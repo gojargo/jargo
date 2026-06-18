@@ -1,0 +1,27 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of `go tool cover`
+*.out
+coverage.*
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# Env & editor cruft
+.env
+.env.*
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,15 @@
+jargo
+=====
+
+jargo is a Go port of Pipecat (https://github.com/pipecat-ai/pipecat), the
+real-time voice and multimodal AI pipeline framework created by Daily.
+
+The upstream project is licensed under the BSD 2-Clause License,
+Copyright (c) 2024-2026, Daily. That license is reproduced verbatim in the
+LICENSE file and its copyright notice is retained in full, as required.
+
+"Pipecat" is a name/mark of Daily and is referenced here solely for accurate
+attribution of the upstream work. jargo is an independent project and is not
+affiliated with, sponsored by, or endorsed by Daily.
+
+Go port copyright (c) 2026 the jargo authors.
