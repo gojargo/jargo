@@ -17,10 +17,40 @@
 
 jargo builds real-time voice agents: audio comes in over WebRTC, flows through a
 pipeline of processors (transcription → reasoning → speech), and audio goes back
-out — with [RTVI](https://docs.pipecat.ai/client/introduction) on the data
-channel so existing RTVI clients interoperate.
+out — with natural turn-taking, barge-in, and [RTVI](https://docs.pipecat.ai/client/introduction)
+on the data channel so existing RTVI clients interoperate.
 
 > **Status:** early work in progress. APIs are unstable and will change.
+
+## Why?
+
+[Pipecat](https://github.com/pipecat-ai/pipecat) is great, and jargo is a port of
+it — the architecture and many design decisions are Pipecat's. This port exists
+for one reason: I'd rather not run a voice agent on Python.
+
+Python is the right tool when you need the AI/data-science ecosystem. A
+real-time voice *server* doesn't: the models run as services or as ONNX, and
+what's left is plumbing — audio framing, WebRTC, concurrency, and shipping a
+binary. For that, Go is a better fit: one static binary to deploy, low and
+predictable memory, fast startup, and real concurrency for many simultaneous
+sessions without a GIL. The heavy numerics stay where they belong (the ONNX
+Runtime, the remote services), so giving up Python costs little here. See the
+[benchmarks](docs/benchmarks.md) for the honest performance picture.
+
+## Features
+
+- **WebRTC transport** via [Pion](https://github.com/pion), pure Go, with HTTP
+  signaling (SDP/ICE).
+- **Opus codec** in pure Go ([pion/opus](https://github.com/pion/opus)).
+- **RTVI** over the data channel — interoperates with existing RTVI clients.
+- **Voice pipeline**: Deepgram (STT) → Anthropic (LLM) → ElevenLabs (TTS),
+  streaming end to end, with prompt caching.
+- **Turn-taking**: Silero VAD + Smart Turn v3 (local ONNX) for end-of-turn
+  detection and mid-sentence barge-in. See [docs/turn-taking.md](docs/turn-taking.md).
+- **Concurrent by construction**: each processor runs independently;
+  interruptions propagate as frames.
+- **Batteries for one stack, clean interfaces for the rest** — swap any service
+  behind a small interface.
 
 ## Install
 
@@ -40,6 +70,15 @@ export ANTHROPIC_API_KEY=...
 export ELEVENLABS_API_KEY=...
 go run ./examples/voicebot             # then open http://localhost:8080
 ```
+
+For turn-taking and barge-in in the voice bot, set up the ONNX Runtime — see
+[docs/turn-taking.md](docs/turn-taking.md).
+
+## Documentation
+
+- [Turn-taking (VAD + Smart Turn)](docs/turn-taking.md)
+- [Benchmarks vs Pipecat](docs/benchmarks.md)
+- [Roadmap](PLAN.md)
 
 ## License & attribution
 

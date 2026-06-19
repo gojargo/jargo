@@ -66,8 +66,10 @@ github.com/gojargo/jargo
 ├── audio/
 │   ├── opus/               # Opus encode/decode (pure Go, pion/opus)          [done]
 │   ├── resample/           # linear resampler (pure Go)                       [done]
-│   ├── vad/                # Silero VAD (ONNX)
-│   └── turn/               # Smart Turn V3 (ONNX)
+│   ├── vad/                # Silero VAD (ONNX)                                [done]
+│   └── turn/               # Smart Turn V3 (ONNX) + Whisper log-mel features  [done]
+├── turntaking/             # VAD + turn processor (speaking/interruption)     [done]
+├── internal/onnxrt/        # ONNX runtime boundary (cgo)                      [done]
 ├── service/
 │   ├── deepgram/           # streaming STT (WebSocket)                        [done]
 │   ├── anthropic/          # streaming LLM (official SDK, Haiku)              [done]
@@ -191,12 +193,36 @@ pre-existing data race in the Pion input transport's read-cancel handling.
 **Milestone:** full voice round-trip — speak, get transcribed, reasoned over,
 and answered out loud.
 
-### Phase 5 — Turn-taking (VAD + Smart Turn)
+### Phase 5 — Turn-taking (VAD + Smart Turn) (complete)
 
-- ONNX backend (onnxruntime-go, cgo).
-- Silero VAD (analyzer + controller).
-- Smart Turn V3 (local ONNX).
-- Interruption/barge-in wired through the interruption frames.
+- [x] `internal/onnxrt`: the single cgo boundary — locates `libonnxruntime`
+      (via `JARGO_ONNXRUNTIME_LIB`), initializes the runtime once, and creates
+      model sessions (`github.com/yalue/onnxruntime_go`).
+- [x] `audio/vad`: a confidence-gated state machine (quiet → starting →
+      speaking → stopping) plus `Silero`, the embedded Silero VAD ONNX model
+      (caller-managed context + recurrent state).
+- [x] `audio/turn`: `SmartTurnV3`, the embedded smart-turn-v3 ONNX model, with
+      a pure-Go Whisper log-mel feature extractor (DFT + Slaney mel filterbank;
+      a constant-frame fast path keeps the silence-padded window cheap).
+- [x] `turntaking`: one processor after the input transport that drives both
+      analyzers, emitting `UserStartedSpeakingFrame` + `InterruptionFrame` on a
+      barge-in and `UserStoppedSpeakingFrame` on a real end-of-turn; a logical
+      turn spans pauses the turn model rates incomplete.
+- [x] Aggregator gating (`aggregators.WithTurnTaking`): the LLM runs when an
+      end-of-turn is reported and a finalized transcript is in hand, rather than
+      on STT endpointing alone; the assistant aggregator commits a partial reply
+      on interruption.
+
+Decisions: the models are **embedded with `go:embed`** (Silero ~2 MB, Smart
+Turn ~8.7 MB); the ONNX runtime is **operator-supplied** at a path, not bundled.
+VAD gating is **confidence-only** — jargo trusts the neural model rather than
+porting Pipecat's EBU R128 volume gate. jargo ships **one opinionated path**
+(Silero + Smart Turn folded into a single `turntaking` processor) rather than
+porting upstream Pipecat's newer pluggable `turns/` strategy framework, which is
+out of scope. Feature extraction and both models are validated to within 1e-3
+of the reference Python implementation by unit tests (the model tests skip when
+the runtime is not configured). Turn analysis runs synchronously on the audio
+goroutine (~30 ms per turn-end); offloading is a future optimization.
 
 **Milestone:** natural turn-taking — the bot waits for end-of-turn and can be
 interrupted mid-sentence.
@@ -224,7 +250,9 @@ interrupted mid-sentence.
 - **Opus encoder quality** — `pion/opus`'s encoder is CELT-only and unreleased;
   evaluate voice quality and revisit (await upstream SILK, or fall back to cgo
   libopus) if it falls short.
-- **ONNX runtime distribution** — how to ship/locate `libonnxruntime` for users.
+- **ONNX runtime distribution** — *resolved:* models are embedded with
+  `go:embed`; the `libonnxruntime` shared library is operator-supplied via the
+  `JARGO_ONNXRUNTIME_LIB` env var (`internal/onnxrt`).
 - **RTVI schema fidelity** — match the message schema closely enough that
   upstream RTVI clients interoperate unchanged.
 - **Audio frame sizing** — sample rate, frame duration, and resampling points

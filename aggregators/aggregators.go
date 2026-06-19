@@ -7,10 +7,19 @@
 // end of the pipeline:
 //
 //	pipeline.New(input, stt, agg.User(), llm, tts, output, agg.Assistant())
+//
+// By default the user turn ends when the STT service finalizes a transcription.
+// With WithTurnTaking, the turn instead ends when a turntaking.Detector reports
+// end-of-turn (a UserStoppedSpeakingFrame), gated on having a finalized
+// transcript — so a Smart Turn model, not STT endpointing, decides when the bot
+// responds. Add the turntaking.Detector right after the input transport:
+//
+//	pipeline.New(input, detector, stt, agg.User(), llm, tts, output, agg.Assistant())
 package aggregators
 
 import (
 	"context"
+	"sync"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -23,11 +32,29 @@ type Pair struct {
 	assistant *AssistantAggregator
 }
 
+// Option configures an aggregator Pair.
+type Option func(*options)
+
+type options struct {
+	turnTaking bool
+}
+
+// WithTurnTaking gates the user turn on end-of-turn detection: the LLM runs when
+// a turntaking.Detector reports the turn complete (UserStoppedSpeakingFrame) and
+// a finalized transcript is in hand, rather than on STT finalization alone.
+func WithTurnTaking() Option {
+	return func(o *options) { o.turnTaking = true }
+}
+
 // New builds a user/assistant aggregator pair around ctx.
-func New(ctx *frames.LLMContext) *Pair {
+func New(ctx *frames.LLMContext, opts ...Option) *Pair {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return &Pair{
 		context:   ctx,
-		user:      newUser(ctx),
+		user:      newUser(ctx, o.turnTaking),
 		assistant: newAssistant(ctx),
 	}
 }
@@ -41,17 +68,24 @@ func (p *Pair) Assistant() processor.Processor { return p.assistant }
 // Context returns the shared conversation context.
 func (p *Pair) Context() *frames.LLMContext { return p.context }
 
-// UserAggregator collects finalized transcriptions into a user message and, when
-// the user's turn ends, appends it to the context and triggers the LLM with an
-// LLMContextFrame.
+// UserAggregator collects transcriptions into a user message and, when the
+// user's turn ends, appends it to the context and triggers the LLM with an
+// LLMContextFrame. With turn taking enabled it also tracks speaking and
+// end-of-turn frames; those are system frames handled on a different goroutine
+// than transcriptions, so the aggregation state is mutex-guarded.
 type UserAggregator struct {
 	*processor.Base
-	context     *frames.LLMContext
-	aggregation string
+	context    *frames.LLMContext
+	turnTaking bool
+
+	mu           sync.Mutex
+	aggregation  string
+	turnComplete bool // turn taking: end-of-turn reported
+	haveFinal    bool // turn taking: a finalized transcript has arrived this turn
 }
 
-func newUser(ctx *frames.LLMContext) *UserAggregator {
-	u := &UserAggregator{context: ctx}
+func newUser(ctx *frames.LLMContext, turnTaking bool) *UserAggregator {
+	u := &UserAggregator{context: ctx, turnTaking: turnTaking}
 	u.Base = processor.New("UserContextAggregator", u)
 	return u
 }
@@ -61,38 +95,115 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 	if err := u.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	tf, ok := f.(*frames.TranscriptionFrame)
-	if !ok {
-		// Interim transcriptions and everything else just flow through.
+
+	switch fr := f.(type) {
+	case *frames.UserStartedSpeakingFrame:
+		// A new turn begins; drop any stale aggregation from a prior turn.
+		if u.turnTaking {
+			u.mu.Lock()
+			u.aggregation = ""
+			u.turnComplete = false
+			u.haveFinal = false
+			u.mu.Unlock()
+		}
+		return u.PushFrame(ctx, f, dir)
+
+	case *frames.UserStoppedSpeakingFrame:
+		if err := u.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		if u.turnTaking {
+			u.mu.Lock()
+			u.turnComplete = true
+			u.mu.Unlock()
+			return u.maybeRun(ctx)
+		}
+		return nil
+
+	case *frames.InterimTranscriptionFrame:
+		// Fresh partial speech: a finalized transcript for this turn is no
+		// longer the last word, so wait for the next one before responding.
+		if u.turnTaking {
+			u.mu.Lock()
+			u.haveFinal = false
+			u.mu.Unlock()
+		}
+		return u.PushFrame(ctx, f, dir)
+
+	case *frames.TranscriptionFrame:
+		return u.handleTranscription(ctx, fr, dir)
+
+	default:
 		return u.PushFrame(ctx, f, dir)
 	}
+}
 
-	if tf.Text != "" {
+func (u *UserAggregator) handleTranscription(
+	ctx context.Context, fr *frames.TranscriptionFrame, dir processor.Direction,
+) error {
+	u.mu.Lock()
+	if fr.Text != "" {
 		if u.aggregation != "" {
 			u.aggregation += " "
 		}
-		u.aggregation += tf.Text
+		u.aggregation += fr.Text
 	}
+	if fr.Finalized {
+		u.haveFinal = true
+	}
+	u.mu.Unlock()
 
 	// Forward the transcription so downstream processors (e.g. RTVI) see it.
-	if err := u.PushFrame(ctx, f, dir); err != nil {
+	if err := u.PushFrame(ctx, fr, dir); err != nil {
 		return err
 	}
 
-	// Finalized marks the end of the user's turn; commit and run the LLM.
-	if tf.Finalized && u.aggregation != "" {
-		u.context.AddUserMessage(u.aggregation)
-		u.aggregation = ""
-		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+	if u.turnTaking {
+		return u.maybeRun(ctx)
+	}
+	// Default: STT finalization marks the end of the user's turn.
+	if fr.Finalized {
+		return u.maybeRun(ctx)
 	}
 	return nil
 }
 
+// maybeRun commits the aggregated user message and triggers the LLM when the
+// turn-completion conditions hold. With turn taking, that means an end-of-turn
+// was reported and a finalized transcript is in hand; without it, a finalized
+// transcript alone suffices.
+func (u *UserAggregator) maybeRun(ctx context.Context) error {
+	u.mu.Lock()
+	ready := u.aggregation != ""
+	if u.turnTaking {
+		ready = ready && u.turnComplete && u.haveFinal
+	}
+	if !ready {
+		u.mu.Unlock()
+		return nil
+	}
+	text := u.aggregation
+	u.aggregation = ""
+	u.turnComplete = false
+	u.haveFinal = false
+	u.mu.Unlock()
+
+	u.context.AddUserMessage(text)
+	return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+}
+
 // AssistantAggregator collects the LLM's streamed text into a single assistant
-// message and appends it to the context when the response completes.
+// message and appends it to the context when the response completes. If the
+// response is interrupted (barge-in), the partial text gathered so far is
+// committed so the context reflects what the bot actually said. The response
+// fields are touched from both the process goroutine (text frames) and the
+// input goroutine (the InterruptionFrame system frame), so they are
+// mutex-guarded.
 type AssistantAggregator struct {
 	*processor.Base
-	context     *frames.LLMContext
+	context *frames.LLMContext
+
+	mu          sync.Mutex
 	aggregation string
 	started     bool
 }
@@ -110,18 +221,34 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	}
 	switch fr := f.(type) {
 	case *frames.LLMFullResponseStartFrame:
+		a.mu.Lock()
 		a.started = true
 		a.aggregation = ""
+		a.mu.Unlock()
 	case *frames.LLMTextFrame:
+		a.mu.Lock()
 		if a.started {
 			a.aggregation += fr.Text
 		}
+		a.mu.Unlock()
 	case *frames.LLMFullResponseEndFrame:
-		if a.aggregation != "" {
-			a.context.AddAssistantMessage(a.aggregation)
-		}
-		a.started = false
-		a.aggregation = ""
+		a.commit()
+	case *frames.InterruptionFrame:
+		// The response was cut off; keep whatever the bot already said.
+		a.commit()
 	}
 	return a.PushFrame(ctx, f, dir)
+}
+
+// commit appends the aggregated assistant message to the context, if any, and
+// resets the response state.
+func (a *AssistantAggregator) commit() {
+	a.mu.Lock()
+	text := a.aggregation
+	a.aggregation = ""
+	a.started = false
+	a.mu.Unlock()
+	if text != "" {
+		a.context.AddAssistantMessage(text)
+	}
 }
