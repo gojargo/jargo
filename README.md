@@ -39,19 +39,12 @@ Runtime, the remote services), so giving up Python costs little here. See the
 
 ## Features
 
-- **WebRTC transport** via [Pion](https://github.com/pion), pure Go, with HTTP
-  signaling (SDP/ICE).
-- **Opus codec** in pure Go ([pion/opus](https://github.com/pion/opus)).
-- **RTVI** over the data channel — interoperates with existing RTVI clients.
-- **Voice pipeline**: streaming STT → LLM → TTS end to end, with prompt caching.
-  The default stack is Deepgram → Anthropic → ElevenLabs; many other providers
-  ship behind the same interfaces (see [Services](#services)).
-- **Turn-taking**: Silero VAD + Smart Turn v3 (local ONNX) for end-of-turn
-  detection and mid-sentence barge-in. See [docs/turn-taking.md](docs/turn-taking.md).
-- **Concurrent by construction**: each processor runs independently;
-  interruptions propagate as frames.
-- **Batteries for one stack, clean interfaces for the rest** — swap any service
-  behind a small interface.
+- **WebRTC + Opus**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
+- **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
+- **Turn-taking & barge-in**: Silero VAD + Smart Turn v3, local ONNX.
+- **RTVI** data channel — works with existing RTVI clients.
+- **Pluggable services**: swap any STT/LLM/TTS behind a small interface.
+- **Concurrent by design**: independent processors; interruptions are frames.
 
 ## Services
 
@@ -82,27 +75,24 @@ STT=assemblyai LLM=openai TTS=cartesia go run ./examples/voicebot
 go get github.com/gojargo/jargo
 ```
 
+jargo uses cgo and two native libraries — **libsoxr** (linked) and the **ONNX
+Runtime** (loaded at run time). Install `libsoxr-dev` or just run the container
+image, which bundles both; the [Quickstart](docs/quickstart.md) covers setup.
+`CGO_ENABLED=0` builds are not supported.
+
 ## Examples
 
+Two runnable bots live in [`examples/`](examples): an **echo** bot (no API keys)
+and a full **voice** bot (STT → LLM → TTS). The fastest way to try either —
+locally or with Docker — is the **[Quickstart](docs/quickstart.md)**.
+
 ```sh
-# Echo bot — speak into the browser, hear yourself back over WebRTC.
 go run ./examples/echo                 # then open http://localhost:8080
-
-# Voice bot — Deepgram (STT) → Anthropic (LLM) → ElevenLabs (TTS).
-export DEEPGRAM_API_KEY=...
-export ANTHROPIC_API_KEY=...
-export ELEVENLABS_API_KEY=...
-go run ./examples/voicebot             # then open http://localhost:8080
 ```
-
-For turn-taking and barge-in in the voice bot, set up the ONNX Runtime — see
-[docs/turn-taking.md](docs/turn-taking.md).
 
 ## Documentation
 
-- [Turn-taking (VAD + Smart Turn)](docs/turn-taking.md)
-- [Benchmarks vs Pipecat](docs/benchmarks.md)
-- [Roadmap](PLAN.md)
+See **[docs/index.md](docs/index.md)** for the full documentation.
 
 ## License & attribution
 

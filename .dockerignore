@@ -1,0 +1,9 @@
+# Keep the build context small; the image builds from source inside the builder.
+.git
+.github
+*.md
+docs
+benchmarks
+assets
+PLAN.md
+coverage.out
