@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>jargo · echo bot</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 4rem auto; padding: 0 1rem; }
+    button { font-size: 1rem; padding: 0.6rem 1.2rem; cursor: pointer; }
+    #status { color: #555; margin-top: 1rem; }
+    #log { margin-top: 1rem; padding: 0.75rem; background: #f5f5f5; border-radius: 6px;
+           font-family: ui-monospace, monospace; font-size: 0.85rem; white-space: pre-wrap;
+           max-height: 16rem; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>jargo echo bot</h1>
+  <p>Click start, allow the microphone, and you should hear yourself back. The
+     RTVI handshake and events appear in the log.</p>
+  <button id="start">Start</button>
+  <p id="status">idle</p>
+  <audio id="remote" autoplay></audio>
+  <div id="log"></div>
+
+  <script>
+    const setStatus = (s) => { document.getElementById("status").textContent = s; };
+    const log = (s) => {
+      const el = document.getElementById("log");
+      el.textContent += s + "\n";
+      el.scrollTop = el.scrollHeight;
+    };
+
+    document.getElementById("start").onclick = async () => {
+      try {
+        setStatus("requesting microphone…");
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
+        stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+        pc.ontrack = (e) => { document.getElementById("remote").srcObject = e.streams[0]; };
+        pc.onconnectionstatechange = () => setStatus("connection: " + pc.connectionState);
+
+        // RTVI runs over a data channel: JSON messages {label:"rtvi-ai", type, id, data}.
+        const dc = pc.createDataChannel("rtvi");
+        dc.onopen = () => {
+          log("data channel open → sending client-ready");
+          dc.send(JSON.stringify({
+            label: "rtvi-ai", type: "client-ready", id: "web-1",
+            data: { version: "2.0.0", about: { library: "jargo-example" } },
+          }));
+        };
+        dc.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "bot-ready") log("← bot-ready (version " + msg.data.version + ")");
+          else if (msg.type === "user-transcription") log("← user: " + msg.data.text);
+          else if (msg.type === "bot-transcription" || msg.type === "bot-tts-text") log("← bot: " + msg.data.text);
+          else log("← " + msg.type);
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await new Promise((resolve) => {
+          if (pc.iceGatheringState === "complete") return resolve();
+          pc.onicegatheringstatechange = () => {
+            if (pc.iceGatheringState === "complete") resolve();
+          };
+        });
+
+        setStatus("signaling…");
+        const resp = await fetch("/offer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(pc.localDescription),
+        });
+        if (!resp.ok) throw new Error("signaling failed: " + resp.status);
+        await pc.setRemoteDescription(await resp.json());
+        setStatus("connected — speak and hear yourself");
+      } catch (err) {
+        setStatus("error: " + err.message);
+        console.error(err);
+      }
+    };
+  </script>
+</body>
+</html>

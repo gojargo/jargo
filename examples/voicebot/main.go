@@ -1,0 +1,123 @@
+// Command voicebot is a full voice agent built on jargo: microphone audio comes
+// in over WebRTC, Deepgram transcribes it, Anthropic reasons over it, ElevenLabs
+// speaks the reply, and the audio goes back out over WebRTC. RTVI events (the
+// handshake and live transcripts) flow over the data channel.
+//
+// Set DEEPGRAM_API_KEY, ANTHROPIC_API_KEY and ELEVENLABS_API_KEY, run it, open
+// http://localhost:8080, click start, and allow the microphone.
+package main
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"log"
+	"log/slog"
+	"net/http"
+
+	"github.com/gojargo/jargo/aggregators"
+	"github.com/gojargo/jargo/audio/opus"
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/rtvi"
+	"github.com/gojargo/jargo/service/anthropic"
+	"github.com/gojargo/jargo/service/deepgram"
+	"github.com/gojargo/jargo/service/elevenlabs"
+	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/pion/webrtc/v4"
+)
+
+//go:embed static
+var staticFiles embed.FS
+
+const systemPrompt = "You are a friendly voice assistant. Keep your replies short, " +
+	"warm and conversational — one or two sentences."
+
+func main() {
+	const addr = ":8080"
+
+	static, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		log.Fatal(err)
+	}
+	http.Handle("/", http.FileServer(http.FS(static)))
+	http.HandleFunc("/offer", handleOffer)
+
+	slog.Info("jargo voicebot listening", "url", "http://localhost"+addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+func handleOffer(w http.ResponseWriter, r *http.Request) {
+	var offer webrtc.SessionDescription
+	if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	conn, err := pionrtc.NewConnection()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	answer, err := conn.Answer(offer)
+	if err != nil {
+		_ = conn.Close()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	go runBot(conn)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(answer); err != nil {
+		slog.Error("write answer", "err", err)
+	}
+}
+
+// runBot builds and runs the STT -> LLM -> TTS pipeline for one connection.
+func runBot(conn *pionrtc.Connection) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = opus.SampleRate
+	params.AudioOutSampleRate = opus.SampleRate
+	t := pionrtc.NewTransport(conn, params)
+
+	stt := deepgram.New(deepgram.Config{SampleRate: opus.SampleRate})
+	llm := anthropic.New(anthropic.Config{})
+	tts := elevenlabs.New(elevenlabs.Config{})
+
+	convo := frames.NewLLMContext(systemPrompt)
+	agg := aggregators.New(convo)
+
+	pipe := pipeline.New(
+		t.Input(),
+		stt,
+		agg.User(),
+		llm,
+		tts,
+		rtvi.NewProcessor(),
+		t.Output(),
+		agg.Assistant(),
+	)
+	task := pipeline.NewTask(pipe, pipeline.TaskParams{
+		AudioInSampleRate:  opus.SampleRate,
+		AudioOutSampleRate: opus.SampleRate,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-conn.Done()
+		cancel()
+	}()
+
+	// Greet the caller so they hear the bot as soon as they connect.
+	task.QueueFrame(frames.NewTextFrame("Hello! How can I help you today?"))
+
+	slog.Info("voicebot pipeline started")
+	if err := task.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		slog.Error("voicebot pipeline ended", "err", err)
+	}
+	_ = conn.Close()
+	slog.Info("voicebot pipeline stopped")
+}
