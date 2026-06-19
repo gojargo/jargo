@@ -106,7 +106,14 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 // Cleanup stops the audio goroutine and the processor.
 func (bo *BaseOutput) Cleanup(ctx context.Context) error {
 	bo.stopStreaming(ctx)
-	return bo.Base.Cleanup(ctx)
+	// Free the soxr handle after the base stops the process goroutine, so no
+	// in-flight resample touches a freed native resampler.
+	err := bo.Base.Cleanup(ctx)
+	if bo.resampler != nil {
+		bo.resampler.Close()
+		bo.resampler = nil
+	}
+	return err
 }
 
 func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) {
@@ -185,7 +192,16 @@ func (bo *BaseOutput) resample(audio []byte, sampleRate, channels int) []byte {
 		return audio
 	}
 	if bo.resampler == nil || bo.resampleIn != sampleRate {
-		bo.resampler = resample.New(sampleRate, bo.sampleRate, channels)
+		if bo.resampler != nil {
+			bo.resampler.Close()
+			bo.resampler = nil
+		}
+		r, err := resample.New(sampleRate, bo.sampleRate, channels)
+		if err != nil {
+			slog.Error("transport: create resampler", "from", sampleRate, "to", bo.sampleRate, "err", err)
+			return audio
+		}
+		bo.resampler = r
 		bo.resampleIn = sampleRate
 	}
 	return bo.resampler.Process(audio)

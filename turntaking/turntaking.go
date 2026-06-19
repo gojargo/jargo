@@ -99,7 +99,14 @@ func (d *Detector) Cleanup(ctx context.Context) error {
 	if d.turn != nil {
 		_ = d.turn.Close()
 	}
-	return d.Base.Cleanup(ctx)
+	// Free the soxr handle after the base stops the process goroutine, so no
+	// in-flight resample touches a freed native resampler.
+	err := d.Base.Cleanup(ctx)
+	if d.resampler != nil {
+		d.resampler.Close()
+		d.resampler = nil
+	}
+	return err
 }
 
 func (d *Detector) start(*frames.StartFrame) error {
@@ -204,7 +211,16 @@ func (d *Detector) toAnalyzerRate(f *frames.InputAudioRawFrame) []byte {
 		return f.Audio
 	}
 	if d.resampler == nil || d.inRate != f.SampleRate {
-		d.resampler = resample.New(f.SampleRate, analyzerSampleRate, 1)
+		if d.resampler != nil {
+			d.resampler.Close()
+			d.resampler = nil
+		}
+		r, err := resample.New(f.SampleRate, analyzerSampleRate, 1)
+		if err != nil {
+			slog.Error("turntaking: create resampler", "from", f.SampleRate, "to", analyzerSampleRate, "err", err)
+			return f.Audio
+		}
+		d.resampler = r
 		d.inRate = f.SampleRate
 	}
 	return d.resampler.Process(f.Audio)
