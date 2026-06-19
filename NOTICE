@@ -21,3 +21,27 @@ Third-party dependencies
 The WebRTC transport is built on the Pion stack (https://github.com/pion),
 copyright (c) The Pion community, licensed under the MIT License. This includes
 github.com/pion/webrtc and github.com/pion/opus (a pure-Go Opus codec).
+
+Voice activity and end-of-turn detection use the ONNX Runtime via
+github.com/yalue/onnxruntime_go (MIT License). The ONNX Runtime itself
+(https://onnxruntime.ai, MIT License) is supplied by the operator and is not
+distributed with jargo.
+
+
+Embedded models
+---------------
+
+jargo embeds two ONNX models, used unmodified:
+
+  - Silero VAD (audio/vad/silero_vad.onnx), from
+    https://github.com/snakers4/silero-vad, copyright (c) Silero Team,
+    licensed under the MIT License.
+
+  - Smart Turn v3 (audio/turn/smart-turn-v3.2-cpu.onnx), from
+    https://github.com/pipecat-ai/smart-turn, copyright (c) Daily, licensed
+    under the BSD 2-Clause License.
+
+The Whisper-style log-mel feature extraction in audio/turn/whisper.go is a
+numpy-free Go reimplementation of the math in Hugging Face Transformers'
+WhisperFeatureExtractor (https://github.com/huggingface/transformers,
+copyright (c) The HuggingFace Team, Apache License 2.0).

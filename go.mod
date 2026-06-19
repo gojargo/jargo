@@ -7,6 +7,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/pion/opus v0.1.1-0.20260618155929-2548672a5d45
 	github.com/pion/webrtc/v4 v4.2.15
+	github.com/yalue/onnxruntime_go v1.31.0
 )
 
 require (
