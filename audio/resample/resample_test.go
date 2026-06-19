@@ -18,7 +18,11 @@ func sine(freq float64, rate, n int) []byte {
 }
 
 func TestIdentityWhenRatesMatch(t *testing.T) {
-	r := resample.New(48000, 48000, 1)
+	r, err := resample.New(48000, 48000, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Close()
 	in := sine(440, 48000, 100)
 	out := r.Process(in)
 	if len(out) != len(in) {
@@ -26,37 +30,57 @@ func TestIdentityWhenRatesMatch(t *testing.T) {
 	}
 }
 
-func TestUpsample24kTo48kDoublesLength(t *testing.T) {
-	r := resample.New(24000, 48000, 1)
-	// Feed 480 input frames (20 ms @ 24k) -> expect ~960 output frames (20 ms @ 48k).
-	in := sine(440, 24000, 480)
-	out := r.Process(in)
-	got := len(out) / 2
-	if got < 955 || got > 965 {
-		t.Fatalf("24k->48k of 480 frames produced %d frames, want ~960", got)
+// streamFrames runs `buffers` equal-sized buffers through r and returns the
+// total output frames. Streaming a long signal makes libsoxr's fixed filter
+// delay negligible relative to the total, so the output-to-input frame ratio
+// converges to outRate/inRate even though any single call is off by the delay.
+func streamFrames(r *resample.Resampler, freq float64, inRate, framesPerBuffer, buffers int) int {
+	total := 0
+	for range buffers {
+		out := r.Process(sine(freq, inRate, framesPerBuffer))
+		total += len(out) / 2
+	}
+	return total
+}
+
+// assertRatio checks got is within 2% of inFrames*outRate/inRate, tolerating
+// libsoxr's filter delay.
+func assertRatio(t *testing.T, got, inFrames, inRate, outRate int) {
+	t.Helper()
+	want := float64(inFrames) * float64(outRate) / float64(inRate)
+	if math.Abs(float64(got)-want) > 0.02*want {
+		t.Fatalf("got %d output frames, want ~%.0f (±2%%)", got, want)
 	}
 }
 
-func TestStreamingContinuityRoughlyDoubles(t *testing.T) {
-	r := resample.New(24000, 48000, 1)
-	total := 0
-	// Stream ten 480-frame buffers (4800 input frames @ 24k); the total output
-	// should be ~2x, about 9600 frames @ 48k.
-	for range 10 {
-		out := r.Process(sine(440, 24000, 480))
-		total += len(out) / 2
+func TestUpsample24kTo48k(t *testing.T) {
+	r, err := resample.New(24000, 48000, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-	if total < 9550 || total > 9650 {
-		t.Fatalf("streamed 4800 input frames -> %d output frames, want ~9600", total)
-	}
+	defer r.Close()
+	// 500 * 480 = 240000 input frames @ 24k -> ~480000 frames @ 48k. The stream
+	// is long enough that soxr's fixed filter delay is well under the tolerance.
+	got := streamFrames(r, 440, 24000, 480, 500)
+	assertRatio(t, got, 240000, 24000, 48000)
 }
 
 func TestDownsample48kTo16k(t *testing.T) {
-	r := resample.New(48000, 16000, 1)
-	in := sine(440, 48000, 960) // 20 ms @ 48k -> ~320 frames @ 16k
-	out := r.Process(in)
-	got := len(out) / 2
-	if got < 316 || got > 324 {
-		t.Fatalf("48k->16k of 960 frames produced %d frames, want ~320", got)
+	r, err := resample.New(48000, 16000, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
+	defer r.Close()
+	// 500 * 960 = 480000 input frames @ 48k -> ~160000 frames @ 16k.
+	got := streamFrames(r, 440, 48000, 960, 500)
+	assertRatio(t, got, 480000, 48000, 16000)
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	r, err := resample.New(24000, 48000, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r.Close()
+	r.Close() // must not panic
 }

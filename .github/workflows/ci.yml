@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -24,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -37,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
