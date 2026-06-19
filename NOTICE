@@ -13,3 +13,11 @@ attribution of the upstream work. jargo is an independent project and is not
 affiliated with, sponsored by, or endorsed by Daily.
 
 Go port copyright (c) 2026 the jargo authors.
+
+
+Third-party dependencies
+------------------------
+
+The WebRTC transport is built on the Pion stack (https://github.com/pion),
+copyright (c) The Pion community, licensed under the MIT License. This includes
+github.com/pion/webrtc and github.com/pion/opus (a pure-Go Opus codec).
