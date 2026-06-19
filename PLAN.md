@@ -39,9 +39,9 @@ the architecture can express.
 | Transport        | WebRTC via Pion + HTTP signaling (SDP/ICE) |
 | Client protocol  | RTVI over the WebRTC data channel       |
 | Modality         | Audio in/out; text as the intermediate  |
-| STT              | Deepgram                                |
-| LLM              | Anthropic                               |
-| TTS              | ElevenLabs                              |
+| STT              | Deepgram (default; + alternatives)      |
+| LLM              | Anthropic (default; + alternatives)     |
+| TTS              | ElevenLabs (default; + alternatives)    |
 | Memory           | mem0                                    |
 | VAD              | Silero (ONNX)                           |
 | Turn detection   | Smart Turn V3 (ONNX)                    |
@@ -71,9 +71,16 @@ github.com/gojargo/jargo
 ├── turntaking/             # VAD + turn processor (speaking/interruption)     [done]
 ├── internal/onnxrt/        # ONNX runtime boundary (cgo)                      [done]
 ├── service/
-│   ├── deepgram/           # streaming STT (WebSocket)                        [done]
+│   ├── llm/                # shared LLM base (response framing + SSE scan)    [done]
+│   ├── stt/                # shared STT bases (streaming + segmented + WAV)   [done]
+│   ├── tts/                # shared TTS base (sentence aggregation + stream)  [done]
 │   ├── anthropic/          # streaming LLM (official SDK, Haiku)              [done]
-│   ├── elevenlabs/         # streaming TTS (HTTP)                             [done]
+│   ├── openai/             # LLM + STT (Whisper) + TTS; OpenAI-compat base    [done]
+│   ├── google/             # Gemini LLM (native SSE)                          [done]
+│   ├── groq, together, …   # OpenAI-compatible LLMs (thin presets)            [done]
+│   ├── deepgram/           # streaming STT (WebSocket) + Aura TTS             [done]
+│   ├── assemblyai/, gladia/ # streaming STT (WebSocket)                       [done]
+│   ├── cartesia/, rime/, lmnt/ # TTS                                          [done]
 │   └── mem0/               # memory
 ├── aggregators/            # LLM context (user + assistant)                   [done]
 ├── metrics/                # hooks only (impls deferred)

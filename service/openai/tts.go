@@ -1,0 +1,75 @@
+package openai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"os"
+
+	"github.com/gojargo/jargo/service/tts"
+)
+
+const (
+	defaultTTSModel = "gpt-4o-mini-tts"
+	defaultTTSVoice = "alloy"
+	// ttsSampleRate is the rate of OpenAI's "pcm" response format.
+	ttsSampleRate = 24000
+)
+
+// TTSConfig configures the OpenAI TTS service.
+type TTSConfig struct {
+	// APIKey is the API key; empty uses the OPENAI_API_KEY env var.
+	APIKey string
+	// BaseURL overrides the API base.
+	BaseURL string
+	// Model is the TTS model; empty uses the default.
+	Model string
+	// Voice is the voice name; empty uses a default voice.
+	Voice string
+}
+
+// NewTTS builds an OpenAI TTS service.
+func NewTTS(cfg TTSConfig) *tts.Base {
+	if cfg.APIKey == "" {
+		cfg.APIKey = os.Getenv("OPENAI_API_KEY")
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultLLMBaseURL
+	}
+	if cfg.Model == "" {
+		cfg.Model = defaultTTSModel
+	}
+	if cfg.Voice == "" {
+		cfg.Voice = defaultTTSVoice
+	}
+	return tts.New("OpenAITTS", &synthesizer{cfg: cfg, http: &http.Client{}})
+}
+
+type synthesizer struct {
+	cfg  TTSConfig
+	http *http.Client
+}
+
+// SampleRate reports OpenAI's fixed PCM output rate.
+func (s *synthesizer) SampleRate() int { return ttsSampleRate }
+
+// Synthesize requests speech for text and streams the raw PCM downstream.
+func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+	body, err := json.Marshal(map[string]any{
+		"model":           s.cfg.Model,
+		"voice":           s.cfg.Voice,
+		"input":           text,
+		"response_format": "pcm",
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/audio/speech", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	return tts.StreamResponse(s.http, req, emit)
+}
