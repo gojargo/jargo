@@ -43,14 +43,38 @@ Runtime, the remote services), so giving up Python costs little here. See the
   signaling (SDP/ICE).
 - **Opus codec** in pure Go ([pion/opus](https://github.com/pion/opus)).
 - **RTVI** over the data channel — interoperates with existing RTVI clients.
-- **Voice pipeline**: Deepgram (STT) → Anthropic (LLM) → ElevenLabs (TTS),
-  streaming end to end, with prompt caching.
+- **Voice pipeline**: streaming STT → LLM → TTS end to end, with prompt caching.
+  The default stack is Deepgram → Anthropic → ElevenLabs; many other providers
+  ship behind the same interfaces (see [Services](#services)).
 - **Turn-taking**: Silero VAD + Smart Turn v3 (local ONNX) for end-of-turn
   detection and mid-sentence barge-in. See [docs/turn-taking.md](docs/turn-taking.md).
 - **Concurrent by construction**: each processor runs independently;
   interruptions propagate as frames.
 - **Batteries for one stack, clean interfaces for the rest** — swap any service
   behind a small interface.
+
+## Services
+
+Each category shares a base (`service/llm`, `service/stt`, `service/tts`), so a
+provider implements only what differs and gets the frame contract, streaming,
+and sentence aggregation for free.
+
+| Category | Providers |
+| -------- | --------- |
+| **LLM** | Anthropic, OpenAI, Google Gemini, plus the OpenAI-compatible family — Groq, Together, Fireworks, DeepSeek, Cerebras, xAI (Grok), OpenRouter, Perplexity, NVIDIA NIM, Ollama |
+| **STT** | Deepgram, AssemblyAI, Gladia (streaming); OpenAI, Groq (segmented Whisper) |
+| **TTS** | ElevenLabs, Cartesia, OpenAI, Deepgram Aura, Rime, LMNT |
+
+Any OpenAI-compatible endpoint works directly via
+`openai.NewCompatLLM(name, baseURL, envVar, model, cfg)`. Each service reads its
+API key from a provider-specific env var (e.g. `OPENAI_API_KEY`,
+`CARTESIA_API_KEY`) when the config field is empty.
+
+The voicebot example selects providers by env var:
+
+```sh
+STT=assemblyai LLM=openai TTS=cartesia go run ./examples/voicebot
+```
 
 ## Install
 

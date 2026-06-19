@@ -1,15 +1,14 @@
-// Package deepgram is a streaming speech-to-text service backed by Deepgram's
-// live transcription WebSocket. It sends received audio to Deepgram and pushes
-// InterimTranscriptionFrames and (finalized) TranscriptionFrames downstream.
+// Package deepgram provides Deepgram's streaming speech-to-text service (over
+// the live transcription WebSocket) and its Aura text-to-speech service.
 //
-// A finalized TranscriptionFrame (Deepgram's speech_final) marks the end of the
-// user's turn, which the user aggregator uses to trigger the LLM.
+// The STT service pushes InterimTranscriptionFrames and finalized
+// TranscriptionFrames downstream; a finalized transcript with Deepgram's
+// speech_final marks the end of the user's turn.
 package deepgram
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,13 +17,14 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 const (
 	listenURL       = "wss://api.deepgram.com/v1/listen"
 	keepAlivePeriod = 8 * time.Second
+	defaultSTTModel = "nova-3"
+	defaultLanguage = "en-US"
 )
 
 // Config configures the STT service.
@@ -39,73 +39,31 @@ type Config struct {
 	SampleRate int
 }
 
-// Service is a Deepgram streaming STT processor.
-type Service struct {
-	*processor.Base
-	cfg        Config
-	sampleRate int
-
-	conn   *websocket.Conn
-	connMu sync.Mutex // serializes writes to conn
-
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
-}
-
-// New builds a Deepgram STT service.
-func New(cfg Config) *Service {
+// NewSTT builds a Deepgram streaming STT service.
+func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.APIKey == "" {
 		cfg.APIKey = os.Getenv("DEEPGRAM_API_KEY")
 	}
 	if cfg.Model == "" {
-		cfg.Model = "nova-3"
+		cfg.Model = defaultSTTModel
 	}
 	if cfg.Language == "" {
-		cfg.Language = "en-US"
+		cfg.Language = defaultLanguage
 	}
-	s := &Service{cfg: cfg}
-	s.Base = processor.New("DeepgramSTT", s)
-	return s
+	return stt.NewStream("DeepgramSTT", &connector{cfg: cfg}, cfg.SampleRate)
 }
 
-// ProcessFrame manages the connection lifecycle and streams audio.
-func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
-		return err
-	}
-	switch fr := f.(type) {
-	case *frames.StartFrame:
-		if err := s.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		s.sampleRate = s.cfg.SampleRate
-		if s.sampleRate == 0 {
-			s.sampleRate = fr.AudioInSampleRate
-		}
-		return s.connect(ctx)
-	case *frames.InputAudioRawFrame:
-		s.sendAudio(ctx, fr.Audio)
-		return s.PushFrame(ctx, f, dir)
-	case *frames.EndFrame, *frames.CancelFrame:
-		s.disconnect()
-		return s.PushFrame(ctx, f, dir)
-	default:
-		return s.PushFrame(ctx, f, dir)
-	}
+type connector struct {
+	cfg Config
 }
 
-// Cleanup tears down the connection and the processor.
-func (s *Service) Cleanup(ctx context.Context) error {
-	s.disconnect()
-	return s.Base.Cleanup(ctx)
-}
-
-func (s *Service) connect(ctx context.Context) error {
+// Connect dials the live transcription WebSocket for the given sample rate.
+func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := url.Values{}
-	q.Set("model", s.cfg.Model)
-	q.Set("language", s.cfg.Language)
+	q.Set("model", c.cfg.Model)
+	q.Set("language", c.cfg.Language)
 	q.Set("encoding", "linear16")
-	q.Set("sample_rate", strconv.Itoa(s.sampleRate))
+	q.Set("sample_rate", strconv.Itoa(sampleRate))
 	q.Set("channels", "1")
 	q.Set("interim_results", "true")
 	q.Set("smart_format", "true")
@@ -115,78 +73,25 @@ func (s *Service) connect(ctx context.Context) error {
 	q.Set("vad_events", "true")
 
 	header := http.Header{}
-	header.Set("Authorization", "Token "+s.cfg.APIKey)
+	header.Set("Authorization", "Token "+c.cfg.APIKey)
 
-	conn, httpResp, err := websocket.Dial(ctx, listenURL+"?"+q.Encode(), &websocket.DialOptions{HTTPHeader: header})
-	if httpResp != nil && httpResp.Body != nil {
-		_ = httpResp.Body.Close()
+	conn, resp, err := websocket.Dial(ctx, listenURL+"?"+q.Encode(), &websocket.DialOptions{HTTPHeader: header})
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
 	}
 	if err != nil {
-		return fmt.Errorf("deepgram dial: %w", err)
+		return nil, err
 	}
-
-	connCtx, cancel := context.WithCancel(ctx)
-	s.connMu.Lock()
-	s.conn = conn
-	s.cancel = cancel
-	s.connMu.Unlock()
-	s.wg.Add(2)
-	go s.readLoop(connCtx, conn)
-	go s.keepAlive(connCtx)
-	return nil
+	s := &stream{conn: conn, ctx: ctx}
+	s.wg.Go(s.keepAlive)
+	return s, nil
 }
 
-func (s *Service) disconnect() {
-	s.connMu.Lock()
-	cancel := s.cancel
-	conn := s.conn
-	if cancel == nil {
-		s.connMu.Unlock()
-		return
-	}
-	// Ask Deepgram to flush and close before tearing down.
-	if conn != nil {
-		_ = conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"CloseStream"}`))
-	}
-	s.connMu.Unlock()
-
-	cancel()
-	s.wg.Wait()
-
-	s.connMu.Lock()
-	if s.conn != nil {
-		_ = s.conn.Close(websocket.StatusNormalClosure, "")
-		s.conn = nil
-	}
-	s.cancel = nil
-	s.connMu.Unlock()
-}
-
-func (s *Service) sendAudio(ctx context.Context, audio []byte) {
-	s.connMu.Lock()
-	defer s.connMu.Unlock()
-	if s.conn == nil {
-		return
-	}
-	_ = s.conn.Write(ctx, websocket.MessageBinary, audio)
-}
-
-func (s *Service) keepAlive(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(keepAlivePeriod)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.connMu.Lock()
-			if s.conn != nil {
-				_ = s.conn.Write(ctx, websocket.MessageText, []byte(`{"type":"KeepAlive"}`))
-			}
-			s.connMu.Unlock()
-		}
-	}
+type stream struct {
+	conn    *websocket.Conn
+	ctx     context.Context
+	writeMu sync.Mutex
+	wg      sync.WaitGroup
 }
 
 // dgMessage is the subset of Deepgram's live transcription result we use.
@@ -201,31 +106,58 @@ type dgMessage struct {
 	SpeechFinal bool `json:"speech_final"`
 }
 
-func (s *Service) readLoop(ctx context.Context, conn *websocket.Conn) {
-	defer s.wg.Done()
+// Send writes a chunk of PCM audio as a binary frame.
+func (s *stream) Send(audio []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(s.ctx, websocket.MessageBinary, audio)
+}
+
+// Recv reads the next result. A finalized result carries Deepgram's speech_final
+// as the end-of-turn signal.
+func (s *stream) Recv() ([]stt.Result, error) {
 	for {
-		_, data, err := conn.Read(ctx)
+		_, data, err := s.conn.Read(s.ctx)
 		if err != nil {
-			return
+			return nil, err
 		}
-		var msg dgMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
+		var m dgMessage
+		if err := json.Unmarshal(data, &m); err != nil {
 			continue
 		}
-		if msg.Type != "Results" || len(msg.Channel.Alternatives) == 0 {
+		if m.Type != "Results" || len(m.Channel.Alternatives) == 0 {
 			continue
 		}
-		text := msg.Channel.Alternatives[0].Transcript
+		text := m.Channel.Alternatives[0].Transcript
 		if text == "" {
 			continue
 		}
-		timestamp := time.Now().UTC().Format(time.RFC3339)
-		if !msg.IsFinal {
-			_ = s.PushFrame(ctx, frames.NewInterimTranscriptionFrame(text, "", timestamp), processor.Downstream)
-			continue
-		}
-		tf := frames.NewTranscriptionFrame(text, "", timestamp)
-		tf.Finalized = msg.SpeechFinal
-		_ = s.PushFrame(ctx, tf, processor.Downstream)
+		return []stt.Result{{Text: text, Final: m.IsFinal, EndOfTurn: m.SpeechFinal}}, nil
 	}
+}
+
+// keepAlive sends a periodic KeepAlive so Deepgram does not close an idle
+// connection during silence.
+func (s *stream) keepAlive() {
+	ticker := time.NewTicker(keepAlivePeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.writeMu.Lock()
+			_ = s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"KeepAlive"}`))
+			s.writeMu.Unlock()
+		}
+	}
+}
+
+// Close asks Deepgram to flush and then closes the socket.
+func (s *stream) Close() error {
+	s.writeMu.Lock()
+	_ = s.conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"CloseStream"}`))
+	s.writeMu.Unlock()
+	s.wg.Wait()
+	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

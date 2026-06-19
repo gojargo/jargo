@@ -1,9 +1,7 @@
-// Package anthropic is a streaming LLM service backed by the Anthropic API. It
-// consumes an LLMContextFrame and emits the response as an
-// LLMFullResponseStartFrame, a stream of LLMTextFrames, and an
-// LLMFullResponseEndFrame.
-//
-// It defaults to Claude Haiku for low latency and caches the system prompt.
+// Package anthropic is a streaming LLM service backed by the Anthropic API. The
+// shared LLM base brackets the response with start/end frames; this service
+// streams the text deltas. It defaults to Claude Haiku for low latency and
+// caches the system prompt.
 package anthropic
 
 import (
@@ -12,7 +10,7 @@ import (
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // defaultMaxTokens keeps spoken responses short and snappy.
@@ -30,14 +28,14 @@ type Config struct {
 
 // Service is a streaming Anthropic LLM processor.
 type Service struct {
-	*processor.Base
+	*llm.Base
 	client    sdk.Client
 	model     sdk.Model
 	maxTokens int64
 }
 
-// New builds an Anthropic LLM service.
-func New(cfg Config) *Service {
+// NewLLM builds an Anthropic LLM service.
+func NewLLM(cfg Config) *Service {
 	var opts []option.RequestOption
 	if cfg.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(cfg.APIKey))
@@ -53,28 +51,12 @@ func New(cfg Config) *Service {
 	if cfg.MaxTokens > 0 {
 		s.maxTokens = int64(cfg.MaxTokens)
 	}
-	s.Base = processor.New("AnthropicLLM", s)
+	s.Base = llm.New("AnthropicLLM", s)
 	return s
 }
 
-// ProcessFrame runs the LLM on each LLMContextFrame and forwards other frames.
-func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
-		return err
-	}
-	if cf, ok := f.(*frames.LLMContextFrame); ok {
-		return s.run(ctx, cf.Context)
-	}
-	return s.PushFrame(ctx, f, dir)
-}
-
-// run streams a response for the conversation, emitting response frames. It runs
-// under the process goroutine's context, so an interruption cancels the stream.
-func (s *Service) run(ctx context.Context, convo *frames.LLMContext) error {
-	if err := s.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
-		return err
-	}
-
+// Generate streams a response for the conversation, emitting each text delta.
+func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	params := sdk.MessageNewParams{
 		Model:     s.model,
 		MaxTokens: s.maxTokens,
@@ -99,15 +81,11 @@ func (s *Service) run(ctx context.Context, convo *frames.LLMContext) error {
 		if !ok || text.Text == "" {
 			continue
 		}
-		if err := s.PushFrame(ctx, frames.NewLLMTextFrame(text.Text), processor.Downstream); err != nil {
+		if err := emit(text.Text); err != nil {
 			return err
 		}
 	}
-	if err := stream.Err(); err != nil && ctx.Err() == nil {
-		s.PushError(ctx, "anthropic streaming failed", err, false)
-	}
-
-	return s.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+	return stream.Err()
 }
 
 // toMessages converts the conversation into Anthropic message params.
