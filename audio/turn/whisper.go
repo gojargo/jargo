@@ -1,6 +1,11 @@
 package turn
 
-import "math"
+import (
+	"math"
+	"sync"
+
+	"gonum.org/v1/gonum/dsp/fourier"
+)
 
 // Whisper-style log-mel feature extraction for Smart Turn v3, ported from the
 // numpy reference (transformers.WhisperFeatureExtractor with chunk_length=8).
@@ -22,12 +27,32 @@ const (
 //nolint:gochecknoglobals // precomputed feature-extraction constants
 var (
 	hannWindow   [nFFT]float64
-	melFilters   [numFreqs][nMels]float64 // projects a power spectrum onto the mel scale
-	dftCos       [numFreqs][nFFT]float64
-	dftSin       [numFreqs][nFFT]float64
-	hannDFTPower [numFreqs]float64 // |DFT(hann)|^2, used to shortcut constant frames
+	melFilters   [nMels][numFreqs]float64 // projects a power spectrum onto the mel scale; mel-major so the projection's inner loop over frequency bins is contiguous
+	melLo, melHi [nMels]int               // inclusive range of nonzero bins per mel filter; the filters are triangular, so only a handful of bins are nonzero
+	hannDFTPower [numFreqs]float64         // |DFT(hann)|^2, used to shortcut constant frames
 	featuresInit bool
 )
+
+// featureWorkspace bundles the FFT and scratch buffers one log-mel extraction
+// needs. A gonum FFT holds mutable work buffers and is not safe for concurrent
+// use, so each computeLogMel call borrows a workspace from the pool — one per
+// concurrent turn analysis — rather than sharing a global.
+type featureWorkspace struct {
+	fft      *fourier.FFT
+	windowed []float64    // windowed frame, length nFFT
+	coeffs   []complex128 // FFT output, length numFreqs
+}
+
+//nolint:gochecknoglobals // reusable FFT/scratch workspaces, see featureWorkspace
+var workspacePool = sync.Pool{
+	New: func() any {
+		return &featureWorkspace{
+			fft:      fourier.NewFFT(nFFT),
+			windowed: make([]float64, nFFT),
+			coeffs:   make([]complex128, numFreqs),
+		}
+	},
+}
 
 // initFeatures precomputes the window, mel filterbank and DFT tables. It runs
 // lazily on first use rather than in init() so importing the package stays
@@ -41,15 +66,11 @@ func initFeatures() {
 		hannWindow[n] = 0.5 - 0.5*math.Cos(2*math.Pi*float64(n)/float64(nFFT))
 	}
 	buildMelFilterbank()
+
+	// |DFT(hann)|^2 per bin, for the constant-frame shortcut in framePower.
+	coeffs := fourier.NewFFT(nFFT).Coefficients(nil, hannWindow[:])
 	for k := range numFreqs {
-		var re, im float64
-		for n := range nFFT {
-			a := 2 * math.Pi * float64(k) * float64(n) / float64(nFFT)
-			dftCos[k][n] = math.Cos(a)
-			dftSin[k][n] = math.Sin(a)
-			re += hannWindow[n] * dftCos[k][n]
-			im -= hannWindow[n] * dftSin[k][n]
-		}
+		re, im := real(coeffs[k]), imag(coeffs[k])
 		hannDFTPower[k] = re*re + im*im
 	}
 	featuresInit = true
@@ -111,8 +132,23 @@ func buildMelFilterbank() {
 				v = 0
 			}
 			enorm := 2.0 / (filterFreqs[m+2] - filterFreqs[m]) // Slaney area normalization
-			melFilters[b][m] = v * enorm
+			melFilters[m][b] = v * enorm
 		}
+	}
+
+	// Record each triangular filter's nonzero bin span so the projection skips
+	// the long runs of zero weights.
+	for m := range nMels {
+		lo, hi := 0, -1 // empty by default: lo > hi means no nonzero bins
+		for b := range numFreqs {
+			if melFilters[m][b] > 0 {
+				if hi < lo {
+					lo = b
+				}
+				hi = b
+			}
+		}
+		melLo[m], melHi[m] = lo, hi
 	}
 }
 
@@ -161,7 +197,7 @@ func reflectPad(x []float64, pad int) []float64 {
 // the fixed 8-second window is silence padding that normalization turns into a
 // single repeated value — has power c^2 * |DFT(hann)|^2, so the full DFT is
 // skipped for it.
-func framePower(padded []float64, start int, power *[numFreqs]float64) {
+func (ws *featureWorkspace) framePower(padded []float64, start int, power *[numFreqs]float64) {
 	c := padded[start]
 	constant := true
 	for n := 1; n < nFFT; n++ {
@@ -178,18 +214,12 @@ func framePower(padded []float64, start int, power *[numFreqs]float64) {
 		return
 	}
 
-	var windowed [nFFT]float64
 	for n := range nFFT {
-		windowed[n] = padded[start+n] * hannWindow[n]
+		ws.windowed[n] = padded[start+n] * hannWindow[n]
 	}
+	ws.fft.Coefficients(ws.coeffs, ws.windowed)
 	for k := range numFreqs {
-		var re, im float64
-		cos := &dftCos[k]
-		sin := &dftSin[k]
-		for n := range nFFT {
-			re += windowed[n] * cos[n]
-			im -= windowed[n] * sin[n]
-		}
+		re, im := real(ws.coeffs[k]), imag(ws.coeffs[k])
 		power[k] = re*re + im*im
 	}
 }
@@ -197,14 +227,15 @@ func framePower(padded []float64, start int, power *[numFreqs]float64) {
 // frameLogMel computes the log10 mel spectrum of the frame starting at the
 // given sample offset in the reflect-padded signal, writing nMels values into
 // dst.
-func frameLogMel(padded []float64, start int, dst []float64) {
+func (ws *featureWorkspace) frameLogMel(padded []float64, start int, dst []float64) {
 	var power [numFreqs]float64
-	framePower(padded, start, &power)
+	ws.framePower(padded, start, &power)
 
 	for m := range nMels {
 		var sum float64
-		for b := range numFreqs {
-			sum += melFilters[b][m] * power[b]
+		filt := &melFilters[m]
+		for b := melLo[m]; b <= melHi[m]; b++ {
+			sum += filt[b] * power[b]
 		}
 		if sum < melFloor {
 			sum = melFloor
@@ -223,6 +254,9 @@ func computeLogMel(audio []float32) []float32 {
 	x := normalizePadded(audio)
 	padded := reflectPad(x, nFFT/2)
 
+	ws := workspacePool.Get().(*featureWorkspace)
+	defer workspacePool.Put(ws)
+
 	mels := make([]float64, nMels*nFrames)
 	logMel := make([]float64, nMels)
 	maxLog := math.Inf(-1)
@@ -230,7 +264,7 @@ func computeLogMel(audio []float32) []float32 {
 	// One extra frame is computed then dropped, matching the reference; only the
 	// first nFrames are kept.
 	for f := range nFrames {
-		frameLogMel(padded, f*hopLength, logMel)
+		ws.frameLogMel(padded, f*hopLength, logMel)
 		for m := range nMels {
 			mels[m*nFrames+f] = logMel[m]
 			if logMel[m] > maxLog {
