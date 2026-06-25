@@ -1,0 +1,72 @@
+# Plumber config for jargo's GitHub Actions pipelines.
+# Required for `plumber analyze` (see .github/workflows/security.yml). Findings
+# are reported to the Security tab; the workflow runs with soft-fail, so
+# below-threshold compliance does not fail the build. Generate/refresh with
+# `plumber config generate`.
+version: "2.0"
+
+github:
+  controls:
+    # Actions should be pinned by commit SHA; actions/* and github/* are trusted
+    # to use tags (jargo pins the rest by tag — reported, not failed for now).
+    actionsMustBePinnedByCommitSha:
+      enabled: true
+      trustedOwners:
+        - actions
+        - github
+    githubActionMustComeFromAuthorizedSources:
+      enabled: true
+      trustGithubOfficialActions: true
+      trustSameOrgActions: true
+      minimumStars: 0
+    actionsMustNotBeArchived:
+      enabled: true
+    actionsMustNotCarryKnownCVEs:
+      enabled: true
+    workflowsMustDeclarePermissions:
+      enabled: true
+    workflowMustNotGrantPermissionsWriteAll:
+      enabled: true
+    workflowMustNotUseDangerousTriggers:
+      enabled: true
+    workflowMustNotInjectUserInputInScripts:
+      enabled: true
+    pullRequestTargetMustNotCheckoutHead:
+      enabled: true
+    reusableWorkflowsMustNotInheritSecrets:
+      enabled: true
+    pipelineMustNotExecuteUnverifiedScripts:
+      enabled: true
+      trustedUrls: []
+    pipelineMustNotUseDockerInDocker:
+      enabled: true
+      detectInsecureDaemon: true
+    pipelineMustNotEnableDebugTrace:
+      enabled: true
+      forbiddenVariables:
+        - ACTIONS_STEP_DEBUG
+        - ACTIONS_RUNNER_DEBUG
+    pipelineMustNotLeakSecretsInConfig:
+      enabled: true
+    securityJobsMustNotBeWeakened:
+      enabled: true
+      securityJobPatterns:
+        - "*codeql*"
+        - "*gitleaks*"
+        - "*trivy*"
+        - "*plumber*"
+        - "*-scan"
+        - "*scan*"
+      allowFailureMustBeFalse:
+        enabled: true
+      rulesMustNotBeRedefined:
+        enabled: true
+      whenMustNotBeManual:
+        enabled: true
+    branchMustBeProtected:
+      enabled: true
+      defaultMustBeProtected: true
+      namePatterns:
+        - main
+      allowForcePush: false
+      codeOwnerApprovalRequired: false
