@@ -60,6 +60,8 @@ jobs:
       - name: Plumber pipeline scan
         uses: getplumber/plumber@fec66e6efa296d4e09b0399c6bff981a90d2bb74 # v0.3.73
         with:
-          # Report findings without failing the build yet; drop soft-fail once
-          # the baseline is clean.
+          # Gate below the action's default of 100 so CI stays green while the
+          # findings still surface in the Security tab. Raise it as the pipelines
+          # are hardened (SHA-pin actions, protect branches, ...).
+          threshold: "75"
           soft-fail: "true"
