@@ -26,9 +26,9 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// ErrStopTurn, returned by a ToolHandler, ends the current turn after recording
-// the tool result instead of generating a further model response. Use it for
-// tools that conclude the interaction, such as ending the session.
+// ErrStopTurn is returned by a ToolHandler to end the current turn after
+// recording the tool result instead of generating a further model response. Use
+// it for tools that conclude the interaction, such as ending the session.
 var ErrStopTurn = errors.New("stop turn")
 
 // Emit pushes a chunk of generated text downstream as an LLMTextFrame. A
@@ -191,24 +191,13 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 		if len(calls) == 0 {
 			break // final spoken answer; the assistant aggregator commits it
 		}
-		if err := b.PushFrame(ctx, frames.NewFunctionCallsStartedFrame(preamble.String(), calls), processor.Downstream); err != nil {
+		started := frames.NewFunctionCallsStartedFrame(preamble.String(), calls)
+		if err := b.PushFrame(ctx, started, processor.Downstream); err != nil {
 			return err
 		}
-		stop := false
-		for _, c := range calls {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if err := b.PushFrame(ctx, frames.NewFunctionCallInProgressFrame(c.ID, c.Name), processor.Downstream); err != nil {
-				return err
-			}
-			result, isErr, stopTurn := b.invoke(ctx, c)
-			if stopTurn {
-				stop = true
-			}
-			if err := b.PushFrame(ctx, frames.NewFunctionCallResultFrame(c.ID, c.Name, result, isErr), processor.Downstream); err != nil {
-				return err
-			}
+		stop, err := b.runTools(ctx, calls)
+		if err != nil {
+			return err
 		}
 		if ctx.Err() != nil || stop {
 			break
@@ -217,6 +206,31 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 		// generate the model's response to the tool results.
 	}
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+}
+
+// runTools executes each tool call in turn, emitting an in-progress frame and a
+// result frame for each, and reports whether a handler asked to stop the turn
+// (see ErrStopTurn). A canceled ctx stops the loop and is returned.
+func (b *Base) runTools(ctx context.Context, calls []frames.ToolCall) (bool, error) {
+	stop := false
+	for _, c := range calls {
+		if ctx.Err() != nil {
+			return stop, ctx.Err()
+		}
+		inProgress := frames.NewFunctionCallInProgressFrame(c.ID, c.Name)
+		if err := b.PushFrame(ctx, inProgress, processor.Downstream); err != nil {
+			return stop, err
+		}
+		result, isErr, stopTurn := b.invoke(ctx, c)
+		if stopTurn {
+			stop = true
+		}
+		resultFrame := frames.NewFunctionCallResultFrame(c.ID, c.Name, result, isErr)
+		if err := b.PushFrame(ctx, resultFrame, processor.Downstream); err != nil {
+			return stop, err
+		}
+	}
+	return stop, nil
 }
 
 // invoke dispatches a tool call to its handler, returning the result content,
