@@ -1,6 +1,7 @@
 package frames
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 )
@@ -17,10 +18,41 @@ const (
 	RoleAssistant Role = "assistant"
 )
 
-// Message is a single conversation turn.
+// Tool is a function the model may call. Parameters is a JSON-Schema object
+// (`{"type":"object","properties":{…},"required":[…]}`) describing the
+// arguments the tool accepts.
+type Tool struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
+}
+
+// ToolCall is a request from the model to invoke a tool. Args is the raw JSON
+// arguments the model produced.
+type ToolCall struct {
+	ID   string
+	Name string
+	Args json.RawMessage
+}
+
+// ToolResult is the outcome of a tool invocation, paired to a ToolCall by ID.
+type ToolResult struct {
+	ID      string
+	Name    string
+	Content string
+	IsError bool
+}
+
+// Message is a single conversation turn. A plain turn carries Text; an assistant
+// turn that invoked tools also carries ToolCalls; a turn returning tool outputs
+// carries ToolResults.
 type Message struct {
 	Role Role
 	Text string
+	// ToolCalls is set on an assistant message that requested tool calls.
+	ToolCalls []ToolCall
+	// ToolResults is set on a message returning the outputs of tool calls.
+	ToolResults []ToolResult
 }
 
 // LLMContext holds the conversation so far: a system prompt plus the running
@@ -31,6 +63,7 @@ type LLMContext struct {
 	mu       sync.Mutex
 	system   string
 	messages []Message
+	tools    []Tool
 }
 
 // NewLLMContext builds a context with the given system prompt.
@@ -39,7 +72,36 @@ func NewLLMContext(system string) *LLMContext {
 }
 
 // System returns the system prompt.
-func (c *LLMContext) System() string { return c.system }
+func (c *LLMContext) System() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.system
+}
+
+// SetSystem replaces the system prompt. Used to switch the assistant's behavior
+// mid-session (the next generation picks up the new prompt).
+func (c *LLMContext) SetSystem(system string) {
+	c.mu.Lock()
+	c.system = system
+	c.mu.Unlock()
+}
+
+// Tools returns a copy of the tools the model may call.
+func (c *LLMContext) Tools() []Tool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Tool, len(c.tools))
+	copy(out, c.tools)
+	return out
+}
+
+// SetTools replaces the set of tools the model may call. Used alongside
+// SetSystem to switch the available toolset mid-session.
+func (c *LLMContext) SetTools(tools []Tool) {
+	c.mu.Lock()
+	c.tools = tools
+	c.mu.Unlock()
+}
 
 // AddUserMessage appends a user message.
 func (c *LLMContext) AddUserMessage(text string) {
@@ -52,6 +114,23 @@ func (c *LLMContext) AddUserMessage(text string) {
 func (c *LLMContext) AddAssistantMessage(text string) {
 	c.mu.Lock()
 	c.messages = append(c.messages, Message{Role: RoleAssistant, Text: text})
+	c.mu.Unlock()
+}
+
+// AddAssistantToolCalls appends an assistant message carrying optional preamble
+// text and the tool calls the model requested in the same turn.
+func (c *LLMContext) AddAssistantToolCalls(text string, calls []ToolCall) {
+	c.mu.Lock()
+	c.messages = append(c.messages, Message{Role: RoleAssistant, Text: text, ToolCalls: calls})
+	c.mu.Unlock()
+}
+
+// AddToolResults appends a user message returning the outputs of one or more
+// tool calls. The results of all calls in an assistant turn belong in a single
+// message.
+func (c *LLMContext) AddToolResults(results []ToolResult) {
+	c.mu.Lock()
+	c.messages = append(c.messages, Message{Role: RoleUser, ToolResults: results})
 	c.mu.Unlock()
 }
 

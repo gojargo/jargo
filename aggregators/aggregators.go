@@ -206,10 +206,15 @@ type AssistantAggregator struct {
 	mu          sync.Mutex
 	aggregation string
 	started     bool
+	// Tool-call state for the current assistant turn. pendingIDs holds the
+	// calls still awaiting a result; pendingResults collects results until all
+	// have arrived and they can be written as one tool-result message.
+	pendingResults []frames.ToolResult
+	pendingIDs     map[string]bool
 }
 
 func newAssistant(ctx *frames.LLMContext) *AssistantAggregator {
-	a := &AssistantAggregator{context: ctx}
+	a := &AssistantAggregator{context: ctx, pendingIDs: make(map[string]bool)}
 	a.Base = processor.New("AssistantContextAggregator", a)
 	return a
 }
@@ -231,13 +236,54 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 			a.aggregation += fr.Text
 		}
 		a.mu.Unlock()
+	case *frames.FunctionCallsStartedFrame:
+		a.handleFunctionCallsStarted(fr)
+	case *frames.FunctionCallResultFrame:
+		a.handleFunctionCallResult(fr)
 	case *frames.LLMFullResponseEndFrame:
 		a.commit()
 	case *frames.InterruptionFrame:
-		// The response was cut off; keep whatever the bot already said.
-		a.commit()
+		// The response was cut off; keep whatever the bot already said and
+		// balance any tool calls that never got a result.
+		a.commitInterrupted()
 	}
 	return a.PushFrame(ctx, f, dir)
+}
+
+// handleFunctionCallsStarted writes the assistant turn that requested the tool
+// calls — any preamble text plus the tool-use blocks — and records the calls as
+// awaiting results.
+func (a *AssistantAggregator) handleFunctionCallsStarted(fr *frames.FunctionCallsStartedFrame) {
+	a.mu.Lock()
+	text := a.aggregation
+	a.aggregation = ""
+	for _, c := range fr.Calls {
+		a.pendingIDs[c.ID] = true
+	}
+	a.mu.Unlock()
+	a.context.AddAssistantToolCalls(text, fr.Calls)
+}
+
+// handleFunctionCallResult buffers a tool result and, once every call from the
+// assistant turn has one, writes them as a single tool-result message.
+func (a *AssistantAggregator) handleFunctionCallResult(fr *frames.FunctionCallResultFrame) {
+	a.mu.Lock()
+	a.pendingResults = append(a.pendingResults, frames.ToolResult{
+		ID:      fr.ToolCallID,
+		Name:    fr.ToolName,
+		Content: fr.Result,
+		IsError: fr.IsError,
+	})
+	delete(a.pendingIDs, fr.ToolCallID)
+	var results []frames.ToolResult
+	if len(a.pendingIDs) == 0 {
+		results = a.pendingResults
+		a.pendingResults = nil
+	}
+	a.mu.Unlock()
+	if results != nil {
+		a.context.AddToolResults(results)
+	}
 }
 
 // commit appends the aggregated assistant message to the context, if any, and
@@ -248,6 +294,31 @@ func (a *AssistantAggregator) commit() {
 	a.aggregation = ""
 	a.started = false
 	a.mu.Unlock()
+	if text != "" {
+		a.context.AddAssistantMessage(text)
+	}
+}
+
+// commitInterrupted closes out a turn cut off by an interruption. Any tool calls
+// still awaiting a result get a synthetic error result so the assistant turn
+// that requested them stays balanced (a tool-use block always has a matching
+// tool-result), then any partial assistant text is committed. This keeps the
+// context valid for the next turn.
+func (a *AssistantAggregator) commitInterrupted() {
+	a.mu.Lock()
+	results := a.pendingResults
+	a.pendingResults = nil
+	for id := range a.pendingIDs {
+		results = append(results, frames.ToolResult{ID: id, Content: "interrupted", IsError: true})
+		delete(a.pendingIDs, id)
+	}
+	text := a.aggregation
+	a.aggregation = ""
+	a.started = false
+	a.mu.Unlock()
+	if len(results) > 0 {
+		a.context.AddToolResults(results)
+	}
 	if text != "" {
 		a.context.AddAssistantMessage(text)
 	}
