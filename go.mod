@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/anthropics/anthropic-sdk-go v1.51.0
 	github.com/coder/websocket v1.8.15
-	github.com/pion/opus v0.1.1-0.20260618155929-2548672a5d45
+	github.com/pion/opus v0.1.1-0.20260624215928-453958b53a21
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/yalue/onnxruntime_go v1.31.0
 	gonum.org/v1/gonum v0.17.0
