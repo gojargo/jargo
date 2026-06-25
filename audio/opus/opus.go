@@ -4,6 +4,11 @@
 // The codec runs at 48 kHz — the rate WebRTC negotiates for Opus — so audio
 // crosses the transport without resampling. Encoding produces 20 ms frames, the
 // standard WebRTC packetization.
+//
+// The decoder is pure Go. The Encoder has two builds selected by the `libopus`
+// build tag (see encoder_pion.go / encoder_libopus.go): the default is the
+// pure-Go encoder; `-tags libopus` links the C library for higher speech
+// quality. Both expose the same NewEncoder/Encode API.
 package opus
 
 import (
@@ -64,41 +69,4 @@ func (d *Decoder) Decode(packet []byte) ([]byte, error) {
 		binary.LittleEndian.PutUint16(out[i*2:], uint16(d.buf[i]))
 	}
 	return out, nil
-}
-
-// Encoder encodes 48 kHz S16LE PCM into Opus packets.
-type Encoder struct {
-	enc      *pion.Encoder
-	channels int
-	out      []byte
-}
-
-// NewEncoder builds an Encoder for channels-channel 48 kHz audio at the given
-// bitrate in bits per second; pass 0 for the codec default.
-func NewEncoder(channels, bitrate int) (*Encoder, error) {
-	opts := []pion.EncoderOption{pion.WithChannels(channels)}
-	if bitrate > 0 {
-		opts = append(opts, pion.WithBitrate(bitrate))
-	}
-	e, err := pion.NewEncoder(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("new opus encoder: %w", err)
-	}
-	return &Encoder{
-		enc:      e,
-		channels: channels,
-		out:      make([]byte, maxPacketBytes),
-	}, nil
-}
-
-// Encode encodes exactly one 20 ms frame of interleaved S16LE PCM — that is
-// FrameBytes(channels) bytes — into a single Opus packet.
-func (e *Encoder) Encode(pcm []byte) ([]byte, error) {
-	n, err := e.enc.Encode(pcm, e.out)
-	if err != nil {
-		return nil, fmt.Errorf("opus encode: %w", err)
-	}
-	packet := make([]byte, n)
-	copy(packet, e.out[:n])
-	return packet, nil
 }
