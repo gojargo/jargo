@@ -52,6 +52,36 @@ func NewLLMTextFrame(text string) *LLMTextFrame {
 	}
 }
 
+// TTSSpeakFrame carries fixed text for the TTS service to speak directly,
+// bypassing the LLM and the TTS sentence aggregator — the way to make the bot
+// say a set phrase (a greeting, an acknowledgement). It is a data frame.
+type TTSSpeakFrame struct {
+	BaseDataFrame
+	// Text is the exact text to speak.
+	Text string
+	// AppendToContext reports whether the spoken text is appended to the LLM
+	// context as an assistant message. Defaults to true; set it false for
+	// utterances that should not become part of the conversation (e.g. a wake
+	// acknowledgement, which would otherwise start the context on an assistant
+	// turn).
+	AppendToContext bool
+}
+
+// NewTTSSpeakFrame builds a TTSSpeakFrame that speaks text, appending it to the
+// LLM context by default.
+func NewTTSSpeakFrame(text string) *TTSSpeakFrame {
+	return &TTSSpeakFrame{
+		BaseDataFrame:   NewBaseDataFrame("TTSSpeakFrame"),
+		Text:            text,
+		AppendToContext: true,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *TTSSpeakFrame) String() string {
+	return fmt.Sprintf("%s(text: [%s])", f.Name(), f.Text)
+}
+
 // TranscriptionFrame carries a finalized speech transcription for a user.
 type TranscriptionFrame struct {
 	TextFrame
@@ -126,6 +156,7 @@ func (f *InterimTranscriptionFrame) String() string {
 var (
 	_ DataFrame = (*TextFrame)(nil)
 	_ DataFrame = (*LLMTextFrame)(nil)
+	_ DataFrame = (*TTSSpeakFrame)(nil)
 	_ DataFrame = (*TranscriptionFrame)(nil)
 	_ DataFrame = (*InterimTranscriptionFrame)(nil)
 )

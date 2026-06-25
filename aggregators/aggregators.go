@@ -133,6 +133,12 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 	case *frames.TranscriptionFrame:
 		return u.handleTranscription(ctx, fr, dir)
 
+	case *frames.LLMRunFrame:
+		// Explicit trigger: run the LLM on the current context now (e.g. to make
+		// the bot speak first), bypassing the turn-completion gating. The frame
+		// is consumed and turned into the LLMContextFrame the LLM service runs.
+		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+
 	default:
 		return u.PushFrame(ctx, f, dir)
 	}
@@ -242,6 +248,11 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		a.handleFunctionCallResult(fr)
 	case *frames.LLMFullResponseEndFrame:
 		a.commit()
+	case *frames.TTSSpeakFrame:
+		// Fixed bot speech becomes part of the conversation unless opted out.
+		if fr.AppendToContext {
+			a.context.AddAssistantMessage(fr.Text)
+		}
 	case *frames.InterruptionFrame:
 		// The response was cut off; keep whatever the bot already said and
 		// balance any tool calls that never got a result.

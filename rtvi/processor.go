@@ -54,6 +54,8 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 		return p.emitAndForward(ctx, f, dir, event(TypeBotStoppedSpeaking))
 	case *frames.LLMTextFrame:
 		return p.emitAndForward(ctx, f, dir, BotLLMText(fr.Text))
+	case *frames.TTSSpeakFrame:
+		return p.emitAndForward(ctx, f, dir, BotTTSText(fr.Text))
 	case *frames.ErrorFrame:
 		return p.emitAndForward(ctx, f, dir, Error(fr.Error, fr.Fatal))
 	default:

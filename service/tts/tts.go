@@ -64,6 +64,12 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 			return err
 		}
 		return b.aggregate(ctx, fr.Text)
+	case *frames.TTSSpeakFrame:
+		// Speak fixed text immediately, bypassing sentence aggregation.
+		if err := b.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		return b.synthesize(ctx, fr.Text)
 	case *frames.LLMFullResponseEndFrame:
 		if err := b.flush(ctx); err != nil {
 			return err

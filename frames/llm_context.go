@@ -168,5 +168,21 @@ func (f *LLMContextFrame) String() string {
 	return fmt.Sprintf("%s(messages: %d)", f.Name(), n)
 }
 
-// Compile-time interface check.
-var _ DataFrame = (*LLMContextFrame)(nil)
+// LLMRunFrame instructs the LLM service to process the current context and
+// generate a response. Queue it to make the bot speak first at the start of a
+// session, or to re-run after editing the context. It carries no data — the
+// user aggregator runs its current shared context. It is a data frame.
+type LLMRunFrame struct {
+	BaseDataFrame
+}
+
+// NewLLMRunFrame builds an LLMRunFrame.
+func NewLLMRunFrame() *LLMRunFrame {
+	return &LLMRunFrame{BaseDataFrame: NewBaseDataFrame("LLMRunFrame")}
+}
+
+// Compile-time interface checks.
+var (
+	_ DataFrame = (*LLMContextFrame)(nil)
+	_ DataFrame = (*LLMRunFrame)(nil)
+)
