@@ -138,9 +138,10 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 // connection's audio track.
 type outputTransport struct {
 	*transport.BaseOutput
-	conn *Connection
-	enc  *opus.Encoder
-	tail []byte
+	conn     *Connection
+	enc      *opus.Encoder
+	tail     []byte
+	nextSend time.Time
 }
 
 func newOutput(conn *Connection, params transport.Params) *outputTransport {
@@ -154,9 +155,14 @@ func (out *outputTransport) SendMessage(_ context.Context, data []byte) error {
 	return out.conn.SendMessage(data)
 }
 
-// WriteAudio encodes PCM into 20 ms Opus frames and sends them. Any audio that
-// does not fill a whole frame is held until the next call.
-func (out *outputTransport) WriteAudio(_ context.Context, pcm []byte) error {
+// WriteAudio encodes PCM into 20 ms Opus frames and sends them, paced to
+// wall-clock time. Pion's WriteSample packetizes and sends a frame the instant
+// it is called, so writing a whole utterance back-to-back floods the client's
+// jitter buffer and produces machine-gun / clicking playback. A pull-based media
+// track is read at real time by the RTP sender and paces itself; this push-based
+// track does not, so we pace explicitly (as pionrtc's own test does with a
+// ticker). Audio that does not fill a whole frame is held until the next call.
+func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	ch := channels(out.Params().AudioOutChannels)
 	if out.enc == nil {
 		enc, err := opus.NewEncoder(ch, out.Params().AudioOutBitrate)
@@ -173,10 +179,31 @@ func (out *outputTransport) WriteAudio(_ context.Context, pcm []byte) error {
 		if err != nil {
 			return err
 		}
+		out.pace(ctx)
 		if err := out.conn.WriteAudio(packet, opus.FrameDuration); err != nil {
 			return err
 		}
 		out.tail = out.tail[frameBytes:]
 	}
 	return nil
+}
+
+// pace blocks until it is time to send the next 20 ms Opus frame, keeping output
+// at real time. The clock resets after a gap longer than one frame (a new
+// utterance, or an underrun) so playback resumes immediately rather than bursting
+// to catch up.
+func (out *outputTransport) pace(ctx context.Context) {
+	now := time.Now()
+	if out.nextSend.IsZero() || now.Sub(out.nextSend) > opus.FrameDuration {
+		out.nextSend = now
+	}
+	if d := time.Until(out.nextSend); d > 0 {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+	}
+	out.nextSend = out.nextSend.Add(opus.FrameDuration)
 }
