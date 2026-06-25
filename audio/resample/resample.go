@@ -26,9 +26,15 @@ static soxr_runtime_spec_t jargo_runtime_1t(void) { return soxr_runtime_spec(1);
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 )
+
+// errSoxrCreate is returned when libsoxr fails to create a resampler.
+//
+//nolint:gochecknoglobals // sentinel error
+var errSoxrCreate = errors.New("resample: soxr_create failed")
 
 // Resampler converts a stream of interleaved S16LE PCM from one sample rate to
 // another. Create one per audio stream with New; it is not safe for concurrent
@@ -60,10 +66,10 @@ func New(inRate, outRate, channels int) (*Resampler, error) {
 	var serr C.soxr_error_t
 	r.soxr = C.soxr_create(
 		C.double(inRate), C.double(outRate), C.uint(channels),
-		&serr, &ioSpec, &qSpec, &rtSpec)
+		&serr, &ioSpec, &qSpec, &rtSpec) //nolint:gocritic // dupSubExpr false positive in cgo-generated soxr_create
 	if serr != nil {
-		return nil, fmt.Errorf("resample: soxr_create %d->%d ch=%d: %s",
-			inRate, outRate, channels, C.GoString((*C.char)(unsafe.Pointer(serr))))
+		return nil, fmt.Errorf("%w %d->%d ch=%d: %s",
+			errSoxrCreate, inRate, outRate, channels, C.GoString((*C.char)(unsafe.Pointer(serr))))
 	}
 	return r, nil
 }

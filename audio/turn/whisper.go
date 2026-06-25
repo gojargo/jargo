@@ -26,10 +26,15 @@ const (
 
 //nolint:gochecknoglobals // precomputed feature-extraction constants
 var (
-	hannWindow   [nFFT]float64
-	melFilters   [nMels][numFreqs]float64 // projects a power spectrum onto the mel scale; mel-major so the projection's inner loop over frequency bins is contiguous
-	melLo, melHi [nMels]int               // inclusive range of nonzero bins per mel filter; the filters are triangular, so only a handful of bins are nonzero
-	hannDFTPower [numFreqs]float64         // |DFT(hann)|^2, used to shortcut constant frames
+	hannWindow [nFFT]float64
+	// melFilters projects a power spectrum onto the mel scale; it is mel-major so
+	// the projection's inner loop over frequency bins is contiguous.
+	melFilters [nMels][numFreqs]float64
+	// melLo, melHi are the inclusive range of nonzero bins per mel filter; the
+	// filters are triangular, so only a handful of bins are nonzero.
+	melLo, melHi [nMels]int
+	// hannDFTPower is |DFT(hann)|^2, used to shortcut constant frames.
+	hannDFTPower [numFreqs]float64
 	featuresInit bool
 )
 
@@ -254,7 +259,7 @@ func computeLogMel(audio []float32) []float32 {
 	x := normalizePadded(audio)
 	padded := reflectPad(x, nFFT/2)
 
-	ws := workspacePool.Get().(*featureWorkspace)
+	ws, _ := workspacePool.Get().(*featureWorkspace)
 	defer workspacePool.Put(ws)
 
 	mels := make([]float64, nMels*nFrames)
