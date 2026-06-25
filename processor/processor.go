@@ -134,6 +134,12 @@ type Base struct {
 	startedMu sync.Mutex
 	started   bool
 
+	// Metrics flags captured from the StartFrame. They are written once on the
+	// input goroutine before the process goroutine is created in start(), which
+	// establishes the happens-before for reads from ProcessFrame.
+	metricsEnabled      bool
+	usageMetricsEnabled bool
+
 	cancelMu  sync.Mutex
 	canceling bool
 
@@ -277,8 +283,10 @@ func (b *Base) processFrame(ctx context.Context, it item) error {
 // concrete processor overrides this, calls the base first, then forwards the
 // frame with PushFrame.
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) error {
-	switch f.(type) {
+	switch fr := f.(type) {
 	case *frames.StartFrame:
+		b.metricsEnabled = fr.EnableMetrics
+		b.usageMetricsEnabled = fr.EnableUsageMetrics
 		b.start()
 	case *frames.InterruptionFrame:
 		b.startInterruption()
@@ -287,6 +295,14 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) 
 	}
 	return nil
 }
+
+// MetricsEnabled reports whether performance-metrics collection was enabled by
+// the StartFrame. It is valid once the processor has received its StartFrame.
+func (b *Base) MetricsEnabled() bool { return b.metricsEnabled }
+
+// UsageMetricsEnabled reports whether usage-metrics collection was enabled by
+// the StartFrame. It is valid once the processor has received its StartFrame.
+func (b *Base) UsageMetricsEnabled() bool { return b.usageMetricsEnabled }
 
 // PushFrame implements Processor. It forwards a frame to the neighbor in dir.
 // Frames pushed before the processor has received its StartFrame are dropped.

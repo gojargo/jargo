@@ -7,6 +7,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -26,6 +27,20 @@ type Config struct {
 	Model string
 	// MaxTokens caps the response length; 0 uses a small default suited to voice.
 	MaxTokens int
+	// Temperature, TopP and TopK are optional sampling controls. A nil value
+	// leaves the API default in place; they are pointers so a deliberate zero is
+	// distinguishable from "unset".
+	Temperature *float64
+	TopP        *float64
+	TopK        *int64
+	// RequestTimeout bounds a single request attempt, including the full stream;
+	// 0 leaves the SDK default. Keep it generously above the expected response
+	// time, since for a streaming request it caps the whole response.
+	RequestTimeout time.Duration
+	// MaxRetries overrides how many times a failed request is retried before the
+	// stream begins (transient connection errors, 429s, 5xx); 0 leaves the SDK
+	// default of two retries. Mid-stream failures are not retried.
+	MaxRetries int
 }
 
 // Service is a streaming Anthropic LLM processor.
@@ -34,6 +49,11 @@ type Service struct {
 	client    sdk.Client
 	model     sdk.Model
 	maxTokens int64
+	// Sampling controls, applied to each request. A zero param.Opt is omitted
+	// from the request, leaving the API default.
+	temperature param.Opt[float64]
+	topP        param.Opt[float64]
+	topK        param.Opt[int64]
 }
 
 // NewLLM builds an Anthropic LLM service.
@@ -41,6 +61,12 @@ func NewLLM(cfg Config) *Service {
 	var opts []option.RequestOption
 	if cfg.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(cfg.APIKey))
+	}
+	if cfg.RequestTimeout > 0 {
+		opts = append(opts, option.WithRequestTimeout(cfg.RequestTimeout))
+	}
+	if cfg.MaxRetries > 0 {
+		opts = append(opts, option.WithMaxRetries(cfg.MaxRetries))
 	}
 	s := &Service{
 		client:    sdk.NewClient(opts...),
@@ -53,16 +79,30 @@ func NewLLM(cfg Config) *Service {
 	if cfg.MaxTokens > 0 {
 		s.maxTokens = int64(cfg.MaxTokens)
 	}
+	if cfg.Temperature != nil {
+		s.temperature = param.NewOpt(*cfg.Temperature)
+	}
+	if cfg.TopP != nil {
+		s.topP = param.NewOpt(*cfg.TopP)
+	}
+	if cfg.TopK != nil {
+		s.topK = param.NewOpt(*cfg.TopK)
+	}
 	s.Base = llm.New("AnthropicLLM", s)
 	return s
 }
 
-// Generate streams a response for the conversation, emitting each text delta.
-func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+// newParams builds the request params shared by both generation paths: model,
+// token cap, the converted conversation, sampling controls and the cached
+// system prompt.
+func (s *Service) newParams(convo *frames.LLMContext) sdk.MessageNewParams {
 	params := sdk.MessageNewParams{
-		Model:     s.model,
-		MaxTokens: s.maxTokens,
-		Messages:  toMessages(convo.Messages()),
+		Model:       s.model,
+		MaxTokens:   s.maxTokens,
+		Messages:    toMessages(convo.Messages()),
+		Temperature: s.temperature,
+		TopP:        s.topP,
+		TopK:        s.topK,
 	}
 	if system := convo.System(); system != "" {
 		// Cache the system prompt so repeated turns reuse it.
@@ -71,10 +111,34 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 			CacheControl: sdk.NewCacheControlEphemeralParam(),
 		}}
 	}
+	return params
+}
 
-	stream := s.client.Messages.NewStreaming(ctx, params)
+// toUsage converts the SDK's per-request usage into the pipeline's token usage.
+func toUsage(u sdk.Usage) frames.LLMTokenUsage {
+	return frames.LLMTokenUsage{
+		PromptTokens:        u.InputTokens,
+		CompletionTokens:    u.OutputTokens,
+		CacheReadTokens:     u.CacheReadInputTokens,
+		CacheCreationTokens: u.CacheCreationInputTokens,
+		TotalTokens:         u.InputTokens + u.OutputTokens,
+	}
+}
+
+// Generate streams a response for the conversation, emitting each text delta.
+// When usage metrics are enabled it accumulates the stream so it can report the
+// turn's token usage once the response completes.
+func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+	report := s.UsageMetricsEnabled()
+	var acc sdk.Message
+	stream := s.client.Messages.NewStreaming(ctx, s.newParams(convo))
 	for stream.Next() {
 		event := stream.Current()
+		if report {
+			if err := acc.Accumulate(event); err != nil {
+				return err
+			}
+		}
 		delta, ok := event.AsAny().(sdk.ContentBlockDeltaEvent)
 		if !ok {
 			continue
@@ -87,7 +151,13 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 			return err
 		}
 	}
-	return stream.Err()
+	if err := stream.Err(); err != nil {
+		return err
+	}
+	if report {
+		return s.PushTokenUsage(ctx, toUsage(acc.Usage))
+	}
+	return nil
 }
 
 // GenerateWithTools streams a response that may request tool calls. It emits
@@ -96,19 +166,9 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 // the request, and any tool-use / tool-result turns already in the context are
 // replayed as the matching Anthropic blocks.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	params := sdk.MessageNewParams{
-		Model:     s.model,
-		MaxTokens: s.maxTokens,
-		Messages:  toMessages(convo.Messages()),
-	}
+	params := s.newParams(convo)
 	if tools := convo.Tools(); len(tools) > 0 {
 		params.Tools = toTools(tools)
-	}
-	if system := convo.System(); system != "" {
-		params.System = []sdk.TextBlockParam{{
-			Text:         system,
-			CacheControl: sdk.NewCacheControlEphemeralParam(),
-		}}
 	}
 
 	var acc sdk.Message
@@ -137,6 +197,9 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 				return err
 			}
 		}
+	}
+	if s.UsageMetricsEnabled() {
+		return s.PushTokenUsage(ctx, toUsage(acc.Usage))
 	}
 	return nil
 }

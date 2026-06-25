@@ -23,6 +23,11 @@ type TaskParams struct {
 	AudioInSampleRate int
 	// AudioOutSampleRate is the StartFrame output sample rate; default 24000.
 	AudioOutSampleRate int
+	// EnableMetrics enables performance-metrics collection across the pipeline.
+	EnableMetrics bool
+	// EnableUsageMetrics enables usage-metrics collection (e.g. LLM token usage)
+	// across the pipeline.
+	EnableUsageMetrics bool
 	// OnReachedDownstream, if set, is called for every frame that reaches the
 	// end of the pipeline.
 	OnReachedDownstream func(frames.Frame)
@@ -152,6 +157,8 @@ func (t *Task) runLoop(ctx context.Context) error {
 	start := frames.NewStartFrame()
 	start.AudioInSampleRate = t.params.AudioInSampleRate
 	start.AudioOutSampleRate = t.params.AudioOutSampleRate
+	start.EnableMetrics = t.params.EnableMetrics
+	start.EnableUsageMetrics = t.params.EnableUsageMetrics
 	if err := t.pipeline.QueueFrame(ctx, start, processor.Downstream); err != nil {
 		return err
 	}
