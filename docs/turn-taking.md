@@ -78,5 +78,5 @@ endpointing, decides when the bot responds. See
   log-mel features; it and both models are validated to within `1e-3` of the
   reference Python implementation by unit tests.
 - Turn analysis currently runs synchronously on the audio goroutine
-  (~tens of ms per end-of-turn). See [benchmarks](benchmarks.md) for the
+  (~tens of ms per end-of-turn). See [benchmarks](https://github.com/gojargo/jargo-benchmarks) for the
   performance picture and the planned FFT optimization.

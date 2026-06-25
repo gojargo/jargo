@@ -38,7 +38,7 @@ binary. For that, Go is a better fit: one static binary to deploy, low and
 predictable memory, fast startup, and real concurrency for many simultaneous
 sessions without a GIL. The heavy numerics stay where they belong (the ONNX
 Runtime, the remote services), so giving up Python costs little here. See the
-[benchmarks](docs/benchmarks.md) for the honest performance picture.
+[benchmarks](https://github.com/gojargo/jargo-benchmarks) for the honest performance picture.
 
 ### No Daily, no lock-in
 
