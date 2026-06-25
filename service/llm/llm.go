@@ -83,6 +83,15 @@ func New(name string, gen Generator) *Base {
 	return b
 }
 
+// PushTokenUsage emits a MetricsFrame carrying token usage downstream. A service
+// calls it after a generation, gated on UsageMetricsEnabled, so the conversion
+// from the provider's usage shape happens only when metrics are collected.
+func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error {
+	f := frames.NewMetricsFrame(b.Name())
+	f.Tokens = &u
+	return b.PushFrame(ctx, f, processor.Downstream)
+}
+
 // RegisterFunction registers a handler for the named tool. During a tool-capable
 // generation, a call to that tool is dispatched to the handler.
 func (b *Base) RegisterFunction(name string, h ToolHandler) {
