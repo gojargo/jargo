@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -54,9 +55,9 @@ type Config struct {
 	// downstream. Empty uses 48 kHz. Must be a rate ElevenLabs supports
 	// (8000, 16000, 22050, 24000, 32000, 44100, 48000).
 	SampleRate int
-	// Language is an ISO-639-1 code (e.g. "fr") for multilingual models; empty
-	// leaves it unset (the model auto-detects).
-	Language string
+	// Language for multilingual models; the zero value leaves it unset (the
+	// model auto-detects). Mapped to ElevenLabs' base code per voice.
+	Language language.Language
 	// VoiceSettings overrides the voice's default settings when non-nil.
 	VoiceSettings *VoiceSettings
 }
@@ -92,8 +93,8 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 		"text":     text,
 		"model_id": s.cfg.Model,
 	}
-	if s.cfg.Language != "" {
-		payload["language_code"] = s.cfg.Language
+	if code := elevenlabsLanguage(s.cfg.Language); code != "" {
+		payload["language_code"] = code
 	}
 	if s.cfg.VoiceSettings != nil {
 		payload["voice_settings"] = s.cfg.VoiceSettings
@@ -124,5 +125,21 @@ func outputFormat(sampleRate int) string {
 	default:
 		slog.Warn("elevenlabs: no PCM output format for sample rate; using 24000", "rate", sampleRate)
 		return "pcm_24000"
+	}
+}
+
+// elevenlabsLanguage maps a Language to ElevenLabs' language_code, mirroring
+// Pipecat's language_to_elevenlabs_language: ElevenLabs wants the base code, so
+// the region is stripped and returned only for languages ElevenLabs supports;
+// otherwise "" (the model auto-detects).
+func elevenlabsLanguage(l language.Language) string {
+	switch base := l.BaseCode(); base {
+	case "ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", "fil",
+		"fr", "hi", "hr", "hu", "id", "it", "ja", "ko", "ms", "nl",
+		"no", "pl", "pt", "ro", "ru", "sk", "sv", "ta", "tr", "uk",
+		"vi", "zh":
+		return base
+	default:
+		return ""
 	}
 }

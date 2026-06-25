@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -24,7 +25,6 @@ const (
 	listenURL       = "wss://api.deepgram.com/v1/listen"
 	keepAlivePeriod = 8 * time.Second
 	defaultSTTModel = "nova-3"
-	defaultLanguage = "en-US"
 )
 
 // Config configures the STT service.
@@ -33,8 +33,8 @@ type Config struct {
 	APIKey string
 	// Model is the Deepgram model; empty uses "nova-3".
 	Model string
-	// Language is the transcription language; empty uses "en-US".
-	Language string
+	// Language is the transcription language; empty uses English (US).
+	Language language.Language
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
 }
@@ -48,9 +48,15 @@ func NewSTT(cfg Config) *stt.StreamService {
 		cfg.Model = defaultSTTModel
 	}
 	if cfg.Language == "" {
-		cfg.Language = defaultLanguage
+		cfg.Language = language.EnglishUS
 	}
 	return stt.NewStream("DeepgramSTT", &connector{cfg: cfg}, cfg.SampleRate)
+}
+
+// deepgramLanguage maps a Language to Deepgram's code. Deepgram uses BCP-47
+// codes directly, so the canonical code passes through unchanged.
+func deepgramLanguage(l language.Language) string {
+	return l.Code()
 }
 
 type connector struct {
@@ -61,7 +67,7 @@ type connector struct {
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := url.Values{}
 	q.Set("model", c.cfg.Model)
-	q.Set("language", c.cfg.Language)
+	q.Set("language", deepgramLanguage(c.cfg.Language))
 	q.Set("encoding", "linear16")
 	q.Set("sample_rate", strconv.Itoa(sampleRate))
 	q.Set("channels", "1")
