@@ -1,21 +1,22 @@
 # syntax=docker/dockerfile:1
 #
-# Container image for the jargo example bots. It bundles the two native
-# dependencies jargo needs — libsoxr (linked) and the ONNX Runtime (loaded at
-# run time for VAD + turn detection) — so the image runs anywhere with no host
-# setup. Build with BuildKit/buildx; multi-arch works (amd64 + arm64) because
-# each platform builds natively, which is what cgo needs.
+# Container image for the jargo example bots. It bundles the native dependencies
+# jargo needs — libsoxr (linked), libopus (the -tags libopus Opus encoder,
+# linked), and the ONNX Runtime (loaded at run time for VAD + turn detection) —
+# so the image runs anywhere with no host setup. Build with BuildKit/buildx;
+# multi-arch works (amd64 + arm64) because each platform builds natively, which
+# is what cgo needs.
 #
 #   docker build -t jargo-voicebot .
 #   docker buildx build --platform linux/amd64,linux/arm64 -t jargo-voicebot .
 #
 # Override which example to build with --build-arg EXAMPLE=echo.
 
-# ---- build the binary (cgo: needs libsoxr-dev) ----
+# ---- build the binary (cgo: needs libsoxr-dev + libopus-dev) ----
 FROM golang:1.26-bookworm AS build
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libsoxr-dev \
+    && apt-get install -y --no-install-recommends libsoxr-dev libopus-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -24,7 +25,8 @@ RUN go mod download
 COPY . .
 
 ARG EXAMPLE=voicebot
-RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /out/jargo-bot ./examples/${EXAMPLE}
+# -tags libopus links libopus for natural speech (the default build is pure-Go).
+RUN CGO_ENABLED=1 go build -tags libopus -ldflags="-s -w" -o /out/jargo-bot ./examples/${EXAMPLE}
 
 # ---- fetch the ONNX Runtime shared library for the target arch ----
 FROM debian:bookworm-slim AS onnx
@@ -48,7 +50,7 @@ RUN set -eux; \
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libsoxr0 \
+    && apt-get install -y --no-install-recommends ca-certificates libsoxr0 libopus0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=onnx /usr/local/lib/libonnxruntime.so /usr/local/lib/libonnxruntime.so

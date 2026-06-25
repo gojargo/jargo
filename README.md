@@ -15,18 +15,21 @@
 
 ---
 
-jargo builds real-time voice agents: audio comes in over WebRTC, flows through a
-pipeline of processors (transcription → reasoning → speech), and audio goes back
-out — with natural turn-taking, barge-in, and [RTVI](https://docs.pipecat.ai/client/introduction)
-on the data channel so existing RTVI clients interoperate.
+**jargo** builds real-time voice agents in Go: audio in over WebRTC, a streaming
+transcription → reasoning → speech pipeline with turn-taking and barge-in, and
+audio back out — over [RTVI](https://docs.pipecat.ai/client/introduction) so
+existing clients interoperate.
 
 > **Status:** early work in progress. APIs are unstable and will change.
 
 ## Why?
 
 [Pipecat](https://github.com/pipecat-ai/pipecat) is great, and jargo is a port of
-it — the architecture and many design decisions are Pipecat's. This port exists
-for one reason: I'd rather not run a voice agent on Python.
+it — the architecture and many design decisions are Pipecat's.
+
+### Python is not the way
+
+This port exists for one reason: I'd rather not run a voice agent on Python.
 
 Python is the right tool when you need the AI/data-science ecosystem. A
 real-time voice *server* doesn't: the models run as services or as ONNX, and
@@ -37,6 +40,14 @@ sessions without a GIL. The heavy numerics stay where they belong (the ONNX
 Runtime, the remote services), so giving up Python costs little here. See the
 [benchmarks](docs/benchmarks.md) for the honest performance picture.
 
+### No Daily, no lock-in
+
+jargo stays on plain, standard WebRTC via [Pion](https://github.com/pion) — no
+Daily, no hosted transport, no proprietary SDK or cloud to sign up for. You ship
+one binary, the browser connects with vanilla WebRTC, and RTVI rides the data
+channel. Keeping the transport open and self-hosted is a deliberate goal, not an
+afterthought.
+
 ## Features
 
 - **WebRTC + Opus**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
@@ -46,39 +57,43 @@ Runtime, the remote services), so giving up Python costs little here. See the
 - **Pluggable services**: swap any STT/LLM/TTS behind a small interface.
 - **Concurrent by design**: independent processors; interruptions are frames.
 
-## Services
+## Dependencies
 
-Each category shares a base (`service/llm`, `service/stt`, `service/tts`), so a
-provider implements only what differs and gets the frame contract, streaming,
-and sentence aggregation for free.
+jargo uses cgo (`CGO_ENABLED=0` is not supported) and a few native libraries:
 
-| Category | Providers |
-| -------- | --------- |
-| **LLM** | Anthropic, OpenAI, Google Gemini, plus the OpenAI-compatible family — Groq, Together, Fireworks, DeepSeek, Cerebras, xAI (Grok), OpenRouter, Perplexity, NVIDIA NIM, Ollama |
-| **STT** | Deepgram, AssemblyAI, Gladia (streaming); OpenAI, Groq (segmented Whisper) |
-| **TTS** | ElevenLabs, Cartesia, OpenAI, Deepgram Aura, Rime, LMNT |
+- **libsoxr** — audio resampling, linked at build time (`libsoxr-dev`).
+- **libopus** — optional C Opus encoder, selected with `-tags libopus`
+  (`libopus-dev`); the default build ships a pure-Go encoder, but libopus
+  sounds noticeably better on speech.
+- **ONNX Runtime** — loaded at run time for VAD + end-of-turn detection.
 
-Any OpenAI-compatible endpoint works directly via
-`openai.NewCompatLLM(name, baseURL, envVar, model, cfg)`. Each service reads its
-API key from a provider-specific env var (e.g. `OPENAI_API_KEY`,
-`CARTESIA_API_KEY`) when the config field is empty.
+The container image bundles all of them.
 
-The voicebot example selects providers by env var:
-
-```sh
-STT=assemblyai LLM=openai TTS=cartesia go run ./examples/voicebot
-```
-
-## Install
+## Usage
 
 ```sh
 go get github.com/gojargo/jargo
 ```
 
-jargo uses cgo and two native libraries — **libsoxr** (linked) and the **ONNX
-Runtime** (loaded at run time). Install `libsoxr-dev` or just run the container
-image, which bundles both; the [Quickstart](docs/quickstart.md) covers setup.
-`CGO_ENABLED=0` builds are not supported.
+**Locally** — install the native deps, then build with cgo:
+
+```sh
+# Debian/Ubuntu: apt-get install -y libsoxr-dev libopus-dev
+CGO_ENABLED=1 go run ./examples/echo                    # open http://localhost:8080
+CGO_ENABLED=1 go run -tags libopus ./examples/voicebot  # libopus speech encoder
+```
+
+**With Docker** — the image bundles every native dependency, so there's no host
+setup:
+
+```sh
+docker build -t jargo-voicebot .
+docker run --rm -p 8080:8080 \
+  -e DEEPGRAM_API_KEY=… -e ANTHROPIC_API_KEY=… -e ELEVENLABS_API_KEY=… \
+  jargo-voicebot
+```
+
+See the **[Quickstart](docs/quickstart.md)** for the full setup.
 
 ## Examples
 
