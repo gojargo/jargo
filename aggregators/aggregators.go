@@ -37,6 +37,7 @@ type Option func(*options)
 
 type options struct {
 	turnTaking bool
+	summarize  *SummarizeConfig
 }
 
 // WithTurnTaking gates the user turn on end-of-turn detection: the LLM runs when
@@ -55,7 +56,7 @@ func New(ctx *frames.LLMContext, opts ...Option) *Pair {
 	return &Pair{
 		context:   ctx,
 		user:      newUser(ctx, o.turnTaking),
-		assistant: newAssistant(ctx),
+		assistant: newAssistant(ctx, o.summarize),
 	}
 }
 
@@ -208,6 +209,9 @@ func (u *UserAggregator) maybeRun(ctx context.Context) error {
 type AssistantAggregator struct {
 	*processor.Base
 	context *frames.LLMContext
+	// summarize is non-nil when automatic context summarization is enabled; it
+	// compacts older turns in the background once the context grows too large.
+	summarize *summarizer
 
 	mu          sync.Mutex
 	aggregation string
@@ -219,8 +223,11 @@ type AssistantAggregator struct {
 	pendingIDs     map[string]bool
 }
 
-func newAssistant(ctx *frames.LLMContext) *AssistantAggregator {
+func newAssistant(ctx *frames.LLMContext, sc *SummarizeConfig) *AssistantAggregator {
 	a := &AssistantAggregator{context: ctx, pendingIDs: make(map[string]bool)}
+	if sc != nil && sc.Summarizer != nil {
+		a.summarize = newSummarizer(*sc)
+	}
 	a.Base = processor.New("AssistantContextAggregator", a)
 	return a
 }
@@ -308,6 +315,7 @@ func (a *AssistantAggregator) commit() {
 	if text != "" {
 		a.context.AddAssistantMessage(text)
 	}
+	a.maybeSummarize()
 }
 
 // commitInterrupted closes out a turn cut off by an interruption. Any tool calls
@@ -333,4 +341,5 @@ func (a *AssistantAggregator) commitInterrupted() {
 	if text != "" {
 		a.context.AddAssistantMessage(text)
 	}
+	a.maybeSummarize()
 }
