@@ -7,7 +7,7 @@ import "github.com/gojargo/jargo/service/openai"
 const (
 	baseURL      = "https://openrouter.ai/api/v1"
 	apiKeyEnv    = "OPENROUTER_API_KEY" //nolint:gosec // G101: env var name, not a credential
-	defaultModel = "openai/gpt-4o-mini"
+	defaultModel = "openai/gpt-4.1"
 )
 
 // NewLLM builds an OpenRouter LLM service. Set cfg.Model to any "vendor/model"

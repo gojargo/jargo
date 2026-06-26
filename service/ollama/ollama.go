@@ -7,7 +7,7 @@ import "github.com/gojargo/jargo/service/openai"
 const (
 	baseURL      = "http://localhost:11434/v1"
 	apiKeyEnv    = "OLLAMA_API_KEY" //nolint:gosec // G101: env var name, not a credential
-	defaultModel = "llama3.2"
+	defaultModel = "llama2"
 )
 
 // NewLLM builds an LLM service backed by a local Ollama server. Set cfg.BaseURL
