@@ -50,7 +50,7 @@ RUN set -eux; \
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libsoxr0 libopus0 \
+    && apt-get install -y --no-install-recommends ca-certificates curl libsoxr0 libopus0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=onnx /usr/local/lib/libonnxruntime.so /usr/local/lib/libonnxruntime.so
@@ -59,6 +59,13 @@ ENV JARGO_ONNXRUNTIME_LIB=/usr/local/lib/libonnxruntime.so
 
 COPY --from=build /out/jargo-bot /usr/local/bin/jargo-bot
 
+# Run as an unprivileged user — the bot needs no root capabilities, and :8080 is
+# above 1024 so a non-root process can bind it.
+RUN useradd --system --no-create-home --uid 10001 jargo
+USER jargo
+
 # The example bots serve their web UI and signaling on :8080.
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -fsS http://localhost:8080/ || exit 1
 ENTRYPOINT ["/usr/local/bin/jargo-bot"]

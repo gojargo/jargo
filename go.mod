@@ -39,9 +39,9 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 )
