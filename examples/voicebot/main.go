@@ -38,6 +38,7 @@ import (
 	"github.com/gojargo/jargo/provider/google"
 	"github.com/gojargo/jargo/provider/groq"
 	"github.com/gojargo/jargo/provider/lmnt"
+	"github.com/gojargo/jargo/provider/mem0"
 	"github.com/gojargo/jargo/provider/ollama"
 	"github.com/gojargo/jargo/provider/openai"
 	"github.com/gojargo/jargo/provider/rime"
@@ -123,9 +124,13 @@ func runBot(conn *pionrtc.Connection) {
 		aggOpts = append(aggOpts, aggregators.WithTurnTaking())
 	}
 	agg := aggregators.New(convo, aggOpts...)
+	procs = append(procs, stt, agg.User())
+	// Optional long-term memory: when MEM0_HOST is set, recall relevant memories
+	// into the context before the LLM and store new turns after it.
+	if mem := buildMemory(); mem != nil {
+		procs = append(procs, mem)
+	}
 	procs = append(procs,
-		stt,
-		agg.User(),
 		llm,
 		tts,
 		rtvi.NewProcessor(),
@@ -209,6 +214,25 @@ func selectTTS() processor.Processor {
 	default:
 		return elevenlabs.NewTTS(elevenlabs.Config{})
 	}
+}
+
+// buildMemory enables mem0 long-term memory when MEM0_HOST is set, scoping
+// memories with MEM0_USER (or a default). It returns nil when memory is off.
+func buildMemory() *mem0.Service {
+	host := os.Getenv("MEM0_HOST")
+	if host == "" {
+		return nil
+	}
+	userID := os.Getenv("MEM0_USER")
+	if userID == "" {
+		userID = "voicebot-user"
+	}
+	slog.Info("long-term memory enabled (mem0)", "host", host, "user", userID)
+	return mem0.NewMemory(mem0.Config{
+		Host:   host,
+		APIKey: os.Getenv("MEM0_API_KEY"),
+		UserID: userID,
+	})
 }
 
 // buildTurnTaking constructs a turn-taking detector from Silero VAD and Smart
