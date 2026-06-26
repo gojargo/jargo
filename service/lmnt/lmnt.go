@@ -17,8 +17,8 @@ const (
 	defaultModel = "blizzard"
 	defaultVoice = "leah"
 	defaultLang  = "en"
-	// sampleRate is the PCM rate jargo requests from LMNT.
-	sampleRate = 24000
+	// defaultSampleRate is the PCM rate jargo requests from LMNT.
+	defaultSampleRate = 24000
 )
 
 // Config configures the LMNT TTS service.
@@ -31,6 +31,9 @@ type Config struct {
 	Voice string
 	// Lang is the spoken language; empty uses "en".
 	Lang string
+	// SampleRate is the PCM rate requested from LMNT and emitted downstream;
+	// 0 uses 24 kHz.
+	SampleRate int
 }
 
 // NewTTS builds an LMNT TTS service.
@@ -47,6 +50,9 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.Lang == "" {
 		cfg.Lang = defaultLang
 	}
+	if cfg.SampleRate == 0 {
+		cfg.SampleRate = defaultSampleRate
+	}
 	return tts.New("LMNTTTS", &synthesizer{cfg: cfg, http: &http.Client{}})
 }
 
@@ -56,7 +62,7 @@ type synthesizer struct {
 }
 
 // SampleRate reports the requested PCM output rate.
-func (s *synthesizer) SampleRate() int { return sampleRate }
+func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
@@ -66,7 +72,7 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 		"model":       s.cfg.Model,
 		"language":    s.cfg.Lang,
 		"format":      "raw",
-		"sample_rate": sampleRate,
+		"sample_rate": s.cfg.SampleRate,
 	})
 	if err != nil {
 		return err
