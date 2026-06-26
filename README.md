@@ -27,7 +27,7 @@ existing clients interoperate.
 [Pipecat](https://github.com/pipecat-ai/pipecat) is great, and jargo is a port of
 it — the architecture and many design decisions are Pipecat's.
 
-### Python is not the way
+### Python might not be the way
 
 This port exists for one reason: I'd rather not run a voice agent on Python.
 
