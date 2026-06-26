@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 
@@ -28,7 +29,9 @@ const (
 	defaultMaxTokens = 1024
 )
 
-// Config configures the Gemini LLM service.
+// Config configures the Gemini LLM service. The sampling controls are pointers
+// so a deliberate zero is distinguishable from "unset"; a nil value is omitted
+// from the request, leaving the API default.
 type Config struct {
 	// APIKey is the Gemini API key; empty uses the GEMINI_API_KEY env var.
 	APIKey string
@@ -36,6 +39,15 @@ type Config struct {
 	Model string
 	// MaxTokens caps the response length; 0 uses a small default suited to voice.
 	MaxTokens int
+	// Temperature is the sampling temperature (0.0 to 2.0); nil omits it.
+	Temperature *float64
+	// TopP is the nucleus-sampling parameter (0.0 to 1.0); nil omits it.
+	TopP *float64
+	// TopK is the top-k sampling parameter; nil omits it.
+	TopK *int
+	// Extra sets arbitrary additional generationConfig fields not modeled above,
+	// applied to every request.
+	Extra map[string]any
 }
 
 // Service is a streaming Gemini LLM processor.
@@ -74,9 +86,20 @@ type genChunk struct {
 
 // Generate streams a Gemini completion, emitting each text delta.
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+	genConfig := map[string]any{"maxOutputTokens": s.cfg.MaxTokens}
+	if s.cfg.Temperature != nil {
+		genConfig["temperature"] = *s.cfg.Temperature
+	}
+	if s.cfg.TopP != nil {
+		genConfig["topP"] = *s.cfg.TopP
+	}
+	if s.cfg.TopK != nil {
+		genConfig["topK"] = *s.cfg.TopK
+	}
+	maps.Copy(genConfig, s.cfg.Extra)
 	reqBody := map[string]any{
 		"contents":         toContents(convo),
-		"generationConfig": map[string]any{"maxOutputTokens": s.cfg.MaxTokens},
+		"generationConfig": genConfig,
 	}
 	if sys := convo.System(); sys != "" {
 		reqBody["systemInstruction"] = map[string]any{"parts": []map[string]any{{"text": sys}}}
