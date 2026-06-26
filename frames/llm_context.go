@@ -1,8 +1,10 @@
 package frames
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -62,20 +64,47 @@ type Message struct {
 type LLMContext struct {
 	mu       sync.Mutex
 	system   string
+	summary  string // rolling summary of compacted older turns; empty until the first Compact
 	messages []Message
 	tools    []Tool
 }
+
+// summaryHeader introduces the rolling summary appended to the system prompt
+// once older turns have been compacted away by Compact.
+const summaryHeader = "Summary of the earlier conversation:"
 
 // NewLLMContext builds a context with the given system prompt.
 func NewLLMContext(system string) *LLMContext {
 	return &LLMContext{system: system}
 }
 
-// System returns the system prompt.
+// System returns the system prompt the LLM should run with. Once older turns
+// have been compacted (see Compact), the rolling summary is appended so the
+// model retains that history even though the messages themselves are gone.
 func (c *LLMContext) System() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.system
+	return c.systemLocked()
+}
+
+// systemLocked composes the base system prompt with the rolling summary. The
+// caller must hold c.mu.
+func (c *LLMContext) systemLocked() string {
+	if c.summary == "" {
+		return c.system
+	}
+	if c.system == "" {
+		return summaryHeader + "\n" + c.summary
+	}
+	return c.system + "\n\n" + summaryHeader + "\n" + c.summary
+}
+
+// Summary returns the rolling summary of compacted older turns, or "" if the
+// conversation has not been compacted yet.
+func (c *LLMContext) Summary() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.summary
 }
 
 // SetSystem replaces the system prompt. Used to switch the assistant's behavior
@@ -141,6 +170,87 @@ func (c *LLMContext) Messages() []Message {
 	out := make([]Message, len(c.messages))
 	copy(out, c.messages)
 	return out
+}
+
+// EstimatedTokens is a rough estimate of the context's size in tokens, used to
+// decide when to compact. It approximates four characters per token across the
+// system prompt, the rolling summary, and every message.
+func (c *LLMContext) EstimatedTokens() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := len(c.system) + len(c.summary)
+	for _, m := range c.messages {
+		n += len(m.Text)
+		for _, tc := range m.ToolCalls {
+			n += len(tc.Name) + len(tc.Args)
+		}
+		for _, tr := range m.ToolResults {
+			n += len(tr.Name) + len(tr.Content)
+		}
+	}
+	return n / 4
+}
+
+// Compact shrinks a long conversation: it drops the oldest messages beyond the
+// keepRecent most recent — cutting on a clean user-turn boundary so the
+// preserved tail stays a valid message list — and folds them into the rolling
+// summary, which System then appends to the prompt. summarize turns the prior
+// summary and the dropped messages into the new summary; it is invoked WITHOUT
+// the context lock held, so it may call out to an LLM. Compact reports whether
+// it compacted anything.
+//
+// Compact only ever removes a prefix, and only the summary (not the messages)
+// carries the dropped history forward, so messages appended at the tail while
+// summarize runs are preserved. It must not be run concurrently with itself on
+// the same context.
+func (c *LLMContext) Compact(
+	ctx context.Context,
+	keepRecent int,
+	summarize func(ctx context.Context, prior string, dropped []Message) (string, error),
+) (bool, error) {
+	c.mu.Lock()
+	cut := cleanCut(c.messages, len(c.messages)-keepRecent)
+	if cut <= 0 {
+		c.mu.Unlock()
+		return false, nil
+	}
+	dropped := append([]Message(nil), c.messages[:cut]...)
+	prior := c.summary
+	c.mu.Unlock()
+
+	next, err := summarize(ctx, prior, dropped)
+	if err != nil {
+		return false, err
+	}
+	if next = strings.TrimSpace(next); next == "" {
+		return false, nil
+	}
+
+	c.mu.Lock()
+	// Only appends can have happened since we read the prefix, so the first cut
+	// messages are still the ones we summarized; drop exactly those.
+	if cut <= len(c.messages) {
+		c.messages = append([]Message(nil), c.messages[cut:]...)
+	}
+	c.summary = next
+	c.mu.Unlock()
+	return true, nil
+}
+
+// cleanCut returns the largest index i in [1, limit] at which msgs[i] begins a
+// new user turn (a plain user message, not a tool result), or 0 if there is
+// none. Cutting there keeps msgs[i:] a valid standalone list — it starts with a
+// user message and never orphans a tool result from its tool call.
+func cleanCut(msgs []Message, limit int) int {
+	if limit > len(msgs)-1 {
+		limit = len(msgs) - 1
+	}
+	for i := limit; i >= 1; i-- {
+		if msgs[i].Role == RoleUser && len(msgs[i].ToolResults) == 0 {
+			return i
+		}
+	}
+	return 0
 }
 
 // LLMContextFrame carries the conversation context to the LLM service to
