@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 
@@ -27,17 +29,83 @@ var errStatus = errors.New("gladia: unexpected status")
 
 const (
 	liveURL = "https://api.gladia.io/v2/live"
-	model   = "solaria-1"
+	// defaults for the audio config sent at session init.
+	defaultModel    = "solaria-1"
+	defaultEncoding = "wav/pcm"
+	defaultBitDepth = 16
+	defaultChannels = 1
 	// readLimit bounds a single WebSocket message.
 	readLimit = 1 << 20
 )
 
-// Config configures the Gladia STT service.
+// LanguageConfig configures language detection and handling.
+type LanguageConfig struct {
+	// Languages restricts transcription to the given language codes.
+	Languages []string `json:"languages,omitempty"`
+	// CodeSwitching auto-detects language changes mid-stream.
+	CodeSwitching *bool `json:"code_switching,omitempty"`
+}
+
+// PreProcessingConfig configures audio pre-processing.
+type PreProcessingConfig struct {
+	// AudioEnhancer enhances the input audio before transcription.
+	AudioEnhancer *bool `json:"audio_enhancer,omitempty"`
+	// SpeechThreshold sets speech-detection sensitivity (0.0-1.0).
+	SpeechThreshold *float64 `json:"speech_threshold,omitempty"`
+}
+
+// MessagesConfig filters which WebSocket messages Gladia sends. Fields left nil
+// are omitted.
+type MessagesConfig struct {
+	ReceivePartialTranscripts       *bool `json:"receive_partial_transcripts,omitempty"`
+	ReceiveFinalTranscripts         *bool `json:"receive_final_transcripts,omitempty"`
+	ReceiveSpeechEvents             *bool `json:"receive_speech_events,omitempty"`
+	ReceivePreProcessingEvents      *bool `json:"receive_pre_processing_events,omitempty"`
+	ReceiveRealtimeProcessingEvents *bool `json:"receive_realtime_processing_events,omitempty"`
+	ReceivePostProcessingEvents     *bool `json:"receive_post_processing_events,omitempty"`
+	ReceiveAcknowledgments          *bool `json:"receive_acknowledgments,omitempty"`
+	ReceiveErrors                   *bool `json:"receive_errors,omitempty"`
+}
+
+// Config configures the Gladia STT service. Optional fields modeled as pointers,
+// slices or maps are omitted from the session init when unset.
 type Config struct {
 	// APIKey is the Gladia API key; empty uses the GLADIA_API_KEY env var.
 	APIKey string
+	// URL overrides the session-init endpoint; empty uses the hosted endpoint.
+	URL string
+	// Region pins the processing region ("us-west" or "eu-west"); empty omits it.
+	Region string
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
+	// Encoding is the audio encoding; empty uses "wav/pcm".
+	Encoding string
+	// BitDepth is the audio bit depth; 0 uses 16.
+	BitDepth int
+	// Channels is the channel count; 0 uses 1.
+	Channels int
+	// Model selects the transcription model; empty uses "solaria-1".
+	Model string
+	// Endpointing is the silence in seconds that marks end of speech; nil omits it.
+	Endpointing *float64
+	// MaximumDurationWithoutEndpointing caps utterance duration in seconds without
+	// silence; nil omits it.
+	MaximumDurationWithoutEndpointing *int
+	// LanguageConfig configures language detection; nil omits it.
+	LanguageConfig *LanguageConfig
+	// PreProcessing configures audio pre-processing; nil omits it.
+	PreProcessing *PreProcessingConfig
+	// RealtimeProcessing passes Gladia's realtime_processing block (custom
+	// vocabulary, translation, NER, sentiment, etc.) through verbatim; nil omits it.
+	RealtimeProcessing map[string]any
+	// MessagesConfig filters received messages; nil defaults to partial+final
+	// transcripts, matching jargo's needs.
+	MessagesConfig *MessagesConfig
+	// CustomMetadata attaches metadata to the session; nil omits it.
+	CustomMetadata map[string]any
+	// ExtraSettings sets arbitrary additional session-init fields not modeled
+	// above; values override any field of the same name.
+	ExtraSettings map[string]any
 }
 
 // NewSTT builds a Gladia streaming STT service. It works best behind a turn
@@ -45,6 +113,21 @@ type Config struct {
 func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.APIKey == "" {
 		cfg.APIKey = os.Getenv("GLADIA_API_KEY")
+	}
+	if cfg.URL == "" {
+		cfg.URL = liveURL
+	}
+	if cfg.Encoding == "" {
+		cfg.Encoding = defaultEncoding
+	}
+	if cfg.BitDepth == 0 {
+		cfg.BitDepth = defaultBitDepth
+	}
+	if cfg.Channels == 0 {
+		cfg.Channels = defaultChannels
+	}
+	if cfg.Model == "" {
+		cfg.Model = defaultModel
 	}
 	return stt.NewStream("GladiaSTT", &connector{cfg: cfg, http: &http.Client{}}, cfg.SampleRate)
 }
@@ -71,22 +154,53 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	return &stream{conn: conn, ctx: ctx}, nil
 }
 
-func (c *connector) initSession(ctx context.Context, sampleRate int) (string, error) {
-	body, err := json.Marshal(map[string]any{
-		"encoding":    "wav/pcm",
+// settings builds the session-init body for the given sample rate.
+func (cfg *Config) settings(sampleRate int) map[string]any {
+	s := map[string]any{
+		"encoding":    cfg.Encoding,
 		"sample_rate": sampleRate,
-		"bit_depth":   16,
-		"channels":    1,
-		"model":       model,
-		"messages_config": map[string]any{
-			"receive_partial_transcripts": true,
-			"receive_final_transcripts":   true,
-		},
-	})
+		"bit_depth":   cfg.BitDepth,
+		"channels":    cfg.Channels,
+		"model":       cfg.Model,
+	}
+	if cfg.Endpointing != nil {
+		s["endpointing"] = *cfg.Endpointing
+	}
+	if cfg.MaximumDurationWithoutEndpointing != nil {
+		s["maximum_duration_without_endpointing"] = *cfg.MaximumDurationWithoutEndpointing
+	}
+	if cfg.LanguageConfig != nil {
+		s["language_config"] = cfg.LanguageConfig
+	}
+	if cfg.PreProcessing != nil {
+		s["pre_processing"] = cfg.PreProcessing
+	}
+	if len(cfg.RealtimeProcessing) > 0 {
+		s["realtime_processing"] = cfg.RealtimeProcessing
+	}
+	if len(cfg.CustomMetadata) > 0 {
+		s["custom_metadata"] = cfg.CustomMetadata
+	}
+	mc := cfg.MessagesConfig
+	if mc == nil {
+		on := true
+		mc = &MessagesConfig{ReceivePartialTranscripts: &on, ReceiveFinalTranscripts: &on}
+	}
+	s["messages_config"] = mc
+	maps.Copy(s, cfg.ExtraSettings)
+	return s
+}
+
+func (c *connector) initSession(ctx context.Context, sampleRate int) (string, error) {
+	body, err := json.Marshal(c.cfg.settings(sampleRate))
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, liveURL, bytes.NewReader(body))
+	endpoint := c.cfg.URL
+	if c.cfg.Region != "" {
+		endpoint += "?" + url.Values{"region": {c.cfg.Region}}.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
