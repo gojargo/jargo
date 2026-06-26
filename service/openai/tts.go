@@ -27,6 +27,10 @@ type TTSConfig struct {
 	Model string
 	// Voice is the voice name; empty uses a default voice.
 	Voice string
+	// Instructions guide the voice synthesis behavior; empty omits it.
+	Instructions string
+	// Speed controls the speaking rate (0.25 to 4.0); nil omits it.
+	Speed *float64
 }
 
 // NewTTS builds an OpenAI TTS service.
@@ -56,12 +60,19 @@ func (s *synthesizer) SampleRate() int { return ttsSampleRate }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
-	body, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"model":           s.cfg.Model,
 		"voice":           s.cfg.Voice,
 		"input":           text,
 		"response_format": "pcm",
-	})
+	}
+	if s.cfg.Instructions != "" {
+		payload["instructions"] = s.cfg.Instructions
+	}
+	if s.cfg.Speed != nil {
+		payload["speed"] = *s.cfg.Speed
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}

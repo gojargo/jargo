@@ -9,7 +9,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -23,6 +25,14 @@ type STTConfig struct {
 	BaseURL string
 	// Model is the transcription model; empty uses the provider default.
 	Model string
+	// Language of the audio, sent as an ISO code; the zero value omits it
+	// (auto-detect). Mapped to the base code.
+	Language language.Language
+	// Prompt steers the model's style or continues a previous segment; empty
+	// omits it.
+	Prompt string
+	// Temperature is the sampling temperature (0.0 to 1.0); nil omits it.
+	Temperature *float64
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
 }
@@ -54,6 +64,33 @@ type transcriber struct {
 	http *http.Client
 }
 
+// writeFields writes the transcription form fields, omitting optional ones that
+// are unset.
+func writeFields(w *multipart.Writer, cfg *STTConfig) error {
+	if err := w.WriteField("model", cfg.Model); err != nil {
+		return err
+	}
+	if err := w.WriteField("response_format", "json"); err != nil {
+		return err
+	}
+	if cfg.Language != "" {
+		if err := w.WriteField("language", cfg.Language.BaseCode()); err != nil {
+			return err
+		}
+	}
+	if cfg.Prompt != "" {
+		if err := w.WriteField("prompt", cfg.Prompt); err != nil {
+			return err
+		}
+	}
+	if cfg.Temperature != nil {
+		if err := w.WriteField("temperature", strconv.FormatFloat(*cfg.Temperature, 'g', -1, 64)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Transcribe uploads the segment as a WAV file and returns the transcript.
 func (t *transcriber) Transcribe(ctx context.Context, audio []byte, sampleRate int) (string, error) {
 	var body bytes.Buffer
@@ -65,10 +102,7 @@ func (t *transcriber) Transcribe(ctx context.Context, audio []byte, sampleRate i
 	if _, err = part.Write(stt.WAV(audio, sampleRate, 1)); err != nil {
 		return "", err
 	}
-	if err = w.WriteField("model", t.cfg.Model); err != nil {
-		return "", err
-	}
-	if err = w.WriteField("response_format", "json"); err != nil {
+	if err = writeFields(w, &t.cfg); err != nil {
 		return "", err
 	}
 	if err = w.Close(); err != nil {
