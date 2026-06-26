@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 
@@ -28,7 +29,9 @@ const (
 	defaultLLMMaxTokens = 1024
 )
 
-// LLMConfig configures an OpenAI (or OpenAI-compatible) LLM service.
+// LLMConfig configures an OpenAI (or OpenAI-compatible) LLM service. The
+// sampling controls are pointers so a deliberate zero is distinguishable from
+// "unset"; a nil value is omitted from the request, leaving the API default.
 type LLMConfig struct {
 	// APIKey is the API key; empty uses the provider's env var.
 	APIKey string
@@ -38,6 +41,22 @@ type LLMConfig struct {
 	Model string
 	// MaxTokens caps the response length; 0 uses a small default suited to voice.
 	MaxTokens int
+	// MaxCompletionTokens caps the completion length on models that require it in
+	// place of MaxTokens; nil omits it.
+	MaxCompletionTokens *int
+	// Temperature is the sampling temperature (0.0 to 2.0); nil omits it.
+	Temperature *float64
+	// TopP is the nucleus-sampling parameter (0.0 to 1.0); nil omits it.
+	TopP *float64
+	// FrequencyPenalty penalizes frequent tokens (-2.0 to 2.0); nil omits it.
+	FrequencyPenalty *float64
+	// PresencePenalty penalizes already-present tokens (-2.0 to 2.0); nil omits it.
+	PresencePenalty *float64
+	// Seed requests deterministic sampling for a fixed seed; nil omits it.
+	Seed *int
+	// Extra sets arbitrary additional request-body fields not modeled above
+	// (e.g. provider-specific parameters), applied to every request.
+	Extra map[string]any
 }
 
 // LLMService is a streaming OpenAI-compatible chat-completions LLM processor.
@@ -79,10 +98,34 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model     string        `json:"model"`
-	Messages  []chatMessage `json:"messages"`
-	Stream    bool          `json:"stream"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
+	Model               string        `json:"model"`
+	Messages            []chatMessage `json:"messages"`
+	Stream              bool          `json:"stream"`
+	MaxTokens           int           `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int          `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64      `json:"temperature,omitempty"`
+	TopP                *float64      `json:"top_p,omitempty"`
+	FrequencyPenalty    *float64      `json:"frequency_penalty,omitempty"`
+	PresencePenalty     *float64      `json:"presence_penalty,omitempty"`
+	Seed                *int          `json:"seed,omitempty"`
+}
+
+// encodeBody marshals the request, merging any extra fields over the modeled
+// ones. The merge cost is paid only when extra is non-empty.
+func encodeBody(req chatRequest, extra map[string]any) ([]byte, error) {
+	if len(extra) == 0 {
+		return json.Marshal(req)
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	maps.Copy(m, extra)
+	return json.Marshal(m)
 }
 
 type chatChunk struct {
@@ -95,8 +138,19 @@ type chatChunk struct {
 
 // Generate streams a chat completion, emitting each content delta.
 func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	reqBody := chatRequest{Model: s.cfg.Model, Messages: toMessages(convo), Stream: true, MaxTokens: s.cfg.MaxTokens}
-	body, err := json.Marshal(reqBody)
+	reqBody := chatRequest{
+		Model:               s.cfg.Model,
+		Messages:            toMessages(convo),
+		Stream:              true,
+		MaxTokens:           s.cfg.MaxTokens,
+		MaxCompletionTokens: s.cfg.MaxCompletionTokens,
+		Temperature:         s.cfg.Temperature,
+		TopP:                s.cfg.TopP,
+		FrequencyPenalty:    s.cfg.FrequencyPenalty,
+		PresencePenalty:     s.cfg.PresencePenalty,
+		Seed:                s.cfg.Seed,
+	}
+	body, err := encodeBody(reqBody, s.cfg.Extra)
 	if err != nil {
 		return err
 	}
