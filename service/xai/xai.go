@@ -6,7 +6,7 @@ import "github.com/gojargo/jargo/service/openai"
 const (
 	baseURL      = "https://api.x.ai/v1"
 	apiKeyEnv    = "XAI_API_KEY" //nolint:gosec // G101: env var name, not a credential
-	defaultModel = "grok-2-latest"
+	defaultModel = "grok-4.20-non-reasoning"
 )
 
 // NewLLM builds an xAI (Grok) LLM service.

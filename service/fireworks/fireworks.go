@@ -6,7 +6,7 @@ import "github.com/gojargo/jargo/service/openai"
 const (
 	baseURL      = "https://api.fireworks.ai/inference/v1"
 	apiKeyEnv    = "FIREWORKS_API_KEY" //nolint:gosec // G101: env var name, not a credential
-	defaultModel = "accounts/fireworks/models/llama-v3p1-8b-instruct"
+	defaultModel = "accounts/fireworks/models/firefunction-v2"
 )
 
 // NewLLM builds a Fireworks AI LLM service.

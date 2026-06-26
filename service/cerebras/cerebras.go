@@ -6,7 +6,7 @@ import "github.com/gojargo/jargo/service/openai"
 const (
 	baseURL      = "https://api.cerebras.ai/v1"
 	apiKeyEnv    = "CEREBRAS_API_KEY" //nolint:gosec // G101: env var name, not a credential
-	defaultModel = "llama3.1-8b"
+	defaultModel = "gpt-oss-120b"
 )
 
 // NewLLM builds a Cerebras LLM service.
