@@ -23,6 +23,9 @@ const defaultMaxTokens = 1024
 type Config struct {
 	// APIKey is the Anthropic API key; empty uses the ANTHROPIC_API_KEY env var.
 	APIKey string
+	// BaseURL overrides the API base (e.g. a proxy or compatible gateway); empty
+	// uses the SDK default.
+	BaseURL string
 	// Model is the model id; empty uses Claude Haiku 4.5.
 	Model string
 	// MaxTokens caps the response length; 0 uses a small default suited to voice.
@@ -41,6 +44,13 @@ type Config struct {
 	// stream begins (transient connection errors, 429s, 5xx); 0 leaves the SDK
 	// default of two retries. Mid-stream failures are not retried.
 	MaxRetries int
+	// EnablePromptCaching caches the system prompt with an ephemeral cache
+	// breakpoint so repeated turns reuse it; nil defaults to true (jargo caches
+	// for latency). Set to false to disable caching.
+	EnablePromptCaching *bool
+	// Extra sets arbitrary additional top-level request-body fields not modeled
+	// above (e.g. beta parameters), applied to every request.
+	Extra map[string]any
 }
 
 // Service is a streaming Anthropic LLM processor.
@@ -54,6 +64,8 @@ type Service struct {
 	temperature param.Opt[float64]
 	topP        param.Opt[float64]
 	topK        param.Opt[int64]
+	// cachePrompt gates the ephemeral cache breakpoint on the system prompt.
+	cachePrompt bool
 }
 
 // NewLLM builds an Anthropic LLM service.
@@ -62,19 +74,29 @@ func NewLLM(cfg Config) *Service {
 	if cfg.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(cfg.APIKey))
 	}
+	if cfg.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	}
 	if cfg.RequestTimeout > 0 {
 		opts = append(opts, option.WithRequestTimeout(cfg.RequestTimeout))
 	}
 	if cfg.MaxRetries > 0 {
 		opts = append(opts, option.WithMaxRetries(cfg.MaxRetries))
 	}
+	for k, v := range cfg.Extra {
+		opts = append(opts, option.WithJSONSet(k, v))
+	}
 	s := &Service{
-		client:    sdk.NewClient(opts...),
-		model:     sdk.ModelClaudeHaiku4_5,
-		maxTokens: defaultMaxTokens,
+		client:      sdk.NewClient(opts...),
+		model:       sdk.ModelClaudeHaiku4_5,
+		maxTokens:   defaultMaxTokens,
+		cachePrompt: true,
 	}
 	if cfg.Model != "" {
 		s.model = cfg.Model
+	}
+	if cfg.EnablePromptCaching != nil {
+		s.cachePrompt = *cfg.EnablePromptCaching
 	}
 	if cfg.MaxTokens > 0 {
 		s.maxTokens = int64(cfg.MaxTokens)
@@ -105,11 +127,12 @@ func (s *Service) newParams(convo *frames.LLMContext) sdk.MessageNewParams {
 		TopK:        s.topK,
 	}
 	if system := convo.System(); system != "" {
-		// Cache the system prompt so repeated turns reuse it.
-		params.System = []sdk.TextBlockParam{{
-			Text:         system,
-			CacheControl: sdk.NewCacheControlEphemeralParam(),
-		}}
+		block := sdk.TextBlockParam{Text: system}
+		if s.cachePrompt {
+			// Cache the system prompt so repeated turns reuse it.
+			block.CacheControl = sdk.NewCacheControlEphemeralParam()
+		}
+		params.System = []sdk.TextBlockParam{block}
 	}
 	return params
 }
