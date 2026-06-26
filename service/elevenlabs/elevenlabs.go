@@ -15,14 +15,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 )
 
 const (
-	apiBase = "https://api.elevenlabs.io/v1/text-to-speech"
+	// defaultBaseURL is the ElevenLabs HTTP API base.
+	defaultBaseURL = "https://api.elevenlabs.io"
 	// defaultSampleRate matches the WebRTC Opus rate so the output transport
 	// does not resample. 48 kHz PCM is not tier-gated (only 44.1 kHz requires a
 	// Pro plan).
@@ -43,10 +46,19 @@ type VoiceSettings struct {
 	Speed           *float64 `json:"speed,omitempty"`
 }
 
+// PronunciationDictionaryLocator references a pronunciation dictionary to apply
+// to the request.
+type PronunciationDictionaryLocator struct {
+	DictionaryID string `json:"pronunciation_dictionary_id"`
+	VersionID    string `json:"version_id,omitempty"`
+}
+
 // Config configures the TTS service.
 type Config struct {
 	// APIKey is the ElevenLabs API key; empty uses the ELEVENLABS_API_KEY env var.
 	APIKey string
+	// BaseURL overrides the HTTP API base; empty uses the hosted API.
+	BaseURL string
 	// VoiceID is the ElevenLabs voice; empty uses a default public voice.
 	VoiceID string
 	// Model is the ElevenLabs model; empty uses the low-latency flash model.
@@ -60,12 +72,27 @@ type Config struct {
 	Language language.Language
 	// VoiceSettings overrides the voice's default settings when non-nil.
 	VoiceSettings *VoiceSettings
+	// OptimizeStreamingLatency requests a latency-optimization level (0-4); nil
+	// leaves it unset.
+	OptimizeStreamingLatency *int
+	// ApplyTextNormalization controls spoken-form text normalization
+	// ("auto", "on", "off"); empty leaves it unset.
+	ApplyTextNormalization string
+	// EnableLogging toggles ElevenLabs server-side logging; nil leaves it unset.
+	// Set to false for zero-retention mode (enterprise only).
+	EnableLogging *bool
+	// PronunciationDictionaryLocators applies the given pronunciation
+	// dictionaries; empty applies none.
+	PronunciationDictionaryLocators []PronunciationDictionaryLocator
 }
 
 // NewTTS builds an ElevenLabs TTS service.
 func NewTTS(cfg Config) *tts.Base {
 	if cfg.APIKey == "" {
 		cfg.APIKey = os.Getenv("ELEVENLABS_API_KEY")
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultBaseURL
 	}
 	if cfg.VoiceID == "" {
 		cfg.VoiceID = defaultVoiceID
@@ -99,12 +126,25 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 	if s.cfg.VoiceSettings != nil {
 		payload["voice_settings"] = s.cfg.VoiceSettings
 	}
+	if s.cfg.ApplyTextNormalization != "" {
+		payload["apply_text_normalization"] = s.cfg.ApplyTextNormalization
+	}
+	if len(s.cfg.PronunciationDictionaryLocators) > 0 {
+		payload["pronunciation_dictionary_locators"] = s.cfg.PronunciationDictionaryLocators
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	endpoint := fmt.Sprintf("%s/%s/stream?output_format=%s",
-		apiBase, s.cfg.VoiceID, outputFormat(s.cfg.SampleRate))
+	q := url.Values{}
+	q.Set("output_format", outputFormat(s.cfg.SampleRate))
+	if s.cfg.OptimizeStreamingLatency != nil {
+		q.Set("optimize_streaming_latency", strconv.Itoa(*s.cfg.OptimizeStreamingLatency))
+	}
+	if s.cfg.EnableLogging != nil {
+		q.Set("enable_logging", strconv.FormatBool(*s.cfg.EnableLogging))
+	}
+	endpoint := fmt.Sprintf("%s/v1/text-to-speech/%s/stream?%s", s.cfg.BaseURL, s.cfg.VoiceID, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -115,9 +155,8 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 	return tts.StreamResponse(s.http, req, emit)
 }
 
-// outputFormat maps a sample rate to ElevenLabs' PCM output_format string,
-// mirroring Pipecat's output_format_from_sample_rate. Unsupported rates fall
-// back to pcm_24000.
+// outputFormat maps a sample rate to ElevenLabs' PCM output_format string.
+// Unsupported rates fall back to pcm_24000.
 func outputFormat(sampleRate int) string {
 	switch sampleRate {
 	case 8000, 16000, 22050, 24000, 32000, 44100, 48000:
@@ -128,10 +167,9 @@ func outputFormat(sampleRate int) string {
 	}
 }
 
-// elevenlabsLanguage maps a Language to ElevenLabs' language_code, mirroring
-// Pipecat's language_to_elevenlabs_language: ElevenLabs wants the base code, so
-// the region is stripped and returned only for languages ElevenLabs supports;
-// otherwise "" (the model auto-detects).
+// elevenlabsLanguage maps a Language to ElevenLabs' language_code: ElevenLabs
+// wants the base code, so the region is stripped and returned only for languages
+// ElevenLabs supports; otherwise "" (the model auto-detects).
 func elevenlabsLanguage(l language.Language) string {
 	switch base := l.BaseCode(); base {
 	case "ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", "fil",
