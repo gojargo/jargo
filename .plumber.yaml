@@ -19,6 +19,14 @@ github:
       trustGithubOfficialActions: true
       trustSameOrgActions: true
       minimumStars: 0
+      # The non-official third-party actions jargo relies on, vetted and pinned
+      # by commit SHA in the workflows. Listed explicitly so the source check
+      # passes without lowering the bar for everything else.
+      trustedGithubActions:
+        - golangci/golangci-lint-action
+        - goreleaser/goreleaser-action
+        - aquasecurity/trivy-action
+        - getplumber/plumber
     actionsMustNotBeArchived:
       enabled: true
     actionsMustNotCarryKnownCVEs:
