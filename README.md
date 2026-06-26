@@ -50,7 +50,8 @@ afterthought.
 
 ## Features
 
-- **WebRTC + Opus**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
+- **WebRTC**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
+- **Opus**, not pure Go yet, waiting for *pion/opus* to be ready.
 - **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
 - **Turn-taking & barge-in**: Silero VAD + Smart Turn v3, local ONNX.
 - **RTVI** data channel — works with existing RTVI clients.
