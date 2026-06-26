@@ -70,18 +70,18 @@ github.com/gojargo/jargo
 │   └── turn/               # Smart Turn V3 (ONNX) + Whisper log-mel features  [done]
 ├── turntaking/             # VAD + turn processor (speaking/interruption)     [done]
 ├── internal/onnxrt/        # ONNX runtime boundary (cgo)                      [done]
-├── service/
+├── service/                # service contracts + shared base processors
 │   ├── llm/                # shared LLM base (response framing + SSE scan)    [done]
 │   ├── stt/                # shared STT bases (streaming + segmented + WAV)   [done]
-│   ├── tts/                # shared TTS base (sentence aggregation + stream)  [done]
+│   └── tts/                # shared TTS base (sentence aggregation + stream)  [done]
+├── provider/               # vendor implementations (each implements ≥1 service)
 │   ├── anthropic/          # streaming LLM (official SDK, Haiku)              [done]
 │   ├── openai/             # LLM + STT (Whisper) + TTS; OpenAI-compat base    [done]
 │   ├── google/             # Gemini LLM (native SSE)                          [done]
 │   ├── groq, together, …   # OpenAI-compatible LLMs (thin presets)            [done]
 │   ├── deepgram/           # streaming STT (WebSocket) + Aura TTS             [done]
 │   ├── assemblyai/, gladia/ # streaming STT (WebSocket)                       [done]
-│   ├── cartesia/, rime/, lmnt/ # TTS                                          [done]
-│   └── mem0/               # memory
+│   └── cartesia/, rime/, lmnt/ # TTS                                          [done]
 ├── aggregators/            # LLM context (user + assistant)                   [done]
 ├── metrics/                # hooks only (impls deferred)
 └── examples/               # echo + voicebot                                 [done]
@@ -178,11 +178,11 @@ bot-ready, and renders live transcripts.
 
 - [x] `audio/resample`: pure-Go stateful linear resampler (e.g. 24 kHz TTS →
       48 kHz output), wired into `BaseOutput`.
-- [x] `service/deepgram`: streaming STT over Deepgram's WebSocket (linear16,
+- [x] `provider/deepgram`: streaming STT over Deepgram's WebSocket (linear16,
       interim results, endpointing → finalized `TranscriptionFrame`).
-- [x] `service/anthropic`: streaming LLM via the official Go SDK (Claude Haiku
+- [x] `provider/anthropic`: streaming LLM via the official Go SDK (Claude Haiku
       default, system-prompt caching) consuming `LLMContextFrame`.
-- [x] `service/elevenlabs`: streaming TTS over the HTTP streaming endpoint, with
+- [x] `provider/elevenlabs`: streaming TTS over the HTTP streaming endpoint, with
       sentence aggregation; emits `TTSAudioRawFrame`s.
 - [x] `aggregators`: shared `LLMContext`, user aggregator (transcription → run
       LLM) and assistant aggregator (response → context).

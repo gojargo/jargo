@@ -2,7 +2,7 @@
 package groq
 
 import (
-	"github.com/gojargo/jargo/service/openai"
+	"github.com/gojargo/jargo/provider/openai"
 	"github.com/gojargo/jargo/service/stt"
 )
 
