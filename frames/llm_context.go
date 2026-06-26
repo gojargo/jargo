@@ -65,6 +65,7 @@ type LLMContext struct {
 	mu       sync.Mutex
 	system   string
 	summary  string // rolling summary of compacted older turns; empty until the first Compact
+	recall   string // transient retrieved context (e.g. long-term memories) for the next generation
 	messages []Message
 	tools    []Tool
 }
@@ -87,16 +88,20 @@ func (c *LLMContext) System() string {
 	return c.systemLocked()
 }
 
-// systemLocked composes the base system prompt with the rolling summary. The
-// caller must hold c.mu.
+// systemLocked composes the base system prompt with the rolling summary and any
+// transient recalled context. The caller must hold c.mu.
 func (c *LLMContext) systemLocked() string {
-	if c.summary == "" {
-		return c.system
+	parts := make([]string, 0, 3)
+	if c.system != "" {
+		parts = append(parts, c.system)
 	}
-	if c.system == "" {
-		return summaryHeader + "\n" + c.summary
+	if c.summary != "" {
+		parts = append(parts, summaryHeader+"\n"+c.summary)
 	}
-	return c.system + "\n\n" + summaryHeader + "\n" + c.summary
+	if c.recall != "" {
+		parts = append(parts, c.recall)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // Summary returns the rolling summary of compacted older turns, or "" if the
@@ -105,6 +110,25 @@ func (c *LLMContext) Summary() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.summary
+}
+
+// SetRecall sets transient retrieved context — typically long-term memories
+// surfaced by a memory service — that is folded into the system prompt for
+// subsequent generations, replacing any previous value. The text is used
+// verbatim, so include any framing (e.g. a "recalled memories" header) in it. A
+// memory processor refreshes it each turn; pass "" to clear it.
+func (c *LLMContext) SetRecall(recall string) {
+	c.mu.Lock()
+	c.recall = recall
+	c.mu.Unlock()
+}
+
+// Recall returns the transient retrieved context folded into the system prompt,
+// or "" if none is set.
+func (c *LLMContext) Recall() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.recall
 }
 
 // SetSystem replaces the system prompt. Used to switch the assistant's behavior
@@ -178,7 +202,7 @@ func (c *LLMContext) Messages() []Message {
 func (c *LLMContext) EstimatedTokens() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	n := len(c.system) + len(c.summary)
+	n := len(c.system) + len(c.summary) + len(c.recall)
 	for _, m := range c.messages {
 		n += len(m.Text)
 		for _, tc := range m.ToolCalls {
