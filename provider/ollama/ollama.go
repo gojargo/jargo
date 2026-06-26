@@ -2,7 +2,7 @@
 // OpenAI-compatible LLM endpoint.
 package ollama
 
-import "github.com/gojargo/jargo/service/openai"
+import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "http://localhost:11434/v1"

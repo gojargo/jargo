@@ -1,7 +1,7 @@
 // Package deepseek provides DeepSeek's OpenAI-compatible LLM service.
 package deepseek
 
-import "github.com/gojargo/jargo/service/openai"
+import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "https://api.deepseek.com/v1"

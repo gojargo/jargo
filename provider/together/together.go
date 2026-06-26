@@ -1,7 +1,7 @@
 // Package together provides Together AI's OpenAI-compatible LLM service.
 package together
 
-import "github.com/gojargo/jargo/service/openai"
+import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "https://api.together.xyz/v1"

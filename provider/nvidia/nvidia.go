@@ -1,7 +1,7 @@
 // Package nvidia provides NVIDIA NIM's OpenAI-compatible LLM service.
 package nvidia
 
-import "github.com/gojargo/jargo/service/openai"
+import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "https://integrate.api.nvidia.com/v1"

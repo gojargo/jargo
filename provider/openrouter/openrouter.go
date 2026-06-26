@@ -2,7 +2,7 @@
 // gateway to many models behind one API.
 package openrouter
 
-import "github.com/gojargo/jargo/service/openai"
+import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "https://openrouter.ai/api/v1"
