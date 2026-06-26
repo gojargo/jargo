@@ -12,9 +12,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // errStatus is returned when a provider responds with a non-200 status.
@@ -107,17 +110,31 @@ func (b *Base) synthesize(ctx context.Context, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
+	ctx, span := tracing.Tracer().Start(ctx, "tts")
+	defer span.End()
+	rate := b.syn.SampleRate()
+	span.SetAttributes(
+		attribute.String("tts.service", b.Name()),
+		attribute.Int("tts.chars", len(text)),
+		attribute.Int("tts.sample_rate", rate),
+	)
 	if err := b.PushFrame(ctx, frames.NewTTSStartedFrame(), processor.Downstream); err != nil {
 		return err
 	}
-	rate := b.syn.SampleRate()
+	start := time.Now()
+	first := true
 	emit := func(pcm []byte) error {
 		if len(pcm) == 0 {
 			return nil
 		}
+		if first {
+			first = false
+			span.SetAttributes(attribute.Int64("tts.ttfb_ms", time.Since(start).Milliseconds()))
+		}
 		return b.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, rate, 1), processor.Downstream)
 	}
 	if err := b.syn.Synthesize(ctx, text, emit); err != nil && ctx.Err() == nil {
+		span.RecordError(err)
 		b.PushError(ctx, "tts synthesis failed", err, false)
 	}
 	return b.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)

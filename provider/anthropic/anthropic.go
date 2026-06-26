@@ -111,6 +111,7 @@ func NewLLM(cfg Config) *Service {
 		s.topK = param.NewOpt(*cfg.TopK)
 	}
 	s.Base = llm.New("AnthropicLLM", s)
+	s.Base.SetModel(s.model)
 	return s
 }
 

@@ -92,6 +92,7 @@ func NewCompatLLM(name, baseURL, envVar, defaultModel string, cfg LLMConfig) *LL
 	}
 	s := &LLMService{cfg: cfg, http: &http.Client{}}
 	s.Base = llm.New(name, s)
+	s.Base.SetModel(cfg.Model)
 	return s
 }
 
