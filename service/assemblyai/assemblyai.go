@@ -16,27 +16,80 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
 
 const (
 	wsBase = "wss://streaming.assemblyai.com/v3/ws"
+	// defaultEncoding is the audio encoding AssemblyAI expects from jargo.
+	defaultEncoding = "pcm_s16le"
 	// readLimit bounds a single WebSocket message; long turns carry many words.
 	readLimit = 1 << 20
 )
 
-// Config configures the AssemblyAI STT service.
+// Config configures the AssemblyAI STT service. Optional fields modeled as
+// pointers or slices are omitted from the request when unset.
 type Config struct {
 	// APIKey is the AssemblyAI API key; empty uses the ASSEMBLYAI_API_KEY env var.
 	APIKey string
+	// BaseURL overrides the streaming WebSocket endpoint; empty uses the hosted
+	// endpoint.
+	BaseURL string
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
+	// Encoding is the audio encoding; empty uses "pcm_s16le".
+	Encoding string
+	// Model selects the speech model (sent as speech_model); empty uses the
+	// account default.
+	Model string
+	// Language declares the audio language (sent as language_code); the zero value
+	// leaves it unset. Mapped to AssemblyAI's base code.
+	Language language.Language
+	// LanguageDetection enables automatic language detection; nil omits it.
+	// Mutually exclusive with Language.
+	LanguageDetection *bool
+	// FormatTurns formats finalized turns (punctuation/casing); nil defaults to true.
+	FormatTurns *bool
+	// FormattedFinals formats partial finals; nil omits it.
+	FormattedFinals *bool
+	// WordFinalizationMaxWaitTime caps the wait in ms for word finalization;
+	// nil omits it.
+	WordFinalizationMaxWaitTime *int
+	// EndOfTurnConfidenceThreshold sets the confidence needed to end a turn
+	// (0.0-1.0); nil omits it.
+	EndOfTurnConfidenceThreshold *float64
+	// MinTurnSilence is the minimum silence in ms to end a turn when confident;
+	// nil omits it.
+	MinTurnSilence *int
+	// MaxTurnSilence is the maximum silence in ms before forcing a turn end;
+	// nil omits it.
+	MaxTurnSilence *int
+	// KeytermsPrompt boosts recognition of the given terms; empty omits it.
+	KeytermsPrompt []string
+	// Prompt steers transcription with free-text guidance; empty omits it.
+	Prompt string
+	// SpeakerLabels enables speaker diarization; nil omits it.
+	SpeakerLabels *bool
+	// VADThreshold sets the VAD confidence threshold (0.0-1.0); nil omits it.
+	VADThreshold *float64
+	// Domain hints the transcription domain; empty omits it.
+	Domain string
+	// ExtraQuery sets arbitrary additional query parameters not modeled above
+	// (e.g. U3 Pro-only options); values override any param of the same name.
+	ExtraQuery map[string]string
 }
 
 // NewSTT builds an AssemblyAI streaming STT service.
 func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.APIKey == "" {
 		cfg.APIKey = os.Getenv("ASSEMBLYAI_API_KEY")
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = wsBase
+	}
+	if cfg.Encoding == "" {
+		cfg.Encoding = defaultEncoding
 	}
 	return stt.NewStream("AssemblyAISTT", &connector{cfg: cfg}, cfg.SampleRate)
 }
@@ -45,17 +98,96 @@ type connector struct {
 	cfg Config
 }
 
-// Connect opens the streaming WebSocket for the given sample rate.
-func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
+// query builds the streaming query string for the given sample rate.
+func (cfg *Config) query(sampleRate int) url.Values {
 	q := url.Values{}
 	q.Set("sample_rate", strconv.Itoa(sampleRate))
-	q.Set("encoding", "pcm_s16le")
-	q.Set("format_turns", "true")
+	q.Set("encoding", cfg.Encoding)
+
+	setStrOpt(q, "speech_model", cfg.Model)
+	if code := assemblyaiLanguage(cfg.Language); code != "" {
+		q.Set("language_code", code)
+	}
+	setBoolOpt(q, "language_detection", cfg.LanguageDetection)
+	setBoolTrue(q, "format_turns", cfg.FormatTurns)
+	setBoolOpt(q, "formatted_finals", cfg.FormattedFinals)
+	setIntOpt(q, "word_finalization_max_wait_time", cfg.WordFinalizationMaxWaitTime)
+	setFloatOpt(q, "end_of_turn_confidence_threshold", cfg.EndOfTurnConfidenceThreshold)
+	setIntOpt(q, "min_turn_silence", cfg.MinTurnSilence)
+	setIntOpt(q, "max_turn_silence", cfg.MaxTurnSilence)
+	setStrOpt(q, "prompt", cfg.Prompt)
+	setBoolOpt(q, "speaker_labels", cfg.SpeakerLabels)
+	setFloatOpt(q, "vad_threshold", cfg.VADThreshold)
+	setStrOpt(q, "domain", cfg.Domain)
+
+	if len(cfg.KeytermsPrompt) > 0 {
+		if b, err := json.Marshal(cfg.KeytermsPrompt); err == nil {
+			q.Set("keyterms_prompt", string(b))
+		}
+	}
+	for k, v := range cfg.ExtraQuery {
+		q.Set(k, v)
+	}
+	return q
+}
+
+// setBoolTrue sets key to v, defaulting to true when v is nil.
+func setBoolTrue(q url.Values, key string, v *bool) {
+	val := true
+	if v != nil {
+		val = *v
+	}
+	q.Set(key, strconv.FormatBool(val))
+}
+
+// setBoolOpt sets key only when v is non-nil.
+func setBoolOpt(q url.Values, key string, v *bool) {
+	if v != nil {
+		q.Set(key, strconv.FormatBool(*v))
+	}
+}
+
+// setIntOpt sets key only when v is non-nil.
+func setIntOpt(q url.Values, key string, v *int) {
+	if v != nil {
+		q.Set(key, strconv.Itoa(*v))
+	}
+}
+
+// setFloatOpt sets key only when v is non-nil.
+func setFloatOpt(q url.Values, key string, v *float64) {
+	if v != nil {
+		q.Set(key, strconv.FormatFloat(*v, 'g', -1, 64))
+	}
+}
+
+// setStrOpt sets key only when v is non-empty.
+func setStrOpt(q url.Values, key, v string) {
+	if v != "" {
+		q.Set(key, v)
+	}
+}
+
+// assemblyaiLanguage maps a Language to AssemblyAI's language_code: it wants the
+// base code, returned only for languages it supports; otherwise "" (unset).
+func assemblyaiLanguage(l language.Language) string {
+	switch base := l.BaseCode(); base {
+	case "en", "es", "fr", "de", "it", "pt", "tr", "nl", "sv", "no", "da",
+		"fi", "hi", "vi", "ar", "he", "ja", "ur", "zh":
+		return base
+	default:
+		return ""
+	}
+}
+
+// Connect opens the streaming WebSocket for the given sample rate.
+func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
+	q := c.cfg.query(sampleRate)
 
 	header := http.Header{}
 	header.Set("Authorization", c.cfg.APIKey)
 
-	conn, resp, err := websocket.Dial(ctx, wsBase+"?"+q.Encode(), &websocket.DialOptions{HTTPHeader: header})
+	conn, resp, err := websocket.Dial(ctx, c.cfg.BaseURL+"?"+q.Encode(), &websocket.DialOptions{HTTPHeader: header})
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
