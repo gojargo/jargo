@@ -21,9 +21,13 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ErrStopTurn is returned by a ToolHandler to end the current turn after
@@ -69,7 +73,8 @@ type ToolHandler func(ctx context.Context, args json.RawMessage) (string, error)
 // runs the tool loop instead.
 type Base struct {
 	*processor.Base
-	gen Generator
+	gen   Generator
+	model string // reported as a span attribute; set by the provider via SetModel
 
 	handlersMu sync.RWMutex
 	handlers   map[string]ToolHandler
@@ -83,13 +88,34 @@ func New(name string, gen Generator) *Base {
 	return b
 }
 
+// SetModel records the model id the service generates with, reported as the
+// llm.model span attribute. A provider calls it during construction.
+func (b *Base) SetModel(model string) { b.model = model }
+
 // PushTokenUsage emits a MetricsFrame carrying token usage downstream. A service
 // calls it after a generation, gated on UsageMetricsEnabled, so the conversion
 // from the provider's usage shape happens only when metrics are collected.
 func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error {
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.Int64("llm.tokens.input", u.PromptTokens),
+		attribute.Int64("llm.tokens.output", u.CompletionTokens),
+		attribute.Int64("llm.tokens.total", u.TotalTokens),
+	)
 	f := frames.NewMetricsFrame(b.Name())
 	f.Tokens = &u
 	return b.PushFrame(ctx, f, processor.Downstream)
+}
+
+// startSpan opens the generation span, tagging it with the service name and
+// model. The returned context carries the span so PushTokenUsage and any nested
+// work attach to it.
+func (b *Base) startSpan(ctx context.Context) (context.Context, trace.Span) {
+	ctx, span := tracing.Tracer().Start(ctx, "llm")
+	span.SetAttributes(attribute.String("llm.service", b.Name()))
+	if b.model != "" {
+		span.SetAttributes(attribute.String("llm.model", b.model))
+	}
+	return ctx, span
 }
 
 // RegisterFunction registers a handler for the named tool. During a tool-capable
@@ -131,16 +157,25 @@ func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
 // runText is the text-only path: brackets the streamed deltas with response
 // start/end frames.
 func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
+	ctx, span := b.startSpan(ctx)
+	defer span.End()
 	if err := b.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
 		return err
 	}
+	start := time.Now()
+	first := true
 	emit := func(text string) error {
 		if text == "" {
 			return nil
 		}
+		if first {
+			first = false
+			span.SetAttributes(attribute.Int64("llm.ttfb_ms", time.Since(start).Milliseconds()))
+		}
 		return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
 	}
 	if err := b.gen.Generate(ctx, convo, emit); err != nil && ctx.Err() == nil {
+		span.RecordError(err)
 		b.PushError(ctx, "llm generation failed", err, false)
 	}
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
@@ -162,6 +197,9 @@ func (s sink) Tool(c frames.ToolCall) error { return s.tool(c) }
 // the context's single writer. An interruption cancels ctx; the loop then stops
 // without emitting a partial tool turn.
 func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg ToolGenerator) error {
+	ctx, span := b.startSpan(ctx)
+	defer span.End()
+	span.SetAttributes(attribute.Bool("llm.tools", true))
 	if err := b.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
 		return err
 	}

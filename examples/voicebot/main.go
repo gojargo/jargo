@@ -44,6 +44,7 @@ import (
 	"github.com/gojargo/jargo/provider/rime"
 	"github.com/gojargo/jargo/provider/together"
 	"github.com/gojargo/jargo/rtvi"
+	"github.com/gojargo/jargo/tracing"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
 	"github.com/gojargo/jargo/turntaking"
@@ -60,17 +61,34 @@ const systemPrompt = "You are a friendly voice assistant. Keep your replies shor
 const providerOpenAI = "openai"
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	const addr = ":8080"
+
+	// Export OpenTelemetry traces when an OTLP endpoint is configured.
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
+		shutdown, err := tracing.Init(context.Background(), tracing.Config{ServiceName: "jargo-voicebot"})
+		if err != nil {
+			slog.Error("tracing init failed", "err", err)
+		} else {
+			defer func() { _ = shutdown(context.Background()) }()
+			slog.Info("OpenTelemetry tracing enabled")
+		}
+	}
 
 	static, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	http.Handle("/", http.FileServer(http.FS(static)))
 	http.HandleFunc("/offer", handleOffer)
 
 	slog.Info("jargo voicebot listening", "url", "http://localhost"+addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	return http.ListenAndServe(addr, nil)
 }
 
 func handleOffer(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +162,9 @@ func runBot(conn *pionrtc.Connection) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// Root span for the session; the LLM and TTS spans nest under it.
+	ctx, span := tracing.StartConversation(ctx, "")
+	defer span.End()
 	go func() {
 		<-conn.Done()
 		cancel()

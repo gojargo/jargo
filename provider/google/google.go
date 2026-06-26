@@ -75,6 +75,7 @@ func NewLLM(cfg Config) *Service {
 	}
 	s := &Service{cfg: cfg, http: &http.Client{}}
 	s.Base = llm.New("GoogleLLM", s)
+	s.Base.SetModel(cfg.Model)
 	return s
 }
 
