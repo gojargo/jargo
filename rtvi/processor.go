@@ -58,9 +58,36 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 		return p.emitAndForward(ctx, f, dir, BotTTSText(fr.Text))
 	case *frames.ErrorFrame:
 		return p.emitAndForward(ctx, f, dir, Error(fr.Error, fr.Fatal))
+	case *frames.MetricsFrame:
+		return p.emitAndForward(ctx, f, dir, metricsMessage(fr))
 	default:
 		return p.PushFrame(ctx, f, dir)
 	}
+}
+
+// metricsMessage converts a MetricsFrame into an RTVI metrics message, including
+// only the metric kinds the frame carries.
+func metricsMessage(f *frames.MetricsFrame) Message {
+	var d MetricsData
+	if f.TTFB != nil {
+		d.TTFB = []MetricData{{Processor: f.Processor, Value: f.TTFB.Seconds(), Model: f.Model}}
+	}
+	if f.Processing != nil {
+		d.Processing = []MetricData{{Processor: f.Processor, Value: f.Processing.Seconds(), Model: f.Model}}
+	}
+	if f.Characters != nil {
+		d.Characters = []MetricData{{Processor: f.Processor, Value: float64(*f.Characters), Model: f.Model}}
+	}
+	if f.Tokens != nil {
+		d.Tokens = []TokenMetricData{{
+			Processor:        f.Processor,
+			Model:            f.Model,
+			PromptTokens:     f.Tokens.PromptTokens,
+			CompletionTokens: f.Tokens.CompletionTokens,
+			TotalTokens:      f.Tokens.TotalTokens,
+		}}
+	}
+	return Metrics(d)
 }
 
 // handleIncoming processes a message received from the client.

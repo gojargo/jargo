@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/metrics"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/tracing"
 	"go.opentelemetry.io/otel/attribute"
@@ -122,14 +123,16 @@ func (b *Base) synthesize(ctx context.Context, text string) error {
 		return err
 	}
 	start := time.Now()
-	first := true
+	var ttfb time.Duration
+	hadTTFB := false
 	emit := func(pcm []byte) error {
 		if len(pcm) == 0 {
 			return nil
 		}
-		if first {
-			first = false
-			span.SetAttributes(attribute.Int64("tts.ttfb_ms", time.Since(start).Milliseconds()))
+		if !hadTTFB {
+			hadTTFB = true
+			ttfb = time.Since(start)
+			span.SetAttributes(attribute.Int64("tts.ttfb_ms", ttfb.Milliseconds()))
 		}
 		return b.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, rate, 1), processor.Downstream)
 	}
@@ -137,7 +140,29 @@ func (b *Base) synthesize(ctx context.Context, text string) error {
 		span.RecordError(err)
 		b.PushError(ctx, "tts synthesis failed", err, false)
 	}
+	b.emitTiming(ctx, len(text), ttfb, hadTTFB, time.Since(start))
 	return b.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+}
+
+// emitTiming records the synthesis's time-to-first-audio, processing time and
+// character count to OpenTelemetry (always) and, when in-band metrics are
+// enabled, downstream as a MetricsFrame for the RTVI client.
+func (b *Base) emitTiming(ctx context.Context, chars int, ttfb time.Duration, hadTTFB bool, processing time.Duration) {
+	metrics.RecordProcessing(ctx, "tts", b.Name(), "", processing.Seconds())
+	metrics.RecordTTSCharacters(ctx, b.Name(), int64(chars))
+	if hadTTFB {
+		metrics.RecordTTFB(ctx, "tts", b.Name(), "", ttfb.Seconds())
+	}
+	if !b.MetricsEnabled() {
+		return
+	}
+	mf := frames.NewMetricsFrame(b.Name())
+	mf.Processing = &processing
+	mf.Characters = &chars
+	if hadTTFB {
+		mf.TTFB = &ttfb
+	}
+	_ = b.PushFrame(ctx, mf, processor.Downstream)
 }
 
 // StreamResponse issues req and streams the raw-PCM response body to emit in

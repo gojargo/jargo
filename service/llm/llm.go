@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/metrics"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/tracing"
 	"go.opentelemetry.io/otel/attribute"
@@ -101,9 +102,31 @@ func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error
 		attribute.Int64("llm.tokens.output", u.CompletionTokens),
 		attribute.Int64("llm.tokens.total", u.TotalTokens),
 	)
+	metrics.RecordTokens(ctx, b.Name(), b.model, u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(b.Name())
+	f.Model = b.model
 	f.Tokens = &u
 	return b.PushFrame(ctx, f, processor.Downstream)
+}
+
+// emitTiming records the generation's time-to-first-byte and processing time to
+// OpenTelemetry (always) and, when in-band metrics are enabled, downstream as a
+// MetricsFrame for the RTVI client.
+func (b *Base) emitTiming(ctx context.Context, ttfb time.Duration, hadTTFB bool, processing time.Duration) {
+	metrics.RecordProcessing(ctx, "llm", b.Name(), b.model, processing.Seconds())
+	if hadTTFB {
+		metrics.RecordTTFB(ctx, "llm", b.Name(), b.model, ttfb.Seconds())
+	}
+	if !b.MetricsEnabled() {
+		return
+	}
+	mf := frames.NewMetricsFrame(b.Name())
+	mf.Model = b.model
+	mf.Processing = &processing
+	if hadTTFB {
+		mf.TTFB = &ttfb
+	}
+	_ = b.PushFrame(ctx, mf, processor.Downstream)
 }
 
 // startSpan opens the generation span, tagging it with the service name and
@@ -163,14 +186,16 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 		return err
 	}
 	start := time.Now()
-	first := true
+	var ttfb time.Duration
+	hadTTFB := false
 	emit := func(text string) error {
 		if text == "" {
 			return nil
 		}
-		if first {
-			first = false
-			span.SetAttributes(attribute.Int64("llm.ttfb_ms", time.Since(start).Milliseconds()))
+		if !hadTTFB {
+			hadTTFB = true
+			ttfb = time.Since(start)
+			span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
 		}
 		return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
 	}
@@ -178,6 +203,7 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 		span.RecordError(err)
 		b.PushError(ctx, "llm generation failed", err, false)
 	}
+	b.emitTiming(ctx, ttfb, hadTTFB, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
@@ -203,6 +229,9 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	if err := b.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
 		return err
 	}
+	start := time.Now()
+	var ttfb time.Duration
+	hadTTFB := false
 	for {
 		var preamble strings.Builder
 		var calls []frames.ToolCall
@@ -210,6 +239,11 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 			text: func(t string) error {
 				if t == "" {
 					return nil
+				}
+				if !hadTTFB {
+					hadTTFB = true
+					ttfb = time.Since(start)
+					span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
 				}
 				preamble.WriteString(t)
 				return b.PushFrame(ctx, frames.NewLLMTextFrame(t), processor.Downstream)
@@ -243,6 +277,7 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 		// Loop: re-read the context (which a handler may have changed) and
 		// generate the model's response to the tool results.
 	}
+	b.emitTiming(ctx, ttfb, hadTTFB, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
