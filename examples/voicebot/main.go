@@ -26,6 +26,7 @@ import (
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/metrics"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/anthropic"
@@ -69,14 +70,19 @@ func main() {
 func run() error {
 	const addr = ":8080"
 
-	// Export OpenTelemetry traces when an OTLP endpoint is configured.
+	// Export OpenTelemetry traces and metrics when an OTLP endpoint is configured.
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
-		shutdown, err := tracing.Init(context.Background(), tracing.Config{ServiceName: "jargo-voicebot"})
-		if err != nil {
+		if shutdown, err := tracing.Init(context.Background(), tracing.Config{ServiceName: "jargo-voicebot"}); err != nil {
 			slog.Error("tracing init failed", "err", err)
 		} else {
 			defer func() { _ = shutdown(context.Background()) }()
 			slog.Info("OpenTelemetry tracing enabled")
+		}
+		if shutdown, err := metrics.Init(context.Background(), metrics.Config{ServiceName: "jargo-voicebot"}); err != nil {
+			slog.Error("metrics init failed", "err", err)
+		} else {
+			defer func() { _ = shutdown(context.Background()) }()
+			slog.Info("OpenTelemetry metrics enabled")
 		}
 	}
 
@@ -159,6 +165,10 @@ func runBot(conn *pionrtc.Connection) {
 	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
 		AudioInSampleRate:  opus.SampleRate,
 		AudioOutSampleRate: opus.SampleRate,
+		// Emit per-turn metrics (TTFB, processing, tokens, characters) in-band so
+		// the RTVI client sees live latency.
+		EnableMetrics:      true,
+		EnableUsageMetrics: true,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -31,6 +31,7 @@ const (
 	TypeUserStoppedSpeaking = "user-stopped-speaking"
 	TypeBotStartedSpeaking  = "bot-started-speaking"
 	TypeBotStoppedSpeaking  = "bot-stopped-speaking"
+	TypeMetrics             = "metrics"
 )
 
 // Message is the RTVI message envelope. Outgoing event messages omit id; bot-ready
@@ -121,6 +122,37 @@ func UserTranscription(text, userID, timestamp string, final bool) Message {
 		Timestamp: timestamp,
 		Final:     final,
 	})
+}
+
+// MetricData is one timing or count entry in a metrics message (ttfb,
+// processing or characters). Value is in seconds for timings, or a count.
+type MetricData struct {
+	Processor string  `json:"processor"`
+	Value     float64 `json:"value"`
+	Model     string  `json:"model,omitempty"`
+}
+
+// TokenMetricData is one LLM token-usage entry in a metrics message.
+type TokenMetricData struct {
+	Processor        string `json:"processor"`
+	Model            string `json:"model,omitempty"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
+// MetricsData is the payload of a metrics message: each kind is a list so a
+// single message can report several processors at once.
+type MetricsData struct {
+	TTFB       []MetricData      `json:"ttfb,omitempty"`
+	Processing []MetricData      `json:"processing,omitempty"`
+	Characters []MetricData      `json:"characters,omitempty"`
+	Tokens     []TokenMetricData `json:"tokens,omitempty"`
+}
+
+// Metrics builds a metrics message from data.
+func Metrics(data MetricsData) Message {
+	return newMessage(TypeMetrics, "", data)
 }
 
 // event builds a data-less event message (speaking events).

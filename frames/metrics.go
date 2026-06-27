@@ -1,6 +1,9 @@
 package frames
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // LLMTokenUsage reports the token counts billed for one LLM generation. The
 // cache counts are a subset of the input tokens: CacheReadTokens were served
@@ -20,14 +23,22 @@ type LLMTokenUsage struct {
 
 // MetricsFrame reports metrics measured by a processor. It is a system frame, so
 // it is delivered with priority and is not dropped by an interruption — usage is
-// billed even when a turn is cut short. It currently carries LLM token usage;
-// further metric kinds can be added as fields.
+// billed even when a turn is cut short. Each field is optional: a processor sets
+// the kinds it measured (e.g. an LLM reports TTFB, processing time and tokens).
 type MetricsFrame struct {
 	BaseSystemFrame
 	// Processor is the name of the processor that produced the metrics.
 	Processor string
+	// Model is the model that produced the metrics, when known.
+	Model string
+	// TTFB is the time to first byte (first token or audio), or nil when not measured.
+	TTFB *time.Duration
+	// Processing is the wall-clock time the operation took, or nil when not measured.
+	Processing *time.Duration
 	// Tokens reports LLM token usage, or nil when not applicable.
 	Tokens *LLMTokenUsage
+	// Characters reports the number of characters synthesized by TTS, or nil.
+	Characters *int
 }
 
 // NewMetricsFrame builds a MetricsFrame attributed to the named processor.
