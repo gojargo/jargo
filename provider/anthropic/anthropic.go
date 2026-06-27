@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/llm"
 )
 
@@ -52,6 +53,9 @@ type Config struct {
 	// above (e.g. beta parameters), applied to every request.
 	Extra map[string]any
 }
+
+// Validate reports whether the configuration is usable.
+func (c Config) Validate() error { return validate.Struct(c) }
 
 // Service is a streaming Anthropic LLM processor.
 type Service struct {

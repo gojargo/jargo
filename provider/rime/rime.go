@@ -7,8 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -24,8 +24,8 @@ const (
 // Config configures the Rime TTS service. The model-specific controls are
 // pointers (or empty strings) and are omitted from the request when unset.
 type Config struct {
-	// APIKey is the Rime API key; empty uses the RIME_API_KEY env var.
-	APIKey string
+	// APIKey is the Rime API key. Required.
+	APIKey string `validate:"required"`
 	// Model is the Rime model id; empty uses a default.
 	Model string
 	// Speaker is the voice id; empty uses a default.
@@ -55,11 +55,11 @@ type Config struct {
 	TimeScaleFactor *float64
 }
 
+// Validate reports whether the configuration is usable.
+func (c Config) Validate() error { return validate.Struct(c) }
+
 // NewTTS builds a Rime TTS service.
 func NewTTS(cfg Config) *tts.Base {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("RIME_API_KEY")
-	}
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}

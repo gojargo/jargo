@@ -12,10 +12,10 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/llm"
 )
 
@@ -36,7 +36,9 @@ const (
 // sampling controls are pointers so a deliberate zero is distinguishable from
 // "unset"; a nil value is omitted from the request, leaving the API default.
 type LLMConfig struct {
-	// APIKey is the API key; empty uses the provider's env var.
+	// APIKey is the API key. It is not marked required because OpenAI-compatible
+	// endpoints vary — some (e.g. a local Ollama) need none — so the caller
+	// supplies it when the endpoint requires one.
 	APIKey string
 	// BaseURL overrides the API base (e.g. an OpenAI-compatible endpoint).
 	BaseURL string
@@ -69,18 +71,18 @@ type LLMService struct {
 	http *http.Client
 }
 
+// Validate reports whether the configuration is usable.
+func (c LLMConfig) Validate() error { return validate.Struct(c) }
+
 // NewLLM builds an OpenAI LLM service.
 func NewLLM(cfg LLMConfig) *LLMService {
-	return NewCompatLLM("OpenAILLM", defaultLLMBaseURL, "OPENAI_API_KEY", defaultLLMModel, cfg)
+	return NewCompatLLM("OpenAILLM", defaultLLMBaseURL, defaultLLMModel, cfg)
 }
 
 // NewCompatLLM builds an LLM service for any OpenAI-compatible endpoint. name is
-// the processor label, baseURL the API base, envVar the key's environment
-// variable, and defaultModel the model used when cfg.Model is empty.
-func NewCompatLLM(name, baseURL, envVar, defaultModel string, cfg LLMConfig) *LLMService {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv(envVar)
-	}
+// the processor label, baseURL the API base, and defaultModel the model used
+// when cfg.Model is empty.
+func NewCompatLLM(name, baseURL, defaultModel string, cfg LLMConfig) *LLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = baseURL
 	}

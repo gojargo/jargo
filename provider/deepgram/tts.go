@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -24,8 +24,8 @@ const (
 
 // TTSConfig configures the Aura TTS service.
 type TTSConfig struct {
-	// APIKey is the Deepgram API key; empty uses the DEEPGRAM_API_KEY env var.
-	APIKey string
+	// APIKey is the Deepgram API key. Required.
+	APIKey string `validate:"required"`
 	// Model is the Aura voice model; empty uses a default.
 	Model string
 	// SampleRate is the PCM rate requested from Aura and emitted downstream;
@@ -35,11 +35,11 @@ type TTSConfig struct {
 	Encoding string
 }
 
+// Validate reports whether the configuration is usable.
+func (c TTSConfig) Validate() error { return validate.Struct(c) }
+
 // NewTTS builds a Deepgram Aura TTS service.
 func NewTTS(cfg TTSConfig) *tts.Base {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("DEEPGRAM_API_KEY")
-	}
 	if cfg.Model == "" {
 		cfg.Model = defaultTTSModel
 	}

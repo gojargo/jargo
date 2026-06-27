@@ -14,10 +14,10 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -70,8 +70,8 @@ type MessagesConfig struct {
 // Config configures the Gladia STT service. Optional fields modeled as pointers,
 // slices or maps are omitted from the session init when unset.
 type Config struct {
-	// APIKey is the Gladia API key; empty uses the GLADIA_API_KEY env var.
-	APIKey string
+	// APIKey is the Gladia API key. Required.
+	APIKey string `validate:"required"`
 	// URL overrides the session-init endpoint; empty uses the hosted endpoint.
 	URL string
 	// Region pins the processing region ("us-west" or "eu-west"); empty omits it.
@@ -108,12 +108,12 @@ type Config struct {
 	ExtraSettings map[string]any
 }
 
+// Validate reports whether the configuration is usable.
+func (cfg Config) Validate() error { return validate.Struct(cfg) }
+
 // NewSTT builds a Gladia streaming STT service. It works best behind a turn
 // detector: Gladia finalizes per utterance rather than per turn.
 func NewSTT(cfg Config) *stt.StreamService {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("GLADIA_API_KEY")
-	}
 	if cfg.URL == "" {
 		cfg.URL = liveURL
 	}

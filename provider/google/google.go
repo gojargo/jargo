@@ -12,9 +12,9 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"os"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/llm"
 )
 
@@ -38,8 +38,8 @@ const (
 // so a deliberate zero is distinguishable from "unset"; a nil value is omitted
 // from the request, leaving the API default.
 type Config struct {
-	// APIKey is the Gemini API key; empty uses the GEMINI_API_KEY env var.
-	APIKey string
+	// APIKey is the Gemini API key. Required.
+	APIKey string `validate:"required"`
 	// Model is the model id; empty uses a low-latency flash default.
 	Model string
 	// MaxTokens caps the response length; 0 uses a small default suited to voice.
@@ -55,6 +55,9 @@ type Config struct {
 	Extra map[string]any
 }
 
+// Validate reports whether the configuration is usable.
+func (c Config) Validate() error { return validate.Struct(c) }
+
 // Service is a streaming Gemini LLM processor.
 type Service struct {
 	*llm.Base
@@ -64,9 +67,6 @@ type Service struct {
 
 // NewLLM builds a Gemini LLM service.
 func NewLLM(cfg Config) *Service {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("GEMINI_API_KEY")
-	}
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
