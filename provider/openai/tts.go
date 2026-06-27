@@ -38,16 +38,24 @@ func (c TTSConfig) Validate() error { return validate.Struct(c) }
 
 // NewTTS builds an OpenAI TTS service.
 func NewTTS(cfg TTSConfig) *tts.Base {
+	return NewCompatTTS("OpenAITTS", defaultLLMBaseURL, defaultTTSModel, defaultTTSVoice, cfg)
+}
+
+// NewCompatTTS builds a TTS service for any endpoint that implements OpenAI's
+// /audio/speech API with a "pcm" response format (e.g. a local Kokoro-FastAPI
+// server). name labels the service; baseURL, defaultModel and defaultVoice fill
+// in the matching Config fields when they are empty.
+func NewCompatTTS(name, baseURL, defaultModel, defaultVoice string, cfg TTSConfig) *tts.Base {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = defaultLLMBaseURL
+		cfg.BaseURL = baseURL
 	}
 	if cfg.Model == "" {
-		cfg.Model = defaultTTSModel
+		cfg.Model = defaultModel
 	}
 	if cfg.Voice == "" {
-		cfg.Voice = defaultTTSVoice
+		cfg.Voice = defaultVoice
 	}
-	return tts.New("OpenAITTS", &synthesizer{cfg: cfg, http: &http.Client{}})
+	return tts.New(name, &synthesizer{cfg: cfg, http: &http.Client{}})
 }
 
 type synthesizer struct {
