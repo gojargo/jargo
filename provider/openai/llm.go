@@ -64,11 +64,33 @@ type LLMConfig struct {
 	Extra map[string]any
 }
 
+// RequestShaper customizes how a chat-completions request is addressed and
+// authorized, so an OpenAI-compatible deployment with a different URL layout or
+// auth scheme (e.g. Azure OpenAI) can reuse this implementation. The default
+// shaper targets <baseURL>/chat/completions with a Bearer token.
+type RequestShaper interface {
+	// Endpoint returns the full chat-completions URL for baseURL, including any
+	// query string.
+	Endpoint(baseURL string) string
+	// Authorize sets the authorization headers for apiKey on req.
+	Authorize(req *http.Request, apiKey string)
+}
+
+// defaultShaper is the standard OpenAI addressing and Bearer authorization.
+type defaultShaper struct{}
+
+func (defaultShaper) Endpoint(baseURL string) string { return baseURL + "/chat/completions" }
+
+func (defaultShaper) Authorize(req *http.Request, apiKey string) {
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+}
+
 // LLMService is a streaming OpenAI-compatible chat-completions LLM processor.
 type LLMService struct {
 	*llm.Base
-	cfg  LLMConfig
-	http *http.Client
+	cfg    LLMConfig
+	http   *http.Client
+	shaper RequestShaper
 }
 
 // Validate reports whether the configuration is usable.
@@ -83,6 +105,13 @@ func NewLLM(cfg LLMConfig) *LLMService {
 // the processor label, baseURL the API base, and defaultModel the model used
 // when cfg.Model is empty.
 func NewCompatLLM(name, baseURL, defaultModel string, cfg LLMConfig) *LLMService {
+	return NewShapedLLM(name, baseURL, defaultModel, defaultShaper{}, cfg)
+}
+
+// NewShapedLLM builds an OpenAI-compatible LLM service whose requests are
+// addressed and authorized by shaper. It is the base for deployments that don't
+// use OpenAI's URL layout or Bearer auth, such as Azure OpenAI.
+func NewShapedLLM(name, baseURL, defaultModel string, shaper RequestShaper, cfg LLMConfig) *LLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = baseURL
 	}
@@ -92,7 +121,7 @@ func NewCompatLLM(name, baseURL, defaultModel string, cfg LLMConfig) *LLMService
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultLLMMaxTokens
 	}
-	s := &LLMService{cfg: cfg, http: &http.Client{}}
+	s := &LLMService{cfg: cfg, http: &http.Client{}, shaper: shaper}
 	s.Base = llm.New(name, s)
 	s.Base.SetModel(cfg.Model)
 	return s
@@ -212,11 +241,11 @@ func (s *LLMService) baseRequest(convo *frames.LLMContext) chatRequest {
 
 // newHTTPRequest builds the POST request to the chat-completions endpoint.
 func (s *LLMService) newHTTPRequest(ctx context.Context, body []byte) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.shaper.Endpoint(s.cfg.BaseURL), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
+	s.shaper.Authorize(req, s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
 }

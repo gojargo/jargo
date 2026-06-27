@@ -74,6 +74,14 @@ type Service struct {
 
 // NewLLM builds an Anthropic LLM service.
 func NewLLM(cfg Config) *Service {
+	return NewLLMWithOptions("AnthropicLLM", cfg)
+}
+
+// NewLLMWithOptions builds an Anthropic LLM service named name with extra SDK
+// request options appended. It backs alternative Anthropic backends — such as
+// Amazon Bedrock or Google Vertex — that authorize and address requests through
+// an SDK option rather than an API key.
+func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *Service {
 	var opts []option.RequestOption
 	if cfg.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(cfg.APIKey))
@@ -90,6 +98,7 @@ func NewLLM(cfg Config) *Service {
 	for k, v := range cfg.Extra {
 		opts = append(opts, option.WithJSONSet(k, v))
 	}
+	opts = append(opts, extra...)
 	s := &Service{
 		client:      sdk.NewClient(opts...),
 		model:       sdk.ModelClaudeHaiku4_5,
@@ -114,7 +123,7 @@ func NewLLM(cfg Config) *Service {
 	if cfg.TopK != nil {
 		s.topK = param.NewOpt(*cfg.TopK)
 	}
-	s.Base = llm.New("AnthropicLLM", s)
+	s.Base = llm.New(name, s)
 	s.Base.SetModel(s.model)
 	return s
 }
