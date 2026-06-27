@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -19,8 +19,8 @@ const (
 
 // TTSConfig configures the OpenAI TTS service.
 type TTSConfig struct {
-	// APIKey is the API key; empty uses the OPENAI_API_KEY env var.
-	APIKey string
+	// APIKey is the API key. Required.
+	APIKey string `validate:"required"`
 	// BaseURL overrides the API base.
 	BaseURL string
 	// Model is the TTS model; empty uses the default.
@@ -33,11 +33,11 @@ type TTSConfig struct {
 	Speed *float64
 }
 
+// Validate reports whether the configuration is usable.
+func (c TTSConfig) Validate() error { return validate.Struct(c) }
+
 // NewTTS builds an OpenAI TTS service.
 func NewTTS(cfg TTSConfig) *tts.Base {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("OPENAI_API_KEY")
-	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultLLMBaseURL
 	}

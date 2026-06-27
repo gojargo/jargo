@@ -8,9 +8,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"strconv"
 
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
@@ -19,8 +19,8 @@ const defaultSTTModel = "gpt-4o-transcribe"
 
 // STTConfig configures an OpenAI (or OpenAI-compatible) transcription service.
 type STTConfig struct {
-	// APIKey is the API key; empty uses the provider's env var.
-	APIKey string
+	// APIKey is the API key. Required.
+	APIKey string `validate:"required"`
 	// BaseURL overrides the API base.
 	BaseURL string
 	// Model is the transcription model; empty uses the provider default.
@@ -37,18 +37,18 @@ type STTConfig struct {
 	SampleRate int
 }
 
+// Validate reports whether the configuration is usable.
+func (c STTConfig) Validate() error { return validate.Struct(c) }
+
 // NewSTT builds an OpenAI transcription service. It is segmented: a turn
 // detector upstream delimits each utterance, which is transcribed in one request.
 func NewSTT(cfg STTConfig) *stt.SegmentService {
-	return NewCompatSTT("OpenAISTT", defaultLLMBaseURL, "OPENAI_API_KEY", defaultSTTModel, cfg)
+	return NewCompatSTT("OpenAISTT", defaultLLMBaseURL, defaultSTTModel, cfg)
 }
 
 // NewCompatSTT builds a transcription service for any endpoint that implements
 // OpenAI's /audio/transcriptions API (e.g. Groq).
-func NewCompatSTT(name, baseURL, envVar, defaultModel string, cfg STTConfig) *stt.SegmentService {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv(envVar)
-	}
+func NewCompatSTT(name, baseURL, defaultModel string, cfg STTConfig) *stt.SegmentService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = baseURL
 	}

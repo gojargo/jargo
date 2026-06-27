@@ -16,9 +16,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -55,8 +55,8 @@ type PronunciationDictionaryLocator struct {
 
 // Config configures the TTS service.
 type Config struct {
-	// APIKey is the ElevenLabs API key; empty uses the ELEVENLABS_API_KEY env var.
-	APIKey string
+	// APIKey is the ElevenLabs API key. Required.
+	APIKey string `validate:"required"`
 	// BaseURL overrides the HTTP API base; empty uses the hosted API.
 	BaseURL string
 	// VoiceID is the ElevenLabs voice; empty uses a default public voice.
@@ -86,11 +86,11 @@ type Config struct {
 	PronunciationDictionaryLocators []PronunciationDictionaryLocator
 }
 
+// Validate reports whether the configuration is usable.
+func (c Config) Validate() error { return validate.Struct(c) }
+
 // NewTTS builds an ElevenLabs TTS service.
 func NewTTS(cfg Config) *tts.Base {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("ELEVENLABS_API_KEY")
-	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}

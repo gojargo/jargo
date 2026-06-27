@@ -5,11 +5,10 @@ import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "https://api.deepseek.com/v1"
-	apiKeyEnv    = "DEEPSEEK_API_KEY" //nolint:gosec // G101: env var name, not a credential
 	defaultModel = "deepseek-chat"
 )
 
 // NewLLM builds a DeepSeek LLM service.
 func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("DeepSeekLLM", baseURL, apiKeyEnv, defaultModel, cfg)
+	return openai.NewCompatLLM("DeepSeekLLM", baseURL, defaultModel, cfg)
 }

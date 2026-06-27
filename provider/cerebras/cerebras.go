@@ -5,11 +5,10 @@ import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "https://api.cerebras.ai/v1"
-	apiKeyEnv    = "CEREBRAS_API_KEY" //nolint:gosec // G101: env var name, not a credential
 	defaultModel = "gpt-oss-120b"
 )
 
 // NewLLM builds a Cerebras LLM service.
 func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("CerebrasLLM", baseURL, apiKeyEnv, defaultModel, cfg)
+	return openai.NewCompatLLM("CerebrasLLM", baseURL, defaultModel, cfg)
 }

@@ -10,9 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -50,8 +50,8 @@ type GenerationConfig struct {
 
 // Config configures the Cartesia TTS service.
 type Config struct {
-	// APIKey is the Cartesia API key; empty uses the CARTESIA_API_KEY env var.
-	APIKey string
+	// APIKey is the Cartesia API key. Required.
+	APIKey string `validate:"required"`
 	// URL overrides the TTS WebSocket endpoint; empty uses the hosted endpoint.
 	URL string
 	// Version sets the Cartesia-Version header; empty uses a pinned default.
@@ -77,11 +77,11 @@ type Config struct {
 	PronunciationDictID string
 }
 
+// Validate reports whether the configuration is usable.
+func (c Config) Validate() error { return validate.Struct(c) }
+
 // NewTTS builds a Cartesia TTS service.
 func NewTTS(cfg Config) *tts.Base {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("CARTESIA_API_KEY")
-	}
 	if cfg.URL == "" {
 		cfg.URL = defaultURL
 	}

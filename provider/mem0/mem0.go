@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/processor"
 )
 
@@ -46,7 +47,8 @@ const (
 // Config configures the memory service.
 type Config struct {
 	// Host is the base URL of the mem0 REST server, e.g. http://localhost:8000.
-	Host string
+	// Required.
+	Host string `validate:"required"`
 	// APIKey is an optional bearer token sent as "Authorization: Token <key>"
 	// (the managed mem0 API, or a secured self-hosted server).
 	APIKey string
@@ -66,6 +68,9 @@ type Config struct {
 	// HTTPClient overrides the HTTP client; nil uses one with Timeout.
 	HTTPClient *http.Client
 }
+
+// Validate reports whether the configuration is usable.
+func (c Config) Validate() error { return validate.Struct(c) }
 
 // Service is the memory frame processor.
 type Service struct {

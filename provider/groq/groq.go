@@ -8,18 +8,17 @@ import (
 
 const (
 	baseURL         = "https://api.groq.com/openai/v1"
-	apiKeyEnv       = "GROQ_API_KEY" //nolint:gosec // G101: env var name, not a credential
 	defaultLLMModel = "llama-3.3-70b-versatile"
 	defaultSTTModel = "whisper-large-v3-turbo"
 )
 
 // NewLLM builds a Groq LLM service.
 func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("GroqLLM", baseURL, apiKeyEnv, defaultLLMModel, cfg)
+	return openai.NewCompatLLM("GroqLLM", baseURL, defaultLLMModel, cfg)
 }
 
 // NewSTT builds a Groq Whisper transcription service. It is segmented: a turn
 // detector upstream delimits each utterance.
 func NewSTT(cfg openai.STTConfig) *stt.SegmentService {
-	return openai.NewCompatSTT("GroqSTT", baseURL, apiKeyEnv, defaultSTTModel, cfg)
+	return openai.NewCompatSTT("GroqSTT", baseURL, defaultSTTModel, cfg)
 }

@@ -11,12 +11,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
@@ -38,8 +38,8 @@ const (
 // those defaults differ from Deepgram's own and are noted per field. Optional
 // fields modeled as pointers or slices are omitted from the request when unset.
 type Config struct {
-	// APIKey is the Deepgram API key; empty uses the DEEPGRAM_API_KEY env var.
-	APIKey string
+	// APIKey is the Deepgram API key. Required.
+	APIKey string `validate:"required"`
 	// ListenURL overrides the live-transcription WebSocket endpoint; empty uses
 	// Deepgram's hosted endpoint.
 	ListenURL string
@@ -107,11 +107,11 @@ type Config struct {
 	ExtraQuery map[string]string
 }
 
+// Validate reports whether the configuration is usable.
+func (cfg Config) Validate() error { return validate.Struct(cfg) }
+
 // NewSTT builds a Deepgram streaming STT service.
 func NewSTT(cfg Config) *stt.StreamService {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("DEEPGRAM_API_KEY")
-	}
 	if cfg.Model == "" {
 		cfg.Model = defaultSTTModel
 	}

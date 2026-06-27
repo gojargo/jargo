@@ -11,11 +11,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
@@ -31,8 +31,8 @@ const (
 // Config configures the AssemblyAI STT service. Optional fields modeled as
 // pointers or slices are omitted from the request when unset.
 type Config struct {
-	// APIKey is the AssemblyAI API key; empty uses the ASSEMBLYAI_API_KEY env var.
-	APIKey string
+	// APIKey is the AssemblyAI API key. Required.
+	APIKey string `validate:"required"`
 	// BaseURL overrides the streaming WebSocket endpoint; empty uses the hosted
 	// endpoint.
 	BaseURL string
@@ -80,11 +80,11 @@ type Config struct {
 	ExtraQuery map[string]string
 }
 
+// Validate reports whether the configuration is usable.
+func (cfg Config) Validate() error { return validate.Struct(cfg) }
+
 // NewSTT builds an AssemblyAI streaming STT service.
 func NewSTT(cfg Config) *stt.StreamService {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("ASSEMBLYAI_API_KEY")
-	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = wsBase
 	}

@@ -7,8 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -23,8 +23,8 @@ const (
 
 // Config configures the LMNT TTS service.
 type Config struct {
-	// APIKey is the LMNT API key; empty uses the LMNT_API_KEY env var.
-	APIKey string
+	// APIKey is the LMNT API key. Required.
+	APIKey string `validate:"required"`
 	// Model is the LMNT model; empty uses a default.
 	Model string
 	// Voice is the voice id; empty uses a default.
@@ -36,11 +36,11 @@ type Config struct {
 	SampleRate int
 }
 
+// Validate reports whether the configuration is usable.
+func (c Config) Validate() error { return validate.Struct(c) }
+
 // NewTTS builds an LMNT TTS service.
 func NewTTS(cfg Config) *tts.Base {
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("LMNT_API_KEY")
-	}
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}

@@ -3,11 +3,15 @@
 // service speaks the reply, and the audio goes back out over WebRTC. RTVI events
 // (the handshake and live transcripts) flow over the data channel.
 //
-// By default it uses Deepgram (STT), Anthropic (LLM) and ElevenLabs (TTS); set
-// DEEPGRAM_API_KEY, ANTHROPIC_API_KEY and ELEVENLABS_API_KEY. Swap providers
-// with the STT, LLM and TTS env vars (e.g. STT=assemblyai LLM=openai
-// TTS=cartesia) and set that provider's own API key env var. Then run it, open
-// http://localhost:8080, click start, and allow the microphone.
+// Configuration is read with Viper from the environment (and an optional
+// voicebot.yaml in the working directory; env overrides it). By default it uses
+// Deepgram (STT), Anthropic (LLM) and ElevenLabs (TTS); set DEEPGRAM_API_KEY,
+// ANTHROPIC_API_KEY and ELEVENLABS_API_KEY. Swap providers with STT, LLM and TTS
+// (e.g. STT=assemblyai LLM=openai TTS=cartesia) and set that provider's own API
+// key. Then run it, open http://localhost:8080, click start, allow the mic.
+//
+// jargo itself reads no environment variables: the library takes explicit
+// Config structs, and this app is responsible for sourcing and validating them.
 package main
 
 import (
@@ -15,11 +19,11 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
-	"os"
 
 	"github.com/gojargo/jargo/aggregators"
 	"github.com/gojargo/jargo/audio/opus"
@@ -50,6 +54,7 @@ import (
 	"github.com/gojargo/jargo/transport/pionrtc"
 	"github.com/gojargo/jargo/turntaking"
 	"github.com/pion/webrtc/v4"
+	"github.com/spf13/viper"
 )
 
 //go:embed static
@@ -58,7 +63,7 @@ var staticFiles embed.FS
 const systemPrompt = "You are a friendly voice assistant. Keep your replies short, " +
 	"warm and conversational — one or two sentences."
 
-// providerOpenAI is the env-var value selecting OpenAI in each category.
+// providerOpenAI is the config value selecting OpenAI in each category.
 const providerOpenAI = "openai"
 
 func main() {
@@ -68,21 +73,19 @@ func main() {
 }
 
 func run() error {
-	const addr = ":8080"
+	v, err := loadConfig()
+	if err != nil {
+		return err
+	}
 
-	// Export OpenTelemetry traces and metrics when an OTLP endpoint is configured.
-	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
-		if shutdown, err := tracing.Init(context.Background(), tracing.Config{ServiceName: "jargo-voicebot"}); err != nil {
-			slog.Error("tracing init failed", "err", err)
-		} else {
-			defer func() { _ = shutdown(context.Background()) }()
-			slog.Info("OpenTelemetry tracing enabled")
-		}
-		if shutdown, err := metrics.Init(context.Background(), metrics.Config{ServiceName: "jargo-voicebot"}); err != nil {
-			slog.Error("metrics init failed", "err", err)
-		} else {
-			defer func() { _ = shutdown(context.Background()) }()
-			slog.Info("OpenTelemetry metrics enabled")
+	shutdown := setupTelemetry(v)
+	defer shutdown()
+
+	// Validate the selected providers up front so misconfiguration fails at
+	// startup, not on the first call.
+	for _, sel := range []func(*viper.Viper) (processor.Processor, error){selectSTT, selectLLM, selectTTS} {
+		if _, err = sel(v); err != nil {
+			return fmt.Errorf("provider configuration: %w", err)
 		}
 	}
 
@@ -91,13 +94,64 @@ func run() error {
 		return err
 	}
 	http.Handle("/", http.FileServer(http.FS(static)))
-	http.HandleFunc("/offer", handleOffer)
+	http.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) { handleOffer(w, r, v) })
 
+	addr := v.GetString("addr")
 	slog.Info("jargo voicebot listening", "url", "http://localhost"+addr)
 	return http.ListenAndServe(addr, nil)
 }
 
-func handleOffer(w http.ResponseWriter, r *http.Request) {
+// setupTelemetry installs OpenTelemetry tracing and metrics exporters when an
+// OTLP endpoint is configured, returning a shutdown function (a no-op when
+// telemetry is off).
+func setupTelemetry(v *viper.Viper) func() {
+	if v.GetString("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
+		return func() {}
+	}
+	var shutdowns []func(context.Context) error
+	if sd, err := tracing.Init(context.Background(), tracing.Config{ServiceName: "jargo-voicebot"}); err != nil {
+		slog.Error("tracing init failed", "err", err)
+	} else {
+		shutdowns = append(shutdowns, sd)
+		slog.Info("OpenTelemetry tracing enabled")
+	}
+	if sd, err := metrics.Init(context.Background(), metrics.Config{ServiceName: "jargo-voicebot"}); err != nil {
+		slog.Error("metrics init failed", "err", err)
+	} else {
+		shutdowns = append(shutdowns, sd)
+		slog.Info("OpenTelemetry metrics enabled")
+	}
+	return func() {
+		for _, sd := range shutdowns {
+			_ = sd(context.Background())
+		}
+	}
+}
+
+// loadConfig builds the Viper config: defaults, the environment (AutomaticEnv),
+// and an optional voicebot.yaml in the working directory that the environment
+// overrides.
+func loadConfig() (*viper.Viper, error) {
+	v := viper.New()
+	v.AutomaticEnv()
+	v.SetDefault("addr", ":8080")
+	v.SetDefault("stt", "deepgram")
+	v.SetDefault("llm", "anthropic")
+	v.SetDefault("tts", "elevenlabs")
+	v.SetDefault("mem0_user", "voicebot-user")
+
+	v.SetConfigName("voicebot")
+	v.AddConfigPath(".")
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			return nil, err
+		}
+	}
+	return v, nil
+}
+
+func handleOffer(w http.ResponseWriter, r *http.Request, v *viper.Viper) {
 	var offer webrtc.SessionDescription
 	if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -115,7 +169,7 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go runBot(conn)
+	go runBot(conn, v)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(answer); err != nil {
@@ -124,15 +178,29 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 }
 
 // runBot builds and runs the STT -> LLM -> TTS pipeline for one connection.
-func runBot(conn *pionrtc.Connection) {
+func runBot(conn *pionrtc.Connection, v *viper.Viper) {
+	defer func() { _ = conn.Close() }()
+
+	stt, err := selectSTT(v)
+	if err != nil {
+		slog.Error("STT unavailable", "err", err)
+		return
+	}
+	llm, err := selectLLM(v)
+	if err != nil {
+		slog.Error("LLM unavailable", "err", err)
+		return
+	}
+	tts, err := selectTTS(v)
+	if err != nil {
+		slog.Error("TTS unavailable", "err", err)
+		return
+	}
+
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
 	t := pionrtc.NewTransport(conn, params)
-
-	stt := selectSTT()
-	llm := selectLLM()
-	tts := selectTTS()
 
 	convo := frames.NewLLMContext(systemPrompt)
 
@@ -149,9 +217,9 @@ func runBot(conn *pionrtc.Connection) {
 	}
 	agg := aggregators.New(convo, aggOpts...)
 	procs = append(procs, stt, agg.User())
-	// Optional long-term memory: when MEM0_HOST is set, recall relevant memories
+	// Optional long-term memory: when mem0_host is set, recall relevant memories
 	// into the context before the LLM and store new turns after it.
-	if mem := buildMemory(); mem != nil {
+	if mem := buildMemory(v); mem != nil {
 		procs = append(procs, mem)
 	}
 	procs = append(procs,
@@ -187,83 +255,94 @@ func runBot(conn *pionrtc.Connection) {
 	if err := task.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("voicebot pipeline ended", "err", err)
 	}
-	_ = conn.Close()
 	slog.Info("voicebot pipeline stopped")
 }
 
-// selectSTT picks the STT service from the STT env var, defaulting to Deepgram.
+// build validates cfg and, when valid, constructs the service with ctor. It
+// keeps each provider case to a line and ensures a misconfigured provider fails
+// fast with a clear error rather than at the first request.
+func build[C interface{ Validate() error }, S processor.Processor](cfg C, ctor func(C) S) (processor.Processor, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return ctor(cfg), nil
+}
+
+// selectSTT picks the STT service from the "stt" setting, defaulting to Deepgram.
 // The openai and groq options are segmented (batch) and need turn taking enabled
 // to delimit utterances.
-func selectSTT() processor.Processor {
-	switch os.Getenv("STT") {
+func selectSTT(v *viper.Viper) (processor.Processor, error) {
+	rate := opus.SampleRate
+	switch v.GetString("stt") {
 	case "assemblyai":
-		return assemblyai.NewSTT(assemblyai.Config{SampleRate: opus.SampleRate})
+		return build(assemblyai.Config{APIKey: v.GetString("ASSEMBLYAI_API_KEY"), SampleRate: rate}, assemblyai.NewSTT)
 	case "gladia":
-		return gladia.NewSTT(gladia.Config{SampleRate: opus.SampleRate})
+		return build(gladia.Config{APIKey: v.GetString("GLADIA_API_KEY"), SampleRate: rate}, gladia.NewSTT)
 	case providerOpenAI:
-		return openai.NewSTT(openai.STTConfig{SampleRate: opus.SampleRate})
+		return build(openai.STTConfig{APIKey: v.GetString("OPENAI_API_KEY"), SampleRate: rate}, openai.NewSTT)
 	case "groq":
-		return groq.NewSTT(openai.STTConfig{SampleRate: opus.SampleRate})
+		return build(openai.STTConfig{APIKey: v.GetString("GROQ_API_KEY"), SampleRate: rate}, groq.NewSTT)
 	default:
-		return deepgram.NewSTT(deepgram.Config{SampleRate: opus.SampleRate})
+		return build(deepgram.Config{APIKey: v.GetString("DEEPGRAM_API_KEY"), SampleRate: rate}, deepgram.NewSTT)
 	}
 }
 
-// selectLLM picks the LLM service from the LLM env var, defaulting to Anthropic.
-func selectLLM() processor.Processor {
-	switch os.Getenv("LLM") {
+// selectLLM picks the LLM service from the "llm" setting, defaulting to Anthropic.
+func selectLLM(v *viper.Viper) (processor.Processor, error) {
+	switch v.GetString("llm") {
 	case providerOpenAI:
-		return openai.NewLLM(openai.LLMConfig{})
+		return build(openai.LLMConfig{APIKey: v.GetString("OPENAI_API_KEY")}, openai.NewLLM)
 	case "google":
-		return google.NewLLM(google.Config{})
+		return build(google.Config{APIKey: v.GetString("GEMINI_API_KEY")}, google.NewLLM)
 	case "groq":
-		return groq.NewLLM(openai.LLMConfig{})
+		return build(openai.LLMConfig{APIKey: v.GetString("GROQ_API_KEY")}, groq.NewLLM)
 	case "together":
-		return together.NewLLM(openai.LLMConfig{})
+		return build(openai.LLMConfig{APIKey: v.GetString("TOGETHER_API_KEY")}, together.NewLLM)
 	case "deepseek":
-		return deepseek.NewLLM(openai.LLMConfig{})
+		return build(openai.LLMConfig{APIKey: v.GetString("DEEPSEEK_API_KEY")}, deepseek.NewLLM)
 	case "ollama":
-		return ollama.NewLLM(openai.LLMConfig{})
+		return build(openai.LLMConfig{}, ollama.NewLLM) // local; no key required
 	default:
-		return anthropic.NewLLM(anthropic.Config{})
+		return build(anthropic.Config{APIKey: v.GetString("ANTHROPIC_API_KEY")}, anthropic.NewLLM)
 	}
 }
 
-// selectTTS picks the TTS service from the TTS env var, defaulting to ElevenLabs.
-func selectTTS() processor.Processor {
-	switch os.Getenv("TTS") {
+// selectTTS picks the TTS service from the "tts" setting, defaulting to ElevenLabs.
+func selectTTS(v *viper.Viper) (processor.Processor, error) {
+	switch v.GetString("tts") {
 	case "cartesia":
-		return cartesia.NewTTS(cartesia.Config{})
+		return build(cartesia.Config{APIKey: v.GetString("CARTESIA_API_KEY")}, cartesia.NewTTS)
 	case providerOpenAI:
-		return openai.NewTTS(openai.TTSConfig{})
+		return build(openai.TTSConfig{APIKey: v.GetString("OPENAI_API_KEY")}, openai.NewTTS)
 	case "deepgram":
-		return deepgram.NewTTS(deepgram.TTSConfig{})
+		return build(deepgram.TTSConfig{APIKey: v.GetString("DEEPGRAM_API_KEY")}, deepgram.NewTTS)
 	case "rime":
-		return rime.NewTTS(rime.Config{})
+		return build(rime.Config{APIKey: v.GetString("RIME_API_KEY")}, rime.NewTTS)
 	case "lmnt":
-		return lmnt.NewTTS(lmnt.Config{})
+		return build(lmnt.Config{APIKey: v.GetString("LMNT_API_KEY")}, lmnt.NewTTS)
 	default:
-		return elevenlabs.NewTTS(elevenlabs.Config{})
+		return build(elevenlabs.Config{APIKey: v.GetString("ELEVENLABS_API_KEY")}, elevenlabs.NewTTS)
 	}
 }
 
-// buildMemory enables mem0 long-term memory when MEM0_HOST is set, scoping
-// memories with MEM0_USER (or a default). It returns nil when memory is off.
-func buildMemory() *mem0.Service {
-	host := os.Getenv("MEM0_HOST")
+// buildMemory enables mem0 long-term memory when mem0_host is set, scoping
+// memories with mem0_user. It returns nil when memory is off or misconfigured.
+func buildMemory(v *viper.Viper) *mem0.Service {
+	host := v.GetString("mem0_host")
 	if host == "" {
 		return nil
 	}
-	userID := os.Getenv("MEM0_USER")
-	if userID == "" {
-		userID = "voicebot-user"
-	}
-	slog.Info("long-term memory enabled (mem0)", "host", host, "user", userID)
-	return mem0.NewMemory(mem0.Config{
+	cfg := mem0.Config{
 		Host:   host,
-		APIKey: os.Getenv("MEM0_API_KEY"),
-		UserID: userID,
-	})
+		APIKey: v.GetString("MEM0_API_KEY"),
+		UserID: v.GetString("mem0_user"),
+	}
+	if err := cfg.Validate(); err != nil {
+		slog.Error("mem0 disabled: invalid config", "err", err)
+		return nil
+	}
+	slog.Info("long-term memory enabled (mem0)", "host", cfg.Host, "user", cfg.UserID)
+	return mem0.NewMemory(cfg)
 }
 
 // buildTurnTaking constructs a turn-taking detector from Silero VAD and Smart

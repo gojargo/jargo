@@ -5,11 +5,10 @@ import "github.com/gojargo/jargo/provider/openai"
 
 const (
 	baseURL      = "https://api.fireworks.ai/inference/v1"
-	apiKeyEnv    = "FIREWORKS_API_KEY" //nolint:gosec // G101: env var name, not a credential
 	defaultModel = "accounts/fireworks/models/firefunction-v2"
 )
 
 // NewLLM builds a Fireworks AI LLM service.
 func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("FireworksLLM", baseURL, apiKeyEnv, defaultModel, cfg)
+	return openai.NewCompatLLM("FireworksLLM", baseURL, defaultModel, cfg)
 }
