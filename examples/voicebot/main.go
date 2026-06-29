@@ -1,14 +1,19 @@
-// Command voicebot is a full voice agent built on jargo: microphone audio comes
-// in over WebRTC, an STT service transcribes it, an LLM reasons over it, a TTS
-// service speaks the reply, and the audio goes back out over WebRTC. RTVI events
-// (the handshake and live transcripts) flow over the data channel.
+// Command voicebot is the full-featured voice agent built on jargo: microphone
+// audio comes in over WebRTC, Deepgram transcribes it, an Anthropic LLM reasons
+// over it, ElevenLabs speaks the reply, and the audio goes back out over WebRTC.
+// On top of the core STT -> LLM -> TTS pipeline it adds turn-taking and barge-in
+// (Silero VAD + Smart Turn), optional long-term memory (mem0), and optional
+// OpenTelemetry tracing and metrics. RTVI events (the handshake and live
+// transcripts) flow over the data channel.
 //
-// Configuration is read with Viper from the environment (and an optional
-// voicebot.yaml in the working directory; env overrides it). By default it uses
-// Deepgram (STT), Anthropic (LLM) and ElevenLabs (TTS); set DEEPGRAM_API_KEY,
-// ANTHROPIC_API_KEY and ELEVENLABS_API_KEY. Swap providers with STT, LLM and TTS
-// (e.g. STT=assemblyai LLM=openai TTS=cartesia) and set that provider's own API
-// key. Then run it, open http://localhost:8080, click start, allow the mic.
+// The provider stack is fixed here so the example can focus on those advanced
+// features. To see other STT/LLM/TTS providers wired explicitly — one provider
+// per file — look at examples/voice (e.g. `go run ./examples/voice/cartesia`).
+//
+// Set DEEPGRAM_API_KEY, ANTHROPIC_API_KEY and ELEVENLABS_API_KEY, then run it,
+// open http://localhost:8080, click start, and allow the mic. Long-term memory
+// turns on when MEM0_HOST is set; tracing and metrics when
+// OTEL_EXPORTER_OTLP_ENDPOINT is set.
 //
 // jargo itself reads no environment variables: the library takes explicit
 // Config structs, and this app is responsible for sourcing and validating them.
@@ -35,31 +40,9 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/anthropic"
-	"github.com/gojargo/jargo/provider/assemblyai"
-	"github.com/gojargo/jargo/provider/azureopenai"
-	"github.com/gojargo/jargo/provider/azurespeech"
-	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/deepgram"
-	"github.com/gojargo/jargo/provider/deepseek"
 	"github.com/gojargo/jargo/provider/elevenlabs"
-	"github.com/gojargo/jargo/provider/fish"
-	"github.com/gojargo/jargo/provider/gladia"
-	"github.com/gojargo/jargo/provider/google"
-	"github.com/gojargo/jargo/provider/groq"
-	"github.com/gojargo/jargo/provider/hume"
-	"github.com/gojargo/jargo/provider/lmnt"
 	"github.com/gojargo/jargo/provider/mem0"
-	"github.com/gojargo/jargo/provider/minimax"
-	"github.com/gojargo/jargo/provider/mistral"
-	"github.com/gojargo/jargo/provider/nebius"
-	"github.com/gojargo/jargo/provider/ollama"
-	"github.com/gojargo/jargo/provider/openai"
-	"github.com/gojargo/jargo/provider/qwen"
-	"github.com/gojargo/jargo/provider/rime"
-	"github.com/gojargo/jargo/provider/sambanova"
-	"github.com/gojargo/jargo/provider/soniox"
-	"github.com/gojargo/jargo/provider/speechmatics"
-	"github.com/gojargo/jargo/provider/together"
 	"github.com/gojargo/jargo/rtvi"
 	"github.com/gojargo/jargo/tracing"
 	"github.com/gojargo/jargo/transport"
@@ -74,9 +57,6 @@ var staticFiles embed.FS
 
 const systemPrompt = "You are a friendly voice assistant. Keep your replies short, " +
 	"warm and conversational — one or two sentences."
-
-// providerOpenAI is the config value selecting OpenAI in each category.
-const providerOpenAI = "openai"
 
 func main() {
 	if err := run(); err != nil {
@@ -93,12 +73,10 @@ func run() error {
 	shutdown := setupTelemetry(v)
 	defer shutdown()
 
-	// Validate the selected providers up front so misconfiguration fails at
-	// startup, not on the first call.
-	for _, sel := range []func(*viper.Viper) (processor.Processor, error){selectSTT, selectLLM, selectTTS} {
-		if _, err = sel(v); err != nil {
-			return fmt.Errorf("provider configuration: %w", err)
-		}
+	// Validate the provider stack up front so misconfiguration fails at startup,
+	// not on the first call.
+	if _, _, _, err = buildStack(v); err != nil {
+		return fmt.Errorf("provider configuration: %w", err)
 	}
 
 	static, err := fs.Sub(staticFiles, "static")
@@ -147,9 +125,6 @@ func loadConfig() (*viper.Viper, error) {
 	v := viper.New()
 	v.AutomaticEnv()
 	v.SetDefault("addr", ":8080")
-	v.SetDefault("stt", "deepgram")
-	v.SetDefault("llm", "anthropic")
-	v.SetDefault("tts", "elevenlabs")
 	v.SetDefault("mem0_user", "voicebot-user")
 
 	v.SetConfigName("voicebot")
@@ -193,19 +168,9 @@ func handleOffer(w http.ResponseWriter, r *http.Request, v *viper.Viper) {
 func runBot(conn *pionrtc.Connection, v *viper.Viper) {
 	defer func() { _ = conn.Close() }()
 
-	stt, err := selectSTT(v)
+	stt, llm, tts, err := buildStack(v)
 	if err != nil {
-		slog.Error("STT unavailable", "err", err)
-		return
-	}
-	llm, err := selectLLM(v)
-	if err != nil {
-		slog.Error("LLM unavailable", "err", err)
-		return
-	}
-	tts, err := selectTTS(v)
-	if err != nil {
-		slog.Error("TTS unavailable", "err", err)
+		slog.Error("provider stack unavailable", "err", err)
 		return
 	}
 
@@ -275,8 +240,8 @@ func runBot(conn *pionrtc.Connection, v *viper.Viper) {
 }
 
 // build validates cfg and, when valid, constructs the service with ctor. It
-// keeps each provider case to a line and ensures a misconfigured provider fails
-// fast with a clear error rather than at the first request.
+// ensures a misconfigured provider fails fast with a clear error rather than at
+// the first request.
 func build[C interface{ Validate() error }, S processor.Processor](cfg C, ctor func(C) S) (processor.Processor, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -284,95 +249,24 @@ func build[C interface{ Validate() error }, S processor.Processor](cfg C, ctor f
 	return ctor(cfg), nil
 }
 
-// selectSTT picks the STT service from the "stt" setting, defaulting to Deepgram.
-// The openai and groq options are segmented (batch) and need turn taking enabled
-// to delimit utterances.
-func selectSTT(v *viper.Viper) (processor.Processor, error) {
-	rate := opus.SampleRate
-	switch v.GetString("stt") {
-	case "assemblyai":
-		return build(assemblyai.Config{APIKey: v.GetString("ASSEMBLYAI_API_KEY"), SampleRate: rate}, assemblyai.NewSTT)
-	case "gladia":
-		return build(gladia.Config{APIKey: v.GetString("GLADIA_API_KEY"), SampleRate: rate}, gladia.NewSTT)
-	case "speechmatics":
-		return build(speechmatics.Config{APIKey: v.GetString("SPEECHMATICS_API_KEY"), SampleRate: rate}, speechmatics.NewSTT)
-	case "soniox":
-		return build(soniox.Config{APIKey: v.GetString("SONIOX_API_KEY"), SampleRate: rate}, soniox.NewSTT)
-	case "azure":
-		return build(azureopenai.STTConfig{
-			Endpoint:   v.GetString("AZURE_OPENAI_ENDPOINT"),
-			Deployment: v.GetString("azure_stt_deployment"),
-			STTConfig:  openai.STTConfig{APIKey: v.GetString("AZURE_OPENAI_API_KEY"), SampleRate: rate},
-		}, azureopenai.NewSTT)
-	case providerOpenAI:
-		return build(openai.STTConfig{APIKey: v.GetString("OPENAI_API_KEY"), SampleRate: rate}, openai.NewSTT)
-	case "groq":
-		return build(openai.STTConfig{APIKey: v.GetString("GROQ_API_KEY"), SampleRate: rate}, groq.NewSTT)
-	default:
-		return build(deepgram.Config{APIKey: v.GetString("DEEPGRAM_API_KEY"), SampleRate: rate}, deepgram.NewSTT)
+// buildStack constructs the fixed provider stack — Deepgram (STT), Anthropic
+// (LLM) and ElevenLabs (TTS) — validating each config so misconfiguration fails
+// fast. See examples/voice for other providers wired one per file.
+func buildStack(v *viper.Viper) (stt, llm, tts processor.Processor, err error) {
+	sttCfg := deepgram.Config{APIKey: v.GetString("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate}
+	stt, err = build(sttCfg, deepgram.NewSTT)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-}
-
-// selectLLM picks the LLM service from the "llm" setting, defaulting to Anthropic.
-func selectLLM(v *viper.Viper) (processor.Processor, error) {
-	switch v.GetString("llm") {
-	case providerOpenAI:
-		return build(openai.LLMConfig{APIKey: v.GetString("OPENAI_API_KEY")}, openai.NewLLM)
-	case "google":
-		return build(google.Config{APIKey: v.GetString("GEMINI_API_KEY")}, google.NewLLM)
-	case "groq":
-		return build(openai.LLMConfig{APIKey: v.GetString("GROQ_API_KEY")}, groq.NewLLM)
-	case "together":
-		return build(openai.LLMConfig{APIKey: v.GetString("TOGETHER_API_KEY")}, together.NewLLM)
-	case "deepseek":
-		return build(openai.LLMConfig{APIKey: v.GetString("DEEPSEEK_API_KEY")}, deepseek.NewLLM)
-	case "mistral":
-		return build(openai.LLMConfig{APIKey: v.GetString("MISTRAL_API_KEY")}, mistral.NewLLM)
-	case "nebius":
-		return build(openai.LLMConfig{APIKey: v.GetString("NEBIUS_API_KEY")}, nebius.NewLLM)
-	case "sambanova":
-		return build(openai.LLMConfig{APIKey: v.GetString("SAMBANOVA_API_KEY")}, sambanova.NewLLM)
-	case "qwen":
-		return build(openai.LLMConfig{APIKey: v.GetString("DASHSCOPE_API_KEY")}, qwen.NewLLM)
-	case "ollama":
-		return build(openai.LLMConfig{}, ollama.NewLLM) // local; no key required
-	default:
-		return build(anthropic.Config{APIKey: v.GetString("ANTHROPIC_API_KEY")}, anthropic.NewLLM)
+	llm, err = build(anthropic.Config{APIKey: v.GetString("ANTHROPIC_API_KEY")}, anthropic.NewLLM)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-}
-
-// selectTTS picks the TTS service from the "tts" setting, defaulting to ElevenLabs.
-func selectTTS(v *viper.Viper) (processor.Processor, error) {
-	switch v.GetString("tts") {
-	case "cartesia":
-		return build(cartesia.Config{APIKey: v.GetString("CARTESIA_API_KEY")}, cartesia.NewTTS)
-	case providerOpenAI:
-		return build(openai.TTSConfig{APIKey: v.GetString("OPENAI_API_KEY")}, openai.NewTTS)
-	case "deepgram":
-		return build(deepgram.TTSConfig{APIKey: v.GetString("DEEPGRAM_API_KEY")}, deepgram.NewTTS)
-	case "rime":
-		return build(rime.Config{APIKey: v.GetString("RIME_API_KEY")}, rime.NewTTS)
-	case "lmnt":
-		return build(lmnt.Config{APIKey: v.GetString("LMNT_API_KEY")}, lmnt.NewTTS)
-	case "azure":
-		return build(azurespeech.TTSConfig{
-			APIKey: v.GetString("AZURE_SPEECH_KEY"),
-			Region: v.GetString("azure_region"),
-			Voice:  v.GetString("azure_voice"),
-		}, azurespeech.NewTTS)
-	case "hume":
-		return build(hume.Config{APIKey: v.GetString("HUME_API_KEY"), VoiceID: v.GetString("hume_voice")}, hume.NewTTS)
-	case "fish":
-		return build(fish.Config{APIKey: v.GetString("FISH_API_KEY"), ReferenceID: v.GetString("fish_voice")}, fish.NewTTS)
-	case "minimax":
-		return build(minimax.Config{
-			APIKey:  v.GetString("MINIMAX_API_KEY"),
-			GroupID: v.GetString("MINIMAX_GROUP_ID"),
-			VoiceID: v.GetString("minimax_voice"),
-		}, minimax.NewTTS)
-	default:
-		return build(elevenlabs.Config{APIKey: v.GetString("ELEVENLABS_API_KEY")}, elevenlabs.NewTTS)
+	tts, err = build(elevenlabs.Config{APIKey: v.GetString("ELEVENLABS_API_KEY")}, elevenlabs.NewTTS)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+	return stt, llm, tts, nil
 }
 
 // buildMemory enables mem0 long-term memory when mem0_host is set, scoping

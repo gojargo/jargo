@@ -45,7 +45,9 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
     Azure, Hume, Fish, MiniMax.
 - **Audio** — libsoxr resampling and an optional libopus encoder
   (`-tags libopus`); G.711 for telephony.
-- **Examples** — runnable `echo`, `voicebot`, and `twiliobot` bots.
+- **Examples** — runnable `echo`, `voicebot` (full stack: turn-taking, mem0,
+  tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
+  bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
 [Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.1...HEAD
 [0.0.1]: https://github.com/gojargo/jargo/releases/tag/v0.0.1

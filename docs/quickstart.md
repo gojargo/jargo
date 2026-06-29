@@ -1,9 +1,12 @@
 # Quickstart
 
-Two example bots live in [`examples/`](../examples):
+The example bots live in [`examples/`](../examples):
 
 - **echo** — speak into the browser, hear yourself back. No API keys.
-- **voicebot** — a full voice agent: STT → LLM → TTS, with turn-taking and barge-in.
+- **voicebot** — the full voice agent: STT → LLM → TTS with turn-taking and
+  barge-in, plus long-term memory and tracing.
+- **voice/** — one small bot per provider, each wiring its STT/LLM/TTS
+  explicitly in Go (`go run ./examples/voice/<provider>`).
 
 Run them the easy way (the container image, no host setup) or with a local Go
 toolchain.
@@ -69,11 +72,17 @@ export ELEVENLABS_API_KEY=...     # TTS
 go run ./examples/voicebot        # then open http://localhost:8080
 ```
 
-Pick different providers per stage with the `STT`, `LLM` and `TTS` env vars:
+The voicebot runs a fixed Deepgram + Anthropic + ElevenLabs stack. To try a
+different provider, run one of the per-provider examples under
+[`examples/voice`](../examples/voice) — one file each, with the provider wired
+explicitly in Go:
 
 ```sh
-STT=assemblyai LLM=openai TTS=cartesia go run ./examples/voicebot
+go run ./examples/voice/cartesia     # Deepgram STT, Anthropic LLM, Cartesia TTS
+go run ./examples/voice/openai       # OpenAI STT + LLM + TTS
+go run ./examples/voice/groq         # Groq STT + LLM, ElevenLabs TTS
 ```
 
-See [Services](../README.md#services) for the full provider list, and
+Each example's doc comment lists the API keys it needs. See
+[Providers](../README.md#providers) for the full list, and
 [Turn-taking](turn-taking.md) for tuning end-of-turn detection and barge-in.
