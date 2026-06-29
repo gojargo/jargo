@@ -140,8 +140,26 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		// is consumed and turned into the LLMContextFrame the LLM service runs.
 		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
 
+	case *frames.LLMMessagesAppendFrame:
+		// The turn-completion re-prompt appends a message to the context before a
+		// follow-up LLMRunFrame.
+		u.appendMessages(fr.Messages)
+		return u.PushFrame(ctx, f, dir)
+
 	default:
 		return u.PushFrame(ctx, f, dir)
+	}
+}
+
+// appendMessages adds messages to the context (used by the turn-completion
+// re-prompt).
+func (u *UserAggregator) appendMessages(msgs []frames.Message) {
+	for _, m := range msgs {
+		if m.Role == frames.RoleAssistant {
+			u.context.AddAssistantMessage(m.Text)
+			continue
+		}
+		u.context.AddUserMessage(m.Text)
 	}
 }
 
