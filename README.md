@@ -112,10 +112,17 @@ See the **[Quickstart](docs/quickstart.md)** for the full setup.
 
 ## Examples
 
-Three runnable bots live in [`examples/`](examples): an **echo** bot (no API
-keys), a full **voice** bot (STT → LLM → TTS over WebRTC), and a **twilio** bot
-(a phone agent over Twilio Media Streams, with the idle watchdog). The fastest
-way to try the first two — locally or with Docker — is the
+Runnable bots live in [`examples/`](examples):
+
+- **echo** — hear yourself back, no API keys.
+- **voicebot** — the full voice agent (STT → LLM → TTS over WebRTC) with
+  turn-taking, long-term memory, and tracing.
+- **voice/** — one bot per provider, each wiring its STT/LLM/TTS explicitly;
+  run with `go run ./examples/voice/<provider>` (e.g. `deepgram`, `cartesia`,
+  `openai`).
+- **twiliobot** — a phone agent over Twilio Media Streams, with the idle watchdog.
+
+The fastest way to try them — locally or with Docker — is the
 **[Quickstart](docs/quickstart.md)**.
 
 ```sh
