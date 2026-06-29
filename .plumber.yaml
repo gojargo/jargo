@@ -27,6 +27,7 @@ github:
         - goreleaser/goreleaser-action
         - aquasecurity/trivy-action
         - getplumber/plumber
+        - ossf/scorecard-action
     actionsMustNotBeArchived:
       enabled: true
     actionsMustNotCarryKnownCVEs:
