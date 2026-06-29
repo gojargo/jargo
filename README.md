@@ -117,9 +117,11 @@ Runnable bots live in [`examples/`](examples):
 - **echo** — hear yourself back, no API keys.
 - **voicebot** — the full voice agent (STT → LLM → TTS over WebRTC) with
   turn-taking, long-term memory, and tracing.
-- **voice/** — one bot per provider, each wiring its STT/LLM/TTS explicitly;
-  run with `go run ./examples/voice/<provider>` (e.g. `deepgram`, `cartesia`,
-  `openai`).
+- **voice/** — one headless backend per provider, each wiring its STT/LLM/TTS
+  explicitly and exposing the WebRTC `/offer` endpoint (no web UI). Run with
+  `go run ./examples/voice/<provider>` (e.g. `deepgram`, `cartesia`, `openai`)
+  and drive it from a browser client — the `nextjs-voicebot` in
+  [jargo-client-react](https://github.com/gojargo/jargo-client-react).
 - **twiliobot** — a phone agent over Twilio Media Streams, with the idle watchdog.
 
 The fastest way to try them — locally or with Docker — is the
