@@ -37,26 +37,45 @@ turn-taking and loses barge-in.
 
 ## How it fits the pipeline
 
-A single `turntaking.Detector` processor sits just after the input transport. It
-runs both analyzers on the incoming audio (resampled to 16 kHz mono) and emits:
+Turn-taking is a small subsystem (ported from Pipecat's `turns/`) split across
+two processors:
 
-- `UserStartedSpeakingFrame` + `InterruptionFrame` when a turn begins — the
-  interruption flushes any in-progress bot response so the user can barge in.
-- `UserStoppedSpeakingFrame` when the turn is actually complete.
+- A `vadproc.Processor` just after the input transport runs the VAD on incoming
+  audio (resampled to 16 kHz mono) and emits `VADUserStartedSpeakingFrame` /
+  `VADUserStoppedSpeakingFrame` plus a periodic `UserSpeakingFrame`.
+- A `turns.UserTurnProcessor` after the STT consumes those VAD frames and the
+  transcripts, runs pluggable **start** and **stop** strategies, and emits the
+  turn decisions: `UserStartedSpeakingFrame` + `InterruptionFrame` to open a turn
+  (the interruption flushes in-progress bot audio for barge-in), and
+  `UserStoppedSpeakingFrame` to close it. It also owns a `UserIdleController`
+  (re-engage a silent user) and optional mute strategies.
 
-A *logical turn* spans pauses that Smart Turn rates as incomplete, so a pause
-mid-sentence does not end the turn.
+The default strategies are VAD-or-transcription to start and Smart Turn v3 to
+stop, so a pause Smart Turn rates incomplete does not end the turn.
 
 ```go
-v, _ := vad.NewSilero()
+vd, _ := vad.NewSilero()
 tr, _ := turn.NewSmartTurnV3()
-detector := turntaking.New(turntaking.Config{VAD: v, Turn: tr})
+
+vadProc := vadproc.New(vadproc.Config{VAD: vd})
+turnsProc := turns.NewUserTurnProcessor(turns.Config{
+    Strategies: turns.UserTurnStrategies{
+        Start: turns.DefaultStartStrategies(), // VAD + transcription
+        Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: tr})},
+    },
+    // Optional: re-engage a caller who goes silent.
+    IdleTimeout: 10 * time.Second,
+    OnIdle: func(ctx context.Context, c *turns.UserIdleController) error {
+        return c.Push(ctx, frames.NewTTSSpeakFrame("Are you still there?"), processor.Downstream)
+    },
+})
 
 pipe := pipeline.New(
     t.Input(),
-    detector,
+    vadProc,
     stt,
-    agg.User(),   // built with aggregators.WithTurnTaking()
+    turnsProc,
+    agg.User(), // built with aggregators.WithTurnTaking()
     llm,
     tts,
     rtvi.NewProcessor(),
@@ -70,6 +89,17 @@ complete *and* a finalized transcript is in hand — so Smart Turn, not STT
 endpointing, decides when the bot responds. See
 [`examples/voicebot`](../examples/voicebot) for the full wiring.
 
+### Strategies, idle, mute, and LLM completion
+
+The start/stop chains are pluggable (`turns.StartStrategy` / `turns.StopStrategy`):
+VAD, transcription, min-words and wake-phrase starts; Smart-Turn, speech-timeout
+and external stops, plus a `deferred` wrapper. `turns.FilterIncompleteUserTurnStrategies`
+together with a `turns.CompletionFilter` placed after the LLM add the optional
+✓/○/◐ LLM turn-completion gate, where the model itself judges whether the user's
+turn is semantically complete (prepend `turns.CompletionInstructions` to the
+system prompt). Mute strategies (`turns.NewAlwaysUserMute`, …) suppress user
+input while the bot speaks or a tool call runs.
+
 ## Implementation notes
 
 - VAD gating is **confidence-only**: jargo trusts Silero's neural confidence
@@ -77,6 +107,6 @@ endpointing, decides when the bot responds. See
 - Feature extraction for Smart Turn is a pure-Go reimplementation of Whisper's
   log-mel features; it and both models are validated to within `1e-3` of the
   reference Python implementation by unit tests.
-- Turn analysis currently runs synchronously on the audio goroutine
-  (~tens of ms per end-of-turn). See [benchmarks](https://github.com/gojargo/jargo-benchmarks) for the
-  performance picture and the planned FFT optimization.
+- Smart Turn runs inside the `TurnAnalyzerStop` strategy, driven by the turn
+  controller (~tens of ms per end-of-turn). See [benchmarks](https://github.com/gojargo/jargo-benchmarks)
+  for the performance picture and the planned FFT optimization.

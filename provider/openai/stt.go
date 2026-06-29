@@ -46,29 +46,60 @@ func NewSTT(cfg STTConfig) *stt.SegmentService {
 	return NewCompatSTT("OpenAISTT", defaultLLMBaseURL, defaultSTTModel, cfg)
 }
 
+// STTRequestShaper customizes how a transcription request is addressed and
+// authorized, so an endpoint with a different URL layout or auth scheme (e.g.
+// Azure OpenAI) can reuse this transcriber. The default targets
+// <baseURL>/audio/transcriptions with a Bearer token.
+type STTRequestShaper interface {
+	// Endpoint returns the full transcription URL for baseURL.
+	Endpoint(baseURL string) string
+	// Authorize sets the authorization headers for apiKey on req.
+	Authorize(req *http.Request, apiKey string)
+}
+
+type defaultSTTShaper struct{}
+
+func (defaultSTTShaper) Endpoint(baseURL string) string { return baseURL + "/audio/transcriptions" }
+
+func (defaultSTTShaper) Authorize(req *http.Request, apiKey string) {
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+}
+
 // NewCompatSTT builds a transcription service for any endpoint that implements
 // OpenAI's /audio/transcriptions API (e.g. Groq).
 func NewCompatSTT(name, baseURL, defaultModel string, cfg STTConfig) *stt.SegmentService {
+	return NewShapedSTT(name, baseURL, defaultModel, defaultSTTShaper{}, cfg)
+}
+
+// NewShapedSTT builds a transcription service whose requests are addressed and
+// authorized by shaper. It is the base for deployments that don't use OpenAI's
+// URL layout or Bearer auth, such as Azure OpenAI.
+func NewShapedSTT(name, baseURL, defaultModel string, shaper STTRequestShaper, cfg STTConfig) *stt.SegmentService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = baseURL
 	}
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	t := &transcriber{cfg: cfg, http: &http.Client{}}
+	t := &transcriber{cfg: cfg, http: &http.Client{}, shaper: shaper}
 	return stt.NewSegment(name, t, cfg.SampleRate)
 }
 
 type transcriber struct {
-	cfg  STTConfig
-	http *http.Client
+	cfg    STTConfig
+	http   *http.Client
+	shaper STTRequestShaper
 }
 
 // writeFields writes the transcription form fields, omitting optional ones that
 // are unset.
 func writeFields(w *multipart.Writer, cfg *STTConfig) error {
-	if err := w.WriteField("model", cfg.Model); err != nil {
-		return err
+	// Azure addresses the model by deployment in the URL and wants no model
+	// field, so it is omitted when empty.
+	if cfg.Model != "" {
+		if err := w.WriteField("model", cfg.Model); err != nil {
+			return err
+		}
 	}
 	if err := w.WriteField("response_format", "json"); err != nil {
 		return err
@@ -109,11 +140,11 @@ func (t *transcriber) Transcribe(ctx context.Context, audio []byte, sampleRate i
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.cfg.BaseURL+"/audio/transcriptions", &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.shaper.Endpoint(t.cfg.BaseURL), &body)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+t.cfg.APIKey)
+	t.shaper.Authorize(req, t.cfg.APIKey)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 
 	resp, err := t.http.Do(req)
