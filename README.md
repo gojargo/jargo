@@ -53,10 +53,24 @@ afterthought.
 - **WebRTC**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
 - **Opus**, not pure Go yet, waiting for *pion/opus* to be ready.
 - **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
+- **Speech-to-speech**: single-model voice agents (OpenAI Realtime, Gemini Live, AWS Nova Sonic).
 - **Turn-taking & barge-in**: Silero VAD + Smart Turn v3, local ONNX.
+- **Telephony** (optional): inbound/outbound phone calls over Twilio Media Streams.
+- **User-idle watchdog**: re-engage or hang up when the caller goes silent.
 - **RTVI** data channel — works with existing RTVI clients.
 - **Pluggable services**: swap any STT/LLM/TTS behind a small interface.
 - **Concurrent by design**: independent processors; interruptions are frames.
+
+## Providers
+
+Pick any per category; each is a small `Config` + constructor.
+
+- **STT**: Deepgram, AssemblyAI, Gladia, Speechmatics, Soniox, Whisper (OpenAI/Groq/local), Azure.
+- **LLM**: Anthropic (direct + Bedrock), OpenAI, Google Gemini, Groq, Together, Fireworks, DeepSeek,
+  Cerebras, Perplexity, OpenRouter, xAI, Ollama, NVIDIA, Mistral, Nebius, SambaNova, Qwen, Azure OpenAI.
+- **TTS**: ElevenLabs, Cartesia, Rime, LMNT, Kokoro, Piper, Deepgram, OpenAI, Azure, Hume, Fish, MiniMax.
+- **Speech-to-speech**: OpenAI Realtime, Gemini Live, AWS Nova Sonic.
+- **Memory**: mem0.
 
 ## Dependencies
 
@@ -98,9 +112,11 @@ See the **[Quickstart](docs/quickstart.md)** for the full setup.
 
 ## Examples
 
-Two runnable bots live in [`examples/`](examples): an **echo** bot (no API keys)
-and a full **voice** bot (STT → LLM → TTS). The fastest way to try either —
-locally or with Docker — is the **[Quickstart](docs/quickstart.md)**.
+Three runnable bots live in [`examples/`](examples): an **echo** bot (no API
+keys), a full **voice** bot (STT → LLM → TTS over WebRTC), and a **twilio** bot
+(a phone agent over Twilio Media Streams, with the idle watchdog). The fastest
+way to try the first two — locally or with Docker — is the
+**[Quickstart](docs/quickstart.md)**.
 
 ```sh
 go run ./examples/echo                 # then open http://localhost:8080

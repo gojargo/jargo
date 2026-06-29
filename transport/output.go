@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
+
+// botStopDebounce is how long after the last audio chunk the bot is considered
+// to have stopped speaking.
+const botStopDebounce = 250 * time.Millisecond
 
 // BaseOutput is the tail of a pipeline: it buffers OutputAudioRawFrames, slices
 // them into fixed-size chunks, and hands each chunk to the concrete transport
@@ -35,6 +40,13 @@ type BaseOutput struct {
 	audioCtx    context.Context
 	audioCancel context.CancelFunc
 	audioWG     sync.WaitGroup
+
+	// Bot-speaking detection: a BotStartedSpeakingFrame is emitted upstream when
+	// audio starts flowing and a BotStoppedSpeakingFrame after it drains, so the
+	// turn and idle controllers know when the bot holds the floor.
+	botMu         sync.Mutex
+	botSpeaking   bool
+	botStopCancel func()
 }
 
 // NewBaseOutput builds a BaseOutput. self is the embedding transport, used to
@@ -80,6 +92,7 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 			return err
 		}
 		bo.handleInterruption()
+		bo.stopBotSpeaking(ctx)
 		return nil
 	case *frames.OutputTransportMessageFrame:
 		if err := bo.sendMessage(ctx, fr); err != nil {
@@ -139,7 +152,8 @@ func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) 
 	go bo.audioLoop(bo.audioCtx)
 }
 
-func (bo *BaseOutput) stopStreaming(context.Context) {
+func (bo *BaseOutput) stopStreaming(ctx context.Context) {
+	bo.stopBotSpeaking(ctx)
 	cancel := bo.audioCancel
 	bo.audioCancel = nil
 	if cancel != nil {
@@ -222,6 +236,52 @@ func (bo *BaseOutput) handleInterruption() {
 	}
 }
 
+// markBotSpeaking emits BotStartedSpeakingFrame on the first audio chunk and
+// arms a debounce timer that emits BotStoppedSpeakingFrame once audio drains.
+// Both go upstream so the turn and idle controllers see them.
+func (bo *BaseOutput) markBotSpeaking(ctx context.Context) {
+	bo.botMu.Lock()
+	if !bo.botSpeaking {
+		bo.botSpeaking = true
+		_ = bo.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
+	}
+	if bo.botStopCancel != nil {
+		bo.botStopCancel()
+	}
+	stopped := false
+	timer := time.AfterFunc(botStopDebounce, func() {
+		bo.botMu.Lock()
+		if stopped {
+			bo.botMu.Unlock()
+			return
+		}
+		bo.botSpeaking = false
+		bo.botStopCancel = nil
+		bo.botMu.Unlock()
+		_ = bo.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Upstream)
+	})
+	bo.botStopCancel = func() {
+		stopped = true
+		timer.Stop()
+	}
+	bo.botMu.Unlock()
+}
+
+// stopBotSpeaking ends bot-speaking immediately (on interruption or shutdown).
+func (bo *BaseOutput) stopBotSpeaking(ctx context.Context) {
+	bo.botMu.Lock()
+	if bo.botStopCancel != nil {
+		bo.botStopCancel()
+		bo.botStopCancel = nil
+	}
+	was := bo.botSpeaking
+	bo.botSpeaking = false
+	bo.botMu.Unlock()
+	if was {
+		_ = bo.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Upstream)
+	}
+}
+
 // audioLoop sends buffered chunks over the transport and forwards them
 // downstream.
 func (bo *BaseOutput) audioLoop(ctx context.Context) {
@@ -235,6 +295,7 @@ func (bo *BaseOutput) audioLoop(ctx context.Context) {
 				slog.Error("write audio to transport", "processor", bo.Name(), "err", err)
 				continue
 			}
+			bo.markBotSpeaking(ctx)
 			_ = bo.PushFrame(ctx, chunk, processor.Downstream)
 		}
 	}

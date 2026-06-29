@@ -1,0 +1,69 @@
+# OpenSSF Scorecard supply-chain security analysis. Reports on the project's
+# adherence to security best practices and uploads the results to GitHub's
+# code-scanning dashboard. Actions are pinned by commit SHA, which is itself one
+# of the practices Scorecard checks for.
+#
+# This workflow uses actions that are not certified by GitHub. They are provided
+# by a third party and are governed by separate terms of service, privacy
+# policy, and support documentation.
+name: Scorecard supply-chain security
+
+on:
+  # For the Branch-Protection check. Only the default branch is supported.
+  # https://github.com/ossf/scorecard/blob/main/docs/checks.md#branch-protection
+  branch_protection_rule:
+  # Keeps the Maintained check fresh. https://github.com/ossf/scorecard/blob/main/docs/checks.md#maintained
+  schedule:
+    - cron: '25 12 * * 5'
+  push:
+    branches: ["main"]
+
+# Declare default permissions as read only.
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    # publish_results only works from the default branch.
+    if: github.event.repository.default_branch == github.ref_name || github.event_name == 'pull_request'
+    permissions:
+      # Needed to upload the results to the code-scanning dashboard.
+      security-events: write
+      # Needed to publish results and get a badge (see publish_results below).
+      id-token: write
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+
+      - name: "Run analysis"
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # A "read" PAT is only required to enable the Branch-Protection check on
+          # a public repository, or to install Scorecard on a private repository.
+          # Create one per the action's authentication docs and store it as the
+          # SCORECARD_TOKEN secret, then uncomment the line below.
+          # repo_token: ${{ secrets.SCORECARD_TOKEN }}
+
+          # Publish results to the OpenSSF REST API so the repository can display
+          # the Scorecard badge. Always forced to false on private repositories.
+          publish_results: true
+
+      # Upload the results as a workflow artifact.
+      - name: "Upload artifact"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Upload the results to GitHub's code-scanning dashboard.
+      - name: "Upload to code-scanning"
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
+        with:
+          sarif_file: results.sarif

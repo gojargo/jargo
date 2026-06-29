@@ -5,6 +5,11 @@
 *.so
 *.dylib
 
+# Built example binaries (from `go build ./examples/...`)
+/echo
+/voicebot
+/twiliobot
+
 # Test binary, built with `go test -c`
 *.test
 

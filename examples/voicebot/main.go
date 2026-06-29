@@ -29,30 +29,42 @@ import (
 	"github.com/gojargo/jargo/audio/opus"
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/audio/vadproc"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/metrics"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/provider/assemblyai"
+	"github.com/gojargo/jargo/provider/azureopenai"
+	"github.com/gojargo/jargo/provider/azurespeech"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/deepseek"
 	"github.com/gojargo/jargo/provider/elevenlabs"
+	"github.com/gojargo/jargo/provider/fish"
 	"github.com/gojargo/jargo/provider/gladia"
 	"github.com/gojargo/jargo/provider/google"
 	"github.com/gojargo/jargo/provider/groq"
+	"github.com/gojargo/jargo/provider/hume"
 	"github.com/gojargo/jargo/provider/lmnt"
 	"github.com/gojargo/jargo/provider/mem0"
+	"github.com/gojargo/jargo/provider/minimax"
+	"github.com/gojargo/jargo/provider/mistral"
+	"github.com/gojargo/jargo/provider/nebius"
 	"github.com/gojargo/jargo/provider/ollama"
 	"github.com/gojargo/jargo/provider/openai"
+	"github.com/gojargo/jargo/provider/qwen"
 	"github.com/gojargo/jargo/provider/rime"
+	"github.com/gojargo/jargo/provider/sambanova"
+	"github.com/gojargo/jargo/provider/soniox"
+	"github.com/gojargo/jargo/provider/speechmatics"
 	"github.com/gojargo/jargo/provider/together"
 	"github.com/gojargo/jargo/rtvi"
 	"github.com/gojargo/jargo/tracing"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
-	"github.com/gojargo/jargo/turntaking"
+	"github.com/gojargo/jargo/turns"
 	"github.com/pion/webrtc/v4"
 	"github.com/spf13/viper"
 )
@@ -207,16 +219,20 @@ func runBot(conn *pionrtc.Connection, v *viper.Viper) {
 	// Turn taking (Silero VAD + Smart Turn) needs the ONNX runtime; when it is
 	// unavailable the bot still works, falling back to STT endpointing for
 	// turn-taking and losing barge-in.
-	detector := buildTurnTaking()
+	vadProc, turnsProc := buildTurnStack()
 
 	procs := []processor.Processor{t.Input()}
+	if vadProc != nil {
+		procs = append(procs, vadProc)
+	}
+	procs = append(procs, stt)
 	var aggOpts []aggregators.Option
-	if detector != nil {
-		procs = append(procs, detector)
+	if turnsProc != nil {
+		procs = append(procs, turnsProc)
 		aggOpts = append(aggOpts, aggregators.WithTurnTaking())
 	}
 	agg := aggregators.New(convo, aggOpts...)
-	procs = append(procs, stt, agg.User())
+	procs = append(procs, agg.User())
 	// Optional long-term memory: when mem0_host is set, recall relevant memories
 	// into the context before the LLM and store new turns after it.
 	if mem := buildMemory(v); mem != nil {
@@ -278,6 +294,16 @@ func selectSTT(v *viper.Viper) (processor.Processor, error) {
 		return build(assemblyai.Config{APIKey: v.GetString("ASSEMBLYAI_API_KEY"), SampleRate: rate}, assemblyai.NewSTT)
 	case "gladia":
 		return build(gladia.Config{APIKey: v.GetString("GLADIA_API_KEY"), SampleRate: rate}, gladia.NewSTT)
+	case "speechmatics":
+		return build(speechmatics.Config{APIKey: v.GetString("SPEECHMATICS_API_KEY"), SampleRate: rate}, speechmatics.NewSTT)
+	case "soniox":
+		return build(soniox.Config{APIKey: v.GetString("SONIOX_API_KEY"), SampleRate: rate}, soniox.NewSTT)
+	case "azure":
+		return build(azureopenai.STTConfig{
+			Endpoint:   v.GetString("AZURE_OPENAI_ENDPOINT"),
+			Deployment: v.GetString("azure_stt_deployment"),
+			STTConfig:  openai.STTConfig{APIKey: v.GetString("AZURE_OPENAI_API_KEY"), SampleRate: rate},
+		}, azureopenai.NewSTT)
 	case providerOpenAI:
 		return build(openai.STTConfig{APIKey: v.GetString("OPENAI_API_KEY"), SampleRate: rate}, openai.NewSTT)
 	case "groq":
@@ -300,6 +326,14 @@ func selectLLM(v *viper.Viper) (processor.Processor, error) {
 		return build(openai.LLMConfig{APIKey: v.GetString("TOGETHER_API_KEY")}, together.NewLLM)
 	case "deepseek":
 		return build(openai.LLMConfig{APIKey: v.GetString("DEEPSEEK_API_KEY")}, deepseek.NewLLM)
+	case "mistral":
+		return build(openai.LLMConfig{APIKey: v.GetString("MISTRAL_API_KEY")}, mistral.NewLLM)
+	case "nebius":
+		return build(openai.LLMConfig{APIKey: v.GetString("NEBIUS_API_KEY")}, nebius.NewLLM)
+	case "sambanova":
+		return build(openai.LLMConfig{APIKey: v.GetString("SAMBANOVA_API_KEY")}, sambanova.NewLLM)
+	case "qwen":
+		return build(openai.LLMConfig{APIKey: v.GetString("DASHSCOPE_API_KEY")}, qwen.NewLLM)
 	case "ollama":
 		return build(openai.LLMConfig{}, ollama.NewLLM) // local; no key required
 	default:
@@ -320,6 +354,22 @@ func selectTTS(v *viper.Viper) (processor.Processor, error) {
 		return build(rime.Config{APIKey: v.GetString("RIME_API_KEY")}, rime.NewTTS)
 	case "lmnt":
 		return build(lmnt.Config{APIKey: v.GetString("LMNT_API_KEY")}, lmnt.NewTTS)
+	case "azure":
+		return build(azurespeech.TTSConfig{
+			APIKey: v.GetString("AZURE_SPEECH_KEY"),
+			Region: v.GetString("azure_region"),
+			Voice:  v.GetString("azure_voice"),
+		}, azurespeech.NewTTS)
+	case "hume":
+		return build(hume.Config{APIKey: v.GetString("HUME_API_KEY"), VoiceID: v.GetString("hume_voice")}, hume.NewTTS)
+	case "fish":
+		return build(fish.Config{APIKey: v.GetString("FISH_API_KEY"), ReferenceID: v.GetString("fish_voice")}, fish.NewTTS)
+	case "minimax":
+		return build(minimax.Config{
+			APIKey:  v.GetString("MINIMAX_API_KEY"),
+			GroupID: v.GetString("MINIMAX_GROUP_ID"),
+			VoiceID: v.GetString("minimax_voice"),
+		}, minimax.NewTTS)
 	default:
 		return build(elevenlabs.Config{APIKey: v.GetString("ELEVENLABS_API_KEY")}, elevenlabs.NewTTS)
 	}
@@ -345,21 +395,29 @@ func buildMemory(v *viper.Viper) *mem0.Service {
 	return mem0.NewMemory(cfg)
 }
 
-// buildTurnTaking constructs a turn-taking detector from Silero VAD and Smart
-// Turn. If the ONNX runtime or models cannot be loaded it logs a warning and
-// returns nil, so the bot runs without turn taking.
-func buildTurnTaking() *turntaking.Detector {
-	v, err := vad.NewSilero()
+// buildTurnStack constructs the turn-taking stack: a VAD processor (Silero) and
+// a UserTurnProcessor whose stop strategy is Smart Turn v3. If the ONNX runtime
+// or models cannot be loaded it logs a warning and returns nil, nil, so the bot
+// runs without turn taking (STT endpointing drives turns, and barge-in is lost).
+func buildTurnStack() (*vadproc.Processor, *turns.UserTurnProcessor) {
+	vd, err := vad.NewSilero()
 	if err != nil {
 		slog.Warn("turn taking disabled: Silero VAD unavailable (set JARGO_ONNXRUNTIME_LIB)", "err", err)
-		return nil
+		return nil, nil
 	}
 	tr, err := turn.NewSmartTurnV3()
 	if err != nil {
 		slog.Warn("turn taking disabled: Smart Turn unavailable", "err", err)
-		_ = v.Close()
-		return nil
+		_ = vd.Close()
+		return nil, nil
 	}
 	slog.Info("turn taking enabled (Silero VAD + Smart Turn v3)")
-	return turntaking.New(turntaking.Config{VAD: v, Turn: tr})
+	vp := vadproc.New(vadproc.Config{VAD: vd})
+	tp := turns.NewUserTurnProcessor(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: turns.DefaultStartStrategies(),
+			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: tr})},
+		},
+	})
+	return vp, tp
 }
