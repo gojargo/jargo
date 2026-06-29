@@ -65,3 +65,40 @@ jobs:
           # are hardened (SHA-pin actions, protect branches, ...).
           threshold: "75"
           soft-fail: "true"
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # govulncheck builds the packages to compute the reachable call graph;
+      # jargo links libsoxr through cgo, so the dev headers must be present.
+      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
+      # Reports only vulnerabilities jargo's code actually reaches, so this gates
+      # the build. Stdlib advisories are cleared by the latest 1.26.x toolchain
+      # that setup-go resolves from go.mod.
+      - run: govulncheck ./...
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      # CodeQL's autobuild compiles the module; cgo needs the libsoxr headers.
+      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: go
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
