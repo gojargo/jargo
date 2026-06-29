@@ -28,6 +28,7 @@ github:
         - aquasecurity/trivy-action
         - getplumber/plumber
         - ossf/scorecard-action
+        - codecov/codecov-action
     actionsMustNotBeArchived:
       enabled: true
     actionsMustNotCarryKnownCVEs:
