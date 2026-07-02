@@ -14,7 +14,7 @@ jobs:
   gitleaks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
       # Run the gitleaks binary directly via its image — the marketplace action
@@ -30,7 +30,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -43,7 +43,7 @@ jobs:
           # tighten to "1" once the baseline is clean.
           exit-code: "0"
       - name: Upload results to the Security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         with:
           sarif_file: trivy.sarif
 
@@ -53,7 +53,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       # Plumber scans this repo's GitHub Actions pipelines for hardening gaps
       # (action pinning, overbroad permissions, curl|bash, risky triggers). It
       # uploads its SARIF to the Security tab itself (upload-sarif defaults true).
@@ -69,11 +69,11 @@ jobs:
   govulncheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       # govulncheck builds the packages to compute the reachable call graph;
       # jargo links libsoxr through cgo, so the dev headers must be present.
       - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
@@ -89,16 +89,16 @@ jobs:
       security-events: write
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       # CodeQL's autobuild compiles the module; cgo needs the libsoxr headers.
       - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         with:
           languages: go
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/autobuild@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
+      - uses: github/codeql-action/analyze@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         with:
           category: "/language:go"

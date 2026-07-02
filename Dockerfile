@@ -13,7 +13,7 @@
 # Override which example to build with --build-arg EXAMPLE=echo.
 
 # ---- build the binary (cgo: needs libsoxr-dev + libopus-dev) ----
-FROM golang:1.26-bookworm AS build
+FROM golang:1.26-bookworm@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b AS build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libsoxr-dev libopus-dev pkg-config \
@@ -29,7 +29,7 @@ ARG EXAMPLE=voicebot
 RUN CGO_ENABLED=1 go build -tags libopus -ldflags="-s -w" -o /out/jargo-bot ./examples/${EXAMPLE}
 
 # ---- fetch the ONNX Runtime shared library for the target arch ----
-FROM debian:bookworm-slim AS onnx
+FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS onnx
 ARG ORT_VERSION=1.26.0
 ARG TARGETARCH
 RUN apt-get update \
@@ -47,7 +47,7 @@ RUN set -eux; \
     cp -L /opt/ort/lib/libonnxruntime.so /usr/local/lib/libonnxruntime.so
 
 # ---- runtime ----
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl libsoxr0 libopus0 \
