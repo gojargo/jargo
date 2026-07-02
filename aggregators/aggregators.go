@@ -82,7 +82,6 @@ type UserAggregator struct {
 	mu           sync.Mutex
 	aggregation  string
 	turnComplete bool // turn taking: end-of-turn reported
-	haveFinal    bool // turn taking: a finalized transcript has arrived this turn
 }
 
 func newUser(ctx *frames.LLMContext, turnTaking bool) *UserAggregator {
@@ -104,7 +103,6 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 			u.mu.Lock()
 			u.aggregation = ""
 			u.turnComplete = false
-			u.haveFinal = false
 			u.mu.Unlock()
 		}
 		return u.PushFrame(ctx, f, dir)
@@ -122,13 +120,8 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		return nil
 
 	case *frames.InterimTranscriptionFrame:
-		// Fresh partial speech: a finalized transcript for this turn is no
-		// longer the last word, so wait for the next one before responding.
-		if u.turnTaking {
-			u.mu.Lock()
-			u.haveFinal = false
-			u.mu.Unlock()
-		}
+		// Interim (partial) speech is forwarded for downstream consumers (e.g.
+		// RTVI) but not aggregated; the turn processor drives end-of-turn.
 		return u.PushFrame(ctx, f, dir)
 
 	case *frames.TranscriptionFrame:
@@ -173,9 +166,6 @@ func (u *UserAggregator) handleTranscription(
 		}
 		u.aggregation += fr.Text
 	}
-	if fr.Finalized {
-		u.haveFinal = true
-	}
 	u.mu.Unlock()
 
 	// Forward the transcription so downstream processors (e.g. RTVI) see it.
@@ -194,14 +184,16 @@ func (u *UserAggregator) handleTranscription(
 }
 
 // maybeRun commits the aggregated user message and triggers the LLM when the
-// turn-completion conditions hold. With turn taking, that means an end-of-turn
-// was reported and a finalized transcript is in hand; without it, a finalized
-// transcript alone suffices.
+// turn-completion conditions hold. With turn taking, the turn processor's
+// end-of-turn is authoritative: the transcripts aggregated during the turn are
+// committed then. It does not additionally require the STT's end-of-utterance
+// flag, which some providers omit (dropping the turn). Without turn taking, a
+// finalized transcript alone suffices.
 func (u *UserAggregator) maybeRun(ctx context.Context) error {
 	u.mu.Lock()
 	ready := u.aggregation != ""
 	if u.turnTaking {
-		ready = ready && u.turnComplete && u.haveFinal
+		ready = ready && u.turnComplete
 	}
 	if !ready {
 		u.mu.Unlock()
@@ -210,7 +202,6 @@ func (u *UserAggregator) maybeRun(ctx context.Context) error {
 	text := u.aggregation
 	u.aggregation = ""
 	u.turnComplete = false
-	u.haveFinal = false
 	u.mu.Unlock()
 
 	u.context.AddUserMessage(text)
