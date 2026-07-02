@@ -1,0 +1,26 @@
+# Dependabot keeps dependencies current: Go modules, the GitHub Actions used in
+# the workflows (it bumps SHA pins in place, preserving the version comment), and
+# the Docker base images (it bumps the pinned digests). Updates are grouped to
+# keep the pull-request volume low.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-modules:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
