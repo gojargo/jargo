@@ -1,0 +1,28 @@
+# Copy this file to config.yaml and fill in your values, then run:
+#   go run ./examples/twilio/outbound -config examples/twilio/outbound/config.yaml
+#
+# config.yaml is gitignored so your secrets are never committed. Any value here
+# can also be supplied (or overridden) by an environment variable: uppercase the
+# key and turn dots into underscores, e.g. twilio.account_sid -> TWILIO_ACCOUNT_SID.
+
+# Publicly reachable host for this server, with no scheme. In development this is
+# your tunnel host, e.g. the output of `ngrok http 8080`.
+public_host: "abc123.ngrok-free.app"
+
+# Listen address for the local HTTP/WebSocket server (optional).
+addr: ":8080"
+
+twilio:
+  account_sid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  auth_token: "your_twilio_auth_token"
+  from_number: "+1XXXXXXXXXX" # a Twilio number you own, E.164 (the caller ID)
+  to_number: "+33XXXXXXXXX"   # the number to call, E.164
+
+deepgram:
+  api_key: "your_deepgram_api_key"
+
+anthropic:
+  api_key: "your_anthropic_api_key"
+
+elevenlabs:
+  api_key: "your_elevenlabs_api_key"

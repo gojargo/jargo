@@ -9,6 +9,7 @@
 /echo
 /voicebot
 /twiliobot
+/outbound
 
 # Test binary, built with `go test -c`
 *.test
@@ -30,3 +31,6 @@ vendor/
 .idea/
 .vscode/
 .DS_Store
+
+# Local example configs holding secrets (templates are *.example.yaml)
+/examples/twilio/outbound/config.yaml

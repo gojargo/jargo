@@ -12,6 +12,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Outbound telephony example** — `examples/twilio/outbound` places an outbound
+  Twilio call (via the REST API, no Twilio SDK dependency), runs an STT → LLM →
+  TTS pipeline over the media stream, collects a few details through a
+  `record_info` tool call, then says goodbye and hangs up. Configured by a YAML
+  file (`-config`, see `config.example.yaml`) with environment-variable overrides.
+
 ### Changed
 
 - The per-provider `examples/voice/<provider>` bots are now self-contained,
