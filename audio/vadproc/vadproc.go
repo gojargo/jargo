@@ -4,10 +4,11 @@
 // on speech onset/offset, plus a periodic UserSpeakingFrame while the user
 // speaks. It does not decide turns — that is the turns package's job.
 //
-// Place it just after the input transport. The analyzer runs on 16 kHz mono
-// audio; audio at another rate is resampled for analysis, while the original
-// input audio is always forwarded downstream unchanged so STT and the turn
-// analyzer still see it.
+// Place it just after the input transport. The analyzer runs at the input sample
+// rate when it supports it — so Silero runs natively on 8 kHz telephony audio,
+// not an upsampled copy — and only resamples to 16 kHz when the input rate is
+// rejected. The original input audio is always forwarded downstream unchanged so
+// STT and the turn analyzer still see it.
 package vadproc
 
 import (
@@ -21,7 +22,8 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// analyzerSampleRate is the rate the VAD analyzer runs at (Silero is 16 kHz mono).
+// analyzerSampleRate is the fallback analyzer rate, used when the input rate is
+// not one the analyzer accepts (Silero also runs natively at 8 kHz).
 const analyzerSampleRate = 16000
 
 // defaultSpeechActivityPeriod is how often a UserSpeakingFrame is emitted while
@@ -44,8 +46,9 @@ type Processor struct {
 	vad          vad.Analyzer
 	speechPeriod time.Duration
 
-	resampler *resample.Resampler
-	inRate    int
+	resampler    *resample.Resampler
+	inRate       int
+	analyzerRate int
 
 	speaking      bool
 	speakingAccum time.Duration
@@ -69,9 +72,20 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 	}
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		if err := p.vad.SetSampleRate(analyzerSampleRate); err != nil {
-			return err
+		// Prefer the input rate so no resampling is needed — Silero runs natively
+		// at 8 kHz as well as 16 kHz. Fall back to the default rate (and resample)
+		// only if the analyzer rejects the input rate.
+		rate := fr.AudioInSampleRate
+		if rate <= 0 {
+			rate = analyzerSampleRate
 		}
+		if err := p.vad.SetSampleRate(rate); err != nil {
+			rate = analyzerSampleRate
+			if err := p.vad.SetSampleRate(rate); err != nil {
+				return err
+			}
+		}
+		p.analyzerRate = rate
 		return p.PushFrame(ctx, f, dir)
 	case *frames.InputAudioRawFrame:
 		if dir == processor.Downstream {
@@ -134,7 +148,7 @@ func frameDuration(f *frames.InputAudioRawFrame) time.Duration {
 
 // toAnalyzerRate returns the frame's audio resampled to the analyzer rate, mono.
 func (p *Processor) toAnalyzerRate(f *frames.InputAudioRawFrame) []byte {
-	if f.SampleRate == analyzerSampleRate {
+	if f.SampleRate == p.analyzerRate {
 		return f.Audio
 	}
 	if p.resampler == nil || p.inRate != f.SampleRate {
@@ -142,9 +156,9 @@ func (p *Processor) toAnalyzerRate(f *frames.InputAudioRawFrame) []byte {
 			p.resampler.Close()
 			p.resampler = nil
 		}
-		r, err := resample.New(f.SampleRate, analyzerSampleRate, 1)
+		r, err := resample.New(f.SampleRate, p.analyzerRate, 1)
 		if err != nil {
-			slog.Error("vadproc: create resampler", "from", f.SampleRate, "to", analyzerSampleRate, "err", err)
+			slog.Error("vadproc: create resampler", "from", f.SampleRate, "to", p.analyzerRate, "err", err)
 			return f.Audio
 		}
 		p.resampler = r
