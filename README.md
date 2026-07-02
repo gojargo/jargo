@@ -83,7 +83,7 @@ jargo uses cgo (`CGO_ENABLED=0` is not supported) and a few native libraries:
   sounds noticeably better on speech.
 - **ONNX Runtime** — loaded at run time for VAD + end-of-turn detection.
 
-The container image bundles all of them.
+The [base images](docs/deploy-with-docker.md) bundle all of them.
 
 ## Usage
 
@@ -99,15 +99,9 @@ CGO_ENABLED=1 go run ./examples/echo                    # open http://localhost:
 CGO_ENABLED=1 go run -tags libopus ./examples/voicebot  # libopus speech encoder
 ```
 
-**With Docker** — the image bundles every native dependency, so there's no host
-setup:
-
-```sh
-docker build -t jargo-voicebot .
-docker run --rm -p 8080:8080 \
-  -e DEEPGRAM_API_KEY=… -e ANTHROPIC_API_KEY=… -e ELEVENLABS_API_KEY=… \
-  jargo-voicebot
-```
+**With Docker** — jargo publishes a build base and a distroless runtime base
+image; see **[Deploy with Docker](docs/deploy-with-docker.md)** to containerise a
+bot without installing the native dependencies on the host.
 
 See the **[Quickstart](docs/quickstart.md)** for the full setup.
 
