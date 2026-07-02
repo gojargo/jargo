@@ -9,31 +9,15 @@ The example bots live in [`examples/`](../examples):
   explicitly in Go and exposing only the WebRTC `/offer` endpoint
   (`go run ./examples/voice/<provider>`); drive it from a browser client.
 
-Run them the easy way (the container image, no host setup) or with a local Go
-toolchain.
+Run them with Docker (no host setup) or with a local Go toolchain.
 
-## Run with Docker (recommended)
+## Run with Docker
 
-The image bundles both native dependencies — libsoxr and the ONNX Runtime — so
-there is nothing to install on the host.
-
-```sh
-docker build -t jargo-voicebot .
-docker run --rm -p 8080:8080 \
-  -e DEEPGRAM_API_KEY=... \
-  -e ANTHROPIC_API_KEY=... \
-  -e ELEVENLABS_API_KEY=... \
-  jargo-voicebot
-```
-
-Then open <http://localhost:8080>, click start, and allow the microphone.
-
-Build the echo bot instead with `--build-arg EXAMPLE=echo` (it needs no keys).
-Multi-arch images build with buildx:
-
-```sh
-docker buildx build --platform linux/amd64,linux/arm64 -t jargo-voicebot .
-```
+jargo publishes a build base and a distroless runtime base image, so you can
+containerise a bot without installing the native (cgo) dependencies on the host.
+The **[Deploy with Docker](deploy-with-docker.md)** guide has a copyable
+two-stage Dockerfile for the example bots and the run command
+(`-e DEEPGRAM_API_KEY=…` etc., then open <http://localhost:8080>).
 
 ## Run locally
 
