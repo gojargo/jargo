@@ -6,11 +6,10 @@ native-dependency pain out of containerising a bot:
 
 | Image | Purpose |
 | --- | --- |
-| `ghcr.io/gojargo/jargo-build` | **Build base** — the Go toolchain plus the cgo dev libraries (libsoxr, libopus, pkg-config). Compile your bot here. |
-| `ghcr.io/gojargo/jargo` | **Runtime base** — a [distroless](https://github.com/GoogleContainerTools/distroless) image (no shell, no package manager, non-root) carrying only the native runtime libraries (libsoxr, libgomp, libopus) and the ONNX Runtime. Ship your bot here. |
+| `gojargo/jargo-build` | **Build base** — the Go toolchain plus the cgo dev libraries (libsoxr, libopus, pkg-config). Compile your bot here. |
+| `gojargo/jargo` | **Runtime base** — a [distroless](https://github.com/GoogleContainerTools/distroless) image (no shell, no package manager, non-root) carrying only the native runtime libraries (libsoxr, libgomp, libopus) and the ONNX Runtime. Ship your bot here. |
 
-Both are mirrored on Docker Hub as `gojargo/jargo-build` and `gojargo/jargo`.
-amd64 only for now.
+Both live on [Docker Hub](https://hub.docker.com/u/gojargo). amd64 only for now.
 
 ## Build and run a bot image
 
@@ -18,7 +17,7 @@ A two-stage Dockerfile — compile on the build base, ship on the runtime base:
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM ghcr.io/gojargo/jargo-build AS build
+FROM gojargo/jargo-build AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -26,7 +25,7 @@ COPY . .
 # -tags libopus links the higher-quality Opus encoder (optional).
 RUN go build -tags libopus -ldflags="-s -w" -o /out/bot ./path/to/your/bot
 
-FROM ghcr.io/gojargo/jargo
+FROM gojargo/jargo
 COPY --from=build /out/bot /usr/local/bin/bot
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/bot"]
@@ -51,13 +50,13 @@ checkout:
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM ghcr.io/gojargo/jargo-build AS build
+FROM gojargo/jargo-build AS build
 WORKDIR /src
 COPY . .
 ARG EXAMPLE=voicebot
 RUN go build -tags libopus -ldflags="-s -w" -o /out/bot ./examples/${EXAMPLE}
 
-FROM ghcr.io/gojargo/jargo
+FROM gojargo/jargo
 COPY --from=build /out/bot /usr/local/bin/bot
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/bot"]
@@ -72,5 +71,5 @@ Build the echo bot (no API keys) instead with `--build-arg EXAMPLE=echo`.
   small. There is no `HEALTHCHECK` (no shell); health-check at the orchestrator
   instead — e.g. a Kubernetes HTTP liveness probe on `:8080`.
 - **Pin for production.** Pin the base images to a released tag
-  (`ghcr.io/gojargo/jargo:0.0.2`) or a digest rather than `latest`.
+  (`gojargo/jargo:0.0.2`) or a digest rather than `latest`.
 - **Architecture.** amd64 only today; arm64 is planned.
