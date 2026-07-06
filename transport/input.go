@@ -16,8 +16,10 @@ type BaseInput struct {
 	*processor.Base
 	params Params
 	self   InputDriver
+	filter AudioFilter
 
-	sampleRate int
+	sampleRate   int
+	filterActive bool
 
 	mu          sync.Mutex
 	paused      bool
@@ -30,7 +32,7 @@ type BaseInput struct {
 // NewBaseInput builds a BaseInput. self is the embedding transport, used to
 // dispatch StartReading/StopReading and to process frames.
 func NewBaseInput(name string, params Params, self InputDriver) *BaseInput {
-	bi := &BaseInput{params: params, self: self}
+	bi := &BaseInput{params: params, self: self, filter: params.AudioInFilter}
 	bi.Base = processor.New(name, self)
 	return bi
 }
@@ -105,6 +107,17 @@ func (bi *BaseInput) Cleanup(ctx context.Context) error {
 func (bi *BaseInput) startStreaming(ctx context.Context, f *frames.StartFrame) error {
 	bi.sampleRate = pick(bi.params.AudioInSampleRate, f.AudioInSampleRate)
 
+	// Start the input filter before the audio goroutine so audioLoop observes a
+	// stable filterActive. A filter that fails to start is skipped, not fatal.
+	if bi.filter != nil {
+		if err := bi.filter.Start(ctx, bi.sampleRate); err != nil {
+			bi.PushError(ctx, "audio input filter failed to start", err, false)
+			bi.filterActive = false
+		} else {
+			bi.filterActive = true
+		}
+	}
+
 	bi.mu.Lock()
 	bi.paused = false
 	bi.audioCtx, bi.audioCancel = context.WithCancel(ctx)
@@ -129,10 +142,19 @@ func (bi *BaseInput) stopStreaming(ctx context.Context) {
 	if cancel != nil {
 		cancel()
 		bi.audioWG.Wait()
+
+		// Stop the filter here, inside the branch only the winning stop caller
+		// enters, and after the audio goroutine has finished: this stops it
+		// exactly once with no Filter call able to race with Stop.
+		if bi.filterActive {
+			_ = bi.filter.Stop(ctx)
+			bi.filterActive = false
+		}
 	}
 }
 
-// audioLoop drains received audio frames and pushes them downstream.
+// audioLoop drains received audio frames, optionally runs them through the input
+// filter, and pushes them downstream.
 func (bi *BaseInput) audioLoop(ctx context.Context) {
 	defer bi.audioWG.Done()
 	for {
@@ -140,11 +162,34 @@ func (bi *BaseInput) audioLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case f := <-bi.audioIn:
-			if bi.params.AudioInPassthrough {
-				_ = bi.PushFrame(ctx, f, processor.Downstream)
+			if !bi.params.AudioInPassthrough {
+				continue
 			}
+			out := bi.applyFilter(ctx, f)
+			if out == nil {
+				continue
+			}
+			_ = bi.PushFrame(ctx, out, processor.Downstream)
 		}
 	}
+}
+
+// applyFilter runs the input filter over f, returning the frame to push
+// downstream. It returns nil when the filter buffered the audio with nothing to
+// emit yet, and the original frame when no filter is active or filtering fails.
+func (bi *BaseInput) applyFilter(ctx context.Context, f *frames.InputAudioRawFrame) frames.Frame {
+	if !bi.filterActive {
+		return f
+	}
+	filtered, err := bi.filter.Filter(ctx, f.Audio)
+	if err != nil {
+		bi.PushError(ctx, "audio input filter failed", err, false)
+		return f
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return frames.NewInputAudioRawFrame(filtered, f.SampleRate, f.NumChannels)
 }
 
 func pick(a, b int) int {

@@ -86,6 +86,92 @@ func (o *fakeOutput) WriteAudio(_ context.Context, pcm []byte) error {
 	return nil
 }
 
+// fakeFilter is an AudioFilter that increments every byte and records its
+// lifecycle calls, so a test can assert the base wired it in.
+type fakeFilter struct {
+	started  atomic.Int32
+	stopped  atomic.Int32
+	rate     atomic.Int32
+	filtered atomic.Int32
+}
+
+func (f *fakeFilter) Start(_ context.Context, sampleRate int) error {
+	f.rate.Store(int32(sampleRate))
+	f.started.Add(1)
+	return nil
+}
+
+func (f *fakeFilter) Stop(context.Context) error {
+	f.stopped.Add(1)
+	return nil
+}
+
+func (f *fakeFilter) Filter(_ context.Context, pcm []byte) ([]byte, error) {
+	f.filtered.Add(1)
+	out := make([]byte, len(pcm))
+	for i, b := range pcm {
+		out[i] = b + 1
+	}
+	return out, nil
+}
+
+func TestBaseInputAppliesFilter(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+	filter := &fakeFilter{}
+	params.AudioInFilter = filter
+
+	var got atomic.Int32
+	done := make(chan struct{})
+	taskParams := pipeline.TaskParams{
+		OnReachedDownstream: func(fr frames.Frame) {
+			af, ok := fr.(*frames.InputAudioRawFrame)
+			if !ok {
+				return
+			}
+			// The fake input emits all-zero audio; the filter increments every
+			// byte, so every downstream sample must be 1.
+			for _, b := range af.Audio {
+				if b != 1 {
+					t.Errorf("downstream byte = %d, want 1 (filtered)", b)
+					break
+				}
+			}
+			if got.Add(1) == 3 {
+				close(done)
+			}
+		},
+	}
+
+	in := newFakeInput(params, 3)
+	task := pipeline.NewTask(pipeline.New(in), taskParams)
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("only %d of 3 filtered frames reached downstream", got.Load())
+	}
+
+	task.StopWhenDone()
+	<-runDone
+
+	if filter.started.Load() != 1 {
+		t.Errorf("Start called %d times, want 1", filter.started.Load())
+	}
+	if filter.rate.Load() != 48000 {
+		t.Errorf("Start sample rate = %d, want 48000", filter.rate.Load())
+	}
+	if filter.filtered.Load() < 3 {
+		t.Errorf("Filter called %d times, want >= 3", filter.filtered.Load())
+	}
+	if filter.stopped.Load() != 1 {
+		t.Errorf("Stop called %d times, want 1", filter.stopped.Load())
+	}
+}
+
 func TestBaseOutputChunksAudio(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // chunk size = 480 samples/10ms * 2 * 2 = 1920 bytes
