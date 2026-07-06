@@ -24,6 +24,9 @@ type Params struct {
 	AudioInChannels int
 	// AudioInPassthrough pushes received audio frames downstream.
 	AudioInPassthrough bool
+	// AudioInFilter, when set, transforms received audio (for example noise
+	// reduction) before it is pushed downstream to VAD, STT and turn detection.
+	AudioInFilter AudioFilter
 
 	// AudioOutEnabled enables sending audio.
 	AudioOutEnabled bool
@@ -51,6 +54,18 @@ func DefaultParams() Params {
 		AudioOutChannels:   1,
 		AudioOut10msChunks: 2,
 	}
+}
+
+// AudioFilter transforms input audio before it enters the pipeline. Start is
+// called with the input sample rate when the transport starts, Filter is called
+// for each received chunk of 16-bit mono PCM, and Stop is called when the
+// transport stops. Filter may buffer internally and return fewer (or more)
+// samples than it was given; it returns an empty slice when it has nothing to
+// emit yet.
+type AudioFilter interface {
+	Start(ctx context.Context, sampleRate int) error
+	Stop(ctx context.Context) error
+	Filter(ctx context.Context, pcm []byte) ([]byte, error)
 }
 
 // Transport is a source and sink of media for a pipeline. Input and Output

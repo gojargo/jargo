@@ -15,6 +15,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 // errProtocol is returned when Cartesia reports an error message.
@@ -141,15 +142,11 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 	header.Set("X-API-Key", s.cfg.APIKey)
 	header.Set("Cartesia-Version", s.cfg.Version)
 
-	conn, resp, err := websocket.Dial(ctx, s.cfg.URL, &websocket.DialOptions{HTTPHeader: header})
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
-	conn.SetReadLimit(readLimit)
 
 	if err := s.request(ctx, conn, text); err != nil {
 		return err
