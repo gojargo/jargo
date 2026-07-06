@@ -34,3 +34,6 @@ vendor/
 
 # Local example configs holding secrets (templates are *.example.yaml)
 /examples/twilio/outbound/config.yaml
+
+# Per-developer local Claude memory (never committed)
+CLAUDE.local.md
