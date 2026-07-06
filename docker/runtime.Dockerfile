@@ -10,7 +10,7 @@
 #
 # Ship a bot by copying a jargo binary (built with the jargo-build base) in:
 #
-#   FROM ghcr.io/gojargo/jargo
+#   FROM gojargo/jargo
 #   COPY --from=build /out/bot /usr/local/bin/bot
 #   ENTRYPOINT ["/usr/local/bin/bot"]
 

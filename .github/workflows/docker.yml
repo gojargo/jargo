@@ -1,7 +1,7 @@
 name: Docker
 
-# Build and publish the jargo base images to both GitHub Container Registry and
-# Docker Hub on a release tag, or on demand. amd64 only for now.
+# Build and publish the jargo base images to Docker Hub on a release tag, or on
+# demand. amd64 only for now.
 on:
   push:
     tags: ["v*"]
@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # push to ghcr.io
     strategy:
       matrix:
         include:
@@ -28,13 +27,6 @@ jobs:
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -46,7 +38,6 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: |
-            ghcr.io/gojargo/${{ matrix.image }}
             docker.io/gojargo/${{ matrix.image }}
           # latest=auto: a semver release tag also updates :latest.
           tags: |

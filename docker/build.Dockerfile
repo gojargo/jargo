@@ -6,16 +6,16 @@
 # application links against — libsoxr (resampling) and libopus (the -tags
 # libopus Opus encoder) — so a downstream image can compile a bot without
 # installing anything. Pair it with the distroless runtime base (docker/runtime
-# .Dockerfile, published as ghcr.io/gojargo/jargo):
+# .Dockerfile, published as gojargo/jargo):
 #
-#   FROM ghcr.io/gojargo/jargo-build AS build
+#   FROM gojargo/jargo-build AS build
 #   WORKDIR /src
 #   COPY go.mod go.sum ./
 #   RUN go mod download
 #   COPY . .
 #   RUN go build -tags libopus -ldflags="-s -w" -o /out/bot ./cmd/bot
 #
-#   FROM ghcr.io/gojargo/jargo            # distroless runtime base
+#   FROM gojargo/jargo            # distroless runtime base
 #   COPY --from=build /out/bot /usr/local/bin/bot
 #   ENTRYPOINT ["/usr/local/bin/bot"]
 
