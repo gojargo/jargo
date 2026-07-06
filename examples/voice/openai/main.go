@@ -21,6 +21,7 @@ import (
 
 	"github.com/gojargo/jargo/aggregators"
 	"github.com/gojargo/jargo/audio/opus"
+	"github.com/gojargo/jargo/audio/rnnoise"
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/audio/vadproc"
@@ -83,6 +84,16 @@ func runBot(conn *pionrtc.Connection) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
+	// Optional input noise reduction. Real denoising needs the "rnnoise" build
+	// tag (which links librnnoise); without it rnnoise.New returns a no-op.
+	//	JARGO_DENOISE=1 go run -tags rnnoise ./examples/voice/openai
+	if os.Getenv("JARGO_DENOISE") != "" {
+		if filter, err := rnnoise.New(); err != nil {
+			slog.Warn("noise reduction unavailable", "err", err)
+		} else {
+			params.AudioInFilter = filter
+		}
+	}
 	t := pionrtc.NewTransport(conn, params)
 
 	convo := frames.NewLLMContext(systemPrompt)
