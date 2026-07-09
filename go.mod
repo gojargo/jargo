@@ -14,7 +14,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/livekit/server-sdk-go/v2 v2.17.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/pion/opus v0.1.1-0.20260624215928-453958b53a21
+	github.com/pion/opus v0.1.1-0.20260706164138-4d863e517a7a
 	github.com/pion/webrtc/v4 v4.2.16
 	github.com/spf13/viper v1.21.0
 	github.com/yalue/onnxruntime_go v1.31.0
