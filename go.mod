@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.54.2
 	github.com/coder/websocket v1.8.15
 	github.com/go-playground/validator/v10 v10.30.3
+	github.com/gojargo/go-resample v1.0.0
 	github.com/google/uuid v1.6.0
 	github.com/livekit/server-sdk-go/v2 v2.17.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
