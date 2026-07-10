@@ -43,7 +43,7 @@ jobs:
           # tighten to "1" once the baseline is clean.
           exit-code: "0"
       - name: Upload results to the Security tab
-        uses: github/codeql-action/upload-sarif@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: trivy.sarif
 
@@ -58,7 +58,7 @@ jobs:
       # (action pinning, overbroad permissions, curl|bash, risky triggers). It
       # uploads its SARIF to the Security tab itself (upload-sarif defaults true).
       - name: Plumber pipeline scan
-        uses: getplumber/plumber@a697e9c316b058d279861719c73b87093fb5a60f # v0.3.86
+        uses: getplumber/plumber@11a099234e6cd446d66e9401ca4f22132a83fe28 # v0.4.1
         with:
           # Gate below the action's default of 100 so CI stays green while the
           # findings still surface in the Security tab. Raise it as the pipelines
@@ -95,10 +95,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+      - uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           languages: go
-      - uses: github/codeql-action/autobuild@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
-      - uses: github/codeql-action/analyze@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+      - uses: github/codeql-action/autobuild@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+      - uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           category: "/language:go"
