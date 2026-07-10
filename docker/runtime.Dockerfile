@@ -47,5 +47,9 @@ COPY --from=libs /usr/lib/x86_64-linux-gnu/libopus.so.0* /usr/lib/x86_64-linux-g
 COPY --from=libs /usr/local/lib/libonnxruntime.so /usr/local/lib/libonnxruntime.so
 ENV JARGO_ONNXRUNTIME_LIB=/usr/local/lib/libonnxruntime.so
 
+# The distroless base already defaults to the non-root user; state it
+# explicitly so it is enforced and visible to scanners.
+USER nonroot
+
 # jargo example bots serve on :8080 (informational; downstream can override).
 EXPOSE 8080
