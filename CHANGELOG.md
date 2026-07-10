@@ -22,6 +22,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Resampling is now pure Go by default.** `audio/resample` uses the no-cgo
+  [`github.com/gojargo/go-resample`](https://github.com/gojargo/go-resample)
+  converter, so the default build links no native resampler and needs no
+  `libsoxr-dev`. Build with `-tags libsoxr` to link libsoxr (the SoX Resampler)
+  for its highest-quality polyphase conversion instead. The `New`/`Process`/
+  `Close` API is unchanged, so callers need no updates.
+- Bumped `github.com/pion/opus` to upstream `main`, pulling in the latest CELT
+  encoder quality work (pitch pre-filter, post-filter, dynalloc). The default
+  pure-Go Opus encoder is still CELT-only — build with `-tags libopus` for
+  natural speech until pion ships a SILK encoder.
 - The per-provider `examples/voice/<provider>` bots are now self-contained,
   headless **backends**: the shared `run` helper was removed and each example
   inlines the full pipeline and serves only the WebRTC `/offer` endpoint (with

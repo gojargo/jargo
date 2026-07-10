@@ -11,20 +11,25 @@ the module root; runnable bots live in `examples/`.
 
 ## Build, test, lint
 
-jargo uses **cgo** (`CGO_ENABLED=0` is not supported). Install the native deps
-first:
+jargo uses **cgo** for the ONNX Runtime binding, so `CGO_ENABLED=0` is not
+supported. The default build needs no native audio libraries — the resampler
+and Opus encoder are pure Go. The optional C audio backends each need a dev
+package, installed only when you build with their tag:
 
 ```sh
-sudo apt-get install -y libsoxr-dev libopus-dev   # Debian/Ubuntu
+sudo apt-get install -y libsoxr-dev   # for -tags libsoxr
+sudo apt-get install -y libopus-dev   # for -tags libopus
 ```
 
-- `CGO_ENABLED=1 go build ./...` — build everything.
+- `CGO_ENABLED=1 go build ./...` — build everything with the pure-Go defaults.
 - `CGO_ENABLED=1 go test ./...` — run tests. Add `-race` as CI does.
+- `go build -tags libsoxr ./...` — opt into libsoxr resampling (SoX Resampler,
+  highest quality; the default is the pure-Go `github.com/gojargo/go-resample`
+  converter).
 - `go build -tags libopus ./...` — opt into the C Opus encoder (better speech;
   the default is a pure-Go encoder).
-- `libsoxr` is linked at build time; the **ONNX Runtime** is loaded at run time
-  (VAD + end-of-turn). Point to it with `JARGO_ONNXRUNTIME_LIB` if it is not on
-  the default search path.
+- The **ONNX Runtime** is loaded at run time (VAD + end-of-turn). Point to it
+  with `JARGO_ONNXRUNTIME_LIB` if it is not on the default search path.
 
 Formatting and lint are enforced by **golangci-lint** (`.golangci.yml`):
 
