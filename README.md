@@ -53,6 +53,7 @@ afterthought.
 
 - **WebRTC**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
 - **Opus**, not pure Go yet, waiting for *pion/opus* to be ready.
+- **Resampling**, pure Go via [go-resample](https://github.com/gojargo/go-resample); libsoxr optional with `-tags libsoxr`.
 - **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
 - **Speech-to-speech**: single-model voice agents (OpenAI Realtime, Gemini Live, AWS Nova Sonic).
 - **Turn-taking & barge-in**: Silero VAD + Smart Turn v3, local ONNX.
@@ -77,7 +78,6 @@ Pick any per category; each is a small `Config` + constructor.
 
 jargo uses cgo (`CGO_ENABLED=0` is not supported) and a few native libraries:
 
-- **libsoxr** — audio resampling, linked at build time (`libsoxr-dev`).
 - **libopus** — optional C Opus encoder, selected with `-tags libopus`
   (`libopus-dev`); the default build ships a pure-Go encoder, but libopus
   sounds noticeably better on speech.
@@ -94,7 +94,7 @@ go get github.com/gojargo/jargo
 **Locally** — install the native deps, then build with cgo:
 
 ```sh
-# Debian/Ubuntu: apt-get install -y libsoxr-dev libopus-dev
+# Debian/Ubuntu: default build needs no audio libs (add libopus-dev for -tags libopus)
 CGO_ENABLED=1 go run ./examples/echo                    # open http://localhost:8080
 CGO_ENABLED=1 go run -tags libopus ./examples/voicebot  # libopus speech encoder
 ```
