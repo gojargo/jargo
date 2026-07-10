@@ -29,6 +29,12 @@ github:
         - getplumber/plumber
         - ossf/scorecard-action
         - codecov/codecov-action
+        # Docker's official actions that build and publish the base images
+        # (docker.yml), pinned by commit SHA there.
+        - docker/setup-buildx-action
+        - docker/login-action
+        - docker/metadata-action
+        - docker/build-push-action
     actionsMustNotBeArchived:
       enabled: true
     actionsMustNotCarryKnownCVEs:
