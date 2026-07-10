@@ -1,0 +1,28 @@
+# Trivy suppressions for the Security workflow (.github/workflows/security.yml).
+# Each entry records why the finding does not apply; delete one to re-surface it.
+
+misconfigurations:
+  # Build base: FROM'd to compile a bot, so the downstream COPY/`go build` and
+  # any apt install need root, like the upstream golang image it derives from.
+  # The runtime base sets a non-root USER; the final app image is the one that
+  # runs, so root here is not the attack surface.
+  - id: AVD-DS-0002
+    paths:
+      - "docker/build.Dockerfile"
+    statement: "Build toolchain base runs as root by design; the runtime/app image runs non-root."
+
+  # Both files are base images, not runnable services: the build base only
+  # compiles, and the runtime base has no ENTRYPOINT (downstream adds one).
+  # HEALTHCHECK belongs on the concrete application image.
+  - id: AVD-DS-0026
+    paths:
+      - "docker/build.Dockerfile"
+      - "docker/runtime.Dockerfile"
+    statement: "Base images have no long-running process to health-check; the app image defines HEALTHCHECK."
+
+vulnerabilities:
+  # golang.org/x/crypto is an indirect dependency; the flagged openpgp
+  # subpackage is not imported (`go mod why` reports it is not needed), and the
+  # advisory has no fixed version because the package is frozen upstream.
+  - id: GO-2026-5932
+    statement: "Unused indirect dependency: openpgp is not imported and has no fixed version upstream."

@@ -37,6 +37,9 @@ jobs:
           scan-type: fs
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
+          # Documented, path-scoped suppressions for base-image and unused-dep
+          # findings that do not apply. See .trivyignore.yaml for the rationale.
+          trivyignores: .trivyignore.yaml
           format: sarif
           output: trivy.sarif
           # Report findings (in the Security tab) without failing the build yet;
