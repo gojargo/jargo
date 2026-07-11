@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.28
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.55.0
 	github.com/coder/websocket v1.8.15
+	github.com/ebitengine/purego v0.10.0
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/gojargo/go-resample v1.0.0
 	github.com/google/uuid v1.6.0

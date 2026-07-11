@@ -11,8 +11,12 @@ the module root; runnable bots live in `examples/`.
 
 ## Build, test, lint
 
-jargo uses **cgo** for the ONNX Runtime binding, so `CGO_ENABLED=0` is not
-supported. The default build needs no native audio libraries — the resampler
+The default build uses **cgo** (for the RNNoise denoiser and the ONNX Runtime
+binding), so a whole-module `CGO_ENABLED=0 go build ./...` is not yet supported.
+The ONNX Runtime binding itself does have a cgo-free backend built on
+`ebitengine/purego`, selected by `CGO_ENABLED=0` (see `internal/onnxrt`), so the
+`internal/onnxrt`, `audio/vad`, and `audio/turn` packages already build and test
+without cgo. The default build needs no native audio libraries — the resampler
 and Opus encoder are pure Go. The optional C audio backends each need a dev
 package, installed only when you build with their tag:
 

@@ -14,6 +14,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Pure-Go ONNX Runtime backend.** `internal/onnxrt` now has two interchangeable
+  backends behind one API: the default cgo binding (`yalue/onnxruntime_go`) and a
+  cgo-free binding built on [`ebitengine/purego`](https://github.com/ebitengine/purego)
+  that calls the ONNX Runtime C API directly, selected by a `CGO_ENABLED=0` build.
+  Both load the runtime shared library at run time; VAD and end-of-turn produce
+  bit-for-bit the same results either way. `onnxrt.NewWithOptions` adds an
+  `IntraOpThreads` cap (useful when many per-stream sessions would otherwise each
+  spawn a core-sized thread pool), and `onnxrt.Backend()` reports the active binding.
+
 - **Outbound telephony example** — `examples/twilio/outbound` places an outbound
   Twilio call (via the REST API, no Twilio SDK dependency), runs an STT → LLM →
   TTS pipeline over the media stream, collects a few details through a
