@@ -35,5 +35,8 @@ vendor/
 # Local example configs holding secrets (templates are *.example.yaml)
 /examples/twilio/outbound/config.yaml
 
+# Audio artifacts written into the repo root by examples/tests (e.g. silktest)
+/*.wav
+
 # Per-developer local Claude memory (never committed)
 CLAUDE.local.md
