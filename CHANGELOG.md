@@ -12,6 +12,42 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-07-12
+
+### Added
+
+- **Service self-description and time-to-first-audio.** STT, TTS, and LLM
+  services broadcast a metadata frame at pipeline start — an STT service can
+  recommend external turn strategies — and the TTS base reports time-to-first-audio
+  (the first *audible* sample, via a pure-Go speech-onset detector) alongside the
+  existing time-to-first-byte.
+- **Pipeline observers** (`observers/`): turn tracking, user-to-bot latency,
+  startup timing, and a frame logger, wired into the task's frame-observation hook.
+- **Audio recording** (`processor/audiobuffer`): a track-synced recorder with an
+  auto-start option plus start/stop-recording control frames and events.
+- **Audio mixer, DTMF, and composable noise filters.** An output mixer
+  (`audio/mixer`) driven by a `MixerControlFrame`; DTMF tone synthesis and an
+  aggregator (`processor/dtmf`), with the Twilio serializer now emitting DTMF; a
+  filter-chaining `audio.Chain` and a pure-Go noise gate (`audio/noise/gate`).
+- **Framework and extension processors.** A LangChain-style chain bridge
+  (`processor/langchain`), an IVR navigator (`processor/ivr`), and a voicemail
+  detector (`processor/voicemail`).
+- **New STT/LLM/TTS provider modalities** — Camb, Gradium, Inworld, Neuphonic,
+  Sarvam, AWS Polly, and AWS Transcribe, plus modality fills for Google,
+  Cartesia, ElevenLabs, Groq, Together, Mistral, and Speechmatics.
+- **Supply-chain security.** Snyk and TruffleHog jobs in the security workflow,
+  and keyless cosign signing of release checksums.
+
+### Changed
+
+- **Package layout.** The `AudioFilter`/`AudioMixer` interfaces moved to a
+  neutral `audio` package (`audio.Filter`/`audio.Mixer`); the RNNoise denoiser
+  and the noise gate now live under `audio/noise/{rnnoise,gate}`; every concrete
+  processor moved under `processor/*` (aggregators, rtvi, turns, vadproc, dtmf,
+  audiobuffer, ivr, voicemail, langchain); and the metrics and tracing exporters
+  were grouped under `telemetry/*`. Import paths change; the exported APIs are
+  otherwise unchanged.
+
 ## [0.0.3] - 2026-07-12
 
 ### Added
@@ -97,6 +133,7 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/gojargo/jargo/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/gojargo/jargo/compare/v0.0.2...v0.0.3
 [0.0.1]: https://github.com/gojargo/jargo/releases/tag/v0.0.1
