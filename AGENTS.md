@@ -29,7 +29,7 @@ sudo apt-get install -y libopus-dev   # for -tags libopus
   highest quality; the default is the pure-Go `github.com/gojargo/go-resample`
   converter). Needs cgo.
 - `go build -tags libopus ./...` — opt into the C Opus encoder (better speech;
-  the default is a pure-Go encoder). Needs cgo.
+  the default is the pure-Go SILK encoder). Needs cgo.
 - The **ONNX Runtime** and **RNNoise** shared libraries are located at run time.
   Point at non-standard installs with `JARGO_ONNXRUNTIME_LIB` and
   `JARGO_RNNOISE_LIB`.

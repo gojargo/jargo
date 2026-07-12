@@ -149,3 +149,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/pion/opus => github.com/gojargo/opus v0.1.1-0.20260710133549-77e753c0dd49
