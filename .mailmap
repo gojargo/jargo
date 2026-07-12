@@ -1,0 +1,6 @@
+# Canonicalizes commit-author identities for display in git shortlog/log and
+# GitHub's contributor and commit views. It unifies the historical name and
+# email variants — including an old address that should no longer appear — to a
+# single identity. This affects display only; it does not rewrite git history.
+fallais <francois.allais@hotmail.com> <f.allais@lyneko.com>
+fallais <francois.allais@hotmail.com> <francois.allais@hotmail.com>
