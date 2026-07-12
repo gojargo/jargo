@@ -12,6 +12,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-07-12
+
 ### Added
 
 - **Pure-Go ONNX Runtime backend.** `internal/onnxrt` now has two interchangeable
@@ -31,6 +33,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Pure-Go SILK Opus encoder by default.** The default Opus encoder is now a
+  pure-Go SILK encoder (natural speech), replacing the CELT-only default. The C
+  libopus encoder stays available behind `-tags libopus`.
 - **Resampling is now pure Go by default.** `audio/resample` uses the no-cgo
   [`github.com/gojargo/go-resample`](https://github.com/gojargo/go-resample)
   converter, so the default build links no native resampler and needs no
@@ -46,9 +51,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the passthrough stub are gone. Together with the ONNX backend, the default build
   is now fully cgo-free — `CGO_ENABLED=0 go build ./...` works.
 - Bumped `github.com/pion/opus` to upstream `main`, pulling in the latest CELT
-  encoder quality work (pitch pre-filter, post-filter, dynalloc). The default
-  pure-Go Opus encoder is still CELT-only — build with `-tags libopus` for
-  natural speech until pion ships a SILK encoder.
+  encoder quality work (pitch pre-filter, post-filter, dynalloc), which the
+  pure-Go encoder builds on.
 - The per-provider `examples/voice/<provider>` bots are now self-contained,
   headless **backends**: the shared `run` helper was removed and each example
   inlines the full pipeline and serves only the WebRTC `/offer` endpoint (with
@@ -93,5 +97,6 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/gojargo/jargo/compare/v0.0.2...v0.0.3
 [0.0.1]: https://github.com/gojargo/jargo/releases/tag/v0.0.1
