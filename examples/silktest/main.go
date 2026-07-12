@@ -108,7 +108,7 @@ func alignedSNR(a, b []int16) float64 {
 }
 
 func readWAV(path string) ([]int16, int) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // path is a CLI argument
 	must(err)
 	rate := int(binary.LittleEndian.Uint32(raw[24:28]))
 	i := 12
@@ -124,7 +124,7 @@ func readWAV(path string) ([]int16, int) {
 }
 
 func writeWAV(path string, pcm []int16, rate int) {
-	f, err := os.Create(path)
+	f, err := os.Create(path) //nolint:gosec // path is a CLI argument
 	must(err)
 	defer func() { _ = f.Close() }()
 
