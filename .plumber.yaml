@@ -32,6 +32,8 @@ github:
         # Security scanners in the security workflow, pinned by commit SHA there.
         - snyk/actions
         - trufflesecurity/trufflehog
+        # Release signing (release.yml), pinned by commit SHA there.
+        - sigstore/cosign-installer
         # Docker's official actions that build and publish the base images
         # (docker.yml), pinned by commit SHA there.
         - docker/setup-buildx-action

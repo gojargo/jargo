@@ -40,6 +40,25 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Sign the checksums file with cosign keyless (Sigstore/OIDC in CI), which
+# transitively covers every release artifact. Produces checksums.txt.sig and
+# checksums.txt.pem release assets, satisfying OSSF Scorecard's Signed-Releases
+# check. Verify with:
+#   cosign verify-blob --certificate checksums.txt.pem \
+#     --signature checksums.txt.sig checksums.txt
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
 changelog:
   use: github
   sort: asc
