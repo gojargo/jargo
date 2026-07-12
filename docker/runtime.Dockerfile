@@ -22,7 +22,7 @@ ARG ORT_VERSION=1.26.0
 ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl libsoxr0 libopus0 \
+        ca-certificates curl wget libsoxr0 libopus0 \
         git build-essential autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
