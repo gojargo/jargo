@@ -99,15 +99,15 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 			return err
 		}
 		return bo.PushFrame(ctx, f, dir)
-	case *frames.TTSAudioRawFrame:
-		if dir == processor.Downstream {
-			bo.handleAudioFrame(fr.Audio, fr.SampleRate, fr.NumChannels)
-			return nil
+	case *frames.MixerControlFrame:
+		if bo.params.AudioOutMixer != nil {
+			_ = bo.params.AudioOutMixer.Control(ctx, fr.Settings)
 		}
 		return bo.PushFrame(ctx, f, dir)
-	case *frames.OutputAudioRawFrame:
+	case *frames.TTSAudioRawFrame, *frames.OutputAudioRawFrame:
 		if dir == processor.Downstream {
-			bo.handleAudioFrame(fr.Audio, fr.SampleRate, fr.NumChannels)
+			audio, rate, channels := outputAudio(f)
+			bo.handleAudioFrame(audio, rate, channels)
 			return nil
 		}
 		return bo.PushFrame(ctx, f, dir)
@@ -146,6 +146,10 @@ func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) 
 	bo.buffer = nil
 	bo.bufMu.Unlock()
 
+	if bo.params.AudioOutMixer != nil {
+		_ = bo.params.AudioOutMixer.Start(ctx, bo.sampleRate)
+	}
+
 	bo.audioCtx, bo.audioCancel = context.WithCancel(ctx)
 	bo.audioOut = make(chan *frames.OutputAudioRawFrame, audioFrameChanCap)
 	bo.audioWG.Add(1)
@@ -154,6 +158,9 @@ func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) 
 
 func (bo *BaseOutput) stopStreaming(ctx context.Context) {
 	bo.stopBotSpeaking(ctx)
+	if bo.params.AudioOutMixer != nil {
+		_ = bo.params.AudioOutMixer.Stop(ctx)
+	}
 	cancel := bo.audioCancel
 	bo.audioCancel = nil
 	if cancel != nil {
@@ -170,6 +177,18 @@ func (bo *BaseOutput) sendMessage(ctx context.Context, f *frames.OutputTransport
 		return err
 	}
 	return bo.self.SendMessage(ctx, data)
+}
+
+// outputAudio extracts the PCM, sample rate and channel count from a bot audio
+// frame (a TTSAudioRawFrame or a plain OutputAudioRawFrame).
+func outputAudio(f frames.Frame) (audio []byte, sampleRate, channels int) {
+	switch fr := f.(type) {
+	case *frames.TTSAudioRawFrame:
+		return fr.Audio, fr.SampleRate, fr.NumChannels
+	case *frames.OutputAudioRawFrame:
+		return fr.Audio, fr.SampleRate, fr.NumChannels
+	}
+	return nil, 0, 0
 }
 
 // handleAudioFrame resamples incoming audio to the output rate, buffers it, and
@@ -291,7 +310,13 @@ func (bo *BaseOutput) audioLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case chunk := <-bo.audioOut:
-			if err := bo.self.WriteAudio(ctx, chunk.Audio); err != nil {
+			audio := chunk.Audio
+			if bo.params.AudioOutMixer != nil {
+				if mixed, err := bo.params.AudioOutMixer.Mix(ctx, audio); err == nil {
+					audio = mixed
+				}
+			}
+			if err := bo.self.WriteAudio(ctx, audio); err != nil {
 				slog.Error("write audio to transport", "processor", bo.Name(), "err", err)
 				continue
 			}

@@ -32,6 +32,7 @@ const meterName = "github.com/gojargo/jargo"
 var (
 	once       sync.Once
 	ttfbHist   metric.Float64Histogram
+	ttfaHist   metric.Float64Histogram
 	procHist   metric.Float64Histogram
 	tokCounter metric.Int64Counter
 	charCount  metric.Int64Counter
@@ -42,6 +43,8 @@ func instruments() {
 		m := otel.Meter(meterName)
 		ttfbHist, _ = m.Float64Histogram("jargo.ttfb",
 			metric.WithUnit("s"), metric.WithDescription("service time to first byte"))
+		ttfaHist, _ = m.Float64Histogram("jargo.ttfa",
+			metric.WithUnit("s"), metric.WithDescription("TTS time to first audible sample"))
 		procHist, _ = m.Float64Histogram("jargo.processing",
 			metric.WithUnit("s"), metric.WithDescription("service processing time"))
 		tokCounter, _ = m.Int64Counter("jargo.llm.tokens",
@@ -69,6 +72,13 @@ func serviceAttrs(kind, service, model string, extra ...attribute.KeyValue) metr
 func RecordTTFB(ctx context.Context, kind, service, model string, seconds float64) {
 	instruments()
 	ttfbHist.Record(ctx, seconds, serviceAttrs(kind, service, model))
+}
+
+// RecordTTFA records a TTS service's time to the first audible sample, in
+// seconds (time to first byte plus any leading silence).
+func RecordTTFA(ctx context.Context, kind, service, model string, seconds float64) {
+	instruments()
+	ttfaHist.Record(ctx, seconds, serviceAttrs(kind, service, model))
 }
 
 // RecordProcessing records a service's processing time, in seconds.

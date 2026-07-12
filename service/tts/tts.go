@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gojargo/jargo/audio/onset"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/metrics"
 	"github.com/gojargo/jargo/processor"
@@ -28,6 +29,10 @@ var errStatus = errors.New("tts: unexpected status")
 
 // readChunk is the size of each audio read from an HTTP stream.
 const readChunk = 4096
+
+// ttfaMaxBufferSeconds bounds how much leading audio is buffered while scanning
+// for a speech onset before giving up on the time-to-first-audio measurement.
+const ttfaMaxBufferSeconds = 3
 
 // Synthesizer turns text into speech audio. SampleRate reports the PCM rate of
 // the audio it produces; Synthesize streams 16-bit mono PCM to emit.
@@ -79,6 +84,12 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 			return err
 		}
 		return b.PushFrame(ctx, f, dir)
+	case *frames.StartFrame:
+		if err := b.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		b.broadcastMetadata(ctx)
+		return nil
 	default:
 		return b.PushFrame(ctx, f, dir)
 	}
@@ -123,35 +134,40 @@ func (b *Base) synthesize(ctx context.Context, text string) error {
 		return err
 	}
 	start := time.Now()
-	var ttfb time.Duration
-	hadTTFB := false
+	meter := ttfaMeter{rate: rate}
 	emit := func(pcm []byte) error {
 		if len(pcm) == 0 {
 			return nil
 		}
-		if !hadTTFB {
-			hadTTFB = true
-			ttfb = time.Since(start)
-			span.SetAttributes(attribute.Int64("tts.ttfb_ms", ttfb.Milliseconds()))
-		}
+		meter.observe(pcm, start)
 		return b.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, rate, 1), processor.Downstream)
 	}
 	if err := b.syn.Synthesize(ctx, text, emit); err != nil && ctx.Err() == nil {
 		span.RecordError(err)
 		b.PushError(ctx, "tts synthesis failed", err, false)
 	}
-	b.emitTiming(ctx, len(text), ttfb, hadTTFB, time.Since(start))
+	if meter.hadTTFB {
+		span.SetAttributes(attribute.Int64("tts.ttfb_ms", meter.ttfb.Milliseconds()))
+	}
+	if meter.hadTTFA {
+		span.SetAttributes(attribute.Int64("tts.ttfa_ms", meter.ttfa.Milliseconds()))
+	}
+	b.emitTiming(ctx, len(text), &meter, time.Since(start))
 	return b.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
 }
 
-// emitTiming records the synthesis's time-to-first-audio, processing time and
-// character count to OpenTelemetry (always) and, when in-band metrics are
-// enabled, downstream as a MetricsFrame for the RTVI client.
-func (b *Base) emitTiming(ctx context.Context, chars int, ttfb time.Duration, hadTTFB bool, processing time.Duration) {
+// emitTiming records the synthesis's time-to-first-byte, time-to-first-audible
+// sample, processing time and character count to OpenTelemetry (always) and,
+// when in-band metrics are enabled, downstream as a MetricsFrame for the RTVI
+// client.
+func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processing time.Duration) {
 	metrics.RecordProcessing(ctx, "tts", b.Name(), "", processing.Seconds())
 	metrics.RecordTTSCharacters(ctx, b.Name(), int64(chars))
-	if hadTTFB {
-		metrics.RecordTTFB(ctx, "tts", b.Name(), "", ttfb.Seconds())
+	if m.hadTTFB {
+		metrics.RecordTTFB(ctx, "tts", b.Name(), "", m.ttfb.Seconds())
+	}
+	if m.hadTTFA {
+		metrics.RecordTTFA(ctx, "tts", b.Name(), "", m.ttfa.Seconds())
 	}
 	if !b.MetricsEnabled() {
 		return
@@ -159,10 +175,64 @@ func (b *Base) emitTiming(ctx context.Context, chars int, ttfb time.Duration, ha
 	mf := frames.NewMetricsFrame(b.Name())
 	mf.Processing = &processing
 	mf.Characters = &chars
-	if hadTTFB {
-		mf.TTFB = &ttfb
+	if m.hadTTFB {
+		mf.TTFB = &m.ttfb
+	}
+	if m.hadTTFA {
+		mf.TTFA = &m.ttfa
+		mf.LeadingSilence = &m.leadingSilence
 	}
 	_ = b.PushFrame(ctx, mf, processor.Downstream)
+}
+
+// broadcastMetadata pushes the TTS service's metadata frame downstream at
+// pipeline start so downstream processors can discover the service.
+func (b *Base) broadcastMetadata(ctx context.Context) {
+	_ = b.PushFrame(ctx, frames.NewServiceMetadataFrame(b.Name()), processor.Downstream)
+}
+
+// ttfaMeter measures a synthesis's time-to-first-byte and time-to-first-audible
+// sample from the emitted PCM. TTFA extends TTFB: once the first byte arrives it
+// scans the leading audio for a sustained speech onset and reports TTFB plus the
+// leading-silence duration.
+type ttfaMeter struct {
+	rate int
+
+	hadTTFB bool
+	ttfb    time.Duration
+
+	active         bool
+	buf            []byte
+	hadTTFA        bool
+	ttfa           time.Duration
+	leadingSilence time.Duration
+}
+
+// observe folds one non-empty PCM chunk into the measurement, relative to the
+// synthesis start time.
+func (m *ttfaMeter) observe(pcm []byte, start time.Time) {
+	if !m.hadTTFB {
+		m.hadTTFB = true
+		m.ttfb = time.Since(start)
+		m.active = true
+	}
+	if !m.active {
+		return
+	}
+	m.buf = append(m.buf, pcm...)
+	if idx := onset.Detect(m.buf, m.rate, 1); idx >= 0 {
+		m.leadingSilence = time.Duration(float64(idx) / float64(m.rate) * float64(time.Second))
+		m.ttfa = m.ttfb + m.leadingSilence
+		m.hadTTFA = true
+		m.active = false
+		m.buf = nil
+		return
+	}
+	if len(m.buf) >= ttfaMaxBufferSeconds*m.rate*2 {
+		// No onset within a bounded window of audio; stop scanning.
+		m.active = false
+		m.buf = nil
+	}
 }
 
 // StreamResponse issues req and streams the raw-PCM response body to emit in

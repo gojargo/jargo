@@ -19,21 +19,21 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/gojargo/jargo/aggregators"
 	"github.com/gojargo/jargo/audio/opus"
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/audio/vad"
-	"github.com/gojargo/jargo/audio/vadproc"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/provider/groq"
 	"github.com/gojargo/jargo/provider/openai"
-	"github.com/gojargo/jargo/rtvi"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
-	"github.com/gojargo/jargo/turns"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -77,7 +77,7 @@ func runBot(conn *pionrtc.Connection) {
 	defer func() { _ = conn.Close() }()
 
 	// --- the provider stack: the only part that differs between examples ---
-	stt := groq.NewSTT(openai.STTConfig{APIKey: os.Getenv("GROQ_API_KEY"), SampleRate: opus.SampleRate})
+	stt := groq.NewSTT(groq.STTConfig{APIKey: os.Getenv("GROQ_API_KEY"), SampleRate: opus.SampleRate})
 	llm := groq.NewLLM(openai.LLMConfig{APIKey: os.Getenv("GROQ_API_KEY")})
 	tts := elevenlabs.NewTTS(elevenlabs.Config{APIKey: os.Getenv("ELEVENLABS_API_KEY")})
 	// ----------------------------------------------------------------------

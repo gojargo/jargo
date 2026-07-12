@@ -50,7 +50,11 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		if s.sampleRate == 0 {
 			s.sampleRate = fr.AudioInSampleRate
 		}
-		return s.PushFrame(ctx, f, dir)
+		if err := s.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		s.broadcastMetadata(ctx)
+		return nil
 	case *frames.UserStartedSpeakingFrame:
 		s.mu.Lock()
 		s.buf = nil
@@ -73,6 +77,19 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 	default:
 		return s.PushFrame(ctx, f, dir)
 	}
+}
+
+// broadcastMetadata pushes the STT service's metadata frame downstream at
+// pipeline start, enriched from the Transcriber when it implements Describer.
+func (s *SegmentService) broadcastMetadata(ctx context.Context) {
+	mf := frames.NewSTTMetadataFrame(0)
+	mf.ServiceName = s.Name()
+	if d, ok := s.tr.(Describer); ok {
+		m := d.Metadata()
+		mf.UserTurns = m.RecommendedUserTurns
+		mf.TTFSP99Latency = m.TTFSP99
+	}
+	_ = s.PushFrame(ctx, mf, processor.Downstream)
 }
 
 // Cleanup waits for any in-flight transcription before tearing down.
