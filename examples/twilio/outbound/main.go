@@ -49,11 +49,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gojargo/jargo/aggregators"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"

@@ -13,7 +13,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/rtvi"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
 	"github.com/pion/webrtc/v4"

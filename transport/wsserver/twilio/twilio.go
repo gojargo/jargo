@@ -104,7 +104,12 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 		s.callSID = m.Start.CallSID
 		s.mu.Unlock()
 		return nil, nil //nolint:nilnil // handshake message carries no frame
-	default: // connected, mark, stop, dtmf
+	case "dtmf":
+		if m.DTMF.Digit == "" {
+			return nil, nil //nolint:nilnil // empty keypress
+		}
+		return frames.NewInputDTMFFrame(frames.KeypadEntry(m.DTMF.Digit)), nil
+	default: // connected, mark, stop
 		return nil, nil //nolint:nilnil // message carries no frame
 	}
 }
@@ -192,4 +197,7 @@ type inbound struct {
 		StreamSID string `json:"streamSid"` //nolint:tagliatelle // Twilio wire field
 		CallSID   string `json:"callSid"`   //nolint:tagliatelle // Twilio wire field
 	} `json:"start"`
+	DTMF struct {
+		Digit string `json:"digit"`
+	} `json:"dtmf"`
 }

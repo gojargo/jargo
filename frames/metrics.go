@@ -33,6 +33,12 @@ type MetricsFrame struct {
 	Model string
 	// TTFB is the time to first byte (first token or audio), or nil when not measured.
 	TTFB *time.Duration
+	// TTFA is the time to the first audible sample (TTFB plus any leading
+	// silence a TTS service padded onto its response), or nil when not measured.
+	TTFA *time.Duration
+	// LeadingSilence is the silence before the first audible sample (TTFA minus
+	// TTFB), or nil when not measured.
+	LeadingSilence *time.Duration
 	// Processing is the wall-clock time the operation took, or nil when not measured.
 	Processing *time.Duration
 	// Tokens reports LLM token usage, or nil when not applicable.
