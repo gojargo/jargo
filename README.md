@@ -52,7 +52,7 @@ afterthought.
 ## Features
 
 - **WebRTC**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
-- **Opus**, not pure Go yet, waiting for *pion/opus* to be ready.
+- **Opus**, pure Go encode + decode via [pion/opus](https://github.com/pion/opus); C libopus optional with `-tags libopus`.
 - **Resampling**, pure Go via [go-resample](https://github.com/gojargo/go-resample); libsoxr optional with `-tags libsoxr`.
 - **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
 - **Speech-to-speech**: single-model voice agents (OpenAI Realtime, Gemini Live, AWS Nova Sonic).
@@ -76,14 +76,13 @@ Pick any per category; each is a small `Config` + constructor.
 
 ## Dependencies
 
-jargo uses cgo (`CGO_ENABLED=0` is not supported) and a few native libraries:
+jargo uses cgo (`CGO_ENABLED=0` is not supported) for one native library:
 
-- **libopus** — optional C Opus encoder, selected with `-tags libopus`
-  (`libopus-dev`); the default build ships a pure-Go encoder, but libopus
-  sounds noticeably better on speech.
 - **ONNX Runtime** — loaded at run time for VAD + end-of-turn detection.
 
-The [base images](docs/deploy-with-docker.md) bundle all of them.
+Opus and resampling are pure Go by default; the C libopus (`-tags libopus`)
+and libsoxr (`-tags libsoxr`) are optional. The
+[base images](docs/deploy-with-docker.md) bundle all of them.
 
 ## Usage
 

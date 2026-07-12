@@ -22,7 +22,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# -tags libopus links the higher-quality Opus encoder (optional).
+# -tags libopus links the C Opus encoder (optional; default is pure-Go SILK).
 RUN go build -tags libopus -ldflags="-s -w" -o /out/bot ./path/to/your/bot
 
 FROM gojargo/jargo

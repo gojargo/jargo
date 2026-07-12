@@ -26,8 +26,8 @@ sudo apt-get install -y libopus-dev   # for -tags libopus
 - `go build -tags libsoxr ./...` — opt into libsoxr resampling (SoX Resampler,
   highest quality; the default is the pure-Go `github.com/gojargo/go-resample`
   converter).
-- `go build -tags libopus ./...` — opt into the C Opus encoder (better speech;
-  the default is a pure-Go encoder).
+- `go build -tags libopus ./...` — opt into the C Opus encoder; the default is
+  the pure-Go SILK encoder.
 - The **ONNX Runtime** is loaded at run time (VAD + end-of-turn). Point to it
   with `JARGO_ONNXRUNTIME_LIB` if it is not on the default search path.
 

@@ -76,6 +76,10 @@ linters:
     - wrapcheck        # Checks that errors returned from external packages are wrapped
     - wsl              # Whitespace Linter - Forces you to use empty lines!
   settings:
+    gomoddirectives:
+      # We consume the SILK-encoder fork of pion/opus until it lands upstream.
+      replace-allow-list:
+        - github.com/pion/opus
     staticcheck:
       checks:
         - all
