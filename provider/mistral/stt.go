@@ -26,6 +26,9 @@ const (
 	// sttReadLimit bounds a single inbound message.
 	sttReadLimit = 1 << 20
 
+	// msgType is the discriminator key shared by client and server frames.
+	msgType = "type"
+
 	// Client message types.
 	sttMsgSessionUpdate = "session.update"
 	sttMsgAudioAppend   = "input_audio.append"
@@ -105,7 +108,7 @@ func (c *sttConnector) sessionUpdate(sampleRate int) []byte {
 		session["target_streaming_delay_ms"] = c.cfg.TargetStreamingDelayMs
 	}
 	b, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map of known-serializable values
-		"type":    sttMsgSessionUpdate,
+		msgType:   sttMsgSessionUpdate,
 		"session": session,
 	})
 	return b
@@ -122,7 +125,7 @@ type sttStream struct {
 // Send appends a chunk of PCM as a base64 audio message.
 func (s *sttStream) Send(audio []byte) error {
 	b, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map of known-serializable values
-		"type":  sttMsgAudioAppend,
+		msgType: sttMsgAudioAppend,
 		"audio": base64.StdEncoding.EncodeToString(audio),
 	})
 	s.writeMu.Lock()
@@ -165,7 +168,7 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 
 // Close signals end of audio and closes the socket.
 func (s *sttStream) Close() error {
-	end, _ := json.Marshal(map[string]any{"type": sttMsgAudioEnd}) //nolint:errchkjson // known-serializable values
+	end, _ := json.Marshal(map[string]any{msgType: sttMsgAudioEnd}) //nolint:errchkjson // known-serializable values
 	s.writeMu.Lock()
 	_ = s.conn.Write(context.Background(), websocket.MessageText, end)
 	s.writeMu.Unlock()

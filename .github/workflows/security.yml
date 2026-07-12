@@ -105,3 +105,26 @@ jobs:
       - uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           category: "/language:go"
+
+  snyk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      # Snyk open-source dependency scan. Needs the SNYK_TOKEN repo secret; like
+      # Trivy it reports to the Security tab without failing the build yet, and
+      # is skipped cleanly when the token (and thus the SARIF) is absent.
+      - name: Snyk test
+        continue-on-error: true
+        uses: snyk/actions/golang@9adf32b1121593767fc3c057af55b55db032dc04 # v1.0.0
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --sarif-file-output=snyk.sarif ./...
+      - name: Upload results to the Security tab
+        if: ${{ hashFiles('snyk.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: snyk.sarif

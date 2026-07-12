@@ -32,6 +32,10 @@ const (
 	defaultInputCodec = "wav"
 	// readLimitSTT bounds a single inbound WebSocket message.
 	readLimitSTT = 1 << 20
+	// msgType and msgData are wire-protocol keys shared by the STT and TTS
+	// transports.
+	msgType = "type"
+	msgData = "data"
 )
 
 // sttModelConfig captures the per-model capabilities that gate which parameters
@@ -302,7 +306,7 @@ type sttMessage struct {
 func (s *stream) Send(audio []byte) error {
 	msg := map[string]any{
 		"audio": map[string]any{
-			"data":        base64.StdEncoding.EncodeToString(audio),
+			msgData:       base64.StdEncoding.EncodeToString(audio),
 			"encoding":    s.encoding,
 			"sample_rate": s.sampleRate,
 		},
@@ -331,7 +335,7 @@ func (s *stream) Recv() ([]stt.Result, error) {
 		switch m.Type {
 		case "error":
 			return nil, fmt.Errorf("%w: %s", errSTTServer, m.Data.Message)
-		case "data":
+		case msgData:
 			text := strings.TrimSpace(m.Data.Transcript)
 			if text == "" {
 				continue
