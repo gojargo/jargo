@@ -16,9 +16,9 @@ import (
 
 	"github.com/gojargo/jargo/audio/onset"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/metrics"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/tracing"
+	"github.com/gojargo/jargo/telemetry/metrics"
+	"github.com/gojargo/jargo/telemetry/tracing"
 	"go.opentelemetry.io/otel/attribute"
 )
 
