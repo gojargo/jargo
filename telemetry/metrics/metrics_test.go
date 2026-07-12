@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gojargo/jargo/metrics"
+	"github.com/gojargo/jargo/telemetry/metrics"
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
