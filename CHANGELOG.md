@@ -12,7 +12,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-07-12
+
 ### Added
+
+- **Pure-Go ONNX Runtime backend.** `internal/onnxrt` now has two interchangeable
+  backends behind one API: the default cgo binding (`yalue/onnxruntime_go`) and a
+  cgo-free binding built on [`ebitengine/purego`](https://github.com/ebitengine/purego)
+  that calls the ONNX Runtime C API directly, selected by a `CGO_ENABLED=0` build.
+  Both load the runtime shared library at run time; VAD and end-of-turn produce
+  bit-for-bit the same results either way. `onnxrt.NewWithOptions` adds an
+  `IntraOpThreads` cap (useful when many per-stream sessions would otherwise each
+  spawn a core-sized thread pool), and `onnxrt.Backend()` reports the active binding.
 
 - **Outbound telephony example** — `examples/twilio/outbound` places an outbound
   Twilio call (via the REST API, no Twilio SDK dependency), runs an STT → LLM →
@@ -22,16 +33,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Pure-Go SILK Opus encoder by default.** The default Opus encoder is now a
+  pure-Go SILK encoder (natural speech), replacing the CELT-only default. The C
+  libopus encoder stays available behind `-tags libopus`.
 - **Resampling is now pure Go by default.** `audio/resample` uses the no-cgo
   [`github.com/gojargo/go-resample`](https://github.com/gojargo/go-resample)
   converter, so the default build links no native resampler and needs no
   `libsoxr-dev`. Build with `-tags libsoxr` to link libsoxr (the SoX Resampler)
   for its highest-quality polyphase conversion instead. The `New`/`Process`/
   `Close` API is unchanged, so callers need no updates.
+- **Noise reduction (RNNoise) no longer needs cgo or a build tag.** `audio/rnnoise`
+  binds librnnoise through [`ebitengine/purego`](https://github.com/ebitengine/purego)
+  and loads it at run time, so it builds in every configuration and is selected at
+  runtime by setting it as the transport's `AudioInFilter` — like any STT/LLM
+  service. `New` returns `ErrNotAvailable` when librnnoise is absent (point at a
+  non-standard install with `JARGO_RNNOISE_LIB`); the `-tags rnnoise` build tag and
+  the passthrough stub are gone. Together with the ONNX backend, the default build
+  is now fully cgo-free — `CGO_ENABLED=0 go build ./...` works.
 - Bumped `github.com/pion/opus` to upstream `main`, pulling in the latest CELT
-  encoder quality work (pitch pre-filter, post-filter, dynalloc). The default
-  pure-Go Opus encoder is still CELT-only — build with `-tags libopus` for
-  natural speech until pion ships a SILK encoder.
+  encoder quality work (pitch pre-filter, post-filter, dynalloc), which the
+  pure-Go encoder builds on.
 - The per-provider `examples/voice/<provider>` bots are now self-contained,
   headless **backends**: the shared `run` helper was removed and each example
   inlines the full pipeline and serves only the WebRTC `/offer` endpoint (with
@@ -76,5 +97,6 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/gojargo/jargo/compare/v0.0.2...v0.0.3
 [0.0.1]: https://github.com/gojargo/jargo/releases/tag/v0.0.1

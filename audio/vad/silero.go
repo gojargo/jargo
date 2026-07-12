@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/internal/onnxrt"
-	ort "github.com/yalue/onnxruntime_go"
 )
 
 //go:embed silero_vad.onnx
@@ -133,37 +132,19 @@ func (s *Silero) voiceConfidence(buffer []byte) float64 {
 // run executes one inference pass, feeding the recurrent state back in and
 // reading the updated state out.
 func (s *Silero) run(input []float32) (float64, error) {
-	inT, err := ort.NewTensor(ort.NewShape(1, int64(len(input))), input)
+	outs, err := s.session.Run([]onnxrt.Tensor{
+		onnxrt.Float32([]int64{1, int64(len(input))}, input),
+		onnxrt.Float32([]int64{2, 1, 128}, s.state),
+		onnxrt.Int64([]int64{1}, []int64{int64(s.sampleRate)}),
+	})
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = inT.Destroy() }()
-	stT, err := ort.NewTensor(ort.NewShape(2, 1, 128), s.state)
-	if err != nil {
-		return 0, err
+	if len(outs) != 2 || len(outs[0].F32) == 0 {
+		return 0, fmt.Errorf("%w: got %d outputs", errUnexpectedTensor, len(outs))
 	}
-	defer func() { _ = stT.Destroy() }()
-	srT, err := ort.NewTensor(ort.NewShape(1), []int64{int64(s.sampleRate)})
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = srT.Destroy() }()
-
-	outs, err := s.session.Run([]ort.Value{inT, stT, srT})
-	if err != nil {
-		return 0, err
-	}
-	defer destroyAll(outs)
-
-	out, ok := outs[0].(*ort.Tensor[float32])
-	if !ok {
-		return 0, fmt.Errorf("%w: %T", errUnexpectedTensor, outs[0])
-	}
-	conf := float64(out.GetData()[0])
-
-	if newState, ok := outs[1].(*ort.Tensor[float32]); ok {
-		copy(s.state, newState.GetData())
-	}
+	conf := float64(outs[0].F32[0])
+	copy(s.state, outs[1].F32)
 	return conf, nil
 }
 
@@ -204,14 +185,6 @@ func pcmToFloat32(pcm []byte) []float32 {
 		out[i] = float32(s) / 32768.0
 	}
 	return out
-}
-
-func destroyAll(vs []ort.Value) {
-	for _, v := range vs {
-		if v != nil {
-			_ = v.Destroy()
-		}
-	}
 }
 
 var _ Analyzer = (*Silero)(nil)

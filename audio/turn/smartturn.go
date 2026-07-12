@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/internal/onnxrt"
-	ort "github.com/yalue/onnxruntime_go"
 )
 
 //go:embed smart-turn-v3.2-cpu.onnx
@@ -218,29 +217,16 @@ func (s *SmartTurnV3) predictEndpoint(audio []float32) (bool, float64, error) {
 // runModel runs the model on a precomputed [80*800] feature matrix and returns
 // the completion probability. The model's output is already sigmoid-activated.
 func (s *SmartTurnV3) runModel(features []float32) (float64, error) {
-	in, err := ort.NewTensor(ort.NewShape(1, nMels, nFrames), features)
+	outs, err := s.session.Run([]onnxrt.Tensor{
+		onnxrt.Float32([]int64{1, nMels, nFrames}, features),
+	})
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = in.Destroy() }()
-
-	outs, err := s.session.Run([]ort.Value{in})
-	if err != nil {
-		return 0, err
+	if len(outs) != 1 || len(outs[0].F32) == 0 {
+		return 0, fmt.Errorf("%w: got %d outputs", errUnexpectedTensor, len(outs))
 	}
-	defer func() {
-		for _, v := range outs {
-			if v != nil {
-				_ = v.Destroy()
-			}
-		}
-	}()
-
-	out, ok := outs[0].(*ort.Tensor[float32])
-	if !ok {
-		return 0, fmt.Errorf("%w: %T", errUnexpectedTensor, outs[0])
-	}
-	return float64(out.GetData()[0]), nil
+	return float64(outs[0].F32[0]), nil
 }
 
 // Close releases the model session.
