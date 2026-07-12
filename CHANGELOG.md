@@ -37,6 +37,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `libsoxr-dev`. Build with `-tags libsoxr` to link libsoxr (the SoX Resampler)
   for its highest-quality polyphase conversion instead. The `New`/`Process`/
   `Close` API is unchanged, so callers need no updates.
+- **Noise reduction (RNNoise) no longer needs cgo or a build tag.** `audio/rnnoise`
+  binds librnnoise through [`ebitengine/purego`](https://github.com/ebitengine/purego)
+  and loads it at run time, so it builds in every configuration and is selected at
+  runtime by setting it as the transport's `AudioInFilter` — like any STT/LLM
+  service. `New` returns `ErrNotAvailable` when librnnoise is absent (point at a
+  non-standard install with `JARGO_RNNOISE_LIB`); the `-tags rnnoise` build tag and
+  the passthrough stub are gone. Together with the ONNX backend, the default build
+  is now fully cgo-free — `CGO_ENABLED=0 go build ./...` works.
 - Bumped `github.com/pion/opus` to upstream `main`, pulling in the latest CELT
   encoder quality work (pitch pre-filter, post-filter, dynalloc). The default
   pure-Go Opus encoder is still CELT-only — build with `-tags libopus` for

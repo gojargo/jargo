@@ -11,29 +11,28 @@ the module root; runnable bots live in `examples/`.
 
 ## Build, test, lint
 
-The default build uses **cgo** (for the RNNoise denoiser and the ONNX Runtime
-binding), so a whole-module `CGO_ENABLED=0 go build ./...` is not yet supported.
-The ONNX Runtime binding itself does have a cgo-free backend built on
-`ebitengine/purego`, selected by `CGO_ENABLED=0` (see `internal/onnxrt`), so the
-`internal/onnxrt`, `audio/vad`, and `audio/turn` packages already build and test
-without cgo. The default build needs no native audio libraries — the resampler
-and Opus encoder are pure Go. The optional C audio backends each need a dev
-package, installed only when you build with their tag:
+The default build is **cgo-free**: `CGO_ENABLED=0 go build ./...` works. The
+resampler and Opus encoder are pure Go, and the native runtimes (ONNX Runtime
+for VAD/turn, RNNoise for denoising) are bound through `ebitengine/purego` —
+loaded at run time from their shared libraries, with no C toolchain at build
+time. The only cgo in the tree is the optional, higher-quality libsoxr and
+libopus backends, compiled in only when you build with their tag:
 
 ```sh
 sudo apt-get install -y libsoxr-dev   # for -tags libsoxr
 sudo apt-get install -y libopus-dev   # for -tags libopus
 ```
 
-- `CGO_ENABLED=1 go build ./...` — build everything with the pure-Go defaults.
-- `CGO_ENABLED=1 go test ./...` — run tests. Add `-race` as CI does.
+- `go build ./...` — build everything with the pure-Go / purego defaults.
+- `go test ./...` — run tests. Add `-race` as CI does.
 - `go build -tags libsoxr ./...` — opt into libsoxr resampling (SoX Resampler,
   highest quality; the default is the pure-Go `github.com/gojargo/go-resample`
-  converter).
+  converter). Needs cgo.
 - `go build -tags libopus ./...` — opt into the C Opus encoder (better speech;
-  the default is a pure-Go encoder).
-- The **ONNX Runtime** is loaded at run time (VAD + end-of-turn). Point to it
-  with `JARGO_ONNXRUNTIME_LIB` if it is not on the default search path.
+  the default is a pure-Go encoder). Needs cgo.
+- The **ONNX Runtime** and **RNNoise** shared libraries are located at run time.
+  Point at non-standard installs with `JARGO_ONNXRUNTIME_LIB` and
+  `JARGO_RNNOISE_LIB`.
 
 Formatting and lint are enforced by **golangci-lint** (`.golangci.yml`):
 
