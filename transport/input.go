@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
@@ -16,7 +17,7 @@ type BaseInput struct {
 	*processor.Base
 	params Params
 	self   InputDriver
-	filter AudioFilter
+	filter audio.Filter
 
 	sampleRate   int
 	filterActive bool

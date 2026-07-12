@@ -23,20 +23,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gojargo/jargo/aggregators"
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/audio/vad"
-	"github.com/gojargo/jargo/audio/vadproc"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/twilio"
-	"github.com/gojargo/jargo/turns"
 	"github.com/spf13/viper"
 )
 

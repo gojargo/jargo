@@ -50,6 +50,25 @@ type Connector interface {
 	Connect(ctx context.Context, sampleRate int) (Stream, error)
 }
 
+// Metadata describes an STT service to downstream processors. A Connector or
+// Transcriber implements Describer to provide it at pipeline start.
+type Metadata struct {
+	// RecommendedUserTurns is the turn strategy the service recommends; a service
+	// that does its own server-side end-of-turn detection returns
+	// frames.UserTurnExternal so the user aggregator can adopt external strategies.
+	RecommendedUserTurns frames.UserTurnRecommendation
+	// TTFSP99 is the time-to-final-segment P99 latency reported on the metadata
+	// frame (see frames.STTMetadataFrame).
+	TTFSP99 time.Duration
+}
+
+// Describer is an optional interface a Connector or Transcriber implements to
+// describe its STT service. When unimplemented, the base broadcasts a plain
+// STTMetadataFrame carrying only the service name.
+type Describer interface {
+	Metadata() Metadata
+}
+
 // StreamService is the shared processor for streaming STT providers. It manages
 // the session lifecycle, forwards input audio to the Stream, and turns results
 // into InterimTranscriptionFrames and TranscriptionFrames.
@@ -83,6 +102,7 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		if err := s.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
+		s.broadcastMetadata(ctx)
 		s.sampleRate = s.cfgRate
 		if s.sampleRate == 0 {
 			s.sampleRate = fr.AudioInSampleRate
@@ -103,6 +123,19 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 func (s *StreamService) Cleanup(ctx context.Context) error {
 	s.disconnect()
 	return s.Base.Cleanup(ctx)
+}
+
+// broadcastMetadata pushes the STT service's metadata frame downstream at
+// pipeline start, enriched from the Connector when it implements Describer.
+func (s *StreamService) broadcastMetadata(ctx context.Context) {
+	mf := frames.NewSTTMetadataFrame(0)
+	mf.ServiceName = s.Name()
+	if d, ok := s.conn.(Describer); ok {
+		m := d.Metadata()
+		mf.UserTurns = m.RecommendedUserTurns
+		mf.TTFSP99Latency = m.TTFSP99
+	}
+	_ = s.PushFrame(ctx, mf, processor.Downstream)
 }
 
 func (s *StreamService) connect(ctx context.Context) error {

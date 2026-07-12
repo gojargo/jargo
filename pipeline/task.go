@@ -34,6 +34,9 @@ type TaskParams struct {
 	// OnReachedUpstream, if set, is called for every frame that reaches the
 	// start of the pipeline.
 	OnReachedUpstream func(frames.Frame)
+	// Observers watch every frame reaching either end of the pipeline. They are
+	// notified after the OnReached callbacks.
+	Observers []Observer
 }
 
 // Task runs a pipeline for a single session. It drives the lifecycle: it sends
@@ -200,6 +203,9 @@ func (t *Task) sinkPush(_ context.Context, f frames.Frame, _ processor.Direction
 	if t.params.OnReachedDownstream != nil {
 		t.params.OnReachedDownstream(f)
 	}
+	for _, o := range t.params.Observers {
+		o.OnFrame(f, processor.Downstream)
+	}
 	return nil
 }
 
@@ -211,6 +217,9 @@ func (t *Task) sourcePush(_ context.Context, f frames.Frame, _ processor.Directi
 	}
 	if t.params.OnReachedUpstream != nil {
 		t.params.OnReachedUpstream(f)
+	}
+	for _, o := range t.params.Observers {
+		o.OnFrame(f, processor.Upstream)
 	}
 	return nil
 }

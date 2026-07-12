@@ -1,4 +1,5 @@
-// Package together provides Together AI's OpenAI-compatible LLM service.
+// Package together provides Together AI's OpenAI-compatible LLM service and its
+// streaming speech-to-text and text-to-speech services.
 package together
 
 import "github.com/gojargo/jargo/provider/openai"

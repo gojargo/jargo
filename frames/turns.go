@@ -90,23 +90,38 @@ func NewUserMuteStoppedFrame() *UserMuteStoppedFrame {
 	return &UserMuteStoppedFrame{BaseSystemFrame: NewBaseSystemFrame("UserMuteStoppedFrame")}
 }
 
-// STTMetadataFrame carries timing metadata from an STT service. Turn-stop
-// strategies use the p99 time-to-final-speech latency to size their safety-net
-// timeouts. It is a system frame.
+// STTMetadataFrame carries metadata an STT service broadcasts at pipeline start.
+// Turn-stop strategies use the p99 time-to-final-speech latency to size their
+// safety-net timeouts, and a service that does its own server-side endpointing
+// recommends external turn strategies through UserTurns. It is a system frame
+// and satisfies ServiceMetadata.
 type STTMetadataFrame struct {
 	BaseSystemFrame
+	// ServiceName names the STT service that broadcast the metadata.
+	ServiceName string
+	// UserTurns is the turn strategy the service recommends; the user aggregator
+	// adopts it unless the application configured its own.
+	UserTurns UserTurnRecommendation
 	// TTFSP99Latency is the p99 latency from end of speech to a finalized
 	// transcript. Zero means unknown; strategies fall back to a default.
 	TTFSP99Latency time.Duration
 }
 
-// NewSTTMetadataFrame builds an STTMetadataFrame.
+// NewSTTMetadataFrame builds an STTMetadataFrame reporting the p99
+// time-to-final-speech latency. Set ServiceName and UserTurns on the returned
+// frame to describe the service further.
 func NewSTTMetadataFrame(ttfsP99 time.Duration) *STTMetadataFrame {
 	return &STTMetadataFrame{
 		BaseSystemFrame: NewBaseSystemFrame("STTMetadataFrame"),
 		TTFSP99Latency:  ttfsP99,
 	}
 }
+
+// Service implements ServiceMetadata.
+func (f *STTMetadataFrame) Service() string { return f.ServiceName }
+
+// RecommendedUserTurns implements ServiceMetadata.
+func (f *STTMetadataFrame) RecommendedUserTurns() UserTurnRecommendation { return f.UserTurns }
 
 // UserIdleTimeoutUpdateFrame updates the user-idle timeout at runtime. A value
 // <= 0 disables idle detection. It is a system frame.

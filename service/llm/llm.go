@@ -158,10 +158,24 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	if cf, ok := f.(*frames.LLMContextFrame); ok {
-		return b.run(ctx, cf.Context)
+	switch fr := f.(type) {
+	case *frames.LLMContextFrame:
+		return b.run(ctx, fr.Context)
+	case *frames.StartFrame:
+		if err := b.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		b.broadcastMetadata(ctx)
+		return nil
+	default:
+		return b.PushFrame(ctx, f, dir)
 	}
-	return b.PushFrame(ctx, f, dir)
+}
+
+// broadcastMetadata pushes the LLM service's metadata frame downstream at
+// pipeline start so downstream processors can discover the service.
+func (b *Base) broadcastMetadata(ctx context.Context) {
+	_ = b.PushFrame(ctx, frames.NewLLMServiceMetadataFrame(b.Name()), processor.Downstream)
 }
 
 // run streams a response for the conversation, choosing the tool loop when the
