@@ -110,7 +110,7 @@ func TestSmartTurnSchedulerProbe(t *testing.T) {
 func probeOnce(
 	sessions []*onnxrt.Session, in []onnxrt.Tensor, dur time.Duration,
 ) (p50, p99, mx time.Duration, runsPerSec float64) {
-	var runs int64
+	var runs atomic.Int64
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, s := range sessions {
@@ -126,7 +126,7 @@ func probeOnce(
 				if _, err := s.Run(in); err != nil {
 					return
 				}
-				atomic.AddInt64(&runs, 1)
+				runs.Add(1)
 			}
 		}(s)
 	}
@@ -146,7 +146,7 @@ func probeOnce(
 
 	slices.Sort(delays)
 	return pct(delays, 50), pct(delays, 99), delays[len(delays)-1],
-		float64(atomic.LoadInt64(&runs)) / elapsed.Seconds()
+		float64(runs.Load()) / elapsed.Seconds()
 }
 
 func pct(sorted []time.Duration, p int) time.Duration {
