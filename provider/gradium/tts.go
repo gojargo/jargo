@@ -96,11 +96,11 @@ func (s *ttsSynthesizer) Synthesize(ctx context.Context, text string, emit func(
 // request sends the setup, text, and end-of-stream messages for one sentence.
 func (s *ttsSynthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
 	setup := map[string]any{
-		"type":            "setup",
-		"output_format":   "pcm",
+		msgType:           "setup",
+		"output_format":   encPCM,
 		"voice_id":        s.cfg.VoiceID,
 		"close_ws_on_eos": false,
-		"client_req_id":   ttsClientReqID,
+		keyClientReqID:    ttsClientReqID,
 	}
 	if s.cfg.JSONConfig != "" {
 		setup["json_config"] = s.cfg.JSONConfig
@@ -110,9 +110,9 @@ func (s *ttsSynthesizer) request(ctx context.Context, conn *websocket.Conn, text
 	}
 
 	txt := map[string]any{
-		"type":          "text",
-		"text":          text,
-		"client_req_id": ttsClientReqID,
+		msgType:        msgText,
+		msgText:        text,
+		keyClientReqID: ttsClientReqID,
 	}
 	if err := s.send(ctx, conn, txt); err != nil {
 		return err
@@ -120,7 +120,7 @@ func (s *ttsSynthesizer) request(ctx context.Context, conn *websocket.Conn, text
 
 	// Signal that no more text is coming so the server flushes and closes the
 	// context with an end_of_stream message.
-	eos := map[string]any{"type": "end_of_stream", "client_req_id": ttsClientReqID}
+	eos := map[string]any{msgType: msgEndStream, keyClientReqID: ttsClientReqID}
 	return s.send(ctx, conn, eos)
 }
 
@@ -144,7 +144,7 @@ func (s *ttsSynthesizer) receive(ctx context.Context, conn *websocket.Conn, emit
 			continue
 		}
 		switch m.Type {
-		case "audio":
+		case msgAudio:
 			pcm, err := base64.StdEncoding.DecodeString(m.Audio)
 			if err != nil {
 				return err
@@ -152,7 +152,7 @@ func (s *ttsSynthesizer) receive(ctx context.Context, conn *websocket.Conn, emit
 			if err := emit(pcm); err != nil {
 				return err
 			}
-		case "end_of_stream":
+		case msgEndStream:
 			return nil
 		case msgError:
 			return fmt.Errorf("%w: %s", errTTSProtocol, m.Message)

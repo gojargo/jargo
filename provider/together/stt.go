@@ -24,6 +24,8 @@ const (
 	// streaming STT contract forwards audio but has no per-turn commit signal,
 	// so the service relies on the server to detect turn boundaries.
 	defaultTurnDetection = "server_vad"
+	// msgType is the discriminator key shared by client and server frames.
+	msgType = "type"
 )
 
 // errSTT wraps an error reported by the Together transcription session.
@@ -107,7 +109,7 @@ type sttEvent struct {
 // Send appends a chunk of PCM to the input buffer as base64.
 func (s *stream) Send(audio []byte) error {
 	msg, err := json.Marshal(map[string]string{
-		"type":  "input_audio_buffer.append",
+		msgType: "input_audio_buffer.append",
 		"audio": base64.StdEncoding.EncodeToString(audio),
 	})
 	if err != nil {

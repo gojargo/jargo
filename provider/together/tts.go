@@ -105,9 +105,9 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 // request pins the voice, then buffers the text and commits it for synthesis.
 func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
 	msgs := []map[string]any{
-		{"type": "tts_session.updated", "session": map[string]any{"voice": s.cfg.Voice}},
-		{"type": "input_text_buffer.append", "text": text},
-		{"type": "input_text_buffer.commit"},
+		{msgType: "tts_session.updated", "session": map[string]any{"voice": s.cfg.Voice}},
+		{msgType: "input_text_buffer.append", "text": text},
+		{msgType: "input_text_buffer.commit"},
 	}
 	for _, m := range msgs {
 		payload, err := json.Marshal(m)

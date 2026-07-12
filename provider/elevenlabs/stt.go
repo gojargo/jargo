@@ -86,7 +86,7 @@ func (t *sttTranscriber) Metadata() stt.Metadata {
 func elevenlabsSTTLanguage(l language.Language) string {
 	codes := map[string]string{
 		"ar": "ara", "bg": "bul", "cs": "ces", "da": "dan", "de": "deu",
-		"el": "ell", "en": "eng", "es": "spa", "fi": "fin", "fil": "fil",
+		"el": "ell", "en": "eng", "es": "spa", "fi": "fin", langFil: langFil,
 		"fr": "fra", "he": "heb", "hi": "hin", "hr": "hrv", "hu": "hun",
 		"id": "ind", "it": "ita", "ja": "jpn", "ko": "kor", "ms": "msa",
 		"nl": "nld", "no": "nor", "pl": "pol", "pt": "por", "ro": "ron",

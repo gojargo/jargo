@@ -36,6 +36,13 @@ const (
 	sttTTFSP99 = 620 * time.Millisecond
 	// msgError is the server message type reporting an error.
 	msgError = "error"
+	// Wire-protocol message keys and values shared by the STT and TTS transports.
+	msgType        = "type"
+	msgAudio       = "audio"
+	msgText        = "text"
+	msgEndStream   = "end_of_stream"
+	keyClientReqID = "client_req_id"
+	encPCM         = "pcm"
 )
 
 // STTConfig configures the Gradium STT service.
@@ -73,7 +80,7 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 		cfg.Model = defaultSTTModel
 	}
 	if cfg.Encoding == "" {
-		cfg.Encoding = "pcm"
+		cfg.Encoding = encPCM
 	}
 	return stt.NewStream("GradiumSTT", &sttConnector{cfg: cfg}, cfg.SampleRate)
 }
@@ -91,7 +98,7 @@ func (c *sttConnector) Metadata() stt.Metadata {
 // inputFormat builds Gradium's input_format from the encoding and sample rate.
 // For PCM the sample rate is appended; other encodings are used as-is.
 func (c *sttConnector) inputFormat(sampleRate int) string {
-	if c.cfg.Encoding != "pcm" {
+	if c.cfg.Encoding != encPCM {
 		return c.cfg.Encoding
 	}
 	switch sampleRate {
@@ -136,7 +143,7 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 // optional language and delay configuration.
 func (c *sttConnector) setup(sampleRate int) []byte {
 	msg := map[string]any{
-		"type":         "setup",
+		msgType:        "setup",
 		"model_name":   c.cfg.Model,
 		"input_format": c.inputFormat(sampleRate),
 	}
@@ -208,8 +215,8 @@ func (s *sttStream) Send(audio []byte) error {
 		chunk := s.buf[:s.chunkBytes]
 		s.buf = s.buf[s.chunkBytes:]
 		msg := map[string]any{
-			"type":  "audio",
-			"audio": base64.StdEncoding.EncodeToString(chunk),
+			msgType:  msgAudio,
+			msgAudio: base64.StdEncoding.EncodeToString(chunk),
 		}
 		b, _ := json.Marshal(msg) //nolint:errchkjson // map of known-serializable values
 		if err := s.conn.Write(s.ctx, websocket.MessageText, b); err != nil {
@@ -233,11 +240,11 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			continue
 		}
 		switch m.Type {
-		case "text":
+		case msgText:
 			s.accumulated = append(s.accumulated, m.Text)
 			text := strings.Join(s.accumulated, " ")
 			return []stt.Result{{Text: text, Final: false, Language: s.lang}}, nil
-		case "flushed", "end_of_stream":
+		case "flushed", msgEndStream:
 			if len(s.accumulated) == 0 {
 				continue
 			}

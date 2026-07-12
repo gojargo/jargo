@@ -285,10 +285,10 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 	if err := conn.Write(ctx, websocket.MessageText, s.configMessage()); err != nil {
 		return err
 	}
-	if err := s.writeJSON(ctx, conn, map[string]any{"type": "text", "data": map[string]any{"text": text}}); err != nil {
+	if err := s.writeJSON(ctx, conn, map[string]any{msgType: "text", msgData: map[string]any{"text": text}}); err != nil {
 		return err
 	}
-	if err := s.writeJSON(ctx, conn, map[string]any{"type": "flush"}); err != nil {
+	if err := s.writeJSON(ctx, conn, map[string]any{msgType: "flush"}); err != nil {
 		return err
 	}
 	return s.receive(ctx, conn, emit)
@@ -317,7 +317,7 @@ func (s *synthesizer) configMessage() []byte {
 	if s.temperature != nil {
 		data["temperature"] = *s.temperature
 	}
-	b, _ := json.Marshal(map[string]any{"type": "config", "data": data}) //nolint:errchkjson // serializable map
+	b, _ := json.Marshal(map[string]any{msgType: "config", msgData: data}) //nolint:errchkjson // serializable map
 	return b
 }
 

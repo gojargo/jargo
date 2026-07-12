@@ -34,6 +34,8 @@ const (
 	defaultVoiceID = "21m00Tcm4TlvDq8ikWAM"
 	// defaultModel is the lowest-latency multilingual model.
 	defaultModel = "eleven_flash_v2_5"
+	// langFil is the Filipino base language code.
+	langFil = "fil"
 )
 
 // VoiceSettings overrides a voice's default generation settings. Fields left nil
@@ -172,7 +174,7 @@ func outputFormat(sampleRate int) string {
 // ElevenLabs supports; otherwise "" (the model auto-detects).
 func elevenlabsLanguage(l language.Language) string {
 	switch base := l.BaseCode(); base {
-	case "ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", "fil",
+	case "ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", langFil,
 		"fr", "hi", "hr", "hu", "id", "it", "ja", "ko", "ms", "nl",
 		"no", "pl", "pt", "ro", "ru", "sk", "sv", "ta", "tr", "uk",
 		"vi", "zh":

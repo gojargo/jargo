@@ -7,6 +7,7 @@ package langchain
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/gojargo/jargo/frames"
@@ -73,10 +74,9 @@ func (p *Processor) invoke(ctx context.Context, input string) error {
 // lastUserText returns the trimmed text of the most recent plain user message in
 // the context, or "" when there is none.
 func lastUserText(convo *frames.LLMContext) string {
-	msgs := convo.Messages()
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == frames.RoleUser && len(msgs[i].ToolResults) == 0 {
-			return strings.TrimSpace(msgs[i].Text)
+	for _, m := range slices.Backward(convo.Messages()) {
+		if m.Role == frames.RoleUser && len(m.ToolResults) == 0 {
+			return strings.TrimSpace(m.Text)
 		}
 	}
 	return ""
