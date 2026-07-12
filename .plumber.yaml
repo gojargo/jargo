@@ -29,6 +29,9 @@ github:
         - getplumber/plumber
         - ossf/scorecard-action
         - codecov/codecov-action
+        # Security scanners in the security workflow, pinned by commit SHA there.
+        - snyk/actions
+        - trufflesecurity/trufflehog
         # Docker's official actions that build and publish the base images
         # (docker.yml), pinned by commit SHA there.
         - docker/setup-buildx-action
