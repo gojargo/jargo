@@ -76,12 +76,16 @@ Pick any per category; each is a small `Config` + constructor.
 
 ## Dependencies
 
-jargo uses cgo (`CGO_ENABLED=0` is not supported) for one native library:
+The default build is **cgo-free** — `CGO_ENABLED=0 go build ./...` works with no C
+toolchain. Two native runtimes are still used, but bound through
+[purego](https://github.com/ebitengine/purego) and loaded at run time, so they need
+their shared library present at runtime and nothing at build time:
 
-- **ONNX Runtime** — loaded at run time for VAD + end-of-turn detection.
+- **ONNX Runtime** — VAD + end-of-turn detection (`JARGO_ONNXRUNTIME_LIB`).
+- **RNNoise** — optional input noise reduction (`JARGO_RNNOISE_LIB`).
 
-Opus and resampling are pure Go by default; the C libopus (`-tags libopus`)
-and libsoxr (`-tags libsoxr`) are optional. The
+Opus and resampling are pure Go by default; the C libopus (`-tags libopus`) and
+libsoxr (`-tags libsoxr`) are the only cgo in the tree, and both are optional. The
 [base images](docs/deploy-with-docker.md) bundle all of them.
 
 ## Usage
@@ -90,19 +94,34 @@ and libsoxr (`-tags libsoxr`) are optional. The
 go get github.com/gojargo/jargo
 ```
 
-**Locally** — install the native deps, then build with cgo:
+A bot is an STT → LLM → TTS pipeline over a WebRTC transport. The heart of it:
 
-```sh
-# Debian/Ubuntu: default build needs no audio libs (add libopus-dev for -tags libopus)
-CGO_ENABLED=1 go run ./examples/echo                    # open http://localhost:8080
-CGO_ENABLED=1 go run -tags libopus ./examples/voicebot  # libopus speech encoder
+```go
+stt := openai.NewSTT(openai.STTConfig{APIKey: key, SampleRate: opus.SampleRate})
+llm := openai.NewLLM(openai.LLMConfig{APIKey: key})
+tts := openai.NewTTS(openai.TTSConfig{APIKey: key})
+
+t := pionrtc.NewTransport(conn, transport.DefaultParams())
+agg := aggregators.New(frames.NewLLMContext("You are a helpful voice assistant."))
+
+task := pipeline.NewTask(pipeline.New(
+	t.Input(), stt, agg.User(), llm, tts, t.Output(), agg.Assistant(),
+), pipeline.TaskParams{})
+task.Run(ctx)
 ```
 
-**With Docker** — jargo publishes a build base and a distroless runtime base
-image; see **[Deploy with Docker](docs/deploy-with-docker.md)** to containerise a
-bot without installing the native dependencies on the host.
+[`examples/voice/openai`](examples/voice/openai) is that pipeline as a complete
+server (WebRTC signaling, VAD/turn-taking, barge-in).
 
-See the **[Quickstart](docs/quickstart.md)** for the full setup.
+**Run it in Docker** — build on the `gojargo/jargo-build` base and ship on the
+distroless `gojargo/jargo` runtime (it bundles the ONNX Runtime), then:
+
+```sh
+docker run --rm -p 8080:8080 -e OPENAI_API_KEY=$OPENAI_API_KEY my-bot
+```
+
+See **[Deploy with Docker](docs/deploy-with-docker.md)** for the Dockerfile and
+the **[Quickstart](docs/quickstart.md)** for the full setup.
 
 ## Examples
 

@@ -1,5 +1,3 @@
-//go:build rnnoise
-
 package rnnoise
 
 import (
@@ -7,16 +5,26 @@ import (
 	"testing"
 )
 
-func TestDenoiseFullFrame(t *testing.T) {
+// startFilter builds and starts a filter at the given rate, skipping the test
+// when librnnoise is not installed.
+func startFilter(t *testing.T, sampleRate int) (*filter, context.Context) {
+	t.Helper()
 	f, err := New()
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Skipf("librnnoise not available: %v", err)
 	}
 	ctx := context.Background()
-	if err := f.Start(ctx, 48000); err != nil {
+	if err := f.Start(ctx, sampleRate); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer func() { _ = f.Stop(ctx) }()
+	//nolint:forcetypeassert // New always returns *filter here
+	ff := f.(*filter)
+	t.Cleanup(func() { _ = ff.Stop(ctx) })
+	return ff, ctx
+}
+
+func TestDenoiseFullFrame(t *testing.T) {
+	f, ctx := startFilter(t, 48000)
 
 	// One exact 480-sample (960-byte) frame at 48 kHz yields one frame out.
 	out, err := f.Filter(ctx, make([]byte, 960))
@@ -29,15 +37,7 @@ func TestDenoiseFullFrame(t *testing.T) {
 }
 
 func TestDenoiseBuffersPartialFrame(t *testing.T) {
-	f, err := New()
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ctx := context.Background()
-	if err := f.Start(ctx, 48000); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer func() { _ = f.Stop(ctx) }()
+	f, ctx := startFilter(t, 48000)
 
 	// A sub-frame chunk is buffered, so nothing is emitted yet.
 	out, err := f.Filter(ctx, make([]byte, 100))
@@ -59,19 +59,11 @@ func TestDenoiseBuffersPartialFrame(t *testing.T) {
 }
 
 func TestDenoiseResamplesOtherRate(t *testing.T) {
-	f, err := New()
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ctx := context.Background()
-	if err := f.Start(ctx, 16000); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer func() { _ = f.Stop(ctx) }()
+	f, ctx := startFilter(t, 16000)
 
-	// 160 samples at 16 kHz upsamples to 480 at 48 kHz — one frame. Both the
-	// up- and down-resamplers have several calls of soxr warm-up latency, so
-	// feed enough chunks to clear it and require audio to eventually flow.
+	// 160 samples at 16 kHz upsamples to 480 at 48 kHz — one frame. The up- and
+	// down-resamplers have some warm-up latency, so feed enough chunks to clear
+	// it and require audio to eventually flow.
 	var total int
 	for range 30 {
 		out, err := f.Filter(ctx, make([]byte, 320))
