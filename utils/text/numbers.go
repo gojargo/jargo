@@ -1,6 +1,7 @@
 package text
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -33,7 +34,7 @@ var (
 // table (>= 10^21) fall back to their decimal digits.
 func cardinal(n int64) string {
 	if n == 0 {
-		return "zero"
+		return onesWords[0]
 	}
 	neg := n < 0
 	if neg {
@@ -56,8 +57,7 @@ func cardinal(n int64) string {
 		val   int64
 	}
 	var parts []part
-	for i := len(groups) - 1; i >= 0; i-- {
-		g := groups[i]
+	for i, g := range slices.Backward(groups) {
 		if g == 0 {
 			continue
 		}
@@ -68,7 +68,8 @@ func cardinal(n int64) string {
 		parts = append(parts, part{t, i, g})
 	}
 
-	result := parts[0].text
+	var b strings.Builder
+	b.WriteString(parts[0].text)
 	for k := 1; k < len(parts); k++ {
 		sep := ", "
 		// num2words joins a final sub-hundred units group with " and " rather
@@ -76,8 +77,10 @@ func cardinal(n int64) string {
 		if k == len(parts)-1 && parts[k].scale == 0 && parts[k].val < 100 {
 			sep = " and "
 		}
-		result += sep + parts[k].text
+		b.WriteString(sep)
+		b.WriteString(parts[k].text)
 	}
+	result := b.String()
 	if neg {
 		return "minus " + result
 	}
@@ -88,8 +91,8 @@ func cardinal(n int64) string {
 // out-of-range fallback.
 func orig(neg bool, groups []int64) int64 {
 	var n int64
-	for i := len(groups) - 1; i >= 0; i-- {
-		n = n*1000 + groups[i]
+	for _, g := range slices.Backward(groups) {
+		n = n*1000 + g
 	}
 	if neg {
 		return -n
