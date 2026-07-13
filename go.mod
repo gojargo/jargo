@@ -17,6 +17,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/gojargo/go-resample v1.0.0
 	github.com/google/uuid v1.6.0
+	github.com/jfreymuth/pulse v0.1.2
 	github.com/livekit/server-sdk-go/v2 v2.17.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/pion/opus v0.1.1-0.20260706164138-4d863e517a7a
