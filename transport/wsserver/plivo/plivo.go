@@ -1,0 +1,201 @@
+// Package plivo is the wsserver.Serializer for Plivo Audio Streaming. Plivo
+// streams call audio as base64 μ-law 8 kHz mono in JSON text messages; this
+// serializer converts those to and from jargo audio frames, emits a "clearAudio"
+// message on barge-in, and optionally hangs the call up over Plivo's REST API
+// when the pipeline ends.
+package plivo
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"sync"
+
+	"github.com/gojargo/jargo/audio/g711"
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/transport/wsserver"
+)
+
+// Serializer implements wsserver.Serializer.
+var _ wsserver.Serializer = (*Serializer)(nil)
+
+const (
+	// sampleRate is Plivo Audio Streaming's fixed rate: 8 kHz mono μ-law.
+	sampleRate = 8000
+	hangupURL  = "https://api.plivo.com/v1/Account/%s/Call/%s/"
+)
+
+// Config configures the Plivo serializer.
+type Config struct {
+	// AuthID and AuthToken authorize the REST hang-up call. They are only needed
+	// when AutoHangUp is set.
+	AuthID    string
+	AuthToken string
+	// AutoHangUp ends the Plivo call over the REST API when the pipeline sends an
+	// EndFrame or CancelFrame.
+	AutoHangUp bool
+	// HTTPClient is used for the hang-up request; nil uses http.DefaultClient.
+	HTTPClient *http.Client
+}
+
+// Serializer implements wsserver.Serializer for Plivo. The stream and call IDs
+// are learned from the inbound "start" message.
+type Serializer struct {
+	cfg  Config
+	http *http.Client
+
+	mu       sync.Mutex
+	streamID string
+	callID   string
+	hungUp   bool
+}
+
+// New builds a Plivo serializer.
+func New(cfg Config) *Serializer {
+	h := cfg.HTTPClient
+	if h == nil {
+		h = http.DefaultClient
+	}
+	return &Serializer{cfg: cfg, http: h}
+}
+
+// Setup is a no-op: Plivo audio is always 8 kHz.
+func (s *Serializer) Setup(*frames.StartFrame) error { return nil }
+
+// Serialize converts an outbound frame to a Plivo message.
+func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
+	switch fr := f.(type) {
+	case *frames.TTSAudioRawFrame:
+		return s.media(fr.Audio)
+	case *frames.OutputAudioRawFrame:
+		return s.media(fr.Audio)
+	case *frames.InterruptionFrame:
+		return s.clear()
+	case *frames.EndFrame, *frames.CancelFrame:
+		s.hangup()
+		return nil, nil //nolint:nilnil // hang-up is a side effect; no wire message
+	default:
+		return nil, nil //nolint:nilnil // frame not sent to Plivo
+	}
+}
+
+// Deserialize converts a Plivo message to a frame.
+func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
+	var m inbound
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	switch m.Event {
+	case "media":
+		ulaw, err := base64.StdEncoding.DecodeString(m.Media.Payload)
+		if err != nil {
+			return nil, err
+		}
+		return frames.NewInputAudioRawFrame(g711.DecodeULaw(ulaw), sampleRate, 1), nil
+	case "start":
+		s.mu.Lock()
+		s.streamID = m.Start.StreamID
+		s.callID = m.Start.CallID
+		s.mu.Unlock()
+		return nil, nil //nolint:nilnil // handshake message carries no frame
+	case "dtmf":
+		if m.DTMF.Digit == "" {
+			return nil, nil //nolint:nilnil // empty keypress
+		}
+		return frames.NewInputDTMFFrame(frames.KeypadEntry(m.DTMF.Digit)), nil
+	default: // connected, checkpoint, clearedAudio
+		return nil, nil //nolint:nilnil // message carries no frame
+	}
+}
+
+func (s *Serializer) media(pcm []byte) ([]byte, error) {
+	s.mu.Lock()
+	id := s.streamID
+	s.mu.Unlock()
+	if id == "" {
+		return nil, nil //nolint:nilnil // stream not started yet; drop until "start" arrives
+	}
+	out := playAudio{Event: "playAudio", StreamID: id}
+	out.Media.ContentType = "audio/x-mulaw"
+	out.Media.SampleRate = sampleRate
+	out.Media.Payload = base64.StdEncoding.EncodeToString(g711.EncodeULaw(pcm))
+	return json.Marshal(out)
+}
+
+func (s *Serializer) clear() ([]byte, error) {
+	s.mu.Lock()
+	id := s.streamID
+	s.mu.Unlock()
+	if id == "" {
+		return nil, nil //nolint:nilnil // stream not started yet; nothing to clear
+	}
+	return json.Marshal(clearAudio{Event: "clearAudio", StreamID: id})
+}
+
+func (s *Serializer) hangup() {
+	if !s.cfg.AutoHangUp {
+		return
+	}
+	s.mu.Lock()
+	ready := !s.hungUp && s.callID != "" && s.cfg.AuthID != "" && s.cfg.AuthToken != ""
+	if ready {
+		s.hungUp = true
+	}
+	callID := s.callID
+	s.mu.Unlock()
+	if !ready {
+		return
+	}
+	go s.doHangup(callID)
+}
+
+func (s *Serializer) doHangup(callID string) {
+	endpoint := fmt.Sprintf(hangupURL, s.cfg.AuthID, callID)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, endpoint, nil)
+	if err != nil {
+		slog.Warn("plivo: build hang-up request", "err", err)
+		return
+	}
+	req.SetBasicAuth(s.cfg.AuthID, s.cfg.AuthToken)
+	resp, err := s.http.Do(req)
+	if err != nil {
+		slog.Warn("plivo: hang-up call", "err", err)
+		return
+	}
+	_ = resp.Body.Close()
+}
+
+// The JSON field names below are Plivo's wire protocol (camelCase), so the
+// snake_case house style does not apply.
+
+type playAudio struct {
+	Event string `json:"event"`
+	Media struct {
+		ContentType string `json:"contentType"` //nolint:tagliatelle // Plivo wire field
+		SampleRate  int    `json:"sampleRate"`  //nolint:tagliatelle // Plivo wire field
+		Payload     string `json:"payload"`
+	} `json:"media"`
+	StreamID string `json:"streamId"` //nolint:tagliatelle // Plivo wire field
+}
+
+type clearAudio struct {
+	Event    string `json:"event"`
+	StreamID string `json:"streamId"` //nolint:tagliatelle // Plivo wire field
+}
+
+type inbound struct {
+	Event string `json:"event"`
+	Media struct {
+		Payload string `json:"payload"`
+	} `json:"media"`
+	Start struct {
+		StreamID string `json:"streamId"` //nolint:tagliatelle // Plivo wire field
+		CallID   string `json:"callId"`   //nolint:tagliatelle // Plivo wire field
+	} `json:"start"`
+	DTMF struct {
+		Digit string `json:"digit"`
+	} `json:"dtmf"`
+}
