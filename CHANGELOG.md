@@ -12,6 +12,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Telephony serializers for Plivo, Telnyx, and Exotel.** Three new
+  `wsserver.Serializer` implementations alongside the existing Twilio one:
+  Plivo (`transport/wsserver/plivo`, μ-law with REST auto-hang-up), Telnyx
+  (`transport/wsserver/telnyx`, μ-law **and** A-law, receive encoding learned
+  from the stream, REST auto-hang-up), and Exotel (`transport/wsserver/exotel`,
+  raw 16-bit PCM). Each learns its stream/call identifiers from the inbound
+  `start` message and emits a barge-in clear on interruption.
+- **G.711 A-law codec** (`audio/g711`): `EncodeALaw`/`DecodeALaw` join the
+  existing μ-law pair, for PSTN audio outside North America (Telnyx PCMA).
+
 ## [0.0.4] - 2026-07-12
 
 ### Added

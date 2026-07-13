@@ -1,8 +1,9 @@
-// Package g711 implements the ITU-T G.711 μ-law companding codec used by
-// telephony media streams (Twilio, Telnyx, Plivo and the wider PSTN). It
-// converts between 16-bit signed little-endian PCM and 8-bit μ-law, one byte per
-// sample, mono. The algorithm is the canonical Sun reference implementation, so
-// it round-trips with audioop.lin2ulaw/ulaw2lin and the like.
+// Package g711 implements the ITU-T G.711 companding codecs used by telephony
+// media streams (Twilio, Telnyx, Plivo and the wider PSTN): μ-law (PCMU), the
+// North American variant, and A-law (PCMA), used elsewhere. Both convert between
+// 16-bit signed little-endian PCM and 8-bit companded samples, one byte per
+// sample, mono. The algorithms are the canonical Sun reference implementations,
+// so they round-trip with audioop.lin2ulaw/ulaw2lin and lin2alaw/alaw2lin.
 package g711
 
 const (
