@@ -31,6 +31,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transforms; attach it with the new `(*tts.Base).SetTextFilters`, promoted to
   every TTS service. English number spelling follows the `num2words` "en"
   conventions and needs no external dependency.
+- **Local-audio transport** (`transport/localaudio`): capture from the local
+  microphone and play back through the local speaker, for running a bot on the
+  same machine with no browser or telephony leg. It speaks the PulseAudio native
+  protocol through the pure-Go [`github.com/jfreymuth/pulse`](https://github.com/jfreymuth/pulse)
+  client, so the default build stays cgo-free; it needs a running PulseAudio or
+  PipeWire (pulse-compatible) server. See `examples/localaudio` for a no-keys
+  microphone-to-speaker echo.
 
 ## [0.0.4] - 2026-07-12
 
