@@ -19,6 +19,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
+	ttstext "github.com/gojargo/jargo/utils/text"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -47,6 +48,7 @@ type Base struct {
 	*processor.Base
 	syn         Synthesizer
 	aggregation string
+	filters     []ttstext.Filter
 }
 
 // New builds a TTS Base named name driven by syn. The concrete service passes
@@ -55,6 +57,15 @@ func New(name string, syn Synthesizer) *Base {
 	b := &Base{syn: syn}
 	b.Base = processor.New(name, b)
 	return b
+}
+
+// SetTextFilters sets the text-normalization filters applied to each sentence
+// just before synthesis — for example a text.VoiceFormatter that strips
+// Markdown and spells out numbers, currency and dates. Filters run in order.
+// Call this before the pipeline starts; the filter set is not safe to change
+// while it is running.
+func (b *Base) SetTextFilters(filters ...ttstext.Filter) {
+	b.filters = filters
 }
 
 // ProcessFrame aggregates text into sentences and synthesizes them.
@@ -119,6 +130,9 @@ func (b *Base) flush(ctx context.Context) error {
 
 // synthesize requests speech for text and streams it downstream as audio.
 func (b *Base) synthesize(ctx context.Context, text string) error {
+	for _, f := range b.filters {
+		text = f.Filter(text)
+	}
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}

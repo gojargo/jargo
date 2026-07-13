@@ -23,6 +23,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `start` message and emits a barge-in clear on interruption.
 - **G.711 A-law codec** (`audio/g711`): `EncodeALaw`/`DecodeALaw` join the
   existing μ-law pair, for PSTN audio outside North America (Telnyx PCMA).
+- **TTS text normalization** (`utils/text/`): a pluggable `text.Filter` layer that
+  rewrites written text into a more speakable form before synthesis — strips
+  Markdown, spells out numbers, currency, percentages, dates, and units, spaces
+  out phone-number digits and acronyms, and reads email addresses aloud. A
+  `text.VoiceFormatter` bundles a configurable, ordered pipeline of these
+  transforms; attach it with the new `(*tts.Base).SetTextFilters`, promoted to
+  every TTS service. English number spelling follows the `num2words` "en"
+  conventions and needs no external dependency.
 
 ## [0.0.4] - 2026-07-12
 
