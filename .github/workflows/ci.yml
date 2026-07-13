@@ -19,7 +19,9 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
-          version: latest
+          # Pinned so a new golangci-lint release can't break CI by adding
+          # findings out from under a green tree; bump this deliberately.
+          version: v2.12.2
 
   test:
     runs-on: ubuntu-latest
