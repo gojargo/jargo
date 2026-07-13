@@ -18,9 +18,14 @@ import (
 // Serializer implements wsserver.Serializer.
 var _ wsserver.Serializer = (*Serializer)(nil)
 
-// defaultSampleRate is Exotel's default stream rate. Exotel also supports 16 kHz;
-// set Config.SampleRate to match and run the pipeline at the same rate.
-const defaultSampleRate = 8000
+const (
+	// defaultSampleRate is Exotel's default stream rate. Exotel also supports 16 kHz;
+	// set Config.SampleRate to match and run the pipeline at the same rate.
+	defaultSampleRate = 8000
+
+	// eventMedia is the Exotel message event carrying base64 PCM audio.
+	eventMedia = "media"
+)
 
 // Config configures the Exotel serializer.
 type Config struct {
@@ -71,7 +76,7 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 		return nil, err
 	}
 	switch m.Event {
-	case "media":
+	case eventMedia:
 		pcm, err := base64.StdEncoding.DecodeString(m.Media.Payload)
 		if err != nil {
 			return nil, err
@@ -99,7 +104,7 @@ func (s *Serializer) media(pcm []byte) ([]byte, error) {
 	if sid == "" {
 		return nil, nil //nolint:nilnil // stream not started yet; drop until "start" arrives
 	}
-	out := mediaOut{Event: "media", StreamSID: sid}
+	out := mediaOut{Event: eventMedia, StreamSID: sid}
 	out.Media.Payload = base64.StdEncoding.EncodeToString(pcm)
 	return json.Marshal(out)
 }

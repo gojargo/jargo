@@ -27,6 +27,9 @@ const (
 	sampleRate = 8000
 	hangupURL  = "https://api.telnyx.com/v2/calls/%s/actions/hangup"
 
+	// eventMedia is the Telnyx message event carrying base64 audio.
+	eventMedia = "media"
+
 	// EncodingPCMU selects G.711 μ-law; EncodingPCMA selects G.711 A-law. These
 	// are Telnyx's media_format.encoding values.
 	EncodingPCMU = "PCMU"
@@ -103,7 +106,7 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 		return nil, err
 	}
 	switch m.Event {
-	case "media":
+	case eventMedia:
 		payload, err := base64.StdEncoding.DecodeString(m.Media.Payload)
 		if err != nil {
 			return nil, err
@@ -132,7 +135,7 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 }
 
 func (s *Serializer) media(pcm []byte) ([]byte, error) {
-	out := mediaOut{Event: "media"}
+	out := mediaOut{Event: eventMedia}
 	out.Media.Payload = base64.StdEncoding.EncodeToString(encode(s.send, pcm))
 	return json.Marshal(out)
 }
