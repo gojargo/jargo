@@ -1,0 +1,15 @@
+# OSV-Scanner suppressions, honored by the OpenSSF Scorecard Vulnerabilities
+# check (.github/workflows/scorecard.yml). Each entry records why the finding
+# does not apply; delete one to re-surface it. Mirrors the matching entry in
+# .trivyignore.yaml so both scanners stay in agreement.
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+# golang.org/x/crypto/openpgp is unmaintained and "unsafe by design"; the
+# advisory has no fixed version because the package is frozen upstream. jargo
+# pulls golang.org/x/crypto in only indirectly (via Pion, LiveKit, and others)
+# and never imports the openpgp subpackage: `go mod why golang.org/x/crypto`
+# reports the main module does not need it, and `govulncheck ./...` confirms the
+# code does not call any vulnerable symbol. Nothing to upgrade to and nothing
+# reachable, so this is suppressed rather than fixed.
+reason = "openpgp is not imported (unreachable indirect dependency) and has no fixed version upstream"
