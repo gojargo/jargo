@@ -23,6 +23,7 @@ require (
 	github.com/pion/opus v0.1.1-0.20260706164138-4d863e517a7a
 	github.com/pion/webrtc/v4 v4.2.16
 	github.com/spf13/viper v1.21.0
+	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/yalue/onnxruntime_go v1.31.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.44.0
@@ -126,6 +127,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchtv/twirp v8.1.3+incompatible // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
