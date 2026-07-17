@@ -239,8 +239,8 @@ func (s *WakePhraseStart) refresh() {
 	})
 }
 
-// Reset re-requires the wake phrase for the next turn when single-activation.
-func (s *WakePhraseStart) Reset() {
+// TurnStarted re-requires the wake phrase for the next turn when single-activation.
+func (s *WakePhraseStart) TurnStarted() {
 	if s.single {
 		s.awake = false
 		if s.cancelTimer != nil {

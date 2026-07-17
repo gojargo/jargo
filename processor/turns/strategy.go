@@ -51,8 +51,10 @@ type StartStrategy interface {
 	// Process examines one frame; returning Stop short-circuits the start chain
 	// for that frame. It runs with the shared mutex held.
 	Process(f frames.Frame) ProcessFrameResult
-	// Reset clears per-turn state at the start of each turn.
-	Reset()
+	// TurnStarted readies per-turn state when a turn begins.
+	TurnStarted()
+	// TurnStopped clears per-turn state when a turn ends.
+	TurnStopped()
 	// Cleanup releases resources (timers).
 	Cleanup()
 	attach(env strategyEnv)
@@ -70,8 +72,11 @@ type StartStrategyBase struct {
 
 func (b *StartStrategyBase) attach(env strategyEnv) { b.env = env }
 
-// Reset is the default no-op.
-func (b *StartStrategyBase) Reset() {}
+// TurnStarted is the default no-op.
+func (b *StartStrategyBase) TurnStarted() {}
+
+// TurnStopped is the default no-op.
+func (b *StartStrategyBase) TurnStopped() {}
 
 // Cleanup is the default no-op.
 func (b *StartStrategyBase) Cleanup() {}
@@ -104,8 +109,11 @@ type StopStrategy interface {
 	// Stop strategies usually return Continue and signal via Trigger*. It runs
 	// with the shared mutex held.
 	Process(f frames.Frame) ProcessFrameResult
-	// Reset clears per-turn state.
-	Reset()
+	// TurnStarted readies per-turn state when a turn begins.
+	TurnStarted()
+	// TurnStopped clears per-turn state, including any buffered speech, when a
+	// turn ends.
+	TurnStopped()
 	// Cleanup releases resources (timers).
 	Cleanup()
 	attach(env strategyEnv)
@@ -120,8 +128,11 @@ type StopStrategyBase struct {
 
 func (b *StopStrategyBase) attach(env strategyEnv) { b.env = env }
 
-// Reset is the default no-op.
-func (b *StopStrategyBase) Reset() {}
+// TurnStarted is the default no-op.
+func (b *StopStrategyBase) TurnStarted() {}
+
+// TurnStopped is the default no-op.
+func (b *StopStrategyBase) TurnStopped() {}
 
 // Cleanup is the default no-op.
 func (b *StopStrategyBase) Cleanup() {}

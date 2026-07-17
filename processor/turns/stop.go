@@ -132,14 +132,22 @@ func (s *TurnAnalyzerStop) cancel() {
 	}
 }
 
-// Reset clears per-turn state.
-func (s *TurnAnalyzerStop) Reset() {
+// TurnStarted resets the bookkeeping but keeps the analyzer's buffered
+// pre-speech audio for the turn now beginning.
+func (s *TurnAnalyzerStop) TurnStarted() { s.resetState() }
+
+// TurnStopped resets the bookkeeping and clears the analyzer's buffered speech.
+func (s *TurnAnalyzerStop) TurnStopped() {
+	s.resetState()
+	s.analyzer.Clear()
+}
+
+func (s *TurnAnalyzerStop) resetState() {
 	s.cancel()
 	s.turnComplete = false
 	s.txFinalized = false
 	s.timeoutExpired = false
 	s.haveText = false
-	s.analyzer.Clear()
 }
 
 // Cleanup stops the timeout.
@@ -268,8 +276,11 @@ func (s *SpeechTimeoutStop) cancelSTTTimer() {
 	}
 }
 
-// Reset clears per-turn state.
-func (s *SpeechTimeoutStop) Reset() { s.reset() }
+// TurnStarted clears per-turn state.
+func (s *SpeechTimeoutStop) TurnStarted() { s.reset() }
+
+// TurnStopped clears per-turn state.
+func (s *SpeechTimeoutStop) TurnStopped() { s.reset() }
 
 // Cleanup stops the timers.
 func (s *SpeechTimeoutStop) Cleanup() { s.cancelTimers() }
@@ -348,8 +359,13 @@ func (s *ExternalStop) cancelT() {
 	}
 }
 
-// Reset clears per-turn state.
-func (s *ExternalStop) Reset() {
+// TurnStarted clears per-turn state.
+func (s *ExternalStop) TurnStarted() { s.reset() }
+
+// TurnStopped clears per-turn state.
+func (s *ExternalStop) TurnStopped() { s.reset() }
+
+func (s *ExternalStop) reset() {
 	s.cancelT()
 	s.haveText = false
 	s.seenInterim = false
@@ -395,5 +411,6 @@ func (d *deferredStop) attach(env strategyEnv) {
 }
 
 func (d *deferredStop) Process(f frames.Frame) ProcessFrameResult { return d.inner.Process(f) }
-func (d *deferredStop) Reset()                                    { d.inner.Reset() }
+func (d *deferredStop) TurnStarted()                              { d.inner.TurnStarted() }
+func (d *deferredStop) TurnStopped()                              { d.inner.TurnStopped() }
 func (d *deferredStop) Cleanup()                                  { d.inner.Cleanup() }

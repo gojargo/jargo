@@ -167,7 +167,7 @@ func (c *UserTurnController) onStartTriggered(params UserTurnStartedParams) {
 	}
 	c.userTurn = true
 	c.rearmWatchdog()
-	c.resetStrategies(true)
+	c.notifyTurnStarted()
 	if c.hooks.Started != nil {
 		c.hooks.Started(c.ctx, params)
 	}
@@ -192,20 +192,29 @@ func (c *UserTurnController) onStopTriggered(params UserTurnStoppedParams) {
 	}
 	c.userTurn = false
 	c.rearmWatchdog()
-	c.resetStrategies(false)
+	c.notifyTurnStopped()
 	if c.hooks.Stopped != nil {
 		c.hooks.Stopped(c.ctx, params)
 	}
 }
 
-func (c *UserTurnController) resetStrategies(includeStart bool) {
-	if includeStart {
-		for _, s := range c.strategies.Start {
-			s.Reset()
-		}
+// notifyTurnStarted readies every strategy for the turn now beginning.
+func (c *UserTurnController) notifyTurnStarted() {
+	for _, s := range c.strategies.Start {
+		s.TurnStarted()
 	}
 	for _, s := range c.strategies.Stop {
-		s.Reset()
+		s.TurnStarted()
+	}
+}
+
+// notifyTurnStopped tells every strategy the turn ended.
+func (c *UserTurnController) notifyTurnStopped() {
+	for _, s := range c.strategies.Start {
+		s.TurnStopped()
+	}
+	for _, s := range c.strategies.Stop {
+		s.TurnStopped()
 	}
 }
 

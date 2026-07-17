@@ -2,6 +2,7 @@ package turns_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -152,6 +153,44 @@ func TestTurnAnalyzerStop(t *testing.T) {
 	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
 	task.QueueFrame(finalTranscript("hello there"))
 	rec.expect(t, "stopped")
+
+	finish(t, task, done)
+}
+
+// countingTurn records how many times Clear is called.
+type countingTurn struct {
+	fakeTurn
+	clears atomic.Int64
+}
+
+func (c *countingTurn) Clear() { c.clears.Add(1) }
+
+// TestTurnAnalyzerClearedOnStopNotStart verifies the analyzer is cleared when a
+// turn ends but not when it begins.
+func TestTurnAnalyzerClearedOnStopNotStart(t *testing.T) {
+	analyzer := &countingTurn{}
+	p := turns.NewUserTurnProcessor(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: analyzer})},
+		},
+		StopTimeout: 2 * time.Second,
+	})
+	rec, task, done := runTurns(t, p)
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	rec.expect(t, "started")
+	rec.expect(t, "interruption")
+	if n := analyzer.clears.Load(); n != 0 {
+		t.Fatalf("analyzer cleared %d times on turn start, want 0", n)
+	}
+
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(finalTranscript("hello there"))
+	rec.expect(t, "stopped")
+	if n := analyzer.clears.Load(); n != 1 {
+		t.Fatalf("analyzer cleared %d times through turn stop, want 1", n)
+	}
 
 	finish(t, task, done)
 }
