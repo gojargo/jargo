@@ -122,7 +122,7 @@ func (s *stream) Send(audio []byte) error {
 }
 
 func (s *stream) sendAudio(pcm []float32) error {
-	b, err := msgpack.Marshal(map[string]any{"type": "Audio", "pcm": pcm})
+	b, err := msgpack.Marshal(map[string]any{msgTypeKey: "Audio", "pcm": pcm})
 	if err != nil {
 		return err
 	}

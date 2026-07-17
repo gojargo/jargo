@@ -87,8 +87,8 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 
 // send streams the text one word per Text message, then an Eos to flush.
 func (s *synthesizer) send(ctx context.Context, conn *websocket.Conn, text string) error {
-	for _, word := range strings.Fields(text) {
-		b, err := msgpack.Marshal(map[string]any{"type": "Text", "text": word})
+	for word := range strings.FieldsSeq(text) {
+		b, err := msgpack.Marshal(map[string]any{msgTypeKey: "Text", "text": word})
 		if err != nil {
 			return err
 		}
@@ -96,7 +96,7 @@ func (s *synthesizer) send(ctx context.Context, conn *websocket.Conn, text strin
 			return err
 		}
 	}
-	b, err := msgpack.Marshal(map[string]any{"type": "Eos"})
+	b, err := msgpack.Marshal(map[string]any{msgTypeKey: "Eos"})
 	if err != nil {
 		return err
 	}

@@ -97,10 +97,15 @@ linters:
       analyze-types: true
     cyclop:
       max-complexity: 15
+    goconst:
+      # Repeated literals in tests are fine (see the _test.go exclusion below);
+      # don't let test occurrences force a production constant.
+      ignore-tests: true
     gosec:
       excludes:
         - G115 # int16<->uint16 PCM conversions are intentional reinterpretation
         - G114 # the example servers use ListenAndServe without timeouts (demos)
+        - G117 # provider Config structs name API-key/secret fields by design; they are app-supplied inputs, never serialized
     tagliatelle:
       case:
         rules:
