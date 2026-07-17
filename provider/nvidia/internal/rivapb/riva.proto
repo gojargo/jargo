@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+// Minimal subset of the NVIDIA Riva speech-recognition gRPC contract, limited to
+// the messages the streaming ASR client uses. Field numbers, the package name,
+// and the service/method names match the upstream Riva schema exactly so the
+// wire format and the gRPC method path are compatible with any Riva/NIM server
+// (hosted NVCF or a locally deployed model such as parakeet). Regenerate with:
+//
+//	go generate ./provider/nvidia/internal/rivapb
+package nvidia.riva.asr;
+
+option go_package = "github.com/gojargo/jargo/provider/nvidia/internal/rivapb;rivapb";
+
+// RivaSpeechRecognition is the Riva ASR service. Only the streaming RPC is
+// declared here; batch Recognize and the config RPC are omitted.
+service RivaSpeechRecognition {
+  // StreamingRecognize streams audio to the server and receives interim and
+  // final transcripts. The first request on the stream must carry a
+  // StreamingRecognitionConfig; every later request carries audio_content.
+  rpc StreamingRecognize(stream StreamingRecognizeRequest)
+      returns (stream StreamingRecognizeResponse) {}
+}
+
+// AudioEncoding of the raw audio bytes sent to the server.
+enum AudioEncoding {
+  ENCODING_UNSPECIFIED = 0;
+  LINEAR_PCM = 1;
+  FLAC = 2;
+  MULAW = 3;
+  OGGOPUS = 4;
+  ALAW = 20;
+}
+
+// StreamingRecognizeRequest is either the opening config or a chunk of audio.
+message StreamingRecognizeRequest {
+  oneof streaming_request {
+    StreamingRecognitionConfig streaming_config = 1;
+    bytes audio_content = 2;
+  }
+}
+
+// StreamingRecognitionConfig configures a streaming session.
+message StreamingRecognitionConfig {
+  RecognitionConfig config = 1;
+  // interim_results asks the server to emit tentative (is_final=false) results.
+  bool interim_results = 2;
+}
+
+// RecognitionConfig tells the recognizer how to process the audio.
+message RecognitionConfig {
+  AudioEncoding encoding = 1;
+  int32 sample_rate_hertz = 2;
+  string language_code = 3;
+  int32 max_alternatives = 4;
+  bool profanity_filter = 5;
+  int32 audio_channel_count = 7;
+  bool enable_word_time_offsets = 8;
+  bool enable_automatic_punctuation = 11;
+  // model selects the served model by name; empty lets the server choose.
+  string model = 13;
+  bool verbatim_transcripts = 14;
+  map<string, string> custom_configuration = 24;
+  optional EndpointingConfig endpointing_config = 25;
+}
+
+// EndpointingConfig tunes the server-side start/end-of-utterance detector. Every
+// field is optional; unset fields keep the server's built-in defaults.
+message EndpointingConfig {
+  optional int32 start_history = 1;
+  optional float start_threshold = 2;
+  optional int32 stop_history = 3;
+  optional float stop_threshold = 4;
+  optional int32 stop_history_eou = 5;
+  optional float stop_threshold_eou = 6;
+}
+
+// StreamingRecognizeResponse carries the latest transcript(s).
+message StreamingRecognizeResponse {
+  repeated StreamingRecognitionResult results = 1;
+}
+
+// StreamingRecognitionResult is one transcript hypothesis set for a portion of
+// audio. is_final marks the final result for that portion (end of utterance
+// when server-side endpointing is enabled).
+message StreamingRecognitionResult {
+  repeated SpeechRecognitionAlternative alternatives = 1;
+  bool is_final = 2;
+  float stability = 3;
+  int32 channel_tag = 5;
+  float audio_processed = 6;
+}
+
+// SpeechRecognitionAlternative is a single transcript hypothesis.
+message SpeechRecognitionAlternative {
+  string transcript = 1;
+  float confidence = 2;
+  repeated string language_code = 4;
+}

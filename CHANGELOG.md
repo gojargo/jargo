@@ -14,6 +14,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **NVIDIA Riva streaming STT** (`provider/nvidia`): `NewSTT` adds a gRPC
+  streaming speech-to-text service that talks to NVIDIA's hosted ASR endpoint
+  or a locally deployed Riva/NIM model (such as parakeet), selected through
+  `Server`/`UseSSL` and the `APIKey`/`FunctionID` auth fields. Emits interim and
+  finalized `TranscriptionFrame`s, with Riva's server-side endpointing driving
+  the end-of-turn signal, and exposes optional endpointing tuning. The generated
+  Riva gRPC client lives in `provider/nvidia/internal/rivapb`.
 - **Telephony serializers for Plivo, Telnyx, and Exotel.** Three new
   `wsserver.Serializer` implementations alongside the existing Twilio one:
   Plivo (`transport/wsserver/plivo`, μ-law with REST auto-hang-up), Telnyx

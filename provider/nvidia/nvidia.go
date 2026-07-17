@@ -1,4 +1,7 @@
-// Package nvidia provides NVIDIA NIM's OpenAI-compatible LLM service.
+// Package nvidia provides NVIDIA services: an NVIDIA NIM OpenAI-compatible LLM
+// (NewLLM) and a Riva streaming speech-to-text service (NewSTT) that talks to
+// NVIDIA's hosted ASR endpoint or a locally deployed Riva/NIM model such as
+// parakeet.
 package nvidia
 
 import "github.com/gojargo/jargo/provider/openai"
