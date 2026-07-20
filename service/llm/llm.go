@@ -8,9 +8,9 @@
 // one place.
 //
 // A service that also supports tool calling implements ToolGenerator. When the
-// context carries tools, the base runs a tool loop: it streams text, dispatches
-// each requested call to a registered handler, emits the function-call frames,
-// and re-generates until the model produces a final answer.
+// context carries tools, the base streams text, dispatches each requested call to
+// a registered handler, and emits the function-call frames; the assistant
+// aggregator commits the results and re-triggers generation for the model's reply.
 package llm
 
 import (
@@ -230,12 +230,11 @@ type sink struct {
 func (s sink) Text(t string) error          { return s.text(t) }
 func (s sink) Tool(c frames.ToolCall) error { return s.tool(c) }
 
-// runWithTools runs the tool loop: stream text, dispatch any requested calls to
-// their handlers, emit the function-call frames, and re-generate until the model
-// answers without calling tools. The base writes nothing to the context — the
-// assistant aggregator records the tool turn from the emitted frames, keeping
-// the context's single writer. An interruption cancels ctx; the loop then stops
-// without emitting a partial tool turn.
+// runWithTools runs one tool-capable inference: it streams text and, when the
+// model requests tools, dispatches each call to its handler and emits the
+// function-call frames. It does not loop — the assistant aggregator commits the
+// results to the context and re-triggers generation, so the next inference reads a
+// context whose tool calls are balanced. The base writes nothing to the context.
 func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg ToolGenerator) error {
 	ctx, span := b.startSpan(ctx)
 	defer span.End()
@@ -246,78 +245,61 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	start := time.Now()
 	var ttfb time.Duration
 	hadTTFB := false
-	for {
-		var preamble strings.Builder
-		var calls []frames.ToolCall
-		s := sink{
-			text: func(t string) error {
-				if t == "" {
-					return nil
-				}
-				if !hadTTFB {
-					hadTTFB = true
-					ttfb = time.Since(start)
-					span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
-				}
-				preamble.WriteString(t)
-				return b.PushFrame(ctx, frames.NewLLMTextFrame(t), processor.Downstream)
-			},
-			tool: func(c frames.ToolCall) error {
-				calls = append(calls, c)
+	var preamble strings.Builder
+	var calls []frames.ToolCall
+	s := sink{
+		text: func(t string) error {
+			if t == "" {
 				return nil
-			},
-		}
-		if err := tg.GenerateWithTools(ctx, convo, s); err != nil && ctx.Err() == nil {
-			b.PushError(ctx, "llm generation failed", err, false)
-			break
-		}
-		if ctx.Err() != nil {
-			break
-		}
-		if len(calls) == 0 {
-			break // final spoken answer; the assistant aggregator commits it
-		}
+			}
+			if !hadTTFB {
+				hadTTFB = true
+				ttfb = time.Since(start)
+				span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
+			}
+			preamble.WriteString(t)
+			return b.PushFrame(ctx, frames.NewLLMTextFrame(t), processor.Downstream)
+		},
+		tool: func(c frames.ToolCall) error {
+			calls = append(calls, c)
+			return nil
+		},
+	}
+	if err := tg.GenerateWithTools(ctx, convo, s); err != nil && ctx.Err() == nil {
+		b.PushError(ctx, "llm generation failed", err, false)
+	} else if ctx.Err() == nil && len(calls) > 0 {
 		started := frames.NewFunctionCallsStartedFrame(preamble.String(), calls)
 		if err := b.PushFrame(ctx, started, processor.Downstream); err != nil {
 			return err
 		}
-		stop, err := b.runTools(ctx, calls)
-		if err != nil {
+		if err := b.runTools(ctx, calls); err != nil {
 			return err
 		}
-		if ctx.Err() != nil || stop {
-			break
-		}
-		// Loop: re-read the context (which a handler may have changed) and
-		// generate the model's response to the tool results.
 	}
 	b.emitTiming(ctx, ttfb, hadTTFB, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
 // runTools executes each tool call in turn, emitting an in-progress frame and a
-// result frame for each, and reports whether a handler asked to stop the turn
-// (see ErrStopTurn). A canceled ctx stops the loop and is returned.
-func (b *Base) runTools(ctx context.Context, calls []frames.ToolCall) (bool, error) {
-	stop := false
+// result frame for each. A handler that returns ErrStopTurn marks its result so
+// the aggregator does not re-trigger generation. A canceled ctx stops the loop.
+func (b *Base) runTools(ctx context.Context, calls []frames.ToolCall) error {
 	for _, c := range calls {
 		if ctx.Err() != nil {
-			return stop, ctx.Err()
+			return ctx.Err()
 		}
 		inProgress := frames.NewFunctionCallInProgressFrame(c.ID, c.Name)
 		if err := b.PushFrame(ctx, inProgress, processor.Downstream); err != nil {
-			return stop, err
+			return err
 		}
 		result, isErr, stopTurn := b.invoke(ctx, c)
-		if stopTurn {
-			stop = true
-		}
 		resultFrame := frames.NewFunctionCallResultFrame(c.ID, c.Name, result, isErr)
+		resultFrame.RunLLM = !stopTurn
 		if err := b.PushFrame(ctx, resultFrame, processor.Downstream); err != nil {
-			return stop, err
+			return err
 		}
 	}
-	return stop, nil
+	return nil
 }
 
 // invoke dispatches a tool call to its handler, returning the result content,
