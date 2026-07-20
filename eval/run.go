@@ -23,14 +23,22 @@ type Bot func(in, out processor.Processor) *pipeline.Task
 // Run plays the scenario at path against buildBot, hosted in-process over a
 // loopback WebSocket, and reports every unmet expectation through t. The bot's
 // real LLM (and STT/TTS, if wired) run; each user turn is injected as RTVI
-// send-text, so audio processors sit idle.
+// send-text, so audio processors sit idle. Scenarios that use `judge:` need a
+// judge — use RunWithJudge.
 func Run(t *testing.T, path string, buildBot Bot) {
+	t.Helper()
+	RunWithJudge(t, path, buildBot, nil)
+}
+
+// RunWithJudge is Run with an LLM judge supplied for the scenario's `judge:`
+// assertions (see NewLLMJudge). Pass nil when no scenario uses `judge:`.
+func RunWithJudge(t *testing.T, path string, buildBot Bot, judge Judge) {
 	t.Helper()
 	scenario, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Host(context.Background(), scenario, buildBot, nil)
+	res, err := Host(context.Background(), scenario, buildBot, judge)
 	if err != nil {
 		t.Fatalf("eval: %v", err)
 	}

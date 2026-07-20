@@ -22,8 +22,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the command line against a running bot with `jargo eval run <scenario.yaml>
   --bot-url ws://…`. This first iteration covers text-mode scenarios — each user
   turn is delivered as RTVI `send-text`, and expectations match `llm_started`,
-  `llm_response` (`text_contains` or an optional LLM `judge`), and `function_call`
-  events in order, each within a `within_ms` latency budget.
+  `llm_response` (`text_contains` or an LLM `judge`), and `function_call`
+  events in order, each within a `within_ms` latency budget. A `judge:` criterion
+  is graded by an LLM judge (`eval.NewLLMJudge`, backed by any jargo LLM service;
+  `jargo eval run --judge-model …` for the CLI), with verdicts cached per
+  (criterion, reply).
 - **RTVI text input and richer event surface** (`processor/rtvi`): the processor
   now handles an inbound `send-text` message (appending a user turn and running
   the LLM), and emits `bot-llm-started`/`bot-llm-stopped`,

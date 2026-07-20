@@ -88,6 +88,15 @@ turns:
 	}
 }
 
+func TestBuildJudge(t *testing.T) {
+	if buildJudge("", "", "") != nil {
+		t.Fatal("no --judge-model should yield no judge")
+	}
+	if buildJudge("gpt-4o-mini", "", "") == nil {
+		t.Fatal("a --judge-model should yield a judge")
+	}
+}
+
 func TestEvalRunRequiresBotURL(t *testing.T) {
 	path := writeScenario(t, "name: x\nturns:\n  - user: hi\n    expect:\n      - event: llm_started\n")
 
