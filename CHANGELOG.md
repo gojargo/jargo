@@ -46,6 +46,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   PipeWire (pulse-compatible) server. See `examples/localaudio` for a no-keys
   microphone-to-speaker echo.
 
+### Fixed
+
+- **Anthropic/Bedrock assistant-prefill constraint** (`provider/anthropic`): the
+  Claude 4.6-generation models (Opus 4.8, Sonnet 4.6, …) reject a request whose
+  message list ends with an assistant message. When the configured model does not
+  support prefill, the service now appends a minimal `.` user message to such
+  requests at send time; the stored `LLMContext` is left untouched. Prefill
+  support is detected from a frozen allow-list of the models known to still
+  accept it, so every current and future no-prefill model is covered by default.
+  Bedrock is fixed by the same change, since it runs on the Anthropic service.
+
 ## [0.0.4] - 2026-07-12
 
 ### Added

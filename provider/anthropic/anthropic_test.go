@@ -31,6 +31,69 @@ func TestToToolsMapsSchema(t *testing.T) {
 	}
 }
 
+func TestSupportsPrefill(t *testing.T) {
+	cases := map[string]bool{
+		// Direct model ids that still support prefill.
+		"claude-haiku-4-5":           true,
+		"claude-haiku-4-5-20251001":  true,
+		"claude-sonnet-4-5":          true,
+		"claude-3-5-sonnet-20241022": true,
+		"claude-opus-4-1":            true,
+		// Direct ids that dropped prefill.
+		"claude-opus-4-8":   false,
+		"claude-sonnet-4-6": false,
+		// Bedrock ids (region-prefixed) are matched as substrings.
+		"us.anthropic.claude-3-5-haiku-20241022-v1:0": true,
+		"us.anthropic.claude-sonnet-4-6-v1:0":         false,
+		"us.anthropic.claude-opus-4-8-v1:0":           false,
+		// Non-Claude models are unaffected (nothing is injected).
+		"amazon.titan-text-express-v1": true,
+		"":                             true,
+	}
+	for model, want := range cases {
+		if got := supportsPrefill(model); got != want {
+			t.Errorf("supportsPrefill(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
+func TestEnsureLastMessageIsUser(t *testing.T) {
+	user := sdk.NewUserMessage(sdk.NewTextBlock("hi"))
+	assistant := sdk.NewAssistantMessage(sdk.NewTextBlock("hello"))
+
+	got := ensureLastMessageIsUser([]sdk.MessageParam{user, assistant})
+	if len(got) != 3 || got[2].Role != sdk.MessageParamRoleUser {
+		t.Fatalf("ending on assistant should append a user message; got %d messages", len(got))
+	}
+
+	got = ensureLastMessageIsUser([]sdk.MessageParam{assistant, user})
+	if len(got) != 2 {
+		t.Fatalf("ending on user should be unchanged; got %d messages", len(got))
+	}
+
+	if got := ensureLastMessageIsUser(nil); len(got) != 0 {
+		t.Fatalf("empty list should stay empty; got %d messages", len(got))
+	}
+}
+
+func TestNewParamsPrefillFixup(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	convo.AddUserMessage("hi")
+	convo.AddAssistantMessage("hello") // context ends on an assistant message
+
+	// A no-prefill model gets a trailing user message injected.
+	noPrefill := NewLLM(Config{Model: "claude-opus-4-8"}).newParams(convo).Messages
+	if n := len(noPrefill); n != 3 || noPrefill[n-1].Role != sdk.MessageParamRoleUser {
+		t.Fatalf("no-prefill model: want 3 messages ending in a user turn, got %d", n)
+	}
+
+	// A prefill-supported model keeps the assistant message last.
+	prefill := NewLLM(Config{Model: "claude-haiku-4-5"}).newParams(convo).Messages
+	if n := len(prefill); n != 2 || prefill[n-1].Role != sdk.MessageParamRoleAssistant {
+		t.Fatalf("prefill model: want the assistant message to stay last, got %d messages", n)
+	}
+}
+
 func TestNewParamsAppliesSampling(t *testing.T) {
 	temp, topP := 0.3, 0.9
 	topK := int64(40)
