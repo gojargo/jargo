@@ -7,6 +7,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -132,10 +133,16 @@ func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *
 // token cap, the converted conversation, sampling controls and the cached
 // system prompt.
 func (s *Service) newParams(convo *frames.LLMContext) sdk.MessageNewParams {
+	messages := toMessages(convo.Messages())
+	// Models without assistant-prefill support reject a request whose message
+	// list ends with an assistant message; give them a trailing user turn.
+	if !supportsPrefill(s.model) {
+		messages = ensureLastMessageIsUser(messages)
+	}
 	params := sdk.MessageNewParams{
 		Model:       s.model,
 		MaxTokens:   s.maxTokens,
-		Messages:    toMessages(convo.Messages()),
+		Messages:    messages,
 		Temperature: s.temperature,
 		TopP:        s.topP,
 		TopK:        s.topK,
@@ -267,6 +274,51 @@ func toTools(tools []frames.Tool) []sdk.ToolUnionParam {
 		out = append(out, sdk.ToolUnionParam{OfTool: tool})
 	}
 	return out
+}
+
+// prefillSupportedPatterns lists the Claude models that still accept a request
+// whose message list ends with an assistant message (assistant prefill).
+// Anthropic dropped prefill support in the 4.6-generation models, so this is a
+// frozen legacy set; any Claude model not matching it is assumed to reject
+// prefill. Patterns are matched as substrings so Bedrock ids like
+// "us.anthropic.claude-sonnet-4-6-v1:0" are handled alongside direct ids.
+//
+//nolint:gochecknoglobals // fixed lookup table
+var prefillSupportedPatterns = []string{
+	"claude-2",
+	"claude-instant",
+	"claude-3",
+	"claude-opus-4-0",
+	"claude-opus-4-1",
+	"claude-sonnet-4-0",
+	"claude-sonnet-4-5",
+	"claude-haiku-4-5",
+}
+
+// supportsPrefill reports whether model accepts an assistant-prefilled request.
+// Non-Claude models are unaffected and reported as supporting it (so nothing is
+// injected); a Claude model is supported only when it matches the frozen legacy
+// set above.
+func supportsPrefill(model string) bool {
+	if !strings.Contains(model, "claude") {
+		return true
+	}
+	for _, p := range prefillSupportedPatterns {
+		if strings.Contains(model, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureLastMessageIsUser appends a minimal user message when the list ends with
+// an assistant message, so a model without prefill support accepts the request.
+// The "." is a language-neutral no-op user turn; the stored context is untouched.
+func ensureLastMessageIsUser(msgs []sdk.MessageParam) []sdk.MessageParam {
+	if n := len(msgs); n > 0 && msgs[n-1].Role == sdk.MessageParamRoleAssistant {
+		return append(msgs, sdk.NewUserMessage(sdk.NewTextBlock(".")))
+	}
+	return msgs
 }
 
 // toMessages converts the conversation into Anthropic message params. Tool turns
