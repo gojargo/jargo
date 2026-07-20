@@ -20,18 +20,25 @@ const (
 
 // Message types exchanged over the data channel.
 const (
-	TypeClientReady         = "client-ready"
-	TypeBotReady            = "bot-ready"
-	TypeError               = "error"
-	TypeUserTranscription   = "user-transcription"
-	TypeBotTranscription    = "bot-transcription"
-	TypeBotTTSText          = "bot-tts-text"
-	TypeBotLLMText          = "bot-llm-text"
-	TypeUserStartedSpeaking = "user-started-speaking"
-	TypeUserStoppedSpeaking = "user-stopped-speaking"
-	TypeBotStartedSpeaking  = "bot-started-speaking"
-	TypeBotStoppedSpeaking  = "bot-stopped-speaking"
-	TypeMetrics             = "metrics"
+	TypeClientReady           = "client-ready"
+	TypeSendText              = "send-text"
+	TypeBotReady              = "bot-ready"
+	TypeError                 = "error"
+	TypeUserTranscription     = "user-transcription"
+	TypeBotTranscription      = "bot-transcription"
+	TypeBotTTSText            = "bot-tts-text"
+	TypeBotLLMText            = "bot-llm-text"
+	TypeUserStartedSpeaking   = "user-started-speaking"
+	TypeUserStoppedSpeaking   = "user-stopped-speaking"
+	TypeBotStartedSpeaking    = "bot-started-speaking"
+	TypeBotStoppedSpeaking    = "bot-stopped-speaking"
+	TypeBotLLMStarted         = "bot-llm-started"
+	TypeBotLLMStopped         = "bot-llm-stopped"
+	TypeBotTTSStarted         = "bot-tts-started"
+	TypeBotTTSStopped         = "bot-tts-stopped"
+	TypeLLMFunctionCall       = "llm-function-call-in-progress"
+	TypeLLMFunctionCallResult = "llm-function-call-result"
+	TypeMetrics               = "metrics"
 )
 
 // Message is the RTVI message envelope. Outgoing event messages omit id; bot-ready
@@ -62,6 +69,33 @@ func ParseIncoming(raw []byte) (Incoming, error) {
 	var m Incoming
 	err := json.Unmarshal(raw, &m)
 	return m, err
+}
+
+// SendTextOptions controls how the pipeline processes a send-text message.
+// Both fields default to true when absent, matching the RTVI client SDKs.
+type SendTextOptions struct {
+	RunImmediately *bool `json:"run_immediately,omitempty"`
+	AudioResponse  *bool `json:"audio_response,omitempty"`
+}
+
+// SendTextData is the payload of a send-text message: user text to inject into
+// the conversation, with options controlling whether the LLM runs immediately.
+type SendTextData struct {
+	Content string           `json:"content"`
+	Options *SendTextOptions `json:"options,omitempty"`
+}
+
+// RunImmediately reports whether the LLM should run as soon as the text is
+// appended. Absent options (or an absent flag) default to true.
+func (d SendTextData) RunImmediately() bool {
+	return d.Options == nil || d.Options.RunImmediately == nil || *d.Options.RunImmediately
+}
+
+// ParseSendTextData decodes the data payload of a send-text message.
+func ParseSendTextData(raw json.RawMessage) (SendTextData, error) {
+	var d SendTextData
+	err := json.Unmarshal(raw, &d)
+	return d, err
 }
 
 // BotReadyData is the payload of a bot-ready message.
@@ -104,6 +138,39 @@ func BotTTSText(text string) Message {
 // BotLLMText builds a bot-llm-text message.
 func BotLLMText(text string) Message {
 	return newMessage(TypeBotLLMText, "", TextData{Text: text})
+}
+
+// LLMFunctionCallData is the payload of a llm-function-call-in-progress message.
+// Arguments are intentionally omitted: the call name and id are enough for a
+// client to surface an "in progress" indication without exposing argument
+// values.
+type LLMFunctionCallData struct {
+	FunctionName string `json:"function_name"`
+	ToolCallID   string `json:"tool_call_id"`
+}
+
+// LLMFunctionCall builds a llm-function-call-in-progress message.
+func LLMFunctionCall(name, toolCallID string) Message {
+	return newMessage(TypeLLMFunctionCall, "", LLMFunctionCallData{
+		FunctionName: name,
+		ToolCallID:   toolCallID,
+	})
+}
+
+// LLMFunctionCallResultData is the payload of a llm-function-call-result message.
+type LLMFunctionCallResultData struct {
+	FunctionName string `json:"function_name"`
+	ToolCallID   string `json:"tool_call_id"`
+	Result       string `json:"result"`
+}
+
+// LLMFunctionCallResult builds a llm-function-call-result message.
+func LLMFunctionCallResult(name, toolCallID, result string) Message {
+	return newMessage(TypeLLMFunctionCallResult, "", LLMFunctionCallResultData{
+		FunctionName: name,
+		ToolCallID:   toolCallID,
+		Result:       result,
+	})
 }
 
 // UserTranscriptionData is the payload of a user-transcription message.

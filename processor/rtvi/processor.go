@@ -34,34 +34,71 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 		return err
 	}
 
-	switch fr := f.(type) {
-	case *frames.InputTransportMessageFrame:
-		// Client messages are consumed here, not forwarded downstream.
+	// Client messages are consumed here, not forwarded downstream.
+	if fr, ok := f.(*frames.InputTransportMessageFrame); ok {
 		return p.handleIncoming(ctx, fr)
+	}
+	if msg, ok := messageFor(f); ok {
+		return p.emitAndForward(ctx, f, dir, msg)
+	}
+	return p.PushFrame(ctx, f, dir)
+}
+
+// messageFor maps a pipeline frame to the RTVI server message it should emit,
+// reporting false for frames that produce no message. The mapping is split into
+// user- and bot-originated frames to keep each dispatch small.
+func messageFor(f frames.Frame) (Message, bool) {
+	if msg, ok := userMessageFor(f); ok {
+		return msg, true
+	}
+	return botMessageFor(f)
+}
+
+// userMessageFor maps user- and system-originated frames.
+func userMessageFor(f frames.Frame) (Message, bool) {
+	switch fr := f.(type) {
 	case *frames.TranscriptionFrame:
-		return p.emitAndForward(ctx, f, dir,
-			UserTranscription(fr.Text, fr.UserID, fr.Timestamp, true))
+		return UserTranscription(fr.Text, fr.UserID, fr.Timestamp, true), true
 	case *frames.InterimTranscriptionFrame:
-		return p.emitAndForward(ctx, f, dir,
-			UserTranscription(fr.Text, fr.UserID, fr.Timestamp, false))
+		return UserTranscription(fr.Text, fr.UserID, fr.Timestamp, false), true
 	case *frames.UserStartedSpeakingFrame:
-		return p.emitAndForward(ctx, f, dir, event(TypeUserStartedSpeaking))
+		return event(TypeUserStartedSpeaking), true
 	case *frames.UserStoppedSpeakingFrame:
-		return p.emitAndForward(ctx, f, dir, event(TypeUserStoppedSpeaking))
-	case *frames.BotStartedSpeakingFrame:
-		return p.emitAndForward(ctx, f, dir, event(TypeBotStartedSpeaking))
-	case *frames.BotStoppedSpeakingFrame:
-		return p.emitAndForward(ctx, f, dir, event(TypeBotStoppedSpeaking))
-	case *frames.LLMTextFrame:
-		return p.emitAndForward(ctx, f, dir, BotLLMText(fr.Text))
-	case *frames.TTSSpeakFrame:
-		return p.emitAndForward(ctx, f, dir, BotTTSText(fr.Text))
+		return event(TypeUserStoppedSpeaking), true
 	case *frames.ErrorFrame:
-		return p.emitAndForward(ctx, f, dir, Error(fr.Error, fr.Fatal))
+		return Error(fr.Error, fr.Fatal), true
 	case *frames.MetricsFrame:
-		return p.emitAndForward(ctx, f, dir, metricsMessage(fr))
+		return metricsMessage(fr), true
 	default:
-		return p.PushFrame(ctx, f, dir)
+		return Message{}, false
+	}
+}
+
+// botMessageFor maps bot-originated frames (speaking, LLM, TTS, tool calls).
+func botMessageFor(f frames.Frame) (Message, bool) {
+	switch fr := f.(type) {
+	case *frames.BotStartedSpeakingFrame:
+		return event(TypeBotStartedSpeaking), true
+	case *frames.BotStoppedSpeakingFrame:
+		return event(TypeBotStoppedSpeaking), true
+	case *frames.LLMFullResponseStartFrame:
+		return event(TypeBotLLMStarted), true
+	case *frames.LLMFullResponseEndFrame:
+		return event(TypeBotLLMStopped), true
+	case *frames.LLMTextFrame:
+		return BotLLMText(fr.Text), true
+	case *frames.TTSStartedFrame:
+		return event(TypeBotTTSStarted), true
+	case *frames.TTSStoppedFrame:
+		return event(TypeBotTTSStopped), true
+	case *frames.TTSSpeakFrame:
+		return BotTTSText(fr.Text), true
+	case *frames.FunctionCallInProgressFrame:
+		return LLMFunctionCall(fr.ToolName, fr.ToolCallID), true
+	case *frames.FunctionCallResultFrame:
+		return LLMFunctionCallResult(fr.ToolName, fr.ToolCallID, fr.Result), true
+	default:
+		return Message{}, false
 	}
 }
 
@@ -105,10 +142,36 @@ func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransport
 	case TypeClientReady:
 		slog.Debug("RTVI client-ready", "id", in.ID)
 		return p.send(ctx, BotReady(in.ID))
+	case TypeSendText:
+		return p.handleSendText(ctx, in)
 	default:
 		slog.Debug("unhandled RTVI message", "type", in.Type)
 		return nil
 	}
+}
+
+// handleSendText injects a text user turn. The processor sits downstream of the
+// context aggregator, so the injected frames are pushed upstream to reach it:
+// the append adds the user message to the shared context, and — unless the
+// client opted out — the run makes the LLM respond immediately, bypassing the
+// VAD/turn-taking gating that governs spoken turns.
+func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
+	d, err := ParseSendTextData(in.Data)
+	if err != nil {
+		slog.Warn("invalid RTVI send-text", "err", err)
+		return nil
+	}
+	if d.Content == "" {
+		return nil
+	}
+	appendMsg := frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: d.Content}})
+	if err := p.PushFrame(ctx, appendMsg, processor.Upstream); err != nil {
+		return err
+	}
+	if d.RunImmediately() {
+		return p.PushFrame(ctx, frames.NewLLMRunFrame(), processor.Upstream)
+	}
+	return nil
 }
 
 // emitAndForward sends an RTVI message and forwards the originating frame.

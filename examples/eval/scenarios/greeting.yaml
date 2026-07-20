@@ -1,0 +1,11 @@
+name: greeting
+turns:
+  - user: "hello there"
+    expect:
+      - event: llm_started
+      - event: llm_response
+        text_contains: "how can I help"
+  - user: "I'd like a coffee"
+    expect:
+      - event: llm_response
+        text_contains: "what kind of coffee"

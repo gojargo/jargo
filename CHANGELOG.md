@@ -14,6 +14,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Behavioral eval harness** (`eval`) and a **`jargo` CLI** (`cmd/jargo`). The
+  harness drives a real bot over RTVI, plays scripted conversation turns from a
+  YAML scenario, and asserts on the semantic events the bot emits. Scenarios run
+  two ways off one core: in-process from a Go test with `eval.Run(t, path,
+  buildBot)` (the bot hosted on a loopback WebSocket via `eval.Handler`), or from
+  the command line against a running bot with `jargo eval run <scenario.yaml>
+  --bot-url ws://…`. This first iteration covers text-mode scenarios — each user
+  turn is delivered as RTVI `send-text`, and expectations match `llm_started`,
+  `llm_response` (`text_contains` or an LLM `judge`), and `function_call`
+  events in order, each within a `within_ms` latency budget. A `judge:` criterion
+  is graded by an LLM judge (`eval.NewLLMJudge`, backed by any jargo LLM service;
+  `jargo eval run --judge-model …` for the CLI), with verdicts cached per
+  (criterion, reply). **Audio mode** (`Options.UserTTS`) synthesizes each user
+  turn and streams it to the bot as microphone audio at real-time cadence, so the
+  bot's real VAD, turn detection and STT run — unlocking `user_started_speaking`,
+  `user_stopped_speaking` and `user_transcription` assertions. **`jargo eval
+  suite <manifest.yaml>`** runs many scenarios across bots concurrently and prints
+  an aggregate summary.
+- **RTVI text input and richer event surface** (`processor/rtvi`): the processor
+  now handles an inbound `send-text` message (appending a user turn and running
+  the LLM), and emits `bot-llm-started`/`bot-llm-stopped`,
+  `bot-tts-started`/`bot-tts-stopped`, `llm-function-call-in-progress`, and
+  `llm-function-call-result` server messages — so RTVI clients see the full
+  response lifecycle and tool calls.
+- **RTVI-over-WebSocket serializer** (`transport/wsserver/rtviws`): a
+  `wsserver.Serializer` that carries the RTVI control, event, and text channel —
+  plus inbound microphone audio (`raw-audio` → `InputAudioRawFrame`) — over a
+  plain WebSocket, so a client can drive a bot without WebRTC.
 - **NVIDIA Riva streaming STT** (`provider/nvidia`): `NewSTT` adds a gRPC
   streaming speech-to-text service that talks to NVIDIA's hosted ASR endpoint
   or a locally deployed Riva/NIM model (such as parakeet), selected through
