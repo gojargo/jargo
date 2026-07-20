@@ -26,7 +26,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   events in order, each within a `within_ms` latency budget. A `judge:` criterion
   is graded by an LLM judge (`eval.NewLLMJudge`, backed by any jargo LLM service;
   `jargo eval run --judge-model …` for the CLI), with verdicts cached per
-  (criterion, reply).
+  (criterion, reply). **Audio mode** (`Options.UserTTS`) synthesizes each user
+  turn and streams it to the bot as microphone audio at real-time cadence, so the
+  bot's real VAD, turn detection and STT run — unlocking `user_started_speaking`,
+  `user_stopped_speaking` and `user_transcription` assertions. **`jargo eval
+  suite <manifest.yaml>`** runs many scenarios across bots concurrently and prints
+  an aggregate summary.
 - **RTVI text input and richer event surface** (`processor/rtvi`): the processor
   now handles an inbound `send-text` message (appending a user turn and running
   the LLM), and emits `bot-llm-started`/`bot-llm-stopped`,
@@ -34,8 +39,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `llm-function-call-result` server messages — so RTVI clients see the full
   response lifecycle and tool calls.
 - **RTVI-over-WebSocket serializer** (`transport/wsserver/rtviws`): a
-  `wsserver.Serializer` that carries the RTVI control, event, and text channel
-  over a plain WebSocket, so a client can drive a bot without WebRTC.
+  `wsserver.Serializer` that carries the RTVI control, event, and text channel —
+  plus inbound microphone audio (`raw-audio` → `InputAudioRawFrame`) — over a
+  plain WebSocket, so a client can drive a bot without WebRTC.
 - **NVIDIA Riva streaming STT** (`provider/nvidia`): `NewSTT` adds a gRPC
   streaming speech-to-text service that talks to NVIDIA's hosted ASR endpoint
   or a locally deployed Riva/NIM model (such as parakeet), selected through

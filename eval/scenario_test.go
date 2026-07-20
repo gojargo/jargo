@@ -85,7 +85,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		},
 		"judge on wrong event": {
 			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - event: function_call\n        judge: nice\n",
-			want: "text_contains/judge are only valid",
+			want: "judge is only valid",
 		},
 	}
 	for name, tc := range cases {

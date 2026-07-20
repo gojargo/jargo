@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/service/tts"
 )
 
 // defaultTimeout is the latency budget for an expectation that sets no within_ms.
@@ -32,6 +33,7 @@ type session struct {
 	client   *client
 	scenario *Scenario
 	judge    Judge
+	userTTS  *tts.Base // non-nil in audio mode: synthesizes each user turn
 
 	// llmBuf accumulates bot-llm-text between bot-llm-started and bot-llm-stopped.
 	llmBuf strings.Builder
@@ -78,7 +80,11 @@ func (s *session) handshake(ctx context.Context) error {
 // Every expectation's budget is anchored at the send, so a stalled turn fails
 // within a single budget rather than one per expectation.
 func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failure, error) {
-	if err := s.client.send(ctx, sendText(turn.User)); err != nil {
+	if s.userTTS != nil {
+		if err := s.sendUserAudio(ctx, turn.User); err != nil {
+			return nil, err
+		}
+	} else if err := s.client.send(ctx, sendText(turn.User)); err != nil {
 		return nil, err
 	}
 	anchor := time.Now()
@@ -157,6 +163,16 @@ func (s *session) verify(ctx context.Context, exp Expectation, ev event) string 
 // ends).
 func (s *session) translate(in rtvi.Incoming) *event {
 	switch in.Type {
+	case rtvi.TypeUserStartedSpeaking:
+		return &event{kind: EventUserStartedSpeaking}
+	case rtvi.TypeUserStoppedSpeaking:
+		return &event{kind: EventUserStoppedSpeaking}
+	case rtvi.TypeUserTranscription:
+		var d rtvi.UserTranscriptionData
+		if json.Unmarshal(in.Data, &d) != nil || !d.Final {
+			return nil // only final transcriptions are turn-level events
+		}
+		return &event{kind: EventUserTranscription, text: d.Text}
 	case rtvi.TypeBotLLMStarted:
 		s.llmBuf.Reset()
 		return &event{kind: EventLLMStarted}

@@ -38,6 +38,14 @@ var (
 // Event names a scenario can assert on. These are the friendly names scenarios
 // use; the harness maps the bot's RTVI server messages onto them.
 const (
+	// EventUserStartedSpeaking fires when the bot's VAD detects the user's speech
+	// beginning (audio mode only).
+	EventUserStartedSpeaking = "user_started_speaking"
+	// EventUserStoppedSpeaking fires when the user's turn ends (audio mode only).
+	EventUserStoppedSpeaking = "user_stopped_speaking"
+	// EventUserTranscription carries the bot's STT transcription of the user's
+	// speech (audio mode only).
+	EventUserTranscription = "user_transcription"
 	// EventLLMStarted fires when the bot begins generating a response.
 	EventLLMStarted = "llm_started"
 	// EventLLMResponse carries the bot's LLM text, joined across the response.
@@ -46,13 +54,17 @@ const (
 	EventFunctionCall = "function_call"
 )
 
-// knownEvents is the set of event names a text-mode scenario may assert on.
+// knownEvents is the set of event names a scenario may assert on. The user_*
+// events only fire in audio mode (see Options.UserTTS).
 //
 //nolint:gochecknoglobals // fixed lookup table
 var knownEvents = map[string]bool{
-	EventLLMStarted:   true,
-	EventLLMResponse:  true,
-	EventFunctionCall: true,
+	EventUserStartedSpeaking: true,
+	EventUserStoppedSpeaking: true,
+	EventUserTranscription:   true,
+	EventLLMStarted:          true,
+	EventLLMResponse:         true,
+	EventFunctionCall:        true,
 }
 
 // Scenario is a scripted conversation and the events it should produce.
@@ -136,8 +148,11 @@ func (e Expectation) validate() error {
 	if e.Function != "" && e.Event != EventFunctionCall {
 		return fmt.Errorf("%w: function is only valid on a %s event", errFieldForEvent, EventFunctionCall)
 	}
-	if (e.TextContains != "" || e.Judge != "") && e.Event != EventLLMResponse {
-		return fmt.Errorf("%w: text_contains/judge are only valid on a %s event", errFieldForEvent, EventLLMResponse)
+	if e.Judge != "" && e.Event != EventLLMResponse {
+		return fmt.Errorf("%w: judge is only valid on a %s event", errFieldForEvent, EventLLMResponse)
+	}
+	if e.TextContains != "" && e.Event != EventLLMResponse && e.Event != EventUserTranscription {
+		return fmt.Errorf("%w: text_contains needs %s or %s", errFieldForEvent, EventLLMResponse, EventUserTranscription)
 	}
 	if e.WithinMS < 0 {
 		return errNegativeBudget

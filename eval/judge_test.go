@@ -80,7 +80,7 @@ turns:
 		t.Fatal(err)
 	}
 	judge := eval.NewLLMJudge(&fakeGen{reply: "PASS — it echoes the greeting"})
-	res, err := eval.Host(context.Background(), scenario, buildFakeBot, judge)
+	res, err := eval.Host(context.Background(), scenario, buildFakeBot, eval.Options{Judge: judge})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ turns:
         judge: "asks a clarifying question"
 `))
 	judge := eval.NewLLMJudge(&fakeGen{reply: "FAIL: it just echoes, no question"})
-	res, err := eval.Host(context.Background(), scenario, buildFakeBot, judge)
+	res, err := eval.Host(context.Background(), scenario, buildFakeBot, eval.Options{Judge: judge})
 	if err != nil {
 		t.Fatal(err)
 	}

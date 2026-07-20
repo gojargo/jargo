@@ -9,6 +9,7 @@ import (
 
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/rtviws"
@@ -20,25 +21,41 @@ import (
 // agnostic: the harness supplies a WebSocket transport's input and output.
 type Bot func(in, out processor.Processor) *pipeline.Task
 
-// Run plays the scenario at path against buildBot, hosted in-process over a
-// loopback WebSocket, and reports every unmet expectation through t. The bot's
-// real LLM (and STT/TTS, if wired) run; each user turn is injected as RTVI
-// send-text, so audio processors sit idle. Scenarios that use `judge:` need a
-// judge — use RunWithJudge.
-func Run(t *testing.T, path string, buildBot Bot) {
-	t.Helper()
-	RunWithJudge(t, path, buildBot, nil)
+// Options configures a scenario run.
+type Options struct {
+	// Judge grades `judge:` assertions; nil is fine when no scenario uses one.
+	Judge Judge
+	// UserTTS selects audio mode. When set, each user turn is synthesized with
+	// this TTS service and streamed to the bot as microphone audio (so the bot's
+	// real VAD, turn detection and STT run), instead of the text-mode send-text.
+	// Any jargo TTS service works, e.g. cartesia.NewTTS(...).
+	UserTTS *tts.Base
 }
 
-// RunWithJudge is Run with an LLM judge supplied for the scenario's `judge:`
-// assertions (see NewLLMJudge). Pass nil when no scenario uses `judge:`.
+// Run plays the scenario at path against buildBot, hosted in-process over a
+// loopback WebSocket, and reports every unmet expectation through t. Text mode:
+// each user turn is injected as RTVI send-text, so audio processors sit idle.
+// For an LLM judge or audio mode, use RunWith.
+func Run(t *testing.T, path string, buildBot Bot) {
+	t.Helper()
+	RunWith(t, path, buildBot, Options{})
+}
+
+// RunWithJudge is Run with an LLM judge for the scenario's `judge:` assertions
+// (see NewLLMJudge). Pass nil when no scenario uses `judge:`.
 func RunWithJudge(t *testing.T, path string, buildBot Bot, judge Judge) {
+	t.Helper()
+	RunWith(t, path, buildBot, Options{Judge: judge})
+}
+
+// RunWith is Run with explicit Options (a judge, audio mode, or both).
+func RunWith(t *testing.T, path string, buildBot Bot, opts Options) {
 	t.Helper()
 	scenario, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Host(context.Background(), scenario, buildBot, judge)
+	res, err := Host(context.Background(), scenario, buildBot, opts)
 	if err != nil {
 		t.Fatalf("eval: %v", err)
 	}
@@ -48,14 +65,13 @@ func RunWithJudge(t *testing.T, path string, buildBot Bot, judge Judge) {
 }
 
 // Host stands up buildBot on an in-process loopback WebSocket and plays scenario
-// against it, returning the result. judge may be nil when the scenario has no
-// `judge:` assertions. Run wraps this for the go-test path; callers that want
-// the Result directly (custom reporting, benchmarks) can use it.
-func Host(ctx context.Context, scenario *Scenario, buildBot Bot, judge Judge) (Result, error) {
+// against it, returning the result. Run wraps this for the go-test path; callers
+// that want the Result directly (custom reporting, benchmarks) can use it.
+func Host(ctx context.Context, scenario *Scenario, buildBot Bot, opts Options) (Result, error) {
 	srv := httptest.NewServer(Handler(buildBot))
 	defer srv.Close()
 
-	return runAgainst(ctx, scenario, wsURL(srv.URL), judge)
+	return runAgainst(ctx, scenario, wsURL(srv.URL), opts)
 }
 
 // Handler serves buildBot over RTVI on a plain WebSocket: it accepts one client
@@ -82,18 +98,18 @@ func Handler(buildBot Bot) http.Handler {
 // RunURL plays scenario against a bot already listening at botURL (a ws:// or
 // wss:// RTVI endpoint). It backs the command-line runner.
 func RunURL(ctx context.Context, scenario *Scenario, botURL string, judge Judge) (Result, error) {
-	return runAgainst(ctx, scenario, botURL, judge)
+	return runAgainst(ctx, scenario, botURL, Options{Judge: judge})
 }
 
 // runAgainst connects to a bot and plays the scenario.
-func runAgainst(ctx context.Context, scenario *Scenario, url string, judge Judge) (Result, error) {
+func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Options) (Result, error) {
 	c, err := dial(ctx, url)
 	if err != nil {
 		return Result{Scenario: scenario.Name}, err
 	}
 	defer c.close()
 
-	sess := &session{client: c, scenario: scenario, judge: judge}
+	sess := &session{client: c, scenario: scenario, judge: opts.Judge, userTTS: opts.UserTTS}
 	return sess.run(ctx)
 }
 

@@ -29,7 +29,9 @@ func dial(ctx context.Context, url string) (*client, error) {
 		return nil, fmt.Errorf("eval: dial %s: %w", url, err)
 	}
 	conn.SetReadLimit(readLimit)
-	c := &client{conn: conn, incoming: make(chan rtvi.Incoming, 64)}
+	// A generous buffer so events emitted while the harness is busy streaming a
+	// turn's audio (audio mode) are not dropped before matching reads them.
+	c := &client{conn: conn, incoming: make(chan rtvi.Incoming, 256)}
 	go c.readLoop(ctx)
 	return c, nil
 }

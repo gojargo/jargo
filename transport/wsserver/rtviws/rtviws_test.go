@@ -52,6 +52,23 @@ func TestDeserializeCopiesInput(t *testing.T) {
 	}
 }
 
+func TestDeserializeRawAudio(t *testing.T) {
+	pcm := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06}
+	raw, _ := json.Marshal(rtviws.RawAudio(pcm, 16000, 1))
+
+	f, err := rtviws.New().Deserialize(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	af, ok := f.(*frames.InputAudioRawFrame)
+	if !ok {
+		t.Fatalf("expected *InputAudioRawFrame, got %T", f)
+	}
+	if !bytes.Equal(af.Audio, pcm) || af.SampleRate != 16000 || af.NumChannels != 1 {
+		t.Fatalf("unexpected audio frame: audio=%v rate=%d ch=%d", af.Audio, af.SampleRate, af.NumChannels)
+	}
+}
+
 func TestDeserializeIgnoresNonRTVI(t *testing.T) {
 	cases := map[string][]byte{
 		"wrong label": []byte(`{"label":"other","type":"x"}`),

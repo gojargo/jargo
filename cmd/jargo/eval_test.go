@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -85,6 +86,42 @@ turns:
 	}
 	if !strings.Contains(out.String(), "PASS cli") {
 		t.Fatalf("expected PASS in output, got:\n%s", out.String())
+	}
+}
+
+func TestEvalSuiteAgainstBots(t *testing.T) {
+	srv := httptest.NewServer(eval.Handler(echoBot))
+	defer srv.Close()
+	ws := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "s.yaml"), []byte(`name: s
+turns:
+  - user: "ping"
+    expect:
+      - event: llm_response
+        text_contains: "echo: ping"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), fmt.Appendf(nil, `suite:
+  - bot_url: %s
+    scenarios: [s.yaml]
+`, ws), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"eval", "suite", filepath.Join(dir, "m.yaml")})
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("eval suite failed: %v\noutput:\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "1/1 scenarios passed") {
+		t.Fatalf("expected summary in output, got:\n%s", out.String())
 	}
 }
 

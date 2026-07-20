@@ -71,7 +71,7 @@ func host(t *testing.T, body string) eval.Result {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	res, err := eval.Host(ctx, scenario, buildFakeBot, nil)
+	res, err := eval.Host(ctx, scenario, buildFakeBot, eval.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
