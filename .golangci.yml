@@ -110,6 +110,7 @@ linters:
       case:
         rules:
           json: snake
+          yaml: snake
     gomodguard:
       blocked:
         modules:

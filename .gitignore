@@ -5,7 +5,8 @@
 *.so
 *.dylib
 
-# Built example binaries (from `go build ./examples/...`)
+# Built binaries (from `go build ./cmd/...` or `go build ./examples/...`)
+/jargo
 /echo
 /voicebot
 /twiliobot
