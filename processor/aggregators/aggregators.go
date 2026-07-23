@@ -230,6 +230,8 @@ type AssistantAggregator struct {
 	// have arrived and they can be written as one tool-result message.
 	pendingResults []frames.ToolResult
 	pendingIDs     map[string]bool
+	// suppressRun is set when a result asks not to re-run (a stopped turn).
+	suppressRun bool
 }
 
 func newAssistant(ctx *frames.LLMContext, sc *SummarizeConfig) *AssistantAggregator {
@@ -261,7 +263,9 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	case *frames.FunctionCallsStartedFrame:
 		a.handleFunctionCallsStarted(fr)
 	case *frames.FunctionCallResultFrame:
-		a.handleFunctionCallResult(fr)
+		if err := a.handleFunctionCallResult(ctx, fr); err != nil {
+			return err
+		}
 	case *frames.LLMFullResponseEndFrame:
 		a.commit()
 	case *frames.TTSSpeakFrame:
@@ -292,8 +296,11 @@ func (a *AssistantAggregator) handleFunctionCallsStarted(fr *frames.FunctionCall
 }
 
 // handleFunctionCallResult buffers a tool result and, once every call from the
-// assistant turn has one, writes them as a single tool-result message.
-func (a *AssistantAggregator) handleFunctionCallResult(fr *frames.FunctionCallResultFrame) {
+// assistant turn has one, writes them as a single tool-result message and
+// re-triggers generation — unless a result asked to stop the turn. Writing the
+// results before re-triggering keeps the tool calls balanced for the next
+// inference.
+func (a *AssistantAggregator) handleFunctionCallResult(ctx context.Context, fr *frames.FunctionCallResultFrame) error {
 	a.mu.Lock()
 	a.pendingResults = append(a.pendingResults, frames.ToolResult{
 		ID:      fr.ToolCallID,
@@ -301,16 +308,29 @@ func (a *AssistantAggregator) handleFunctionCallResult(fr *frames.FunctionCallRe
 		Content: fr.Result,
 		IsError: fr.IsError,
 	})
+	if !fr.RunLLM {
+		a.suppressRun = true
+	}
 	delete(a.pendingIDs, fr.ToolCallID)
 	var results []frames.ToolResult
-	if len(a.pendingIDs) == 0 {
+	complete := len(a.pendingIDs) == 0
+	if complete {
 		results = a.pendingResults
 		a.pendingResults = nil
 	}
+	runLLM := complete && !a.suppressRun
+	if complete {
+		a.suppressRun = false
+	}
 	a.mu.Unlock()
+
 	if results != nil {
 		a.context.AddToolResults(results)
 	}
+	if runLLM {
+		return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
+	}
+	return nil
 }
 
 // commit appends the aggregated assistant message to the context, if any, and
@@ -340,6 +360,7 @@ func (a *AssistantAggregator) commitInterrupted() {
 		results = append(results, frames.ToolResult{ID: id, Content: "interrupted", IsError: true})
 		delete(a.pendingIDs, id)
 	}
+	a.suppressRun = false
 	text := a.aggregation
 	a.aggregation = ""
 	a.started = false

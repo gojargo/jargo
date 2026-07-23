@@ -67,6 +67,9 @@ type FunctionCallResultFrame struct {
 	Result string
 	// IsError reports whether the tool failed.
 	IsError bool
+	// RunLLM reports whether generation should re-run after this result; a handler
+	// that stops the turn (ErrStopTurn) sets it false.
+	RunLLM bool
 }
 
 // NewFunctionCallResultFrame builds a FunctionCallResultFrame.
@@ -77,6 +80,7 @@ func NewFunctionCallResultFrame(toolCallID, name, result string, isError bool) *
 		ToolName:         name,
 		Result:           result,
 		IsError:          isError,
+		RunLLM:           true,
 	}
 }
 
