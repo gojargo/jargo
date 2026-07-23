@@ -210,7 +210,11 @@ func TestToolContinuationSeesToolResult(t *testing.T) {
 	})
 
 	convo := frames.NewLLMContext("be brief")
-	convo.SetTools([]frames.Tool{{Name: "get_weather", Description: "weather", Parameters: json.RawMessage(`{"type":"object"}`)}})
+	convo.SetTools([]frames.Tool{{
+		Name:        "get_weather",
+		Description: "weather",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+	}})
 	convo.AddUserMessage("weather?")
 
 	pair := aggregators.New(convo)
@@ -218,7 +222,8 @@ func TestToolContinuationSeesToolResult(t *testing.T) {
 	done := make(chan struct{}, 1)
 	ends := 0
 	var mu sync.Mutex
-	task := pipeline.NewTask(pipeline.New(svc, newDelayResults(50*time.Millisecond), pair.Assistant()), pipeline.TaskParams{
+	pipe := pipeline.New(svc, newDelayResults(50*time.Millisecond), pair.Assistant())
+	task := pipeline.NewTask(pipe, pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
 				mu.Lock()
