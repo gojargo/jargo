@@ -101,6 +101,8 @@ func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error
 		attribute.Int64("llm.tokens.input", u.PromptTokens),
 		attribute.Int64("llm.tokens.output", u.CompletionTokens),
 		attribute.Int64("llm.tokens.total", u.TotalTokens),
+		attribute.Int64("gen_ai.usage.input_tokens", u.PromptTokens),
+		attribute.Int64("gen_ai.usage.output_tokens", u.CompletionTokens),
 	)
 	metrics.RecordTokens(ctx, b.Name(), b.model, u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(b.Name())
@@ -139,6 +141,59 @@ func (b *Base) startSpan(ctx context.Context) (context.Context, trace.Span) {
 		span.SetAttributes(attribute.String("llm.model", b.model))
 	}
 	return ctx, span
+}
+
+// traceRequest tags the generation span with the gen_ai.* request attributes and
+// the serialized input messages, so a trace backend (e.g. Langfuse) renders the
+// prompt. Mirrors Pipecat's add_llm_span_attributes (input + gen_ai.request.*).
+func (b *Base) traceRequest(span trace.Span, convo *frames.LLMContext) {
+	span.SetAttributes(
+		attribute.String("gen_ai.operation.name", "chat"),
+		attribute.String("gen_ai.output.type", "text"),
+		attribute.Bool("stream", true),
+	)
+	if b.model != "" {
+		span.SetAttributes(attribute.String("gen_ai.request.model", b.model))
+	}
+	if in := traceMessages(convo); in != "" {
+		span.SetAttributes(attribute.String("input", in))
+	}
+}
+
+// traceOutput records the model's reply text as the span's output attribute.
+func traceOutput(span trace.Span, text string) {
+	if text != "" {
+		span.SetAttributes(attribute.String("output", text))
+	}
+}
+
+// traceMessages renders the context (system prompt plus conversation) as a JSON
+// array of role/content messages for the span's input attribute — the shape
+// Langfuse and the gen_ai convention read.
+func traceMessages(convo *frames.LLMContext) string {
+	type msg struct {
+		Role        string              `json:"role"`
+		Content     string              `json:"content,omitempty"`
+		ToolCalls   []frames.ToolCall   `json:"tool_calls,omitempty"`
+		ToolResults []frames.ToolResult `json:"tool_results,omitempty"`
+	}
+	var out []msg
+	if sys := convo.System(); sys != "" {
+		out = append(out, msg{Role: "system", Content: sys})
+	}
+	for _, m := range convo.Messages() {
+		out = append(out, msg{
+			Role:        string(m.Role),
+			Content:     m.Text,
+			ToolCalls:   m.ToolCalls,
+			ToolResults: m.ToolResults,
+		})
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // RegisterFunction registers a handler for the named tool. During a tool-capable
@@ -196,12 +251,14 @@ func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
 func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 	ctx, span := b.startSpan(ctx)
 	defer span.End()
+	b.traceRequest(span, convo)
 	if err := b.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
 		return err
 	}
 	start := time.Now()
 	var ttfb time.Duration
 	hadTTFB := false
+	var out strings.Builder
 	emit := func(text string) error {
 		if text == "" {
 			return nil
@@ -211,12 +268,14 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 			ttfb = time.Since(start)
 			span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
 		}
+		out.WriteString(text)
 		return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
 	}
 	if err := b.gen.Generate(ctx, convo, emit); err != nil && ctx.Err() == nil {
 		span.RecordError(err)
 		b.PushError(ctx, "llm generation failed", err, false)
 	}
+	traceOutput(span, out.String())
 	b.emitTiming(ctx, ttfb, hadTTFB, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
@@ -239,6 +298,7 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	ctx, span := b.startSpan(ctx)
 	defer span.End()
 	span.SetAttributes(attribute.Bool("llm.tools", true))
+	b.traceRequest(span, convo)
 	if err := b.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
 		return err
 	}
@@ -276,6 +336,7 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 			return err
 		}
 	}
+	traceOutput(span, preamble.String())
 	b.emitTiming(ctx, ttfb, hadTTFB, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
