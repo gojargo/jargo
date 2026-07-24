@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,5 +69,18 @@ func TestGenerationEmitsSpan(t *testing.T) {
 	}
 	if attrs["llm.service"] == "" {
 		t.Fatalf("missing llm.service attribute (attrs: %v)", attrs)
+	}
+	// gen_ai.* + input/output so a backend (Langfuse) renders the generation.
+	if attrs["gen_ai.request.model"] != "test-model" {
+		t.Fatalf("gen_ai.request.model = %q, want test-model", attrs["gen_ai.request.model"])
+	}
+	if attrs["gen_ai.operation.name"] != "chat" {
+		t.Fatalf("gen_ai.operation.name = %q, want chat", attrs["gen_ai.operation.name"])
+	}
+	if attrs["output"] != "Hi" {
+		t.Fatalf("output = %q, want %q", attrs["output"], "Hi")
+	}
+	if !strings.Contains(attrs["input"], "be brief") || !strings.Contains(attrs["input"], "hi") {
+		t.Fatalf("input missing system/user content: %q", attrs["input"])
 	}
 }
