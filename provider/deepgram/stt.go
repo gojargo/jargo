@@ -21,13 +21,6 @@ const (
 	defaultSTTModel = "nova-3"
 	defaultEncoding = "linear16"
 	defaultChannels = 1
-	// defaultEndpointingMs is jargo's turn-detection default: it is the silence
-	// that makes Deepgram emit speech_final, which the STT service maps to
-	// TranscriptionFrame.Finalized — the signal TurnAnalyzerStop waits on to end a
-	// turn. It is NOT a free STT knob: Deepgram's own default is 10ms, which would
-	// end a turn on every micro-pause, so jargo keeps this rather than leave it
-	// unset (unlike Pipecat, which does not gate turns on speech_final).
-	defaultEndpointingMs = 300
 )
 
 // Config configures the STT service. Fields left at their zero value fall back
@@ -53,21 +46,17 @@ type Config struct {
 
 	// InterimResults emits partial transcripts; nil defaults to true.
 	InterimResults *bool
-	// SmartFormat applies Deepgram smart formatting; nil omits the param
-	// (Deepgram default false), matching Pipecat.
+	// SmartFormat applies Deepgram smart formatting; nil omits the param.
 	SmartFormat *bool
 	// Punctuate adds punctuation; nil defaults to true.
 	Punctuate *bool
-	// VADEvents requests speech-start/utterance events; nil omits the param.
-	// jargo's turn-taking uses its own Silero VAD, not Deepgram's events.
+	// VADEvents requests Deepgram speech/utterance events; nil omits the param.
 	VADEvents *bool
-	// Endpointing is the silence in ms before Deepgram emits speech_final, which
-	// the STT service maps to TranscriptionFrame.Finalized (the turn-end gate);
-	// nil defaults to 300 — see defaultEndpointingMs for why it is not left unset.
+	// Endpointing is the silence in ms before Deepgram's speech_final; nil omits
+	// the param.
 	Endpointing *int
 	// UtteranceEndMs is the silence in ms before an utterance-end event; nil omits
-	// the param. jargo does not consume Deepgram's UtteranceEnd events, so this is
-	// only useful to callers wiring their own handling.
+	// the param (jargo does not consume Deepgram's UtteranceEnd events).
 	UtteranceEndMs *int
 
 	// The remaining options are omitted from the request unless set, matching
@@ -149,7 +138,7 @@ func (cfg *Config) query(sampleRate int) url.Values {
 	setBoolOpt(q, "smart_format", cfg.SmartFormat)
 	setBoolTrue(q, "punctuate", cfg.Punctuate)
 	setBoolOpt(q, "vad_events", cfg.VADEvents)
-	setIntDefault(q, "endpointing", cfg.Endpointing, defaultEndpointingMs)
+	setIntOpt(q, "endpointing", cfg.Endpointing)
 	setIntOpt(q, "utterance_end_ms", cfg.UtteranceEndMs)
 
 	setBoolOpt(q, "numerals", cfg.Numerals)
@@ -188,15 +177,6 @@ func setBoolOpt(q url.Values, key string, v *bool) {
 	if v != nil {
 		q.Set(key, strconv.FormatBool(*v))
 	}
-}
-
-// setIntDefault sets key to v, or to def when v is nil.
-func setIntDefault(q url.Values, key string, v *int, def int) {
-	val := def
-	if v != nil {
-		val = *v
-	}
-	q.Set(key, strconv.Itoa(val))
 }
 
 // setIntOpt sets key only when v is non-nil.

@@ -7,6 +7,5 @@
 // speech_final marks the end of the user's turn.
 package deepgram
 
-// authToken formats the Deepgram Authorization header value shared by the STT
-// and TTS services.
+// authToken formats the shared Deepgram Authorization header value.
 func authToken(apiKey string) string { return "Token " + apiKey }
