@@ -128,6 +128,50 @@ func TestNewParamsOmitsUnsetSampling(t *testing.T) {
 	}
 }
 
+func TestNewParamsAppliesThinking(t *testing.T) {
+	convo := frames.NewLLMContext("be brief")
+	convo.AddUserMessage("hi")
+
+	for mode, want := range map[string]string{
+		"disabled": `"thinking":{"type":"disabled"}`,
+		"adaptive": `"thinking":{"type":"adaptive"}`,
+	} {
+		s := NewLLM(Config{Thinking: &ThinkingConfig{Type: mode}})
+		b, err := json.Marshal(s.newParams(convo))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(b); !strings.Contains(got, want) {
+			t.Fatalf("thinking %q: params JSON %s missing %q", mode, got, want)
+		}
+	}
+
+	// "enabled" carries the token budget.
+	s := NewLLM(Config{MaxTokens: 4096, Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 2048}})
+	b, err := json.Marshal(s.newParams(convo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type":"enabled"`, `"budget_tokens":2048`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("enabled thinking missing %q:\n%s", want, string(b))
+		}
+	}
+}
+
+func TestNewParamsOmitsThinkingWhenUnset(t *testing.T) {
+	s := NewLLM(Config{})
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hi")
+	b, err := json.Marshal(s.newParams(convo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "thinking") {
+		t.Fatalf("params JSON should omit thinking when unset:\n%s", string(b))
+	}
+}
+
 func TestToUsageMapsFields(t *testing.T) {
 	u := toUsage(sdk.Usage{
 		InputTokens:              100,

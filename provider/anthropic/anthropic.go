@@ -21,6 +21,17 @@ import (
 // defaultMaxTokens keeps spoken responses short and snappy.
 const defaultMaxTokens = 1024
 
+// ThinkingConfig configures extended thinking on each request. Type is the mode:
+// "enabled" (a fixed BudgetTokens, older models), "adaptive" (the model decides
+// how much to think, 4.6+ models), or "disabled" (no thinking). BudgetTokens
+// applies only to "enabled". Leaving Config.Thinking nil omits the parameter, so
+// the model's own default applies — note adaptive thinking is on by default on
+// Sonnet 5 / Opus 4.8, so set "disabled" for the lowest latency.
+type ThinkingConfig struct {
+	Type         string `validate:"required,oneof=enabled disabled adaptive"`
+	BudgetTokens int
+}
+
 // Config configures the LLM service.
 type Config struct {
 	// APIKey is the Anthropic API key; empty uses the ANTHROPIC_API_KEY env var.
@@ -38,6 +49,10 @@ type Config struct {
 	Temperature *float64
 	TopP        *float64
 	TopK        *int64
+	// Thinking configures extended thinking. Nil omits the parameter (model
+	// default). For voice, "disabled" avoids the latency of adaptive thinking on
+	// models where it is on by default.
+	Thinking *ThinkingConfig `validate:"omitempty"`
 	// RequestTimeout bounds a single request attempt, including the full stream;
 	// 0 leaves the SDK default. Keep it generously above the expected response
 	// time, since for a streaming request it caps the whole response.
@@ -71,6 +86,10 @@ type Service struct {
 	topK        param.Opt[int64]
 	// cachePrompt gates the ephemeral cache breakpoint on the system prompt.
 	cachePrompt bool
+	// thinking is the extended-thinking config sent on each request; thinkingSet
+	// reports whether it was configured (an unset union means "omit").
+	thinking    sdk.ThinkingConfigParamUnion
+	thinkingSet bool
 }
 
 // NewLLM builds an Anthropic LLM service.
@@ -124,6 +143,19 @@ func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *
 	if cfg.TopK != nil {
 		s.topK = param.NewOpt(*cfg.TopK)
 	}
+	if cfg.Thinking != nil {
+		switch cfg.Thinking.Type {
+		case "disabled":
+			s.thinking = sdk.ThinkingConfigParamUnion{OfDisabled: &sdk.ThinkingConfigDisabledParam{}}
+			s.thinkingSet = true
+		case "adaptive":
+			s.thinking = sdk.ThinkingConfigParamUnion{OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{}}
+			s.thinkingSet = true
+		case "enabled":
+			s.thinking = sdk.ThinkingConfigParamOfEnabled(int64(cfg.Thinking.BudgetTokens))
+			s.thinkingSet = true
+		}
+	}
 	s.Base = llm.New(name, s)
 	s.Base.SetModel(s.model)
 	return s
@@ -146,6 +178,9 @@ func (s *Service) newParams(convo *frames.LLMContext) sdk.MessageNewParams {
 		Temperature: s.temperature,
 		TopP:        s.topP,
 		TopK:        s.topK,
+	}
+	if s.thinkingSet {
+		params.Thinking = s.thinking
 	}
 	if system := convo.System(); system != "" {
 		block := sdk.TextBlockParam{Text: system}
