@@ -77,7 +77,7 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Token "+s.cfg.APIKey)
+	req.Header.Set("Authorization", authToken(s.cfg.APIKey))
 	req.Header.Set("Content-Type", "application/json")
 	return tts.StreamResponse(s.http, req, emit)
 }
