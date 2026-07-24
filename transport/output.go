@@ -40,6 +40,9 @@ type BaseOutput struct {
 	audioCtx    context.Context
 	audioCancel context.CancelFunc
 	audioWG     sync.WaitGroup
+	// drainWait, set under bufMu before a drain marker is queued, is closed by
+	// the audio loop once it has paced out everything ahead of the marker.
+	drainWait chan struct{}
 
 	// Bot-speaking detection: a BotStartedSpeakingFrame is emitted upstream when
 	// audio starts flowing and a BotStoppedSpeakingFrame after it drains, so the
@@ -82,6 +85,7 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 		bo.startStreaming(ctx, fr)
 		return bo.PushFrame(ctx, f, dir)
 	case *frames.EndFrame:
+		bo.drainAudio(ctx)
 		bo.stopStreaming(ctx)
 		return bo.PushFrame(ctx, f, dir)
 	case *frames.CancelFrame:
@@ -166,6 +170,39 @@ func (bo *BaseOutput) stopStreaming(ctx context.Context) {
 	if cancel != nil {
 		cancel()
 		bo.audioWG.Wait()
+	}
+}
+
+// drainMarker is a sentinel queued on audioOut to detect when the audio loop has
+// paced out everything ahead of it. It is compared by identity and never played.
+//
+//nolint:gochecknoglobals // sentinel value
+var drainMarker = &frames.OutputAudioRawFrame{}
+
+// drainAudio blocks until the audio loop has paced out everything it has queued,
+// so a graceful EndFrame lets the bot finish speaking (a farewell, say) instead
+// of cutting off. A CancelFrame or an interruption skips it and stops at once. It
+// queues a marker behind the buffered audio and waits for the loop to reach it.
+func (bo *BaseOutput) drainAudio(ctx context.Context) {
+	bo.bufMu.Lock()
+	ac := bo.audioCtx
+	if ac == nil {
+		bo.bufMu.Unlock()
+		return
+	}
+	if len(bo.buffer) > 0 { // flush the sub-chunk tail so it plays too
+		sendAudio(ac, bo.audioOut, frames.NewOutputAudioRawFrame(bo.buffer, bo.sampleRate, bo.channels))
+		bo.buffer = nil
+	}
+	done := make(chan struct{})
+	bo.drainWait = done
+	bo.bufMu.Unlock()
+
+	sendAudio(ac, bo.audioOut, drainMarker)
+	select {
+	case <-done:
+	case <-ac.Done():
+	case <-ctx.Done():
 	}
 }
 
@@ -310,6 +347,16 @@ func (bo *BaseOutput) audioLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case chunk := <-bo.audioOut:
+			if chunk == drainMarker {
+				bo.bufMu.Lock()
+				w := bo.drainWait
+				bo.drainWait = nil
+				bo.bufMu.Unlock()
+				if w != nil {
+					close(w)
+				}
+				continue
+			}
 			audio := chunk.Audio
 			if bo.params.AudioOutMixer != nil {
 				if mixed, err := bo.params.AudioOutMixer.Mix(ctx, audio); err == nil {

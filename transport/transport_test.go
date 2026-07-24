@@ -8,6 +8,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
 )
 
@@ -198,4 +199,90 @@ func TestBaseOutputChunksAudio(t *testing.T) {
 
 	task.StopWhenDone()
 	<-runDone
+}
+
+// pacedOutput records how many chunks it was asked to write, sleeping on each so
+// a drain must wait for the queued backlog to finish.
+type pacedOutput struct {
+	*transport.BaseOutput
+	writes atomic.Int32
+}
+
+func newPacedOutput(p transport.Params) *pacedOutput {
+	o := &pacedOutput{}
+	o.BaseOutput = transport.NewBaseOutput("PacedOutput", p, o)
+	return o
+}
+
+func (o *pacedOutput) WriteAudio(context.Context, []byte) error {
+	time.Sleep(3 * time.Millisecond) // stand in for real-time pacing
+	o.writes.Add(1)
+	return nil
+}
+
+// TestBaseOutputEndFrameDrainsAudio is the regression test for the farewell
+// cutoff: a graceful EndFrame must let the queued audio finish before the
+// pipeline stops, unlike a CancelFrame which stops at once.
+func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	o := newPacedOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	const chunks = 15
+	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920*chunks), 48000, 1))
+	task.StopWhenDone() // EndFrame right behind the audio
+
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipeline did not end")
+	}
+	if got := o.writes.Load(); got != chunks {
+		t.Fatalf("wrote %d/%d chunks — EndFrame cut off queued audio", got, chunks)
+	}
+}
+
+// ender pushes an EndWorkerFrame upstream once the pipeline has started.
+type ender struct {
+	*processor.Base
+}
+
+func newEnder() *ender {
+	e := &ender{}
+	e.Base = processor.New("Ender", e)
+	return e
+}
+
+func (e *ender) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := e.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.StartFrame); ok {
+		if err := e.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		return e.PushFrame(ctx, frames.NewEndWorkerFrame(), processor.Upstream)
+	}
+	return e.PushFrame(ctx, f, dir)
+}
+
+// TestEndWorkerFrameEndsTask checks a processor can end the run gracefully by
+// pushing an EndWorkerFrame upstream — the Task turns it into an EndFrame.
+func TestEndWorkerFrameEndsTask(t *testing.T) {
+	task := pipeline.NewTask(pipeline.New(newEnder()), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not end on EndWorkerFrame")
+	}
 }
