@@ -46,6 +46,28 @@ func (f *CancelFrame) String() string {
 	return fmt.Sprintf("%s(reason: %v)", f.Name(), f.Reason)
 }
 
+// EndWorkerFrame requests a graceful shutdown of the pipeline worker (the Task).
+// A processor pushes it upstream; on reaching the Task it queues an EndFrame
+// downstream (see Task.StopWhenDone), so frames already queued are flushed and
+// the bot finishes speaking before the pipeline ends. It is a system frame, so
+// a processor with no Task handle can end the run and the signal reaches the
+// Task even while the pipeline is busy.
+type EndWorkerFrame struct {
+	BaseSystemFrame
+	// Reason is an optional reason for ending.
+	Reason any
+}
+
+// NewEndWorkerFrame builds an EndWorkerFrame.
+func NewEndWorkerFrame() *EndWorkerFrame {
+	return &EndWorkerFrame{BaseSystemFrame: NewBaseSystemFrame("EndWorkerFrame")}
+}
+
+// String implements fmt.Stringer.
+func (f *EndWorkerFrame) String() string {
+	return fmt.Sprintf("%s(reason: %v)", f.Name(), f.Reason)
+}
+
 // ErrorSource identifies the component that raised an error — in practice the
 // frame processor that produced it. It is declared here, rather than imported
 // from the processor package, so the frames package keeps no dependency on it;

@@ -215,6 +215,11 @@ func (t *Task) sourcePush(_ context.Context, f frames.Frame, _ processor.Directi
 	if ef, ok := f.(*frames.ErrorFrame); ok && ef.Fatal {
 		t.Cancel()
 	}
+	// A processor asked to end gracefully: queue an EndFrame so frames already
+	// queued flush before the pipeline stops.
+	if _, ok := f.(*frames.EndWorkerFrame); ok {
+		t.StopWhenDone()
+	}
 	if t.params.OnReachedUpstream != nil {
 		t.params.OnReachedUpstream(f)
 	}
