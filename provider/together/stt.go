@@ -24,8 +24,6 @@ const (
 	// streaming STT contract forwards audio but has no per-turn commit signal,
 	// so the service relies on the server to detect turn boundaries.
 	defaultTurnDetection = "server_vad"
-	// msgType is the discriminator key shared by client and server frames.
-	msgType = "type"
 )
 
 // errSTT wraps an error reported by the Together transcription session.

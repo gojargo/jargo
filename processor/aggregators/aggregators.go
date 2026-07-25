@@ -225,6 +225,13 @@ type AssistantAggregator struct {
 	mu          sync.Mutex
 	aggregation string
 	started     bool
+	// spoken accumulates the words actually spoken this turn, in their original
+	// written form, from the playback-aligned TTSTextFrames a word-timestamp TTS
+	// service emits. It drives the assistant message when the TTS reports word
+	// timings; spokenCommitted tracks whether that message has been written to
+	// the context yet, so later words update it in place rather than appending.
+	spoken          string
+	spokenCommitted bool
 	// Tool-call state for the current assistant turn. pendingIDs holds the
 	// calls still awaiting a result; pendingResults collects results until all
 	// have arrived and they can be written as one tool-result message.
@@ -253,13 +260,23 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		a.mu.Lock()
 		a.started = true
 		a.aggregation = ""
+		a.spoken = ""
+		a.spokenCommitted = false
 		a.mu.Unlock()
 	case *frames.LLMTextFrame:
+		// When a word-timestamp TTS drives the turn it excludes its text from the
+		// context (AppendToContext == false); the spoken words arrive as
+		// TTSTextFrames instead. Otherwise (the default) accumulate as before.
+		if !fr.AppendToContext {
+			break
+		}
 		a.mu.Lock()
 		if a.started {
 			a.aggregation += fr.Text
 		}
 		a.mu.Unlock()
+	case *frames.TTSTextFrame:
+		a.handleSpoken(fr)
 	case *frames.FunctionCallsStartedFrame:
 		a.handleFunctionCallsStarted(fr)
 	case *frames.FunctionCallResultFrame:
@@ -279,6 +296,36 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		a.commitInterrupted()
 	}
 	return a.PushFrame(ctx, f, dir)
+}
+
+// handleSpoken records one playback-aligned spoken word into the assistant
+// turn. The word's original written form is appended to the running spoken text
+// and the in-progress assistant message is kept up to date in the context, so
+// that if the turn is interrupted the context already holds exactly the words
+// spoken so far. Because the TTSTextFrames flow in step with audio playback,
+// only the words already spoken have arrived at any given moment.
+func (a *AssistantAggregator) handleSpoken(fr *frames.TTSTextFrame) {
+	if !fr.AppendToContext {
+		return
+	}
+	text := fr.Original()
+	if text == "" {
+		return
+	}
+	a.mu.Lock()
+	if a.spoken != "" {
+		a.spoken += " "
+	}
+	a.spoken += text
+	spoken := a.spoken
+	committed := a.spokenCommitted
+	a.spokenCommitted = true
+	a.mu.Unlock()
+
+	if committed && a.context.ReplaceLastAssistantText(spoken) {
+		return
+	}
+	a.context.AddAssistantMessage(spoken)
 }
 
 // handleFunctionCallsStarted writes the assistant turn that requested the tool
@@ -364,6 +411,11 @@ func (a *AssistantAggregator) commitInterrupted() {
 	text := a.aggregation
 	a.aggregation = ""
 	a.started = false
+	// Word-timestamp path: the spoken text was written to the context live as
+	// each word played, so it already holds exactly what was spoken before the
+	// interruption. Just close the turn so the next one starts fresh.
+	a.spoken = ""
+	a.spokenCommitted = false
 	a.mu.Unlock()
 	if len(results) > 0 {
 		a.context.AddToolResults(results)

@@ -17,6 +17,7 @@ package tracing
 import (
 	"context"
 
+	"github.com/gojargo/jargo/frames"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -100,4 +101,35 @@ func StartConversation(ctx context.Context, id string) (context.Context, trace.S
 		span.SetAttributes(attribute.String("conversation.id", id))
 	}
 	return ctx, span
+}
+
+// SetTokenUsage records LLM token usage on the span in ctx. It dual-writes the
+// legacy llm.tokens.* attributes and the OpenTelemetry GenAI gen_ai.usage.*
+// attributes, so both existing dashboards and OTel-native backends see the
+// counts under a single set of keys. The per-modality audio/text and cache
+// breakdowns (reported by realtime speech-to-speech models) are written only
+// when nonzero, so a text-only generation carries no empty realtime attributes.
+func SetTokenUsage(ctx context.Context, u frames.LLMTokenUsage) {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.Int64("llm.tokens.input", u.PromptTokens),
+		attribute.Int64("llm.tokens.output", u.CompletionTokens),
+		attribute.Int64("llm.tokens.total", u.TotalTokens),
+		attribute.Int64("gen_ai.usage.input_tokens", u.PromptTokens),
+		attribute.Int64("gen_ai.usage.output_tokens", u.CompletionTokens),
+	)
+	setPositive(span, "gen_ai.usage.input_audio_tokens", u.InputAudioTokens)
+	setPositive(span, "gen_ai.usage.output_audio_tokens", u.OutputAudioTokens)
+	setPositive(span, "gen_ai.usage.input_text_tokens", u.InputTextTokens)
+	setPositive(span, "gen_ai.usage.output_text_tokens", u.OutputTextTokens)
+	setPositive(span, "gen_ai.usage.cache_read.input_tokens", u.CacheReadTokens)
+	setPositive(span, "gen_ai.usage.cache_creation.input_tokens", u.CacheCreationTokens)
+}
+
+// setPositive sets an int64 span attribute only when v is positive, keeping
+// unmeasured breakdown counts off spans that don't carry them.
+func setPositive(span trace.Span, key string, v int64) {
+	if v > 0 {
+		span.SetAttributes(attribute.Int64(key, v))
+	}
 }

@@ -52,6 +52,49 @@ func NewLLMTextFrame(text string) *LLMTextFrame {
 	}
 }
 
+// TTSTextFrame is a chunk of text a TTS service is speaking, aligned to audio
+// playback. Text is the token as it was sent to the synthesizer; RawText, when
+// set, is that same span in its original written form (for example "$42.50" for
+// a token spoken as "forty two dollars and fifty cents"), so the assistant
+// context records what was written rather than what was pronounced. A TTS
+// service that reports word timings emits one per spoken word as its audio
+// plays; because they flow in step with playback, an interruption leaves only
+// the frames already emitted — the words actually spoken — in the context.
+type TTSTextFrame struct {
+	TextFrame
+	// RawText is the original written form of this span; "" means use Text.
+	RawText string
+	// ContextID identifies the TTS context that produced this text; "" when unset.
+	ContextID string
+}
+
+// NewTTSTextFrame builds a TTSTextFrame for the spoken token text, appending it
+// to the LLM context by default. Word tokens do not carry their own inter-frame
+// spacing, so a consumer joins them with a separator.
+func NewTTSTextFrame(text string) *TTSTextFrame {
+	return &TTSTextFrame{
+		TextFrame: TextFrame{
+			BaseDataFrame:   NewBaseDataFrame("TTSTextFrame"),
+			Text:            text,
+			AppendToContext: true,
+		},
+	}
+}
+
+// Original returns the text to record in the context: RawText when set,
+// otherwise Text.
+func (f *TTSTextFrame) Original() string {
+	if f.RawText != "" {
+		return f.RawText
+	}
+	return f.Text
+}
+
+// String implements fmt.Stringer.
+func (f *TTSTextFrame) String() string {
+	return fmt.Sprintf("%s(pts: %s, text: [%s], raw: [%s])", f.Name(), formatPTS(f), f.Text, f.RawText)
+}
+
 // TTSSpeakFrame carries fixed text for the TTS service to speak directly,
 // bypassing the LLM and the TTS sentence aggregator — the way to make the bot
 // say a set phrase (a greeting, an acknowledgement). It is a data frame.
@@ -156,6 +199,7 @@ func (f *InterimTranscriptionFrame) String() string {
 var (
 	_ DataFrame = (*TextFrame)(nil)
 	_ DataFrame = (*LLMTextFrame)(nil)
+	_ DataFrame = (*TTSTextFrame)(nil)
 	_ DataFrame = (*TTSSpeakFrame)(nil)
 	_ DataFrame = (*TranscriptionFrame)(nil)
 	_ DataFrame = (*InterimTranscriptionFrame)(nil)

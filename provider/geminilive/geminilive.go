@@ -230,6 +230,58 @@ func (s *Service) disconnect() {
 type serverMessage struct {
 	SetupComplete *json.RawMessage `json:"setupComplete"` //nolint:tagliatelle // Gemini wire field
 	ServerContent *serverContent   `json:"serverContent"` //nolint:tagliatelle // Gemini wire field
+	UsageMetadata *usageMetadata   `json:"usageMetadata"` //nolint:tagliatelle // Gemini wire field
+}
+
+// usageMetadata is the per-turn token accounting the Live API sends alongside a
+// completed turn. The *Details lists break the prompt and response token counts
+// down by modality (TEXT vs AUDIO), which is how a native-audio model exposes
+// how many of its billed tokens were speech.
+type usageMetadata struct {
+	PromptTokenCount        int64                `json:"promptTokenCount"`        //nolint:tagliatelle // Gemini wire field
+	ResponseTokenCount      int64                `json:"responseTokenCount"`      //nolint:tagliatelle // Gemini wire field
+	TotalTokenCount         int64                `json:"totalTokenCount"`         //nolint:tagliatelle // Gemini wire field
+	CachedContentTokenCount int64                `json:"cachedContentTokenCount"` //nolint:tagliatelle // Gemini wire field
+	PromptTokensDetails     []modalityTokenCount `json:"promptTokensDetails"`     //nolint:tagliatelle // Gemini wire field
+	ResponseTokensDetails   []modalityTokenCount `json:"responseTokensDetails"`   //nolint:tagliatelle // Gemini wire field
+}
+
+// modalityTokenCount is a token count attributed to one modality (e.g. TEXT or
+// AUDIO) within a prompt or response.
+type modalityTokenCount struct {
+	Modality   string `json:"modality"`
+	TokenCount int64  `json:"tokenCount"` //nolint:tagliatelle // Gemini wire field
+}
+
+// tokenUsage converts the wire accounting into the framework's usage shape,
+// folding the per-modality detail lists into the audio and text breakdowns.
+func (u usageMetadata) tokenUsage() frames.LLMTokenUsage {
+	usage := frames.LLMTokenUsage{
+		PromptTokens:     u.PromptTokenCount,
+		CompletionTokens: u.ResponseTokenCount,
+		TotalTokens:      u.TotalTokenCount,
+		CacheReadTokens:  u.CachedContentTokenCount,
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	for _, d := range u.PromptTokensDetails {
+		switch d.Modality {
+		case "AUDIO":
+			usage.InputAudioTokens += d.TokenCount
+		case "TEXT":
+			usage.InputTextTokens += d.TokenCount
+		}
+	}
+	for _, d := range u.ResponseTokensDetails {
+		switch d.Modality {
+		case "AUDIO":
+			usage.OutputAudioTokens += d.TokenCount
+		case "TEXT":
+			usage.OutputTextTokens += d.TokenCount
+		}
+	}
+	return usage
 }
 
 type serverContent struct {
@@ -277,6 +329,9 @@ func (s *Service) readLoop(conn *websocket.Conn, connCtx context.Context) {
 func (s *Service) handle(ctx context.Context, msg serverMessage) {
 	if msg.SetupComplete != nil {
 		s.ready.Store(true)
+	}
+	if msg.UsageMetadata != nil && s.UsageMetricsEnabled() {
+		_ = s.PushTokenUsage(ctx, s.cfg.Model, msg.UsageMetadata.tokenUsage())
 	}
 	sc := msg.ServerContent
 	if sc == nil {

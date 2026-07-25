@@ -34,15 +34,6 @@ const (
 	sttChunkMS = 80
 	// sttTTFSP99 is the time-to-final-segment P99 latency reported to downstream.
 	sttTTFSP99 = 620 * time.Millisecond
-	// msgError is the server message type reporting an error.
-	msgError = "error"
-	// Wire-protocol message keys and values shared by the STT and TTS transports.
-	msgType        = "type"
-	msgAudio       = "audio"
-	msgText        = "text"
-	msgEndStream   = "end_of_stream"
-	keyClientReqID = "client_req_id"
-	encPCM         = "pcm"
 )
 
 // STTConfig configures the Gradium STT service.

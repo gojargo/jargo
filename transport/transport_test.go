@@ -1,6 +1,7 @@
 package transport_test
 
 import (
+	"bytes"
 	"context"
 	"sync/atomic"
 	"testing"
@@ -244,6 +245,194 @@ func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
 	if got := o.writes.Load(); got != chunks {
 		t.Fatalf("wrote %d/%d chunks — EndFrame cut off queued audio", got, chunks)
 	}
+}
+
+// TestBaseOutputFlushesTailOnTurnEnd is the regression test for the turn-end
+// cutoff: audio that does not fill a whole chunk must still play out when the
+// bot's turn ends, padded to a full chunk so downstream whole-frame encoders
+// emit it instead of stranding it until the next turn.
+func TestBaseOutputFlushesTailOnTurnEnd(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// One full chunk plus a half-chunk tail, marked with 0x01 so the padding is
+	// distinguishable from the audio.
+	audio := bytes.Repeat([]byte{0x01}, 1920+960)
+	task.QueueFrame(frames.NewOutputAudioRawFrame(audio, 48000, 1))
+
+	// First write is the full chunk, unpadded.
+	first := recvWrite(t, o)
+	if len(first) != 1920 {
+		t.Fatalf("first write = %d bytes, want 1920", len(first))
+	}
+
+	// The turn goes quiet; the debounce fires and flushes the padded tail.
+	tail := recvWrite(t, o)
+	if len(tail) != 1920 {
+		t.Fatalf("tail write = %d bytes, want 1920 (padded)", len(tail))
+	}
+	if !bytes.Equal(tail[:960], bytes.Repeat([]byte{0x01}, 960)) {
+		t.Errorf("tail audio was not preserved")
+	}
+	if !bytes.Equal(tail[960:], make([]byte, 960)) {
+		t.Errorf("tail was not zero-padded with silence")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestBaseOutputInterruptionDiscardsTail checks the other half of the contract:
+// a barge-in must drop the pending sub-chunk tail, not play it after the fact.
+func TestBaseOutputInterruptionDiscardsTail(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	audio := bytes.Repeat([]byte{0x01}, 1920+960)
+	task.QueueFrame(frames.NewOutputAudioRawFrame(audio, 48000, 1))
+
+	// Wait for the full chunk so the tail is buffered, then barge in before the
+	// debounce can flush it.
+	if len(recvWrite(t, o)) != 1920 {
+		t.Fatal("did not receive the full chunk")
+	}
+	task.QueueFrame(frames.NewInterruptionFrame())
+
+	// The tail must never be written — not even after the debounce window.
+	select {
+	case extra := <-o.writes:
+		t.Fatalf("interruption failed to discard tail: got a %d-byte write", len(extra))
+	case <-time.After(2 * botStopDebounceTest):
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// botStopDebounceTest mirrors the base output's internal bot-stop debounce so
+// the interruption test waits past a would-be tail flush.
+const botStopDebounceTest = 250 * time.Millisecond
+
+// recvWrite returns the next chunk the output was asked to write, failing if
+// none arrives in time.
+func recvWrite(t *testing.T, o *fakeOutput) []byte {
+	t.Helper()
+	select {
+	case chunk := <-o.writes:
+		return chunk
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for an audio write")
+		return nil
+	}
+}
+
+// TestBaseOutputForwardsWordFramesInOrder checks that a word-aligned
+// TTSTextFrame is forwarded downstream in step with the audio it was queued
+// between — after the preceding audio chunk, before the following one.
+func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	var mu struct {
+		seq []string
+	}
+	wordSeen := make(chan struct{}, 1)
+	taskParams := pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			switch fr := f.(type) {
+			case *frames.OutputAudioRawFrame:
+				mu.seq = append(mu.seq, "audio")
+			case *frames.TTSTextFrame:
+				mu.seq = append(mu.seq, "word:"+fr.Text)
+				select {
+				case wordSeen <- struct{}{}:
+				default:
+				}
+			}
+		},
+	}
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920), 48000, 1))
+	task.QueueFrame(frames.NewTTSTextFrame("hello"))
+	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920), 48000, 1))
+
+	select {
+	case <-wordSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("word frame never reached downstream")
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	// The word frame must appear, and not before the audio queued ahead of it.
+	idxWord, idxFirstAudio := -1, -1
+	for i, s := range mu.seq {
+		if s == "audio" && idxFirstAudio < 0 {
+			idxFirstAudio = i
+		}
+		if s == "word:hello" {
+			idxWord = i
+		}
+	}
+	if idxWord < 0 {
+		t.Fatalf("word frame missing from downstream sequence %v", mu.seq)
+	}
+	if idxFirstAudio < 0 || idxWord < idxFirstAudio {
+		t.Fatalf("word frame at %d preceded its audio at %d (seq %v)", idxWord, idxFirstAudio, mu.seq)
+	}
+}
+
+// TestBaseOutputInterruptionDropsUnplayedWordFrames checks that a barge-in drops
+// word-aligned text still queued behind unplayed audio, so the assistant context
+// never records words that were not actually spoken.
+func TestBaseOutputInterruptionDropsUnplayedWordFrames(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	lateSeen := make(chan string, 4)
+	taskParams := pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if fr, ok := f.(*frames.TTSTextFrame); ok {
+				lateSeen <- fr.Text
+			}
+		},
+	}
+
+	o := newPacedOutput(params) // ~3ms per chunk write
+	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// A long run of audio with a word frame queued behind it: the word's audio is
+	// nowhere near played when the interruption arrives.
+	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920*40), 48000, 1))
+	task.QueueFrame(frames.NewTTSTextFrame("unspoken"))
+	time.Sleep(10 * time.Millisecond) // a couple of chunks play
+	task.QueueFrame(frames.NewInterruptionFrame())
+
+	select {
+	case got := <-lateSeen:
+		t.Fatalf("interruption failed to drop unplayed word frame: got %q", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	task.StopWhenDone()
+	<-runDone
 }
 
 // ender pushes an EndWorkerFrame upstream once the pipeline has started.

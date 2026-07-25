@@ -146,3 +146,57 @@ func TestVoiceFormatter(t *testing.T) {
 		t.Errorf("VoiceFormatter.Filter = %q, want %q", got, want)
 	}
 }
+
+// Some transforms split a word into separate tokens (acronym letter-spacing
+// turns "API" into "A P I") and others recase words (a unit abbreviation is
+// matched case-insensitively and rewritten as a lower-case word). If the
+// transforms ran in the wrong order, a later one could re-match or re-case an
+// earlier one's output and mangle it. The deliberate ordering in
+// NewVoiceFormatter — units before acronyms, email before phone and acronyms —
+// keeps each transform from corrupting another's result. These cases lock that
+// in; they fail if the pipeline is reordered.
+func TestVoiceFormatterOrderingPreventsCorruption(t *testing.T) {
+	// Units expand before acronyms letter-space them, so "MB" becomes
+	// "megabytes" rather than the unreadable "M B" (which the unit transform
+	// could then no longer expand).
+	f, err := NewVoiceFormatter(DefaultFormatterOptions())
+	if err != nil {
+		t.Fatalf("NewVoiceFormatter: %v", err)
+	}
+	if got, want := f.Filter("Copy 100 MB to the SSD"), "Copy 100 megabytes to the S S D"; got != want {
+		t.Errorf("units-before-acronyms: Filter = %q, want %q", got, want)
+	}
+
+	// Email is spoken before phone and acronyms run, so its structure survives:
+	// the all-caps local part is letter-spaced only after "@" has been turned
+	// into "at". If acronyms ran first, letter-spacing "SALES" would split the
+	// address and the email pattern would match only a truncated remainder.
+	if got, want := f.Filter("Email SALES@example.com please"),
+		"Email S A L E S at example dot com please"; got != want {
+		t.Errorf("email-before-acronyms: Filter = %q, want %q", got, want)
+	}
+
+	// A split acronym and number expansion coexist without one corrupting the
+	// other: the letter-spaced "A P I" carries no digits for the number
+	// transform to touch, and "42" carries no letters for the acronym transform.
+	opts := DefaultFormatterOptions()
+	opts.ExpandNumbers = true
+	opts.NumberDigitCutoff = 2025
+	fn, err := NewVoiceFormatter(opts)
+	if err != nil {
+		t.Fatalf("NewVoiceFormatter: %v", err)
+	}
+	if got, want := fn.Filter("The API returns 42"), "The A P I returns forty-two"; got != want {
+		t.Errorf("acronym-split with numbers: Filter = %q, want %q", got, want)
+	}
+
+	// Direct demonstration of the corruption the ordering avoids: running the
+	// acronym split before the unit expansion mangles "5 GB" into "5 G B", which
+	// the unit transform can no longer recognize. The formatter never does this.
+	if mangled := ExpandUnits(NormalizeAcronyms("Send 5 GB now")); mangled != "Send 5 G B now" {
+		t.Errorf("expected wrong-order to mangle, got %q", mangled)
+	}
+	if ok := NormalizeAcronyms(ExpandUnits("Send 5 GB now")); ok != "Send 5 gigabytes now" {
+		t.Errorf("expected right-order to expand, got %q", ok)
+	}
+}

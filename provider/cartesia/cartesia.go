@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
+	uctx "github.com/gojargo/jargo/utils/context"
 )
 
 // errProtocol is returned when Cartesia reports an error message.
@@ -76,6 +77,12 @@ type Config struct {
 	GenerationConfig *GenerationConfig
 	// PronunciationDictID applies a custom pronunciation dictionary; empty omits it.
 	PronunciationDictID string
+	// WordTimestamps requests per-word timestamps and drives the word-aligned
+	// text path: the TTS base emits a TTSTextFrame for each spoken word as its
+	// audio plays, mapped back to its original written form, so the assistant
+	// context records only what was actually spoken before an interruption. It is
+	// off by default; leaving it off keeps the service behaving exactly as before.
+	WordTimestamps bool
 }
 
 // Validate reports whether the configuration is usable.
@@ -104,11 +111,23 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.Container == "" {
 		cfg.Container = defaultContainer
 	}
-	return tts.New("CartesiaTTS", &synthesizer{cfg: cfg})
+	s := &synthesizer{cfg: cfg}
+	if cfg.WordTimestamps {
+		// Only the timestamp-aware type implements tts.WordTimestamps, so the base
+		// takes the word-aligned path solely when the caller opts in.
+		return tts.New("CartesiaTTS", &timedSynthesizer{synthesizer: s})
+	}
+	return tts.New("CartesiaTTS", s)
 }
 
 type synthesizer struct {
 	cfg Config
+}
+
+// timedSynthesizer adds word-timestamp streaming on top of synthesizer. It
+// implements tts.WordTimestamps.
+type timedSynthesizer struct {
+	*synthesizer
 }
 
 // SampleRate reports the requested PCM output rate.
@@ -131,30 +150,64 @@ func cartesiaLanguage(l language.Language) string {
 
 // wsMessage is the subset of a Cartesia WebSocket message we read.
 type wsMessage struct {
-	Type    string `json:"type"`
-	Data    string `json:"data"`
-	Message string `json:"message"`
+	Type           string         `json:"type"`
+	Data           string         `json:"data"`
+	Message        string         `json:"message"`
+	WordTimestamps *wsWordTimings `json:"word_timestamps"`
+}
+
+// wsWordTimings is the payload of a Cartesia "timestamps" message: parallel
+// arrays of spoken words and their start times, in seconds from the start of the
+// synthesis.
+type wsWordTimings struct {
+	Words []string  `json:"words"`
+	Start []float64 `json:"start"`
 }
 
 // Synthesize opens a session, sends the transcript, and streams audio chunks.
 func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
-	header := http.Header{}
-	header.Set("X-API-Key", s.cfg.APIKey)
-	header.Set("Cartesia-Version", s.cfg.Version)
-
-	conn, err := wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
+	conn, err := s.dial(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 
-	if err := s.request(ctx, conn, text); err != nil {
+	if err := s.request(ctx, conn, text, false); err != nil {
 		return err
 	}
-	return s.receive(ctx, conn, emit)
+	return s.receive(ctx, conn, emit, nil)
 }
 
-func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
+// SynthesizeTimed streams audio and reports per-word timing, implementing
+// tts.WordTimestamps. It requests timestamps and forwards each Cartesia
+// "timestamps" message (after merging any punctuation-only tokens into the
+// preceding word) to word.
+func (s *timedSynthesizer) SynthesizeTimed(
+	ctx context.Context,
+	text string,
+	emit func(pcm []byte) error,
+	word func(text string, offset float64) error,
+) error {
+	conn, err := s.dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+
+	if err := s.request(ctx, conn, text, true); err != nil {
+		return err
+	}
+	return s.receive(ctx, conn, emit, word)
+}
+
+func (s *synthesizer) dial(ctx context.Context) (*websocket.Conn, error) {
+	header := http.Header{}
+	header.Set("X-API-Key", s.cfg.APIKey)
+	header.Set("Cartesia-Version", s.cfg.Version)
+	return wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
+}
+
+func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text string, timestamps bool) error {
 	msg := map[string]any{
 		"model_id":   s.cfg.Model,
 		"transcript": text,
@@ -166,6 +219,10 @@ func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text st
 		},
 		"context_id": "jargo",
 		"continue":   false,
+	}
+	if timestamps {
+		msg["add_timestamps"] = true
+		msg["use_normalized_timestamps"] = false
 	}
 	if lang := cartesiaLanguage(s.cfg.Language); lang != "" {
 		msg["language"] = lang
@@ -183,7 +240,14 @@ func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text st
 	return conn.Write(ctx, websocket.MessageText, payload)
 }
 
-func (s *synthesizer) receive(ctx context.Context, conn *websocket.Conn, emit func(pcm []byte) error) error {
+// receive reads audio chunks and, when word is non-nil, word-timestamp messages
+// until the transcript is done.
+func (s *synthesizer) receive(
+	ctx context.Context,
+	conn *websocket.Conn,
+	emit func(pcm []byte) error,
+	word func(text string, offset float64) error,
+) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -202,10 +266,38 @@ func (s *synthesizer) receive(ctx context.Context, conn *websocket.Conn, emit fu
 			if err := emit(pcm); err != nil {
 				return err
 			}
+		case "timestamps":
+			if word != nil {
+				if err := emitWordTimings(m.WordTimestamps, word); err != nil {
+					return err
+				}
+			}
 		case "done":
 			return nil
 		case "error":
 			return fmt.Errorf("%w: %s", errProtocol, m.Message)
 		}
 	}
+}
+
+// emitWordTimings merges punctuation-only tokens into the preceding word and
+// forwards each resulting (word, start) pair to word.
+func emitWordTimings(wt *wsWordTimings, word func(text string, offset float64) error) error {
+	if wt == nil {
+		return nil
+	}
+	batch := make([]uctx.WordTiming, 0, len(wt.Words))
+	for i, w := range wt.Words {
+		var start float64
+		if i < len(wt.Start) {
+			start = wt.Start[i]
+		}
+		batch = append(batch, uctx.WordTiming{Word: w, Offset: start})
+	}
+	for _, m := range uctx.MergePunctTokens(batch) {
+		if err := word(m.Word, m.Offset); err != nil {
+			return err
+		}
+	}
+	return nil
 }

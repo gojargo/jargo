@@ -16,8 +16,6 @@ const (
 	speakURL = "https://api.deepgram.com/v1/speak"
 	// defaultTTSModel is a current Aura-2 English voice.
 	defaultTTSModel = "aura-2-thalia-en"
-	// defaultTTSSampleRate is the PCM rate jargo requests from Aura.
-	defaultTTSSampleRate = 24000
 	// defaultTTSEncoding is the audio encoding jargo requests from Aura.
 	defaultTTSEncoding = "linear16"
 )

@@ -249,14 +249,54 @@ func (s *Service) disconnect() {
 
 // serverEvent is the subset of Realtime server events the service handles. The
 // delta field carries base64 PCM for audio events and plain text for transcript
-// events.
+// events; response carries the token accounting on the response.done event.
 type serverEvent struct {
-	Type       string `json:"type"`
-	Delta      string `json:"delta"`
-	Transcript string `json:"transcript"`
+	Type       string          `json:"type"`
+	Delta      string          `json:"delta"`
+	Transcript string          `json:"transcript"`
+	Response   *responseObject `json:"response"`
 	Error      struct {
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// responseObject is the completed-response payload on a response.done event; the
+// service reads only its usage.
+type responseObject struct {
+	Usage *usage `json:"usage"`
+}
+
+// usage is the Realtime API's per-response token accounting. The *_token_details
+// break the input and output token counts down by modality (text vs audio),
+// which is how a speech-to-speech model exposes its audio-token billing.
+type usage struct {
+	TotalTokens        int64        `json:"total_tokens"`         //nolint:tagliatelle // OpenAI wire field
+	InputTokens        int64        `json:"input_tokens"`         //nolint:tagliatelle // OpenAI wire field
+	OutputTokens       int64        `json:"output_tokens"`        //nolint:tagliatelle // OpenAI wire field
+	InputTokenDetails  tokenDetails `json:"input_token_details"`  //nolint:tagliatelle // OpenAI wire field
+	OutputTokenDetails tokenDetails `json:"output_token_details"` //nolint:tagliatelle // OpenAI wire field
+}
+
+// tokenDetails is the per-modality (and cache) breakdown of one direction's
+// token count.
+type tokenDetails struct {
+	TextTokens   int64 `json:"text_tokens"`   //nolint:tagliatelle // OpenAI wire field
+	AudioTokens  int64 `json:"audio_tokens"`  //nolint:tagliatelle // OpenAI wire field
+	CachedTokens int64 `json:"cached_tokens"` //nolint:tagliatelle // OpenAI wire field
+}
+
+// tokenUsage converts the wire accounting into the framework's usage shape.
+func (u usage) tokenUsage() frames.LLMTokenUsage {
+	return frames.LLMTokenUsage{
+		PromptTokens:      u.InputTokens,
+		CompletionTokens:  u.OutputTokens,
+		TotalTokens:       u.TotalTokens,
+		CacheReadTokens:   u.InputTokenDetails.CachedTokens,
+		InputAudioTokens:  u.InputTokenDetails.AudioTokens,
+		OutputAudioTokens: u.OutputTokenDetails.AudioTokens,
+		InputTextTokens:   u.InputTokenDetails.TextTokens,
+		OutputTextTokens:  u.OutputTokenDetails.TextTokens,
+	}
 }
 
 // readLoop reads server events until the connection is closed or canceled.
@@ -298,6 +338,7 @@ func (s *Service) handleEvent(ctx context.Context, ev serverEvent) {
 			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(ev.Delta), processor.Downstream)
 		}
 	case "response.done":
+		s.reportUsage(ctx, ev)
 		_ = s.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Downstream)
 	case "conversation.item.input_audio_transcription.completed":
 		if ev.Transcript != "" {
@@ -306,4 +347,13 @@ func (s *Service) handleEvent(ctx context.Context, ev serverEvent) {
 	case "error":
 		s.PushError(ctx, "openai realtime error: "+ev.Error.Message, fmt.Errorf("%w: %s", errServer, ev.Error.Message), false)
 	}
+}
+
+// reportUsage forwards the token accounting on a response.done event to metrics
+// and telemetry, when usage metrics are enabled.
+func (s *Service) reportUsage(ctx context.Context, ev serverEvent) {
+	if ev.Response == nil || ev.Response.Usage == nil || !s.UsageMetricsEnabled() {
+		return
+	}
+	_ = s.PushTokenUsage(ctx, s.cfg.Model, ev.Response.Usage.tokenUsage())
 }

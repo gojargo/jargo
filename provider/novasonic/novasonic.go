@@ -464,6 +464,12 @@ func contentEnd(prompt, content string) map[string]any {
 
 // --- inbound event parsing ---
 
+// The bidirectional stream carries no token-usage event: the completion is
+// bracketed by completionStart / completionEnd with no token accounting, so this
+// service reports no LLM token usage. If a usage event is added to the protocol,
+// parse it here and report it through PushTokenUsage as the other realtime
+// services do.
+//
 // The JSON field names below are Nova Sonic's wire protocol (camelCase), so the
 // snake_case house style does not apply.
 

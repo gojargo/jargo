@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
@@ -32,10 +33,6 @@ const (
 	defaultInputCodec = "wav"
 	// readLimitSTT bounds a single inbound WebSocket message.
 	readLimitSTT = 1 << 20
-	// msgType and msgData are wire-protocol keys shared by the STT and TTS
-	// transports.
-	msgType = "type"
-	msgData = "data"
 )
 
 // sttModelConfig captures the per-model capabilities that gate which parameters
@@ -214,16 +211,16 @@ func (c *connector) query(sampleRate int) url.Values {
 	}
 
 	if c.mc.supportsVADParams {
-		setFloatOpt(q, "positive_speech_threshold", c.cfg.PositiveSpeechThreshold)
-		setFloatOpt(q, "negative_speech_threshold", c.cfg.NegativeSpeechThreshold)
-		setIntOpt(q, "min_speech_frames", c.cfg.MinSpeechFrames)
-		setIntOpt(q, "first_turn_min_speech_frames", c.cfg.FirstTurnMinSpeechFrames)
-		setIntOpt(q, "negative_frames_count", c.cfg.NegativeFramesCount)
-		setIntOpt(q, "negative_frames_window", c.cfg.NegativeFramesWindow)
-		setFloatOpt(q, "start_speech_volume_threshold", c.cfg.StartSpeechVolumeThreshold)
-		setIntOpt(q, "interrupt_min_speech_frames", c.cfg.InterruptMinSpeechFrames)
-		setIntOpt(q, "pre_speech_pad_frames", c.cfg.PreSpeechPadFrames)
-		setIntOpt(q, "num_initial_ignored_frames", c.cfg.NumInitialIgnoredFrames)
+		query.SetFloatOpt(q, "positive_speech_threshold", c.cfg.PositiveSpeechThreshold)
+		query.SetFloatOpt(q, "negative_speech_threshold", c.cfg.NegativeSpeechThreshold)
+		query.SetIntOpt(q, "min_speech_frames", c.cfg.MinSpeechFrames)
+		query.SetIntOpt(q, "first_turn_min_speech_frames", c.cfg.FirstTurnMinSpeechFrames)
+		query.SetIntOpt(q, "negative_frames_count", c.cfg.NegativeFramesCount)
+		query.SetIntOpt(q, "negative_frames_window", c.cfg.NegativeFramesWindow)
+		query.SetFloatOpt(q, "start_speech_volume_threshold", c.cfg.StartSpeechVolumeThreshold)
+		query.SetIntOpt(q, "interrupt_min_speech_frames", c.cfg.InterruptMinSpeechFrames)
+		query.SetIntOpt(q, "pre_speech_pad_frames", c.cfg.PreSpeechPadFrames)
+		query.SetIntOpt(q, "num_initial_ignored_frames", c.cfg.NumInitialIgnoredFrames)
 	}
 
 	if lang := c.languageString(); lang != "" {
@@ -244,18 +241,6 @@ func (c *connector) mode() string {
 		return c.cfg.Mode
 	}
 	return c.mc.defaultMode
-}
-
-func setFloatOpt(q url.Values, key string, v *float64) {
-	if v != nil {
-		q.Set(key, strconv.FormatFloat(*v, 'g', -1, 64))
-	}
-}
-
-func setIntOpt(q url.Values, key string, v *int) {
-	if v != nil {
-		q.Set(key, strconv.Itoa(*v))
-	}
 }
 
 // Connect dials the streaming WebSocket for the configured model.

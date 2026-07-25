@@ -14,6 +14,38 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Word-aligned TTS text and interruption-accurate context.** A new
+  `frames.TTSTextFrame` carries each spoken word aligned to audio playback, with
+  the original written form of transformed spans (e.g. `"$42.50"` for a token
+  spoken as "forty two dollars and fifty cents") in its `RawText` field. A TTS
+  provider opts in by implementing the optional `tts.WordTimestamps` interface
+  (`SynthesizeTimed`); the shared TTS base then diffs the text sent to the
+  synthesizer against the original, tracks word completion, and emits a
+  `TTSTextFrame` per spoken word as its audio is produced. The output transport
+  releases these frames in step with playback, so an interruption drops the ones
+  whose audio never played. The assistant context aggregator records the spoken
+  words in their original written form and truncates exactly at the interruption
+  point, instead of recording the full generated response. Cartesia gains a
+  `WordTimestamps` config flag that enables this path; every provider without
+  word timings — and Cartesia with the flag off — behaves exactly as before. The
+  text-alignment machinery lives in the new `utils/context` package
+  (`TextSegmentMap`, `WordCompletionTracker`, `MergePunctTokens`).
+
+- **Audio token usage for realtime models.** `frames.LLMTokenUsage` gains an
+  additive per-modality breakdown — `InputAudioTokens`, `OutputAudioTokens`,
+  `InputTextTokens`, `OutputTextTokens` — each a subset of the prompt/completion
+  totals, for speech-to-speech models that bill audio and text at different
+  rates. The Gemini Live service now parses `usageMetadata` (folding the
+  prompt/response modality detail into the breakdown) and the OpenAI Realtime
+  service parses the `response.done` usage (input/output token details incl.
+  audio); both report through a shared `processor.Base.PushTokenUsage`, so
+  realtime token usage reaches the in-band `MetricsFrame`, the aggregate metrics,
+  and telemetry spans. Token attributes are written under the OpenTelemetry
+  GenAI `gen_ai.usage.*` keys (with the audio/text/cache breakdowns added when
+  nonzero) alongside the legacy `llm.tokens.*` keys, unified for the cascaded
+  and realtime paths. Nova Sonic's bidirectional stream carries no usage event,
+  so it reports none.
+
 - **Behavioral eval harness** (`eval`) and a **`jargo` CLI** (`cmd/jargo`). The
   harness drives a real bot over RTVI, plays scripted conversation turns from a
   YAML scenario, and asserts on the semantic events the bot emits. Scenarios run
@@ -75,6 +107,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   microphone-to-speaker echo.
 
 ### Fixed
+
+- **Trailing audio dropped at turn ends** (`transport`): the base output
+  transport buffers audio into fixed-size chunks and used to leave the final
+  sub-chunk of a turn sitting in the buffer, where a barge-in would clear it —
+  clipping the last few milliseconds of the bot's utterance. The remainder is now
+  padded to a full chunk with silence and flushed when the turn ends, so it plays
+  out. Padding lets the tail pass through downstream whole-frame encoders (Opus)
+  that would otherwise strand a short frame. A barge-in still discards the pending
+  tail, as it must.
 
 - **Anthropic/Bedrock assistant-prefill constraint** (`provider/anthropic`): the
   Claude 4.6-generation models (Opus 4.8, Sonnet 4.6, …) reject a request whose

@@ -18,10 +18,15 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 )
 
-// errStatus is returned when the API responds with a non-200 status.
+// errStatus is returned when the API responds with a non-200 status. It is shared
+// by the LLM, STT and TTS services.
 //
 //nolint:gochecknoglobals // sentinel error
 var errStatus = errors.New("google: unexpected status")
+
+// defaultLangCode is the default BCP-47 language code for the STT and TTS
+// services.
+const defaultLangCode = "en-US"
 
 const (
 	apiBase          = "https://generativelanguage.googleapis.com/v1beta/models"

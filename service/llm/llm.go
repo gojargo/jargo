@@ -97,13 +97,7 @@ func (b *Base) SetModel(model string) { b.model = model }
 // calls it after a generation, gated on UsageMetricsEnabled, so the conversion
 // from the provider's usage shape happens only when metrics are collected.
 func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error {
-	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.Int64("llm.tokens.input", u.PromptTokens),
-		attribute.Int64("llm.tokens.output", u.CompletionTokens),
-		attribute.Int64("llm.tokens.total", u.TotalTokens),
-		attribute.Int64("gen_ai.usage.input_tokens", u.PromptTokens),
-		attribute.Int64("gen_ai.usage.output_tokens", u.CompletionTokens),
-	)
+	tracing.SetTokenUsage(ctx, u)
 	metrics.RecordTokens(ctx, b.Name(), b.model, u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(b.Name())
 	f.Model = b.model

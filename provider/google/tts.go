@@ -17,7 +17,6 @@ import (
 const (
 	ttsEndpoint      = "https://texttospeech.googleapis.com/v1/text:synthesize"
 	defaultVoiceName = "en-US-Chirp3-HD-Charon"
-	defaultLangCode  = "en-US"
 	defaultTTSRate   = 24000
 	// wavHeaderBytes is the canonical PCM WAV header the synthesizer strips to
 	// recover raw samples from a LINEAR16 response.

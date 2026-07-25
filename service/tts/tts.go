@@ -19,6 +19,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
+	uctx "github.com/gojargo/jargo/utils/context"
 	ttstext "github.com/gojargo/jargo/utils/text"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -40,6 +41,37 @@ const ttfaMaxBufferSeconds = 3
 type Synthesizer interface {
 	SampleRate() int
 	Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error
+}
+
+// WordTimestamps is an optional interface a Synthesizer may implement to report
+// per-word timing aligned to the audio it produces. When the provider driving a
+// Base implements it, the Base tracks word completion and emits playback-aligned
+// TTSTextFrames that map each spoken word back to its original written form — so
+// the assistant context records only what was actually spoken before an
+// interruption, in its written form. A Synthesizer that does not implement this
+// interface is unaffected: the Base pushes text and synthesizes audio exactly as
+// before, and no TTSTextFrames are produced.
+type WordTimestamps interface {
+	Synthesizer
+	// SynthesizeTimed streams 16-bit mono PCM to emit like Synthesize, and
+	// additionally reports word timing via word(text, offset): text is a single
+	// spoken token, offset its start time in seconds from the beginning of this
+	// synthesis. Tokens are reported in spoken order; punctuation the provider
+	// splits into its own token should be merged into the preceding word first
+	// (see utils/context.MergePunctTokens).
+	SynthesizeTimed(
+		ctx context.Context,
+		text string,
+		emit func(pcm []byte) error,
+		word func(text string, offset float64) error,
+	) error
+}
+
+// pendingWord is a TTSTextFrame awaiting the point in the emitted audio where
+// its word begins, so it is pushed downstream in step with playback.
+type pendingWord struct {
+	offset float64
+	frame  *frames.TTSTextFrame
 }
 
 // Base is the shared TTS processor. It aggregates text into sentences and
@@ -75,17 +107,16 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	}
 	switch fr := f.(type) {
 	case *frames.LLMTextFrame:
-		if err := b.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		return b.aggregate(ctx, fr.Text)
+		return b.handleText(ctx, &fr.TextFrame, f, dir)
 	case *frames.TextFrame:
-		if err := b.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		return b.aggregate(ctx, fr.Text)
+		return b.handleText(ctx, fr, f, dir)
 	case *frames.TTSSpeakFrame:
 		// Speak fixed text immediately, bypassing sentence aggregation.
+		if b.wordPath() {
+			// The spoken words drive the context via TTSTextFrames; don't also let
+			// the aggregator record the whole fixed text (it would double-count).
+			fr.AppendToContext = false
+		}
 		if err := b.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
@@ -104,6 +135,21 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	default:
 		return b.PushFrame(ctx, f, dir)
 	}
+}
+
+// handleText forwards a text frame downstream and buffers its text for
+// synthesis. On the word-timestamp path the frame is excluded from the assistant
+// context (the playback-aligned TTSTextFrames drive it instead) while still
+// flowing to other consumers such as transcripts. tf is the (embedded) TextFrame
+// carrying the flags; orig is the concrete frame to forward.
+func (b *Base) handleText(ctx context.Context, tf *frames.TextFrame, orig frames.Frame, dir processor.Direction) error {
+	if b.wordPath() {
+		tf.AppendToContext = false
+	}
+	if err := b.PushFrame(ctx, orig, dir); err != nil {
+		return err
+	}
+	return b.aggregate(ctx, tf.Text)
 }
 
 // aggregate buffers text and synthesizes once a sentence is complete.
@@ -128,12 +174,24 @@ func (b *Base) flush(ctx context.Context) error {
 	return b.synthesize(ctx, sentence)
 }
 
-// synthesize requests speech for text and streams it downstream as audio.
-func (b *Base) synthesize(ctx context.Context, text string) error {
+// wordPath reports whether the driving provider reports word timings, in which
+// case the base emits playback-aligned TTSTextFrames for interruption-accurate
+// context.
+func (b *Base) wordPath() bool {
+	_, ok := b.syn.(WordTimestamps)
+	return ok
+}
+
+// synthesize requests speech for original and streams it downstream as audio.
+// original is the pre-filter text; the configured filters produce the text sent
+// to the provider. When the provider reports word timings, the base also emits
+// TTSTextFrames mapping each spoken word back to original.
+func (b *Base) synthesize(ctx context.Context, original string) error {
+	filtered := original
 	for _, f := range b.filters {
-		text = f.Filter(text)
+		filtered = f.Filter(filtered)
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(filtered) == "" {
 		return nil
 	}
 	ctx, span := tracing.Tracer().Start(ctx, "tts")
@@ -141,7 +199,7 @@ func (b *Base) synthesize(ctx context.Context, text string) error {
 	rate := b.syn.SampleRate()
 	span.SetAttributes(
 		attribute.String("tts.service", b.Name()),
-		attribute.Int("tts.chars", len(text)),
+		attribute.Int("tts.chars", len(filtered)),
 		attribute.Int("tts.sample_rate", rate),
 	)
 	if err := b.PushFrame(ctx, frames.NewTTSStartedFrame(), processor.Downstream); err != nil {
@@ -156,9 +214,16 @@ func (b *Base) synthesize(ctx context.Context, text string) error {
 		meter.observe(pcm, start)
 		return b.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, rate, 1), processor.Downstream)
 	}
-	if err := b.syn.Synthesize(ctx, text, emit); err != nil && ctx.Err() == nil {
-		span.RecordError(err)
-		b.PushError(ctx, "tts synthesis failed", err, false)
+
+	var synthErr error
+	if wt, ok := b.syn.(WordTimestamps); ok {
+		synthErr = b.synthesizeTimed(ctx, wt, original, filtered, rate, emit)
+	} else {
+		synthErr = b.syn.Synthesize(ctx, filtered, emit)
+	}
+	if synthErr != nil && ctx.Err() == nil {
+		span.RecordError(synthErr)
+		b.PushError(ctx, "tts synthesis failed", synthErr, false)
 	}
 	if meter.hadTTFB {
 		span.SetAttributes(attribute.Int64("tts.ttfb_ms", meter.ttfb.Milliseconds()))
@@ -166,8 +231,96 @@ func (b *Base) synthesize(ctx context.Context, text string) error {
 	if meter.hadTTFA {
 		span.SetAttributes(attribute.Int64("tts.ttfa_ms", meter.ttfa.Milliseconds()))
 	}
-	b.emitTiming(ctx, len(text), &meter, time.Since(start))
+	b.emitTiming(ctx, len(filtered), &meter, time.Since(start))
 	return b.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+}
+
+// synthesizeTimed drives a word-timestamp provider. It tracks word completion
+// against a segment map built from filtered (sent to the provider) and original
+// (written form), and interleaves a TTSTextFrame for each spoken word into the
+// audio stream at the point its audio begins to play. Words whose audio has not
+// yet been emitted are held back, so an interruption (a canceled ctx) leaves
+// only the spoken words downstream. When the synthesis finishes normally, any
+// trailing words are released and any original text the provider under-reported
+// is emitted to close out the sentence.
+func (b *Base) synthesizeTimed(
+	ctx context.Context,
+	wt WordTimestamps,
+	original, filtered string,
+	rate int,
+	emit func(pcm []byte) error,
+) error {
+	tracker := uctx.NewWordCompletionTracker(filtered, original, original)
+	var (
+		pending []pendingWord
+		elapsed float64 // seconds of audio emitted so far
+	)
+	release := func(upTo float64) error {
+		for len(pending) > 0 && pending[0].offset <= upTo {
+			if err := b.PushFrame(ctx, pending[0].frame, processor.Downstream); err != nil {
+				return err
+			}
+			pending = pending[1:]
+		}
+		return nil
+	}
+	timedEmit := func(pcm []byte) error {
+		if len(pcm) == 0 {
+			return nil
+		}
+		if err := emit(pcm); err != nil {
+			return err
+		}
+		elapsed += float64(len(pcm)) / float64(rate*2) // 16-bit mono
+		// Release every word whose audio has now been emitted, so each spoken
+		// word's frame follows its audio downstream. A word is "spoken" once its
+		// audio has played, so an interruption after this chunk keeps it.
+		return release(elapsed)
+	}
+	word := func(text string, offset float64) error {
+		if fr := trackWord(tracker, text); fr != nil {
+			pending = append(pending, pendingWord{offset: offset, frame: fr})
+		}
+		return nil
+	}
+
+	err := wt.SynthesizeTimed(ctx, filtered, timedEmit, word)
+	if ctx.Err() != nil {
+		return err // interrupted: leave held-back words unspoken
+	}
+	for _, p := range pending {
+		if perr := b.PushFrame(ctx, p.frame, processor.Downstream); perr != nil {
+			return perr
+		}
+	}
+	if rem := tracker.RemainingRawText(); rem != "" {
+		f := frames.NewTTSTextFrame(rem)
+		f.RawText = rem
+		if perr := b.PushFrame(ctx, f, processor.Downstream); perr != nil {
+			return perr
+		}
+	}
+	return err
+}
+
+// trackWord advances the tracker by one spoken token and builds the
+// TTSTextFrame to emit for it, or nil when the token produced no frame text. An
+// intermediate token of a transformed span is marked to stay out of the context;
+// the completing token carries the original written text as RawText.
+func trackWord(tracker *uctx.WordCompletionTracker, text string) *frames.TTSTextFrame {
+	tracker.AddWord(text)
+	frameWord, ok := tracker.FrameWord()
+	if !ok || frameWord == "" {
+		return nil
+	}
+	f := frames.NewTTSTextFrame(frameWord)
+	if raw, has := tracker.RawText(); has {
+		f.RawText = raw
+	}
+	if tracker.Suppress() {
+		f.AppendToContext = false
+	}
+	return f
 }
 
 // emitTiming records the synthesis's time-to-first-byte, time-to-first-audible

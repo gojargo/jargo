@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
@@ -104,21 +105,21 @@ func (cfg *Config) query(sampleRate int) url.Values {
 	q.Set("sample_rate", strconv.Itoa(sampleRate))
 	q.Set("encoding", cfg.Encoding)
 
-	setStrOpt(q, "speech_model", cfg.Model)
+	query.SetStrOpt(q, "speech_model", cfg.Model)
 	if code := assemblyaiLanguage(cfg.Language); code != "" {
 		q.Set("language_code", code)
 	}
-	setBoolOpt(q, "language_detection", cfg.LanguageDetection)
-	setBoolTrue(q, "format_turns", cfg.FormatTurns)
-	setBoolOpt(q, "formatted_finals", cfg.FormattedFinals)
-	setIntOpt(q, "word_finalization_max_wait_time", cfg.WordFinalizationMaxWaitTime)
-	setFloatOpt(q, "end_of_turn_confidence_threshold", cfg.EndOfTurnConfidenceThreshold)
-	setIntOpt(q, "min_turn_silence", cfg.MinTurnSilence)
-	setIntOpt(q, "max_turn_silence", cfg.MaxTurnSilence)
-	setStrOpt(q, "prompt", cfg.Prompt)
-	setBoolOpt(q, "speaker_labels", cfg.SpeakerLabels)
-	setFloatOpt(q, "vad_threshold", cfg.VADThreshold)
-	setStrOpt(q, "domain", cfg.Domain)
+	query.SetBoolOpt(q, "language_detection", cfg.LanguageDetection)
+	query.SetBoolTrue(q, "format_turns", cfg.FormatTurns)
+	query.SetBoolOpt(q, "formatted_finals", cfg.FormattedFinals)
+	query.SetIntOpt(q, "word_finalization_max_wait_time", cfg.WordFinalizationMaxWaitTime)
+	query.SetFloatOpt(q, "end_of_turn_confidence_threshold", cfg.EndOfTurnConfidenceThreshold)
+	query.SetIntOpt(q, "min_turn_silence", cfg.MinTurnSilence)
+	query.SetIntOpt(q, "max_turn_silence", cfg.MaxTurnSilence)
+	query.SetStrOpt(q, "prompt", cfg.Prompt)
+	query.SetBoolOpt(q, "speaker_labels", cfg.SpeakerLabels)
+	query.SetFloatOpt(q, "vad_threshold", cfg.VADThreshold)
+	query.SetStrOpt(q, "domain", cfg.Domain)
 
 	if len(cfg.KeytermsPrompt) > 0 {
 		if b, err := json.Marshal(cfg.KeytermsPrompt); err == nil {
@@ -129,43 +130,6 @@ func (cfg *Config) query(sampleRate int) url.Values {
 		q.Set(k, v)
 	}
 	return q
-}
-
-// setBoolTrue sets key to v, defaulting to true when v is nil.
-func setBoolTrue(q url.Values, key string, v *bool) {
-	val := true
-	if v != nil {
-		val = *v
-	}
-	q.Set(key, strconv.FormatBool(val))
-}
-
-// setBoolOpt sets key only when v is non-nil.
-func setBoolOpt(q url.Values, key string, v *bool) {
-	if v != nil {
-		q.Set(key, strconv.FormatBool(*v))
-	}
-}
-
-// setIntOpt sets key only when v is non-nil.
-func setIntOpt(q url.Values, key string, v *int) {
-	if v != nil {
-		q.Set(key, strconv.Itoa(*v))
-	}
-}
-
-// setFloatOpt sets key only when v is non-nil.
-func setFloatOpt(q url.Values, key string, v *float64) {
-	if v != nil {
-		q.Set(key, strconv.FormatFloat(*v, 'g', -1, 64))
-	}
-}
-
-// setStrOpt sets key only when v is non-empty.
-func setStrOpt(q url.Values, key, v string) {
-	if v != "" {
-		q.Set(key, v)
-	}
 }
 
 // assemblyaiLanguage maps a Language to AssemblyAI's language_code: it wants the
