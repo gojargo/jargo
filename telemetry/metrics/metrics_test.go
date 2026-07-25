@@ -21,7 +21,8 @@ func TestRecordsInstruments(t *testing.T) {
 	metrics.RecordTTFB(ctx, "llm", "AnthropicLLM", "haiku", 0.3)
 	metrics.RecordProcessing(ctx, "llm", "AnthropicLLM", "haiku", 1.2)
 	metrics.RecordTokens(ctx, "AnthropicLLM", "haiku", 100, 40)
-	metrics.RecordTTSCharacters(ctx, "ElevenLabsTTS", 25)
+	metrics.RecordTTSCharacters(ctx, "ElevenLabsTTS", "eleven_flash_v2_5", 25)
+	metrics.RecordSTTAudio(ctx, "DeepgramSTT", "nova-3", 4.5)
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(ctx, &rm); err != nil {
@@ -33,7 +34,10 @@ func TestRecordsInstruments(t *testing.T) {
 			names[m.Name] = true
 		}
 	}
-	for _, want := range []string{"jargo.ttfb", "jargo.processing", "jargo.llm.tokens", "jargo.tts.characters"} {
+	for _, want := range []string{
+		"jargo.ttfb", "jargo.processing", "jargo.llm.tokens",
+		"jargo.tts.characters", "jargo.stt.audio",
+	} {
 		if !names[want] {
 			t.Fatalf("missing instrument %q; got %v", want, names)
 		}

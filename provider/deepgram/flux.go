@@ -159,7 +159,7 @@ type fluxConnector struct {
 
 // Metadata recommends external user turns: Flux emits its own turn boundaries.
 func (c *fluxConnector) Metadata() stt.Metadata {
-	return stt.Metadata{RecommendedUserTurns: frames.UserTurnExternal}
+	return stt.Metadata{RecommendedUserTurns: frames.UserTurnExternal, Model: c.cfg.Model}
 }
 
 // Connect dials the Flux transcription WebSocket for the given sample rate.

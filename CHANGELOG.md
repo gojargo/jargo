@@ -46,6 +46,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and realtime paths. Nova Sonic's bidirectional stream carries no usage event,
   so it reports none.
 
+- **Priceable STT and TTS spans.** Speech spans now carry what a cost-tracking
+  backend needs to price them, so a trace shows the cost of the whole turn
+  rather than of its LLM call alone. Each synthesis records the provider model
+  and its character count; each transcription records the model and the duration
+  of audio sent. A provider reports its model through the new optional
+  `tts.Describer` (returning a `tts.Metadata`) or through `Model` on the existing
+  `stt.Metadata` — ElevenLabs, Deepgram (including Flux), Cartesia, NVIDIA and
+  Gradium do; a provider that reports none is unchanged apart from the
+  operation name. Streaming STT reports usage once per session, covering all the
+  audio the connection carried (silence included, which is what streaming
+  providers bill for); batch STT reports per transcribed segment. Usage is
+  written as OpenTelemetry GenAI `gen_ai.*` attributes plus
+  `langfuse.observation.usage_details`, since the GenAI conventions model usage
+  only as token counts and speech is billed per character or per second.
+  Characters are counted in runes, so accented text is no longer counted — or
+  billed — twice. The model now labels the TTS metrics too, and a new
+  `jargo.stt.audio` counter records transcribed audio.
+
 - **Behavioral eval harness** (`eval`) and a **`jargo` CLI** (`cmd/jargo`). The
   harness drives a real bot over RTVI, plays scripted conversation turns from a
   YAML scenario, and asserts on the semantic events the bot emits. Scenarios run
@@ -105,6 +123,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   client, so the default build stays cgo-free; it needs a running PulseAudio or
   PipeWire (pulse-compatible) server. See `examples/localaudio` for a no-keys
   microphone-to-speaker echo.
+
+### Changed
+
+- `metrics.RecordTTSCharacters` takes the provider model, so TTS measurements
+  carry the same `model` label the other instruments do.
 
 ### Fixed
 

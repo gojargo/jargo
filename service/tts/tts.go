@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gojargo/jargo/audio/onset"
 	"github.com/gojargo/jargo/frames"
@@ -67,6 +68,26 @@ type WordTimestamps interface {
 	) error
 }
 
+// Metadata describes a TTS service to the observability layer.
+type Metadata struct {
+	// Model is the provider's model identifier, e.g. "eleven_flash_v2_5". It
+	// labels the metrics and is what a cost-tracking backend prices the
+	// synthesis against, so it should be the identifier the provider bills
+	// under.
+	Model string
+	// VoiceID is the provider's voice identifier, or "" when the service has no
+	// notion of a voice separate from the model.
+	VoiceID string
+}
+
+// Describer is an optional interface a Synthesizer implements to describe the
+// model it synthesizes with. A Synthesizer that does not implement it still
+// reports character usage on its spans; only the model label is missing, and
+// with it the ability to price the synthesis.
+type Describer interface {
+	Metadata() Metadata
+}
+
 // pendingWord is a TTSTextFrame awaiting the point in the emitted audio where
 // its word begins, so it is pushed downstream in step with playback.
 type pendingWord struct {
@@ -79,6 +100,7 @@ type pendingWord struct {
 type Base struct {
 	*processor.Base
 	syn         Synthesizer
+	meta        Metadata
 	aggregation string
 	filters     []ttstext.Filter
 }
@@ -87,6 +109,9 @@ type Base struct {
 // itself as syn and embeds the returned Base.
 func New(name string, syn Synthesizer) *Base {
 	b := &Base{syn: syn}
+	if d, ok := syn.(Describer); ok {
+		b.meta = d.Metadata()
+	}
 	b.Base = processor.New(name, b)
 	return b
 }
@@ -197,11 +222,19 @@ func (b *Base) synthesize(ctx context.Context, original string) error {
 	ctx, span := tracing.Tracer().Start(ctx, "tts")
 	defer span.End()
 	rate := b.syn.SampleRate()
+	// Providers bill per character, so count runes: len would charge an accented
+	// character twice.
+	chars := utf8.RuneCountInString(filtered)
 	span.SetAttributes(
 		attribute.String("tts.service", b.Name()),
-		attribute.Int("tts.chars", len(filtered)),
+		attribute.Int("tts.chars", chars),
 		attribute.Int("tts.sample_rate", rate),
+		attribute.String("gen_ai.output.type", "speech"),
 	)
+	if b.meta.VoiceID != "" {
+		span.SetAttributes(attribute.String("gen_ai.request.voice", b.meta.VoiceID))
+	}
+	tracing.SetTTSUsage(ctx, b.meta.Model, chars)
 	if err := b.PushFrame(ctx, frames.NewTTSStartedFrame(), processor.Downstream); err != nil {
 		return err
 	}
@@ -231,7 +264,7 @@ func (b *Base) synthesize(ctx context.Context, original string) error {
 	if meter.hadTTFA {
 		span.SetAttributes(attribute.Int64("tts.ttfa_ms", meter.ttfa.Milliseconds()))
 	}
-	b.emitTiming(ctx, len(filtered), &meter, time.Since(start))
+	b.emitTiming(ctx, chars, &meter, time.Since(start))
 	return b.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
 }
 
@@ -328,13 +361,13 @@ func trackWord(tracker *uctx.WordCompletionTracker, text string) *frames.TTSText
 // when in-band metrics are enabled, downstream as a MetricsFrame for the RTVI
 // client.
 func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processing time.Duration) {
-	metrics.RecordProcessing(ctx, "tts", b.Name(), "", processing.Seconds())
-	metrics.RecordTTSCharacters(ctx, b.Name(), int64(chars))
+	metrics.RecordProcessing(ctx, "tts", b.Name(), b.meta.Model, processing.Seconds())
+	metrics.RecordTTSCharacters(ctx, b.Name(), b.meta.Model, int64(chars))
 	if m.hadTTFB {
-		metrics.RecordTTFB(ctx, "tts", b.Name(), "", m.ttfb.Seconds())
+		metrics.RecordTTFB(ctx, "tts", b.Name(), b.meta.Model, m.ttfb.Seconds())
 	}
 	if m.hadTTFA {
-		metrics.RecordTTFA(ctx, "tts", b.Name(), "", m.ttfa.Seconds())
+		metrics.RecordTTFA(ctx, "tts", b.Name(), b.meta.Model, m.ttfa.Seconds())
 	}
 	if !b.MetricsEnabled() {
 		return

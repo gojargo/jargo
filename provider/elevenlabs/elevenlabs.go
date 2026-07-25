@@ -113,6 +113,11 @@ type synthesizer struct {
 	http *http.Client
 }
 
+// Metadata reports the ElevenLabs model and voice synthesis is billed against.
+func (s *synthesizer) Metadata() tts.Metadata {
+	return tts.Metadata{Model: s.cfg.Model, VoiceID: s.cfg.VoiceID}
+}
+
 // SampleRate reports the PCM output rate.
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 

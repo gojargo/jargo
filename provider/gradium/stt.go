@@ -83,7 +83,7 @@ type sttConnector struct {
 // Metadata reports Gradium's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99}
+	return stt.Metadata{TTFSP99: sttTTFSP99, Model: c.cfg.Model}
 }
 
 // inputFormat builds Gradium's input_format from the encoding and sample rate.

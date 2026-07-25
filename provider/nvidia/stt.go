@@ -147,7 +147,11 @@ type sttConnector struct {
 // Metadata reports the Riva ASR time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{RecommendedUserTurns: frames.UserTurnUnspecified, TTFSP99: sttTTFSP99}
+	return stt.Metadata{
+		RecommendedUserTurns: frames.UserTurnUnspecified,
+		TTFSP99:              sttTTFSP99,
+		Model:                c.cfg.Model,
+	}
 }
 
 // Connect dials the Riva gRPC endpoint, opens a StreamingRecognize stream, and

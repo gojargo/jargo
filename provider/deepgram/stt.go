@@ -204,6 +204,11 @@ type connector struct {
 	cfg Config
 }
 
+// Metadata reports the Deepgram model transcription is billed against.
+func (c *connector) Metadata() stt.Metadata {
+	return stt.Metadata{Model: c.cfg.Model}
+}
+
 // Connect dials the live transcription WebSocket for the given sample rate.
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := c.cfg.query(sampleRate)

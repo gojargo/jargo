@@ -124,6 +124,11 @@ type synthesizer struct {
 	cfg Config
 }
 
+// Metadata reports the Cartesia model and voice synthesis is billed against.
+func (s *synthesizer) Metadata() tts.Metadata {
+	return tts.Metadata{Model: s.cfg.Model, VoiceID: s.cfg.VoiceID}
+}
+
 // timedSynthesizer adds word-timestamp streaming on top of synthesizer. It
 // implements tts.WordTimestamps.
 type timedSynthesizer struct {

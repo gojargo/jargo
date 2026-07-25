@@ -9,6 +9,9 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // fakeSynth records the text it was asked to speak and emits fixed PCM.
@@ -85,6 +88,81 @@ func TestSynthesizesCompletedSentence(t *testing.T) {
 	want := []string{"started", "audio", "stopped"}
 	if !equal(seq, want) {
 		t.Fatalf("frame sequence = %v, want %v", seq, want)
+	}
+}
+
+// describingSynth reports a model and voice, so the base can label the span.
+type describingSynth struct {
+	*fakeSynth
+}
+
+func (s *describingSynth) Metadata() tts.Metadata {
+	return tts.Metadata{Model: "eleven_flash_v2_5", VoiceID: "XB0fDUnXU5powFXDhCwa"}
+}
+
+// TestSynthesisReportsCharacterUsage checks that a synthesis is priceable: it
+// carries the provider model and its character count. The count is in runes,
+// so accented text is not billed twice.
+func TestSynthesisReportsCharacterUsage(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prev)
+
+	// 11 runes, 13 bytes in UTF-8 (Ç and è take two bytes each).
+	const text = "Ça va très."
+	syn := &describingSynth{&fakeSynth{rate: 24000, chunk: []byte{1, 2}, spoken: make(chan string, 1)}}
+	svc := tts.New("FakeTTS", syn)
+
+	stopped := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.TTSStoppedFrame); ok {
+				select {
+				case stopped <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewLLMTextFrame(text))
+
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("TTS base did not finish a synthesis")
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	var span sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "tts" {
+			span = s
+		}
+	}
+	if span == nil {
+		t.Fatal("no tts span recorded")
+	}
+	attrs := map[string]string{}
+	for _, kv := range span.Attributes() {
+		attrs[string(kv.Key)] = kv.Value.String()
+	}
+	want := map[string]string{
+		"tts.chars":                          "11",
+		"gen_ai.request.model":               "eleven_flash_v2_5",
+		"gen_ai.request.voice":               "XB0fDUnXU5powFXDhCwa",
+		"gen_ai.output.type":                 "speech",
+		"langfuse.observation.type":          "generation",
+		"langfuse.observation.usage_details": `{"characters":11}`,
+	}
+	for k, v := range want {
+		if attrs[k] != v {
+			t.Errorf("attr %q = %q, want %q (all: %v)", k, attrs[k], v, attrs)
+		}
 	}
 }
 
