@@ -103,16 +103,10 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 		bo.handleInterruption()
 		bo.stopBotSpeaking(ctx)
 		return nil
-	case *frames.OutputTransportMessageFrame:
-		if err := bo.sendMessage(ctx, fr); err != nil {
-			return err
-		}
-		return bo.PushFrame(ctx, f, dir)
-	case *frames.MixerControlFrame:
-		if bo.params.AudioOutMixer != nil {
-			_ = bo.params.AudioOutMixer.Control(ctx, fr.Settings)
-		}
-		return bo.PushFrame(ctx, f, dir)
+	case *frames.OutputTransportMessageFrame, *frames.OutputTransportMessageUrgentFrame:
+		return bo.handleTransportMessage(ctx, f, dir)
+	case frames.MixerControlFrame:
+		return bo.handleMixerControl(ctx, fr, dir)
 	case *frames.TTSAudioRawFrame, *frames.OutputAudioRawFrame:
 		if dir == processor.Downstream {
 			audio, rate, channels := outputAudio(f)
@@ -218,10 +212,51 @@ func (bo *BaseOutput) drainAudio(ctx context.Context) {
 	}
 }
 
-// sendMessage serializes a transport message to JSON and hands it to the
-// concrete transport.
-func (bo *BaseOutput) sendMessage(ctx context.Context, f *frames.OutputTransportMessageFrame) error {
-	data, err := json.Marshal(f.Message)
+// handleMixerControl applies a mixer control frame to the output mixer and
+// forwards it. The mixer's settings map is its whole control surface, so
+// enabling is expressed as the "enabled" setting.
+func (bo *BaseOutput) handleMixerControl(
+	ctx context.Context, f frames.MixerControlFrame, dir processor.Direction,
+) error {
+	if bo.params.AudioOutMixer != nil {
+		var settings map[string]any
+		switch fr := f.(type) {
+		case *frames.MixerUpdateSettingsFrame:
+			settings = fr.Settings
+		case *frames.MixerEnableFrame:
+			settings = map[string]any{"enabled": fr.Enable}
+		}
+		if settings != nil {
+			_ = bo.params.AudioOutMixer.Control(ctx, settings)
+		}
+	}
+	return bo.PushFrame(ctx, f, dir)
+}
+
+// handleTransportMessage sends an application message to the client and forwards
+// the frame on. It serves both message frames: the ordered one, which reaches
+// here in step with the surrounding audio, and the urgent one, which is a system
+// frame and so arrives ahead of anything queued.
+func (bo *BaseOutput) handleTransportMessage(
+	ctx context.Context, f frames.Frame, dir processor.Direction,
+) error {
+	var message any
+	switch fr := f.(type) {
+	case *frames.OutputTransportMessageFrame:
+		message = fr.Message
+	case *frames.OutputTransportMessageUrgentFrame:
+		message = fr.Message
+	}
+	if err := bo.sendMessage(ctx, message); err != nil {
+		return err
+	}
+	return bo.PushFrame(ctx, f, dir)
+}
+
+// sendMessage serializes a transport message payload to JSON and hands it to the
+// concrete transport. It serves both the ordered and the urgent message frames.
+func (bo *BaseOutput) sendMessage(ctx context.Context, message any) error {
+	data, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}

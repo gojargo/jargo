@@ -4,7 +4,7 @@
 // microphone audio arrives as raw-audio messages and enters the pipeline as
 // InputAudioRawFrames (VAD, turn detection and STT then see it as a live mic).
 // Outbound RTVI server messages reach the socket through the transport's own
-// message path (an OutputTransportMessageFrame).
+// message path (an OutputTransportMessageUrgentFrame).
 //
 // Bot audio is not yet streamed back over the socket, so a client on this
 // transport hears events and text, not synthesized speech. Pair it with a
@@ -60,7 +60,7 @@ func New() *Serializer { return &Serializer{} }
 func (*Serializer) Setup(*frames.StartFrame) error { return nil }
 
 // Serialize drops outbound frames. RTVI server messages reach the socket through
-// the transport's own OutputTransportMessageFrame path rather than the
+// the transport's own OutputTransportMessageUrgentFrame path rather than the
 // serializer, and bot audio is not streamed over this channel.
 func (*Serializer) Serialize(frames.Frame) ([]byte, error) { return nil, nil }
 

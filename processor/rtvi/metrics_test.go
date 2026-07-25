@@ -14,7 +14,7 @@ func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 	out := make(chan rtvi.Message, 8)
 	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor()), pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
-			if m, ok := f.(*frames.OutputTransportMessageFrame); ok {
+			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
 					select {
 					case out <- msg:
