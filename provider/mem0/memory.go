@@ -98,13 +98,27 @@ func (s *Service) store(msgs []frames.Message) {
 	}
 }
 
+// searchFilters scopes a search to the configured entities. Search takes them
+// nested under "filters" and rejects the top-level fields that add accepts.
+func (s *Service) searchFilters() map[string]any {
+	filters := make(map[string]any, 3)
+	if s.cfg.UserID != "" {
+		filters["user_id"] = s.cfg.UserID
+	}
+	if s.cfg.AgentID != "" {
+		filters["agent_id"] = s.cfg.AgentID
+	}
+	if s.cfg.RunID != "" {
+		filters["run_id"] = s.cfg.RunID
+	}
+	return filters
+}
+
 // search returns the memories relevant to query.
 func (s *Service) search(ctx context.Context, query string) ([]memory, error) {
 	body := searchRequest{
 		Query:     query,
-		UserID:    s.cfg.UserID,
-		AgentID:   s.cfg.AgentID,
-		RunID:     s.cfg.RunID,
+		Filters:   s.searchFilters(),
 		TopK:      s.cfg.SearchLimit,
 		Threshold: s.cfg.SearchThreshold,
 	}
@@ -202,12 +216,10 @@ type addRequest struct {
 }
 
 type searchRequest struct {
-	Query     string  `json:"query"`
-	UserID    string  `json:"user_id,omitempty"`
-	AgentID   string  `json:"agent_id,omitempty"`
-	RunID     string  `json:"run_id,omitempty"`
-	TopK      int     `json:"top_k,omitempty"`
-	Threshold float64 `json:"threshold,omitempty"`
+	Query     string         `json:"query"`
+	Filters   map[string]any `json:"filters,omitempty"`
+	TopK      int            `json:"top_k,omitempty"`
+	Threshold float64        `json:"threshold,omitempty"`
 }
 
 // memory is one retrieved memory; the server returns more fields, but the text
