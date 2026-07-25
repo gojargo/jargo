@@ -1,6 +1,9 @@
 package frames
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // EndFrame indicates the pipeline has ended and processors should shut down. As
 // a control frame it is received in order, after preceding frames are flushed.
@@ -9,8 +12,8 @@ import "fmt"
 type EndFrame struct {
 	BaseControlFrame
 	UninterruptibleMixin
-	// Reason is an optional reason for ending the pipeline.
-	Reason any
+	// Reason describes why the pipeline is ending; "" when unset.
+	Reason string
 }
 
 // NewEndFrame builds an EndFrame.
@@ -20,7 +23,57 @@ func NewEndFrame() *EndFrame {
 
 // String implements fmt.Stringer.
 func (f *EndFrame) String() string {
-	return fmt.Sprintf("%s(reason: %v)", f.Name(), f.Reason)
+	return fmt.Sprintf("%s(reason: %s)", f.Name(), f.Reason)
+}
+
+// StopFrame indicates the pipeline should stop but that its processors are to be
+// kept running, ready for another run. Unlike EndFrame it does not shut
+// processors down. It is normally queued by the Task. It is uninterruptible so a
+// barge-in cannot drop it.
+type StopFrame struct {
+	BaseControlFrame
+	UninterruptibleMixin
+}
+
+// NewStopFrame builds a StopFrame.
+func NewStopFrame() *StopFrame {
+	return &StopFrame{BaseControlFrame: NewBaseControlFrame("StopFrame")}
+}
+
+// PipelineFlushFrame is a probe that reports when the pipeline has drained. It is
+// pushed downstream; the Task's sink bounces it back upstream, and when it
+// reaches the source the Task closes Done. Waiting on Done therefore means every
+// frame queued ahead of the probe has completed its round trip — useful to let
+// the pipeline settle after an interruption before injecting new work.
+//
+// It is uninterruptible so the probe survives an InterruptionFrame and still
+// completes its round trip; otherwise a waiter would block forever. Done is
+// carried on the frame so concurrent flushes stay isolated, each awaiting its
+// own probe.
+type PipelineFlushFrame struct {
+	BaseControlFrame
+	UninterruptibleMixin
+	// Done is closed by the Task once the probe has completed its round trip.
+	Done chan struct{}
+
+	closeOnce sync.Once
+}
+
+// NewPipelineFlushFrame builds a PipelineFlushFrame with a fresh Done channel.
+// Wait on Done (against a context) to know the pipeline has drained.
+func NewPipelineFlushFrame() *PipelineFlushFrame {
+	return &PipelineFlushFrame{
+		BaseControlFrame: NewBaseControlFrame("PipelineFlushFrame"),
+		Done:             make(chan struct{}),
+	}
+}
+
+// CloseDone closes Done, releasing whoever is waiting on the probe. The Task
+// calls it when the probe completes its round trip. Unlike the rest of a frame's
+// state this is safe to call from any goroutine, and more than once: the probe is
+// a deliberate handoff between the waiter and the pipeline.
+func (f *PipelineFlushFrame) CloseDone() {
+	f.closeOnce.Do(func() { close(f.Done) })
 }
 
 // LLMFullResponseStartFrame marks the beginning of an LLM response, followed by
@@ -85,6 +138,10 @@ func NewTTSStoppedFrame() *TTSStoppedFrame {
 var (
 	_ ControlFrame    = (*EndFrame)(nil)
 	_ Uninterruptible = (*EndFrame)(nil)
+	_ ControlFrame    = (*StopFrame)(nil)
+	_ Uninterruptible = (*StopFrame)(nil)
+	_ ControlFrame    = (*PipelineFlushFrame)(nil)
+	_ Uninterruptible = (*PipelineFlushFrame)(nil)
 	_ ControlFrame    = (*LLMFullResponseStartFrame)(nil)
 	_ ControlFrame    = (*LLMFullResponseEndFrame)(nil)
 	_ ControlFrame    = (*TTSStartedFrame)(nil)

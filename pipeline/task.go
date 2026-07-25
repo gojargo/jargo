@@ -103,8 +103,27 @@ func (t *Task) QueueFrames(fs []frames.Frame) {
 // processed, by queueing an EndFrame.
 func (t *Task) StopWhenDone() { t.QueueFrame(frames.NewEndFrame()) }
 
+// Flush waits for the pipeline to drain: it queues a PipelineFlushFrame probe
+// and blocks until the probe has traveled down to the sink and back up to the
+// source, meaning every frame queued ahead of it has been processed. Use it to
+// let the pipeline settle — after an interruption, say — before injecting new
+// work. It returns ctx.Err() if ctx is done first.
+func (t *Task) Flush(ctx context.Context) error {
+	probe := frames.NewPipelineFlushFrame()
+	t.QueueFrame(probe)
+	select {
+	case <-probe.Done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Cancel stops the pipeline immediately by queueing a CancelFrame.
-func (t *Task) Cancel() {
+func (t *Task) Cancel() { t.cancelWithReason("") }
+
+// cancelWithReason queues a CancelFrame carrying reason, at most once.
+func (t *Task) cancelWithReason(reason string) {
 	t.mu.Lock()
 	if t.canceling {
 		t.mu.Unlock()
@@ -112,7 +131,9 @@ func (t *Task) Cancel() {
 	}
 	t.canceling = true
 	t.mu.Unlock()
-	t.QueueFrame(frames.NewCancelFrame())
+	cancel := frames.NewCancelFrame()
+	cancel.Reason = reason
+	t.QueueFrame(cancel)
 }
 
 // HasFinished reports whether the task has finished running.
@@ -193,11 +214,25 @@ func (t *Task) runLoop(ctx context.Context) error {
 
 // sinkPush observes frames reaching the end of the pipeline and signals the
 // lifecycle events the run loop waits on.
-func (t *Task) sinkPush(_ context.Context, f frames.Frame, _ processor.Direction) error {
+func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
+	// The flush probe reached the sink. Bounce the same instance back upstream so
+	// it returns to the source and the round trip covers both directions.
+	if probe, ok := f.(*frames.PipelineFlushFrame); ok {
+		return t.sink.PushFrame(ctx, probe, processor.Upstream)
+	}
+
+	// A worker frame pushed downstream — the documented default, so frames queued
+	// ahead of it are processed first — has now reached the end. Send a fresh
+	// instance back upstream so it arrives at the source, which converts it into
+	// the pipeline-wide frame.
+	if back := workerFrameEcho(f); back != nil {
+		return t.sink.PushFrame(ctx, back, processor.Upstream)
+	}
+
 	switch f.(type) {
 	case *frames.StartFrame:
 		t.startOnce.Do(func() { close(t.startSig) })
-	case *frames.EndFrame, *frames.CancelFrame:
+	case *frames.EndFrame, *frames.CancelFrame, *frames.StopFrame:
 		t.endOnce.Do(func() { close(t.endSig) })
 	}
 	if t.params.OnReachedDownstream != nil {
@@ -209,16 +244,40 @@ func (t *Task) sinkPush(_ context.Context, f frames.Frame, _ processor.Direction
 	return nil
 }
 
-// sourcePush observes frames reaching the start of the pipeline. A fatal error
-// cancels the pipeline.
-func (t *Task) sourcePush(_ context.Context, f frames.Frame, _ processor.Direction) error {
+// sourcePush observes frames reaching the start of the pipeline and converts the
+// worker frames a processor pushed upstream into the corresponding pipeline-wide
+// frame. A fatal error cancels the pipeline.
+func (t *Task) sourcePush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
+	// The flush probe completed its round trip: everything queued ahead of it has
+	// been processed, so release whoever is waiting on it.
+	if probe, ok := f.(*frames.PipelineFlushFrame); ok {
+		probe.CloseDone()
+		return nil
+	}
+
 	if ef, ok := f.(*frames.ErrorFrame); ok && ef.Fatal {
 		t.Cancel()
 	}
-	// A processor asked to end gracefully: queue an EndFrame so frames already
-	// queued flush before the pipeline stops.
-	if _, ok := f.(*frames.EndWorkerFrame); ok {
-		t.StopWhenDone()
+
+	switch fr := f.(type) {
+	case *frames.EndWorkerFrame:
+		// End gracefully: queue an EndFrame so frames already queued flush before
+		// the pipeline stops.
+		end := frames.NewEndFrame()
+		end.Reason = fr.Reason
+		t.QueueFrame(end)
+	case *frames.CancelWorkerFrame:
+		// Stop right away, without flushing.
+		t.cancelWithReason(fr.Reason)
+	case *frames.StopWorkerFrame:
+		// Stop once queued frames are flushed, leaving processors running.
+		t.QueueFrame(frames.NewStopFrame())
+	case *frames.InterruptionWorkerFrame:
+		// Queue straight into the pipeline rather than the push queue, which may
+		// be blocked waiting for a pipeline-ending frame to finish traversing.
+		if err := t.pipeline.QueueFrame(ctx, frames.NewInterruptionFrame(), processor.Downstream); err != nil {
+			return err
+		}
 	}
 	if t.params.OnReachedUpstream != nil {
 		t.params.OnReachedUpstream(f)
@@ -229,9 +288,31 @@ func (t *Task) sourcePush(_ context.Context, f frames.Frame, _ processor.Directi
 	return nil
 }
 
+// workerFrameEcho returns a fresh worker frame to send back upstream when one
+// reaches the sink, or nil if f is not a worker frame. A new instance is built
+// rather than the original being reused so the two directions never share a
+// frame; the reason, where there is one, is carried across.
+func workerFrameEcho(f frames.Frame) frames.Frame {
+	switch fr := f.(type) {
+	case *frames.EndWorkerFrame:
+		back := frames.NewEndWorkerFrame()
+		back.Reason = fr.Reason
+		return back
+	case *frames.StopWorkerFrame:
+		return frames.NewStopWorkerFrame()
+	case *frames.CancelWorkerFrame:
+		back := frames.NewCancelWorkerFrame()
+		back.Reason = fr.Reason
+		return back
+	case *frames.InterruptionWorkerFrame:
+		return frames.NewInterruptionWorkerFrame()
+	}
+	return nil
+}
+
 func isPipelineEnd(f frames.Frame) bool {
 	switch f.(type) {
-	case *frames.EndFrame, *frames.CancelFrame:
+	case *frames.EndFrame, *frames.CancelFrame, *frames.StopFrame:
 		return true
 	}
 	return false
