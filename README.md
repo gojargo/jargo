@@ -10,17 +10,19 @@
 ![Go version](https://img.shields.io/github/go-mod/go-version/gojargo/jargo)
 [![Release](https://img.shields.io/github/v/release/gojargo/jargo?sort=semver)](https://github.com/gojargo/jargo/releases)
 [![License: BSD-2-Clause](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
+[![Status: early WIP](https://img.shields.io/badge/status-early%20WIP-orange)](#project-status)
 
 </div>
 
 ---
 
-**jargo** builds real-time voice agents in Go: audio in over WebRTC, a streaming
-transcription → reasoning → speech pipeline with turn-taking and barge-in, and
-audio back out — over [RTVI](https://docs.pipecat.ai/client/introduction) so
-existing clients interoperate.
+**jargo** is a framework for real-time voice agents in Go: audio in over WebRTC,
+a streaming transcription → reasoning → speech pipeline with turn-taking and
+barge-in, and audio back out.
 
-> **Status:** early work in progress. APIs are unstable and will change.
+> [!WARNING]
+> **Early work in progress. Not ready for production.** The public API is
+> unstable and changes in any release. See [Project status](#project-status).
 
 ## Why?
 
@@ -146,6 +148,25 @@ go run ./examples/echo                 # then open http://localhost:8080
 ## Documentation
 
 See **[docs/index.md](docs/index.md)** for the full documentation.
+
+## Project status
+
+jargo is **early work in progress**, in the `0.0.x` series. It runs real
+conversations end to end, but it has not been hardened by production use.
+
+What that means in practice:
+
+- **The API will break.** Anything exported may be renamed, resliced or removed
+  in any release, with no deprecation period. Pin an exact version and read
+  [`CHANGELOG.md`](CHANGELOG.md) before upgrading.
+- **Coverage is uneven.** The core pipeline, WebRTC transport and turn-taking get
+  the most use; some of the 50+ providers are thinly exercised. Bug reports about
+  a specific provider are especially useful.
+- **What is not settled yet:** the frame catalog is still growing, and several
+  subsystems that exist upstream are not ported yet, including images and vision.
+
+Issues and pull requests are welcome, particularly ones that come with a failing
+test.
 
 ## License & attribution
 

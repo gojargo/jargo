@@ -14,6 +14,78 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Pipeline lifecycle frames.** A processor with no handle on the `Task` can now
+  ask it to change the run's lifecycle, and the `Task` converts the request into
+  the matching pipeline-wide frame: `frames.CancelWorkerFrame` becomes a
+  `CancelFrame`, `frames.StopWorkerFrame` a new `frames.StopFrame` (stop the run
+  but leave processors running), and `frames.InterruptionWorkerFrame` an
+  `InterruptionFrame`. `frames.EndWorkerFrame` already did this. The four now
+  live together in `frames/worker.go`; push them downstream so frames queued
+  ahead are processed first, and the `Task` sink returns them upstream.
+- **`Task.Flush`**, a drain barrier. It queues a `frames.PipelineFlushFrame`
+  probe that travels to the sink, is bounced back to the source, and closes its
+  `Done` channel on arrival. When `Flush` returns, every frame queued ahead of
+  the probe has been processed — useful to let a pipeline settle after an
+  interruption before injecting new work. The probe is uninterruptible, so it
+  always completes its round trip and a waiter cannot be stranded.
+- **`frames.CancelWorkerFrame` separates cancellation from failure.** Stopping a
+  healthy run (the caller hung up, a supervisor asked to stop) no longer has to
+  be dressed as a fatal error, and carries a `Reason` instead of surfacing as an
+  `ErrorFrame` to observers and clients. `frames.FatalErrorFrame` is its
+  counterpart for genuine unrecoverable failures.
+- **Runtime LLM context changes.** `frames.LLMSetToolsFrame`,
+  `frames.LLMSetToolChoiceFrame` and `frames.LLMMessagesUpdateFrame` change the
+  toolset, the tool-choice policy and the whole conversation on a running
+  pipeline. The context aggregator applies each to the shared `LLMContext` and
+  forwards it downstream. Backing them, `LLMContext` gains `SetMessages`,
+  `ToolChoice` and `SetToolChoice`.
+- **`frames.DefaultAudioInSampleRate` / `DefaultAudioOutSampleRate`**, the rates
+  `NewStartFrame` applies, exported so applications can refer to them.
+
+### Changed
+
+- **Speech-to-speech services are told when tools change.** A realtime model
+  generates continuously and never re-reads the shared context between turns, so
+  a toolset changed with `LLMContext.SetTools` never reached it. Tool changes now
+  travel as `frames.LLMSetToolsFrame`, and the OpenAI Realtime service renders
+  tools into its initial session configuration and sends a fresh `session.update`
+  whenever they change. `SetTools` and `SetToolChoice` remain for seeding a
+  context before the pipeline starts.
+- **`frames.OutputTransportMessageFrame` is a data frame again**, delivered in
+  order with the surrounding audio, for messages that must land in step with what
+  the bot is saying. The new `frames.OutputTransportMessageUrgentFrame` is the
+  system-frame variant that goes out immediately, ahead of queued audio; the RTVI
+  processor uses it. Previously the single frame had urgent semantics under the
+  ordered name and the ordered variant was unavailable.
+- **`frames.MixerControlFrame` is now the interface for the mixer control
+  family**, with `frames.MixerUpdateSettingsFrame` carrying the settings map and
+  `frames.MixerEnableFrame` carrying an `Enable` flag, replacing the single
+  settings-carrying frame.
+- **`frames.EndWorkerFrame` is a control frame** (uninterruptible) rather than a
+  system frame, so it is ordered behind the work already queued.
+- **`turns.Emitter.Broadcast` takes a frame constructor** rather than a frame,
+  and builds one instance per direction, cross-linked by `BroadcastSiblingID`.
+  The two directions are processed on separate goroutines, so sharing a single
+  frame between them was a latent data race. Observers ignore the upstream half
+  of a pair, so a broadcast event is still reported once.
+- **`frames.Frame` is a four-method interface** (`String`, `ID`, `Name`,
+  `Base`). The optional per-frame state — presentation timestamp, metadata,
+  transport source and destination, broadcast sibling id — lives on `BaseFrame`
+  and is reached through `Base()`; the accessors are still promoted onto every
+  concrete frame, so code holding a concrete type is unaffected.
+- `CancelFrame.Reason`, `EndFrame.Reason` and `EndWorkerFrame.Reason` are
+  `string` rather than `any`.
+- `frames.STTMetadataFrame` embeds `ServiceMetadataFrame`, as
+  `LLMServiceMetadataFrame` already did, and moves to `frames/metadata.go`
+  alongside it. `FunctionCallCancelFrame` moves to `frames/function.go` with the
+  other function-call frames.
+- `AudioRawData.NumFrames` is derived on each call instead of cached at
+  construction, so it stays correct when `Audio` is replaced.
+- The `frames` package documents its ownership rule: a frame has a single owner
+  at a time and must not be mutated after it is pushed.
+
+### Added
+
 - **Word-aligned TTS text and interruption-accurate context.** A new
   `frames.TTSTextFrame` carries each spoken word aligned to audio playback, with
   the original written form of transformed spans (e.g. `"$42.50"` for a token
