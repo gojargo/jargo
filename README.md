@@ -87,7 +87,7 @@ their shared library present at runtime and nothing at build time:
 
 Opus and resampling are pure Go by default; the C libopus (`-tags libopus`) and
 libsoxr (`-tags libsoxr`) are the only cgo in the tree, and both are optional. The
-[base images](docs/deploy-with-docker.md) bundle all of them.
+[base images](docs/deploy/docker.md) bundle all of them.
 
 ## Usage
 
@@ -121,8 +121,8 @@ distroless `gojargo/jargo` runtime (it bundles the ONNX Runtime), then:
 docker run --rm -p 8080:8080 -e OPENAI_API_KEY=$OPENAI_API_KEY my-bot
 ```
 
-See **[Deploy with Docker](docs/deploy-with-docker.md)** for the Dockerfile and
-the **[Quickstart](docs/quickstart.md)** for the full setup.
+See **[Deploy with Docker](docs/deploy/docker.md)** for the Dockerfile and
+the **[Quickstart](docs/getting-started/quickstart.md)** for the full setup.
 
 ## Examples
 
@@ -139,7 +139,7 @@ Runnable bots live in [`examples/`](examples):
 - **twiliobot** — a phone agent over Twilio Media Streams, with the idle watchdog.
 
 The fastest way to try them — locally or with Docker — is the
-**[Quickstart](docs/quickstart.md)**.
+**[Quickstart](docs/getting-started/quickstart.md)**.
 
 ```sh
 go run ./examples/echo                 # then open http://localhost:8080
@@ -147,7 +147,14 @@ go run ./examples/echo                 # then open http://localhost:8080
 
 ## Documentation
 
-See **[docs/index.md](docs/index.md)** for the full documentation.
+**[gojargo.github.io/jargo](https://gojargo.github.io/jargo/)** — the full
+documentation. The same pages live in [`docs/`](docs) and read fine on GitHub.
+
+Start with [Architecture](docs/concepts/architecture.md) for the model, or
+[Frames](docs/concepts/frames.md) and [Processors](docs/concepts/processors.md) for
+the engine. [Writing a processor](docs/extending/custom-processor.md) covers
+extending it. The API reference is the
+[Go reference](https://pkg.go.dev/github.com/gojargo/jargo).
 
 ## Project status
 

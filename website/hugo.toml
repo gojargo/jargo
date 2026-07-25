@@ -1,0 +1,129 @@
+# Hugo configuration for the jargo documentation site.
+#
+# This directory holds only site machinery — theme config, layouts, styles. All
+# prose lives in ../docs and is mounted below, so there is exactly one copy of
+# every page and it stays readable on GitHub.
+
+baseURL = "https://gojargo.github.io/jargo/"
+title = "jargo"
+languageCode = "en-us"
+
+enableGitInfo = true
+enableRobotsTXT = true
+
+# Hextra: https://github.com/imfing/hextra
+[module]
+  [[module.imports]]
+    path = "github.com/imfing/hextra"
+
+  # Declaring any mount replaces Hugo's defaults, so every directory the site
+  # needs is listed explicitly.
+  [[module.mounts]]
+    source = "content"
+    target = "content"
+  [[module.mounts]]
+    source = "../docs"          # ← the single source of truth
+    target = "content/docs"
+  [[module.mounts]]
+    source = "../assets"        # the logo, shared with the README
+    target = "static/img"
+  [[module.mounts]]
+    source = "assets"
+    target = "assets"
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+  [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
+    source = "data"
+    target = "data"
+  [[module.mounts]]
+    source = "i18n"
+    target = "i18n"
+  [[module.mounts]]
+    source = "archetypes"
+    target = "archetypes"
+
+[markup]
+  [markup.highlight]
+    noClasses = false
+    lineNos = false
+    codeFences = true
+  [markup.goldmark.renderer]
+    unsafe = true               # raw HTML in markdown (the README-style blocks)
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 3
+
+[params]
+  description = "A WebRTC-native, audio-first conversational-AI framework for Go."
+
+  [params.navbar]
+    displayTitle = true
+    displayLogo = true
+    [params.navbar.logo]
+      path = "img/logo.png"
+      width = 28
+      height = 28
+
+  [params.page]
+    width = "normal"
+
+  [params.theme]
+    default = "system"
+    displayToggle = true
+
+  [params.footer]
+    enable = true
+    displayCopyright = true
+    displayPoweredBy = false
+
+  # "Edit this page" points at the real file in ../docs, not a copy. The repo edit
+  # root, not the docs directory — layouts/_partials/toc.html appends the
+  # repo-relative path itself. See the comment there.
+  [params.editURL]
+    enable = true
+    base = "https://github.com/gojargo/jargo/edit/main"
+
+  [params.search]
+    enable = true
+    type = "flexsearch"
+    [params.search.flexsearch]
+      index = "content"
+      tokenize = "forward"
+
+[menu]
+  [[menu.main]]
+    name = "Documentation"
+    pageRef = "/docs"
+    weight = 1
+  [[menu.main]]
+    name = "Go reference"
+    url = "https://pkg.go.dev/github.com/gojargo/jargo"
+    weight = 2
+  [[menu.main]]
+    name = "Search"
+    weight = 3
+    [menu.main.params]
+      type = "search"
+  [[menu.main]]
+    name = "GitHub"
+    url = "https://github.com/gojargo/jargo"
+    weight = 4
+    [menu.main.params]
+      icon = "github"
+
+[[menu.sidebar]]
+  name = "Examples ↗"
+  url = "https://github.com/gojargo/jargo/tree/main/examples"
+  weight = 10
+[[menu.sidebar]]
+  name = "Benchmarks ↗"
+  url = "https://github.com/gojargo/jargo-benchmarks"
+  weight = 11
+[[menu.sidebar]]
+  name = "Changelog ↗"
+  url = "https://github.com/gojargo/jargo/blob/main/CHANGELOG.md"
+  weight = 12

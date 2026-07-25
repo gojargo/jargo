@@ -41,3 +41,9 @@ vendor/
 
 # Per-developer local Claude memory (never committed)
 CLAUDE.local.md
+
+# Hugo documentation site build output (website/; sources are in docs/)
+/website/public/
+/website/resources/_gen/
+/website/_vendor/
+/website/.hugo_build.lock

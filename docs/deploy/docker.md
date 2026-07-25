@@ -1,3 +1,8 @@
+---
+title: Deploy with Docker
+weight: 1
+---
+
 # Deploy with Docker
 
 The default build is cgo-free, but a bot still uses native libraries at run
@@ -47,7 +52,7 @@ turn detection and noise reduction work with no extra configuration.
 
 ## Try an example bot
 
-Point the build at one of jargo's [examples](../examples), from a jargo
+Point the build at one of jargo's [examples](../../examples), from a jargo
 checkout:
 
 ```dockerfile

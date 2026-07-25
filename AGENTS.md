@@ -60,10 +60,14 @@ Formatting and lint are enforced by **golangci-lint** (`.golangci.yml`):
 ## Layout
 
 - `frames/`, `pipeline/`, `processor/` — the streaming engine.
-- `transport/` — Pion WebRTC, plus WebSocket/Twilio.
+- `transport/` — Pion WebRTC, plus WebSocket/telephony and LiveKit.
 - `service/` + `provider/` — STT/LLM/TTS/S2S interfaces and their providers.
-- `turns/`, `audio/` — turn-taking (VAD + Smart Turn) and audio handling.
-- `rtvi/`, `aggregators/`, `metrics/`, `tracing/` — RTVI, context, observability.
+- `audio/` — Opus, resampling, mixing, VAD and Smart Turn analyzers.
+- `processor/turns`, `processor/aggregators`, `processor/rtvi` — turn-taking,
+  conversation context, RTVI.
+- `observers/`, `telemetry/` — frame observers, metrics and tracing.
+- `docs/` — the documentation sources; `website/` is the Hugo site that renders
+  them (see `website/hugo.toml`). Edit `docs/`, never a copy.
 
 ## Security
 

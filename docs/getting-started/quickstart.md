@@ -1,6 +1,11 @@
+---
+title: Quickstart
+weight: 2
+---
+
 # Quickstart
 
-The example bots live in [`examples/`](../examples):
+The example bots live in [`examples/`](../../examples):
 
 - **echo** — speak into the browser, hear yourself back. No API keys.
 - **voicebot** — the full voice agent: STT → LLM → TTS with turn-taking and
@@ -14,31 +19,36 @@ Run them with Docker (no host setup) or with a local Go toolchain.
 ## Run with Docker
 
 jargo publishes a build base and a distroless runtime base image, so you can
-containerise a bot without installing the native (cgo) dependencies on the host.
-The **[Deploy with Docker](deploy-with-docker.md)** guide has a copyable
-two-stage Dockerfile for the example bots and the run command
-(`-e DEEPGRAM_API_KEY=…` etc., then open <http://localhost:8080>).
+containerise a bot without installing any native dependencies on the host. The
+**[Deploy with Docker](../deploy/docker.md)** guide has a copyable two-stage
+Dockerfile for the example bots and the run command (`-e DEEPGRAM_API_KEY=…`
+etc., then open <http://localhost:8080>).
 
 ## Run locally
 
 ### Prerequisites
 
-jargo uses cgo and two native libraries:
+The default build is **cgo-free** — `go build ./...` needs no C toolchain. One
+native library is loaded at run time, through
+[purego](https://github.com/ebitengine/purego):
 
-- **libsoxr** — high-quality audio resampling (linked at build time).
-- **ONNX Runtime** — VAD and turn detection (loaded at run time).
+- **ONNX Runtime** — VAD and end-of-turn detection.
 
 ```sh
-# Debian/Ubuntu
-sudo apt-get install -y libsoxr-dev      # libsoxr0 at run time
-
-# ONNX Runtime: download the shared library and point jargo at it
+# Download a build for your platform, then point jargo at it:
 export JARGO_ONNXRUNTIME_LIB=/path/to/libonnxruntime.so
 ```
 
-Get the ONNX Runtime library from the
+Get it from the
 [onnxruntime releases](https://github.com/microsoft/onnxruntime/releases) — the
-`onnxruntime-linux-*` archive contains `lib/libonnxruntime.so`.
+`onnxruntime-linux-*` archive contains `lib/libonnxruntime.so`. If the variable is
+unset, jargo looks for the library by its conventional name on the loader's
+default search path.
+
+Without the ONNX Runtime the voice bot **still runs**: it falls back to STT
+endpointing for turn-taking and loses barge-in. Everything else in the list below
+is optional — see [Installation](installation.md) for RNNoise and the `libsoxr` /
+`libopus` build tags.
 
 ### Echo bot — no keys
 
@@ -59,7 +69,7 @@ go run ./examples/voicebot        # then open http://localhost:8080
 
 The voicebot runs a fixed Deepgram + Anthropic + ElevenLabs stack. To try a
 different provider, run one of the per-provider examples under
-[`examples/voice`](../examples/voice) — one self-contained file each, with the
+[`examples/voice`](../../examples/voice) — one self-contained file each, with the
 provider wired explicitly in Go:
 
 ```sh
@@ -72,6 +82,10 @@ These are **headless backends**: they expose the WebRTC `/offer` endpoint and no
 web UI. Point a browser client at `http://localhost:8080` — the `nextjs-voicebot`
 example in [jargo-client-react](https://github.com/gojargo/jargo-client-react),
 with `NEXT_PUBLIC_JARGO_URL=http://localhost:8080`. Each example's doc comment
-lists the API keys it needs. See [Providers](../README.md#providers) for the full
-list, and [Turn-taking](turn-taking.md) for tuning end-of-turn detection and
-barge-in.
+lists the API keys it needs.
+
+## Next
+
+- **[Your first bot](your-first-bot.md)** — the same pipeline, built up line by line.
+- **[Architecture](../concepts/architecture.md)** — how the pieces fit together.
+- **[Turn-taking](../guides/turn-taking.md)** — tuning end-of-turn detection and barge-in.
