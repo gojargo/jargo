@@ -114,7 +114,7 @@ func (s *Service) setup() map[string]any {
 	setup := map[string]any{
 		"model": "models/" + s.cfg.Model,
 		"generationConfig": map[string]any{
-			"responseModalities": []string{"AUDIO"},
+			"responseModalities": []string{modalityAudio},
 			"speechConfig": map[string]any{
 				"voiceConfig": map[string]any{
 					"prebuiltVoiceConfig": map[string]any{"voiceName": s.cfg.Voice},
@@ -224,17 +224,17 @@ func (u usageMetadata) tokenUsage() frames.LLMTokenUsage {
 	}
 	for _, d := range u.PromptTokensDetails {
 		switch d.Modality {
-		case "AUDIO":
+		case modalityAudio:
 			usage.InputAudioTokens += d.TokenCount
-		case "TEXT":
+		case modalityText:
 			usage.InputTextTokens += d.TokenCount
 		}
 	}
 	for _, d := range u.ResponseTokensDetails {
 		switch d.Modality {
-		case "AUDIO":
+		case modalityAudio:
 			usage.OutputAudioTokens += d.TokenCount
-		case "TEXT":
+		case modalityText:
 			usage.OutputTextTokens += d.TokenCount
 		}
 	}

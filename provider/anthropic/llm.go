@@ -36,11 +36,8 @@ func NewLLM(cfg Config) *Service {
 	return NewLLMWithOptions("AnthropicLLM", cfg)
 }
 
-// NewLLMWithOptions builds an Anthropic LLM service named name with extra SDK
-// request options appended. It backs alternative Anthropic backends — such as
-// Amazon Bedrock or Google Vertex — that authorize and address requests through
-// an SDK option rather than an API key.
-func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *Service {
+// requestOptions builds the SDK client options for cfg, with extra appended.
+func requestOptions(cfg Config, extra ...option.RequestOption) []option.RequestOption {
 	var opts []option.RequestOption
 	if cfg.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(cfg.APIKey))
@@ -57,9 +54,16 @@ func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *
 	for k, v := range cfg.Extra {
 		opts = append(opts, option.WithJSONSet(k, v))
 	}
-	opts = append(opts, extra...)
+	return append(opts, extra...)
+}
+
+// NewLLMWithOptions builds an Anthropic LLM service named name with extra SDK
+// request options appended. It backs alternative Anthropic backends — such as
+// Amazon Bedrock or Google Vertex — that authorize and address requests through
+// an SDK option rather than an API key.
+func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *Service {
 	s := &Service{
-		client:      sdk.NewClient(opts...),
+		client:      sdk.NewClient(requestOptions(cfg, extra...)...),
 		model:       sdk.ModelClaudeHaiku4_5,
 		maxTokens:   defaultMaxTokens,
 		cachePrompt: true,

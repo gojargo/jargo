@@ -25,6 +25,9 @@ const (
 	outputSampleRate = 24000
 	// readLimit bounds a single inbound message; audio parts are large.
 	readLimit = 1 << 24
+	// modalityAudio and modalityText are the Live API's modality names.
+	modalityAudio = "AUDIO"
+	modalityText  = "TEXT"
 )
 
 // Config configures the Gemini Live service.
