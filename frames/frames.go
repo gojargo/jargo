@@ -1,5 +1,37 @@
 // Package frames defines the Frame type and the core frame categories — system,
 // data and control — that flow through a jargo pipeline.
+//
+// # Categories
+//
+// Every frame belongs to exactly one category, which decides how the pipeline
+// schedules it and whether an interruption may drop it:
+//
+//   - [SystemFrame] is delivered ahead of queued work and is never dropped by an
+//     interruption. Lifecycle and out-of-band signals: [StartFrame],
+//     [CancelFrame], [InterruptionFrame], [MetricsFrame].
+//   - [DataFrame] is processed in order and is canceled by an interruption. The
+//     payload frames: [TextFrame], [OutputAudioRawFrame], [LLMContextFrame].
+//   - [ControlFrame] is processed in order like a data frame and is likewise
+//     canceled, but carries instructions rather than payload: [EndFrame],
+//     [TTSStartedFrame], [FunctionCallResultFrame].
+//
+// A frame joins a category by embedding [BaseSystemFrame], [BaseDataFrame] or
+// [BaseControlFrame]; assert the matching interface to test the category. The
+// [Uninterruptible] marker is orthogonal: embed [UninterruptibleMixin] alongside
+// a data or control base to keep a frame queued through an interruption.
+//
+// # Ownership
+//
+// A frame carries mutable state behind pointer receivers and is deliberately not
+// synchronized. Exactly one goroutine owns a frame at a time: a processor may
+// read and mutate a frame until it pushes the frame onward, and must not touch
+// it afterwards. Do not mutate a frame that is being pushed in both directions
+// at once — the two ends run on separate goroutines, so a shared frame must be
+// treated as read-only by both.
+//
+// [LLMContext] is the exception. It is a long-lived aggregate shared by the
+// aggregators and the LLM service rather than a frame, and it is safe for
+// concurrent use.
 package frames
 
 import (
@@ -19,7 +51,7 @@ func nextID() uint64 { return idCounter.Add(1) }
 // formatPTS renders a frame's presentation timestamp for String output,
 // returning the nanosecond value or "none" when the timestamp is unset.
 func formatPTS(f Frame) string {
-	if pts, ok := f.PTS(); ok {
+	if pts, ok := f.Base().PTS(); ok {
 		return strconv.FormatInt(pts, 10)
 	}
 	return "none"
@@ -27,11 +59,18 @@ func formatPTS(f Frame) string {
 
 // Frame is implemented by every frame that flows through a pipeline. Concrete
 // frames embed BaseFrame (directly or via BaseSystemFrame, BaseDataFrame or
-// BaseControlFrame), which supplies all of these methods.
+// BaseControlFrame), which supplies these methods.
 //
 // The unexported isFrame marker means a type must embed BaseFrame to satisfy
-// Frame; this guarantees every Frame has a valid id, name and metadata map.
-// Frames carry mutable state and are passed as pointers.
+// Frame; this guarantees every Frame has a valid id and name. Frames carry
+// mutable state and are passed as pointers.
+//
+// The interface is deliberately narrow: identity is all a pipeline needs to
+// route, log and correlate a frame. The optional per-frame state — presentation
+// timestamp, metadata, transport source and destination, broadcast sibling id —
+// lives on [BaseFrame] and is reached through Base. Those accessors are also
+// promoted onto every concrete frame, so a caller holding a concrete type can
+// keep calling them directly.
 type Frame interface {
 	fmt.Stringer
 
@@ -40,38 +79,19 @@ type Frame interface {
 	// Name is a human-readable label, "<TypeName>#<n>".
 	Name() string
 
-	// PTS is the presentation timestamp in nanoseconds; ok is false if unset.
-	PTS() (pts int64, ok bool)
-	// SetPTS sets the presentation timestamp in nanoseconds.
-	SetPTS(pts int64)
-
-	// BroadcastSiblingID is the id of the paired frame when this frame was
-	// broadcast in both directions; ok is false if unset.
-	BroadcastSiblingID() (id uint64, ok bool)
-	// SetBroadcastSiblingID records the paired frame id.
-	SetBroadcastSiblingID(id uint64)
-
-	// Metadata is an arbitrary, mutable per-frame metadata map.
-	Metadata() map[string]any
-
-	// TransportSource is the name of the transport that created this frame.
-	TransportSource() string
-	// SetTransportSource sets the transport source.
-	SetTransportSource(source string)
-	// TransportDestination is the name of the transport this frame targets.
-	TransportDestination() string
-	// SetTransportDestination sets the transport destination.
-	SetTransportDestination(dest string)
+	// Base exposes the embedded BaseFrame and the optional state it carries.
+	Base() *BaseFrame
 
 	isFrame()
 }
 
 // BaseFrame is embedded by every concrete frame and implements Frame. Construct
-// it with NewBaseFrame so the id, name and metadata map are initialized.
+// it with NewBaseFrame so the id and name are initialized.
 type BaseFrame struct {
 	id                 uint64
 	typeName           string
-	pts                *int64
+	pts                int64
+	hasPTS             bool
 	broadcastSiblingID *uint64
 	metadata           map[string]any
 	transportSource    string
@@ -82,12 +102,12 @@ type BaseFrame struct {
 // typeName (e.g. "TextFrame"). It assigns a unique id; the "<typeName>#<id>"
 // name is formatted on demand.
 func NewBaseFrame(typeName string) BaseFrame {
-	return BaseFrame{
-		id:       nextID(),
-		typeName: typeName,
-		metadata: map[string]any{},
-	}
+	return BaseFrame{id: nextID(), typeName: typeName}
 }
+
+// Base implements Frame, returning the BaseFrame itself so a caller holding the
+// Frame interface can reach the optional per-frame state.
+func (f *BaseFrame) Base() *BaseFrame { return f }
 
 // ID implements Frame.
 func (f *BaseFrame) ID() uint64 { return f.id }
@@ -99,15 +119,13 @@ func (f *BaseFrame) Name() string { return f.typeName + "#" + strconv.FormatUint
 func (f *BaseFrame) String() string { return f.Name() }
 
 // PTS implements Frame.
-func (f *BaseFrame) PTS() (int64, bool) {
-	if f.pts == nil {
-		return 0, false
-	}
-	return *f.pts, true
-}
+func (f *BaseFrame) PTS() (int64, bool) { return f.pts, f.hasPTS }
 
 // SetPTS implements Frame.
-func (f *BaseFrame) SetPTS(pts int64) { f.pts = &pts }
+func (f *BaseFrame) SetPTS(pts int64) {
+	f.pts = pts
+	f.hasPTS = true
+}
 
 // BroadcastSiblingID implements Frame.
 func (f *BaseFrame) BroadcastSiblingID() (uint64, bool) {
@@ -120,8 +138,9 @@ func (f *BaseFrame) BroadcastSiblingID() (uint64, bool) {
 // SetBroadcastSiblingID implements Frame.
 func (f *BaseFrame) SetBroadcastSiblingID(id uint64) { f.broadcastSiblingID = &id }
 
-// Metadata implements Frame. It lazily initializes the map so a zero BaseFrame
-// is still usable.
+// Metadata implements Frame. The map is allocated on first use, so a frame that
+// carries no metadata costs nothing. Like the rest of a frame's state it is
+// unsynchronized: only the goroutine that owns the frame may call this.
 func (f *BaseFrame) Metadata() map[string]any {
 	if f.metadata == nil {
 		f.metadata = map[string]any{}

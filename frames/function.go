@@ -89,9 +89,35 @@ func (f *FunctionCallResultFrame) String() string {
 	return fmt.Sprintf("%s(%s, error: %t)", f.Name(), f.ToolName, f.IsError)
 }
 
+// FunctionCallCancelFrame reports that a tool call was canceled (for example by
+// a barge-in) so trackers can decrement their in-flight count. It is a control
+// frame.
+type FunctionCallCancelFrame struct {
+	BaseControlFrame
+	// ToolCallID identifies the canceled call.
+	ToolCallID string
+	// ToolName is the tool's name.
+	ToolName string
+}
+
+// NewFunctionCallCancelFrame builds a FunctionCallCancelFrame.
+func NewFunctionCallCancelFrame(toolCallID, name string) *FunctionCallCancelFrame {
+	return &FunctionCallCancelFrame{
+		BaseControlFrame: NewBaseControlFrame("FunctionCallCancelFrame"),
+		ToolCallID:       toolCallID,
+		ToolName:         name,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *FunctionCallCancelFrame) String() string {
+	return fmt.Sprintf("%s(%s)", f.Name(), f.ToolName)
+}
+
 // Compile-time interface checks.
 var (
 	_ ControlFrame = (*FunctionCallsStartedFrame)(nil)
 	_ ControlFrame = (*FunctionCallInProgressFrame)(nil)
 	_ ControlFrame = (*FunctionCallResultFrame)(nil)
+	_ ControlFrame = (*FunctionCallCancelFrame)(nil)
 )
