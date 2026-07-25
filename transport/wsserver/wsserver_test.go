@@ -174,6 +174,13 @@ type call struct {
 // head is the transport input and tail is its output.
 func dial(t *testing.T, ser wsserver.Serializer, params transport.Params) *call {
 	t.Helper()
+	return dialTuned(t, ser, params, nil)
+}
+
+// dialTuned is dial with a hook to adjust the task params, for tests that need
+// to observe upstream traffic.
+func dialTuned(t *testing.T, ser wsserver.Serializer, params transport.Params, tune func(*pipeline.TaskParams)) *call {
+	t.Helper()
 
 	c := &call{done: make(chan error, 1)}
 	ready := make(chan struct{})
@@ -191,10 +198,11 @@ func dial(t *testing.T, ser wsserver.Serializer, params transport.Params) *call 
 		}
 		c.tr = tr
 		c.tap = newTap()
-		c.task = pipeline.NewTask(
-			pipeline.New(tr.Input(), c.tap, tr.Output()),
-			pipeline.TaskParams{AudioInSampleRate: 8000, AudioOutSampleRate: 8000},
-		)
+		tp := pipeline.TaskParams{AudioInSampleRate: 8000, AudioOutSampleRate: 8000}
+		if tune != nil {
+			tune(&tp)
+		}
+		c.task = pipeline.NewTask(pipeline.New(tr.Input(), c.tap, tr.Output()), tp)
 		close(ready)
 		c.done <- c.task.Run(ctx)
 	}))
@@ -334,40 +342,55 @@ func TestSetupRunsBeforeReading(t *testing.T) {
 	}
 }
 
-// TestSetupErrorStallsTheStart documents what happens when a serializer cannot
-// configure itself from the StartFrame. The failure is reported as a non-fatal
-// error frame, but the StartFrame never reaches the end of the pipeline, so the
-// run neither starts streaming nor returns; canceling the context is the only
-// way out. Done() does not help, because the read loop never started.
+// TestSetupErrorEndsTheCall checks a serializer that cannot configure itself
+// ends the session instead of stalling it.
 //
-// No shipped serializer returns an error from Setup — the error return exists
-// but is unused — so this is a latent shape rather than a live fault. Anyone who
-// adds a Setup that can genuinely fail needs a fatal error path, or the pipeline
-// hangs instead of failing fast. This test is the record of that.
-func TestSetupErrorStallsTheStart(t *testing.T) {
+// The ordering is the point. The StartFrame must reach the rest of the pipeline
+// before the serializer is set up; configuring first and failing would swallow
+// the StartFrame, leaving every processor downstream uninitialized and the run
+// unable to finish. Setup therefore runs in StartReading, after the push and
+// before the first inbound message is decoded.
+//
+// The failure is fatal rather than logged and shrugged off: a session that
+// cannot speak the provider's wire format can neither hear nor answer, so the
+// pipeline ends and the socket closes.
+func TestSetupErrorEndsTheCall(t *testing.T) {
 	ser := &testSerializer{setupErr: errSerialize}
 	c := dial(t, ser, params())
 
-	c.task.StopWhenDone()
+	// The budget is deliberately tight. Tearing the session down with the normal
+	// close handshake would block the frame-processing goroutine for up to five
+	// seconds waiting on the peer, wedging the pipeline; aborting takes
+	// microseconds. A regression to the handshake fails here rather than passing
+	// slowly.
 	select {
 	case <-c.done:
-		t.Fatal("Run returned; the stall documented here has been fixed, so update this test")
-	case <-time.After(500 * time.Millisecond):
-	}
-
-	c.cancel()
-	select {
-	case err := <-c.done:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Run error = %v, want context.Canceled", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return even after the context was canceled")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the pipeline neither started nor finished after a Setup failure")
 	}
 	c.stop.Do(func() {}) // already drained
 
 	if called, _, _ := ser.snapshot(); !called {
 		t.Error("Setup was never called")
+	}
+
+	// Done must close, or an app waiting on it to tear the call down would leak
+	// the session: the read loop never started, so nothing else closes it.
+	select {
+	case <-c.tr.Done():
+	case <-time.After(2 * time.Second):
+		t.Error("Done was not closed after the Setup failure")
+	}
+
+	// The StartFrame reached the pipeline despite the failure.
+	var sawStart bool
+	for _, f := range c.tap.frames() {
+		if _, ok := f.(*frames.StartFrame); ok {
+			sawStart = true
+		}
+	}
+	if !sawStart {
+		t.Error("the StartFrame never reached the pipeline; Setup must not run before the push")
 	}
 }
 

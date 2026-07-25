@@ -95,10 +95,24 @@ func (s *Session) write(ctx context.Context, msg []byte) error {
 }
 
 // Close closes the socket and signals Done. It is idempotent.
+//
+// It performs the WebSocket close handshake, which waits up to five seconds for
+// the peer to reply, so it belongs on the read goroutine and not on a
+// frame-processing one. Use abort where the caller cannot afford to wait.
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
 		_ = s.conn.Close(websocket.StatusNormalClosure, "")
+	})
+}
+
+// abort tears the socket down without the close handshake and signals Done. It
+// is for a session that never started: there is no conversation to end politely,
+// and the caller is a frame-processing goroutine that must not block.
+func (s *Session) abort() {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		_ = s.conn.CloseNow()
 	})
 }
 
@@ -119,6 +133,7 @@ type inputTransport struct {
 	readWG     sync.WaitGroup
 	mu         sync.Mutex
 	readCancel context.CancelFunc
+	start      *frames.StartFrame
 }
 
 func newInput(sess *Session, ser Serializer, params transport.Params) *inputTransport {
@@ -127,19 +142,43 @@ func newInput(sess *Session, ser Serializer, params transport.Params) *inputTran
 	return in
 }
 
-// ProcessFrame sets the serializer up from the StartFrame before the base starts
-// reading, then defers to the base.
+// ProcessFrame records the StartFrame for the serializer and defers to the base.
+//
+// The serializer is set up in StartReading rather than here, because the base
+// pushes the StartFrame downstream before it calls StartReading. Configuring the
+// serializer first would mean a failure swallowed the StartFrame, leaving every
+// processor downstream uninitialized and the pipeline unable to finish.
 func (in *inputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if sf, ok := f.(*frames.StartFrame); ok {
-		if err := in.ser.Setup(sf); err != nil {
-			return err
-		}
+		in.mu.Lock()
+		in.start = sf
+		in.mu.Unlock()
 	}
 	return in.BaseInput.ProcessFrame(ctx, f, dir)
 }
 
-// StartReading launches the socket read loop.
+// StartReading configures the serializer and launches the socket read loop. It
+// runs after the StartFrame has reached the rest of the pipeline and before any
+// inbound message is deserialized, so the serializer always sees the pipeline's
+// configuration before the first frame it must decode.
+//
+// A serializer that cannot configure itself leaves the session unable to speak
+// the provider's wire format at all, so the failure is fatal: it ends the
+// pipeline and closes the socket rather than holding a call open that can
+// neither hear nor answer.
 func (in *inputTransport) StartReading(ctx context.Context) error {
+	in.mu.Lock()
+	sf := in.start
+	in.mu.Unlock()
+
+	if sf != nil {
+		if err := in.ser.Setup(sf); err != nil {
+			in.PushError(ctx, "wsserver: serializer setup failed", err, true)
+			in.sess.abort()
+			return nil // reported as a fatal error frame; do not report it twice
+		}
+	}
+
 	readCtx, cancel := context.WithCancel(ctx)
 	in.mu.Lock()
 	in.readCancel = cancel
