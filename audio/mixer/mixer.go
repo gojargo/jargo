@@ -1,7 +1,7 @@
 // Package mixer mixes background audio into a transport's outgoing audio. Loop
 // plays a PCM buffer on a loop, blending it under the bot's speech at a
 // configurable volume; its volume and mute state can be changed at runtime
-// through a frames.MixerControlFrame. It plugs into an output transport via
+// through a frames.MixerUpdateSettingsFrame. It plugs into an output transport via
 // Params.AudioOutMixer.
 package mixer
 
@@ -24,7 +24,7 @@ type LoopConfig struct {
 	// Volume scales the background (0..1); 0 uses 0.3.
 	Volume float64
 	// Enabled starts the mixer active; a disabled mixer passes audio through
-	// until a MixerControlFrame enables it.
+	// until a MixerEnableFrame enables it.
 	Enabled bool
 }
 
