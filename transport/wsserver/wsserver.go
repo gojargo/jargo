@@ -96,9 +96,11 @@ func (s *Session) write(ctx context.Context, msg []byte) error {
 
 // Close closes the socket and signals Done. It is idempotent.
 //
-// It performs the WebSocket close handshake, which waits up to five seconds for
-// the peer to reply, so it belongs on the read goroutine and not on a
-// frame-processing one. Use abort where the caller cannot afford to wait.
+// It is safe on the read path, where it is deferred by readLoop: a read that
+// fails or is canceled has already closed the connection underneath, so Close
+// finds it closed and returns at once. Called on a live connection it instead
+// performs the close handshake and waits up to five seconds for the peer to
+// reply, which must never happen on a frame-processing goroutine — see abort.
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		close(s.done)

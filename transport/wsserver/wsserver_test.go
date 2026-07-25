@@ -590,3 +590,42 @@ func findTranscription(fs []frames.Frame) *frames.TranscriptionFrame {
 	}
 	return nil
 }
+
+// teardownBudget is far below the five seconds a WebSocket close handshake may
+// spend waiting on a peer, so a regression that starts performing the handshake
+// during teardown fails here instead of merely running slowly.
+const teardownBudget = time.Second
+
+// TestTeardownIsPromptWhenPeerIsSilent checks ending a call does not wait on the
+// close handshake. Stopping the read cancels its context, and the WebSocket
+// library closes the connection itself when a read fails, so the deferred Close
+// finds the socket already closed and returns immediately rather than sending a
+// close frame and waiting for a reply that a silent peer will never send.
+func TestTeardownIsPromptWhenPeerIsSilent(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	c.ready(t)
+
+	// The client never reads, so it never auto-replies to a close frame.
+	start := time.Now()
+	c.shutdown(t)
+
+	if elapsed := time.Since(start); elapsed > teardownBudget {
+		t.Errorf("teardown took %v, want under %v; the close handshake is being waited on", elapsed, teardownBudget)
+	}
+}
+
+// TestTeardownIsPromptWhenPeerVanished is the telephony case that matters: the
+// provider tore the call down on its side, so nothing will ever answer a close
+// frame. Teardown must not stall on it.
+func TestTeardownIsPromptWhenPeerVanished(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	c.ready(t)
+	_ = c.client.CloseNow()
+
+	start := time.Now()
+	c.shutdown(t)
+
+	if elapsed := time.Since(start); elapsed > teardownBudget {
+		t.Errorf("teardown took %v, want under %v", elapsed, teardownBudget)
+	}
+}
