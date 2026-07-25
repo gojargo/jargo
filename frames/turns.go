@@ -24,6 +24,11 @@ func NewVADUserStartedSpeakingFrame(startSecs float64) *VADUserStartedSpeakingFr
 	}
 }
 
+// String implements fmt.Stringer.
+func (f *VADUserStartedSpeakingFrame) String() string {
+	return fmt.Sprintf("%s(start_secs: %.3f)", f.Name(), f.StartSecs)
+}
+
 // VADUserStoppedSpeakingFrame reports that the VAD heard the user stop speaking.
 // It is a system frame.
 type VADUserStoppedSpeakingFrame struct {
@@ -43,6 +48,11 @@ func NewVADUserStoppedSpeakingFrame(stopSecs float64, timestamp string) *VADUser
 		StopSecs:        stopSecs,
 		Timestamp:       timestamp,
 	}
+}
+
+// String implements fmt.Stringer.
+func (f *VADUserStoppedSpeakingFrame) String() string {
+	return fmt.Sprintf("%s(stop_secs: %.3f)", f.Name(), f.StopSecs)
 }
 
 // UserSpeakingFrame is emitted periodically while the user is speaking, a
@@ -90,39 +100,6 @@ func NewUserMuteStoppedFrame() *UserMuteStoppedFrame {
 	return &UserMuteStoppedFrame{BaseSystemFrame: NewBaseSystemFrame("UserMuteStoppedFrame")}
 }
 
-// STTMetadataFrame carries metadata an STT service broadcasts at pipeline start.
-// Turn-stop strategies use the p99 time-to-final-speech latency to size their
-// safety-net timeouts, and a service that does its own server-side endpointing
-// recommends external turn strategies through UserTurns. It is a system frame
-// and satisfies ServiceMetadata.
-type STTMetadataFrame struct {
-	BaseSystemFrame
-	// ServiceName names the STT service that broadcast the metadata.
-	ServiceName string
-	// UserTurns is the turn strategy the service recommends; the user aggregator
-	// adopts it unless the application configured its own.
-	UserTurns UserTurnRecommendation
-	// TTFSP99Latency is the p99 latency from end of speech to a finalized
-	// transcript. Zero means unknown; strategies fall back to a default.
-	TTFSP99Latency time.Duration
-}
-
-// NewSTTMetadataFrame builds an STTMetadataFrame reporting the p99
-// time-to-final-speech latency. Set ServiceName and UserTurns on the returned
-// frame to describe the service further.
-func NewSTTMetadataFrame(ttfsP99 time.Duration) *STTMetadataFrame {
-	return &STTMetadataFrame{
-		BaseSystemFrame: NewBaseSystemFrame("STTMetadataFrame"),
-		TTFSP99Latency:  ttfsP99,
-	}
-}
-
-// Service implements ServiceMetadata.
-func (f *STTMetadataFrame) Service() string { return f.ServiceName }
-
-// RecommendedUserTurns implements ServiceMetadata.
-func (f *STTMetadataFrame) RecommendedUserTurns() UserTurnRecommendation { return f.UserTurns }
-
 // UserIdleTimeoutUpdateFrame updates the user-idle timeout at runtime. A value
 // <= 0 disables idle detection. It is a system frame.
 type UserIdleTimeoutUpdateFrame struct {
@@ -139,24 +116,9 @@ func NewUserIdleTimeoutUpdateFrame(timeout time.Duration) *UserIdleTimeoutUpdate
 	}
 }
 
-// FunctionCallCancelFrame reports that a tool call was canceled (for example by
-// a barge-in) so trackers can decrement their in-flight count. It is a control
-// frame.
-type FunctionCallCancelFrame struct {
-	BaseControlFrame
-	// ToolCallID identifies the canceled call.
-	ToolCallID string
-	// ToolName is the tool's name.
-	ToolName string
-}
-
-// NewFunctionCallCancelFrame builds a FunctionCallCancelFrame.
-func NewFunctionCallCancelFrame(toolCallID, name string) *FunctionCallCancelFrame {
-	return &FunctionCallCancelFrame{
-		BaseControlFrame: NewBaseControlFrame("FunctionCallCancelFrame"),
-		ToolCallID:       toolCallID,
-		ToolName:         name,
-	}
+// String implements fmt.Stringer.
+func (f *UserIdleTimeoutUpdateFrame) String() string {
+	return fmt.Sprintf("%s(timeout: %s)", f.Name(), f.Timeout)
 }
 
 // UserTurnInferenceCompletedFrame signals that an external judge (an LLM
@@ -225,31 +187,6 @@ func NewLLMMessagesAppendFrame(messages []Message) *LLMMessagesAppendFrame {
 	}
 }
 
-// String implements fmt.Stringer.
-func (f *VADUserStartedSpeakingFrame) String() string {
-	return fmt.Sprintf("%s(start_secs: %.3f)", f.Name(), f.StartSecs)
-}
-
-// String implements fmt.Stringer.
-func (f *VADUserStoppedSpeakingFrame) String() string {
-	return fmt.Sprintf("%s(stop_secs: %.3f)", f.Name(), f.StopSecs)
-}
-
-// String implements fmt.Stringer.
-func (f *STTMetadataFrame) String() string {
-	return fmt.Sprintf("%s(ttfs_p99: %s)", f.Name(), f.TTFSP99Latency)
-}
-
-// String implements fmt.Stringer.
-func (f *UserIdleTimeoutUpdateFrame) String() string {
-	return fmt.Sprintf("%s(timeout: %s)", f.Name(), f.Timeout)
-}
-
-// String implements fmt.Stringer.
-func (f *FunctionCallCancelFrame) String() string {
-	return fmt.Sprintf("%s(%s)", f.Name(), f.ToolName)
-}
-
 // Compile-time interface checks.
 var (
 	_ SystemFrame  = (*VADUserStartedSpeakingFrame)(nil)
@@ -258,10 +195,8 @@ var (
 	_ SystemFrame  = (*BotSpeakingFrame)(nil)
 	_ SystemFrame  = (*UserMuteStartedFrame)(nil)
 	_ SystemFrame  = (*UserMuteStoppedFrame)(nil)
-	_ SystemFrame  = (*STTMetadataFrame)(nil)
 	_ SystemFrame  = (*UserIdleTimeoutUpdateFrame)(nil)
 	_ SystemFrame  = (*SpeechControlParamsFrame)(nil)
-	_ ControlFrame = (*FunctionCallCancelFrame)(nil)
 	_ ControlFrame = (*UserTurnInferenceCompletedFrame)(nil)
 	_ DataFrame    = (*LLMMarkerFrame)(nil)
 	_ ControlFrame = (*LLMMessagesAppendFrame)(nil)

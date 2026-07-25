@@ -74,15 +74,16 @@ func (c *UserIdleController) Push(ctx context.Context, f frames.Frame, dir proce
 	return emit.Push(ctx, f, dir)
 }
 
-// Broadcast sends a frame both downstream and upstream (for use from the callback).
-func (c *UserIdleController) Broadcast(ctx context.Context, f frames.Frame) error {
+// Broadcast sends a frame both downstream and upstream (for use from the
+// callback), building a separate instance for each direction.
+func (c *UserIdleController) Broadcast(ctx context.Context, build func() frames.Frame) error {
 	c.mu.Lock()
 	emit := c.emit
 	c.mu.Unlock()
 	if emit == nil {
 		return nil
 	}
-	return emit.Broadcast(ctx, f)
+	return emit.Broadcast(ctx, build)
 }
 
 // Process updates idle state from one frame and arms/cancels the timer.

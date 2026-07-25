@@ -161,3 +161,23 @@ func TestTransportSourceDest(t *testing.T) {
 			f.TransportSource(), f.TransportDestination())
 	}
 }
+
+// TestPipelineFlushDone checks the probe's Done channel closes once and stays
+// safe to close again, since the Task may see the probe more than once.
+func TestPipelineFlushDone(t *testing.T) {
+	probe := frames.NewPipelineFlushFrame()
+	select {
+	case <-probe.Done:
+		t.Fatal("Done should be open on a fresh probe")
+	default:
+	}
+
+	probe.CloseDone()
+	probe.CloseDone() // must not panic
+
+	select {
+	case <-probe.Done:
+	default:
+		t.Error("Done should be closed after CloseDone")
+	}
+}

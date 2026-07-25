@@ -22,7 +22,7 @@ type strategyEnv struct {
 	inferenceTriggered func()
 	stopped            func(params UserTurnStoppedParams)
 	push               func(f frames.Frame, dir processor.Direction)
-	broadcast          func(f frames.Frame)
+	broadcast          func(build func() frames.Frame)
 }
 
 // after schedules fn to run after d with the shared mutex held, returning a
@@ -166,10 +166,11 @@ func (b *StopStrategyBase) Push(f frames.Frame, dir processor.Direction) {
 	}
 }
 
-// Broadcast sends a frame both downstream and upstream.
-func (b *StopStrategyBase) Broadcast(f frames.Frame) {
+// Broadcast builds one frame per direction and sends them both ways. It takes a
+// constructor so the two directions never share an instance.
+func (b *StopStrategyBase) Broadcast(build func() frames.Frame) {
 	if b.env.broadcast != nil {
-		b.env.broadcast(f)
+		b.env.broadcast(build)
 	}
 }
 

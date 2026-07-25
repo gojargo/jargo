@@ -133,15 +133,50 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		// is consumed and turned into the LLMContextFrame the LLM service runs.
 		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
 
-	case *frames.LLMMessagesAppendFrame:
-		// The turn-completion re-prompt appends a message to the context before a
-		// follow-up LLMRunFrame.
-		u.appendMessages(fr.Messages)
-		return u.PushFrame(ctx, f, dir)
+	case *frames.LLMMessagesAppendFrame, *frames.LLMMessagesUpdateFrame,
+		*frames.LLMSetToolsFrame, *frames.LLMSetToolChoiceFrame:
+		return u.handleContextUpdate(ctx, f, dir)
 
 	default:
 		return u.PushFrame(ctx, f, dir)
 	}
+}
+
+// handleContextUpdate applies a frame that mutates the shared LLM context and
+// then forwards it. Forwarding matters: a text LLM reads the context on its next
+// run, but a realtime (speech-to-speech) service generates continuously and
+// learns of a tool or message change only from the frame itself.
+func (u *UserAggregator) handleContextUpdate(
+	ctx context.Context, f frames.Frame, dir processor.Direction,
+) error {
+	runLLM := false
+
+	switch fr := f.(type) {
+	case *frames.LLMMessagesAppendFrame:
+		// The turn-completion re-prompt appends a message to the context before a
+		// follow-up LLMRunFrame.
+		u.appendMessages(fr.Messages)
+
+	case *frames.LLMMessagesUpdateFrame:
+		// Wholesale replacement of the conversation (restoring a saved session,
+		// resetting the conversation).
+		u.context.SetMessages(fr.Messages)
+		runLLM = fr.RunLLM
+
+	case *frames.LLMSetToolsFrame:
+		u.context.SetTools(fr.Tools)
+
+	case *frames.LLMSetToolChoiceFrame:
+		u.context.SetToolChoice(fr.ToolChoice)
+	}
+
+	if err := u.PushFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if runLLM {
+		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+	}
+	return nil
 }
 
 // appendMessages adds messages to the context (used by the turn-completion

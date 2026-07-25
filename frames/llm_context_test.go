@@ -307,3 +307,40 @@ func TestEstimatedTokens(t *testing.T) {
 		t.Error("tool calls and results should count toward the estimate")
 	}
 }
+
+// TestContextToolChoice checks the default and the setter, which back the
+// LLMSetToolChoiceFrame the aggregator applies.
+func TestContextToolChoice(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	if got := c.ToolChoice(); got != frames.ToolChoiceAuto {
+		t.Errorf("ToolChoice() = %q, want auto by default", got)
+	}
+	c.SetToolChoice(frames.ToolChoiceNone)
+	if got := c.ToolChoice(); got != frames.ToolChoiceNone {
+		t.Errorf("ToolChoice() = %q, want none", got)
+	}
+}
+
+// TestContextSetMessages checks SetMessages replaces the conversation, leaves the
+// system prompt alone, and copies its input so a later caller mutation cannot
+// reach into the context.
+func TestContextSetMessages(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	c.AddUserMessage("old")
+
+	in := []frames.Message{{Role: frames.RoleUser, Text: "new"}}
+	c.SetMessages(in)
+
+	got := c.Messages()
+	if len(got) != 1 || got[0].Text != "new" {
+		t.Fatalf("Messages() = %+v, want the conversation replaced", got)
+	}
+	if c.System() != "system" {
+		t.Errorf("System() = %q, want it untouched", c.System())
+	}
+
+	in[0].Text = "mutated by the caller"
+	if again := c.Messages(); again[0].Text != "new" {
+		t.Error("SetMessages should copy its input, not alias the caller's slice")
+	}
+}

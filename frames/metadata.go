@@ -1,6 +1,9 @@
 package frames
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // UserTurnRecommendation is a turn-taking strategy a service recommends to the
 // user-turn aggregator through a metadata frame. The aggregator adopts the
@@ -28,7 +31,8 @@ func (r UserTurnRecommendation) String() string {
 
 // ServiceMetadata is implemented by every metadata frame a service broadcasts at
 // pipeline start. Downstream processors assert this interface to read the common
-// fields; a concrete STTMetadataFrame or LLMServiceMetadataFrame carries more.
+// fields; a concrete [STTMetadataFrame] or [LLMServiceMetadataFrame] carries
+// more.
 type ServiceMetadata interface {
 	SystemFrame
 	// Service is the name of the service that broadcast the metadata.
@@ -40,8 +44,8 @@ type ServiceMetadata interface {
 
 // ServiceMetadataFrame is broadcast by a service at pipeline start to share its
 // configuration and performance characteristics with downstream processors. It
-// is a system frame. LLMServiceMetadataFrame embeds it; STTMetadataFrame (see
-// turns.go) carries the same common fields to satisfy ServiceMetadata.
+// is a system frame. [STTMetadataFrame] and [LLMServiceMetadataFrame] embed it to
+// add their service-specific fields.
 type ServiceMetadataFrame struct {
 	BaseSystemFrame
 	// ServiceName names the broadcasting service.
@@ -89,9 +93,39 @@ func NewLLMServiceMetadataFrame(service string) *LLMServiceMetadataFrame {
 	}
 }
 
+// STTMetadataFrame is the metadata an STT service broadcasts. Turn-stop
+// strategies use the p99 time-to-final-speech latency to size their safety-net
+// timeouts, and a service that does its own server-side endpointing recommends
+// external turn strategies through UserTurns.
+type STTMetadataFrame struct {
+	ServiceMetadataFrame
+	// TTFSP99Latency is the p99 latency from end of speech to a finalized
+	// transcript. Zero means unknown; strategies fall back to a default.
+	TTFSP99Latency time.Duration
+}
+
+// NewSTTMetadataFrame builds an STTMetadataFrame reporting the p99
+// time-to-final-speech latency. Set ServiceName and UserTurns on the returned
+// frame to describe the service further.
+func NewSTTMetadataFrame(ttfsP99 time.Duration) *STTMetadataFrame {
+	return &STTMetadataFrame{
+		ServiceMetadataFrame: ServiceMetadataFrame{
+			BaseSystemFrame: NewBaseSystemFrame("STTMetadataFrame"),
+		},
+		TTFSP99Latency: ttfsP99,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *STTMetadataFrame) String() string {
+	return fmt.Sprintf("%s(ttfs_p99: %s)", f.Name(), f.TTFSP99Latency)
+}
+
 // Compile-time interface checks.
 var (
 	_ SystemFrame     = (*ServiceMetadataFrame)(nil)
 	_ ServiceMetadata = (*ServiceMetadataFrame)(nil)
 	_ ServiceMetadata = (*LLMServiceMetadataFrame)(nil)
+	_ SystemFrame     = (*STTMetadataFrame)(nil)
+	_ ServiceMetadata = (*STTMetadataFrame)(nil)
 )

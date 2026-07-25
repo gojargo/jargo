@@ -2,6 +2,15 @@ package frames
 
 import "fmt"
 
+// The sample rates NewStartFrame applies when the application does not override
+// them: input is sized for speech recognition, output for synthesis quality.
+const (
+	// DefaultAudioInSampleRate is the default input audio sample rate in Hz.
+	DefaultAudioInSampleRate = 16000
+	// DefaultAudioOutSampleRate is the default output audio sample rate in Hz.
+	DefaultAudioOutSampleRate = 24000
+)
+
 // StartFrame is the first frame pushed down a pipeline. It initializes every
 // processor with the pipeline-wide configuration. It is a system frame.
 type StartFrame struct {
@@ -23,8 +32,8 @@ type StartFrame struct {
 func NewStartFrame() *StartFrame {
 	return &StartFrame{
 		BaseSystemFrame:    NewBaseSystemFrame("StartFrame"),
-		AudioInSampleRate:  16000,
-		AudioOutSampleRate: 24000,
+		AudioInSampleRate:  DefaultAudioInSampleRate,
+		AudioOutSampleRate: DefaultAudioOutSampleRate,
 	}
 }
 
@@ -32,8 +41,8 @@ func NewStartFrame() *StartFrame {
 // any remaining queued frames. It is a system frame.
 type CancelFrame struct {
 	BaseSystemFrame
-	// Reason is an optional reason for the cancellation.
-	Reason any
+	// Reason describes why the pipeline was canceled; "" when unset.
+	Reason string
 }
 
 // NewCancelFrame builds a CancelFrame.
@@ -43,29 +52,7 @@ func NewCancelFrame() *CancelFrame {
 
 // String implements fmt.Stringer.
 func (f *CancelFrame) String() string {
-	return fmt.Sprintf("%s(reason: %v)", f.Name(), f.Reason)
-}
-
-// EndWorkerFrame requests a graceful shutdown of the pipeline worker (the Task).
-// A processor pushes it upstream; on reaching the Task it queues an EndFrame
-// downstream (see Task.StopWhenDone), so frames already queued are flushed and
-// the bot finishes speaking before the pipeline ends. It is a system frame, so
-// a processor with no Task handle can end the run and the signal reaches the
-// Task even while the pipeline is busy.
-type EndWorkerFrame struct {
-	BaseSystemFrame
-	// Reason is an optional reason for ending.
-	Reason any
-}
-
-// NewEndWorkerFrame builds an EndWorkerFrame.
-func NewEndWorkerFrame() *EndWorkerFrame {
-	return &EndWorkerFrame{BaseSystemFrame: NewBaseSystemFrame("EndWorkerFrame")}
-}
-
-// String implements fmt.Stringer.
-func (f *EndWorkerFrame) String() string {
-	return fmt.Sprintf("%s(reason: %v)", f.Name(), f.Reason)
+	return fmt.Sprintf("%s(reason: %s)", f.Name(), f.Reason)
 }
 
 // ErrorSource identifies the component that raised an error — in practice the
@@ -98,6 +85,25 @@ func NewErrorFrame(message string) *ErrorFrame {
 // String implements fmt.Stringer.
 func (f *ErrorFrame) String() string {
 	return fmt.Sprintf("%s(error: %s, fatal: %t)", f.Name(), f.Error, f.Fatal)
+}
+
+// FatalErrorFrame notifies upstream that an unrecoverable error occurred and the
+// bot should exit immediately. It is an ErrorFrame whose Fatal is always set, so
+// a processor can report an unrecoverable failure by type rather than by
+// remembering to set the flag.
+type FatalErrorFrame struct {
+	ErrorFrame
+}
+
+// NewFatalErrorFrame builds a FatalErrorFrame describing message.
+func NewFatalErrorFrame(message string) *FatalErrorFrame {
+	return &FatalErrorFrame{
+		ErrorFrame: ErrorFrame{
+			BaseSystemFrame: NewBaseSystemFrame("FatalErrorFrame"),
+			Error:           message,
+			Fatal:           true,
+		},
+	}
 }
 
 // InterruptionFrame interrupts the pipeline — for example when the user starts
@@ -161,6 +167,7 @@ var (
 	_ SystemFrame = (*StartFrame)(nil)
 	_ SystemFrame = (*CancelFrame)(nil)
 	_ SystemFrame = (*ErrorFrame)(nil)
+	_ SystemFrame = (*FatalErrorFrame)(nil)
 	_ SystemFrame = (*InterruptionFrame)(nil)
 	_ SystemFrame = (*UserStartedSpeakingFrame)(nil)
 	_ SystemFrame = (*UserStoppedSpeakingFrame)(nil)

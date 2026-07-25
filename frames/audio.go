@@ -12,27 +12,21 @@ type AudioRawData struct {
 	SampleRate int
 	// NumChannels is the number of interleaved audio channels.
 	NumChannels int
-
-	numFrames int
 }
 
-// newAudioRawData builds an AudioRawData and derives its frame count from the
-// buffer length.
+// newAudioRawData builds an AudioRawData from PCM audio.
 func newAudioRawData(audio []byte, sampleRate, numChannels int) AudioRawData {
-	d := AudioRawData{Audio: audio, SampleRate: sampleRate, NumChannels: numChannels}
-	d.recountFrames()
-	return d
+	return AudioRawData{Audio: audio, SampleRate: sampleRate, NumChannels: numChannels}
 }
 
 // NumFrames is the number of audio frames (samples per channel) in the buffer:
 // len(Audio) / (NumChannels * 2) for 16-bit PCM. It is 0 when NumChannels is
-// unset.
-func (a *AudioRawData) NumFrames() int { return a.numFrames }
-
-func (a *AudioRawData) recountFrames() {
-	if a.NumChannels > 0 {
-		a.numFrames = len(a.Audio) / (a.NumChannels * 2)
+// unset. It is derived on each call, so it stays correct when Audio is replaced.
+func (a *AudioRawData) NumFrames() int {
+	if a.NumChannels <= 0 {
+		return 0
 	}
+	return len(a.Audio) / (a.NumChannels * 2)
 }
 
 // InputAudioRawFrame is a chunk of audio coming from an input transport. When a

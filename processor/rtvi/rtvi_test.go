@@ -50,12 +50,12 @@ func TestUserTranscriptionJSON(t *testing.T) {
 
 // TestProcessorHandshakeAndTranscript drives the RTVI processor in a pipeline:
 // a client-ready message must produce a bot-ready, and a TranscriptionFrame must
-// produce a user-transcription — both as OutputTransportMessageFrames.
+// produce a user-transcription — both as OutputTransportMessageUrgentFrames.
 func TestProcessorHandshakeAndTranscript(t *testing.T) {
 	out := make(chan rtvi.Message, 8)
 	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor()), pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
-			if m, ok := f.(*frames.OutputTransportMessageFrame); ok {
+			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
 					out <- msg
 				}
@@ -99,7 +99,7 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	out := make(chan rtvi.Message, 16)
 	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor()), pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
-			if m, ok := f.(*frames.OutputTransportMessageFrame); ok {
+			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
 					out <- msg
 				}

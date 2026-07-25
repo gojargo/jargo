@@ -56,7 +56,7 @@ type catalogEntry struct {
 // catalog lists every frame a caller can construct. Adding a frame type means
 // adding a line here.
 //
-//nolint:funlen // a flat catalog of every frame type; length is the point
+//nolint:funlen,maintidx // a flat catalog of every frame type; length is the point
 func catalog() []catalogEntry {
 	return []catalogEntry{
 		// System frames: priority delivery, unaffected by interruptions.
@@ -69,12 +69,20 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewCancelFrame() },
 		},
 		{
-			label: "EndWorkerFrame", cat: system, wantString: "reason:",
-			build: func() frames.Frame { return frames.NewEndWorkerFrame() },
-		},
-		{
 			label: "ErrorFrame", cat: system, wantString: "boom",
 			build: func() frames.Frame { return frames.NewErrorFrame("boom") },
+		},
+		{
+			label: "FatalErrorFrame", cat: system, wantString: "fatal: true",
+			build: func() frames.Frame { return frames.NewFatalErrorFrame("boom") },
+		},
+		{
+			label: "CancelWorkerFrame", cat: system, wantString: "reason:",
+			build: func() frames.Frame { return frames.NewCancelWorkerFrame() },
+		},
+		{
+			label: "InterruptionWorkerFrame", cat: system,
+			build: func() frames.Frame { return frames.NewInterruptionWorkerFrame() },
 		},
 		{
 			label: "InterruptionFrame", cat: system,
@@ -153,8 +161,10 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewInputTransportMessageFrame([]byte("abc")) },
 		},
 		{
-			label: "OutputTransportMessageFrame", cat: system,
-			build: func() frames.Frame { return frames.NewOutputTransportMessageFrame(map[string]any{"a": 1}) },
+			label: "OutputTransportMessageUrgentFrame", cat: system, wantString: "message:",
+			build: func() frames.Frame {
+				return frames.NewOutputTransportMessageUrgentFrame(map[string]any{"a": 1})
+			},
 		},
 		{
 			label: "MetricsFrame", cat: system, wantString: "processor: tts-1",
@@ -206,11 +216,49 @@ func catalog() []catalogEntry {
 			label: "LLMRunFrame", cat: data,
 			build: func() frames.Frame { return frames.NewLLMRunFrame() },
 		},
+		{
+			label: "OutputTransportMessageFrame", cat: data, wantString: "message:",
+			build: func() frames.Frame { return frames.NewOutputTransportMessageFrame(map[string]any{"a": 1}) },
+		},
+		{
+			label: "LLMSetToolsFrame", cat: data, wantString: "tools: 1",
+			build: func() frames.Frame {
+				return frames.NewLLMSetToolsFrame([]frames.Tool{{Name: "get_weather"}})
+			},
+		},
+		{
+			label: "LLMSetToolChoiceFrame", cat: data, wantString: "choice: required",
+			build: func() frames.Frame {
+				return frames.NewLLMSetToolChoiceFrame(frames.ToolChoiceRequired)
+			},
+		},
+		{
+			label: "LLMMessagesUpdateFrame", cat: data, wantString: "messages: 1",
+			build: func() frames.Frame {
+				return frames.NewLLMMessagesUpdateFrame([]frames.Message{{Role: frames.RoleUser, Text: "hi"}})
+			},
+		},
 
 		// Control frames: in order like data frames, but carrying instructions.
 		{
 			label: "EndFrame", cat: control, uninterruptible: true,
 			build: func() frames.Frame { return frames.NewEndFrame() },
+		},
+		{
+			label: "StopFrame", cat: control, uninterruptible: true,
+			build: func() frames.Frame { return frames.NewStopFrame() },
+		},
+		{
+			label: "StopWorkerFrame", cat: control, uninterruptible: true,
+			build: func() frames.Frame { return frames.NewStopWorkerFrame() },
+		},
+		{
+			label: "EndWorkerFrame", cat: control, uninterruptible: true, wantString: "reason:",
+			build: func() frames.Frame { return frames.NewEndWorkerFrame() },
+		},
+		{
+			label: "PipelineFlushFrame", cat: control, uninterruptible: true,
+			build: func() frames.Frame { return frames.NewPipelineFlushFrame() },
 		},
 		{
 			label: "LLMFullResponseStartFrame", cat: control,
@@ -237,8 +285,14 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewOutputDTMFFrame(frames.KeypadSeven) },
 		},
 		{
-			label: "MixerControlFrame", cat: control,
-			build: func() frames.Frame { return frames.NewMixerControlFrame(map[string]any{"volume": 0.5}) },
+			label: "MixerUpdateSettingsFrame", cat: control, wantString: "settings: 1",
+			build: func() frames.Frame {
+				return frames.NewMixerUpdateSettingsFrame(map[string]any{"volume": 0.5})
+			},
+		},
+		{
+			label: "MixerEnableFrame", cat: control, wantString: "enable: true",
+			build: func() frames.Frame { return frames.NewMixerEnableFrame(true) },
 		},
 		{
 			label: "LLMMessagesAppendFrame", cat: control,
@@ -380,9 +434,12 @@ func TestConstructorFields(t *testing.T) {
 	})
 
 	t.Run("mixer settings", func(t *testing.T) {
-		f := frames.NewMixerControlFrame(map[string]any{"volume": 0.5})
+		f := frames.NewMixerUpdateSettingsFrame(map[string]any{"volume": 0.5})
 		if f.Settings["volume"] != 0.5 {
 			t.Errorf("Settings = %v", f.Settings)
+		}
+		if !frames.NewMixerEnableFrame(true).Enable {
+			t.Error("Enable should carry the constructor argument")
 		}
 	})
 

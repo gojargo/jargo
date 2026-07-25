@@ -26,9 +26,12 @@ func (f *InputTransportMessageFrame) String() string {
 
 // OutputTransportMessageFrame carries an application message to send to the
 // client over the transport — for example an RTVI message onto a WebRTC data
-// channel. Message is serialized by the output transport. It is a system frame.
+// channel. Message is serialized by the output transport. It is a data frame, so
+// it is delivered in order with the surrounding audio: use it for a message that
+// must land in step with what the bot is saying. For a message that must go out
+// immediately, ahead of any queued audio, use OutputTransportMessageUrgentFrame.
 type OutputTransportMessageFrame struct {
-	BaseSystemFrame
+	BaseDataFrame
 	// Message is the message payload to send; the transport serializes it.
 	Message any
 }
@@ -36,13 +39,42 @@ type OutputTransportMessageFrame struct {
 // NewOutputTransportMessageFrame builds an OutputTransportMessageFrame.
 func NewOutputTransportMessageFrame(message any) *OutputTransportMessageFrame {
 	return &OutputTransportMessageFrame{
-		BaseSystemFrame: NewBaseSystemFrame("OutputTransportMessageFrame"),
+		BaseDataFrame: NewBaseDataFrame("OutputTransportMessageFrame"),
+		Message:       message,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *OutputTransportMessageFrame) String() string {
+	return fmt.Sprintf("%s(message: %v)", f.Name(), f.Message)
+}
+
+// OutputTransportMessageUrgentFrame carries an application message that must be
+// sent to the client immediately, ahead of any queued audio. It is a system
+// frame; prefer OutputTransportMessageFrame when the message should stay ordered
+// with the bot's speech.
+type OutputTransportMessageUrgentFrame struct {
+	BaseSystemFrame
+	// Message is the message payload to send; the transport serializes it.
+	Message any
+}
+
+// NewOutputTransportMessageUrgentFrame builds an OutputTransportMessageUrgentFrame.
+func NewOutputTransportMessageUrgentFrame(message any) *OutputTransportMessageUrgentFrame {
+	return &OutputTransportMessageUrgentFrame{
+		BaseSystemFrame: NewBaseSystemFrame("OutputTransportMessageUrgentFrame"),
 		Message:         message,
 	}
+}
+
+// String implements fmt.Stringer.
+func (f *OutputTransportMessageUrgentFrame) String() string {
+	return fmt.Sprintf("%s(message: %v)", f.Name(), f.Message)
 }
 
 // Compile-time interface checks.
 var (
 	_ SystemFrame = (*InputTransportMessageFrame)(nil)
-	_ SystemFrame = (*OutputTransportMessageFrame)(nil)
+	_ DataFrame   = (*OutputTransportMessageFrame)(nil)
+	_ SystemFrame = (*OutputTransportMessageUrgentFrame)(nil)
 )

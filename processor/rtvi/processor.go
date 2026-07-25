@@ -15,7 +15,7 @@ import (
 // carries the messages to the client.
 //
 // Incoming client messages arrive as InputTransportMessageFrames; outgoing
-// messages are pushed downstream as OutputTransportMessageFrames.
+// messages are pushed downstream as OutputTransportMessageUrgentFrames.
 type Processor struct {
 	*processor.Base
 }
@@ -184,5 +184,5 @@ func (p *Processor) emitAndForward(ctx context.Context, f frames.Frame, dir proc
 
 // send pushes an RTVI message toward the output transport.
 func (p *Processor) send(ctx context.Context, msg Message) error {
-	return p.PushFrame(ctx, frames.NewOutputTransportMessageFrame(msg), processor.Downstream)
+	return p.PushFrame(ctx, frames.NewOutputTransportMessageUrgentFrame(msg), processor.Downstream)
 }
