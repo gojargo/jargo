@@ -203,6 +203,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Memory recall failed against mem0 2.x** (`provider/mem0`): a search sent the
+  user, agent and run ids as top-level fields, which `search` rejects from 2.0.0
+  on — every retrieval failed with a 502 and the bot ran with no long-term
+  recall, while storage kept working. They now travel nested under `filters`,
+  the shape search expects. Storage still passes them top-level, which `add`
+  accepts.
+
 - **Trailing audio dropped at turn ends** (`transport`): the base output
   transport buffers audio into fixed-size chunks and used to leave the final
   sub-chunk of a turn sitting in the buffer, where a barge-in would clear it —

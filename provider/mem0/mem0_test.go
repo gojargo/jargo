@@ -16,9 +16,10 @@ import (
 
 // wire decodes the mem0 request bodies the test inspects.
 type searchBody struct {
-	Query  string `json:"query"`
-	UserID string `json:"user_id"`
-	TopK   int    `json:"top_k"`
+	Query   string            `json:"query"`
+	UserID  string            `json:"user_id"`
+	Filters map[string]string `json:"filters"`
+	TopK    int               `json:"top_k"`
 }
 
 type addBody struct {
@@ -64,8 +65,12 @@ func TestMemoryRetrievesAndStores(t *testing.T) {
 
 	select {
 	case b := <-searched:
-		if b.Query != "what do you remember about me?" || b.UserID != "u1" || b.TopK != 5 {
-			t.Fatalf("search request = %+v, want query/user/top_k populated", b)
+		if b.Query != "what do you remember about me?" || b.Filters["user_id"] != "u1" || b.TopK != 5 {
+			t.Fatalf("search request = %+v, want query/filters.user_id/top_k populated", b)
+		}
+		// The entity scope belongs under "filters"; search rejects it top-level.
+		if b.UserID != "" {
+			t.Fatalf("search request carried a top-level user_id = %q, want it only in filters", b.UserID)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("mem0 search was not called")
