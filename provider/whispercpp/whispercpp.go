@@ -10,8 +10,6 @@ package whispercpp
 import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
-	"github.com/gojargo/jargo/provider/openai"
-	"github.com/gojargo/jargo/service/stt"
 )
 
 // defaultModel is sent as the transcription model. whisper.cpp uses the model it
@@ -36,14 +34,3 @@ type Config struct {
 
 // Validate reports whether the configuration is usable.
 func (c Config) Validate() error { return validate.Struct(c) }
-
-// NewSTT builds a whisper.cpp transcription service.
-func NewSTT(cfg Config) *stt.SegmentService {
-	return openai.NewCompatSTT("WhisperCppSTT", cfg.BaseURL, defaultModel, openai.STTConfig{
-		APIKey:     cfg.APIKey,
-		BaseURL:    cfg.BaseURL,
-		Model:      cfg.Model,
-		Language:   cfg.Language,
-		SampleRate: cfg.SampleRate,
-	})
-}

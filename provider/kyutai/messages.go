@@ -2,19 +2,6 @@ package kyutai
 
 import "encoding/binary"
 
-// moshiSampleRate is the PCM rate the moshi-server models run at, for both the
-// audio sent to STT and the audio received from TTS.
-const moshiSampleRate = 24000
-
-// defaultToken is moshi-server's default shared API token, sent as the
-// kyutai-api-key header. Deployments that set a real token override it via the
-// APIKey config field.
-const defaultToken = "public_token"
-
-// msgTypeKey is the moshi message discriminator field, used as the map key when
-// framing outbound audio and text messages.
-const msgTypeKey = "type"
-
 // audioMsg decodes a moshi {"type":"Audio","pcm":[...]} message: TTS returns it
 // carrying 24 kHz float32 synthesized PCM.
 type audioMsg struct {

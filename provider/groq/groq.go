@@ -2,11 +2,7 @@
 // speech-to-text and text-to-speech services.
 package groq
 
-import (
-	"errors"
-
-	"github.com/gojargo/jargo/provider/openai"
-)
+import "errors"
 
 const (
 	baseURL         = "https://api.groq.com/openai/v1"
@@ -19,8 +15,3 @@ const (
 //
 //nolint:gochecknoglobals // sentinel error
 var errStatus = errors.New("groq: unexpected status")
-
-// NewLLM builds a Groq LLM service.
-func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("GroqLLM", baseURL, defaultLLMModel, cfg)
-}

@@ -2,8 +2,6 @@
 // streaming speech-to-text and text-to-speech services.
 package together
 
-import "github.com/gojargo/jargo/provider/openai"
-
 const (
 	baseURL      = "https://api.together.xyz/v1"
 	defaultModel = "zai-org/GLM-5.1"
@@ -12,8 +10,3 @@ const (
 // msgType is the discriminator key shared by the STT and TTS client/server
 // frames.
 const msgType = "type"
-
-// NewLLM builds a Together AI LLM service.
-func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("TogetherLLM", baseURL, defaultModel, cfg)
-}
