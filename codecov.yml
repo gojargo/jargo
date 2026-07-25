@@ -1,0 +1,29 @@
+coverage:
+  # Below 50 is red, above 85 green, graded in between.
+  range: 50..85
+
+  status:
+    project:
+      default:
+        # Never regress against the parent commit by more than a rounding error.
+        target: auto
+        threshold: 1%
+    # New code should carry tests, but don't block on a strict patch target
+    # while the historical gaps are still being filled.
+    patch:
+      default:
+        target: 60%
+        threshold: 5%
+
+# Coverage should measure the library, not the demo programs or generated code.
+#
+# `examples/` is 24 runnable `main()` programs that exist as documentation; they
+# are compiled by CI but will never carry unit tests, and counting them hides
+# ~13 points of real library coverage. `rivapb` is protoc output.
+ignore:
+  - "examples/**"
+  - "**/internal/rivapb/**"
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true

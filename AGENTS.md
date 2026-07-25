@@ -25,6 +25,10 @@ sudo apt-get install -y libopus-dev   # for -tags libopus
 
 - `go build ./...` — build everything with the pure-Go / purego defaults.
 - `go test ./...` — run tests. Add `-race` as CI does.
+- `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out`
+  — coverage. CI uploads the same profile to Codecov, which applies the
+  `ignore:` rules in `codecov.yml` (`examples/`, generated protobuf) — so the
+  raw local total reads roughly 13 points lower than the reported one.
 - `go build -tags libsoxr ./...` — opt into libsoxr resampling (SoX Resampler,
   highest quality; the default is the pure-Go `github.com/gojargo/go-resample`
   converter). Needs cgo.
