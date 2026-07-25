@@ -62,12 +62,13 @@ type Message struct {
 // append to a shared context as the conversation proceeds, and the LLM service
 // reads it to generate each response. It is safe for concurrent use.
 type LLMContext struct {
-	mu       sync.Mutex
-	system   string
-	summary  string // rolling summary of compacted older turns; empty until the first Compact
-	recall   string // transient retrieved context (e.g. long-term memories) for the next generation
-	messages []Message
-	tools    []Tool
+	mu         sync.Mutex
+	system     string
+	summary    string // rolling summary of compacted older turns; empty until the first Compact
+	recall     string // transient retrieved context (e.g. long-term memories) for the next generation
+	messages   []Message
+	tools      []Tool
+	toolChoice ToolChoice
 }
 
 // summaryHeader introduces the rolling summary appended to the system prompt
@@ -148,11 +149,47 @@ func (c *LLMContext) Tools() []Tool {
 	return out
 }
 
-// SetTools replaces the set of tools the model may call. Used alongside
-// SetSystem to switch the available toolset mid-session.
+// SetTools replaces the set of tools the model may call.
+//
+// This mutates the context and notifies nobody. A text LLM reads the context on
+// its next run and so picks the change up, but a realtime (speech-to-speech)
+// service is generating continuously and will keep offering the old toolset. To
+// change tools on a running pipeline, push an [LLMSetToolsFrame] instead: the
+// aggregator applies it here and forwards it downstream so realtime services are
+// told. Use this directly only to seed the toolset before the pipeline starts.
 func (c *LLMContext) SetTools(tools []Tool) {
 	c.mu.Lock()
 	c.tools = tools
+	c.mu.Unlock()
+}
+
+// ToolChoice returns whether the model may or must call a tool. It is
+// ToolChoiceAuto unless set.
+func (c *LLMContext) ToolChoice() ToolChoice {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.toolChoice == "" {
+		return ToolChoiceAuto
+	}
+	return c.toolChoice
+}
+
+// SetToolChoice sets whether the model may or must call a tool. The same caveat
+// as SetTools applies: on a running pipeline push an [LLMSetToolChoiceFrame] so
+// realtime services learn of the change.
+func (c *LLMContext) SetToolChoice(choice ToolChoice) {
+	c.mu.Lock()
+	c.toolChoice = choice
+	c.mu.Unlock()
+}
+
+// SetMessages replaces the conversation messages, in contrast to the Add methods
+// which append. The system prompt, tools and rolling summary are left alone. On
+// a running pipeline push an [LLMMessagesUpdateFrame] so the replacement is
+// ordered against the conversation rather than racing an in-flight generation.
+func (c *LLMContext) SetMessages(messages []Message) {
+	c.mu.Lock()
+	c.messages = append([]Message(nil), messages...)
 	c.mu.Unlock()
 }
 
@@ -333,8 +370,98 @@ func NewLLMRunFrame() *LLMRunFrame {
 	return &LLMRunFrame{BaseDataFrame: NewBaseDataFrame("LLMRunFrame")}
 }
 
+// LLMSetToolsFrame changes the set of tools advertised to the model
+// mid-conversation. The context aggregator applies it to the shared context and
+// forwards it downstream: a text LLM picks the change up on its next run, but a
+// realtime (speech-to-speech) service is generating continuously and would never
+// see it, so it must be told. Always change tools through this frame rather than
+// calling LLMContext.SetTools directly, or realtime services will keep using the
+// old toolset. It is a data frame, so the change is ordered against the
+// surrounding conversation instead of racing an in-flight generation.
+type LLMSetToolsFrame struct {
+	BaseDataFrame
+	// Tools is the new toolset; nil or empty clears the tools.
+	Tools []Tool
+}
+
+// NewLLMSetToolsFrame builds an LLMSetToolsFrame advertising tools.
+func NewLLMSetToolsFrame(tools []Tool) *LLMSetToolsFrame {
+	return &LLMSetToolsFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMSetToolsFrame"),
+		Tools:         tools,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMSetToolsFrame) String() string {
+	return fmt.Sprintf("%s(tools: %d)", f.Name(), len(f.Tools))
+}
+
+// ToolChoice tells the model whether it may or must call a tool.
+type ToolChoice string
+
+const (
+	// ToolChoiceAuto lets the model decide whether to call a tool.
+	ToolChoiceAuto ToolChoice = "auto"
+	// ToolChoiceNone forbids tool calls.
+	ToolChoiceNone ToolChoice = "none"
+	// ToolChoiceRequired requires the model to call a tool.
+	ToolChoiceRequired ToolChoice = "required"
+)
+
+// LLMSetToolChoiceFrame changes whether the model may or must call a tool. Like
+// LLMSetToolsFrame it is applied to the shared context and forwarded downstream
+// so realtime services learn of the change. It is a data frame.
+type LLMSetToolChoiceFrame struct {
+	BaseDataFrame
+	// ToolChoice is the new setting.
+	ToolChoice ToolChoice
+}
+
+// NewLLMSetToolChoiceFrame builds an LLMSetToolChoiceFrame.
+func NewLLMSetToolChoiceFrame(choice ToolChoice) *LLMSetToolChoiceFrame {
+	return &LLMSetToolChoiceFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMSetToolChoiceFrame"),
+		ToolChoice:    choice,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMSetToolChoiceFrame) String() string {
+	return fmt.Sprintf("%s(choice: %s)", f.Name(), f.ToolChoice)
+}
+
+// LLMMessagesUpdateFrame replaces the conversation messages in the shared
+// context, in contrast to LLMMessagesAppendFrame which adds to them. Use it to
+// swap the conversation wholesale — restoring a saved session, or resetting the
+// conversation without rebuilding the pipeline. It is a data frame, so the
+// replacement is ordered against the surrounding conversation.
+type LLMMessagesUpdateFrame struct {
+	BaseDataFrame
+	// Messages replaces the context's current messages.
+	Messages []Message
+	// RunLLM reports whether the LLM should run on the updated context.
+	RunLLM bool
+}
+
+// NewLLMMessagesUpdateFrame builds an LLMMessagesUpdateFrame.
+func NewLLMMessagesUpdateFrame(messages []Message) *LLMMessagesUpdateFrame {
+	return &LLMMessagesUpdateFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMMessagesUpdateFrame"),
+		Messages:      messages,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMMessagesUpdateFrame) String() string {
+	return fmt.Sprintf("%s(messages: %d)", f.Name(), len(f.Messages))
+}
+
 // Compile-time interface checks.
 var (
 	_ DataFrame = (*LLMContextFrame)(nil)
 	_ DataFrame = (*LLMRunFrame)(nil)
+	_ DataFrame = (*LLMSetToolsFrame)(nil)
+	_ DataFrame = (*LLMSetToolChoiceFrame)(nil)
+	_ DataFrame = (*LLMMessagesUpdateFrame)(nil)
 )

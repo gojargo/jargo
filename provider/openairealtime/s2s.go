@@ -1,11 +1,13 @@
 package openairealtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"sync"
 
@@ -25,6 +27,13 @@ type Service struct {
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
 	wg      sync.WaitGroup
+
+	// tools and toolChoice are the function-calling configuration currently
+	// advertised to the session. The model generates continuously, so it does not
+	// re-read the context between turns: every change must be pushed to it with a
+	// session.update. They are guarded by mu.
+	tools      []frames.Tool
+	toolChoice frames.ToolChoice
 }
 
 // New builds a Realtime service.
@@ -63,6 +72,20 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 			s.sendAudio(fr.Audio)
 			return nil // The model consumes the audio; it does not flow on.
 		}
+		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMContextFrame:
+		// Seed the function-calling configuration from the shared context.
+		if fr.Context != nil {
+			s.syncTools(fr.Context.Tools(), fr.Context.ToolChoice())
+		}
+		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMSetToolsFrame:
+		// The toolset changed mid-conversation. A text LLM would pick this up on
+		// its next run; this model is generating continuously, so tell it now.
+		s.syncTools(fr.Tools, s.currentToolChoice())
+		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMSetToolChoiceFrame:
+		s.syncTools(s.currentTools(), fr.ToolChoice)
 		return s.PushFrame(ctx, f, dir)
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
@@ -141,7 +164,89 @@ func (s *Service) sessionUpdate() sessionUpdateMsg {
 	if s.cfg.TranscriptionModel != "-" {
 		session["input_audio_transcription"] = map[string]any{"model": s.cfg.TranscriptionModel}
 	}
+	maps.Copy(session, s.toolSession(s.currentTools(), s.currentToolChoice()))
 	return sessionUpdateMsg{Type: "session.update", Session: session}
+}
+
+// toolSession renders the function-calling part of a session payload. It is
+// empty when no tools are advertised, so a session without function calling is
+// configured exactly as before.
+func (s *Service) toolSession(tools []frames.Tool, choice frames.ToolChoice) map[string]any {
+	if len(tools) == 0 {
+		return nil
+	}
+	specs := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		spec := map[string]any{"type": "function", "name": t.Name}
+		if t.Description != "" {
+			spec["description"] = t.Description
+		}
+		if len(t.Parameters) > 0 {
+			spec["parameters"] = t.Parameters
+		}
+		specs = append(specs, spec)
+	}
+	if choice == "" {
+		choice = frames.ToolChoiceAuto
+	}
+	return map[string]any{"tools": specs, "tool_choice": string(choice)}
+}
+
+// currentTools returns the tools currently advertised to the session.
+func (s *Service) currentTools() []frames.Tool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tools
+}
+
+// currentToolChoice returns the tool choice currently advertised to the session.
+func (s *Service) currentToolChoice() frames.ToolChoice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolChoice
+}
+
+// syncTools records the function-calling configuration and, when it differs from
+// what the live session was told, pushes a session.update so the continuously
+// running model picks the change up. It is a no-op before the session connects;
+// the initial sessionUpdate carries whatever has been recorded by then.
+func (s *Service) syncTools(tools []frames.Tool, choice frames.ToolChoice) {
+	s.mu.Lock()
+	if sameTools(s.tools, tools) && s.toolChoice == choice {
+		s.mu.Unlock()
+		return
+	}
+	s.tools = tools
+	s.toolChoice = choice
+	live := s.conn != nil
+	s.mu.Unlock()
+
+	if !live {
+		return
+	}
+	session := s.toolSession(tools, choice)
+	if session == nil {
+		// Clearing the toolset still has to reach the model.
+		session = map[string]any{"tools": []map[string]any{}}
+	}
+	if err := s.send(sessionUpdateMsg{Type: "session.update", Session: session}); err != nil {
+		slog.Warn("openai realtime tool update failed", "err", err)
+	}
+}
+
+// sameTools reports whether two toolsets are equivalent for session purposes.
+func sameTools(a, b []frames.Tool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name ||
+			a[i].Description != b[i].Description ||
+			!bytes.Equal(a[i].Parameters, b[i].Parameters) {
+			return false
+		}
+	}
+	return true
 }
 
 // sendAudio appends a chunk of input PCM to the model's input buffer.
