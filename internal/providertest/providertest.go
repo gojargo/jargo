@@ -139,3 +139,60 @@ func captureRequest(t *testing.T, build CompatLLMBuilder, cfg openai.LLMConfig, 
 	got.reply = out.String()
 	return got
 }
+
+// Validator is the shape every provider config shares: a Validate that reports
+// whether the config is usable before anything tries to connect with it.
+type Validator interface {
+	Validate() error
+}
+
+// ConfigCase is one configuration and whether Validate should accept it.
+type ConfigCase struct {
+	// Name describes what the case exercises, e.g. "missing API key".
+	Name string
+	// Cfg is the configuration under test.
+	Cfg Validator
+	// Valid is whether Validate should return nil.
+	Valid bool
+}
+
+// Configs runs each case through Validate. It is the check that a provider's
+// `validate` struct tags actually say what the field comments claim: a required
+// credential must be rejected when absent, and an otherwise-empty config must be
+// accepted when the provider documents defaults for everything else.
+func Configs(t *testing.T, cases []ConfigCase) {
+	t.Helper()
+	for _, c := range cases {
+		t.Run(c.Name, func(t *testing.T) {
+			err := c.Cfg.Validate()
+			if c.Valid && err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+			if !c.Valid && err == nil {
+				t.Error("Validate() = nil, want an error")
+			}
+		})
+	}
+}
+
+// namer is satisfied by every service, which embeds a processor.
+type namer interface {
+	Name() string
+}
+
+// Service checks a constructor returned a usable service carrying wantLabel.
+// Constructors take no error return, so a misconfigured provider surfaces only
+// as a nil service or a mislabeled processor in the logs and traces.
+func Service(t *testing.T, wantLabel string, svc namer) {
+	t.Helper()
+	// A nil interface means the constructor returned nothing; a non-nil
+	// interface holding a nil pointer would panic on Name, which is also a
+	// failure worth catching here rather than in a pipeline.
+	if svc == nil {
+		t.Fatalf("constructor returned nil, want a %s service", wantLabel)
+	}
+	// processor.New appends a "#<id>" instance counter.
+	if got := svc.Name(); !strings.HasPrefix(got, wantLabel+"#") {
+		t.Errorf("Name() = %q, want the %q label", got, wantLabel)
+	}
+}
