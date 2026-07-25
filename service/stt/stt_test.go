@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,9 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestWAVHeader(t *testing.T) {
@@ -58,12 +62,17 @@ func (s *fakeStream) Recv() ([]stt.Result, error) {
 
 func (s *fakeStream) Close() error { return nil }
 
-type fakeConnector struct{ stream *fakeStream }
+type fakeConnector struct {
+	stream *fakeStream
+	model  string
+}
 
 func (c *fakeConnector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
 	c.stream.ctx = ctx
 	return c.stream, nil
 }
+
+func (c *fakeConnector) Metadata() stt.Metadata { return stt.Metadata{Model: c.model} }
 
 func TestStreamServiceEmitsInterimAndFinal(t *testing.T) {
 	conn := &fakeConnector{stream: &fakeStream{results: [][]stt.Result{
@@ -170,5 +179,74 @@ func TestSegmentServiceTranscribesBufferedSpeech(t *testing.T) {
 
 	if captured != "buffered words" {
 		t.Fatalf("transcription = %q, want %q", captured, "buffered words")
+	}
+}
+
+// TestStreamServiceReportsAudioUsage checks that the session span carries the
+// model and the whole duration of audio streamed to the provider — streaming
+// STT is billed on connection time, so silence counts too.
+func TestStreamServiceReportsAudioUsage(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prev)
+
+	conn := &fakeConnector{
+		model:  "nova-3",
+		stream: &fakeStream{results: [][]stt.Result{{{Text: "hello", Final: true, EndOfTurn: true}}}},
+	}
+	svc := stt.NewStream("FakeSTT", conn, 16000)
+
+	done := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.TranscriptionFrame); ok {
+				select {
+				case done <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream service did not emit a transcription")
+	}
+	// 16000 bytes of 16-bit mono at 16 kHz is 500 ms of audio.
+	task.QueueFrame(frames.NewInputAudioRawFrame(make([]byte, 16000), 16000, 1))
+	task.StopWhenDone()
+	<-runDone
+
+	var span sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "stt" {
+			span = s
+		}
+	}
+	if span == nil {
+		t.Fatal("no stt span recorded")
+	}
+	attrs := map[string]string{}
+	for _, kv := range span.Attributes() {
+		attrs[string(kv.Key)] = kv.Value.String()
+	}
+	want := map[string]string{
+		"stt.audio_ms":                       "500",
+		"gen_ai.request.model":               "nova-3",
+		"langfuse.observation.usage_details": `{"milliseconds":500}`,
+	}
+	for k, v := range want {
+		if attrs[k] != v {
+			t.Errorf("attr %q = %q, want %q (all: %v)", k, attrs[k], v, attrs)
+		}
+	}
+	// The processor name is uniquified per instance ("FakeSTT#3").
+	if got := attrs["stt.service"]; !strings.HasPrefix(got, "FakeSTT") {
+		t.Errorf("stt.service = %q, want a FakeSTT instance", got)
 	}
 }

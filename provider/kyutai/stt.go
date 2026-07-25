@@ -1,13 +1,3 @@
-// Package kyutai provides streaming speech-to-text and text-to-speech backed by
-// a self-hosted Kyutai moshi-server (the Delayed Streams Modeling STT and TTS
-// models). Both talk MessagePack over a WebSocket: STT streams 24 kHz float32
-// PCM up and receives word and semantic-VAD messages back; TTS streams words up
-// and receives 24 kHz float32 PCM back.
-//
-// The STT service emits cumulative interim transcripts as words arrive and a
-// single finalized end-of-turn transcript when moshi's semantic VAD predicts a
-// pause, so it works whether the pipeline runs its own turn detection or leans
-// on that end-of-turn signal.
 package kyutai
 
 import (
@@ -18,8 +8,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/audio/resample"
-	"github.com/gojargo/jargo/internal/validate"
-	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/vmihailenco/msgpack/v5"
@@ -39,23 +27,6 @@ const (
 	// considered to have finished their turn.
 	pauseThreshold = 0.5
 )
-
-// Config configures the Kyutai STT service.
-type Config struct {
-	// APIKey is moshi-server's shared token (sent as the kyutai-api-key header);
-	// empty uses moshi's default "public_token".
-	APIKey string
-	// URL overrides the moshi-server ASR WebSocket endpoint; empty uses localhost.
-	URL string
-	// SampleRate is the input PCM rate from the pipeline; 0 uses the transport's
-	// rate. Audio is resampled from this rate to the 24 kHz moshi expects.
-	SampleRate int
-	// Language is informational; the model itself is fixed (e.g. en_fr).
-	Language language.Language
-}
-
-// Validate reports whether the configuration is usable.
-func (cfg Config) Validate() error { return validate.Struct(cfg) }
 
 // NewSTT builds a Kyutai streaming STT service backed by moshi-server.
 func NewSTT(cfg Config) *stt.StreamService {

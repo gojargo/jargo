@@ -81,7 +81,7 @@ type sttConnector struct {
 // Metadata reports Cartesia's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99}
+	return stt.Metadata{TTFSP99: sttTTFSP99, Model: c.cfg.Model}
 }
 
 // cartesiaSTTLanguage maps a Language to Cartesia's STT language code. Cartesia

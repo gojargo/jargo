@@ -77,7 +77,7 @@ type sttTranscriber struct {
 // Metadata reports ElevenLabs' time-to-final-segment latency to downstream
 // processors.
 func (t *sttTranscriber) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99}
+	return stt.Metadata{TTFSP99: sttTTFSP99, Model: t.cfg.Model}
 }
 
 // elevenlabsSTTLanguage maps a Language to ElevenLabs' ISO-639-3 STT language

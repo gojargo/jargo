@@ -3,8 +3,8 @@
 // The service processors emit spans through the global tracer, so
 // instrumentation costs nothing until a TracerProvider is installed — without
 // one, Tracer returns a no-op. Call Init at startup to export spans over OTLP,
-// and wrap each session in StartConversation so the per-turn LLM and TTS spans
-// nest under a single trace:
+// and wrap each session in StartConversation so the per-turn STT, LLM and TTS
+// spans nest under a single trace:
 //
 //	shutdown, err := tracing.Init(ctx, tracing.Config{ServiceName: "voicebot"})
 //	defer shutdown(context.Background())
@@ -16,7 +16,10 @@ package tracing
 
 import (
 	"context"
+	"strconv"
+	"time"
 
+	"github.com/gojargo/jargo/frames"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -100,4 +103,90 @@ func StartConversation(ctx context.Context, id string) (context.Context, trace.S
 		span.SetAttributes(attribute.String("conversation.id", id))
 	}
 	return ctx, span
+}
+
+// SetTokenUsage records LLM token usage on the span in ctx. It dual-writes the
+// legacy llm.tokens.* attributes and the OpenTelemetry GenAI gen_ai.usage.*
+// attributes, so both existing dashboards and OTel-native backends see the
+// counts under a single set of keys. The per-modality audio/text and cache
+// breakdowns (reported by realtime speech-to-speech models) are written only
+// when nonzero, so a text-only generation carries no empty realtime attributes.
+func SetTokenUsage(ctx context.Context, u frames.LLMTokenUsage) {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.Int64("llm.tokens.input", u.PromptTokens),
+		attribute.Int64("llm.tokens.output", u.CompletionTokens),
+		attribute.Int64("llm.tokens.total", u.TotalTokens),
+		attribute.Int64("gen_ai.usage.input_tokens", u.PromptTokens),
+		attribute.Int64("gen_ai.usage.output_tokens", u.CompletionTokens),
+	)
+	setPositive(span, "gen_ai.usage.input_audio_tokens", u.InputAudioTokens)
+	setPositive(span, "gen_ai.usage.output_audio_tokens", u.OutputAudioTokens)
+	setPositive(span, "gen_ai.usage.input_text_tokens", u.InputTextTokens)
+	setPositive(span, "gen_ai.usage.output_text_tokens", u.OutputTextTokens)
+	setPositive(span, "gen_ai.usage.cache_read.input_tokens", u.CacheReadTokens)
+	setPositive(span, "gen_ai.usage.cache_creation.input_tokens", u.CacheCreationTokens)
+}
+
+// setPositive sets an int64 span attribute only when v is positive, keeping
+// unmeasured breakdown counts off spans that don't carry them.
+func setPositive(span trace.Span, key string, v int64) {
+	if v > 0 {
+		span.SetAttributes(attribute.Int64(key, v))
+	}
+}
+
+// Attribute keys that let a cost-tracking backend price a span. The
+// OpenTelemetry GenAI conventions model usage only as token counts, so speech
+// billed per character or per second of audio has no standard key to report
+// under; these carry the billable units and mark the span as the kind of
+// observation a price applies to.
+const (
+	observationTypeKey = "langfuse.observation.type"
+	usageDetailsKey    = "langfuse.observation.usage_details"
+	generationType     = "generation"
+)
+
+// SetTTSUsage records one synthesis's billable usage on the span in ctx: the
+// provider model and the number of characters handed to it. Characters are
+// counted in runes rather than bytes, because that is the unit TTS providers
+// bill in — an accented character is one character, not the two bytes it
+// occupies in UTF-8.
+func SetTTSUsage(ctx context.Context, model string, characters int) {
+	setUsage(ctx, "tts", model, usageDetails("characters", int64(characters)))
+}
+
+// SetSTTUsage records billable transcription usage on the span in ctx: the
+// provider model and the duration of audio sent for transcription. The unit is
+// milliseconds because usage values have to be whole numbers — a fractional one
+// is discarded — and rounding to whole seconds would throw away most of a short
+// turn. Configure the model's price per millisecond accordingly: a rate quoted
+// per minute is that rate divided by 60000.
+func SetSTTUsage(ctx context.Context, model string, audio time.Duration) {
+	setUsage(ctx, "stt", model, usageDetails("milliseconds", audio.Milliseconds()))
+}
+
+// setUsage marks the span in ctx as a priceable generation carrying usage. The
+// operation is always recorded; the model and the usage are recorded only when
+// the service reported a model, since without one there is nothing to price the
+// usage against and the span is better left a plain span than an unpriceable
+// generation.
+func setUsage(ctx context.Context, operation, model, usage string) {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.String("gen_ai.operation.name", operation))
+	if model == "" {
+		return
+	}
+	span.SetAttributes(
+		attribute.String("gen_ai.request.model", model),
+		attribute.String(observationTypeKey, generationType),
+		attribute.String(usageDetailsKey, usage),
+	)
+}
+
+// usageDetails renders a single-unit usage object. Both the unit and the count
+// are constrained to values that need no escaping, so the JSON is built
+// directly rather than marshaled.
+func usageDetails(unit string, n int64) string {
+	return `{"` + unit + `":` + strconv.FormatInt(n, 10) + `}`
 }

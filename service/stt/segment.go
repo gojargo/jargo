@@ -7,6 +7,9 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/telemetry/metrics"
+	"github.com/gojargo/jargo/telemetry/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Transcriber turns a complete audio segment into text. The audio is 16-bit
@@ -23,6 +26,7 @@ type SegmentService struct {
 	*processor.Base
 	tr      Transcriber
 	cfgRate int
+	model   string
 
 	sampleRate int
 	mu         sync.Mutex
@@ -35,6 +39,9 @@ type SegmentService struct {
 // sampleRate overrides the transport's input rate.
 func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 	s := &SegmentService{tr: tr, cfgRate: sampleRate}
+	if d, ok := tr.(Describer); ok {
+		s.model = d.Metadata().Model
+	}
 	s.Base = processor.New(name, s)
 	return s
 }
@@ -111,18 +118,32 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		return
 	}
 	s.wg.Go(func() {
-		text, err := s.tr.Transcribe(ctx, audio, rate)
+		sctx, span := tracing.Tracer().Start(ctx, "stt")
+		defer span.End()
+		played := pcmDuration(int64(len(audio)), rate)
+		span.SetAttributes(
+			attribute.String("stt.service", s.Name()),
+			attribute.Int("stt.sample_rate", rate),
+			attribute.Int64("stt.audio_ms", played.Milliseconds()),
+		)
+		tracing.SetSTTUsage(sctx, s.model, played)
+		metrics.RecordSTTAudio(sctx, s.Name(), s.model, played.Seconds())
+
+		start := time.Now()
+		text, err := s.tr.Transcribe(sctx, audio, rate)
 		if err != nil {
-			if ctx.Err() == nil {
-				s.PushError(ctx, "stt transcription failed", err, false)
+			if sctx.Err() == nil {
+				span.RecordError(err)
+				s.PushError(sctx, "stt transcription failed", err, false)
 			}
 			return
 		}
+		metrics.RecordProcessing(sctx, "stt", s.Name(), s.model, time.Since(start).Seconds())
 		if text == "" {
 			return
 		}
 		tf := frames.NewTranscriptionFrame(text, "", time.Now().UTC().Format(time.RFC3339))
 		tf.Finalized = true
-		_ = s.PushFrame(ctx, tf, processor.Downstream)
+		_ = s.PushFrame(sctx, tf, processor.Downstream)
 	})
 }

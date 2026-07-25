@@ -15,6 +15,9 @@ import (
 
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/telemetry/metrics"
+	"github.com/gojargo/jargo/telemetry/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Direction is the direction a frame flows through the pipeline.
@@ -321,6 +324,29 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir Direction) err
 		}
 	}
 	return nil
+}
+
+// PushTokenUsage reports LLM token usage measured by a service that does not run
+// through the LLM base — a realtime (speech-to-speech) service that receives a
+// usage event from its provider. It opens a short "llm" span carrying the
+// gen_ai.usage.* attributes, records the aggregate token counts as metrics, and
+// emits a MetricsFrame downstream for in-band consumers (e.g. an RTVI client).
+// The caller passes the model id and gates the call on UsageMetricsEnabled, so
+// the conversion from the provider's usage shape happens only when metrics are
+// collected.
+func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTokenUsage) error {
+	ctx, span := tracing.Tracer().Start(ctx, "llm")
+	span.SetAttributes(attribute.String("llm.service", b.name))
+	if model != "" {
+		span.SetAttributes(attribute.String("llm.model", model))
+	}
+	tracing.SetTokenUsage(ctx, u)
+	span.End()
+	metrics.RecordTokens(ctx, b.name, model, u.PromptTokens, u.CompletionTokens)
+	f := frames.NewMetricsFrame(b.name)
+	f.Model = model
+	f.Tokens = &u
+	return b.PushFrame(ctx, f, Downstream)
 }
 
 // PushError builds an ErrorFrame for msg and pushes it upstream.

@@ -2,7 +2,7 @@
 // speech-to-text and text-to-speech services.
 package groq
 
-import "github.com/gojargo/jargo/provider/openai"
+import "errors"
 
 const (
 	baseURL         = "https://api.groq.com/openai/v1"
@@ -10,7 +10,8 @@ const (
 	defaultSTTModel = "whisper-large-v3-turbo"
 )
 
-// NewLLM builds a Groq LLM service.
-func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("GroqLLM", baseURL, defaultLLMModel, cfg)
-}
+// errStatus is returned when the API responds with a non-200 status. It is shared
+// by the STT and TTS services.
+//
+//nolint:gochecknoglobals // sentinel error
+var errStatus = errors.New("groq: unexpected status")

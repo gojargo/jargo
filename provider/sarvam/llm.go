@@ -1,5 +1,3 @@
-// Package sarvam provides Sarvam's OpenAI-compatible LLM plus its WebSocket
-// streaming text-to-speech and speech-to-text services for Indian languages.
 package sarvam
 
 import "github.com/gojargo/jargo/provider/openai"

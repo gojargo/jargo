@@ -36,6 +36,7 @@ var (
 	procHist   metric.Float64Histogram
 	tokCounter metric.Int64Counter
 	charCount  metric.Int64Counter
+	sttAudio   metric.Float64Counter
 )
 
 func instruments() {
@@ -51,6 +52,8 @@ func instruments() {
 			metric.WithDescription("LLM tokens, by direction"))
 		charCount, _ = m.Int64Counter("jargo.tts.characters",
 			metric.WithDescription("characters synthesized by TTS"))
+		sttAudio, _ = m.Float64Counter("jargo.stt.audio",
+			metric.WithUnit("s"), metric.WithDescription("audio transcribed by STT"))
 	})
 }
 
@@ -95,9 +98,16 @@ func RecordTokens(ctx context.Context, service, model string, input, output int6
 }
 
 // RecordTTSCharacters records the number of characters a TTS service synthesized.
-func RecordTTSCharacters(ctx context.Context, service string, n int64) {
+func RecordTTSCharacters(ctx context.Context, service, model string, n int64) {
 	instruments()
-	charCount.Add(ctx, n, serviceAttrs("tts", service, ""))
+	charCount.Add(ctx, n, serviceAttrs("tts", service, model))
+}
+
+// RecordSTTAudio records the duration of audio an STT service transcribed, in
+// seconds.
+func RecordSTTAudio(ctx context.Context, service, model string, seconds float64) {
+	instruments()
+	sttAudio.Add(ctx, seconds, serviceAttrs("stt", service, model))
 }
 
 // Config configures OTLP metric export.

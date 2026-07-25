@@ -170,6 +170,24 @@ func (c *LLMContext) AddAssistantMessage(text string) {
 	c.mu.Unlock()
 }
 
+// ReplaceLastAssistantText replaces the text of the most recent message when it
+// is a plain assistant message (one carrying no tool calls or results),
+// reporting whether it did. The assistant aggregator uses it to keep an
+// in-progress assistant turn updated with the words spoken so far, so that an
+// interruption leaves exactly the spoken text in the context.
+func (c *LLMContext) ReplaceLastAssistantText(text string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n := len(c.messages); n > 0 {
+		m := &c.messages[n-1]
+		if m.Role == RoleAssistant && len(m.ToolCalls) == 0 && len(m.ToolResults) == 0 {
+			m.Text = text
+			return true
+		}
+	}
+	return false
+}
+
 // AddAssistantToolCalls appends an assistant message carrying optional preamble
 // text and the tool calls the model requested in the same turn.
 func (c *LLMContext) AddAssistantToolCalls(text string, calls []ToolCall) {

@@ -1,13 +1,9 @@
-// Package openai provides OpenAI's LLM, STT and TTS services, plus the
-// OpenAI-compatible LLM base that other providers (Groq, Together, Fireworks and
-// the rest) wrap with their own base URL, key and default model.
 package openai
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -19,13 +15,7 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 )
 
-// errStatus is returned when the API responds with a non-200 status.
-//
-//nolint:gochecknoglobals // sentinel error
-var errStatus = errors.New("openai: unexpected status")
-
 const (
-	defaultLLMBaseURL   = "https://api.openai.com/v1"
 	defaultLLMModel     = "gpt-4o-mini"
 	defaultLLMMaxTokens = 1024
 	// toolTypeFunction is the only tool type OpenAI's chat API defines.

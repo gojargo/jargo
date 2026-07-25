@@ -16,8 +16,6 @@ const (
 	speakURL = "https://api.deepgram.com/v1/speak"
 	// defaultTTSModel is a current Aura-2 English voice.
 	defaultTTSModel = "aura-2-thalia-en"
-	// defaultTTSSampleRate is the PCM rate jargo requests from Aura.
-	defaultTTSSampleRate = 24000
 	// defaultTTSEncoding is the audio encoding jargo requests from Aura.
 	defaultTTSEncoding = "linear16"
 )
@@ -55,6 +53,11 @@ func NewTTS(cfg TTSConfig) *tts.Base {
 type synthesizer struct {
 	cfg  TTSConfig
 	http *http.Client
+}
+
+// Metadata reports the Aura voice model synthesis is billed against.
+func (s *synthesizer) Metadata() tts.Metadata {
+	return tts.Metadata{Model: s.cfg.Model}
 }
 
 // SampleRate reports the requested PCM output rate.

@@ -7,7 +7,11 @@ import (
 
 // LLMTokenUsage reports the token counts billed for one LLM generation. The
 // cache counts are a subset of the input tokens: CacheReadTokens were served
-// from a prompt cache and CacheCreationTokens were written to one.
+// from a prompt cache and CacheCreationTokens were written to one. The
+// per-modality audio and text counts are likewise subsets — of the prompt
+// tokens (input) and completion tokens (output). Realtime (speech-to-speech)
+// models bill audio and text at different rates and report this breakdown; a
+// text-only generation leaves the audio fields zero.
 type LLMTokenUsage struct {
 	// PromptTokens is the number of input tokens.
 	PromptTokens int64
@@ -19,6 +23,19 @@ type LLMTokenUsage struct {
 	CacheCreationTokens int64
 	// TotalTokens is the sum of the prompt and completion tokens.
 	TotalTokens int64
+	// InputAudioTokens is the number of input (prompt) tokens that were audio,
+	// as reported by realtime models. It is a subset of PromptTokens.
+	InputAudioTokens int64
+	// OutputAudioTokens is the number of output (completion) tokens that were
+	// audio. It is a subset of CompletionTokens.
+	OutputAudioTokens int64
+	// InputTextTokens is the number of input (prompt) tokens that were text,
+	// when the model reports a per-modality breakdown. Subset of PromptTokens.
+	InputTextTokens int64
+	// OutputTextTokens is the number of output (completion) tokens that were
+	// text, when the model reports a per-modality breakdown. Subset of
+	// CompletionTokens.
+	OutputTextTokens int64
 }
 
 // MetricsFrame reports metrics measured by a processor. It is a system frame, so

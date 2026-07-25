@@ -6,8 +6,6 @@ package kokoro
 
 import (
 	"github.com/gojargo/jargo/internal/validate"
-	"github.com/gojargo/jargo/provider/openai"
-	"github.com/gojargo/jargo/service/tts"
 )
 
 const (
@@ -34,15 +32,3 @@ type Config struct {
 
 // Validate reports whether the configuration is usable.
 func (c Config) Validate() error { return validate.Struct(c) }
-
-// NewTTS builds a Kokoro TTS service. Kokoro-FastAPI returns 24 kHz PCM, which
-// matches the OpenAI "pcm" response format this wrapper requests.
-func NewTTS(cfg Config) *tts.Base {
-	return openai.NewCompatTTS("KokoroTTS", cfg.BaseURL, defaultModel, defaultVoice, openai.TTSConfig{
-		APIKey:  cfg.APIKey,
-		BaseURL: cfg.BaseURL,
-		Model:   cfg.Model,
-		Voice:   cfg.Voice,
-		Speed:   cfg.Speed,
-	})
-}

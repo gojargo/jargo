@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -15,11 +14,6 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
-
-// errStatus is returned when the API responds with a non-200 status.
-//
-//nolint:gochecknoglobals // sentinel error
-var errStatus = errors.New("groq: unexpected status")
 
 // STTConfig configures the Groq Whisper transcription service. It targets Groq's
 // OpenAI-compatible /audio/transcriptions endpoint.
