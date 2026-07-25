@@ -22,7 +22,7 @@ tts := cartesia.NewTTS(cartesia.Config{APIKey: key, VoiceID: id})
 Library packages read **no environment variables** and take no functional options.
 Configs are validated with `go-playground/validator` tags, so a bad config fails
 at construction rather than mid-call. Reading env vars, flags or config files is
-your app's job — see `examples/`.
+your app's job. See `examples/`.
 
 Most fields have sensible defaults: an empty `Model` picks the provider's
 recommended one, and `SampleRate: 0` inherits the transport's rate.
@@ -31,7 +31,7 @@ recommended one, and `SampleRate: 0` inherits the transport's rate.
 > names it plainly `Config`; one that offers several qualifies the extras. So it
 > is `deepgram.Config` for STT but `deepgram.TTSConfig` for TTS, `cartesia.Config`
 > for TTS but `cartesia.STTConfig` for STT, and `openai.STTConfig` /
-> `openai.LLMConfig` / `openai.TTSConfig` for all three. Check the package — or
+> `openai.LLMConfig` / `openai.TTSConfig` for all three. Check the package, or
 > let the compiler tell you.
 
 ## Providers
@@ -46,8 +46,8 @@ Pick any per category.
 | **Speech-to-speech** | OpenAI Realtime, Gemini Live, AWS Nova Sonic |
 | **Memory** | mem0 |
 
-Each lives in `provider/<name>`, and there are more in the tree than listed above
-— browse [`provider/`](../../provider) for the current set. Per-provider runnable
+Each lives in `provider/<name>`, and there are more in the tree than listed above.
+Browse [`provider/`](../../provider) for the current set. Per-provider runnable
 examples are in [`examples/voice/`](../../examples/voice).
 
 Coverage is uneven: the providers used by the examples get the most exercise, and
@@ -56,7 +56,7 @@ especially useful.
 
 ## The interfaces
 
-You rarely implement these — but knowing their shape explains what a provider can
+You rarely implement these, but knowing their shape explains what a provider can
 and cannot do.
 
 ### STT
@@ -88,7 +88,7 @@ type Transcriber interface {
 ```
 
 Segment STT emits no interim transcriptions. It still works with
-`WithTurnTaking()`, which gates on a *finalized* transcript — but start strategies
+`WithTurnTaking()`, which gates on a *finalized* transcript, but start strategies
 that key on partial transcripts never fire, so turn starts fall back to VAD alone.
 `openai.NewSTT` is segment-based; `deepgram.NewSTT` streams.
 
@@ -101,7 +101,7 @@ type Generator interface {
 ```
 
 Stream deltas to `emit` until done or `ctx` is canceled. **Cancellation is an
-interruption** — honor it, or barge-in stalls for up to three seconds.
+interruption**: honor it, or barge-in stalls for up to three seconds.
 
 Tool-capable providers implement `ToolGenerator` as well:
 
@@ -124,7 +124,7 @@ type Synthesizer interface {
 ```
 
 Providers that return word timings also implement `WordTimestamps`, which is what
-lets `TTSTextFrame`s align to the audio actually being spoken — and therefore what
+lets `TTSTextFrame`s align to the audio actually being spoken, and therefore what
 lets an interrupted response be recorded truncated rather than whole.
 
 ## Tool calling
@@ -152,7 +152,7 @@ convo.SetTools([]frames.Tool{{
 ```
 
 `Parameters` is a raw JSON-Schema object. A handler that blocks **must honor
-`ctx`** — the same interruption rule as `Generate`.
+`ctx`**, the same interruption rule as `Generate`.
 
 Tool results reach the context on an uninterruptible frame, so a tool that has
 already run is never lost to a barge-in. See
@@ -172,7 +172,7 @@ The three implementations are `provider/openairealtime`, `provider/geminilive`
 and `provider/novasonic`.
 
 Lower latency and better prosody, at the cost of the per-stage control you get
-from three separate services — you cannot inspect the transcript before the model
+from three separate services. You cannot inspect the transcript before the model
 answers, or swap just the voice.
 
 ## Switching at runtime

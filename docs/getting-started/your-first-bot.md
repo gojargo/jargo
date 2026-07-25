@@ -12,7 +12,7 @@ at a time, explaining each. The finished result is
 ## 1. The services
 
 Each service is a plain `Config` struct and a constructor. No environment
-variables are read by the library — that is your app's job.
+variables are read by the library; that is your app's job.
 
 ```go
 key := os.Getenv("OPENAI_API_KEY")
@@ -22,7 +22,7 @@ llm := openai.NewLLM(openai.LLMConfig{APIKey: key})
 tts := openai.NewTTS(openai.TTSConfig{APIKey: key})
 ```
 
-Any of the three can be swapped for a different provider independently — they are
+Any of the three can be swapped for a different provider independently. They are
 all just processors behind a small interface. See
 **[Services](../guides/services.md)**.
 
@@ -75,7 +75,7 @@ turnsProc := turns.NewUserTurnProcessor(turns.Config{
 ```
 
 Both constructors need the ONNX Runtime and return an error without it. Handle
-that by running without turn-taking rather than failing — the bot still works, it
+that by running without turn-taking rather than failing. The bot still works; it
 just falls back to STT endpointing and loses barge-in.
 
 When you add these, tell the aggregator to wait for them:
@@ -128,7 +128,7 @@ if err := task.Run(ctx); err != nil {
 }
 ```
 
-`Run` blocks until the pipeline finishes. One task per connection — build the
+`Run` blocks until the pipeline finishes. One task per connection: build the
 whole thing inside your `/offer` handler and let it die with the connection.
 
 ## Make it speak first
@@ -143,11 +143,11 @@ task.QueueFrame(frames.NewLLMRunFrame())
 Or say something fixed, bypassing the LLM entirely:
 
 ```go
-task.QueueFrame(frames.NewTTSSpeakFrame("Hi — what can I help with?"))
+task.QueueFrame(frames.NewTTSSpeakFrame("Hi, what can I help with?"))
 ```
 
 ## Where to go next
 
-- **[Architecture](../concepts/architecture.md)** — the model behind what you just wired.
-- **[Turn-taking](../guides/turn-taking.md)** — tuning how it feels.
-- **[Writing a processor](../extending/custom-processor.md)** — adding your own logic to the chain.
+- **[Architecture](../concepts/architecture.md)**: the model behind what you just wired.
+- **[Turn-taking](../guides/turn-taking.md)**: tuning how it feels.
+- **[Writing a processor](../extending/custom-processor.md)**: adding your own logic to the chain.

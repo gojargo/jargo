@@ -29,8 +29,8 @@ turn-taking and barge-in, and audio back out.
 
 ## Concepts
 
-The engine is small — `frames`, `processor` and `pipeline` are about 2,000 lines
-between them — and understanding it makes everything else obvious.
+The engine is small: `frames`, `processor` and `pipeline` are about 2,000 lines
+between them. Understanding it makes everything else obvious.
 
 | Page | What it covers |
 |---|---|
@@ -38,7 +38,7 @@ between them — and understanding it makes everything else obvious.
 | [Frames](concepts/frames.md) | The three categories, why they exist, and the complete catalog. |
 | [Processors](concepts/processors.md) | The two goroutines inside every processor, and why. |
 | [Pipeline & Task](concepts/pipeline.md) | Building the chain and driving it. |
-| [Interruptions](concepts/interruptions.md) | Barge-in — the mechanism, not the metaphor. |
+| [Interruptions](concepts/interruptions.md) | Barge-in: the mechanism, not the metaphor. |
 | [LLM context](concepts/llm-context.md) | How the conversation accumulates, and when the LLM runs. |
 
 ## Guides
@@ -50,7 +50,7 @@ between them — and understanding it makes everything else obvious.
 | [Audio](guides/audio.md) | Codecs, sample rates, denoising, mixing, recording. |
 | [Telephony](guides/telephony.md) | Phone calls over Twilio, Telnyx, Plivo, Exotel; DTMF; the idle watchdog. |
 | [RTVI](guides/rtvi.md) | The client event protocol over the data channel. |
-| [Observability](guides/observability.md) | Observers, metrics, tracing — and which numbers matter. |
+| [Observability](guides/observability.md) | Observers, metrics, tracing, and which numbers matter. |
 
 ## Extending
 
@@ -67,11 +67,11 @@ between them — and understanding it makes everything else obvious.
 
 ## Elsewhere
 
-- **[Go reference](https://pkg.go.dev/github.com/gojargo/jargo)** — the API. These
+- **[Go reference](https://pkg.go.dev/github.com/gojargo/jargo)**: the API. These
   pages deliberately do not duplicate it.
-- **[Examples](https://github.com/gojargo/jargo/tree/main/examples)** — runnable
+- **[Examples](https://github.com/gojargo/jargo/tree/main/examples)**: runnable
   bots, one per provider.
-- **[Benchmarks](https://github.com/gojargo/jargo-benchmarks)** — the honest
+- **[Benchmarks](https://github.com/gojargo/jargo-benchmarks)**: the honest
   performance picture.
-- **[Changelog](https://github.com/gojargo/jargo/blob/main/CHANGELOG.md)** — what
+- **[Changelog](https://github.com/gojargo/jargo/blob/main/CHANGELOG.md)**: what
   changed, and what broke.

@@ -19,7 +19,7 @@ CGO_ENABLED=0 go build ./...
 
 That works out of the box. Opus encode/decode and resampling are **pure Go**, and
 the two native runtimes are bound through
-[purego](https://github.com/ebitengine/purego) — located and loaded at *run* time
+[purego](https://github.com/ebitengine/purego), located and loaded at *run* time
 from their shared libraries, with nothing required at build time.
 
 This is the property that makes jargo deployable as a single static binary. Keep
@@ -38,7 +38,7 @@ when the variable is unset.
 ### ONNX Runtime
 
 Download a build for your platform from the
-[onnxruntime releases](https://github.com/microsoft/onnxruntime/releases) — the
+[onnxruntime releases](https://github.com/microsoft/onnxruntime/releases); the
 `onnxruntime-linux-*` archive contains `lib/libonnxruntime.so`:
 
 ```sh
@@ -67,7 +67,7 @@ if filter, err := rnnoise.New(); err == nil {
 ```
 
 `rnnoise.New` returns an error when the library is missing, which is the
-idiomatic way to make denoising optional — see `examples/voice/openai`.
+idiomatic way to make denoising optional. See `examples/voice/openai`.
 
 ## Optional cgo build tags
 
@@ -91,8 +91,8 @@ These are the only cgo in the tree.
 The published base images bundle all of the above, so you do not have to think
 about any of it:
 
-- **`gojargo/jargo-build`** — build stage, with the toolchain and C headers.
-- **`gojargo/jargo`** — distroless runtime, carrying the ONNX Runtime, RNNoise,
+- **`gojargo/jargo-build`**: build stage, with the toolchain and C headers.
+- **`gojargo/jargo`**: distroless runtime, carrying the ONNX Runtime, RNNoise,
   libsoxr, libgomp and libopus.
 
 See **[Deploy with Docker](../deploy/docker.md)** for a copyable Dockerfile.
@@ -103,6 +103,6 @@ See **[Deploy with Docker](../deploy/docker.md)** for a copyable Dockerfile.
 go run ./examples/echo    # then open http://localhost:8080
 ```
 
-The echo bot needs no API keys and no ONNX Runtime — if you hear yourself back,
+The echo bot needs no API keys and no ONNX Runtime. If you hear yourself back,
 the audio path works. Then continue to
 **[Your first bot](your-first-bot.md)**.

@@ -34,10 +34,10 @@ flowchart LR
 Because a `Pipeline` is a `Processor`, it can be an element of another pipeline.
 Two composites build on that:
 
-- **`pipeline.NewParallel(branches ...[]processor.Processor)`** — fan a frame out
+- **`pipeline.NewParallel(branches ...[]processor.Processor)`**: fan a frame out
   to several branches and merge what comes back. Useful for running two services
   on the same audio.
-- **`pipeline.NewServiceSwitcher(services, strategy)`** — route frames to exactly
+- **`pipeline.NewServiceSwitcher(services, strategy)`**: route frames to exactly
   one of several services, switched at runtime by pushing a
   `SwitchServiceFrame`. Useful for swapping an LLM mid-conversation.
 
@@ -81,7 +81,7 @@ Note the last step: cleanup runs on a **fresh context**, so a canceled `ctx` doe
 not abort goroutine shutdown.
 
 `Run` returns only after an `EndFrame`, `StopFrame` or `CancelFrame` has traveled
-the *whole* way through the pipeline — not merely been queued. That round trip is
+the *whole* way through the pipeline, not merely been queued. That round trip is
 what guarantees every processor has seen the shutdown.
 
 ### Driving a running task
@@ -103,8 +103,8 @@ if err := task.Flush(ctx); err != nil { /* ctx expired */ }
 
 It queues a `PipelineFlushFrame` probe and blocks until the probe has traveled
 down to the sink **and back up** to the source. When it returns, every frame
-queued ahead of it has been processed. Use it to let the pipeline settle — after
-an interruption, say — before injecting new work.
+queued ahead of it has been processed. Use it to let the pipeline settle (after
+an interruption, say) before injecting new work.
 
 ### Observing frames
 
@@ -124,7 +124,7 @@ between every pair of processors. Observers are notified after the callbacks. Se
 
 ## Worker frames: talking back to the Task
 
-A processor deep in the chain sometimes needs to end the session — a voicemail
+A processor deep in the chain sometimes needs to end the session: a voicemail
 detector that decides to hang up, for instance. It cannot reach the `Task`
 directly, so it pushes a **worker frame** and the `Task` converts it:
 
@@ -146,7 +146,7 @@ flowchart LR
 
 Worker frames are pushed **downstream** by default so that frames already queued
 ahead of them are processed first. On reaching the sink, a *fresh* instance is
-sent back upstream — a new instance rather than the original, so the two
+sent back upstream, a new instance rather than the original, so the two
 directions never share a frame.
 
 ## Runner
@@ -157,7 +157,7 @@ err := runner.Run(ctx, task)
 ```
 
 Runs the task and cancels it on `SIGINT`/`SIGTERM`. For a server that runs one
-task per connection, call `task.Run` directly and cancel on connection close —
+task per connection, call `task.Run` directly and cancel on connection close,
 which is what the examples do:
 
 ```go
@@ -168,5 +168,5 @@ task.Run(ctx)
 
 ---
 
-Next: **[Interruptions](interruptions.md)** — the mechanism that makes barge-in
+Next: **[Interruptions](interruptions.md)**, the mechanism that makes barge-in
 work.

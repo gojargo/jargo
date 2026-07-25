@@ -79,7 +79,7 @@ func (p *Redactor) ProcessFrame(ctx context.Context, f frames.Frame, dir process
 }
 ```
 
-Mutating before the push is fine — you own the frame until then. After pushing,
+Mutating before the push is fine; you own the frame until then. After pushing,
 the frame belongs to the next processor; touching it is a data race.
 
 ## Emitting new frames
@@ -90,7 +90,7 @@ func (p *Greeter) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
         return err
     }
     if _, ok := f.(*frames.StartFrame); ok {
-        // Forward the StartFrame first — nothing may be pushed before it.
+        // Forward the StartFrame first; nothing may be pushed before it.
         if err := p.PushFrame(ctx, f, dir); err != nil {
             return err
         }
@@ -181,7 +181,7 @@ func (p *Recorder) Cleanup(ctx context.Context) error {
 ```
 
 `Setup` runs before any frame arrives; `Clock()` is available after it. Do not
-push frames from `Setup` — the pipeline has not started. Use the `StartFrame`.
+push frames from `Setup`, because the pipeline has not started. Use the `StartFrame`.
 
 ## Reporting errors
 
@@ -232,7 +232,7 @@ func NewOrderLookupFrame(id string) *OrderLookupFrame {
 }
 ```
 
-Pick the category deliberately — it decides whether an interruption drops your
+Pick the category deliberately: it decides whether an interruption drops your
 frame. Add `frames.UninterruptibleMixin` if the work must survive one. See
 [Frames](../concepts/frames.md#the-three-categories).
 
@@ -264,6 +264,6 @@ func TestRedactor(t *testing.T) {
 }
 ```
 
-Because `QueueFrame` is asynchronous, synchronize before asserting — a channel the
+Because `QueueFrame` is asynchronous, synchronize before asserting, with a channel the
 sink signals, or `pipeline.Task.Flush` if you are driving a whole pipeline. See
 `processor/*_test.go` for the patterns in use.

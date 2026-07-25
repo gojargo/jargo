@@ -5,8 +5,8 @@ weight: 2
 
 # Writing a service
 
-Adding an STT, LLM or TTS provider means implementing a small interface — usually
-one method — and letting the shared base handle the pipeline side: frames,
+Adding an STT, LLM or TTS provider means implementing a small interface, usually
+one method, and letting the shared base handle the pipeline side: frames,
 metrics, tracing, interruption, and the tool loop.
 
 You do **not** write a processor for this. The base is the processor.
@@ -67,7 +67,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
     for {
         select {
         case <-ctx.Done():
-            return ctx.Err()      // interruption — stop immediately
+            return ctx.Err()      // interruption: stop immediately
         default:
         }
 
@@ -103,8 +103,8 @@ type ToolGenerator interface {
 ```
 
 Stream text to `sink.Text` and each requested call to `sink.Tool`. Return when the
-model's turn completes. `llm.Base` runs the whole tool loop — dispatching handlers,
-emitting the call frames, feeding results back — as long as the context carries
+model's turn completes. `llm.Base` runs the whole tool loop (dispatching handlers,
+emitting the call frames, feeding results back) as long as the context carries
 tools and your service implements this.
 
 For a server-sent-events provider, `service/llm/sse.go` already handles the SSE
@@ -148,8 +148,8 @@ func (s *Service) Synthesize(ctx context.Context, text string, emit func([]byte)
 ```
 
 Emit PCM **as it arrives**. Buffering the whole utterance before the first `emit`
-adds its full synthesis time to perceived latency — the single most common mistake
-in a TTS integration.
+adds its full synthesis time to perceived latency. It is the single most common
+mistake in a TTS integration.
 
 `tts.Base` handles chunking, the `TTSStartedFrame` / `TTSStoppedFrame` bracket,
 `TTSAudioRawFrame`s, and TTFA measured from the first *audible* sample.
@@ -157,7 +157,7 @@ in a TTS integration.
 ### Word timings
 
 If your provider returns them, implement `WordTimestamps` as well. This is what
-aligns `TTSTextFrame`s to the audio actually spoken — and therefore what lets an
+aligns `TTSTextFrame`s to the audio actually spoken, and therefore what lets an
 interrupted response be recorded truncated instead of whole. Worth doing when the
 API supports it.
 
@@ -191,7 +191,7 @@ Mark interim results honestly. Reporting partials as final makes the bot answer
 half-sentences.
 
 For a provider with no streaming API, implement `Transcriber` and build it with
-`stt.NewSegment(name, transcriber, sampleRate)` instead — accepting that there will
+`stt.NewSegment(name, transcriber, sampleRate)` instead, accepting that there will
 be no interim transcriptions.
 
 ## Metadata
@@ -216,7 +216,7 @@ a default.
 - [ ] `ctx` honored everywhere, including inside network calls.
 - [ ] Output streamed incrementally, not buffered whole.
 - [ ] `SetModel` called, so traces attribute correctly.
-- [ ] Errors returned, not swallowed — the base converts them to `ErrorFrame`s.
+- [ ] Errors returned, not swallowed; the base converts them to `ErrorFrame`s.
 - [ ] A test against a fake server; see the existing `provider/*/­*_test.go`.
 
 ## Contributing it

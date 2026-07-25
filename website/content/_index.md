@@ -15,7 +15,7 @@ layout: hextra-home
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  A WebRTC-native, audio-first conversational-AI framework.&nbsp;<br class="hx:sm:block hx:hidden" />Audio in, streaming STT → LLM → TTS, audio out — with real turn-taking and barge-in.
+  A WebRTC-native, audio-first conversational-AI framework.&nbsp;<br class="hx:sm:block hx:hidden" />Audio in, streaming STT → LLM → TTS, audio out, with real turn-taking and barge-in.
 {{< /hextra/hero-subtitle >}}
 </div>
 
@@ -32,11 +32,11 @@ layout: hextra-home
   >}}
   {{< hextra/feature-card
     title="Standard WebRTC, self-hosted"
-    subtitle="Plain Pion WebRTC — no hosted transport, no proprietary SDK, no cloud to sign up for. Ship the binary; the browser connects."
+    subtitle="Plain Pion WebRTC: no hosted transport, no proprietary SDK, no cloud to sign up for. Ship the binary; the browser connects."
   >}}
   {{< hextra/feature-card
     title="Turn-taking that works"
-    subtitle="Silero VAD and Smart Turn v3 run locally on ONNX, so the bot waits for a real end-of-turn instead of any pause — and the user can cut in."
+    subtitle="Silero VAD and Smart Turn v3 run locally on ONNX, so the bot waits for a real end-of-turn instead of any pause, and the user can cut in."
   >}}
   {{< hextra/feature-card
     title="Pluggable providers"

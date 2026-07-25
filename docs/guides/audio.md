@@ -38,7 +38,7 @@ task := pipeline.NewTask(pipe, pipeline.TaskParams{
 })
 ```
 
-Task defaults are **16000 in / 24000 out** — chosen because STT models want 16 kHz
+Task defaults are **16000 in / 24000 out**, chosen because STT models want 16 kHz
 and TTS output is commonly 24 kHz. Over WebRTC you generally want both at
 `opus.SampleRate` (48 kHz) and let the services resample internally, which avoids
 a double conversion.
@@ -52,7 +52,7 @@ processor learns them. Set them on the `TaskParams`, not by mutating frames.
 |---|---|---|
 | `audio/opus` | Pure-Go decode + SILK encode | C libopus with `-tags libopus` (better speech quality) |
 | `audio/resample` | Pure-Go [go-resample](https://github.com/gojargo/go-resample) | libsoxr with `-tags libsoxr` (highest quality) |
-| `audio/g711` | µ-law / A-law for telephony | — |
+| `audio/g711` | µ-law / A-law for telephony | n/a |
 
 The pure-Go defaults are what keep `CGO_ENABLED=0` working. Reach for the C
 backends only when you have measured that quality matters for your use case.
@@ -69,7 +69,7 @@ if filter, err := rnnoise.New(); err != nil {
 }
 ```
 
-Treat the error as "run without it" rather than fatal — that way the bot works on
+Treat the error as "run without it" rather than fatal, so the bot works on
 machines that do not have the library. `AudioInFilter` takes any `audio.Filter`,
 so a custom one (gain, a high-pass, your own model) drops in the same way.
 
@@ -78,7 +78,7 @@ information the VAD uses. Measure before shipping it.
 
 ## Background audio
 
-An output mixer loops a background track under the bot's speech — hold music,
+An output mixer loops a background track under the bot's speech: hold music,
 ambience, or comfort noise so a silent line does not sound dead:
 
 ```go
@@ -118,6 +118,6 @@ buffer holds audio in memory.
 
 ## Other pieces
 
-- **`audio/onset`** — finds the first audible sample in a PCM stream, so
+- **`audio/onset`**: finds the first audible sample in a PCM stream, so
   time-to-first-audio metrics measure real speech rather than leading silence.
-- **`audio/chain.go`** — composes several `audio.Filter`s into one.
+- **`audio/chain.go`**: composes several `audio.Filter`s into one.

@@ -32,7 +32,7 @@ t, err := wsserver.Accept(w, r, ser, params)
 | Exotel Media Streaming | `transport/wsserver/exotel` |
 
 Each is `New(Config)` returning a `*Serializer`. One serializer serves **one
-session** — build it per call, not once at startup; it is not safe to share.
+session**: build it per call, not once at startup; it is not safe to share.
 
 ## Run the pipeline at 8 kHz
 
@@ -61,7 +61,7 @@ which costs both quality and latency.
 
 ## The pipeline
 
-Identical to the WebRTC one, minus the RTVI processor — there is no data channel
+Identical to the WebRTC one, minus the RTVI processor, since there is no data channel
 on a phone call:
 
 ```go
@@ -91,19 +91,19 @@ turnsProc := turns.NewUserTurnProcessor(turns.Config{
 
 `OnIdle` fires each time the timeout elapses, so escalate and eventually hang up
 rather than asking forever. To end the call from inside the callback, push an
-`EndWorkerFrame` — that is the mechanism a processor uses to reach the `Task`:
+`EndWorkerFrame`, the mechanism a processor uses to reach the `Task`:
 
 ```go
 return c.Push(ctx, frames.NewEndWorkerFrame(), processor.Downstream)
 ```
 
-Retune the timeout mid-call with `UserIdleTimeoutUpdateFrame` — shorter while
+Retune the timeout mid-call with `UserIdleTimeoutUpdateFrame`: shorter while
 waiting for a yes/no, longer while the caller reads out a number.
 
 ## DTMF
 
 Keypresses arrive as `InputDTMFFrame` (a system frame, so they are never dropped
-by a barge-in). `processor/dtmf` aggregates digits into complete entries — an
+by a barge-in). `processor/dtmf` aggregates digits into complete entries, so an
 account number typed at speed arrives as one value rather than eight frames.
 
 Play tones outbound with `OutputDTMFFrame`.
@@ -115,7 +115,7 @@ conversation with a recording.
 ## Practical notes
 
 - **8 kHz µ-law hurts STT accuracy.** Expect a real drop versus wideband audio and
-  budget for it in prompts — confirm important values back to the caller.
+  budget for it in prompts. Confirm important values back to the caller.
 - **Turn-taking matters more on the phone.** There is no video, no visual
   backchannel, and callers expect the rhythm of a phone conversation. Tune it.
 - **Recording is usually regulated.** Consent requirements vary by jurisdiction.

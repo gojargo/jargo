@@ -15,7 +15,7 @@ jargo server works with clients you did not write.
 
 ## Adding it
 
-One processor, placed **upstream of the output transport** — which is what
+One processor, placed **upstream of the output transport**, which is what
 actually carries the messages to the client:
 
 ```go
@@ -44,7 +44,7 @@ flowchart LR
 ```
 
 Incoming client messages arrive as `InputTransportMessageFrame`s; outgoing ones
-are pushed downstream as `OutputTransportMessageUrgentFrame`s — **urgent**, so a
+are pushed downstream as `OutputTransportMessageUrgentFrame`s. **Urgent**, so a
 transcription reaches the UI ahead of queued audio instead of lagging behind the
 speech it describes.
 
@@ -68,7 +68,7 @@ speaks protocol version `2.0.0`.
 | `send-text` | Client sends text instead of speech. |
 | `error` | Something failed. |
 
-The constants live in `processor/rtvi` — `rtvi.TypeUserTranscription` and so on —
+The constants live in `processor/rtvi` (`rtvi.TypeUserTranscription` and so on),
 so you do not hand-write the strings.
 
 ## Clients
@@ -83,13 +83,13 @@ go run ./examples/voice/openai                        # backend on :8080
 NEXT_PUBLIC_JARGO_URL=http://localhost:8080 npm run dev   # client
 ```
 
-The per-provider examples are **headless** — they expose the `/offer` endpoint and
+The per-provider examples are **headless**: they expose the `/offer` endpoint and
 no UI, so a client is required. `examples/echo` and `examples/voicebot` serve
 their own minimal page and need nothing extra.
 
 ## Without RTVI
 
-The processor is optional. Leave it out and you still have working audio — you
+The processor is optional. Leave it out and you still have working audio. You
 just have no event stream, so the UI cannot show live transcriptions or speaking
 state. Phone transports have no data channel at all, which is why
 [`examples/twiliobot`](../../examples/twiliobot) omits it.

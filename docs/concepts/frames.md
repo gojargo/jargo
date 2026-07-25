@@ -7,7 +7,7 @@ weight: 2
 
 A frame is the unit of everything that moves through a pipeline: a chunk of
 audio, a transcription, an LLM token, a request to stop talking. Processors do
-not call each other — they push frames.
+not call each other; they push frames.
 
 Every frame satisfies [`frames.Frame`](https://pkg.go.dev/github.com/gojargo/jargo/frames#Frame),
 which is deliberately tiny:
@@ -23,7 +23,7 @@ type Frame interface {
 ```
 
 Identity is all the pipeline needs to route, log and correlate. The optional
-state — presentation timestamp, metadata, transport source/destination — lives on
+state (presentation timestamp, metadata, transport source/destination) lives on
 `BaseFrame` and is reached through `Base()`.
 
 ## The three categories
@@ -76,7 +76,7 @@ documentation.
 
 ### The `Uninterruptible` escape hatch
 
-Some work must complete even when the user barges in — a tool call that charges a
+Some work must complete even when the user barges in: a tool call that charges a
 card, say. Embed `UninterruptibleMixin` alongside a data or control base:
 
 ```go
@@ -88,7 +88,7 @@ type ChargeResultFrame struct {
 ```
 
 An uninterruptible frame **stays queued** through an interruption, and if it is
-the frame currently being processed, the processor is not canceled — it is left
+the frame currently being processed, the processor is not canceled; it is left
 to finish. `FunctionCallResultFrame` uses this.
 
 ## How priority actually works
@@ -124,9 +124,9 @@ uninterruptible frames. `system` is untouched.
 There are 62 concrete frame types. Grouped by where they appear in a conversation
 rather than by the file they live in.
 
-Categories below are the real ones, taken from the embedded base — and a few are
-worth a second look, because the mechanical consequence is not always what the
-name suggests.
+Categories below are the real ones, taken from the embedded base. A few are worth
+a second look, because the mechanical consequence is not always what the name
+suggests.
 
 ### Lifecycle
 
@@ -261,7 +261,7 @@ synchronized**. The rule:
 > A processor may read and mutate a frame until it pushes it onward, and must not
 > touch it afterwards.
 
-Pushing the same frame in both directions is a bug — the two ends run on separate
+Pushing the same frame in both directions is a bug: the two ends run on separate
 goroutines. Where a component genuinely needs to signal both ways, it builds
 **two** frames and pairs them with `BroadcastSiblingID`, so a consumer can
 recognize the pair and count the event once. `processor/turns` does exactly this;
@@ -272,5 +272,5 @@ not a frame, and it is safe for concurrent use.
 
 ---
 
-Next: **[Processors](processors.md)** — what happens to a frame after it is
+Next: **[Processors](processors.md)**, on what happens to a frame after it is
 pushed.

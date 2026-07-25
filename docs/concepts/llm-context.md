@@ -67,7 +67,7 @@ flowchart LR
 ```
 
 **`agg.User()` goes before the LLM.** It collects `TranscriptionFrame`s into a
-user message, appends it to the context, and emits an `LLMContextFrame` — which is
+user message, appends it to the context, and emits an `LLMContextFrame`, which is
 what actually triggers the LLM.
 
 **`agg.Assistant()` goes at the very end, after the output transport.** It
@@ -87,11 +87,11 @@ bot feels.
 
 ```mermaid
 flowchart TB
-    subgraph Default["default — STT endpointing"]
+    subgraph Default["default: STT endpointing"]
         A1["TranscriptionFrame<br/>(final)"] --> A2["append user message"] --> A3["LLMContextFrame"]
     end
 
-    subgraph Turn["WithTurnTaking() — Smart Turn"]
+    subgraph Turn["WithTurnTaking(): Smart Turn"]
         B1["TranscriptionFrame<br/>(final)"] --> B2["held"]
         B3["UserStoppedSpeakingFrame<br/><i>from UserTurnProcessor</i>"] --> B4{"transcript<br/>in hand?"}
         B2 --> B4
@@ -108,8 +108,8 @@ simple and provider-dependent: endpointing tuned for dictation tends to cut in
 while someone is still thinking.
 
 With `aggregators.WithTurnTaking()`, the turn instead ends when the
-`UserTurnProcessor` says so — a Smart Turn model looking at prosody, not just
-silence — gated on a finalized transcript being available:
+`UserTurnProcessor` says so (a Smart Turn model looking at prosody, not just
+silence), gated on a finalized transcript being available:
 
 ```go
 agg := aggregators.New(convo, aggregators.WithTurnTaking())
@@ -161,7 +161,7 @@ sequenceDiagram
     L->>L: model continues with the result
 ```
 
-`FunctionCallResultFrame` is **uninterruptible** — a tool that already ran has
+`FunctionCallResultFrame` is **uninterruptible**: a tool that already ran has
 side effects, so its result must reach the context even if the user barged in
 meanwhile. See [Interruptions](interruptions.md#surviving-an-interruption).
 

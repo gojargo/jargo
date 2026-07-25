@@ -15,7 +15,7 @@ two nouns.
 
 ## The shape of a bot
 
-Here is a complete voice agent — the pipeline from
+Here is a complete voice agent: the pipeline from
 [`examples/voice/openai`](https://github.com/gojargo/jargo/tree/main/examples/voice/openai),
 which is the reference wiring:
 
@@ -60,7 +60,7 @@ the design:
   the bot actually said into the conversation context, so it has to be positioned
   where the spoken text has already gone out.
 - **`UserTurn` sits after STT, not next to the VAD.** It decides when the user's
-  turn is over, and that decision needs transcriptions and LLM/TTS activity — not
+  turn is over, and that decision needs transcriptions and LLM/TTS activity, not
   just raw speech energy. It reaches the processors *behind* it by pushing frames
   upstream.
 
@@ -80,8 +80,8 @@ flowchart LR
 have to reach processors positioned earlier in the chain.
 
 This is why interruptions work at all. When the user barges in, `UserTurn` emits
-an `InterruptionFrame` in *both* directions, so every processor in the chain —
-those ahead of it and those behind it — learns about it at once. See
+an `InterruptionFrame` in *both* directions, so every processor in the chain
+(those ahead of it and those behind it) learns about it at once. See
 [Interruptions](interruptions.md).
 
 ## The three layers
@@ -141,8 +141,8 @@ complete steps.
 
 ## Where to go next
 
-- **[Frames](frames.md)** — the three categories, and what the 62 frame types are for.
-- **[Processors](processors.md)** — the two goroutines inside every processor.
-- **[Pipeline & Task](pipeline.md)** — how the chain is built and driven.
-- **[Interruptions](interruptions.md)** — barge-in, and why it is a frame.
-- **[LLM context](llm-context.md)** — how the conversation accumulates.
+- **[Frames](frames.md)**: the three categories, and what the 62 frame types are for.
+- **[Processors](processors.md)**: the two goroutines inside every processor.
+- **[Pipeline & Task](pipeline.md)**: how the chain is built and driven.
+- **[Interruptions](interruptions.md)**: barge-in, and why it is a frame.
+- **[LLM context](llm-context.md)**: how the conversation accumulates.

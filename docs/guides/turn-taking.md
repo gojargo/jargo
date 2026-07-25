@@ -9,9 +9,9 @@ jargo does natural turn-taking: the bot waits for a real end-of-turn instead of
 any pause, and the user can interrupt it mid-sentence (barge-in). Two local ONNX
 models drive this:
 
-- **[Silero VAD](https://github.com/snakers4/silero-vad)** — voice activity
-  detection: when is the user speaking at all.
-- **[Smart Turn v3](https://github.com/pipecat-ai/smart-turn)** — end-of-turn
+- **[Silero VAD](https://github.com/snakers4/silero-vad)** for voice activity
+  detection: is the user speaking at all.
+- **[Smart Turn v3](https://github.com/pipecat-ai/smart-turn)** for end-of-turn
   detection: has the user actually finished, or just paused mid-thought.
 
 Both models are **embedded in the binary** (`go:embed`), so there is nothing to
@@ -20,7 +20,7 @@ download or locate at run time except the ONNX Runtime itself.
 ## ONNX Runtime setup
 
 The models run on the [ONNX Runtime](https://onnxruntime.ai/), bound through
-[purego](https://github.com/ebitengine/purego) and loaded at run time — so it
+[purego](https://github.com/ebitengine/purego) and loaded at run time, so it
 needs no C toolchain at build time, and the default `CGO_ENABLED=0` build works.
 The runtime shared library is **not** bundled; download a
 build for your platform from the
@@ -39,7 +39,7 @@ set JARGO_ONNXRUNTIME_LIB=C:\path\to\onnxruntime.dll
 If `JARGO_ONNXRUNTIME_LIB` is unset, jargo looks for the library by its
 conventional name on the loader's default search path
 (`libonnxruntime.so`/`.dylib`/`onnxruntime.dll`). When the runtime cannot be
-loaded, the voice bot still runs — it falls back to STT endpointing for
+loaded, the voice bot still runs. It falls back to STT endpointing for
 turn-taking and loses barge-in.
 
 ## How it fits the pipeline
@@ -91,7 +91,7 @@ pipe := pipeline.New(
 ```
 
 With `aggregators.WithTurnTaking()`, the LLM runs when the turn is reported
-complete *and* a finalized transcript is in hand — so Smart Turn, not STT
+complete *and* a finalized transcript is in hand, so Smart Turn, not STT
 endpointing, decides when the bot responds. See
 [`examples/voicebot`](../../examples/voicebot) for the full wiring, and
 [Interruptions](../concepts/interruptions.md) for what barge-in does to the

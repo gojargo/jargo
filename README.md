@@ -147,7 +147,7 @@ go run ./examples/echo                 # then open http://localhost:8080
 
 ## Documentation
 
-**[gojargo.github.io/jargo](https://gojargo.github.io/jargo/)** — the full
+**[gojargo.github.io/jargo](https://gojargo.github.io/jargo/)** is the full
 documentation. The same pages live in [`docs/`](docs) and read fine on GitHub.
 
 Start with [Architecture](docs/concepts/architecture.md) for the model, or

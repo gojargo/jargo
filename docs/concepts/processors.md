@@ -6,8 +6,8 @@ weight: 3
 # Processors
 
 A processor is a node in the chain. It receives frames, does something, and
-pushes frames on. Every processor in jargo — a transport, an STT service, an
-aggregator, a whole nested pipeline — is one of these.
+pushes frames on. Every processor in jargo (a transport, an STT service, an
+aggregator, a whole nested pipeline) is one of these.
 
 Concrete processors embed `*processor.Base`, which supplies everything in the
 [`Processor`](https://pkg.go.dev/github.com/gojargo/jargo/processor#Processor)
@@ -34,7 +34,7 @@ Two rules, and they matter:
 
 1. **Pass `self` to `processor.New`.** That is how the base dispatches to *your*
    `ProcessFrame` instead of its own.
-2. **Call `e.Base.ProcessFrame` first.** The base handles the lifecycle frames —
+2. **Call `e.Base.ProcessFrame` first.** The base handles the lifecycle frames:
    `StartFrame`, `InterruptionFrame`, `CancelFrame`. Skip it and your processor
    never starts, and never responds to barge-in.
 
@@ -67,12 +67,12 @@ flowchart TB
 
 Why two? Because a system frame must be able to overtake a backlog. If the bot
 has ten seconds of synthesized audio queued and the user interrupts, the
-`InterruptionFrame` cannot wait behind that audio — it has to be handled *now*,
+`InterruptionFrame` cannot wait behind that audio. It has to be handled *now*,
 and its whole job is to throw that audio away.
 
 Splitting the goroutines is what makes that possible. The input goroutine only
 ever sorts frames; it never blocks on slow work. The process goroutine does the
-slow, in-order work, and it is **cancelable and disposable** — an interruption
+slow, in-order work, and it is **cancelable and disposable**: an interruption
 kills it and starts a fresh one.
 
 ### Consequences worth internalizing
@@ -87,7 +87,7 @@ kills it and starts a fresh one.
 
 ### Direct mode
 
-Routing processors — a `Pipeline` and its source and sink — do no real work and
+Routing processors (a `Pipeline` and its source and sink) do no real work and
 would only add a goroutine hop per frame. `processor.WithDirectMode()` makes them
 process inline on the caller's goroutine, with no queues and no goroutines:
 
@@ -140,7 +140,7 @@ b.PushFrame(ctx, f, processor.Upstream)    // toward input
 backpressure between processors by design: an unbounded queue is what prevents
 two processors that push to each other from deadlocking.
 
-For errors, use the helper — it builds the frame, logs, and pushes upstream:
+For errors, use the helper, which builds the frame, logs, and pushes upstream:
 
 ```go
 b.PushError(ctx, "transcription failed", err, false)  // true = fatal, cancels the task
@@ -150,8 +150,8 @@ A `FatalErrorFrame` reaching the pipeline source cancels the task.
 
 ## Signalling in both directions
 
-A processor that needs every other processor to hear something — in front of it
-*and* behind it — must not push the same frame twice. Build one frame per
+A processor that needs every other processor to hear something, in front of it
+*and* behind it, must not push the same frame twice. Build one frame per
 direction and pair them:
 
 ```go
@@ -165,7 +165,7 @@ _ = p.PushFrame(ctx, up, processor.Upstream)
 
 Two reasons this is not just paranoia. The directions are processed on separate
 goroutines, so a shared frame would be mutated concurrently. And a consumer that
-sees both halves — an observer counting turns — can use the sibling id to
+sees both halves (an observer counting turns) can use the sibling id to
 recognize the pair and report the event once instead of twice.
 
 `processor/turns` broadcasts this way for `UserStartedSpeakingFrame`,
@@ -186,10 +186,10 @@ recognize the pair and report the event once instead of twice.
 | `processor/langchain` | LangChain | LangChain-backed LLM bridge. |
 | `processor` | `FunctionFilter` | Drop or allow frames by predicate, per direction. |
 
-Transports and services are processors too — `t.Input()`, `t.Output()`, and every
+Transports and services are processors too: `t.Input()`, `t.Output()`, and every
 STT/LLM/TTS from `provider/`.
 
 ---
 
-Next: **[Pipeline & Task](pipeline.md)** — how processors get linked and driven.
+Next: **[Pipeline & Task](pipeline.md)**, on how processors get linked and driven.
 See **[Writing a processor](../extending/custom-processor.md)** to build your own.
