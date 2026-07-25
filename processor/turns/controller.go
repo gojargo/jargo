@@ -22,7 +22,7 @@ type ControllerHooks struct {
 	StopTimeout        func(ctx context.Context)
 	ResetAggregation   func(ctx context.Context)
 	Push               func(ctx context.Context, f frames.Frame, dir processor.Direction)
-	Broadcast          func(ctx context.Context, f frames.Frame)
+	Broadcast          func(ctx context.Context, build func() frames.Frame)
 }
 
 // UserTurnController runs the start and stop strategy chains and owns the
@@ -145,10 +145,10 @@ func (c *UserTurnController) pushHook() func(frames.Frame, processor.Direction) 
 	}
 }
 
-func (c *UserTurnController) broadcastHook() func(frames.Frame) {
-	return func(f frames.Frame) {
+func (c *UserTurnController) broadcastHook() func(func() frames.Frame) {
+	return func(build func() frames.Frame) {
 		if c.hooks.Broadcast != nil {
-			c.hooks.Broadcast(c.ctx, f)
+			c.hooks.Broadcast(c.ctx, build)
 		}
 	}
 }

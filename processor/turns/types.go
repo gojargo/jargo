@@ -54,11 +54,14 @@ func DefaultStoppedParams() UserTurnStoppedParams {
 
 // Emitter lets a controller or strategy push frames into the pipeline. The
 // UserTurnProcessor implements it. Broadcast sends a frame both downstream and
-// upstream (the analog of Pipecat's broadcast_frame), which is how turn
-// decisions and interruptions reach the whole pipeline.
+// upstream, which is how turn decisions and interruptions reach the whole
+// pipeline.
 type Emitter interface {
 	// Push sends a frame to the neighbor in dir.
 	Push(ctx context.Context, f frames.Frame, dir processor.Direction) error
-	// Broadcast sends a frame both downstream and upstream.
-	Broadcast(ctx context.Context, f frames.Frame) error
+	// Broadcast builds one frame per direction and sends them both ways. It takes
+	// a constructor rather than a frame because the two directions must not share
+	// one instance: each is processed on its own goroutine, and a frame is owned
+	// by a single goroutine at a time.
+	Broadcast(ctx context.Context, build func() frames.Frame) error
 }

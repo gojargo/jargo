@@ -40,7 +40,7 @@ func (s *spy) env() strategyEnv {
 		resetAggregation:   func() { s.resets++ },
 		inferenceTriggered: func() { s.inferences++ },
 		push:               func(_ frames.Frame, d processor.Direction) { s.pushed = append(s.pushed, d) },
-		broadcast:          func(f frames.Frame) { s.broadcast = append(s.broadcast, f) },
+		broadcast:          func(build func() frames.Frame) { s.broadcast = append(s.broadcast, build()) },
 	}
 }
 
@@ -868,7 +868,7 @@ func TestStrategyBaseNoOps(t *testing.T) {
 		b.Cleanup()
 		b.TriggerStopped()
 		b.Push(frames.NewUserSpeakingFrame(), processor.Downstream)
-		b.Broadcast(frames.NewUserSpeakingFrame())
+		b.Broadcast(func() frames.Frame { return frames.NewUserSpeakingFrame() })
 	})
 }
 
@@ -881,7 +881,7 @@ func TestStopStrategyBaseEmits(t *testing.T) {
 	b.attach(spy.env())
 
 	b.Push(frames.NewUserSpeakingFrame(), processor.Upstream)
-	b.Broadcast(frames.NewBotSpeakingFrame())
+	b.Broadcast(func() frames.Frame { return frames.NewBotSpeakingFrame() })
 	b.TriggerStopped()
 
 	if len(spy.pushed) != 1 || spy.pushed[0] != processor.Upstream {
@@ -958,7 +958,7 @@ func (e *fakeEmitter) Push(_ context.Context, _ frames.Frame, dir processor.Dire
 	return e.err
 }
 
-func (e *fakeEmitter) Broadcast(_ context.Context, _ frames.Frame) error {
+func (e *fakeEmitter) Broadcast(_ context.Context, _ func() frames.Frame) error {
 	e.broadcast++
 	return e.err
 }
@@ -971,7 +971,7 @@ func TestUserIdleControllerEmit(t *testing.T) {
 		if err := c.Push(t.Context(), frames.NewUserSpeakingFrame(), processor.Downstream); err != nil {
 			t.Errorf("Push before Setup: %v", err)
 		}
-		if err := c.Broadcast(t.Context(), frames.NewUserSpeakingFrame()); err != nil {
+		if err := c.Broadcast(t.Context(), func() frames.Frame { return frames.NewUserSpeakingFrame() }); err != nil {
 			t.Errorf("Broadcast before Setup: %v", err)
 		}
 	})
@@ -984,7 +984,7 @@ func TestUserIdleControllerEmit(t *testing.T) {
 		if err := c.Push(t.Context(), frames.NewUserSpeakingFrame(), processor.Upstream); err != nil {
 			t.Errorf("Push: %v", err)
 		}
-		if err := c.Broadcast(t.Context(), frames.NewUserSpeakingFrame()); err != nil {
+		if err := c.Broadcast(t.Context(), func() frames.Frame { return frames.NewUserSpeakingFrame() }); err != nil {
 			t.Errorf("Broadcast: %v", err)
 		}
 		if len(emit.pushed) != 1 || emit.pushed[0] != processor.Upstream {
@@ -1004,7 +1004,8 @@ func TestUserIdleControllerEmit(t *testing.T) {
 		if err := c.Push(t.Context(), frames.NewUserSpeakingFrame(), processor.Downstream); !errors.Is(err, errEmit) {
 			t.Errorf("Push error = %v, want errEmit", err)
 		}
-		if err := c.Broadcast(t.Context(), frames.NewUserSpeakingFrame()); !errors.Is(err, errEmit) {
+		build := func() frames.Frame { return frames.NewUserSpeakingFrame() }
+		if err := c.Broadcast(t.Context(), build); !errors.Is(err, errEmit) {
 			t.Errorf("Broadcast error = %v, want errEmit", err)
 		}
 	})

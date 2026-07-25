@@ -52,7 +52,7 @@ func NewUserTurnProcessor(cfg Config) *UserTurnProcessor {
 		Started:   p.onTurnStarted,
 		Stopped:   p.onTurnStopped,
 		Push:      func(ctx context.Context, f frames.Frame, dir processor.Direction) { _ = p.PushFrame(ctx, f, dir) },
-		Broadcast: func(ctx context.Context, f frames.Frame) { _ = p.Broadcast(ctx, f) },
+		Broadcast: func(ctx context.Context, build func() frames.Frame) { _ = p.Broadcast(ctx, build) },
 	})
 	return p
 }
@@ -113,9 +113,9 @@ func (p *UserTurnProcessor) suppressed(ctx context.Context, f frames.Frame) bool
 	if should != p.muted {
 		p.muted = should
 		if should {
-			_ = p.Broadcast(ctx, frames.NewUserMuteStartedFrame())
+			_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewUserMuteStartedFrame() })
 		} else {
-			_ = p.Broadcast(ctx, frames.NewUserMuteStoppedFrame())
+			_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewUserMuteStoppedFrame() })
 		}
 	}
 	if !p.muted {
@@ -137,22 +137,33 @@ func (p *UserTurnProcessor) Push(ctx context.Context, f frames.Frame, dir proces
 
 // Broadcast implements Emitter, sending a frame both downstream and upstream so
 // turn decisions reach the whole pipeline.
-func (p *UserTurnProcessor) Broadcast(ctx context.Context, f frames.Frame) error {
-	if err := p.PushFrame(ctx, f, processor.Downstream); err != nil {
+//
+// build is called once per direction: the two halves are distinct frames, paired
+// by BroadcastSiblingID. That matters for two reasons. The directions are
+// processed on separate goroutines, so a shared frame would be mutated
+// concurrently; and a consumer that sees both halves — an observer, say — can
+// recognize the pair and act on one of them rather than reporting the event
+// twice.
+func (p *UserTurnProcessor) Broadcast(ctx context.Context, build func() frames.Frame) error {
+	down, up := build(), build()
+	down.Base().SetBroadcastSiblingID(up.ID())
+	up.Base().SetBroadcastSiblingID(down.ID())
+
+	if err := p.PushFrame(ctx, down, processor.Downstream); err != nil {
 		return err
 	}
-	return p.PushFrame(ctx, f, processor.Upstream)
+	return p.PushFrame(ctx, up, processor.Upstream)
 }
 
 // onTurnStarted broadcasts the turn-start decision and barges in, and feeds the
 // idle controller a synthetic user-started frame so it tracks the turn.
 func (p *UserTurnProcessor) onTurnStarted(ctx context.Context, params UserTurnStartedParams) {
 	if params.EnableUserSpeakingFrames {
-		_ = p.Broadcast(ctx, frames.NewUserStartedSpeakingFrame())
+		_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewUserStartedSpeakingFrame() })
 	}
 	p.idle.Process(frames.NewUserStartedSpeakingFrame())
 	if params.EnableInterruptions {
-		_ = p.Broadcast(ctx, frames.NewInterruptionFrame())
+		_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
 	}
 }
 
@@ -160,7 +171,7 @@ func (p *UserTurnProcessor) onTurnStarted(ctx context.Context, params UserTurnSt
 // a synthetic user-stopped frame.
 func (p *UserTurnProcessor) onTurnStopped(ctx context.Context, params UserTurnStoppedParams) {
 	if params.EnableUserSpeakingFrames {
-		_ = p.Broadcast(ctx, frames.NewUserStoppedSpeakingFrame())
+		_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() })
 	}
 	p.idle.Process(frames.NewUserStoppedSpeakingFrame())
 }

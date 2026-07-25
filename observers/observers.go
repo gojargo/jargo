@@ -19,8 +19,20 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// deduper drops frames already seen at the other pipeline end (broadcast frames
-// reach both), keeping a bounded window of recent ids.
+// skipBroadcastSibling reports whether a frame is the upstream half of a
+// broadcast pair and should be ignored. A broadcast builds a distinct frame for
+// each direction, paired by BroadcastSiblingID, so an observer that watched both
+// would report one event twice. Counting only the downstream half reports it
+// once, and the pairing is what makes the two halves recognizable — their ids
+// deliberately differ, so the id deduper below cannot catch them.
+func skipBroadcastSibling(f frames.Frame, dir processor.Direction) bool {
+	_, paired := f.Base().BroadcastSiblingID()
+	return paired && dir != processor.Downstream
+}
+
+// deduper drops a frame already seen, keeping a bounded window of recent ids. It
+// catches the same instance arriving twice — a frame pushed on and later echoed
+// back — which is distinct from the broadcast pairing above.
 type deduper struct {
 	seen  map[uint64]struct{}
 	order []uint64
@@ -86,7 +98,10 @@ func NewTurnTracking(cfg TurnTrackingConfig) *TurnTracking {
 }
 
 // OnFrame implements pipeline.Observer.
-func (o *TurnTracking) OnFrame(f frames.Frame, _ processor.Direction) {
+func (o *TurnTracking) OnFrame(f frames.Frame, dir processor.Direction) {
+	if skipBroadcastSibling(f, dir) {
+		return
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.dd.seenBefore(f.ID()) {
@@ -201,7 +216,10 @@ func NewUserBotLatency(cfg LatencyConfig) *UserBotLatency {
 }
 
 // OnFrame implements pipeline.Observer.
-func (o *UserBotLatency) OnFrame(f frames.Frame, _ processor.Direction) {
+func (o *UserBotLatency) OnFrame(f frames.Frame, dir processor.Direction) {
+	if skipBroadcastSibling(f, dir) {
+		return
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.dd.seenBefore(f.ID()) {
@@ -246,7 +264,10 @@ func NewStartupTiming(cfg StartupConfig) *StartupTiming {
 }
 
 // OnFrame implements pipeline.Observer.
-func (o *StartupTiming) OnFrame(f frames.Frame, _ processor.Direction) {
+func (o *StartupTiming) OnFrame(f frames.Frame, dir processor.Direction) {
+	if skipBroadcastSibling(f, dir) {
+		return
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.dd.seenBefore(f.ID()) {
