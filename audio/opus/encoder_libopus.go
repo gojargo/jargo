@@ -89,8 +89,10 @@ func (e *Encoder) free() {
 // Encode encodes exactly one 20 ms frame of interleaved S16LE PCM — that is
 // FrameBytes(channels) bytes — into a single Opus packet.
 func (e *Encoder) Encode(pcm []byte) ([]byte, error) {
-	if len(pcm) == 0 {
-		return nil, errFrameSize
+	// opus_encode reads a fixed FrameSamples*channels samples from the pointer
+	// regardless of the slice length, so a short frame would read out of bounds.
+	if len(pcm) != FrameBytes(e.channels) {
+		return nil, fmt.Errorf("%w: got %d bytes, want %d", errFrameSize, len(pcm), FrameBytes(e.channels))
 	}
 	// S16LE interleaved bytes are native int16 on little-endian targets
 	// (amd64/arm64), so the buffer can be read as opus_int16 without a copy.
