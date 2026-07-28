@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gojargo/jargo/audio/opus"
@@ -135,17 +136,18 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 	}
 }
 
-// queuedFrames bounds the frames waiting to be sent. The base output already
-// buffers well ahead of this, so a shallow queue is enough to keep the sender fed
-// without holding a second copy of the same audio.
-const queuedFrames = 64
+// queuedFrames is how far the writer may run ahead of the sender. It has to be
+// more than one: the sender takes whatever is queued at the instant it comes
+// round, so a queue that only ever holds the frame being waited on leaves no
+// slack, and any hesitation upstream — a goroutine not scheduled promptly, work
+// done downstream between chunks — arrives too late and gets a frame of silence
+// spliced into the middle of speech instead. The cushion is small enough that
+// bot-speaking state stays close to what is actually playing.
+const queuedFrames = 8
 
-// pending is one 20 ms frame of PCM waiting its turn, and the channel closed
-// once it has been sent.
-type pending struct {
-	pcm  []byte
-	sent chan struct{}
-}
+// starvationWindow is how soon after real audio a silence frame counts as the
+// sender having been starved rather than the talker having stopped.
+const starvationWindow = 200 * time.Millisecond
 
 // outputTransport encodes outgoing PCM into Opus and writes it to the
 // connection's audio track at real time.
@@ -167,10 +169,13 @@ type outputTransport struct {
 	tail []byte
 
 	mu      sync.Mutex
-	queue   chan *pending
+	queue   chan []byte
 	cancel  context.CancelFunc
 	sendWG  sync.WaitGroup
 	running bool
+	// queued counts frames handed over but not yet sent, so a graceful end can
+	// wait for them rather than cutting the last words off.
+	queued atomic.Int64
 }
 
 func newOutput(conn *Connection, params transport.Params) *outputTransport {
@@ -194,7 +199,12 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		return out.startSending()
 	case *frames.InterruptionFrame:
 		out.discardQueued()
-	case *frames.EndFrame, *frames.CancelFrame:
+	case *frames.EndFrame:
+		// The base output has handed over everything it had; let it play before
+		// the sender goes away, or the farewell loses its last words.
+		out.waitDrained(ctx)
+		out.stopSending()
+	case *frames.CancelFrame:
 		out.stopSending()
 	}
 	return nil
@@ -228,7 +238,7 @@ func (out *outputTransport) startSending() error {
 	// The encoder is touched only by the sender goroutine from here on, so
 	// packets cannot be sent in a different order than they were encoded.
 	out.enc = enc
-	out.queue = make(chan *pending, queuedFrames)
+	out.queue = make(chan []byte, queuedFrames)
 	ctx, cancel := context.WithCancel(context.Background())
 	out.cancel = cancel
 	out.running = true
@@ -253,7 +263,6 @@ func (out *outputTransport) stopSending() {
 
 // discardQueued drops audio that has not been sent yet. A barge-in has to take
 // effect now: anything already queued belongs to the turn the user just cut off.
-// Waiters are released rather than left blocked on audio that will never go out.
 func (out *outputTransport) discardQueued() {
 	out.mu.Lock()
 	q := out.queue
@@ -264,9 +273,30 @@ func (out *outputTransport) discardQueued() {
 	}
 	for {
 		select {
-		case p := <-q:
-			close(p.sent)
+		case <-q:
+			out.queued.Add(-1)
 		default:
+			return
+		}
+	}
+}
+
+// waitDrained blocks until everything handed to the sender has gone out, so a
+// graceful end plays the last of the audio instead of clipping it. Bounded, so a
+// sender that has already stopped cannot hang the shutdown.
+func (out *outputTransport) waitDrained(ctx context.Context) {
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(opus.FrameDuration)
+	defer tick.Stop()
+	for out.queued.Load() > 0 {
+		select {
+		case <-tick.C:
+		case <-ctx.Done():
+			return
+		case <-out.conn.Done():
+			return
+		case <-deadline.C:
 			return
 		}
 	}
@@ -285,7 +315,13 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 
 	quiet := make([]byte, frameBytes)
 	start := time.Now()
-	var sent int64
+	var sent, silence, starved int64
+	var lastReal time.Time
+
+	defer func() {
+		slog.Info("pion sender stopped", "processor", out.Name(),
+			"frames", sent, "silence", silence, "starved", starved)
+	}()
 
 	for {
 		if d := time.Until(start.Add(time.Duration(sent) * opus.FrameDuration)); d > 0 {
@@ -308,11 +344,19 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 		default:
 		}
 
-		pcm, done := quiet, (chan struct{})(nil)
+		pcm := quiet
 		select {
-		case p := <-out.queue:
-			pcm, done = p.pcm, p.sent
+		case frame := <-out.queue:
+			pcm = frame
+			out.queued.Add(-1)
+			lastReal = time.Now()
 		default:
+			silence++
+			// Silence arriving mid-speech means the writer did not keep up, which
+			// is heard as a chopped word rather than a pause.
+			if !lastReal.IsZero() && time.Since(lastReal) < starvationWindow {
+				starved++
+			}
 		}
 
 		packet, err := out.enc.Encode(pcm)
@@ -322,17 +366,15 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 		if err != nil {
 			slog.Error("write audio", "processor", out.Name(), "err", err)
 		}
-		if done != nil {
-			close(done)
-		}
 		sent++
 	}
 }
 
-// WriteAudio hands PCM to the sender a frame at a time and returns once the last
-// of it has gone out, so callers still see a write that takes as long as the
-// audio does — the drain at the end of a turn depends on that. Audio that does
-// not fill a whole frame is held until the next call.
+// WriteAudio hands PCM to the sender a frame at a time. It blocks only when the
+// sender is already as far ahead as the queue allows, which is what paces the
+// pipeline to real time; waiting on each frame individually would instead keep
+// the queue empty and starve the sender. Audio that does not fill a whole frame
+// is held until the next call.
 func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	out.mu.Lock()
 	q, running := out.queue, out.running
@@ -342,35 +384,26 @@ func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	}
 	frameBytes := opus.FrameBytes(channels(out.Params().AudioOutChannels))
 	out.tail = append(out.tail, pcm...)
-	var last chan struct{}
-	var batch []*pending
+	var batch [][]byte
 	for len(out.tail) >= frameBytes {
 		frame := make([]byte, frameBytes)
 		copy(frame, out.tail[:frameBytes])
-		p := &pending{pcm: frame, sent: make(chan struct{})}
-		batch = append(batch, p)
-		last = p.sent
+		batch = append(batch, frame)
 		out.tail = out.tail[frameBytes:]
 	}
 	out.mu.Unlock()
 
-	for _, p := range batch {
+	for _, frame := range batch {
+		out.queued.Add(1)
 		select {
-		case q <- p:
+		case q <- frame:
 		case <-ctx.Done():
+			out.queued.Add(-1)
 			return ctx.Err()
 		case <-out.conn.Done():
+			out.queued.Add(-1)
 			return nil
 		}
-	}
-	if last == nil {
-		return nil
-	}
-	select {
-	case <-last:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-out.conn.Done():
 	}
 	return nil
 }
