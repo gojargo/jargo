@@ -27,7 +27,7 @@ barge-in, and audio back out.
 ## Why?
 
 [Pipecat](https://github.com/pipecat-ai/pipecat) is great, and jargo is a port of
-it — the architecture and many design decisions are Pipecat's.
+it. The architecture and many design decisions are Pipecat's.
 
 ### Python might not be the way
 
@@ -35,7 +35,7 @@ This port exists for one reason: I'd rather not run a voice agent on Python.
 
 Python is the right tool when you need the AI/data-science ecosystem. A
 real-time voice *server* doesn't: the models run as services or as ONNX, and
-what's left is plumbing — audio framing, WebRTC, concurrency, and shipping a
+what's left is plumbing: audio framing, WebRTC, concurrency, and shipping a
 binary. For that, Go is a better fit: one static binary to deploy, low and
 predictable memory, fast startup, and real concurrency for many simultaneous
 sessions without a GIL. The heavy numerics stay where they belong (the ONNX
@@ -44,7 +44,7 @@ Runtime, the remote services), so giving up Python costs little here. See the
 
 ### No Daily, no lock-in
 
-jargo stays on plain, standard WebRTC via [Pion](https://github.com/pion) — no
+jargo stays on plain, standard WebRTC via [Pion](https://github.com/pion): no
 Daily, no hosted transport, no proprietary SDK or cloud to sign up for. You ship
 one binary, the browser connects with vanilla WebRTC, and RTVI rides the data
 channel. Keeping the transport open and self-hosted is a deliberate goal, not an
@@ -52,7 +52,7 @@ afterthought.
 
 ## Features
 
-- **WebRTC**, pure Go ([Pion](https://github.com/pion)) — audio in and out of the browser.
+- **WebRTC**, pure Go ([Pion](https://github.com/pion)): audio in and out of the browser.
 - **Opus**, pure Go encode + decode via [pion/opus](https://github.com/pion/opus); C libopus optional with `-tags libopus`.
 - **Resampling**, pure Go via [go-resample](https://github.com/gojargo/go-resample); libsoxr optional with `-tags libsoxr`.
 - **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
@@ -60,7 +60,7 @@ afterthought.
 - **Turn-taking & barge-in**: Silero VAD + Smart Turn v3, local ONNX.
 - **Telephony** (optional): inbound/outbound phone calls over Twilio Media Streams.
 - **User-idle watchdog**: re-engage or hang up when the caller goes silent.
-- **RTVI** data channel — works with existing RTVI clients.
+- **RTVI** data channel: works with existing RTVI clients.
 - **Pluggable services**: swap any STT/LLM/TTS behind a small interface.
 - **Concurrent by design**: independent processors; interruptions are frames.
 
@@ -77,13 +77,13 @@ Pick any per category; each is a small `Config` + constructor.
 
 ## Dependencies
 
-The default build is **cgo-free** — `CGO_ENABLED=0 go build ./...` works with no C
+The default build is **cgo-free**: `CGO_ENABLED=0 go build ./...` works with no C
 toolchain. Two native runtimes are still used, but bound through
 [purego](https://github.com/ebitengine/purego) and loaded at run time, so they need
 their shared library present at runtime and nothing at build time:
 
-- **ONNX Runtime** — VAD + end-of-turn detection (`JARGO_ONNXRUNTIME_LIB`).
-- **RNNoise** — optional input noise reduction (`JARGO_RNNOISE_LIB`).
+- **ONNX Runtime**: VAD + end-of-turn detection (`JARGO_ONNXRUNTIME_LIB`).
+- **RNNoise**: optional input noise reduction (`JARGO_RNNOISE_LIB`).
 
 Opus and resampling are pure Go by default; the C libopus (`-tags libopus`) and
 libsoxr (`-tags libsoxr`) are the only cgo in the tree, and both are optional. The
@@ -114,7 +114,7 @@ task.Run(ctx)
 [`examples/voice/openai`](examples/voice/openai) is that pipeline as a complete
 server (WebRTC signaling, VAD/turn-taking, barge-in).
 
-**Run it in Docker** — build on the `gojargo/jargo-build` base and ship on the
+**Run it in Docker**: build on the `gojargo/jargo-build` base and ship on the
 distroless `gojargo/jargo` runtime (it bundles the ONNX Runtime), then:
 
 ```sh
@@ -128,17 +128,17 @@ the **[Quickstart](docs/getting-started/quickstart.md)** for the full setup.
 
 Runnable bots live in [`examples/`](examples):
 
-- **echo** — hear yourself back, no API keys.
-- **voicebot** — the full voice agent (STT → LLM → TTS over WebRTC) with
+- **echo**: hear yourself back, no API keys.
+- **voicebot**: the full voice agent (STT → LLM → TTS over WebRTC) with
   turn-taking, long-term memory, and tracing.
-- **voice/** — one headless backend per provider, each wiring its STT/LLM/TTS
+- **voice/**: one headless backend per provider, each wiring its STT/LLM/TTS
   explicitly and exposing the WebRTC `/offer` endpoint (no web UI). Run with
   `go run ./examples/voice/<provider>` (e.g. `deepgram`, `cartesia`, `openai`)
-  and drive it from a browser client — the `nextjs-voicebot` in
+  and drive it from a browser client, the `nextjs-voicebot` in
   [jargo-client-react](https://github.com/gojargo/jargo-client-react).
-- **twiliobot** — a phone agent over Twilio Media Streams, with the idle watchdog.
+- **twiliobot**: a phone agent over Twilio Media Streams, with the idle watchdog.
 
-The fastest way to try them — locally or with Docker — is the
+The fastest way to try them (locally or with Docker) is the
 **[Quickstart](docs/getting-started/quickstart.md)**.
 
 ```sh
@@ -178,7 +178,7 @@ test.
 ## License & attribution
 
 jargo is a Go port of [Pipecat](https://github.com/pipecat-ai/pipecat),
-distributed under the same **BSD 2-Clause License**. The upstream copyright —
-*Copyright (c) 2024–2026, Daily* — is preserved verbatim in [`LICENSE`](LICENSE);
+distributed under the same **BSD 2-Clause License**. The upstream copyright
+(*Copyright (c) 2024–2026, Daily*) is preserved verbatim in [`LICENSE`](LICENSE);
 see [`NOTICE`](NOTICE) for details. jargo is an independent project, not
 affiliated with or endorsed by Daily.
