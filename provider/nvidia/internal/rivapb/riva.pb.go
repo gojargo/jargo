@@ -29,63 +29,164 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// AudioEncoding of the raw audio bytes sent to the server.
-type AudioEncoding int32
+// RecognizeRequest carries the configuration and the whole audio buffer.
+type RecognizeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Config        *RecognitionConfig     `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
+	Audio         []byte                 `protobuf:"bytes,2,opt,name=audio,proto3" json:"audio,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const (
-	AudioEncoding_ENCODING_UNSPECIFIED AudioEncoding = 0
-	AudioEncoding_LINEAR_PCM           AudioEncoding = 1
-	AudioEncoding_FLAC                 AudioEncoding = 2
-	AudioEncoding_MULAW                AudioEncoding = 3
-	AudioEncoding_OGGOPUS              AudioEncoding = 4
-	AudioEncoding_ALAW                 AudioEncoding = 20
-)
+func (x *RecognizeRequest) Reset() {
+	*x = RecognizeRequest{}
+	mi := &file_riva_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
 
-// Enum value maps for AudioEncoding.
-var (
-	AudioEncoding_name = map[int32]string{
-		0:  "ENCODING_UNSPECIFIED",
-		1:  "LINEAR_PCM",
-		2:  "FLAC",
-		3:  "MULAW",
-		4:  "OGGOPUS",
-		20: "ALAW",
+func (x *RecognizeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecognizeRequest) ProtoMessage() {}
+
+func (x *RecognizeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_riva_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
 	}
-	AudioEncoding_value = map[string]int32{
-		"ENCODING_UNSPECIFIED": 0,
-		"LINEAR_PCM":           1,
-		"FLAC":                 2,
-		"MULAW":                3,
-		"OGGOPUS":              4,
-		"ALAW":                 20,
-	}
-)
-
-func (x AudioEncoding) Enum() *AudioEncoding {
-	p := new(AudioEncoding)
-	*p = x
-	return p
+	return mi.MessageOf(x)
 }
 
-func (x AudioEncoding) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (AudioEncoding) Descriptor() protoreflect.EnumDescriptor {
-	return file_riva_proto_enumTypes[0].Descriptor()
-}
-
-func (AudioEncoding) Type() protoreflect.EnumType {
-	return &file_riva_proto_enumTypes[0]
-}
-
-func (x AudioEncoding) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use AudioEncoding.Descriptor instead.
-func (AudioEncoding) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use RecognizeRequest.ProtoReflect.Descriptor instead.
+func (*RecognizeRequest) Descriptor() ([]byte, []int) {
 	return file_riva_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *RecognizeRequest) GetConfig() *RecognitionConfig {
+	if x != nil {
+		return x.Config
+	}
+	return nil
+}
+
+func (x *RecognizeRequest) GetAudio() []byte {
+	if x != nil {
+		return x.Audio
+	}
+	return nil
+}
+
+// RecognizeResponse carries the transcript(s) for the buffer.
+type RecognizeResponse struct {
+	state         protoimpl.MessageState     `protogen:"open.v1"`
+	Results       []*SpeechRecognitionResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecognizeResponse) Reset() {
+	*x = RecognizeResponse{}
+	mi := &file_riva_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecognizeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecognizeResponse) ProtoMessage() {}
+
+func (x *RecognizeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_riva_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecognizeResponse.ProtoReflect.Descriptor instead.
+func (*RecognizeResponse) Descriptor() ([]byte, []int) {
+	return file_riva_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RecognizeResponse) GetResults() []*SpeechRecognitionResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+// SpeechRecognitionResult is one transcript hypothesis set for a portion of the
+// audio.
+type SpeechRecognitionResult struct {
+	state          protoimpl.MessageState          `protogen:"open.v1"`
+	Alternatives   []*SpeechRecognitionAlternative `protobuf:"bytes,1,rep,name=alternatives,proto3" json:"alternatives,omitempty"`
+	ChannelTag     int32                           `protobuf:"varint,2,opt,name=channel_tag,json=channelTag,proto3" json:"channel_tag,omitempty"`
+	AudioProcessed float32                         `protobuf:"fixed32,3,opt,name=audio_processed,json=audioProcessed,proto3" json:"audio_processed,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SpeechRecognitionResult) Reset() {
+	*x = SpeechRecognitionResult{}
+	mi := &file_riva_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SpeechRecognitionResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SpeechRecognitionResult) ProtoMessage() {}
+
+func (x *SpeechRecognitionResult) ProtoReflect() protoreflect.Message {
+	mi := &file_riva_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SpeechRecognitionResult.ProtoReflect.Descriptor instead.
+func (*SpeechRecognitionResult) Descriptor() ([]byte, []int) {
+	return file_riva_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SpeechRecognitionResult) GetAlternatives() []*SpeechRecognitionAlternative {
+	if x != nil {
+		return x.Alternatives
+	}
+	return nil
+}
+
+func (x *SpeechRecognitionResult) GetChannelTag() int32 {
+	if x != nil {
+		return x.ChannelTag
+	}
+	return 0
+}
+
+func (x *SpeechRecognitionResult) GetAudioProcessed() float32 {
+	if x != nil {
+		return x.AudioProcessed
+	}
+	return 0
 }
 
 // StreamingRecognizeRequest is either the opening config or a chunk of audio.
@@ -102,7 +203,7 @@ type StreamingRecognizeRequest struct {
 
 func (x *StreamingRecognizeRequest) Reset() {
 	*x = StreamingRecognizeRequest{}
-	mi := &file_riva_proto_msgTypes[0]
+	mi := &file_riva_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -114,7 +215,7 @@ func (x *StreamingRecognizeRequest) String() string {
 func (*StreamingRecognizeRequest) ProtoMessage() {}
 
 func (x *StreamingRecognizeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_riva_proto_msgTypes[0]
+	mi := &file_riva_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -127,7 +228,7 @@ func (x *StreamingRecognizeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamingRecognizeRequest.ProtoReflect.Descriptor instead.
 func (*StreamingRecognizeRequest) Descriptor() ([]byte, []int) {
-	return file_riva_proto_rawDescGZIP(), []int{0}
+	return file_riva_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *StreamingRecognizeRequest) GetStreamingRequest() isStreamingRecognizeRequest_StreamingRequest {
@@ -183,7 +284,7 @@ type StreamingRecognitionConfig struct {
 
 func (x *StreamingRecognitionConfig) Reset() {
 	*x = StreamingRecognitionConfig{}
-	mi := &file_riva_proto_msgTypes[1]
+	mi := &file_riva_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -195,7 +296,7 @@ func (x *StreamingRecognitionConfig) String() string {
 func (*StreamingRecognitionConfig) ProtoMessage() {}
 
 func (x *StreamingRecognitionConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_riva_proto_msgTypes[1]
+	mi := &file_riva_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -208,7 +309,7 @@ func (x *StreamingRecognitionConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamingRecognitionConfig.ProtoReflect.Descriptor instead.
 func (*StreamingRecognitionConfig) Descriptor() ([]byte, []int) {
-	return file_riva_proto_rawDescGZIP(), []int{1}
+	return file_riva_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *StreamingRecognitionConfig) GetConfig() *RecognitionConfig {
@@ -228,7 +329,7 @@ func (x *StreamingRecognitionConfig) GetInterimResults() bool {
 // RecognitionConfig tells the recognizer how to process the audio.
 type RecognitionConfig struct {
 	state                      protoimpl.MessageState `protogen:"open.v1"`
-	Encoding                   AudioEncoding          `protobuf:"varint,1,opt,name=encoding,proto3,enum=nvidia.riva.asr.AudioEncoding" json:"encoding,omitempty"`
+	Encoding                   AudioEncoding          `protobuf:"varint,1,opt,name=encoding,proto3,enum=nvidia.riva.AudioEncoding" json:"encoding,omitempty"`
 	SampleRateHertz            int32                  `protobuf:"varint,2,opt,name=sample_rate_hertz,json=sampleRateHertz,proto3" json:"sample_rate_hertz,omitempty"`
 	LanguageCode               string                 `protobuf:"bytes,3,opt,name=language_code,json=languageCode,proto3" json:"language_code,omitempty"`
 	MaxAlternatives            int32                  `protobuf:"varint,4,opt,name=max_alternatives,json=maxAlternatives,proto3" json:"max_alternatives,omitempty"`
@@ -247,7 +348,7 @@ type RecognitionConfig struct {
 
 func (x *RecognitionConfig) Reset() {
 	*x = RecognitionConfig{}
-	mi := &file_riva_proto_msgTypes[2]
+	mi := &file_riva_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -259,7 +360,7 @@ func (x *RecognitionConfig) String() string {
 func (*RecognitionConfig) ProtoMessage() {}
 
 func (x *RecognitionConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_riva_proto_msgTypes[2]
+	mi := &file_riva_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -272,7 +373,7 @@ func (x *RecognitionConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecognitionConfig.ProtoReflect.Descriptor instead.
 func (*RecognitionConfig) Descriptor() ([]byte, []int) {
-	return file_riva_proto_rawDescGZIP(), []int{2}
+	return file_riva_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RecognitionConfig) GetEncoding() AudioEncoding {
@@ -375,7 +476,7 @@ type EndpointingConfig struct {
 
 func (x *EndpointingConfig) Reset() {
 	*x = EndpointingConfig{}
-	mi := &file_riva_proto_msgTypes[3]
+	mi := &file_riva_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -387,7 +488,7 @@ func (x *EndpointingConfig) String() string {
 func (*EndpointingConfig) ProtoMessage() {}
 
 func (x *EndpointingConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_riva_proto_msgTypes[3]
+	mi := &file_riva_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -400,7 +501,7 @@ func (x *EndpointingConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndpointingConfig.ProtoReflect.Descriptor instead.
 func (*EndpointingConfig) Descriptor() ([]byte, []int) {
-	return file_riva_proto_rawDescGZIP(), []int{3}
+	return file_riva_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *EndpointingConfig) GetStartHistory() int32 {
@@ -455,7 +556,7 @@ type StreamingRecognizeResponse struct {
 
 func (x *StreamingRecognizeResponse) Reset() {
 	*x = StreamingRecognizeResponse{}
-	mi := &file_riva_proto_msgTypes[4]
+	mi := &file_riva_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -467,7 +568,7 @@ func (x *StreamingRecognizeResponse) String() string {
 func (*StreamingRecognizeResponse) ProtoMessage() {}
 
 func (x *StreamingRecognizeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_riva_proto_msgTypes[4]
+	mi := &file_riva_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -480,7 +581,7 @@ func (x *StreamingRecognizeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamingRecognizeResponse.ProtoReflect.Descriptor instead.
 func (*StreamingRecognizeResponse) Descriptor() ([]byte, []int) {
-	return file_riva_proto_rawDescGZIP(), []int{4}
+	return file_riva_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *StreamingRecognizeResponse) GetResults() []*StreamingRecognitionResult {
@@ -506,7 +607,7 @@ type StreamingRecognitionResult struct {
 
 func (x *StreamingRecognitionResult) Reset() {
 	*x = StreamingRecognitionResult{}
-	mi := &file_riva_proto_msgTypes[5]
+	mi := &file_riva_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -518,7 +619,7 @@ func (x *StreamingRecognitionResult) String() string {
 func (*StreamingRecognitionResult) ProtoMessage() {}
 
 func (x *StreamingRecognitionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_riva_proto_msgTypes[5]
+	mi := &file_riva_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -531,7 +632,7 @@ func (x *StreamingRecognitionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamingRecognitionResult.ProtoReflect.Descriptor instead.
 func (*StreamingRecognitionResult) Descriptor() ([]byte, []int) {
-	return file_riva_proto_rawDescGZIP(), []int{5}
+	return file_riva_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *StreamingRecognitionResult) GetAlternatives() []*SpeechRecognitionAlternative {
@@ -581,7 +682,7 @@ type SpeechRecognitionAlternative struct {
 
 func (x *SpeechRecognitionAlternative) Reset() {
 	*x = SpeechRecognitionAlternative{}
-	mi := &file_riva_proto_msgTypes[6]
+	mi := &file_riva_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -593,7 +694,7 @@ func (x *SpeechRecognitionAlternative) String() string {
 func (*SpeechRecognitionAlternative) ProtoMessage() {}
 
 func (x *SpeechRecognitionAlternative) ProtoReflect() protoreflect.Message {
-	mi := &file_riva_proto_msgTypes[6]
+	mi := &file_riva_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -606,7 +707,7 @@ func (x *SpeechRecognitionAlternative) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpeechRecognitionAlternative.ProtoReflect.Descriptor instead.
 func (*SpeechRecognitionAlternative) Descriptor() ([]byte, []int) {
-	return file_riva_proto_rawDescGZIP(), []int{6}
+	return file_riva_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SpeechRecognitionAlternative) GetTranscript() string {
@@ -635,16 +736,26 @@ var File_riva_proto protoreflect.FileDescriptor
 const file_riva_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"riva.proto\x12\x0fnvidia.riva.asr\"\xb1\x01\n" +
+	"riva.proto\x12\x0fnvidia.riva.asr\x1a\x10riva_audio.proto\"d\n" +
+	"\x10RecognizeRequest\x12:\n" +
+	"\x06config\x18\x01 \x01(\v2\".nvidia.riva.asr.RecognitionConfigR\x06config\x12\x14\n" +
+	"\x05audio\x18\x02 \x01(\fR\x05audio\"W\n" +
+	"\x11RecognizeResponse\x12B\n" +
+	"\aresults\x18\x01 \x03(\v2(.nvidia.riva.asr.SpeechRecognitionResultR\aresults\"\xb6\x01\n" +
+	"\x17SpeechRecognitionResult\x12Q\n" +
+	"\falternatives\x18\x01 \x03(\v2-.nvidia.riva.asr.SpeechRecognitionAlternativeR\falternatives\x12\x1f\n" +
+	"\vchannel_tag\x18\x02 \x01(\x05R\n" +
+	"channelTag\x12'\n" +
+	"\x0faudio_processed\x18\x03 \x01(\x02R\x0eaudioProcessed\"\xb1\x01\n" +
 	"\x19StreamingRecognizeRequest\x12X\n" +
 	"\x10streaming_config\x18\x01 \x01(\v2+.nvidia.riva.asr.StreamingRecognitionConfigH\x00R\x0fstreamingConfig\x12%\n" +
 	"\raudio_content\x18\x02 \x01(\fH\x00R\faudioContentB\x13\n" +
 	"\x11streaming_request\"\x81\x01\n" +
 	"\x1aStreamingRecognitionConfig\x12:\n" +
 	"\x06config\x18\x01 \x01(\v2\".nvidia.riva.asr.RecognitionConfigR\x06config\x12'\n" +
-	"\x0finterim_results\x18\x02 \x01(\bR\x0einterimResults\"\x91\x06\n" +
-	"\x11RecognitionConfig\x12:\n" +
-	"\bencoding\x18\x01 \x01(\x0e2\x1e.nvidia.riva.asr.AudioEncodingR\bencoding\x12*\n" +
+	"\x0finterim_results\x18\x02 \x01(\bR\x0einterimResults\"\x8d\x06\n" +
+	"\x11RecognitionConfig\x126\n" +
+	"\bencoding\x18\x01 \x01(\x0e2\x1a.nvidia.riva.AudioEncodingR\bencoding\x12*\n" +
 	"\x11sample_rate_hertz\x18\x02 \x01(\x05R\x0fsampleRateHertz\x12#\n" +
 	"\rlanguage_code\x18\x03 \x01(\tR\flanguageCode\x12)\n" +
 	"\x10max_alternatives\x18\x04 \x01(\x05R\x0fmaxAlternatives\x12)\n" +
@@ -689,16 +800,9 @@ const file_riva_proto_rawDesc = "" +
 	"\n" +
 	"confidence\x18\x02 \x01(\x02R\n" +
 	"confidence\x12#\n" +
-	"\rlanguage_code\x18\x04 \x03(\tR\flanguageCode*e\n" +
-	"\rAudioEncoding\x12\x18\n" +
-	"\x14ENCODING_UNSPECIFIED\x10\x00\x12\x0e\n" +
-	"\n" +
-	"LINEAR_PCM\x10\x01\x12\b\n" +
-	"\x04FLAC\x10\x02\x12\t\n" +
-	"\x05MULAW\x10\x03\x12\v\n" +
-	"\aOGGOPUS\x10\x04\x12\b\n" +
-	"\x04ALAW\x10\x142\x8c\x01\n" +
-	"\x15RivaSpeechRecognition\x12s\n" +
+	"\rlanguage_code\x18\x04 \x03(\tR\flanguageCode2\xe2\x01\n" +
+	"\x15RivaSpeechRecognition\x12T\n" +
+	"\tRecognize\x12!.nvidia.riva.asr.RecognizeRequest\x1a\".nvidia.riva.asr.RecognizeResponse\"\x00\x12s\n" +
 	"\x12StreamingRecognize\x12*.nvidia.riva.asr.StreamingRecognizeRequest\x1a+.nvidia.riva.asr.StreamingRecognizeResponse\"\x00(\x010\x01BAZ?github.com/gojargo/jargo/provider/nvidia/internal/rivapb;rivapbb\x06proto3"
 
 var (
@@ -713,34 +817,41 @@ func file_riva_proto_rawDescGZIP() []byte {
 	return file_riva_proto_rawDescData
 }
 
-var file_riva_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_riva_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_riva_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_riva_proto_goTypes = []any{
-	(AudioEncoding)(0),                   // 0: nvidia.riva.asr.AudioEncoding
-	(*StreamingRecognizeRequest)(nil),    // 1: nvidia.riva.asr.StreamingRecognizeRequest
-	(*StreamingRecognitionConfig)(nil),   // 2: nvidia.riva.asr.StreamingRecognitionConfig
-	(*RecognitionConfig)(nil),            // 3: nvidia.riva.asr.RecognitionConfig
-	(*EndpointingConfig)(nil),            // 4: nvidia.riva.asr.EndpointingConfig
-	(*StreamingRecognizeResponse)(nil),   // 5: nvidia.riva.asr.StreamingRecognizeResponse
-	(*StreamingRecognitionResult)(nil),   // 6: nvidia.riva.asr.StreamingRecognitionResult
-	(*SpeechRecognitionAlternative)(nil), // 7: nvidia.riva.asr.SpeechRecognitionAlternative
-	nil,                                  // 8: nvidia.riva.asr.RecognitionConfig.CustomConfigurationEntry
+	(*RecognizeRequest)(nil),             // 0: nvidia.riva.asr.RecognizeRequest
+	(*RecognizeResponse)(nil),            // 1: nvidia.riva.asr.RecognizeResponse
+	(*SpeechRecognitionResult)(nil),      // 2: nvidia.riva.asr.SpeechRecognitionResult
+	(*StreamingRecognizeRequest)(nil),    // 3: nvidia.riva.asr.StreamingRecognizeRequest
+	(*StreamingRecognitionConfig)(nil),   // 4: nvidia.riva.asr.StreamingRecognitionConfig
+	(*RecognitionConfig)(nil),            // 5: nvidia.riva.asr.RecognitionConfig
+	(*EndpointingConfig)(nil),            // 6: nvidia.riva.asr.EndpointingConfig
+	(*StreamingRecognizeResponse)(nil),   // 7: nvidia.riva.asr.StreamingRecognizeResponse
+	(*StreamingRecognitionResult)(nil),   // 8: nvidia.riva.asr.StreamingRecognitionResult
+	(*SpeechRecognitionAlternative)(nil), // 9: nvidia.riva.asr.SpeechRecognitionAlternative
+	nil,                                  // 10: nvidia.riva.asr.RecognitionConfig.CustomConfigurationEntry
+	(AudioEncoding)(0),                   // 11: nvidia.riva.AudioEncoding
 }
 var file_riva_proto_depIdxs = []int32{
-	2, // 0: nvidia.riva.asr.StreamingRecognizeRequest.streaming_config:type_name -> nvidia.riva.asr.StreamingRecognitionConfig
-	3, // 1: nvidia.riva.asr.StreamingRecognitionConfig.config:type_name -> nvidia.riva.asr.RecognitionConfig
-	0, // 2: nvidia.riva.asr.RecognitionConfig.encoding:type_name -> nvidia.riva.asr.AudioEncoding
-	8, // 3: nvidia.riva.asr.RecognitionConfig.custom_configuration:type_name -> nvidia.riva.asr.RecognitionConfig.CustomConfigurationEntry
-	4, // 4: nvidia.riva.asr.RecognitionConfig.endpointing_config:type_name -> nvidia.riva.asr.EndpointingConfig
-	6, // 5: nvidia.riva.asr.StreamingRecognizeResponse.results:type_name -> nvidia.riva.asr.StreamingRecognitionResult
-	7, // 6: nvidia.riva.asr.StreamingRecognitionResult.alternatives:type_name -> nvidia.riva.asr.SpeechRecognitionAlternative
-	1, // 7: nvidia.riva.asr.RivaSpeechRecognition.StreamingRecognize:input_type -> nvidia.riva.asr.StreamingRecognizeRequest
-	5, // 8: nvidia.riva.asr.RivaSpeechRecognition.StreamingRecognize:output_type -> nvidia.riva.asr.StreamingRecognizeResponse
-	8, // [8:9] is the sub-list for method output_type
-	7, // [7:8] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	5,  // 0: nvidia.riva.asr.RecognizeRequest.config:type_name -> nvidia.riva.asr.RecognitionConfig
+	2,  // 1: nvidia.riva.asr.RecognizeResponse.results:type_name -> nvidia.riva.asr.SpeechRecognitionResult
+	9,  // 2: nvidia.riva.asr.SpeechRecognitionResult.alternatives:type_name -> nvidia.riva.asr.SpeechRecognitionAlternative
+	4,  // 3: nvidia.riva.asr.StreamingRecognizeRequest.streaming_config:type_name -> nvidia.riva.asr.StreamingRecognitionConfig
+	5,  // 4: nvidia.riva.asr.StreamingRecognitionConfig.config:type_name -> nvidia.riva.asr.RecognitionConfig
+	11, // 5: nvidia.riva.asr.RecognitionConfig.encoding:type_name -> nvidia.riva.AudioEncoding
+	10, // 6: nvidia.riva.asr.RecognitionConfig.custom_configuration:type_name -> nvidia.riva.asr.RecognitionConfig.CustomConfigurationEntry
+	6,  // 7: nvidia.riva.asr.RecognitionConfig.endpointing_config:type_name -> nvidia.riva.asr.EndpointingConfig
+	8,  // 8: nvidia.riva.asr.StreamingRecognizeResponse.results:type_name -> nvidia.riva.asr.StreamingRecognitionResult
+	9,  // 9: nvidia.riva.asr.StreamingRecognitionResult.alternatives:type_name -> nvidia.riva.asr.SpeechRecognitionAlternative
+	0,  // 10: nvidia.riva.asr.RivaSpeechRecognition.Recognize:input_type -> nvidia.riva.asr.RecognizeRequest
+	3,  // 11: nvidia.riva.asr.RivaSpeechRecognition.StreamingRecognize:input_type -> nvidia.riva.asr.StreamingRecognizeRequest
+	1,  // 12: nvidia.riva.asr.RivaSpeechRecognition.Recognize:output_type -> nvidia.riva.asr.RecognizeResponse
+	7,  // 13: nvidia.riva.asr.RivaSpeechRecognition.StreamingRecognize:output_type -> nvidia.riva.asr.StreamingRecognizeResponse
+	12, // [12:14] is the sub-list for method output_type
+	10, // [10:12] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_riva_proto_init() }
@@ -748,25 +859,25 @@ func file_riva_proto_init() {
 	if File_riva_proto != nil {
 		return
 	}
-	file_riva_proto_msgTypes[0].OneofWrappers = []any{
+	file_riva_audio_proto_init()
+	file_riva_proto_msgTypes[3].OneofWrappers = []any{
 		(*StreamingRecognizeRequest_StreamingConfig)(nil),
 		(*StreamingRecognizeRequest_AudioContent)(nil),
 	}
-	file_riva_proto_msgTypes[2].OneofWrappers = []any{}
-	file_riva_proto_msgTypes[3].OneofWrappers = []any{}
+	file_riva_proto_msgTypes[5].OneofWrappers = []any{}
+	file_riva_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_riva_proto_rawDesc), len(file_riva_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   8,
+			NumEnums:      0,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_riva_proto_goTypes,
 		DependencyIndexes: file_riva_proto_depIdxs,
-		EnumInfos:         file_riva_proto_enumTypes,
 		MessageInfos:      file_riva_proto_msgTypes,
 	}.Build()
 	File_riva_proto = out.File

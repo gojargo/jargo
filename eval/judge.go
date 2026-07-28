@@ -44,7 +44,7 @@ type verdict struct {
 }
 
 // NewLLMJudge builds a judge backed by gen. Any jargo LLM service works, e.g.
-// eval.NewLLMJudge(openai.NewLLM(openai.LLMConfig{APIKey: key})).
+// eval.NewLLMJudge(chat.NewLLM(chat.LLMConfig{APIKey: key})).
 func NewLLMJudge(gen llm.Generator) *LLMJudge {
 	return &LLMJudge{gen: gen, cache: make(map[string]verdict)}
 }

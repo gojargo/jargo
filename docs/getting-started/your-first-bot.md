@@ -17,9 +17,9 @@ variables are read by the library; that is your app's job.
 ```go
 key := os.Getenv("OPENAI_API_KEY")
 
-stt := openai.NewSTT(openai.STTConfig{APIKey: key, SampleRate: opus.SampleRate})
-llm := openai.NewLLM(openai.LLMConfig{APIKey: key})
-tts := openai.NewTTS(openai.TTSConfig{APIKey: key})
+stt := chat.NewSTT(chat.STTConfig{APIKey: key, SampleRate: opus.SampleRate})
+llm := chat.NewLLM(chat.LLMConfig{APIKey: key})
+tts := chat.NewTTS(chat.TTSConfig{APIKey: key})
 ```
 
 Any of the three can be swapped for a different provider independently. They are

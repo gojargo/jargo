@@ -1,7 +1,9 @@
 // Package nvidia provides NVIDIA services: an NVIDIA NIM OpenAI-compatible LLM
-// (NewLLM) and a Riva streaming speech-to-text service (NewSTT) that talks to
-// NVIDIA's hosted ASR endpoint or a locally deployed Riva/NIM model such as
-// parakeet.
+// (NewLLM), a Riva streaming speech-to-text service (NewSTT), and a Riva
+// streaming text-to-speech service (NewTTS). Both speech services talk to
+// NVIDIA's hosted endpoints or to a locally deployed Riva/NIM model (parakeet
+// for recognition, magpie for synthesis), selected through the server address,
+// the TLS setting, and the auth fields.
 package nvidia
 
 const (

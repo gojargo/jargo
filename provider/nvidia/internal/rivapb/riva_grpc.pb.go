@@ -27,6 +27,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	RivaSpeechRecognition_Recognize_FullMethodName          = "/nvidia.riva.asr.RivaSpeechRecognition/Recognize"
 	RivaSpeechRecognition_StreamingRecognize_FullMethodName = "/nvidia.riva.asr.RivaSpeechRecognition/StreamingRecognize"
 )
 
@@ -34,9 +35,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// RivaSpeechRecognition is the Riva ASR service. Only the streaming RPC is
-// declared here; batch Recognize and the config RPC are omitted.
+// RivaSpeechRecognition is the Riva ASR service. The config RPC is omitted.
 type RivaSpeechRecognitionClient interface {
+	// Recognize transcribes one complete audio buffer in a single call, for the
+	// offline models a segmented service uses.
+	Recognize(ctx context.Context, in *RecognizeRequest, opts ...grpc.CallOption) (*RecognizeResponse, error)
 	// StreamingRecognize streams audio to the server and receives interim and
 	// final transcripts. The first request on the stream must carry a
 	// StreamingRecognitionConfig; every later request carries audio_content.
@@ -49,6 +52,16 @@ type rivaSpeechRecognitionClient struct {
 
 func NewRivaSpeechRecognitionClient(cc grpc.ClientConnInterface) RivaSpeechRecognitionClient {
 	return &rivaSpeechRecognitionClient{cc}
+}
+
+func (c *rivaSpeechRecognitionClient) Recognize(ctx context.Context, in *RecognizeRequest, opts ...grpc.CallOption) (*RecognizeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecognizeResponse)
+	err := c.cc.Invoke(ctx, RivaSpeechRecognition_Recognize_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *rivaSpeechRecognitionClient) StreamingRecognize(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamingRecognizeRequest, StreamingRecognizeResponse], error) {
@@ -68,9 +81,11 @@ type RivaSpeechRecognition_StreamingRecognizeClient = grpc.BidiStreamingClient[S
 // All implementations must embed UnimplementedRivaSpeechRecognitionServer
 // for forward compatibility.
 //
-// RivaSpeechRecognition is the Riva ASR service. Only the streaming RPC is
-// declared here; batch Recognize and the config RPC are omitted.
+// RivaSpeechRecognition is the Riva ASR service. The config RPC is omitted.
 type RivaSpeechRecognitionServer interface {
+	// Recognize transcribes one complete audio buffer in a single call, for the
+	// offline models a segmented service uses.
+	Recognize(context.Context, *RecognizeRequest) (*RecognizeResponse, error)
 	// StreamingRecognize streams audio to the server and receives interim and
 	// final transcripts. The first request on the stream must carry a
 	// StreamingRecognitionConfig; every later request carries audio_content.
@@ -85,6 +100,9 @@ type RivaSpeechRecognitionServer interface {
 // pointer dereference when methods are called.
 type UnimplementedRivaSpeechRecognitionServer struct{}
 
+func (UnimplementedRivaSpeechRecognitionServer) Recognize(context.Context, *RecognizeRequest) (*RecognizeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Recognize not implemented")
+}
 func (UnimplementedRivaSpeechRecognitionServer) StreamingRecognize(grpc.BidiStreamingServer[StreamingRecognizeRequest, StreamingRecognizeResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamingRecognize not implemented")
 }
@@ -109,6 +127,24 @@ func RegisterRivaSpeechRecognitionServer(s grpc.ServiceRegistrar, srv RivaSpeech
 	s.RegisterService(&RivaSpeechRecognition_ServiceDesc, srv)
 }
 
+func _RivaSpeechRecognition_Recognize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecognizeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RivaSpeechRecognitionServer).Recognize(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RivaSpeechRecognition_Recognize_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RivaSpeechRecognitionServer).Recognize(ctx, req.(*RecognizeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RivaSpeechRecognition_StreamingRecognize_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(RivaSpeechRecognitionServer).StreamingRecognize(&grpc.GenericServerStream[StreamingRecognizeRequest, StreamingRecognizeResponse]{ServerStream: stream})
 }
@@ -122,7 +158,12 @@ type RivaSpeechRecognition_StreamingRecognizeServer = grpc.BidiStreamingServer[S
 var RivaSpeechRecognition_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "nvidia.riva.asr.RivaSpeechRecognition",
 	HandlerType: (*RivaSpeechRecognitionServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Recognize",
+			Handler:    _RivaSpeechRecognition_Recognize_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "StreamingRecognize",

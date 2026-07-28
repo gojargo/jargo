@@ -1,8 +1,8 @@
 package novita
 
-import "github.com/gojargo/jargo/provider/openai"
+import "github.com/gojargo/jargo/provider/openai/chat"
 
 // NewLLM builds a Novita AI LLM service.
-func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("NovitaLLM", baseURL, defaultModel, cfg)
+func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return chat.NewCompatLLM("NovitaLLM", baseURL, defaultModel, cfg)
 }

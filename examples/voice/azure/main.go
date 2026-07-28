@@ -31,9 +31,9 @@ import (
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/anthropic"
-	"github.com/gojargo/jargo/provider/azureopenai"
-	"github.com/gojargo/jargo/provider/azurespeech"
-	"github.com/gojargo/jargo/provider/openai"
+	"github.com/gojargo/jargo/provider/azure/openai"
+	"github.com/gojargo/jargo/provider/azure/speech"
+	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
 	"github.com/pion/webrtc/v4"
@@ -79,13 +79,13 @@ func runBot(conn *pionrtc.Connection) {
 	defer func() { _ = conn.Close() }()
 
 	// --- the provider stack: the only part that differs between examples ---
-	stt := azureopenai.NewSTT(azureopenai.STTConfig{
+	stt := openai.NewSTT(openai.STTConfig{
 		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),
 		Deployment: os.Getenv("AZURE_STT_DEPLOYMENT"),
-		STTConfig:  openai.STTConfig{APIKey: os.Getenv("AZURE_OPENAI_API_KEY"), SampleRate: opus.SampleRate},
+		STTConfig:  chat.STTConfig{APIKey: os.Getenv("AZURE_OPENAI_API_KEY"), SampleRate: opus.SampleRate},
 	})
 	llm := anthropic.NewLLM(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
-	tts := azurespeech.NewTTS(azurespeech.TTSConfig{
+	tts := speech.NewTTS(speech.TTSConfig{
 		APIKey: os.Getenv("AZURE_SPEECH_KEY"),
 		Region: os.Getenv("AZURE_SPEECH_REGION"),
 		Voice:  os.Getenv("AZURE_SPEECH_VOICE"),

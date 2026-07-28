@@ -31,7 +31,7 @@ import (
 	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"
-	"github.com/gojargo/jargo/provider/google"
+	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
 	"github.com/pion/webrtc/v4"
@@ -78,7 +78,7 @@ func runBot(conn *pionrtc.Connection) {
 
 	// --- the provider stack: the only part that differs between examples ---
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate})
-	llm := google.NewLLM(google.Config{APIKey: os.Getenv("GEMINI_API_KEY")})
+	llm := gemini.NewLLM(gemini.Config{APIKey: os.Getenv("GEMINI_API_KEY")})
 	tts := elevenlabs.NewTTS(elevenlabs.Config{APIKey: os.Getenv("ELEVENLABS_API_KEY")})
 	// ----------------------------------------------------------------------
 

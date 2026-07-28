@@ -14,6 +14,161 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Four streaming speech-to-text variants**, each sitting alongside a service
+  the provider already had:
+
+  - `provider/openai/realtime.NewSTT` runs the Realtime API in
+    transcription-only mode, selected with an `intent=transcription` handshake.
+    It exchanges 24 kHz audio, so run the transport's input at that rate.
+  - `provider/elevenlabs.NewRealtimeSTT` holds a connection open and lets
+    ElevenLabs commit each utterance on its own silence detection, unlike
+    `NewSTT` which transcribes one delimited segment per request.
+  - `provider/cartesia.NewTurnsSTT` uses Cartesia's turn-detection endpoint,
+    where the server reports turn boundaries. An eagerly predicted end of turn
+    can be retracted by the user carrying on, so only a real turn end finalizes
+    the transcript.
+  - `provider/nvidia.NewSegmentedSTT` transcribes a whole utterance in one Riva
+    batch call, for the offline models. It needs a turn detector upstream and
+    produces no interim transcripts.
+
+  The three streaming services detect utterance boundaries server-side, so they
+  report `frames.UserTurnExternal` and the pipeline needs no end-of-turn
+  detection of its own. The batch Riva call needed a `Recognize` RPC added to
+  the generated client.
+
+- **Azure OpenAI Realtime speech-to-speech** (`provider/azure/realtime`), the
+  Realtime service as served by an Azure OpenAI resource. It wraps
+  `provider/openai/realtime` and changes only the addressing and authorization:
+  Azure selects the model with a `deployment` query parameter rather than a model
+  name, and authorizes with an `api-key` header rather than a bearer token. The
+  session URL is derived from the resource endpoint, deployment and API version,
+  and an https endpoint pasted from the portal is rewritten to `wss`. A whole URL
+  can be given instead for a deployment whose address is not derivable.
+
+- **`realtime.NewWithConnector`**, the hook Azure hangs off. A
+  `realtime.Connector` chooses how the Realtime session is addressed and
+  authorized, defaulting to OpenAI's own model query parameter and bearer token,
+  so the existing service is unchanged.
+
+- **OpenAI Responses API** (`provider/openai/responses`), in two forms.
+  `NewHTTPLLM` streams over a request per turn, the same shape as the
+  chat-completions service. `NewLLM` holds a WebSocket open for the session and
+  adds the API's incremental-context optimization: when the conversation has
+  grown from where the previous turn left off, only the new items travel and the
+  server recalls the rest by response id. The conversation prefix is fingerprinted
+  so a history rewritten behind the service's back falls back to sending
+  everything rather than continuing from a copy that no longer matches. Both
+  support tool calling, take the system prompt as the API's own instructions
+  field rather than a leading message, and default to `store: false` so nothing
+  is retained server-side. The two connection-scoped failures (the server having
+  dropped the response being continued from, and the connection reaching its
+  lifetime limit) reconnect and retry with the full context; an interruption
+  does not. A barge-in cancels the response server-side and drains its remaining
+  events before the next turn starts, since the API gives no way to tell which
+  response a delta belongs to and stale events would otherwise be read as the
+  next turn's output.
+
+- **Google Vertex AI** (`provider/google/vertex`), Gemini as served by Vertex
+  rather than the Gemini API: `NewLLM` for the cascaded model and `NewS2S` for
+  Live speech-to-speech. Both reuse the corresponding Gemini service and change
+  only how requests are addressed and authorized, so their behavior, config
+  fields and frame contract match. Vertex addresses a model by project and
+  location on a regional endpoint and authorizes with a short-lived OAuth token.
+  Credentials are explicit: either a service-account key JSON, which is exchanged
+  for a token through a signed assertion, or a token source the application built
+  itself. jargo reads no environment variables, so Application Default
+  Credentials stay opt-in by passing their token source.
+
+- **`gemini.NewShapedLLM` and `live.NewWithConnector`**, the hooks Vertex hangs
+  off. A `gemini.RequestShaper` chooses how a generateContent request is
+  addressed and authorized; a `live.Connector` does the same for the Live
+  WebSocket, and also names the model's resource path in the setup message. Both
+  default to the Gemini API's own URL layout and api-key auth, so the existing
+  services are unchanged.
+
+- **Azure AI Speech speech-to-text** (`provider/azure/speech.NewSTT`), streaming
+  continuous recognition. It speaks Azure's recognition WebSocket protocol
+  directly rather than binding the native Speech SDK, so the cgo-free build is
+  unaffected: messages carry Azure's header framing, each turn opens with a RIFF
+  header describing the PCM that follows, and the recognition parameters travel
+  as query parameters. Azure ends a turn after every utterance, so the service
+  opens the next one itself, which is what makes recognition continuous rather
+  than one-shot. Hypotheses surface as interim transcriptions and a successful
+  phrase as a finalized one. It supports a recognition locale, the profanity
+  policy (non-English deployments often want `raw`), a custom speech model by
+  deployment id, and a private endpoint or sovereign-cloud host. Note this is
+  Azure AI Speech, distinct from `provider/azure/openai.NewSTT`, which is Azure
+  OpenAI's Whisper.
+
+- **Soniox text-to-speech** (`provider/soniox.NewTTS`), streaming synthesis over
+  Soniox's real-time WebSocket API. Each sentence opens a synthesis stream and
+  emits audio as it is generated. Word timings are on by default: Soniox reports
+  a start offset per character, which is assembled into words to drive the
+  word-aligned text path. Chinese and Japanese are written without spaces
+  between words, so their characters are reported individually rather than
+  assembled. It accepts a stock voice name or a cloned voice's id, a language, a
+  speaking rate, and any of Soniox's supported sample rates.
+  `provider/soniox` previously offered speech-to-text only.
+
+- **`utils/context.CharAccumulator`**, which assembles per-character timings
+  into whole words, carrying a word split across two batches into the next one.
+  Several synthesizers report a start offset for every character rather than per
+  word; `CharsAsWords` covers the languages written without spaces, where there
+  is no boundary to split on. The xAI and Soniox TTS services share it.
+
+- **NVIDIA Riva text-to-speech** (`provider/nvidia.NewTTS`), streaming synthesis
+  over Riva's gRPC API. Like the Riva STT service it already sits next to, one
+  provider serves both NVIDIA's hosted endpoint and a locally deployed Riva/NIM,
+  selected through `Server`, `UseSSL` and the auth fields. Each sentence opens a
+  `SynthesizeOnline` stream and emits the audio as the server generates it; a
+  sentence past the model's request-length limit is split across several requests
+  on that one stream, so it is still generated as a single utterance. It supports
+  a custom IPA pronunciation dictionary, model-specific options, and the audio
+  prompt a zero-shot model clones its voice from. `provider/nvidia` previously
+  offered the LLM and STT only.
+
+- **`tts.Closer`**, an optional interface a `tts.Synthesizer` implements when it
+  holds a resource open across syntheses. `tts.Base` closes it during cleanup,
+  so a provider can reuse one connection for every sentence (rather than paying
+  for a fresh handshake each time) without leaking it when the pipeline ends. A
+  Synthesizer that does not implement it is unaffected.
+
+- **xAI Realtime speech-to-speech** (`provider/xai/realtime`), a single
+  bidirectional WebSocket carrying the whole conversation in place of the
+  cascaded STT → LLM → TTS stack. It sits alongside the OpenAI Realtime, Gemini
+  Live and Nova Sonic services and behaves the same way downstream: server VAD
+  drives turn-taking and emits an `InterruptionFrame` on barge-in, the model's
+  spoken reply arrives as audio frames and its transcript as `LLMTextFrame`s,
+  and token usage is reported on each completed response. Where xAI differs
+  from the OpenAI protocol it follows xAI: the model is chosen on the handshake
+  rather than in the session, the session is configured only once the server
+  opens the conversation, the audio format is nested per direction, and the
+  session runs at a configurable sample rate (24 kHz by default) rather than a
+  fixed one. xAI's built-in web, X and file search tools are advertised from the
+  config alongside the pipeline's own function tools. As with the other
+  speech-to-speech services, executing a function call is not yet wired up.
+
+- **xAI text-to-speech**, in two forms. `provider/xai/grok.NewTTS` streams synthesis
+  over a WebSocket, opening a session per sentence and emitting audio chunks as
+  they arrive; `provider/xai/grok.NewHTTPTTS` synthesizes each sentence in one request
+  against the batch endpoint. The streaming service reports word timings by
+  default: xAI sends per-character timings, which are assembled into words
+  (carrying a word split across payloads over to the next one) and drive the
+  word-aligned text path, so the assistant context records only what was
+  actually spoken before an interruption. Set `WordTimestamps` to false to fall
+  back to aggregated text frames. Both accept a voice, language, speaking rate,
+  latency-optimization level and text normalization, and both emit raw 16-bit
+  PCM at the configured rate.
+
+- **xAI speech-to-text** (`provider/xai/grok.NewSTT`), a streaming transcription
+  service over xAI's real-time WebSocket API. It holds one connection for the
+  whole session, configures itself through handshake query parameters (encoding,
+  language, endpointing silence, interim results, diarization and multichannel
+  transcription), and surfaces the server's partial results as interim
+  transcriptions and its endpointed results as finalized ones. Audio is withheld
+  until the server acknowledges the session, and closing signals end of audio so
+  the last transcript is flushed. `provider/xai/grok` previously offered only the LLM.
+
 - **Pipeline lifecycle frames.** A processor with no handle on the `Task` can now
   ask it to change the run's lifecycle, and the `Task` converts the request into
   the matching pipeline-wide frame: `frames.CancelWorkerFrame` becomes a
@@ -43,6 +198,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `NewStartFrame` applies, exported so applications can refer to them.
 
 ### Changed
+
+- **Providers are grouped by vendor.** A vendor offering several services now
+  has one folder per service under a folder of its own, so the tree reads by
+  vendor rather than by a flattened name. Import paths change accordingly:
+
+  | Was | Now |
+  |---|---|
+  | `provider/openai` | `provider/openai/chat` |
+  | `provider/openairealtime` | `provider/openai/realtime` |
+  | `provider/azureopenai` | `provider/azure/openai` |
+  | `provider/azurespeech` | `provider/azure/speech` |
+  | `provider/google` | `provider/google/gemini` |
+  | `provider/geminilive` | `provider/google/live` |
+  | `provider/xai` | `provider/xai/grok` |
+  | `provider/xairealtime` | `provider/xai/realtime` |
+  | `provider/bedrock` | `provider/aws/bedrock` |
+  | `provider/polly` | `provider/aws/polly` |
+  | `provider/transcribe` | `provider/aws/transcribe` |
+  | `provider/novasonic` | `provider/aws/novasonic` |
+
+  The package names follow the last path element, so `openai.LLMConfig` becomes
+  `chat.LLMConfig`, `google.NewLLM` becomes `gemini.NewLLM`, and so on. Only the
+  import path and package name change; every config field, constructor and
+  behavior is untouched. A provider offering a single service (`deepgram`,
+  `cartesia`, `nvidia`, …) keeps its top-level folder.
 
 - **Speech-to-speech services are told when tools change.** A realtime model
   generates continuously and never re-reads the shared context between turns, so
