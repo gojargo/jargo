@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+// Minimal subset of the NVIDIA Riva speech-synthesis gRPC contract, limited to
+// the messages the streaming TTS client uses. Field numbers, the package name,
+// and the service/method names match the upstream Riva schema exactly so the
+// wire format and the gRPC method path are compatible with any Riva/NIM server
+// (hosted NVCF or a locally deployed model such as magpie). Regenerate with:
+//
+//	go generate ./provider/nvidia/internal/rivapb
+package nvidia.riva.tts;
+
+option go_package = "github.com/gojargo/jargo/provider/nvidia/internal/rivapb;rivapb";
+
+import "riva_audio.proto";
+
+// RivaSpeechSynthesis is the Riva TTS service. Only the streaming RPC is
+// declared here; the batch Synthesize and the config RPC are omitted.
+service RivaSpeechSynthesis {
+  // SynthesizeOnline streams synthesis requests to the server and receives the
+  // audio back as it is generated. The stream is bidirectional: sending several
+  // requests on one call is what lets a model stitch across sentences.
+  rpc SynthesizeOnline(stream SynthesizeSpeechRequest)
+      returns (stream SynthesizeSpeechResponse) {}
+}
+
+// ZeroShotData carries the audio prompt a zero-shot model clones its voice from.
+message ZeroShotData {
+  // audio_prompt is the prompt audio. NVIDIA recommends 3 to 10 seconds.
+  bytes audio_prompt = 1;
+  // sample_rate_hz is the prompt's rate; the server defaults to 22050.
+  int32 sample_rate_hz = 2;
+  // encoding of the prompt. Only LINEAR_PCM and OGGOPUS are supported.
+  nvidia.riva.AudioEncoding encoding = 3;
+  // quality is how many times the prompt is passed through the decoder, 1 to
+  // 40. The server defaults to 20.
+  int32 quality = 4;
+  // transcript of the prompt audio.
+  string transcript = 5;
+}
+
+// SynthesizeSpeechRequest asks for one span of text to be spoken.
+message SynthesizeSpeechRequest {
+  string text = 1;
+  string language_code = 2;
+  nvidia.riva.AudioEncoding encoding = 3;
+  // sample_rate_hz is the rate the generated audio is resampled to.
+  int32 sample_rate_hz = 4;
+  string voice_name = 5;
+  // zero_shot_data is required by zero-shot models and ignored by the others.
+  ZeroShotData zero_shot_data = 6;
+  // custom_dictionary is comma-separated grapheme/phoneme pairs, each pair
+  // separated by two spaces.
+  string custom_dictionary = 7;
+  // custom_configuration carries model-specific options the schema does not
+  // name, for example "exaggeration_factor".
+  map<string, string> custom_configuration = 8;
+}
+
+// SynthesizeSpeechResponseMetadata reports the text the server actually spoke.
+// Upstream marks it experimental and subject to change.
+message SynthesizeSpeechResponseMetadata {
+  string text = 1;
+  string processed_text = 2;
+  repeated float predicted_durations = 8;
+}
+
+// SynthesizeSpeechResponse is one chunk of generated audio.
+message SynthesizeSpeechResponse {
+  bytes audio = 1;
+  SynthesizeSpeechResponseMetadata meta = 2;
+}

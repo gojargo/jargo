@@ -30,8 +30,8 @@ recommended one, and `SampleRate: 0` inherits the transport's rate.
 > **The config type name varies by provider.** A provider that offers one service
 > names it plainly `Config`; one that offers several qualifies the extras. So it
 > is `deepgram.Config` for STT but `deepgram.TTSConfig` for TTS, `cartesia.Config`
-> for TTS but `cartesia.STTConfig` for STT, and `openai.STTConfig` /
-> `openai.LLMConfig` / `openai.TTSConfig` for all three. Check the package, or
+> for TTS but `cartesia.STTConfig` for STT, and `chat.STTConfig` /
+> `chat.LLMConfig` / `chat.TTSConfig` for all three. Check the package, or
 > let the compiler tell you.
 
 ## Providers
@@ -40,14 +40,16 @@ Pick any per category.
 
 | Category | Providers |
 |---|---|
-| **STT** | Deepgram, AssemblyAI, Gladia, Speechmatics, Soniox, Whisper (OpenAI/Groq/local), Azure |
-| **LLM** | Anthropic (direct + Bedrock), OpenAI, Gemini, Groq, Together, Fireworks, DeepSeek, Cerebras, Perplexity, OpenRouter, xAI, Ollama, NVIDIA, Mistral, Nebius, SambaNova, Qwen, Azure OpenAI |
-| **TTS** | ElevenLabs, Cartesia, Rime, LMNT, Kokoro, Piper, Deepgram, OpenAI, Azure, Hume, Fish, MiniMax |
-| **Speech-to-speech** | OpenAI Realtime, Gemini Live, AWS Nova Sonic |
+| **STT** | Deepgram, AssemblyAI, Gladia, Speechmatics, Soniox, Whisper (OpenAI/Groq/local), Azure, xAI, ElevenLabs, Cartesia, NVIDIA |
+| **LLM** | Anthropic (direct + Bedrock), OpenAI (chat + Responses), Gemini (direct + Vertex), Groq, Together, Fireworks, DeepSeek, Cerebras, Perplexity, OpenRouter, xAI, Ollama, NVIDIA, Mistral, Nebius, SambaNova, Qwen, Azure OpenAI |
+| **TTS** | ElevenLabs, Cartesia, Rime, LMNT, Kokoro, Piper, Deepgram, OpenAI, Azure, Hume, Fish, MiniMax, xAI, NVIDIA, Soniox |
+| **Speech-to-speech** | OpenAI Realtime (direct + Azure), Gemini Live (direct + Vertex), AWS Nova Sonic, xAI Realtime |
 | **Memory** | mem0 |
 
-Each lives in `provider/<name>`, and there are more in the tree than listed above.
-Browse [`provider/`](../../provider) for the current set. Per-provider runnable
+Each lives in `provider/<name>`, or `provider/<vendor>/<name>` when a vendor
+offers several (`provider/azure/speech`, `provider/openai/chat`,
+`provider/aws/bedrock`). There are more in the tree than listed above; browse
+[`provider/`](../../provider) for the current set. Per-provider runnable
 examples are in [`examples/voice/`](../../examples/voice).
 
 Coverage is uneven: the providers used by the examples get the most exercise, and
@@ -90,7 +92,7 @@ type Transcriber interface {
 Segment STT emits no interim transcriptions. It still works with
 `WithTurnTaking()`, which gates on a *finalized* transcript, but start strategies
 that key on partial transcripts never fire, so turn starts fall back to VAD alone.
-`openai.NewSTT` is segment-based; `deepgram.NewSTT` streams.
+`chat.NewSTT` is segment-based; `deepgram.NewSTT` streams.
 
 ### LLM
 
@@ -163,13 +165,13 @@ already run is never lost to a barge-in. See
 A single model replaces the STT → LLM → TTS trio:
 
 ```go
-s2s := openairealtime.New(openairealtime.Config{APIKey: key})
+s2s := realtime.New(realtime.Config{APIKey: key})
 
 pipeline.New(t.Input(), s2s, t.Output())
 ```
 
-The three implementations are `provider/openairealtime`, `provider/geminilive`
-and `provider/novasonic`.
+The three implementations are `provider/openai/realtime`,
+`provider/google/live` and `provider/aws/novasonic`.
 
 Lower latency and better prosody, at the cost of the per-stage control you get
 from three separate services. You cannot inspect the transcript before the model

@@ -32,7 +32,7 @@ import (
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/provider/nebius"
-	"github.com/gojargo/jargo/provider/openai"
+	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
 	"github.com/pion/webrtc/v4"
@@ -79,7 +79,7 @@ func runBot(conn *pionrtc.Connection) {
 
 	// --- the provider stack: the only part that differs between examples ---
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate})
-	llm := nebius.NewLLM(openai.LLMConfig{APIKey: os.Getenv("NEBIUS_API_KEY")})
+	llm := nebius.NewLLM(chat.LLMConfig{APIKey: os.Getenv("NEBIUS_API_KEY")})
 	tts := elevenlabs.NewTTS(elevenlabs.Config{APIKey: os.Getenv("ELEVENLABS_API_KEY")})
 	// ----------------------------------------------------------------------
 

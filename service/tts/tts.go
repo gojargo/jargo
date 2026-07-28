@@ -88,6 +88,14 @@ type Describer interface {
 	Metadata() Metadata
 }
 
+// Closer is an optional interface a Synthesizer implements when it holds a
+// resource open across syntheses, such as a connection it reuses rather than
+// redialing per sentence. The Base closes it when the pipeline tears down. A
+// Synthesizer that does not implement it is unaffected.
+type Closer interface {
+	Close() error
+}
+
 // pendingWord is a TTSTextFrame awaiting the point in the emitted audio where
 // its word begins, so it is pushed downstream in step with playback.
 type pendingWord struct {
@@ -114,6 +122,15 @@ func New(name string, syn Synthesizer) *Base {
 	}
 	b.Base = processor.New(name, b)
 	return b
+}
+
+// Cleanup releases the Synthesizer's resources, when it holds any, and tears
+// down the processor.
+func (b *Base) Cleanup(ctx context.Context) error {
+	if c, ok := b.syn.(Closer); ok {
+		_ = c.Close()
+	}
+	return b.Base.Cleanup(ctx)
 }
 
 // SetTextFilters sets the text-normalization filters applied to each sentence

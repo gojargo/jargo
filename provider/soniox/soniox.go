@@ -1,7 +1,13 @@
-// Package soniox provides Soniox real-time streaming speech-to-text over its
-// WebSocket API. Soniox streams tokens, each marked final or provisional, and
-// signals end-of-turn with a special "<end>" token; this service surfaces
+// Package soniox provides Soniox's real-time speech services over its WebSocket
+// APIs.
+//
+// Speech-to-text (NewSTT) streams tokens, each marked final or provisional, and
+// signals end-of-turn with a special "<end>" token; the service surfaces
 // provisional text as interims and the finalized utterance with EndOfTurn set.
+//
+// Text-to-speech (NewTTS) opens a synthesis stream per sentence, sends the text,
+// and streams the audio chunks downstream as Soniox generates them, reporting
+// per-word timing from the character timestamps it returns.
 package soniox
 
 import (
