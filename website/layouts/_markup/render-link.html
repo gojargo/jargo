@@ -1,0 +1,65 @@
+{{- /*
+  Link render hook. Extends Hextra's with two rules, so the markdown in ../docs
+  works unchanged in both places.
+
+  The files in ../docs are the single source of truth and are read on GitHub as
+  well as here, so they use plain relative links — "processors.md",
+  "../guides/audio.md", "../../examples/echo". GitHub resolves those natively;
+  Hugo needs help with two cases:
+
+    1. "../../<path>" escapes the docs tree entirely and points at repository
+       files (examples/, provider/, AGENTS.md). Rewrite to a GitHub URL.
+    2. "<page>.md" — resolve through GetPage so the href is the real permalink,
+       with any anchor preserved. Warn and strip ".md" if it does not resolve, so
+       a broken link is visible in the build log rather than silent.
+
+  Everything else falls through to Hextra's original behavior: absolute "/" paths
+  resolved against the site, external links opened in a new tab.
+*/ -}}
+
+{{- $dest := .Destination -}}
+{{- $repo := "https://github.com/gojargo/jargo" -}}
+{{- $page := or .PageInner .Page -}}
+
+{{- /* 1. links that escape the docs tree → the repository on GitHub */ -}}
+{{- if strings.HasPrefix $dest "../../" -}}
+  {{- $dest = printf "%s/tree/main/%s" $repo (strings.TrimPrefix "../../" $dest) -}}
+
+{{- /* 2. relative *.md → the resolved page permalink */ -}}
+{{- else if and (not (strings.HasPrefix $dest "/")) (not (strings.HasPrefix $dest "http")) (not (strings.HasPrefix $dest "#")) (not (strings.HasPrefix $dest "mailto:")) -}}
+  {{- $url := urls.Parse $dest -}}
+  {{- if strings.HasSuffix $url.Path ".md" -}}
+    {{- $fragment := cond $url.Fragment (printf "#%s" $url.Fragment) "" -}}
+    {{- with $page.GetPage $url.Path -}}
+      {{- $dest = printf "%s%s" .RelPermalink $fragment -}}
+    {{- else -}}
+      {{- warnf "render-link: unresolved %q on page %q" $dest $page.Path -}}
+      {{- $dest = printf "%s/%s" (strings.TrimSuffix ".md" $url.Path) $fragment -}}
+    {{- end -}}
+  {{- end -}}
+
+{{- /* 3. Hextra's original handling of site-absolute paths */ -}}
+{{- else if and $dest (strings.HasPrefix $dest "/") -}}
+  {{- $url := urls.Parse $dest -}}
+  {{- with or ($page.GetPage $url.Path) ($page.Resources.Get $url.Path) (resources.Get $url.Path) -}}
+    {{- $query := cond $url.RawQuery (printf "?%s" $url.RawQuery) "" -}}
+    {{- $fragment := cond $url.Fragment (printf "#%s" $url.Fragment) "" -}}
+    {{- $dest = printf "%s%s%s" .RelPermalink $query $fragment -}}
+  {{- else -}}
+    {{- $hasBasePrefix := and (ne site.Home.RelPermalink "/") (strings.HasPrefix $dest site.Home.RelPermalink) -}}
+    {{- if not $hasBasePrefix -}}
+      {{- $dest = (relURL (strings.TrimPrefix "/" $dest)) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- $isExternal := strings.HasPrefix $dest "http" -}}
+<a href="{{ $dest | safeURL }}"
+   {{- with .Title -}}title="{{ . }}"{{- end -}}
+   {{- if $isExternal -}}target="_blank" rel="noopener"{{- end -}}
+>
+  {{- .Text | safeHTML -}}
+  {{- if and site.Params.externalLinkDecoration $isExternal -}}
+    {{- partial "utils/icon.html" (dict "name" "arrow-up-right" "attributes" `class="hx:inline hx:rtl:rotate-270 hx:align-baseline" height="1em" aria-hidden="true"`) -}}
+  {{- end -}}
+</a>

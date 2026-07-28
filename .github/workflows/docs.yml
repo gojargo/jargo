@@ -1,0 +1,97 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "website/**"
+      - "assets/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "website/**"
+      - "assets/**"
+      - ".github/workflows/docs.yml"
+  # Lets a docs deploy be triggered by hand without an empty commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer commit supersedes an in-flight deploy rather than racing it.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HUGO_VERSION: 0.152.0
+
+jobs:
+  # Runs on pull requests too, so a broken link or template fails review rather
+  # than main.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # enableGitInfo needs history for page dates
+
+      - name: Install Hugo (extended)
+        run: |
+          curl -sSL -o /tmp/hugo.deb \
+            "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb"
+          sudo dpkg -i /tmp/hugo.deb
+          hugo version
+
+      # Hextra is a Hugo module, so the Go toolchain resolves it.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: website/go.sum
+
+      - name: Configure Pages
+        id: pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      # --baseURL from the Pages config on a real deploy; the hugo.toml default is
+      # used for pull-request builds, which are only checked, never published.
+      - name: Build
+        working-directory: website
+        run: |
+          hugo --gc --minify --printPathWarnings \
+            ${{ steps.pages.outputs.base_url && format('--baseURL "{0}/"', steps.pages.outputs.base_url) || '' }}
+
+      # The render-link hook warns on any unresolved relative link; treat that as
+      # a failure so docs links cannot rot silently. Run before the artifact
+      # upload so a broken link blocks the deploy.
+      - name: Check for unresolved links
+        working-directory: website
+        run: |
+          set -o pipefail
+          hugo --gc --renderToMemory --logLevel warn 2>&1 | tee /tmp/hugo-check.log
+          if grep -F "render-link: unresolved" /tmp/hugo-check.log; then
+            echo "::error::unresolved documentation links — see the warnings above"
+            exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: website/public
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write # deploy to Pages
+      id-token: write # verify the deployment origin
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
