@@ -5,7 +5,7 @@ package qwen
 const (
 	// baseURL is the international DashScope OpenAI-compatible endpoint; callers
 	// inside mainland China should override it with the dashscope.aliyuncs.com
-	// host via openai.LLMConfig.BaseURL.
+	// host via chat.LLMConfig.BaseURL.
 	baseURL      = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 	defaultModel = "qwen-plus"
 )

@@ -1,6 +1,8 @@
-// Package rivapb holds the generated gRPC client for the subset of the NVIDIA
-// Riva speech-recognition API used by the streaming ASR service. riva.proto is
-// the source of truth; regenerate the *.pb.go files with:
+// Package rivapb holds the generated gRPC clients for the subset of the NVIDIA
+// Riva speech API the streaming ASR and TTS services use. The .proto files are
+// the source of truth: riva.proto for recognition, riva_tts.proto for synthesis,
+// and riva_audio.proto for the audio encodings they share. Regenerate the *.pb.go
+// files with:
 //
 //	go generate ./provider/nvidia/internal/rivapb
 //

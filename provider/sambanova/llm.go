@@ -1,8 +1,8 @@
 package sambanova
 
-import "github.com/gojargo/jargo/provider/openai"
+import "github.com/gojargo/jargo/provider/openai/chat"
 
 // NewLLM builds a SambaNova Cloud LLM service.
-func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("SambaNovaLLM", baseURL, defaultModel, cfg)
+func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return chat.NewCompatLLM("SambaNovaLLM", baseURL, defaultModel, cfg)
 }

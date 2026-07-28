@@ -30,7 +30,7 @@ import (
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/processor/vadproc"
-	"github.com/gojargo/jargo/provider/openai"
+	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/pionrtc"
 	"github.com/pion/webrtc/v4"
@@ -76,9 +76,9 @@ func runBot(conn *pionrtc.Connection) {
 	defer func() { _ = conn.Close() }()
 
 	// --- the provider stack: the only part that differs between examples ---
-	stt := openai.NewSTT(openai.STTConfig{APIKey: os.Getenv("OPENAI_API_KEY"), SampleRate: opus.SampleRate})
-	llm := openai.NewLLM(openai.LLMConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
-	tts := openai.NewTTS(openai.TTSConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
+	stt := chat.NewSTT(chat.STTConfig{APIKey: os.Getenv("OPENAI_API_KEY"), SampleRate: opus.SampleRate})
+	llm := chat.NewLLM(chat.LLMConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
+	tts := chat.NewTTS(chat.TTSConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
 	// ----------------------------------------------------------------------
 
 	params := transport.DefaultParams()

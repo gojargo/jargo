@@ -68,11 +68,11 @@ afterthought.
 
 Pick any per category; each is a small `Config` + constructor.
 
-- **STT**: Deepgram, AssemblyAI, Gladia, Speechmatics, Soniox, Whisper (OpenAI/Groq/local), Azure.
-- **LLM**: Anthropic (direct + Bedrock), OpenAI, Google Gemini, Groq, Together, Fireworks, DeepSeek,
+- **STT**: Deepgram, AssemblyAI, Gladia, Speechmatics, Soniox, Whisper (OpenAI/Groq/local), Azure, xAI, ElevenLabs, Cartesia, NVIDIA.
+- **LLM**: Anthropic (direct + Bedrock), OpenAI (chat + Responses), Google Gemini (direct + Vertex), Groq, Together, Fireworks, DeepSeek,
   Cerebras, Perplexity, OpenRouter, xAI, Ollama, NVIDIA, Mistral, Nebius, SambaNova, Qwen, Azure OpenAI.
-- **TTS**: ElevenLabs, Cartesia, Rime, LMNT, Kokoro, Piper, Deepgram, OpenAI, Azure, Hume, Fish, MiniMax.
-- **Speech-to-speech**: OpenAI Realtime, Gemini Live, AWS Nova Sonic.
+- **TTS**: ElevenLabs, Cartesia, Rime, LMNT, Kokoro, Piper, Deepgram, OpenAI, Azure, Hume, Fish, MiniMax, xAI, NVIDIA, Soniox.
+- **Speech-to-speech**: OpenAI Realtime (direct + Azure), Gemini Live (direct + Vertex), AWS Nova Sonic, xAI Realtime.
 - **Memory**: mem0.
 
 ## Dependencies
@@ -98,9 +98,9 @@ go get github.com/gojargo/jargo
 A bot is an STT → LLM → TTS pipeline over a WebRTC transport. The heart of it:
 
 ```go
-stt := openai.NewSTT(openai.STTConfig{APIKey: key, SampleRate: opus.SampleRate})
-llm := openai.NewLLM(openai.LLMConfig{APIKey: key})
-tts := openai.NewTTS(openai.TTSConfig{APIKey: key})
+stt := chat.NewSTT(chat.STTConfig{APIKey: key, SampleRate: opus.SampleRate})
+llm := chat.NewLLM(chat.LLMConfig{APIKey: key})
+tts := chat.NewTTS(chat.TTSConfig{APIKey: key})
 
 t := pionrtc.NewTransport(conn, transport.DefaultParams())
 agg := aggregators.New(frames.NewLLMContext("You are a helpful voice assistant."))

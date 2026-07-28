@@ -2,7 +2,7 @@
 // behavior is fully determined by the base service they delegate to.
 //
 // A dozen providers are nothing but a name, a base URL and a default model
-// handed to openai.NewCompatLLM. Testing each one separately would be a dozen
+// handed to chat.NewCompatLLM. Testing each one separately would be a dozen
 // copies of the same httptest server; testing them all from one package would
 // leave every one of them reporting zero coverage, because Go credits a package
 // only for the tests that live in it. So the assertions live here and each
@@ -17,12 +17,12 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/provider/openai"
+	"github.com/gojargo/jargo/provider/openai/chat"
 )
 
 // CompatLLMBuilder builds an OpenAI-compatible LLM service from a config, i.e.
 // the NewLLM function every compatible provider exposes.
-type CompatLLMBuilder func(openai.LLMConfig) *openai.LLMService
+type CompatLLMBuilder func(chat.LLMConfig) *chat.LLMService
 
 // CompatLLM checks that build produces a usable OpenAI-compatible LLM service:
 // it is named wantName, defaults to wantModel, lets a caller override the model,
@@ -37,7 +37,7 @@ func CompatLLM(t *testing.T, wantName, wantModel string, build CompatLLMBuilder)
 	t.Helper()
 
 	t.Run("defaults", func(t *testing.T) {
-		svc := build(openai.LLMConfig{APIKey: "test-key"})
+		svc := build(chat.LLMConfig{APIKey: "test-key"})
 		if svc == nil {
 			t.Fatal("NewLLM returned nil")
 		}
@@ -49,7 +49,7 @@ func CompatLLM(t *testing.T, wantName, wantModel string, build CompatLLMBuilder)
 	})
 
 	t.Run("streams a completion", func(t *testing.T) {
-		req := captureRequest(t, build, openai.LLMConfig{APIKey: "test-key"}, "Hello there")
+		req := captureRequest(t, build, chat.LLMConfig{APIKey: "test-key"}, "Hello there")
 
 		if req.path != "/chat/completions" {
 			t.Errorf("path = %q, want /chat/completions", req.path)
@@ -72,7 +72,7 @@ func CompatLLM(t *testing.T, wantName, wantModel string, build CompatLLMBuilder)
 	})
 
 	t.Run("model override", func(t *testing.T) {
-		req := captureRequest(t, build, openai.LLMConfig{APIKey: "k", Model: "override-model"}, "hi")
+		req := captureRequest(t, build, chat.LLMConfig{APIKey: "k", Model: "override-model"}, "hi")
 		if req.body.Model != "override-model" {
 			t.Errorf("model = %q, want the override", req.body.Model)
 		}
@@ -97,7 +97,7 @@ type capturedRequest struct {
 
 // captureRequest points the service at a fake chat-completions endpoint, runs one
 // generation, and reports what crossed the wire in both directions.
-func captureRequest(t *testing.T, build CompatLLMBuilder, cfg openai.LLMConfig, reply string) capturedRequest {
+func captureRequest(t *testing.T, build CompatLLMBuilder, cfg chat.LLMConfig, reply string) capturedRequest {
 	t.Helper()
 
 	var got capturedRequest

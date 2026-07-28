@@ -194,3 +194,43 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+// closingSynth records whether the base released it at teardown.
+type closingSynth struct {
+	*fakeSynth
+	closed chan struct{}
+}
+
+func (s *closingSynth) Close() error {
+	close(s.closed)
+	return nil
+}
+
+// TestCleanupClosesSynthesizer checks a Synthesizer holding a resource open
+// across syntheses (a reused connection, say) is released when the pipeline
+// tears down, rather than leaking for the life of the process.
+func TestCleanupClosesSynthesizer(t *testing.T) {
+	syn := &closingSynth{
+		fakeSynth: &fakeSynth{rate: 24000, chunk: []byte{1}, spoken: make(chan string, 1)},
+		closed:    make(chan struct{}),
+	}
+	base := tts.New("ClosingTTS", syn)
+
+	if err := base.Cleanup(context.Background()); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	select {
+	case <-syn.closed:
+	case <-time.After(time.Second):
+		t.Fatal("Cleanup did not close the synthesizer")
+	}
+}
+
+// TestCleanupWithoutCloserIsFine checks a Synthesizer that holds nothing open is
+// unaffected by the teardown hook.
+func TestCleanupWithoutCloserIsFine(t *testing.T) {
+	syn := &fakeSynth{rate: 24000, chunk: []byte{1}, spoken: make(chan string, 1)}
+	if err := tts.New("PlainTTS", syn).Cleanup(context.Background()); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+}

@@ -1,8 +1,8 @@
 package deepseek
 
-import "github.com/gojargo/jargo/provider/openai"
+import "github.com/gojargo/jargo/provider/openai/chat"
 
 // NewLLM builds a DeepSeek LLM service.
-func NewLLM(cfg openai.LLMConfig) *openai.LLMService {
-	return openai.NewCompatLLM("DeepSeekLLM", baseURL, defaultModel, cfg)
+func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return chat.NewCompatLLM("DeepSeekLLM", baseURL, defaultModel, cfg)
 }
