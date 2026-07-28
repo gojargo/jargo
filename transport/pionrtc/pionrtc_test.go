@@ -126,7 +126,7 @@ func TestWebRTCEchoLoopback(t *testing.T) {
 	go func() { _ = task.Run(ctx); close(taskDone) }()
 
 	// Client streams Opus audio until the test ends.
-	enc, err := opus.NewEncoder(1, 0)
+	enc, err := opus.NewEncoder(opus.EncoderConfig{Channels: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

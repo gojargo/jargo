@@ -31,7 +31,7 @@ func main() {
 	// Pure-Go resample to jargo's 48 kHz stream rate.
 	pcm48 := resampleI16(pcm, rate, opus.SampleRate)
 
-	enc, err := opus.NewEncoder(1, 24000)
+	enc, err := opus.NewEncoder(opus.EncoderConfig{Channels: 1, Bitrate: 24000})
 	must(err)
 	dec, err := opus.NewDecoder(1)
 	must(err)

@@ -8,12 +8,18 @@ package opus
 #include <stdlib.h>
 
 // opus_encoder_ctl is variadic, which cgo cannot call directly, so wrap the
-// two control requests we use in plain functions.
+// control requests we use in plain functions.
 static int jargo_opus_set_bitrate(OpusEncoder *enc, opus_int32 bitrate) {
 	return opus_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate));
 }
 static int jargo_opus_set_signal_voice(OpusEncoder *enc) {
 	return opus_encoder_ctl(enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+}
+static int jargo_opus_set_inband_fec(OpusEncoder *enc, int on) {
+	return opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(on));
+}
+static int jargo_opus_set_packet_loss_perc(OpusEncoder *enc, int perc) {
+	return opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC(perc));
 }
 */
 import "C"
@@ -35,18 +41,17 @@ type Encoder struct {
 	out      []byte
 }
 
-var errEmptyPCM = errors.New("opus: empty pcm frame")
+var errFrameSize = errors.New("opus: wrong frame size")
 
-// NewEncoder builds an Encoder for channels-channel 48 kHz audio at the given
-// bitrate in bits per second; pass 0 for the codec default.
-func NewEncoder(channels, bitrate int) (*Encoder, error) {
+// NewEncoder builds an Encoder for 48 kHz audio from cfg.
+func NewEncoder(cfg EncoderConfig) (*Encoder, error) {
 	var cerr C.int
-	enc := C.opus_encoder_create(C.opus_int32(SampleRate), C.int(channels), C.OPUS_APPLICATION_VOIP, &cerr)
+	enc := C.opus_encoder_create(C.opus_int32(SampleRate), C.int(cfg.Channels), C.OPUS_APPLICATION_VOIP, &cerr)
 	if cerr != C.OPUS_OK || enc == nil {
 		return nil, fmt.Errorf("opus_encoder_create failed: %d", int(cerr))
 	}
-	if bitrate > 0 {
-		if rc := C.jargo_opus_set_bitrate(enc, C.opus_int32(bitrate)); rc != C.OPUS_OK {
+	if cfg.Bitrate > 0 {
+		if rc := C.jargo_opus_set_bitrate(enc, C.opus_int32(cfg.Bitrate)); rc != C.OPUS_OK {
 			C.opus_encoder_destroy(enc)
 			return nil, fmt.Errorf("opus set bitrate failed: %d", int(rc))
 		}
@@ -54,7 +59,21 @@ func NewEncoder(channels, bitrate int) (*Encoder, error) {
 	// Bias toward SILK for speech; harmless if the content is not voice.
 	C.jargo_opus_set_signal_voice(enc)
 
-	e := &Encoder{enc: enc, channels: channels, out: make([]byte, maxPacketBytes)}
+	if cfg.InbandFEC {
+		if rc := C.jargo_opus_set_inband_fec(enc, 1); rc != C.OPUS_OK {
+			C.opus_encoder_destroy(enc)
+			return nil, fmt.Errorf("opus set inband fec failed: %d", int(rc))
+		}
+		// Without a loss estimate libopus assumes 0% and emits no redundancy,
+		// so FEC would be on in name only.
+		perc := min(max(cfg.ExpectedPacketLoss, 0), 100)
+		if rc := C.jargo_opus_set_packet_loss_perc(enc, C.int(perc)); rc != C.OPUS_OK {
+			C.opus_encoder_destroy(enc)
+			return nil, fmt.Errorf("opus set packet loss perc failed: %d", int(rc))
+		}
+	}
+
+	e := &Encoder{enc: enc, channels: cfg.Channels, out: make([]byte, maxPacketBytes)}
 	// libopus encoders must be freed; tie the C lifetime to the Go object.
 	runtime.SetFinalizer(e, (*Encoder).free)
 	return e, nil
@@ -71,7 +90,7 @@ func (e *Encoder) free() {
 // FrameBytes(channels) bytes — into a single Opus packet.
 func (e *Encoder) Encode(pcm []byte) ([]byte, error) {
 	if len(pcm) == 0 {
-		return nil, errEmptyPCM
+		return nil, errFrameSize
 	}
 	// S16LE interleaved bytes are native int16 on little-endian targets
 	// (amd64/arm64), so the buffer can be read as opus_int16 without a copy.

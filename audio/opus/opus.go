@@ -36,6 +36,26 @@ const (
 // FrameBytes is the size in bytes of one 20 ms S16LE frame for channels.
 func FrameBytes(channels int) int { return FrameSamples * channels * 2 }
 
+// EncoderConfig configures an Encoder.
+type EncoderConfig struct {
+	// Channels is the number of channels in the PCM handed to Encode.
+	Channels int
+	// Bitrate is the target bitrate in bits per second; 0 uses the codec
+	// default. Speech is transparent well below the codec's fullband range, so
+	// raising this past ~32 kbps for a single voice mostly costs bandwidth.
+	Bitrate int
+	// InbandFEC embeds a low-rate copy of the previous frame in each packet so
+	// the receiver can reconstruct a dropped one instead of concealing it. It
+	// trades a little of the bitrate budget for resilience, which is worth it
+	// on lossy links (mobile radio, relayed media) and inert on clean ones,
+	// where the redundancy is simply never decoded. Honored by the libopus
+	// build; the pure-Go SILK encoder ignores it.
+	InbandFEC bool
+	// ExpectedPacketLoss is the loss percentage (0-100) the encoder sizes its
+	// FEC redundancy for. Ignored unless InbandFEC is set.
+	ExpectedPacketLoss int
+}
+
 // Decoder decodes Opus packets into signed 16-bit little-endian PCM.
 type Decoder struct {
 	dec      pion.Decoder

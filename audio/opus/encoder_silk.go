@@ -34,9 +34,10 @@ type Encoder struct {
 	out      []byte
 }
 
-// NewEncoder builds a SILK Encoder for channels-channel 48 kHz audio at the
-// given bitrate in bits per second; pass 0 for the codec default.
-func NewEncoder(channels, bitrate int) (*Encoder, error) {
+// NewEncoder builds a SILK Encoder for 48 kHz audio from cfg.
+// EncoderConfig.InbandFEC is ignored: this encoder emits no FEC redundancy.
+func NewEncoder(cfg EncoderConfig) (*Encoder, error) {
+	bitrate := cfg.Bitrate
 	if bitrate <= 0 {
 		bitrate = 24000
 	}
@@ -49,7 +50,7 @@ func NewEncoder(channels, bitrate int) (*Encoder, error) {
 		return nil, fmt.Errorf("new silk resampler: %w", err)
 	}
 
-	return &Encoder{enc: enc, down: down, channels: channels, out: make([]byte, maxPacketBytes)}, nil
+	return &Encoder{enc: enc, down: down, channels: cfg.Channels, out: make([]byte, maxPacketBytes)}, nil
 }
 
 // Encode encodes exactly one 20 ms frame of interleaved S16LE PCM — that is

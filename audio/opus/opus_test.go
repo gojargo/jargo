@@ -19,7 +19,7 @@ func sineFrame(freq float64) []byte {
 }
 
 func TestEncodeProducesPacket(t *testing.T) {
-	enc, err := opus.NewEncoder(1, 0)
+	enc, err := opus.NewEncoder(opus.EncoderConfig{Channels: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestEncodeProducesPacket(t *testing.T) {
 }
 
 func TestEncodeRejectsWrongFrameSize(t *testing.T) {
-	enc, err := opus.NewEncoder(1, 0)
+	enc, err := opus.NewEncoder(opus.EncoderConfig{Channels: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestEncodeRejectsWrongFrameSize(t *testing.T) {
 }
 
 func TestRoundTrip(t *testing.T) {
-	enc, err := opus.NewEncoder(1, 0)
+	enc, err := opus.NewEncoder(opus.EncoderConfig{Channels: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
