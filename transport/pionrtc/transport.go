@@ -3,6 +3,7 @@ package pionrtc
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -134,15 +135,42 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 	}
 }
 
-// outputTransport encodes outgoing PCM chunks into Opus and writes them to the
-// connection's audio track.
+// queuedFrames bounds the frames waiting to be sent. The base output already
+// buffers well ahead of this, so a shallow queue is enough to keep the sender fed
+// without holding a second copy of the same audio.
+const queuedFrames = 64
+
+// pending is one 20 ms frame of PCM waiting its turn, and the channel closed
+// once it has been sent.
+type pending struct {
+	pcm  []byte
+	sent chan struct{}
+}
+
+// outputTransport encodes outgoing PCM into Opus and writes it to the
+// connection's audio track at real time.
+//
+// The sender goroutine owns the clock and writes on every frame boundary for as
+// long as the session lasts, falling back to silence whenever nothing is queued
+// — the same thing the local audio transport does in its playback callback, and
+// what a device's pull callback forces on you. That is what keeps RTP timestamps
+// honest: they advance one frame per packet whatever the wall clock did, so a
+// sender that goes quiet during a gap and resumes leaves the audio after it
+// timestamped as though the gap never happened. A receiver schedules playout from
+// those timestamps, reads that as delay, conceals by repeating the last frame,
+// then compresses once packets bunch up again — stuttered and clipped words. With
+// the sender writing every frame, elapsed frames and elapsed time cannot diverge.
 type outputTransport struct {
 	*transport.BaseOutput
-	conn     *Connection
-	enc      *opus.Encoder
-	tail     []byte
-	nextSend time.Time
-	quiet    []byte // one frame of PCM silence, sized on first use
+	conn *Connection
+	enc  *opus.Encoder
+	tail []byte
+
+	mu      sync.Mutex
+	queue   chan *pending
+	cancel  context.CancelFunc
+	sendWG  sync.WaitGroup
+	running bool
 }
 
 func newOutput(conn *Connection, params transport.Params) *outputTransport {
@@ -151,125 +179,198 @@ func newOutput(conn *Connection, params transport.Params) *outputTransport {
 	return out
 }
 
+// ProcessFrame drives the sender's lifecycle around the base output: start it on
+// the StartFrame so silence is already flowing before the first word, drop
+// anything queued on a barge-in, and stop it when the session ends.
+func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := out.BaseOutput.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if dir != processor.Downstream {
+		return nil
+	}
+	switch f.(type) {
+	case *frames.StartFrame:
+		return out.startSending()
+	case *frames.InterruptionFrame:
+		out.discardQueued()
+	case *frames.EndFrame, *frames.CancelFrame:
+		out.stopSending()
+	}
+	return nil
+}
+
 // SendMessage sends an application message over the data channel.
 func (out *outputTransport) SendMessage(_ context.Context, data []byte) error {
 	return out.conn.SendMessage(data)
 }
 
-// WriteAudio encodes PCM into 20 ms Opus frames and sends them, paced to
-// wall-clock time. Pion's WriteSample packetizes and sends a frame the instant
-// it is called, so writing a whole utterance back-to-back floods the client's
-// jitter buffer and produces machine-gun / clicking playback. A pull-based media
-// track is read at real time by the RTP sender and paces itself; this push-based
-// track does not, so we pace explicitly (as pionrtc's own test does with a
-// ticker). Audio that does not fill a whole frame is held until the next call.
-func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
+// startSending brings up the sender goroutine. It runs for the whole session, so
+// the receiver is already being fed before the first word rather than having to
+// build its buffer from a cold start mid-sentence.
+func (out *outputTransport) startSending() error {
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	if out.running {
+		return nil
+	}
 	ch := channels(out.Params().AudioOutChannels)
-	if out.enc == nil {
-		p := out.Params()
-		enc, err := opus.NewEncoder(opus.EncoderConfig{
-			Channels:           ch,
-			Bitrate:            p.AudioOutBitrate,
-			InbandFEC:          p.AudioOutFEC,
-			ExpectedPacketLoss: p.AudioOutExpectedPacketLoss,
-		})
-		if err != nil {
-			return err
-		}
-		out.enc = enc
-	}
-
-	frameBytes := opus.FrameBytes(ch)
-	out.tail = append(out.tail, pcm...)
-	for len(out.tail) >= frameBytes {
-		// Pace first: it may emit silence frames, and Opus is stateful, so
-		// packets have to be sent in the order they were encoded.
-		if err := out.pace(ctx, frameBytes); err != nil {
-			return err
-		}
-		packet, err := out.enc.Encode(out.tail[:frameBytes])
-		if err != nil {
-			return err
-		}
-		if err := out.conn.WriteAudio(packet, opus.FrameDuration); err != nil {
-			return err
-		}
-		out.tail = out.tail[frameBytes:]
-	}
-	return nil
-}
-
-// maxSilenceFill bounds how much of a gap is covered with silence. Past it the
-// pause is a real one and the receiver has long since drained, so the clock
-// restarts instead — the new-talkspurt case, which a receiver resynchronizes on
-// cleanly. Without the bound, resuming after an idle turn would burst out every
-// frame the pause was long.
-const maxSilenceFill = 400 * time.Millisecond
-
-// silenceFill reports how many frames of silence cover the gap between nextSend
-// and now, and whether the send clock should restart instead. A clock that has
-// not started yet, or a pause too long to paper over, restarts; anything else
-// under a frame needs no fill.
-func silenceFill(now, nextSend time.Time) (frames int, restart bool) {
-	if nextSend.IsZero() {
-		return 0, true
-	}
-	behind := now.Sub(nextSend)
-	if behind > maxSilenceFill {
-		return 0, true
-	}
-	if behind <= opus.FrameDuration {
-		return 0, false
-	}
-	return int(behind / opus.FrameDuration), false
-}
-
-// writeSilence sends one frame of encoded silence, advancing the RTP timeline by
-// a frame. It goes out unpaced: the point is to catch the timeline up to the
-// wall clock, not to play it.
-func (out *outputTransport) writeSilence(frameBytes int) error {
-	if len(out.quiet) != frameBytes {
-		out.quiet = make([]byte, frameBytes)
-	}
-	packet, err := out.enc.Encode(out.quiet)
+	p := out.Params()
+	enc, err := opus.NewEncoder(opus.EncoderConfig{
+		Channels:           ch,
+		Bitrate:            p.AudioOutBitrate,
+		InbandFEC:          p.AudioOutFEC,
+		ExpectedPacketLoss: p.AudioOutExpectedPacketLoss,
+	})
 	if err != nil {
 		return err
 	}
-	return out.conn.WriteAudio(packet, opus.FrameDuration)
+	// The encoder is touched only by the sender goroutine from here on, so
+	// packets cannot be sent in a different order than they were encoded.
+	out.enc = enc
+	out.queue = make(chan *pending, queuedFrames)
+	ctx, cancel := context.WithCancel(context.Background())
+	out.cancel = cancel
+	out.running = true
+	out.sendWG.Add(1)
+	go out.sendLoop(ctx, opus.FrameBytes(ch))
+	return nil
 }
 
-// pace blocks until it is time to send the next 20 ms Opus frame, keeping output
-// at real time, and covers a short gap with silence rather than skipping it.
-//
-// RTP timestamps advance by exactly one frame per packet however much wall clock
-// actually passed, so simply restarting the clock after a stall — a chunk that
-// arrived late, or the pipeline being descheduled — leaves the audio that
-// follows timestamped as though the gap never happened. A receiver schedules
-// playout from those timestamps, so it reads the gap as network delay: it
-// conceals, repeating the last frame, and then compresses or drops once packets
-// bunch up again. That is heard as stuttered and clipped words. Sending silence
-// through the gap keeps the media clock and the wall clock together, so the
-// audio after it lands where it belongs.
-func (out *outputTransport) pace(ctx context.Context, frameBytes int) error {
-	now := time.Now()
-	fill, restart := silenceFill(now, out.nextSend)
-	if restart {
-		out.nextSend = now
+// stopSending shuts the sender down and waits for it to finish.
+func (out *outputTransport) stopSending() {
+	out.mu.Lock()
+	cancel := out.cancel
+	out.cancel = nil
+	out.running = false
+	out.mu.Unlock()
+	if cancel == nil {
+		return
 	}
-	for range fill {
-		if err := out.writeSilence(frameBytes); err != nil {
-			return err
+	cancel()
+	out.sendWG.Wait()
+}
+
+// discardQueued drops audio that has not been sent yet. A barge-in has to take
+// effect now: anything already queued belongs to the turn the user just cut off.
+// Waiters are released rather than left blocked on audio that will never go out.
+func (out *outputTransport) discardQueued() {
+	out.mu.Lock()
+	q := out.queue
+	out.tail = nil
+	out.mu.Unlock()
+	if q == nil {
+		return
+	}
+	for {
+		select {
+		case p := <-q:
+			close(p.sent)
+		default:
+			return
 		}
-		out.nextSend = out.nextSend.Add(opus.FrameDuration)
 	}
-	if d := time.Until(out.nextSend); d > 0 {
-		timer := time.NewTimer(d)
-		defer timer.Stop()
+}
+
+// sendLoop writes one frame on every frame boundary until the session ends,
+// sending queued audio when there is any and silence when there is not.
+//
+// The schedule comes from a fixed origin — frames sent times the frame duration —
+// rather than from a ticker, which coalesces the ticks it misses and would let
+// the stream fall permanently behind the wall clock while its timestamps claimed
+// otherwise. Running late here instead sends back to back until the count catches
+// up, so elapsed frames and elapsed time stay equal.
+func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
+	defer out.sendWG.Done()
+
+	quiet := make([]byte, frameBytes)
+	start := time.Now()
+	var sent int64
+
+	for {
+		if d := time.Until(start.Add(time.Duration(sent) * opus.FrameDuration)); d > 0 {
+			timer := time.NewTimer(d)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-out.conn.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
 		select {
 		case <-ctx.Done():
-		case <-timer.C:
+			return
+		case <-out.conn.Done():
+			return
+		default:
+		}
+
+		pcm, done := quiet, (chan struct{})(nil)
+		select {
+		case p := <-out.queue:
+			pcm, done = p.pcm, p.sent
+		default:
+		}
+
+		packet, err := out.enc.Encode(pcm)
+		if err == nil {
+			err = out.conn.WriteAudio(packet, opus.FrameDuration)
+		}
+		if err != nil {
+			slog.Error("write audio", "processor", out.Name(), "err", err)
+		}
+		if done != nil {
+			close(done)
+		}
+		sent++
+	}
+}
+
+// WriteAudio hands PCM to the sender a frame at a time and returns once the last
+// of it has gone out, so callers still see a write that takes as long as the
+// audio does — the drain at the end of a turn depends on that. Audio that does
+// not fill a whole frame is held until the next call.
+func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
+	out.mu.Lock()
+	q, running := out.queue, out.running
+	if !running {
+		out.mu.Unlock()
+		return nil
+	}
+	frameBytes := opus.FrameBytes(channels(out.Params().AudioOutChannels))
+	out.tail = append(out.tail, pcm...)
+	var last chan struct{}
+	var batch []*pending
+	for len(out.tail) >= frameBytes {
+		frame := make([]byte, frameBytes)
+		copy(frame, out.tail[:frameBytes])
+		p := &pending{pcm: frame, sent: make(chan struct{})}
+		batch = append(batch, p)
+		last = p.sent
+		out.tail = out.tail[frameBytes:]
+	}
+	out.mu.Unlock()
+
+	for _, p := range batch {
+		select {
+		case q <- p:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-out.conn.Done():
+			return nil
 		}
 	}
-	out.nextSend = out.nextSend.Add(opus.FrameDuration)
+	if last == nil {
+		return nil
+	}
+	select {
+	case <-last:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-out.conn.Done():
+	}
 	return nil
 }
