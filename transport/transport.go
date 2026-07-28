@@ -38,6 +38,14 @@ type Params struct {
 	// AudioOutBitrate is the output bitrate in bits per second; 0 uses the
 	// codec default.
 	AudioOutBitrate int
+	// AudioOutFEC enables Opus inband forward error correction on the outgoing
+	// stream, letting receivers rebuild dropped packets. Recommended whenever
+	// clients may be on lossy links.
+	AudioOutFEC bool
+	// AudioOutExpectedPacketLoss is the loss percentage (0-100) the encoder
+	// sizes its FEC redundancy for. Ignored unless AudioOutFEC is set; 0 leaves
+	// FEC enabled but carrying no redundancy, so set it alongside.
+	AudioOutExpectedPacketLoss int
 	// AudioOut10msChunks is how many 10 ms chunks of audio are written at a
 	// time. With WebRTC Opus this is 2, so audio is written in 20 ms frames.
 	AudioOut10msChunks int

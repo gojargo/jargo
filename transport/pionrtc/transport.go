@@ -165,7 +165,13 @@ func (out *outputTransport) SendMessage(_ context.Context, data []byte) error {
 func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	ch := channels(out.Params().AudioOutChannels)
 	if out.enc == nil {
-		enc, err := opus.NewEncoder(ch, out.Params().AudioOutBitrate)
+		p := out.Params()
+		enc, err := opus.NewEncoder(opus.EncoderConfig{
+			Channels:           ch,
+			Bitrate:            p.AudioOutBitrate,
+			InbandFEC:          p.AudioOutFEC,
+			ExpectedPacketLoss: p.AudioOutExpectedPacketLoss,
+		})
 		if err != nil {
 			return err
 		}

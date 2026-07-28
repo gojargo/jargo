@@ -169,6 +169,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   until the server acknowledges the session, and closing signals end of audio so
   the last transcript is flushed. `provider/xai/grok` previously offered only the LLM.
 
+- **Opus inband FEC.** `transport.Params` gained `AudioOutFEC` and
+  `AudioOutExpectedPacketLoss`, which enable forward error correction on the
+  outgoing stream so receivers can rebuild dropped packets instead of concealing
+  them. Worth enabling whenever clients may be on lossy links (mobile radio,
+  relayed media); on a clean link the redundancy is never decoded. Honored by
+  the `libopus` build; the pure-Go SILK encoder ignores it.
+
 - **Pipeline lifecycle frames.** A processor with no handle on the `Task` can now
   ask it to change the run's lifecycle, and the `Task` converts the request into
   the matching pipeline-wide frame: `frames.CancelWorkerFrame` becomes a
@@ -224,6 +231,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   behavior is untouched. A provider offering a single service (`deepgram`,
   `cartesia`, `nvidia`, …) keeps its top-level folder.
 
+- **`opus.NewEncoder` takes an `opus.EncoderConfig`** instead of positional
+  `channels, bitrate` arguments, matching the config-struct convention used
+  elsewhere and leaving room for the new FEC settings.
 - **Speech-to-speech services are told when tools change.** A realtime model
   generates continuously and never re-reads the shared context between turns, so
   a toolset changed with `LLMContext.SetTools` never reached it. Tool changes now
@@ -263,6 +273,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   construction, so it stays correct when `Audio` is replaced.
 - The `frames` package documents its ownership rule: a frame has a single owner
   at a time and must not be mutated after it is pushed.
+
+### Fixed
+
+- **The `libopus` encoder rejects wrong-sized frames** instead of reading past
+  the end of the caller's buffer: `opus_encode` consumes a fixed frame regardless
+  of the slice length, so a short frame read out of bounds. It now returns the
+  same error the pure-Go encoder does, as the shared API promises.
 
 ### Added
 
