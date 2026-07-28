@@ -276,6 +276,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The Pion transport covers a short output gap with silence** rather than
+  restarting its send clock. RTP timestamps advance by one frame per packet
+  however much wall clock actually passed, so a stall — a chunk arriving late, or
+  the pipeline being descheduled — left the audio after it timestamped as though
+  the gap never happened. Receivers schedule playout from those timestamps, so
+  the gap read as network delay: conceal (repeating the last frame), then
+  compress once packets bunched up again, heard as stuttered and clipped words.
+  Gaps up to 400 ms are now filled so the media clock keeps pace with the wall
+  clock; a longer pause is a real one and still restarts the clock, which is the
+  new-talkspurt case receivers resynchronize on cleanly. `transport/livekit`
+  paces the same way and is likely affected too, but is untested here.
 - **The `libopus` encoder rejects wrong-sized frames** instead of reading past
   the end of the caller's buffer: `opus_encode` consumes a fixed frame regardless
   of the slice length, so a short frame read out of bounds. It now returns the

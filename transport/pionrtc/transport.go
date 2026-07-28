@@ -142,6 +142,7 @@ type outputTransport struct {
 	enc      *opus.Encoder
 	tail     []byte
 	nextSend time.Time
+	quiet    []byte // one frame of PCM silence, sized on first use
 }
 
 func newOutput(conn *Connection, params transport.Params) *outputTransport {
@@ -181,11 +182,15 @@ func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	frameBytes := opus.FrameBytes(ch)
 	out.tail = append(out.tail, pcm...)
 	for len(out.tail) >= frameBytes {
+		// Pace first: it may emit silence frames, and Opus is stateful, so
+		// packets have to be sent in the order they were encoded.
+		if err := out.pace(ctx, frameBytes); err != nil {
+			return err
+		}
 		packet, err := out.enc.Encode(out.tail[:frameBytes])
 		if err != nil {
 			return err
 		}
-		out.pace(ctx)
 		if err := out.conn.WriteAudio(packet, opus.FrameDuration); err != nil {
 			return err
 		}
@@ -194,14 +199,68 @@ func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	return nil
 }
 
+// maxSilenceFill bounds how much of a gap is covered with silence. Past it the
+// pause is a real one and the receiver has long since drained, so the clock
+// restarts instead — the new-talkspurt case, which a receiver resynchronizes on
+// cleanly. Without the bound, resuming after an idle turn would burst out every
+// frame the pause was long.
+const maxSilenceFill = 400 * time.Millisecond
+
+// silenceFill reports how many frames of silence cover the gap between nextSend
+// and now, and whether the send clock should restart instead. A clock that has
+// not started yet, or a pause too long to paper over, restarts; anything else
+// under a frame needs no fill.
+func silenceFill(now, nextSend time.Time) (frames int, restart bool) {
+	if nextSend.IsZero() {
+		return 0, true
+	}
+	behind := now.Sub(nextSend)
+	if behind > maxSilenceFill {
+		return 0, true
+	}
+	if behind <= opus.FrameDuration {
+		return 0, false
+	}
+	return int(behind / opus.FrameDuration), false
+}
+
+// writeSilence sends one frame of encoded silence, advancing the RTP timeline by
+// a frame. It goes out unpaced: the point is to catch the timeline up to the
+// wall clock, not to play it.
+func (out *outputTransport) writeSilence(frameBytes int) error {
+	if len(out.quiet) != frameBytes {
+		out.quiet = make([]byte, frameBytes)
+	}
+	packet, err := out.enc.Encode(out.quiet)
+	if err != nil {
+		return err
+	}
+	return out.conn.WriteAudio(packet, opus.FrameDuration)
+}
+
 // pace blocks until it is time to send the next 20 ms Opus frame, keeping output
-// at real time. The clock resets after a gap longer than one frame (a new
-// utterance, or an underrun) so playback resumes immediately rather than bursting
-// to catch up.
-func (out *outputTransport) pace(ctx context.Context) {
+// at real time, and covers a short gap with silence rather than skipping it.
+//
+// RTP timestamps advance by exactly one frame per packet however much wall clock
+// actually passed, so simply restarting the clock after a stall — a chunk that
+// arrived late, or the pipeline being descheduled — leaves the audio that
+// follows timestamped as though the gap never happened. A receiver schedules
+// playout from those timestamps, so it reads the gap as network delay: it
+// conceals, repeating the last frame, and then compresses or drops once packets
+// bunch up again. That is heard as stuttered and clipped words. Sending silence
+// through the gap keeps the media clock and the wall clock together, so the
+// audio after it lands where it belongs.
+func (out *outputTransport) pace(ctx context.Context, frameBytes int) error {
 	now := time.Now()
-	if out.nextSend.IsZero() || now.Sub(out.nextSend) > opus.FrameDuration {
+	fill, restart := silenceFill(now, out.nextSend)
+	if restart {
 		out.nextSend = now
+	}
+	for range fill {
+		if err := out.writeSilence(frameBytes); err != nil {
+			return err
+		}
+		out.nextSend = out.nextSend.Add(opus.FrameDuration)
 	}
 	if d := time.Until(out.nextSend); d > 0 {
 		timer := time.NewTimer(d)
@@ -212,4 +271,5 @@ func (out *outputTransport) pace(ctx context.Context) {
 		}
 	}
 	out.nextSend = out.nextSend.Add(opus.FrameDuration)
+	return nil
 }
