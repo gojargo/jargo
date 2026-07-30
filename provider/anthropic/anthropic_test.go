@@ -211,3 +211,75 @@ func TestToMessagesBuildsToolTurns(t *testing.T) {
 		}
 	}
 }
+
+// A cached prefix is only reused while it stays byte-identical. Recalled context
+// is replaced every turn, so the breakpoint has to sit before it: inside it, the
+// cache would be written on every request and never read back, which costs more
+// than not caching at all.
+func TestNewParamsKeepsTheCachedPrefixStableAcrossRecall(t *testing.T) {
+	s := NewLLM(Config{})
+	convo := frames.NewLLMContext("you are a companion")
+	convo.AddUserMessage("hi")
+
+	cachedPrefix := func() string {
+		params := s.newParams(convo)
+		var prefix []string
+		for _, block := range params.System {
+			if block.CacheControl.Type != "" {
+				prefix = append(prefix, block.Text)
+			}
+		}
+		return strings.Join(prefix, "\n\n")
+	}
+
+	convo.SetRecall("I recall: the user has a cat")
+	first := cachedPrefix()
+	convo.SetRecall("I recall: the user has a dog")
+	second := cachedPrefix()
+
+	if first == "" {
+		t.Fatal("nothing was marked for caching")
+	}
+	if first != second {
+		t.Fatalf("the cached prefix changed when recall did:\n first: %q\nsecond: %q", first, second)
+	}
+	if strings.Contains(first, "cat") || strings.Contains(first, "dog") {
+		t.Fatalf("recalled context is inside the cached prefix: %q", first)
+	}
+}
+
+// Recall still has to reach the model — it just travels outside the breakpoint.
+func TestNewParamsStillSendsRecall(t *testing.T) {
+	s := NewLLM(Config{})
+	convo := frames.NewLLMContext("you are a companion")
+	convo.AddUserMessage("hi")
+	convo.SetRecall("I recall: the user has a cat")
+
+	b, err := json.Marshal(s.newParams(convo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "the user has a cat") {
+		t.Fatalf("recall missing from the request: %s", b)
+	}
+}
+
+// With caching off the system prompt travels as one uncached block.
+func TestNewParamsWithoutCaching(t *testing.T) {
+	off := false
+	s := NewLLM(Config{EnablePromptCaching: &off})
+	convo := frames.NewLLMContext("you are a companion")
+	convo.AddUserMessage("hi")
+	convo.SetRecall("I recall: the user has a cat")
+
+	params := s.newParams(convo)
+	if len(params.System) != 1 {
+		t.Fatalf("got %d system blocks, want 1", len(params.System))
+	}
+	if params.System[0].CacheControl.Type != "" {
+		t.Fatal("cache control set although caching is off")
+	}
+	if !strings.Contains(params.System[0].Text, "the user has a cat") {
+		t.Fatal("recall missing from the system prompt")
+	}
+}

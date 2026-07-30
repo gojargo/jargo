@@ -105,6 +105,29 @@ func (c *LLMContext) systemLocked() string {
 	return strings.Join(parts, "\n\n")
 }
 
+// SystemParts returns the system prompt split at its first volatile point:
+// stable is the part that survives from one turn to the next, volatile the
+// transient recalled context that a memory service replaces every turn.
+// Concatenated with a blank line between them they are exactly System().
+//
+// The split exists for prompt caching. A provider that caches a prefix of the
+// prompt can only reuse it while that prefix is byte-identical, so a breakpoint
+// placed after the recalled context would be rewritten every turn and never
+// read back. Caching stable and leaving volatile outside the breakpoint keeps
+// the bulk of the prompt reusable.
+func (c *LLMContext) SystemParts() (stable, volatile string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	parts := make([]string, 0, 2)
+	if c.system != "" {
+		parts = append(parts, c.system)
+	}
+	if c.summary != "" {
+		parts = append(parts, summaryHeader+"\n"+c.summary)
+	}
+	return strings.Join(parts, "\n\n"), c.recall
+}
+
 // Summary returns the rolling summary of compacted older turns, or "" if the
 // conversation has not been compacted yet.
 func (c *LLMContext) Summary() string {
