@@ -64,10 +64,31 @@ func TestRealtimeTTSEndpoint(t *testing.T) {
 		"model_id":      defaultModel,
 		"output_format": "pcm_24000",
 		"language_code": "fr",
+		// Omitting auto_mode leaves the server buffering text that closing the
+		// context then discards, so a synthesis returns no audio whatsoever.
+		"auto_mode": "true",
 	} {
 		if got := u.Query().Get(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// TestRealtimeTTSAutoModeCanBeDisabled checks the default is a default and not a
+// constant: a caller driving generation itself with explicit flushes can turn it
+// off.
+func TestRealtimeTTSAutoModeCanBeDisabled(t *testing.T) {
+	s := &realtimeSynthesizer{cfg: RealtimeTTSConfig{
+		APIKey:   "k",
+		AutoMode: new(false),
+	}.withDefaults()}
+
+	u, err := url.Parse(s.endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("auto_mode"); got != "false" {
+		t.Errorf("auto_mode = %q, want %q", got, "false")
 	}
 }
 
@@ -85,10 +106,16 @@ func realtimeTTSServer(t *testing.T, script [][]map[string]any) (host string, se
 		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
 		ctx := r.Context()
 
+		// Auto mode makes the server generate as text arrives. Without it, text is
+		// held until a flush, and closing the context discards what was never
+		// flushed — the real server then answers with a final marker and no audio.
+		autoMode := r.URL.Query().Get("auto_mode") == "true"
+
 		for _, events := range script {
 			// Each synthesis opens a context, sends its text, and closes it.
 			var contextID string
-			for range 3 {
+			generate := autoMode
+			for {
 				_, data, err := c.Read(ctx)
 				if err != nil {
 					return
@@ -101,6 +128,19 @@ func realtimeTTSServer(t *testing.T, script [][]map[string]any) (host string, se
 				if id, ok := msg["context_id"].(string); ok {
 					contextID = id
 				}
+				if flush, ok := msg["flush"].(bool); ok && flush {
+					generate = true
+				}
+				if closed, ok := msg["close_context"].(bool); ok && closed {
+					break
+				}
+			}
+			if !generate {
+				b, _ := json.Marshal(map[string]any{"contextId": contextID, "isFinal": true})
+				if c.Write(ctx, websocket.MessageText, b) != nil {
+					return
+				}
+				continue
 			}
 			for _, ev := range events {
 				// The server stamps every message with the context it belongs to.
