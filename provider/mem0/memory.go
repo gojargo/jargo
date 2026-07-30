@@ -26,6 +26,10 @@ type Service struct {
 	// Store de-duplication state, touched only on the process goroutine.
 	lastUser      string
 	lastAssistant string
+	// lastQuery is the query the current recall was retrieved for, so a context
+	// replayed for the same user message does not search again. A tool-calling
+	// turn replays the context once per round trip.
+	lastQuery string
 }
 
 // NewMemory builds a memory service from cfg.
@@ -55,8 +59,16 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	if cf, ok := f.(*frames.LLMContextFrame); ok && dir == processor.Downstream {
-		s.onContext(ctx, cf.Context)
+	switch fr := f.(type) {
+	case *frames.LLMContextFrame:
+		if dir == processor.Downstream {
+			s.onContext(ctx, fr.Context)
+		}
+	case *frames.StartFrame:
+		if s.cfg.Prewarm {
+			//nolint:gosec // detached like store: the warm-up must outlive a turn that gets interrupted
+			go s.prewarm()
+		}
 	}
 	return s.PushFrame(ctx, f, dir)
 }
@@ -67,14 +79,38 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 // the background under a detached context so memories outlive a barge-in.
 func (s *Service) onContext(ctx context.Context, convo *frames.LLMContext) {
 	msgs := convo.Messages()
-	if query := lastText(msgs, frames.RoleUser); query != "" {
-		mems, err := s.search(ctx, query)
+	if query := lastText(msgs, frames.RoleUser); query != "" && query != s.lastQuery {
+		s.lastQuery = query
+		sctx, cancel := s.searchContext(ctx)
+		mems, err := s.search(sctx, query)
+		cancel()
 		if err != nil && ctx.Err() == nil {
 			slog.Warn("mem0 search failed", "processor", s.Name(), "error", err)
 		}
 		convo.SetRecall(formatMemories(mems))
 	}
 	s.store(msgs)
+}
+
+// searchContext bounds retrieval when SearchTimeout is set, so a slow mem0
+// delays a reply by no more than that.
+func (s *Service) searchContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.cfg.SearchTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, s.cfg.SearchTimeout)
+}
+
+// prewarm issues one throwaway search at session start so the first real one
+// does not pay for whatever the path warms up. Measured over a session on a
+// self-hosted server: 1.52s for the first search, 0.58s for the second, 0.19s
+// for the third.
+func (s *Service) prewarm() {
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Timeout)
+	defer cancel()
+	if _, err := s.search(ctx, prewarmQuery); err != nil {
+		slog.Debug("mem0 prewarm failed", "processor", s.Name(), "error", err)
+	}
 }
 
 // store sends the latest user and assistant turns to mem0 once each. The

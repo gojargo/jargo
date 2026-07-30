@@ -230,6 +230,27 @@ func TestMinWordsStartBotStopsSpeaking(t *testing.T) {
 	}
 }
 
+// TestMinWordsStartTurnStartedClearsBotSpeaking checks the threshold drops to one
+// word as soon as a turn opens, rather than waiting for the bot-stopped frame the
+// interruption will produce.
+func TestMinWordsStartTurnStartedClearsBotSpeaking(t *testing.T) {
+	s := NewMinWordsStart(MinWordsStartConfig{MinWords: 3})
+	spy := attachStart(s)
+
+	spy.send(s, frames.NewBotStartedSpeakingFrame())
+	spy.send(s, transcript("three words now"))
+	if spy.starts() != 1 {
+		t.Fatalf("starts = %d, want 1 once three words interrupt the bot", spy.starts())
+	}
+	s.TurnStarted()
+
+	// No BotStoppedSpeakingFrame yet — the flag must already be clear.
+	spy.send(s, transcript("yes"))
+	if spy.starts() != 2 {
+		t.Errorf("starts = %d, want 2: one word should suffice after a turn opened", spy.starts())
+	}
+}
+
 func TestMinWordsStartInterim(t *testing.T) {
 	t.Run("counted by default", func(t *testing.T) {
 		s := NewMinWordsStart(MinWordsStartConfig{MinWords: 2})
