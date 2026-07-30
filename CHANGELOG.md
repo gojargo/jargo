@@ -289,6 +289,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The ElevenLabs WebSocket TTS produced no audio at all.** `auto_mode` was only
+  sent when the caller set it, and with it absent the server buffers text until an
+  explicit flush — then discards whatever was never flushed when the context
+  closes, answering with a final marker and an empty audio field. Every synthesis
+  therefore completed, quickly and without error, having emitted nothing.
+  `auto_mode` now defaults on, as upstream does; a caller driving generation with
+  its own flushes can still turn it off. The fake server in the tests accepted the
+  broken sequence, which is why this passed CI: it now generates only when auto
+  mode is on or a flush was sent, as the real one does.
 - **`MinWordsStart` drops back to the single-word threshold as soon as a turn
   opens.** It tracked the bot's speaking state only from the bot-speaking frames,
   so after a barge-in it kept requiring `MinWords` until the interrupted bot's

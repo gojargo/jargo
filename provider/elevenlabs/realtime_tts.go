@@ -89,6 +89,14 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 	if c.SampleRate == 0 {
 		c.SampleRate = defaultSampleRate
 	}
+	if c.AutoMode == nil {
+		// Without auto mode the server holds text until it is explicitly flushed,
+		// and closing a context discards whatever was never flushed — the synthesis
+		// then ends with a final marker and no audio at all. Sentence-at-a-time
+		// synthesis has nothing to gain from that buffering, so it is on unless the
+		// caller turns it off.
+		c.AutoMode = new(true)
+	}
 	return c
 }
 
