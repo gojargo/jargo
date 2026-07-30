@@ -62,7 +62,13 @@ func NewSilero(opts ...Option) (*Silero, error) {
 		opt(&cfg)
 	}
 
-	session, err := onnxrt.New(sileroModel, []string{"input", "state", "sr"}, []string{"output", "stateN"})
+	// One thread per Run. The model is tiny and runs once per 32 ms of audio, so
+	// the runtime's default pool wins nothing and costs a great deal: its workers
+	// spin between inferences, burning whole cores per stream whatever the
+	// container's CPU limit says.
+	session, err := onnxrt.NewWithOptions(sileroModel,
+		[]string{"input", "state", "sr"}, []string{"output", "stateN"},
+		onnxrt.Options{IntraOpThreads: 1})
 	if err != nil {
 		return nil, fmt.Errorf("vad: load Silero model: %w", err)
 	}

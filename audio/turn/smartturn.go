@@ -188,7 +188,12 @@ func NewSmartTurnV3(opts ...TurnOption) (*SmartTurnV3, error) {
 		opt(&params)
 	}
 
-	session, err := onnxrt.New(smartTurnModel, []string{"input_features"}, []string{"logits"})
+	// One thread per Run, for the reason given in the VAD analyzer: this model
+	// runs only at the end of an utterance, so a spinning pool sized to the host
+	// burns cores between inferences without making any of them faster.
+	session, err := onnxrt.NewWithOptions(smartTurnModel,
+		[]string{"input_features"}, []string{"logits"},
+		onnxrt.Options{IntraOpThreads: 1})
 	if err != nil {
 		return nil, fmt.Errorf("turn: load Smart Turn model: %w", err)
 	}
