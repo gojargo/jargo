@@ -11,9 +11,11 @@ import (
 	"github.com/coder/websocket"
 )
 
-// DefaultReadLimit bounds a single inbound WebSocket message. Providers stream
-// base64-encoded audio chunks, which fit comfortably in 1 MiB.
-const DefaultReadLimit = 1 << 20
+// DefaultReadLimit bounds a single inbound WebSocket message. It guards against
+// a server that streams without end, not against large messages: a TTS provider
+// generating a long sentence in one go sends base64 audio well past a megabyte,
+// and a limit tight enough to cut that off fails the synthesis mid-reply.
+const DefaultReadLimit = 16 << 20
 
 // Dial opens a WebSocket to url with the given headers, closes the handshake
 // response body, and applies readLimit when it is positive. The caller owns the

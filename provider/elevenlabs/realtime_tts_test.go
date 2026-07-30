@@ -74,6 +74,39 @@ func TestRealtimeTTSEndpoint(t *testing.T) {
 	}
 }
 
+// TestRealtimeTTSAcceptsALargeAudioMessage checks a single message carrying a
+// long sentence's audio is read rather than rejected. Generating a whole sentence
+// at once puts well over a megabyte of base64 in one message, and a read limit
+// tight enough to cut that off fails the synthesis part-way through a reply.
+func TestRealtimeTTSAcceptsALargeAudioMessage(t *testing.T) {
+	// Comfortably past the megabyte that used to be the ceiling.
+	big := make([]byte, 2<<20)
+	for i := range big {
+		big[i] = byte(i)
+	}
+	host, _ := realtimeTTSServer(t, [][]map[string]any{{
+		audioMessage(big),
+		{"isFinal": true},
+	}})
+
+	s := &realtimeSynthesizer{cfg: RealtimeTTSConfig{
+		APIKey: "k", Host: host, SampleRate: 24000,
+	}.withDefaults()}
+	defer func() { _ = s.Close() }()
+
+	total := 0
+	err := s.Synthesize(context.Background(), "Une phrase longue.", func(pcm []byte) error {
+		total += len(pcm)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("synthesis of a large message failed: %v", err)
+	}
+	if total != len(big) {
+		t.Errorf("emitted %d bytes, want %d", total, len(big))
+	}
+}
+
 // TestRealtimeTTSAutoModeCanBeDisabled checks the default is a default and not a
 // constant: a caller driving generation itself with explicit flushes can turn it
 // off.

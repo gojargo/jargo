@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -188,6 +189,19 @@ func (s *realtimeSynthesizer) drop() {
 	}
 	_ = s.conn.Close(websocket.StatusInternalError, "")
 	s.conn = nil
+}
+
+// Start dials the shared connection when the pipeline starts, implementing
+// tts.Starter. The handshake to the vendor is the slowest part of a session's
+// first sentence, so leaving it to be dialed lazily puts it in front of the
+// bot's opening words.
+func (s *realtimeSynthesizer) Start(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.stream(ctx); err != nil {
+		// Best-effort: the first synthesis dials again and reports the failure.
+		slog.Debug("elevenlabs realtime tts connect on start failed", "error", err)
+	}
 }
 
 // Close releases the shared connection, implementing tts.Closer.

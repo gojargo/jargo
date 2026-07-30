@@ -96,6 +96,16 @@ type Closer interface {
 	Close() error
 }
 
+// Starter is an optional interface a Synthesizer implements when it has setup to
+// do before the first synthesis, such as dialing the connection it will reuse.
+// The Base calls it when the pipeline starts — the counterpart to Closer at
+// teardown — so the cost lands while the transport is still negotiating rather
+// than in front of the first thing the bot says. It runs off the frame goroutine.
+// A Synthesizer that does not implement it is unaffected.
+type Starter interface {
+	Start(ctx context.Context)
+}
+
 // pendingWord is a TTSTextFrame awaiting the point in the emitted audio where
 // its word begins, so it is pushed downstream in step with playback.
 type pendingWord struct {
@@ -173,6 +183,11 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 			return err
 		}
 		b.broadcastMetadata(ctx)
+		if st, ok := b.syn.(Starter); ok {
+			// Detached: the setup outlives this frame, and a turn canceled by an
+			// interruption must not abandon a connection half-dialed.
+			go st.Start(context.WithoutCancel(ctx))
+		}
 		return nil
 	default:
 		return b.PushFrame(ctx, f, dir)

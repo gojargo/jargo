@@ -226,6 +226,44 @@ func TestCleanupClosesSynthesizer(t *testing.T) {
 	}
 }
 
+// startingSynth records that it was given the chance to set up before the first
+// synthesis.
+type startingSynth struct {
+	*fakeSynth
+	started chan struct{}
+}
+
+func (s *startingSynth) Start(context.Context) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+}
+
+// TestStartStartsSynthesizer checks a Synthesizer with setup to do is asked to do
+// it on start. The vendor handshake is the slowest part of a session's first
+// synthesis, and it belongs in the window where the transport is still
+// negotiating rather than in front of the bot's first words.
+func TestStartStartsSynthesizer(t *testing.T) {
+	syn := &startingSynth{
+		fakeSynth: &fakeSynth{rate: 24000, chunk: []byte{1}, spoken: make(chan string, 1)},
+		started:   make(chan struct{}, 1),
+	}
+	task := pipeline.NewTask(pipeline.New(tts.New("StartingTTS", syn)), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// StartFrame alone: no text has been queued and nothing has been synthesized.
+	select {
+	case <-syn.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the synthesizer was not started on start")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
 // TestCleanupWithoutCloserIsFine checks a Synthesizer that holds nothing open is
 // unaffected by the teardown hook.
 func TestCleanupWithoutCloserIsFine(t *testing.T) {
