@@ -14,6 +14,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **ElevenLabs WebSocket text-to-speech** (`provider/elevenlabs.NewRealtimeTTS`),
+  the multi-stream-input protocol over a single connection held open for the
+  session. `NewTTS` issues an HTTP request per sentence, and since the TTS base
+  synthesizes a sentence at a time, every sentence boundary in a reply paid for
+  connection setup before its first audio came back — a pause the listener hears.
+  Each synthesis opens a context, sends its text, and closes it, which is what
+  makes the final marker arrive immediately after the last audio byte rather than
+  after the server waits to see whether more text is coming. Audio is attributed
+  by context id, so what the server had already generated for a synthesis
+  abandoned by an interruption cannot leak into the next sentence. Optionally
+  reports word timing (`WordTimestamps`): ElevenLabs times every character, and
+  those are assembled into words with `utils/context.CharAccumulator`, which lets
+  the assistant context record what was actually spoken when a turn is cut short.
 - **Four streaming speech-to-text variants**, each sitting alongside a service
   the provider already had:
 
