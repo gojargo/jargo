@@ -99,6 +99,11 @@ func NewMinWordsStart(cfg MinWordsStartConfig) *MinWordsStart {
 	return s
 }
 
+// TurnStarted clears the bot-speaking flag: the turn that just started will have
+// interrupted the bot, so the rest of it counts against the single-word threshold
+// without waiting for the bot-stopped frame to catch up.
+func (s *MinWordsStart) TurnStarted() { s.botSpeaking = false }
+
 // Process counts words and triggers once the threshold is met.
 func (s *MinWordsStart) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {

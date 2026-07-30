@@ -289,6 +289,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`MinWordsStart` drops back to the single-word threshold as soon as a turn
+  opens.** It tracked the bot's speaking state only from the bot-speaking frames,
+  so after a barge-in it kept requiring `MinWords` until the interrupted bot's
+  stopped frame arrived, and the rest of that turn was held to the interruption
+  bar rather than the ordinary one. It now clears the flag on turn start, matching
+  the upstream strategy's `handle_user_turn_started`.
+- **`mem0` searches once per user message rather than once per context frame.** A
+  tool-calling turn replays the context after every round trip, and each replay
+  repeated the same retrieval — latency and load on the critical path before the
+  reply, for a result already in hand. Retrieval is now keyed on the user message
+  it was performed for. `Config.SearchTimeout` bounds that blocking retrieval
+  separately from `Timeout`, since a late memory is worse than a missing one when
+  a reply is waiting on it, and `Config.Prewarm` issues one throwaway search when
+  the session starts so the first real one does not pay to warm the path.
+- **The Pion sender's starvation counter no longer charges every utterance for
+  its own ending.** It counted any silence sent within a fixed window after real
+  audio, but the window is also exactly what a normal end of speech looks like, so
+  the figure tracked how many times the bot spoke rather than how often the writer
+  fell behind — it read as a fault on every healthy session. A run of silence is
+  now only charged once real audio resumes after it, and the log reports the
+  number of gaps alongside the frame count.
 - **The Anthropic prompt cache is now read, not only written.** The cache
   breakpoint sat at the end of the system prompt, which folds in the transient
   context a memory service recalls each turn. A cached prefix is only reused

@@ -145,9 +145,41 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 // bot-speaking state stays close to what is actually playing.
 const queuedFrames = 8
 
-// starvationWindow is how soon after real audio a silence frame counts as the
-// sender having been starved rather than the talker having stopped.
-const starvationWindow = 200 * time.Millisecond
+// starvationFrames is the longest run of silence that still counts as a gap in
+// speech once real audio resumes after it. A longer run is taken as the end of
+// an utterance.
+const starvationFrames = 10
+
+// gapTracker accounts for the silence the sender emits. Only silence that real
+// audio resumes after is a fault: the writer fell behind and a word was chopped.
+// Silence that nothing resumes is the talker having stopped, which is why a run
+// stays pending until it is known which one it was — counting it on sight charges
+// every utterance for its own ending.
+type gapTracker struct {
+	silence int64
+	starved int64
+	gaps    int64
+	pending int64
+	spoken  bool
+}
+
+// real records a frame of real audio, settling any silence run before it.
+func (g *gapTracker) real() {
+	if g.pending > 0 && g.pending <= starvationFrames {
+		g.starved += g.pending
+		g.gaps++
+	}
+	g.pending = 0
+	g.spoken = true
+}
+
+// quiet records a frame of silence sent because the queue was empty.
+func (g *gapTracker) quiet() {
+	g.silence++
+	if g.spoken {
+		g.pending++
+	}
+}
 
 // outputTransport encodes outgoing PCM into Opus and writes it to the
 // connection's audio track at real time.
@@ -315,12 +347,12 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 
 	quiet := make([]byte, frameBytes)
 	start := time.Now()
-	var sent, silence, starved int64
-	var lastReal time.Time
+	var sent int64
+	var gap gapTracker
 
 	defer func() {
-		slog.Info("pion sender stopped", "processor", out.Name(),
-			"frames", sent, "silence", silence, "starved", starved)
+		slog.Info("pion sender stopped", "processor", out.Name(), "frames", sent,
+			"silence", gap.silence, "starved", gap.starved, "gaps", gap.gaps)
 	}()
 
 	for {
@@ -349,14 +381,9 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 		case frame := <-out.queue:
 			pcm = frame
 			out.queued.Add(-1)
-			lastReal = time.Now()
+			gap.real()
 		default:
-			silence++
-			// Silence arriving mid-speech means the writer did not keep up, which
-			// is heard as a chopped word rather than a pause.
-			if !lastReal.IsZero() && time.Since(lastReal) < starvationWindow {
-				starved++
-			}
+			gap.quiet()
 		}
 
 		packet, err := out.enc.Encode(pcm)

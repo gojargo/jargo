@@ -31,6 +31,9 @@ const (
 	defaultTimeout     = 10 * time.Second
 	// recallHeader frames the retrieved memories injected into the system prompt.
 	recallHeader = "Based on previous conversations, you recall the following about the user:"
+	// prewarmQuery is the throwaway query used to warm the search path. Search is
+	// read-only, so it leaves nothing behind.
+	prewarmQuery = "hello"
 )
 
 // Config configures the memory service.
@@ -54,6 +57,13 @@ type Config struct {
 	SearchThreshold float64
 	// Timeout bounds a single mem0 request; 0 uses a default.
 	Timeout time.Duration
+	// SearchTimeout bounds the per-turn retrieval specifically, which runs before
+	// the LLM and so delays the reply; 0 falls back to Timeout. Set it well below
+	// Timeout for voice, where a late memory is worse than a missing one.
+	SearchTimeout time.Duration
+	// Prewarm issues one throwaway search when the session starts, so the first
+	// real retrieval does not pay the cost of warming the path.
+	Prewarm bool
 	// HTTPClient overrides the HTTP client; nil uses one with Timeout.
 	HTTPClient *http.Client
 }

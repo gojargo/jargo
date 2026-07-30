@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/mem0"
 )
 
@@ -139,6 +142,185 @@ func TestMemoryNoResultsClearsRecall(t *testing.T) {
 
 	task.StopWhenDone()
 	<-runDone
+}
+
+// countingServer answers every search and records the queries it was asked, so a
+// test can tell how many times retrieval actually ran.
+func countingServer(t *testing.T, delay time.Duration) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/search" {
+			var b searchBody
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			mu.Lock()
+			queries = append(queries, b.Query)
+			mu.Unlock()
+			if delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
+	}))
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(queries)
+	}
+}
+
+// searchQueries returns the non-prewarm queries seen so far.
+func searchQueries(all []string) []string {
+	var out []string
+	for _, q := range all {
+		if q != "hello" {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// A tool-calling turn replays the same context once per round trip. Retrieval is
+// keyed on the user message, so the replays must not each cost a search.
+func TestMemorySearchesOncePerUserMessage(t *testing.T) {
+	srv, queries := countingServer(t, 0)
+	defer srv.Close()
+
+	convo := frames.NewLLMContext("base")
+	convo.AddUserMessage("where did I put my keys?")
+	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1"})
+
+	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	for range 3 {
+		task.QueueFrame(frames.NewLLMContextFrame(convo))
+	}
+	if !waitFor(3*time.Second, func() bool { return len(searchQueries(queries())) >= 1 }) {
+		t.Fatal("mem0 search was never called")
+	}
+
+	// A second user message is a new query and must search again.
+	convo.AddUserMessage("and my glasses?")
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return len(searchQueries(queries())) >= 2 }) {
+		t.Fatal("the second user message did not trigger a search")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+
+	got := searchQueries(queries())
+	want := []string{"where did I put my keys?", "and my glasses?"}
+	if !slices.Equal(got, want) {
+		t.Errorf("searched for %q, want %q — one search per user message", got, want)
+	}
+}
+
+func TestMemoryPrewarmsTheSearchPath(t *testing.T) {
+	srv, queries := countingServer(t, 0)
+	defer srv.Close()
+
+	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1", Prewarm: true})
+	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// StartFrame alone must warm the path, before any user message exists.
+	if !waitFor(3*time.Second, func() bool { return len(queries()) > 0 }) {
+		t.Fatal("no search was issued on start, so the path was not prewarmed")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+func TestMemoryPrewarmIsOptIn(t *testing.T) {
+	srv, queries := countingServer(t, 0)
+	defer srv.Close()
+
+	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1"})
+	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	time.Sleep(200 * time.Millisecond)
+	if got := queries(); len(got) != 0 {
+		t.Errorf("searched %q on start, want nothing without Prewarm", got)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// A slow server must not hold the turn past SearchTimeout: the reply goes out
+// without memories rather than late with them.
+func TestMemorySearchTimeoutReleasesTheTurn(t *testing.T) {
+	srv, _ := countingServer(t, 2*time.Second)
+	defer srv.Close()
+
+	convo := frames.NewLLMContext("base")
+	convo.AddUserMessage("hello there")
+	m := mem0.NewMemory(mem0.Config{
+		Host: srv.URL, UserID: "u1",
+		Timeout:       10 * time.Second,
+		SearchTimeout: 100 * time.Millisecond,
+	})
+
+	downstream := newFrameSink()
+	task := pipeline.NewTask(pipeline.New(m, downstream), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	start := time.Now()
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return downstream.sawContext() }) {
+		t.Fatal("the context frame never reached the LLM")
+	}
+	// Well under the server's 2s, so the deadline and not the server ended it.
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("context frame took %v to pass, want it released near the 100ms SearchTimeout", elapsed)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// frameSink records whether a context frame made it downstream of memory.
+type frameSink struct {
+	*processor.Base
+	mu  sync.Mutex
+	got bool
+}
+
+func newFrameSink() *frameSink {
+	s := &frameSink{}
+	s.Base = processor.New("Sink", s)
+	return s
+}
+
+func (s *frameSink) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.LLMContextFrame); ok {
+		s.mu.Lock()
+		s.got = true
+		s.mu.Unlock()
+	}
+	return s.PushFrame(ctx, f, dir)
+}
+
+func (s *frameSink) sawContext() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.got
 }
 
 func waitFor(timeout time.Duration, cond func() bool) bool {
