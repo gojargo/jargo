@@ -287,8 +287,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The `frames` package documents its ownership rule: a frame has a single owner
   at a time and must not be mutated after it is pushed.
 
+### Added
+
+- **`tts.Starter`**, the counterpart to `tts.Closer` at the other end of the
+  pipeline's life: an optional interface a Synthesizer implements when it has
+  setup to do before the first sentence, such as dialing the connection it will
+  reuse. Upstream every WebSocket TTS service connects in its `start(StartFrame)`
+  and none dials lazily, so this closes a gap rather than adding an optimization —
+  the Synthesizer contract had no way to take part in the pipeline starting.
+  `provider/elevenlabs.NewRealtimeTTS` implements it, having dialed on first use:
+  its handshake measured 2.3 s on a session's first synthesis against roughly
+  120 ms for every one after, all of it in the silence before the bot's opening
+  words.
+
 ### Fixed
 
+- **A single WebSocket message larger than a megabyte failed the read.** The
+  shared read limit was set on the premise that a provider's base64 audio chunks
+  fit comfortably below it; a TTS provider generating a long sentence in one go
+  sends well past that, and the synthesis died part-way through a reply with
+  `message too big`. The limit exists to stop a server streaming without end, not
+  to bound a legitimate message, so it is now 16 MiB.
 - **The ElevenLabs WebSocket TTS produced no audio at all.** `auto_mode` was only
   sent when the caller set it, and with it absent the server buffers text until an
   explicit flush — then discards whatever was never flushed when the context
