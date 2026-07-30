@@ -125,15 +125,42 @@ func (s *Service) newParams(convo *frames.LLMContext) sdk.MessageNewParams {
 	if s.thinkingSet {
 		params.Thinking = s.thinking
 	}
-	if system := convo.System(); system != "" {
-		block := sdk.TextBlockParam{Text: system}
-		if s.cachePrompt {
-			// Cache the system prompt so repeated turns reuse it.
-			block.CacheControl = sdk.NewCacheControlEphemeralParam()
-		}
-		params.System = []sdk.TextBlockParam{block}
-	}
+	params.System = s.systemBlocks(convo)
 	return params
+}
+
+// systemBlocks renders the system prompt, with the cache breakpoint on the part
+// of it that survives between turns.
+//
+// A cached prefix is only reused while it stays byte-identical, and everything
+// after the breakpoint is free to vary without disturbing it. The recalled
+// context a memory service refreshes every turn is exactly that: putting it
+// inside the breakpoint rewrites the cache on every request and never reads one
+// back, which costs more than not caching at all.
+func (s *Service) systemBlocks(convo *frames.LLMContext) []sdk.TextBlockParam {
+	if !s.cachePrompt {
+		system := convo.System()
+		if system == "" {
+			return nil
+		}
+		return []sdk.TextBlockParam{{Text: system}}
+	}
+
+	stable, volatile := convo.SystemParts()
+	blocks := make([]sdk.TextBlockParam, 0, 2)
+	if stable != "" {
+		blocks = append(blocks, sdk.TextBlockParam{
+			Text:         stable,
+			CacheControl: sdk.NewCacheControlEphemeralParam(),
+		})
+	}
+	if volatile != "" {
+		blocks = append(blocks, sdk.TextBlockParam{Text: volatile})
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	return blocks
 }
 
 // toUsage converts the SDK's per-request usage into the pipeline's token usage.

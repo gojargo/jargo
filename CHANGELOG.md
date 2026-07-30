@@ -289,6 +289,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The Anthropic prompt cache is now read, not only written.** The cache
+  breakpoint sat at the end of the system prompt, which folds in the transient
+  context a memory service recalls each turn. A cached prefix is only reused
+  while it stays byte-identical, so the breakpoint moved on every request: each
+  turn wrote a fresh cache entry and read none back, paying the write premium for
+  no benefit. It now sits on the part of the system prompt that survives between
+  turns, with the recalled context after it where it is free to vary.
+  `LLMContext.SystemParts` exposes that split.
 - **The Pion transport sends on every frame boundary for the life of the
   session**, falling back to silence when nothing is queued, instead of writing
   only when the pipeline handed it audio. RTP timestamps advance one frame per
