@@ -64,7 +64,7 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
 	payload := map[string]any{
-		"text":     text,
+		keyText:    text,
 		"model_id": s.cfg.Model,
 	}
 	if code := elevenlabsLanguage(s.cfg.Language); code != "" {

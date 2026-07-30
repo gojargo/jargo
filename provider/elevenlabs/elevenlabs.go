@@ -1,11 +1,17 @@
-// Package elevenlabs is a streaming text-to-speech service backed by the
-// ElevenLabs HTTP streaming API. The shared TTS base aggregates incoming text
-// into sentences; this service synthesizes each and streams raw PCM downstream
-// at the configured rate (48 kHz by default, matching the WebRTC Opus rate so no
-// resampling is needed).
+// Package elevenlabs is a streaming text-to-speech service backed by ElevenLabs.
+// The shared TTS base aggregates incoming text into sentences; the service
+// synthesizes each and streams raw PCM downstream at the configured rate (48 kHz
+// by default, matching the WebRTC Opus rate so no resampling is needed).
 //
-// This wraps the HTTP /stream endpoint. It does not implement ElevenLabs'
-// WebSocket multi-stream-input transport or word-level timestamp alignment.
+// There are two transports. NewTTS wraps the HTTP /stream endpoint, one request
+// per sentence. NewRealtimeTTS speaks the WebSocket multi-stream-input protocol
+// over a single connection held open for the session, so a sentence pays no
+// connection setup before its first audio; it also reports word-level timing,
+// which lets the assistant context record what was actually spoken when a turn
+// is cut short. Prefer it for conversation, where the pause between one
+// synthesized sentence and the next is heard.
+//
+// The package also provides streaming speech-to-text (NewSTT, NewRealtimeSTT).
 package elevenlabs
 
 import (
