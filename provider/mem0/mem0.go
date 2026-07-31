@@ -26,6 +26,13 @@ import (
 // errStatus is returned when mem0 answers with a non-2xx status.
 var errStatus = errors.New("mem0 returned an error status")
 
+// HeaderXAPIKey is the header a self-hosted mem0 server authenticates with. Set
+// Config.APIKeyHeader to it when talking to one; the managed API uses the
+// default "Authorization: Token <key>" instead.
+//
+//nolint:gosec // G101: a header name, not a credential
+const HeaderXAPIKey = "X-API-Key"
+
 const (
 	defaultSearchLimit = 10
 	defaultTimeout     = 10 * time.Second
@@ -41,9 +48,13 @@ type Config struct {
 	// Host is the base URL of the mem0 REST server, e.g. http://localhost:8000.
 	// Required.
 	Host string `validate:"required"`
-	// APIKey is an optional bearer token sent as "Authorization: Token <key>"
-	// (the managed mem0 API, or a secured self-hosted server).
+	// APIKey authenticates the caller. Optional.
 	APIKey string
+	// APIKeyHeader names the header APIKey is sent in. Empty sends
+	// "Authorization: Token <key>", which is what the managed mem0 API expects.
+	// A self-hosted server reads the key from X-API-Key instead and ignores the
+	// Authorization form, so point this at HeaderXAPIKey for one of those.
+	APIKeyHeader string `validate:"omitempty,printascii"`
 	// UserID scopes memories to a caller. Recommended; without it memories are
 	// not partitioned per user.
 	UserID string

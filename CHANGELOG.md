@@ -14,6 +14,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`mem0.Config.APIKeyHeader`**, naming the header the API key is sent in. The
+  key went out as `Authorization: Token <key>`, which is what the managed mem0
+  API expects; a self-hosted server reads `X-API-Key` and ignores that form, so
+  a secured self-hosted deployment rejected every search and store. Empty keeps
+  the managed default, and `mem0.HeaderXAPIKey` names the self-hosted one.
 - **ElevenLabs WebSocket text-to-speech** (`provider/elevenlabs.NewRealtimeTTS`),
   the multi-stream-input protocol over a single connection held open for the
   session. `NewTTS` issues an HTTP request per sentence, and since the TTS base

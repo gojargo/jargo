@@ -194,7 +194,11 @@ func (s *Service) post(ctx context.Context, path string, in, out any) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if s.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Token "+s.cfg.APIKey)
+		if s.cfg.APIKeyHeader != "" {
+			req.Header.Set(s.cfg.APIKeyHeader, s.cfg.APIKey)
+		} else {
+			req.Header.Set("Authorization", "Token "+s.cfg.APIKey)
+		}
 	}
 	res, err := s.http.Do(req)
 	if err != nil {

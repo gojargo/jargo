@@ -333,3 +333,73 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 	}
 	return cond()
 }
+
+// authHeaders captures the auth-bearing headers of the first request, so a test
+// can assert how the API key was presented.
+func authHeaders(t *testing.T, cfg mem0.Config) http.Header {
+	t.Helper()
+	got := make(chan http.Header, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case got <- r.Header.Clone():
+		default:
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
+	}))
+	defer srv.Close()
+
+	cfg.Host = srv.URL
+	cfg.UserID = "u1"
+	convo := frames.NewLLMContext("base")
+	convo.AddUserMessage("hello")
+	m := mem0.NewMemory(cfg)
+
+	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+
+	var headers http.Header
+	select {
+	case headers = <-got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("mem0 was not called")
+	}
+	task.StopWhenDone()
+	<-runDone
+	return headers
+}
+
+func TestMemorySendsTheManagedAPIAuthByDefault(t *testing.T) {
+	h := authHeaders(t, mem0.Config{APIKey: "k1"})
+
+	if got := h.Get("Authorization"); got != "Token k1" {
+		t.Fatalf("Authorization = %q, want %q", got, "Token k1")
+	}
+	if got := h.Get(mem0.HeaderXAPIKey); got != "" {
+		t.Fatalf("%s = %q, want it unset by default", mem0.HeaderXAPIKey, got)
+	}
+}
+
+func TestMemorySendsTheKeyInAConfiguredHeader(t *testing.T) {
+	// A self-hosted server reads X-API-Key and ignores the Authorization form.
+	h := authHeaders(t, mem0.Config{APIKey: "k1", APIKeyHeader: mem0.HeaderXAPIKey})
+
+	if got := h.Get(mem0.HeaderXAPIKey); got != "k1" {
+		t.Fatalf("%s = %q, want %q", mem0.HeaderXAPIKey, got, "k1")
+	}
+	if got := h.Get("Authorization"); got != "" {
+		t.Fatalf("Authorization = %q, want it unset when a header is configured", got)
+	}
+}
+
+func TestMemorySendsNoAuthWithoutAKey(t *testing.T) {
+	h := authHeaders(t, mem0.Config{APIKeyHeader: mem0.HeaderXAPIKey})
+
+	if got := h.Get(mem0.HeaderXAPIKey); got != "" {
+		t.Fatalf("%s = %q, want no auth header without a key", mem0.HeaderXAPIKey, got)
+	}
+	if got := h.Get("Authorization"); got != "" {
+		t.Fatalf("Authorization = %q, want no auth header without a key", got)
+	}
+}
