@@ -161,6 +161,9 @@ type gapTracker struct {
 	gaps    int64
 	pending int64
 	spoken  bool
+	// sent is the frame the sender is on, so a gap can be placed in the session
+	// rather than only counted at the end of it.
+	sent int64
 }
 
 // real records a frame of real audio, settling any silence run before it.
@@ -168,6 +171,10 @@ func (g *gapTracker) real() {
 	if g.pending > 0 && g.pending <= starvationFrames {
 		g.starved += g.pending
 		g.gaps++
+		slog.Debug("audio gap spliced into speech",
+			"gap", time.Duration(g.pending)*opus.FrameDuration,
+			"at", time.Duration(g.sent)*opus.FrameDuration,
+			"gaps", g.gaps)
 	}
 	g.pending = 0
 	g.spoken = true
@@ -377,6 +384,7 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 		}
 
 		pcm := quiet
+		gap.sent = sent
 		select {
 		case frame := <-out.queue:
 			pcm = frame

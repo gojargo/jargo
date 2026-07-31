@@ -1,6 +1,7 @@
 package turns
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/gojargo/jargo/audio/turn"
@@ -126,6 +127,8 @@ func (s *TurnAnalyzerStop) reportPrediction(complete bool, prob float64, err err
 	if len(start) > 0 {
 		f.Turn.Processing = time.Since(start[0])
 	}
+	slog.Debug("end of turn prediction",
+		"complete", complete, "probability", prob, "took", f.Turn.Processing)
 	s.env.push(f, processor.Downstream)
 }
 

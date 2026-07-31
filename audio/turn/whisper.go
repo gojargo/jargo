@@ -158,29 +158,35 @@ func buildMelFilterbank() {
 }
 
 // normalizePadded returns the audio padded or truncated to exactly nSamples and
-// normalized to zero mean and unit variance, in float64.
+// normalized to zero mean and unit variance.
+//
+// The normalization is applied at float32, the width the waveform is carried at,
+// and only the result is widened for the spectrogram. Doing the arithmetic at
+// float64 instead shifts the features slightly, which is enough to move a
+// borderline prediction across the decision threshold. The sums are still
+// accumulated at float64 so a long buffer does not lose the accuracy a pairwise
+// summation would have kept.
 func normalizePadded(audio []float32) []float64 {
+	src := make([]float32, nSamples)
+	copy(src, audio[:min(len(audio), nSamples)])
+
+	var sum float64
+	for _, v := range src {
+		sum += float64(v)
+	}
+	mean := float32(sum / float64(nSamples))
+
+	var sumSq float64
+	for _, v := range src {
+		d := float64(v - mean)
+		sumSq += d * d
+	}
+	variance := float32(sumSq / float64(nSamples))
+	std := float32(math.Sqrt(float64(variance + normVarEps)))
+
 	x := make([]float64, nSamples)
-	for i := 0; i < nSamples && i < len(audio); i++ {
-		x[i] = float64(audio[i])
-	}
-
-	var mean float64
-	for _, v := range x {
-		mean += v
-	}
-	mean /= float64(nSamples)
-
-	var variance float64
-	for _, v := range x {
-		d := v - mean
-		variance += d * d
-	}
-	variance /= float64(nSamples)
-	std := math.Sqrt(variance + normVarEps)
-
-	for i := range x {
-		x[i] = (x[i] - mean) / std
+	for i, v := range src {
+		x[i] = float64((v - mean) / std)
 	}
 	return x
 }

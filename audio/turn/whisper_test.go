@@ -23,10 +23,13 @@ func at(features []float32, mel, frame int) float32 {
 	return features[mel*nFrames+frame]
 }
 
-// TestComputeLogMel checks the pure-Go feature extraction against values
-// produced by the reference numpy implementation (Smart Turn v3's
-// WhisperFeatureExtractor). The reference runs in float32; jargo runs in
-// float64, so a small tolerance is allowed.
+// TestComputeLogMel checks the feature extraction against values produced by
+// the reference implementation.
+//
+// The tolerance is tight on purpose. The waveform normalization runs at the
+// same width as the reference, so the two agree to about 1e-6; anything looser
+// would hide a drift large enough to move a borderline end-of-turn prediction
+// across its threshold.
 func TestComputeLogMel(t *testing.T) {
 	features := computeLogMel(refAudio())
 
@@ -34,7 +37,7 @@ func TestComputeLogMel(t *testing.T) {
 		t.Fatalf("len(features) = %d, want %d", len(features), nMels*nFrames)
 	}
 
-	const tol = 5e-3
+	const tol = 1e-6
 	cases := []struct {
 		mel, frame int
 		want       float32
