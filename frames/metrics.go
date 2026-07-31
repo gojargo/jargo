@@ -62,6 +62,21 @@ type MetricsFrame struct {
 	Tokens *LLMTokenUsage
 	// Characters reports the number of characters synthesized by TTS, or nil.
 	Characters *int
+	// Turn reports an end-of-turn prediction, or nil when not applicable.
+	Turn *TurnPrediction
+}
+
+// TurnPrediction is what an end-of-turn analyzer decided about a user turn, and
+// what it cost to decide. Without it a turn that ends on the safety-net timeout
+// is indistinguishable from one the analyzer judged unfinished.
+type TurnPrediction struct {
+	// Complete is whether the turn was predicted to be finished.
+	Complete bool
+	// Probability is the analyzer's confidence that it was finished.
+	Probability float64
+	// Processing is how long the analysis took, measured from the point the
+	// analyzer was asked.
+	Processing time.Duration
 }
 
 // NewMetricsFrame builds a MetricsFrame attributed to the named processor.

@@ -2,6 +2,7 @@ package turns_test
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -273,4 +274,56 @@ func TestIdleFires(t *testing.T) {
 		t.Fatal("idle did not fire")
 	}
 	finish(t, task, done)
+}
+
+// incompleteTurn is an analyzer that judges the turn unfinished.
+type incompleteTurn struct{ fakeTurn }
+
+func (incompleteTurn) AnalyzeEndOfTurn() (turn.EndOfTurnState, float64, error) {
+	return turn.Incomplete, 0.17, nil
+}
+
+// The analyzer's verdict is reported as metrics, so a turn that ended on the
+// safety-net timeout can be told from one the analyzer judged unfinished. It is
+// the only thing that says which happened.
+func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
+	p := turns.NewUserTurnProcessor(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: incompleteTurn{}})},
+		},
+		StopTimeout: time.Second,
+	})
+
+	var mu sync.Mutex
+	var pred *frames.TurnPrediction
+	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if mf, ok := f.(*frames.MetricsFrame); ok && mf.Turn != nil {
+				mu.Lock()
+				pred = mf.Turn
+				mu.Unlock()
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	time.Sleep(300 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if pred == nil {
+		t.Fatal("no turn prediction was reported")
+	}
+	if pred.Complete {
+		t.Error("prediction reported complete, want incomplete")
+	}
+	if pred.Probability != 0.17 {
+		t.Errorf("probability = %v, want 0.17", pred.Probability)
+	}
 }

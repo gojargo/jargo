@@ -126,6 +126,14 @@ func metricsMessage(f *frames.MetricsFrame) Message {
 	if f.Characters != nil {
 		d.Characters = []MetricData{{Processor: f.Processor, Value: float64(*f.Characters), Model: f.Model}}
 	}
+	if f.Turn != nil {
+		d.Turn = []TurnMetricData{{
+			Processor:    f.Processor,
+			Complete:     f.Turn.Complete,
+			Probability:  f.Turn.Probability,
+			ProcessingMs: float64(f.Turn.Processing.Microseconds()) / 1000,
+		}}
+	}
 	if f.Tokens != nil {
 		d.Tokens = []TokenMetricData{{
 			Processor:        f.Processor,

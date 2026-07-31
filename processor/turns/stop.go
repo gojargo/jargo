@@ -5,6 +5,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 )
 
 const (
@@ -32,6 +33,9 @@ type TurnAnalyzerConfig struct {
 	// defaults to true. Set false for realtime services that bypass STT.
 	WaitForTranscript *bool
 }
+
+// analyzerMetricsProcessor labels the metrics an end-of-turn analyzer produces.
+const analyzerMetricsProcessor = "TurnAnalyzer"
 
 // TurnAnalyzerStop ends a turn using an end-of-turn model fed the user's audio,
 // gated on a finalized transcript (or a safety-net timeout). This is the
@@ -78,12 +82,19 @@ func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 		s.cancel()
 	case *frames.InputAudioRawFrame:
 		if s.analyzer.AppendAudio(fr.Audio, s.vadSpeaking) == turn.Complete {
+			// A streaming analyzer decides inside AppendAudio, and a batch one
+			// reports Complete here only on the silence safety net. Either way the
+			// prediction is consumed now, while it is fresh.
+			_, prob, err := s.analyzer.AnalyzeEndOfTurn()
+			s.reportPrediction(true, prob, err)
 			s.turnComplete = true
 			s.maybeTrigger()
 		}
 	case *frames.VADUserStoppedSpeakingFrame:
 		s.vadSpeaking = false
-		state, _, err := s.analyzer.AnalyzeEndOfTurn()
+		start := time.Now()
+		state, prob, err := s.analyzer.AnalyzeEndOfTurn()
+		s.reportPrediction(state == turn.Complete, prob, err, start)
 		s.turnComplete = err == nil && state == turn.Complete
 		wait := max(0, s.sttTimeout-time.Duration(fr.StopSecs*float64(time.Second)))
 		s.cancel()
@@ -102,6 +113,20 @@ func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 		s.maybeTrigger()
 	}
 	return Continue
+}
+
+// reportPrediction emits what the analyzer decided, so a turn that ended on the
+// safety-net timeout can be told from one the analyzer judged unfinished.
+func (s *TurnAnalyzerStop) reportPrediction(complete bool, prob float64, err error, start ...time.Time) {
+	if err != nil || s.env.push == nil {
+		return
+	}
+	f := frames.NewMetricsFrame(analyzerMetricsProcessor)
+	f.Turn = &frames.TurnPrediction{Complete: complete, Probability: prob}
+	if len(start) > 0 {
+		f.Turn.Processing = time.Since(start[0])
+	}
+	s.env.push(f, processor.Downstream)
 }
 
 func (s *TurnAnalyzerStop) maybeTrigger() {

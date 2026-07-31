@@ -215,6 +215,16 @@ type MetricsData struct {
 	Processing []MetricData      `json:"processing,omitempty"`
 	Characters []MetricData      `json:"characters,omitempty"`
 	Tokens     []TokenMetricData `json:"tokens,omitempty"`
+	Turn       []TurnMetricData  `json:"turn,omitempty"`
+}
+
+// TurnMetricData is one end-of-turn prediction: whether the analyzer judged the
+// turn finished, how confident it was, and how long deciding took.
+type TurnMetricData struct {
+	Processor    string  `json:"processor"`
+	Complete     bool    `json:"complete"`
+	Probability  float64 `json:"probability"`
+	ProcessingMs float64 `json:"processing_ms"`
 }
 
 // Metrics builds a metrics message from data.
