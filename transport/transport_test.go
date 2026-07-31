@@ -3,6 +3,7 @@ package transport_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -487,5 +488,63 @@ func TestEndWorkerFrameEndsTask(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("task did not end on EndWorkerFrame")
+	}
+}
+
+// errClosedForTest stands in for a connection that has gone away.
+//
+//nolint:gochecknoglobals // sentinel error
+var errClosedForTest = errors.New("connection closed")
+
+// failingMessageOutput is an output whose message sending always fails, the way
+// a closed connection does.
+type failingMessageOutput struct {
+	*transport.BaseOutput
+}
+
+func newFailingMessageOutput(params transport.Params) *failingMessageOutput {
+	o := &failingMessageOutput{}
+	o.BaseOutput = transport.NewBaseOutput("FailingOutput", params, o)
+	return o
+}
+
+func (o *failingMessageOutput) SendMessage(context.Context, []byte) error {
+	return errClosedForTest
+}
+
+func (o *failingMessageOutput) WriteAudio(context.Context, []byte) error { return nil }
+
+// A message that cannot be sent must not become an error frame. Anything that
+// reports errors to the client would turn that into another message to send,
+// and with the connection down the pipeline would feed itself errors without
+// end.
+func TestBaseOutputDoesNotEscalateSendFailures(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000
+
+	errs := make(chan string, 8)
+	o := newFailingMessageOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+		OnReachedUpstream: func(f frames.Frame) {
+			if fr, ok := f.(*frames.ErrorFrame); ok {
+				select {
+				case errs <- fr.Error:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewOutputTransportMessageUrgentFrame("hello"))
+	time.Sleep(200 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+
+	select {
+	case got := <-errs:
+		t.Fatalf("a failed send produced an error frame (%q); it would feed itself", got)
+	default:
 	}
 }

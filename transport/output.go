@@ -253,7 +253,14 @@ func (bo *BaseOutput) handleTransportMessage(
 		message = fr.Message
 	}
 	if err := bo.sendMessage(ctx, message); err != nil {
-		return err
+		// Logged, not returned. A returned error becomes an ErrorFrame, and
+		// anything that reports errors to the client turns that into another
+		// message to send: if the connection is what failed, sending the report
+		// fails too and the pipeline feeds itself errors until it runs out of
+		// memory. A connection that cannot carry a message cannot carry the
+		// complaint about it either.
+		slog.Error("send transport message", "processor", bo.Name(), "err", err)
+		return nil
 	}
 	return bo.PushFrame(ctx, f, dir)
 }
