@@ -97,8 +97,9 @@ func NewTurnTracking(cfg TurnTrackingConfig) *TurnTracking {
 	return &TurnTracking{cfg: cfg, dd: newDeduper()}
 }
 
-// OnFrame implements pipeline.Observer.
-func (o *TurnTracking) OnFrame(f frames.Frame, dir processor.Direction) {
+// OnPushFrame implements processor.Observer.
+func (o *TurnTracking) OnPushFrame(data processor.FramePushed) {
+	f, dir := data.Frame, data.Direction
 	if skipBroadcastSibling(f, dir) {
 		return
 	}
@@ -215,8 +216,9 @@ func NewUserBotLatency(cfg LatencyConfig) *UserBotLatency {
 	return &UserBotLatency{cfg: cfg, dd: newDeduper()}
 }
 
-// OnFrame implements pipeline.Observer.
-func (o *UserBotLatency) OnFrame(f frames.Frame, dir processor.Direction) {
+// OnPushFrame implements processor.Observer.
+func (o *UserBotLatency) OnPushFrame(data processor.FramePushed) {
+	f, dir := data.Frame, data.Direction
 	if skipBroadcastSibling(f, dir) {
 		return
 	}
@@ -263,8 +265,9 @@ func NewStartupTiming(cfg StartupConfig) *StartupTiming {
 	return &StartupTiming{cfg: cfg, dd: newDeduper()}
 }
 
-// OnFrame implements pipeline.Observer.
-func (o *StartupTiming) OnFrame(f frames.Frame, dir processor.Direction) {
+// OnPushFrame implements processor.Observer.
+func (o *StartupTiming) OnPushFrame(data processor.FramePushed) {
+	f, dir := data.Frame, data.Direction
 	if skipBroadcastSibling(f, dir) {
 		return
 	}
@@ -315,10 +318,19 @@ func NewLogger(cfg LoggerConfig) *Logger {
 	return &Logger{log: log, level: cfg.Level, filter: cfg.Filter}
 }
 
-// OnFrame implements pipeline.Observer.
-func (o *Logger) OnFrame(f frames.Frame, dir processor.Direction) {
+// OnPushFrame implements processor.Observer.
+func (o *Logger) OnPushFrame(data processor.FramePushed) {
+	f, dir := data.Frame, data.Direction
 	if o.filter != nil && !o.filter(f) {
 		return
 	}
 	o.log.Log(context.Background(), o.level, "frame", "frame", f.String(), "dir", dir.String())
 }
+
+// Every observer here is reported each handover, so each dedups by frame id.
+var (
+	_ processor.Observer = (*TurnTracking)(nil)
+	_ processor.Observer = (*UserBotLatency)(nil)
+	_ processor.Observer = (*StartupTiming)(nil)
+	_ processor.Observer = (*Logger)(nil)
+)

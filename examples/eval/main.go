@@ -43,9 +43,13 @@ func main() {
 // observe its events.
 func buildBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("You are a friendly demo assistant."))
+	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, agg.User(), newDemoLLM(), rtvi.NewProcessor(), out, agg.Assistant(),
-	), pipeline.TaskParams{})
+		in, agg.User(), newDemoLLM(), rtviProc, out, agg.Assistant(),
+	), pipeline.TaskParams{
+		// The observer reports pipeline events; the processor carries them.
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+	})
 }
 
 // demoLLM stands in for an LLM service: it answers each user turn with a canned

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -154,18 +155,20 @@ func (s *ttsSynthesizer) config(withTimestamps bool) map[string]any {
 }
 
 // Synthesize opens a stream, sends the sentence, and streams audio chunks.
-func (s *ttsSynthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	return s.run(ctx, text, false, emit, nil)
 }
 
 // SynthesizeTimed streams audio and reports per-word timing, implementing
 // tts.WordTimestamps.
-func (s *timedTTSSynthesizer) SynthesizeTimed(
+func (s *timedTTSSynthesizer) RunTTSTimed(
 	ctx context.Context,
-	text string,
-	emit func(pcm []byte) error,
+	text, _ string,
+	yield func(f frames.Frame) error,
 	word func(text string, offset float64) error,
 ) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	return s.run(ctx, text, true, emit, word)
 }
 

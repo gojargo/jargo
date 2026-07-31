@@ -48,6 +48,8 @@ const processCancelTimeout = 3 * time.Second
 type Setup struct {
 	// Clock is the pipeline clock used for timing.
 	Clock clock.Clock
+	// Observers watch every frame handed between processors.
+	Observers []Observer
 }
 
 // Processor is a node in a pipeline. Concrete processors embed *Base, which
@@ -124,6 +126,7 @@ type Base struct {
 
 	directMode bool
 	clock      clock.Clock
+	observers  []Observer
 
 	// Lifetime context for the processor's goroutines, canceled on Cleanup.
 	baseCtx    context.Context
@@ -208,6 +211,7 @@ func (b *Base) Clock() clock.Clock { return b.clock }
 // goroutine (unless the processor is in direct mode).
 func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.clock = s.Clock
+	b.observers = s.Observers
 	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
 	if !b.directMode {
 		b.inputWG.Add(1)
@@ -274,6 +278,7 @@ func (b *Base) processLoop(ctx context.Context, done chan struct{}) {
 // processFrame dispatches a frame to the concrete processor and turns a
 // processing error into an ErrorFrame pushed upstream.
 func (b *Base) processFrame(ctx context.Context, it item) error {
+	b.notifyProcess(it.frame, it.dir)
 	if err := b.self.ProcessFrame(ctx, it.frame, it.dir); err != nil {
 		b.PushError(ctx, fmt.Sprintf("error processing frame: %v", err), err, false)
 		return err
@@ -316,10 +321,12 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir Direction) err
 	switch dir {
 	case Downstream:
 		if b.next != nil {
+			b.notifyPush(f, dir, b.next)
 			return b.next.QueueFrame(ctx, f, dir)
 		}
 	case Upstream:
 		if b.prev != nil {
+			b.notifyPush(f, dir, b.prev)
 			return b.prev.QueueFrame(ctx, f, dir)
 		}
 	}

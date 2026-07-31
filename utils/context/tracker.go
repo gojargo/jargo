@@ -70,7 +70,7 @@ func (t *WordCompletionTracker) AddWord(word string) bool {
 		return true
 	}
 
-	if !t.wordBelongsHere(word) {
+	if !t.WordBelongsHere(word) {
 		t.frameWord, t.frameSet = string(t.ttsRunes[t.segmentMap.RawPos():]), true
 		t.userFacingPos = len(t.userFacingRunes)
 		if t.hasLLM {
@@ -150,9 +150,11 @@ func (t *WordCompletionTracker) discardLLMSpanIfFrameWordMissing() {
 	t.llmConsumed, t.llmSet = "", false
 }
 
-// wordBelongsHere reports whether word plausibly belongs to the remaining TTS
-// text of this frame.
-func (t *WordCompletionTracker) wordBelongsHere(word string) bool {
+// WordBelongsHere reports whether word plausibly belongs to the remaining TTS
+// text of this frame. It is how a dropped word-timestamp event is detected: a
+// word that does not match this frame's remaining content belongs to the next
+// one, and this frame has to be force-completed.
+func (t *WordCompletionTracker) WordBelongsHere(word string) bool {
 	return t.segmentMap.WordBelongsCurrentSegment(word)
 }
 
@@ -201,6 +203,58 @@ func (t *WordCompletionTracker) RemainingRawText() string {
 		return strings.TrimSpace(string(t.userFacingRunes[t.userFacingPos:]))
 	}
 	return strings.TrimSpace(string(t.llmRunes[t.llmPos:]))
+}
+
+// AccumulatedUserFacingText returns the user-facing text consumed so far.
+func (t *WordCompletionTracker) AccumulatedUserFacingText() string {
+	return string(t.userFacingRunes[:t.userFacingPos])
+}
+
+// RemainingUserFacingText returns the unspoken portion of the user-facing text.
+// Leading whitespace is kept unless strip is set, so accumulated plus remaining
+// reconstructs the original exactly.
+func (t *WordCompletionTracker) RemainingUserFacingText(strip bool) string {
+	remaining := string(t.userFacingRunes[t.userFacingPos:])
+	if strip {
+		return strings.TrimSpace(remaining)
+	}
+	return remaining
+}
+
+// AccumulatedTTSText returns the text sent to the synthesizer that has been
+// consumed so far. Unlike FrameWord, which reflects only the last word, this is
+// everything since construction or the last Reset.
+func (t *WordCompletionTracker) AccumulatedTTSText() string {
+	return string(t.ttsRunes[:t.segmentMap.RawPos()])
+}
+
+// RemainingTTSText returns the unspoken portion of the text sent to the
+// synthesizer. Leading whitespace is kept unless strip is set.
+func (t *WordCompletionTracker) RemainingTTSText(strip bool) string {
+	remaining := string(t.ttsRunes[t.segmentMap.RawPos():])
+	if strip {
+		return strings.TrimSpace(remaining)
+	}
+	return remaining
+}
+
+// AccumulatedRawText returns the original text consumed so far, and whether any
+// original text was provided.
+func (t *WordCompletionTracker) AccumulatedRawText() (string, bool) {
+	if !t.hasLLM {
+		return "", false
+	}
+	return string(t.llmRunes[:t.llmPos]), true
+}
+
+// RemainingRawTextOnly returns the unspoken portion of the original text,
+// trimmed, and whether any original text was provided. It differs from
+// RemainingRawText, which falls back to the user-facing text when there is none.
+func (t *WordCompletionTracker) RemainingRawTextOnly() (string, bool) {
+	if !t.hasLLM {
+		return "", false
+	}
+	return strings.TrimSpace(string(t.llmRunes[t.llmPos:])), true
 }
 
 // IsComplete reports whether this frame's TTS text has been fully accounted for.

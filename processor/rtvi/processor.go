@@ -3,21 +3,27 @@ package rtvi
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
 
-// Processor bridges a pipeline to an RTVI client. It completes the handshake —
-// replying to client-ready with bot-ready — and reports pipeline events
-// (transcriptions, speaking state, errors, LLM text) to the client as RTVI
-// messages. Place it in the pipeline upstream of the output transport, which
-// carries the messages to the client.
+// Processor bridges a pipeline to an RTVI client. It completes the handshake,
+// replying to client-ready with bot-ready, and carries out what the client asks
+// of the pipeline. Place it upstream of the output transport, which carries its
+// messages to the client.
 //
-// Incoming client messages arrive as InputTransportMessageFrames; outgoing
-// messages are pushed downstream as OutputTransportMessageUrgentFrames.
+// It does not report pipeline events: pair it with an Observer, which watches
+// the whole pipeline and sends through this processor. Incoming client messages
+// arrive as InputTransportMessageFrames; outgoing messages are pushed downstream
+// as OutputTransportMessageUrgentFrames.
 type Processor struct {
 	*processor.Base
+
+	// mu guards baseCtx, which an Observer uses to send from its own goroutine.
+	mu      sync.Mutex
+	baseCtx context.Context //nolint:containedctx // outlives the frame that set it
 }
 
 // NewProcessor builds an RTVI processor.
@@ -27,8 +33,16 @@ func NewProcessor() *Processor {
 	return p
 }
 
-// ProcessFrame handles RTVI client messages and converts pipeline frames into
-// RTVI messages, forwarding every frame on.
+// Setup records the context an out-of-band send runs under.
+func (p *Processor) Setup(ctx context.Context, s processor.Setup) error {
+	p.mu.Lock()
+	p.baseCtx = ctx
+	p.mu.Unlock()
+	return p.Base.Setup(ctx, s)
+}
+
+// ProcessFrame handles messages arriving from the client and forwards every
+// frame on. Events going the other way are reported by an Observer.
 func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
@@ -37,9 +51,6 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 	// Client messages are consumed here, not forwarded downstream.
 	if fr, ok := f.(*frames.InputTransportMessageFrame); ok {
 		return p.handleIncoming(ctx, fr)
-	}
-	if msg, ok := messageFor(f); ok {
-		return p.emitAndForward(ctx, f, dir, msg)
 	}
 	return p.PushFrame(ctx, f, dir)
 }
@@ -172,14 +183,6 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 		return p.PushFrame(ctx, frames.NewLLMRunFrame(), processor.Upstream)
 	}
 	return nil
-}
-
-// emitAndForward sends an RTVI message and forwards the originating frame.
-func (p *Processor) emitAndForward(ctx context.Context, f frames.Frame, dir processor.Direction, msg Message) error {
-	if err := p.send(ctx, msg); err != nil {
-		return err
-	}
-	return p.PushFrame(ctx, f, dir)
 }
 
 // send pushes an RTVI message toward the output transport.

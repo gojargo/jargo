@@ -23,7 +23,8 @@ type fakeSynth struct{}
 
 func (fakeSynth) SampleRate() int { return audioRate }
 
-func (fakeSynth) Synthesize(_ context.Context, _ string, emit func(pcm []byte) error) error {
+func (f fakeSynth) RunTTS(_ context.Context, _, _ string, yield func(fr frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, f.SampleRate())
 	pcm := make([]byte, audioRate/5*2) // 200ms of 16-bit mono
 	for i := range pcm {
 		pcm[i] = 0x20 // non-zero → "speech"
@@ -104,9 +105,14 @@ func allZero(b []byte) bool {
 
 func buildAudioBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("test"))
+	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, newFakeAudioSTT(), agg.User(), newFakeLLM(), rtvi.NewProcessor(), out, agg.Assistant(),
-	), pipeline.TaskParams{AudioInSampleRate: audioRate})
+		in, newFakeAudioSTT(), agg.User(), newFakeLLM(), rtviProc, out, agg.Assistant(),
+	), pipeline.TaskParams{
+		AudioInSampleRate: audioRate,
+		// The observer reports pipeline events; the processor carries them.
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+	})
 }
 
 // TestHarnessAudioMode drives the full real input path: the harness synthesizes

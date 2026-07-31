@@ -41,6 +41,9 @@ type BaseOutput struct {
 	audioCtx    context.Context
 	audioCancel context.CancelFunc
 	audioWG     sync.WaitGroup
+	// clockQ delivers frames carrying a presentation timestamp at the moment
+	// that timestamp names. See clockqueue.go.
+	clockQ *clockQueue
 	// drainWait, set under bufMu before a drain marker is queued, is closed by
 	// the audio loop once it has paced out everything ahead of the marker.
 	drainWait chan struct{}
@@ -114,14 +117,8 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 			return nil
 		}
 		return bo.PushFrame(ctx, f, dir)
-	case *frames.TTSTextFrame:
-		// Release word-aligned text in step with the audio it belongs to: queue
-		// it behind the buffered audio so the audio loop forwards it downstream
-		// only once that audio has played, and an interruption drops it along
-		// with the audio that never played.
-		return bo.enqueueWordFrame(ctx, fr, dir)
 	default:
-		return bo.PushFrame(ctx, f, dir)
+		return bo.handleTimedFrame(ctx, f, dir)
 	}
 }
 
@@ -163,6 +160,11 @@ func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) 
 	bo.audioOut = make(chan frames.Frame, audioFrameChanCap)
 	bo.audioWG.Add(1)
 	go bo.audioLoop(bo.audioCtx)
+
+	if bo.clockQ == nil {
+		bo.clockQ = newClockQueue(bo)
+	}
+	bo.clockQ.start(ctx)
 }
 
 func (bo *BaseOutput) stopStreaming(ctx context.Context) {
@@ -175,6 +177,9 @@ func (bo *BaseOutput) stopStreaming(ctx context.Context) {
 	if cancel != nil {
 		cancel()
 		bo.audioWG.Wait()
+	}
+	if bo.clockQ != nil {
+		bo.clockQ.stop()
 	}
 }
 
@@ -303,18 +308,14 @@ func (bo *BaseOutput) handleAudioFrame(audio []byte, sampleRate, channels int) {
 
 // enqueueWordFrame queues a downstream word-aligned TTSTextFrame on the audio
 // channel so the audio loop forwards it downstream in playback order with the
-// surrounding audio. When audio output is disabled or streaming has not started
-// there is no pacing to align to, so it is forwarded immediately; an upstream
-// frame is forwarded as-is.
-func (bo *BaseOutput) enqueueWordFrame(ctx context.Context, fr *frames.TTSTextFrame, dir processor.Direction) error {
-	bo.bufMu.Lock()
-	ac := bo.audioCtx
-	out := bo.audioOut
-	bo.bufMu.Unlock()
-	if dir != processor.Downstream || ac == nil || out == nil || !bo.params.AudioOutEnabled {
-		return bo.PushFrame(ctx, fr, dir)
+// surrounding audio. A frame with no timestamp, or one going upstream, has
+// nothing to wait for and is forwarded as it arrives.
+func (bo *BaseOutput) handleTimedFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	pts, timed := f.Base().PTS()
+	if !timed || dir != processor.Downstream || bo.clockQ == nil {
+		return bo.PushFrame(ctx, f, dir)
 	}
-	sendAudio(ac, out, frames.Frame(fr))
+	bo.clockQ.push(pts, f)
 	return nil
 }
 
@@ -364,6 +365,10 @@ func (bo *BaseOutput) handleInterruption() {
 	bo.buffer = nil
 	bo.bufMu.Unlock()
 	bo.flushFrame.Store(nil)
+	if bo.clockQ != nil {
+		// The frames waiting on the clock belong to audio that will never play.
+		bo.clockQ.drop()
+	}
 	for {
 		select {
 		case <-bo.audioOut:

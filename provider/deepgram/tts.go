@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -65,7 +66,8 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 // container=none is required to receive headerless PCM rather than a WAV stream.
-func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	q := url.Values{}
 	q.Set("model", s.cfg.Model)
 	q.Set("encoding", s.cfg.Encoding)

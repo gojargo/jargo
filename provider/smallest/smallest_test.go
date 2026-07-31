@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/tts"
 )
 
 func TestValidate(t *testing.T) {
@@ -50,7 +52,7 @@ func TestSynthesizeStreamsPCM(t *testing.T) {
 	}
 
 	var got []byte
-	err := syn.Synthesize(context.Background(), "hello", func(pcm []byte) error {
+	err := runPCM(syn, context.Background(), "hello", func(pcm []byte) error {
 		got = append(got, pcm...)
 		return nil
 	})
@@ -63,3 +65,14 @@ func TestSynthesizeStreamsPCM(t *testing.T) {
 }
 
 func wsURL(httpURL string) string { return "ws" + strings.TrimPrefix(httpURL, "http") }
+
+// runPCM drives a synthesizer the way the base does, handing back the raw audio
+// it yields.
+func runPCM(s tts.Synthesizer, ctx context.Context, text string, emit func(pcm []byte) error) error {
+	return s.RunTTS(ctx, text, "", func(f frames.Frame) error {
+		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
+			return emit(af.Audio)
+		}
+		return nil
+	})
+}

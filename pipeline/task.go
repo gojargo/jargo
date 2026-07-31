@@ -157,7 +157,7 @@ func (t *Task) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if err := t.pipeline.Setup(runCtx, processor.Setup{Clock: t.clk}); err != nil {
+	if err := t.pipeline.Setup(runCtx, processor.Setup{Clock: t.clk, Observers: t.params.Observers}); err != nil {
 		return err
 	}
 
@@ -238,9 +238,6 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 	if t.params.OnReachedDownstream != nil {
 		t.params.OnReachedDownstream(f)
 	}
-	for _, o := range t.params.Observers {
-		o.OnFrame(f, processor.Downstream)
-	}
 	return nil
 }
 
@@ -281,9 +278,6 @@ func (t *Task) sourcePush(ctx context.Context, f frames.Frame, _ processor.Direc
 	}
 	if t.params.OnReachedUpstream != nil {
 		t.params.OnReachedUpstream(f)
-	}
-	for _, o := range t.params.Observers {
-		o.OnFrame(f, processor.Upstream)
 	}
 	return nil
 }

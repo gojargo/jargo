@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/tts"
 )
 
 // buildWAV builds a minimal 16-bit mono PCM WAV around data.
@@ -85,7 +88,7 @@ func TestSynthesizeStreamsPCM(t *testing.T) {
 	s := &synthesizer{cfg: Config{BaseURL: srv.URL, SampleRate: defaultSampleRate}, http: srv.Client()}
 
 	var got bytes.Buffer
-	err := s.Synthesize(context.Background(), "hello", func(pcm []byte) error {
+	err := runPCM(s, context.Background(), "hello", func(pcm []byte) error {
 		got.Write(pcm)
 		return nil
 	})
@@ -110,4 +113,15 @@ func readAll(r *http.Request) ([]byte, error) {
 	var b bytes.Buffer
 	_, err := b.ReadFrom(r.Body)
 	return b.Bytes(), err
+}
+
+// runPCM drives a synthesizer the way the base does, handing back the raw audio
+// it yields.
+func runPCM(s tts.Synthesizer, ctx context.Context, text string, emit func(pcm []byte) error) error {
+	return s.RunTTS(ctx, text, "", func(f frames.Frame) error {
+		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
+			return emit(af.Audio)
+		}
+		return nil
+	})
 }

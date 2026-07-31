@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -193,18 +194,20 @@ func (s *ttsSynthesizer) endpoint(withTimestamps bool) string {
 }
 
 // Synthesize opens a session, sends the transcript, and streams audio chunks.
-func (s *ttsSynthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	return s.run(ctx, text, false, emit, nil)
 }
 
 // SynthesizeTimed streams audio and reports per-word timing, implementing
 // tts.WordTimestamps.
-func (s *timedTTSSynthesizer) SynthesizeTimed(
+func (s *timedTTSSynthesizer) RunTTSTimed(
 	ctx context.Context,
-	text string,
-	emit func(pcm []byte) error,
+	text, _ string,
+	yield func(f frames.Frame) error,
 	word func(text string, offset float64) error,
 ) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	return s.run(ctx, text, true, emit, word)
 }
 
@@ -386,7 +389,8 @@ func (s *httpTTSSynthesizer) Metadata() tts.Metadata {
 }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
-func (s *httpTTSSynthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *httpTTSSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	payload := map[string]any{
 		"text":     text,
 		"voice_id": s.cfg.Voice,

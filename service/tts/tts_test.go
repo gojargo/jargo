@@ -23,7 +23,8 @@ type fakeSynth struct {
 
 func (s *fakeSynth) SampleRate() int { return s.rate }
 
-func (s *fakeSynth) Synthesize(_ context.Context, text string, emit func(pcm []byte) error) error {
+func (s *fakeSynth) RunTTS(_ context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	s.spoken <- text
 	return emit(s.chunk)
 }
@@ -78,8 +79,12 @@ func TestSynthesizesCompletedSentence(t *testing.T) {
 	syn := &fakeSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}, spoken: make(chan string, 1)}
 	seq := runTTS(t, syn, func(task *pipeline.Task) {
 		// Split across frames; synthesis fires once the sentence terminates.
+		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("Hello "))
 		task.QueueFrame(frames.NewLLMTextFrame("world."))
+		// The turn's context closes when the LLM response ends, which is what
+		// brackets the audio with a stop frame.
+		task.QueueFrame(frames.NewLLMFullResponseEndFrame())
 	})
 
 	if got := <-syn.spoken; got != "Hello world." {
@@ -128,7 +133,9 @@ func TestSynthesisReportsCharacterUsage(t *testing.T) {
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 	task.QueueFrame(frames.NewLLMTextFrame(text))
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
 
 	select {
 	case <-stopped:
@@ -170,6 +177,7 @@ func TestFlushSynthesizesTrailingText(t *testing.T) {
 	syn := &fakeSynth{rate: 16000, chunk: []byte{9}, spoken: make(chan string, 1)}
 	seq := runTTS(t, syn, func(task *pipeline.Task) {
 		// No sentence terminator: only the end-of-response flush speaks it.
+		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewTextFrame("no period here"))
 		task.QueueFrame(frames.NewLLMFullResponseEndFrame())
 	})

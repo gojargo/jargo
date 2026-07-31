@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/tts"
 )
 
 func TestValidate(t *testing.T) {
@@ -42,7 +45,7 @@ func TestSynthesizeStreamsPCM(t *testing.T) {
 	}
 
 	var got []byte
-	err := syn.Synthesize(context.Background(), "Hello.", func(pcm []byte) error {
+	err := runPCM(syn, context.Background(), "Hello.", func(pcm []byte) error {
 		got = append(got, pcm...)
 		return nil
 	})
@@ -61,7 +64,18 @@ func TestUnknownSpeaker(t *testing.T) {
 	defer srv.Close()
 
 	syn := &synthesizer{cfg: Config{BaseURL: srv.URL, Voice: "Nobody"}, http: srv.Client()}
-	if err := syn.Synthesize(context.Background(), "hi", func([]byte) error { return nil }); err == nil {
+	if err := runPCM(syn, context.Background(), "hi", func([]byte) error { return nil }); err == nil {
 		t.Fatal("expected error for unknown studio speaker")
 	}
+}
+
+// runPCM drives a synthesizer the way the base does, handing back the raw audio
+// it yields.
+func runPCM(s tts.Synthesizer, ctx context.Context, text string, emit func(pcm []byte) error) error {
+	return s.RunTTS(ctx, text, "", func(f frames.Frame) error {
+		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
+			return emit(af.Audio)
+		}
+		return nil
+	})
 }

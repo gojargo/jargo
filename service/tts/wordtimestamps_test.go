@@ -3,6 +3,7 @@ package tts_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,7 +34,8 @@ type fakeTimedSynth struct {
 func (s *fakeTimedSynth) SampleRate() int { return s.rate }
 
 // Synthesize is the plain fallback; unused because the base takes the timed path.
-func (s *fakeTimedSynth) Synthesize(_ context.Context, _ string, emit func(pcm []byte) error) error {
+func (s *fakeTimedSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	for _, w := range s.words {
 		if err := emit(w.pcm); err != nil {
 			return err
@@ -42,12 +44,13 @@ func (s *fakeTimedSynth) Synthesize(_ context.Context, _ string, emit func(pcm [
 	return nil
 }
 
-func (s *fakeTimedSynth) SynthesizeTimed(
+func (s *fakeTimedSynth) RunTTSTimed(
 	ctx context.Context,
-	_ string,
-	emit func(pcm []byte) error,
+	_, _ string,
+	yield func(f frames.Frame) error,
 	word func(text string, offset float64) error,
 ) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	for i, w := range s.words {
 		if err := word(w.text, w.offset); err != nil {
 			return err
@@ -181,7 +184,8 @@ type plainSynth struct {
 
 func (s *plainSynth) SampleRate() int { return s.rate }
 
-func (s *plainSynth) Synthesize(_ context.Context, _ string, emit func(pcm []byte) error) error {
+func (s *plainSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	return emit(s.chunk)
 }
 
@@ -211,5 +215,73 @@ func TestNoTimestampsRecordsFullLLMText(t *testing.T) {
 	msgs := convo.Messages()
 	if len(msgs) != 1 || msgs[0].Role != frames.RoleAssistant || msgs[0].Text != "Hello there." {
 		t.Fatalf("messages = %+v, want one assistant 'Hello there.'", msgs)
+	}
+}
+
+// TestWordTimestampsCarryPresentationTimestamps proves each spoken word is
+// stamped with the moment it is heard, timed from the first chunk of the
+// context's audio. That timestamp is what lets the output transport hold the
+// word until its audio plays, instead of it landing wherever buffering left it.
+func TestWordTimestampsCarryPresentationTimestamps(t *testing.T) {
+	syn := &fakeTimedSynth{rate: 24000, words: wordsFor(24000)}
+	base := tts.New("FakeTTS", syn)
+	base.SetTextFilters(currencyFilter{})
+
+	var mu sync.Mutex
+	type stamped struct {
+		text string
+		pts  int64
+		ok   bool
+	}
+	var got []stamped
+	var firstAudio int64 = -1
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch fr := f.(type) {
+			case *frames.TTSAudioRawFrame:
+				if firstAudio < 0 {
+					firstAudio = 0
+				}
+			case *frames.TTSTextFrame:
+				pts, ok := fr.Base().PTS()
+				got = append(got, stamped{text: fr.Text, pts: pts, ok: ok})
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
+	task.QueueFrame(frames.NewLLMTextFrame("Your balance is $42.50"))
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+	time.Sleep(400 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) == 0 {
+		t.Fatal("no word frames reached downstream")
+	}
+	for _, w := range got {
+		if !w.ok {
+			t.Fatalf("word %q carries no presentation timestamp", w.text)
+		}
+	}
+	// Words are 0.1s apart, so their timestamps must climb by that much.
+	for i := 1; i < len(got); i++ {
+		if got[i].pts <= got[i-1].pts {
+			t.Fatalf("word %q at %d does not follow %q at %d",
+				got[i].text, got[i].pts, got[i-1].text, got[i-1].pts)
+		}
+	}
+	if spread := got[len(got)-1].pts - got[0].pts; spread < int64(100*time.Millisecond) {
+		t.Fatalf("word timestamps span %v, want at least one word gap", time.Duration(spread))
 	}
 }

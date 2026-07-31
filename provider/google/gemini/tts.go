@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -76,7 +77,8 @@ func (s *ttsSynthesizer) requestBody(text string) ([]byte, error) {
 }
 
 // Synthesize requests speech for text and streams the decoded raw PCM downstream.
-func (s *ttsSynthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	body, err := s.requestBody(text)
 	if err != nil {
 		return err

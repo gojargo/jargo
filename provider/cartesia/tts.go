@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -107,7 +108,8 @@ type wsWordTimings struct {
 }
 
 // Synthesize opens a session, sends the transcript, and streams audio chunks.
-func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	conn, err := s.dial(ctx)
 	if err != nil {
 		return err
@@ -124,12 +126,13 @@ func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm
 // tts.WordTimestamps. It requests timestamps and forwards each Cartesia
 // "timestamps" message (after merging any punctuation-only tokens into the
 // preceding word) to word.
-func (s *timedSynthesizer) SynthesizeTimed(
+func (s *timedSynthesizer) RunTTSTimed(
 	ctx context.Context,
-	text string,
-	emit func(pcm []byte) error,
+	text, _ string,
+	yield func(f frames.Frame) error,
 	word func(text string, offset float64) error,
 ) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	conn, err := s.dial(ctx)
 	if err != nil {
 		return err

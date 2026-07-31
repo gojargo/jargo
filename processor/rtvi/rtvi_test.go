@@ -53,7 +53,10 @@ func TestUserTranscriptionJSON(t *testing.T) {
 // produce a user-transcription — both as OutputTransportMessageUrgentFrames.
 func TestProcessorHandshakeAndTranscript(t *testing.T) {
 	out := make(chan rtvi.Message, 8)
-	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor()), pipeline.TaskParams{
+	proc := rtvi.NewProcessor()
+	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+		// Events are reported by the observer; the processor only carries them.
+		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
@@ -97,7 +100,10 @@ func TestProcessorHandshakeAndTranscript(t *testing.T) {
 // wire message.
 func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	out := make(chan rtvi.Message, 16)
-	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor()), pipeline.TaskParams{
+	proc := rtvi.NewProcessor()
+	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+		// Events are reported by the observer; the processor only carries them.
+		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -72,7 +73,8 @@ type ttsMessage struct {
 
 // Synthesize opens a session, sends the transcript, and streams audio chunks
 // until the server signals end-of-stream.
-func (s *ttsSynthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	header := http.Header{}
 	header.Set("x-api-key", s.cfg.APIKey)
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/nvidia/internal/rivapb"
@@ -257,7 +258,8 @@ func (s *ttsSynthesizer) request(text string, zeroShot *rivapb.ZeroShotData) *ri
 
 // Synthesize opens a synthesis stream, sends the sentence, and streams the
 // generated audio downstream until the server closes the stream.
-func (s *ttsSynthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	chunks := chunkText(text, maxTTSChunkLen)
 	if len(chunks) == 0 {
 		return nil

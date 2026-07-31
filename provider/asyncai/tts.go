@@ -8,6 +8,7 @@ import (
 	"net/url"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -46,7 +47,8 @@ type wsMessage struct {
 }
 
 // Synthesize opens a session, sends the transcript, and streams audio chunks.
-func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	endpoint := s.cfg.URL + "?api_key=" + url.QueryEscape(s.cfg.APIKey) + "&version=" + url.QueryEscape(s.cfg.Version)
 	conn, err := wsutil.Dial(ctx, endpoint, http.Header{}, wsutil.DefaultReadLimit)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -29,7 +30,8 @@ type synthesizer struct {
 func (s *synthesizer) SampleRate() int { return humeSampleRate }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
-func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	utterance := map[string]any{"text": text}
 	if voice := s.voice(); voice != nil {
 		utterance["voice"] = voice

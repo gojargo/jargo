@@ -203,15 +203,18 @@ func runBot(conn *pionrtc.Connection, v *viper.Viper) {
 	if mem := buildMemory(v); mem != nil {
 		procs = append(procs, mem)
 	}
+	rtviProc := rtvi.NewProcessor()
 	procs = append(procs,
 		llm,
 		tts,
-		rtvi.NewProcessor(),
+		rtviProc,
 		t.Output(),
 		agg.Assistant(),
 	)
 
 	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
+		// The observer reports pipeline events; the processor carries them.
+		Observers:          []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 		AudioInSampleRate:  opus.SampleRate,
 		AudioOutSampleRate: opus.SampleRate,
 		// Emit per-turn metrics (TTFB, processing, tokens, characters) in-band so

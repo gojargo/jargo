@@ -114,9 +114,12 @@ func runBot(conn *pionrtc.Connection) {
 		aggOpts = append(aggOpts, aggregators.WithTurnTaking())
 	}
 	agg := aggregators.New(convo, aggOpts...)
-	procs = append(procs, agg.User(), llm, tts, rtvi.NewProcessor(), t.Output(), agg.Assistant())
+	rtviProc := rtvi.NewProcessor()
+	procs = append(procs, agg.User(), llm, tts, rtviProc, t.Output(), agg.Assistant())
 
 	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
+		// The observer reports pipeline events; the processor carries them.
+		Observers:          []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 		AudioInSampleRate:  opus.SampleRate,
 		AudioOutSampleRate: opus.SampleRate,
 		EnableMetrics:      true,

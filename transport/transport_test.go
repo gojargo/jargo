@@ -3,6 +3,7 @@ package transport_test
 import (
 	"bytes"
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -343,12 +344,17 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 
+	// Audio and timed frames now reach downstream from separate goroutines, so
+	// the recorded sequence needs its own lock.
 	var mu struct {
+		sync.Mutex
 		seq []string
 	}
 	wordSeen := make(chan struct{}, 1)
 	taskParams := pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			defer mu.Unlock()
 			switch fr := f.(type) {
 			case *frames.OutputAudioRawFrame:
 				mu.seq = append(mu.seq, "audio")
@@ -368,7 +374,11 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 	go func() { runDone <- task.Run(context.Background()) }()
 
 	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920), 48000, 1))
-	task.QueueFrame(frames.NewTTSTextFrame("hello"))
+	// The word carries the moment it is spoken, which is what holds it back
+	// until the audio around it has gone out.
+	word := frames.NewTTSTextFrame("hello")
+	word.SetPTS(int64(20 * time.Millisecond))
+	task.QueueFrame(word)
 	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920), 48000, 1))
 
 	select {
@@ -380,6 +390,8 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 	<-runDone
 
 	// The word frame must appear, and not before the audio queued ahead of it.
+	mu.Lock()
+	defer mu.Unlock()
 	idxWord, idxFirstAudio := -1, -1
 	for i, s := range mu.seq {
 		if s == "audio" && idxFirstAudio < 0 {
@@ -398,8 +410,8 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 }
 
 // TestBaseOutputInterruptionDropsUnplayedWordFrames checks that a barge-in drops
-// word-aligned text still queued behind unplayed audio, so the assistant context
-// never records words that were not actually spoken.
+// word-aligned text whose moment has not arrived, so the assistant context never
+// records words that were not actually spoken.
 func TestBaseOutputInterruptionDropsUnplayedWordFrames(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
@@ -421,7 +433,9 @@ func TestBaseOutputInterruptionDropsUnplayedWordFrames(t *testing.T) {
 	// A long run of audio with a word frame queued behind it: the word's audio is
 	// nowhere near played when the interruption arrives.
 	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920*40), 48000, 1))
-	task.QueueFrame(frames.NewTTSTextFrame("unspoken"))
+	unspoken := frames.NewTTSTextFrame("unspoken")
+	unspoken.SetPTS(int64(700 * time.Millisecond)) // far beyond the interruption
+	task.QueueFrame(unspoken)
 	time.Sleep(10 * time.Millisecond) // a couple of chunks play
 	task.QueueFrame(frames.NewInterruptionFrame())
 

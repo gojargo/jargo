@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -29,7 +30,8 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // Synthesize POSTs text to the Piper server, strips the returned WAV header, and
 // streams the PCM downstream in chunks.
-func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL, bytes.NewReader([]byte(text)))
 	if err != nil {
 		return err

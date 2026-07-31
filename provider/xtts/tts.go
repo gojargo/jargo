@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -42,7 +43,8 @@ type speaker struct {
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // Synthesize requests speech for text and streams raw PCM downstream.
-func (s *synthesizer) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	spk, err := s.lookupSpeaker(ctx)
 	if err != nil {
 		return err

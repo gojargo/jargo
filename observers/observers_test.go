@@ -34,11 +34,11 @@ func TestTurnTrackingStartAndInterruption(t *testing.T) {
 	})
 
 	// Pipeline start opens turn 1.
-	o.OnFrame(frames.NewStartFrame(), processor.Downstream)
+	push(o, frames.NewStartFrame(), processor.Downstream)
 	// Bot answers turn 1.
-	o.OnFrame(frames.NewBotStartedSpeakingFrame(), processor.Upstream)
+	push(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
 	// User barges in: turn 1 ends interrupted, turn 2 starts.
-	o.OnFrame(frames.NewUserStartedSpeakingFrame(), processor.Downstream)
+	push(o, frames.NewUserStartedSpeakingFrame(), processor.Downstream)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -56,9 +56,9 @@ func TestUserBotLatency(t *testing.T) {
 	o := observers.NewUserBotLatency(observers.LatencyConfig{
 		OnLatency: func(d time.Duration) { got = d; n++ },
 	})
-	o.OnFrame(frames.NewUserStoppedSpeakingFrame(), processor.Downstream)
+	push(o, frames.NewUserStoppedSpeakingFrame(), processor.Downstream)
 	time.Sleep(10 * time.Millisecond)
-	o.OnFrame(frames.NewBotStartedSpeakingFrame(), processor.Upstream)
+	push(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
 
 	if n != 1 {
 		t.Fatalf("OnLatency called %d times, want 1", n)
@@ -73,9 +73,9 @@ func TestStartupTimingFiresOnce(t *testing.T) {
 	o := observers.NewStartupTiming(observers.StartupConfig{
 		OnStartup: func(time.Duration) { n++ },
 	})
-	o.OnFrame(frames.NewStartFrame(), processor.Downstream)
-	o.OnFrame(frames.NewTTSAudioRawFrame([]byte{0, 0}, 24000, 1), processor.Downstream)
-	o.OnFrame(frames.NewBotStartedSpeakingFrame(), processor.Upstream)
+	push(o, frames.NewStartFrame(), processor.Downstream)
+	push(o, frames.NewTTSAudioRawFrame([]byte{0, 0}, 24000, 1), processor.Downstream)
+	push(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
 	if n != 1 {
 		t.Fatalf("OnStartup called %d times, want 1", n)
 	}
@@ -97,8 +97,8 @@ func TestBroadcastSiblingCountedOnce(t *testing.T) {
 	})
 
 	// Turn one begins with the pipeline and the bot starts speaking.
-	o.OnFrame(frames.NewStartFrame(), processor.Downstream)
-	o.OnFrame(frames.NewBotStartedSpeakingFrame(), processor.Downstream)
+	push(o, frames.NewStartFrame(), processor.Downstream)
+	push(o, frames.NewBotStartedSpeakingFrame(), processor.Downstream)
 	started, ended = 0, 0
 
 	// The user barges in. UserTurnProcessor.Broadcast builds one frame per
@@ -108,10 +108,15 @@ func TestBroadcastSiblingCountedOnce(t *testing.T) {
 	down.SetBroadcastSiblingID(up.ID())
 	up.SetBroadcastSiblingID(down.ID())
 
-	o.OnFrame(down, processor.Downstream)
-	o.OnFrame(up, processor.Upstream)
+	push(o, down, processor.Downstream)
+	push(o, up, processor.Upstream)
 
 	if ended != 1 || started != 1 {
 		t.Errorf("turn transitions = %d ended / %d started, want exactly 1 each", ended, started)
 	}
+}
+
+// push reports one frame to an observer the way a processor handover does.
+func push(o processor.Observer, f frames.Frame, dir processor.Direction) {
+	o.OnPushFrame(processor.FramePushed{Frame: f, Direction: dir})
 }

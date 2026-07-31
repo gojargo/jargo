@@ -1,8 +1,14 @@
 // Package tts is the shared base for text-to-speech services. The base
-// aggregates incoming text into sentences, hands each sentence to a provider's
-// Synthesizer, and brackets the resulting audio with TTSStarted/TTSStopped
-// frames. Providers implement only Synthesize; sentence aggregation, the frame
-// contract, and the HTTP response streaming helper live here.
+// aggregates incoming text into sentences and sends each one on the turn's audio
+// context, a queue that holds a turn's audio in the order it was generated and
+// is drained downstream by a goroutine of its own. Bracketing a turn with
+// TTSStarted/TTSStopped, sentence aggregation, and the HTTP response streaming
+// helper live here; the context machinery is in audiocontext.go.
+//
+// A provider implements Synthesize and has its audio appended for it, or
+// implements ContextSynthesizer and appends the audio itself as its receive loop
+// reads it. Either way the audio reaches the pipeline through a context, so one
+// sentence never waits on the one before it.
 package tts
 
 import (
@@ -12,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -19,10 +26,9 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/telemetry/metrics"
-	"github.com/gojargo/jargo/telemetry/tracing"
 	uctx "github.com/gojargo/jargo/utils/context"
 	ttstext "github.com/gojargo/jargo/utils/text"
-	"go.opentelemetry.io/otel/attribute"
+	"github.com/google/uuid"
 )
 
 // errStatus is returned when a provider responds with a non-200 status.
@@ -37,11 +43,32 @@ const readChunk = 4096
 // for a speech onset before giving up on the time-to-first-audio measurement.
 const ttfaMaxBufferSeconds = 3
 
-// Synthesizer turns text into speech audio. SampleRate reports the PCM rate of
-// the audio it produces; Synthesize streams 16-bit mono PCM to emit.
+// Synthesizer turns text into speech. SampleRate reports the PCM rate of the
+// audio it produces.
+//
+// RunTTS synthesizes one unit of text and hands each frame it produces to yield,
+// which routes them to the synthesis context they belong to. Most providers
+// yield audio and nothing else, and can build those frames with PCMYielder;
+// yielding is the contract so a provider that has more to report, such as an
+// error mid-stream, can say so in the same ordered stream as its audio.
+//
+// contextID names the synthesis the text belongs to. A provider that keeps a
+// server-side stream open across a turn needs it; one that answers each call on
+// its own can ignore it.
 type Synthesizer interface {
 	SampleRate() int
-	Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error
+	RunTTS(ctx context.Context, text, contextID string, yield func(f frames.Frame) error) error
+}
+
+// PCMYielder adapts a frame yield to a callback taking raw 16-bit mono PCM, for
+// a provider whose output is audio and nothing else.
+func PCMYielder(yield func(f frames.Frame) error, rate int) func(pcm []byte) error {
+	return func(pcm []byte) error {
+		if len(pcm) == 0 {
+			return nil
+		}
+		return yield(frames.NewTTSAudioRawFrame(pcm, rate, 1))
+	}
 }
 
 // WordTimestamps is an optional interface a Synthesizer may implement to report
@@ -54,16 +81,15 @@ type Synthesizer interface {
 // before, and no TTSTextFrames are produced.
 type WordTimestamps interface {
 	Synthesizer
-	// SynthesizeTimed streams 16-bit mono PCM to emit like Synthesize, and
-	// additionally reports word timing via word(text, offset): text is a single
-	// spoken token, offset its start time in seconds from the beginning of this
-	// synthesis. Tokens are reported in spoken order; punctuation the provider
-	// splits into its own token should be merged into the preceding word first
-	// (see utils/context.MergePunctTokens).
-	SynthesizeTimed(
+	// RunTTSTimed synthesizes like RunTTS and additionally reports word timing
+	// via word(text, offset): text is a single spoken token, offset its start
+	// time in seconds from the beginning of this synthesis. Tokens are reported
+	// in spoken order; punctuation the provider splits into its own token should
+	// be merged into the preceding word first (see utils/context.MergePunctTokens).
+	RunTTSTimed(
 		ctx context.Context,
-		text string,
-		emit func(pcm []byte) error,
+		text, contextID string,
+		yield func(f frames.Frame) error,
 		word func(text string, offset float64) error,
 	) error
 }
@@ -106,41 +132,83 @@ type Starter interface {
 	Start(ctx context.Context)
 }
 
-// pendingWord is a TTSTextFrame awaiting the point in the emitted audio where
-// its word begins, so it is pushed downstream in step with playback.
-type pendingWord struct {
-	offset float64
-	frame  *frames.TTSTextFrame
-}
-
-// Base is the shared TTS processor. It aggregates text into sentences and
-// synthesizes each one.
+// Base is the shared TTS processor. It aggregates text into sentences,
+// synthesizes each one, and routes the audio through an audio context so it
+// reaches the pipeline in the order it was generated. See audiocontext.go.
 type Base struct {
 	*processor.Base
-	syn         Synthesizer
-	meta        Metadata
-	aggregation string
-	filters     []ttstext.Filter
+	syn     Synthesizer
+	meta    Metadata
+	filters []ttstext.Filter
+
+	// aggregator groups streamed text into the units the provider is given.
+	aggregator ttstext.Aggregator
+	// sequencer keeps the frames of a synthesis in the order the text was
+	// spoken, so the conversation records it that way.
+	sequencer *uctx.AggregatedFrameSequencer
+	// aggregatorErr is the failure to build the default aggregator, reported
+	// when the pipeline starts rather than swallowed.
+	aggregatorErr error
+
+	// Audio contexts. serial orders playback across contexts; audioContexts
+	// holds each open context's queue. See audiocontext.go.
+	audioCtxMu    sync.Mutex
+	audioContexts map[string]*audioContext
+	serial        *serialQueue
+	ctxCancel     context.CancelFunc
+	ctxWG         sync.WaitGroup
+
+	// yieldsSync records whether the provider answered the last call with its
+	// audio, which is what says who closes the context out.
+	yieldsSync bool
+
+	// wordLastPTS is when the last word pushed downstream was spoken, so a
+	// context starting while another is still playing times its words after it.
+	wordLastPTS time.Duration
+
+	// turnContext is the context every sentence of the current turn is sent on,
+	// empty between turns. Reusing it is what keeps the provider from opening a
+	// cold context per sentence.
+	turnContext string
 }
 
 // New builds a TTS Base named name driven by syn. The concrete service passes
 // itself as syn and embeds the returned Base.
 func New(name string, syn Synthesizer) *Base {
 	b := &Base{syn: syn}
+	if tok, err := ttstext.NewPunktEnglish(); err != nil {
+		b.aggregatorErr = err
+	} else {
+		b.aggregator = ttstext.NewSimpleAggregator(frames.AggregationSentence, tok)
+		b.sequencer = uctx.NewAggregatedFrameSequencer(name, false, tok)
+	}
 	if d, ok := syn.(Describer); ok {
 		b.meta = d.Metadata()
 	}
 	b.Base = processor.New(name, b)
+	if cs, ok := syn.(ContextSynthesizer); ok {
+		cs.SetAudioContextHost(b)
+	}
 	return b
 }
 
 // Cleanup releases the Synthesizer's resources, when it holds any, and tears
 // down the processor.
 func (b *Base) Cleanup(ctx context.Context) error {
+	b.stopAudioContexts()
 	if c, ok := b.syn.(Closer); ok {
 		_ = c.Close()
 	}
 	return b.Base.Cleanup(ctx)
+}
+
+// SetTextAggregator sets how streamed text is grouped into the units handed to
+// the provider, replacing the default (English sentences). Pass an aggregator
+// built over the language the bot speaks, or one that aggregates by token to
+// stream text through as it arrives. Call this before the pipeline starts.
+func (b *Base) SetTextAggregator(a ttstext.Aggregator) {
+	b.aggregator = a
+	b.aggregatorErr = nil
 }
 
 // SetTextFilters sets the text-normalization filters applied to each sentence
@@ -163,72 +231,226 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	case *frames.TextFrame:
 		return b.handleText(ctx, fr, f, dir)
 	case *frames.TTSSpeakFrame:
-		// Speak fixed text immediately, bypassing sentence aggregation.
-		if b.wordPath() {
-			// The spoken words drive the context via TTSTextFrames; don't also let
-			// the aggregator record the whole fixed text (it would double-count).
-			fr.AppendToContext = false
+		return b.handleSpeak(ctx, fr, dir)
+	case *frames.LLMFullResponseStartFrame:
+		// A new turn gets one context id, shared by all of its sentences.
+		b.turnContext = b.createContextID()
+		if c, ok := b.syn.(TurnContextCreator); ok {
+			c.OnTurnContextCreated(ctx, b.turnContext)
 		}
-		if err := b.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		return b.synthesize(ctx, fr.Text)
-	case *frames.LLMFullResponseEndFrame:
+		// Through the serialization queue, so this frame is emitted only after any
+		// context already queued has drained rather than racing ahead of it.
+		return b.queueSerial(ctx, f, dir)
+	case *frames.LLMFullResponseEndFrame, *frames.EndFrame:
+		// Both end a turn: flush whatever text did not land on a sentence
+		// boundary, then close the context it was sent on.
 		if err := b.flush(ctx); err != nil {
 			return err
 		}
+		b.onTurnContextCompleted(ctx)
+		if _, isEnd := f.(*frames.EndFrame); isEnd {
+			return b.PushFrame(ctx, f, dir)
+		}
+		return b.queueSerial(ctx, f, dir)
+	case *frames.InterruptionFrame:
+		b.handleInterruption(ctx)
+		return b.PushFrame(ctx, f, dir)
+	case *frames.CancelFrame:
+		b.handleInterruption(ctx)
+		b.stopAudioContexts()
 		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
-		if err := b.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		b.broadcastMetadata(ctx)
-		if st, ok := b.syn.(Starter); ok {
-			// Detached: the setup outlives this frame, and a turn canceled by an
-			// interruption must not abandon a connection half-dialed.
-			go st.Start(context.WithoutCancel(ctx))
-		}
-		return nil
+		return b.handleStart(ctx, f, dir)
 	default:
+		return b.queueSerial(ctx, f, dir)
+	}
+}
+
+// queueSerial routes a downstream frame through the serialization queue so it is
+// emitted in the order it arrived relative to the contexts already queued. A
+// system frame, or anything going upstream, overtakes the queue by design.
+func (b *Base) queueSerial(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if _, isSystem := f.(frames.SystemFrame); isSystem || dir != processor.Downstream {
 		return b.PushFrame(ctx, f, dir)
 	}
+	b.audioCtxMu.Lock()
+	serial := b.serial
+	b.audioCtxMu.Unlock()
+	if serial == nil {
+		return b.PushFrame(ctx, f, dir)
+	}
+	serial.push(serialItem{frame: f})
+	return nil
 }
 
-// handleText forwards a text frame downstream and buffers its text for
-// synthesis. On the word-timestamp path the frame is excluded from the assistant
-// context (the playback-aligned TTSTextFrames drive it instead) while still
-// flowing to other consumers such as transcripts. tf is the (embedded) TextFrame
-// carrying the flags; orig is the concrete frame to forward.
-func (b *Base) handleText(ctx context.Context, tf *frames.TextFrame, orig frames.Frame, dir processor.Direction) error {
-	if b.wordPath() {
-		tf.AppendToContext = false
+// createContextID returns the turn's context id, so every sentence of a turn is
+// synthesized on one context, or a fresh one outside a turn.
+func (b *Base) createContextID() string {
+	if b.turnContext != "" {
+		// Keep the open context from timing out while the next sentence is still
+		// being generated.
+		b.refreshAudioContext(b.turnContext)
+		return b.turnContext
 	}
-	if err := b.PushFrame(ctx, orig, dir); err != nil {
+	return uuid.NewString()
+}
+
+// onTurnContextCompleted closes the turn out once its text has all been sent.
+// The audio for it may still be arriving: for a provider that streams on its own
+// receive loop the context is removed when the provider marks it final, and for
+// one that returns its audio inline the base closes it here.
+func (b *Base) onTurnContextCompleted(ctx context.Context) {
+	id := b.turnContext
+	b.turnContext = ""
+	if id == "" {
+		return
+	}
+	if ctx.Err() != nil {
+		// Interrupted while the turn's last sentence was still being synthesized.
+		// The interruption tears the context down, and the words it was holding
+		// back are meant to stay unspoken.
+		//
+		// The check is here because a goroutine cannot be stopped from outside:
+		// canceling only cancels the context, so the call that was in flight
+		// runs to its end and has to notice for itself. Closing the turn out here
+		// would speak what the interruption was meant to cut off.
+		return
+	}
+	if b.yieldingSync() && b.AudioContextAvailable(id) {
+		b.AppendToAudioContext(id, frames.NewTTSStoppedFrame())
+		b.RemoveAudioContext(id)
+	}
+	// Anything the provider is still holding is flushed before the context is
+	// closed, so a provider that waits to be told generates what it has.
+	if f, ok := b.syn.(AudioFlusher); ok && b.AudioContextAvailable(id) {
+		f.FlushAudio(ctx, id)
+	}
+	if c, ok := b.syn.(TurnContextCompleter); ok && b.AudioContextAvailable(id) {
+		c.OnTurnContextCompleted(ctx, id)
+	}
+}
+
+// handleInterruption drops everything queued for playback. The audio is no
+// longer wanted, and the provider is told so it stops generating into contexts
+// nobody is listening to.
+func (b *Base) handleInterruption(ctx context.Context) {
+	if b.aggregator != nil {
+		b.aggregator.Reset()
+	}
+	if b.sequencer != nil {
+		b.sequencer.Clear()
+	}
+	b.turnContext = ""
+	b.audioCtxMu.Lock()
+	b.wordLastPTS = 0
+	b.audioCtxMu.Unlock()
+	b.stopAudioContexts()
+	b.audioCtxMu.Lock()
+	if b.serial != nil {
+		b.serial.reset()
+	}
+	b.audioCtxMu.Unlock()
+	if c, ok := b.syn.(AudioContextInterrupter); ok {
+		for _, id := range b.openAudioContexts() {
+			c.OnAudioContextInterrupted(ctx, id)
+		}
+	}
+	b.startAudioContexts(ctx)
+}
+
+// handleSpeak speaks fixed text immediately, bypassing sentence aggregation.
+func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir processor.Direction) error {
+	if b.wordPath() {
+		// The spoken words drive the context via TTSTextFrames; don't also let
+		// the aggregator record the whole fixed text (it would double-count).
+		fr.AppendToContext = false
+	}
+	if err := b.PushFrame(ctx, fr, dir); err != nil {
 		return err
 	}
-	return b.aggregate(ctx, tf.Text)
+	// A fixed utterance is independent of any LLM turn, so it gets a context of
+	// its own that is opened and closed around it.
+	saved := b.turnContext
+	b.turnContext = b.createContextID()
+	if c, ok := b.syn.(TurnContextCreator); ok {
+		c.OnTurnContextCreated(ctx, b.turnContext)
+	}
+	if err := b.pushTTSFrames(ctx, fr.Text); err != nil {
+		return err
+	}
+	b.onTurnContextCompleted(ctx)
+	b.turnContext = saved
+	return nil
 }
 
-// aggregate buffers text and synthesizes once a sentence is complete.
-func (b *Base) aggregate(ctx context.Context, text string) error {
-	b.aggregation += text
-	if endOfSentence(b.aggregation) {
-		sentence := b.aggregation
-		b.aggregation = ""
-		return b.synthesize(ctx, sentence)
+// handleStart forwards the StartFrame, announces the service, and gives the
+// provider its chance to set up before the first sentence.
+func (b *Base) handleStart(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := b.PushFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if err := b.aggregatorErr; err != nil {
+		// Fatal: with no way to group text into units there is nothing to speak.
+		b.PushError(ctx, "tts text aggregator unavailable", err, true)
+		return err
+	}
+	b.startAudioContexts(ctx)
+	b.broadcastMetadata(ctx)
+	if st, ok := b.syn.(Starter); ok {
+		// Detached: the setup outlives this frame, and a turn canceled by an
+		// interruption must not abandon a connection half-dialed.
+		go st.Start(context.WithoutCancel(ctx))
 	}
 	return nil
 }
 
-// flush synthesizes any buffered text that didn't end on a sentence boundary.
-func (b *Base) flush(ctx context.Context) error {
-	if strings.TrimSpace(b.aggregation) == "" {
-		b.aggregation = ""
+// handleText folds a text frame's text into the aggregator. The frame itself is
+// not forwarded: what reaches the pipeline is the text the synthesizer actually
+// spoke, as TTSTextFrames timed to the audio, so the conversation records what
+// was said rather than what was generated. A consumer that wants the text as the
+// model produced it watches for it where the model pushes it.
+func (b *Base) handleText(ctx context.Context, tf *frames.TextFrame, _ frames.Frame, _ processor.Direction) error {
+	return b.aggregate(ctx, tf.Text)
+}
+
+// aggregate folds text into the aggregator and synthesizes every unit it
+// completes.
+func (b *Base) aggregate(ctx context.Context, text string) error {
+	if b.aggregator == nil {
 		return nil
 	}
-	sentence := b.aggregation
-	b.aggregation = ""
-	return b.synthesize(ctx, sentence)
+	for _, agg := range b.aggregator.Aggregate(text) {
+		if err := b.pushTTSFrames(ctx, agg.Text); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// flush synthesizes text left buffered when a response ends without a boundary.
+func (b *Base) flush(ctx context.Context) error {
+	if b.aggregator == nil {
+		return nil
+	}
+	rest, ok := b.aggregator.Flush()
+	if !ok || strings.TrimSpace(rest.Text) == "" {
+		return nil
+	}
+	return b.pushTTSFrames(ctx, rest.Text)
+}
+
+// setYieldsSync records whether the provider yielded its audio.
+func (b *Base) setYieldsSync(v bool) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	b.yieldsSync = v
+}
+
+// yieldingSync reports whether the provider answers with its audio.
+func (b *Base) yieldingSync() bool {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	return b.yieldsSync
 }
 
 // wordPath reports whether the driving provider reports word timings, in which
@@ -239,11 +461,15 @@ func (b *Base) wordPath() bool {
 	return ok
 }
 
-// synthesize requests speech for original and streams it downstream as audio.
-// original is the pre-filter text; the configured filters produce the text sent
-// to the provider. When the provider reports word timings, the base also emits
-// TTSTextFrames mapping each spoken word back to original.
-func (b *Base) synthesize(ctx context.Context, original string) error {
+// pushTTSFrames synthesizes one piece of text on the turn's audio context,
+// opening the context if this is the turn's first sentence. original is the
+// pre-filter text; the configured filters produce the text sent to the provider.
+//
+// The audio does not go downstream from here. It is appended to the context and
+// pushed by the context's drain loop, so a provider whose audio arrives later on
+// its own receive loop and one that returns it inline reach the pipeline the
+// same way, in the order the audio was generated.
+func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
 	filtered := original
 	for _, f := range b.filters {
 		filtered = f.Filter(filtered)
@@ -251,141 +477,68 @@ func (b *Base) synthesize(ctx context.Context, original string) error {
 	if strings.TrimSpace(filtered) == "" {
 		return nil
 	}
-	ctx, span := tracing.Tracer().Start(ctx, "tts")
-	defer span.End()
-	rate := b.syn.SampleRate()
+	contextID := b.createContextID()
+	if !b.AudioContextAvailable(contextID) {
+		b.CreateAudioContext(contextID)
+		b.AppendToAudioContext(contextID, frames.NewTTSStartedFrame())
+	}
+	c := b.audioContextFor(contextID)
+	if c == nil {
+		return nil
+	}
 	// Providers bill per character, so count runes: len would charge an accented
 	// character twice.
-	chars := utf8.RuneCountInString(filtered)
-	span.SetAttributes(
-		attribute.String("tts.service", b.Name()),
-		attribute.Int("tts.chars", chars),
-		attribute.Int("tts.sample_rate", rate),
-		attribute.String("gen_ai.output.type", "speech"),
-	)
-	if b.meta.VoiceID != "" {
-		span.SetAttributes(attribute.String("gen_ai.request.voice", b.meta.VoiceID))
-	}
-	tracing.SetTTSUsage(ctx, b.meta.Model, chars)
-	if err := b.PushFrame(ctx, frames.NewTTSStartedFrame(), processor.Downstream); err != nil {
-		return err
-	}
-	start := time.Now()
-	meter := ttfaMeter{rate: rate}
-	emit := func(pcm []byte) error {
-		if len(pcm) == 0 {
-			return nil
-		}
-		meter.observe(pcm, start)
-		return b.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, rate, 1), processor.Downstream)
-	}
+	c.addChars(utf8.RuneCountInString(filtered))
+	// The frame the sequencer tracks carries the text as written, so the
+	// conversation records that rather than what the filters made of it.
+	aggregated := frames.NewAggregatedTextFrame(original, frames.AggregationSentence)
+	aggregated.ContextID = contextID
+	aggregated.WillBeSpoken = true
+	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
+		aggregated, contextID, filtered, true, b.wordPath(), false))
+	return b.runTTS(ctx, c, contextID, original, filtered)
+}
 
-	var synthErr error
+// runTTS asks the provider to speak one unit of text and routes what it yields
+// to the synthesis context. A provider whose audio arrives later on its own
+// receive loop yields nothing here and appends it itself.
+func (b *Base) runTTS(ctx context.Context, c *audioContext, contextID, original, filtered string) error {
+	// Every frame the provider yields is routed to its context, so audio and
+	// anything else it reports stay in the order it produced them.
+	yielded := false
+	yield := func(f frames.Frame) error {
+		if _, audio := f.(*frames.TTSAudioRawFrame); audio {
+			yielded = true
+		}
+		b.AppendToAudioContext(contextID, f)
+		return nil
+	}
+	var err error
 	if wt, ok := b.syn.(WordTimestamps); ok {
-		synthErr = b.synthesizeTimed(ctx, wt, original, filtered, rate, emit)
-	} else {
-		synthErr = b.syn.Synthesize(ctx, filtered, emit)
-	}
-	if synthErr != nil && ctx.Err() == nil {
-		span.RecordError(synthErr)
-		b.PushError(ctx, "tts synthesis failed", synthErr, false)
-	}
-	if meter.hadTTFB {
-		span.SetAttributes(attribute.Int64("tts.ttfb_ms", meter.ttfb.Milliseconds()))
-	}
-	if meter.hadTTFA {
-		span.SetAttributes(attribute.Int64("tts.ttfa_ms", meter.ttfa.Milliseconds()))
-	}
-	b.emitTiming(ctx, chars, &meter, time.Since(start))
-	return b.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
-}
-
-// synthesizeTimed drives a word-timestamp provider. It tracks word completion
-// against a segment map built from filtered (sent to the provider) and original
-// (written form), and interleaves a TTSTextFrame for each spoken word into the
-// audio stream at the point its audio begins to play. Words whose audio has not
-// yet been emitted are held back, so an interruption (a canceled ctx) leaves
-// only the spoken words downstream. When the synthesis finishes normally, any
-// trailing words are released and any original text the provider under-reported
-// is emitted to close out the sentence.
-func (b *Base) synthesizeTimed(
-	ctx context.Context,
-	wt WordTimestamps,
-	original, filtered string,
-	rate int,
-	emit func(pcm []byte) error,
-) error {
-	tracker := uctx.NewWordCompletionTracker(filtered, original, original)
-	var (
-		pending []pendingWord
-		elapsed float64 // seconds of audio emitted so far
-	)
-	release := func(upTo float64) error {
-		for len(pending) > 0 && pending[0].offset <= upTo {
-			if err := b.PushFrame(ctx, pending[0].frame, processor.Downstream); err != nil {
-				return err
-			}
-			pending = pending[1:]
-		}
-		return nil
-	}
-	timedEmit := func(pcm []byte) error {
-		if len(pcm) == 0 {
+		word := func(text string, offset float64) error {
+			b.AppendWordToAudioContext(contextID, text, offset)
 			return nil
 		}
-		if err := emit(pcm); err != nil {
-			return err
-		}
-		elapsed += float64(len(pcm)) / float64(rate*2) // 16-bit mono
-		// Release every word whose audio has now been emitted, so each spoken
-		// word's frame follows its audio downstream. A word is "spoken" once its
-		// audio has played, so an interruption after this chunk keeps it.
-		return release(elapsed)
+		err = wt.RunTTSTimed(ctx, filtered, contextID, yield, word)
+	} else {
+		err = b.syn.RunTTS(ctx, filtered, contextID, yield)
 	}
-	word := func(text string, offset float64) error {
-		if fr := trackWord(tracker, text); fr != nil {
-			pending = append(pending, pendingWord{offset: offset, frame: fr})
-		}
-		return nil
+	if err != nil && ctx.Err() == nil {
+		c.span.RecordError(err)
+		b.PushError(ctx, "tts synthesis failed", err, false)
 	}
-
-	err := wt.SynthesizeTimed(ctx, filtered, timedEmit, word)
-	if ctx.Err() != nil {
-		return err // interrupted: leave held-back words unspoken
+	// Whether the provider answered here decides who closes the context: one that
+	// yielded its audio is finished, one that did not is still delivering.
+	b.setYieldsSync(yielded)
+	if !b.wordPath() && yielded {
+		// With no word timings there is nothing to place the text against, so the
+		// whole unit goes in behind its audio, carrying the text as written rather
+		// than what the filters made of it.
+		text := frames.NewTTSTextFrame(original)
+		b.AppendToAudioContext(contextID, text)
+		b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot())
 	}
-	for _, p := range pending {
-		if perr := b.PushFrame(ctx, p.frame, processor.Downstream); perr != nil {
-			return perr
-		}
-	}
-	if rem := tracker.RemainingRawText(); rem != "" {
-		f := frames.NewTTSTextFrame(rem)
-		f.RawText = rem
-		if perr := b.PushFrame(ctx, f, processor.Downstream); perr != nil {
-			return perr
-		}
-	}
-	return err
-}
-
-// trackWord advances the tracker by one spoken token and builds the
-// TTSTextFrame to emit for it, or nil when the token produced no frame text. An
-// intermediate token of a transformed span is marked to stay out of the context;
-// the completing token carries the original written text as RawText.
-func trackWord(tracker *uctx.WordCompletionTracker, text string) *frames.TTSTextFrame {
-	tracker.AddWord(text)
-	frameWord, ok := tracker.FrameWord()
-	if !ok || frameWord == "" {
-		return nil
-	}
-	f := frames.NewTTSTextFrame(frameWord)
-	if raw, has := tracker.RawText(); has {
-		f.RawText = raw
-	}
-	if tracker.Suppress() {
-		f.AppendToContext = false
-	}
-	return f
+	return nil
 }
 
 // emitTiming records the synthesis's time-to-first-byte, time-to-first-audible
@@ -468,7 +621,8 @@ func (m *ttfaMeter) observe(pcm []byte, start time.Time) {
 }
 
 // StreamResponse issues req and streams the raw-PCM response body to emit in
-// chunks. It is the shared body-reading loop for HTTP TTS providers.
+// chunks. It is the shared body-reading loop for HTTP TTS providers. Pair it
+// with PCMYielder to turn the chunks into frames.
 func StreamResponse(client *http.Client, req *http.Request, emit func(pcm []byte) error) error {
 	resp, err := client.Do(req) //nolint:gosec // request target is the service's configured endpoint
 	if err != nil {
@@ -496,23 +650,4 @@ func StreamResponse(client *http.Client, req *http.Request, emit func(pcm []byte
 			return err
 		}
 	}
-}
-
-// endOfSentence reports whether text ends on a sentence-terminating mark.
-func endOfSentence(text string) bool {
-	trimmed := strings.TrimRight(text, " \t\n\"')]}")
-	if trimmed == "" {
-		return false
-	}
-	switch trimmed[len(trimmed)-1] {
-	case '.', '!', '?', ':', ';':
-		return true
-	}
-	// Catch full-width CJK terminators.
-	for _, suffix := range []string{"。", "！", "？", "…"} {
-		if strings.HasSuffix(trimmed, suffix) {
-			return true
-		}
-	}
-	return false
 }

@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
@@ -144,7 +145,8 @@ func (s *fluxSynth) SampleRate() int { return s.cfg.SampleRate }
 
 // Synthesize opens a synthesis session, sends text and a flush to render it as
 // one turn, and streams the returned PCM to emit until the turn completes.
-func (s *fluxSynth) Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error {
+func (s *fluxSynth) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
 	q := fluxTTSQuery(s.cfg)
 
 	header := http.Header{}

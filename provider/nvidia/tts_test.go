@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/nvidia/internal/rivapb"
+	"github.com/gojargo/jargo/service/tts"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -246,7 +248,7 @@ func TestTTSSynthesize(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 
 	var got []byte
-	if err := s.Synthesize(context.Background(), "hello there", func(pcm []byte) error {
+	if err := runPCM(s, context.Background(), "hello there", func(pcm []byte) error {
 		got = append(got, pcm...)
 		return nil
 	}); err != nil {
@@ -297,7 +299,7 @@ func TestTTSSynthesizeChunksLongText(t *testing.T) {
 
 	long := strings.TrimSpace(strings.Repeat("word ", 80)) // ~400 bytes
 	var chunks int
-	if err := s.Synthesize(context.Background(), long, func([]byte) error {
+	if err := runPCM(s, context.Background(), long, func([]byte) error {
 		chunks++
 		return nil
 	}); err != nil {
@@ -332,7 +334,7 @@ func TestTTSLocalNIMOmitsCredentials(t *testing.T) {
 	}.withTTSDefaults()}
 	t.Cleanup(func() { _ = s.Close() })
 
-	if err := s.Synthesize(context.Background(), "hi", func([]byte) error { return nil }); err != nil {
+	if err := runPCM(s, context.Background(), "hi", func([]byte) error { return nil }); err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
 	<-fake.requests
@@ -362,4 +364,15 @@ func TestTTSCloseIsIdempotent(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+}
+
+// runPCM drives a synthesizer the way the base does, handing back the raw audio
+// it yields.
+func runPCM(s tts.Synthesizer, ctx context.Context, text string, emit func(pcm []byte) error) error {
+	return s.RunTTS(ctx, text, "", func(f frames.Frame) error {
+		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
+			return emit(af.Audio)
+		}
+		return nil
+	})
 }

@@ -58,9 +58,13 @@ func (f *fakeLLM) ProcessFrame(ctx context.Context, frame frames.Frame, dir proc
 
 func buildFakeBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("test system"))
+	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, agg.User(), newFakeLLM(), rtvi.NewProcessor(), out, agg.Assistant(),
-	), pipeline.TaskParams{})
+		in, agg.User(), newFakeLLM(), rtviProc, out, agg.Assistant(),
+	), pipeline.TaskParams{
+		// The observer reports pipeline events; the processor carries them.
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+	})
 }
 
 func host(t *testing.T, body string) eval.Result {

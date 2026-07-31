@@ -1,17 +1,16 @@
 package pipeline
 
-import (
-	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/processor"
-)
+import "github.com/gojargo/jargo/processor"
 
-// Observer watches frames flowing through a pipeline without modifying them, to
-// derive turn, latency or startup metrics, or to log the stream. The task
-// reports each frame that reaches the pipeline's downstream end (with dir
-// Downstream) or upstream end (with dir Upstream) to every registered observer.
-//
-// Observers must be safe for concurrent use: the two ends run on separate
-// goroutines, so OnFrame may be called from either.
-type Observer interface {
-	OnFrame(f frames.Frame, dir processor.Direction)
-}
+// Observer watches frames flowing through a pipeline. See processor.Observer,
+// which is where the contract lives so a processor can report every handover.
+type Observer = processor.Observer
+
+// FramePushed is one frame moving from one processor to the next.
+type FramePushed = processor.FramePushed
+
+// FrameProcessed is one frame reaching a processor.
+type FrameProcessed = processor.FrameProcessed
+
+// ProcessObserver also sees a frame as it reaches a processor.
+type ProcessObserver = processor.ProcessObserver

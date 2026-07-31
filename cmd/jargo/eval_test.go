@@ -47,9 +47,13 @@ func (e *echoLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 
 func echoBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("test"))
+	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, agg.User(), newEchoLLM(), rtvi.NewProcessor(), out, agg.Assistant(),
-	), pipeline.TaskParams{})
+		in, agg.User(), newEchoLLM(), rtviProc, out, agg.Assistant(),
+	), pipeline.TaskParams{
+		// The observer reports pipeline events; the processor carries them.
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+	})
 }
 
 func writeScenario(t *testing.T, body string) string {

@@ -204,3 +204,87 @@ var (
 	_ DataFrame = (*TranscriptionFrame)(nil)
 	_ DataFrame = (*InterimTranscriptionFrame)(nil)
 )
+
+// AggregationType names how a stream of text was aggregated before synthesis.
+type AggregationType string
+
+// The built-in aggregation types.
+const (
+	// AggregationSentence aggregates text up to a sentence boundary.
+	AggregationSentence AggregationType = "sentence"
+	// AggregationToken passes each token through as it arrives.
+	AggregationToken AggregationType = "token"
+	// AggregationWord aggregates text a word at a time.
+	AggregationWord AggregationType = "word"
+)
+
+// AggregatedTextFrame is a run of TextFrames aggregated into one unit for
+// synthesis, carrying how they were aggregated.
+type AggregatedTextFrame struct {
+	TextFrame
+	// AggregatedBy is how the text was aggregated.
+	AggregatedBy AggregationType
+	// ContextID identifies the synthesis context this text was sent on.
+	ContextID string
+	// RawText is the full matched text including any pattern delimiters, set
+	// when the frame came from a pattern match such as a code block. Empty for
+	// an ordinary sentence aggregation.
+	RawText string
+	// WillBeSpoken reports whether the TTS service will speak this frame. The
+	// service sets it just before synthesis.
+	WillBeSpoken bool
+}
+
+// NewAggregatedTextFrame builds an AggregatedTextFrame aggregated by by.
+func NewAggregatedTextFrame(text string, by AggregationType) *AggregatedTextFrame {
+	return &AggregatedTextFrame{
+		TextFrame:    *NewTextFrame(text),
+		AggregatedBy: by,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *AggregatedTextFrame) String() string {
+	return fmt.Sprintf("%s(pts: %s, text: [%s], by: %s)", f.Name(), formatPTS(f), f.Text, f.AggregatedBy)
+}
+
+// AggregatedTextProgressFrame accompanies each TTSTextFrame during
+// word-timestamp playback, carrying the spoken-so-far and remaining text of the
+// AggregatedTextFrame being spoken. It lets a consumer highlight words as they
+// are heard without reaching into the sequencer's state.
+type AggregatedTextProgressFrame struct {
+	BaseDataFrame
+	// SegmentID identifies the AggregatedTextFrame being spoken.
+	SegmentID uint64
+	// ContextID is the synthesis context the text belongs to.
+	ContextID string
+	// Text is the full original text of the frame being spoken.
+	Text string
+	// AggregatedBy is how that text was aggregated.
+	AggregatedBy AggregationType
+	// AccumulatedText is what has been spoken so far, including the current word.
+	AccumulatedText string
+	// RemainingText is what has not been spoken yet.
+	RemainingText string
+}
+
+// NewAggregatedTextProgressFrame builds an AggregatedTextProgressFrame.
+func NewAggregatedTextProgressFrame(segmentID uint64, contextID, text string,
+	by AggregationType, accumulated, remaining string,
+) *AggregatedTextProgressFrame {
+	return &AggregatedTextProgressFrame{
+		BaseDataFrame:   NewBaseDataFrame("AggregatedTextProgressFrame"),
+		SegmentID:       segmentID,
+		ContextID:       contextID,
+		Text:            text,
+		AggregatedBy:    by,
+		AccumulatedText: accumulated,
+		RemainingText:   remaining,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *AggregatedTextProgressFrame) String() string {
+	return fmt.Sprintf("%s(pts: %s, spoken: [%s], remaining: [%s])",
+		f.Name(), formatPTS(f), f.AccumulatedText, f.RemainingText)
+}

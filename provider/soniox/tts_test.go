@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/tts"
 )
 
 // TestTTSConfigValidate pins which TTSConfig fields the provider requires and
@@ -177,7 +179,7 @@ func TestTTSSynthesize(t *testing.T) {
 
 	s := &ttsSynthesizer{cfg: TTSConfig{APIKey: "test-key", URL: endpoint}.withTTSDefaults()}
 	var got []byte
-	if err := s.Synthesize(context.Background(), "hello there", func(pcm []byte) error {
+	if err := runPCM(s, context.Background(), "hello there", func(pcm []byte) error {
 		got = append(got, pcm...)
 		return nil
 	}); err != nil {
@@ -231,7 +233,7 @@ func TestTTSSynthesizeTimed(t *testing.T) {
 		offset float64
 	}
 	var words []timed
-	if err := s.SynthesizeTimed(context.Background(), "hi there, pal",
+	if err := runPCMTimed(s, context.Background(), "hi there, pal",
 		func([]byte) error { return nil },
 		func(text string, offset float64) error {
 			words = append(words, timed{text, offset})
@@ -265,7 +267,7 @@ func TestTTSSynthesizeTimedSpaceless(t *testing.T) {
 	}}
 
 	var words []string
-	if err := s.SynthesizeTimed(context.Background(), "你好。",
+	if err := runPCMTimed(s, context.Background(), "你好。",
 		func([]byte) error { return nil },
 		func(text string, _ float64) error {
 			words = append(words, text)
@@ -286,7 +288,7 @@ func TestTTSServerError(t *testing.T) {
 	})
 
 	s := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k", URL: endpoint}.withTTSDefaults()}
-	err := s.Synthesize(context.Background(), "hello", func([]byte) error { return nil })
+	err := runPCM(s, context.Background(), "hello", func([]byte) error { return nil })
 	if err == nil {
 		t.Fatal("Synthesize() = nil error, want the server error surfaced")
 	}
@@ -305,7 +307,7 @@ func TestTTSTimingLengthMismatch(t *testing.T) {
 	s := &timedTTSSynthesizer{ttsSynthesizer: &ttsSynthesizer{
 		cfg: TTSConfig{APIKey: "k", URL: endpoint}.withTTSDefaults(),
 	}}
-	err := s.SynthesizeTimed(context.Background(), "hi",
+	err := runPCMTimed(s, context.Background(), "hi",
 		func([]byte) error { return nil },
 		func(string, float64) error { return nil })
 	if err == nil {
@@ -339,4 +341,28 @@ func TestNewTTSWordTimestampPath(t *testing.T) {
 	if (TTSConfig{APIKey: "k", WordTimestamps: &off}).wordTimestamps() {
 		t.Error("wordTimestamps() = true, want it off when explicitly disabled")
 	}
+}
+
+// runPCM drives a synthesizer the way the base does, handing back the raw audio
+// it yields.
+func runPCM(s tts.Synthesizer, ctx context.Context, text string, emit func(pcm []byte) error) error {
+	return s.RunTTS(ctx, text, "", func(f frames.Frame) error {
+		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
+			return emit(af.Audio)
+		}
+		return nil
+	})
+}
+
+// runPCMTimed drives a word-timestamp synthesizer the way the base does, handing
+// back the raw audio it yields.
+func runPCMTimed(s tts.WordTimestamps, ctx context.Context, text string,
+	emit func(pcm []byte) error, word func(text string, offset float64) error,
+) error {
+	return s.RunTTSTimed(ctx, text, "", func(f frames.Frame) error {
+		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
+			return emit(af.Audio)
+		}
+		return nil
+	}, word)
 }

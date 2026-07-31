@@ -12,7 +12,10 @@ import (
 
 func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 	out := make(chan rtvi.Message, 8)
-	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor()), pipeline.TaskParams{
+	rtviProc := rtvi.NewProcessor()
+	task := pipeline.NewTask(pipeline.New(rtviProc), pipeline.TaskParams{
+		// Events are reported by the observer; the processor only carries them.
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
