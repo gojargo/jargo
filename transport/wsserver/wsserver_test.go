@@ -477,6 +477,38 @@ func TestOutboundAudioDropped(t *testing.T) {
 	}
 }
 
+// TestOutboundAudioIsPaced checks audio leaves at the rate it plays rather than
+// the rate it is produced. Without pacing a whole utterance lands in the
+// provider's playout buffer at once, and a barge-in then cuts only audio that
+// has not been handed over yet, so the caller keeps hearing the bot. Upstream
+// has no test for this.
+func TestOutboundAudioIsPaced(t *testing.T) {
+	p := params()
+	p.AudioOut10msChunks = 10 // 100 ms chunks, long enough to time reliably
+	c := dial(t, &testSerializer{}, p)
+	defer c.shutdown(t)
+
+	// One 100 ms chunk at 8 kHz mono 16-bit is 1600 bytes. Queue four at once,
+	// so pacing is the only thing that can spread them out.
+	const chunk = 1600
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, chunk*4), 8000, 1))
+
+	start := time.Now()
+	for i := range 4 {
+		if got := c.expect(t); got.Kind != "audio" {
+			t.Fatalf("message %d kind = %q, want audio", i, got.Kind)
+		}
+	}
+	elapsed := time.Since(start)
+
+	// Each chunk is sent and only then does the clock wait, so the first two go
+	// out back to back and every later one waits a full interval. Four chunks
+	// therefore take about two intervals to all arrive.
+	if want := 150 * time.Millisecond; elapsed < want {
+		t.Errorf("four 100 ms chunks arrived in %v, want at least %v: output is not paced", elapsed, want)
+	}
+}
+
 // TestInterruptionSendsClear covers barge-in: the provider must be told to
 // discard the audio it has already buffered, or the bot keeps talking over the
 // caller.
