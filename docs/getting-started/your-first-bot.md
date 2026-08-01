@@ -33,11 +33,11 @@ params := transport.DefaultParams()
 params.AudioInSampleRate = opus.SampleRate
 params.AudioOutSampleRate = opus.SampleRate
 
-t := pionrtc.NewTransport(conn, params)
+t := rtc.NewTransport(conn, params)
 ```
 
 `t.Input()` and `t.Output()` are the processors that sit at the head and tail of
-the pipeline. `conn` is a `*pionrtc.Connection` you have already answered a WebRTC
+the pipeline. `conn` is a `*rtc.Connection` you have already answered a WebRTC
 offer on.
 
 ## 3. The conversation context

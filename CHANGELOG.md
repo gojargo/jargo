@@ -12,7 +12,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- **`transport/pionrtc` is now `transport/rtc`.** Pion is how the WebRTC
+  transport is implemented, not what it is, and the package name said the
+  former. Update imports and any `pionrtc.` references to `rtc.`.
+- **`transport.OutputDriver.WriteAudio` takes a frame** rather than a bare PCM
+  buffer, so a transport can read the outgoing stream a chunk is addressed to
+  alongside its samples. Implementations take a `frames.OutputAudioFrame` and
+  read the samples from `AudioData().Audio`.
+- **The frames carrying output audio are now a family**, `frames.OutputAudioFrame`,
+  covering `OutputAudioRawFrame`, `TTSAudioRawFrame` and the new
+  `SpeechOutputAudioRawFrame`. Match the interface rather than a concrete type,
+  or audio of a kind that was not named goes unhandled. `InputAudioRawFrame` is
+  outside the family, since it is never sent.
+
 ### Added
+
+- **Several outgoing audio streams per transport.** `Params.AudioOutDestinations`
+  names them, `OutputDriver.RegisterAudioDestination` opens each one, and every
+  frame is routed to the stream its `TransportDestination` names. Each stream
+  keeps its own buffer, mixer, chunking and bot-speaking state, so a turn on one
+  neither shares a buffer with nor silences another. A frame naming a stream that
+  was never registered is dropped with a warning.
+- **`Params.AudioOutMixers`**, mapping a destination to the mixer serving it.
+  `Params.AudioOutMixer` still serves the default stream, and now serves only
+  that one rather than every stream at once.
 
 - **`mem0.Config.APIKeyHeader`**, naming the header the API key is sent in. The
   key went out as `Authorization: Token <key>`, which is what the managed mem0

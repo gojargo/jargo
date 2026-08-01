@@ -21,7 +21,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -51,7 +51,7 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := pionrtc.NewConnection()
+	conn, err := rtc.NewConnection()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -73,12 +73,12 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 
 // runEcho runs a pipeline that echoes received audio back over the connection
 // until the client disconnects.
-func runEcho(conn *pionrtc.Connection) {
+func runEcho(conn *rtc.Connection) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
 
-	t := pionrtc.NewTransport(conn, params)
+	t := rtc.NewTransport(conn, params)
 	// The RTVI processor handles the client handshake (client-ready -> bot-ready)
 	// and reports pipeline events to the client over the data channel.
 	rtviProc := rtvi.NewProcessor()

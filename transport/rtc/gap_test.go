@@ -1,4 +1,4 @@
-package pionrtc
+package rtc
 
 import (
 	"strings"

@@ -39,7 +39,7 @@ import (
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -55,7 +55,7 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	conn, err := pionrtc.NewConnection()
+	conn, err := rtc.NewConnection()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -77,7 +77,7 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 
 // runBot builds and runs the STT -> LLM -> TTS pipeline for one connection and
 // drives it with a FlowManager entered at the opening node.
-func runBot(conn *pionrtc.Connection) {
+func runBot(conn *rtc.Connection) {
 	defer func() { _ = conn.Close() }()
 
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate})
@@ -87,7 +87,7 @@ func runBot(conn *pionrtc.Connection) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
-	t := pionrtc.NewTransport(conn, params)
+	t := rtc.NewTransport(conn, params)
 
 	convo := frames.NewLLMContext("") // the flow's opening node sets the persona.
 

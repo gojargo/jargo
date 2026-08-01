@@ -59,7 +59,7 @@ stt := openai.NewSTT(openai.STTConfig{APIKey: key, SampleRate: opus.SampleRate})
 llm := openai.NewLLM(openai.LLMConfig{APIKey: key})
 tts := openai.NewTTS(openai.TTSConfig{APIKey: key})
 
-t := pionrtc.NewTransport(conn, transport.DefaultParams())
+t := rtc.NewTransport(conn, transport.DefaultParams())
 agg := aggregators.New(frames.NewLLMContext("You are a helpful voice assistant."))
 
 task := pipeline.NewTask(pipeline.New(

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -136,7 +136,7 @@ func TestWebhookConnectAcceptsCall(t *testing.T) {
 
 func TestWebhookTerminateClosesCall(t *testing.T) {
 	c := mustClient(t, "")
-	conn, err := pionrtc.NewConnection(pionrtc.WithICEServers())
+	conn, err := rtc.NewConnection(rtc.WithICEServers())
 	if err != nil {
 		t.Fatalf("new connection: %v", err)
 	}

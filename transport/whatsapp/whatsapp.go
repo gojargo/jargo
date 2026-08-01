@@ -1,12 +1,12 @@
 // Package whatsapp answers inbound WhatsApp Business calls and bridges their
 // audio into a jargo pipeline. It runs a webhook endpoint for the WhatsApp Cloud
 // (Graph) API: it verifies the webhook, answers a "connect" event by building a
-// WebRTC answer with the Pion transport (transport/pionrtc) and accepting the
+// WebRTC answer with the Pion transport (transport/rtc) and accepting the
 // call over the Graph API, and closes the media on a "terminate" event.
 //
 // The media transport is the standard Pion WebRTC transport — the connected
-// *pionrtc.Connection handed to the OnCall callback is wrapped with
-// pionrtc.NewTransport to build the pipeline, exactly like the /offer examples.
+// *rtc.Connection handed to the OnCall callback is wrapped with
+// rtc.NewTransport to build the pipeline, exactly like the /offer examples.
 package whatsapp
 
 import (
@@ -23,7 +23,7 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/internal/validate"
-	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -50,11 +50,11 @@ type Config struct {
 func (c Config) Validate() error { return validate.Struct(c) }
 
 // Call is an accepted WhatsApp call whose media is ready to bridge. Wrap
-// Connection with pionrtc.NewTransport to build the pipeline.
+// Connection with rtc.NewTransport to build the pipeline.
 type Call struct {
 	ID         string
 	From       string
-	Connection *pionrtc.Connection
+	Connection *rtc.Connection
 
 	client *Client
 }
@@ -73,7 +73,7 @@ type Client struct {
 	onCall func(*Call)
 
 	mu    sync.Mutex
-	calls map[string]*pionrtc.Connection
+	calls map[string]*rtc.Connection
 }
 
 // NewClient builds a WhatsApp calling client.
@@ -87,7 +87,7 @@ func NewClient(cfg Config) (*Client, error) {
 	return &Client{
 		cfg:   cfg,
 		api:   &api{token: cfg.Token, phoneNumberID: cfg.PhoneNumberID, baseURL: cfg.BaseURL, http: &http.Client{}},
-		calls: map[string]*pionrtc.Connection{},
+		calls: map[string]*rtc.Connection{},
 	}, nil
 }
 
@@ -175,7 +175,7 @@ func (c *Client) validSignature(body []byte, header string) bool {
 // handleConnect answers the offer, accepts the call, and invokes OnCall.
 func (c *Client) handleConnect(call webhookCall) {
 	ctx := context.Background()
-	conn, err := pionrtc.NewConnection(pionrtc.WithICEServers(c.cfg.ICEServers...))
+	conn, err := rtc.NewConnection(rtc.WithICEServers(c.cfg.ICEServers...))
 	if err != nil {
 		slog.Error("whatsapp: new connection", "call", call.ID, "err", err)
 		return
@@ -217,7 +217,7 @@ func (c *Client) handleTerminate(callID string) {
 	}
 }
 
-func (c *Client) store(id string, conn *pionrtc.Connection) {
+func (c *Client) store(id string, conn *rtc.Connection) {
 	c.mu.Lock()
 	c.calls[id] = conn
 	c.mu.Unlock()

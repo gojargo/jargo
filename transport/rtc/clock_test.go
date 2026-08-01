@@ -1,4 +1,4 @@
-package pionrtc_test
+package rtc_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -31,7 +31,7 @@ const stallGap = 700 * time.Millisecond
 // span between the first and last timestamp, which must cover the wall clock the
 // test actually spent, gap included.
 func TestOutputTimelineSurvivesAStall(t *testing.T) {
-	server, err := pionrtc.NewConnection(pionrtc.WithICEServers())
+	server, err := rtc.NewConnection(rtc.WithICEServers())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestOutputTimelineSurvivesAStall(t *testing.T) {
 	params.AudioInEnabled = false
 	params.AudioInPassthrough = false
 	params.AudioOutSampleRate = opus.SampleRate
-	tr := pionrtc.NewTransport(server, params)
+	tr := rtc.NewTransport(server, params)
 
 	src := newBurstSource()
 	task := pipeline.NewTask(pipeline.New(src, tr.Output()), pipeline.TaskParams{

@@ -1,4 +1,4 @@
-package pionrtc_test
+package rtc_test
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -47,7 +47,7 @@ func (e *echoProcessor) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 // re-encodes it, and the client must receive audio back.
 func TestWebRTCEchoLoopback(t *testing.T) {
 	// Server side: a jargo connection with no STUN (host candidates only).
-	server, err := pionrtc.NewConnection(pionrtc.WithICEServers())
+	server, err := rtc.NewConnection(rtc.WithICEServers())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestWebRTCEchoLoopback(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
-	tr := pionrtc.NewTransport(server, params)
+	tr := rtc.NewTransport(server, params)
 	task := pipeline.NewTask(pipeline.New(tr.Input(), newEcho(), tr.Output()), pipeline.TaskParams{
 		AudioInSampleRate:  opus.SampleRate,
 		AudioOutSampleRate: opus.SampleRate,
@@ -169,7 +169,7 @@ func TestWebRTCEchoLoopback(t *testing.T) {
 // real WebRTC data channel: the client sends client-ready and must receive
 // bot-ready back over the channel.
 func TestRTVIHandshakeOverDataChannel(t *testing.T) {
-	server, err := pionrtc.NewConnection(pionrtc.WithICEServers())
+	server, err := rtc.NewConnection(rtc.WithICEServers())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestRTVIHandshakeOverDataChannel(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
-	tr := pionrtc.NewTransport(server, params)
+	tr := rtc.NewTransport(server, params)
 	task := pipeline.NewTask(
 		pipeline.New(tr.Input(), rtvi.NewProcessor(), newEcho(), tr.Output()),
 		pipeline.TaskParams{AudioInSampleRate: opus.SampleRate, AudioOutSampleRate: opus.SampleRate},

@@ -33,7 +33,7 @@ import (
 	"github.com/gojargo/jargo/provider/groq"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/transport/pionrtc"
+	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -52,7 +52,7 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	conn, err := pionrtc.NewConnection()
+	conn, err := rtc.NewConnection()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -73,7 +73,7 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 }
 
 // runBot builds and runs the STT -> LLM -> TTS pipeline for one connection.
-func runBot(conn *pionrtc.Connection) {
+func runBot(conn *rtc.Connection) {
 	defer func() { _ = conn.Close() }()
 
 	// --- the provider stack: the only part that differs between examples ---
@@ -85,7 +85,7 @@ func runBot(conn *pionrtc.Connection) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
-	t := pionrtc.NewTransport(conn, params)
+	t := rtc.NewTransport(conn, params)
 
 	convo := frames.NewLLMContext(systemPrompt)
 

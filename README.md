@@ -102,7 +102,7 @@ stt := chat.NewSTT(chat.STTConfig{APIKey: key, SampleRate: opus.SampleRate})
 llm := chat.NewLLM(chat.LLMConfig{APIKey: key})
 tts := chat.NewTTS(chat.TTSConfig{APIKey: key})
 
-t := pionrtc.NewTransport(conn, transport.DefaultParams())
+t := rtc.NewTransport(conn, transport.DefaultParams())
 agg := aggregators.New(frames.NewLLMContext("You are a helpful voice assistant."))
 
 task := pipeline.NewTask(pipeline.New(

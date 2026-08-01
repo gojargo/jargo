@@ -1,10 +1,14 @@
-// Package pionrtc implements a WebRTC transport for jargo using Pion. It
-// terminates a peer connection, decodes received Opus audio into PCM frames,
-// and encodes outgoing PCM frames into Opus sent over an RTP track.
+// Package rtc implements a WebRTC transport for jargo. It terminates a peer
+// connection, decodes received Opus audio into PCM frames, and encodes outgoing
+// PCM frames into Opus sent over an RTP track.
+//
+// Pion is the WebRTC implementation it is built on, which is why it imports
+// github.com/pion/webrtc. That is an implementation detail rather than part of
+// the interface this package offers.
 //
 // Signaling is a single SDP offer/answer exchange (non-trickle ICE) that the
 // application drives over HTTP.
-package pionrtc
+package rtc
 
 import (
 	"context"
@@ -19,7 +23,7 @@ import (
 
 // errConnectionClosed is returned when the peer connection closes while a
 // caller is waiting on it.
-var errConnectionClosed = errors.New("pionrtc: connection closed")
+var errConnectionClosed = errors.New("rtc: connection closed")
 
 // Connection wraps a Pion peer connection for one client session. It owns the
 // outgoing audio track and exposes the incoming one. It is safe for concurrent

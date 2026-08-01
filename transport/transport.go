@@ -3,7 +3,7 @@
 // frames and an output processor that turns frames into sent media.
 //
 // This package holds the transport-agnostic base processors; a concrete
-// transport (for example the Pion WebRTC transport in transport/pionrtc) embeds
+// transport (for example the WebRTC transport in transport/rtc) embeds
 // them and supplies the media I/O.
 package transport
 

@@ -2,7 +2,7 @@
 // participant. It subscribes to a remote participant's Opus audio, decodes it to
 // PCM frames for the pipeline, and publishes the pipeline's audio back as an
 // Opus track. Room signaling and the access token are handled by the LiveKit
-// server SDK; the media path mirrors the Pion transport (transport/pionrtc).
+// server SDK; the media path mirrors the Pion transport (transport/rtc).
 package livekit
 
 import (
