@@ -5,17 +5,31 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
 
-// botStopDebounce is how long after the last audio chunk the bot is considered
-// to have stopped speaking.
-const botStopDebounce = 250 * time.Millisecond
+const (
+	// botVADStop is how long a speech stream has to stay silent before the
+	// bot counts as having stopped speaking. It applies only to a speech stream,
+	// which carries silence between utterances; TTS output is ended by its
+	// TTSStoppedFrame instead.
+	botVADStop = 350 * time.Millisecond
+
+	// botVADStopFallback is the fallback, used when nothing reaches the
+	// output at all: with no audio and no stop frame for this long, the bot
+	// counts as having stopped speaking.
+	botVADStopFallback = 3 * time.Second
+
+	// botSpeakingFramePeriod is how often a BotSpeakingFrame is broadcast while
+	// the bot holds the floor. It only has an effect while it stays longer than
+	// one chunk's duration.
+	botSpeakingFramePeriod = 200 * time.Millisecond
+)
 
 // BaseOutput is the tail of a pipeline: it buffers OutputAudioRawFrames, slices
 // them into fixed-size chunks, and hands each chunk to the concrete transport
@@ -36,6 +50,11 @@ type BaseOutput struct {
 
 	bufMu  sync.Mutex
 	buffer []byte
+	// newChunk rebuilds a buffered chunk as the same frame type as the audio it
+	// was buffered from, so TTS audio stays a TTSAudioRawFrame and a speech
+	// stream stays a SpeechOutputAudioRawFrame. The bot-speaking bookkeeping
+	// reads that type to tell which of the two it is pacing out.
+	newChunk func(pcm []byte, sampleRate, numChannels int) frames.Frame
 
 	audioOut    chan frames.Frame
 	audioCtx    context.Context
@@ -47,17 +66,20 @@ type BaseOutput struct {
 	// drainWait, set under bufMu before a drain marker is queued, is closed by
 	// the audio loop once it has paced out everything ahead of the marker.
 	drainWait chan struct{}
-	// flushFrame holds the padded trailing chunk emitted when a turn ends. The
-	// audio loop plays it but skips the bot-speaking bookkeeping, so flushing a
-	// turn's tail does not re-arm speaking on a floor the bot has already given up.
-	flushFrame atomic.Pointer[frames.OutputAudioRawFrame]
 
-	// Bot-speaking detection: a BotStartedSpeakingFrame is emitted upstream when
-	// audio starts flowing and a BotStoppedSpeakingFrame after it drains, so the
-	// turn and idle controllers know when the bot holds the floor.
-	botMu         sync.Mutex
-	botSpeaking   bool
-	botStopCancel func()
+	// Bot-speaking detection: BotStartedSpeakingFrame is broadcast when the
+	// bot's audio starts flowing and BotStoppedSpeakingFrame once it ends, so
+	// the turn and idle controllers know when the bot holds the floor.
+	botMu sync.Mutex
+	// botSpeaking is whether the bot currently holds the floor.
+	botSpeaking bool
+	// ttsAudioReceived gates ending a turn on TTSStoppedFrame: a stop only
+	// counts once TTS audio has actually arrived for the turn.
+	ttsAudioReceived bool
+	// botSpeakingFrameAt is when the last periodic BotSpeakingFrame went out.
+	botSpeakingFrameAt time.Time
+	// botSpeechLastAt is when the bot was last audibly speaking.
+	botSpeechLastAt time.Time
 }
 
 // NewBaseOutput builds a BaseOutput. self is the embedding transport, used to
@@ -79,6 +101,9 @@ func (bo *BaseOutput) WriteAudio(context.Context, []byte) error { return nil }
 
 // SendMessage is the default no-op; a concrete transport overrides it.
 func (bo *BaseOutput) SendMessage(context.Context, []byte) error { return nil }
+
+// WriteTransportFrame is the default no-op; a concrete transport overrides it.
+func (bo *BaseOutput) WriteTransportFrame(context.Context, frames.Frame) error { return nil }
 
 // ProcessFrame handles the transport lifecycle and routes audio.
 func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
@@ -104,17 +129,21 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 			return err
 		}
 		bo.handleInterruption()
-		bo.stopBotSpeaking(ctx)
+		bo.botStoppedSpeaking(ctx)
 		return nil
 	case *frames.OutputTransportMessageFrame, *frames.OutputTransportMessageUrgentFrame:
 		return bo.handleTransportMessage(ctx, f, dir)
 	case frames.MixerControlFrame:
 		return bo.handleMixerControl(ctx, fr, dir)
-	case *frames.TTSAudioRawFrame, *frames.OutputAudioRawFrame:
+	case *frames.TTSAudioRawFrame, *frames.SpeechOutputAudioRawFrame, *frames.OutputAudioRawFrame:
 		if dir == processor.Downstream {
-			audio, rate, channels := outputAudio(f)
-			bo.handleAudioFrame(audio, rate, channels)
+			bo.handleAudioFrame(f)
 			return nil
+		}
+		return bo.PushFrame(ctx, f, dir)
+	case *frames.TTSStoppedFrame:
+		if dir == processor.Downstream {
+			return bo.handleTTSStopped(ctx, fr)
 		}
 		return bo.PushFrame(ctx, f, dir)
 	default:
@@ -168,7 +197,7 @@ func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) 
 }
 
 func (bo *BaseOutput) stopStreaming(ctx context.Context) {
-	bo.stopBotSpeaking(ctx)
+	bo.botStoppedSpeaking(ctx)
 	if bo.params.AudioOutMixer != nil {
 		_ = bo.params.AudioOutMixer.Stop(ctx)
 	}
@@ -196,15 +225,15 @@ var drainMarker = &frames.OutputAudioRawFrame{}
 func (bo *BaseOutput) drainAudio(ctx context.Context) {
 	bo.bufMu.Lock()
 	ac := bo.audioCtx
+	bo.bufMu.Unlock()
 	if ac == nil {
-		bo.bufMu.Unlock()
 		return
 	}
-	if len(bo.buffer) > 0 { // pad and flush the sub-chunk tail so it plays too
-		chunk := padChunk(bo.buffer, bo.chunkSize)
-		bo.buffer = nil
-		sendAudio(ac, bo.audioOut, frames.Frame(frames.NewOutputAudioRawFrame(chunk, bo.sampleRate, bo.channels)))
-	}
+
+	// Pad and flush the sub-chunk tail so the last of the audio plays too.
+	bo.enqueueFlushedAudioBuffer()
+
+	bo.bufMu.Lock()
 	done := make(chan struct{})
 	bo.drainWait = done
 	bo.bufMu.Unlock()
@@ -276,10 +305,13 @@ func (bo *BaseOutput) sendMessage(ctx context.Context, message any) error {
 }
 
 // outputAudio extracts the PCM, sample rate and channel count from a bot audio
-// frame (a TTSAudioRawFrame or a plain OutputAudioRawFrame).
-func outputAudio(f frames.Frame) (audio []byte, sampleRate, channels int) {
+// frame (a TTSAudioRawFrame, a SpeechOutputAudioRawFrame, or a plain
+// OutputAudioRawFrame).
+func outputAudio(f frames.Frame) (pcm []byte, sampleRate, channels int) {
 	switch fr := f.(type) {
 	case *frames.TTSAudioRawFrame:
+		return fr.Audio, fr.SampleRate, fr.NumChannels
+	case *frames.SpeechOutputAudioRawFrame:
 		return fr.Audio, fr.SampleRate, fr.NumChannels
 	case *frames.OutputAudioRawFrame:
 		return fr.Audio, fr.SampleRate, fr.NumChannels
@@ -287,30 +319,99 @@ func outputAudio(f frames.Frame) (audio []byte, sampleRate, channels int) {
 	return nil, 0, 0
 }
 
+// chunkBuilder returns the constructor for f's own frame type, so a chunk sliced
+// out of f is rebuilt as the same kind of frame rather than flattened to a plain
+// OutputAudioRawFrame.
+func chunkBuilder(f frames.Frame) func(pcm []byte, sampleRate, numChannels int) frames.Frame {
+	switch f.(type) {
+	case *frames.TTSAudioRawFrame:
+		return func(pcm []byte, rate, ch int) frames.Frame {
+			return frames.NewTTSAudioRawFrame(pcm, rate, ch)
+		}
+	case *frames.SpeechOutputAudioRawFrame:
+		return func(pcm []byte, rate, ch int) frames.Frame {
+			return frames.NewSpeechOutputAudioRawFrame(pcm, rate, ch)
+		}
+	default:
+		return func(pcm []byte, rate, ch int) frames.Frame {
+			return frames.NewOutputAudioRawFrame(pcm, rate, ch)
+		}
+	}
+}
+
 // handleAudioFrame resamples incoming audio to the output rate, buffers it, and
-// emits fixed-size chunks.
-func (bo *BaseOutput) handleAudioFrame(audio []byte, sampleRate, channels int) {
+// emits fixed-size chunks, each rebuilt as the frame type it was buffered from.
+func (bo *BaseOutput) handleAudioFrame(f frames.Frame) {
 	if !bo.params.AudioOutEnabled || bo.chunkSize == 0 {
 		return
 	}
-	audio = bo.resample(audio, sampleRate, channels)
+	pcm, sampleRate, channels := outputAudio(f)
+	pcm = bo.resample(pcm, sampleRate, channels)
 
 	bo.bufMu.Lock()
-	bo.buffer = append(bo.buffer, audio...)
-	var chunks [][]byte
+	bo.newChunk = chunkBuilder(f)
+	build := bo.newChunk
+	bo.buffer = append(bo.buffer, pcm...)
+	var chunks []frames.Frame
 	for len(bo.buffer) >= bo.chunkSize {
 		chunk := make([]byte, bo.chunkSize)
 		copy(chunk, bo.buffer[:bo.chunkSize])
-		chunks = append(chunks, chunk)
+		chunks = append(chunks, build(chunk, bo.sampleRate, channels))
 		bo.buffer = bo.buffer[bo.chunkSize:]
 	}
 	ctx := bo.audioCtx
+	out := bo.audioOut
 	bo.bufMu.Unlock()
 
 	for _, chunk := range chunks {
-		out := frames.NewOutputAudioRawFrame(chunk, bo.sampleRate, bo.channels)
-		sendAudio(ctx, bo.audioOut, frames.Frame(out))
+		sendAudio(ctx, out, chunk)
 	}
+}
+
+// handleTTSStopped queues a TTSStoppedFrame behind the audio it ends, flushing
+// the trailing partial chunk first. handleAudioFrame only queues whole chunks,
+// so up to one chunk of a turn's audio can still be sitting in the buffer;
+// queueing it now plays it before the stop frame is handled, instead of leaving
+// it to be discarded when the buffer is cleared.
+func (bo *BaseOutput) handleTTSStopped(ctx context.Context, f *frames.TTSStoppedFrame) error {
+	bo.enqueueFlushedAudioBuffer()
+
+	bo.bufMu.Lock()
+	audioCtx, out := bo.audioCtx, bo.audioOut
+	bo.bufMu.Unlock()
+	if audioCtx == nil || out == nil {
+		return bo.PushFrame(ctx, f, processor.Downstream)
+	}
+	// The audio loop forwards it downstream once it reaches it, so that the stop
+	// lands after the audio it ends rather than ahead of it.
+	sendAudio(audioCtx, out, frames.Frame(f))
+	return nil
+}
+
+// enqueueFlushedAudioBuffer pads whatever is left in the buffer out to a full
+// chunk with silence and queues it for playback, as the same frame type as the
+// audio it was buffered from. It goes through the normal playback path (write,
+// error handling, bot-speaking bookkeeping) like any other chunk, and keeps its
+// order relative to whatever is queued after it.
+func (bo *BaseOutput) enqueueFlushedAudioBuffer() {
+	bo.bufMu.Lock()
+	if len(bo.buffer) == 0 || bo.chunkSize == 0 {
+		bo.bufMu.Unlock()
+		return
+	}
+	build := bo.newChunk
+	if build == nil {
+		build = chunkBuilder(nil)
+	}
+	tail := build(padChunk(bo.buffer, bo.chunkSize), bo.sampleRate, bo.channels)
+	bo.buffer = nil
+	audioCtx, out := bo.audioCtx, bo.audioOut
+	bo.bufMu.Unlock()
+
+	if audioCtx == nil || out == nil {
+		return
+	}
+	sendAudio(audioCtx, out, tail)
 }
 
 // enqueueWordFrame queues a downstream word-aligned TTSTextFrame on the audio
@@ -371,7 +472,6 @@ func (bo *BaseOutput) handleInterruption() {
 	bo.bufMu.Lock()
 	bo.buffer = nil
 	bo.bufMu.Unlock()
-	bo.flushFrame.Store(nil)
 	if bo.clockQ != nil {
 		// The frames waiting on the clock belong to audio that will never play.
 		bo.clockQ.drop()
@@ -385,124 +485,179 @@ func (bo *BaseOutput) handleInterruption() {
 	}
 }
 
-// flushTailChunk pads and emits the sub-chunk remainder left in the buffer at a
-// turn's end, so the final few milliseconds of the bot's audio play out instead
-// of being stranded until the next turn. The emitted chunk is marked so the
-// audio loop writes it without re-arming bot-speaking. It is safe against a
-// barge-in: an interruption clears the buffer before this can read it, or drains
-// the emitted chunk back out of the queue.
-func (bo *BaseOutput) flushTailChunk(ctx context.Context) {
-	bo.bufMu.Lock()
-	if len(bo.buffer) == 0 || bo.chunkSize == 0 {
-		bo.bufMu.Unlock()
+// handleBotSpeech updates the bot-speaking state from one chunk of outgoing
+// audio. The two kinds of audio end a turn differently: TTS output is ended by
+// its TTSStoppedFrame, while a speech stream carries its own silence and has to
+// be measured.
+func (bo *BaseOutput) handleBotSpeech(ctx context.Context, f frames.Frame) {
+	switch fr := f.(type) {
+	case *frames.TTSAudioRawFrame:
+		// A TTSStoppedFrame only ends the turn once TTS audio has arrived for it.
+		bo.botMu.Lock()
+		bo.ttsAudioReceived = true
+		bo.botMu.Unlock()
+		bo.botCurrentlySpeaking(ctx)
+	case *frames.SpeechOutputAudioRawFrame:
+		bo.maybeBotCurrentlySpeaking(ctx, fr)
+	}
+}
+
+// maybeBotCurrentlySpeaking tracks a speech stream, which carries silence
+// between utterances: audible audio holds the floor, and silence for longer than
+// botVADStop gives it up.
+func (bo *BaseOutput) maybeBotCurrentlySpeaking(ctx context.Context, f *frames.SpeechOutputAudioRawFrame) {
+	if !audio.IsSilence(f.Audio) {
+		bo.botCurrentlySpeaking(ctx)
 		return
 	}
-	tail := frames.NewOutputAudioRawFrame(padChunk(bo.buffer, bo.chunkSize), bo.sampleRate, bo.channels)
-	bo.buffer = nil
-	out := bo.audioOut
-	bo.bufMu.Unlock()
-
-	bo.flushFrame.Store(tail)
-	sendAudio(ctx, out, frames.Frame(tail))
+	bo.botMu.Lock()
+	last := bo.botSpeechLastAt
+	bo.botMu.Unlock()
+	if time.Since(last) > botVADStop {
+		bo.botStoppedSpeaking(ctx)
+	}
 }
 
-// markBotSpeaking emits BotStartedSpeakingFrame on the first audio chunk and
-// arms a debounce timer that emits BotStoppedSpeakingFrame once audio drains.
-// Both go upstream so the turn and idle controllers see them.
-func (bo *BaseOutput) markBotSpeaking(ctx context.Context) {
+// botCurrentlySpeaking marks the bot as holding the floor and broadcasts a
+// BotSpeakingFrame at most once per botSpeakingFramePeriod while it does.
+func (bo *BaseOutput) botCurrentlySpeaking(ctx context.Context) {
+	bo.botStartedSpeaking(ctx)
+
+	now := time.Now()
+	bo.botMu.Lock()
+	due := now.Sub(bo.botSpeakingFrameAt) >= botSpeakingFramePeriod
+	if due {
+		bo.botSpeakingFrameAt = now
+	}
+	bo.botSpeechLastAt = now
+	bo.botMu.Unlock()
+
+	if due {
+		_ = bo.Broadcast(ctx, func() frames.Frame { return frames.NewBotSpeakingFrame() })
+	}
+}
+
+// botStartedSpeaking broadcasts that the bot took the floor, once per run of
+// speech.
+func (bo *BaseOutput) botStartedSpeaking(ctx context.Context) {
+	bo.botMu.Lock()
+	if bo.botSpeaking {
+		bo.botMu.Unlock()
+		return
+	}
+	bo.botSpeaking = true
+	bo.botMu.Unlock()
+
+	_ = bo.Broadcast(ctx, func() frames.Frame { return frames.NewBotStartedSpeakingFrame() })
+}
+
+// botStoppedSpeaking broadcasts that the bot gave up the floor. Whatever is left
+// buffered is dropped rather than flushed: after an interruption, or once a turn
+// has ended, that audio is no longer wanted.
+func (bo *BaseOutput) botStoppedSpeaking(ctx context.Context) {
 	bo.botMu.Lock()
 	if !bo.botSpeaking {
-		bo.botSpeaking = true
-		_ = bo.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
-	}
-	if bo.botStopCancel != nil {
-		bo.botStopCancel()
-	}
-	stopped := false
-	timer := time.AfterFunc(botStopDebounce, func() {
-		bo.botMu.Lock()
-		if stopped {
-			bo.botMu.Unlock()
-			return
-		}
-		bo.botSpeaking = false
-		bo.botStopCancel = nil
 		bo.botMu.Unlock()
-		// The turn has gone quiet: flush its trailing sub-chunk so the last of
-		// the bot's audio plays before we report it stopped speaking.
-		bo.flushTailChunk(ctx)
-		_ = bo.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Upstream)
-	})
-	bo.botStopCancel = func() {
-		stopped = true
-		timer.Stop()
+		return
 	}
-	bo.botMu.Unlock()
-}
-
-// stopBotSpeaking ends bot-speaking immediately (on interruption or shutdown).
-func (bo *BaseOutput) stopBotSpeaking(ctx context.Context) {
-	bo.botMu.Lock()
-	if bo.botStopCancel != nil {
-		bo.botStopCancel()
-		bo.botStopCancel = nil
-	}
-	was := bo.botSpeaking
 	bo.botSpeaking = false
+	bo.ttsAudioReceived = false
 	bo.botMu.Unlock()
-	if was {
-		_ = bo.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Upstream)
+
+	bo.bufMu.Lock()
+	bo.buffer = nil
+	bo.bufMu.Unlock()
+
+	_ = bo.Broadcast(ctx, func() frames.Frame { return frames.NewBotStoppedSpeakingFrame() })
+}
+
+// ttsStopped ends the bot's turn on a TTSStoppedFrame, but only when TTS audio
+// actually arrived for that turn.
+func (bo *BaseOutput) ttsStopped(ctx context.Context) {
+	bo.botMu.Lock()
+	received := bo.ttsAudioReceived
+	bo.botMu.Unlock()
+	if received {
+		bo.botStoppedSpeaking(ctx)
 	}
 }
 
-// audioLoop sends buffered chunks over the transport and forwards them
-// downstream.
+// audioLoop paces queued frames out to the transport. Receiving nothing at all
+// for botVADStopFallback is the fallback that ends the bot's turn when no
+// explicit stop reaches the output.
 func (bo *BaseOutput) audioLoop(ctx context.Context) {
 	defer bo.audioWG.Done()
+	idle := time.NewTimer(botVADStopFallback)
+	defer idle.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-idle.C:
+			bo.botStoppedSpeaking(ctx)
+			idle.Reset(botVADStopFallback)
 		case queued := <-bo.audioOut:
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(botVADStopFallback)
+
 			if queued == drainMarker {
-				bo.bufMu.Lock()
-				w := bo.drainWait
-				bo.drainWait = nil
-				bo.bufMu.Unlock()
-				if w != nil {
-					close(w)
-				}
+				bo.signalDrained()
 				continue
 			}
-			// A word-aligned text frame carries no audio; it has waited behind the
-			// audio it belongs to, so forward it downstream now that that audio has
-			// played and move on.
-			if wf, ok := queued.(*frames.TTSTextFrame); ok {
-				_ = bo.PushFrame(ctx, wf, processor.Downstream)
-				continue
-			}
-			chunk, ok := queued.(*frames.OutputAudioRawFrame)
-			if !ok {
-				continue
-			}
-			// A trailing flush chunk is the tail of a turn that already ended; it
-			// plays but must not re-arm bot-speaking, or it would open a spurious
-			// speaking cycle on a floor the bot has given up.
-			trailing := bo.flushFrame.CompareAndSwap(chunk, nil)
-			audio := chunk.Audio
-			if bo.params.AudioOutMixer != nil {
-				if mixed, err := bo.params.AudioOutMixer.Mix(ctx, audio); err == nil {
-					audio = mixed
-				}
-			}
-			if err := bo.self.WriteAudio(ctx, audio); err != nil {
-				slog.Error("write audio to transport", "processor", bo.Name(), "err", err)
-				continue
-			}
-			if !trailing {
-				bo.markBotSpeaking(ctx)
-			}
-			_ = bo.PushFrame(ctx, chunk, processor.Downstream)
+			bo.handleQueuedFrame(ctx, queued)
 		}
+	}
+}
+
+// signalDrained releases a drainAudio waiter once the loop reaches its marker.
+func (bo *BaseOutput) signalDrained() {
+	bo.bufMu.Lock()
+	w := bo.drainWait
+	bo.drainWait = nil
+	bo.bufMu.Unlock()
+	if w != nil {
+		close(w)
+	}
+}
+
+// handleQueuedFrame plays one queued frame: it applies the frame's own effect,
+// writes whatever audio it carries to the transport, and forwards it downstream.
+// A frame whose audio could not be written is not forwarded, so nothing
+// downstream treats it as having been sent.
+func (bo *BaseOutput) handleQueuedFrame(ctx context.Context, f frames.Frame) {
+	pushDownstream := true
+
+	switch f.(type) {
+	case *frames.TTSAudioRawFrame, *frames.SpeechOutputAudioRawFrame, *frames.OutputAudioRawFrame:
+		bo.handleBotSpeech(ctx, f)
+
+		pcm, _, _ := outputAudio(f)
+		if bo.params.AudioOutMixer != nil {
+			if mixed, err := bo.params.AudioOutMixer.Mix(ctx, pcm); err == nil {
+				pcm = mixed
+			}
+		}
+		if err := bo.self.WriteAudio(ctx, pcm); err != nil {
+			slog.Error("write audio to transport", "processor", bo.Name(), "err", err)
+			pushDownstream = false
+		}
+	case *frames.TTSStoppedFrame:
+		bo.ttsStopped(ctx)
+	default:
+		// A frame that carries no audio has waited behind the audio it belongs
+		// to (a word-aligned text frame, say). Give the concrete transport a
+		// chance to act on it now that that audio has played.
+		if err := bo.self.WriteTransportFrame(ctx, f); err != nil {
+			slog.Error("write transport frame", "processor", bo.Name(), "frame", f.Name(), "err", err)
+		}
+	}
+
+	if pushDownstream {
+		_ = bo.PushFrame(ctx, f, processor.Downstream)
 	}
 }

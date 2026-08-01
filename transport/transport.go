@@ -98,6 +98,10 @@ type OutputDriver interface {
 	// SendMessage sends an application message to the client (for example over
 	// a data channel).
 	SendMessage(ctx context.Context, data []byte) error
+	// WriteTransportFrame handles a queued frame that carries no audio, once the
+	// audio ahead of it has been sent. A transport overrides it to act on frame
+	// types it carries itself; the default does nothing.
+	WriteTransportFrame(ctx context.Context, f frames.Frame) error
 }
 
 // audioFrameChanCap bounds the buffered audio channels between the media

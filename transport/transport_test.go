@@ -265,7 +265,7 @@ func TestBaseOutputFlushesTailOnTurnEnd(t *testing.T) {
 	// One full chunk plus a half-chunk tail, marked with 0x01 so the padding is
 	// distinguishable from the audio.
 	audio := bytes.Repeat([]byte{0x01}, 1920+960)
-	task.QueueFrame(frames.NewOutputAudioRawFrame(audio, 48000, 1))
+	task.QueueFrame(frames.NewTTSAudioRawFrame(audio, 48000, 1))
 
 	// First write is the full chunk, unpadded.
 	first := recvWrite(t, o)
@@ -273,7 +273,9 @@ func TestBaseOutputFlushesTailOnTurnEnd(t *testing.T) {
 		t.Fatalf("first write = %d bytes, want 1920", len(first))
 	}
 
-	// The turn goes quiet; the debounce fires and flushes the padded tail.
+	// The turn ends: the TTS stop flushes the padded tail ahead of itself, so
+	// the last of the audio plays before the stop is handled.
+	task.QueueFrame(frames.NewTTSStoppedFrame())
 	tail := recvWrite(t, o)
 	if len(tail) != 1920 {
 		t.Fatalf("tail write = %d bytes, want 1920 (padded)", len(tail))
@@ -287,6 +289,93 @@ func TestBaseOutputFlushesTailOnTurnEnd(t *testing.T) {
 
 	task.StopWhenDone()
 	<-runDone
+}
+
+// TestBaseOutputShortTurnSignalsBotSpeaking covers a turn whose whole audio
+// never fills one chunk. It has to flush as the frame type it was buffered from,
+// so the bot-speaking bookkeeping (which dispatches on that type) still fires for
+// it instead of skipping the turn's start and stop events.
+func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	var mu sync.Mutex
+	var down, up []frames.Frame
+	taskParams := pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			down = append(down, f)
+			mu.Unlock()
+		},
+		OnReachedUpstream: func(f frames.Frame) {
+			mu.Lock()
+			up = append(up, f)
+			mu.Unlock()
+		},
+	}
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// Audio shorter than a single chunk is never queued for playback on its own;
+	// it only ever sits in the buffer until the turn ends.
+	partial := bytes.Repeat([]byte{0x03, 0x04}, 1920/4)
+	task.QueueFrame(frames.NewTTSAudioRawFrame(partial, 48000, 1))
+	task.QueueFrame(frames.NewTTSStoppedFrame())
+
+	got := recvWrite(t, o)
+	if len(got) != 1920 {
+		t.Fatalf("flushed write = %d bytes, want 1920 (padded)", len(got))
+	}
+	if !bytes.Equal(got[:len(partial)], partial) {
+		t.Errorf("flushed audio was not preserved")
+	}
+	if !bytes.Equal(got[len(partial):], make([]byte, 1920-len(partial))) {
+		t.Errorf("flush was not zero-padded with silence")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// The flushed chunk must stay a TTSAudioRawFrame rather than being flattened
+	// to a plain OutputAudioRawFrame, or the bookkeeping never recognizes it.
+	var sawTTSAudio bool
+	for _, f := range down {
+		if _, ok := f.(*frames.TTSAudioRawFrame); ok {
+			sawTTSAudio = true
+		}
+	}
+	if !sawTTSAudio {
+		t.Errorf("flushed chunk did not reach downstream as a TTSAudioRawFrame")
+	}
+
+	// Both speaking events must have fired even though no full chunk was queued,
+	// and both must be broadcast in each direction.
+	for _, dir := range []struct {
+		name string
+		got  []frames.Frame
+	}{{"downstream", down}, {"upstream", up}} {
+		var started, stopped bool
+		for _, f := range dir.got {
+			switch f.(type) {
+			case *frames.BotStartedSpeakingFrame:
+				started = true
+			case *frames.BotStoppedSpeakingFrame:
+				stopped = true
+			}
+		}
+		if !started {
+			t.Errorf("no BotStartedSpeakingFrame reached %s", dir.name)
+		}
+		if !stopped {
+			t.Errorf("no BotStoppedSpeakingFrame reached %s", dir.name)
+		}
+	}
 }
 
 // TestBaseOutputInterruptionDiscardsTail checks the other half of the contract:
