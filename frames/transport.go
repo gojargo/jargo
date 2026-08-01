@@ -24,6 +24,23 @@ func (f *InputTransportMessageFrame) String() string {
 	return fmt.Sprintf("%s(size: %d)", f.Name(), len(f.Message))
 }
 
+// InputTransportStartAudioStreamingFrame asks the input transport to start
+// streaming audio from its source. It is pushed downstream (by the RTVI
+// processor once the client is ready, say) so that starting the stream stays
+// frame-based rather than a direct call across processors. It is a control
+// frame.
+type InputTransportStartAudioStreamingFrame struct {
+	BaseControlFrame
+}
+
+// NewInputTransportStartAudioStreamingFrame builds an
+// InputTransportStartAudioStreamingFrame.
+func NewInputTransportStartAudioStreamingFrame() *InputTransportStartAudioStreamingFrame {
+	return &InputTransportStartAudioStreamingFrame{
+		BaseControlFrame: NewBaseControlFrame("InputTransportStartAudioStreamingFrame"),
+	}
+}
+
 // OutputTransportMessageFrame carries an application message to send to the
 // client over the transport — for example an RTVI message onto a WebRTC data
 // channel. Message is serialized by the output transport. It is a data frame, so

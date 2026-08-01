@@ -150,6 +150,12 @@ linters:
       - linters:
           - forbidigo
         path: cmd
+      # The filter and mixer control frames are deliberately parallel families:
+      # the same shape applied to a different subject. Collapsing them would
+      # hide that symmetry rather than remove real duplication.
+      - linters:
+          - dupl
+        path: frames/(filter|mixer)\.go
 formatters:
   enable:
     - gci              # Gci control golang package import order and make it always deterministic.

@@ -22,6 +22,13 @@ type BaseInput struct {
 	sampleRate   int
 	filterActive bool
 
+	// lifeMu serializes the streaming lifecycle (start, pause, stop) so that the
+	// audio goroutine is only ever torn down and recreated by one caller at a
+	// time. Without it a pause racing a teardown would add to the wait group
+	// while the other was waiting on it. It is never held by PushAudioFrame, so
+	// a driver blocked delivering audio cannot deadlock a stop.
+	lifeMu sync.Mutex
+
 	mu          sync.Mutex
 	paused      bool
 	audioIn     chan *frames.InputAudioRawFrame
@@ -49,6 +56,10 @@ func (bi *BaseInput) StartReading(context.Context) error { return nil }
 
 // StopReading is the default no-op; a concrete transport overrides it.
 func (bi *BaseInput) StopReading(context.Context) error { return nil }
+
+// StartAudioStreaming is the default no-op; a concrete transport overrides it to
+// begin streaming audio from its source.
+func (bi *BaseInput) StartAudioStreaming(context.Context) error { return nil }
 
 // PushAudioFrame queues a received audio frame to be pushed downstream. The
 // driver calls it for each chunk of audio it reads from the transport.
@@ -85,15 +96,36 @@ func (bi *BaseInput) ProcessFrame(ctx context.Context, f frames.Frame, dir proce
 			return err
 		}
 		return bi.startStreaming(ctx, fr)
+	case *frames.CancelFrame:
+		bi.stopStreaming(ctx)
+		return bi.PushFrame(ctx, f, dir)
+	case *frames.InputAudioRawFrame:
+		// Audio pushed in from upstream (by the RTVI processor, say) goes down
+		// the same filtering path as audio read from the transport itself,
+		// rather than being forwarded on as a plain frame.
+		bi.PushAudioFrame(ctx, fr)
+		return nil
 	case *frames.EndFrame:
+		// Push EndFrame before stopping, because stopping waits for the audio
+		// goroutine to finish.
 		if err := bi.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
 		bi.stopStreaming(ctx)
 		return nil
-	case *frames.CancelFrame:
-		bi.stopStreaming(ctx)
-		return bi.PushFrame(ctx, f, dir)
+	case *frames.StopFrame:
+		if err := bi.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		bi.pause(ctx)
+		return nil
+	case *frames.InputTransportStartAudioStreamingFrame:
+		return bi.self.StartAudioStreaming(ctx)
+	case *frames.FilterUpdateSettingsFrame:
+		if bi.filter == nil {
+			return nil
+		}
+		return bi.filter.ProcessFrame(ctx, fr)
 	default:
 		return bi.PushFrame(ctx, f, dir)
 	}
@@ -106,6 +138,9 @@ func (bi *BaseInput) Cleanup(ctx context.Context) error {
 }
 
 func (bi *BaseInput) startStreaming(ctx context.Context, f *frames.StartFrame) error {
+	bi.lifeMu.Lock()
+	defer bi.lifeMu.Unlock()
+
 	bi.sampleRate = pick(bi.params.AudioInSampleRate, f.AudioInSampleRate)
 
 	// Start the input filter before the audio goroutine so audioLoop observes a
@@ -132,7 +167,40 @@ func (bi *BaseInput) startStreaming(ctx context.Context, f *frames.StartFrame) e
 	return bi.self.StartReading(audioCtx)
 }
 
+// pause stops received audio from reaching the pipeline while leaving the
+// transport reading, so the pipeline can be stopped and started again without
+// tearing the connection down. Canceling the audio goroutine and starting a
+// fresh one also drops whatever was already queued, so a restart does not replay
+// audio from before the stop.
+func (bi *BaseInput) pause(ctx context.Context) {
+	bi.lifeMu.Lock()
+	defer bi.lifeMu.Unlock()
+
+	bi.mu.Lock()
+	bi.paused = true
+	cancel := bi.audioCancel
+	bi.audioCancel = nil
+	bi.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+		bi.audioWG.Wait()
+	}
+
+	bi.mu.Lock()
+	bi.audioCtx, bi.audioCancel = context.WithCancel(ctx)
+	bi.audioIn = make(chan *frames.InputAudioRawFrame, audioFrameChanCap)
+	audioCtx := bi.audioCtx
+	bi.mu.Unlock()
+
+	bi.audioWG.Add(1)
+	go bi.audioLoop(audioCtx)
+}
+
 func (bi *BaseInput) stopStreaming(ctx context.Context) {
+	bi.lifeMu.Lock()
+	defer bi.lifeMu.Unlock()
+
 	_ = bi.self.StopReading(ctx)
 
 	bi.mu.Lock()
