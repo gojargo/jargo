@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/frames"
 )
 
 // The failures the fake filters report.
@@ -21,12 +22,19 @@ var (
 type fake struct {
 	tag byte
 
-	started   int
-	stopped   int
-	filtered  int
-	startErr  error
-	stopErr   error
-	filterErr error
+	started    int
+	stopped    int
+	filtered   int
+	controlled int
+	startErr   error
+	stopErr    error
+	filterErr  error
+	controlErr error
+}
+
+func (f *fake) ProcessFrame(context.Context, frames.FilterControlFrame) error {
+	f.controlled++
+	return f.controlErr
 }
 
 func (f *fake) Start(context.Context, int) error {

@@ -12,6 +12,7 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/frames"
 )
 
 // rnnoiseRate is the only sample rate RNNoise operates at.
@@ -93,13 +94,14 @@ func New() (audio.Filter, error) {
 	if err := load(); err != nil {
 		return nil, err
 	}
-	return &filter{}, nil
+	return &filter{filtering: true}, nil
 }
 
 type filter struct {
-	mu    sync.Mutex
-	st    uintptr // RNNoise DenoiseState*
-	frame int     // samples RNNoise consumes per call (480)
+	mu        sync.Mutex
+	st        uintptr // RNNoise DenoiseState*
+	frame     int     // samples RNNoise consumes per call (480)
+	filtering bool    // false once a FilterEnableFrame switches denoising off
 
 	up   *resample.Resampler // input rate -> 48 kHz
 	down *resample.Resampler // 48 kHz -> input rate
@@ -159,6 +161,18 @@ func (f *filter) Stop(context.Context) error {
 	return nil
 }
 
+// ProcessFrame applies a runtime control frame. A FilterEnableFrame switches
+// denoising on or off, leaving the RNNoise state in place so it can be switched
+// back without reloading.
+func (f *filter) ProcessFrame(_ context.Context, fr frames.FilterControlFrame) error {
+	if enable, ok := fr.(*frames.FilterEnableFrame); ok {
+		f.mu.Lock()
+		f.filtering = enable.Enable
+		f.mu.Unlock()
+	}
+	return nil
+}
+
 // Filter denoises pcm. It resamples to 48 kHz, processes every complete 480-sample
 // frame (buffering any remainder for the next call), resamples back to the input
 // rate, and returns the result — empty when no whole frame was available yet.
@@ -166,8 +180,8 @@ func (f *filter) Filter(_ context.Context, pcm []byte) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if f.st == 0 {
-		return pcm, nil // not started: passthrough
+	if f.st == 0 || !f.filtering {
+		return pcm, nil // not started, or switched off: passthrough
 	}
 
 	wide := pcm

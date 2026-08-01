@@ -1,6 +1,10 @@
 package audio
 
-import "context"
+import (
+	"context"
+
+	"github.com/gojargo/jargo/frames"
+)
 
 // Chain applies several Filters in sequence, composing multiple input-audio
 // stages — noise reduction, gating, conditioning — into one Filter that a
@@ -45,6 +49,18 @@ func (c *Chain) Filter(ctx context.Context, pcm []byte) ([]byte, error) {
 		}
 	}
 	return pcm, nil
+}
+
+// ProcessFrame applies a control frame to every filter, returning the last error
+// if any. Each filter decides for itself which controls it recognizes.
+func (c *Chain) ProcessFrame(ctx context.Context, f frames.FilterControlFrame) error {
+	var err error
+	for _, flt := range c.filters {
+		if e := flt.ProcessFrame(ctx, f); e != nil {
+			err = e
+		}
+	}
+	return err
 }
 
 // Compile-time interface check.
