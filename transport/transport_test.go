@@ -20,12 +20,20 @@ import (
 type fakeInput struct {
 	*transport.BaseInput
 	frames int
+
+	// streaming records calls to StartAudioStreaming.
+	streaming chan struct{}
 }
 
 func newFakeInput(p transport.Params, n int) *fakeInput {
-	in := &fakeInput{frames: n}
+	in := &fakeInput{frames: n, streaming: make(chan struct{}, 4)}
 	in.BaseInput = transport.NewBaseInput("FakeInput", p, in)
 	return in
+}
+
+func (in *fakeInput) StartAudioStreaming(context.Context) error {
+	in.streaming <- struct{}{}
+	return nil
 }
 
 func (in *fakeInput) StartReading(ctx context.Context) error {
@@ -70,6 +78,154 @@ func TestBaseInputPushesAudioDownstream(t *testing.T) {
 	<-runDone
 }
 
+// TestBaseInputRoutesUpstreamAudioThroughFilter covers audio pushed into the
+// input from elsewhere in the pipeline (by the RTVI processor, say). It has to go
+// down the same filtering path as audio read from the transport itself, rather
+// than being forwarded on untouched as a plain frame.
+func TestBaseInputRoutesUpstreamAudioThroughFilter(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+	filter := &fakeFilter{}
+	params.AudioInFilter = filter
+
+	got := make(chan []byte, 4)
+	taskParams := pipeline.TaskParams{
+		OnReachedDownstream: func(fr frames.Frame) {
+			if af, ok := fr.(*frames.InputAudioRawFrame); ok {
+				got <- af.Audio
+			}
+		},
+	}
+
+	// No frames of its own: the only audio is the one queued below.
+	in := newFakeInput(params, 0)
+	task := pipeline.NewTask(pipeline.New(in), taskParams)
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewInputAudioRawFrame([]byte{1, 2, 3, 4}, 48000, 1))
+
+	select {
+	case audio := <-got:
+		// fakeFilter increments every byte, so filtered audio proves the frame
+		// went through the audio path instead of straight downstream.
+		if !bytes.Equal(audio, []byte{2, 3, 4, 5}) {
+			t.Errorf("audio = %v, want %v (upstream audio bypassed the filter)", audio, []byte{2, 3, 4, 5})
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("upstream audio never reached downstream")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestBaseInputStartAudioStreamingFrame checks that the frame reaches the
+// transport's streaming hook, so starting the stream stays frame-based rather
+// than a direct call across processors.
+func TestBaseInputStartAudioStreamingFrame(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+
+	in := newFakeInput(params, 0)
+	task := pipeline.NewTask(pipeline.New(in), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewInputTransportStartAudioStreamingFrame())
+
+	select {
+	case <-in.streaming:
+	case <-time.After(3 * time.Second):
+		t.Fatal("InputTransportStartAudioStreamingFrame did not reach StartAudioStreaming")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestBaseInputStopFramePausesAudio covers the pause: a StopFrame stops the
+// pipeline while leaving its processors running, so the transport keeps reading
+// but what it receives must no longer reach the pipeline. Upstream has no test
+// for this; it covers the ported behavior.
+func TestBaseInputStopFramePausesAudio(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+
+	// The filter counter is what makes this observable: a StopFrame ends the
+	// task, so nothing reaches the end of the pipeline afterwards either way,
+	// but the filter only runs for audio the input actually accepted.
+	filter := &fakeFilter{}
+	params.AudioInFilter = filter
+
+	in := newFakeInput(params, 0)
+	task := pipeline.NewTask(pipeline.New(in), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	ctx := context.Background()
+	audio := func() *frames.InputAudioRawFrame {
+		return frames.NewInputAudioRawFrame(make([]byte, 320), 48000, 1)
+	}
+
+	// Settle first, so the StartFrame has been processed and the input is
+	// actually accepting audio.
+	if err := task.Flush(ctx); err != nil {
+		t.Fatalf("flush after start: %v", err)
+	}
+
+	in.PushAudioFrame(ctx, audio())
+	deadline := time.Now().Add(3 * time.Second)
+	for filter.filtered.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("audio was not filtered before the stop")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Stopping the pipeline pauses the input: the transport keeps reading, but
+	// what it receives no longer enters the pipeline. The StopFrame is pushed on
+	// before the pause runs, so give the pause a moment to land.
+	task.QueueFrame(frames.NewStopFrame())
+	<-runDone
+	time.Sleep(50 * time.Millisecond)
+
+	before := filter.filtered.Load()
+	in.PushAudioFrame(ctx, audio())
+	time.Sleep(300 * time.Millisecond)
+	if got := filter.filtered.Load(); got != before {
+		t.Errorf("filter ran %d more times: audio was not dropped while paused", got-before)
+	}
+}
+
+// TestBaseInputRoutesFilterSettings checks that a filter settings frame reaches
+// the filter, so it can be retuned at runtime without being torn down.
+func TestBaseInputRoutesFilterSettings(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+	filter := &fakeFilter{controls: make(chan *frames.FilterUpdateSettingsFrame, 4)}
+	params.AudioInFilter = filter
+
+	in := newFakeInput(params, 0)
+	task := pipeline.NewTask(pipeline.New(in), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewFilterUpdateSettingsFrame(map[string]any{"level": 3}))
+
+	select {
+	case settings := <-filter.controls:
+		if settings.Settings["level"] != 3 {
+			t.Errorf("settings = %v, want level 3", settings.Settings)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("FilterUpdateSettingsFrame never reached the filter")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
 // fakeOutput is an output transport that records the audio chunks it is asked
 // to send.
 type fakeOutput struct {
@@ -97,6 +253,16 @@ type fakeFilter struct {
 	stopped  atomic.Int32
 	rate     atomic.Int32
 	filtered atomic.Int32
+
+	// controls records the settings frames routed to the filter at runtime.
+	controls chan *frames.FilterUpdateSettingsFrame
+}
+
+func (f *fakeFilter) ProcessFrame(_ context.Context, fr frames.FilterControlFrame) error {
+	if settings, ok := fr.(*frames.FilterUpdateSettingsFrame); ok && f.controls != nil {
+		f.controls <- settings
+	}
+	return nil
 }
 
 func (f *fakeFilter) Start(_ context.Context, sampleRate int) error {

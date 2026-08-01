@@ -87,6 +87,11 @@ type InputDriver interface {
 	StartReading(ctx context.Context) error
 	// StopReading stops reading media from the transport.
 	StopReading(ctx context.Context) error
+	// StartAudioStreaming begins streaming audio from the transport's source,
+	// for a transport that does not start streaming as soon as it connects. It
+	// is driven by an InputTransportStartAudioStreamingFrame; the default does
+	// nothing.
+	StartAudioStreaming(ctx context.Context) error
 }
 
 // OutputDriver is implemented by a concrete output transport so the base can
