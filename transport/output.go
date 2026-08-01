@@ -93,6 +93,10 @@ func NewBaseOutput(name string, params Params, self OutputDriver) *BaseOutput {
 // SampleRate is the output sample rate in Hz, set when the transport starts.
 func (bo *BaseOutput) SampleRate() int { return bo.sampleRate }
 
+// ChunkSize is the size in bytes of the audio chunks the output writes, set when
+// the transport starts.
+func (bo *BaseOutput) ChunkSize() int { return bo.chunkSize }
+
 // Params returns the transport parameters.
 func (bo *BaseOutput) Params() Params { return bo.params }
 

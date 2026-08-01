@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
@@ -232,6 +233,27 @@ type outputTransport struct {
 	*transport.BaseOutput
 	sess *Session
 	ser  Serializer
+
+	// WriteAudio is called as soon as audio is produced, by the TTS say, and
+	// this is only a network connection, so audio would otherwise go out far
+	// faster than it plays. Blocking for as long as a chunk takes to play
+	// emulates an audio device, keeping the provider's playout buffer shallow so
+	// a barge-in cuts audio that has not been handed over yet.
+	paceMu sync.Mutex
+	// sendInterval is how long one chunk takes to play, set on the StartFrame.
+	sendInterval time.Duration
+	// nextSend is when the next chunk is due. The zero time means send now and
+	// start the clock from there.
+	nextSend time.Time
+}
+
+// chunkDuration is how long one chunk of 16-bit PCM takes to play.
+func chunkDuration(chunkSize, sampleRate, numChannels int) time.Duration {
+	bytesPerSec := sampleRate * numChannels * 2
+	if chunkSize <= 0 || bytesPerSec <= 0 {
+		return 0
+	}
+	return time.Duration(chunkSize) * time.Second / time.Duration(bytesPerSec)
 }
 
 func newOutput(sess *Session, ser Serializer, params transport.Params) *outputTransport {
@@ -250,7 +272,47 @@ func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	if msg == nil {
 		return nil
 	}
-	return out.sess.write(ctx, msg)
+	if err := out.sess.write(ctx, msg); err != nil {
+		return err
+	}
+	out.writeAudioSleep(ctx)
+	return nil
+}
+
+// writeAudioSleep blocks until the next chunk is due, so audio leaves at the
+// rate it plays rather than the rate it is produced.
+func (out *outputTransport) writeAudioSleep(ctx context.Context) {
+	out.paceMu.Lock()
+	interval, next := out.sendInterval, out.nextSend
+	out.paceMu.Unlock()
+	if interval <= 0 {
+		return
+	}
+
+	if wait := time.Until(next); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		out.paceMu.Lock()
+		// An interruption may have reset the clock while this waited. Leave the
+		// reset alone if so, or the next chunk would wait on a stale schedule
+		// instead of going out at once.
+		if out.nextSend.Equal(next) {
+			out.nextSend = next.Add(interval)
+		}
+		out.paceMu.Unlock()
+		return
+	}
+
+	// At or behind schedule: send now and time the next chunk from here.
+	out.paceMu.Lock()
+	out.nextSend = time.Now().Add(interval)
+	out.paceMu.Unlock()
 }
 
 // SendMessage sends an already-encoded application message.
@@ -269,11 +331,31 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		return nil
 	}
 	switch f.(type) {
-	case *frames.InterruptionFrame, *frames.EndFrame, *frames.CancelFrame:
-		msg, err := out.ser.Serialize(f)
-		if err == nil && msg != nil {
-			_ = out.sess.write(ctx, msg)
-		}
+	case *frames.StartFrame:
+		// The base has sized the chunks by now, so the playout clock can be
+		// derived from them.
+		out.paceMu.Lock()
+		out.sendInterval = chunkDuration(out.ChunkSize(), out.SampleRate(), channels(out.Params().AudioOutChannels))
+		out.nextSend = time.Time{}
+		out.paceMu.Unlock()
+	case *frames.InterruptionFrame:
+		out.sendControl(ctx, f)
+		// Restart the playout clock on a barge-in so the next turn's audio goes
+		// out at once rather than waiting on the cut-off turn's schedule.
+		out.paceMu.Lock()
+		out.nextSend = time.Time{}
+		out.paceMu.Unlock()
+	case *frames.EndFrame, *frames.CancelFrame:
+		out.sendControl(ctx, f)
 	}
 	return nil
+}
+
+// sendControl serializes a control frame to the provider's own message, if the
+// serializer has one for it, and sends it.
+func (out *outputTransport) sendControl(ctx context.Context, f frames.Frame) {
+	msg, err := out.ser.Serialize(f)
+	if err == nil && msg != nil {
+		_ = out.sess.write(ctx, msg)
+	}
 }
