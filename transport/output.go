@@ -315,6 +315,19 @@ func outputAudio(f frames.Frame) (pcm []byte, sampleRate, channels int) {
 	return nil, 0, 0
 }
 
+// setOutputAudio replaces the PCM a bot audio frame carries, leaving everything
+// else about the frame alone.
+func setOutputAudio(f frames.Frame, pcm []byte) {
+	switch fr := f.(type) {
+	case *frames.TTSAudioRawFrame:
+		fr.Audio = pcm
+	case *frames.SpeechOutputAudioRawFrame:
+		fr.Audio = pcm
+	case *frames.OutputAudioRawFrame:
+		fr.Audio = pcm
+	}
+}
+
 // chunkBuilder returns the constructor for f's own frame type, so a chunk sliced
 // out of f is rebuilt as the same kind of frame rather than flattened to a plain
 // OutputAudioRawFrame.
@@ -578,11 +591,62 @@ func (bo *BaseOutput) ttsStopped(ctx context.Context) {
 	}
 }
 
-// audioLoop paces queued frames out to the transport. Receiving nothing at all
-// for botVADStopFallback is the fallback that ends the bot's turn when no
-// explicit stop reaches the output.
+// audioLoop paces queued frames out to the transport. A mixer changes how the
+// gaps between frames are handled, so the two cases are separate loops.
 func (bo *BaseOutput) audioLoop(ctx context.Context) {
 	defer bo.audioWG.Done()
+	if bo.params.AudioOutMixer != nil {
+		bo.audioLoopWithMixer(ctx)
+		return
+	}
+	bo.audioLoopWithoutMixer(ctx)
+}
+
+// audioLoopWithMixer blends the mixer into queued audio and fills the gaps
+// between frames with the mixer's own audio. Without that filling, auxiliary
+// audio would only be audible while the bot speaks and would cut out between
+// turns. The generated audio is plain output audio, so it paces the loop through
+// the transport without ever marking the bot as speaking.
+func (bo *BaseOutput) audioLoopWithMixer(ctx context.Context) {
+	mixer := bo.params.AudioOutMixer
+	silence := make([]byte, bo.chunkSize)
+	var lastAudioAt time.Time
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case queued := <-bo.audioOut:
+			if queued == drainMarker {
+				bo.signalDrained()
+				continue
+			}
+			if pcm, _, _ := outputAudio(queued); pcm != nil {
+				if mixed, err := mixer.Mix(ctx, pcm); err == nil {
+					setOutputAudio(queued, mixed)
+				}
+				lastAudioAt = time.Now()
+			}
+			bo.handleQueuedFrame(ctx, queued)
+		default:
+			// Nothing is queued. The bot has stopped speaking once it has been
+			// quiet for long enough, and the mixer plays on regardless.
+			if time.Since(lastAudioAt) > botVADStopFallback {
+				bo.botStoppedSpeaking(ctx)
+			}
+			mixed, err := mixer.Mix(ctx, silence)
+			if err != nil {
+				mixed = silence
+			}
+			bo.handleQueuedFrame(ctx, frames.NewOutputAudioRawFrame(mixed, bo.sampleRate, bo.channels))
+		}
+	}
+}
+
+// audioLoopWithoutMixer paces queued frames out to the transport. Receiving
+// nothing at all for botVADStopFallback is the fallback that ends the bot's turn
+// when no explicit stop reaches the output.
+func (bo *BaseOutput) audioLoopWithoutMixer(ctx context.Context) {
 	idle := time.NewTimer(botVADStopFallback)
 	defer idle.Stop()
 	for {
@@ -632,12 +696,9 @@ func (bo *BaseOutput) handleQueuedFrame(ctx context.Context, f frames.Frame) {
 	case *frames.TTSAudioRawFrame, *frames.SpeechOutputAudioRawFrame, *frames.OutputAudioRawFrame:
 		bo.handleBotSpeech(ctx, f)
 
+		// The mixer has already been blended in by the loop that sourced this
+		// frame, so what the frame carries is what goes out.
 		pcm, _, _ := outputAudio(f)
-		if bo.params.AudioOutMixer != nil {
-			if mixed, err := bo.params.AudioOutMixer.Mix(ctx, pcm); err == nil {
-				pcm = mixed
-			}
-		}
 		if err := bo.self.WriteAudio(ctx, pcm); err != nil {
 			slog.Error("write audio to transport", "processor", bo.Name(), "err", err)
 			pushDownstream = false

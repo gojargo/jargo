@@ -544,6 +544,53 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 	}
 }
 
+// passthroughMixer returns the audio it is given, so the only thing a test can
+// read from it is whether the output asked it to mix at all.
+type passthroughMixer struct{}
+
+func (passthroughMixer) Start(context.Context, int) error { return nil }
+func (passthroughMixer) Stop(context.Context) error       { return nil }
+
+func (passthroughMixer) Mix(_ context.Context, pcm []byte) ([]byte, error) { return pcm, nil }
+
+func (passthroughMixer) ProcessFrame(context.Context, frames.MixerControlFrame) error { return nil }
+
+// TestBaseOutputMixerFillsGaps covers auxiliary audio between turns: with a
+// mixer configured, mixer-only audio has to keep flowing while nothing is
+// queued, and keep flowing across an interruption. Otherwise background audio
+// would only ever be audible underneath the bot's speech and would cut out the
+// moment it stopped.
+func TestBaseOutputMixerFillsGaps(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000
+	params.AudioOutMixer = passthroughMixer{}
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// Nothing is queued at any point: every write below is the mixer's own audio.
+	for i := range 3 {
+		if got := recvWrite(t, o); len(got) == 0 {
+			t.Fatalf("mixer write %d was empty", i)
+		}
+	}
+
+	task.QueueFrame(frames.NewInterruptionFrame())
+
+	// The mixer keeps playing across a barge-in: it is not the bot's turn that
+	// was interrupted, it is the background.
+	for i := range 3 {
+		if got := recvWrite(t, o); len(got) == 0 {
+			t.Fatalf("mixer write %d after the interruption was empty", i)
+		}
+	}
+
+	task.Cancel()
+	<-runDone
+}
+
 // TestBaseOutputInterruptionDiscardsTail checks the other half of the contract:
 // a barge-in must drop the pending sub-chunk tail, not play it after the fact.
 func TestBaseOutputInterruptionDiscardsTail(t *testing.T) {
