@@ -2,12 +2,14 @@ package aggregators_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/turns"
 )
 
 func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
@@ -52,7 +54,13 @@ func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
 
 func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	convo := frames.NewLLMContext("system")
-	pair := aggregators.New(convo, aggregators.WithTurnTaking())
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+		},
+		StopTimeout: 2 * time.Second,
+	}))
 
 	triggered := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
@@ -69,7 +77,7 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	go func() { runDone <- task.Run(context.Background()) }()
 
 	// A finalized transcript without an end-of-turn must NOT trigger the LLM.
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
 	tf := frames.NewTranscriptionFrame("hello there", "u", "ts")
 	tf.Finalized = true
 	task.QueueFrame(tf)
@@ -80,9 +88,8 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	// The end-of-turn frame, with a finalized transcript already in hand, now
-	// triggers the LLM.
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	// The end-of-turn decision, with a finalized transcript in hand, triggers it.
+	task.QueueFrame(frames.NewUserTurnInferenceCompletedFrame())
 	select {
 	case <-triggered:
 	case <-time.After(3 * time.Second):
@@ -93,7 +100,63 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Text != "hello there" {
 		t.Fatalf("context messages = %+v, want one user 'hello there'", msgs)
 	}
+	task.StopWhenDone()
+	<-runDone
+}
 
+// The transcript that ends a turn belongs to that turn's message. It is the
+// last thing the user said, and losing it means answering a question they only
+// half asked: the strategies run inside this aggregator so the transcript is
+// folded in before any of them can call the turn over.
+func TestUserAggregatorKeepsTheTranscriptThatEndsTheTurn(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop: []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{
+				UserSpeechTimeout: 20 * time.Millisecond,
+			})},
+		},
+		StopTimeout: 2 * time.Second,
+	}))
+
+	triggered := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.LLMContextFrame); ok {
+				select {
+				case triggered <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	first := frames.NewTranscriptionFrame("j'ai un ami qui me demande", "u", "ts")
+	first.Finalized = true
+	task.QueueFrame(first)
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	// The turn ends on this transcript, so it must be in the message.
+	last := frames.NewTranscriptionFrame("c'est qui Clovis", "u", "ts")
+	last.Finalized = true
+	task.QueueFrame(last)
+
+	select {
+	case <-triggered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("LLM not triggered")
+	}
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("context messages = %+v, want one", msgs)
+	}
+	if !strings.Contains(msgs[0].Text, "c'est qui Clovis") {
+		t.Fatalf("user message = %q, want it to carry the transcript that ended the turn", msgs[0].Text)
+	}
 	task.StopWhenDone()
 	<-runDone
 }

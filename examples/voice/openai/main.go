@@ -101,7 +101,7 @@ func runBot(conn *pionrtc.Connection) {
 
 	// Turn taking (Silero VAD + Smart Turn) needs the ONNX runtime; without it
 	// the bot still works, falling back to STT endpointing and losing barge-in.
-	vadProc, turnsProc := buildTurnStack()
+	vadProc, turnsCfg := buildTurnStack()
 
 	procs := []processor.Processor{t.Input()}
 	if vadProc != nil {
@@ -109,9 +109,10 @@ func runBot(conn *pionrtc.Connection) {
 	}
 	procs = append(procs, stt)
 	var aggOpts []aggregators.Option
-	if turnsProc != nil {
-		procs = append(procs, turnsProc)
-		aggOpts = append(aggOpts, aggregators.WithTurnTaking())
+	if turnsCfg != nil {
+		// The turn strategies run inside the user aggregator, so a turn that
+		// ends on a transcript ends with that transcript in the message.
+		aggOpts = append(aggOpts, aggregators.WithTurns(*turnsCfg))
 	}
 	agg := aggregators.New(convo, aggOpts...)
 	rtviProc := rtvi.NewProcessor()
@@ -143,7 +144,7 @@ func runBot(conn *pionrtc.Connection) {
 // buildTurnStack builds the turn-taking stack (Silero VAD + Smart Turn v3). If
 // the ONNX runtime or models cannot be loaded it logs a warning and returns
 // nil, nil, so the bot runs without turn taking (and without barge-in).
-func buildTurnStack() (*vadproc.Processor, *turns.UserTurnProcessor) {
+func buildTurnStack() (*vadproc.Processor, *turns.Config) {
 	vd, err := vad.NewSilero()
 	if err != nil {
 		slog.Warn("turn taking disabled: Silero VAD unavailable (set JARGO_ONNXRUNTIME_LIB)", "err", err)
@@ -156,12 +157,12 @@ func buildTurnStack() (*vadproc.Processor, *turns.UserTurnProcessor) {
 		return nil, nil
 	}
 	vp := vadproc.New(vadproc.Config{VAD: vd})
-	tp := turns.NewUserTurnProcessor(turns.Config{
+	tp := &turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: turns.DefaultStartStrategies(),
 			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: tr})},
 		},
-	})
+	}
 	return vp, tp
 }
 

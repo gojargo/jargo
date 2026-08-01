@@ -23,6 +23,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/turns"
 )
 
 // Pair is a user and assistant aggregator sharing one conversation context.
@@ -36,15 +37,21 @@ type Pair struct {
 type Option func(*options)
 
 type options struct {
-	turnTaking bool
-	summarize  *SummarizeConfig
+	turns     *turns.Config
+	summarize *SummarizeConfig
 }
 
-// WithTurnTaking gates the user turn on end-of-turn detection: the LLM runs when
-// a turntaking.Detector reports the turn complete (UserStoppedSpeakingFrame) and
-// a finalized transcript is in hand, rather than on STT finalization alone.
-func WithTurnTaking() Option {
-	return func(o *options) { o.turnTaking = true }
+// WithTurns drives the user turn from turn-taking strategies rather than from
+// STT finalization: the LLM runs when the strategies say the turn ended.
+//
+// The strategies run inside the user aggregator, on the same frames and in the
+// same order as the aggregation. That is what makes the turn's own transcript
+// part of it: a turn ends because a transcript finalized, and were the decision
+// made in a processor of its own, the end-of-turn frame would be a system frame
+// racing ahead of the transcript that caused it and the user's last words would
+// be dropped from the message the model is given.
+func WithTurns(cfg turns.Config) Option {
+	return func(o *options) { o.turns = &cfg }
 }
 
 // New builds a user/assistant aggregator pair around ctx.
@@ -55,7 +62,7 @@ func New(ctx *frames.LLMContext, opts ...Option) *Pair {
 	}
 	return &Pair{
 		context:   ctx,
-		user:      newUser(ctx, o.turnTaking),
+		user:      newUser(ctx, o.turns),
 		assistant: newAssistant(ctx, o.summarize),
 	}
 }
@@ -71,31 +78,93 @@ func (p *Pair) Context() *frames.LLMContext { return p.context }
 
 // UserAggregator collects transcriptions into a user message and, when the
 // user's turn ends, appends it to the context and triggers the LLM with an
-// LLMContextFrame. With turn taking enabled it also tracks speaking and
-// end-of-turn frames; those are system frames handled on a different goroutine
-// than transcriptions, so the aggregation state is mutex-guarded.
+// LLMContextFrame.
+//
+// When turn strategies are configured it also drives them, and the idle
+// watchdog, from this same processor: every frame is folded into the
+// aggregation first and only then handed to the controllers, so a turn that
+// ends on a finalized transcript ends with that transcript already in the
+// message.
 type UserAggregator struct {
 	*processor.Base
 	context    *frames.LLMContext
 	turnTaking bool
+
+	turn *turns.UserTurnController
+	idle *turns.UserIdleController
+
+	muteStrategies []turns.MuteStrategy
+	muteMu         sync.Mutex
+	muted          bool
 
 	mu           sync.Mutex
 	aggregation  string
 	turnComplete bool // turn taking: end-of-turn reported
 }
 
-func newUser(ctx *frames.LLMContext, turnTaking bool) *UserAggregator {
-	u := &UserAggregator{context: ctx, turnTaking: turnTaking}
+func newUser(ctx *frames.LLMContext, cfg *turns.Config) *UserAggregator {
+	u := &UserAggregator{context: ctx, turnTaking: cfg != nil}
 	u.Base = processor.New("UserContextAggregator", u)
+	if cfg == nil {
+		return u
+	}
+	u.muteStrategies = cfg.MuteStrategies
+	u.turn = turns.NewUserTurnController(cfg.Strategies, cfg.StopTimeout)
+	u.idle = turns.NewUserIdleController(turns.IdleConfig{Timeout: cfg.IdleTimeout, Callback: cfg.OnIdle})
+	u.turn.SetHooks(turns.ControllerHooks{
+		Started:   u.onTurnStarted,
+		Stopped:   u.onTurnStopped,
+		Push:      func(ctx context.Context, f frames.Frame, dir processor.Direction) { _ = u.PushFrame(ctx, f, dir) },
+		Broadcast: func(ctx context.Context, build func() frames.Frame) { _ = u.Broadcast(ctx, build) },
+	})
 	return u
 }
 
+// Setup wires the controllers.
+func (u *UserAggregator) Setup(ctx context.Context, s processor.Setup) error {
+	if err := u.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	if u.turn != nil {
+		u.turn.Setup(ctx)
+		u.idle.Setup(ctx, u)
+	}
+	return nil
+}
+
+// Cleanup tears the controllers down.
+func (u *UserAggregator) Cleanup(ctx context.Context) error {
+	if u.turn != nil {
+		u.turn.Cleanup()
+		u.idle.Cleanup()
+	}
+	return u.Base.Cleanup(ctx)
+}
+
 // ProcessFrame collects transcriptions and triggers the LLM.
+//
+// The frame is handled first and only then given to the turn and idle
+// controllers, so anything the frame contributes to the aggregation is already
+// there when a strategy decides the turn ended on it.
 func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := u.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
+	// A muted frame is dropped outright: the controllers must not see input the
+	// user is not allowed to give.
+	if u.turn != nil && u.suppressed(ctx, f) {
+		return nil
+	}
+	err := u.handleFrame(ctx, f, dir)
+	if u.turn != nil {
+		u.turn.Process(f)
+		u.idle.Process(f)
+	}
+	return err
+}
 
+// handleFrame folds one frame into the aggregation and forwards it.
+func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
 	case *frames.UserStartedSpeakingFrame:
 		// A new turn begins; drop any stale aggregation from a prior turn.
@@ -460,3 +529,102 @@ func (a *AssistantAggregator) commitInterrupted() {
 	}
 	a.maybeSummarize()
 }
+
+// suppressed runs the mute strategies and reports whether this user-input frame
+// should be dropped. It emits UserMute frames on a change of state.
+func (u *UserAggregator) suppressed(ctx context.Context, f frames.Frame) bool {
+	switch f.(type) {
+	case *frames.StartFrame, *frames.EndFrame, *frames.CancelFrame:
+		// Lifecycle frames are never muted and must keep their ordering.
+		return false
+	}
+	if len(u.muteStrategies) == 0 {
+		return false
+	}
+	u.muteMu.Lock()
+	defer u.muteMu.Unlock()
+
+	should := false
+	for _, m := range u.muteStrategies {
+		if m.ShouldMute(f) { // call all, so each updates its state
+			should = true
+		}
+	}
+	if should != u.muted {
+		u.muted = should
+		if should {
+			_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserMuteStartedFrame() })
+		} else {
+			_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserMuteStoppedFrame() })
+		}
+	}
+	if !u.muted {
+		return false
+	}
+	switch f.(type) {
+	case *frames.InterruptionFrame, *frames.VADUserStartedSpeakingFrame, *frames.VADUserStoppedSpeakingFrame,
+		*frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame, *frames.InputAudioRawFrame,
+		*frames.InterimTranscriptionFrame, *frames.TranscriptionFrame:
+		return true
+	}
+	return false
+}
+
+// Push implements turns.Emitter.
+func (u *UserAggregator) Push(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	return u.PushFrame(ctx, f, dir)
+}
+
+// Broadcast implements turns.Emitter, sending a frame both downstream and
+// upstream so turn decisions reach the whole pipeline.
+//
+// build is called once per direction: the two halves are distinct frames, paired
+// by BroadcastSiblingID. The directions are processed on separate goroutines, so
+// a shared frame would be mutated concurrently, and a consumer that sees both
+// halves can recognize the pair rather than reporting the event twice.
+func (u *UserAggregator) Broadcast(ctx context.Context, build func() frames.Frame) error {
+	down, up := build(), build()
+	down.Base().SetBroadcastSiblingID(up.ID())
+	up.Base().SetBroadcastSiblingID(down.ID())
+
+	if err := u.PushFrame(ctx, down, processor.Downstream); err != nil {
+		return err
+	}
+	return u.PushFrame(ctx, up, processor.Upstream)
+}
+
+// onTurnStarted broadcasts the turn-start decision and barges in, and feeds the
+// idle controller a synthetic user-started frame so it tracks the turn.
+func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTurnStartedParams) {
+	u.mu.Lock()
+	u.aggregation = ""
+	u.turnComplete = false
+	u.mu.Unlock()
+	if params.EnableUserSpeakingFrames {
+		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserStartedSpeakingFrame() })
+	}
+	u.idle.Process(frames.NewUserStartedSpeakingFrame())
+	if params.EnableInterruptions {
+		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
+	}
+}
+
+// onTurnStopped broadcasts the turn-stop decision, feeds the idle controller a
+// synthetic user-stopped frame, and commits the turn.
+//
+// Committing here rather than on a received UserStoppedSpeakingFrame is the
+// point of driving the turn from inside the aggregator: the frame that ended
+// the turn has already been folded into the aggregation by the time this runs,
+// so the user's last words are part of the message the model is given.
+func (u *UserAggregator) onTurnStopped(ctx context.Context, params turns.UserTurnStoppedParams) {
+	if params.EnableUserSpeakingFrames {
+		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() })
+	}
+	u.idle.Process(frames.NewUserStoppedSpeakingFrame())
+	u.mu.Lock()
+	u.turnComplete = true
+	u.mu.Unlock()
+	_ = u.maybeRun(ctx)
+}
+
+var _ turns.Emitter = (*UserAggregator)(nil)

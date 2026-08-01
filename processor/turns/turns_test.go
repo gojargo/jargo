@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 )
 
@@ -50,10 +51,11 @@ func (r *recorder) expectNone(t *testing.T, d time.Duration) {
 	}
 }
 
-func runTurns(t *testing.T, p *turns.UserTurnProcessor) (*recorder, *pipeline.Task, chan error) {
+func runTurns(t *testing.T, cfg turns.Config) (*recorder, *pipeline.Task, chan error) {
 	t.Helper()
 	rec := newRecorder()
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{OnReachedDownstream: rec.onDown})
+	agg := aggregators.New(frames.NewLLMContext("test"), aggregators.WithTurns(cfg))
+	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{OnReachedDownstream: rec.onDown})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return rec, task, done
@@ -80,14 +82,14 @@ func finalTranscript(text string) *frames.TranscriptionFrame {
 // transcript closes it.
 func TestVADStartSpeechTimeoutStop(t *testing.T) {
 	stop := turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{UserSpeechTimeout: 30 * time.Millisecond})
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop:  []turns.StopStrategy{stop},
 		},
 		StopTimeout: 2 * time.Second,
-	})
-	rec, task, done := runTurns(t, p)
+	}
+	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
 	rec.expect(t, "started")
@@ -103,15 +105,15 @@ func TestVADStartSpeechTimeoutStop(t *testing.T) {
 // TestWatchdogForceStop covers the stop-timeout watchdog finalizing a turn that
 // got stuck open with the user silent.
 func TestWatchdogForceStop(t *testing.T) {
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			// A stop strategy that never fires on its own.
 			Stop: []turns.StopStrategy{turns.NewExternalCompletionStop()},
 		},
 		StopTimeout: 40 * time.Millisecond,
-	})
-	rec, task, done := runTurns(t, p)
+	}
+	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
 	rec.expect(t, "started")
@@ -138,14 +140,14 @@ func (fakeTurn) Close() error               { return nil }
 // TestTurnAnalyzerStop covers the Smart-Turn stop: the model reports complete on
 // VAD stop and a finalized transcript closes the turn.
 func TestTurnAnalyzerStop(t *testing.T) {
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: fakeTurn{}})},
 		},
 		StopTimeout: 2 * time.Second,
-	})
-	rec, task, done := runTurns(t, p)
+	}
+	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
 	rec.expect(t, "started")
@@ -170,14 +172,14 @@ func (c *countingTurn) Clear() { c.clears.Add(1) }
 // turn ends but not when it begins.
 func TestTurnAnalyzerClearedOnStopNotStart(t *testing.T) {
 	analyzer := &countingTurn{}
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: analyzer})},
 		},
 		StopTimeout: 2 * time.Second,
-	})
-	rec, task, done := runTurns(t, p)
+	}
+	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
 	rec.expect(t, "started")
@@ -199,7 +201,7 @@ func TestTurnAnalyzerClearedOnStopNotStart(t *testing.T) {
 // TestDeferredFinalization covers deferred(): the wrapped detector triggers
 // inference but cannot finalize; only the completion strategy finalizes.
 func TestDeferredFinalization(t *testing.T) {
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop: []turns.StopStrategy{
@@ -208,8 +210,8 @@ func TestDeferredFinalization(t *testing.T) {
 			},
 		},
 		StopTimeout: 2 * time.Second,
-	})
-	rec, task, done := runTurns(t, p)
+	}
+	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
 	rec.expect(t, "started")
@@ -230,15 +232,15 @@ func TestDeferredFinalization(t *testing.T) {
 // TestMuteSuppressesDuringBotSpeech covers an AlwaysUserMute strategy dropping a
 // barge-in while the bot speaks and allowing it once the bot stops.
 func TestMuteSuppressesDuringBotSpeech(t *testing.T) {
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
 		},
 		MuteStrategies: []turns.MuteStrategy{turns.NewAlwaysUserMute()},
 		StopTimeout:    2 * time.Second,
-	})
-	rec, task, done := runTurns(t, p)
+	}
+	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewBotStartedSpeakingFrame())
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2)) // muted: suppressed
@@ -254,7 +256,7 @@ func TestMuteSuppressesDuringBotSpeech(t *testing.T) {
 // TestIdleFires covers the idle controller arming on bot-stopped and firing.
 func TestIdleFires(t *testing.T) {
 	fired := make(chan struct{}, 1)
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
@@ -264,8 +266,8 @@ func TestIdleFires(t *testing.T) {
 			fired <- struct{}{}
 			return nil
 		},
-	})
-	_, task, done := runTurns(t, p)
+	}
+	_, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewBotStoppedSpeakingFrame())
 	select {
@@ -287,17 +289,18 @@ func (incompleteTurn) AnalyzeEndOfTurn() (turn.EndOfTurnState, float64, error) {
 // safety-net timeout can be told from one the analyzer judged unfinished. It is
 // the only thing that says which happened.
 func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
-	p := turns.NewUserTurnProcessor(turns.Config{
+	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: incompleteTurn{}})},
 		},
 		StopTimeout: time.Second,
-	})
+	}
+	agg := aggregators.New(frames.NewLLMContext("test"), aggregators.WithTurns(cfg))
 
 	var mu sync.Mutex
 	var pred *frames.TurnPrediction
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
 			if mf, ok := f.(*frames.MetricsFrame); ok && mf.Turn != nil {
 				mu.Lock()

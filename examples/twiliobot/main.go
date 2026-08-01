@@ -119,7 +119,7 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 	})
 
 	convo := frames.NewLLMContext(systemPrompt)
-	vadProc, turnsProc := newTurnStack(v)
+	vadProc, turnsCfg := newTurnStack(v)
 
 	procs := []processor.Processor{t.Input()}
 	if vadProc != nil {
@@ -127,9 +127,10 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 	}
 	procs = append(procs, stt)
 	var aggOpts []aggregators.Option
-	if turnsProc != nil {
-		procs = append(procs, turnsProc)
-		aggOpts = append(aggOpts, aggregators.WithTurnTaking())
+	if turnsCfg != nil {
+		// The turn strategies run inside the user aggregator, so a turn that
+		// ends on a transcript ends with that transcript in the message.
+		aggOpts = append(aggOpts, aggregators.WithTurns(*turnsCfg))
 	}
 	agg := aggregators.New(convo, aggOpts...)
 	procs = append(procs,
@@ -168,7 +169,7 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 // the nudge and the EndFrame go downstream toward the TTS and output. When the
 // ONNX runtime or models are unavailable it returns nil, nil and the bot falls
 // back to STT endpointing without turn taking or idle.
-func newTurnStack(v *viper.Viper) (*vadproc.Processor, *turns.UserTurnProcessor) {
+func newTurnStack(v *viper.Viper) (*vadproc.Processor, *turns.Config) {
 	vd, err := vad.NewSilero()
 	if err != nil {
 		slog.Warn("turn taking disabled: Silero VAD unavailable (set JARGO_ONNXRUNTIME_LIB)", "err", err)
@@ -190,7 +191,7 @@ func newTurnStack(v *viper.Viper) (*vadproc.Processor, *turns.UserTurnProcessor)
 	var retries atomic.Int64
 
 	vp := vadproc.New(vadproc.Config{VAD: vd})
-	tp := turns.NewUserTurnProcessor(turns.Config{
+	tp := &turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: turns.DefaultStartStrategies(),
 			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: tr})},
@@ -205,6 +206,6 @@ func newTurnStack(v *viper.Viper) (*vadproc.Processor, *turns.UserTurnProcessor)
 			slog.Info("caller idle: nudging", "retry", n)
 			return c.Push(ctx, frames.NewTTSSpeakFrame("Are you still there?"), processor.Downstream)
 		},
-	})
+	}
 	return vp, tp
 }
