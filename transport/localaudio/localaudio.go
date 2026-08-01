@@ -15,6 +15,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -223,16 +224,42 @@ func (out *outputTransport) openStream() error {
 	return nil
 }
 
-// WriteAudio queues one chunk of S16 PCM for playback. PulseAudio pulls it back
-// out through fill at the device's pace.
-func (out *outputTransport) WriteAudio(_ context.Context, pcm []byte) error {
+// drainPoll is how often WriteAudio rechecks the playback backlog while waiting
+// for the device to take what it queued.
+const drainPoll = 2 * time.Millisecond
+
+// WriteAudio queues one chunk of S16 PCM for playback and waits until the device
+// has taken all but the last chunk of it, so audio is written at the rate it
+// plays rather than the rate it is produced. Without that wait a whole turn is
+// queued at once, and a barge-in can only drop what the device has not already
+// consumed.
+//
+// PulseAudio pulls through fill rather than accepting a blocking write, so the
+// wait is on the backlog draining instead of on a write returning. It ends early
+// if the stream closes or the pipeline stops, so a stop is never held up.
+func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
 	out.mu.Lock()
 	out.buf = append(out.buf, pcm...)
 	if limit := maxBufferBytes(out.SampleRate()); len(out.buf) > limit {
 		out.buf = out.buf[len(out.buf)-limit:]
 	}
 	out.mu.Unlock()
-	return nil
+
+	// One chunk of slack, so the device always has something to pull and never
+	// underruns between callbacks.
+	for {
+		out.mu.Lock()
+		queued, open := len(out.buf), out.stream != nil
+		out.mu.Unlock()
+		if !open || queued <= len(pcm) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(drainPoll):
+		}
+	}
 }
 
 // SendMessage is a no-op: the local transport has no client data channel.
