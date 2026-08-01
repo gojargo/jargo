@@ -333,6 +333,24 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir Direction) err
 	return nil
 }
 
+// Broadcast sends a frame both downstream and upstream, so an event that the
+// whole pipeline has to see reaches processors on either side of this one.
+//
+// build is called once per direction: the two halves are distinct frames paired
+// by BroadcastSiblingID. The directions are processed on separate goroutines, so
+// a single shared frame would be mutated concurrently, and a consumer that sees
+// both halves can recognize the pair rather than reporting the event twice.
+func (b *Base) Broadcast(ctx context.Context, build func() frames.Frame) error {
+	down, up := build(), build()
+	down.Base().SetBroadcastSiblingID(up.ID())
+	up.Base().SetBroadcastSiblingID(down.ID())
+
+	if err := b.PushFrame(ctx, down, Downstream); err != nil {
+		return err
+	}
+	return b.PushFrame(ctx, up, Upstream)
+}
+
 // PushTokenUsage reports LLM token usage measured by a service that does not run
 // through the LLM base — a realtime (speech-to-speech) service that receives a
 // usage event from its provider. It opens a short "llm" span carrying the

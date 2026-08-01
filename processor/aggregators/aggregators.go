@@ -575,23 +575,7 @@ func (u *UserAggregator) Push(ctx context.Context, f frames.Frame, dir processor
 	return u.PushFrame(ctx, f, dir)
 }
 
-// Broadcast implements turns.Emitter, sending a frame both downstream and
-// upstream so turn decisions reach the whole pipeline.
-//
-// build is called once per direction: the two halves are distinct frames, paired
-// by BroadcastSiblingID. The directions are processed on separate goroutines, so
-// a shared frame would be mutated concurrently, and a consumer that sees both
-// halves can recognize the pair rather than reporting the event twice.
-func (u *UserAggregator) Broadcast(ctx context.Context, build func() frames.Frame) error {
-	down, up := build(), build()
-	down.Base().SetBroadcastSiblingID(up.ID())
-	up.Base().SetBroadcastSiblingID(down.ID())
-
-	if err := u.PushFrame(ctx, down, processor.Downstream); err != nil {
-		return err
-	}
-	return u.PushFrame(ctx, up, processor.Upstream)
-}
+// Broadcast, which turns.Emitter also requires, is promoted from processor.Base.
 
 // onTurnStarted broadcasts the turn-start decision and barges in, and feeds the
 // idle controller a synthetic user-started frame so it tracks the turn.

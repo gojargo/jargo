@@ -92,9 +92,27 @@ func NewTTSAudioRawFrame(audio []byte, sampleRate, numChannels int) *TTSAudioRaw
 	}
 }
 
+// SpeechOutputAudioRawFrame is one chunk of a continuous stream of speech audio.
+// The stream can also carry silence between utterances, so a consumer that needs
+// to tell the two apart has to test the samples themselves.
+type SpeechOutputAudioRawFrame struct {
+	OutputAudioRawFrame
+}
+
+// NewSpeechOutputAudioRawFrame builds a SpeechOutputAudioRawFrame from PCM audio.
+func NewSpeechOutputAudioRawFrame(audio []byte, sampleRate, numChannels int) *SpeechOutputAudioRawFrame {
+	return &SpeechOutputAudioRawFrame{
+		OutputAudioRawFrame: OutputAudioRawFrame{
+			BaseDataFrame: NewBaseDataFrame("SpeechOutputAudioRawFrame"),
+			AudioRawData:  newAudioRawData(audio, sampleRate, numChannels),
+		},
+	}
+}
+
 // Compile-time interface checks.
 var (
 	_ SystemFrame = (*InputAudioRawFrame)(nil)
 	_ DataFrame   = (*OutputAudioRawFrame)(nil)
 	_ DataFrame   = (*TTSAudioRawFrame)(nil)
+	_ DataFrame   = (*SpeechOutputAudioRawFrame)(nil)
 )
