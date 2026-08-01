@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/frames"
 )
 
 // defaultVolume scales the background when none is configured.
@@ -82,9 +83,25 @@ func (m *Loop) Mix(_ context.Context, pcm []byte) ([]byte, error) {
 	return out, nil
 }
 
-// Control applies a runtime settings update: "volume" (float64), "enabled"
-// (bool) and "background" ([]byte, 16-bit mono PCM).
-func (m *Loop) Control(_ context.Context, settings map[string]any) error {
+// ProcessFrame applies a runtime control frame. A MixerUpdateSettingsFrame
+// carries "volume" (float64), "enabled" (bool) and "background" ([]byte, 16-bit
+// mono PCM); a MixerEnableFrame turns mixing on or off without disturbing the
+// settings.
+func (m *Loop) ProcessFrame(_ context.Context, f frames.MixerControlFrame) error {
+	switch fr := f.(type) {
+	case *frames.MixerUpdateSettingsFrame:
+		m.updateSettings(fr.Settings)
+	case *frames.MixerEnableFrame:
+		m.mu.Lock()
+		m.enabled = fr.Enable
+		m.mu.Unlock()
+	}
+	return nil
+}
+
+// updateSettings applies the settings a MixerUpdateSettingsFrame carries,
+// leaving any it does not name untouched.
+func (m *Loop) updateSettings(settings map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if v, ok := settings["volume"].(float64); ok {
@@ -97,7 +114,6 @@ func (m *Loop) Control(_ context.Context, settings map[string]any) error {
 		m.background = bg
 		m.pos = 0
 	}
-	return nil
 }
 
 // Compile-time interface check.

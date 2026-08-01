@@ -246,23 +246,15 @@ func (bo *BaseOutput) drainAudio(ctx context.Context) {
 	}
 }
 
-// handleMixerControl applies a mixer control frame to the output mixer and
-// forwards it. The mixer's settings map is its whole control surface, so
-// enabling is expressed as the "enabled" setting.
+// handleMixerControl hands a mixer control frame to the output mixer and
+// forwards it on. The mixer reads the frame itself, so a control the mixer
+// understands does not have to be translated on the way through, and a new one
+// needs no change here.
 func (bo *BaseOutput) handleMixerControl(
 	ctx context.Context, f frames.MixerControlFrame, dir processor.Direction,
 ) error {
 	if bo.params.AudioOutMixer != nil {
-		var settings map[string]any
-		switch fr := f.(type) {
-		case *frames.MixerUpdateSettingsFrame:
-			settings = fr.Settings
-		case *frames.MixerEnableFrame:
-			settings = map[string]any{"enabled": fr.Enable}
-		}
-		if settings != nil {
-			_ = bo.params.AudioOutMixer.Control(ctx, settings)
-		}
+		_ = bo.params.AudioOutMixer.ProcessFrame(ctx, f)
 	}
 	return bo.PushFrame(ctx, f, dir)
 }

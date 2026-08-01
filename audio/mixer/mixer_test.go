@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/audio/mixer"
+	"github.com/gojargo/jargo/frames"
 )
 
 // pcm encodes samples as 16-bit little-endian mono PCM, the format the mixer
@@ -161,32 +162,54 @@ func TestLoopPositionPersistsAcrossChunks(t *testing.T) {
 	}
 }
 
-// TestControl covers the runtime updates a MixerControlFrame carries.
-func TestControl(t *testing.T) {
-	t.Run("enable and disable", func(t *testing.T) {
+// TestProcessFrame covers the runtime updates a MixerControlFrame carries.
+func TestProcessFrame(t *testing.T) {
+	t.Run("enable frame enables and disables", func(t *testing.T) {
 		m := mixer.NewLoop(mixer.LoopConfig{Background: pcm(1000), Volume: 1})
 
 		if got := mix(t, m, pcm(0)); !equal(got, 0) {
 			t.Fatalf("samples = %v, want silence while disabled", got)
 		}
-		if err := m.Control(t.Context(), map[string]any{"enabled": true}); err != nil {
-			t.Fatalf("Control: %v", err)
+		if err := m.ProcessFrame(t.Context(), frames.NewMixerEnableFrame(true)); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
 		}
 		if got := mix(t, m, pcm(0)); !equal(got, 1000) {
 			t.Errorf("samples = %v, want the background once enabled", got)
 		}
-		if err := m.Control(t.Context(), map[string]any{"enabled": false}); err != nil {
-			t.Fatalf("Control: %v", err)
+		if err := m.ProcessFrame(t.Context(), frames.NewMixerEnableFrame(false)); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
 		}
 		if got := mix(t, m, pcm(0)); !equal(got, 0) {
 			t.Errorf("samples = %v, want silence once disabled again", got)
 		}
 	})
 
+	t.Run("enable frame leaves the other settings alone", func(t *testing.T) {
+		m := mixer.NewLoop(mixer.LoopConfig{Background: pcm(1000), Volume: 0.5, Enabled: true})
+		if err := m.ProcessFrame(t.Context(), frames.NewMixerEnableFrame(true)); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
+		}
+		if got := mix(t, m, pcm(0)); !equal(got, 500) {
+			t.Errorf("samples = %v, want the configured volume kept", got)
+		}
+	})
+
+	t.Run("settings frame carries enabled too", func(t *testing.T) {
+		m := mixer.NewLoop(mixer.LoopConfig{Background: pcm(1000), Volume: 1})
+		settings := frames.NewMixerUpdateSettingsFrame(map[string]any{"enabled": true})
+		if err := m.ProcessFrame(t.Context(), settings); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
+		}
+		if got := mix(t, m, pcm(0)); !equal(got, 1000) {
+			t.Errorf("samples = %v, want the background once enabled", got)
+		}
+	})
+
 	t.Run("volume", func(t *testing.T) {
 		m := mixer.NewLoop(mixer.LoopConfig{Background: pcm(1000), Volume: 1, Enabled: true})
-		if err := m.Control(t.Context(), map[string]any{"volume": 0.5}); err != nil {
-			t.Fatalf("Control: %v", err)
+		settings := frames.NewMixerUpdateSettingsFrame(map[string]any{"volume": 0.5})
+		if err := m.ProcessFrame(t.Context(), settings); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
 		}
 		if got := mix(t, m, pcm(0)); !equal(got, 500) {
 			t.Errorf("samples = %v, want the new volume applied", got)
@@ -197,8 +220,9 @@ func TestControl(t *testing.T) {
 		m := mixer.NewLoop(mixer.LoopConfig{Background: pcm(10, 20), Volume: 1, Enabled: true})
 		mix(t, m, pcm(0)) // advance into the current track
 
-		if err := m.Control(t.Context(), map[string]any{"background": pcm(70, 80)}); err != nil {
-			t.Fatalf("Control: %v", err)
+		settings := frames.NewMixerUpdateSettingsFrame(map[string]any{"background": pcm(70, 80)})
+		if err := m.ProcessFrame(t.Context(), settings); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
 		}
 		// A new track must start at its beginning, not at the old offset.
 		if got := mix(t, m, pcm(0, 0)); !equal(got, 70, 80) {
@@ -208,13 +232,13 @@ func TestControl(t *testing.T) {
 
 	t.Run("unknown and mistyped settings are ignored", func(t *testing.T) {
 		m := mixer.NewLoop(mixer.LoopConfig{Background: pcm(1000), Volume: 1, Enabled: true})
-		err := m.Control(t.Context(), map[string]any{
+		settings := frames.NewMixerUpdateSettingsFrame(map[string]any{
 			"volume":  "loud", // wrong type
 			"enabled": 1,      // wrong type
 			"unknown": true,
 		})
-		if err != nil {
-			t.Fatalf("Control: %v", err)
+		if err := m.ProcessFrame(t.Context(), settings); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
 		}
 		if got := mix(t, m, pcm(0)); !equal(got, 1000) {
 			t.Errorf("samples = %v, want the settings unchanged", got)
