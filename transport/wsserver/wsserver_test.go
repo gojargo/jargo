@@ -73,14 +73,14 @@ func (s *testSerializer) Serialize(f frames.Frame) ([]byte, error) {
 
 	var m message
 	switch fr := f.(type) {
-	case *frames.OutputAudioRawFrame:
+	case frames.OutputAudioFrame:
 		if drop {
 			return nil, nil //nolint:nilnil // provider not ready for audio yet
 		}
 		if serErr != nil {
 			return nil, serErr
 		}
-		m = message{Kind: "audio", Payload: string(fr.Audio)}
+		m = message{Kind: "audio", Payload: string(fr.AudioData().Audio)}
 	case *frames.InterruptionFrame:
 		m = message{Kind: "clear"}
 	case *frames.EndFrame:

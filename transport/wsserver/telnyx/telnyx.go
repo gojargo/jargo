@@ -85,10 +85,10 @@ func (s *Serializer) Setup(*frames.StartFrame) error { return nil }
 // Serialize converts an outbound frame to a Telnyx message.
 func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
 	switch fr := f.(type) {
-	case *frames.TTSAudioRawFrame:
-		return s.media(fr.Audio)
-	case *frames.OutputAudioRawFrame:
-		return s.media(fr.Audio)
+	// Every kind of output audio is sent the same way, so match the family
+	// rather than each concrete frame.
+	case frames.OutputAudioFrame:
+		return s.media(fr.AudioData().Audio)
 	case *frames.InterruptionFrame:
 		return json.Marshal(event{Event: "clear"})
 	case *frames.EndFrame, *frames.CancelFrame:

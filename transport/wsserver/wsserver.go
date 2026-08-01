@@ -263,8 +263,7 @@ func newOutput(sess *Session, ser Serializer, params transport.Params) *outputTr
 }
 
 // WriteAudio serializes a PCM chunk to a provider media message and sends it.
-func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
-	f := frames.NewOutputAudioRawFrame(pcm, out.SampleRate(), channels(out.Params().AudioOutChannels))
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
 	msg, err := out.ser.Serialize(f)
 	if err != nil {
 		return err

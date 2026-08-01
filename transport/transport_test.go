@@ -239,7 +239,8 @@ func newFakeOutput(p transport.Params) *fakeOutput {
 	return o
 }
 
-func (o *fakeOutput) WriteAudio(_ context.Context, pcm []byte) error {
+func (o *fakeOutput) WriteAudio(_ context.Context, f frames.OutputAudioFrame) error {
+	pcm := f.AudioData().Audio
 	cp := make([]byte, len(pcm))
 	copy(cp, pcm)
 	o.writes <- cp
@@ -383,7 +384,7 @@ func newPacedOutput(p transport.Params) *pacedOutput {
 	return o
 }
 
-func (o *pacedOutput) WriteAudio(context.Context, []byte) error {
+func (o *pacedOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error {
 	time.Sleep(3 * time.Millisecond) // stand in for real-time pacing
 	o.writes.Add(1)
 	return nil
@@ -542,6 +543,97 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 			t.Errorf("no BotStoppedSpeakingFrame reached %s", dir.name)
 		}
 	}
+}
+
+// addressedWrite is one chunk the transport was asked to send, with the outgoing
+// stream it was addressed to.
+type addressedWrite struct {
+	destination string
+	pcm         []byte
+}
+
+// multiDestOutput records which destination each chunk was written to, and which
+// destinations it was asked to open.
+type multiDestOutput struct {
+	*transport.BaseOutput
+	writes     chan addressedWrite
+	registered chan string
+}
+
+func newMultiDestOutput(p transport.Params) *multiDestOutput {
+	o := &multiDestOutput{
+		writes:     make(chan addressedWrite, 64),
+		registered: make(chan string, 8),
+	}
+	o.BaseOutput = transport.NewBaseOutput("MultiDestOutput", p, o)
+	return o
+}
+
+func (o *multiDestOutput) RegisterAudioDestination(_ context.Context, destination string) error {
+	o.registered <- destination
+	return nil
+}
+
+func (o *multiDestOutput) WriteAudio(_ context.Context, f frames.OutputAudioFrame) error {
+	pcm := f.AudioData().Audio
+	cp := make([]byte, len(pcm))
+	copy(cp, pcm)
+	o.writes <- addressedWrite{destination: f.Base().TransportDestination(), pcm: cp}
+	return nil
+}
+
+// TestBaseOutputRoutesByDestination covers a transport carrying more than one
+// outgoing stream: each frame has to reach the stream it names, and reach the
+// transport still carrying that name, or the transport cannot tell the streams
+// apart when it sends.
+func TestBaseOutputRoutesByDestination(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000
+	params.AudioOutDestinations = []string{"side"}
+
+	o := newMultiDestOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	select {
+	case got := <-o.registered:
+		if got != "side" {
+			t.Errorf("registered destination %q, want \"side\"", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the named destination was never registered with the transport")
+	}
+
+	// One full chunk to the default stream, one to the named stream.
+	def := frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x01}, 1920), 48000, 1)
+	side := frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x02}, 1920), 48000, 1)
+	side.Base().SetTransportDestination("side")
+	task.QueueFrame(def)
+	task.QueueFrame(side)
+
+	seen := map[string]byte{}
+	for range 2 {
+		select {
+		case w := <-o.writes:
+			if len(w.pcm) == 0 {
+				t.Fatalf("empty write for destination %q", w.destination)
+			}
+			seen[w.destination] = w.pcm[0]
+		case <-time.After(3 * time.Second):
+			t.Fatalf("only saw writes for %v", seen)
+		}
+	}
+
+	if seen[""] != 0x01 {
+		t.Errorf("default stream carried %#x, want 0x01", seen[""])
+	}
+	if seen["side"] != 0x02 {
+		t.Errorf("named stream carried %#x, want 0x02: audio reached the wrong stream", seen["side"])
+	}
+
+	task.Cancel()
+	<-runDone
 }
 
 // passthroughMixer returns the audio it is given, so the only thing a test can
@@ -814,7 +906,7 @@ func (o *failingMessageOutput) SendMessage(context.Context, []byte) error {
 	return errClosedForTest
 }
 
-func (o *failingMessageOutput) WriteAudio(context.Context, []byte) error { return nil }
+func (o *failingMessageOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error { return nil }
 
 // A message that cannot be sent must not become an error frame. Anything that
 // reports errors to the client would turn that into another message to send,

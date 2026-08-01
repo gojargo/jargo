@@ -410,7 +410,9 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 // pipeline to real time; waiting on each frame individually would instead keep
 // the queue empty and starve the sender. Audio that does not fill a whole frame
 // is held until the next call.
-func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+	pcm := f.AudioData().Audio
+
 	out.mu.Lock()
 	q, running := out.queue, out.running
 	if !running {

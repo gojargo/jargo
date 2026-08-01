@@ -19,6 +19,28 @@ func newAudioRawData(audio []byte, sampleRate, numChannels int) AudioRawData {
 	return AudioRawData{Audio: audio, SampleRate: sampleRate, NumChannels: numChannels}
 }
 
+// AudioData returns the raw-audio payload itself, so a frame carrying audio can
+// be handled through the AudioFrame interface without knowing which kind it is.
+func (a *AudioRawData) AudioData() *AudioRawData { return a }
+
+// AudioFrame is implemented by every frame that carries raw audio, whichever
+// direction it travels in.
+type AudioFrame interface {
+	Frame
+	AudioData() *AudioRawData
+}
+
+// OutputAudioFrame is implemented by every frame carrying audio bound for an
+// output transport: plain output audio, TTS audio, and speech-stream audio. A
+// transport takes one rather than a bare buffer, so it can read the destination
+// the frame names alongside the samples and send it on the right outgoing
+// stream. Assert this interface rather than a concrete type, so audio keeps
+// being handled whichever kind produced it.
+type OutputAudioFrame interface {
+	AudioFrame
+	isOutputAudio()
+}
+
 // NumFrames is the number of audio frames (samples per channel) in the buffer:
 // len(Audio) / (NumChannels * 2) for 16-bit PCM. It is 0 when NumChannels is
 // unset. It is derived on each call, so it stays correct when Audio is replaced.
@@ -58,6 +80,9 @@ type OutputAudioRawFrame struct {
 	BaseDataFrame
 	AudioRawData
 }
+
+// isOutputAudio marks this frame and the ones embedding it as output audio.
+func (*OutputAudioRawFrame) isOutputAudio() {}
 
 // NewOutputAudioRawFrame builds an OutputAudioRawFrame from PCM audio.
 func NewOutputAudioRawFrame(audio []byte, sampleRate, numChannels int) *OutputAudioRawFrame {

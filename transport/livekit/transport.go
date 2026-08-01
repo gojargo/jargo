@@ -157,7 +157,8 @@ func (out *outputTransport) SendMessage(_ context.Context, data []byte) error {
 // instant it is called, so writing a whole utterance back-to-back floods the
 // client's jitter buffer; we pace explicitly, exactly as the Pion transport
 // does. Audio that does not fill a whole frame is held until the next call.
-func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+	pcm := f.AudioData().Audio
 	ch := channels(out.Params().AudioOutChannels)
 	if out.enc == nil {
 		p := out.Params()

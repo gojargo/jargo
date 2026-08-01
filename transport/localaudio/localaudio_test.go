@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/transport"
 )
 
@@ -26,7 +27,8 @@ func TestInt16ToPCMRoundTrip(t *testing.T) {
 // running.
 func TestFillDrainsThenPads(t *testing.T) {
 	out := newOutput(nil, transport.DefaultParams())
-	if err := out.WriteAudio(context.Background(), int16ToPCM([]int16{100, -200})); err != nil {
+	chunk := frames.NewOutputAudioRawFrame(int16ToPCM([]int16{100, -200}), 24000, 1)
+	if err := out.WriteAudio(context.Background(), chunk); err != nil {
 		t.Fatalf("WriteAudio: %v", err)
 	}
 
@@ -62,7 +64,8 @@ func TestFillDrainsThenPads(t *testing.T) {
 func TestWriteAudioCapsBacklog(t *testing.T) {
 	out := newOutput(nil, transport.DefaultParams())
 	capacity := maxBufferBytes(0)
-	if err := out.WriteAudio(context.Background(), make([]byte, capacity+4096)); err != nil {
+	chunk := frames.NewOutputAudioRawFrame(make([]byte, capacity+4096), 24000, 1)
+	if err := out.WriteAudio(context.Background(), chunk); err != nil {
 		t.Fatalf("WriteAudio: %v", err)
 	}
 	if len(out.buf) > capacity {

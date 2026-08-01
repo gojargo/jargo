@@ -237,7 +237,9 @@ const drainPoll = 2 * time.Millisecond
 // PulseAudio pulls through fill rather than accepting a blocking write, so the
 // wait is on the backlog draining instead of on a write returning. It ends early
 // if the stream closes or the pipeline stops, so a stop is never held up.
-func (out *outputTransport) WriteAudio(ctx context.Context, pcm []byte) error {
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+	pcm := f.AudioData().Audio
+
 	out.mu.Lock()
 	out.buf = append(out.buf, pcm...)
 	if limit := maxBufferBytes(out.SampleRate()); len(out.buf) > limit {

@@ -50,8 +50,18 @@ type Params struct {
 	// time. With WebRTC Opus this is 2, so audio is written in 20 ms frames.
 	AudioOut10msChunks int
 	// AudioOutMixer, when set, mixes auxiliary audio (for example background
-	// music) into the outgoing audio before it is sent.
+	// music) into the outgoing audio before it is sent. It serves the default
+	// destination only; use AudioOutMixers to mix into a named one.
 	AudioOutMixer audio.Mixer
+	// AudioOutMixers maps a destination name to the mixer serving it, for a
+	// transport that sends several outgoing streams and wants different
+	// auxiliary audio (or none) on each. It takes precedence over AudioOutMixer.
+	AudioOutMixers map[string]audio.Mixer
+	// AudioOutDestinations names the additional outgoing audio streams the
+	// transport serves, beyond the default unnamed one. A frame is routed to the
+	// destination it carries, so each stream keeps its own buffer, mixer and
+	// speaking state. Leave it empty for a transport with a single stream.
+	AudioOutDestinations []string
 }
 
 // DefaultParams returns Params with audio input and output enabled and the
@@ -98,8 +108,11 @@ type InputDriver interface {
 // hand it audio chunks and messages to send.
 type OutputDriver interface {
 	processor.Processor
-	// WriteAudio sends one chunk of interleaved S16LE PCM over the transport.
-	WriteAudio(ctx context.Context, pcm []byte) error
+	// WriteAudio sends one chunk of audio over the transport. The frame carries
+	// the interleaved S16LE PCM in AudioData, and the outgoing stream it belongs
+	// to in TransportDestination, so a transport serving several streams can
+	// send it on the right one.
+	WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error
 	// SendMessage sends an application message to the client (for example over
 	// a data channel).
 	SendMessage(ctx context.Context, data []byte) error
@@ -107,6 +120,12 @@ type OutputDriver interface {
 	// audio ahead of it has been sent. A transport overrides it to act on frame
 	// types it carries itself; the default does nothing.
 	WriteTransportFrame(ctx context.Context, f frames.Frame) error
+	// RegisterAudioDestination opens the outgoing stream a destination names,
+	// for a transport that serves more than one. It is called for each entry in
+	// Params.AudioOutDestinations when the transport starts, and a destination
+	// that fails to open is skipped rather than being sent to. The default does
+	// nothing.
+	RegisterAudioDestination(ctx context.Context, destination string) error
 }
 
 // audioFrameChanCap bounds the buffered audio channels between the media

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/opus"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/transport"
 )
 
@@ -39,11 +40,11 @@ func TestWriteAudioRunsAheadOfTheSender(t *testing.T) {
 	frameBytes := opus.FrameBytes(1)
 
 	// Comfortably inside the cushion: this must not wait for playout.
-	frames := queuedFrames / 2
-	pcm := make([]byte, frameBytes*frames)
+	nFrames := queuedFrames / 2
+	pcm := make([]byte, frameBytes*nFrames)
 
 	started := time.Now()
-	if err := out.WriteAudio(context.Background(), pcm); err != nil {
+	if err := out.WriteAudio(context.Background(), frames.NewOutputAudioRawFrame(pcm, 48000, 1)); err != nil {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(started)
@@ -54,7 +55,7 @@ func TestWriteAudioRunsAheadOfTheSender(t *testing.T) {
 	if elapsed >= opus.FrameDuration {
 		t.Fatalf("writing %d frames into a cushion of %d took %v, at least a frame's "+
 			"playout: the writer cannot run ahead, so the sender will starve",
-			frames, queuedFrames, elapsed)
+			nFrames, queuedFrames, elapsed)
 	}
 }
 
@@ -64,21 +65,21 @@ func TestWriteAudioBlocksOncePastTheCushion(t *testing.T) {
 	out := newTestOutput(t)
 	frameBytes := opus.FrameBytes(1)
 
-	frames := queuedFrames * 3
-	pcm := make([]byte, frameBytes*frames)
+	nFrames := queuedFrames * 3
+	pcm := make([]byte, frameBytes*nFrames)
 
 	started := time.Now()
-	if err := out.WriteAudio(context.Background(), pcm); err != nil {
+	if err := out.WriteAudio(context.Background(), frames.NewOutputAudioRawFrame(pcm, 48000, 1)); err != nil {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(started)
 
 	// Everything past the cushion has to be played before it can be accepted.
-	least := time.Duration(frames-queuedFrames) * opus.FrameDuration
+	least := time.Duration(nFrames-queuedFrames) * opus.FrameDuration
 	// Allow for the sender having drained a frame or two while we measured.
 	least -= 2 * opus.FrameDuration
 	if elapsed < least {
 		t.Fatalf("writing %d frames returned in %v, less than the %v of playout it "+
-			"should have waited for: output is not paced", frames, elapsed, least)
+			"should have waited for: output is not paced", nFrames, elapsed, least)
 	}
 }
