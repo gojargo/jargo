@@ -190,6 +190,15 @@ func (c *UserTurnController) onStopTriggered(params UserTurnStoppedParams) {
 	if !c.userTurn {
 		return
 	}
+	// Never finalize while the user is audibly speaking. A stop strategy can
+	// finalize on a latent signal, an LLM verdict that resolves only after the
+	// user resumed, which is stale by the time it lands. Keeping the turn open
+	// lets the next inference re-evaluate, and the watchdog still finalizes if the
+	// user then falls silent. Detector strategies finalize only once the user has
+	// stopped, so this costs them nothing.
+	if c.userSpeaking {
+		return
+	}
 	c.userTurn = false
 	c.rearmWatchdog()
 	c.notifyTurnStopped()

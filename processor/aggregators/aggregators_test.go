@@ -88,6 +88,11 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
+	// The user falls silent. A turn is never finalized while they are still
+	// audibly speaking, since a verdict that lands mid-speech is already stale,
+	// so the VAD stop has to come first as it does in a real pipeline.
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+
 	// The end-of-turn decision, with a finalized transcript in hand, triggers it.
 	task.QueueFrame(frames.NewUserTurnInferenceCompletedFrame())
 	select {

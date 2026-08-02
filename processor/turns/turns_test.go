@@ -402,3 +402,59 @@ func TestTurnAnalyzerInterimReopensFinalizedTranscript(t *testing.T) {
 
 	finish(t, task, done)
 }
+
+// A transcript can arrive with no VAD stop behind it, from speech soft enough
+// that the VAD never bracketed it. Nothing will start the silence timers in that
+// case, so the strategy measures inactivity from the transcript itself rather
+// than leaving the turn to the stop watchdog.
+func TestSpeechTimeoutTranscriptWithNoVADStopStillStops(t *testing.T) {
+	cfg := turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewTranscriptionStart(turns.TranscriptionStartConfig{})},
+			Stop: []turns.StopStrategy{
+				turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{UserSpeechTimeout: 30 * time.Millisecond}),
+			},
+		},
+		StopTimeout: 3 * time.Second,
+	}
+	rec, task, done := runTurns(t, cfg)
+
+	start := time.Now()
+	task.QueueFrame(finalTranscript("hello there"))
+	rec.expect(t, "started")
+	rec.expect(t, "interruption")
+	rec.expect(t, "stopped")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("turn took %v to stop, want the speech timeout rather than the %v watchdog", elapsed, cfg.StopTimeout)
+	}
+
+	finish(t, task, done)
+}
+
+// A strategy can decide a turn is over on a signal that resolves late, by which
+// time the user has started speaking again. Finalizing then would cut them off,
+// so the turn stays open and the watchdog closes it once they fall silent.
+func TestNoFinalizeWhileUserIsSpeaking(t *testing.T) {
+	cfg := turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+		},
+		StopTimeout: 150 * time.Millisecond,
+	}
+	rec, task, done := runTurns(t, cfg)
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	rec.expect(t, "started")
+	rec.expect(t, "interruption")
+
+	// The verdict lands while the user is still audibly speaking.
+	task.QueueFrame(frames.NewUserTurnInferenceCompletedFrame())
+	rec.expectNone(t, 80*time.Millisecond)
+
+	// Once they stop, the watchdog finalizes the turn that was held open.
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	rec.expect(t, "stopped")
+
+	finish(t, task, done)
+}

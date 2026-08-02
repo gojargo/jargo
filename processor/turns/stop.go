@@ -277,9 +277,13 @@ type SpeechTimeoutStop struct {
 	userSpeechTimeout time.Duration
 	waitForTx         bool
 	sttTimeout        time.Duration
+	// stopWindow is the silence window the VAD required before its last stop.
+	stopWindow time.Duration
 
-	vadSpeaking    bool
 	haveText       bool
+	vadSpeaking    bool
+	vadStopped     bool
+	txFinalized    bool
 	userSpeechDone bool
 	sttDone        bool
 	cancelUser     func()
@@ -310,40 +314,89 @@ func (s *SpeechTimeoutStop) Process(f frames.Frame) ProcessFrameResult {
 		}
 	case *frames.VADUserStartedSpeakingFrame:
 		s.vadSpeaking = true
-		s.reset()
+		s.discardPendingEndOfTurn()
 	case *frames.VADUserStoppedSpeakingFrame:
-		s.vadSpeaking = false
-		s.startTimers(fr.StopSecs)
+		s.handleVADStopped(fr)
 	case *frames.TranscriptionFrame:
-		if fr.Text != "" {
-			s.haveText = true
-		}
-		if fr.Finalized {
-			s.sttDone = true
-			s.cancelSTTTimer()
-		}
-		s.maybeTrigger()
+		s.handleTranscription(fr)
+	case *frames.InterimTranscriptionFrame:
+		// More transcription is still on the way, so an earlier finalized
+		// transcript no longer covers all of the user's speech and must not be
+		// allowed to skip the STT safety net at the next VAD stop.
+		s.txFinalized = false
 	}
 	return Continue
 }
 
-func (s *SpeechTimeoutStop) startTimers(stopSecs float64) {
-	s.cancelTimers()
+// handleVADStopped starts the silence timers the turn now waits on.
+func (s *SpeechTimeoutStop) handleVADStopped(fr *frames.VADUserStoppedSpeakingFrame) {
+	s.vadSpeaking = false
+	s.stopWindow = time.Duration(fr.StopSecs * float64(time.Second))
+	s.vadStopped = true
+
+	// The speech timeout is the policy floor and always runs. Any earlier run of
+	// it, from the fallback below, is superseded here.
+	s.restartUserSpeechTimer()
+
+	// The STT wait is only a safety net. Skip it when the transcript is already
+	// finalized, or when the VAD's own silence window already covered it.
+	s.sttDone = false
+	if s.txFinalized || s.sttWait() <= 0 {
+		s.sttDone = true
+		return
+	}
+	s.cancelSTT = s.after(s.sttWait(), func() {
+		s.sttDone = true
+		s.cancelSTT = nil
+		s.maybeTrigger()
+	})
+}
+
+// handleTranscription records the transcript and either releases the turn or,
+// with no VAD stop behind it, measures inactivity from the transcript itself.
+func (s *SpeechTimeoutStop) handleTranscription(fr *frames.TranscriptionFrame) {
+	if fr.Text != "" {
+		s.haveText = true
+	}
+	if fr.Finalized {
+		s.txFinalized = true
+		// STT says nothing more is coming, so the safety net has nothing left to
+		// wait for.
+		if !s.sttDone {
+			s.sttDone = true
+			s.cancelSTTTimer()
+		}
+	}
+
+	// Both waits already done means the turn was only waiting on text.
+	if s.userSpeechDone && s.sttDone {
+		s.maybeTrigger()
+		return
+	}
+
+	// Fallback for a transcript with no VAD stop behind it: measure inactivity
+	// since the last transcript instead. The STT wait is defined relative to a VAD
+	// stop and means nothing here, so it is marked done at once.
+	if !s.vadSpeaking && !s.vadStopped {
+		s.sttDone = true
+		s.restartUserSpeechTimer()
+	}
+}
+
+// sttWait is what is left of the STT budget once the VAD's own silence window is
+// discounted.
+func (s *SpeechTimeoutStop) sttWait() time.Duration { return s.sttTimeout - s.stopWindow }
+
+// restartUserSpeechTimer cancels any running speech timer and starts a fresh one.
+func (s *SpeechTimeoutStop) restartUserSpeechTimer() {
+	if s.cancelUser != nil {
+		s.cancelUser()
+		s.cancelUser = nil
+	}
 	s.userSpeechDone = false
 	s.cancelUser = s.after(s.userSpeechTimeout, func() {
 		s.userSpeechDone = true
 		s.cancelUser = nil
-		s.maybeTrigger()
-	})
-	wait := s.sttTimeout - time.Duration(stopSecs*float64(time.Second))
-	if wait <= 0 {
-		s.sttDone = true
-		return
-	}
-	s.sttDone = false
-	s.cancelSTT = s.after(wait, func() {
-		s.sttDone = true
-		s.cancelSTT = nil
 		s.maybeTrigger()
 	})
 }
@@ -361,11 +414,28 @@ func (s *SpeechTimeoutStop) maybeTrigger() {
 	}
 }
 
-func (s *SpeechTimeoutStop) reset() {
-	s.cancelTimers()
+// reset clears turn-scoped state. clearVADSpeaking is set only at the end of a
+// turn: the flag reflects the live VAD state rather than anything turn-scoped,
+// and the VAD re-emits a start only after a stop. Clearing it at a turn start the
+// VAD did not drive would leave the strategy believing there is no VAD reference
+// at all, and treating every transcript as a standalone utterance.
+func (s *SpeechTimeoutStop) reset(clearVADSpeaking bool) {
 	s.haveText = false
+	if clearVADSpeaking {
+		s.vadSpeaking = false
+	}
+	s.discardPendingEndOfTurn()
+}
+
+// discardPendingEndOfTurn drops whatever progress toward an end-of-turn has been
+// made. It runs at a turn boundary, and whenever the VAD reports the user
+// speaking again, which makes earlier progress stale mid-turn.
+func (s *SpeechTimeoutStop) discardPendingEndOfTurn() {
+	s.txFinalized = false
+	s.vadStopped = false
 	s.userSpeechDone = false
 	s.sttDone = false
+	s.cancelTimers()
 }
 
 func (s *SpeechTimeoutStop) cancelTimers() {
@@ -383,11 +453,11 @@ func (s *SpeechTimeoutStop) cancelSTTTimer() {
 	}
 }
 
-// TurnStarted clears per-turn state.
-func (s *SpeechTimeoutStop) TurnStarted() { s.reset() }
+// TurnStarted readies the strategy to detect the end of the turn now starting.
+func (s *SpeechTimeoutStop) TurnStarted() { s.reset(false) }
 
-// TurnStopped clears per-turn state.
-func (s *SpeechTimeoutStop) TurnStopped() { s.reset() }
+// TurnStopped clears per-turn state once the turn has ended.
+func (s *SpeechTimeoutStop) TurnStopped() { s.reset(true) }
 
 // Cleanup stops the timers.
 func (s *SpeechTimeoutStop) Cleanup() { s.cancelTimers() }
