@@ -112,11 +112,16 @@ func newUser(ctx *frames.LLMContext, cfg *turns.Config) *UserAggregator {
 	u.turn = turns.NewUserTurnController(cfg.Strategies, cfg.StopTimeout)
 	u.idle = turns.NewUserIdleController(turns.IdleConfig{Timeout: cfg.IdleTimeout, Callback: cfg.OnIdle})
 	u.turn.SetHooks(turns.ControllerHooks{
-		Started:          u.onTurnStarted,
-		Stopped:          u.onTurnStopped,
-		ResetAggregation: u.onResetAggregation,
-		Push:             func(ctx context.Context, f frames.Frame, dir processor.Direction) { _ = u.PushFrame(ctx, f, dir) },
-		Broadcast:        func(ctx context.Context, build func() frames.Frame) { _ = u.Broadcast(ctx, build) },
+		Started:            u.onTurnStarted,
+		Stopped:            u.onTurnStopped,
+		InferenceTriggered: u.onInferenceTriggered,
+		ResetAggregation:   u.onResetAggregation,
+		Push: func(ctx context.Context, f frames.Frame, dir processor.Direction) {
+			_ = u.PushFrame(ctx, f, dir)
+		},
+		Broadcast: func(ctx context.Context, build func() frames.Frame) {
+			_ = u.Broadcast(ctx, build)
+		},
 	})
 	return u
 }
@@ -598,6 +603,22 @@ func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTur
 	if params.EnableInterruptions {
 		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
 	}
+}
+
+// onInferenceTriggered commits what the user has said so far and runs the LLM on
+// it, without the turn being over.
+//
+// For most strategies this arrives together with the turn ending and is the
+// moment the answer starts being written. It matters on its own when
+// finalization is deferred to a separate judge: the detector says there is
+// enough to answer, and the answer begins while the judge is still deciding,
+// rather than after it. Anything the user adds before the turn actually ends is
+// committed by onTurnStopped, which runs the LLM again on it.
+func (u *UserAggregator) onInferenceTriggered(ctx context.Context) {
+	u.mu.Lock()
+	u.turnComplete = true
+	u.mu.Unlock()
+	_ = u.maybeRun(ctx)
 }
 
 // onResetAggregation drops the speech aggregated so far, at a start strategy's

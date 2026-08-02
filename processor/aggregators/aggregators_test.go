@@ -291,3 +291,66 @@ func TestUserAggregatorKeepsTheSpeechThatOpensTheTurn(t *testing.T) {
 		t.Fatal("task did not finish")
 	}
 }
+
+// Deferred finalization exists so the answer can start being written while a
+// separate judge is still deciding whether the turn is really over. The detector
+// says there is enough to answer and inference begins; the judge finalizes
+// later. Acting only on the finalization would mean waiting for the judge before
+// starting at all, which is the delay the arrangement is meant to remove.
+func TestUserAggregatorRunsInferenceBeforeDeferredFinalization(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop: []turns.StopStrategy{
+				// The detector triggers inference but cannot finalize.
+				turns.Deferred(turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{
+					UserSpeechTimeout: 20 * time.Millisecond,
+				})),
+				// Only the judge finalizes.
+				turns.NewExternalCompletionStop(),
+			},
+		},
+		StopTimeout: 3 * time.Second,
+	}))
+
+	triggered := make(chan struct{}, 4)
+	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.LLMContextFrame); ok {
+				select {
+				case triggered <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	tf := frames.NewTranscriptionFrame("what time do you close", "u", "ts")
+	tf.Finalized = true
+	task.QueueFrame(tf)
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+
+	// No completion verdict has been sent, so the judge has not finalized. The
+	// answer must already be under way.
+	select {
+	case <-triggered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("inference never started: it waited on a finalization that had not happened")
+	}
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleUser || msgs[0].Text != "what time do you close" {
+		t.Fatalf("messages = %+v, want one user 'what time do you close'", msgs)
+	}
+
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+}
