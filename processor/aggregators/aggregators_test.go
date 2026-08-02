@@ -219,3 +219,75 @@ func TestAssistantAggregatorCollectsResponse(t *testing.T) {
 		t.Fatalf("context messages = %+v, want one assistant 'Hello world'", msgs)
 	}
 }
+
+// The speech that opens a turn is the turn's first words, and must survive the
+// opening. A start strategy that holds out for a few words only decides once
+// they have been transcribed, so by the time the turn opens they are already
+// aggregated: clearing then would throw away exactly the speech that caused it,
+// and the turn would close having produced nothing at all.
+//
+// Speech that must not count is dropped explicitly instead. Here the one-word
+// barge-in is below the strategy's threshold, so the strategy asks for the
+// aggregation to be reset and those words stay out of the conversation.
+func TestUserAggregatorKeepsTheSpeechThatOpensTheTurn(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewMinWordsStart(turns.MinWordsStartConfig{MinWords: 3})},
+			Stop: []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{
+				UserSpeechTimeout: 30 * time.Millisecond,
+			})},
+		},
+		StopTimeout: 3 * time.Second,
+	}))
+
+	triggered := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.LLMContextFrame); ok {
+				select {
+				case triggered <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// The bot is talking, so it takes several words to barge in.
+	task.QueueFrame(frames.NewBotStartedSpeakingFrame())
+
+	// One word is not enough to interrupt: it opens no turn and must not end up
+	// in the conversation either.
+	short := frames.NewTranscriptionFrame("wait", "u", "ts")
+	short.Finalized = true
+	task.QueueFrame(short)
+	time.Sleep(50 * time.Millisecond)
+
+	// These words do open the turn, and they are the words it was opened for.
+	long := frames.NewTranscriptionFrame("cancel the order", "u", "ts")
+	long.Finalized = true
+	task.QueueFrame(long)
+
+	select {
+	case <-triggered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("LLM never ran: the turn produced nothing")
+	}
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleUser {
+		t.Fatalf("messages = %+v, want one user message", msgs)
+	}
+	if msgs[0].Text != "cancel the order" {
+		t.Fatalf("user text = %q, want %q", msgs[0].Text, "cancel the order")
+	}
+
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+}

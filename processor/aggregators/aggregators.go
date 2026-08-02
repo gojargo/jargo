@@ -112,10 +112,11 @@ func newUser(ctx *frames.LLMContext, cfg *turns.Config) *UserAggregator {
 	u.turn = turns.NewUserTurnController(cfg.Strategies, cfg.StopTimeout)
 	u.idle = turns.NewUserIdleController(turns.IdleConfig{Timeout: cfg.IdleTimeout, Callback: cfg.OnIdle})
 	u.turn.SetHooks(turns.ControllerHooks{
-		Started:   u.onTurnStarted,
-		Stopped:   u.onTurnStopped,
-		Push:      func(ctx context.Context, f frames.Frame, dir processor.Direction) { _ = u.PushFrame(ctx, f, dir) },
-		Broadcast: func(ctx context.Context, build func() frames.Frame) { _ = u.Broadcast(ctx, build) },
+		Started:          u.onTurnStarted,
+		Stopped:          u.onTurnStopped,
+		ResetAggregation: u.onResetAggregation,
+		Push:             func(ctx context.Context, f frames.Frame, dir processor.Direction) { _ = u.PushFrame(ctx, f, dir) },
+		Broadcast:        func(ctx context.Context, build func() frames.Frame) { _ = u.Broadcast(ctx, build) },
 	})
 	return u
 }
@@ -167,10 +168,10 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
 	case *frames.UserStartedSpeakingFrame:
-		// A new turn begins; drop any stale aggregation from a prior turn.
+		// A new turn begins. The aggregation is left alone for the reason given on
+		// onTurnStarted: the speech that opened the turn belongs to it.
 		if u.turnTaking {
 			u.mu.Lock()
-			u.aggregation = ""
 			u.turnComplete = false
 			u.mu.Unlock()
 		}
@@ -579,9 +580,15 @@ func (u *UserAggregator) Push(ctx context.Context, f frames.Frame, dir processor
 
 // onTurnStarted broadcasts the turn-start decision and barges in, and feeds the
 // idle controller a synthetic user-started frame so it tracks the turn.
+// The aggregation deliberately survives this. The words that opened the turn are
+// the turn's first words: a start strategy that holds out for a few of them only
+// decides once they have been transcribed, and by then they are already
+// aggregated. Clearing here would throw away exactly the speech that caused the
+// turn, leaving it to close having produced nothing. Speech that must not count
+// is dropped explicitly instead, by a strategy asking for it through
+// onResetAggregation.
 func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTurnStartedParams) {
 	u.mu.Lock()
-	u.aggregation = ""
 	u.turnComplete = false
 	u.mu.Unlock()
 	if params.EnableUserSpeakingFrames {
@@ -591,6 +598,17 @@ func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTur
 	if params.EnableInterruptions {
 		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
 	}
+}
+
+// onResetAggregation drops the speech aggregated so far, at a start strategy's
+// request. It is how words that must not count toward a turn are discarded:
+// anything said before a wake phrase, or an utterance too short to open one.
+// Since a turn beginning no longer clears the aggregation, this is the only way
+// such speech is kept out of the conversation.
+func (u *UserAggregator) onResetAggregation(context.Context) {
+	u.mu.Lock()
+	u.aggregation = ""
+	u.mu.Unlock()
 }
 
 // onTurnStopped broadcasts the turn-stop decision, feeds the idle controller a
