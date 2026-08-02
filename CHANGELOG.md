@@ -92,6 +92,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A barge-in during playback no longer races the sequencer.** Clearing it when
+  the user interrupts runs on the goroutine processing frames, while completing
+  its slots runs on the one draining a context's audio, and nothing kept the two
+  apart: concurrent map access, which can corrupt the queue or panic outright.
+
 - **The text about to be spoken is announced again.** An `AggregatedTextFrame`
   describing each unit is emitted before the audio for it opens, so a consumer
   that wants the text ahead of hearing it can act on it: an RTVI client starts

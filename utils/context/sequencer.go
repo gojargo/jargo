@@ -2,6 +2,7 @@ package context
 
 import (
 	"log/slog"
+	"sync"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -54,6 +55,14 @@ type streamingContext struct {
 // written to the conversation, and streaming holds the transient pending
 // sentence of a context still assembling one from tokens.
 type AggregatedFrameSequencer struct {
+	// mu guards everything below it. The sequencer is reached from the goroutine
+	// processing frames and from the one draining a context's audio: a barge-in
+	// clears it while the audio still playing is completing slots against it.
+	//
+	// The upstream project needs no such guard, running all of this on one event
+	// loop; the guard is here because these are genuinely separate goroutines.
+	mu sync.Mutex
+
 	name          string
 	streamingMode bool
 	slots         []*aggregatedFrameSlot
@@ -94,7 +103,7 @@ func NewAggregatedFrameSequencer(name string, streaming bool, tokenizer Sentence
 // the context's sentence assembler and registers a slot only once a boundary is
 // confirmed. buildTracker is false for a service with no word timings, whose
 // slot completes on CompleteSpokenSlot instead.
-func (s *AggregatedFrameSequencer) RegisterSpoken(
+func (s *AggregatedFrameSequencer) registerSpokenLocked(
 	frame *frames.AggregatedTextFrame,
 	contextID, ttsText string,
 	appendToContext, buildTracker, includesInterFrame bool,
@@ -127,11 +136,11 @@ func (s *AggregatedFrameSequencer) RegisterSpoken(
 // unblocked. Any sentence still pending for the context is finalized first, so a
 // real spoken slot sits immediately ahead of the skipped one and blocks it until
 // that sentence has actually been spoken.
-func (s *AggregatedFrameSequencer) RegisterSkipped(
+func (s *AggregatedFrameSequencer) registerSkippedLocked(
 	frame *frames.AggregatedTextFrame,
 	contextID, transportDestination string,
 ) []frames.Frame {
-	out := s.Finalize(contextID)
+	out := s.finalizeLocked(contextID)
 	frame.ContextID = contextID
 	s.slots = append(s.slots, &aggregatedFrameSlot{
 		frame:                frame,
@@ -139,14 +148,14 @@ func (s *AggregatedFrameSequencer) RegisterSkipped(
 		spoken:               false,
 		transportDestination: transportDestination,
 	})
-	return append(out, s.Flush(0)...)
+	return append(out, s.flushLocked(0)...)
 }
 
 // Finalize promotes a context's still-pending sentence into a real slot, for the
 // end of its text where no more tokens are coming. The context's live entry is
 // kept: word timings for the slot just promoted arrive later, during playback,
 // and have to be recognized.
-func (s *AggregatedFrameSequencer) Finalize(contextID string) []frames.Frame {
+func (s *AggregatedFrameSequencer) finalizeLocked(contextID string) []frames.Frame {
 	if !s.streamingMode || contextID == "" {
 		return nil
 	}
@@ -164,7 +173,7 @@ func (s *AggregatedFrameSequencer) Finalize(contextID string) []frames.Frame {
 
 // ProcessWord folds one word timing into the slot it belongs to and returns the
 // frames to push. pts is when the word is spoken.
-func (s *AggregatedFrameSequencer) ProcessWord(
+func (s *AggregatedFrameSequencer) processWordLocked(
 	word string, pts int64, contextID string, includesInterFrame bool,
 ) []frames.Frame {
 	// A word for a context that was never registered, was cleared by an
@@ -194,10 +203,10 @@ func (s *AggregatedFrameSequencer) ProcessWord(
 	out := s.emitWord(active, word, pts, contextID, includesInterFrame)
 	if complete && active != nil {
 		active.complete = true
-		out = append(out, s.Flush(pts)...)
+		out = append(out, s.flushLocked(pts)...)
 		if overflow != "" {
 			slog.Debug("sequencer emitting overflow word", "sequencer", s.name, "word", overflow)
-			out = append(out, s.ProcessWord(overflow, pts, contextID, false)...)
+			out = append(out, s.processWordLocked(overflow, pts, contextID, false)...)
 		}
 	}
 	return out
@@ -273,21 +282,21 @@ func (s *AggregatedFrameSequencer) emitWord(
 // CompleteSpokenSlot marks the first pending spoken slot complete and returns
 // the skipped frames that unblocks. It is for a service with no word timings,
 // whose slots complete one at a time in the call that registers them.
-func (s *AggregatedFrameSequencer) CompleteSpokenSlot() []frames.Frame {
+func (s *AggregatedFrameSequencer) completeSpokenSlotLocked() []frames.Frame {
 	for _, slot := range s.slots {
 		if slot.spoken && !slot.complete {
 			slot.complete = true
 			break
 		}
 	}
-	return s.Flush(0)
+	return s.flushLocked(0)
 }
 
 // Flush walks the queue and returns every skipped frame now unblocked. Complete
 // spoken slots come off the head, then skipped slots whose spoken predecessors
 // are all done. It stops at the first incomplete spoken slot. A non-zero
 // lastWordPTS places the skipped frames right after the last spoken word.
-func (s *AggregatedFrameSequencer) Flush(lastWordPTS int64) []frames.Frame {
+func (s *AggregatedFrameSequencer) flushLocked(lastWordPTS int64) []frames.Frame {
 	var out []frames.Frame
 	for len(s.slots) > 0 {
 		slot := s.slots[0]
@@ -316,7 +325,7 @@ func (s *AggregatedFrameSequencer) Flush(lastWordPTS int64) []frames.Frame {
 // emits a frame for its remaining unspoken text and is marked complete; slots of
 // other contexts still in flight are left to their own words. The context is
 // then forgotten, so any word arriving later is stale.
-func (s *AggregatedFrameSequencer) ForceComplete(contextID string, lastWordPTS int64) []frames.Frame {
+func (s *AggregatedFrameSequencer) forceCompleteLocked(contextID string, lastWordPTS int64) []frames.Frame {
 	var out []frames.Frame
 	for _, slot := range s.slots {
 		if !slot.spoken || slot.complete || slot.contextID != contextID {
@@ -337,7 +346,7 @@ func (s *AggregatedFrameSequencer) ForceComplete(contextID string, lastWordPTS i
 		}
 		slot.complete = true
 	}
-	out = append(out, s.Flush(lastWordPTS)...)
+	out = append(out, s.flushLocked(lastWordPTS)...)
 	delete(s.contextAppend, contextID)
 	delete(s.streaming, contextID)
 	return out
@@ -345,6 +354,9 @@ func (s *AggregatedFrameSequencer) ForceComplete(contextID string, lastWordPTS i
 
 // Clear drops every slot and all context state, for an interruption.
 func (s *AggregatedFrameSequencer) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.slots = nil
 	s.contextAppend = map[string]bool{}
 	s.buffered = nil
@@ -404,7 +416,7 @@ func (s *AggregatedFrameSequencer) promote(
 		wordFrame.RawText = agg.llm
 		wordFrame.AppendToContext = appendToContext
 		out = append(out, wordFrame)
-		out = append(out, s.CompleteSpokenSlot()...)
+		out = append(out, s.completeSpokenSlotLocked()...)
 	}
 	return append(out, s.drainBufferedWords()...)
 }
@@ -418,7 +430,7 @@ func (s *AggregatedFrameSequencer) drainBufferedWords() []frames.Frame {
 	s.buffered = nil
 	var out []frames.Frame
 	for _, w := range buffered {
-		out = append(out, s.ProcessWord(w.word, w.pts, w.contextID, w.includesInterFrame)...)
+		out = append(out, s.processWordLocked(w.word, w.pts, w.contextID, w.includesInterFrame)...)
 	}
 	return out
 }
@@ -507,4 +519,65 @@ func rawOr(f *frames.AggregatedTextFrame) string {
 		return f.RawText
 	}
 	return f.Text
+}
+
+// RegisterSpoken records a frame handed to the synthesizer. See
+// registerSpokenLocked.
+func (s *AggregatedFrameSequencer) RegisterSpoken(
+	frame *frames.AggregatedTextFrame,
+	contextID, ttsText string,
+	appendToContext, buildTracker, includesInterFrame bool,
+) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registerSpokenLocked(frame, contextID, ttsText, appendToContext, buildTracker, includesInterFrame)
+}
+
+// RegisterSkipped records a frame that is not spoken. See registerSkippedLocked.
+func (s *AggregatedFrameSequencer) RegisterSkipped(
+	frame *frames.AggregatedTextFrame,
+	contextID, transportDestination string,
+) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registerSkippedLocked(frame, contextID, transportDestination)
+}
+
+// Finalize closes out a context. See finalizeLocked.
+func (s *AggregatedFrameSequencer) Finalize(contextID string) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.finalizeLocked(contextID)
+}
+
+// ProcessWord records one spoken word. See processWordLocked.
+func (s *AggregatedFrameSequencer) ProcessWord(
+	word string, pts int64, contextID string, includesInterFrame bool,
+) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.processWordLocked(word, pts, contextID, includesInterFrame)
+}
+
+// CompleteSpokenSlot marks the active spoken slot complete. See
+// completeSpokenSlotLocked.
+func (s *AggregatedFrameSequencer) CompleteSpokenSlot() []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.completeSpokenSlotLocked()
+}
+
+// Flush returns every skipped frame now unblocked. See flushLocked.
+func (s *AggregatedFrameSequencer) Flush(lastWordPTS int64) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushLocked(lastWordPTS)
+}
+
+// ForceComplete completes a context's outstanding slots. See
+// forceCompleteLocked.
+func (s *AggregatedFrameSequencer) ForceComplete(contextID string, lastWordPTS int64) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forceCompleteLocked(contextID, lastWordPTS)
 }
