@@ -120,6 +120,11 @@ type OutputDriver interface {
 	// audio ahead of it has been sent. A transport overrides it to act on frame
 	// types it carries itself; the default does nothing.
 	WriteTransportFrame(ctx context.Context, f frames.Frame) error
+	// StartWriting opens the transport's outgoing media path, so that nothing is
+	// sent before it can carry audio. The base calls it while starting, and only
+	// once it returns does it start the senders and report the transport ready.
+	// A transport with nothing to open leaves the default, which does nothing.
+	StartWriting(ctx context.Context) error
 	// RegisterAudioDestination opens the outgoing stream a destination names,
 	// for a transport that serves more than one. It is called for each entry in
 	// Params.AudioOutDestinations when the transport starts, and a destination

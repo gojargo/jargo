@@ -545,6 +545,79 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 	}
 }
 
+// readyOutput records the order of its lifecycle callbacks, so a test can check
+// the media path is opened before anything is written to it.
+type readyOutput struct {
+	*transport.BaseOutput
+	mu    sync.Mutex
+	calls []string
+}
+
+func newReadyOutput(p transport.Params) *readyOutput {
+	o := &readyOutput{}
+	o.BaseOutput = transport.NewBaseOutput("ReadyOutput", p, o)
+	return o
+}
+
+func (o *readyOutput) record(name string) {
+	o.mu.Lock()
+	o.calls = append(o.calls, name)
+	o.mu.Unlock()
+}
+
+func (o *readyOutput) StartWriting(context.Context) error {
+	o.record("StartWriting")
+	return nil
+}
+
+func (o *readyOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error {
+	o.record("WriteAudio")
+	return nil
+}
+
+// TestBaseOutputReportsReady covers the readiness handshake: the transport's own
+// media path has to be open before the output queues anything for it, and once it
+// is the pipeline is told upstream, so a producer that must not speak into a
+// connection that is not up yet can wait for it.
+func TestBaseOutputReportsReady(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000
+
+	ready := make(chan struct{}, 4)
+	taskParams := pipeline.TaskParams{
+		OnReachedUpstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.OutputTransportReadyFrame); ok {
+				ready <- struct{}{}
+			}
+		},
+	}
+
+	o := newReadyOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no OutputTransportReadyFrame reached upstream")
+	}
+
+	task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x01}, 1920), 48000, 1))
+	if err := task.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.calls) == 0 || o.calls[0] != "StartWriting" {
+		t.Fatalf("calls = %v, want StartWriting first: audio was queued before the media path was open", o.calls)
+	}
+}
+
 // addressedWrite is one chunk the transport was asked to send, with the outgoing
 // stream it was addressed to.
 type addressedWrite struct {

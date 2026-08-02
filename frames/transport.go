@@ -24,6 +24,21 @@ func (f *InputTransportMessageFrame) String() string {
 	return fmt.Sprintf("%s(size: %d)", f.Name(), len(f.Message))
 }
 
+// OutputTransportReadyFrame reports that the output transport has opened its
+// media path and can receive frames. It is pushed upstream once the transport is
+// ready, so a producer that must not speak into a connection that is not up yet
+// (an avatar or video service, say) can wait for it. It is a control frame.
+type OutputTransportReadyFrame struct {
+	BaseControlFrame
+}
+
+// NewOutputTransportReadyFrame builds an OutputTransportReadyFrame.
+func NewOutputTransportReadyFrame() *OutputTransportReadyFrame {
+	return &OutputTransportReadyFrame{
+		BaseControlFrame: NewBaseControlFrame("OutputTransportReadyFrame"),
+	}
+}
+
 // InputTransportStartAudioStreamingFrame asks the input transport to start
 // streaming audio from its source. It is pushed downstream (by the RTVI
 // processor once the client is ready, say) so that starting the stream stays

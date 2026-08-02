@@ -86,6 +86,10 @@ func (bo *BaseOutput) SendMessage(context.Context, []byte) error { return nil }
 // WriteTransportFrame is the default no-op; a concrete transport overrides it.
 func (bo *BaseOutput) WriteTransportFrame(context.Context, frames.Frame) error { return nil }
 
+// StartWriting is the default no-op; a concrete transport overrides it to open
+// its outgoing media path.
+func (bo *BaseOutput) StartWriting(context.Context) error { return nil }
+
 // RegisterAudioDestination is the default no-op; a concrete transport overrides
 // it to open the outgoing stream a destination names.
 func (bo *BaseOutput) RegisterAudioDestination(context.Context, string) error { return nil }
@@ -102,7 +106,13 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 		// audio frame can be processed. Nothing downstream of the output
 		// transport needs the StartFrame ahead of this.
 		bo.startStreaming(ctx, fr)
-		return bo.PushFrame(ctx, f, dir)
+		if err := bo.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		// Report ready only once the StartFrame has gone downstream, so the
+		// pipeline is running by the time anything waiting on the transport is
+		// released.
+		return bo.PushFrame(ctx, frames.NewOutputTransportReadyFrame(), processor.Upstream)
 	case *frames.EndFrame:
 		bo.eachSender(func(s *mediaSender) { s.drainAudio(ctx) })
 		bo.stopStreaming(ctx)
@@ -229,6 +239,21 @@ func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) 
 	bytesPer10ms := bo.sampleRate / 100 * bo.channels * 2
 	bo.chunkSize = bytesPer10ms * chunks
 
+	// Open the transport's own media path before anything can be queued for it.
+	// An output that cannot open one can never send, so the failure is fatal
+	// rather than something to stream into and drop.
+	if err := bo.self.StartWriting(ctx); err != nil {
+		bo.PushError(ctx, "transport: open the outgoing media path", err, true)
+		return
+	}
+	bo.setTransportReady(ctx)
+}
+
+// setTransportReady registers the outgoing streams and starts a sender for each.
+// It runs once the media path is open, so nothing is queued for a stream that
+// cannot carry it yet. Reporting the transport ready is separate, because that
+// has to wait for the StartFrame to have gone downstream first.
+func (bo *BaseOutput) setTransportReady(ctx context.Context) {
 	// The default sender always exists: it serves every frame that names no
 	// destination of its own.
 	destinations := []string{defaultDestination}

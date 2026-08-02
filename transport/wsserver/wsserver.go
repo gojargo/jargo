@@ -322,6 +322,16 @@ func (out *outputTransport) SendMessage(ctx context.Context, data []byte) error 
 // ProcessFrame adds the control-frame handling the base output does not: an
 // interruption becomes the provider's "clear" message (barge-in), and end or
 // cancel triggers the serializer's hang-up.
+// StartWriting sets the playout clock. The base has sized the chunks by the time
+// it calls this, so the interval can be derived from them.
+func (out *outputTransport) StartWriting(context.Context) error {
+	out.paceMu.Lock()
+	defer out.paceMu.Unlock()
+	out.sendInterval = chunkDuration(out.ChunkSize(), out.SampleRate(), channels(out.Params().AudioOutChannels))
+	out.nextSend = time.Time{}
+	return nil
+}
+
 func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := out.BaseOutput.ProcessFrame(ctx, f, dir); err != nil {
 		return err
@@ -330,13 +340,6 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		return nil
 	}
 	switch f.(type) {
-	case *frames.StartFrame:
-		// The base has sized the chunks by now, so the playout clock can be
-		// derived from them.
-		out.paceMu.Lock()
-		out.sendInterval = chunkDuration(out.ChunkSize(), out.SampleRate(), channels(out.Params().AudioOutChannels))
-		out.nextSend = time.Time{}
-		out.paceMu.Unlock()
 	case *frames.InterruptionFrame:
 		out.sendControl(ctx, f)
 		// Restart the playout clock on a barge-in so the next turn's audio goes

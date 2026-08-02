@@ -226,6 +226,12 @@ func newOutput(conn *Connection, params transport.Params) *outputTransport {
 // ProcessFrame drives the sender's lifecycle around the base output: start it on
 // the StartFrame so silence is already flowing before the first word, drop
 // anything queued on a barge-in, and stop it when the session ends.
+// StartWriting brings the sender up, so the outgoing track is running before the
+// base starts queueing audio for it.
+func (out *outputTransport) StartWriting(context.Context) error {
+	return out.startSending()
+}
+
 func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := out.BaseOutput.ProcessFrame(ctx, f, dir); err != nil {
 		return err
@@ -234,8 +240,6 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		return nil
 	}
 	switch f.(type) {
-	case *frames.StartFrame:
-		return out.startSending()
 	case *frames.InterruptionFrame:
 		out.discardQueued()
 	case *frames.EndFrame:

@@ -29,6 +29,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`frames.OutputTransportReadyFrame`**, pushed upstream once the output
+  transport has opened its media path and can receive frames. A producer that
+  must not speak into a connection that is not up yet can wait for it.
+- **`transport.OutputDriver.StartWriting`**, the hook a transport implements to
+  open its outgoing media path. The base calls it while starting, and only once
+  it returns does it start the senders and report the transport ready, so
+  nothing is queued for a path that cannot carry it yet. Transports with nothing
+  to open need not implement it.
 - **Several outgoing audio streams per transport.** `Params.AudioOutDestinations`
   names them, `OutputDriver.RegisterAudioDestination` opens each one, and every
   frame is routed to the stream its `TransportDestination` names. Each stream

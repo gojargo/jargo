@@ -192,8 +192,6 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		return nil
 	}
 	switch f.(type) {
-	case *frames.StartFrame:
-		return out.openStream()
 	case *frames.InterruptionFrame:
 		out.mu.Lock()
 		out.buf = nil
@@ -202,6 +200,12 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		out.closeStream()
 	}
 	return nil
+}
+
+// StartWriting opens the playback stream, so the device is running before the
+// base starts queueing audio for it.
+func (out *outputTransport) StartWriting(context.Context) error {
+	return out.openStream()
 }
 
 func (out *outputTransport) openStream() error {
