@@ -19,6 +19,45 @@ func TestStripMarkdown(t *testing.T) {
 	}
 }
 
+func TestCollapseRepeatedPunctuation(t *testing.T) {
+	collapse := CollapseRepeatedPunctuation(RepeatedPunctuationOptions{})
+	cases := map[string]string{
+		"C'est super !!!!!":  "C'est super !",
+		"Vraiment ????":      "Vraiment ?",
+		"Wait!! Really??":    "Wait! Really?",
+		"One! Two? Three.":   "One! Two? Three.",
+		"Hold on...":         "Hold on...",
+		"Mixed ?!?! run":     "Mixed ?!?! run",
+		"Ends both ?!!!":     "Ends both ?!",
+		"nothing to do here": "nothing to do here",
+	}
+	for in, want := range cases {
+		if got := collapse(in); got != want {
+			t.Errorf("CollapseRepeatedPunctuation(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCollapseRepeatedPunctuationOptions(t *testing.T) {
+	// Keep more than one mark, and only act on longer runs.
+	lenient := CollapseRepeatedPunctuation(RepeatedPunctuationOptions{Keep: 2, MinRun: 4})
+	if got, want := lenient("Really!!! Truly!!!!!"), "Really!!! Truly!!"; got != want {
+		t.Errorf("lenient = %q, want %q", got, want)
+	}
+
+	// A custom mark set brings the full stop in, collapsing ellipses too.
+	withStops := CollapseRepeatedPunctuation(RepeatedPunctuationOptions{Marks: "!?."})
+	if got, want := withStops("Well... maybe!!"), "Well. maybe!"; got != want {
+		t.Errorf("withStops = %q, want %q", got, want)
+	}
+
+	// Keep cannot swallow the mark entirely, and MinRun cannot sit below it.
+	degenerate := CollapseRepeatedPunctuation(RepeatedPunctuationOptions{Keep: -3, MinRun: -1})
+	if got, want := degenerate("what???"), "what?"; got != want {
+		t.Errorf("degenerate = %q, want %q", got, want)
+	}
+}
+
 func TestEmailToSpeech(t *testing.T) {
 	got := EmailToSpeech("Contact user_1@example.com today")
 	want := "Contact user underscore 1 at example dot com today"

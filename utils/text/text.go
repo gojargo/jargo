@@ -15,6 +15,18 @@ type Filter interface {
 	Filter(text string) string
 }
 
+// InterruptibleFilter is a Filter that carries state between calls and needs to
+// be told when speech is cut off. Markdown structures such as code blocks and
+// tables arrive split across several sentences, so a filter tracking one has to
+// abandon it when the text that would have closed it never arrives. The TTS base
+// calls HandleInterruption on an interruption, and ResetInterruption before
+// filtering resumes.
+type InterruptibleFilter interface {
+	Filter
+	HandleInterruption()
+	ResetInterruption()
+}
+
 // Transform is a single text-normalization step. All the package's transforms
 // have this shape, so they compose directly and a VoiceFormatter is just an
 // ordered list of them.

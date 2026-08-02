@@ -20,6 +20,7 @@ require (
 	github.com/jfreymuth/pulse v0.1.2
 	github.com/livekit/server-sdk-go/v2 v2.18.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/neurosnap/sentences v1.1.2
 	github.com/pion/opus v0.1.1-0.20260706164138-4d863e517a7a
 	github.com/pion/webrtc/v4 v4.2.18
 	github.com/spf13/cobra v1.10.2
@@ -27,6 +28,7 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/yalue/onnxruntime_go v1.31.0
+	github.com/yuin/goldmark v1.8.5
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0
@@ -98,7 +100,6 @@ require (
 	github.com/nats-io/nats.go v1.52.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
-	github.com/neurosnap/sentences v1.1.2 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect

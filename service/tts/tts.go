@@ -348,6 +348,11 @@ func (b *Base) handleInterruption(ctx context.Context) {
 	if b.aggregator != nil {
 		b.aggregator.Reset()
 	}
+	for _, f := range b.filters {
+		if i, ok := f.(ttstext.InterruptibleFilter); ok {
+			i.HandleInterruption()
+		}
+	}
 	if b.sequencer != nil {
 		b.sequencer.Clear()
 	}
@@ -483,6 +488,11 @@ func (b *Base) wordPath() bool {
 func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
 	filtered := original
 	for _, f := range b.filters {
+		// A stateful filter is told the interruption is over just before it is
+		// asked for text again, which is the point it can resume from.
+		if i, ok := f.(ttstext.InterruptibleFilter); ok {
+			i.ResetInterruption()
+		}
 		filtered = f.Filter(filtered)
 	}
 	if strings.TrimSpace(filtered) == "" {
