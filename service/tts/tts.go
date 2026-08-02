@@ -82,16 +82,27 @@ func PCMYielder(yield func(f frames.Frame) error, rate int) func(pcm []byte) err
 type WordTimestamps interface {
 	Synthesizer
 	// RunTTSTimed synthesizes like RunTTS and additionally reports word timing
-	// via word(text, offset): text is a single spoken token, offset its start
-	// time in seconds from the beginning of this synthesis. Tokens are reported
-	// in spoken order; punctuation the provider splits into its own token should
-	// be merged into the preceding word first (see utils/context.MergePunctTokens).
+	// via word: each call carries a batch of tokens in spoken order, with the
+	// offset of each in seconds from the beginning of this synthesis. A batch
+	// rather than one token at a time, because normalizing a token stream can
+	// need the token before it, which the base cannot see one call at a time.
 	RunTTSTimed(
 		ctx context.Context,
 		text, contextID string,
 		yield func(f frames.Frame) error,
-		word func(text string, offset float64) error,
+		word func(words []uctx.WordTiming, opts WordTimingOptions) error,
 	) error
+}
+
+// WordTimingOptions says how a batch of word timings should be treated, for the
+// shapes a provider's token stream can take.
+type WordTimingOptions struct {
+	// PreMergeTokens merges punctuation- and space-only tokens into the word
+	// before them, for a provider that reports those as tokens of their own
+	// rather than attached to the word they belong to. Off by default: a
+	// provider whose stream is already word-level needs no merging, and merging
+	// it anyway would join tokens that were meant to stand apart.
+	PreMergeTokens bool
 }
 
 // Metadata describes a TTS service to the observability layer.
@@ -528,8 +539,8 @@ func (b *Base) runTTS(ctx context.Context, c *audioContext, contextID, original,
 	}
 	var err error
 	if wt, ok := b.syn.(WordTimestamps); ok {
-		word := func(text string, offset float64) error {
-			b.AppendWordToAudioContext(contextID, text, offset)
+		word := func(words []uctx.WordTiming, opts WordTimingOptions) error {
+			b.AddWordTimestamps(contextID, words, opts)
 			return nil
 		}
 		err = wt.RunTTSTimed(ctx, filtered, contextID, yield, word)

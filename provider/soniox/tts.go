@@ -166,7 +166,7 @@ func (s *timedTTSSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, _ string,
 	yield func(f frames.Frame) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
 	return s.run(ctx, text, true, emit, word)
@@ -178,7 +178,7 @@ func (s *ttsSynthesizer) run(
 	text string,
 	withTimestamps bool,
 	emit func(pcm []byte) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	conn, err := wsutil.Dial(ctx, s.cfg.URL, nil, readLimit)
 	if err != nil {
@@ -247,7 +247,7 @@ func (s *ttsSynthesizer) receive(
 	ctx context.Context,
 	conn *websocket.Conn,
 	emit func(pcm []byte) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	var acc uctx.CharAccumulator
 	for {
@@ -268,7 +268,7 @@ func (s *ttsSynthesizer) receive(
 			}
 			// A final word with no terminating space is still unreported.
 			if w, ok := acc.Flush(); ok {
-				return word(w.Word, w.Offset)
+				return word([]uctx.WordTiming{w}, tts.WordTimingOptions{})
 			}
 			return nil
 		}
@@ -295,7 +295,7 @@ func (s *ttsSynthesizer) receive(
 func (s *ttsSynthesizer) reportWords(
 	acc *uctx.CharAccumulator,
 	t *ttsTimings,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	var (
 		words []uctx.WordTiming
@@ -310,7 +310,7 @@ func (s *ttsSynthesizer) reportWords(
 		return err
 	}
 	for _, w := range words {
-		if err := word(w.Word, w.Offset); err != nil {
+		if err := word([]uctx.WordTiming{w}, tts.WordTimingOptions{}); err != nil {
 			return err
 		}
 	}

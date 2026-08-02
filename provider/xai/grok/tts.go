@@ -205,7 +205,7 @@ func (s *timedTTSSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, _ string,
 	yield func(f frames.Frame) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
 	return s.run(ctx, text, true, emit, word)
@@ -217,7 +217,7 @@ func (s *ttsSynthesizer) run(
 	text string,
 	withTimestamps bool,
 	emit func(pcm []byte) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+s.cfg.APIKey)
@@ -277,7 +277,7 @@ func receiveTTS(
 	ctx context.Context,
 	conn *websocket.Conn,
 	emit func(pcm []byte) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	var acc uctx.CharAccumulator
 	for {
@@ -308,7 +308,7 @@ func handleDelta(
 	acc *uctx.CharAccumulator,
 	m ttsMessage,
 	emit func(pcm []byte) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	if m.Delta != "" {
 		pcm, err := base64.StdEncoding.DecodeString(m.Delta)
@@ -327,12 +327,15 @@ func handleDelta(
 
 // flushFinalWord reports the word left buffered when the utterance ends, which
 // had no terminating space to close it.
-func flushFinalWord(acc *uctx.CharAccumulator, word func(text string, offset float64) error) error {
+func flushFinalWord(
+	acc *uctx.CharAccumulator,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+) error {
 	if word == nil {
 		return nil
 	}
 	if w, ok := acc.Flush(); ok {
-		return word(w.Word, w.Offset)
+		return word([]uctx.WordTiming{w}, tts.WordTimingOptions{})
 	}
 	return nil
 }
@@ -353,7 +356,11 @@ func (t *ttsTimings) startOffsets() []float64 {
 
 // addTimings folds one timing payload into acc, reporting every word it
 // completes.
-func addTimings(acc *uctx.CharAccumulator, t *ttsTimings, word func(text string, offset float64) error) error {
+func addTimings(
+	acc *uctx.CharAccumulator,
+	t *ttsTimings,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+) error {
 	if t == nil || len(t.Chars) == 0 {
 		return nil
 	}
@@ -365,9 +372,9 @@ func addTimings(acc *uctx.CharAccumulator, t *ttsTimings, word func(text string,
 }
 
 // emitWords forwards each assembled word to the callback.
-func emitWords(words []uctx.WordTiming, word func(text string, offset float64) error) error {
+func emitWords(words []uctx.WordTiming, word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error) error {
 	for _, w := range words {
-		if err := word(w.Word, w.Offset); err != nil {
+		if err := word([]uctx.WordTiming{w}, tts.WordTimingOptions{}); err != nil {
 			return err
 		}
 	}

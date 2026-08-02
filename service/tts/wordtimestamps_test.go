@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
+	uctx "github.com/gojargo/jargo/utils/context"
 )
 
 // timedWord is one spoken token the fake provider reports, with its start offset
@@ -31,6 +32,10 @@ type fakeTimedSynth struct {
 	blockAfter int
 }
 
+// Asserted, because a synthesizer that stops satisfying this interface does not
+// fail to build: the base just stops reporting word timings for it.
+var _ tts.WordTimestamps = (*fakeTimedSynth)(nil)
+
 func (s *fakeTimedSynth) SampleRate() int { return s.rate }
 
 // Synthesize is the plain fallback; unused because the base takes the timed path.
@@ -48,11 +53,11 @@ func (s *fakeTimedSynth) RunTTSTimed(
 	ctx context.Context,
 	_, _ string,
 	yield func(f frames.Frame) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
 	for i, w := range s.words {
-		if err := word(w.text, w.offset); err != nil {
+		if err := word([]uctx.WordTiming{{Word: w.text, Offset: w.offset}}, tts.WordTimingOptions{}); err != nil {
 			return err
 		}
 		if err := emit(w.pcm); err != nil {

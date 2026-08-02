@@ -14,6 +14,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Word timings are reported to the TTS base a batch at a time**, not one token
+  at a time: `tts.WordTimestamps.RunTTSTimed` now takes
+  `word(words []uctx.WordTiming, opts tts.WordTimingOptions)`, and
+  `tts.AudioContextHost` gains `AddWordTimestamps` for a provider delivering on
+  its own receive loop. Normalizing a token stream can need the token before it,
+  which the base could not see one call at a time.
+- **Punctuation merging moved from the providers into the base**, asked for with
+  `tts.WordTimingOptions{PreMergeTokens: true}` and off by default. It was done
+  by each provider that happened to need it, so of the four reporting word
+  timings two merged and two did not, with no way to tell from the outside which.
+
 - **Voice detection gates on volume as well as confidence.** `vad.Params` gains
   `MinVolume`, 0.6 by default, and a frame counts as speech only when the model
   is confident enough about it and it is loud enough to be worth hearing. A

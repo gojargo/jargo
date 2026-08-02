@@ -17,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
+	uctx "github.com/gojargo/jargo/utils/context"
 )
 
 // TestRealtimeTTSConfigValidate pins which fields the service requires.
@@ -334,6 +335,16 @@ func (h *fakeHost) AppendWordToAudioContext(_, word string, _ float64) {
 	h.words = append(h.words, word)
 }
 
+// AddWordTimestamps mirrors the base: normalize as asked, then queue each token.
+func (h *fakeHost) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts tts.WordTimingOptions) {
+	if opts.PreMergeTokens {
+		words = uctx.MergePunctTokens(words)
+	}
+	for _, w := range words {
+		h.AppendWordToAudioContext(contextID, w.Word, w.Offset)
+	}
+}
+
 func (h *fakeHost) RemoveAudioContext(string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -543,6 +554,15 @@ func (h *offsetHost) AppendWordToAudioContext(_, _ string, offset float64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.offs = append(h.offs, offset)
+}
+
+func (h *offsetHost) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts tts.WordTimingOptions) {
+	if opts.PreMergeTokens {
+		words = uctx.MergePunctTokens(words)
+	}
+	for _, w := range words {
+		h.AppendWordToAudioContext(contextID, w.Word, w.Offset)
+	}
 }
 
 func (h *offsetHost) offsets() []float64 {

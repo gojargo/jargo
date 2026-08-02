@@ -130,7 +130,7 @@ func (s *timedSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, _ string,
 	yield func(f frames.Frame) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
 	conn, err := s.dial(ctx)
@@ -191,7 +191,7 @@ func (s *synthesizer) receive(
 	ctx context.Context,
 	conn *websocket.Conn,
 	emit func(pcm []byte) error,
-	word func(text string, offset float64) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	for {
 		_, data, err := conn.Read(ctx)
@@ -227,7 +227,7 @@ func (s *synthesizer) receive(
 
 // emitWordTimings merges punctuation-only tokens into the preceding word and
 // forwards each resulting (word, start) pair to word.
-func emitWordTimings(wt *wsWordTimings, word func(text string, offset float64) error) error {
+func emitWordTimings(wt *wsWordTimings, word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error) error {
 	if wt == nil {
 		return nil
 	}
@@ -239,10 +239,5 @@ func emitWordTimings(wt *wsWordTimings, word func(text string, offset float64) e
 		}
 		batch = append(batch, uctx.WordTiming{Word: w, Offset: start})
 	}
-	for _, m := range uctx.MergePunctTokens(batch) {
-		if err := word(m.Word, m.Offset); err != nil {
-			return err
-		}
-	}
-	return nil
+	return word(batch, tts.WordTimingOptions{PreMergeTokens: true})
 }

@@ -388,8 +388,18 @@ func (s *realtimeSynthesizer) reportWords(
 		return err
 	}
 	st.cumulative = alignment.end(st.cumulative)
+
+	// This provider splits punctuation into tokens of its own, so it asks for
+	// them to be merged. The merging itself is the base's, so every provider
+	// that needs it gets the same treatment.
+	if st.direct == nil {
+		if host != nil {
+			host.AddWordTimestamps(msg.ContextID, words, tts.WordTimingOptions{PreMergeTokens: true})
+		}
+		return nil
+	}
 	for _, wt := range uctx.MergePunctTokens(words) {
-		if err := s.emitWord(msg.ContextID, st, host, wt.Word, wt.Offset); err != nil {
+		if err := st.direct.word(wt.Word, wt.Offset); err != nil {
 			return err
 		}
 	}
@@ -707,7 +717,7 @@ func (s *timedRealtimeSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	_ func(f frames.Frame) error,
-	_ func(text string, offset float64) error,
+	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, nil)
 }

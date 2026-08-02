@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/service/tts"
+	uctx "github.com/gojargo/jargo/utils/context"
 )
 
 // timedSynthesizer must satisfy tts.WordTimestamps so the base takes the
@@ -21,7 +22,12 @@ func TestPlainConfigDoesNotOptIn(t *testing.T) {
 	}
 }
 
-func TestEmitWordTimingsMergesAndForwards(t *testing.T) {
+// TestEmitWordTimingsForwardsRawAndAsksForMerging checks the provider hands its
+// tokens over as they came and asks for them to be normalized, rather than
+// normalizing them itself. This API splits punctuation and spaces into tokens of
+// their own, so the merging matters; doing it here rather than in the base is
+// what left other providers reporting tokens nothing downstream expects.
+func TestEmitWordTimingsForwardsRawAndAsksForMerging(t *testing.T) {
 	in := &wsWordTimings{
 		Words: []string{"Hello", ",", " ", "world"},
 		Start: []float64{0.0, 0.4, 0.45, 0.5},
@@ -31,14 +37,22 @@ func TestEmitWordTimingsMergesAndForwards(t *testing.T) {
 		offset float64
 	}
 	var got []wt
-	err := emitWordTimings(in, func(word string, offset float64) error {
-		got = append(got, wt{word, offset})
+	var asked tts.WordTimingOptions
+	err := emitWordTimings(in, func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
+		asked = opts
+		for _, w := range words {
+			got = append(got, wt{w.Word, w.Offset})
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("emitWordTimings: %v", err)
 	}
-	want := []wt{{"Hello,", 0.0}, {"world", 0.5}}
+	if !asked.PreMergeTokens {
+		t.Error("the provider did not ask for its punctuation tokens to be merged")
+	}
+	// Forwarded as they came: the merging happens in the base.
+	want := []wt{{"Hello", 0.0}, {",", 0.4}, {" ", 0.45}, {"world", 0.5}}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -51,7 +65,8 @@ func TestEmitWordTimingsMergesAndForwards(t *testing.T) {
 
 func TestEmitWordTimingsNilIsNoop(t *testing.T) {
 	called := false
-	if err := emitWordTimings(nil, func(string, float64) error { called = true; return nil }); err != nil {
+	emit := func([]uctx.WordTiming, tts.WordTimingOptions) error { called = true; return nil }
+	if err := emitWordTimings(nil, emit); err != nil {
 		t.Fatalf("emitWordTimings(nil): %v", err)
 	}
 	if called {
