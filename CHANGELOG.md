@@ -14,6 +14,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Voice detection gates on volume as well as confidence.** `vad.Params` gains
+  `MinVolume`, 0.6 by default, and a frame counts as speech only when the model
+  is confident enough about it and it is loud enough to be worth hearing. A
+  confident guess at something barely audible no longer opens a turn. Set it to 0
+  for the previous confidence-only behaviour.
+- **`audio/loudness`**, measuring loudness to ITU-R BS.1770 (EBU R128): the
+  K-weighting filter pair, gated block loudness, and normalisation onto a 0..1
+  scale. It is what the volume gate reads, so the gate follows how the ear hears
+  rather than raw amplitude.
 - **Voice detection moved out of the processor into `audio/vad/controller`.**
   The controller owns the detection state, the resampling the detector needs and
   the watch for audio that stops arriving, so anything needing the same detection

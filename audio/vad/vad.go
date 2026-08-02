@@ -9,7 +9,11 @@
 // turns its state transitions into speaking and interruption frames.
 package vad
 
-import "math"
+import (
+	"math"
+
+	"github.com/gojargo/jargo/audio/loudness"
+)
 
 // State is the voice-activity state of the audio stream.
 type State int
@@ -41,11 +45,12 @@ func (s State) String() string {
 	}
 }
 
-// Default detection parameters, matching the Silero defaults jargo ports.
+// Default detection parameters.
 const (
 	defaultConfidence = 0.7
 	defaultStartSecs  = 0.2
 	defaultStopSecs   = 0.2
+	defaultMinVolume  = 0.6
 )
 
 // Params configures voice activity detection.
@@ -59,11 +64,20 @@ type Params struct {
 	// StopSecs is how long silence must persist before the state is confirmed
 	// as quiet.
 	StopSecs float64
+	// MinVolume is how loud a frame must be, on the 0..1 scale audio/loudness
+	// measures, to count as speech however confident the model is. It keeps a
+	// confident guess at something barely audible from opening a turn.
+	MinVolume float64
 }
 
 // DefaultParams returns the default detection parameters.
 func DefaultParams() Params {
-	return Params{Confidence: defaultConfidence, StartSecs: defaultStartSecs, StopSecs: defaultStopSecs}
+	return Params{
+		Confidence: defaultConfidence,
+		StartSecs:  defaultStartSecs,
+		StopSecs:   defaultStopSecs,
+		MinVolume:  defaultMinVolume,
+	}
 }
 
 // Analyzer detects voice activity in a mono 16-bit PCM stream.
@@ -97,9 +111,10 @@ type confidencer interface {
 
 // stateMachine is the model-agnostic detection logic shared by analyzers. A
 // concrete analyzer embeds it and supplies itself as the confidencer, so the
-// machine can score frames without inheritance. Gating is confidence-only:
-// jargo relies on the neural model's confidence rather than an additional
-// volume threshold.
+// machine can score frames without inheritance. A frame counts as speech only
+// when the model is confident enough about it and it is loud enough to be worth
+// hearing, so a confident guess at something barely audible does not open a
+// turn.
 type stateMachine struct {
 	self   confidencer
 	params Params
@@ -112,6 +127,9 @@ type stateMachine struct {
 	stoppingCount int
 	state         State
 	buf           []byte
+	// prevVolume is the running volume each new reading is smoothed against. It
+	// carries across a parameter or rate change, as the detection state does not.
+	prevVolume float64
 }
 
 func newStateMachine(self confidencer, params Params) *stateMachine {
@@ -193,7 +211,10 @@ func (m *stateMachine) AnalyzeAudio(buffer []byte) State {
 	for len(m.buf) >= m.frameNumBytes {
 		frame := m.buf[:m.frameNumBytes]
 		m.buf = m.buf[m.frameNumBytes:]
-		m.advance(m.self.voiceConfidence(frame) >= m.params.Confidence)
+		confidence := m.self.voiceConfidence(frame)
+		m.prevVolume = loudness.Smooth(
+			loudness.Volume(frame, m.sampleRate), m.prevVolume, loudness.SmoothingFactor)
+		m.advance(confidence >= m.params.Confidence && m.prevVolume >= m.params.MinVolume)
 	}
 
 	if m.state == StateStarting && m.startingCount >= m.startFrames {
