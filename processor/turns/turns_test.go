@@ -330,3 +330,75 @@ func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
 		t.Errorf("probability = %v, want 0.17", pred.Probability)
 	}
 }
+
+// A verdict can land in the instant before the turn opens: the analyzer judges
+// the speech complete on the VAD stop, and the transcript that follows is what
+// opens the turn, wiping the verdict along with the rest of the previous turn's
+// state. The transcript fallback is what recovers it, so the turn still closes
+// on its own rather than hanging until the stop watchdog.
+func TestTurnAnalyzerTranscriptWithNoVADStopStillStops(t *testing.T) {
+	cfg := turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart(), turns.NewTranscriptionStart(turns.TranscriptionStartConfig{})},
+			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: fakeTurn{}})},
+		},
+		StopTimeout: 3 * time.Second,
+	}
+	rec, task, done := runTurns(t, cfg)
+
+	task.QueueFrame(frames.NewSTTMetadataFrame(120 * time.Millisecond))
+	// The analyzer judges the speech complete, but no turn is open yet to close.
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.02, ""))
+	rec.expectNone(t, 50*time.Millisecond)
+
+	// The transcript opens the turn, discarding that verdict, and must still be
+	// what ends it.
+	start := time.Now()
+	task.QueueFrame(finalTranscript("comment ça va"))
+	rec.expect(t, "started")
+	rec.expect(t, "interruption")
+	rec.expect(t, "stopped")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("turn took %v to stop, want the STT safety net rather than the %v watchdog", elapsed, cfg.StopTimeout)
+	}
+
+	finish(t, task, done)
+}
+
+// An interim transcript means more speech is still in flight, so an earlier
+// finalized transcript no longer covers all of it. The turn must fall back to
+// the STT safety net instead of closing the moment the VAD stops.
+func TestTurnAnalyzerInterimReopensFinalizedTranscript(t *testing.T) {
+	cfg := turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop:  []turns.StopStrategy{turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: fakeTurn{}})},
+		},
+		StopTimeout: 3 * time.Second,
+	}
+	rec, task, done := runTurns(t, cfg)
+
+	task.QueueFrame(frames.NewSTTMetadataFrame(500 * time.Millisecond))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	rec.expect(t, "started")
+	rec.expect(t, "interruption")
+
+	// The STT endpointer finalizes on a pause too short for the VAD to call it a
+	// stop, then keeps transcribing. Each frame is left to land before the next
+	// is queued: VAD frames are system frames and would otherwise overtake the
+	// transcripts, which are data frames.
+	task.QueueFrame(finalTranscript("hello"))
+	rec.expectNone(t, 30*time.Millisecond)
+	task.QueueFrame(frames.NewInterimTranscriptionFrame("hello how", "user", ""))
+	rec.expectNone(t, 30*time.Millisecond)
+
+	// The VAD stop must no longer find a finalized transcript to close on.
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.02, ""))
+	rec.expectNone(t, 200*time.Millisecond)
+
+	// The tail arrives and closes the turn.
+	task.QueueFrame(finalTranscript("hello how are you"))
+	rec.expect(t, "stopped")
+
+	finish(t, task, done)
+}

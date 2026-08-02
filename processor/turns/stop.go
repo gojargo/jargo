@@ -43,14 +43,20 @@ const analyzerMetricsProcessor = "TurnAnalyzer"
 // Smart-Turn stop strategy.
 type TurnAnalyzerStop struct {
 	StopStrategyBase
-	analyzer       turn.Analyzer
-	waitForTx      bool
-	sttTimeout     time.Duration
-	vadSpeaking    bool
+	analyzer   turn.Analyzer
+	waitForTx  bool
+	sttTimeout time.Duration
+	// stopWindow is the silence window the VAD required before its last stop. It
+	// outlives the turn that observed it, so a transcript arriving with no VAD
+	// stop behind it can still discount it from the STT budget.
+	stopWindow time.Duration
+
+	text           string
 	turnComplete   bool
+	vadSpeaking    bool
+	vadStopped     bool
 	txFinalized    bool
 	timeoutExpired bool
-	haveText       bool
 	cancelTimeout  func()
 }
 
@@ -77,10 +83,7 @@ func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 	case *frames.VADUserStartedSpeakingFrame:
 		s.analyzer.UpdateVADStartSecs(fr.StartSecs)
 		s.vadSpeaking = true
-		s.turnComplete = false
-		s.txFinalized = false
-		s.timeoutExpired = false
-		s.cancel()
+		s.discardPendingEndOfTurn()
 	case *frames.InputAudioRawFrame:
 		if s.analyzer.AppendAudio(fr.Audio, s.vadSpeaking) == turn.Complete {
 			// A streaming analyzer decides inside AppendAudio, and a batch one
@@ -92,28 +95,83 @@ func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 			s.maybeTrigger()
 		}
 	case *frames.VADUserStoppedSpeakingFrame:
-		s.vadSpeaking = false
-		start := time.Now()
-		state, prob, err := s.analyzer.AnalyzeEndOfTurn()
-		s.reportPrediction(state == turn.Complete, prob, err, start)
-		s.turnComplete = err == nil && state == turn.Complete
-		wait := max(0, s.sttTimeout-time.Duration(fr.StopSecs*float64(time.Second)))
-		s.cancel()
-		s.cancelTimeout = s.after(wait, func() {
-			s.timeoutExpired = true
-			s.cancelTimeout = nil
-			s.maybeTrigger()
-		})
+		s.handleVADStopped(fr)
 	case *frames.TranscriptionFrame:
-		if fr.Text != "" {
-			s.haveText = true
-		}
-		if fr.Finalized {
-			s.txFinalized = true
-		}
-		s.maybeTrigger()
+		s.handleTranscription(fr)
+	case *frames.InterimTranscriptionFrame:
+		// An interim means more transcription is still on the way, so an earlier
+		// finalized transcript no longer covers all of the user's speech. Without
+		// this, a transcript finalized during a pause too short for the VAD to
+		// report a stop (and so a new start, which is what normally clears the
+		// flag) would leave the flag stale and trigger the turn at the next VAD
+		// stop while the tail of the utterance is still in flight. STT endpointers
+		// that finalize on silences shorter than the VAD stop window do exactly
+		// that.
+		s.txFinalized = false
 	}
 	return Continue
+}
+
+// handleVADStopped consumes the analyzer's verdict for the speech that just
+// ended and arms the safety net that releases the turn if no transcript lands.
+func (s *TurnAnalyzerStop) handleVADStopped(fr *frames.VADUserStoppedSpeakingFrame) {
+	s.vadSpeaking = false
+	s.stopWindow = time.Duration(fr.StopSecs * float64(time.Second))
+	s.vadStopped = true
+
+	start := time.Now()
+	state, prob, err := s.analyzer.AnalyzeEndOfTurn()
+	s.reportPrediction(state == turn.Complete, prob, err, start)
+	s.turnComplete = err == nil && state == turn.Complete
+
+	s.armTimeout()
+
+	// A finalized transcript may already have satisfied the trigger conditions
+	// while the analyzer was running, as may Complete itself when waitForTx is
+	// false. The verdict is only known now, so re-check here rather than wait the
+	// safety net out.
+	s.maybeTrigger()
+}
+
+// handleTranscription records the transcript and releases the turn, or falls
+// back to an inactivity timer when no VAD stop stands behind the speech.
+func (s *TurnAnalyzerStop) handleTranscription(fr *frames.TranscriptionFrame) {
+	// Only whether there is text matters, not what it says.
+	s.text = fr.Text
+
+	switch {
+	case fr.Finalized:
+		s.txFinalized = true
+		// Nothing more is coming, so release the turn now if the analyzer agrees.
+		s.maybeTrigger()
+	case s.timeoutExpired && s.turnComplete:
+		// The safety net elapsed before the transcript arrived. Now that it has,
+		// stop the turn at once instead of waiting a second time.
+		s.fire()
+		return
+	}
+
+	// Fallback for a transcript with no VAD stop behind it: the analyzer is never
+	// asked for a verdict on speech the VAD did not bracket, so one would never
+	// arrive. Assume the turn is complete and measure inactivity from this
+	// transcript instead. This is also the recovery path when a verdict reached
+	// just before the turn opened was discarded with the rest of the previous
+	// turn's state.
+	if !s.vadSpeaking && !s.vadStopped {
+		s.turnComplete = true
+		s.armTimeout()
+	}
+}
+
+// armTimeout restarts the safety net, measured from now over what is left of the
+// STT budget once the VAD's own silence window is discounted.
+func (s *TurnAnalyzerStop) armTimeout() {
+	s.cancel()
+	s.cancelTimeout = s.after(max(0, s.sttTimeout-s.stopWindow), func() {
+		s.timeoutExpired = true
+		s.cancelTimeout = nil
+		s.maybeTrigger()
+	})
 }
 
 // reportPrediction emits what the analyzer decided, so a turn that ended on the
@@ -137,13 +195,20 @@ func (s *TurnAnalyzerStop) maybeTrigger() {
 		return
 	}
 	if !s.waitForTx {
+		// The analyzer drives turn-end; transcripts are bookkeeping.
 		s.fire()
 		return
 	}
-	if !s.haveText {
+	if s.text == "" {
 		return
 	}
-	if s.txFinalized || s.timeoutExpired {
+	if s.txFinalized {
+		s.fire()
+		return
+	}
+	// Non-finalized: release only once no safety net is pending, meaning it has
+	// already elapsed or none was ever armed.
+	if s.cancelTimeout == nil {
 		s.fire()
 	}
 }
@@ -170,12 +235,26 @@ func (s *TurnAnalyzerStop) TurnStopped() {
 	s.analyzer.Clear()
 }
 
+// resetState clears turn-scoped state. It runs at both turn boundaries.
+//
+// vadSpeaking is deliberately left alone: whether the user is speaking belongs
+// to the user, not to the turn, and the VAD reports it only on transitions.
+// Clearing it at a turn start the VAD did not drive (a turn opened from a
+// transcript, mid-utterance) would leave it wrong until the user next stopped.
 func (s *TurnAnalyzerStop) resetState() {
-	s.cancel()
+	s.text = ""
+	s.discardPendingEndOfTurn()
+}
+
+// discardPendingEndOfTurn drops whatever end-of-turn conclusion has been reached
+// so far. It runs at a turn boundary, and whenever the VAD reports the user
+// speaking again, which makes an earlier conclusion stale mid-turn.
+func (s *TurnAnalyzerStop) discardPendingEndOfTurn() {
 	s.turnComplete = false
 	s.txFinalized = false
 	s.timeoutExpired = false
-	s.haveText = false
+	s.vadStopped = false
+	s.cancel()
 }
 
 // Cleanup stops the timeout.
