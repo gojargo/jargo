@@ -14,6 +14,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Frames leaving the output wait for the audio they were queued behind.** A
+  downstream frame carrying neither audio nor a presentation timestamp used to be
+  forwarded the moment it arrived, overtaking the audio around it by however much
+  was buffered. It is now queued behind that audio and forwarded in step with
+  playback. System frames still go straight through, as does anything travelling
+  upstream.
+- **`frames.OutputTransportMessageFrame` is sent in step with the audio around
+  it** rather than the moment it arrives, which is what makes it the ordered
+  counterpart of the urgent one. The urgent frame is still sent at once, and is
+  no longer also forwarded downstream.
+- **Mixer control frames stop at the output** rather than being forwarded on.
+  They address the mixer of the stream they name and have no meaning past it.
 - **`transport/pionrtc` is now `transport/rtc`.** Pion is how the WebRTC
   transport is implemented, not what it is, and the package name said the
   former. Update imports and any `pionrtc.` references to `rtc.`.

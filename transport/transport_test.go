@@ -545,6 +545,88 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 	}
 }
 
+// markerFrame is a plain downstream data frame carrying no audio and no
+// timestamp, used to check where it lands relative to the audio around it.
+type markerFrame struct {
+	frames.BaseDataFrame
+}
+
+func newMarkerFrame() *markerFrame {
+	return &markerFrame{BaseDataFrame: frames.NewBaseDataFrame("MarkerFrame")}
+}
+
+// TestBaseOutputOrdersSyncFramesWithAudio covers a frame that carries neither
+// audio nor a timestamp. It has to wait behind the audio queued before it, so it
+// is forwarded in step with what is being heard, instead of overtaking it by
+// however much audio is buffered. Upstream has no test for this at the output;
+// the marker-frame technique is borrowed from its TTS ordering tests.
+func TestBaseOutputOrdersSyncFramesWithAudio(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	var mu sync.Mutex
+	var order []string
+	seen := make(chan struct{}, 8)
+	taskParams := pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			switch f.(type) {
+			case *frames.TTSAudioRawFrame:
+				mu.Lock()
+				order = append(order, "audio")
+				mu.Unlock()
+			case *markerFrame:
+				mu.Lock()
+				order = append(order, "marker")
+				mu.Unlock()
+				seen <- struct{}{}
+			}
+		},
+	}
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// Drain the transport's writes so the audio loop keeps pacing.
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for range o.writes {
+		}
+	}()
+
+	// Three whole chunks of audio, then a frame with nothing to play.
+	task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x01}, 1920*3), 48000, 1))
+	task.QueueFrame(newMarkerFrame())
+
+	select {
+	case <-seen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the marker frame never reached downstream")
+	}
+
+	mu.Lock()
+	got := append([]string(nil), order...)
+	mu.Unlock()
+
+	if len(got) == 0 || got[len(got)-1] != "marker" {
+		t.Fatalf("order = %v, want the marker last: it overtook the audio it was queued behind", got)
+	}
+	audio := 0
+	for _, s := range got {
+		if s == "audio" {
+			audio++
+		}
+	}
+	if audio != 3 {
+		t.Errorf("saw %d audio chunks before the marker, want 3", audio)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
 // readyOutput records the order of its lifecycle callbacks, so a test can check
 // the media path is opened before anything is written to it.
 type readyOutput struct {

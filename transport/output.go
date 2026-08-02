@@ -131,43 +131,49 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 			s.botStoppedSpeaking(ctx)
 		})
 		return nil
-	case *frames.OutputTransportMessageFrame, *frames.OutputTransportMessageUrgentFrame:
-		return bo.handleTransportMessage(ctx, f, dir)
-	case frames.MixerControlFrame:
-		return bo.handleMixerControl(ctx, fr, dir)
-	case *frames.TTSAudioRawFrame, *frames.SpeechOutputAudioRawFrame, *frames.OutputAudioRawFrame:
-		return bo.routeAudio(ctx, f, dir)
-	case *frames.TTSStoppedFrame:
-		return bo.routeTTSStopped(ctx, fr, dir)
+	case *frames.OutputTransportMessageUrgentFrame:
+		// Urgent, so it goes out at once, ahead of whatever is queued, and is
+		// not forwarded on.
+		bo.sendTransportMessage(ctx, fr.Message)
+		return nil
+	case frames.SystemFrame:
+		// A system frame outranks the queue and is forwarded as it arrives.
+		return bo.PushFrame(ctx, f, dir)
 	default:
-		return bo.handleTimedFrame(ctx, f, dir)
+		if dir != processor.Downstream {
+			return bo.PushFrame(ctx, f, dir)
+		}
+		return bo.handleFrame(ctx, f)
 	}
 }
 
-// routeAudio hands a bot audio frame to the sender for the destination it names.
-func (bo *BaseOutput) routeAudio(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if dir != processor.Downstream {
-		return bo.PushFrame(ctx, f, dir)
-	}
-	if s := bo.senderFor(f); s != nil {
-		s.handleAudioFrame(f)
-	}
-	return nil
-}
-
-// routeTTSStopped hands a TTS stop to the sender for the destination it names, so
-// it lands behind the audio it ends rather than ahead of it.
-func (bo *BaseOutput) routeTTSStopped(
-	ctx context.Context, f *frames.TTSStoppedFrame, dir processor.Direction,
-) error {
-	if dir != processor.Downstream {
-		return bo.PushFrame(ctx, f, dir)
-	}
+// handleFrame routes one downstream frame to the sender for the destination it
+// names. Audio is buffered and chunked, a mixer control reaches that stream's
+// mixer, a frame carrying a presentation timestamp waits on the clock, and
+// anything else is queued behind the audio already there so it is forwarded in
+// step with playback rather than as it arrives.
+func (bo *BaseOutput) handleFrame(ctx context.Context, f frames.Frame) error {
 	s := bo.senderFor(f)
 	if s == nil {
-		return bo.PushFrame(ctx, f, dir)
+		return nil
 	}
-	return s.handleTTSStopped(ctx, f)
+	switch fr := f.(type) {
+	case *frames.TTSAudioRawFrame, *frames.SpeechOutputAudioRawFrame, *frames.OutputAudioRawFrame:
+		s.handleAudioFrame(f)
+	case frames.MixerControlFrame:
+		if s.mixer != nil {
+			_ = s.mixer.ProcessFrame(ctx, fr)
+		}
+	case *frames.TTSStoppedFrame:
+		return s.handleTTSStopped(ctx, fr)
+	default:
+		if pts, timed := f.Base().PTS(); timed && s.clockQ != nil {
+			s.clockQ.push(pts, f)
+			return nil
+		}
+		s.handleSyncFrame(ctx, f)
+	}
+	return nil
 }
 
 // Cleanup stops the senders and the processor.
@@ -288,71 +294,24 @@ func (bo *BaseOutput) stopStreaming(ctx context.Context) {
 	bo.eachSender(func(s *mediaSender) { s.stop(ctx) })
 }
 
-// handleMixerControl hands a mixer control frame to the mixer of the destination
-// it names and forwards it on. The mixer reads the frame itself, so a control the
-// mixer understands does not have to be translated on the way through, and a new
-// one needs no change here.
-func (bo *BaseOutput) handleMixerControl(
-	ctx context.Context, f frames.MixerControlFrame, dir processor.Direction,
-) error {
-	if s := bo.senderFor(f); s != nil && s.mixer != nil {
-		_ = s.mixer.ProcessFrame(ctx, f)
-	}
-	return bo.PushFrame(ctx, f, dir)
-}
-
-// handleTransportMessage sends an application message to the client and forwards
-// the frame on. It serves both message frames: the ordered one, which reaches
-// here in step with the surrounding audio, and the urgent one, which is a system
-// frame and so arrives ahead of anything queued.
-func (bo *BaseOutput) handleTransportMessage(
-	ctx context.Context, f frames.Frame, dir processor.Direction,
-) error {
-	var message any
-	switch fr := f.(type) {
-	case *frames.OutputTransportMessageFrame:
-		message = fr.Message
-	case *frames.OutputTransportMessageUrgentFrame:
-		message = fr.Message
-	}
-	if err := bo.sendMessage(ctx, message); err != nil {
-		// Logged, not returned. A returned error becomes an ErrorFrame, and
-		// anything that reports errors to the client turns that into another
-		// message to send: if the connection is what failed, sending the report
-		// fails too and the pipeline feeds itself errors until it runs out of
-		// memory. A connection that cannot carry a message cannot carry the
-		// complaint about it either.
-		slog.Error("send transport message", "processor", bo.Name(), "err", err)
-		return nil
-	}
-	return bo.PushFrame(ctx, f, dir)
-}
-
-// sendMessage serializes a transport message payload to JSON and hands it to the
-// concrete transport. It serves both the ordered and the urgent message frames.
-func (bo *BaseOutput) sendMessage(ctx context.Context, message any) error {
+// sendTransportMessage serializes a transport message payload to JSON and hands
+// it to the concrete transport. It serves both message frames: the ordered one,
+// which reaches here in step with the surrounding audio, and the urgent one,
+// which is a system frame and so arrives ahead of anything queued.
+//
+// A failure is logged, not returned. A returned error becomes an ErrorFrame, and
+// anything that reports errors to the client turns that into another message to
+// send: if the connection is what failed, sending the report fails too and the
+// pipeline feeds itself errors until it runs out of memory. A connection that
+// cannot carry a message cannot carry the complaint about it either.
+func (bo *BaseOutput) sendTransportMessage(ctx context.Context, message any) {
 	data, err := json.Marshal(message)
+	if err == nil {
+		err = bo.self.SendMessage(ctx, data)
+	}
 	if err != nil {
-		return err
+		slog.Error("send transport message", "processor", bo.Name(), "err", err)
 	}
-	return bo.self.SendMessage(ctx, data)
-}
-
-// handleTimedFrame queues a downstream frame carrying a presentation timestamp
-// (a word-aligned TTSTextFrame, say) on its destination's clock, so it is
-// forwarded at the moment that timestamp names. A frame with no timestamp, or one
-// going upstream, has nothing to wait for and is forwarded as it arrives.
-func (bo *BaseOutput) handleTimedFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	pts, timed := f.Base().PTS()
-	if !timed || dir != processor.Downstream {
-		return bo.PushFrame(ctx, f, dir)
-	}
-	s := bo.senderFor(f)
-	if s == nil || s.clockQ == nil {
-		return bo.PushFrame(ctx, f, dir)
-	}
-	s.clockQ.push(pts, f)
-	return nil
 }
 
 // outputAudio extracts the PCM, sample rate and channel count from a bot audio

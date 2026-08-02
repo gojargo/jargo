@@ -208,6 +208,22 @@ func (s *mediaSender) handleTTSStopped(ctx context.Context, f *frames.TTSStopped
 	return nil
 }
 
+// handleSyncFrame queues a frame that carries no audio behind the audio already
+// queued for this stream, so it is forwarded in step with playback rather than
+// as it arrives. A text frame that belongs with the words being spoken, say,
+// would otherwise overtake the audio it describes by however much is buffered.
+func (s *mediaSender) handleSyncFrame(ctx context.Context, f frames.Frame) {
+	s.bufMu.Lock()
+	audioCtx, out := s.audioCtx, s.audioOut
+	s.bufMu.Unlock()
+	if audioCtx == nil || out == nil {
+		// Nothing is pacing anything yet, so there is nothing to wait behind.
+		_ = s.out.PushFrame(ctx, f, processor.Downstream)
+		return
+	}
+	sendAudio(audioCtx, out, f)
+}
+
 // enqueueFlushedAudioBuffer pads whatever is left in the buffer out to a full
 // chunk with silence and queues it for playback, as the same frame type as the
 // audio it was buffered from. It goes through the normal playback path (write,
@@ -490,6 +506,10 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) {
 				"processor", s.out.Name(), "destination", s.destination, "err", err)
 			pushDownstream = false
 		}
+	case *frames.OutputTransportMessageFrame:
+		// The ordered message: it waited behind the audio around it, so it
+		// reaches the client in step with what the client is hearing.
+		s.out.sendTransportMessage(ctx, af.Message)
 	case *frames.TTSStoppedFrame:
 		s.ttsStopped(ctx)
 	default:
