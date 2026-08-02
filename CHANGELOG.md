@@ -14,6 +14,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Voice detection moved out of the processor into `audio/vad/vadcontrol`.**
+  The controller owns the detection state, the resampling the detector needs and
+  the watch for audio that stops arriving, so anything needing the same detection
+  can drive it without going through a pipeline. `processor/vadproc` now just
+  hosts one and turns what it reports into frames.
 - **The VAD frames are broadcast rather than pushed downstream.**
   `VADUserStartedSpeakingFrame`, `VADUserStoppedSpeakingFrame` and
   `UserSpeakingFrame` now reach processors on both sides of the detector, which
