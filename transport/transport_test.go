@@ -396,6 +396,9 @@ func (o *pacedOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error
 func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+	// This is about the queued audio surviving the end, so leave the closing
+	// silence out of the count; TestBaseOutputSendsClosingSilence covers that.
+	params.AudioOutEndSilenceSecs = 0
 
 	o := newPacedOutput(params)
 	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
@@ -542,6 +545,49 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 		if !stopped {
 			t.Errorf("no BotStoppedSpeakingFrame reached %s", dir.name)
 		}
+	}
+}
+
+// TestBaseOutputSendsClosingSilence covers the run of silence sent after the
+// last of the audio when the pipeline ends, so the closing words are not clipped
+// by whatever closes on top of them.
+func TestBaseOutputSendsClosingSilence(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+	params.AudioOutEndSilenceSecs = 1
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x01}, 1920), 48000, 1))
+	task.StopWhenDone()
+
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipeline did not end")
+	}
+	close(o.writes)
+
+	var last []byte
+	writes := 0
+	for w := range o.writes {
+		last = w
+		writes++
+	}
+	if writes < 2 {
+		t.Fatalf("saw %d writes, want the turn's audio and the closing silence after it", writes)
+	}
+
+	// One second at 48 kHz of 16-bit samples.
+	want := 48000 * 2
+	if len(last) != want {
+		t.Fatalf("closing write = %d bytes, want %d", len(last), want)
+	}
+	if !bytes.Equal(last, make([]byte, want)) {
+		t.Error("the closing write was not silence")
 	}
 }
 

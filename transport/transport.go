@@ -57,6 +57,10 @@ type Params struct {
 	// transport that sends several outgoing streams and wants different
 	// auxiliary audio (or none) on each. It takes precedence over AudioOutMixer.
 	AudioOutMixers map[string]audio.Mixer
+	// AudioOutEndSilenceSecs is how many seconds of silence are sent after the
+	// last of the audio when the pipeline ends, so the closing words are not
+	// clipped by whatever closes on top of them. 0 sends none.
+	AudioOutEndSilenceSecs int
 	// AudioOutDestinations names the additional outgoing audio streams the
 	// transport serves, beyond the default unnamed one. A frame is routed to the
 	// destination it carries, so each stream keeps its own buffer, mixer and
@@ -69,12 +73,13 @@ type Params struct {
 // chunks.
 func DefaultParams() Params {
 	return Params{
-		AudioInEnabled:     true,
-		AudioInChannels:    1,
-		AudioInPassthrough: true,
-		AudioOutEnabled:    true,
-		AudioOutChannels:   1,
-		AudioOut10msChunks: 2,
+		AudioInEnabled:         true,
+		AudioInChannels:        1,
+		AudioInPassthrough:     true,
+		AudioOutEnabled:        true,
+		AudioOutChannels:       1,
+		AudioOut10msChunks:     2,
+		AudioOutEndSilenceSecs: 2,
 	}
 }
 

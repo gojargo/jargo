@@ -56,6 +56,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`Params.AudioOutEndSilenceSecs`**, how many seconds of silence follow the
+  last of the audio when the pipeline ends, so the closing words are not clipped
+  by whatever closes on top of them. Two seconds by default; 0 sends none.
 - **`frames.OutputTransportReadyFrame`**, pushed upstream once the output
   transport has opened its media path and can receive frames. A producer that
   must not speak into a connection that is not up yet can wait for it.

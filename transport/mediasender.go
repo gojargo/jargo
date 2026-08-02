@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -467,6 +468,8 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 
 		if queued, ok := q.tryGet(); ok {
 			if queued == drainMarker {
+				// Everything queued has been paced out; the turn is over.
+				s.sendEndSilence(ctx)
 				s.signalDrained()
 				continue
 			}
@@ -521,6 +524,8 @@ func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
 			idle.Reset(botVADStopFallback)
 
 			if queued == drainMarker {
+				// Everything queued has been paced out; the turn is over.
+				s.sendEndSilence(ctx)
 				s.signalDrained()
 				continue
 			}
@@ -535,6 +540,34 @@ func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
 			idle.Reset(botVADStopFallback)
 		case <-q.wait():
 		}
+	}
+}
+
+// sendEndSilence writes a short run of silence after the last of the audio, so
+// the closing words are not clipped by whatever closes on top of them. It is
+// bounded by a timeout: a transport that cannot take the silence must not hold
+// the shutdown up behind it.
+func (s *mediaSender) sendEndSilence(ctx context.Context) {
+	secs := s.out.params.AudioOutEndSilenceSecs
+	if secs <= 0 {
+		return
+	}
+	const sampleWidth = 2 // 16-bit samples
+	silence := frames.NewOutputAudioRawFrame(
+		make([]byte, s.sampleRate*sampleWidth*secs), s.sampleRate, 1)
+	silence.SetTransportDestination(s.destination)
+
+	writeCtx, cancel := context.WithTimeout(ctx, time.Duration(secs+1)*time.Second)
+	defer cancel()
+
+	if err := s.out.self.WriteAudio(writeCtx, silence); err != nil {
+		slog.Warn("transport: write end-frame silence",
+			"processor", s.out.Name(), "destination", s.destination, "err", err)
+		return
+	}
+	if errors.Is(writeCtx.Err(), context.DeadlineExceeded) {
+		slog.Warn("transport: timed out writing end-frame silence",
+			"processor", s.out.Name(), "destination", s.destination)
 	}
 }
 
