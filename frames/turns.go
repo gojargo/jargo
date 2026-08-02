@@ -3,6 +3,9 @@ package frames
 import (
 	"fmt"
 	"time"
+
+	"github.com/gojargo/jargo/audio/turn"
+	"github.com/gojargo/jargo/audio/vad"
 )
 
 // VADUserStartedSpeakingFrame reports that a voice-activity detector heard the
@@ -136,24 +139,43 @@ func NewUserTurnInferenceCompletedFrame() *UserTurnInferenceCompletedFrame {
 	}
 }
 
-// SpeechControlParamsFrame broadcasts the active end-of-turn timing parameters
-// so clients and observers can mirror them. It is a system frame.
+// SpeechControlParamsFrame reports the parameters governing speech detection and
+// end-of-turn analysis, so a processor downstream can size its own behavior to
+// them (speech recognition matching its endpointing to the detector's, say) and
+// clients and observers can mirror them. Either set is nil when only the other
+// is being reported. It is a system frame.
 type SpeechControlParamsFrame struct {
 	BaseSystemFrame
-	// StopSecs, PreSpeechMs and MaxDurationSecs mirror the turn analyzer's
-	// timing parameters.
-	StopSecs        float64
-	PreSpeechMs     float64
-	MaxDurationSecs float64
+	// VADParams are the voice-activity parameters in force, or nil.
+	VADParams *vad.Params
+	// TurnParams are the end-of-turn parameters in force, or nil.
+	TurnParams *turn.Params
 }
 
-// NewSpeechControlParamsFrame builds a SpeechControlParamsFrame.
-func NewSpeechControlParamsFrame(stopSecs, preSpeechMs, maxDurationSecs float64) *SpeechControlParamsFrame {
+// NewSpeechControlParamsFrame builds a SpeechControlParamsFrame. Either set may
+// be nil.
+func NewSpeechControlParamsFrame(vadParams *vad.Params, turnParams *turn.Params) *SpeechControlParamsFrame {
 	return &SpeechControlParamsFrame{
 		BaseSystemFrame: NewBaseSystemFrame("SpeechControlParamsFrame"),
-		StopSecs:        stopSecs,
-		PreSpeechMs:     preSpeechMs,
-		MaxDurationSecs: maxDurationSecs,
+		VADParams:       vadParams,
+		TurnParams:      turnParams,
+	}
+}
+
+// VADParamsUpdateFrame asks the voice-activity detector to adopt new parameters.
+// It is pushed upstream (by the RTVI processor acting on a client request, say)
+// and takes effect from the next chunk analyzed. It is a control frame.
+type VADParamsUpdateFrame struct {
+	BaseControlFrame
+	// Params are the detection parameters to adopt.
+	Params vad.Params
+}
+
+// NewVADParamsUpdateFrame builds a VADParamsUpdateFrame.
+func NewVADParamsUpdateFrame(params vad.Params) *VADParamsUpdateFrame {
+	return &VADParamsUpdateFrame{
+		BaseControlFrame: NewBaseControlFrame("VADParamsUpdateFrame"),
+		Params:           params,
 	}
 }
 
@@ -197,6 +219,7 @@ var (
 	_ SystemFrame  = (*UserMuteStoppedFrame)(nil)
 	_ SystemFrame  = (*UserIdleTimeoutUpdateFrame)(nil)
 	_ SystemFrame  = (*SpeechControlParamsFrame)(nil)
+	_ ControlFrame = (*VADParamsUpdateFrame)(nil)
 	_ ControlFrame = (*UserTurnInferenceCompletedFrame)(nil)
 	_ DataFrame    = (*LLMMarkerFrame)(nil)
 	_ ControlFrame = (*LLMMessagesAppendFrame)(nil)

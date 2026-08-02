@@ -14,6 +14,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The VAD frames are broadcast rather than pushed downstream.**
+  `VADUserStartedSpeakingFrame`, `VADUserStoppedSpeakingFrame` and
+  `UserSpeakingFrame` now reach processors on both sides of the detector, which
+  is what an interruption decision upstream needs.
+- **`UserSpeakingFrame` is emitted for every chunk heard as speech**, rather than
+  at a fixed period. `vadproc.Config.SpeechActivityPeriod` is gone with the
+  throttle it configured.
+- **`frames.SpeechControlParamsFrame` carries the parameter sets themselves.** It
+  held three flattened turn timings and no VAD parameters at all; it now carries
+  `*vad.Params` and `*turn.Params`, either of which may be nil. It is reported
+  when the pipeline starts and whenever the parameters change.
 - **A barge-in keeps the frames that must survive it.** The output dropped
   everything it had queued when the user interrupted, uninterruptible frames
   included, so a frame marked to always be delivered was not. It now keeps them
@@ -56,6 +67,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`frames.VADParamsUpdateFrame`**, changing the detection parameters on a
+  running pipeline. It is pushed upstream (by the RTVI processor acting on a
+  client request, say), and the analyzer adopts them from the next chunk.
+  `vad.Analyzer` gains `SetParams` for it.
 - **`vadproc.Config.AudioIdleTimeout`**, ending the user's speech when the audio
   stops arriving mid-utterance. Voice detection only ever hears silence as speech
   ending, so audio that stops outright, a microphone muted part-way through being

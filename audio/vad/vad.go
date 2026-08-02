@@ -78,6 +78,10 @@ type Analyzer interface {
 	AnalyzeAudio(buffer []byte) State
 	// Params returns the detection parameters.
 	Params() Params
+	// SetParams applies new detection parameters at runtime and resets the
+	// detection state, so a change takes effect from the next chunk rather than
+	// part-way through the one being decided.
+	SetParams(params Params)
 	// Reset clears all internal state.
 	Reset()
 	// Close releases any resources (for example a model session).
@@ -116,6 +120,16 @@ func newStateMachine(self confidencer, params Params) *stateMachine {
 
 // Params implements part of Analyzer.
 func (m *stateMachine) Params() Params { return m.params }
+
+// SetParams implements part of Analyzer. It recomputes the frame counts the
+// parameters size and resets the detection state, so the new values apply from
+// a clean start rather than to a decision already part-way made.
+func (m *stateMachine) SetParams(params Params) {
+	m.params = params
+	if m.sampleRate > 0 {
+		m.setSampleRate(m.sampleRate)
+	}
+}
 
 // setSampleRate recomputes the frame size and the start/stop frame counts. The
 // concrete analyzer calls it from its SetSampleRate after validating the rate.

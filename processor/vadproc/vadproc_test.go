@@ -16,6 +16,11 @@ import (
 type fakeVAD struct {
 	states []vad.State
 	i      int
+	params vad.Params
+}
+
+func newFakeVAD(states ...vad.State) *fakeVAD {
+	return &fakeVAD{states: states, params: vad.DefaultParams()}
 }
 
 func (f *fakeVAD) SetSampleRate(int) error { return nil }
@@ -24,15 +29,16 @@ func (f *fakeVAD) AnalyzeAudio([]byte) vad.State {
 	f.i++
 	return s
 }
-func (f *fakeVAD) Params() vad.Params { return vad.DefaultParams() }
-func (f *fakeVAD) Reset()             {}
-func (f *fakeVAD) Close() error       { return nil }
+func (f *fakeVAD) Params() vad.Params     { return f.params }
+func (f *fakeVAD) SetParams(p vad.Params) { f.params = p }
+func (f *fakeVAD) Reset()                 {}
+func (f *fakeVAD) Close() error           { return nil }
 
 // runVAD drives a VAD processor with the scripted states (one per 20 ms frame at
 // 16 kHz) and returns the ordered names of the VAD frames it emitted.
-func runVAD(t *testing.T, states []vad.State, period time.Duration, nframes int) []string {
+func runVAD(t *testing.T, states []vad.State, nframes int) []string {
 	t.Helper()
-	p := vadproc.New(vadproc.Config{VAD: &fakeVAD{states: states}, SpeechActivityPeriod: period})
+	p := vadproc.New(vadproc.Config{VAD: newFakeVAD(states...)})
 
 	var mu sync.Mutex
 	var events []string
@@ -70,16 +76,15 @@ func runVAD(t *testing.T, states []vad.State, period time.Duration, nframes int)
 
 func TestVADStartStop(t *testing.T) {
 	states := []vad.State{vad.StateQuiet, vad.StateSpeaking, vad.StateSpeaking, vad.StateQuiet}
-	got := runVAD(t, states, -1, 4) // keepalive disabled
-	assertEvents(t, got, []string{"started", "stopped"})
+	got := runVAD(t, states, 4)
+	// Every chunk heard as speech is reported, the one that started it included.
+	assertEvents(t, got, []string{"started", "speaking", "speaking", "stopped"})
 }
 
-func TestVADPeriodicSpeaking(t *testing.T) {
-	// Four speaking frames then quiet; a 40 ms period emits a keepalive every two
-	// 20 ms frames.
+func TestVADReportsEverySpeakingChunk(t *testing.T) {
 	states := []vad.State{vad.StateSpeaking, vad.StateSpeaking, vad.StateSpeaking, vad.StateSpeaking, vad.StateQuiet}
-	got := runVAD(t, states, 40*time.Millisecond, 5)
-	assertEvents(t, got, []string{"started", "speaking", "speaking", "stopped"})
+	got := runVAD(t, states, 5)
+	assertEvents(t, got, []string{"started", "speaking", "speaking", "speaking", "speaking", "stopped"})
 }
 
 // TestVADAudioIdleForcesSpeechStop covers audio that stops arriving mid-speech,
@@ -89,9 +94,8 @@ func TestVADPeriodicSpeaking(t *testing.T) {
 func TestVADAudioIdleForcesSpeechStop(t *testing.T) {
 	const idle = 150 * time.Millisecond
 	p := vadproc.New(vadproc.Config{
-		VAD:                  &fakeVAD{states: []vad.State{vad.StateSpeaking}},
-		SpeechActivityPeriod: -1, // keepalive off, so only the speech events show
-		AudioIdleTimeout:     idle,
+		VAD:              newFakeVAD(vad.StateSpeaking),
+		AudioIdleTimeout: idle,
 	})
 
 	stopped := make(chan struct{}, 4)
@@ -123,9 +127,8 @@ func TestVADAudioIdleForcesSpeechStop(t *testing.T) {
 func TestVADAudioIdleStaysQuiet(t *testing.T) {
 	const idle = 100 * time.Millisecond
 	p := vadproc.New(vadproc.Config{
-		VAD:                  &fakeVAD{states: []vad.State{vad.StateQuiet}},
-		SpeechActivityPeriod: -1,
-		AudioIdleTimeout:     idle,
+		VAD:              newFakeVAD(vad.StateQuiet),
+		AudioIdleTimeout: idle,
 	})
 
 	stopped := make(chan struct{}, 4)
@@ -145,6 +148,80 @@ func TestVADAudioIdleStaysQuiet(t *testing.T) {
 	case <-stopped:
 		t.Error("the idle timeout ended a speech that had never started")
 	case <-time.After(4 * idle):
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestVADReportsParamsOnStart covers the parameters being reported when the
+// pipeline starts, so a processor downstream can size its own behavior to them.
+// Ported from upstream's test of the same behavior.
+func TestVADReportsParamsOnStart(t *testing.T) {
+	p := vadproc.New(vadproc.Config{VAD: newFakeVAD(vad.StateQuiet)})
+
+	got := make(chan *frames.SpeechControlParamsFrame, 4)
+	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
+				got <- sc
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	select {
+	case sc := <-got:
+		if sc.VADParams == nil {
+			t.Fatal("the reported parameters carried no VAD params")
+		}
+		if sc.VADParams.StopSecs != vad.DefaultParams().StopSecs {
+			t.Errorf("StopSecs = %v, want %v", sc.VADParams.StopSecs, vad.DefaultParams().StopSecs)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the parameters were never reported")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestVADParamsUpdateTakesEffect covers changing the detection parameters on a
+// running pipeline: the analyzer adopts them, and the new values are reported so
+// anything sized to the old ones can follow.
+func TestVADParamsUpdateTakesEffect(t *testing.T) {
+	fake := newFakeVAD(vad.StateQuiet)
+	p := vadproc.New(vadproc.Config{VAD: fake})
+
+	got := make(chan *frames.SpeechControlParamsFrame, 8)
+	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
+				got <- sc
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	<-got // the report made on start
+
+	updated := vad.DefaultParams()
+	updated.StopSecs = 1.25
+	task.QueueFrame(frames.NewVADParamsUpdateFrame(updated))
+
+	select {
+	case sc := <-got:
+		if sc.VADParams == nil || sc.VADParams.StopSecs != 1.25 {
+			t.Errorf("reported params = %+v, want StopSecs 1.25", sc.VADParams)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the updated parameters were never reported")
+	}
+
+	if fake.Params().StopSecs != 1.25 {
+		t.Errorf("analyzer StopSecs = %v, want 1.25: the update never reached it", fake.Params().StopSecs)
 	}
 
 	task.StopWhenDone()

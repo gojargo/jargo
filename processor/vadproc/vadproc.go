@@ -27,10 +27,6 @@ import (
 // not one the analyzer accepts (Silero also runs natively at 8 kHz).
 const analyzerSampleRate = 16000
 
-// defaultSpeechActivityPeriod is how often a UserSpeakingFrame is emitted while
-// the user is speaking.
-const defaultSpeechActivityPeriod = 200 * time.Millisecond
-
 // defaultAudioIdleTimeout is how long the audio can stop arriving mid-speech
 // before the user is taken to have stopped.
 const defaultAudioIdleTimeout = time.Second
@@ -39,9 +35,6 @@ const defaultAudioIdleTimeout = time.Second
 type Config struct {
 	// VAD detects voice activity. Required.
 	VAD vad.Analyzer
-	// SpeechActivityPeriod is how often a UserSpeakingFrame is emitted while the
-	// user is speaking; 0 uses 200ms, a negative value disables the keepalive.
-	SpeechActivityPeriod time.Duration
 	// AudioIdleTimeout is how long to wait, with the user speaking and no audio
 	// arriving at all, before taking the speech to have stopped. It covers the
 	// audio going away mid-utterance, a muted microphone being the usual case:
@@ -55,9 +48,8 @@ type Config struct {
 type Processor struct {
 	*processor.Base
 
-	vad          vad.Analyzer
-	speechPeriod time.Duration
-	idleTimeout  time.Duration
+	vad         vad.Analyzer
+	idleTimeout time.Duration
 
 	resampler    *resample.Resampler
 	inRate       int
@@ -65,10 +57,9 @@ type Processor struct {
 
 	// mu guards the speaking state, which the idle watcher reads and writes
 	// alongside the goroutine processing frames.
-	mu            sync.Mutex
-	speaking      bool
-	speakingAccum time.Duration
-	lastAudioAt   time.Time
+	mu          sync.Mutex
+	speaking    bool
+	lastAudioAt time.Time
 
 	idleCancel context.CancelFunc
 	idleWG     sync.WaitGroup
@@ -76,50 +67,72 @@ type Processor struct {
 
 // New builds a VAD Processor. The VAD analyzer is required.
 func New(cfg Config) *Processor {
-	period := cfg.SpeechActivityPeriod
-	if period == 0 {
-		period = defaultSpeechActivityPeriod
-	}
 	idle := cfg.AudioIdleTimeout
 	if idle == 0 {
 		idle = defaultAudioIdleTimeout
 	}
-	p := &Processor{vad: cfg.VAD, speechPeriod: period, idleTimeout: idle}
+	p := &Processor{vad: cfg.VAD, idleTimeout: idle}
 	p.Base = processor.New("VAD", p)
 	return p
 }
 
-// ProcessFrame drives the analyzer from incoming audio and forwards frames.
+// ProcessFrame forwards the frame and then drives the analyzer from it.
+//
+// It forwards first so the StartFrame reaches everything downstream before the
+// parameters are reported, and so audio keeps flowing without waiting on
+// detection.
 func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
+	if err := p.PushFrame(ctx, f, dir); err != nil {
+		return err
+	}
+
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		// Prefer the input rate so no resampling is needed — Silero runs natively
-		// at 8 kHz as well as 16 kHz. Fall back to the default rate (and resample)
-		// only if the analyzer rejects the input rate.
-		rate := fr.AudioInSampleRate
-		if rate <= 0 {
-			rate = analyzerSampleRate
-		}
-		if err := p.vad.SetSampleRate(rate); err != nil {
-			rate = analyzerSampleRate
-			if err := p.vad.SetSampleRate(rate); err != nil {
-				return err
-			}
-		}
-		p.analyzerRate = rate
-		p.startIdleWatch(ctx)
-		return p.PushFrame(ctx, f, dir)
+		return p.start(ctx, fr)
 	case *frames.InputAudioRawFrame:
-		if dir == processor.Downstream {
-			return p.handleAudio(ctx, fr)
-		}
-		return p.PushFrame(ctx, f, dir)
-	default:
-		return p.PushFrame(ctx, f, dir)
+		p.handleAudio(ctx, fr)
+	case *frames.VADParamsUpdateFrame:
+		// Travels upstream from whatever asked for the change, so it is acted on
+		// whichever way it was going.
+		p.vad.SetParams(fr.Params)
+		p.reportParams(ctx)
 	}
+	return nil
+}
+
+// start configures the analyzer for the pipeline's input rate and reports the
+// parameters it will run with.
+func (p *Processor) start(ctx context.Context, f *frames.StartFrame) error {
+	// Prefer the input rate so no resampling is needed — Silero runs natively
+	// at 8 kHz as well as 16 kHz. Fall back to the default rate (and resample)
+	// only if the analyzer rejects the input rate.
+	rate := f.AudioInSampleRate
+	if rate <= 0 {
+		rate = analyzerSampleRate
+	}
+	if err := p.vad.SetSampleRate(rate); err != nil {
+		rate = analyzerSampleRate
+		if err := p.vad.SetSampleRate(rate); err != nil {
+			return err
+		}
+	}
+	p.analyzerRate = rate
+	p.startIdleWatch(ctx)
+	p.reportParams(ctx)
+	return nil
+}
+
+// reportParams broadcasts the detection parameters in force, so a processor
+// downstream can size its own behavior to them.
+func (p *Processor) reportParams(ctx context.Context) {
+	params := p.vad.Params()
+	_ = p.Broadcast(ctx, func() frames.Frame {
+		vp := params
+		return frames.NewSpeechControlParamsFrame(&vp, nil)
+	})
 }
 
 // Cleanup closes the analyzer and resampler.
@@ -136,11 +149,10 @@ func (p *Processor) Cleanup(ctx context.Context) error {
 	return err
 }
 
-// handleAudio forwards the audio, runs the VAD, and emits VAD frames.
-func (p *Processor) handleAudio(ctx context.Context, f *frames.InputAudioRawFrame) error {
-	if err := p.PushFrame(ctx, f, processor.Downstream); err != nil {
-		return err
-	}
+// handleAudio runs detection over one chunk and reports what it heard. The
+// frames go both ways: an interruption decision upstream and a transcription one
+// downstream are both driven by them.
+func (p *Processor) handleAudio(ctx context.Context, f *frames.InputAudioRawFrame) {
 	state := p.vad.AnalyzeAudio(p.toAnalyzerRate(f))
 
 	p.mu.Lock()
@@ -150,36 +162,37 @@ func (p *Processor) handleAudio(ctx context.Context, f *frames.InputAudioRawFram
 	switch {
 	case started:
 		p.speaking = true
-		p.speakingAccum = 0
 	case stopped:
 		p.speaking = false
 	}
-	keepalive := false
-	if p.speaking && p.speechPeriod > 0 {
-		p.speakingAccum += frameDuration(f)
-		if p.speakingAccum >= p.speechPeriod {
-			p.speakingAccum = 0
-			keepalive = true
-		}
-	}
+	speaking := p.speaking
 	p.mu.Unlock()
 
-	if started {
-		_ = p.PushFrame(ctx, frames.NewVADUserStartedSpeakingFrame(p.vad.Params().StartSecs), processor.Downstream)
+	switch {
+	case started:
+		startSecs := p.vad.Params().StartSecs
+		_ = p.Broadcast(ctx, func() frames.Frame {
+			return frames.NewVADUserStartedSpeakingFrame(startSecs)
+		})
+	case stopped:
+		p.broadcastStopped(ctx)
 	}
-	if stopped {
-		_ = p.PushFrame(ctx, p.stoppedFrame(), processor.Downstream)
+
+	// Reported for every chunk heard as speech, the one that started it
+	// included, so anything counting on the user still being there keeps hearing
+	// about it.
+	if speaking {
+		_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewUserSpeakingFrame() })
 	}
-	if keepalive {
-		_ = p.PushFrame(ctx, frames.NewUserSpeakingFrame(), processor.Downstream)
-	}
-	return nil
 }
 
-// stoppedFrame builds the frame reporting that the user's speech has ended.
-func (p *Processor) stoppedFrame() frames.Frame {
-	ts := time.Now().UTC().Format(time.RFC3339)
-	return frames.NewVADUserStoppedSpeakingFrame(p.vad.Params().StopSecs, ts)
+// broadcastStopped reports that the user's speech has ended.
+func (p *Processor) broadcastStopped(ctx context.Context) {
+	stopSecs := p.vad.Params().StopSecs
+	_ = p.Broadcast(ctx, func() frames.Frame {
+		ts := time.Now().UTC().Format(time.RFC3339)
+		return frames.NewVADUserStoppedSpeakingFrame(stopSecs, ts)
+	})
 }
 
 // startIdleWatch brings up the watcher that ends speech when the audio stops
@@ -235,14 +248,13 @@ func (p *Processor) idleWatch(ctx context.Context) {
 		idled := p.speaking
 		if idled {
 			p.speaking = false
-			p.speakingAccum = 0
 		}
 		p.mu.Unlock()
 
 		if idled {
 			slog.Warn("vadproc: no audio while the user was speaking, ending the speech",
 				"timeout", p.idleTimeout)
-			_ = p.PushFrame(ctx, p.stoppedFrame(), processor.Downstream)
+			p.broadcastStopped(ctx)
 		}
 
 		if !sleepCtx(ctx, p.idleTimeout) {
@@ -261,14 +273,6 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
-}
-
-// frameDuration is the wall-clock duration of one audio frame.
-func frameDuration(f *frames.InputAudioRawFrame) time.Duration {
-	if f.SampleRate == 0 {
-		return 0
-	}
-	return time.Duration(f.NumFrames()) * time.Second / time.Duration(f.SampleRate)
 }
 
 // toAnalyzerRate returns the frame's audio resampled to the analyzer rate, mono.

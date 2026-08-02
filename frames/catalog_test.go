@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/audio/turn"
+	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -138,7 +140,9 @@ func catalog() []catalogEntry {
 		},
 		{
 			label: "SpeechControlParamsFrame", cat: system,
-			build: func() frames.Frame { return frames.NewSpeechControlParamsFrame(0.8, 200, 8) },
+			build: func() frames.Frame {
+				return frames.NewSpeechControlParamsFrame(&vad.Params{StopSecs: 0.8}, &turn.Params{StopSecs: 0.8})
+			},
 		},
 		{
 			label: "ServiceMetadataFrame", cat: system, wantString: "service: stt-1",
@@ -427,9 +431,14 @@ func TestConstructorFields(t *testing.T) {
 	})
 
 	t.Run("speech control params", func(t *testing.T) {
-		f := frames.NewSpeechControlParamsFrame(0.8, 200, 8)
-		if f.StopSecs != 0.8 || f.PreSpeechMs != 200 || f.MaxDurationSecs != 8 {
-			t.Errorf("params = %+v", f)
+		vadParams := &vad.Params{StopSecs: 0.8}
+		turnParams := &turn.Params{StopSecs: 0.8, PreSpeechMs: 200, MaxDurationSecs: 8}
+		f := frames.NewSpeechControlParamsFrame(vadParams, turnParams)
+		if f.VADParams == nil || f.VADParams.StopSecs != 0.8 {
+			t.Errorf("VADParams = %+v", f.VADParams)
+		}
+		if f.TurnParams == nil || f.TurnParams.PreSpeechMs != 200 || f.TurnParams.MaxDurationSecs != 8 {
+			t.Errorf("TurnParams = %+v", f.TurnParams)
 		}
 	})
 
