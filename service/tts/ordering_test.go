@@ -228,3 +228,109 @@ func TestFrameOrderingAsyncProvider(t *testing.T) {
 	synth.wg.Wait()
 	assertGroupOrdering(t, got, []string{"1", "2"})
 }
+
+// runTurns drives the service with the given frames and returns everything that
+// reached the end of the pipeline.
+func runTurns(t *testing.T, synth tts.Synthesizer, send []frames.Frame) []frames.Frame {
+	t.Helper()
+
+	var mu sync.Mutex
+	var got []frames.Frame
+	base := tts.New("TurnsTTS", synth)
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			got = append(got, f)
+			mu.Unlock()
+		},
+	})
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	for _, f := range send {
+		task.QueueFrame(f)
+	}
+
+	time.Sleep(700 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	return got
+}
+
+// TestResponseEndFollowsAllSpokenText covers the end of a turn arriving behind
+// everything the turn said. A consumer building the assistant's message from the
+// spoken text closes its turn on that frame, so anything still to come after it
+// is text the conversation loses.
+func TestResponseEndFollowsAllSpokenText(t *testing.T) {
+	got := runTurns(t, &inlineSynth{}, []frames.Frame{
+		frames.NewLLMFullResponseStartFrame(),
+		// The first sentence ends on a period, so it is spoken at once; the
+		// second has no terminator and is flushed by the end of the turn.
+		frames.NewLLMTextFrame("Hello there. "),
+		frames.NewLLMTextFrame("How are you?"),
+		frames.NewLLMFullResponseEndFrame(),
+	})
+
+	spoken, end := 0, -1
+	for i, f := range got {
+		switch f.(type) {
+		case *frames.TTSTextFrame:
+			spoken++
+			if end >= 0 {
+				t.Errorf("spoken text arrived after the turn had ended\nframes: %s", names(got))
+			}
+		case *frames.LLMFullResponseEndFrame:
+			end = i
+		}
+	}
+	if spoken != 2 {
+		t.Errorf("saw %d spoken units, want 2\nframes: %s", spoken, names(got))
+	}
+	if end < 0 {
+		t.Fatalf("the turn never ended\nframes: %s", names(got))
+	}
+}
+
+// TestSecondTurnDoesNotOvertakeFirst covers a turn beginning while the one
+// before it is still being delivered. With a provider answering on its own
+// receive loop nothing pauses the pipeline, so the next turn's start can be
+// processed while the previous turn's audio is still draining. It must still
+// come out behind it: a consumer builds the assistant's turns from this order,
+// and two turns interleaved are two turns merged.
+func TestSecondTurnDoesNotOvertakeFirst(t *testing.T) {
+	synth := &asyncSynthOrdering{}
+	got := runTurns(t, synth, []frames.Frame{
+		frames.NewLLMFullResponseStartFrame(),
+		frames.NewLLMTextFrame("Hello there."),
+		frames.NewLLMFullResponseEndFrame(),
+		frames.NewLLMFullResponseStartFrame(),
+		frames.NewLLMTextFrame("World."),
+		frames.NewLLMFullResponseEndFrame(),
+	})
+	synth.wg.Wait()
+
+	var seq []string
+	for _, f := range got {
+		switch f.(type) {
+		case *frames.LLMFullResponseStartFrame:
+			seq = append(seq, "start")
+		case *frames.TTSStoppedFrame:
+			seq = append(seq, "stopped")
+		case *frames.LLMFullResponseEndFrame:
+			seq = append(seq, "end")
+		}
+	}
+
+	want := []string{"start", "stopped", "end", "start", "stopped", "end"}
+	if fmt.Sprint(seq) != fmt.Sprint(want) {
+		t.Errorf("turn order = %v, want %v: the second turn overtook the first\nframes: %s",
+			seq, want, names(got))
+	}
+}
