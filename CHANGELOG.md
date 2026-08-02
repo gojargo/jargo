@@ -56,6 +56,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`vadproc.Config.AudioIdleTimeout`**, ending the user's speech when the audio
+  stops arriving mid-utterance. Voice detection only ever hears silence as speech
+  ending, so audio that stops outright, a microphone muted part-way through being
+  the usual case, left the user speaking for good and the turn never closed. One
+  second by default; a negative value disables it.
 - **`Params.AudioOutEndSilenceSecs`**, how many seconds of silence follow the
   last of the audio when the pipeline ends, so the closing words are not clipped
   by whatever closes on top of them. Two seconds by default; 0 sends none.

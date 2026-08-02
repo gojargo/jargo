@@ -14,6 +14,7 @@ package vadproc
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/gojargo/jargo/audio/resample"
@@ -30,6 +31,10 @@ const analyzerSampleRate = 16000
 // the user is speaking.
 const defaultSpeechActivityPeriod = 200 * time.Millisecond
 
+// defaultAudioIdleTimeout is how long the audio can stop arriving mid-speech
+// before the user is taken to have stopped.
+const defaultAudioIdleTimeout = time.Second
+
 // Config configures a Processor.
 type Config struct {
 	// VAD detects voice activity. Required.
@@ -37,6 +42,13 @@ type Config struct {
 	// SpeechActivityPeriod is how often a UserSpeakingFrame is emitted while the
 	// user is speaking; 0 uses 200ms, a negative value disables the keepalive.
 	SpeechActivityPeriod time.Duration
+	// AudioIdleTimeout is how long to wait, with the user speaking and no audio
+	// arriving at all, before taking the speech to have stopped. It covers the
+	// audio going away mid-utterance, a muted microphone being the usual case:
+	// the detector never sees the silence that would have ended the speech, so
+	// without this the user is left speaking for good. 0 uses one second, a
+	// negative value disables it.
+	AudioIdleTimeout time.Duration
 }
 
 // Processor is the VAD pipeline processor.
@@ -45,13 +57,21 @@ type Processor struct {
 
 	vad          vad.Analyzer
 	speechPeriod time.Duration
+	idleTimeout  time.Duration
 
 	resampler    *resample.Resampler
 	inRate       int
 	analyzerRate int
 
+	// mu guards the speaking state, which the idle watcher reads and writes
+	// alongside the goroutine processing frames.
+	mu            sync.Mutex
 	speaking      bool
 	speakingAccum time.Duration
+	lastAudioAt   time.Time
+
+	idleCancel context.CancelFunc
+	idleWG     sync.WaitGroup
 }
 
 // New builds a VAD Processor. The VAD analyzer is required.
@@ -60,7 +80,11 @@ func New(cfg Config) *Processor {
 	if period == 0 {
 		period = defaultSpeechActivityPeriod
 	}
-	p := &Processor{vad: cfg.VAD, speechPeriod: period}
+	idle := cfg.AudioIdleTimeout
+	if idle == 0 {
+		idle = defaultAudioIdleTimeout
+	}
+	p := &Processor{vad: cfg.VAD, speechPeriod: period, idleTimeout: idle}
 	p.Base = processor.New("VAD", p)
 	return p
 }
@@ -86,6 +110,7 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 			}
 		}
 		p.analyzerRate = rate
+		p.startIdleWatch(ctx)
 		return p.PushFrame(ctx, f, dir)
 	case *frames.InputAudioRawFrame:
 		if dir == processor.Downstream {
@@ -99,6 +124,7 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 
 // Cleanup closes the analyzer and resampler.
 func (p *Processor) Cleanup(ctx context.Context) error {
+	p.stopIdleWatch()
 	if p.vad != nil {
 		_ = p.vad.Close()
 	}
@@ -117,25 +143,124 @@ func (p *Processor) handleAudio(ctx context.Context, f *frames.InputAudioRawFram
 	}
 	state := p.vad.AnalyzeAudio(p.toAnalyzerRate(f))
 
+	p.mu.Lock()
+	p.lastAudioAt = time.Now()
+	started := state == vad.StateSpeaking && !p.speaking
+	stopped := state == vad.StateQuiet && p.speaking
 	switch {
-	case state == vad.StateSpeaking && !p.speaking:
+	case started:
 		p.speaking = true
 		p.speakingAccum = 0
-		_ = p.PushFrame(ctx, frames.NewVADUserStartedSpeakingFrame(p.vad.Params().StartSecs), processor.Downstream)
-	case state == vad.StateQuiet && p.speaking:
+	case stopped:
 		p.speaking = false
-		ts := time.Now().UTC().Format(time.RFC3339)
-		_ = p.PushFrame(ctx, frames.NewVADUserStoppedSpeakingFrame(p.vad.Params().StopSecs, ts), processor.Downstream)
 	}
-
+	keepalive := false
 	if p.speaking && p.speechPeriod > 0 {
 		p.speakingAccum += frameDuration(f)
 		if p.speakingAccum >= p.speechPeriod {
 			p.speakingAccum = 0
-			_ = p.PushFrame(ctx, frames.NewUserSpeakingFrame(), processor.Downstream)
+			keepalive = true
 		}
 	}
+	p.mu.Unlock()
+
+	if started {
+		_ = p.PushFrame(ctx, frames.NewVADUserStartedSpeakingFrame(p.vad.Params().StartSecs), processor.Downstream)
+	}
+	if stopped {
+		_ = p.PushFrame(ctx, p.stoppedFrame(), processor.Downstream)
+	}
+	if keepalive {
+		_ = p.PushFrame(ctx, frames.NewUserSpeakingFrame(), processor.Downstream)
+	}
 	return nil
+}
+
+// stoppedFrame builds the frame reporting that the user's speech has ended.
+func (p *Processor) stoppedFrame() frames.Frame {
+	ts := time.Now().UTC().Format(time.RFC3339)
+	return frames.NewVADUserStoppedSpeakingFrame(p.vad.Params().StopSecs, ts)
+}
+
+// startIdleWatch brings up the watcher that ends speech when the audio stops
+// arriving altogether.
+func (p *Processor) startIdleWatch(ctx context.Context) {
+	if p.idleTimeout <= 0 {
+		return
+	}
+	p.stopIdleWatch()
+
+	p.mu.Lock()
+	p.lastAudioAt = time.Now()
+	p.mu.Unlock()
+
+	// Detached from the frame's context, which does not outlive the frame.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	p.idleCancel = cancel
+	p.idleWG.Add(1)
+	go p.idleWatch(runCtx)
+}
+
+// stopIdleWatch tears the watcher down.
+func (p *Processor) stopIdleWatch() {
+	cancel := p.idleCancel
+	p.idleCancel = nil
+	if cancel == nil {
+		return
+	}
+	cancel()
+	p.idleWG.Wait()
+}
+
+// idleWatch ends the user's speech when no audio has arrived for the idle
+// timeout. The detector only ever hears silence as speech ending, so audio that
+// stops mid-utterance (a microphone muted part-way through, typically) would
+// otherwise leave the user speaking for good, and the turn would never close.
+func (p *Processor) idleWatch(ctx context.Context) {
+	defer p.idleWG.Done()
+	for {
+		p.mu.Lock()
+		deadline := p.lastAudioAt.Add(p.idleTimeout)
+		p.mu.Unlock()
+
+		if remaining := time.Until(deadline); remaining > 0 {
+			// Audio is still recent, so wait out only what is left of the window.
+			if !sleepCtx(ctx, remaining) {
+				return
+			}
+			continue
+		}
+
+		p.mu.Lock()
+		idled := p.speaking
+		if idled {
+			p.speaking = false
+			p.speakingAccum = 0
+		}
+		p.mu.Unlock()
+
+		if idled {
+			slog.Warn("vadproc: no audio while the user was speaking, ending the speech",
+				"timeout", p.idleTimeout)
+			_ = p.PushFrame(ctx, p.stoppedFrame(), processor.Downstream)
+		}
+
+		if !sleepCtx(ctx, p.idleTimeout) {
+			return
+		}
+	}
+}
+
+// sleepCtx waits for d, reporting false if ctx was done first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // frameDuration is the wall-clock duration of one audio frame.
