@@ -530,11 +530,19 @@ func (b *Base) runTTS(ctx context.Context, c *audioContext, contextID, original,
 	// Whether the provider answered here decides who closes the context: one that
 	// yielded its audio is finished, one that did not is still delivering.
 	b.setYieldsSync(yielded)
-	if !b.wordPath() && yielded {
+	if !b.wordPath() {
 		// With no word timings there is nothing to place the text against, so the
-		// whole unit goes in behind its audio, carrying the text as written rather
-		// than what the filters made of it.
+		// whole unit goes in as one, carrying the text as written rather than what
+		// the filters made of it.
+		//
+		// This is the only thing that puts the turn into the conversation: the
+		// text the model produced is consumed here and never forwarded, and
+		// without word timings no per-word frames are produced either. It cannot
+		// depend on the provider having answered inline. One that delivers its
+		// audio later on its own receive loop yields nothing here, and gating on
+		// that left every one of its turns out of the context entirely.
 		text := frames.NewTTSTextFrame(original)
+		text.ContextID = contextID
 		b.AppendToAudioContext(contextID, text)
 		b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot())
 	}

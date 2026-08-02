@@ -79,6 +79,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   or audio of a kind that was not named goes unhandled. `InputAudioRawFrame` is
   outside the family, since it is never sent.
 
+### Fixed
+
+- **The assistant's turns reached the conversation again** with a TTS provider
+  that delivers its audio on its own receive loop rather than inline, and no word
+  timestamps. With no word timings the whole-unit text frame is the only thing
+  carrying a turn into the context, and it was emitted only when the provider had
+  answered inline, so every turn of such a provider was left out. Each new turn
+  then saw nothing but a run of user messages, and the bot repeated itself and
+  re-asked what it had just been told.
+
 ### Added
 
 - **`frames.VADParamsUpdateFrame`**, changing the detection parameters on a

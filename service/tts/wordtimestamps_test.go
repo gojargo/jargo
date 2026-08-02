@@ -285,3 +285,49 @@ func TestWordTimestampsCarryPresentationTimestamps(t *testing.T) {
 		t.Fatalf("word timestamps span %v, want at least one word gap", time.Duration(spread))
 	}
 }
+
+// asyncSynth answers on its own receive loop rather than inline: RunTTS returns
+// having yielded nothing, and the audio reaches the context later. Realtime
+// WebSocket providers work this way.
+type asyncSynth struct{ rate int }
+
+func (s *asyncSynth) SampleRate() int { return s.rate }
+
+func (s *asyncSynth) RunTTS(_ context.Context, _, _ string, _ func(f frames.Frame) error) error {
+	return nil
+}
+
+// TestNoTimestampsRecordsTurnWhenAudioArrivesLater covers a provider that
+// answers on its own receive loop instead of inline.
+//
+// With no word timings, the whole-unit text frame is the only thing carrying the
+// turn into the conversation: the model's own text is folded into the aggregator
+// and never forwarded, and no per-word frames are produced. Emitting it only
+// when the provider had answered inline left every turn of such a provider out
+// of the context, so each new turn saw nothing but a run of user messages and
+// the bot repeated itself.
+func TestNoTimestampsRecordsTurnWhenAudioArrivesLater(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	base := tts.New("AsyncTTS", &asyncSynth{rate: 24000})
+	pair := aggregators.New(convo)
+
+	task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
+	task.QueueFrame(frames.NewLLMTextFrame("Hello there."))
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+	time.Sleep(300 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleAssistant || msgs[0].Text != "Hello there." {
+		t.Fatalf("messages = %+v, want one assistant 'Hello there.': the turn never reached the context", msgs)
+	}
+}
