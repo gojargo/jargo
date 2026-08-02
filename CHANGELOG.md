@@ -14,7 +14,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
-- **Voice detection moved out of the processor into `audio/vad/vadcontrol`.**
+- **Voice detection moved out of the processor into `audio/vad/controller`.**
   The controller owns the detection state, the resampling the detector needs and
   the watch for audio that stops arriving, so anything needing the same detection
   can drive it without going through a pipeline. `processor/vadproc` now just

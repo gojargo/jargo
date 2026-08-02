@@ -1,4 +1,4 @@
-// Package vadcontrol drives a voice-activity detector and reports what it hears.
+// Package controller drives a voice-activity detector and reports what it hears.
 // It owns the detection state, the resampling the detector needs, and the watch
 // for audio that stops arriving, and it reports speech starting, continuing and
 // stopping through handlers the caller supplies.
@@ -9,9 +9,9 @@
 // provider's, say. It sits beside the detector rather than inside a processor
 // for that reason.
 //
-// It lives in its own package rather than in audio/vad because it works in
+// It is its own package rather than part of audio/vad because it works in
 // frames, and the frames package refers to vad.Params.
-package vadcontrol
+package controller
 
 import (
 	"context"
@@ -260,7 +260,7 @@ func (c *Controller) idleWatch(ctx context.Context) {
 		c.mu.Unlock()
 
 		if idled {
-			slog.Warn("vadcontrol: no audio while the user was speaking, ending the speech",
+			slog.Warn("vad: no audio while the user was speaking, ending the speech",
 				"timeout", c.idleTimeout)
 			if c.handlers.OnSpeechStopped != nil {
 				c.handlers.OnSpeechStopped(ctx)
@@ -297,7 +297,7 @@ func (c *Controller) toAnalyzerRate(f *frames.InputAudioRawFrame) []byte {
 		}
 		r, err := resample.New(f.SampleRate, c.analyzerRate, 1)
 		if err != nil {
-			slog.Error("vadcontrol: create resampler",
+			slog.Error("vad: create resampler",
 				"from", f.SampleRate, "to", c.analyzerRate, "err", err)
 			return f.Audio
 		}

@@ -1,12 +1,12 @@
 // Package vadproc is the voice-activity-detection pipeline processor. It hosts a
-// vadcontrol.Controller and turns what it hears into the raw VAD frames the turn
+// controller.Controller and turns what it hears into the raw VAD frames the turn
 // subsystem consumes: VADUserStartedSpeakingFrame and VADUserStoppedSpeakingFrame
 // on speech onset and offset, and UserSpeakingFrame for every chunk heard as
 // speech. It does not decide turns, which is the turns package's job.
 //
 // Place it just after the input transport. The detection itself, along with the
 // resampling it needs and the watch for audio that stops arriving, lives in
-// audio/vad/vadcontrol, so anything else needing the same detection can drive it
+// audio/vad/controller, so anything else needing the same detection can drive it
 // without going through a pipeline. Frames are forwarded before detection runs
 // over them, so audio keeps flowing and the rest of the pipeline is started
 // before the parameters are reported.
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
-	"github.com/gojargo/jargo/audio/vad/vadcontrol"
+	"github.com/gojargo/jargo/audio/vad/controller"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
@@ -39,7 +39,7 @@ type Config struct {
 type Processor struct {
 	*processor.Base
 
-	controller *vadcontrol.Controller
+	controller *controller.Controller
 }
 
 // New builds a VAD Processor. The VAD analyzer is required.
@@ -49,7 +49,7 @@ func New(cfg Config) *Processor {
 
 	// The frames go both ways: an interruption decision is made upstream of the
 	// detector and a transcription one downstream, and both are driven by them.
-	p.controller = vadcontrol.New(cfg.VAD, vadcontrol.Handlers{
+	p.controller = controller.New(cfg.VAD, controller.Handlers{
 		OnSpeechStarted: func(ctx context.Context) {
 			startSecs := p.controller.Params().StartSecs
 			_ = p.Broadcast(ctx, func() frames.Frame {
@@ -72,7 +72,7 @@ func New(cfg Config) *Processor {
 		OnBroadcastFrame: func(ctx context.Context, build func() frames.Frame) {
 			_ = p.Broadcast(ctx, build)
 		},
-	}, vadcontrol.Config{AudioIdleTimeout: cfg.AudioIdleTimeout})
+	}, controller.Config{AudioIdleTimeout: cfg.AudioIdleTimeout})
 
 	return p
 }
