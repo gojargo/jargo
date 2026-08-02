@@ -37,7 +37,14 @@ type mediaSender struct {
 	// reads that type to tell which of the two it is pacing out.
 	newChunk func(pcm []byte, sampleRate, numChannels int) frames.Frame
 
-	audioOut    chan frames.Frame
+	// lifeMu serializes starting, restarting and stopping the audio loop, so a
+	// barge-in restarting it cannot add to the wait group while a teardown is
+	// waiting on it.
+	lifeMu sync.Mutex
+	// parentCtx is what the audio context is derived from, kept so a restart
+	// after an interruption outlives the frame that caused it.
+	parentCtx   context.Context
+	audioOut    *frameQueue
 	audioCtx    context.Context
 	audioCancel context.CancelFunc
 	audioWG     sync.WaitGroup
@@ -79,6 +86,10 @@ func newMediaSender(out *BaseOutput, destination string) *mediaSender {
 
 // start brings the sender's audio loop and clock up.
 func (s *mediaSender) start(ctx context.Context) {
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
+
+	s.parentCtx = ctx
 	s.bufMu.Lock()
 	s.buffer = nil
 	s.bufMu.Unlock()
@@ -88,7 +99,7 @@ func (s *mediaSender) start(ctx context.Context) {
 	}
 
 	s.audioCtx, s.audioCancel = context.WithCancel(ctx)
-	s.audioOut = make(chan frames.Frame, audioFrameChanCap)
+	s.audioOut = newFrameQueue()
 	s.audioWG.Add(1)
 	go s.audioLoop(s.audioCtx)
 
@@ -101,6 +112,10 @@ func (s *mediaSender) start(ctx context.Context) {
 // stop tears the sender down.
 func (s *mediaSender) stop(ctx context.Context) {
 	s.botStoppedSpeaking(ctx)
+
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
+
 	if s.mixer != nil {
 		_ = s.mixer.Stop(ctx)
 	}
@@ -143,7 +158,7 @@ func (s *mediaSender) drainAudio(ctx context.Context) {
 	s.drainWait = done
 	s.bufMu.Unlock()
 
-	sendAudio(ac, s.audioOut, frames.Frame(drainMarker))
+	s.audioOut.push(drainMarker)
 	select {
 	case <-done:
 	case <-ac.Done():
@@ -172,12 +187,11 @@ func (s *mediaSender) handleAudioFrame(f frames.Frame) {
 		chunks = append(chunks, s.address(build(chunk, s.sampleRate, channels)))
 		s.buffer = s.buffer[s.chunkSize:]
 	}
-	ctx := s.audioCtx
 	out := s.audioOut
 	s.bufMu.Unlock()
 
 	for _, chunk := range chunks {
-		sendAudio(ctx, out, chunk)
+		out.push(chunk)
 	}
 }
 
@@ -204,7 +218,7 @@ func (s *mediaSender) handleTTSStopped(ctx context.Context, f *frames.TTSStopped
 	}
 	// The audio loop forwards it downstream once it reaches it, so that the stop
 	// lands after the audio it ends rather than ahead of it.
-	sendAudio(audioCtx, out, frames.Frame(f))
+	out.push(f)
 	return nil
 }
 
@@ -221,7 +235,7 @@ func (s *mediaSender) handleSyncFrame(ctx context.Context, f frames.Frame) {
 		_ = s.out.PushFrame(ctx, f, processor.Downstream)
 		return
 	}
-	sendAudio(audioCtx, out, f)
+	out.push(f)
 }
 
 // enqueueFlushedAudioBuffer pads whatever is left in the buffer out to a full
@@ -247,7 +261,7 @@ func (s *mediaSender) enqueueFlushedAudioBuffer() {
 	if audioCtx == nil || out == nil {
 		return
 	}
-	sendAudio(audioCtx, out, tail)
+	out.push(tail)
 }
 
 // resample converts audio at sampleRate to the transport output rate. The
@@ -282,13 +296,42 @@ func (s *mediaSender) handleInterruption() {
 		// The frames waiting on the clock belong to audio that will never play.
 		s.clockQ.drop()
 	}
-	for {
-		select {
-		case <-s.audioOut:
-		default:
-			return
-		}
+
+	q := s.audioOut
+	if q == nil {
+		return
 	}
+	// Frames marked uninterruptible have to be delivered even through a
+	// barge-in, and a mixer has to keep playing through one, so in either case
+	// the loop keeps running and only the queue is cleared. Canceling it would
+	// stop the mixer's own output too, leaving an audible gap in the background.
+	if q.hasUninterruptible() || s.mixer != nil {
+		q.reset()
+		return
+	}
+	// Nothing has to survive, so restart the loop instead of draining it: that
+	// cuts short a write already in flight rather than leaving the barge-in
+	// waiting behind it.
+	s.restartAudioLoop()
+}
+
+// restartAudioLoop stops the audio loop and starts a fresh one on an empty
+// queue.
+func (s *mediaSender) restartAudioLoop() {
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
+
+	cancel := s.audioCancel
+	if cancel == nil {
+		return
+	}
+	cancel()
+	s.audioWG.Wait()
+
+	s.audioCtx, s.audioCancel = context.WithCancel(s.parentCtx)
+	s.audioOut = newFrameQueue()
+	s.audioWG.Add(1)
+	go s.audioLoop(s.audioCtx)
 }
 
 // handleBotSpeech updates the bot-speaking state from one chunk of outgoing
@@ -411,6 +454,7 @@ func (s *mediaSender) audioLoop(ctx context.Context) {
 // turns. The generated audio is plain output audio, so it paces the loop through
 // the transport without ever marking the bot as speaking.
 func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
+	q := s.audioOut
 	silence := make([]byte, s.chunkSize)
 	var lastAudioAt time.Time
 
@@ -418,7 +462,10 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case queued := <-s.audioOut:
+		default:
+		}
+
+		if queued, ok := q.tryGet(); ok {
 			if queued == drainMarker {
 				s.signalDrained()
 				continue
@@ -430,19 +477,20 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 				lastAudioAt = time.Now()
 			}
 			s.handleQueuedFrame(ctx, queued)
-		default:
-			// Nothing is queued. The bot has stopped speaking once it has been
-			// quiet for long enough, and the mixer plays on regardless.
-			if time.Since(lastAudioAt) > botVADStopFallback {
-				s.botStoppedSpeaking(ctx)
-			}
-			mixed, err := s.mixer.Mix(ctx, silence)
-			if err != nil {
-				mixed = silence
-			}
-			s.handleQueuedFrame(ctx, s.address(
-				frames.NewOutputAudioRawFrame(mixed, s.sampleRate, s.channels)))
+			continue
 		}
+
+		// Nothing is queued. The bot has stopped speaking once it has been quiet
+		// for long enough, and the mixer plays on regardless.
+		if time.Since(lastAudioAt) > botVADStopFallback {
+			s.botStoppedSpeaking(ctx)
+		}
+		mixed, err := s.mixer.Mix(ctx, silence)
+		if err != nil {
+			mixed = silence
+		}
+		s.handleQueuedFrame(ctx, s.address(
+			frames.NewOutputAudioRawFrame(mixed, s.sampleRate, s.channels)))
 	}
 }
 
@@ -450,16 +498,20 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 // nothing at all for botVADStopFallback is the fallback that ends the bot's turn
 // when no explicit stop reaches the output.
 func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
+	q := s.audioOut
 	idle := time.NewTimer(botVADStopFallback)
 	defer idle.Stop()
 	for {
+		// Check for a stop before taking anything else off the queue. A loop
+		// that only looked when the queue ran dry would keep writing a cut-off
+		// turn's audio all the way to the end of it.
 		select {
 		case <-ctx.Done():
 			return
-		case <-idle.C:
-			s.botStoppedSpeaking(ctx)
-			idle.Reset(botVADStopFallback)
-		case queued := <-s.audioOut:
+		default:
+		}
+
+		if queued, ok := q.tryGet(); ok {
 			if !idle.Stop() {
 				select {
 				case <-idle.C:
@@ -473,6 +525,15 @@ func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
 				continue
 			}
 			s.handleQueuedFrame(ctx, queued)
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-idle.C:
+			s.botStoppedSpeaking(ctx)
+			idle.Reset(botVADStopFallback)
+		case <-q.wait():
 		}
 	}
 }

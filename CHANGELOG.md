@@ -14,6 +14,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A barge-in keeps the frames that must survive it.** The output dropped
+  everything it had queued when the user interrupted, uninterruptible frames
+  included, so a frame marked to always be delivered was not. It now keeps them
+  and drops the rest. When nothing queued has to survive and no mixer is running,
+  the sender is restarted instead, which cuts short a write already in flight
+  rather than leaving the barge-in waiting behind it.
+- **The output's audio queue is no longer bounded at 256 frames.** Expressing
+  "drop these but keep those" needs a queue rather than a channel, and the queue
+  is unbounded, so a producer running ahead of playback is no longer blocked by
+  it.
+- **`Task.Flush` now waits for queued audio to play**, a consequence of frames
+  leaving the output in step with the audio: the probe is queued like anything
+  else, so it completes once what was queued ahead of it has been paced out. It
+  is uninterruptible, so a barge-in still lets it finish rather than stranding a
+  waiter.
 - **Frames leaving the output wait for the audio they were queued behind.** A
   downstream frame carrying neither audio nor a presentation timestamp used to be
   forwarded the moment it arrived, overtaking the audio around it by however much

@@ -545,6 +545,110 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 	}
 }
 
+// uninterruptibleMarkerFrame is a test-only control frame that must survive an
+// interruption, used to check it is still delivered when the audio around it is
+// dropped.
+type uninterruptibleMarkerFrame struct {
+	frames.BaseControlFrame
+	frames.UninterruptibleMixin
+}
+
+func newUninterruptibleMarkerFrame() *uninterruptibleMarkerFrame {
+	return &uninterruptibleMarkerFrame{
+		BaseControlFrame: frames.NewBaseControlFrame("UninterruptibleMarkerFrame"),
+	}
+}
+
+// blockingOutput holds each write until the test releases it, so a test can
+// leave frames queued behind an in-flight write.
+type blockingOutput struct {
+	*transport.BaseOutput
+	entered chan struct{}
+	release chan struct{}
+	writes  atomic.Int32
+}
+
+func newBlockingOutput(p transport.Params) *blockingOutput {
+	o := &blockingOutput{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	o.BaseOutput = transport.NewBaseOutput("BlockingOutput", p, o)
+	return o
+}
+
+func (o *blockingOutput) WriteAudio(ctx context.Context, _ frames.OutputAudioFrame) error {
+	o.writes.Add(1)
+	select {
+	case o.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-o.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+// TestBaseOutputKeepsUninterruptibleFramesThroughBargeIn covers the frames that
+// must be delivered even when the bot is cut off. A barge-in drops the audio
+// still queued, but a frame marked uninterruptible stays and is still forwarded.
+// Upstream has no test for this at the output; the marker-frame technique is
+// borrowed from its ordering tests.
+func TestBaseOutputKeepsUninterruptibleFramesThroughBargeIn(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	seen := make(chan struct{}, 4)
+	taskParams := pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*uninterruptibleMarkerFrame); ok {
+				seen <- struct{}{}
+			}
+		},
+	}
+
+	o := newBlockingOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// Five chunks: the first is taken up by the loop and blocks in the write,
+	// leaving four queued behind it.
+	task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x01}, 1920*5), 48000, 1))
+	select {
+	case <-o.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the transport was never asked to write")
+	}
+
+	// Queued behind the audio that is about to be dropped. It has to really be
+	// on the queue when the barge-in lands, or the queue holds nothing that must
+	// survive and this tests the wrong branch. An interruption is a system frame
+	// and would overtake it on the way here, so the two are separated by a
+	// settle. The flush probe cannot be used for that here: it is queued behind
+	// the audio too, and this test is holding that audio up on purpose.
+	task.QueueFrame(newUninterruptibleMarkerFrame())
+	time.Sleep(200 * time.Millisecond)
+
+	task.QueueFrame(frames.NewInterruptionFrame())
+	time.Sleep(200 * time.Millisecond)
+
+	close(o.release)
+
+	select {
+	case <-seen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the uninterruptible frame was dropped by the barge-in")
+	}
+
+	// The audio behind the in-flight write belonged to the turn that was cut
+	// off, so it must not have been sent.
+	if got := o.writes.Load(); got != 1 {
+		t.Errorf("wrote %d chunks, want 1: audio queued before the barge-in was still sent", got)
+	}
+
+	task.Cancel()
+	<-runDone
+}
+
 // markerFrame is a plain downstream data frame carrying no audio and no
 // timestamp, used to check where it lands relative to the audio around it.
 type markerFrame struct {
