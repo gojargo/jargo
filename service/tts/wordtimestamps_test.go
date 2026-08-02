@@ -336,3 +336,50 @@ func TestNoTimestampsRecordsTurnWhenAudioArrivesLater(t *testing.T) {
 		t.Fatalf("messages = %+v, want one assistant 'Hello there.': the turn never reached the context", msgs)
 	}
 }
+
+// TestSpeakFrameEntersTheContextOnce covers a fixed utterance on a provider with
+// no word timings.
+//
+// The conversation is built from what was actually spoken, so the utterance
+// reaches the context as the whole-unit text frame. The aggregator also records
+// a TTSSpeakFrame that asks to be appended, which was guarded against only on
+// the word path: once the whole-unit frame was emitted whichever way the audio
+// arrived, both wrote and the utterance was said once but stored twice.
+func TestSpeakFrameEntersTheContextOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		syn  tts.Synthesizer
+	}{
+		{"audio inline", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}}},
+		{"audio later", &asyncSynth{rate: 24000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			convo := frames.NewLLMContext("system")
+			base := tts.New("FixedTTS", tc.syn)
+			pair := aggregators.New(convo)
+
+			task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+			runDone := make(chan error, 1)
+			go func() { runDone <- task.Run(context.Background()) }()
+
+			speak := frames.NewTTSSpeakFrame("One moment please.")
+			speak.AppendToContext = true
+			task.QueueFrame(speak)
+			time.Sleep(300 * time.Millisecond)
+			task.StopWhenDone()
+			select {
+			case <-runDone:
+			case <-time.After(3 * time.Second):
+				t.Fatal("task did not finish")
+			}
+
+			msgs := convo.Messages()
+			if len(msgs) != 1 {
+				t.Fatalf("messages = %+v, want exactly one assistant message", msgs)
+			}
+			if msgs[0].Role != frames.RoleAssistant || msgs[0].Text != "One moment please." {
+				t.Fatalf("message = %+v, want assistant 'One moment please.'", msgs[0])
+			}
+		})
+	}
+}

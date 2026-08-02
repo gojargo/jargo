@@ -376,11 +376,12 @@ func (b *Base) handleInterruption(ctx context.Context) {
 
 // handleSpeak speaks fixed text immediately, bypassing sentence aggregation.
 func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir processor.Direction) error {
-	if b.wordPath() {
-		// The spoken words drive the context via TTSTextFrames; don't also let
-		// the aggregator record the whole fixed text (it would double-count).
-		fr.AppendToContext = false
-	}
+	// The conversation is built from what was actually spoken, never from the
+	// text on its way to the synthesizer. Word timings or not, this utterance
+	// reaches the context as TTSTextFrames: per word where the provider times
+	// them, as one whole unit where it does not. Letting the aggregator record
+	// the fixed text as well would enter it twice.
+	fr.AppendToContext = false
 	if err := b.PushFrame(ctx, fr, dir); err != nil {
 		return err
 	}
