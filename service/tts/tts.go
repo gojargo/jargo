@@ -478,9 +478,27 @@ func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
 		return nil
 	}
 	contextID := b.createContextID()
+
+	// Announce what is about to be spoken, before the audio describing it opens.
+	// A consumer that wants the text ahead of hearing it reads this: an RTVI
+	// client starts its segment from it, and the progress frames that follow
+	// refer back to it. It carries the text as written, before the filters, and
+	// does not itself go into the conversation, which is built from what was
+	// actually spoken.
+	aggregated := frames.NewAggregatedTextFrame(original, frames.AggregationSentence)
+	aggregated.ContextID = contextID
+	aggregated.WillBeSpoken = true
+	aggregated.AppendToContext = false
+
 	if !b.AudioContextAvailable(contextID) {
+		// Serialized so it lands immediately before the start of the context it
+		// describes, rather than racing ahead of audio still draining from the
+		// turn before.
+		_ = b.queueSerial(ctx, aggregated, processor.Downstream)
 		b.CreateAudioContext(contextID)
 		b.AppendToAudioContext(contextID, frames.NewTTSStartedFrame())
+	} else {
+		b.AppendToAudioContext(contextID, aggregated)
 	}
 	c := b.audioContextFor(contextID)
 	if c == nil {
@@ -489,11 +507,6 @@ func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
 	// Providers bill per character, so count runes: len would charge an accented
 	// character twice.
 	c.addChars(utf8.RuneCountInString(filtered))
-	// The frame the sequencer tracks carries the text as written, so the
-	// conversation records that rather than what the filters made of it.
-	aggregated := frames.NewAggregatedTextFrame(original, frames.AggregationSentence)
-	aggregated.ContextID = contextID
-	aggregated.WillBeSpoken = true
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
 		aggregated, contextID, filtered, true, b.wordPath(), false))
 	return b.runTTS(ctx, c, contextID, original, filtered)

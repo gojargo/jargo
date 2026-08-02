@@ -81,6 +81,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The text about to be spoken is announced again.** An `AggregatedTextFrame`
+  describing each unit is emitted before the audio for it opens, so a consumer
+  that wants the text ahead of hearing it can act on it: an RTVI client starts
+  its segment from this frame, and the progress frames that follow refer back to
+  it. It was built and handed to the sequencer, which stored it and returned
+  nothing, so it never reached the pipeline at all.
+
 - **The assistant's turns reached the conversation again** with a TTS provider
   that delivers its audio on its own receive loop rather than inline, and no word
   timestamps. With no word timings the whole-unit text frame is the only thing
