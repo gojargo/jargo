@@ -30,6 +30,20 @@ const (
 	keyText  = "text"
 )
 
+// SafetySetting is one content-safety filter: a category of harm and the
+// threshold at which the model blocks content for it. A category left
+// unspecified keeps the API's own default.
+type SafetySetting struct {
+	// Category is the harm category the threshold applies to. Required.
+	Category string `json:"category" validate:"required,oneof=HARM_CATEGORY_HARASSMENT HARM_CATEGORY_HATE_SPEECH HARM_CATEGORY_SEXUALLY_EXPLICIT HARM_CATEGORY_DANGEROUS_CONTENT HARM_CATEGORY_CIVIC_INTEGRITY"` //nolint:lll // one line per accepted value would not read better
+	// Threshold is how much of the category to block. Required.
+	Threshold string `json:"threshold" validate:"required,oneof=BLOCK_LOW_AND_ABOVE BLOCK_MEDIUM_AND_ABOVE BLOCK_ONLY_HIGH BLOCK_NONE OFF"` //nolint:lll // one line per accepted value would not read better
+	// Method selects whether the threshold is read against the probability that
+	// the content is harmful or the severity of the harm; empty leaves the API
+	// default.
+	Method string `json:"method,omitempty" validate:"omitempty,oneof=SEVERITY PROBABILITY"`
+}
+
 // Config configures the Gemini LLM service. The sampling controls are pointers
 // so a deliberate zero is distinguishable from "unset"; a nil value is omitted
 // from the request, leaving the API default.
@@ -46,6 +60,9 @@ type Config struct {
 	TopP *float64
 	// TopK is the top-k sampling parameter; nil omits it.
 	TopK *int
+	// SafetySettings are the content-safety filters, one per harm category.
+	// Empty sends none, leaving every category at the API's default.
+	SafetySettings []SafetySetting `validate:"omitempty,dive"`
 	// Extra sets arbitrary additional generationConfig fields not modeled above,
 	// applied to every request.
 	Extra map[string]any

@@ -117,6 +117,9 @@ func (s *Service) requestBody(convo *frames.LLMContext, withTools bool) map[stri
 		"contents":         toContents(convo),
 		"generationConfig": s.genConfig(),
 	}
+	if len(s.cfg.SafetySettings) > 0 {
+		body["safetySettings"] = s.cfg.SafetySettings
+	}
 	if sys := convo.System(); sys != "" {
 		body["systemInstruction"] = map[string]any{keyParts: []map[string]any{{keyText: sys}}}
 	}

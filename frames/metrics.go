@@ -5,15 +5,23 @@ import (
 	"time"
 )
 
-// LLMTokenUsage reports the token counts billed for one LLM generation. The
-// cache counts are a subset of the input tokens: CacheReadTokens were served
-// from a prompt cache and CacheCreationTokens were written to one. The
-// per-modality audio and text counts are likewise subsets, of the prompt tokens
-// (input) and completion tokens (output). Realtime (speech-to-speech)
-// models bill audio and text at different rates and report this breakdown; a
-// text-only generation leaves the audio fields zero.
+// LLMTokenUsage reports the token counts billed for one LLM generation.
+// CacheReadTokens were served from a prompt cache and CacheCreationTokens were
+// written to one.
+//
+// Services differ over whether they report the input count net or gross of the
+// cache. TotalTokens is the gross figure either way, so it stays comparable
+// between services, and it is therefore not always PromptTokens plus
+// CompletionTokens. Read the cache counts for the breakdown rather than
+// subtracting.
+//
+// The per-modality audio and text counts are subsets, of the prompt tokens
+// (input) and completion tokens (output). Realtime (speech-to-speech) models
+// bill audio and text at different rates and report this breakdown; a text-only
+// generation leaves the audio fields zero.
 type LLMTokenUsage struct {
-	// PromptTokens is the number of input tokens.
+	// PromptTokens is the number of input tokens. It is net of the cache on a
+	// service that reports its cache reads separately.
 	PromptTokens int64
 	// CompletionTokens is the number of output tokens.
 	CompletionTokens int64
@@ -21,7 +29,7 @@ type LLMTokenUsage struct {
 	CacheReadTokens int64
 	// CacheCreationTokens is the number of input tokens written to the prompt cache.
 	CacheCreationTokens int64
-	// TotalTokens is the sum of the prompt and completion tokens.
+	// TotalTokens is every token the generation used, cached input included.
 	TotalTokens int64
 	// InputAudioTokens is the number of input (prompt) tokens that were audio,
 	// as reported by realtime models. It is a subset of PromptTokens.

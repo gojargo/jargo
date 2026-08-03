@@ -29,6 +29,9 @@ type LLMConfig struct {
 	TopP *float64
 	// TopK is the top-k sampling parameter; nil omits it.
 	TopK *int
+	// SafetySettings are the content-safety filters, one per harm category.
+	// Empty sends none, leaving every category at the API's default.
+	SafetySettings []gemini.SafetySetting `validate:"omitempty,dive"`
 	// Extra sets arbitrary additional generationConfig fields not modeled above,
 	// applied to every request.
 	Extra map[string]any
@@ -48,12 +51,13 @@ func NewLLM(cfg LLMConfig) *gemini.Service {
 		location:  location(cfg.Location),
 	}
 	return gemini.NewShapedLLM("GoogleVertexLLM", shaper, gemini.Config{
-		Model:       cfg.Model,
-		MaxTokens:   cfg.MaxTokens,
-		Temperature: cfg.Temperature,
-		TopP:        cfg.TopP,
-		TopK:        cfg.TopK,
-		Extra:       cfg.Extra,
+		Model:          cfg.Model,
+		MaxTokens:      cfg.MaxTokens,
+		Temperature:    cfg.Temperature,
+		TopP:           cfg.TopP,
+		TopK:           cfg.TopK,
+		SafetySettings: cfg.SafetySettings,
+		Extra:          cfg.Extra,
 	})
 }
 

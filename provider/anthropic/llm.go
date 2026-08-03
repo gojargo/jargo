@@ -170,7 +170,10 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 		CompletionTokens:    u.OutputTokens,
 		CacheReadTokens:     u.CacheReadInputTokens,
 		CacheCreationTokens: u.CacheCreationInputTokens,
-		TotalTokens:         u.InputTokens + u.OutputTokens,
+		// The input count is reported net of the cache, so the cached tokens are
+		// added back: the total stays the gross figure, comparable with a
+		// service whose provider supplies it that way already.
+		TotalTokens: u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens + u.OutputTokens,
 	}
 }
 

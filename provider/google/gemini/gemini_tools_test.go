@@ -110,3 +110,70 @@ func TestGeminiToolStreamParsesParts(t *testing.T) {
 		t.Error("expected a synthetic call id")
 	}
 }
+
+// Safety filters are sent alongside the request rather than inside the
+// generation config, which is where the API expects them.
+func TestRequestBodyCarriesSafetySettings(t *testing.T) {
+	safety := []SafetySetting{
+		{Category: "HARM_CATEGORY_HATE_SPEECH", Threshold: "BLOCK_LOW_AND_ABOVE"},
+		{Category: "HARM_CATEGORY_DANGEROUS_CONTENT", Threshold: "BLOCK_NONE", Method: "SEVERITY"},
+	}
+	s := NewLLM(Config{APIKey: "k", SafetySettings: safety})
+
+	b, err := json.Marshal(s.requestBody(frames.NewLLMContext(""), false))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	wants := []string{
+		`"safetySettings":[`,
+		`{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_LOW_AND_ABOVE"}`,
+		`{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"BLOCK_NONE","method":"SEVERITY"}`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Errorf("request body is missing %s:\n%s", want, got)
+		}
+	}
+}
+
+// Configuring no filters sends none, leaving every category at the API default
+// rather than pinning it to an empty list.
+func TestRequestBodyOmitsSafetySettingsByDefault(t *testing.T) {
+	s := NewLLM(Config{APIKey: "k"})
+
+	b, err := json.Marshal(s.requestBody(frames.NewLLMContext(""), false))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "safetySettings") {
+		t.Errorf("request body carries safetySettings with none configured:\n%s", b)
+	}
+}
+
+// A safety filter is checked before anything tries to use it, since the API
+// rejects an unknown category or threshold outright.
+func TestSafetySettingValidation(t *testing.T) {
+	const harassment = "HARM_CATEGORY_HARASSMENT"
+	cases := map[string]struct {
+		setting SafetySetting
+		wantOK  bool
+	}{
+		"category and threshold":  {SafetySetting{Category: harassment, Threshold: "BLOCK_ONLY_HIGH"}, true},
+		"with a method":           {SafetySetting{Category: harassment, Threshold: "OFF", Method: "PROBABILITY"}, true},
+		"unknown category":        {SafetySetting{Category: "HARM_CATEGORY_NONSENSE", Threshold: "BLOCK_ONLY_HIGH"}, false},
+		"unknown threshold":       {SafetySetting{Category: harassment, Threshold: "BLOCK_SOMETIMES"}, false},
+		"threshold without cause": {SafetySetting{Threshold: "BLOCK_ONLY_HIGH"}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := Config{APIKey: "k", SafetySettings: []SafetySetting{tc.setting}}.Validate()
+			if tc.wantOK && err != nil {
+				t.Errorf("Validate: %v", err)
+			}
+			if !tc.wantOK && err == nil {
+				t.Error("Validate accepted a setting the API would reject")
+			}
+		})
+	}
+}

@@ -4,7 +4,7 @@ import "github.com/gojargo/jargo/provider/openai/chat"
 
 const (
 	llmBaseURL      = "https://api.sarvam.ai/v1"
-	defaultLLMModel = "sarvam-30b"
+	defaultLLMModel = "sarvam-105b"
 )
 
 // NewLLM builds a Sarvam LLM service over its OpenAI-compatible endpoint.

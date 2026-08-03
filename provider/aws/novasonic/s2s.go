@@ -295,7 +295,31 @@ func (s *Service) handle(ev outputEvent) {
 		if ev.ContentEnd.Type == "AUDIO" {
 			s.setSpeaking(ctx, false)
 		}
+	case ev.UsageEvent != nil:
+		s.handleUsage(ctx, ev.UsageEvent.Details.Delta)
 	}
+}
+
+// handleUsage reports the tokens one usage event accounts for. The delta is
+// reported rather than the running total, so usage stays incremental per event
+// as the other realtime services report it.
+func (s *Service) handleUsage(ctx context.Context, delta usageDelta) {
+	// The service splits each direction into speech and text, so the prompt and
+	// completion counts are the two added together.
+	prompt := delta.Input.SpeechTokens + delta.Input.TextTokens
+	completion := delta.Output.SpeechTokens + delta.Output.TextTokens
+	if prompt == 0 && completion == 0 {
+		return
+	}
+	_ = s.PushTokenUsage(ctx, s.cfg.Model, frames.LLMTokenUsage{
+		PromptTokens:      prompt,
+		CompletionTokens:  completion,
+		TotalTokens:       prompt + completion,
+		InputAudioTokens:  delta.Input.SpeechTokens,
+		OutputAudioTokens: delta.Output.SpeechTokens,
+		InputTextTokens:   delta.Input.TextTokens,
+		OutputTextTokens:  delta.Output.TextTokens,
+	})
 }
 
 // handleText routes a transcript: a barge-in marker interrupts, a user transcript
@@ -413,12 +437,6 @@ func contentEnd(prompt, content string) map[string]any {
 
 // --- inbound event parsing ---
 
-// The bidirectional stream carries no token-usage event: the completion is
-// bracketed by completionStart / completionEnd with no token accounting, so this
-// service reports no LLM token usage. If a usage event is added to the protocol,
-// parse it here and report it through PushTokenUsage as the other realtime
-// services do.
-//
 // The JSON field names below are Nova Sonic's wire protocol (camelCase), so the
 // snake_case house style does not apply.
 
@@ -443,6 +461,26 @@ type outputEvent struct {
 		Type       string `json:"type"`
 		StopReason string `json:"stopReason"` //nolint:tagliatelle // Nova Sonic wire field
 	} `json:"contentEnd"` //nolint:tagliatelle // Nova Sonic wire field
+	UsageEvent *struct {
+		Details struct {
+			// Delta is what this event adds; Details also carries a running
+			// total, which is left alone so usage stays incremental.
+			Delta usageDelta `json:"delta"`
+		} `json:"details"`
+	} `json:"usageEvent"` //nolint:tagliatelle // Nova Sonic wire field
+}
+
+// usageDelta is the token accounting one usage event adds, split by direction
+// and, within each, by modality.
+type usageDelta struct {
+	Input  usageTokens `json:"input"`
+	Output usageTokens `json:"output"`
+}
+
+// usageTokens is one direction's accounting for a usage event.
+type usageTokens struct {
+	SpeechTokens int64 `json:"speechTokens"` //nolint:tagliatelle // Nova Sonic wire field
+	TextTokens   int64 `json:"textTokens"`   //nolint:tagliatelle // Nova Sonic wire field
 }
 
 // CanGenerateMetrics reports that this service times the conversation and reports

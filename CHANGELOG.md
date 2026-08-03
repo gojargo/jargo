@@ -117,8 +117,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   or audio of a kind that was not named goes unhandled. `InputAudioRawFrame` is
   outside the family, since it is never sent.
 
+### Added
+
+- **Gemini takes content-safety filters**, as `gemini.Config.SafetySettings`
+  (and the same field on the Vertex AI config): a harm category and the
+  threshold at which the model blocks content for it, one entry per category.
+  Configuring none leaves every category at the API's default, as before.
+- **Nova Sonic reports its token usage.** The service accounts for each turn in
+  a `usageEvent` the read loop was dropping, so a speech-to-speech session
+  billed by token reported nothing at all. Each event's own tokens are reported
+  rather than the running total, which is how the other realtime services report
+  usage, and the speech and text split it carries is kept in the per-modality
+  counts.
+
 ### Fixed
 
+- **The token total an Anthropic model reports counts its cached input.** The
+  service reports the input count net of the prompt cache, so adding only the
+  prompt and completion counts left the cached tokens out of the total and
+  understated a cached turn, sometimes by most of the prompt. AWS Bedrock reads
+  the same, since it runs through the same service. The doc on
+  `frames.LLMTokenUsage` now says which of its counts are gross and which are
+  net.
+- **The Sarvam LLM defaults to `sarvam-105b`**, the model the service now
+  offers; `sarvam-30b` is gone.
 - **A WebSocket close waits at most two seconds for the peer to answer.**
   Disconnecting happens while a service handles the `EndFrame`, before the frame
   carries on downstream, so a peer that never acknowledges the closing handshake

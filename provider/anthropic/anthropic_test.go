@@ -179,8 +179,10 @@ func TestToUsageMapsFields(t *testing.T) {
 		CacheReadInputTokens:     80,
 		CacheCreationInputTokens: 10,
 	})
+	// The input count is net of the cache here, so the total adds the cached
+	// tokens back: 100 + 10 + 80 + 20.
 	if u.PromptTokens != 100 || u.CompletionTokens != 20 ||
-		u.CacheReadTokens != 80 || u.CacheCreationTokens != 10 || u.TotalTokens != 120 {
+		u.CacheReadTokens != 80 || u.CacheCreationTokens != 10 || u.TotalTokens != 210 {
 		t.Fatalf("usage = %+v", u)
 	}
 }
