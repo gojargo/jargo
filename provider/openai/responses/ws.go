@@ -176,6 +176,7 @@ func (s *Service) turn(ctx context.Context, convo *frames.LLMContext, sink llm.S
 	}
 	// The write uses the session's context, not the turn's: canceling a write
 	// closes the socket, and an interruption has to leave it usable.
+	s.StartTTFBMetrics()
 	if werr := sess.conn.Write(sess.ctx, websocket.MessageText, body); werr != nil {
 		return werr
 	}
@@ -211,6 +212,9 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink) (*
 			if m.err != nil {
 				return state, m.err
 			}
+			// The socket carries no response headers, so the first event of the
+			// turn is the moment the model starts answering.
+			s.StopTTFBMetrics()
 			if cerr := classifyStreamError(m.ev); cerr != nil {
 				return state, cerr
 			}

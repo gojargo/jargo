@@ -59,7 +59,9 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 
+	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
+	s.StopTTFBMetrics()
 	if err != nil {
 		return err
 	}

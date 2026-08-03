@@ -180,7 +180,9 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	report := s.UsageMetricsEnabled()
 	var acc sdk.Message
+	s.StartTTFBMetrics()
 	stream := s.client.Messages.NewStreaming(ctx, s.newParams(convo))
+	s.StopTTFBMetrics()
 	for stream.Next() {
 		event := stream.Current()
 		if report {
@@ -221,7 +223,9 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 	}
 
 	var acc sdk.Message
+	s.StartTTFBMetrics()
 	stream := s.client.Messages.NewStreaming(ctx, params)
+	s.StopTTFBMetrics()
 	for stream.Next() {
 		event := stream.Current()
 		if err := acc.Accumulate(event); err != nil {

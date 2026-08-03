@@ -79,6 +79,11 @@ type Base struct {
 
 	handlersMu sync.RWMutex
 	handlers   map[string]ToolHandler
+
+	ttfbMu    sync.Mutex
+	ttfbStart time.Time
+	ttfb      time.Duration
+	hasTTFB   bool
 }
 
 // New builds an LLM Base named name driven by gen. The concrete service passes
@@ -105,12 +110,46 @@ func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error
 	return b.PushFrame(ctx, f, processor.Downstream)
 }
 
+// StartTTFBMetrics starts this generation's time-to-first-byte clock. A service
+// calls it immediately before issuing the request.
+func (b *Base) StartTTFBMetrics() {
+	b.ttfbMu.Lock()
+	defer b.ttfbMu.Unlock()
+	b.ttfbStart = time.Now()
+	b.ttfb = 0
+	b.hasTTFB = false
+}
+
+// StopTTFBMetrics records time to first byte. A service calls it as soon as the
+// provider's response stream is open, which is the moment the model starts
+// answering — a turn that only requests tools streams no text, and so would
+// otherwise report no TTFB at all. Only the first call in a generation counts.
+func (b *Base) StopTTFBMetrics() {
+	b.ttfbMu.Lock()
+	defer b.ttfbMu.Unlock()
+	if b.hasTTFB || b.ttfbStart.IsZero() {
+		return
+	}
+	b.ttfb = time.Since(b.ttfbStart)
+	b.hasTTFB = true
+}
+
+// ttfbMetrics returns the recorded time to first byte, and whether the service
+// recorded one at all.
+func (b *Base) ttfbMetrics() (time.Duration, bool) {
+	b.ttfbMu.Lock()
+	defer b.ttfbMu.Unlock()
+	return b.ttfb, b.hasTTFB
+}
+
 // emitTiming records the generation's time-to-first-byte and processing time to
-// OpenTelemetry (always) and, when in-band metrics are enabled, downstream as a
-// MetricsFrame for the RTVI client.
-func (b *Base) emitTiming(ctx context.Context, ttfb time.Duration, hadTTFB bool, processing time.Duration) {
+// the span and to OpenTelemetry (always) and, when in-band metrics are enabled,
+// downstream as a MetricsFrame for the RTVI client.
+func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.Duration) {
+	ttfb, hadTTFB := b.ttfbMetrics()
 	metrics.RecordProcessing(ctx, "llm", b.Name(), b.model, processing.Seconds())
 	if hadTTFB {
+		span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
 		metrics.RecordTTFB(ctx, "llm", b.Name(), b.model, ttfb.Seconds())
 	}
 	if !b.MetricsEnabled() {
@@ -250,17 +289,10 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 		return err
 	}
 	start := time.Now()
-	var ttfb time.Duration
-	hadTTFB := false
 	var out strings.Builder
 	emit := func(text string) error {
 		if text == "" {
 			return nil
-		}
-		if !hadTTFB {
-			hadTTFB = true
-			ttfb = time.Since(start)
-			span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
 		}
 		out.WriteString(text)
 		return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
@@ -270,7 +302,7 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 		b.PushError(ctx, "llm generation failed", err, false)
 	}
 	traceOutput(span, out.String())
-	b.emitTiming(ctx, ttfb, hadTTFB, time.Since(start))
+	b.emitTiming(ctx, span, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
@@ -297,19 +329,12 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 		return err
 	}
 	start := time.Now()
-	var ttfb time.Duration
-	hadTTFB := false
 	var preamble strings.Builder
 	var calls []frames.ToolCall
 	s := sink{
 		text: func(t string) error {
 			if t == "" {
 				return nil
-			}
-			if !hadTTFB {
-				hadTTFB = true
-				ttfb = time.Since(start)
-				span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
 			}
 			preamble.WriteString(t)
 			return b.PushFrame(ctx, frames.NewLLMTextFrame(t), processor.Downstream)
@@ -326,35 +351,45 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 		if err := b.PushFrame(ctx, started, processor.Downstream); err != nil {
 			return err
 		}
-		if err := b.runTools(ctx, calls); err != nil {
-			return err
-		}
+		b.runTools(ctx, calls)
 	}
 	traceOutput(span, preamble.String())
-	b.emitTiming(ctx, ttfb, hadTTFB, time.Since(start))
+	b.emitTiming(ctx, span, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
-// runTools executes each tool call in turn, emitting an in-progress frame and a
-// result frame for each. A handler that returns ErrStopTurn marks its result so
-// the aggregator does not re-trigger generation. A canceled ctx stops the loop.
-func (b *Base) runTools(ctx context.Context, calls []frames.ToolCall) error {
+// runTools starts each tool call on its own goroutine and returns. A handler
+// runs for as long as the work it does takes, and running it here — on the
+// goroutine that processes this service's frames — would hold up every frame
+// queued behind it, including the speech a bot plays to cover the wait. The
+// assistant aggregator holds the results until the last call has returned, so
+// the calls finishing out of order costs nothing.
+func (b *Base) runTools(ctx context.Context, calls []frames.ToolCall) {
 	for _, c := range calls {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		inProgress := frames.NewFunctionCallInProgressFrame(c.ID, c.Name)
-		if err := b.PushFrame(ctx, inProgress, processor.Downstream); err != nil {
-			return err
-		}
-		result, isErr, stopTurn := b.invoke(ctx, c)
-		resultFrame := frames.NewFunctionCallResultFrame(c.ID, c.Name, result, isErr)
-		resultFrame.RunLLM = !stopTurn
-		if err := b.PushFrame(ctx, resultFrame, processor.Downstream); err != nil {
-			return err
-		}
+		go b.runTool(ctx, c)
 	}
-	return nil
+}
+
+// runTool executes one tool call, emitting an in-progress frame and a result
+// frame. A handler that returns ErrStopTurn marks its result so the aggregator
+// does not re-trigger generation. Nothing is reported once ctx is canceled: an
+// interruption already balanced the call the aggregator was waiting on, and a
+// late result would be a second one.
+func (b *Base) runTool(ctx context.Context, c frames.ToolCall) {
+	if ctx.Err() != nil {
+		return
+	}
+	inProgress := frames.NewFunctionCallInProgressFrame(c.ID, c.Name)
+	if err := b.PushFrame(ctx, inProgress, processor.Downstream); err != nil {
+		return
+	}
+	result, isErr, stopTurn := b.invoke(ctx, c)
+	if ctx.Err() != nil {
+		return
+	}
+	resultFrame := frames.NewFunctionCallResultFrame(c.ID, c.Name, result, isErr)
+	resultFrame.RunLLM = !stopTurn
+	_ = b.PushFrame(ctx, resultFrame, processor.Downstream)
 }
 
 // invoke dispatches a tool call to its handler, returning the result content,

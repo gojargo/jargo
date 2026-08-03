@@ -79,7 +79,6 @@ func TestBaseRunsToolLoop(t *testing.T) {
 			case *frames.LLMTextFrame:
 				got = append(got, "text:"+fr.Text)
 			case *frames.LLMFullResponseEndFrame:
-				got = append(got, "end")
 				ends++
 				if ends == 2 {
 					select {
@@ -105,15 +104,18 @@ func TestBaseRunsToolLoop(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
+	// The response-end frames are counted rather than placed: the tool calls run
+	// off the frame loop, so the first end and the call's own frames race.
+	if ends != 2 {
+		t.Fatalf("response-end frames = %d, want 2", ends)
+	}
 	want := []string{
 		"start",
 		"calls-started",
 		"in-progress:get_weather",
 		"result:sunny, 20C",
-		"end",
 		"start",
 		"text:It is sunny.",
-		"end",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("frames = %v, want %v", got, want)
@@ -141,6 +143,59 @@ func TestBaseRunsToolLoop(t *testing.T) {
 	if !toolCallsBalanced(convo) {
 		t.Fatalf("context has an unbalanced tool call: %+v", msgs)
 	}
+}
+
+// TestToolHandlerDoesNotBlockFrames is the regression test for a handler run on
+// the frame loop: a tool that waits on the network must not hold up the frames
+// queued behind it, which is how a bot covers the wait with speech.
+func TestToolHandlerDoesNotBlockFrames(t *testing.T) {
+	gen := &fakeToolGen{}
+	svc := llm.New("FakeToolLLM", gen)
+
+	release := make(chan struct{})
+	svc.RegisterFunction("get_weather", func(ctx context.Context, _ json.RawMessage) (string, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return "sunny, 20C", nil
+	})
+
+	convo := frames.NewLLMContext("be brief")
+	convo.SetTools([]frames.Tool{{
+		Name:        "get_weather",
+		Description: "weather",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+	}})
+	convo.AddUserMessage("weather?")
+
+	spoken := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.TTSSpeakFrame); ok {
+				select {
+				case spoken <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	task.QueueFrame(frames.NewTTSSpeakFrame("Je regarde la météo."))
+
+	select {
+	case <-spoken:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("speech queued behind a running tool handler never reached the transport")
+	}
+	close(release)
+
+	task.StopWhenDone()
+	<-runDone
 }
 
 // balanceCheckGen records whether the context is balanced (every tool-use message

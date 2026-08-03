@@ -241,7 +241,9 @@ func (s *LLMService) newHTTPRequest(ctx context.Context, body []byte) (*http.Req
 }
 
 func (s *LLMService) stream(req *http.Request, emit llm.Emit) error {
+	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
+	s.StopTTFBMetrics()
 	if err != nil {
 		return err
 	}
@@ -337,7 +339,9 @@ func (c *toolCoalescer) emit(sink llm.Sink) error {
 // coalescing the streamed tool_call fragments into whole calls reported once the
 // stream completes.
 func (s *LLMService) streamTools(req *http.Request, sink llm.Sink) error {
+	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
+	s.StopTTFBMetrics()
 	if err != nil {
 		return err
 	}

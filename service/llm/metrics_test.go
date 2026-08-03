@@ -10,9 +10,22 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 )
 
+// timingGen mirrors how a real service reports timing: it records time to first
+// byte itself, around the point its response stream opens.
+type timingGen struct {
+	*llm.Base
+}
+
+func (g *timingGen) Generate(_ context.Context, _ *frames.LLMContext, emit llm.Emit) error {
+	g.StartTTFBMetrics()
+	g.StopTTFBMetrics()
+	return emit("hello")
+}
+
 func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
-	gen := &fakeGen{deltas: []string{"hello"}}
+	gen := &timingGen{}
 	svc := llm.New("FakeLLM", gen)
+	gen.Base = svc
 	svc.SetModel("m1")
 
 	mfCh := make(chan *frames.MetricsFrame, 4)

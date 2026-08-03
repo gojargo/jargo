@@ -148,7 +148,9 @@ func (s *Service) newRequest(ctx context.Context, reqBody map[string]any) (*http
 }
 
 func (s *Service) stream(req *http.Request, emit llm.Emit) error {
+	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
+	s.StopTTFBMetrics()
 	if err != nil {
 		return err
 	}
@@ -224,7 +226,9 @@ func (t *geminiToolStream) consume(chunk genChunk) error {
 
 // streamTools streams a tool-capable completion, forwarding text and tool calls.
 func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
+	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
+	s.StopTTFBMetrics()
 	if err != nil {
 		return err
 	}

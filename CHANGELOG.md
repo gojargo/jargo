@@ -92,6 +92,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A tool call no longer holds up the frames queued behind it.** Handlers ran on
+  the goroutine that processes the LLM service's frames, so nothing queued while
+  one was in flight moved until it returned — including the speech a bot plays to
+  cover the wait, which is defeated by exactly the slow tools it exists for. Each
+  call now runs on its own goroutine; the assistant aggregator already holds the
+  results until the last one is in, so calls finishing out of order costs nothing,
+  and a result arriving after an interruption is dropped rather than added to the
+  synthetic one that already balanced the call.
+
+- **Time to first byte is recorded for a turn that only requests tools.** It was
+  measured on the first text delta, so a generation whose whole answer is a
+  tool-use block reported no TTFB at all — the turns where the wait is longest
+  and least visible. `llm.Base` gains `StartTTFBMetrics` and `StopTTFBMetrics`,
+  and each LLM service records it around the point its response stream opens.
+  For an SDK that retries inside the call that opens the stream, the retry is now
+  part of the measurement rather than invisible.
+
 - **A barge-in during playback no longer races the sequencer.** Clearing it when
   the user interrupts runs on the goroutine processing frames, while completing
   its slots runs on the one draining a context's audio, and nothing kept the two
