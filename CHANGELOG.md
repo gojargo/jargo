@@ -212,7 +212,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Synthesizer` and the `Generator`, and a model that changes relabels the
   metrics it is measured and priced against. Only STT reopens its session for a
   change, because only there does the base own the connection; a synthesizer
-  owns its own and reconnects for itself. Provider adoption comes next.
+  owns its own and reconnects for itself. **Deepgram STT is the first provider
+  wired**: `deepgram.Settings` carries the fifteen fields the provider treats as
+  changeable, plus the model and language, and a change to any of them reopens
+  the session, since Deepgram takes them as query parameters when the session
+  opens and has no way to be told afterwards. What is fixed at build time (the
+  endpoint, encoding, channels, VAD events, version, tags) stays on `Config`.
+  The remaining providers are unchanged and keep taking their configuration at
+  construction.
 - **A transcription session reopened for a settings change waits for the user to
   stop speaking**, and the audio arriving in between is held and sent on once the
   new session is up. Replacing the session mid-sentence would drop what is being

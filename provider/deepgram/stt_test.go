@@ -16,7 +16,7 @@ func TestQueryDefaults(t *testing.T) {
 		Encoding: defaultEncoding,
 		Channels: defaultChannels,
 	}
-	q := cfg.query(16000)
+	q := cfg.query(16000, newSettings(cfg))
 
 	// Omitted when unset → Deepgram's own defaults apply.
 	for _, key := range []string{"smart_format", "vad_events", "utterance_end_ms", "endpointing"} {

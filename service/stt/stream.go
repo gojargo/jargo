@@ -213,6 +213,12 @@ type StreamService struct {
 	// held is the audio that arrived while the session was being replaced, sent
 	// on once the new one is up so the words spoken across the gap are not lost.
 	held [][]byte
+
+	// settingsMu serializes reading the provider's settings against changing
+	// them. A session is opened from the read loop when one drops, and an update
+	// is applied on the frame goroutine, so without this a session could be
+	// opened from settings that are half written.
+	settingsMu sync.Mutex
 }
 
 // NewStream builds a streaming STT service named name driven by conn. A non-zero
@@ -344,7 +350,12 @@ func (s *StreamService) disconnect(ctx context.Context) {
 // every reconnect, so it replaces whatever session was there before.
 func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 	sessionCtx, cancel := context.WithCancel(ctx)
+	// Held across the dial: the provider reads its settings to build the
+	// session, and a session opened from settings changing underneath it would
+	// be neither the old configuration nor the new one.
+	s.settingsMu.Lock()
 	stream, err := s.conn.Connect(sessionCtx, s.sampleRate)
+	s.settingsMu.Unlock()
 	if err != nil {
 		cancel()
 		return err
@@ -457,13 +468,31 @@ func (s *StreamService) updateSettings(ctx context.Context, f *frames.STTUpdateS
 	}
 	store := holder.Settings()
 
-	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	// The reopen this may ask for is taken after the lock is released, or it
+	// would deadlock against the dial it goes on to make.
+	s.settingsMu.Lock()
+	reopen, err := s.applySettings(ctx, store, f)
+	s.settingsMu.Unlock()
 	if err != nil {
 		s.PushError(ctx, "stt: settings update", err, false)
 		return
 	}
+	if reopen {
+		s.requestReopen(ctx)
+	}
+}
+
+// applySettings merges the update and lets the provider act on it, reporting
+// whether the provider wants the session reopened. It runs under settingsMu.
+func (s *StreamService) applySettings(
+	ctx context.Context, store any, f *frames.STTUpdateSettingsFrame,
+) (bool, error) {
+	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	if err != nil {
+		return false, err
+	}
 	if !ok {
-		return
+		return false, nil
 	}
 
 	// Naming the language the provider's way before applying is what keeps the
@@ -474,11 +503,10 @@ func (s *StreamService) updateSettings(ctx context.Context, f *frames.STTUpdateS
 
 	changed, err := settings.Apply(store, delta)
 	if err != nil {
-		s.PushError(ctx, "stt: settings update", err, false)
-		return
+		return false, err
 	}
 	if len(changed) == 0 {
-		return
+		return false, nil
 	}
 	slog.Info("updated settings", "service", s.Name(), "fields", changed.String())
 
@@ -491,16 +519,9 @@ func (s *StreamService) updateSettings(ctx context.Context, f *frames.STTUpdateS
 
 	updater, ok := s.conn.(SettingsUpdater)
 	if !ok {
-		return
+		return false, nil
 	}
-	reopen, err := updater.UpdateSettings(ctx, changed)
-	if err != nil {
-		s.PushError(ctx, "stt: settings update", err, false)
-		return
-	}
-	if reopen {
-		s.requestReopen(ctx)
-	}
+	return updater.UpdateSettings(ctx, changed)
 }
 
 // nameLanguage rewrites a language the delta gives into the code the provider

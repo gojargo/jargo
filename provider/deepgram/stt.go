@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -116,7 +117,7 @@ func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.ListenURL == "" {
 		cfg.ListenURL = listenURL
 	}
-	return stt.NewStream("DeepgramSTT", &connector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("DeepgramSTT", &connector{cfg: cfg, live: newSettings(cfg)}, cfg.SampleRate)
 }
 
 // deepgramLanguage maps a Language to Deepgram's code. Deepgram uses BCP-47
@@ -125,37 +126,131 @@ func deepgramLanguage(l language.Language) string {
 	return l.Code()
 }
 
+// Settings is the part of the Deepgram configuration that can change while the
+// pipeline runs. It is the same set the provider itself treats as changeable;
+// everything else about the connection, the endpoint, the encoding, the channel
+// count, is fixed when the service is built.
+//
+// A change to any of it reopens the transcription session, because Deepgram
+// takes these as query parameters when the session opens and has no way to be
+// told about them afterwards.
+type Settings struct {
+	settings.STT
+
+	// DetectEntities enables named-entity detection.
+	DetectEntities settings.Opt[bool] `settings:"detect_entities"`
+	// Diarize labels speakers in the transcript.
+	Diarize settings.Opt[bool] `settings:"diarize"`
+	// Dictation converts spoken commands (e.g. "comma") to punctuation.
+	Dictation settings.Opt[bool] `settings:"dictation"`
+	// Endpointing is the silence in ms before Deepgram's speech_final.
+	Endpointing settings.Opt[int] `settings:"endpointing"`
+	// InterimResults emits partial transcripts.
+	InterimResults settings.Opt[bool] `settings:"interim_results"`
+	// Keyterm boosts recognition of the given terms (nova-3).
+	Keyterm settings.Opt[[]string] `settings:"keyterm"`
+	// Keywords boosts recognition of the given terms (legacy models).
+	Keywords settings.Opt[[]string] `settings:"keywords"`
+	// Numerals converts spoken numbers to numerals.
+	Numerals settings.Opt[bool] `settings:"numerals"`
+	// ProfanityFilter filters profanity from transcripts.
+	ProfanityFilter settings.Opt[bool] `settings:"profanity_filter"`
+	// Punctuate adds punctuation.
+	Punctuate settings.Opt[bool] `settings:"punctuate"`
+	// Redact removes the given categories of sensitive data.
+	Redact settings.Opt[[]string] `settings:"redact"`
+	// Replace applies find/replace rules to the transcript.
+	Replace settings.Opt[[]string] `settings:"replace"`
+	// Search flags occurrences of the given terms.
+	Search settings.Opt[[]string] `settings:"search"`
+	// SmartFormat applies Deepgram smart formatting.
+	SmartFormat settings.Opt[bool] `settings:"smart_format"`
+	// UtteranceEndMs is the silence in ms before an utterance-end event.
+	UtteranceEndMs settings.Opt[int] `settings:"utterance_end_ms"`
+}
+
+// newSettings is the starting state, taken from what the service was built with.
+func newSettings(cfg Config) *Settings {
+	s := &Settings{}
+	s.Model = settings.Set(cfg.Model)
+	s.Language = settings.Set(deepgramLanguage(cfg.Language))
+	// The two that default to on when the caller says nothing.
+	s.InterimResults = settings.Set(boolOr(cfg.InterimResults, true))
+	s.Punctuate = settings.Set(boolOr(cfg.Punctuate, true))
+	setOptBool(&s.SmartFormat, cfg.SmartFormat)
+	setOptBool(&s.Numerals, cfg.Numerals)
+	setOptBool(&s.ProfanityFilter, cfg.ProfanityFilter)
+	setOptBool(&s.Diarize, cfg.Diarize)
+	setOptBool(&s.DetectEntities, cfg.DetectEntities)
+	setOptBool(&s.Dictation, cfg.Dictation)
+	setOptInt(&s.Endpointing, cfg.Endpointing)
+	setOptInt(&s.UtteranceEndMs, cfg.UtteranceEndMs)
+	setOptSlice(&s.Keywords, cfg.Keywords)
+	setOptSlice(&s.Keyterm, cfg.Keyterm)
+	setOptSlice(&s.Redact, cfg.Redact)
+	setOptSlice(&s.Replace, cfg.Replace)
+	setOptSlice(&s.Search, cfg.Search)
+	return s
+}
+
+func boolOr(v *bool, def bool) bool {
+	if v != nil {
+		return *v
+	}
+	return def
+}
+
+func setOptBool(o *settings.Opt[bool], v *bool) {
+	if v != nil {
+		*o = settings.Set(*v)
+	}
+}
+
+func setOptInt(o *settings.Opt[int], v *int) {
+	if v != nil {
+		*o = settings.Set(*v)
+	}
+}
+
+func setOptSlice(o *settings.Opt[[]string], v []string) {
+	if len(v) > 0 {
+		*o = settings.Set(v)
+	}
+}
+
 // query builds the live-transcription query string for the given sample rate.
-func (cfg *Config) query(sampleRate int) url.Values {
+func (cfg *Config) query(sampleRate int, live *Settings) url.Values {
 	q := url.Values{}
-	q.Set("model", cfg.Model)
-	q.Set("language", deepgramLanguage(cfg.Language))
 	q.Set("encoding", cfg.Encoding)
 	q.Set("sample_rate", strconv.Itoa(sampleRate))
 	q.Set("channels", strconv.Itoa(cfg.Channels))
 
-	setBoolTrue(q, "interim_results", cfg.InterimResults)
-	setBoolOpt(q, "smart_format", cfg.SmartFormat)
-	setBoolTrue(q, "punctuate", cfg.Punctuate)
+	// Fixed when the service is built: Deepgram takes them at the session, and
+	// the provider does not treat them as changeable.
 	setBoolOpt(q, "vad_events", cfg.VADEvents)
-	setIntOpt(q, "endpointing", cfg.Endpointing)
-	setIntOpt(q, "utterance_end_ms", cfg.UtteranceEndMs)
-
-	setBoolOpt(q, "numerals", cfg.Numerals)
-	setBoolOpt(q, "profanity_filter", cfg.ProfanityFilter)
-	setBoolOpt(q, "diarize", cfg.Diarize)
-	setBoolOpt(q, "detect_entities", cfg.DetectEntities)
-	setBoolOpt(q, "dictation", cfg.Dictation)
 	setBoolOpt(q, "multichannel", cfg.Multichannel)
 	setBoolOpt(q, "mip_opt_out", cfg.MipOptOut)
 	setStrOpt(q, "version", cfg.Version)
-
-	addAll(q, "keywords", cfg.Keywords)
-	addAll(q, "keyterm", cfg.Keyterm)
-	addAll(q, "redact", cfg.Redact)
-	addAll(q, "replace", cfg.Replace)
-	addAll(q, "search", cfg.Search)
 	addAll(q, "tag", cfg.Tag)
+
+	// Changeable while the pipeline runs.
+	setStrOpt(q, "model", live.Model.Or(""))
+	setStrOpt(q, "language", live.Language.Or(""))
+	setOptQueryBool(q, "interim_results", live.InterimResults)
+	setOptQueryBool(q, "smart_format", live.SmartFormat)
+	setOptQueryBool(q, "punctuate", live.Punctuate)
+	setOptQueryInt(q, "endpointing", live.Endpointing)
+	setOptQueryInt(q, "utterance_end_ms", live.UtteranceEndMs)
+	setOptQueryBool(q, "numerals", live.Numerals)
+	setOptQueryBool(q, "profanity_filter", live.ProfanityFilter)
+	setOptQueryBool(q, "diarize", live.Diarize)
+	setOptQueryBool(q, "detect_entities", live.DetectEntities)
+	setOptQueryBool(q, "dictation", live.Dictation)
+	addAll(q, "keywords", live.Keywords.Or(nil))
+	addAll(q, "keyterm", live.Keyterm.Or(nil))
+	addAll(q, "redact", live.Redact.Or(nil))
+	addAll(q, "replace", live.Replace.Or(nil))
+	addAll(q, "search", live.Search.Or(nil))
 
 	for k, v := range cfg.ExtraQuery {
 		q.Set(k, v)
@@ -163,26 +258,24 @@ func (cfg *Config) query(sampleRate int) url.Values {
 	return q
 }
 
-// setBoolTrue sets key to v, defaulting to true when v is nil.
-func setBoolTrue(q url.Values, key string, v *bool) {
-	val := true
-	if v != nil {
-		val = *v
+// setOptQueryBool sets key only when the setting carries a value.
+func setOptQueryBool(q url.Values, key string, o settings.Opt[bool]) {
+	if v, ok := o.Value(); ok {
+		q.Set(key, strconv.FormatBool(v))
 	}
-	q.Set(key, strconv.FormatBool(val))
+}
+
+// setOptQueryInt sets key only when the setting carries a value.
+func setOptQueryInt(q url.Values, key string, o settings.Opt[int]) {
+	if v, ok := o.Value(); ok {
+		q.Set(key, strconv.Itoa(v))
+	}
 }
 
 // setBoolOpt sets key only when v is non-nil.
 func setBoolOpt(q url.Values, key string, v *bool) {
 	if v != nil {
 		q.Set(key, strconv.FormatBool(*v))
-	}
-}
-
-// setIntOpt sets key only when v is non-nil.
-func setIntOpt(q url.Values, key string, v *int) {
-	if v != nil {
-		q.Set(key, strconv.Itoa(*v))
 	}
 }
 
@@ -202,16 +295,36 @@ func addAll(q url.Values, key string, vals []string) {
 
 type connector struct {
 	cfg Config
+	// live is what may change while the pipeline runs. The service serializes
+	// reading it here against applying an update, so a session is never opened
+	// from a half-written change.
+	live *Settings
 }
 
 // Metadata reports the Deepgram model transcription is billed against.
 func (c *connector) Metadata() stt.Metadata {
-	return stt.Metadata{Model: c.cfg.Model}
+	return stt.Metadata{Model: c.live.Model.Or(c.cfg.Model)}
+}
+
+// Settings is the configuration a caller may change while the pipeline runs.
+func (c *connector) Settings() any { return c.live }
+
+// UpdateSettings asks for the session to be reopened whenever anything changed.
+// Deepgram takes all of it as query parameters when the session opens, so a
+// change reaches it only by opening another.
+func (c *connector) UpdateSettings(context.Context, settings.Changed) (bool, error) {
+	return true, nil
+}
+
+// ServiceLanguage names a language the way Deepgram does. It uses BCP-47 codes
+// directly, so the canonical code passes through unchanged.
+func (c *connector) ServiceLanguage(l language.Language) string {
+	return deepgramLanguage(l)
 }
 
 // Connect dials the live transcription WebSocket for the given sample rate.
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
-	q := c.cfg.query(sampleRate)
+	q := c.cfg.query(sampleRate, c.live)
 
 	header := http.Header{}
 	header.Set("Authorization", authToken(c.cfg.APIKey))
