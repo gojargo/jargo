@@ -69,8 +69,14 @@ func (s *ttsSynthesizer) ssml(text string) ([]byte, error) {
 	if err := xml.EscapeText(&esc, []byte(text)); err != nil {
 		return nil, err
 	}
+	body := esc.String()
+	if s.cfg.ForceLocale {
+		// A multilingual voice reads the language out of the text unless it is
+		// told; the <lang> element is what tells it.
+		body = fmt.Sprintf("<lang xml:lang='%s'>%s</lang>", lang, body)
+	}
 	doc := fmt.Sprintf("<speak version='1.0' xml:lang='%s'><voice name='%s'>%s</voice></speak>",
-		lang, s.cfg.Voice, esc.String())
+		lang, s.cfg.Voice, body)
 	return []byte(doc), nil
 }
 

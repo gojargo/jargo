@@ -131,6 +131,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   distinct languages, which `Validate` checks rather than leaving the service to
   close the session over it. The steering is prompt-based, so it is sent to U3
   Pro models alone.
+- **Azure speech synthesis takes `ForceLocale`**, wrapping the text in SSML's
+  `<lang>` element so a multilingual voice speaks in the configured language
+  rather than the one it reads out of the text.
+- **The OpenAI transcription and synthesis take an `HTTPClient`**, for a longer
+  timeout, a proxy, or connection limits of your own. Every provider built on
+  them (Groq, Together, Kokoro's server and the rest) takes it too. Leaving it
+  nil is unchanged.
 - **Deepgram Flux takes `Numerals`**, writing spoken numbers as digits. It is
   fixed when the session opens, which is all Flux accepts for it.
 - **ElevenLabs realtime transcription takes `FilterBackgroundAudio`**, having
@@ -156,8 +163,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **The Cartesia transcription connects with `Cartesia-Version: 2026-03-01`**,
   the version its TTS and turn-taking services already used.
 
+### Deprecated
+
+- **`provider/xtts` is deprecated** and will be removed. It has no replacement:
+  `provider/kokoro` and `provider/piper` are the maintained local speech
+  synthesis services.
+
 ### Fixed
 
+- **Polly escapes the XML-reserved characters in the text it speaks.** An
+  ampersand or an angle bracket in a reply broke the SSML document, which Polly
+  rejects outright, so the whole sentence went unsaid.
 - **The token total an Anthropic model reports counts its cached input.** The
   service reports the input count net of the prompt cache, so adding only the
   prompt and completion counts left the cached tokens out of the total and

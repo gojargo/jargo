@@ -32,6 +32,10 @@ type TTSConfig struct {
 	Instructions string
 	// Speed controls the speaking rate (0.25 to 4.0); nil omits it.
 	Speed *float64
+	// HTTPClient makes the requests; nil uses one with the standard library's
+	// defaults. Supply one to set a longer timeout, a proxy, or connection
+	// limits of your own.
+	HTTPClient *http.Client
 }
 
 // Validate reports whether the configuration is usable.
@@ -56,7 +60,7 @@ func NewCompatTTS(name, baseURL, defaultModel, defaultVoice string, cfg TTSConfi
 	if cfg.Voice == "" {
 		cfg.Voice = defaultVoice
 	}
-	return tts.New(name, &synthesizer{cfg: cfg, http: &http.Client{}})
+	return tts.New(name, &synthesizer{cfg: cfg, http: httpClientOr(cfg.HTTPClient)})
 }
 
 type synthesizer struct {

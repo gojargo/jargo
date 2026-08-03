@@ -35,6 +35,10 @@ type STTConfig struct {
 	Temperature *float64
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
+	// HTTPClient makes the requests; nil uses one with the standard library's
+	// defaults. Supply one to set a longer timeout, a proxy, or connection
+	// limits of your own.
+	HTTPClient *http.Client
 }
 
 // Validate reports whether the configuration is usable.
@@ -81,7 +85,7 @@ func NewShapedSTT(name, baseURL, defaultModel string, shaper STTRequestShaper, c
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	t := &transcriber{cfg: cfg, http: &http.Client{}, shaper: shaper}
+	t := &transcriber{cfg: cfg, http: httpClientOr(cfg.HTTPClient), shaper: shaper}
 	return stt.NewSegment(name, t, cfg.SampleRate)
 }
 

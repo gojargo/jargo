@@ -2,6 +2,10 @@
 // server (https://github.com/coqui-ai/xtts-streaming-server). The server holds
 // the voices; this client fetches a studio speaker's embeddings once and streams
 // raw 24 kHz PCM for each sentence.
+//
+// Deprecated: XTTS has no replacement. The maintained local text-to-speech
+// services are [github.com/gojargo/jargo/provider/kokoro] and
+// [github.com/gojargo/jargo/provider/piper].
 package xtts
 
 import (

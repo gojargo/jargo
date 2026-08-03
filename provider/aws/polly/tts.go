@@ -2,6 +2,7 @@ package polly
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"io"
 	"strconv"
@@ -145,7 +146,14 @@ func (c Config) ssml(text string) string {
 		b.WriteString(strings.Join(prosody, " "))
 		b.WriteString(">")
 	}
-	b.WriteString(text)
+	// The reserved characters are escaped so arbitrary text cannot break the
+	// document: Polly rejects a malformed one outright rather than reading
+	// around it, so an ampersand in a reply would fail the whole sentence.
+	if err := xml.EscapeText(&b, []byte(text)); err != nil {
+		// EscapeText only fails when the writer does, and a strings.Builder
+		// never does.
+		b.WriteString(text)
+	}
 	if len(prosody) > 0 {
 		b.WriteString("</prosody>")
 	}

@@ -3,7 +3,10 @@
 // the rest) wrap with their own base URL, key and default model.
 package chat
 
-import "errors"
+import (
+	"errors"
+	"net/http"
+)
 
 // defaultLLMBaseURL is the OpenAI API base used by the LLM, STT and TTS services.
 const defaultLLMBaseURL = "https://api.openai.com/v1"
@@ -13,3 +16,12 @@ const defaultLLMBaseURL = "https://api.openai.com/v1"
 //
 //nolint:gochecknoglobals // sentinel error
 var errStatus = errors.New("openai: unexpected status")
+
+// httpClientOr returns c, or a fresh client with the standard library's defaults
+// when c is nil.
+func httpClientOr(c *http.Client) *http.Client {
+	if c != nil {
+		return c
+	}
+	return &http.Client{}
+}

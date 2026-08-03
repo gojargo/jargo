@@ -35,6 +35,13 @@ type TTSConfig struct {
 	// Language sets the SSML xml:lang; the zero value derives it from the voice's
 	// locale.
 	Language language.Language
+	// ForceLocale wraps the text in SSML's <lang> element, so a multilingual
+	// voice (en-US-EmmaMultilingualNeural, say) speaks in Language rather than
+	// the language it reads out of the text. A single-locale voice ignores the
+	// element. It also stops the voice switching language part-way, so mixed
+	// text is spoken entirely in Language: pair it with a language the voice
+	// actually speaks, since it synthesizes nothing at all for one it does not.
+	ForceLocale bool
 	// SampleRate is the PCM output rate; empty uses 24 kHz. Must be one Azure
 	// offers as raw PCM (8000, 16000, 22050, 24000, 44100, 48000).
 	SampleRate int

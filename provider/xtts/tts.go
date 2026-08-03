@@ -14,6 +14,10 @@ import (
 )
 
 // NewTTS builds a Coqui XTTS TTS service.
+//
+// Deprecated: XTTS has no replacement. Use [github.com/gojargo/jargo/provider/kokoro]
+// or [github.com/gojargo/jargo/provider/piper], the maintained local
+// text-to-speech services.
 func NewTTS(cfg Config) *tts.Base {
 	if cfg.Language == "" {
 		cfg.Language = defaultLanguage
