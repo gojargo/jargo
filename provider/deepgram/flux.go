@@ -84,6 +84,10 @@ type FluxConfig struct {
 	MinConfidence *float64
 	// MipOptOut opts out of Deepgram's model-improvement program.
 	MipOptOut *bool
+	// Numerals writes spoken numbers as digits ("twenty three" becomes "23");
+	// nil leaves the service default. It is fixed when the session opens: Flux
+	// does not take a change to it mid-stream.
+	Numerals *bool
 	// Keyterm boosts recognition of the given terms.
 	Keyterm []string
 	// Tag attaches billing tags to the request.
@@ -134,6 +138,7 @@ func fluxQuery(cfg FluxConfig, sampleRate int) url.Values {
 	if cfg.EOTTimeoutMs != nil {
 		q.Set("eot_timeout_ms", strconv.Itoa(*cfg.EOTTimeoutMs))
 	}
+	query.SetBoolOpt(q, "numerals", cfg.Numerals)
 	query.SetBoolOpt(q, "mip_opt_out", cfg.MipOptOut)
 
 	query.AddAll(q, "keyterm", cfg.Keyterm)

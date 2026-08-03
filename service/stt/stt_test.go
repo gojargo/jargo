@@ -250,3 +250,46 @@ func TestStreamServiceReportsAudioUsage(t *testing.T) {
 		t.Errorf("stt.service = %q, want a FakeSTT instance", got)
 	}
 }
+
+// finalizingStream records that it was told the speech ended.
+type finalizingStream struct {
+	fakeStream
+	finalized chan struct{}
+}
+
+func (s *finalizingStream) Finalize() error {
+	select {
+	case s.finalized <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// finalizingConnector opens the one stream the test watches.
+type finalizingConnector struct{ stream *finalizingStream }
+
+func (c *finalizingConnector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+// A provider that flushes an utterance only when told is told as soon as the VAD
+// reports the speech ended, rather than waiting on its own endpointing.
+func TestStreamServiceFinalizesOnVADStop(t *testing.T) {
+	stream := &finalizingStream{finalized: make(chan struct{}, 1)}
+	svc := stt.NewStream("FinalizingSTT", &finalizingConnector{stream: stream}, 16000)
+
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	select {
+	case <-stream.finalized:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session was never told the speech ended")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}

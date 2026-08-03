@@ -105,6 +105,15 @@ type KeepaliveSender interface {
 	SendKeepalive(silence []byte) error
 }
 
+// Finalizer is an optional interface a Stream implements when the provider has
+// to be told the speech has ended before it flushes the transcript for it.
+// Finalize is called once the VAD reports the user stopped, and the session
+// carries on afterwards for the next utterance. A Stream that does not implement
+// it is left to the provider's own endpointing.
+type Finalizer interface {
+	Finalize() error
+}
+
 // SettingsHolder is an optional interface a Connector implements when part of
 // what it was built with can change while the pipeline runs: the language it
 // transcribes, the model it uses. The value returned is the provider's own
@@ -270,6 +279,9 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		s.mu.Lock()
 		s.canReopen = false
 		s.mu.Unlock()
+		return s.PushFrame(ctx, f, dir)
+	case *frames.VADUserStoppedSpeakingFrame:
+		s.finalize()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.UserStoppedSpeakingFrame:
 		s.reopenIfDeferred(ctx)
@@ -634,6 +646,27 @@ func (s *StreamService) send(audio []byte) {
 	s.mu.Unlock()
 	if stream != nil {
 		_ = stream.Send(audio)
+	}
+}
+
+// finalize tells the session the speech has ended, for a provider that flushes
+// the transcript for an utterance only when asked. It is a no-op for a provider
+// that does its own endpointing, and for a session that is being replaced: what
+// the finalize would flush is held audio the new session has not been given yet.
+func (s *StreamService) finalize() {
+	s.mu.Lock()
+	stream := s.stream
+	reopening := s.reopening
+	s.mu.Unlock()
+	if stream == nil || reopening {
+		return
+	}
+	fin, ok := stream.(Finalizer)
+	if !ok {
+		return
+	}
+	if err := fin.Finalize(); err != nil {
+		slog.Debug("stt finalize failed", "service", s.Name(), "err", err)
 	}
 }
 

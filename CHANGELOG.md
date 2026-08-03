@@ -119,6 +119,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The Smallest AI transcription carries every option the service accepts**:
+  `WordTimestamps`, `FullTranscript`, `SentenceTimestamps`, `RedactPII`,
+  `RedactPCI`, `Numerals`, `Diarize`, `Endpointing`, `Keywords` and `Format`,
+  alongside the model. Endpointing and formatting are on unless turned off, as
+  they are on the service itself.
+- **AssemblyAI takes a list of declared languages**, as
+  `Config.LanguageCodes`: one pins the transcription to that language, several
+  steer towards that set while still letting the speaker switch between them, in
+  the order given. Regional variants resolve to their base code, so at most ten
+  distinct languages, which `Validate` checks rather than leaving the service to
+  close the session over it. The steering is prompt-based, so it is sent to U3
+  Pro models alone.
+- **Deepgram Flux takes `Numerals`**, writing spoken numbers as digits. It is
+  fixed when the session opens, which is all Flux accepts for it.
+- **ElevenLabs realtime transcription takes `FilterBackgroundAudio`**, having
+  the service strip background audio before it transcribes.
 - **Gemini takes content-safety filters**, as `gemini.Config.SafetySettings`
   (and the same field on the Vertex AI config): a harm category and the
   threshold at which the model blocks content for it, one entry per category.
@@ -129,6 +145,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rather than the running total, which is how the other realtime services report
   usage, and the speech and text split it carries is kept in the per-modality
   counts.
+
+### Changed
+
+- **The Smallest AI transcription opens the Waves v4 session** at
+  `/waves/v1/stt/live` and flushes each utterance with a `finalize` message when
+  the VAD reports the speech ended, keeping the session open for the next one.
+  A `Stream` asks for that by implementing the new `stt.Finalizer`; a provider
+  that does its own endpointing is left alone.
+- **The Cartesia transcription connects with `Cartesia-Version: 2026-03-01`**,
+  the version its TTS and turn-taking services already used.
 
 ### Fixed
 

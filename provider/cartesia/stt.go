@@ -29,7 +29,7 @@ var errSTTProtocol = errors.New("cartesia: stt protocol error")
 const (
 	defaultSTTURL = "wss://api.cartesia.ai/stt/websocket"
 	// defaultSTTVersion pins the Cartesia STT API version; sent on every request.
-	defaultSTTVersion  = "2025-04-16"
+	defaultSTTVersion  = "2026-03-01"
 	defaultSTTModel    = "ink-whisper"
 	defaultSTTEncoding = "pcm_s16le"
 	// defaultSTTLanguage is Cartesia's default transcription language.

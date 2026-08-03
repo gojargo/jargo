@@ -73,6 +73,9 @@ type RealtimeSTTConfig struct {
 	// MinSilenceMS is the shortest run of silence treated as a pause; 0 uses the
 	// service default.
 	MinSilenceMS int `validate:"omitempty,min=0"`
+	// FilterBackgroundAudio has the service strip background audio before it
+	// transcribes; nil uses the service default.
+	FilterBackgroundAudio *bool
 }
 
 // Validate reports whether the configuration is usable.
@@ -126,6 +129,7 @@ func (c *realtimeSTTConnector) endpoint(sampleRate int) string {
 	if c.cfg.MinSilenceMS > 0 {
 		q.Set("min_silence_duration_ms", strconv.Itoa(c.cfg.MinSilenceMS))
 	}
+	query.SetBoolOpt(q, "filter_background_audio", c.cfg.FilterBackgroundAudio)
 	return c.cfg.Host + realtimeSTTPath + "?" + q.Encode()
 }
 

@@ -34,6 +34,9 @@ type SegmentedSTTConfig struct {
 	APIKey string
 	// FunctionID is the NVIDIA Cloud Function id, sent as a "function-id" header.
 	// Required by the hosted endpoint to select the model; omit for a local NIM.
+	// It identifies one deployment of a model rather than the model itself, so
+	// it changes whenever NVIDIA redeploys; the current one is on the model's
+	// page under build.nvidia.com.
 	FunctionID string
 	// Model selects a served model by name; empty lets the server choose.
 	Model string

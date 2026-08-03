@@ -7,6 +7,10 @@
 package assemblyai
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 )
@@ -17,7 +21,31 @@ const (
 	defaultEncoding = "pcm_s16le"
 	// readLimit bounds a single WebSocket message; long turns carry many words.
 	readLimit = 1 << 20
+	// maxLanguageCodes is the longest declared-language list AssemblyAI accepts.
+	maxLanguageCodes = 10
 )
+
+// errTooManyLanguages is returned when more languages are declared than
+// AssemblyAI accepts.
+//
+//nolint:gochecknoglobals // sentinel error
+var errTooManyLanguages = errors.New("assemblyai: too many declared languages")
+
+// u3ProModelPrefixes name the Universal-3 Pro streaming variants. Language
+// steering is prompt-based, so only these models are steered by it.
+//
+//nolint:gochecknoglobals // fixed table
+var u3ProModelPrefixes = []string{"u3-rt-pro", "universal-3-5-pro"}
+
+// isU3ProModel reports whether model is a Universal-3 Pro streaming variant.
+func isU3ProModel(model string) bool {
+	for _, p := range u3ProModelPrefixes {
+		if strings.HasPrefix(model, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // Config configures the AssemblyAI STT service. Optional fields modeled as
 // pointers or slices are omitted from the request when unset.
@@ -35,10 +63,21 @@ type Config struct {
 	// account default.
 	Model string
 	// Language declares the audio language (sent as language_code); the zero value
-	// leaves it unset. Mapped to AssemblyAI's base code.
+	// leaves it unset. Mapped to AssemblyAI's base code. AssemblyAI treats this
+	// and LanguageCodes as two names for one parameter and binds LanguageCodes
+	// when both are set, so prefer LanguageCodes.
 	Language language.Language
+	// LanguageCodes declares the audio languages. One pins transcription to that
+	// language; several steer towards that set while still allowing the speaker
+	// to switch between them, in the order given, which the steering follows.
+	// Regional variants resolve to their base code, so at most 10 distinct
+	// languages. The steering is prompt-based and so applies to U3 Pro models
+	// only; it is not sent for any other model, including the multilingual one,
+	// which transcribes several languages without being steered. Empty omits it.
+	LanguageCodes []language.Language
 	// LanguageDetection enables automatic language detection; nil omits it.
-	// Mutually exclusive with Language.
+	// It is independent of the declared languages above: those steer the
+	// transcription, while this reports the language detected on each turn.
 	LanguageDetection *bool
 	// FormatTurns formats finalized turns (punctuation/casing); nil defaults to true.
 	FormatTurns *bool
@@ -71,5 +110,16 @@ type Config struct {
 	ExtraQuery map[string]string
 }
 
-// Validate reports whether the configuration is usable.
-func (cfg Config) Validate() error { return validate.Struct(cfg) }
+// Validate reports whether the configuration is usable. An over-long list of
+// declared languages is rejected here, since AssemblyAI closes the session over
+// it rather than ignoring it.
+func (cfg Config) Validate() error {
+	if err := validate.Struct(cfg); err != nil {
+		return err
+	}
+	// Counted after resolution, since that is the list the service sees.
+	if n := len(prepareLanguageCodes(cfg.LanguageCodes)); n > maxLanguageCodes {
+		return fmt.Errorf("%w: %d declared, at most %d accepted", errTooManyLanguages, n, maxLanguageCodes)
+	}
+	return nil
+}

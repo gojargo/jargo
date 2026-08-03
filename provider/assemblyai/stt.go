@@ -3,6 +3,7 @@ package assemblyai
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -23,6 +24,7 @@ func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.Encoding == "" {
 		cfg.Encoding = defaultEncoding
 	}
+	cfg.warnLanguageSettings()
 	return stt.NewStream("AssemblyAISTT", &connector{cfg: cfg}, cfg.SampleRate)
 }
 
@@ -57,10 +59,57 @@ func (cfg *Config) query(sampleRate int) url.Values {
 			q.Set("keyterms_prompt", string(b))
 		}
 	}
+	// Language steering is prompt-based, so it reaches U3 Pro models only.
+	if codes := prepareLanguageCodes(cfg.LanguageCodes); len(codes) > 0 && isU3ProModel(cfg.Model) {
+		if b, err := json.Marshal(codes); err == nil {
+			q.Set("language_codes", string(b))
+		}
+	}
 	for k, v := range cfg.ExtraQuery {
 		q.Set(k, v)
 	}
 	return q
+}
+
+// warnLanguageSettings reports the language settings that will not do what they
+// look like they do. It runs once, when the service is built.
+func (cfg *Config) warnLanguageSettings() {
+	declared := len(cfg.LanguageCodes) > 0
+	if declared && !isU3ProModel(cfg.Model) {
+		slog.Warn("assemblyai declared languages steer U3 Pro models only, so they are ignored here",
+			"model", cfg.Model)
+	}
+	if declared && cfg.Language != "" {
+		slog.Warn("assemblyai treats Language and LanguageCodes as one parameter and binds " +
+			"LanguageCodes, so Language is ignored; declare a single language as a one-element list")
+	}
+	if (declared || cfg.Language != "") && cfg.LanguageDetection != nil && *cfg.LanguageDetection {
+		slog.Warn("assemblyai was given both declared languages and language detection; these are " +
+			"independent, the declared languages steering the transcription while detection reports " +
+			"the language of each turn, and both are sent as they are")
+	}
+}
+
+// prepareLanguageCodes resolves declared languages to the codes sent on the
+// wire. Duplicates collapse, since regional variants of one language share a
+// base code, and the order is kept because the steering follows it. A language
+// the service does not declare support for is dropped, as it is for
+// LanguageCode.
+func prepareLanguageCodes(langs []language.Language) []string {
+	out := make([]string, 0, len(langs))
+	seen := make(map[string]struct{}, len(langs))
+	for _, l := range langs {
+		code := assemblyaiLanguage(l)
+		if code == "" {
+			continue
+		}
+		if _, dup := seen[code]; dup {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	return out
 }
 
 // assemblyaiLanguage maps a Language to AssemblyAI's language_code: it wants the
