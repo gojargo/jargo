@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -20,11 +22,39 @@ func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	return stt.NewStream("SonioxSTT", &connector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("SonioxSTT", &connector{cfg: cfg, live: newSTTSettings(cfg)}, cfg.SampleRate)
 }
 
 type connector struct {
 	cfg Config
+	// live is what may change while the pipeline runs: the model and the
+	// language, which is the set Soniox treats as changeable and that jargo's
+	// configuration carries.
+	live *settings.STT
+}
+
+// newSTTSettings is the starting state, taken from what the service was built
+// with.
+func newSTTSettings(cfg Config) *settings.STT {
+	s := &settings.STT{}
+	s.Model = settings.Set(cfg.Model)
+	s.Language = settings.Set(cfg.Language.BaseCode())
+	return s
+}
+
+// Settings is the configuration a caller may change while the pipeline runs.
+func (c *connector) Settings() any { return c.live }
+
+// UpdateSettings asks for the session to be reopened whenever anything changed.
+// Soniox is told all of this in the handshake that opens the session, so a
+// change reaches it only by opening another.
+func (c *connector) UpdateSettings(context.Context, settings.Changed) (bool, error) {
+	return true, nil
+}
+
+// ServiceLanguage names a language the way Soniox does, by its base code.
+func (c *connector) ServiceLanguage(l language.Language) string {
+	return l.BaseCode()
 }
 
 // Connect dials the WebSocket and sends the config handshake (which carries the
@@ -49,13 +79,13 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 func (c *connector) config(sampleRate int) []byte {
 	cfg := map[string]any{
 		"api_key":                   c.cfg.APIKey,
-		"model":                     c.cfg.Model,
+		"model":                     c.live.Model.Or(c.cfg.Model),
 		"audio_format":              "s16le",
 		"sample_rate":               sampleRate,
 		"num_channels":              1,
 		"enable_endpoint_detection": c.cfg.EnableEndpointDetection == nil || *c.cfg.EnableEndpointDetection,
 	}
-	if lang := c.cfg.Language.BaseCode(); lang != "" {
+	if lang := c.live.Language.Or(c.cfg.Language.BaseCode()); lang != "" {
 		cfg["language_hints"] = []string{lang}
 	}
 	b, _ := json.Marshal(cfg) //nolint:errchkjson // map of known-serializable values

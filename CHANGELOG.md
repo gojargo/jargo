@@ -218,8 +218,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the session, since Deepgram takes them as query parameters when the session
   opens and has no way to be told afterwards. What is fixed at build time (the
   endpoint, encoding, channels, VAD events, version, tags) stays on `Config`.
-  The remaining providers are unchanged and keep taking their configuration at
-  construction.
+  Cartesia and Soniox STT follow, each with the model and language changeable,
+  which is what their configuration carries of the set upstream treats as
+  changeable. All three reopen the session on any change, because all three are
+  told their configuration only when the session opens. The remaining providers
+  are unchanged and keep taking their configuration at construction.
 - **A transcription session reopened for a settings change waits for the user to
   stop speaking**, and the audio arriving in between is held and sent on once the
   new session is up. Replacing the session mid-sentence would drop what is being

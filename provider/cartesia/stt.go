@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -71,17 +72,44 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	if cfg.Encoding == "" {
 		cfg.Encoding = defaultSTTEncoding
 	}
-	return stt.NewStream("CartesiaSTT", &sttConnector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("CartesiaSTT", &sttConnector{cfg: cfg, live: newSTTSettings(cfg)}, cfg.SampleRate)
 }
 
 type sttConnector struct {
 	cfg STTConfig
+	// live is what may change while the pipeline runs: the model and the
+	// language, which is the set Cartesia treats as changeable.
+	live *settings.STT
+}
+
+// newSTTSettings is the starting state, taken from what the service was built
+// with.
+func newSTTSettings(cfg STTConfig) *settings.STT {
+	s := &settings.STT{}
+	s.Model = settings.Set(cfg.Model)
+	s.Language = settings.Set(cartesiaSTTLanguage(cfg.Language))
+	return s
 }
 
 // Metadata reports Cartesia's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99, Model: c.cfg.Model}
+	return stt.Metadata{TTFSP99: sttTTFSP99, Model: c.live.Model.Or(c.cfg.Model)}
+}
+
+// Settings is the configuration a caller may change while the pipeline runs.
+func (c *sttConnector) Settings() any { return c.live }
+
+// UpdateSettings asks for the session to be reopened whenever anything changed.
+// Cartesia takes the model and the language as query parameters when the session
+// opens, so a change reaches it only by opening another.
+func (c *sttConnector) UpdateSettings(context.Context, settings.Changed) (bool, error) {
+	return true, nil
+}
+
+// ServiceLanguage names a language the way Cartesia does, by its base code.
+func (c *sttConnector) ServiceLanguage(l language.Language) string {
+	return cartesiaSTTLanguage(l)
 }
 
 // cartesiaSTTLanguage maps a Language to Cartesia's STT language code. Cartesia
@@ -111,8 +139,8 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 // sample rate query parameters.
 func (c *sttConnector) endpoint(sampleRate int) string {
 	q := url.Values{}
-	q.Set("model", c.cfg.Model)
-	q.Set("language", cartesiaSTTLanguage(c.cfg.Language))
+	q.Set("model", c.live.Model.Or(c.cfg.Model))
+	q.Set("language", c.live.Language.Or(cartesiaSTTLanguage(c.cfg.Language)))
 	q.Set("encoding", c.cfg.Encoding)
 	q.Set("sample_rate", strconv.Itoa(sampleRate))
 	return c.cfg.URL + "?" + q.Encode()
