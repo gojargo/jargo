@@ -84,6 +84,14 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		}
 		in.PushTransportMessage(readCtx, raw)
 	})
+	// A key a SIP caller presses becomes a frame, so the DTMF aggregator works
+	// on a LiveKit call the same way it does on a telephony one.
+	in.conn.OnDTMF(func(button frames.KeypadEntry) {
+		if readCtx.Err() != nil {
+			return
+		}
+		_ = in.PushFrame(readCtx, frames.NewInputDTMFFrame(button), processor.Downstream)
+	})
 	return nil
 }
 

@@ -8,10 +8,13 @@ package livekit
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -55,6 +58,10 @@ type Connection struct {
 	msgMu      sync.Mutex
 	msgHandler func([]byte)
 	pendingIn  [][]byte
+
+	dtmfMu      sync.Mutex
+	dtmfHandler func(frames.KeypadEntry)
+	pendingDTMF []frames.KeypadEntry
 }
 
 // Connect joins the configured room, publishes an Opus audio track, and returns
@@ -83,8 +90,12 @@ func Connect(cfg Config) (*Connection, error) {
 		}
 	}
 	cb.OnDataPacket = func(data lksdk.DataPacket, _ lksdk.DataReceiveParams) {
-		if u, ok := data.(*lksdk.UserDataPacket); ok {
-			c.deliver(u.Payload)
+		switch p := data.(type) {
+		case *lksdk.UserDataPacket:
+			c.deliver(p.Payload)
+		case *livekit.SipDTMF:
+			// A key pressed by a caller on a SIP leg of the room.
+			c.deliverDTMF(p.Digit)
 		}
 	}
 	cb.OnDisconnected = func() { c.closeOnce.Do(func() { close(c.closed) }) }
@@ -164,6 +175,39 @@ func (c *Connection) deliver(data []byte) {
 	}
 	c.msgMu.Unlock()
 	h(data)
+}
+
+// OnDTMF registers the handler for the keys a SIP caller presses. Keys that
+// arrived before a handler was set are delivered immediately.
+func (c *Connection) OnDTMF(h func(frames.KeypadEntry)) {
+	c.dtmfMu.Lock()
+	c.dtmfHandler = h
+	pending := c.pendingDTMF
+	c.pendingDTMF = nil
+	c.dtmfMu.Unlock()
+	for _, e := range pending {
+		h(e)
+	}
+}
+
+// deliverDTMF hands one keypress to the handler, holding it when none is
+// registered yet. A digit that is not a keypad key is dropped: SIP carries the
+// key as text and there is nothing to press that is not one of them.
+func (c *Connection) deliverDTMF(digit string) {
+	entry := frames.KeypadEntry(digit)
+	if !entry.Valid() {
+		slog.Warn("livekit ignoring an unsupported DTMF key", "digit", digit)
+		return
+	}
+	c.dtmfMu.Lock()
+	h := c.dtmfHandler
+	if h == nil {
+		c.pendingDTMF = append(c.pendingDTMF, entry)
+		c.dtmfMu.Unlock()
+		return
+	}
+	c.dtmfMu.Unlock()
+	h(entry)
 }
 
 // SendMessage publishes an application message to the room.

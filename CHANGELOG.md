@@ -131,6 +131,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   distinct languages, which `Validate` checks rather than leaving the service to
   close the session over it. The steering is prompt-based, so it is sent to U3
   Pro models alone.
+- **The LiveKit transport reads inbound SIP DTMF.** A key pressed by a caller on
+  a SIP leg of the room becomes an `InputDTMFFrame`, so the DTMF aggregator works
+  on a LiveKit call as it does on a telephony one. `frames.KeypadEntry.Valid`
+  reports whether what arrived is a key at all.
 - **Azure speech synthesis takes `ForceLocale`**, wrapping the text in SSML's
   `<lang>` element so a multilingual voice speaks in the configured language
   rather than the one it reads out of the text.

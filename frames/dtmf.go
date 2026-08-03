@@ -26,6 +26,19 @@ const (
 	KeypadD     KeypadEntry = "D"
 )
 
+// Valid reports whether e is one of the keypad entries. A transport reading a
+// key off the wire uses it to tell a keypress from whatever else arrives.
+func (e KeypadEntry) Valid() bool {
+	switch e {
+	case KeypadZero, KeypadOne, KeypadTwo, KeypadThree, KeypadFour, KeypadFive,
+		KeypadSix, KeypadSeven, KeypadEight, KeypadNine,
+		KeypadStar, KeypadPound, KeypadA, KeypadB, KeypadC, KeypadD:
+		return true
+	default:
+		return false
+	}
+}
+
 // InputDTMFFrame is a DTMF keypress received from the transport — for example a
 // phone caller pressing a key. It is a system frame so it is delivered with
 // priority and in order.
