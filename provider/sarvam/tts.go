@@ -323,7 +323,7 @@ func (s *synthesizer) configMessage() []byte {
 	return b
 }
 
-func (s *synthesizer) writeJSON(ctx context.Context, conn *websocket.Conn, msg map[string]any) error {
+func (s *synthesizer) writeJSON(ctx context.Context, conn *wsutil.Conn, msg map[string]any) error {
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -331,7 +331,7 @@ func (s *synthesizer) writeJSON(ctx context.Context, conn *websocket.Conn, msg m
 	return conn.Write(ctx, websocket.MessageText, b)
 }
 
-func (s *synthesizer) receive(ctx context.Context, conn *websocket.Conn, emit func(pcm []byte) error) error {
+func (s *synthesizer) receive(ctx context.Context, conn *wsutil.Conn, emit func(pcm []byte) error) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {

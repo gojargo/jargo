@@ -62,7 +62,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	return s.receive(ctx, conn, emit)
 }
 
-func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
+func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text string) error {
 	init := map[string]any{
 		"model_id": s.cfg.Model,
 		"voice":    map[string]any{"mode": "id", "id": s.cfg.Voice},
@@ -80,7 +80,7 @@ func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text st
 	return writeJSON(ctx, conn, map[string]any{"transcript": text, "context_id": "jargo", "force": true})
 }
 
-func writeJSON(ctx context.Context, conn *websocket.Conn, msg map[string]any) error {
+func writeJSON(ctx context.Context, conn *wsutil.Conn, msg map[string]any) error {
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -88,7 +88,7 @@ func writeJSON(ctx context.Context, conn *websocket.Conn, msg map[string]any) er
 	return conn.Write(ctx, websocket.MessageText, payload)
 }
 
-func (s *synthesizer) receive(ctx context.Context, conn *websocket.Conn, emit func(pcm []byte) error) error {
+func (s *synthesizer) receive(ctx context.Context, conn *wsutil.Conn, emit func(pcm []byte) error) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {

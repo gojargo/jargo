@@ -115,7 +115,7 @@ func (c *sttConnector) sessionUpdate(sampleRate int) []byte {
 }
 
 type sttStream struct {
-	conn        *websocket.Conn
+	conn        *wsutil.Conn
 	ctx         context.Context
 	writeMu     sync.Mutex
 	accumulated string

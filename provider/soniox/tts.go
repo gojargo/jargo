@@ -196,7 +196,7 @@ func (s *ttsSynthesizer) run(
 // tells Soniox no more text is coming.
 func (s *ttsSynthesizer) request(
 	ctx context.Context,
-	conn *websocket.Conn,
+	conn *wsutil.Conn,
 	text string,
 	withTimestamps bool,
 ) error {
@@ -245,7 +245,7 @@ type ttsTimings struct {
 // Soniox reports the stream is finished.
 func (s *ttsSynthesizer) receive(
 	ctx context.Context,
-	conn *websocket.Conn,
+	conn *wsutil.Conn,
 	emit func(pcm []byte) error,
 	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {

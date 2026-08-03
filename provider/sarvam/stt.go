@@ -269,7 +269,7 @@ func (c *connector) encoding() string {
 }
 
 type stream struct {
-	conn       *websocket.Conn
+	conn       *wsutil.Conn
 	ctx        context.Context
 	encoding   string
 	sampleRate int

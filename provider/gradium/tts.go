@@ -91,7 +91,7 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 }
 
 // request sends the setup, text, and end-of-stream messages for one sentence.
-func (s *ttsSynthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
+func (s *ttsSynthesizer) request(ctx context.Context, conn *wsutil.Conn, text string) error {
 	setup := map[string]any{
 		msgType:           "setup",
 		"output_format":   encPCM,
@@ -121,7 +121,7 @@ func (s *ttsSynthesizer) request(ctx context.Context, conn *websocket.Conn, text
 	return s.send(ctx, conn, eos)
 }
 
-func (s *ttsSynthesizer) send(ctx context.Context, conn *websocket.Conn, msg map[string]any) error {
+func (s *ttsSynthesizer) send(ctx context.Context, conn *wsutil.Conn, msg map[string]any) error {
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (s *ttsSynthesizer) send(ctx context.Context, conn *websocket.Conn, msg map
 }
 
 // receive streams audio chunks to emit until end-of-stream or an error.
-func (s *ttsSynthesizer) receive(ctx context.Context, conn *websocket.Conn, emit func(pcm []byte) error) error {
+func (s *ttsSynthesizer) receive(ctx context.Context, conn *wsutil.Conn, emit func(pcm []byte) error) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {

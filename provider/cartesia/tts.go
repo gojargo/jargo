@@ -145,14 +145,14 @@ func (s *timedSynthesizer) RunTTSTimed(
 	return s.receive(ctx, conn, emit, word)
 }
 
-func (s *synthesizer) dial(ctx context.Context) (*websocket.Conn, error) {
+func (s *synthesizer) dial(ctx context.Context) (*wsutil.Conn, error) {
 	header := http.Header{}
 	header.Set("X-API-Key", s.cfg.APIKey)
 	header.Set("Cartesia-Version", s.cfg.Version)
 	return wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
 }
 
-func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text string, timestamps bool) error {
+func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text string, timestamps bool) error {
 	msg := map[string]any{
 		"model_id":   s.cfg.Model,
 		"transcript": text,
@@ -189,7 +189,7 @@ func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text st
 // until the transcript is done.
 func (s *synthesizer) receive(
 	ctx context.Context,
-	conn *websocket.Conn,
+	conn *wsutil.Conn,
 	emit func(pcm []byte) error,
 	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {

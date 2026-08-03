@@ -237,7 +237,7 @@ func (s *ttsSynthesizer) run(
 // request streams the sentence in and closes the utterance so xAI starts
 // synthesizing. jargo hands the base a whole sentence at a time, so one delta
 // carries all of it.
-func (s *ttsSynthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
+func (s *ttsSynthesizer) request(ctx context.Context, conn *wsutil.Conn, text string) error {
 	delta, err := json.Marshal(map[string]any{"type": ttsClientDelta, "delta": text})
 	if err != nil {
 		return err
@@ -275,7 +275,7 @@ type ttsTimings struct {
 // the utterance's audio is complete.
 func receiveTTS(
 	ctx context.Context,
-	conn *websocket.Conn,
+	conn *wsutil.Conn,
 	emit func(pcm []byte) error,
 	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {

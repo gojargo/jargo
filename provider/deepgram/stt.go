@@ -14,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 const (
@@ -329,10 +330,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	header := http.Header{}
 	header.Set("Authorization", authToken(c.cfg.APIKey))
 
-	conn, resp, err := websocket.Dial(ctx, c.cfg.ListenURL+"?"+q.Encode(), &websocket.DialOptions{HTTPHeader: header})
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := wsutil.Dial(ctx, c.cfg.ListenURL+"?"+q.Encode(), header, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +340,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 }
 
 type stream struct {
-	conn    *websocket.Conn
+	conn    *wsutil.Conn
 	ctx     context.Context
 	writeMu sync.Mutex
 	wg      sync.WaitGroup

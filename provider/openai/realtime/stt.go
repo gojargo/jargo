@@ -155,7 +155,7 @@ func (c *sttConnector) sessionUpdate() map[string]any {
 }
 
 type sttStream struct {
-	conn *websocket.Conn
+	conn *wsutil.Conn
 	ctx  context.Context
 	// lang is the configured language echoed on results, or "".
 	lang    string

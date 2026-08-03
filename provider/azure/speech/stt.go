@@ -224,7 +224,7 @@ func newRequestID() string {
 }
 
 type sttStream struct {
-	conn       *websocket.Conn
+	conn       *wsutil.Conn
 	ctx        context.Context
 	sampleRate int
 	// lang is the configured locale echoed on results.

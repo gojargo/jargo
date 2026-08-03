@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -137,5 +138,87 @@ func TestDialFailure(t *testing.T) {
 	}
 	if conn != nil {
 		t.Error("Dial returned a connection alongside an error")
+	}
+}
+
+// deafServer accepts a WebSocket and then reads nothing, so a close frame is
+// never answered: the closing handshake can only end by giving up on it.
+func deafServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// A peer that never answers the closing handshake does not hold the caller for
+// the library's own deadline: a teardown runs while the pipeline is ending, so
+// the wait has to be bounded.
+func TestCloseGivesUpOnAnUnresponsivePeer(t *testing.T) {
+	srv := deafServer(t)
+
+	conn, err := wsutil.Dial(t.Context(), wsURL(srv), nil, 0)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	conn.SetCloseTimeout(200 * time.Millisecond)
+
+	start := time.Now()
+	if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if elapsed < 200*time.Millisecond {
+		t.Errorf("Close returned after %v, before waiting for the peer at all", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Close took %v, so it waited out the library's own deadline rather than the configured one", elapsed)
+	}
+}
+
+// A peer that answers is not made to wait: the bound only applies when the
+// handshake does not complete.
+func TestCloseReturnsAsSoonAsThePeerAnswers(t *testing.T) {
+	srv := echoServer(t, nil)
+
+	conn, err := wsutil.Dial(t.Context(), wsURL(srv), nil, 0)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	conn.SetCloseTimeout(5 * time.Second)
+
+	start := time.Now()
+	if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Close took %v against a peer that answers", elapsed)
+	}
+}
+
+// SetCloseTimeout ignores a non-positive value, so a caller cannot turn the
+// bound into an immediate give-up by mistake.
+func TestSetCloseTimeoutIgnoresNonPositive(t *testing.T) {
+	srv := deafServer(t)
+
+	conn, err := wsutil.Dial(t.Context(), wsURL(srv), nil, 0)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	const timeout = 150 * time.Millisecond
+	conn.SetCloseTimeout(timeout)
+	conn.SetCloseTimeout(0) // ignored: the timeout above still stands
+
+	start := time.Now()
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+	if elapsed := time.Since(start); elapsed < timeout {
+		t.Errorf("Close returned after %v, so a zero timeout replaced the one set", elapsed)
 	}
 }

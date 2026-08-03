@@ -105,7 +105,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 }
 
 // request pins the voice, then buffers the text and commits it for synthesis.
-func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
+func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text string) error {
 	msgs := []map[string]any{
 		{msgType: "tts_session.updated", "session": map[string]any{"voice": s.cfg.Voice}},
 		{msgType: "input_text_buffer.append", "text": text},
@@ -124,7 +124,7 @@ func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text st
 }
 
 // receive streams audio deltas until the session reports completion.
-func (s *synthesizer) receive(ctx context.Context, conn *websocket.Conn, emit func(pcm []byte) error) error {
+func (s *synthesizer) receive(ctx context.Context, conn *wsutil.Conn, emit func(pcm []byte) error) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {

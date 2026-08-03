@@ -231,7 +231,7 @@ func encodeQuery(q url.Values) string {
 }
 
 type sttStream struct {
-	conn    *websocket.Conn
+	conn    *wsutil.Conn
 	ctx     context.Context
 	writeMu sync.Mutex
 }

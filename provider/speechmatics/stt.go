@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 // NewSTT builds a Speechmatics streaming STT service.
@@ -41,14 +42,10 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
-	conn, resp, err := websocket.Dial(ctx, c.cfg.URL, &websocket.DialOptions{HTTPHeader: header})
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := wsutil.Dial(ctx, c.cfg.URL, header, readLimit)
 	if err != nil {
 		return nil, err
 	}
-	conn.SetReadLimit(readLimit)
 
 	s := &stream{conn: conn, ctx: ctx}
 	if err := conn.Write(ctx, websocket.MessageText, c.startRecognition(sampleRate)); err != nil {
@@ -90,7 +87,7 @@ func (c *connector) startRecognition(sampleRate int) []byte {
 }
 
 type stream struct {
-	conn     *websocket.Conn
+	conn     *wsutil.Conn
 	ctx      context.Context
 	writeMu  sync.Mutex
 	seqNo    atomic.Uint64

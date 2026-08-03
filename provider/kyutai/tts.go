@@ -88,7 +88,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 }
 
 // send streams the text one word per Text message, then an Eos to flush.
-func (s *synthesizer) send(ctx context.Context, conn *websocket.Conn, text string) error {
+func (s *synthesizer) send(ctx context.Context, conn *wsutil.Conn, text string) error {
 	for word := range strings.FieldsSeq(text) {
 		b, err := msgpack.Marshal(map[string]any{msgTypeKey: "Text", "text": word})
 		if err != nil {
@@ -107,7 +107,7 @@ func (s *synthesizer) send(ctx context.Context, conn *websocket.Conn, text strin
 
 // receive reads Audio messages, converts the float32 PCM to S16LE, and emits it.
 // A normal-closure from moshi marks the end of synthesis.
-func (s *synthesizer) receive(ctx context.Context, conn *websocket.Conn, emit func(pcm []byte) error) error {
+func (s *synthesizer) receive(ctx context.Context, conn *wsutil.Conn, emit func(pcm []byte) error) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {

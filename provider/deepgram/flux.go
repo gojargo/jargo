@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 const (
@@ -169,10 +170,7 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 	header := http.Header{}
 	header.Set("Authorization", "Token "+c.cfg.APIKey)
 
-	conn, resp, err := websocket.Dial(ctx, c.cfg.ListenURL+"?"+q.Encode(), &websocket.DialOptions{HTTPHeader: header})
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := wsutil.Dial(ctx, c.cfg.ListenURL+"?"+q.Encode(), header, 0)
 	if err != nil {
 		return nil, fmt.Errorf("deepgram flux: dial: %w", err)
 	}
@@ -190,7 +188,7 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 }
 
 type fluxStream struct {
-	conn        *websocket.Conn
+	conn        *wsutil.Conn
 	ctx         context.Context //nolint:containedctx // mirrors the STT stream lifetime
 	sampleRate  int
 	model       string

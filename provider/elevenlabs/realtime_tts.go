@@ -152,7 +152,7 @@ type realtimeSynthesizer struct {
 	// across a call into the host: appending blocks while the audio plays out,
 	// and the next sentence has to be able to go out while that happens.
 	mu       sync.Mutex
-	conn     *websocket.Conn
+	conn     *wsutil.Conn
 	connStop context.CancelFunc
 	// active is the context the keepalive may name, set once its opening message
 	// has gone out.
@@ -235,7 +235,7 @@ func (s *realtimeSynthesizer) endpoint() string {
 // stream returns the shared connection, dialing it on first use and redialing
 // when a previous turn left it broken. Dialing also starts the goroutines that
 // own the connection for its lifetime. Callers hold mu.
-func (s *realtimeSynthesizer) stream(ctx context.Context) (*websocket.Conn, error) {
+func (s *realtimeSynthesizer) stream(ctx context.Context) (*wsutil.Conn, error) {
 	if s.conn != nil {
 		return s.conn, nil
 	}
@@ -275,7 +275,7 @@ func (s *realtimeSynthesizer) drop(cause error) {
 }
 
 // write sends one JSON message, serialized against the other writers.
-func (s *realtimeSynthesizer) write(ctx context.Context, conn *websocket.Conn, msg map[string]any) error {
+func (s *realtimeSynthesizer) write(ctx context.Context, conn *wsutil.Conn, msg map[string]any) error {
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -287,7 +287,7 @@ func (s *realtimeSynthesizer) write(ctx context.Context, conn *websocket.Conn, m
 
 // readLoop owns the connection's incoming messages for as long as it lasts,
 // handing each to the context it belongs to.
-func (s *realtimeSynthesizer) readLoop(ctx context.Context, conn *websocket.Conn) {
+func (s *realtimeSynthesizer) readLoop(ctx context.Context, conn *wsutil.Conn) {
 	for {
 		msg, err := readRealtimeTTSMessage(ctx, conn)
 		if err == nil {
@@ -456,7 +456,7 @@ func (s *realtimeSynthesizer) forgetContext(contextID string) {
 
 // keepalive holds an idle connection open. Between turns nothing is written for
 // as long as the user is talking, and the server drops a stream that goes quiet.
-func (s *realtimeSynthesizer) keepalive(ctx context.Context, conn *websocket.Conn) {
+func (s *realtimeSynthesizer) keepalive(ctx context.Context, conn *wsutil.Conn) {
 	tick := time.NewTicker(keepaliveInterval)
 	defer tick.Stop()
 	for {
@@ -539,9 +539,9 @@ func (s *realtimeSynthesizer) openContext(
 	ctx context.Context,
 	contextID string,
 	direct *directSink,
-) (*websocket.Conn, error) {
+) (*wsutil.Conn, error) {
 	var (
-		conn *websocket.Conn
+		conn *wsutil.Conn
 		err  error
 	)
 	s.mu.Lock()
@@ -587,7 +587,7 @@ func (s *realtimeSynthesizer) openContext(
 // sendText hands one piece of text to an open context.
 func (s *realtimeSynthesizer) sendText(
 	ctx context.Context,
-	conn *websocket.Conn,
+	conn *wsutil.Conn,
 	contextID, text string,
 ) error {
 	if err := s.write(ctx, conn, map[string]any{keyText: text, keyContextID: contextID}); err != nil {
@@ -685,7 +685,7 @@ type realtimeTTSMessage struct {
 }
 
 // readRealtimeTTSMessage reads and decodes one server message.
-func readRealtimeTTSMessage(ctx context.Context, conn *websocket.Conn) (*realtimeTTSMessage, error) {
+func readRealtimeTTSMessage(ctx context.Context, conn *wsutil.Conn) (*realtimeTTSMessage, error) {
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		return nil, err

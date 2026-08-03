@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 // Service is the xAI Realtime speech-to-speech processor.
@@ -22,7 +23,7 @@ type Service struct {
 	cfg Config
 
 	mu      sync.Mutex
-	conn    *websocket.Conn
+	conn    *wsutil.Conn
 	connCtx context.Context
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
@@ -108,14 +109,10 @@ func (s *Service) connect(ctx context.Context) error {
 	header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 
 	endpoint := s.cfg.BaseURL + "?model=" + url.QueryEscape(s.cfg.Model)
-	conn, resp, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPHeader: header})
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := wsutil.Dial(ctx, endpoint, header, readLimit)
 	if err != nil {
 		return err
 	}
-	conn.SetReadLimit(readLimit)
 
 	connCtx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
@@ -347,7 +344,7 @@ func (u usage) tokenUsage() frames.LLMTokenUsage {
 }
 
 // readLoop reads server events until the connection is closed or canceled.
-func (s *Service) readLoop(conn *websocket.Conn, connCtx context.Context) {
+func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 	defer s.wg.Done()
 	for {
 		_, data, err := conn.Read(connCtx)

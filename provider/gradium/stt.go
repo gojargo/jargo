@@ -157,7 +157,7 @@ func (c *sttConnector) setup(sampleRate int) []byte {
 }
 
 // awaitReady reads the handshake reply and requires a "ready" message.
-func awaitReady(ctx context.Context, conn *websocket.Conn) error {
+func awaitReady(ctx context.Context, conn *wsutil.Conn) error {
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		return err
@@ -177,7 +177,7 @@ func awaitReady(ctx context.Context, conn *websocket.Conn) error {
 }
 
 type sttStream struct {
-	conn       *websocket.Conn
+	conn       *wsutil.Conn
 	ctx        context.Context
 	chunkBytes int
 	// lang is the configured language hint echoed on results, or "".

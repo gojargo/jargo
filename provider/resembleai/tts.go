@@ -59,7 +59,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	return s.receive(ctx, conn, emit)
 }
 
-func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text string) error {
+func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text string) error {
 	// A fresh connection carries one request, so a fixed request_id is fine.
 	msg := map[string]any{
 		"voice_uuid":      s.cfg.Voice,
@@ -78,7 +78,7 @@ func (s *synthesizer) request(ctx context.Context, conn *websocket.Conn, text st
 	return conn.Write(ctx, websocket.MessageText, payload)
 }
 
-func (s *synthesizer) receive(ctx context.Context, conn *websocket.Conn, emit func(pcm []byte) error) error {
+func (s *synthesizer) receive(ctx context.Context, conn *wsutil.Conn, emit func(pcm []byte) error) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {

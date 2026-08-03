@@ -15,6 +15,7 @@ import (
 	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 const (
@@ -152,15 +153,11 @@ func (s *fluxSynth) RunTTS(ctx context.Context, text, _ string, yield func(f fra
 	header := http.Header{}
 	header.Set("Authorization", "Token "+s.cfg.APIKey)
 
-	conn, resp, err := websocket.Dial(ctx, s.cfg.SpeakURL+"?"+q.Encode(), &websocket.DialOptions{HTTPHeader: header})
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := wsutil.Dial(ctx, s.cfg.SpeakURL+"?"+q.Encode(), header, fluxTTSReadLimit)
 	if err != nil {
 		return fmt.Errorf("deepgram flux tts: dial: %w", err)
 	}
 	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
-	conn.SetReadLimit(fluxTTSReadLimit)
 
 	speak, err := json.Marshal(fluxSpeak{Type: "Speak", Text: text})
 	if err != nil {

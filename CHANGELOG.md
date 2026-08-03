@@ -119,6 +119,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A WebSocket close waits at most two seconds for the peer to answer.**
+  Disconnecting happens while a service handles the `EndFrame`, before the frame
+  carries on downstream, so a peer that never acknowledges the closing handshake
+  held up the end of the pipeline for the library's own five seconds, once per
+  service. `wsutil.Dial` now returns a `*wsutil.Conn` whose `Close` gives up
+  after `wsutil.DefaultCloseTimeout`, adjustable per connection with
+  `SetCloseTimeout`. The providers that dialled the library directly go through
+  `wsutil.Dial` too, so every provider socket is bounded the same way.
 - **A settings update reaches the service a switcher is not currently using.**
   `ServiceSwitcher` gated every non-system frame on the active service, so an
   update addressed to one of its other services never arrived, and

@@ -150,7 +150,7 @@ func (c *sttConnector) endpoint(sampleRate int) string {
 }
 
 type sttStream struct {
-	conn *websocket.Conn
+	conn *wsutil.Conn
 	ctx  context.Context
 	// lang is the configured language hint echoed on results, or "".
 	lang string

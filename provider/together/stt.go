@@ -88,7 +88,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 }
 
 type stream struct {
-	conn    *websocket.Conn
+	conn    *wsutil.Conn
 	ctx     context.Context
 	writeMu sync.Mutex
 	lang    string

@@ -53,7 +53,7 @@ type wsEvent struct {
 
 // session is one live connection and the read loop draining it.
 type session struct {
-	conn   *websocket.Conn
+	conn   *wsutil.Conn
 	ctx    context.Context
 	cancel context.CancelFunc
 	events chan wsEvent

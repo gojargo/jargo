@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 // NewSTT builds a Gladia streaming STT service. It works best behind a turn
@@ -47,14 +48,10 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	if err != nil {
 		return nil, err
 	}
-	conn, resp, err := websocket.Dial(ctx, wsURL, nil)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := wsutil.Dial(ctx, wsURL, nil, readLimit)
 	if err != nil {
 		return nil, err
 	}
-	conn.SetReadLimit(readLimit)
 	return &stream{conn: conn, ctx: ctx}, nil
 }
 
@@ -130,7 +127,7 @@ func (c *connector) initSession(ctx context.Context, sampleRate int) (string, er
 }
 
 type stream struct {
-	conn    *websocket.Conn
+	conn    *wsutil.Conn
 	ctx     context.Context
 	writeMu sync.Mutex
 }

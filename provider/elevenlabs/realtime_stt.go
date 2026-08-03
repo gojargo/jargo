@@ -146,7 +146,7 @@ func (c *realtimeSTTConnector) Connect(ctx context.Context, sampleRate int) (stt
 }
 
 type realtimeSTTStream struct {
-	conn *websocket.Conn
+	conn *wsutil.Conn
 	ctx  context.Context
 	// lang is the configured language echoed on results, or "".
 	lang    string
