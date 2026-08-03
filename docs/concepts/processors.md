@@ -98,6 +98,34 @@ p.Base = processor.New("Pipeline", p, processor.WithDirectMode())
 A direct-mode processor also ignores interruptions, since it holds nothing to
 throw away.
 
+### Pausing
+
+A processor can hold its own frame handling and release it later. Frames stay
+queued, in order, and are handled on the resume:
+
+```go
+p.PauseProcessingFrames()   // hold data and control frames
+p.ResumeProcessingFrames()
+
+p.PauseProcessingSystemFrames()   // hold system frames too
+p.ResumeProcessingSystemFrames()
+```
+
+A pause takes effect from the next frame, not the one being handled, and is
+one-shot: after a resume the processor keeps going until it is paused again. An
+interruption clears it, because the process goroutine is replaced.
+
+The two are separate on purpose. Pausing data and control frames leaves system
+frames flowing, which is what lets the resume arrive at all; a `TTS` service
+holding the next turn until its audio has played is released by the
+`BotStoppedSpeakingFrame`. Pausing system frames as well holds everything, which
+is what a `ParallelPipeline` does while it synchronizes a lifecycle frame.
+
+`frames.FrameProcessorPauseFrame` and `FrameProcessorResumeFrame` ask for the
+same thing in band, addressed to one processor by name, with
+`FrameProcessorPauseUrgentFrame` and `FrameProcessorResumeUrgentFrame` as the
+system-frame variants that overtake the queue.
+
 ## Lifecycle
 
 ```mermaid

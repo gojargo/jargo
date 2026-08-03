@@ -21,13 +21,19 @@ var errNoBranches = errors.New("pipeline: parallel pipeline needs at least one b
 // branch forwards unchanged escapes only once: the merge deduplicates by frame
 // id.
 //
-// Lifecycle frames — StartFrame, EndFrame and CancelFrame — are synchronized.
-// The parallel pipeline waits for every branch to process the frame before
-// letting a single copy continue, and buffers any other frames a branch emits in
-// the meantime (flushing them after a StartFrame, before an EndFrame or
-// CancelFrame). This stops a fast branch from leaking an EndFrame and shutting
-// downstream processors down while a slower branch still has output to flush, or
-// from emitting data before every branch has been started.
+// Lifecycle frames (StartFrame, EndFrame and CancelFrame) are synchronized. On
+// one of those the parallel pipeline pauses its own frame handling and lets a
+// single copy continue only once every branch has processed it, buffering any
+// other frames a branch emits in the meantime (flushing them after a StartFrame,
+// before an EndFrame or CancelFrame). Three things go wrong without this:
+//
+//   - StartFrame: a fast branch completing first would let processors in the
+//     other branches receive frames before their StartFrame.
+//   - EndFrame: an EndFrame escaping from a fast branch would shut downstream
+//     processors down while a slower branch still had output to flush.
+//   - CancelFrame: the Task waits for the CancelFrame to reach the pipeline
+//     sink, so one escaping early would make it consider cancellation complete
+//     while slower branches were still running.
 //
 // A ParallelPipeline is itself a processor, so it nests inside a Pipeline.
 //
@@ -41,7 +47,6 @@ type ParallelPipeline struct {
 	mu       sync.Mutex
 	seen     map[uint64]struct{}
 	counter  map[uint64]int
-	syncDone map[uint64]chan struct{}
 	syncing  bool
 	buffered []bufferedFrame
 }
@@ -60,10 +65,11 @@ func NewParallel(branches ...[]processor.Processor) (*ParallelPipeline, error) {
 		return nil, errNoBranches
 	}
 	p := &ParallelPipeline{
-		seen:     map[uint64]struct{}{},
-		counter:  map[uint64]int{},
-		syncDone: map[uint64]chan struct{}{},
+		seen:    map[uint64]struct{}{},
+		counter: map[uint64]int{},
 	}
+	// Not direct mode: the synchronization pauses frame handling, which needs the
+	// processor's queues.
 	p.Base = processor.New("ParallelPipeline", p)
 	for i, procs := range branches {
 		// A source and sink bracket each branch so the parallel pipeline controls
@@ -77,22 +83,21 @@ func NewParallel(branches ...[]processor.Processor) (*ParallelPipeline, error) {
 }
 
 // ProcessFrame fans a frame out to every branch. For a lifecycle frame it first
-// arms the synchronization counter, then blocks until every branch has processed
-// the frame (or the context is canceled), so the next frame is not fanned out
-// until the lifecycle frame has fully propagated.
+// arms the synchronization counter and pauses its own frame handling, so nothing
+// else is fanned out until the last branch reports the frame back and the sink
+// resumes it.
 func (p *ParallelPipeline) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
 
-	var done chan struct{}
 	if isLifecycle(f) {
-		done = make(chan struct{})
 		p.mu.Lock()
 		p.counter[f.ID()] = len(p.branches)
-		p.syncDone[f.ID()] = done
 		p.syncing = true
 		p.mu.Unlock()
+		p.PauseProcessingSystemFrames()
+		p.PauseProcessingFrames()
 	}
 
 	for _, b := range p.branches {
@@ -100,16 +105,7 @@ func (p *ParallelPipeline) ProcessFrame(ctx context.Context, f frames.Frame, dir
 			return err
 		}
 	}
-
-	if done == nil {
-		return nil
-	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }
 
 // emit pushes a frame out of the parallel pipeline, dropping duplicates and
@@ -135,54 +131,88 @@ func (p *ParallelPipeline) emit(ctx context.Context, f frames.Frame, dir process
 // sinkPush is the branch sinks' downstream handler. Lifecycle frames decrement
 // the synchronization counter and are released once the last branch reports in;
 // every other frame goes out through emit.
+//
+// A lifecycle frame the parallel pipeline never fanned out has no counter, which
+// counts as zero: a frame a branch raised on its own (an EndFrame from something
+// inside it that ends the session) is released the same way rather than dropped.
 func (p *ParallelPipeline) sinkPush(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if !isLifecycle(f) {
 		return p.emit(ctx, f, dir)
 	}
 
 	p.mu.Lock()
-	n, ok := p.counter[f.ID()]
-	if !ok || n == 0 {
-		p.mu.Unlock()
-		return nil
+	n := p.counter[f.ID()]
+	if n > 0 {
+		n--
+		p.counter[f.ID()] = n
 	}
-	n--
-	p.counter[f.ID()] = n
 	if n > 0 {
 		p.mu.Unlock()
 		return nil
 	}
 	// Last branch in: release the synchronized frame and any buffered frames.
 	delete(p.counter, f.ID())
-	doneCh := p.syncDone[f.ID()]
-	delete(p.syncDone, f.ID())
 	p.syncing = false
-	buffered := p.buffered
-	p.buffered = nil
-	_, seen := p.seen[f.ID()]
-	first := !seen
-	if first {
-		p.seen[f.ID()] = struct{}{}
-	}
 	p.mu.Unlock()
 
 	// A StartFrame must precede the frames buffered behind it; an EndFrame or
 	// CancelFrame must follow them.
-	_, isStart := f.(*frames.StartFrame)
-	if isStart && first {
-		_ = p.PushFrame(ctx, f, dir)
-	}
-	for _, bf := range buffered {
-		_ = p.PushFrame(ctx, bf.frame, bf.dir)
-	}
-	if !isStart && first {
-		_ = p.PushFrame(ctx, f, dir)
+	if _, isStart := f.(*frames.StartFrame); isStart {
+		_ = p.emit(ctx, f, dir)
+		p.flushBuffered(ctx)
+	} else {
+		p.flushBuffered(ctx)
+		_ = p.emit(ctx, f, dir)
 	}
 
-	if doneCh != nil {
-		close(doneCh)
-	}
+	p.ResumeProcessingSystemFrames()
+	p.ResumeProcessingFrames()
 	return nil
+}
+
+// flushBuffered pushes out the frames held back while a lifecycle frame was
+// synchronizing. They were deduplicated on the way in, so they go straight out.
+func (p *ParallelPipeline) flushBuffered(ctx context.Context) {
+	for {
+		p.mu.Lock()
+		if len(p.buffered) == 0 {
+			p.mu.Unlock()
+			return
+		}
+		bf := p.buffered[0]
+		p.buffered = p.buffered[1:]
+		p.mu.Unlock()
+
+		_ = p.PushFrame(ctx, bf.frame, bf.dir)
+	}
+}
+
+// Processors returns the branches.
+func (p *ParallelPipeline) Processors() []processor.Processor { return branchList(p.branches) }
+
+// EntryProcessors returns the branches: a frame entering the parallel pipeline
+// is fanned out to all of them.
+func (p *ParallelPipeline) EntryProcessors() []processor.Processor {
+	return branchList(p.branches)
+}
+
+// ProcessorsWithMetrics returns the processors across every branch that report
+// metrics.
+func (p *ParallelPipeline) ProcessorsWithMetrics() []processor.Processor {
+	var out []processor.Processor
+	for _, b := range p.branches {
+		out = append(out, b.ProcessorsWithMetrics()...)
+	}
+	return out
+}
+
+// branchList widens a list of branches to the processor interface.
+func branchList(branches []*Pipeline) []processor.Processor {
+	out := make([]processor.Processor, 0, len(branches))
+	for _, b := range branches {
+		out = append(out, b)
+	}
+	return out
 }
 
 // Setup sets up the parallel pipeline and every branch.

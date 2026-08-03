@@ -28,14 +28,25 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 	gen.Base = svc
 	svc.SetModel("m1")
 
+	// The zeroed frames the task sends when the pipeline is ready would arrive
+	// first and are not what this is measuring.
+	noInitial := false
 	mfCh := make(chan *frames.MetricsFrame, 4)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableMetrics: true,
+		EnableMetrics:           true,
+		SendInitialEmptyMetrics: &noInitial,
 		OnReachedDownstream: func(f frames.Frame) {
-			if mf, ok := f.(*frames.MetricsFrame); ok && mf.Processing != nil {
-				select {
-				case mfCh <- mf:
-				default:
+			mf, ok := f.(*frames.MetricsFrame)
+			if !ok {
+				return
+			}
+			for _, d := range mf.Data {
+				if _, ok := d.(frames.ProcessingMetricsData); ok {
+					select {
+					case mfCh <- mf:
+					default:
+					}
+					return
 				}
 			}
 		},
@@ -49,11 +60,17 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 
 	select {
 	case mf := <-mfCh:
-		if mf.TTFB == nil {
-			t.Fatal("TTFB not set on the timing MetricsFrame")
+		var sawTTFB bool
+		for _, d := range mf.Data {
+			if ttfb, ok := d.(frames.TTFBMetricsData); ok {
+				sawTTFB = true
+				if ttfb.Model != "m1" {
+					t.Fatalf("model = %q, want m1", ttfb.Model)
+				}
+			}
 		}
-		if mf.Model != "m1" {
-			t.Fatalf("model = %q, want m1", mf.Model)
+		if !sawTTFB {
+			t.Fatal("TTFB not reported on the timing MetricsFrame")
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no timing MetricsFrame emitted")

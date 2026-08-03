@@ -70,6 +70,28 @@ func (p *Pipeline) ProcessFrame(ctx context.Context, f frames.Frame, dir process
 	return nil
 }
 
+// Processors returns the chain, source and sink included.
+func (p *Pipeline) Processors() []processor.Processor { return p.processors }
+
+// EntryProcessors returns the source, which every frame entering the pipeline
+// reaches first.
+func (p *Pipeline) EntryProcessors() []processor.Processor {
+	return []processor.Processor{p.source}
+}
+
+// ProcessorsWithMetrics returns the processors in the chain that report metrics,
+// including those inside a nested pipeline.
+func (p *Pipeline) ProcessorsWithMetrics() []processor.Processor {
+	var out []processor.Processor
+	for _, proc := range p.processors {
+		if proc.CanGenerateMetrics() {
+			out = append(out, proc)
+		}
+		out = append(out, proc.ProcessorsWithMetrics()...)
+	}
+	return out
+}
+
 // Setup sets up the pipeline and every processor in the chain.
 func (p *Pipeline) Setup(ctx context.Context, s processor.Setup) error {
 	if err := p.Base.Setup(ctx, s); err != nil {

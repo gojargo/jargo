@@ -8,8 +8,8 @@ import (
 // LLMTokenUsage reports the token counts billed for one LLM generation. The
 // cache counts are a subset of the input tokens: CacheReadTokens were served
 // from a prompt cache and CacheCreationTokens were written to one. The
-// per-modality audio and text counts are likewise subsets — of the prompt
-// tokens (input) and completion tokens (output). Realtime (speech-to-speech)
+// per-modality audio and text counts are likewise subsets, of the prompt tokens
+// (input) and completion tokens (output). Realtime (speech-to-speech)
 // models bill audio and text at different rates and report this breakdown; a
 // text-only generation leaves the audio fields zero.
 type LLMTokenUsage struct {
@@ -38,63 +38,163 @@ type LLMTokenUsage struct {
 	OutputTextTokens int64
 }
 
-// MetricsFrame reports metrics measured by a processor. It is a system frame, so
-// it is delivered with priority and is not dropped by an interruption — usage is
-// billed even when a turn is cut short. Each field is optional: a processor sets
-// the kinds it measured (e.g. an LLM reports TTFB, processing time and tokens).
-type MetricsFrame struct {
-	BaseSystemFrame
-	// Processor is the name of the processor that produced the metrics.
-	Processor string
-	// Model is the model that produced the metrics, when known.
-	Model string
-	// TTFB is the time to first byte (first token or audio), or nil when not measured.
-	TTFB *time.Duration
-	// TTFA is the time to the first audible sample (TTFB plus any leading
-	// silence a TTS service padded onto its response), or nil when not measured.
-	TTFA *time.Duration
-	// LeadingSilence is the silence before the first audible sample (TTFA minus
-	// TTFB), or nil when not measured.
-	LeadingSilence *time.Duration
-	// Processing is the wall-clock time the operation took, or nil when not measured.
-	Processing *time.Duration
-	// Tokens reports LLM token usage, or nil when not applicable.
-	Tokens *LLMTokenUsage
-	// Characters reports the number of characters synthesized by TTS, or nil.
-	Characters *int
-	// Turn reports an end-of-turn prediction, or nil when not applicable.
-	Turn *TurnPrediction
+// STTUsage is how much audio a speech-to-text service was given. It is raw
+// usage, not cost, and each report is the amount since the one before it, so a
+// consumer sums them across a session.
+//
+// A streaming service is sent all the audio, silence included, so its total
+// approximates the length of the stream, which is what most stream-priced
+// providers bill. A segmented service is sent only the detected speech, so its
+// total covers just those segments.
+type STTUsage struct {
+	// AudioSeconds is the seconds of audio submitted since the last report.
+	AudioSeconds float64
 }
 
-// TurnPrediction is what an end-of-turn analyzer decided about a user turn, and
+// MetricsData is one measurement carried by a MetricsFrame. The concrete types
+// are the kinds a processor can report: TTFBMetricsData, TTFAMetricsData,
+// ProcessingMetricsData, LLMUsageMetricsData, STTUsageMetricsData,
+// TTSUsageMetricsData, TextAggregationMetricsData and TurnMetricsData. A
+// consumer switches on the type to read the value.
+type MetricsData interface {
+	// MetricsProcessor is the name of the processor that measured it.
+	MetricsProcessor() string
+	// MetricsModel is the model it is attributed to, "" when unknown.
+	MetricsModel() string
+
+	isMetricsData()
+}
+
+// BaseMetricsData is embedded by every measurement and carries what they all
+// have: which processor measured it, and against which model.
+type BaseMetricsData struct {
+	// Processor is the name of the processor that measured it.
+	Processor string
+	// Model is the model the measurement is attributed to, "" when unknown.
+	Model string
+}
+
+// MetricsProcessor implements MetricsData.
+func (d BaseMetricsData) MetricsProcessor() string { return d.Processor }
+
+// MetricsModel implements MetricsData.
+func (d BaseMetricsData) MetricsModel() string { return d.Model }
+
+func (d BaseMetricsData) isMetricsData() {}
+
+// TTFBMetricsData is time to first byte: how long a service took to produce
+// anything at all, its first token or its first audio.
+type TTFBMetricsData struct {
+	BaseMetricsData
+	// Value is the measured time to first byte.
+	Value time.Duration
+}
+
+// TTFAMetricsData is time to first audible sample: time to first byte plus any
+// silence a TTS service padded onto the start of its response.
+//
+// It is reported with its breakdown so a consumer can see how much of the delay
+// the listener hears is padding rather than the service answering, without
+// having to match it up with the TTFBMetricsData reported separately. TTFB here
+// is that same measurement, not another one, so do not add the two together.
+type TTFAMetricsData struct {
+	BaseMetricsData
+	// TTFA is the time to the first audible sample: TTFB plus LeadingSilence.
+	TTFA time.Duration
+	// TTFB is the time to first byte that TTFA builds on.
+	TTFB time.Duration
+	// LeadingSilence is the silence before the first audible sample: TTFA minus
+	// TTFB.
+	LeadingSilence time.Duration
+}
+
+// ProcessingMetricsData is the wall-clock time an operation took.
+type ProcessingMetricsData struct {
+	BaseMetricsData
+	// Value is the measured processing time.
+	Value time.Duration
+}
+
+// LLMUsageMetricsData is the token usage billed for one LLM generation.
+type LLMUsageMetricsData struct {
+	BaseMetricsData
+	// Value is the token usage.
+	Value LLMTokenUsage
+}
+
+// STTUsageMetricsData is the audio a speech-to-text service was given.
+type STTUsageMetricsData struct {
+	BaseMetricsData
+	// Value is the usage.
+	Value STTUsage
+}
+
+// TTSUsageMetricsData is the number of characters a TTS service synthesized,
+// which is what providers bill against.
+type TTSUsageMetricsData struct {
+	BaseMetricsData
+	// Value is the number of characters.
+	Value int
+}
+
+// TextAggregationMetricsData is the time from a model's first token to the
+// first complete sentence: what grouping text into sentences costs before
+// synthesis can start.
+type TextAggregationMetricsData struct {
+	BaseMetricsData
+	// Value is the measured aggregation time.
+	Value time.Duration
+}
+
+// TurnMetricsData is what an end-of-turn analyzer decided about a user turn, and
 // what it cost to decide. Without it a turn that ends on the safety-net timeout
 // is indistinguishable from one the analyzer judged unfinished.
-type TurnPrediction struct {
+type TurnMetricsData struct {
+	BaseMetricsData
 	// Complete is whether the turn was predicted to be finished.
 	Complete bool
 	// Probability is the analyzer's confidence that it was finished.
 	Probability float64
-	// Processing is how long the analysis took, measured from the point the
-	// analyzer was asked.
-	Processing time.Duration
+	// E2EProcessing is how long deciding took end to end, measured from the
+	// point speech turned to silence.
+	E2EProcessing time.Duration
 }
 
-// NewMetricsFrame builds a MetricsFrame attributed to the named processor.
-func NewMetricsFrame(processor string) *MetricsFrame {
+// MetricsFrame reports measurements made by one or more processors. It is a
+// system frame, so it is delivered with priority and is not dropped by an
+// interruption: usage is billed even when a turn is cut short.
+type MetricsFrame struct {
+	BaseSystemFrame
+	// Data is the measurements this frame reports. One frame can carry several
+	// kinds, and measurements from more than one processor.
+	Data []MetricsData
+}
+
+// NewMetricsFrame builds a MetricsFrame reporting data.
+func NewMetricsFrame(data ...MetricsData) *MetricsFrame {
 	return &MetricsFrame{
 		BaseSystemFrame: NewBaseSystemFrame("MetricsFrame"),
-		Processor:       processor,
+		Data:            data,
 	}
 }
 
 // String implements fmt.Stringer.
 func (f *MetricsFrame) String() string {
-	if f.Tokens != nil {
-		return fmt.Sprintf("%s(processor: %s, tokens: %d in / %d out)",
-			f.Name(), f.Processor, f.Tokens.PromptTokens, f.Tokens.CompletionTokens)
+	if len(f.Data) == 1 {
+		return fmt.Sprintf("%s(processor: %s, %T)", f.Name(), f.Data[0].MetricsProcessor(), f.Data[0])
 	}
-	return fmt.Sprintf("%s(processor: %s)", f.Name(), f.Processor)
+	return fmt.Sprintf("%s(%d measurements)", f.Name(), len(f.Data))
 }
 
-// Compile-time interface check.
-var _ SystemFrame = (*MetricsFrame)(nil)
+// Compile-time interface checks.
+var (
+	_ SystemFrame = (*MetricsFrame)(nil)
+	_ MetricsData = TTFBMetricsData{}
+	_ MetricsData = TTFAMetricsData{}
+	_ MetricsData = ProcessingMetricsData{}
+	_ MetricsData = LLMUsageMetricsData{}
+	_ MetricsData = STTUsageMetricsData{}
+	_ MetricsData = TTSUsageMetricsData{}
+	_ MetricsData = TextAggregationMetricsData{}
+	_ MetricsData = TurnMetricsData{}
+)

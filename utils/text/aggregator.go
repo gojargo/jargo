@@ -17,6 +17,10 @@ type Aggregation struct {
 
 // Aggregator groups streamed text into the units a synthesizer is given.
 type Aggregator interface {
+	// Type is how this aggregator groups text. A caller reads it to know what to
+	// expect before any text has been aggregated: grouping by token, say, means
+	// no unit ever completes a sentence.
+	Type() frames.AggregationType
 	// Aggregate folds text into the buffer and returns every unit it completed.
 	Aggregate(text string) []Aggregation
 	// Flush returns whatever is left in the buffer, for the end of a response.
@@ -45,6 +49,9 @@ type SimpleAggregator struct {
 func NewSimpleAggregator(aggregateBy frames.AggregationType, tokenizer SentenceTokenizer) *SimpleAggregator {
 	return &SimpleAggregator{aggregationType: aggregateBy, tokenizer: tokenizer}
 }
+
+// Type implements Aggregator.
+func (a *SimpleAggregator) Type() frames.AggregationType { return a.aggregationType }
 
 // Aggregate implements Aggregator. Aggregating by token returns the text as it
 // arrives; aggregating by sentence walks it a character at a time, so a chunk

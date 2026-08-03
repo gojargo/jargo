@@ -436,3 +436,8 @@ func (s *Service) reportUsage(ctx context.Context, ev serverEvent) {
 	}
 	_ = s.PushTokenUsage(ctx, s.cfg.Model, u.tokenUsage())
 }
+
+// CanGenerateMetrics reports that this service times the conversation and reports
+// the result, so the pipeline counts it when it collects the processors that
+// report metrics.
+func (s *Service) CanGenerateMetrics() bool { return true }

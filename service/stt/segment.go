@@ -128,6 +128,7 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		)
 		tracing.SetSTTUsage(sctx, s.model, played)
 		metrics.RecordSTTAudio(sctx, s.Name(), s.model, played.Seconds())
+		s.pushUsageMetrics(sctx, played)
 
 		start := time.Now()
 		text, err := s.tr.Transcribe(sctx, audio, rate)
@@ -147,3 +148,8 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		_ = s.PushFrame(sctx, tf, processor.Downstream)
 	})
 }
+
+// CanGenerateMetrics reports that this service times transcription and reports
+// the result, so the pipeline counts it when it collects the processors that
+// report metrics.
+func (s *SegmentService) CanGenerateMetrics() bool { return true }

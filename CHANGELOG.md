@@ -14,6 +14,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A `MetricsFrame` carries a list of measurements**, so one frame can report
+  several kinds, and several processors, at once. Where it had a fixed set of
+  optional fields it now has `Data []frames.MetricsData`, whose concrete types
+  are `TTFBMetricsData`, `TTFAMetricsData`, `ProcessingMetricsData`,
+  `LLMUsageMetricsData`, `STTUsageMetricsData`, `TTSUsageMetricsData`,
+  `TextAggregationMetricsData` and `TurnMetricsData`, each carrying the processor
+  that measured it and the model it is attributed to. Read them by switching on
+  the type. `frames.TurnPrediction` is gone, replaced by `TurnMetricsData`, and
+  `NewMetricsFrame` now takes the measurements rather than a processor name. A
+  frame that reported one processor could not say what a pipeline-wide report
+  needs to say.
+- **A TTS service reports what grouping text into sentences costs**, as a
+  `TextAggregationMetricsData` on a `MetricsFrame`: the wait from a model's first
+  token to the sentence it completes, which is the delay before synthesis of that
+  sentence can start. Nothing is reported when the service passes tokens straight
+  through, since per-token aggregation time means nothing. `ttstext.Aggregator`
+  gains `Type`, reporting how it groups text, which is what says whether there is
+  anything to measure.
+- **A speech-to-text service reports the audio it was given in band**, as an
+  `STTUsageMetricsData` on a `MetricsFrame`, gated on `EnableUsageMetrics` like
+  the token usage an LLM reports. It was measured already but only ever reached
+  OpenTelemetry, so an in-band consumer such as an RTVI client could bill LLM and
+  TTS use but not STT.
+- **The RTVI metrics message gained `ttfa`, `stt_usage` and `text_aggregation`**,
+  and now reports every measurement a frame carries rather than one processor's.
+  Time to the first audible sample was measured and dropped on the way to the
+  client.
 - **Word timings are reported to the TTS base a batch at a time**, not one token
   at a time: `tts.WordTimestamps.RunTTSTimed` now takes
   `word(words []uctx.WordTiming, opts tts.WordTimingOptions)`, and
@@ -92,6 +119,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A parallel pipeline holds system frames while it synchronizes a lifecycle
+  frame.** It waited for a `StartFrame`, `EndFrame` or `CancelFrame` to reach
+  every branch by blocking on the goroutine handling it. An `EndFrame` is a
+  control frame, so that left the system-frame path open: an interruption
+  arriving mid-shutdown was fanned into the branches, where it flushed the output
+  they still had queued to send ahead of the `EndFrame`. The synchronization now
+  pauses both paths, which is what the wait was for.
+- **A parallel pipeline no longer swallows a lifecycle frame a branch raised
+  itself.** Such a frame was never fanned out, so it had no synchronization
+  counter and was dropped at the branch sink. A processor inside a branch ending
+  the session, an idle monitor or a transport hanging up, could not end the
+  pipeline. A frame with no counter is now released like one whose branches have
+  all reported.
 - **The end of a pipeline waits for the audio still in flight.** A bot stopped
   right after queueing its farewell said about half of it: every other frame the
   TTS base emits goes through the serialization queue, which holds it until the
@@ -141,6 +181,40 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`pipeline.NewSyncParallel`**, a parallel pipeline that holds the output of
+  each input frame until every branch has finished producing it, so everything
+  the branches produced for one input is released together. It sends a
+  `pipeline.SyncFrame` in behind each frame to know when a branch is done, which
+  needs the last processor of each branch to be synchronous.
+  `pipeline.FrameOrder` picks whether the collected frames go out as they arrive
+  (`FrameOrderArrival`, the default) or branch by branch (`FrameOrderPipeline`),
+  for when the order between branches matters. Use it where output has to stay
+  together; where branches are independent, `pipeline.NewParallel` stays the
+  lighter choice.
+- **A compound processor reports what it contains**: `Processors`,
+  `EntryProcessors` and `ProcessorsWithMetrics` on `Processor`, implemented by
+  `Pipeline`, `ParallelPipeline` and `SyncParallelPipeline`; every other
+  processor reports nothing. `CanGenerateMetrics` marks a processor that reports
+  metrics, which the STT, LLM, TTS and speech-to-speech services do.
+- **`TaskParams.SendInitialEmptyMetrics`**, sending one `MetricsFrame` once the
+  pipeline is ready that carries a zeroed time to first byte and processing time
+  for every processor reporting metrics, so a consumer knows which processors to
+  expect metrics from before any have been measured. It applies only when
+  `EnableMetrics` is set, and nil defaults to true.
+- **`tts.Base.SetPauseFrameProcessing`**, pausing a TTS service's frame handling
+  from the moment a turn's text has been sent to the provider until the audio for
+  it has played, so the next turn cannot be synthesized over it. It is off unless
+  asked for. A watchdog force-resumes, and reports a non-fatal error, if nothing
+  confirms the audio is playing within `PauseOptions.WatchdogTimeout` (3s by
+  default), so a turn that produces no audio cannot pause the service for good.
+- **Pausing a processor's frame handling**: `Base.PauseProcessingFrames` and
+  `ResumeProcessingFrames` hold data and control frames, and
+  `PauseProcessingSystemFrames` and `ResumeProcessingSystemFrames` hold system
+  frames. Held frames stay queued, in order, and are handled on the resume.
+  `frames.FrameProcessorPauseFrame` and `FrameProcessorResumeFrame` ask for the
+  same thing in band, with `FrameProcessorPauseUrgentFrame` and
+  `FrameProcessorResumeUrgentFrame` as the system-frame variants that overtake
+  the queue. `ParallelPipeline` is the first caller.
 - **`frames.VADParamsUpdateFrame`**, changing the detection parameters on a
   running pipeline. It is pushed upstream (by the RTVI processor acting on a
   client request, say), and the analyzer adopts them from the next chunk.

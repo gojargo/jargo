@@ -444,3 +444,8 @@ type outputEvent struct {
 		StopReason string `json:"stopReason"` //nolint:tagliatelle // Nova Sonic wire field
 	} `json:"contentEnd"` //nolint:tagliatelle // Nova Sonic wire field
 }
+
+// CanGenerateMetrics reports that this service times the conversation and reports
+// the result, so the pipeline counts it when it collects the processors that
+// report metrics.
+func (s *Service) CanGenerateMetrics() bool { return true }

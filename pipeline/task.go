@@ -28,6 +28,11 @@ type TaskParams struct {
 	// EnableUsageMetrics enables usage-metrics collection (e.g. LLM token usage)
 	// across the pipeline.
 	EnableUsageMetrics bool
+	// SendInitialEmptyMetrics sends a zeroed MetricsFrame for every processor
+	// that reports metrics once the pipeline is ready, so a consumer knows which
+	// processors to expect metrics from before any have been measured; nil
+	// defaults to true. It only applies when EnableMetrics is set.
+	SendInitialEmptyMetrics *bool
 	// OnReachedDownstream, if set, is called for every frame that reaches the
 	// end of the pipeline.
 	OnReachedDownstream func(frames.Frame)
@@ -193,6 +198,12 @@ func (t *Task) runLoop(ctx context.Context) error {
 		return ctx.Err()
 	}
 
+	if t.params.EnableMetrics && boolValue(t.params.SendInitialEmptyMetrics, true) {
+		if err := t.pipeline.QueueFrame(ctx, t.initialMetricsFrame(), processor.Downstream); err != nil {
+			return err
+		}
+	}
+
 	for {
 		f, ok := t.pushQueue.get(ctx)
 		if !ok {
@@ -210,6 +221,29 @@ func (t *Task) runLoop(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// initialMetricsFrame builds one MetricsFrame carrying a zeroed time to first
+// byte and processing time for every processor in the pipeline that reports
+// metrics, so a consumer knows the full set before any have been measured.
+func (t *Task) initialMetricsFrame() *frames.MetricsFrame {
+	var data []frames.MetricsData
+	for _, p := range t.pipeline.ProcessorsWithMetrics() {
+		base := frames.BaseMetricsData{Processor: p.Name()}
+		data = append(data,
+			frames.TTFBMetricsData{BaseMetricsData: base},
+			frames.ProcessingMetricsData{BaseMetricsData: base},
+		)
+	}
+	return frames.NewMetricsFrame(data...)
+}
+
+// boolValue returns *p, or def when p is nil.
+func boolValue(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
 }
 
 // sinkPush observes frames reaching the end of the pipeline and signals the
@@ -332,6 +366,19 @@ func (q *frameQueue) push(f frames.Frame) {
 	case q.notify <- struct{}{}:
 	default:
 	}
+}
+
+// tryGet pops the next frame without blocking, reporting false when the queue is
+// empty.
+func (q *frameQueue) tryGet() (frames.Frame, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return nil, false
+	}
+	f := q.items[0]
+	q.items = q.items[1:]
+	return f, true
 }
 
 func (q *frameQueue) get(ctx context.Context) (frames.Frame, bool) {

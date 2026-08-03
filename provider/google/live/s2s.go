@@ -385,3 +385,8 @@ func (s *Service) setSpeaking(ctx context.Context, speaking bool) {
 		_ = s.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Downstream)
 	}
 }
+
+// CanGenerateMetrics reports that this service times the conversation and reports
+// the result, so the pipeline counts it when it collects the processors that
+// report metrics.
+func (s *Service) CanGenerateMetrics() bool { return true }

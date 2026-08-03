@@ -180,14 +180,17 @@ func (s *TurnAnalyzerStop) reportPrediction(complete bool, prob float64, err err
 	if err != nil || s.env.push == nil {
 		return
 	}
-	f := frames.NewMetricsFrame(analyzerMetricsProcessor)
-	f.Turn = &frames.TurnPrediction{Complete: complete, Probability: prob}
+	turn := frames.TurnMetricsData{
+		BaseMetricsData: frames.BaseMetricsData{Processor: analyzerMetricsProcessor},
+		Complete:        complete,
+		Probability:     prob,
+	}
 	if len(start) > 0 {
-		f.Turn.Processing = time.Since(start[0])
+		turn.E2EProcessing = time.Since(start[0])
 	}
 	slog.Debug("end of turn prediction",
-		"complete", complete, "probability", prob, "took", f.Turn.Processing)
-	s.env.push(f, processor.Downstream)
+		"complete", complete, "probability", prob, "took", turn.E2EProcessing)
+	s.env.push(frames.NewMetricsFrame(turn), processor.Downstream)
 }
 
 func (s *TurnAnalyzerStop) maybeTrigger() {

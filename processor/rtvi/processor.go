@@ -113,35 +113,49 @@ func botMessageFor(f frames.Frame) (Message, bool) {
 	}
 }
 
-// metricsMessage converts a MetricsFrame into an RTVI metrics message, including
-// only the metric kinds the frame carries.
+// metricsMessage converts a MetricsFrame into an RTVI metrics message, grouping
+// its measurements by kind. A frame can carry several kinds, and measurements
+// from more than one processor, so each kind is a list.
 func metricsMessage(f *frames.MetricsFrame) Message {
 	var d MetricsData
-	if f.TTFB != nil {
-		d.TTFB = []MetricData{{Processor: f.Processor, Value: f.TTFB.Seconds(), Model: f.Model}}
-	}
-	if f.Processing != nil {
-		d.Processing = []MetricData{{Processor: f.Processor, Value: f.Processing.Seconds(), Model: f.Model}}
-	}
-	if f.Characters != nil {
-		d.Characters = []MetricData{{Processor: f.Processor, Value: float64(*f.Characters), Model: f.Model}}
-	}
-	if f.Turn != nil {
-		d.Turn = []TurnMetricData{{
-			Processor:    f.Processor,
-			Complete:     f.Turn.Complete,
-			Probability:  f.Turn.Probability,
-			ProcessingMs: float64(f.Turn.Processing.Microseconds()) / 1000,
-		}}
-	}
-	if f.Tokens != nil {
-		d.Tokens = []TokenMetricData{{
-			Processor:        f.Processor,
-			Model:            f.Model,
-			PromptTokens:     f.Tokens.PromptTokens,
-			CompletionTokens: f.Tokens.CompletionTokens,
-			TotalTokens:      f.Tokens.TotalTokens,
-		}}
+	for _, m := range f.Data {
+		p, model := m.MetricsProcessor(), m.MetricsModel()
+		switch v := m.(type) {
+		case frames.TTFBMetricsData:
+			d.TTFB = append(d.TTFB, MetricData{Processor: p, Value: v.Value.Seconds(), Model: model})
+		case frames.TTFAMetricsData:
+			d.TTFA = append(d.TTFA, TTFAMetricData{
+				Processor:      p,
+				Model:          model,
+				TTFA:           v.TTFA.Seconds(),
+				TTFB:           v.TTFB.Seconds(),
+				LeadingSilence: v.LeadingSilence.Seconds(),
+			})
+		case frames.ProcessingMetricsData:
+			d.Processing = append(d.Processing, MetricData{Processor: p, Value: v.Value.Seconds(), Model: model})
+		case frames.TTSUsageMetricsData:
+			d.Characters = append(d.Characters, MetricData{Processor: p, Value: float64(v.Value), Model: model})
+		case frames.STTUsageMetricsData:
+			d.STTUsage = append(d.STTUsage, MetricData{Processor: p, Value: v.Value.AudioSeconds, Model: model})
+		case frames.TextAggregationMetricsData:
+			d.TextAggregation = append(d.TextAggregation,
+				MetricData{Processor: p, Value: v.Value.Seconds(), Model: model})
+		case frames.TurnMetricsData:
+			d.Turn = append(d.Turn, TurnMetricData{
+				Processor:    p,
+				Complete:     v.Complete,
+				Probability:  v.Probability,
+				ProcessingMs: float64(v.E2EProcessing.Microseconds()) / 1000,
+			})
+		case frames.LLMUsageMetricsData:
+			d.Tokens = append(d.Tokens, TokenMetricData{
+				Processor:        p,
+				Model:            model,
+				PromptTokens:     v.Value.PromptTokens,
+				CompletionTokens: v.Value.CompletionTokens,
+				TotalTokens:      v.Value.TotalTokens,
+			})
+		}
 	}
 	return Metrics(d)
 }

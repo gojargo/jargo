@@ -43,7 +43,11 @@ func TestBasePushesTokenUsageWhenEnabled(t *testing.T) {
 			defer mu.Unlock()
 			switch fr := f.(type) {
 			case *frames.MetricsFrame:
-				got = fr.Tokens
+				for _, d := range fr.Data {
+					if u, ok := d.(frames.LLMUsageMetricsData); ok {
+						got = &u.Value
+					}
+				}
 			case *frames.LLMFullResponseEndFrame:
 				select {
 				case done <- struct{}{}:

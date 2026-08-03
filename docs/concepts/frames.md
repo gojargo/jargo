@@ -251,7 +251,7 @@ ordered against the response it belongs to.
 |---|---|---|
 | `ServiceMetadataFrame` | system | A service announces itself at start. |
 | `LLMServiceMetadataFrame` / `STTMetadataFrame` | system | Per-category service details. |
-| `MetricsFrame` | system | TTFB, processing time, token usage. |
+| `MetricsFrame` | system | A list of measurements: TTFB, TTFA, processing time, token and audio usage, turn predictions. |
 
 ## Ownership: one goroutine at a time
 

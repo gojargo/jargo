@@ -162,6 +162,54 @@ func NewBotStoppedSpeakingFrame() *BotStoppedSpeakingFrame {
 	return &BotStoppedSpeakingFrame{BaseSystemFrame: NewBaseSystemFrame("BotStoppedSpeakingFrame")}
 }
 
+// ProcessorTarget identifies the processor a frame is addressed to. Like
+// ErrorSource it is declared here rather than imported from the processor
+// package, so the frames package keeps no dependency on it; a frame processor
+// satisfies it by exposing its name.
+type ProcessorTarget interface {
+	Name() string
+}
+
+// FrameProcessorPauseUrgentFrame asks a processor to pause its handling of data
+// and control frames as fast as possible. Paused frames stay in the processor's
+// queue and are handled once processing resumes. It is a system frame, so it
+// overtakes the frames queued ahead of it; use FrameProcessorPauseFrame to pause
+// in order instead.
+type FrameProcessorPauseUrgentFrame struct {
+	BaseSystemFrame
+	// Processor is the processor to pause.
+	Processor ProcessorTarget
+}
+
+// NewFrameProcessorPauseUrgentFrame builds a FrameProcessorPauseUrgentFrame
+// addressed to p.
+func NewFrameProcessorPauseUrgentFrame(p ProcessorTarget) *FrameProcessorPauseUrgentFrame {
+	return &FrameProcessorPauseUrgentFrame{
+		BaseSystemFrame: NewBaseSystemFrame("FrameProcessorPauseUrgentFrame"),
+		Processor:       p,
+	}
+}
+
+// FrameProcessorResumeUrgentFrame asks a processor to resume the handling of
+// data and control frames it paused, as fast as possible. Queued frames are then
+// handled in the order they were received. It is a system frame, so it overtakes
+// the frames queued ahead of it; use FrameProcessorResumeFrame to resume in
+// order instead.
+type FrameProcessorResumeUrgentFrame struct {
+	BaseSystemFrame
+	// Processor is the processor to resume.
+	Processor ProcessorTarget
+}
+
+// NewFrameProcessorResumeUrgentFrame builds a FrameProcessorResumeUrgentFrame
+// addressed to p.
+func NewFrameProcessorResumeUrgentFrame(p ProcessorTarget) *FrameProcessorResumeUrgentFrame {
+	return &FrameProcessorResumeUrgentFrame{
+		BaseSystemFrame: NewBaseSystemFrame("FrameProcessorResumeUrgentFrame"),
+		Processor:       p,
+	}
+}
+
 // Compile-time interface checks.
 var (
 	_ SystemFrame = (*StartFrame)(nil)
@@ -169,6 +217,8 @@ var (
 	_ SystemFrame = (*ErrorFrame)(nil)
 	_ SystemFrame = (*FatalErrorFrame)(nil)
 	_ SystemFrame = (*InterruptionFrame)(nil)
+	_ SystemFrame = (*FrameProcessorPauseUrgentFrame)(nil)
+	_ SystemFrame = (*FrameProcessorResumeUrgentFrame)(nil)
 	_ SystemFrame = (*UserStartedSpeakingFrame)(nil)
 	_ SystemFrame = (*UserStoppedSpeakingFrame)(nil)
 	_ SystemFrame = (*BotStartedSpeakingFrame)(nil)

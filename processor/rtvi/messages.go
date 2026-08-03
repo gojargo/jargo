@@ -208,14 +208,29 @@ type TokenMetricData struct {
 	TotalTokens      int64  `json:"total_tokens"`
 }
 
+// TTFAMetricData is one time-to-first-audible-sample entry, reported with the
+// breakdown that makes it up: the time to first byte it builds on, and the
+// silence padded on before the first audible sample. TTFB here is the same
+// measurement reported under "ttfb", not another one.
+type TTFAMetricData struct {
+	Processor      string  `json:"processor"`
+	Model          string  `json:"model,omitempty"`
+	TTFA           float64 `json:"ttfa"`
+	TTFB           float64 `json:"ttfb"`
+	LeadingSilence float64 `json:"leading_silence"`
+}
+
 // MetricsData is the payload of a metrics message: each kind is a list so a
 // single message can report several processors at once.
 type MetricsData struct {
-	TTFB       []MetricData      `json:"ttfb,omitempty"`
-	Processing []MetricData      `json:"processing,omitempty"`
-	Characters []MetricData      `json:"characters,omitempty"`
-	Tokens     []TokenMetricData `json:"tokens,omitempty"`
-	Turn       []TurnMetricData  `json:"turn,omitempty"`
+	TTFB            []MetricData      `json:"ttfb,omitempty"`
+	TTFA            []TTFAMetricData  `json:"ttfa,omitempty"`
+	Processing      []MetricData      `json:"processing,omitempty"`
+	Characters      []MetricData      `json:"characters,omitempty"`
+	STTUsage        []MetricData      `json:"stt_usage,omitempty"`
+	TextAggregation []MetricData      `json:"text_aggregation,omitempty"`
+	Tokens          []TokenMetricData `json:"tokens,omitempty"`
+	Turn            []TurnMetricData  `json:"turn,omitempty"`
 }
 
 // TurnMetricData is one end-of-turn prediction: whether the analyzer judged the

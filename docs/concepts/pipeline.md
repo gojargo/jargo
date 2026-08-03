@@ -32,14 +32,27 @@ flowchart LR
 ```
 
 Because a `Pipeline` is a `Processor`, it can be an element of another pipeline.
-Two composites build on that:
+Three composites build on that:
 
 - **`pipeline.NewParallel(branches ...[]processor.Processor)`**: fan a frame out
-  to several branches and merge what comes back. Useful for running two services
-  on the same audio.
+  to several branches and merge what comes back, each branch running at its own
+  pace. Useful for running two services on the same audio.
+- **`pipeline.NewSyncParallel(order, branches ...[]processor.Processor)`**: fan a
+  frame out the same way, but hold the output of each input frame until every
+  branch has finished producing it, so what the branches produced for one input
+  stays together. Pass `pipeline.FrameOrderArrival` to release frames as they
+  arrive, or `pipeline.FrameOrderPipeline` to release them branch by branch when
+  the order between branches matters, an image ahead of the speech describing it.
+  It needs the last processor of each branch to be synchronous.
 - **`pipeline.NewServiceSwitcher(services, strategy)`**: route frames to exactly
   one of several services, switched at runtime by pushing a
   `SwitchServiceFrame`. Useful for swapping an LLM mid-conversation.
+
+A parallel pipeline synchronizes the lifecycle frames (`StartFrame`, `EndFrame`
+and `CancelFrame`): it pauses its own frame handling until every branch has
+processed one, so a fast branch cannot start emitting before the others have
+been started, or shut the pipeline down while a slower branch still has output
+to flush.
 
 ## Task
 
@@ -51,6 +64,29 @@ task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
     EnableUsageMetrics: true,
 })
 err := task.Run(ctx)
+```
+
+With `EnableMetrics` set, the task sends one `MetricsFrame` once the pipeline is
+ready, carrying a zeroed time to first byte and processing time for every
+processor that reports metrics, so a consumer knows which processors to expect
+metrics from before any have been measured. Set `SendInitialEmptyMetrics` to
+`&false` to skip it. Which processors those are comes from
+`pipeline.ProcessorsWithMetrics()`, which walks the chain and every nested
+pipeline collecting the processors whose `CanGenerateMetrics()` reports true: the
+STT, LLM, TTS and speech-to-speech services.
+
+A `MetricsFrame` carries a list of measurements, so one frame can report several
+kinds and several processors at once. Read them by switching on the type:
+
+```go
+for _, d := range mf.Data {
+    switch m := d.(type) {
+    case frames.TTFBMetricsData:
+        log.Printf("%s took %v to answer", m.Processor, m.Value)
+    case frames.LLMUsageMetricsData:
+        log.Printf("%s used %d tokens", m.Processor, m.Value.TotalTokens)
+    }
+}
 ```
 
 `Run` blocks until the pipeline finishes. What it does:

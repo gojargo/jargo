@@ -55,6 +55,12 @@ type catalogEntry struct {
 	uninterruptible bool
 }
 
+// namedProcessor is a stand-in for the processor a pause or resume frame is
+// addressed to; the frames only ever read its name.
+type namedProcessor string
+
+func (n namedProcessor) Name() string { return string(n) }
+
 // catalog lists every frame a caller can construct. Adding a frame type means
 // adding a line here.
 //
@@ -89,6 +95,14 @@ func catalog() []catalogEntry {
 		{
 			label: "InterruptionFrame", cat: system,
 			build: func() frames.Frame { return frames.NewInterruptionFrame() },
+		},
+		{
+			label: "FrameProcessorPauseUrgentFrame", cat: system,
+			build: func() frames.Frame { return frames.NewFrameProcessorPauseUrgentFrame(namedProcessor("p")) },
+		},
+		{
+			label: "FrameProcessorResumeUrgentFrame", cat: system,
+			build: func() frames.Frame { return frames.NewFrameProcessorResumeUrgentFrame(namedProcessor("p")) },
 		},
 		{
 			label: "UserStartedSpeakingFrame", cat: system,
@@ -172,7 +186,12 @@ func catalog() []catalogEntry {
 		},
 		{
 			label: "MetricsFrame", cat: system, wantString: "processor: tts-1",
-			build: func() frames.Frame { return frames.NewMetricsFrame("tts-1") },
+			build: func() frames.Frame {
+				return frames.NewMetricsFrame(frames.TTSUsageMetricsData{
+					BaseMetricsData: frames.BaseMetricsData{Processor: "tts-1"},
+					Value:           42,
+				})
+			},
 		},
 
 		// Data frames: carried in order, dropped on interruption.
@@ -247,6 +266,14 @@ func catalog() []catalogEntry {
 		{
 			label: "EndFrame", cat: control, uninterruptible: true,
 			build: func() frames.Frame { return frames.NewEndFrame() },
+		},
+		{
+			label: "FrameProcessorPauseFrame", cat: control,
+			build: func() frames.Frame { return frames.NewFrameProcessorPauseFrame(namedProcessor("p")) },
+		},
+		{
+			label: "FrameProcessorResumeFrame", cat: control,
+			build: func() frames.Frame { return frames.NewFrameProcessorResumeFrame(namedProcessor("p")) },
 		},
 		{
 			label: "StopFrame", cat: control, uninterruptible: true,
@@ -558,16 +585,21 @@ func TestTTSSpeakFrameDefaults(t *testing.T) {
 	}
 }
 
-// TestMetricsFrameString covers both renderings: with and without token usage.
+// TestMetricsFrameString covers both renderings: one measurement names its
+// processor, several are counted.
 func TestMetricsFrameString(t *testing.T) {
-	f := frames.NewMetricsFrame("llm-1")
-	if got := f.String(); !strings.Contains(got, "processor: llm-1") || strings.Contains(got, "tokens") {
-		t.Errorf("String() = %q, want the processor only", got)
+	base := frames.BaseMetricsData{Processor: "llm-1"}
+	f := frames.NewMetricsFrame(frames.TTFBMetricsData{BaseMetricsData: base, Value: time.Second})
+	if got := f.String(); !strings.Contains(got, "processor: llm-1") {
+		t.Errorf("String() = %q, want the processor named", got)
 	}
 
-	f.Tokens = &frames.LLMTokenUsage{PromptTokens: 12, CompletionTokens: 34}
-	if got := f.String(); !strings.Contains(got, "12 in / 34 out") {
-		t.Errorf("String() = %q, want the token counts", got)
+	f = frames.NewMetricsFrame(
+		frames.TTFBMetricsData{BaseMetricsData: base, Value: time.Second},
+		frames.ProcessingMetricsData{BaseMetricsData: base, Value: time.Second},
+	)
+	if got := f.String(); !strings.Contains(got, "2 measurements") {
+		t.Errorf("String() = %q, want the measurement count", got)
 	}
 }
 

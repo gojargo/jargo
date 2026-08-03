@@ -299,13 +299,19 @@ func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
 	agg := aggregators.New(frames.NewLLMContext("test"), aggregators.WithTurns(cfg))
 
 	var mu sync.Mutex
-	var pred *frames.TurnPrediction
+	var pred *frames.TurnMetricsData
 	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
-			if mf, ok := f.(*frames.MetricsFrame); ok && mf.Turn != nil {
-				mu.Lock()
-				pred = mf.Turn
-				mu.Unlock()
+			mf, ok := f.(*frames.MetricsFrame)
+			if !ok {
+				return
+			}
+			for _, d := range mf.Data {
+				if turn, ok := d.(frames.TurnMetricsData); ok {
+					mu.Lock()
+					pred = &turn
+					mu.Unlock()
+				}
 			}
 		},
 	})

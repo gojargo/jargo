@@ -64,6 +64,21 @@ type Processor interface {
 	Next() Processor
 	// Prev is the upstream processor, or nil.
 	Prev() Processor
+
+	// Processors are the sub-processors this processor contains. Only a
+	// compound processor (a pipeline, a parallel pipeline) has any; every
+	// other processor reports none.
+	Processors() []Processor
+	// EntryProcessors are the processors a frame entering a compound
+	// processor reaches first. A pipeline is a processor itself, so an entry
+	// processor can be a pipeline in turn. Every other processor reports none.
+	EntryProcessors() []Processor
+	// ProcessorsWithMetrics are the processors below this one that report
+	// metrics, collected recursively.
+	ProcessorsWithMetrics() []Processor
+	// CanGenerateMetrics reports whether this processor reports metrics. It is
+	// false for everything but a service.
+	CanGenerateMetrics() bool
 	// Link sets next as this processor's downstream neighbor and this
 	// processor as next's upstream neighbor.
 	Link(next Processor)
@@ -137,6 +152,15 @@ type Base struct {
 	inputQueue *queue
 	inputWG    sync.WaitGroup
 
+	// Pause gates. Each loop checks its gate after taking a frame off its queue
+	// and before handling it, so a pause takes effect from the next frame on.
+	// The events are created with the goroutine they hold.
+	pauseMu           sync.Mutex
+	blockSystemFrames bool
+	inputEvent        *event
+	blockFrames       bool
+	processEvent      *event
+
 	startedMu sync.Mutex
 	started   bool
 
@@ -188,6 +212,23 @@ func (b *Base) ID() uint64 { return b.id }
 // Name implements Processor.
 func (b *Base) Name() string { return b.name }
 
+// Processors implements Processor. A plain processor contains none; a compound
+// processor overrides this.
+func (b *Base) Processors() []Processor { return nil }
+
+// EntryProcessors implements Processor. A plain processor has none; a compound
+// processor overrides this.
+func (b *Base) EntryProcessors() []Processor { return nil }
+
+// ProcessorsWithMetrics implements Processor. A plain processor contains
+// nothing, so it reports nothing; a compound processor overrides this and
+// collects from what it contains.
+func (b *Base) ProcessorsWithMetrics() []Processor { return nil }
+
+// CanGenerateMetrics implements Processor. A processor reports no metrics unless
+// it is a service, which overrides this.
+func (b *Base) CanGenerateMetrics() bool { return false }
+
 // Next implements Processor.
 func (b *Base) Next() Processor { return b.next }
 
@@ -214,6 +255,9 @@ func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.observers = s.Observers
 	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
 	if !b.directMode {
+		b.pauseMu.Lock()
+		b.inputEvent = newEvent()
+		b.pauseMu.Unlock()
 		b.inputWG.Add(1)
 		go b.inputLoop()
 	}
@@ -252,6 +296,9 @@ func (b *Base) inputLoop() {
 		if !ok {
 			return
 		}
+		if !b.waitWhilePaused(b.baseCtx, true) {
+			return
+		}
 		if _, isSystem := it.frame.(frames.SystemFrame); isSystem {
 			_ = b.processFrame(b.baseCtx, it)
 		} else {
@@ -271,6 +318,9 @@ func (b *Base) processLoop(ctx context.Context, done chan struct{}) {
 			return
 		}
 		b.setCurFrame(it.frame)
+		if !b.waitWhilePaused(ctx, false) {
+			return
+		}
 		_ = b.processFrame(ctx, it)
 	}
 }
@@ -300,6 +350,14 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) 
 		b.startInterruption()
 	case *frames.CancelFrame:
 		b.cancel()
+	case *frames.FrameProcessorPauseFrame:
+		b.pauseIfAddressed(fr.Processor)
+	case *frames.FrameProcessorPauseUrgentFrame:
+		b.pauseIfAddressed(fr.Processor)
+	case *frames.FrameProcessorResumeFrame:
+		b.resumeIfAddressed(fr.Processor)
+	case *frames.FrameProcessorResumeUrgentFrame:
+		b.resumeIfAddressed(fr.Processor)
 	}
 	return nil
 }
@@ -368,9 +426,10 @@ func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTok
 	tracing.SetTokenUsage(ctx, u)
 	span.End()
 	metrics.RecordTokens(ctx, b.name, model, u.PromptTokens, u.CompletionTokens)
-	f := frames.NewMetricsFrame(b.name)
-	f.Model = model
-	f.Tokens = &u
+	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
+		BaseMetricsData: frames.BaseMetricsData{Processor: b.name, Model: model},
+		Value:           u,
+	})
 	return b.PushFrame(ctx, f, Downstream)
 }
 
@@ -423,6 +482,12 @@ func (b *Base) createProcessTask() {
 		return
 	}
 	b.procQueue.reset()
+	// A fresh process goroutine starts unpaused, with its own gate: a pause that
+	// was in effect for the goroutine being replaced must not hold the new one.
+	b.pauseMu.Lock()
+	b.blockFrames = false
+	b.processEvent = newEvent()
+	b.pauseMu.Unlock()
 	ctx, cancel := context.WithCancel(b.baseCtx)
 	done := make(chan struct{})
 	b.procCancel = cancel

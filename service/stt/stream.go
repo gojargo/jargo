@@ -200,6 +200,7 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 		return
 	}
 	metrics.RecordSTTAudio(ctx, s.Name(), s.model, audio.Seconds())
+	s.pushUsageMetrics(ctx, audio)
 	sctx, span := tracing.Tracer().Start(ctx, "stt", trace.WithTimestamp(connectedAt))
 	defer span.End()
 	span.SetAttributes(
@@ -258,3 +259,8 @@ func pcmDuration(n int64, sampleRate int) time.Duration {
 	}
 	return time.Duration(n) * time.Second / time.Duration(2*sampleRate)
 }
+
+// CanGenerateMetrics reports that this service times transcription and reports
+// the result, so the pipeline counts it when it collects the processors that
+// report metrics.
+func (s *StreamService) CanGenerateMetrics() bool { return true }

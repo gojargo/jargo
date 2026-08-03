@@ -134,8 +134,48 @@ func NewTTSStoppedFrame() *TTSStoppedFrame {
 	return &TTSStoppedFrame{BaseControlFrame: NewBaseControlFrame("TTSStoppedFrame")}
 }
 
+// FrameProcessorPauseFrame asks a processor to pause its handling of data and
+// control frames. Paused frames stay in the processor's queue and are handled
+// once processing resumes with a FrameProcessorResumeFrame. It is a control
+// frame, so it is received in order, after the frames queued ahead of it; use
+// FrameProcessorPauseUrgentFrame to pause immediately instead.
+type FrameProcessorPauseFrame struct {
+	BaseControlFrame
+	// Processor is the processor to pause.
+	Processor ProcessorTarget
+}
+
+// NewFrameProcessorPauseFrame builds a FrameProcessorPauseFrame addressed to p.
+func NewFrameProcessorPauseFrame(p ProcessorTarget) *FrameProcessorPauseFrame {
+	return &FrameProcessorPauseFrame{
+		BaseControlFrame: NewBaseControlFrame("FrameProcessorPauseFrame"),
+		Processor:        p,
+	}
+}
+
+// FrameProcessorResumeFrame asks a processor to resume the handling of data and
+// control frames it paused. Queued frames are then handled in the order they
+// were received. It is a control frame, so it is received in order, after the
+// frames queued ahead of it; use FrameProcessorResumeUrgentFrame to resume
+// immediately instead.
+type FrameProcessorResumeFrame struct {
+	BaseControlFrame
+	// Processor is the processor to resume.
+	Processor ProcessorTarget
+}
+
+// NewFrameProcessorResumeFrame builds a FrameProcessorResumeFrame addressed to p.
+func NewFrameProcessorResumeFrame(p ProcessorTarget) *FrameProcessorResumeFrame {
+	return &FrameProcessorResumeFrame{
+		BaseControlFrame: NewBaseControlFrame("FrameProcessorResumeFrame"),
+		Processor:        p,
+	}
+}
+
 // Compile-time interface checks.
 var (
+	_ ControlFrame    = (*FrameProcessorPauseFrame)(nil)
+	_ ControlFrame    = (*FrameProcessorResumeFrame)(nil)
 	_ ControlFrame    = (*EndFrame)(nil)
 	_ Uninterruptible = (*EndFrame)(nil)
 	_ ControlFrame    = (*StopFrame)(nil)

@@ -30,14 +30,28 @@ func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
-	mf := frames.NewMetricsFrame("AnthropicLLM#1")
-	mf.Model = "claude-haiku"
-	ttfb := 300 * time.Millisecond
-	proc := 1200 * time.Millisecond
-	mf.TTFB = &ttfb
-	mf.Processing = &proc
-	mf.Tokens = &frames.LLMTokenUsage{PromptTokens: 100, CompletionTokens: 40, TotalTokens: 140}
-	task.QueueFrame(mf)
+	llm := frames.BaseMetricsData{Processor: "AnthropicLLM#1", Model: "claude-haiku"}
+	tts := frames.BaseMetricsData{Processor: "CartesiaTTS#2", Model: "sonic"}
+	task.QueueFrame(frames.NewMetricsFrame(
+		frames.TTFBMetricsData{BaseMetricsData: llm, Value: 300 * time.Millisecond},
+		frames.ProcessingMetricsData{BaseMetricsData: llm, Value: 1200 * time.Millisecond},
+		frames.LLMUsageMetricsData{
+			BaseMetricsData: llm,
+			Value:           frames.LLMTokenUsage{PromptTokens: 100, CompletionTokens: 40, TotalTokens: 140},
+		},
+		// A second processor in the same frame, which is what the list shape is
+		// for: every kind reaches the client as its own list.
+		frames.TTFAMetricsData{
+			BaseMetricsData: tts,
+			TTFA:            500 * time.Millisecond,
+			TTFB:            400 * time.Millisecond,
+			LeadingSilence:  100 * time.Millisecond,
+		},
+		frames.STTUsageMetricsData{
+			BaseMetricsData: frames.BaseMetricsData{Processor: "DeepgramSTT#3"},
+			Value:           frames.STTUsage{AudioSeconds: 2.5},
+		},
+	))
 
 	got := waitMessage(t, out)
 	if got.Type != rtvi.TypeMetrics {
@@ -55,6 +69,12 @@ func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 	}
 	if len(d.Tokens) != 1 || d.Tokens[0].TotalTokens != 140 || d.Tokens[0].Model != "claude-haiku" {
 		t.Fatalf("tokens = %+v, want one entry totalling 140", d.Tokens)
+	}
+	if len(d.TTFA) != 1 || d.TTFA[0].Processor != "CartesiaTTS#2" || !approx(d.TTFA[0].LeadingSilence, 0.1) {
+		t.Fatalf("ttfa = %+v, want one entry with ~0.1s of leading silence", d.TTFA)
+	}
+	if len(d.STTUsage) != 1 || !approx(d.STTUsage[0].Value, 2.5) {
+		t.Fatalf("stt_usage = %+v, want one ~2.5s entry", d.STTUsage)
 	}
 
 	task.StopWhenDone()

@@ -104,9 +104,10 @@ func (b *Base) SetModel(model string) { b.model = model }
 func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error {
 	tracing.SetTokenUsage(ctx, u)
 	metrics.RecordTokens(ctx, b.Name(), b.model, u.PromptTokens, u.CompletionTokens)
-	f := frames.NewMetricsFrame(b.Name())
-	f.Model = b.model
-	f.Tokens = &u
+	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
+		BaseMetricsData: frames.BaseMetricsData{Processor: b.Name(), Model: b.model},
+		Value:           u,
+	})
 	return b.PushFrame(ctx, f, processor.Downstream)
 }
 
@@ -155,13 +156,12 @@ func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.
 	if !b.MetricsEnabled() {
 		return
 	}
-	mf := frames.NewMetricsFrame(b.Name())
-	mf.Model = b.model
-	mf.Processing = &processing
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.model}
+	data := []frames.MetricsData{frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing}}
 	if hadTTFB {
-		mf.TTFB = &ttfb
+		data = append(data, frames.TTFBMetricsData{BaseMetricsData: base, Value: ttfb})
 	}
-	_ = b.PushFrame(ctx, mf, processor.Downstream)
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
 }
 
 // startSpan opens the generation span, tagging it with the service name and
@@ -411,3 +411,8 @@ func (b *Base) invoke(ctx context.Context, c frames.ToolCall) (result string, is
 	}
 	return out, false, false
 }
+
+// CanGenerateMetrics reports that this service times inference and reports
+// the result, so the pipeline counts it when it collects the processors that
+// report metrics.
+func (b *Base) CanGenerateMetrics() bool { return true }

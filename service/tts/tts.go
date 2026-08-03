@@ -184,6 +184,23 @@ type Base struct {
 	// empty between turns. Reusing it is what keeps the provider from opening a
 	// cold context per sentence.
 	turnContext string
+
+	// Pausing frame handling while a turn's audio is generated. See pause.go.
+	pauseStateMu sync.Mutex
+	// pauseOpts is how the service was configured; pausing is off by default.
+	pauseOpts PauseOptions
+	// processingText records that text for this turn reached the provider, so
+	// there is audio worth waiting for.
+	processingText bool
+	// botSpeaking records that the audio is confirmed playing, which is what
+	// says the watchdog is not needed.
+	botSpeaking bool
+	// watchdogCancel stops the armed watchdog, nil when none is armed.
+	watchdogCancel context.CancelFunc
+
+	// textAgg times how long grouping text into sentences takes. See
+	// textaggregation.go.
+	textAgg textAggregationMetrics
 }
 
 // New builds a TTS Base named name driven by syn. The concrete service passes
@@ -209,6 +226,7 @@ func New(name string, syn Synthesizer) *Base {
 // Cleanup releases the Synthesizer's resources, when it holds any, and tears
 // down the processor.
 func (b *Base) Cleanup(ctx context.Context) error {
+	b.cancelPauseWatchdog()
 	b.stopAudioContexts()
 	if c, ok := b.syn.(Closer); ok {
 		_ = c.Close()
@@ -256,25 +274,11 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		// context already queued has drained rather than racing ahead of it.
 		return b.queueSerial(ctx, f, dir)
 	case *frames.LLMFullResponseEndFrame, *frames.EndFrame:
-		_, isEnd := f.(*frames.EndFrame)
-		if isEnd {
-			// The pipeline is ending. The serialization queue is shut down and
-			// waited on first, so the audio a provider is still delivering, and
-			// anything queued behind it, reaches the output before the frame that
-			// stops the pipeline rather than being cut off by it.
-			b.drainAudioContexts()
-		}
-		// Both end a turn: flush whatever text did not land on a sentence
-		// boundary, then close the context it was sent on.
-		if err := b.flush(ctx); err != nil {
-			return err
-		}
-		b.onTurnContextCompleted(ctx)
-		if isEnd {
-			return b.PushFrame(ctx, f, dir)
-		}
-		return b.queueSerial(ctx, f, dir)
+		return b.handleTurnEnd(ctx, f, dir)
 	case *frames.InterruptionFrame:
+		// An interruption stops every clock this service is running, this one
+		// included: what it was measuring will never finish.
+		b.stopTextAggregationMetrics(ctx)
 		b.handleInterruption(ctx)
 		return b.PushFrame(ctx, f, dir)
 	case *frames.CancelFrame:
@@ -283,9 +287,52 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
 		return b.handleStart(ctx, f, dir)
+	case *frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
+		return b.handleBotSpeaking(ctx, f, dir)
 	default:
 		return b.queueSerial(ctx, f, dir)
 	}
+}
+
+// handleTurnEnd closes a turn out: an LLMFullResponseEndFrame ends the model's
+// response, an EndFrame ends the pipeline. Both flush whatever text did not land
+// on a sentence boundary and close the context it was sent on.
+func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	_, isEnd := f.(*frames.EndFrame)
+	if isEnd {
+		// The pipeline is ending. The serialization queue is shut down and
+		// waited on first, so the audio a provider is still delivering, and
+		// anything queued behind it, reaches the output before the frame that
+		// stops the pipeline rather than being cut off by it.
+		b.drainAudioContexts()
+	}
+	if err := b.flush(ctx); err != nil {
+		return err
+	}
+	// Pause before the flag is cleared: a turn that sent no text, a function
+	// call and nothing else, has no audio to wait for.
+	b.maybePauseFrameProcessing(ctx)
+	b.setProcessingText(false)
+	b.onTurnContextCompleted(ctx)
+	if isEnd {
+		return b.PushFrame(ctx, f, dir)
+	}
+	return b.queueSerial(ctx, f, dir)
+}
+
+// handleBotSpeaking tracks whether the bot's audio is playing, which is what
+// releases a service paused waiting for it.
+func (b *Base) handleBotSpeaking(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if _, started := f.(*frames.BotStartedSpeakingFrame); started {
+		// The audio for this turn is confirmed playing, so the watchdog is not
+		// needed: the stopped frame resumes once playback finishes.
+		b.setBotSpeaking(true)
+		b.cancelPauseWatchdog()
+		return b.queueSerial(ctx, f, dir)
+	}
+	b.setBotSpeaking(false)
+	b.maybeResumeFrameProcessing()
+	return b.queueSerial(ctx, f, dir)
 }
 
 // queueSerial routes a downstream frame through the serialization queue so it is
@@ -356,6 +403,8 @@ func (b *Base) onTurnContextCompleted(ctx context.Context) {
 // longer wanted, and the provider is told so it stops generating into contexts
 // nobody is listening to.
 func (b *Base) handleInterruption(ctx context.Context) {
+	b.setProcessingText(false)
+	b.setBotSpeaking(false)
 	if b.aggregator != nil {
 		b.aggregator.Reset()
 	}
@@ -383,6 +432,11 @@ func (b *Base) handleInterruption(ctx context.Context) {
 		}
 	}
 	b.startAudioContexts(ctx)
+	// The frame goroutine may be paused here: an interruption arriving while an
+	// uninterruptible frame was being handled flushes the queue but leaves the
+	// goroutine in place, and no BotStoppedSpeakingFrame is coming for audio that
+	// was never played. Resume, or the service stays paused for good.
+	b.maybeResumeFrameProcessing()
 }
 
 // handleSpeak speaks fixed text immediately, bypassing sentence aggregation.
@@ -397,8 +451,10 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir pr
 		return err
 	}
 	// A fixed utterance is independent of any LLM turn, so it gets a context of
-	// its own that is opened and closed around it.
+	// its own that is opened and closed around it. Whether a turn was mid-flight
+	// is saved and put back, so speaking this does not look like the end of one.
 	saved := b.turnContext
+	savedProcessing := b.isProcessingText()
 	b.turnContext = b.createContextID()
 	if c, ok := b.syn.(TurnContextCreator); ok {
 		c.OnTurnContextCreated(ctx, b.turnContext)
@@ -407,7 +463,10 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir pr
 		return err
 	}
 	b.onTurnContextCompleted(ctx)
+	// Text went to the provider, so pause for the audio it will produce.
+	b.maybePauseFrameProcessing(ctx)
 	b.turnContext = saved
+	b.setProcessingText(savedProcessing)
 	return nil
 }
 
@@ -438,6 +497,9 @@ func (b *Base) handleStart(ctx context.Context, f frames.Frame, dir processor.Di
 // was said rather than what was generated. A consumer that wants the text as the
 // model produced it watches for it where the model pushes it.
 func (b *Base) handleText(ctx context.Context, tf *frames.TextFrame, _ frames.Frame, _ processor.Direction) error {
+	// The model has started answering, which is when the wait for the first
+	// sentence starts. A transcription is a distinct type and does not land here.
+	b.startTextAggregationMetrics()
 	return b.aggregate(ctx, tf.Text)
 }
 
@@ -448,6 +510,11 @@ func (b *Base) aggregate(ctx context.Context, text string) error {
 		return nil
 	}
 	for _, agg := range b.aggregator.Aggregate(text) {
+		if agg.Type != frames.AggregationToken {
+			// The first sentence is complete, which is what the aggregation clock
+			// was waiting for. Later ones find it already stopped.
+			b.stopTextAggregationMetrics(ctx)
+		}
 		if err := b.pushTTSFrames(ctx, agg.Text); err != nil {
 			return err
 		}
@@ -461,6 +528,9 @@ func (b *Base) flush(ctx context.Context) error {
 		return nil
 	}
 	rest, ok := b.aggregator.Flush()
+	// The response is over. Stop the clock whether or not anything was left, for
+	// a response that never completed a sentence at all.
+	b.stopTextAggregationMetrics(ctx)
 	if !ok || strings.TrimSpace(rest.Text) == "" {
 		return nil
 	}
@@ -510,6 +580,11 @@ func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
 	if strings.TrimSpace(filtered) == "" {
 		return nil
 	}
+	// Text is on its way to the provider, so there is audio to wait for at the
+	// end of the turn. Set after the filters: a filter that strips the text to
+	// nothing would otherwise leave the flag latched and, with pausing enabled,
+	// pause the service waiting for audio that never comes.
+	b.setProcessingText(true)
 	contextID := b.createContextID()
 
 	// Announce what is about to be spoken, before the audio describing it opens.
@@ -611,17 +686,23 @@ func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processi
 	if !b.MetricsEnabled() {
 		return
 	}
-	mf := frames.NewMetricsFrame(b.Name())
-	mf.Processing = &processing
-	mf.Characters = &chars
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.meta.Model}
+	data := []frames.MetricsData{
+		frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing},
+		frames.TTSUsageMetricsData{BaseMetricsData: base, Value: chars},
+	}
 	if m.hadTTFB {
-		mf.TTFB = &m.ttfb
+		data = append(data, frames.TTFBMetricsData{BaseMetricsData: base, Value: m.ttfb})
 	}
 	if m.hadTTFA {
-		mf.TTFA = &m.ttfa
-		mf.LeadingSilence = &m.leadingSilence
+		data = append(data, frames.TTFAMetricsData{
+			BaseMetricsData: base,
+			TTFA:            m.ttfa,
+			TTFB:            m.ttfb,
+			LeadingSilence:  m.leadingSilence,
+		})
 	}
-	_ = b.PushFrame(ctx, mf, processor.Downstream)
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
 }
 
 // broadcastMetadata pushes the TTS service's metadata frame downstream at
@@ -705,3 +786,8 @@ func StreamResponse(client *http.Client, req *http.Request, emit func(pcm []byte
 		}
 	}
 }
+
+// CanGenerateMetrics reports that this service times synthesis and reports
+// the result, so the pipeline counts it when it collects the processors that
+// report metrics.
+func (b *Base) CanGenerateMetrics() bool { return true }
