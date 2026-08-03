@@ -117,6 +117,13 @@ type OutputDriver interface {
 	// the interleaved S16LE PCM in AudioData, and the outgoing stream it belongs
 	// to in TransportDestination, so a transport serving several streams can
 	// send it on the right one.
+	//
+	// It must return once ctx is done, however far it had got. Stopping the
+	// output cancels ctx and then waits for the send loop to finish, and the
+	// loop is inside this call whenever it is sending, so a write that blocks
+	// past cancellation holds the pipeline open for good. A transport that
+	// paces its sends, or waits for room downstream, waits on ctx.Done()
+	// alongside whatever else it waits for.
 	WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error
 	// SendMessage sends an application message to the client (for example over
 	// a data channel).

@@ -132,6 +132,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the session, an idle monitor or a transport hanging up, could not end the
   pipeline. A frame with no counter is now released like one whose branches have
   all reported.
+- **An output transport must return from `WriteAudio` once its context is
+  done**, which is now stated on `OutputDriver`. Stopping an output cancels the
+  send loop's context and then waits for the loop to finish, and the loop sits
+  inside `WriteAudio` whenever it is sending, so a write that blocks past
+  cancellation holds the pipeline open for good. With a mixer the loop writes
+  whether or not anything is queued, so at shutdown there is nearly always a
+  write in flight and a transport that ignores cancellation wedges every
+  shutdown rather than an occasional one. Every transport in the tree already
+  waited on the context; the contract was simply never written down.
 - **The end of a pipeline waits for the audio still in flight.** A bot stopped
   right after queueing its farewell said about half of it: every other frame the
   TTS base emits goes through the serialization queue, which holds it until the

@@ -239,11 +239,17 @@ func newFakeOutput(p transport.Params) *fakeOutput {
 	return o
 }
 
-func (o *fakeOutput) WriteAudio(_ context.Context, f frames.OutputAudioFrame) error {
+func (o *fakeOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
 	pcm := f.AudioData().Audio
 	cp := make([]byte, len(pcm))
 	copy(cp, pcm)
-	o.writes <- cp
+	// Recording the write must not outlast the send loop it runs on: a test
+	// that stops reading leaves this channel full, and a send that ignored ctx
+	// would hold the shutdown open the way a real transport never may.
+	select {
+	case o.writes <- cp:
+	case <-ctx.Done():
+	}
 	return nil
 }
 
@@ -879,11 +885,14 @@ func (o *multiDestOutput) RegisterAudioDestination(_ context.Context, destinatio
 	return nil
 }
 
-func (o *multiDestOutput) WriteAudio(_ context.Context, f frames.OutputAudioFrame) error {
+func (o *multiDestOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
 	pcm := f.AudioData().Audio
 	cp := make([]byte, len(pcm))
 	copy(cp, pcm)
-	o.writes <- addressedWrite{destination: f.Base().TransportDestination(), pcm: cp}
+	select {
+	case o.writes <- addressedWrite{destination: f.Base().TransportDestination(), pcm: cp}:
+	case <-ctx.Done():
+	}
 	return nil
 }
 
@@ -986,6 +995,51 @@ func TestBaseOutputMixerFillsGaps(t *testing.T) {
 
 	task.Cancel()
 	<-runDone
+}
+
+// waitForFullWrites blocks until nothing more can be recorded, which is what
+// leaves the send loop stuck inside a write.
+func waitForFullWrites(t *testing.T, o *fakeOutput) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for len(o.writes) < cap(o.writes) {
+		select {
+		case <-time.After(2 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("the recording buffer never filled: %d of %d", len(o.writes), cap(o.writes))
+		}
+	}
+	// Full is not yet blocked; give the loop the moment it needs to enter the
+	// write that has nowhere to go.
+	time.Sleep(20 * time.Millisecond)
+}
+
+// TestBaseOutputShutdownIsNotHeldByAWriteInFlight is the regression test for a
+// shutdown that never finished. With a mixer filling the gaps, the send loop
+// writes whether or not anything is queued, so at shutdown there is nearly
+// always a write in flight. Stopping cancels the loop's context and then waits
+// for the loop to finish, so cancellation has to reach inside that write: a
+// transport that blocks past it holds the pipeline open for good.
+func TestBaseOutputShutdownIsNotHeldByAWriteInFlight(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000
+	params.AudioOutMixer = passthroughMixer{}
+
+	o := newFakeOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// Nobody reads the writes, so the mixer's gap-filling audio fills the
+	// recording buffer and the loop ends up blocked mid-write.
+	waitForFullWrites(t, o)
+
+	task.Cancel()
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pipeline never stopped: a write in flight held the shutdown open")
+	}
 }
 
 // TestBaseOutputInterruptionDiscardsTail checks the other half of the contract:
