@@ -181,6 +181,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A streaming speech-to-text session can be held open while it carries no
+  audio**, for the providers that close an idle one. Silence reaches the service
+  whenever nobody is speaking, and a service switched out of the pipeline sends
+  nothing at all, so an idle session is ordinary and losing it costs the next
+  thing the user says. A `Connector` implementing `stt.Keepaliver` says how long
+  a session may go quiet before silence is submitted to hold it open, and how
+  often to look. A `Stream` implementing `stt.KeepaliveSender` sends something of
+  the provider's own instead, for a service with a protocol message for this.
+  Silence submitted as audio counts towards the session's usage, since the
+  provider bills for it; a protocol message does not. A `Connector` that
+  implements neither gets no keepalive.
 - **A streaming speech-to-text session that drops is reopened**, so a network
   blip no longer costs transcription for the rest of the call. The read loop
   ended with the first failed read before, and nothing dialed again: every

@@ -63,6 +63,46 @@ type Connector interface {
 	Connect(ctx context.Context, sampleRate int) (Stream, error)
 }
 
+const (
+	// keepaliveSilence is how much silence one keepalive submits.
+	keepaliveSilence = 100 * time.Millisecond
+	// DefaultKeepaliveInterval is how often the idle check runs when a provider
+	// asks for a keepalive without saying how often to look.
+	DefaultKeepaliveInterval = 5 * time.Second
+)
+
+// KeepaliveOptions says how a provider wants an idle session held open.
+type KeepaliveOptions struct {
+	// Timeout is how long a session may carry no audio before silence is sent
+	// to keep it open. Zero disables the keepalive, which is right for a
+	// provider that leaves an idle session alone.
+	Timeout time.Duration
+	// Interval is how often the session is checked for having gone idle. Zero
+	// takes DefaultKeepaliveInterval.
+	Interval time.Duration
+}
+
+// Keepaliver is an optional interface a Connector implements when the provider
+// closes a session that carries no audio for a while. Silence only reaches the
+// service during a call when nobody is speaking, and a service switched out of
+// the pipeline sends nothing at all, so an idle session is a normal thing to
+// have and a closed one costs the next thing the user says. A Connector that
+// does not implement this gets no keepalive, which is right for a provider that
+// leaves an idle session open.
+type Keepaliver interface {
+	Keepalive() KeepaliveOptions
+}
+
+// KeepaliveSender is an optional interface a Stream implements when the silence
+// has to be wrapped in the provider's own protocol, or replaced by a protocol
+// message of its own, rather than submitted as raw audio. A Stream that does not
+// implement it has the silence sent with Send, and that silence is audio the
+// provider bills for, so it counts towards the session's usage. Silence a
+// provider swaps for a protocol message is not audio and is not counted.
+type KeepaliveSender interface {
+	SendKeepalive(silence []byte) error
+}
+
 // Metadata describes an STT service to downstream processors. A Connector or
 // Transcriber implements Describer to provide it at pipeline start.
 type Metadata struct {
@@ -114,6 +154,15 @@ type StreamService struct {
 	connectedAt time.Time
 	audioBytes  int64
 	wg          sync.WaitGroup
+
+	// keepalive is what the provider asked for; a zero Timeout means none.
+	keepalive KeepaliveOptions
+	// lastAudio is when audio last went to the provider, which is what says
+	// whether the session has gone idle.
+	lastAudio time.Time
+	// keepaliveCancel stops the keepalive goroutine, nil when none is running.
+	keepaliveCancel context.CancelFunc
+	keepaliveWG     sync.WaitGroup
 }
 
 // NewStream builds a streaming STT service named name driven by conn. A non-zero
@@ -122,6 +171,12 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s := &StreamService{conn: conn, cfgRate: sampleRate}
 	if d, ok := conn.(Describer); ok {
 		s.model = d.Metadata().Model
+	}
+	if k, ok := conn.(Keepaliver); ok {
+		s.keepalive = k.Keepalive()
+		if s.keepalive.Interval <= 0 {
+			s.keepalive.Interval = DefaultKeepaliveInterval
+		}
 	}
 	s.Base = processor.New(name, s)
 	s.ws = wsservice.New(s, wsservice.Config{})
@@ -236,6 +291,10 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 	s.stream = stream
 	s.sessionCancel = cancel
 	s.mu.Unlock()
+	// Every session gets its own keepalive, the first and each replacement
+	// alike: the goroutine gives up on a failed send, so the one belonging to
+	// the session that just dropped is likely gone.
+	s.startKeepalive(ctx)
 	return nil
 }
 
@@ -244,6 +303,9 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 // nothing about whether the next one will open, so the failure is logged rather
 // than failing the reconnect attempt that is about to redial.
 func (s *StreamService) DisconnectWebsocket(context.Context) error {
+	// Stopped before the session goes, so nothing tries to send on a session
+	// that is being closed underneath it.
+	s.stopKeepalive()
 	s.mu.Lock()
 	stream := s.stream
 	cancel := s.sessionCancel
@@ -318,6 +380,10 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 func (s *StreamService) send(audio []byte) {
 	s.mu.Lock()
 	stream := s.stream
+	// Stamped whether or not there is a session to send on: audio arriving is
+	// what says the call is not idle, and a session that opens a moment later
+	// has no catching up to do.
+	s.lastAudio = time.Now()
 	if stream != nil {
 		s.audioBytes += int64(len(audio))
 	}
@@ -325,6 +391,94 @@ func (s *StreamService) send(audio []byte) {
 	if stream != nil {
 		_ = stream.Send(audio)
 	}
+}
+
+// startKeepalive replaces the running keepalive, if any, with one for the
+// session just opened. It does nothing when the provider asked for none.
+func (s *StreamService) startKeepalive(ctx context.Context) {
+	if s.keepalive.Timeout <= 0 {
+		return
+	}
+	s.stopKeepalive()
+	kaCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.keepaliveCancel = cancel
+	s.lastAudio = time.Now()
+	s.mu.Unlock()
+	s.keepaliveWG.Go(func() { s.keepaliveLoop(kaCtx) })
+}
+
+// stopKeepalive ends the running keepalive and waits for it to finish.
+func (s *StreamService) stopKeepalive() {
+	s.mu.Lock()
+	cancel := s.keepaliveCancel
+	s.keepaliveCancel = nil
+	s.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	s.keepaliveWG.Wait()
+}
+
+// keepaliveLoop submits silence to a session that has carried no audio for long
+// enough that the provider might close it. It gives up on the first failed send:
+// the session is gone, and the read loop is the one that reopens it.
+func (s *StreamService) keepaliveLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.keepalive.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if !s.Connected() {
+			continue
+		}
+		s.mu.Lock()
+		idle := time.Since(s.lastAudio)
+		s.mu.Unlock()
+		if idle < s.keepalive.Timeout {
+			continue
+		}
+		if err := s.sendKeepalive(); err != nil {
+			slog.Warn("keeping the transcription session alive failed",
+				"service", s.Name(), "err", err)
+			return
+		}
+		s.mu.Lock()
+		s.lastAudio = time.Now()
+		s.mu.Unlock()
+	}
+}
+
+// sendKeepalive submits one stretch of silence on the current session.
+func (s *StreamService) sendKeepalive() error {
+	s.mu.Lock()
+	stream := s.stream
+	rate := s.sampleRate
+	s.mu.Unlock()
+	if stream == nil {
+		return errNoSession
+	}
+
+	// 16-bit mono silence, which is what every provider is fed.
+	silence := make([]byte, int(float64(rate)*keepaliveSilence.Seconds())*2)
+
+	if ks, ok := stream.(KeepaliveSender); ok {
+		// The provider swapped the silence for something of its own, so there
+		// is no audio to bill for.
+		return ks.SendKeepalive(silence)
+	}
+	if err := stream.Send(silence); err != nil {
+		return err
+	}
+	// Silence submitted as audio is audio the provider bills for.
+	s.mu.Lock()
+	s.audioBytes += int64(len(silence))
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *StreamService) emit(ctx context.Context, r Result) {
