@@ -167,7 +167,10 @@ type Base struct {
 	audioContexts map[string]*audioContext
 	serial        *serialQueue
 	ctxCancel     context.CancelFunc
-	ctxWG         sync.WaitGroup
+	// ctxDone is closed when the drain goroutine exits, so a graceful end can
+	// wait for the queue it asked to shut down.
+	ctxDone chan struct{}
+	ctxWG   sync.WaitGroup
 
 	// yieldsSync records whether the provider answered the last call with its
 	// audio, which is what says who closes the context out.
@@ -253,13 +256,21 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		// context already queued has drained rather than racing ahead of it.
 		return b.queueSerial(ctx, f, dir)
 	case *frames.LLMFullResponseEndFrame, *frames.EndFrame:
+		_, isEnd := f.(*frames.EndFrame)
+		if isEnd {
+			// The pipeline is ending. The serialization queue is shut down and
+			// waited on first, so the audio a provider is still delivering, and
+			// anything queued behind it, reaches the output before the frame that
+			// stops the pipeline rather than being cut off by it.
+			b.drainAudioContexts()
+		}
 		// Both end a turn: flush whatever text did not land on a sentence
 		// boundary, then close the context it was sent on.
 		if err := b.flush(ctx); err != nil {
 			return err
 		}
 		b.onTurnContextCompleted(ctx)
-		if _, isEnd := f.(*frames.EndFrame); isEnd {
+		if isEnd {
 			return b.PushFrame(ctx, f, dir)
 		}
 		return b.queueSerial(ctx, f, dir)

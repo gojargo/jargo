@@ -240,10 +240,13 @@ func (c *audioContext) get(ctx context.Context, timeout time.Duration) (it ctxIt
 }
 
 // serialItem is what the serialization queue carries: an audio context to drain,
-// or a frame to emit at exactly this position in the output stream.
+// a frame to emit at exactly this position in the output stream, or the sentinel
+// that shuts the queue down once everything queued ahead of it has been
+// processed.
 type serialItem struct {
 	contextID string
 	frame     frames.Frame
+	end       bool
 }
 
 // serialQueue is an unbounded FIFO of serialization items. Unbounded because its
@@ -297,17 +300,21 @@ func (q *serialQueue) get(ctx context.Context) (serialItem, bool) {
 // startAudioContexts brings up the drain goroutine and the context registry.
 func (b *Base) startAudioContexts(ctx context.Context) {
 	b.stopAudioContexts()
+	done := make(chan struct{})
 	b.audioCtxMu.Lock()
 	b.audioContexts = map[string]*audioContext{}
 	b.serial = newSerialQueue()
+	b.ctxDone = done
 	b.audioCtxMu.Unlock()
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	b.ctxCancel = cancel
 	b.ctxWG.Add(1)
-	go b.audioContextLoop(loopCtx)
+	go b.audioContextLoop(loopCtx, done)
 }
 
-// stopAudioContexts tears the drain goroutine down and waits for it.
+// stopAudioContexts tears the drain goroutine down and waits for it. What was
+// queued is dropped, which is what an interruption or a cancel wants; a graceful
+// end goes through drainAudioContexts instead.
 func (b *Base) stopAudioContexts() {
 	cancel := b.ctxCancel
 	b.ctxCancel = nil
@@ -316,6 +323,26 @@ func (b *Base) stopAudioContexts() {
 	}
 	cancel()
 	b.ctxWG.Wait()
+}
+
+// drainAudioContexts shuts the serialization queue down gracefully and returns
+// once it has drained. The sentinel is queued behind everything already there,
+// so reaching it means every context queued ahead has played out in full and
+// every frame behind them has been pushed, including audio a provider was still
+// delivering on its own receive loop.
+//
+// It is what an EndFrame waits on: the frame that stops the pipeline must not
+// overtake the speech it was queued behind. An interruption arriving meanwhile
+// tears the loop down, and the wait ends with it.
+func (b *Base) drainAudioContexts() {
+	b.audioCtxMu.Lock()
+	serial, done := b.serial, b.ctxDone
+	b.audioCtxMu.Unlock()
+	if serial == nil || done == nil {
+		return
+	}
+	serial.push(serialItem{end: true})
+	<-done
 }
 
 // CreateAudioContext opens a context and queues it for playback behind whatever
@@ -424,8 +451,11 @@ func (b *Base) deleteAudioContext(contextID string) {
 
 // audioContextLoop drains the serialization queue, preserving downstream frame
 // order: a context is played out in full before whatever was queued behind it.
-func (b *Base) audioContextLoop(ctx context.Context) {
+// It runs until the queue is torn down or the shutdown sentinel is reached,
+// closing done on its way out so a graceful end knows the queue has drained.
+func (b *Base) audioContextLoop(ctx context.Context, done chan struct{}) {
 	defer b.ctxWG.Done()
+	defer close(done)
 	b.audioCtxMu.Lock()
 	serial := b.serial
 	b.audioCtxMu.Unlock()
@@ -435,6 +465,10 @@ func (b *Base) audioContextLoop(ctx context.Context) {
 	for {
 		it, ok := serial.get(ctx)
 		if !ok {
+			return
+		}
+		if it.end {
+			// Everything queued ahead of the sentinel has been processed.
 			return
 		}
 		if it.frame != nil {

@@ -92,6 +92,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The end of a pipeline waits for the audio still in flight.** A bot stopped
+  right after queueing its farewell said about half of it: every other frame the
+  TTS base emits goes through the serialization queue, which holds it until the
+  contexts queued ahead have drained, but the `EndFrame` was pushed straight
+  downstream. It reached the output while a provider delivering on its own
+  receive loop was still sending audio, so the output drained what little it had
+  and stopped. The `EndFrame` now shuts the serialization queue down and waits
+  for it, which puts the last of the audio, and anything queued behind it such as
+  a closing chime, downstream before the frame that ends the pipeline.
+
 - **A tool call no longer holds up the frames queued behind it.** Handlers ran on
   the goroutine that processes the LLM service's frames, so nothing queued while
   one was in flight moved until it returned — including the speech a bot plays to

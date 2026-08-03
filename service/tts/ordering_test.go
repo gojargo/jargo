@@ -26,6 +26,10 @@ import (
 const (
 	orderingSampleRate = 16000
 	orderingChunkBytes = 640
+	// trailingChunks is how many chunks the trailing provider delivers, spread
+	// out far enough that the end of the pipeline is reached while it is still
+	// going.
+	trailingChunks = 5
 )
 
 // fooFrame is a plain data frame sent behind a spoken unit, marking where that
@@ -81,6 +85,108 @@ func (s *asyncSynthOrdering) RunTTS(_ context.Context, _, contextID string, _ fu
 		host.RemoveAudioContext(contextID)
 	})
 	return nil
+}
+
+// trailingAsyncSynth answers on its own receive loop and takes its time about
+// it, the way a streaming provider does: the call returns having yielded
+// nothing, and the audio lands on the context chunk by chunk long after the
+// frame that asked for it was processed.
+type trailingAsyncSynth struct {
+	mu   sync.Mutex
+	host tts.AudioContextHost
+	wg   sync.WaitGroup
+}
+
+func (s *trailingAsyncSynth) SampleRate() int { return orderingSampleRate }
+
+func (s *trailingAsyncSynth) SetAudioContextHost(h tts.AudioContextHost) {
+	s.mu.Lock()
+	s.host = h
+	s.mu.Unlock()
+}
+
+func (s *trailingAsyncSynth) RunTTS(_ context.Context, _, contextID string, _ func(frames.Frame) error) error {
+	s.mu.Lock()
+	host := s.host
+	s.mu.Unlock()
+	if host == nil {
+		return nil
+	}
+	s.wg.Go(func() {
+		for range trailingChunks {
+			time.Sleep(40 * time.Millisecond)
+			host.AppendToAudioContext(contextID,
+				frames.NewTTSAudioRawFrame(make([]byte, orderingChunkBytes), orderingSampleRate, 1))
+		}
+		host.AppendToAudioContext(contextID, frames.NewTTSStoppedFrame())
+		host.RemoveAudioContext(contextID)
+	})
+	return nil
+}
+
+// TestEndFrameWaitsForAudioStillInFlight covers a pipeline stopped right after
+// queueing speech. The frames arrive in order, the audio does not: a streaming
+// provider delivers it on its own receive loop, after the frame that asked for
+// it has been processed. The end of the pipeline must wait for it, or the last
+// utterance is cut off halfway through.
+func TestEndFrameWaitsForAudioStillInFlight(t *testing.T) {
+	var mu sync.Mutex
+	var got []frames.Frame
+	synth := &trailingAsyncSynth{}
+	base := tts.New("EndTTS", synth)
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			got = append(got, f)
+			mu.Unlock()
+		},
+	})
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	speak := frames.NewTTSSpeakFrame("Goodbye, take care.")
+	speak.AppendToContext = false
+	task.QueueFrame(speak)
+	// Queued right behind the speech, the way a bot that says its farewell and
+	// hangs up does it.
+	task.StopWhenDone()
+
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task did not finish")
+	}
+	synth.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	audio, end, stopped := 0, -1, -1
+	for i, f := range got {
+		switch f.(type) {
+		case *frames.TTSAudioRawFrame:
+			audio++
+			if end >= 0 {
+				t.Errorf("audio arrived after the pipeline had ended\nframes: %s", names(got))
+			}
+		case *frames.TTSStoppedFrame:
+			stopped = i
+		case *frames.EndFrame:
+			end = i
+		}
+	}
+	if end < 0 {
+		t.Fatalf("the pipeline never ended\nframes: %s", names(got))
+	}
+	if audio != trailingChunks {
+		t.Errorf("heard %d of %d audio chunks: the utterance was cut short\nframes: %s",
+			audio, trailingChunks, names(got))
+	}
+	if stopped < 0 || stopped > end {
+		t.Errorf("the end of the audio did not arrive before the end of the pipeline\nframes: %s",
+			names(got))
+	}
 }
 
 // assertGroupOrdering checks that the frames arrived as one ordered run per
