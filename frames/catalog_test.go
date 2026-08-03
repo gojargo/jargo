@@ -326,6 +326,21 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewMixerEnableFrame(true) },
 		},
 		{
+			label: "LLMUpdateSettingsFrame", cat: control, uninterruptible: true,
+			wantString: "service: all",
+			build:      func() frames.Frame { return frames.NewLLMUpdateSettingsFrame(nil) },
+		},
+		{
+			label: "TTSUpdateSettingsFrame", cat: control, uninterruptible: true,
+			wantString: "service: all",
+			build:      func() frames.Frame { return frames.NewTTSUpdateSettingsFrame(nil) },
+		},
+		{
+			label: "STTUpdateSettingsFrame", cat: control, uninterruptible: true,
+			wantString: "service: all",
+			build:      func() frames.Frame { return frames.NewSTTUpdateSettingsFrame(nil) },
+		},
+		{
 			label: "LLMMessagesAppendFrame", cat: control,
 			build: func() frames.Frame {
 				return frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: "hi"}})

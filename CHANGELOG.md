@@ -190,6 +190,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`service/settings`, the settings a service can be given while the pipeline
+  runs**, with `settings.LLM`, `settings.TTS` and `settings.STT` covering the
+  model, voice, language and the sampling knobs an LLM exposes. `settings.Apply`
+  merges an update into what a service holds and reports which fields moved and
+  what they held before, so a service reacts only to a real change. A field
+  carries three states rather than two: not given, given a value, and given no
+  value, the last being how a caller asks a service to drop a setting rather than
+  leave it alone. `settings.FromMap` builds an update from plain names and
+  values, resolving aliases and keeping provider-specific keys, for one arriving
+  over the wire. The carriers are `LLMUpdateSettingsFrame`,
+  `TTSUpdateSettingsFrame` and `STTUpdateSettingsFrame`: control frames, applied
+  in order with the speech around them, and uninterruptible, so a barge-in
+  arriving at the same moment cannot drop them. **No service reads them yet**;
+  wiring them into the LLM, TTS and STT bases and into the providers comes next.
 - **A streaming speech-to-text session can be held open while it carries no
   audio**, for the providers that close an idle one. Silence reaches the service
   whenever nobody is speaking, and a service switched out of the pipeline sends
