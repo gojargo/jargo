@@ -91,7 +91,7 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	// The user falls silent. A turn is never finalized while they are still
 	// audibly speaking, since a verdict that lands mid-speech is already stale,
 	// so the VAD stop has to come first as it does in a real pipeline.
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 
 	// The end-of-turn decision, with a finalized transcript in hand, triggers it.
 	task.QueueFrame(frames.NewUserTurnInferenceCompletedFrame())
@@ -143,7 +143,7 @@ func TestUserAggregatorKeepsTheTranscriptThatEndsTheTurn(t *testing.T) {
 	first := frames.NewTranscriptionFrame("j'ai un ami qui me demande", "u", "ts")
 	first.Finalized = true
 	task.QueueFrame(first)
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	// The turn ends on this transcript, so it must be in the message.
 	last := frames.NewTranscriptionFrame("c'est qui Clovis", "u", "ts")
 	last.Finalized = true
@@ -332,7 +332,7 @@ func TestUserAggregatorRunsInferenceBeforeDeferredFinalization(t *testing.T) {
 	tf := frames.NewTranscriptionFrame("what time do you close", "u", "ts")
 	tf.Finalized = true
 	task.QueueFrame(tf)
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 
 	// No completion verdict has been sent, so the judge has not finalized. The
 	// answer must already be under way.

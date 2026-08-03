@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
@@ -1030,4 +1031,56 @@ func TestUserIdleControllerEmit(t *testing.T) {
 			t.Errorf("Broadcast error = %v, want errEmit", err)
 		}
 	})
+}
+
+// slowAnalyzer takes a fixed time to judge the end of a turn, standing in for a
+// model whose inference is not free.
+type slowAnalyzer struct{ took time.Duration }
+
+func (slowAnalyzer) SetSampleRate(int)                            {}
+func (slowAnalyzer) AppendAudio([]byte, bool) turn.EndOfTurnState { return turn.Incomplete }
+func (a slowAnalyzer) AnalyzeEndOfTurn() (turn.EndOfTurnState, float64, error) {
+	time.Sleep(a.took)
+	return turn.Complete, 0.9, nil
+}
+func (slowAnalyzer) Clear()                     {}
+func (slowAnalyzer) Close() error               { return nil }
+func (slowAnalyzer) UpdateVADStartSecs(float64) {}
+
+// The STT safety net is anchored to the end of the user's speech, so the time
+// the analyzer spends judging the turn comes out of the budget rather than
+// extending it.
+func TestTurnAnalyzerSTTTimeoutAnchoredToSpeechEnd(t *testing.T) {
+	const (
+		inference = 150 * time.Millisecond
+		stopSecs  = 0.2
+		sttP99    = 600 * time.Millisecond
+	)
+
+	s := NewTurnAnalyzerStop(TurnAnalyzerConfig{Analyzer: slowAnalyzer{took: inference}})
+	spy := attachStop(s)
+
+	spy.sendStop(s, frames.NewSTTMetadataFrame(sttP99))
+	spy.sendStop(s, frames.NewVADUserStartedSpeakingFrame(stopSecs))
+
+	// A transcript that is not final: only the safety net can release the turn.
+	spy.sendStop(s, transcript("hello"))
+
+	start := time.Now()
+	spy.sendStop(s, frames.NewVADUserStoppedSpeakingFrame(stopSecs, time.Now()))
+
+	// Anchored, the turn is released sttP99 minus the VAD's own stop window after
+	// the speech ended, whatever the analyzer cost. Unanchored it would be that
+	// plus the inference time.
+	want := sttP99 - time.Duration(stopSecs*float64(time.Second))
+	eventually(t, func() bool { return spy.stops() == 1 }, 2*time.Second, "turn never released")
+	elapsed := time.Since(start)
+
+	if elapsed < inference {
+		t.Errorf("released after %v, before the analyzer even finished (%v)", elapsed, inference)
+	}
+	if slack := want + inference/2; elapsed > slack {
+		t.Errorf("released after %v, want about %v: the inference time was added to "+
+			"the budget rather than taken out of it", elapsed, want)
+	}
 }

@@ -142,7 +142,7 @@ func catalog() []catalogEntry {
 		},
 		{
 			label: "VADUserStoppedSpeakingFrame", cat: system, wantString: "stop_secs: 2.250",
-			build: func() frames.Frame { return frames.NewVADUserStoppedSpeakingFrame(2.25, "ts") },
+			build: func() frames.Frame { return frames.NewVADUserStoppedSpeakingFrame(2.25, time.Now()) },
 		},
 		{
 			label: "STTMetadataFrame", cat: system, wantString: "ttfs_p99: 300ms",

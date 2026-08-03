@@ -95,7 +95,7 @@ func TestVADStartSpeechTimeoutStop(t *testing.T) {
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	task.QueueFrame(finalTranscript("hello"))
 	rec.expect(t, "stopped")
 
@@ -119,7 +119,7 @@ func TestWatchdogForceStop(t *testing.T) {
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 	// User went silent; the watchdog force-stops after StopTimeout.
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "stopped")
 
 	finish(t, task, done)
@@ -153,7 +153,7 @@ func TestTurnAnalyzerStop(t *testing.T) {
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	task.QueueFrame(finalTranscript("hello there"))
 	rec.expect(t, "stopped")
 
@@ -188,7 +188,7 @@ func TestTurnAnalyzerClearedOnStopNotStart(t *testing.T) {
 		t.Fatalf("analyzer cleared %d times on turn start, want 0", n)
 	}
 
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	task.QueueFrame(finalTranscript("hello there"))
 	rec.expect(t, "stopped")
 	if n := analyzer.clears.Load(); n != 1 {
@@ -218,7 +218,7 @@ func TestDeferredFinalization(t *testing.T) {
 	rec.expect(t, "interruption")
 
 	// The analyzer would finalize, but it is deferred — no stop yet.
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	task.QueueFrame(finalTranscript("hello"))
 	rec.expectNone(t, 150*time.Millisecond)
 
@@ -319,7 +319,7 @@ func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
 	go func() { runDone <- task.Run(context.Background()) }()
 
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	time.Sleep(300 * time.Millisecond)
 	task.StopWhenDone()
 	<-runDone
@@ -354,7 +354,7 @@ func TestTurnAnalyzerTranscriptWithNoVADStopStillStops(t *testing.T) {
 
 	task.QueueFrame(frames.NewSTTMetadataFrame(120 * time.Millisecond))
 	// The analyzer judges the speech complete, but no turn is open yet to close.
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.02, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.02, time.Now()))
 	rec.expectNone(t, 50*time.Millisecond)
 
 	// The transcript opens the turn, discarding that verdict, and must still be
@@ -399,7 +399,7 @@ func TestTurnAnalyzerInterimReopensFinalizedTranscript(t *testing.T) {
 	rec.expectNone(t, 30*time.Millisecond)
 
 	// The VAD stop must no longer find a finalized transcript to close on.
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.02, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.02, time.Now()))
 	rec.expectNone(t, 200*time.Millisecond)
 
 	// The tail arrives and closes the turn.
@@ -459,8 +459,117 @@ func TestNoFinalizeWhileUserIsSpeaking(t *testing.T) {
 	rec.expectNone(t, 80*time.Millisecond)
 
 	// Once they stop, the watchdog finalizes the turn that was held open.
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, ""))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "stopped")
 
 	finish(t, task, done)
+}
+
+// idleHarness drives a UserIdleController directly, the way a UserTurnProcessor
+// does, and reports whether the idle callback ran.
+type idleHarness struct {
+	ctrl  *turns.UserIdleController
+	fired chan struct{}
+}
+
+// newIdleHarness builds a controller with the given starting timeout. A timeout
+// of 0 leaves idle detection off until a UserIdleTimeoutUpdateFrame turns it on.
+func newIdleHarness(t *testing.T, timeout time.Duration) *idleHarness {
+	t.Helper()
+	h := &idleHarness{fired: make(chan struct{}, 1)}
+	h.ctrl = turns.NewUserIdleController(turns.IdleConfig{
+		Timeout: timeout,
+		Callback: func(context.Context, *turns.UserIdleController) error {
+			select {
+			case h.fired <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	})
+	h.ctrl.Setup(t.Context(), nil)
+	t.Cleanup(h.ctrl.Cleanup)
+	return h
+}
+
+// send feeds frames to the controller in order.
+func (h *idleHarness) send(fs ...frames.Frame) {
+	for _, f := range fs {
+		h.ctrl.Process(f)
+	}
+}
+
+// waitFired reports whether the idle callback ran within d.
+func (h *idleHarness) waitFired(d time.Duration) bool {
+	select {
+	case <-h.fired:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// idleTimeout is the retuned timeout the update tests wait out.
+const idleTimeout = 40 * time.Millisecond
+
+// A timeout update restarts a running timer with the new duration, rather than
+// leaving the old one to run out first.
+func TestIdleUpdateAppliesToRunningTimer(t *testing.T) {
+	h := newIdleHarness(t, 10*time.Second)
+
+	h.send(frames.NewBotStoppedSpeakingFrame())
+	h.send(frames.NewUserIdleTimeoutUpdateFrame(idleTimeout))
+
+	if !h.waitFired(2 * time.Second) {
+		t.Error("retuning a running timer did not shorten it")
+	}
+}
+
+// Enabling idle detection while the bot is already done speaking arms the timer
+// then and there: nothing else is coming that would arm it.
+func TestIdleUpdateArmsWhileWaitingForTheUser(t *testing.T) {
+	h := newIdleHarness(t, 0)
+
+	h.send(frames.NewBotStartedSpeakingFrame(), frames.NewBotStoppedSpeakingFrame())
+	h.send(frames.NewUserIdleTimeoutUpdateFrame(idleTimeout))
+
+	if !h.waitFired(2 * time.Second) {
+		t.Error("enabling idle detection while waiting for the user did not arm the timer")
+	}
+}
+
+// A timeout update outside that window leaves the timer alone: something else is
+// in flight and will arm it when it finishes.
+func TestIdleUpdateDoesNotArmOutsideTheWaitingWindow(t *testing.T) {
+	cases := map[string][]frames.Frame{
+		"bot is speaking": {
+			frames.NewBotStartedSpeakingFrame(),
+		},
+		"the bot has not spoken yet": {},
+		"a user turn is in progress": {
+			frames.NewBotStartedSpeakingFrame(),
+			frames.NewUserStartedSpeakingFrame(),
+			frames.NewBotStoppedSpeakingFrame(),
+		},
+		"the bot's reply is still coming": {
+			frames.NewUserStartedSpeakingFrame(),
+			frames.NewUserStoppedSpeakingFrame(),
+		},
+		"a tool call is in flight": {
+			frames.NewBotStartedSpeakingFrame(),
+			frames.NewBotStoppedSpeakingFrame(),
+			frames.NewFunctionCallsStartedFrame("", []frames.ToolCall{{ID: "1", Name: "f"}}),
+		},
+	}
+	for name, prelude := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newIdleHarness(t, 0)
+			h.send(prelude...)
+			h.send(frames.NewUserIdleTimeoutUpdateFrame(idleTimeout))
+
+			if h.waitFired(4 * idleTimeout) {
+				t.Error("the timer was armed when the conversation was not waiting for the user")
+			}
+		})
+	}
 }

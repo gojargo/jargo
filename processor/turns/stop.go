@@ -119,12 +119,19 @@ func (s *TurnAnalyzerStop) handleVADStopped(fr *frames.VADUserStoppedSpeakingFra
 	s.stopWindow = time.Duration(fr.StopSecs * float64(time.Second))
 	s.vadStopped = true
 
+	// The STT budget is measured from the moment the user actually stopped
+	// speaking, which the VAD only reports a stop window later. Anchoring the
+	// safety net to that absolute deadline keeps the wait fixed however long
+	// end-of-turn analysis (model inference, say) takes before the timer is
+	// armed.
+	deadline := s.sttDeadline(fr)
+
 	start := time.Now()
 	state, prob, err := s.analyzer.AnalyzeEndOfTurn()
 	s.reportPrediction(state == turn.Complete, prob, err, start)
 	s.turnComplete = err == nil && state == turn.Complete
 
-	s.armTimeout()
+	s.armTimeoutFor(max(0, time.Until(deadline)))
 
 	// A finalized transcript may already have satisfied the trigger conditions
 	// while the analyzer was running, as may Complete itself when waitForTx is
@@ -163,11 +170,28 @@ func (s *TurnAnalyzerStop) handleTranscription(fr *frames.TranscriptionFrame) {
 	}
 }
 
+// sttDeadline returns the instant the safety net expires for the speech the VAD
+// just reported the end of: the STT budget counted from the end of the speech
+// itself, which is the stop window before the VAD said so. A frame carrying no
+// timestamp falls back to counting from now.
+func (s *TurnAnalyzerStop) sttDeadline(fr *frames.VADUserStoppedSpeakingFrame) time.Time {
+	stopped := fr.Timestamp
+	if stopped.IsZero() {
+		stopped = time.Now()
+	}
+	return stopped.Add(-s.stopWindow).Add(s.sttTimeout)
+}
+
 // armTimeout restarts the safety net, measured from now over what is left of the
 // STT budget once the VAD's own silence window is discounted.
 func (s *TurnAnalyzerStop) armTimeout() {
+	s.armTimeoutFor(max(0, s.sttTimeout-s.stopWindow))
+}
+
+// armTimeoutFor restarts the safety net over d.
+func (s *TurnAnalyzerStop) armTimeoutFor(d time.Duration) {
 	s.cancel()
-	s.cancelTimeout = s.after(max(0, s.sttTimeout-s.stopWindow), func() {
+	s.cancelTimeout = s.after(d, func() {
 		s.timeoutExpired = true
 		s.cancelTimeout = nil
 		s.maybeTrigger()

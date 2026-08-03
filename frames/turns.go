@@ -39,13 +39,15 @@ type VADUserStoppedSpeakingFrame struct {
 	// StopSecs is the silence duration the VAD required before confirming the
 	// stop, in seconds.
 	StopSecs float64
-	// Timestamp is when the stop was detected, as an RFC3339 string; "" when
-	// unset.
-	Timestamp string
+	// Timestamp is the wall-clock time at which the VAD made its determination.
+	// Subtracting StopSecs from it gives the moment the speech itself ended,
+	// which is what a deadline measured from the end of speech is anchored to.
+	// The zero value means unset.
+	Timestamp time.Time
 }
 
 // NewVADUserStoppedSpeakingFrame builds a VADUserStoppedSpeakingFrame.
-func NewVADUserStoppedSpeakingFrame(stopSecs float64, timestamp string) *VADUserStoppedSpeakingFrame {
+func NewVADUserStoppedSpeakingFrame(stopSecs float64, timestamp time.Time) *VADUserStoppedSpeakingFrame {
 	return &VADUserStoppedSpeakingFrame{
 		BaseSystemFrame: NewBaseSystemFrame("VADUserStoppedSpeakingFrame"),
 		StopSecs:        stopSecs,

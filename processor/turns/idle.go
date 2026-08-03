@@ -31,13 +31,22 @@ type IdleConfig struct {
 // decisions. The timer arms on BotStoppedSpeakingFrame (only when no user turn
 // is in progress and no tool calls are pending) and is canceled by bot/user
 // speech onset or a tool call.
+//
+// A UserIdleTimeoutUpdateFrame applies at once: it restarts a running timer with
+// the new duration and, while the bot waits for the user to speak, arms the
+// timer even when idle detection was disabled before.
 type UserIdleController struct {
 	cfg  IdleConfig
 	emit Emitter
 
-	mu                 sync.Mutex
-	ctx                context.Context
-	timeout            time.Duration
+	mu      sync.Mutex
+	ctx     context.Context
+	timeout time.Duration
+	// waitingForUser records the window where the bot has finished and nothing
+	// has happened since, which is when a timeout update may arm the timer
+	// without waiting for the next bot turn. It is tracked even while the
+	// timeout is <= 0 and no timer runs.
+	waitingForUser     bool
 	userTurnInProgress bool
 	functionCalls      int
 	timerCancel        func()
@@ -93,21 +102,30 @@ func (c *UserIdleController) Process(f frames.Frame) {
 	switch fr := f.(type) {
 	case *frames.UserIdleTimeoutUpdateFrame:
 		c.timeout = fr.Timeout
-		if c.timeout <= 0 {
+		switch {
+		case c.timeout <= 0:
 			c.cancelTimer()
+		case c.waitingForUser:
+			// Apply the new timeout now: restart a running timer with it, or
+			// arm one when idle detection was disabled before.
+			c.startTimer()
 		}
 	case *frames.BotStoppedSpeakingFrame:
 		if !c.userTurnInProgress && c.functionCalls == 0 {
+			c.waitingForUser = true
 			c.startTimer()
 		}
 	case *frames.BotStartedSpeakingFrame:
+		c.waitingForUser = false
 		c.cancelTimer()
 	case *frames.UserStartedSpeakingFrame:
+		c.waitingForUser = false
 		c.userTurnInProgress = true
 		c.cancelTimer()
 	case *frames.UserStoppedSpeakingFrame:
 		c.userTurnInProgress = false
 	case *frames.FunctionCallsStartedFrame:
+		c.waitingForUser = false
 		c.functionCalls += len(fr.Calls)
 		c.cancelTimer()
 	case *frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame:

@@ -58,8 +58,10 @@ func New(cfg Config) *Processor {
 		},
 		OnSpeechStopped: func(ctx context.Context) {
 			stopSecs := p.controller.Params().StopSecs
+			// Taken once, outside the builder, so the frame sent each way
+			// reports the same moment.
+			ts := time.Now()
 			_ = p.Broadcast(ctx, func() frames.Frame {
-				ts := time.Now().UTC().Format(time.RFC3339)
 				return frames.NewVADUserStoppedSpeakingFrame(stopSecs, ts)
 			})
 		},

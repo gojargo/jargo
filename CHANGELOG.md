@@ -119,6 +119,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A user-idle timeout update applies at once.** `UserIdleTimeoutUpdateFrame`
+  changed the stored timeout and nothing else, so a retune took effect only at
+  the next bot turn: a running timer ran out on the old duration, and turning
+  idle detection on while the bot was already waiting for the user armed nothing
+  at all until it spoke again. The controller now tracks that waiting window and
+  restarts (or arms) the timer on the update.
+- **The turn analyzer's safety net is anchored to the end of the user's
+  speech.** The wait for a transcript was measured from the moment the timer was
+  armed, which is after the end-of-turn model has run, so every millisecond of
+  inference was added to the budget instead of taken out of it. It is now
+  measured from the instant the speech itself ended, which is the VAD's own stop
+  window before it reported the stop. `VADUserStoppedSpeakingFrame.Timestamp` is
+  a `time.Time` for this: an RFC3339 string resolved to the second, which is
+  coarser than the budget it has to be subtracted from.
 - **A parallel pipeline holds system frames while it synchronizes a lifecycle
   frame.** It waited for a `StartFrame`, `EndFrame` or `CancelFrame` to reach
   every branch by blocking on the goroutine handling it. An `EndFrame` is a
