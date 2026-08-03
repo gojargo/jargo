@@ -3,6 +3,7 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,4 +173,174 @@ func TestServiceSwitcherNoServices(t *testing.T) {
 	if _, err := pipeline.NewServiceSwitcher(nil, pipeline.SwitchManual); err == nil {
 		t.Fatal("NewServiceSwitcher(nil): want error, got nil")
 	}
+}
+
+// settingsSvc records the settings updates that reach it, so a test can tell
+// which member services of a switcher an update was delivered to.
+type settingsSvc struct {
+	*processor.Base
+	mu       sync.Mutex
+	received []*frames.LLMUpdateSettingsFrame
+}
+
+func newSettingsSvc(name string) *settingsSvc {
+	s := &settingsSvc{}
+	s.Base = processor.New("SettingsSvc:"+name, s)
+	return s
+}
+
+func (s *settingsSvc) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if uf, ok := f.(*frames.LLMUpdateSettingsFrame); ok && uf.TargetsService(s) {
+		s.mu.Lock()
+		s.received = append(s.received, uf)
+		s.mu.Unlock()
+	}
+	return s.PushFrame(ctx, f, dir)
+}
+
+// updates returns how many updates this service applied.
+func (s *settingsSvc) updates() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.received)
+}
+
+// switcherWithSettingsServices builds a three-service switcher and returns it
+// with its members, the first of which is active.
+func switcherWithSettingsServices(t *testing.T) (*pipeline.ServiceSwitcher, []*settingsSvc) {
+	t.Helper()
+	svcs := []*settingsSvc{newSettingsSvc("1"), newSettingsSvc("2"), newSettingsSvc("3")}
+	procs := make([]processor.Processor, len(svcs))
+	for i, s := range svcs {
+		procs[i] = s
+	}
+	sw, err := pipeline.NewServiceSwitcher(procs, pipeline.SwitchManual)
+	if err != nil {
+		t.Fatalf("NewServiceSwitcher: %v", err)
+	}
+	return sw, svcs
+}
+
+// wantUpdates waits for each service to have applied the number of updates
+// expected of it, and checks none applied more than that.
+func wantUpdates(t *testing.T, svcs []*settingsSvc, want []int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		done := true
+		for i, s := range svcs {
+			if s.updates() != want[i] {
+				done = false
+			}
+		}
+		if done {
+			return
+		}
+		if time.Now().After(deadline) {
+			got := make([]int, len(svcs))
+			for i, s := range svcs {
+				got[i] = s.updates()
+			}
+			t.Fatalf("updates applied = %v, want %v", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// An update that names no service and asks for nothing more reaches the service
+// in use and no other: a setting is usually specific to one provider.
+func TestServiceSwitcherSettingsUpdateReachesTheActiveServiceAlone(t *testing.T) {
+	sw, svcs := switcherWithSettingsServices(t)
+	task, _, stop := runCollector(t, sw)
+	defer stop()
+
+	task.QueueFrame(frames.NewLLMUpdateSettingsFrame(nil))
+	wantUpdates(t, svcs, []int{1, 0, 0})
+}
+
+// An update that asks to reach inactive services reaches every service the
+// switcher manages, so whichever becomes active later is already configured.
+func TestServiceSwitcherSettingsUpdateReachesEveryService(t *testing.T) {
+	sw, svcs := switcherWithSettingsServices(t)
+	task, out, stop := runCollector(t, sw)
+	defer stop()
+
+	update := frames.NewLLMUpdateSettingsFrame(nil)
+	update.ReachInactiveServices = true
+	task.QueueFrame(update)
+	wantUpdates(t, svcs, []int{1, 1, 1})
+
+	// One copy leaves the switcher, not one per service: a text frame queued
+	// behind the update is the next thing downstream sees.
+	task.QueueFrame(frames.NewTextFrame("after"))
+	wantText(t, out, "after")
+}
+
+// An update addressed to a service is applied by that service whether or not it
+// is the one in use, and by no other.
+func TestServiceSwitcherSettingsUpdateAddressedToAnInactiveService(t *testing.T) {
+	sw, svcs := switcherWithSettingsServices(t)
+	task, _, stop := runCollector(t, sw)
+	defer stop()
+
+	update := frames.NewLLMUpdateSettingsFrame(nil)
+	update.Service = svcs[2]
+	task.QueueFrame(update)
+	wantUpdates(t, svcs, []int{0, 0, 1})
+}
+
+// An update addressed to a service another switcher manages passes through
+// untouched, leaving this switcher's own inactive services out of it.
+func TestServiceSwitcherSettingsUpdateForAnotherSwitcher(t *testing.T) {
+	sw, svcs := switcherWithSettingsServices(t)
+	outsider := newSettingsSvc("outsider")
+	task, _, stop := runCollector(t, pipeline.New(sw, outsider))
+	defer stop()
+
+	update := frames.NewLLMUpdateSettingsFrame(nil)
+	update.Service = outsider
+	task.QueueFrame(update)
+
+	wantUpdates(t, []*settingsSvc{outsider}, []int{1})
+	wantUpdates(t, svcs, []int{0, 0, 0})
+}
+
+// upstreamRaiser sits behind the switcher and sends a held frame back up the
+// pipeline when a text frame reaches it, standing in for a processor that raises
+// a settings update of its own.
+type upstreamRaiser struct {
+	*processor.Base
+	f frames.Frame
+}
+
+func newUpstreamRaiser(f frames.Frame) *upstreamRaiser {
+	r := &upstreamRaiser{f: f}
+	r.Base = processor.New("UpstreamRaiser", r)
+	return r
+}
+
+func (r *upstreamRaiser) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := r.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.TextFrame); ok && dir == processor.Downstream {
+		return r.PushFrame(ctx, r.f, processor.Upstream)
+	}
+	return r.PushFrame(ctx, f, dir)
+}
+
+// An update traveling upstream is routed the same way as one going downstream.
+func TestServiceSwitcherSettingsUpdateTravelingUpstream(t *testing.T) {
+	sw, svcs := switcherWithSettingsServices(t)
+
+	update := frames.NewLLMUpdateSettingsFrame(nil)
+	update.ReachInactiveServices = true
+	task, _, stop := runCollector(t, pipeline.New(sw, newUpstreamRaiser(update)))
+	defer stop()
+
+	task.QueueFrame(frames.NewTextFrame("tick")) // reaches the raiser, which replies
+	wantUpdates(t, svcs, []int{1, 1, 1})
 }

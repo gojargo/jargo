@@ -46,6 +46,19 @@ func (f *ServiceUpdateSettingsFrame) TargetsService(svc ServiceTarget) bool {
 	return f.Service == nil || f.Service == svc
 }
 
+// SettingsUpdate is implemented by every settings update frame, whatever kind of
+// service it names, so a processor that only routes them can read where an
+// update is meant to go without knowing which kind it is.
+type SettingsUpdate interface {
+	Frame
+	// ServiceUpdate returns the update itself.
+	ServiceUpdate() *ServiceUpdateSettingsFrame
+}
+
+// ServiceUpdate implements SettingsUpdate. The frame for each kind of service
+// embeds this one, so each of them satisfies the interface through it.
+func (f *ServiceUpdateSettingsFrame) ServiceUpdate() *ServiceUpdateSettingsFrame { return f }
+
 // describe renders the fields shared by every settings update.
 func (f *ServiceUpdateSettingsFrame) describe(name string) string {
 	target := "all"

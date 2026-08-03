@@ -119,6 +119,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A settings update reaches the service a switcher is not currently using.**
+  `ServiceSwitcher` gated every non-system frame on the active service, so an
+  update addressed to one of its other services never arrived, and
+  `ReachInactiveServices` had nothing acting on it: a setting meant to survive a
+  switch was lost at the switch. Both now pass the gate, and the merge's
+  existing deduplication keeps a single copy leaving the switcher. Any other
+  settings update still applies to the active service alone, since a setting is
+  usually specific to one provider. Every settings frame satisfies the new
+  `frames.SettingsUpdate` interface, which is what lets a processor route one
+  without knowing which kind of service it names.
 - **A currency amount with more decimals than the currency has is read to
   subunit precision.** The match stopped after two fractional digits, so
   "$5.500" was spoken as "five dollars and fifty cents" with the third digit

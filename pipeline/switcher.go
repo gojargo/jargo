@@ -53,6 +53,12 @@ func NewSwitchServiceFrame(svc processor.Processor) *SwitchServiceFrame {
 // ready) but gate data frames on whether the service is active. A control
 // processor in front consumes switch requests and watches for the errors that
 // drive failover.
+//
+// A settings update is the exception to the gating. One addressed to a member
+// service reaches it whether or not it is in use, and one marked
+// ReachInactiveServices reaches every member, so whichever service becomes
+// active later is already configured. Any other settings update applies to the
+// active service alone.
 type ServiceSwitcher struct {
 	*Pipeline
 	state *switcherState
@@ -92,12 +98,36 @@ func (s *ServiceSwitcher) ActiveService() processor.Processor { return s.state.a
 func (s *ServiceSwitcher) OnSwitch(fn func(processor.Processor)) { s.state.setOnSwitch(fn) }
 
 // gate returns the filter predicate for svc: lifecycle and system frames always
-// pass (so the service stays started and ready), and other frames pass only
-// while svc is the active service.
+// pass (so the service stays started and ready), a settings update meant for a
+// service that is not in use passes as well, and other frames pass only while
+// svc is the active service.
 func gate(state *switcherState, svc processor.Processor) processor.FilterFunc {
 	return func(f frames.Frame) bool {
-		return alwaysPass(f) || state.isActive(svc)
+		return alwaysPass(f) || reachesInactiveService(f, svc) || state.isActive(svc)
 	}
+}
+
+// reachesInactiveService reports whether f is a settings update that must reach
+// svc even while another service is in use: one addressed to svc, applied by the
+// service it names whether or not that service is active, or one that asks to
+// reach every service the switcher manages, so whichever becomes active later is
+// already configured. Any other update applies to the active service alone,
+// since a setting is usually specific to one provider.
+//
+// Only one copy leaves the switcher: the branches are handed the same frame, and
+// the merge deduplicates by frame id.
+func reachesInactiveService(f frames.Frame, svc processor.Processor) bool {
+	u, ok := f.(frames.SettingsUpdate)
+	if !ok {
+		return false
+	}
+	update := u.ServiceUpdate()
+	if update.Service != nil {
+		// An update addressed elsewhere in the pipeline is left to the switcher
+		// that manages that service.
+		return update.Service == frames.ServiceTarget(svc)
+	}
+	return update.ReachInactiveServices
 }
 
 // alwaysPass reports whether a frame must reach every branch regardless of which
