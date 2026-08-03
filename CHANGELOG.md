@@ -181,6 +181,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A streaming speech-to-text session that drops is reopened**, so a network
+  blip no longer costs transcription for the rest of the call. The read loop
+  ended with the first failed read before, and nothing dialed again: every
+  provider that transcribes over a live connection went silent for good. The new
+  `service/wsservice` package holds that loop and the reconnection around it,
+  retrying with an exponential backoff and reporting each failed attempt as a
+  non-fatal `ErrorFrame`. `service/stt.StreamService` drives it, so all 18
+  streaming providers get it without a change of their own. A session closed
+  normally is not reopened, since it ended because it was meant to. Neither is
+  one that keeps dying the instant it opens, which is what a server rejecting
+  credentials after the upgrade looks like: `utils/network.QuickFailureTracker`
+  spots it and stops, because waiting longer between attempts cannot help.
+  `utils/network.ExponentialBackoffTime` computes the wait.
 - **`pipeline.NewSyncParallel`**, a parallel pipeline that holds the output of
   each input frame until every branch has finished producing it, so everything
   the branches produced for one input is released together. It sends a

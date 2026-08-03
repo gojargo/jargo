@@ -11,16 +11,25 @@ package stt
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// errNoSession is returned when a Connector reports neither a session nor an
+// error, which leaves nothing to transcribe on.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNoSession = errors.New("stt: connector returned no session")
 
 // Result is one transcription result from a streaming STT provider.
 type Result struct {
@@ -80,16 +89,28 @@ type Describer interface {
 // StreamService is the shared processor for streaming STT providers. It manages
 // the session lifecycle, forwards input audio to the Stream, and turns results
 // into InterimTranscriptionFrames and TranscriptionFrames.
+//
+// The session is held open for the length of the call, so it can drop while the
+// call carries on. The service reopens it rather than transcribing nothing for
+// the rest of the call: see service/wsservice, which runs the read loop and the
+// reconnection around it. A dropped session costs the audio spoken during the
+// gap, which is why the reconnect is immediate rather than waiting for the next
+// utterance.
 type StreamService struct {
 	*processor.Base
 	conn    Connector
 	cfgRate int
 	model   string
+	ws      *wsservice.Base
 
-	sampleRate  int
-	mu          sync.Mutex
-	stream      Stream
-	cancel      context.CancelFunc
+	sampleRate int
+	mu         sync.Mutex
+	stream     Stream
+	// sessionCancel ends the current session, replaced on every reconnect.
+	sessionCancel context.CancelFunc
+	// readCancel ends the read loop, and with it the whole connection. It
+	// outlives any one session, so a reconnect does not stop the loop.
+	readCancel  context.CancelFunc
 	connectedAt time.Time
 	audioBytes  int64
 	wg          sync.WaitGroup
@@ -103,6 +124,7 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 		s.model = d.Metadata().Model
 	}
 	s.Base = processor.New(name, s)
+	s.ws = wsservice.New(s, wsservice.Config{})
 	return s
 }
 
@@ -152,36 +174,40 @@ func (s *StreamService) broadcastMetadata(ctx context.Context) {
 	_ = s.PushFrame(ctx, mf, processor.Downstream)
 }
 
+// connect opens the session and starts the read loop that owns it from here on.
+// The loop outlives any one session: when the session drops it opens another,
+// which is why the loop context is separate from the session's.
 func (s *StreamService) connect(ctx context.Context) error {
-	connCtx, cancel := context.WithCancel(ctx)
-	stream, err := s.conn.Connect(connCtx, s.sampleRate)
-	if err != nil {
+	readCtx, cancel := context.WithCancel(ctx)
+	s.ws.Connect()
+	if err := s.ConnectWebsocket(readCtx); err != nil {
 		cancel()
 		return err
 	}
 	s.mu.Lock()
-	s.stream = stream
-	s.cancel = cancel
+	s.readCancel = cancel
 	s.connectedAt = time.Now()
 	s.audioBytes = 0
 	s.mu.Unlock()
-	s.wg.Go(func() { s.readLoop(connCtx, stream) })
+	s.wg.Go(func() { s.ws.ReceiveTaskHandler(readCtx, s.reportConnectionError) })
 	return nil
 }
 
 // disconnect closes the session and records what it transcribed. Streaming
 // providers bill for every second of audio the session carries, silence
-// included, so the usage is the audio streamed over the whole session rather
-// than per transcript — and it is reported on one span covering the session,
-// started at the point the connection opened.
+// included, so the usage is the audio streamed over the whole connection rather
+// than per transcript — and it is reported on one span covering it, started at
+// the point the connection opened. A session dropped and reopened partway
+// through is still the same connection, so it is still one span.
 func (s *StreamService) disconnect(ctx context.Context) {
+	// Marking the disconnect deliberate first is what tells the read loop that
+	// the session ending is the shutdown it asked for, not one to reconnect.
+	s.ws.Disconnect()
 	s.mu.Lock()
-	cancel := s.cancel
-	stream := s.stream
+	cancel := s.readCancel
 	connectedAt := s.connectedAt
 	audioBytes := s.audioBytes
-	s.cancel = nil
-	s.stream = nil
+	s.readCancel = nil
 	s.connectedAt = time.Time{}
 	s.mu.Unlock()
 	if cancel == nil {
@@ -189,8 +215,86 @@ func (s *StreamService) disconnect(ctx context.Context) {
 	}
 	cancel()
 	s.wg.Wait()
-	_ = stream.Close()
+	_ = s.DisconnectWebsocket(ctx)
 	s.recordUsage(ctx, connectedAt, audioBytes)
+}
+
+// ConnectWebsocket opens a transcription session. The read loop calls it for
+// every reconnect, so it replaces whatever session was there before.
+func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
+	sessionCtx, cancel := context.WithCancel(ctx)
+	stream, err := s.conn.Connect(sessionCtx, s.sampleRate)
+	if err != nil {
+		cancel()
+		return err
+	}
+	if stream == nil {
+		cancel()
+		return errNoSession
+	}
+	s.mu.Lock()
+	s.stream = stream
+	s.sessionCancel = cancel
+	s.mu.Unlock()
+	return nil
+}
+
+// DisconnectWebsocket closes the current transcription session, if there is one.
+// A session that has already dropped cannot be closed cleanly, and that says
+// nothing about whether the next one will open, so the failure is logged rather
+// than failing the reconnect attempt that is about to redial.
+func (s *StreamService) DisconnectWebsocket(context.Context) error {
+	s.mu.Lock()
+	stream := s.stream
+	cancel := s.sessionCancel
+	s.stream = nil
+	s.sessionCancel = nil
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if stream == nil {
+		return nil
+	}
+	if err := stream.Close(); err != nil {
+		slog.Debug("closing the transcription session failed", "service", s.Name(), "err", err)
+	}
+	return nil
+}
+
+// ReceiveMessages reads results until the session ends, pushing each one
+// downstream. It returns the failure that ended the session, leaving the read
+// loop to decide whether to open another.
+func (s *StreamService) ReceiveMessages(ctx context.Context) error {
+	s.mu.Lock()
+	stream := s.stream
+	s.mu.Unlock()
+	if stream == nil {
+		return errNoSession
+	}
+	for {
+		results, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		for _, r := range results {
+			s.emit(ctx, r)
+		}
+	}
+}
+
+// Connected reports whether there is a session to transcribe on.
+func (s *StreamService) Connected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stream != nil
+}
+
+// reportConnectionError puts a lost provider connection on the pipeline. It is
+// not fatal: the call continues, and the application decides what losing
+// transcription for part of it means.
+func (s *StreamService) reportConnectionError(ctx context.Context, message string) {
+	s.PushError(ctx, message, nil, false)
 }
 
 // recordUsage emits the session's STT span, spanning the life of the connection.
@@ -220,18 +324,6 @@ func (s *StreamService) send(audio []byte) {
 	s.mu.Unlock()
 	if stream != nil {
 		_ = stream.Send(audio)
-	}
-}
-
-func (s *StreamService) readLoop(ctx context.Context, stream Stream) {
-	for {
-		results, err := stream.Recv()
-		if err != nil {
-			return
-		}
-		for _, r := range results {
-			s.emit(ctx, r)
-		}
 	}
 }
 
