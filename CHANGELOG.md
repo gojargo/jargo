@@ -202,8 +202,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   over the wire. The carriers are `LLMUpdateSettingsFrame`,
   `TTSUpdateSettingsFrame` and `STTUpdateSettingsFrame`: control frames, applied
   in order with the speech around them, and uninterruptible, so a barge-in
-  arriving at the same moment cannot drop them. **No service reads them yet**;
-  wiring them into the LLM, TTS and STT bases and into the providers comes next.
+  arriving at the same moment cannot drop them. `service/stt.StreamService`
+  reads them: a `Connector` implementing `stt.SettingsHolder` has updates merged
+  into its own store, `stt.SettingsUpdater` is told what changed and may ask for
+  the session to be reopened, and `stt.LanguageNamer` names a language the
+  provider's way before the update is applied, so a neutral name and the
+  provider's own code are not mistaken for a change. Wiring for TTS and LLM, and
+  provider adoption, come next.
+- **A transcription session reopened for a settings change waits for the user to
+  stop speaking**, and the audio arriving in between is held and sent on once the
+  new session is up. Replacing the session mid-sentence would drop what is being
+  said, and the words lost would be the ones the change was meant to transcribe
+  better. A change asked for while nobody is speaking takes effect at once.
 - **A streaming speech-to-text session can be held open while it carries no
   audio**, for the providers that close an idle one. Silence reaches the service
   whenever nobody is speaking, and a service switched out of the pipeline sends

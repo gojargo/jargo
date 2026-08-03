@@ -212,6 +212,63 @@ type STT struct {
 	Language Opt[string] `settings:"language"`
 }
 
+// Get is what a settings value holds for the named field: the value, and
+// whether the field carries one at all. A field a provider's own settings
+// declare is reached the same way as one of the shared fields.
+func Get(v any, name string) (any, bool) {
+	rv, err := settingsValue(v)
+	if err != nil {
+		return nil, false
+	}
+	var value any
+	var found bool
+	eachField(rv, func(fieldName string, field reflect.Value, _ []int) {
+		if fieldName != name || found {
+			return
+		}
+		o, _ := field.Interface().(option)
+		if o.IsGiven() {
+			value = o.AsAny()
+		}
+		found = value != nil
+	})
+	return value, found
+}
+
+// SetNamed gives the named field a value, converting it where the conversion
+// loses nothing. It reports whether the field exists.
+func SetNamed(v any, name string, value any) error {
+	rv, err := settingsValue(v)
+	if err != nil {
+		return err
+	}
+	var target reflect.Value
+	eachField(rv, func(fieldName string, field reflect.Value, _ []int) {
+		if fieldName == name && !target.IsValid() {
+			target = field
+		}
+	})
+	if !target.IsValid() {
+		return fmt.Errorf("%w: no field %q", ErrNotSettings, name)
+	}
+	results := target.Addr().MethodByName("SetAny").
+		Call([]reflect.Value{reflect.ValueOf(&value).Elem()})
+	if err, _ := results[0].Interface().(error); err != nil {
+		return fmt.Errorf("settings: field %q: %w", name, err)
+	}
+	return nil
+}
+
+// NewDelta builds an empty delta of the same type as store, for an update that
+// arrived as plain data and has to be given a shape before it can be applied.
+func NewDelta(store any) (any, error) {
+	sv, err := settingsValue(store)
+	if err != nil {
+		return nil, err
+	}
+	return reflect.New(sv.Type()).Interface(), nil
+}
+
 // Apply merges delta into store and reports what changed. Only the fields the
 // delta gives are considered, and a field changes only when what it carries
 // differs from what is already there, so re-sending a service what it already

@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
@@ -103,6 +105,38 @@ type KeepaliveSender interface {
 	SendKeepalive(silence []byte) error
 }
 
+// SettingsHolder is an optional interface a Connector implements when part of
+// what it was built with can change while the pipeline runs: the language it
+// transcribes, the model it uses. The value returned is the provider's own
+// store, a pointer to a settings value, which an update is merged into.
+type SettingsHolder interface {
+	Settings() any
+}
+
+// SettingsUpdater is an optional interface a Connector implements to act on a
+// settings change. A Connector that holds settings without implementing this
+// still has them updated; it simply picks them up the next time it opens a
+// session.
+type SettingsUpdater interface {
+	SettingsHolder
+	// UpdateSettings is called once the changed fields have been written to the
+	// store, with what changed and what each field held before. Returning true
+	// asks for the session to be reopened, which is what a provider needs when
+	// the setting is fixed at the point the session opens and cannot be changed
+	// on a session already running.
+	UpdateSettings(ctx context.Context, changed settings.Changed) (reopen bool, err error)
+}
+
+// LanguageNamer is an optional interface a Connector implements to name a
+// language the way its provider does. Providers disagree on the codes, so a
+// caller naming a language neutrally has it converted before it is stored,
+// leaving the store holding the code the provider itself uses. Without that the
+// stored value and the next update would be in different vocabularies, and a
+// change would be reported for two spellings of the same language.
+type LanguageNamer interface {
+	ServiceLanguage(l language.Language) string
+}
+
 // Metadata describes an STT service to downstream processors. A Connector or
 // Transcriber implements Describer to provide it at pipeline start.
 type Metadata struct {
@@ -163,6 +197,22 @@ type StreamService struct {
 	// keepaliveCancel stops the keepalive goroutine, nil when none is running.
 	keepaliveCancel context.CancelFunc
 	keepaliveWG     sync.WaitGroup
+
+	// Reopening the session for a settings change. Doing it while the user is
+	// mid-sentence would drop what they are saying, so it waits for the turn to
+	// end, and the audio that arrives in the gap is held rather than sent to a
+	// session that is being replaced.
+	//
+	// canReopen is false from the moment speech is detected until the turn ends.
+	canReopen bool
+	// needReopen records a reopen asked for while the user was speaking.
+	needReopen bool
+	// reopening is set while the session is being replaced, which is what says
+	// to hold incoming audio rather than send it.
+	reopening bool
+	// held is the audio that arrived while the session was being replaced, sent
+	// on once the new one is up so the words spoken across the gap are not lost.
+	held [][]byte
 }
 
 // NewStream builds a streaming STT service named name driven by conn. A non-zero
@@ -178,6 +228,7 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 			s.keepalive.Interval = DefaultKeepaliveInterval
 		}
 	}
+	s.canReopen = true
 	s.Base = processor.New(name, s)
 	s.ws = wsservice.New(s, wsservice.Config{})
 	return s
@@ -201,6 +252,21 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		return s.connect(ctx)
 	case *frames.InputAudioRawFrame:
 		s.send(fr.Audio)
+		return s.PushFrame(ctx, f, dir)
+	case *frames.STTUpdateSettingsFrame:
+		if !fr.TargetsService(s) {
+			// Meant for another service; leave it untouched for that one.
+			return s.PushFrame(ctx, f, dir)
+		}
+		s.updateSettings(ctx, fr)
+		return nil
+	case *frames.VADUserStartedSpeakingFrame:
+		s.mu.Lock()
+		s.canReopen = false
+		s.mu.Unlock()
+		return s.PushFrame(ctx, f, dir)
+	case *frames.UserStoppedSpeakingFrame:
+		s.reopenIfDeferred(ctx)
 		return s.PushFrame(ctx, f, dir)
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect(ctx)
@@ -365,7 +431,10 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 	if audio == 0 {
 		return
 	}
-	metrics.RecordSTTAudio(ctx, s.Name(), s.model, audio.Seconds())
+	s.mu.Lock()
+	model := s.model
+	s.mu.Unlock()
+	metrics.RecordSTTAudio(ctx, s.Name(), model, audio.Seconds())
 	s.pushUsageMetrics(ctx, audio)
 	sctx, span := tracing.Tracer().Start(ctx, "stt", trace.WithTimestamp(connectedAt))
 	defer span.End()
@@ -374,11 +443,175 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 		attribute.Int("stt.sample_rate", s.sampleRate),
 		attribute.Int64("stt.audio_ms", audio.Milliseconds()),
 	)
-	tracing.SetSTTUsage(sctx, s.model, audio)
+	tracing.SetSTTUsage(sctx, model, audio)
+}
+
+// updateSettings merges an update into the provider's own settings and lets it
+// act on what changed, reopening the session when the provider says the change
+// cannot take effect on the one already running.
+func (s *StreamService) updateSettings(ctx context.Context, f *frames.STTUpdateSettingsFrame) {
+	holder, ok := s.conn.(SettingsHolder)
+	if !ok {
+		slog.Warn("settings update for a service whose provider has none", "service", s.Name())
+		return
+	}
+	store := holder.Settings()
+
+	delta := f.Delta
+	if delta == nil {
+		// The update arrived as plain names and values, so it has to be given
+		// the shape of this provider's settings before it can be applied.
+		if len(f.Settings) == 0 {
+			return
+		}
+		built, err := settings.NewDelta(store)
+		if err != nil {
+			s.PushError(ctx, "stt: settings update", err, false)
+			return
+		}
+		if err := settings.FromMap(built, f.Settings); err != nil {
+			s.PushError(ctx, "stt: settings update", err, false)
+			return
+		}
+		delta = built
+	}
+
+	// Naming the language the provider's way before applying is what keeps the
+	// comparison honest: the store holds the provider's code, so a neutral name
+	// that means the same language must be converted first or it reads as a
+	// change when nothing changed.
+	s.nameLanguage(delta)
+
+	changed, err := settings.Apply(store, delta)
+	if err != nil {
+		s.PushError(ctx, "stt: settings update", err, false)
+		return
+	}
+	if len(changed) == 0 {
+		return
+	}
+	slog.Info("updated settings", "service", s.Name(), "fields", changed.String())
+
+	if changed.Has("model") {
+		// The model labels the usage this service reports, and it is priced
+		// against it, so a model that changed mid-call has to relabel what
+		// follows or the cost lands against the wrong one.
+		s.syncModel(store)
+	}
+
+	updater, ok := s.conn.(SettingsUpdater)
+	if !ok {
+		return
+	}
+	reopen, err := updater.UpdateSettings(ctx, changed)
+	if err != nil {
+		s.PushError(ctx, "stt: settings update", err, false)
+		return
+	}
+	if reopen {
+		s.requestReopen(ctx)
+	}
+}
+
+// nameLanguage rewrites a language the delta gives into the code the provider
+// uses, when the provider says how. A code the provider does not recognize is
+// left as it came, since it may be one the service accepts directly.
+func (s *StreamService) nameLanguage(delta any) {
+	namer, ok := s.conn.(LanguageNamer)
+	if !ok {
+		return
+	}
+	value, ok := settings.Get(delta, "language")
+	if !ok {
+		return
+	}
+	code, ok := value.(string)
+	if !ok || code == "" {
+		return
+	}
+	named := namer.ServiceLanguage(language.Language(code))
+	if named == "" || named == code {
+		return
+	}
+	if err := settings.SetNamed(delta, "language", named); err != nil {
+		slog.Warn("naming the language the provider's way failed",
+			"service", s.Name(), "err", err)
+	}
+}
+
+// syncModel relabels the metrics with the model now in force.
+func (s *StreamService) syncModel(store any) {
+	name, _ := settings.Get(store, "model")
+	model, _ := name.(string)
+	s.mu.Lock()
+	s.model = model
+	s.mu.Unlock()
+}
+
+// requestReopen replaces the session now, or as soon as the user has finished
+// speaking. Reopening mid-sentence would drop what is being said, and the words
+// lost are exactly the ones the change was meant to transcribe better.
+func (s *StreamService) requestReopen(ctx context.Context) {
+	s.mu.Lock()
+	can := s.canReopen
+	if !can {
+		s.needReopen = true
+	}
+	s.mu.Unlock()
+	if can {
+		s.reopen(ctx)
+	}
+}
+
+// reopenIfDeferred runs a reopen that waited for the user to stop speaking.
+func (s *StreamService) reopenIfDeferred(ctx context.Context) {
+	s.mu.Lock()
+	s.canReopen = true
+	deferred := s.needReopen
+	s.mu.Unlock()
+	if deferred {
+		s.reopen(ctx)
+	}
+}
+
+// reopen replaces the session with one carrying the new settings, holding the
+// audio that arrives in between and sending it on once the new session is up, so
+// the words spoken across the gap still reach the provider.
+func (s *StreamService) reopen(ctx context.Context) {
+	s.mu.Lock()
+	s.held = nil
+	s.reopening = true
+	s.needReopen = false
+	s.mu.Unlock()
+
+	slog.Info("reopening the transcription session", "service", s.Name())
+	s.disconnect(ctx)
+	err := s.connect(ctx)
+
+	s.mu.Lock()
+	s.reopening = false
+	held := s.held
+	s.held = nil
+	s.mu.Unlock()
+
+	if err != nil {
+		s.PushError(ctx, "stt: reopening the session", err, false)
+		return
+	}
+	for _, audio := range held {
+		s.send(audio)
+	}
 }
 
 func (s *StreamService) send(audio []byte) {
 	s.mu.Lock()
+	if s.reopening {
+		// The session is being replaced. Hold the audio rather than send it to
+		// one that is going away, or the words spoken across the gap are lost.
+		s.held = append(s.held, audio)
+		s.mu.Unlock()
+		return
+	}
 	stream := s.stream
 	// Stamped whether or not there is a session to send on: audio arriving is
 	// what says the call is not idle, and a session that opens a moment later
