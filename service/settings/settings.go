@@ -152,6 +152,23 @@ func (c Changed) Has(field string) bool {
 	return ok
 }
 
+// Except lists the changed fields a service does not act on, given the ones it
+// does. A service warns about these rather than staying silent: a caller who
+// asked for a change that cannot take effect should hear so.
+func (c Changed) Except(handled ...string) []string {
+	skip := make(map[string]struct{}, len(handled))
+	for _, name := range handled {
+		skip[name] = struct{}{}
+	}
+	var rest []string
+	for _, name := range c.Names() {
+		if _, ok := skip[name]; !ok {
+			rest = append(rest, name)
+		}
+	}
+	return rest
+}
+
 // String implements fmt.Stringer.
 func (c Changed) String() string { return strings.Join(c.Names(), ", ") }
 

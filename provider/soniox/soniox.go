@@ -47,6 +47,34 @@ type Config struct {
 	// EnableEndpointDetection emits an end-of-turn marker on detected silence;
 	// nil defaults to true.
 	EnableEndpointDetection *bool
+
+	// The remaining options may also be changed while the pipeline runs, through
+	// an STTUpdateSettingsFrame. A change reopens the session, since Soniox is
+	// told all of this in the handshake that opens one.
+
+	// LanguageHintsStrict confines recognition to the hinted language; nil omits
+	// it and lets Soniox decide.
+	LanguageHintsStrict *bool
+	// Context primes the model with what the conversation is about, for the
+	// models that take it; nil omits it.
+	Context *Context
+	// EnableSpeakerDiarization labels speakers in the transcript; nil omits it.
+	EnableSpeakerDiarization *bool
+	// EnableLanguageIdentification reports the language of each token; nil omits
+	// it.
+	EnableLanguageIdentification *bool
+	// MaxEndpointDelayMs bounds how long Soniox waits before ending a turn; nil
+	// omits it.
+	MaxEndpointDelayMs *int
+	// EndpointSensitivity tunes how readily Soniox calls a turn ended; nil omits
+	// it.
+	EndpointSensitivity *float64
+	// EndpointLatencyAdjustmentLevel trades endpoint latency against accuracy;
+	// nil omits it.
+	EndpointLatencyAdjustmentLevel *int
+	// ClientReferenceID labels the session in Soniox's own records; empty omits
+	// it.
+	ClientReferenceID string
 }
 
 // Validate reports whether the configuration is usable.

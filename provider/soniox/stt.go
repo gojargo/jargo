@@ -25,21 +25,94 @@ func NewSTT(cfg Config) *stt.StreamService {
 	return stt.NewStream("SonioxSTT", &connector{cfg: cfg, live: newSTTSettings(cfg)}, cfg.SampleRate)
 }
 
+// ContextGeneralItem is one key-value pair of structured context.
+type ContextGeneralItem struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// ContextTranslationTerm maps an ambiguous or domain-specific term onto the
+// translation it should take.
+type ContextTranslationTerm struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// Context primes the model with what the conversation is about, for the models
+// that take it.
+type Context struct {
+	// General is structured context as key-value pairs.
+	General []ContextGeneralItem `json:"general,omitempty"`
+	// Text is free-form context.
+	Text string `json:"text,omitempty"`
+	// Terms are words the model should expect to hear.
+	Terms []string `json:"terms,omitempty"`
+	// TranslationTerms fix how particular terms are translated.
+	TranslationTerms []ContextTranslationTerm `json:"translation_terms,omitempty"`
+}
+
+// Settings is the part of the Soniox configuration that can change while the
+// pipeline runs. Soniox is told all of it in the handshake that opens a session,
+// so a change to any of it reopens the session.
+type Settings struct {
+	settings.STT
+
+	// LanguageHints are the languages to expect, as Soniox names them.
+	LanguageHints settings.Opt[[]string] `settings:"language_hints"`
+	// LanguageHintsStrict confines recognition to the languages hinted.
+	LanguageHintsStrict settings.Opt[bool] `settings:"language_hints_strict"`
+	// Context primes the model with what the conversation is about.
+	Context settings.Opt[Context] `settings:"context"`
+	// EnableSpeakerDiarization labels speakers in the transcript.
+	EnableSpeakerDiarization settings.Opt[bool] `settings:"enable_speaker_diarization"`
+	// EnableLanguageIdentification reports the language of each token.
+	EnableLanguageIdentification settings.Opt[bool] `settings:"enable_language_identification"`
+	// MaxEndpointDelayMs bounds how long Soniox waits before ending a turn.
+	MaxEndpointDelayMs settings.Opt[int] `settings:"max_endpoint_delay_ms"`
+	// EndpointSensitivity tunes how readily Soniox calls a turn ended.
+	EndpointSensitivity settings.Opt[float64] `settings:"endpoint_sensitivity"`
+	// EndpointLatencyAdjustmentLevel trades endpoint latency against accuracy.
+	EndpointLatencyAdjustmentLevel settings.Opt[int] `settings:"endpoint_latency_adjustment_level"`
+	// ClientReferenceID labels the session in Soniox's own records.
+	ClientReferenceID settings.Opt[string] `settings:"client_reference_id"`
+}
+
+// newSTTSettings is the starting state, taken from what the service was built
+// with.
+func newSTTSettings(cfg Config) *Settings {
+	s := &Settings{}
+	s.Model = settings.Set(cfg.Model)
+	if hint := cfg.Language.BaseCode(); hint != "" {
+		s.LanguageHints = settings.Set([]string{hint})
+	}
+	setOpt(&s.LanguageHintsStrict, cfg.LanguageHintsStrict)
+	setOpt(&s.EnableSpeakerDiarization, cfg.EnableSpeakerDiarization)
+	setOpt(&s.EnableLanguageIdentification, cfg.EnableLanguageIdentification)
+	setOpt(&s.MaxEndpointDelayMs, cfg.MaxEndpointDelayMs)
+	setOpt(&s.EndpointSensitivity, cfg.EndpointSensitivity)
+	setOpt(&s.EndpointLatencyAdjustmentLevel, cfg.EndpointLatencyAdjustmentLevel)
+	if cfg.ClientReferenceID != "" {
+		s.ClientReferenceID = settings.Set(cfg.ClientReferenceID)
+	}
+	if cfg.Context != nil {
+		s.Context = settings.Set(*cfg.Context)
+	}
+	return s
+}
+
+// setOpt gives o a value when the configuration carried one.
+func setOpt[T any](o *settings.Opt[T], v *T) {
+	if v != nil {
+		*o = settings.Set(*v)
+	}
+}
+
 type connector struct {
 	cfg Config
 	// live is what may change while the pipeline runs: the model and the
 	// language, which is the set Soniox treats as changeable and that jargo's
 	// configuration carries.
-	live *settings.STT
-}
-
-// newSTTSettings is the starting state, taken from what the service was built
-// with.
-func newSTTSettings(cfg Config) *settings.STT {
-	s := &settings.STT{}
-	s.Model = settings.Set(cfg.Model)
-	s.Language = settings.Set(cfg.Language.BaseCode())
-	return s
+	live *Settings
 }
 
 // Settings is the configuration a caller may change while the pipeline runs.
@@ -85,11 +158,28 @@ func (c *connector) config(sampleRate int) []byte {
 		"num_channels":              1,
 		"enable_endpoint_detection": c.cfg.EnableEndpointDetection == nil || *c.cfg.EnableEndpointDetection,
 	}
-	if lang := c.live.Language.Or(c.cfg.Language.BaseCode()); lang != "" {
-		cfg["language_hints"] = []string{lang}
-	}
+	// Everything Soniox is told in the handshake and that may change while the
+	// pipeline runs. A setting with no value is left out, so Soniox applies its
+	// own default rather than being sent a zero that means something else.
+	putOpt(cfg, "language_hints", c.live.LanguageHints)
+	putOpt(cfg, "language_hints_strict", c.live.LanguageHintsStrict)
+	putOpt(cfg, "context", c.live.Context)
+	putOpt(cfg, "enable_speaker_diarization", c.live.EnableSpeakerDiarization)
+	putOpt(cfg, "enable_language_identification", c.live.EnableLanguageIdentification)
+	putOpt(cfg, "max_endpoint_delay_ms", c.live.MaxEndpointDelayMs)
+	putOpt(cfg, "endpoint_sensitivity", c.live.EndpointSensitivity)
+	putOpt(cfg, "endpoint_latency_adjustment_level", c.live.EndpointLatencyAdjustmentLevel)
+	putOpt(cfg, "client_reference_id", c.live.ClientReferenceID)
+
 	b, _ := json.Marshal(cfg) //nolint:errchkjson // map of known-serializable values
 	return b
+}
+
+// putOpt writes a setting into the handshake only when it carries a value.
+func putOpt[T any](cfg map[string]any, key string, o settings.Opt[T]) {
+	if v, ok := o.Value(); ok {
+		cfg[key] = v
+	}
 }
 
 type stream struct {

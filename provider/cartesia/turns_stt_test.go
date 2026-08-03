@@ -31,7 +31,8 @@ func TestNewTurnsSTT(t *testing.T) {
 // TestTurnsSTTMetadata checks the service tells downstream it detects turns
 // itself, which is the whole point of this endpoint over the plain STT one.
 func TestTurnsSTTMetadata(t *testing.T) {
-	c := &turnsConnector{cfg: TurnsSTTConfig{APIKey: "k", Model: defaultTurnsModel}}
+	cfg := TurnsSTTConfig{APIKey: "k", Model: defaultTurnsModel}
+	c := newTurnsConnector(cfg)
 	meta := c.Metadata()
 	if meta.RecommendedUserTurns != frames.UserTurnExternal {
 		t.Errorf("RecommendedUserTurns = %v, want UserTurnExternal", meta.RecommendedUserTurns)
@@ -96,12 +97,12 @@ func TestTurnsSTTRecv(t *testing.T) {
 		{"type": "turn.end", "transcript": "hello there friend"},
 	})
 
-	conn := &turnsConnector{cfg: TurnsSTTConfig{
+	conn := newTurnsConnector(TurnsSTTConfig{
 		APIKey:  "k",
 		URL:     endpoint,
 		Version: defaultVersion,
 		Model:   defaultTurnsModel,
-	}}
+	})
 	stream, err := conn.Connect(context.Background(), 16000)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -147,7 +148,7 @@ func TestTurnsSTTServerError(t *testing.T) {
 	endpoint, _ := turnsServer(t, []map[string]any{
 		{"type": "error", "message": "unsupported sample rate"},
 	})
-	conn := &turnsConnector{cfg: TurnsSTTConfig{APIKey: "k", URL: endpoint, Version: defaultVersion}}
+	conn := newTurnsConnector(TurnsSTTConfig{APIKey: "k", URL: endpoint, Version: defaultVersion})
 	stream, err := conn.Connect(context.Background(), 16000)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)

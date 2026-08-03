@@ -218,11 +218,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the session, since Deepgram takes them as query parameters when the session
   opens and has no way to be told afterwards. What is fixed at build time (the
   endpoint, encoding, channels, VAD events, version, tags) stays on `Config`.
-  Cartesia and Soniox STT follow, each with the model and language changeable,
-  which is what their configuration carries of the set upstream treats as
-  changeable. All three reopen the session on any change, because all three are
-  told their configuration only when the session opens. The remaining providers
-  are unchanged and keep taking their configuration at construction.
+  Cartesia STT follows, with the model, the language and keyterms, and Soniox
+  STT with the model, the language hints and the nine options it is told in its
+  handshake. All three reopen the session on any change, because all three are
+  told their configuration only when the session opens. Cartesia's turn-detecting
+  service reopens for a keyterm change alone and reports any other change as one
+  that cannot take effect. The remaining providers are unchanged and keep taking
+  their configuration at construction.
+- **Cartesia and Soniox STT gained the options they were missing.** Cartesia
+  takes `Keyterm`, capped at the 100 terms and 1200 characters a connection
+  accepts and sent only on the ink-2 models that honor them, with spaces
+  percent-encoded as Cartesia requires. Soniox takes `LanguageHintsStrict`,
+  `Context`, `EnableSpeakerDiarization`, `EnableLanguageIdentification`,
+  `MaxEndpointDelayMs`, `EndpointSensitivity`,
+  `EndpointLatencyAdjustmentLevel` and `ClientReferenceID`. An option nobody sets
+  is left out of the request, so the service applies its own default rather than
+  being sent a zero that means something else.
 - **A transcription session reopened for a settings change waits for the user to
   stop speaking**, and the audio arriving in between is held and sent on once the
   new session is up. Replacing the session mid-sentence would drop what is being

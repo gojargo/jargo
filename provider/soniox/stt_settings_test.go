@@ -38,9 +38,12 @@ func TestSTTSettingsChangeReachesTheHandshake(t *testing.T) {
 		t.Fatalf("language_hints = %v, want [en]", before["language_hints"])
 	}
 
-	if _, err := settings.Apply(c.live, &settings.STT{
-		Base:     settings.Base{Model: settings.Set("stt-rt-preview-v2")},
-		Language: settings.Set("fr"),
+	if _, err := settings.Apply(c.live, &Settings{
+		STT:                      settings.STT{Base: settings.Base{Model: settings.Set("stt-rt-preview-v2")}},
+		LanguageHints:            settings.Set([]string{"fr"}),
+		EnableSpeakerDiarization: settings.Set(true),
+		EndpointSensitivity:      settings.Set(0.6),
+		ClientReferenceID:        settings.Set("call-7"),
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -52,9 +55,70 @@ func TestSTTSettingsChangeReachesTheHandshake(t *testing.T) {
 	if hints, ok := after["language_hints"].([]any); !ok || len(hints) != 1 || hints[0] != "fr" {
 		t.Errorf("language_hints = %v, want [fr]", after["language_hints"])
 	}
+	if got := after["enable_speaker_diarization"]; got != true {
+		t.Errorf("enable_speaker_diarization = %v, want true", got)
+	}
+	if got := after["endpoint_sensitivity"]; got != 0.6 {
+		t.Errorf("endpoint_sensitivity = %v, want 0.6", got)
+	}
+	if got := after["client_reference_id"]; got != "call-7" {
+		t.Errorf("client_reference_id = %v, want call-7", got)
+	}
 	// What the caller did not touch is untouched.
 	if got := after["audio_format"]; got != "s16le" {
 		t.Errorf("audio_format = %v, want s16le", got)
+	}
+}
+
+// A setting nobody gave is left out of the handshake, so Soniox applies its own
+// default rather than being sent a zero that means something else.
+func TestUnsetSettingsAreLeftOutOfTheHandshake(t *testing.T) {
+	t.Parallel()
+
+	cfg := sttConfig()
+	c := &connector{cfg: cfg, live: newSTTSettings(cfg)}
+	got := handshake(t, c)
+
+	for _, key := range []string{
+		"language_hints_strict", "context", "enable_speaker_diarization",
+		"enable_language_identification", "max_endpoint_delay_ms",
+		"endpoint_sensitivity", "endpoint_latency_adjustment_level",
+		"client_reference_id",
+	} {
+		if _, present := got[key]; present {
+			t.Errorf("%s was sent though nobody set it: %v", key, got[key])
+		}
+	}
+}
+
+// What the service was built with seeds the settings, so a configured option
+// reaches the first handshake.
+func TestConfiguredOptionsSeedTheSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg := sttConfig()
+	strict := true
+	delay := 900
+	cfg.LanguageHintsStrict = &strict
+	cfg.MaxEndpointDelayMs = &delay
+	cfg.ClientReferenceID = "call-1"
+	cfg.Context = &Context{Text: "ordering coffee", Terms: []string{"flat white"}}
+
+	c := &connector{cfg: cfg, live: newSTTSettings(cfg)}
+	got := handshake(t, c)
+
+	if got["language_hints_strict"] != true {
+		t.Errorf("language_hints_strict = %v, want true", got["language_hints_strict"])
+	}
+	if got["max_endpoint_delay_ms"] != float64(900) {
+		t.Errorf("max_endpoint_delay_ms = %v, want 900", got["max_endpoint_delay_ms"])
+	}
+	if got["client_reference_id"] != "call-1" {
+		t.Errorf("client_reference_id = %v, want call-1", got["client_reference_id"])
+	}
+	ctx, ok := got["context"].(map[string]any)
+	if !ok || ctx["text"] != "ordering coffee" {
+		t.Errorf("context = %v, want the configured context", got["context"])
 	}
 }
 
