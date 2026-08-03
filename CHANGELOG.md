@@ -119,6 +119,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A currency amount with more decimals than the currency has is read to
+  subunit precision.** The match stopped after two fractional digits, so
+  "$5.500" was spoken as "five dollars and fifty cents" with the third digit
+  left in the text right behind the word: "cents0". The fraction is now consumed
+  whole and read to the subunit, dropping the precision below it.
 - **A user-idle timeout update applies at once.** `UserIdleTimeoutUpdateFrame`
   changed the stored timeout and nothing else, so a retune took effect only at
   the next bot turn: a running timer ran out on the old duration, and turning

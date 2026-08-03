@@ -278,7 +278,9 @@ func ordinal(n int) string {
 
 //nolint:gochecknoglobals // compiled once, immutable
 var (
-	currencyRE = regexp.MustCompile(`([€£¥₹$])\s*(\d{1,3}(?:,\d{3})*|\d+)\b(?:\.(\d{1,2}))?`)
+	// The fractional part takes every digit, not just the two that are spoken:
+	// stopping at two leaves the rest behind as bare digits after the words.
+	currencyRE = regexp.MustCompile(`([€£¥₹$])\s*(\d{1,3}(?:,\d{3})*|\d+)\b(?:\.(\d+))?`)
 
 	currencyMap = map[string]struct {
 		singular, plural, centSingular, centPlural string
@@ -302,7 +304,9 @@ func ExpandCurrency(text string) string {
 		whole, _ := strconv.ParseInt(strings.ReplaceAll(g[2], ",", ""), 10, 64)
 		result := amountWords(whole, cur.singular, cur.plural)
 		if g[3] != "" && cur.centSingular != "" {
-			cents, _ := strconv.ParseInt(padRight(g[3], 2, '0'), 10, 64)
+			// Only the first two digits are subunits; anything past them is
+			// below what the currency can express.
+			cents, _ := strconv.ParseInt(padRight(truncate(g[3], 2), 2, '0'), 10, 64)
 			if cents > 0 {
 				result += " and " + amountWords(cents, cur.centSingular, cur.centPlural)
 			}
@@ -317,6 +321,15 @@ func amountWords(n int64, singular, plural string) string {
 		unit = singular
 	}
 	return cardinal(n) + " " + unit
+}
+
+// truncate returns at most the first n bytes of s. It is used on digits, which
+// are one byte each.
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 func padRight(s string, width int, pad byte) string {

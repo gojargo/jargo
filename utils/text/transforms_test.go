@@ -109,6 +109,11 @@ func TestExpandCurrency(t *testing.T) {
 		"It costs $1":            "It costs one dollar",
 		"Paid £3.01":             "Paid three pounds and one penny",
 		"Total ¥100":             "Total one hundred yen",
+		// A fraction with more digits than the currency can express is read to
+		// subunit precision, with nothing left over to say after the words.
+		"The item costs $5.500 today": "The item costs five dollars and fifty cents today",
+		"$3.567":                      "three dollars and fifty-six cents",
+		"£1.999":                      "one pound and ninety-nine pence",
 	}
 	for in, want := range cases {
 		if got := ExpandCurrency(in); got != want {
