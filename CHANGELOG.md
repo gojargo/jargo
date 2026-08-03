@@ -207,8 +207,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   into its own store, `stt.SettingsUpdater` is told what changed and may ask for
   the session to be reopened, and `stt.LanguageNamer` names a language the
   provider's way before the update is applied, so a neutral name and the
-  provider's own code are not mistaken for a change. Wiring for TTS and LLM, and
-  provider adoption, come next.
+  provider's own code are not mistaken for a change. `service/tts.Base` and
+  `service/llm.Base` read them too, through the same optional interfaces on the
+  `Synthesizer` and the `Generator`, and a model that changes relabels the
+  metrics it is measured and priced against. Only STT reopens its session for a
+  change, because only there does the base own the connection; a synthesizer
+  owns its own and reconnects for itself. Provider adoption comes next.
 - **A transcription session reopened for a settings change waits for the user to
   stop speaking**, and the audio arriving in between is held and sent on once the
   new session is up. Replacing the session mid-sentence would drop what is being

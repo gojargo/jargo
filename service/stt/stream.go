@@ -457,23 +457,13 @@ func (s *StreamService) updateSettings(ctx context.Context, f *frames.STTUpdateS
 	}
 	store := holder.Settings()
 
-	delta := f.Delta
-	if delta == nil {
-		// The update arrived as plain names and values, so it has to be given
-		// the shape of this provider's settings before it can be applied.
-		if len(f.Settings) == 0 {
-			return
-		}
-		built, err := settings.NewDelta(store)
-		if err != nil {
-			s.PushError(ctx, "stt: settings update", err, false)
-			return
-		}
-		if err := settings.FromMap(built, f.Settings); err != nil {
-			s.PushError(ctx, "stt: settings update", err, false)
-			return
-		}
-		delta = built
+	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	if err != nil {
+		s.PushError(ctx, "stt: settings update", err, false)
+		return
+	}
+	if !ok {
+		return
 	}
 
 	// Naming the language the provider's way before applying is what keeps the

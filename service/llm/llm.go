@@ -25,6 +25,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	"go.opentelemetry.io/otel/attribute"
@@ -68,14 +69,35 @@ type ToolGenerator interface {
 // ignores cancellation an interruption is delayed until it returns.
 type ToolHandler func(ctx context.Context, args json.RawMessage) (string, error)
 
+// SettingsHolder is an optional interface a Generator implements when part of
+// what it was built with can change while the pipeline runs: the model, the
+// system prompt, the sampling knobs. The value returned is the provider's own
+// store, a pointer to a settings value, which an update is merged into.
+type SettingsHolder interface {
+	Settings() any
+}
+
+// SettingsUpdater is an optional interface a Generator implements to act on a
+// settings change, with what changed and what each field held before. A
+// Generator that holds settings without implementing this still has them
+// updated; it picks them up on the next generation, which is enough for a
+// service that reads its settings each time it generates.
+type SettingsUpdater interface {
+	SettingsHolder
+	UpdateSettings(ctx context.Context, changed settings.Changed) error
+}
+
 // Base is the shared LLM processor. It runs the embedded Generator on each
 // LLMContextFrame and surrounds the streamed text with response start/end
 // frames. When the context carries tools and the generator supports them, it
 // runs the tool loop instead.
 type Base struct {
 	*processor.Base
-	gen   Generator
-	model string // reported as a span attribute; set by the provider via SetModel
+	gen Generator
+
+	// modelMu guards model, which labels the metrics and can change mid-call.
+	modelMu sync.Mutex
+	model   string // reported as a span attribute; set by the provider via SetModel
 
 	handlersMu sync.RWMutex
 	handlers   map[string]ToolHandler
@@ -96,16 +118,27 @@ func New(name string, gen Generator) *Base {
 
 // SetModel records the model id the service generates with, reported as the
 // llm.model span attribute. A provider calls it during construction.
-func (b *Base) SetModel(model string) { b.model = model }
+func (b *Base) SetModel(model string) {
+	b.modelMu.Lock()
+	defer b.modelMu.Unlock()
+	b.model = model
+}
+
+// modelName is the identifier the generation is measured and priced against.
+func (b *Base) modelName() string {
+	b.modelMu.Lock()
+	defer b.modelMu.Unlock()
+	return b.model
+}
 
 // PushTokenUsage emits a MetricsFrame carrying token usage downstream. A service
 // calls it after a generation, gated on UsageMetricsEnabled, so the conversion
 // from the provider's usage shape happens only when metrics are collected.
 func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error {
 	tracing.SetTokenUsage(ctx, u)
-	metrics.RecordTokens(ctx, b.Name(), b.model, u.PromptTokens, u.CompletionTokens)
+	metrics.RecordTokens(ctx, b.Name(), b.modelName(), u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: b.Name(), Model: b.model},
+		BaseMetricsData: frames.BaseMetricsData{Processor: b.Name(), Model: b.modelName()},
 		Value:           u,
 	})
 	return b.PushFrame(ctx, f, processor.Downstream)
@@ -148,15 +181,16 @@ func (b *Base) ttfbMetrics() (time.Duration, bool) {
 // downstream as a MetricsFrame for the RTVI client.
 func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.Duration) {
 	ttfb, hadTTFB := b.ttfbMetrics()
-	metrics.RecordProcessing(ctx, "llm", b.Name(), b.model, processing.Seconds())
+	model := b.modelName()
+	metrics.RecordProcessing(ctx, "llm", b.Name(), model, processing.Seconds())
 	if hadTTFB {
 		span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
-		metrics.RecordTTFB(ctx, "llm", b.Name(), b.model, ttfb.Seconds())
+		metrics.RecordTTFB(ctx, "llm", b.Name(), model, ttfb.Seconds())
 	}
 	if !b.MetricsEnabled() {
 		return
 	}
-	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.model}
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: model}
 	data := []frames.MetricsData{frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing}}
 	if hadTTFB {
 		data = append(data, frames.TTFBMetricsData{BaseMetricsData: base, Value: ttfb})
@@ -170,8 +204,8 @@ func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.
 func (b *Base) startSpan(ctx context.Context) (context.Context, trace.Span) {
 	ctx, span := tracing.Tracer().Start(ctx, "llm")
 	span.SetAttributes(attribute.String("llm.service", b.Name()))
-	if b.model != "" {
-		span.SetAttributes(attribute.String("llm.model", b.model))
+	if model := b.modelName(); model != "" {
+		span.SetAttributes(attribute.String("llm.model", model))
 	}
 	return ctx, span
 }
@@ -185,8 +219,8 @@ func (b *Base) traceRequest(span trace.Span, convo *frames.LLMContext) {
 		attribute.String("gen_ai.output.type", "text"),
 		attribute.Bool("stream", true),
 	)
-	if b.model != "" {
-		span.SetAttributes(attribute.String("gen_ai.request.model", b.model))
+	if model := b.modelName(); model != "" {
+		span.SetAttributes(attribute.String("gen_ai.request.model", model))
 	}
 	if in := traceMessages(convo); in != "" {
 		span.SetAttributes(attribute.String("input", in))
@@ -240,6 +274,52 @@ func (b *Base) RegisterFunction(name string, h ToolHandler) {
 	b.handlers[name] = h
 }
 
+// updateSettings merges an update into the provider's own settings and lets it
+// act on what changed. There is no reconnection here: a generation is a request
+// of its own, so a provider reads its settings the next time it generates.
+func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFrame) {
+	holder, ok := b.gen.(SettingsHolder)
+	if !ok {
+		slog.Warn("settings update for a service whose provider has none", "service", b.Name())
+		return
+	}
+	store := holder.Settings()
+
+	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	if err != nil {
+		b.PushError(ctx, "llm: settings update", err, false)
+		return
+	}
+	if !ok {
+		return
+	}
+
+	changed, err := settings.Apply(store, delta)
+	if err != nil {
+		b.PushError(ctx, "llm: settings update", err, false)
+		return
+	}
+	if len(changed) == 0 {
+		return
+	}
+	slog.Info("updated settings", "service", b.Name(), "fields", changed.String())
+
+	if changed.Has("model") {
+		// The model labels the tokens this service reports and is what they are
+		// priced against, so a model that changed mid-call has to relabel what
+		// follows.
+		name, _ := settings.Get(store, "model")
+		model, _ := name.(string)
+		b.SetModel(model)
+	}
+
+	if updater, ok := b.gen.(SettingsUpdater); ok {
+		if err := updater.UpdateSettings(ctx, changed); err != nil {
+			b.PushError(ctx, "llm: settings update", err, false)
+		}
+	}
+}
+
 // ProcessFrame runs the generator on each LLMContextFrame and forwards other
 // frames untouched.
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
@@ -254,6 +334,13 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 			return err
 		}
 		b.broadcastMetadata(ctx)
+		return nil
+	case *frames.LLMUpdateSettingsFrame:
+		if !fr.TargetsService(b) {
+			// Meant for another service; leave it untouched for that one.
+			return b.PushFrame(ctx, f, dir)
+		}
+		b.updateSettings(ctx, fr)
 		return nil
 	default:
 		return b.PushFrame(ctx, f, dir)

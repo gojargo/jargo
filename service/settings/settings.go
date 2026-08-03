@@ -25,6 +25,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/gojargo/jargo/frames"
 )
 
 // Errors reported when a settings value does not fit where it is being put.
@@ -210,6 +212,26 @@ type STT struct {
 	// Language is the language transcribed, as the service names it. A caller
 	// may give a neutral tag; the service converts it before it is stored.
 	Language Opt[string] `settings:"language"`
+}
+
+// Resolve turns an update into a delta of the store's own type: the typed one
+// the update carries, or one built from the plain names and values it carries
+// instead. It reports false when the update asks for nothing at all.
+func Resolve(f *frames.ServiceUpdateSettingsFrame, store any) (delta any, ok bool, err error) {
+	if f.Delta != nil {
+		return f.Delta, true, nil
+	}
+	if len(f.Settings) == 0 {
+		return nil, false, nil
+	}
+	built, err := NewDelta(store)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := FromMap(built, f.Settings); err != nil {
+		return nil, false, err
+	}
+	return built, true, nil
 }
 
 // Get is what a settings value holds for the named field: the value, and

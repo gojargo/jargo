@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,7 +25,9 @@ import (
 
 	"github.com/gojargo/jargo/audio/onset"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	uctx "github.com/gojargo/jargo/utils/context"
 	ttstext "github.com/gojargo/jargo/utils/text"
@@ -125,6 +128,35 @@ type Describer interface {
 	Metadata() Metadata
 }
 
+// SettingsHolder is an optional interface a Synthesizer implements when part of
+// what it was built with can change while the pipeline runs: the voice it speaks
+// in, the language, the model. The value returned is the provider's own store, a
+// pointer to a settings value, which an update is merged into.
+type SettingsHolder interface {
+	Settings() any
+}
+
+// SettingsUpdater is an optional interface a Synthesizer implements to act on a
+// settings change, with what changed and what each field held before. A provider
+// whose new settings only take effect on a fresh connection reconnects here,
+// which it can do because it owns its connection. A Synthesizer that holds
+// settings without implementing this still has them updated; it picks them up
+// the next time it synthesizes.
+type SettingsUpdater interface {
+	SettingsHolder
+	UpdateSettings(ctx context.Context, changed settings.Changed) error
+}
+
+// LanguageNamer is an optional interface a Synthesizer implements to name a
+// language the way its provider does. Providers disagree on the codes, so a
+// caller naming a language neutrally has it converted before it is stored,
+// leaving the store holding the code the provider itself uses. Without that the
+// stored value and the next update would be in different vocabularies, and a
+// change would be reported for two spellings of the same language.
+type LanguageNamer interface {
+	ServiceLanguage(l language.Language) string
+}
+
 // Closer is an optional interface a Synthesizer implements when it holds a
 // resource open across syntheses, such as a connection it reuses rather than
 // redialing per sentence. The Base closes it when the pipeline tears down. A
@@ -201,6 +233,17 @@ type Base struct {
 	// textAgg times how long grouping text into sentences takes. See
 	// textaggregation.go.
 	textAgg textAggregationMetrics
+
+	// metaMu guards meta, which the model labeling the metrics is read from
+	// and which a settings update can change while a turn is being measured.
+	metaMu sync.Mutex
+}
+
+// model is the identifier the synthesis is measured and priced against.
+func (b *Base) model() string {
+	b.metaMu.Lock()
+	defer b.metaMu.Unlock()
+	return b.meta.Model
 }
 
 // New builds a TTS Base named name driven by syn. The concrete service passes
@@ -287,10 +330,97 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
 		return b.handleStart(ctx, f, dir)
+	case *frames.TTSUpdateSettingsFrame:
+		if !fr.TargetsService(b) {
+			// Meant for another service; leave it untouched for that one.
+			return b.PushFrame(ctx, f, dir)
+		}
+		b.updateSettings(ctx, fr)
+		return nil
 	case *frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
 		return b.handleBotSpeaking(ctx, f, dir)
 	default:
 		return b.queueSerial(ctx, f, dir)
+	}
+}
+
+// updateSettings merges an update into the provider's own settings and lets it
+// act on what changed. A provider whose new settings only take effect on a fresh
+// connection reconnects for itself: unlike a transcription session, which the
+// base owns, a synthesizer owns its own connection.
+func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFrame) {
+	holder, ok := b.syn.(SettingsHolder)
+	if !ok {
+		slog.Warn("settings update for a service whose provider has none", "service", b.Name())
+		return
+	}
+	store := holder.Settings()
+
+	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	if err != nil {
+		b.PushError(ctx, "tts: settings update", err, false)
+		return
+	}
+	if !ok {
+		return
+	}
+
+	// Naming the language the provider's way before applying is what keeps the
+	// comparison honest: the store holds the provider's code, so a neutral name
+	// meaning the same language must be converted first or it reads as a change
+	// when nothing changed.
+	b.nameLanguage(delta)
+
+	changed, err := settings.Apply(store, delta)
+	if err != nil {
+		b.PushError(ctx, "tts: settings update", err, false)
+		return
+	}
+	if len(changed) == 0 {
+		return
+	}
+	slog.Info("updated settings", "service", b.Name(), "fields", changed.String())
+
+	if changed.Has("model") {
+		// The model labels the synthesis this service reports and is what the
+		// characters are priced against, so a model that changed mid-call has to
+		// relabel what follows.
+		name, _ := settings.Get(store, "model")
+		model, _ := name.(string)
+		b.metaMu.Lock()
+		b.meta.Model = model
+		b.metaMu.Unlock()
+	}
+
+	if updater, ok := b.syn.(SettingsUpdater); ok {
+		if err := updater.UpdateSettings(ctx, changed); err != nil {
+			b.PushError(ctx, "tts: settings update", err, false)
+		}
+	}
+}
+
+// nameLanguage rewrites a language the delta gives into the code the provider
+// uses, when the provider says how. A code the provider does not recognize is
+// left as it came, since it may be one the service accepts directly.
+func (b *Base) nameLanguage(delta any) {
+	namer, ok := b.syn.(LanguageNamer)
+	if !ok {
+		return
+	}
+	value, ok := settings.Get(delta, "language")
+	if !ok {
+		return
+	}
+	code, ok := value.(string)
+	if !ok || code == "" {
+		return
+	}
+	named := namer.ServiceLanguage(language.Language(code))
+	if named == "" || named == code {
+		return
+	}
+	if err := settings.SetNamed(delta, "language", named); err != nil {
+		slog.Warn("naming the language the provider's way failed", "service", b.Name(), "err", err)
 	}
 }
 
@@ -675,18 +805,19 @@ func (b *Base) runTTS(ctx context.Context, c *audioContext, contextID, original,
 // when in-band metrics are enabled, downstream as a MetricsFrame for the RTVI
 // client.
 func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processing time.Duration) {
-	metrics.RecordProcessing(ctx, "tts", b.Name(), b.meta.Model, processing.Seconds())
-	metrics.RecordTTSCharacters(ctx, b.Name(), b.meta.Model, int64(chars))
+	model := b.model()
+	metrics.RecordProcessing(ctx, "tts", b.Name(), model, processing.Seconds())
+	metrics.RecordTTSCharacters(ctx, b.Name(), model, int64(chars))
 	if m.hadTTFB {
-		metrics.RecordTTFB(ctx, "tts", b.Name(), b.meta.Model, m.ttfb.Seconds())
+		metrics.RecordTTFB(ctx, "tts", b.Name(), model, m.ttfb.Seconds())
 	}
 	if m.hadTTFA {
-		metrics.RecordTTFA(ctx, "tts", b.Name(), b.meta.Model, m.ttfa.Seconds())
+		metrics.RecordTTFA(ctx, "tts", b.Name(), model, m.ttfa.Seconds())
 	}
 	if !b.MetricsEnabled() {
 		return
 	}
-	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.meta.Model}
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.model()}
 	data := []frames.MetricsData{
 		frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing},
 		frames.TTSUsageMetricsData{BaseMetricsData: base, Value: chars},
