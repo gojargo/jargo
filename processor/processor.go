@@ -50,6 +50,11 @@ type Setup struct {
 	Clock clock.Clock
 	// Observers watch every frame handed between processors.
 	Observers []Observer
+	// Tracing is the session's tracing state: the conversation span the trace
+	// hangs from and the turn being spoken. Processors parent their spans to it,
+	// so a span raised away from the frame path still lands under the turn it
+	// belongs to. Nil when the pipeline is not traced.
+	Tracing *tracing.TracingContext
 }
 
 // Processor is a node in a pipeline. Concrete processors embed *Base, which
@@ -142,6 +147,7 @@ type Base struct {
 	directMode bool
 	clock      clock.Clock
 	observers  []Observer
+	tracing    *tracing.TracingContext
 
 	// Lifetime context for the processor's goroutines, canceled on Cleanup.
 	baseCtx    context.Context
@@ -248,11 +254,17 @@ func (b *Base) setPrev(p Processor) { b.prev = p }
 // Clock returns the pipeline clock, available after Setup.
 func (b *Base) Clock() clock.Clock { return b.clock }
 
+// Tracing returns the session's tracing state, available after Setup. It is nil
+// when the pipeline is not traced, which its methods handle: parent a span with
+// Tracing().Parent(ctx) without checking.
+func (b *Base) Tracing() *tracing.TracingContext { return b.tracing }
+
 // Setup implements Processor. It stores shared components and starts the input
 // goroutine (unless the processor is in direct mode).
 func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.clock = s.Clock
 	b.observers = s.Observers
+	b.tracing = s.Tracing
 	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
 	if !b.directMode {
 		b.pauseMu.Lock()
@@ -418,7 +430,7 @@ func (b *Base) Broadcast(ctx context.Context, build func() frames.Frame) error {
 // the conversion from the provider's usage shape happens only when metrics are
 // collected.
 func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTokenUsage) error {
-	ctx, span := tracing.Tracer().Start(ctx, "llm")
+	ctx, span := tracing.Tracer().Start(b.tracing.Parent(ctx), "llm")
 	span.SetAttributes(attribute.String("llm.service", b.name))
 	if model != "" {
 		span.SetAttributes(attribute.String("llm.model", model))

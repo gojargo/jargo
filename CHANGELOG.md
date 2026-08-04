@@ -14,6 +14,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A task traces the session it runs**, so a call is one trace shaped like the
+  conversation it recorded: a `conversation` span at the root, a `turn` span per
+  turn beneath it, and each turn's STT, LLM and TTS spans beneath that.
+  `pipeline.TaskParams` gains `EnableTracing`, `ConversationID`,
+  `AdditionalSpanAttributes` and `EnableTurnTracking`; the turn spans carry
+  `turn.number`, `turn.duration_seconds`, `turn.was_interrupted` and
+  `turn.user_bot_latency_seconds`, and the conversation span carries whatever
+  attributes the caller adds — which is where a backend's own grouping keys go
+  (`langfuse.session.id`, `langfuse.user.id`). Services parent their spans to the
+  turn through the new `tracing.TracingContext`, handed to them at setup as
+  `processor.Setup.Tracing` and reachable as `processor.Base.Tracing()`, so a span
+  raised away from the frame path — a TTS synthesis played out on the audio queue
+  — lands under the turn it belongs to instead of starting a trace of its own.
+  `tracing.StartConversation` is gone: the task opens the conversation span now,
+  and `observers.TurnTrace` writes it.
 - **A `MetricsFrame` carries a list of measurements**, so one frame can report
   several kinds, and several processors, at once. Where it had a fixed set of
   optional fields it now has `Data []frames.MetricsData`, whose concrete types

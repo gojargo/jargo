@@ -118,7 +118,7 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		return
 	}
 	s.wg.Go(func() {
-		sctx, span := tracing.Tracer().Start(ctx, "stt")
+		sctx, span := tracing.Tracer().Start(s.Tracing().Parent(ctx), "stt")
 		defer span.End()
 		played := pcmDuration(int64(len(audio)), rate)
 		span.SetAttributes(

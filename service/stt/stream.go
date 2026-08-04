@@ -459,7 +459,8 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 	s.mu.Unlock()
 	metrics.RecordSTTAudio(ctx, s.Name(), model, audio.Seconds())
 	s.pushUsageMetrics(ctx, audio)
-	sctx, span := tracing.Tracer().Start(ctx, "stt", trace.WithTimestamp(connectedAt))
+	sctx, span := tracing.Tracer().Start(
+		s.Tracing().Parent(ctx), "stt", trace.WithTimestamp(connectedAt))
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("stt.service", s.Name()),

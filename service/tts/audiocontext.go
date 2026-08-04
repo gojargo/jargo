@@ -348,7 +348,10 @@ func (b *Base) drainAudioContexts() {
 // CreateAudioContext opens a context and queues it for playback behind whatever
 // is already queued, so contexts are played in the order they were created.
 func (b *Base) CreateAudioContext(contextID string) {
-	spanCtx, span := tracing.Tracer().Start(context.Background(), "tts")
+	// The context is played out on the serialization queue, long after the frame
+	// that opened it was processed, so the span is parented explicitly to the
+	// turn being spoken rather than through a context that is already gone.
+	spanCtx, span := tracing.Tracer().Start(b.Tracing().Parent(context.Background()), "tts")
 	span.SetAttributes(
 		attribute.String("tts.service", b.Name()),
 		attribute.Int("tts.sample_rate", b.syn.SampleRate()),

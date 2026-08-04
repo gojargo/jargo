@@ -202,7 +202,7 @@ func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.
 // model. The returned context carries the span so PushTokenUsage and any nested
 // work attach to it.
 func (b *Base) startSpan(ctx context.Context) (context.Context, trace.Span) {
-	ctx, span := tracing.Tracer().Start(ctx, "llm")
+	ctx, span := tracing.Tracer().Start(b.Tracing().Parent(ctx), "llm")
 	span.SetAttributes(attribute.String("llm.service", b.Name()))
 	if model := b.modelName(); model != "" {
 		span.SetAttributes(attribute.String("llm.model", model))

@@ -6,7 +6,10 @@ import (
 
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/telemetry/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Default sample rates used for the StartFrame when not overridden.
@@ -42,6 +45,23 @@ type TaskParams struct {
 	// Observers watch every frame reaching either end of the pipeline. They are
 	// notified after the OnReached callbacks.
 	Observers []Observer
+	// EnableTurnTracking tracks the conversation's turns and raises a span for
+	// each; nil defaults to true. Turning it off leaves a traced task with the
+	// conversation span and the service spans beneath it. It says nothing about
+	// an untraced task, which has nowhere to report turns to.
+	EnableTurnTracking *bool
+	// EnableTracing opens a span for the conversation and one for each turn
+	// beneath it, and gives the processors the tracing context their own spans
+	// hang from, so a session is one trace shaped like the conversation it
+	// recorded. It needs a TracerProvider installed (see telemetry/tracing);
+	// without one the spans are no-ops.
+	EnableTracing bool
+	// ConversationID names the traced conversation; empty generates one.
+	ConversationID string
+	// AdditionalSpanAttributes are set on the conversation span, on top of the
+	// ones the task sets itself. They are where the keys a trace backend reads
+	// from the root span belong — a session id, a user id, tags.
+	AdditionalSpanAttributes []attribute.KeyValue
 }
 
 // Task runs a pipeline for a single session. It drives the lifecycle: it sends
@@ -56,6 +76,15 @@ type Task struct {
 	clk      clock.Clock
 
 	pushQueue *frameQueue
+
+	// observers are the caller's, plus the ones the task registers itself to
+	// track and trace turns.
+	observers []Observer
+	// tracing is the session's tracing state, handed to the processors at setup;
+	// nil when the task is not tracing.
+	tracing *tracing.TracingContext
+	// turnTrace writes the conversation and turn spans; nil when not tracing.
+	turnTrace *observers.TurnTrace
 
 	startOnce sync.Once
 	startSig  chan struct{}
@@ -86,6 +115,7 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 	if t.clk == nil {
 		t.clk = clock.NewSystem()
 	}
+	t.buildObservers()
 	// The source observes upstream frames, the sink observes downstream frames.
 	// They bracket the user pipeline so the task can inject and observe frames.
 	t.source = processor.NewSource("Task::Source", t.sourcePush)
@@ -93,6 +123,40 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 	t.pipeline = build(t.source, t.sink, []processor.Processor{pipe})
 	return t
 }
+
+// buildObservers assembles the observers the pipeline runs with: the caller's,
+// and — when the task traces — the turn tracing, plus the turn tracking and
+// latency measurement that feed it.
+func (t *Task) buildObservers() {
+	t.observers = append([]Observer(nil), t.params.Observers...)
+	if !t.params.EnableTracing {
+		return
+	}
+	t.tracing = tracing.NewTracingContext()
+	t.turnTrace = observers.NewTurnTrace(observers.TurnTraceConfig{
+		Tracing:        t.tracing,
+		ConversationID: t.params.ConversationID,
+		Attributes:     t.params.AdditionalSpanAttributes,
+	})
+	t.observers = append(t.observers, t.turnTrace)
+	if t.params.EnableTurnTracking != nil && !*t.params.EnableTurnTracking {
+		return
+	}
+	t.observers = append(t.observers,
+		observers.NewTurnTracking(observers.TurnTrackingConfig{
+			OnTurnStarted: t.turnTrace.TurnStarted,
+			OnTurnEnded:   t.turnTrace.TurnEnded,
+		}),
+		observers.NewUserBotLatency(observers.LatencyConfig{
+			OnLatency: t.turnTrace.LatencyMeasured,
+		}),
+	)
+}
+
+// Tracing is the session's tracing state: the conversation span the trace hangs
+// from and the turn being spoken. It is nil unless the task traces, and is what
+// the processors are given at setup so their spans land under the right turn.
+func (t *Task) Tracing() *tracing.TracingContext { return t.tracing }
 
 // QueueFrame queues a frame to be pushed downstream through the pipeline.
 func (t *Task) QueueFrame(f frames.Frame) { t.pushQueue.push(f) }
@@ -162,7 +226,8 @@ func (t *Task) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if err := t.pipeline.Setup(runCtx, processor.Setup{Clock: t.clk, Observers: t.params.Observers}); err != nil {
+	setup := processor.Setup{Clock: t.clk, Observers: t.observers, Tracing: t.tracing}
+	if err := t.pipeline.Setup(runCtx, setup); err != nil {
 		return err
 	}
 
@@ -171,6 +236,10 @@ func (t *Task) Run(ctx context.Context) error {
 	// Clean up with a fresh context so a canceled runCtx does not abort the
 	// goroutine shutdown.
 	_ = t.pipeline.Cleanup(context.Background())
+
+	// The conversation span closes last, once the processors have stopped and
+	// the spans raised beneath it have ended.
+	t.turnTrace.EndConversation()
 
 	t.mu.Lock()
 	t.finished = true

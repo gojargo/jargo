@@ -3,15 +3,17 @@
 // The service processors emit spans through the global tracer, so
 // instrumentation costs nothing until a TracerProvider is installed — without
 // one, Tracer returns a no-op. Call Init at startup to export spans over OTLP,
-// and wrap each session in StartConversation so the per-turn STT, LLM and TTS
-// spans nest under a single trace:
+// and let the task trace the session so the conversation, its turns and the STT,
+// LLM and TTS calls of each turn nest under a single trace:
 //
 //	shutdown, err := tracing.Init(ctx, tracing.Config{ServiceName: "voicebot"})
 //	defer shutdown(context.Background())
 //	...
-//	ctx, span := tracing.StartConversation(ctx, sessionID)
-//	defer span.End()
-//	task.Run(ctx) // LLM/TTS spans nest under the conversation span
+//	task := pipeline.NewTask(pipe, pipeline.TaskParams{
+//		EnableTracing:  true,
+//		ConversationID: sessionID,
+//	})
+//	task.Run(ctx)
 package tracing
 
 import (
@@ -91,18 +93,6 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 	)
 	otel.SetTracerProvider(tp)
 	return tp.Shutdown, nil
-}
-
-// StartConversation begins the root span for one session. The returned context
-// carries the span, so service spans created while processing the session's
-// frames nest under it; pass it to pipeline.Task.Run. Call End on the returned
-// span when the session ends.
-func StartConversation(ctx context.Context, id string) (context.Context, trace.Span) {
-	ctx, span := Tracer().Start(ctx, "conversation")
-	if id != "" {
-		span.SetAttributes(attribute.String("conversation.id", id))
-	}
-	return ctx, span
 }
 
 // SetTokenUsage records LLM token usage on the span in ctx. It dual-writes the

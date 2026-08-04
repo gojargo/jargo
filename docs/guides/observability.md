@@ -105,22 +105,43 @@ forwards them to a client.
 
 ## Tracing
 
-Spans per conversation and per service call, over OpenTelemetry:
+Spans per conversation, per turn and per service call, over OpenTelemetry:
 
 ```go
 shutdown, err := tracing.Init(ctx, tracing.Config{ /* … */ })
 defer shutdown(ctx)
 
-ctx, span := tracing.StartConversation(ctx, sessionID)
-defer span.End()
-
+task := pipeline.NewTask(pipe, pipeline.TaskParams{
+	EnableTracing:  true,
+	ConversationID: sessionID, // empty generates one
+	// Attributes on the conversation span, which is the root of the trace — where
+	// a backend's own keys go (a session id, a user id, tags).
+	AdditionalSpanAttributes: []attribute.KeyValue{
+		attribute.String("langfuse.session.id", sessionID),
+		attribute.String("langfuse.user.id", userID),
+	},
+})
 task.Run(ctx)
 ```
 
-`StartConversation` roots every span for the session under one trace, so a slow
-turn can be opened up stage by stage: STT finalize → LLM first token → TTS first
-audio. That breakdown is the fastest way to find which provider is costing you the
-latency.
+The session is one trace, shaped like the conversation it recorded:
+
+```
+conversation                       conversation.id, conversation.type
+└── turn                           turn.number, turn.duration_seconds,
+    ├── stt                        turn.was_interrupted,
+    ├── llm                        turn.user_bot_latency_seconds
+    └── tts
+```
+
+So a slow turn can be opened up stage by stage: STT finalize → LLM first token →
+TTS first audio. That breakdown is the fastest way to find which provider is
+costing you the latency, and the turn span carries the number that matters most —
+`turn.user_bot_latency_seconds` — beside it.
+
+Turn spans come from the turn tracking the task runs for them; set
+`EnableTurnTracking` to `false` to trace the conversation and its service calls
+without them.
 
 Token usage lands on spans as `gen_ai.usage.*` attributes via
 `tracing.SetTokenUsage`, with `SetTTSUsage` and `SetSTTUsage` alongside.

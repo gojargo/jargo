@@ -222,12 +222,12 @@ func runBot(conn *rtc.Connection, v *viper.Viper) {
 		// the RTVI client sees live latency.
 		EnableMetrics:      true,
 		EnableUsageMetrics: true,
+		// Trace the session: one span for the conversation, one per turn, and the
+		// service spans of each turn beneath it.
+		EnableTracing: true,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Root span for the session; the LLM and TTS spans nest under it.
-	ctx, span := tracing.StartConversation(ctx, "")
-	defer span.End()
 	go func() {
 		<-conn.Done()
 		cancel()
