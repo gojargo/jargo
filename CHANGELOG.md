@@ -14,6 +14,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The Kyutai moshi-server services moved to `provider/kyutai/moshi`.** Kyutai
+  now offers two self-hosted models in the tree, moshi-server and Pocket TTS, so
+  the vendor directory holds one package per server the way `aws`, `azure` and
+  `openai` do. Update the import path and the qualifier: `kyutai.NewSTT` becomes
+  `moshi.NewSTT`. Nothing about the services themselves changed, the processor
+  names `KyutaiSTT` and `KyutaiTTS` included, so metrics and logs read as before.
 - **A task traces the session it runs**, so a call is one trace shaped like the
   conversation it recorded: a `conversation` span at the root, a `turn` span per
   turn beneath it, and each turn's STT, LLM and TTS spans beneath that.
@@ -155,8 +161,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   it is generated, so the first samples arrive well before the sentence is
   finished. The voice is per request, either a name the server knows or a URL of
   a recording to clone; the language belongs to the server, which loads its
-  weights per language when it starts. It sits under `provider/kyutai` beside
-  the moshi-server models, which are a separate server of the same vendor.
+  weights per language when it starts.
 - **The LiveKit transport reads inbound SIP DTMF.** A key pressed by a caller on
   a SIP leg of the room becomes an `InputDTMFFrame`, so the DTMF aggregator works
   on a LiveKit call as it does on a telephony one. `frames.KeypadEntry.Valid`

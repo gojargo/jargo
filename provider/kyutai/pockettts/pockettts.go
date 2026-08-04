@@ -11,8 +11,8 @@
 // a recording to clone.
 //
 // Kyutai's other self-hosted models, the Delayed Streams Modeling speech-to-text
-// and text-to-speech served by moshi-server, are in the parent package
-// [github.com/gojargo/jargo/provider/kyutai]. They are a separate server
+// and text-to-speech served by moshi-server, are in
+// [github.com/gojargo/jargo/provider/kyutai/moshi]. They are a separate server
 // speaking a separate protocol.
 package pockettts
 

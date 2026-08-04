@@ -1,4 +1,4 @@
-package kyutai
+package moshi
 
 import "encoding/binary"
 

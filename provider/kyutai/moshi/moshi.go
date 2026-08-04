@@ -1,4 +1,4 @@
-// Package kyutai provides streaming speech-to-text and text-to-speech backed by
+// Package moshi provides streaming speech-to-text and text-to-speech backed by
 // a self-hosted Kyutai moshi-server (the Delayed Streams Modeling STT and TTS
 // models). Both talk MessagePack over a WebSocket: STT streams 24 kHz float32
 // PCM up and receives word and semantic-VAD messages back; TTS streams words up
@@ -8,7 +8,11 @@
 // single finalized end-of-turn transcript when moshi's semantic VAD predicts a
 // pause, so it works whether the pipeline runs its own turn detection or leans
 // on that end-of-turn signal.
-package kyutai
+//
+// Kyutai's other self-hosted model, the CPU-only Pocket TTS, is in
+// [github.com/gojargo/jargo/provider/kyutai/pockettts]. It is a separate server
+// speaking a separate protocol.
+package moshi
 
 import (
 	"github.com/gojargo/jargo/internal/validate"
