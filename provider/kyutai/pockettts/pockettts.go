@@ -1,14 +1,19 @@
 // Package pockettts is a text-to-speech provider for a local Pocket TTS server
-// (kyutai-labs' pocket-tts, started with `pocket-tts serve`). Pocket TTS is a
-// small CPU-only model: the server holds the weights in memory and streams the
-// audio back as it is generated, so the first samples arrive well before the
-// sentence is finished.
+// (Kyutai's pocket-tts, started with `pocket-tts serve`). Pocket TTS is a small
+// CPU-only model: the server holds the weights in memory and streams the audio
+// back as it is generated, so the first samples arrive well before the sentence
+// is finished.
 //
 // The server chooses its language when it starts (`pocket-tts serve --language
 // french_24l`), and the weights are per language, so the language is not part of
 // a request and cannot be changed while the server runs. Run one server per
 // language a bot speaks. The voice is per request: a built-in name, or a URL of
 // a recording to clone.
+//
+// Kyutai's other self-hosted models, the Delayed Streams Modeling speech-to-text
+// and text-to-speech served by moshi-server, are in the parent package
+// [github.com/gojargo/jargo/provider/kyutai]. They are a separate server
+// speaking a separate protocol.
 package pockettts
 
 import (

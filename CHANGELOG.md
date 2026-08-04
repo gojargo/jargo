@@ -150,14 +150,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   distinct languages, which `Validate` checks rather than leaving the service to
   close the session over it. The steering is prompt-based, so it is sent to U3
   Pro models alone.
-- **`provider/pockettts`**, speech synthesis from a local Pocket TTS server
-  (`pocket-tts serve`): a small CPU-only model whose audio streams back as it is
-  generated, so the first samples arrive well before the sentence is finished.
-  The voice is per request, either a name the server knows or a URL of a
-  recording to clone; the language belongs to the server, which loads its
-  weights per language when it starts. Note that upstream runs this model in
-  process, which Go cannot do, so jargo talks to the model's own server, as it
-  does for Piper and XTTS.
+- **`provider/kyutai/pockettts`**, speech synthesis from a local Pocket TTS
+  server (`pocket-tts serve`): a small CPU-only model whose audio streams back as
+  it is generated, so the first samples arrive well before the sentence is
+  finished. The voice is per request, either a name the server knows or a URL of
+  a recording to clone; the language belongs to the server, which loads its
+  weights per language when it starts. It sits under `provider/kyutai` beside
+  the moshi-server models, which are a separate server of the same vendor.
 - **The LiveKit transport reads inbound SIP DTMF.** A key pressed by a caller on
   a SIP leg of the room becomes an `InputDTMFFrame`, so the DTMF aggregator works
   on a LiveKit call as it does on a telephony one. `frames.KeypadEntry.Valid`
