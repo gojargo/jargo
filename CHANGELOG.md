@@ -29,6 +29,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   — lands under the turn it belongs to instead of starting a trace of its own.
   `tracing.StartConversation` is gone: the task opens the conversation span now,
   and `observers.TurnTrace` writes it.
+- **A websocket service no longer reconnects once its session is over.** A read
+  that fails because the context is done would redial on that same finished
+  context and fail every attempt, so the end of every call logged a burst of
+  connection errors that read like a provider outage.
 - **A `MetricsFrame` carries a list of measurements**, so one frame can report
   several kinds, and several processors, at once. Where it had a fixed set of
   optional fields it now has `Data []frames.MetricsData`, whose concrete types

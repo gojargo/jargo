@@ -387,6 +387,30 @@ func TestDeliberateDisconnectPreventsReconnection(t *testing.T) {
 	}
 }
 
+// A read that failed because the session ended is not a lost connection: the
+// context it would redial on is already finished, so every attempt would fail
+// and say so in the log.
+func TestEndedSessionPreventsReconnection(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	h := &handler{receive: func(int) error {
+		cancel()
+		return ctx.Err()
+	}}
+	rec := &recorder{}
+	b := newTestBase(t, h, newClock())
+
+	b.ReceiveTaskHandler(ctx, rec.report)
+
+	if got := rec.all(); len(got) != 0 {
+		t.Errorf("reported %v, want nothing reported for a session that ended", got)
+	}
+	if _, connects, _ := h.counts(); connects != 0 {
+		t.Errorf("redialed %d times, want none after the session ended", connects)
+	}
+}
+
 func TestConnectResetsState(t *testing.T) {
 	t.Parallel()
 

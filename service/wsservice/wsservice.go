@@ -189,6 +189,15 @@ func (b *Base) maybeTryReconnect(ctx context.Context, message string, err error,
 		return false
 	}
 
+	if ctx.Err() != nil {
+		// The session is over: the read did not fail, it was stopped. Redialing
+		// would dial on the same finished context and fail every attempt, which
+		// reads in the log like a provider that went down at the end of every
+		// call.
+		slog.Debug("websocket receive loop ended with the session", "err", err)
+		return false
+	}
+
 	if last := b.lastConnectTime(); !last.IsZero() {
 		lasted := b.now().Sub(last)
 		result := b.tracker.Record(lasted)
