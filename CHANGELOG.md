@@ -175,6 +175,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A WebSocket service stops redialing a handshake the server refused.** A
+  rejected key or a model an account cannot use was retried three times with a
+  backoff in between, delaying the error the caller needed to see. `wsutil.Dial`
+  now returns a `*wsutil.HandshakeError` carrying the refused status, and the
+  reconnect gives up on a 4xx while still retrying anything that might not
+  repeat.
 - **Polly escapes the XML-reserved characters in the text it speaks.** An
   ampersand or an angle bracket in a reply broke the SSML document, which Polly
   rejects outright, so the whole sentence went unsaid.

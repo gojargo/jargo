@@ -5,9 +5,11 @@
 // recycling, a proxy timing out an idle socket. Left alone that ends the
 // service for the rest of the call, so the base reconnects. It runs the receive
 // loop, and when the connection fails it retries with an exponential backoff,
-// reporting each failed attempt without ending the call. Retrying does have a
-// limit: a connection that keeps failing the instant it is established is not
-// waiting on the network, so the base gives up rather than retry forever.
+// reporting each failed attempt without ending the call. Retrying has two
+// limits: a connection that keeps failing the instant it is established is not
+// waiting on the network, and a handshake the server refused outright (a
+// rejected key, say) will be refused again. Either way the base gives up rather
+// than retry into a wall.
 //
 // A service supplies the provider-specific half through Handler and owns the
 // socket itself; the base only says when to open it, close it, and read from it.
@@ -22,6 +24,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/gojargo/jargo/utils/network"
 )
 
@@ -234,6 +237,17 @@ func (b *Base) TryReconnect(ctx context.Context, report ReportError) bool {
 			slog.Error("websocket reconnection attempt failed", "attempt", attempt, "err", err)
 			if report != nil {
 				report(ctx, fmt.Sprintf("reconnection attempt %d failed: %v", attempt, err))
+			}
+			if wsutil.Permanent(err) {
+				// The server refused the request itself, a rejected key or a
+				// model the account cannot use. It will refuse the next one the
+				// same way, so retrying only delays the news.
+				message := fmt.Sprintf("giving up: %v", err)
+				slog.Error(message)
+				if report != nil {
+					report(ctx, message)
+				}
+				return false
 			}
 		case ok:
 			slog.Info("websocket reconnected", "attempt", attempt)

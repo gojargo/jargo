@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 // Static failures for the tests to hand back, so each one names what broke.
@@ -500,5 +501,42 @@ func TestSendWithRetryTreatsNoConnectionAsAFailedSend(t *testing.T) {
 	}
 	if _, connects, _ := h.counts(); connects != 1 {
 		t.Errorf("redialed %d times, want 1", connects)
+	}
+}
+
+// A handshake the server refused ends the retrying at once: it will refuse the
+// next dial the same way, so redialing only delays the news.
+func TestPermanentRefusalStopsRetrying(t *testing.T) {
+	t.Parallel()
+
+	refused := &wsutil.HandshakeError{StatusCode: 401, Err: errRefused}
+	h := &handler{connect: func(int) error { return refused }}
+	rec := &recorder{}
+	b := newTestBase(t, h, newClock())
+
+	if b.TryReconnect(t.Context(), rec.report) {
+		t.Fatal("reconnect claimed success against a refused handshake")
+	}
+	if _, connects, _ := h.counts(); connects != 1 {
+		t.Errorf("redialed %d times, want 1: a refusal is not worth repeating", connects)
+	}
+	if last := rec.last(); !strings.Contains(last, "giving up") || !strings.Contains(last, "401") {
+		t.Errorf("final report %q does not say it gave up, or on what", last)
+	}
+}
+
+// A refusal the server may not repeat is retried like any other failure.
+func TestServerErrorIsRetried(t *testing.T) {
+	t.Parallel()
+
+	failed := &wsutil.HandshakeError{StatusCode: 503, Err: errRefused}
+	h := &handler{connect: func(int) error { return failed }}
+	b := newTestBase(t, h, newClock())
+
+	if b.TryReconnect(t.Context(), nil) {
+		t.Fatal("reconnect claimed success with every attempt failing")
+	}
+	if _, connects, _ := h.counts(); connects != 3 {
+		t.Errorf("redialed %d times, want 3: a server-side failure may not repeat", connects)
 	}
 }

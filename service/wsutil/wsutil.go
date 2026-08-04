@@ -6,6 +6,8 @@ package wsutil
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -60,15 +62,56 @@ func (c *Conn) SetCloseTimeout(d time.Duration) {
 	}
 }
 
+// HandshakeError is returned when the server refused the WebSocket handshake. It
+// carries the status it refused with, so a caller can tell a request the server
+// will go on refusing (a rejected key, a model the account cannot use) from a
+// failure that may not repeat.
+type HandshakeError struct {
+	// StatusCode is the HTTP status the server refused the handshake with.
+	StatusCode int
+	// Err is the underlying dial failure.
+	Err error
+}
+
+// Error implements error.
+func (e *HandshakeError) Error() string {
+	return fmt.Sprintf("websocket handshake refused with status %d: %v", e.StatusCode, e.Err)
+}
+
+// Unwrap returns the underlying dial failure.
+func (e *HandshakeError) Unwrap() error { return e.Err }
+
+// Permanent reports whether the server refused the request itself, rather than
+// failing in a way that might not repeat. Retrying a refusal only spends the
+// time before the caller learns of it.
+func (e *HandshakeError) Permanent() bool {
+	return e.StatusCode >= http.StatusBadRequest && e.StatusCode < http.StatusInternalServerError
+}
+
+// Permanent reports whether err is a refusal the server will repeat, so there is
+// nothing to gain by dialing again.
+func Permanent(err error) bool {
+	var he *HandshakeError
+	return errors.As(err, &he) && he.Permanent()
+}
+
 // Dial opens a WebSocket to url with the given headers, closes the handshake
 // response body, and applies readLimit when it is positive. The caller owns the
-// returned connection and must Close it.
+// returned connection and must Close it. A handshake the server refused comes
+// back as a *HandshakeError carrying the status.
 func Dial(ctx context.Context, url string, header http.Header, readLimit int64) (*Conn, error) {
 	conn, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 	}
 	if err != nil {
+		if status != 0 {
+			return nil, &HandshakeError{StatusCode: status, Err: err}
+		}
 		return nil, err
 	}
 	if readLimit > 0 {

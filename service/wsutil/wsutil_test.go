@@ -1,6 +1,7 @@
 package wsutil_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -220,5 +221,52 @@ func TestSetCloseTimeoutIgnoresNonPositive(t *testing.T) {
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 	if elapsed := time.Since(start); elapsed < timeout {
 		t.Errorf("Close returned after %v, so a zero timeout replaced the one set", elapsed)
+	}
+}
+
+// A handshake the server refused comes back naming the status, so a caller can
+// tell a request that will keep being refused from a failure that may not
+// repeat.
+func TestDialReportsTheRefusedStatus(t *testing.T) {
+	cases := map[int]bool{
+		http.StatusUnauthorized:       true,  // a rejected key: refused again next time
+		http.StatusForbidden:          true,  // likewise
+		http.StatusServiceUnavailable: false, // may well work on the next dial
+		http.StatusBadGateway:         false,
+	}
+	for status, wantPermanent := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+
+		_, err := wsutil.Dial(t.Context(), wsURL(srv), nil, 0)
+		srv.Close()
+		if err == nil {
+			t.Fatalf("status %d: Dial succeeded against a server that refused it", status)
+		}
+
+		var he *wsutil.HandshakeError
+		if !errors.As(err, &he) {
+			t.Errorf("status %d: error %v does not carry the refused status", status, err)
+			continue
+		}
+		if he.StatusCode != status {
+			t.Errorf("reported status %d, want %d", he.StatusCode, status)
+		}
+		if got := wsutil.Permanent(err); got != wantPermanent {
+			t.Errorf("status %d: Permanent = %v, want %v", status, got, wantPermanent)
+		}
+	}
+}
+
+// A failure with no handshake behind it, an address nothing is listening on, is
+// left as it is: there is no status to read and it may not repeat.
+func TestDialFailureWithoutAHandshakeIsNotPermanent(t *testing.T) {
+	_, err := wsutil.Dial(t.Context(), "ws://127.0.0.1:1", nil, 0)
+	if err == nil {
+		t.Fatal("Dial succeeded against a closed port")
+	}
+	if wsutil.Permanent(err) {
+		t.Errorf("a dial that never reached a server is treated as permanent: %v", err)
 	}
 }
