@@ -146,22 +146,28 @@ func emitLine(line []byte, emit func(pcm []byte) error) error {
 	return emit(pcm)
 }
 
-// inworldLanguage maps a Language to Inworld's BCP-47 language tag. The zero
-// value leaves it unset; unmapped languages fall back to their full BCP-47 code.
-// inworldBase maps a base language code to Inworld's BCP-47 tag.
+// inworldTags gives each language Inworld verifies the tag it is named by, which
+// carries a region the language itself does not.
 //
 //nolint:gochecknoglobals // lookup table
-var inworldBase = map[string]string{
+var inworldTags = map[string]string{
 	"ar": "ar-SA", "de": "de-DE", "en": "en-US", "es": "es-ES", "fr": "fr-FR",
 	"he": "he-IL", "hi": "hi-IN", "it": "it-IT", "ja": "ja-JP", "ko": "ko-KR",
 	"nl": "nl-NL", "pl": "pl-PL", "pt": "pt-BR", "ru": "ru-RU", "zh": "zh-CN",
 }
 
+// inworldLanguage names a language the way Inworld does. The zero value leaves
+// it unset, a verified language takes its tag, and anything else is passed
+// through as it was given.
+//
+// The lookup is on the whole code rather than the base, so a caller asking for a
+// region gets that region: British English stays en-GB rather than being read as
+// verified English and answered in en-US.
 func inworldLanguage(l language.Language) string {
 	if l == "" {
 		return ""
 	}
-	if c, ok := inworldBase[l.BaseCode()]; ok {
+	if c, ok := inworldTags[l.Code()]; ok {
 		return c
 	}
 	return l.Code()
