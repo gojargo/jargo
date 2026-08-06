@@ -263,19 +263,20 @@ func newOutput(sess *Session, ser Serializer, params transport.Params) *outputTr
 }
 
 // WriteAudio serializes a PCM chunk to a provider media message and sends it.
-func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
 	msg, err := out.ser.Serialize(f)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if msg == nil {
-		return nil
+		// The serializer had nothing to send for this frame.
+		return false, nil
 	}
 	if err := out.sess.write(ctx, msg); err != nil {
-		return err
+		return false, err
 	}
 	out.writeAudioSleep(ctx)
-	return nil
+	return true, nil
 }
 
 // writeAudioSleep blocks until the next chunk is due, so audio leaves at the

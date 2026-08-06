@@ -473,13 +473,12 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 				s.signalDrained()
 				continue
 			}
-			if pcm, _, _ := outputAudio(queued); pcm != nil {
-				if mixed, err := s.mixer.Mix(ctx, pcm); err == nil {
-					setOutputAudio(queued, mixed)
-				}
+			if s.blendMixer(ctx, queued) {
 				lastAudioAt = time.Now()
 			}
-			s.handleQueuedFrame(ctx, queued)
+			if !s.handleQueuedFrame(ctx, queued) {
+				return
+			}
 			continue
 		}
 
@@ -492,9 +491,26 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 		if err != nil {
 			mixed = silence
 		}
-		s.handleQueuedFrame(ctx, s.address(
-			frames.NewOutputAudioRawFrame(mixed, s.sampleRate, s.channels)))
+		if !s.handleQueuedFrame(ctx, s.address(
+			frames.NewOutputAudioRawFrame(mixed, s.sampleRate, s.channels))) {
+			return
+		}
 	}
+}
+
+// blendMixer mixes the mixer's audio into a queued frame, in place. It reports
+// whether the frame carried any audio to mix into, which is how the loop knows
+// when audio last flowed. A mix that fails leaves the frame as it was, so the
+// bot is still heard without the auxiliary audio behind it.
+func (s *mediaSender) blendMixer(ctx context.Context, f frames.Frame) bool {
+	pcm, _, _ := outputAudio(f)
+	if pcm == nil {
+		return false
+	}
+	if mixed, err := s.mixer.Mix(ctx, pcm); err == nil {
+		setOutputAudio(f, mixed)
+	}
+	return true
 }
 
 // audioLoopWithoutMixer paces queued frames out to the transport. Receiving
@@ -529,7 +545,9 @@ func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
 				s.signalDrained()
 				continue
 			}
-			s.handleQueuedFrame(ctx, queued)
+			if !s.handleQueuedFrame(ctx, queued) {
+				return
+			}
 			continue
 		}
 		select {
@@ -560,7 +578,12 @@ func (s *mediaSender) sendEndSilence(ctx context.Context) {
 	writeCtx, cancel := context.WithTimeout(ctx, time.Duration(secs+1)*time.Second)
 	defer cancel()
 
-	if err := s.out.self.WriteAudio(writeCtx, silence); err != nil {
+	if _, err := s.out.self.WriteAudio(writeCtx, silence); err != nil {
+		// A stop landing while the closing silence is going out cuts it short.
+		// The turn is over either way, so there is nothing to report.
+		if canceled(ctx) {
+			return
+		}
 		slog.Warn("transport: write end-frame silence",
 			"processor", s.out.Name(), "destination", s.destination, "err", err)
 		return
@@ -584,9 +607,14 @@ func (s *mediaSender) signalDrained() {
 
 // handleQueuedFrame plays one queued frame: it applies the frame's own effect,
 // writes whatever audio it carries to the transport, and forwards it downstream.
-// A frame whose audio could not be written is not forwarded, so nothing
-// downstream treats it as having been sent.
-func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) {
+// A frame whose audio the transport did not send is not forwarded, so nothing
+// downstream treats it as having been heard.
+//
+// It reports whether the loop that called it should carry on. Cancellation ends
+// it: the loop is being restarted by a barge-in or torn down by a stop, so the
+// frame it was holding belongs to a turn that is over. That frame is abandoned
+// where it stands, unreported and unforwarded, and the loop ends with it.
+func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) bool {
 	pushDownstream := true
 
 	switch af := f.(type) {
@@ -595,11 +623,14 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) {
 
 		// The mixer has already been blended in by the loop that sourced this
 		// frame, so what the frame carries is what goes out, destination and all.
-		if err := s.out.self.WriteAudio(ctx, af); err != nil {
+		sent, err := s.out.self.WriteAudio(ctx, af)
+		if err != nil && !canceled(ctx) {
 			slog.Error("write audio to transport",
 				"processor", s.out.Name(), "destination", s.destination, "err", err)
-			pushDownstream = false
 		}
+		// Audio the transport had nowhere to put is no more heard than audio a
+		// failed write dropped, so neither is forwarded.
+		pushDownstream = sent && err == nil
 	case *frames.OutputTransportMessageFrame:
 		// The ordered message: it waited behind the audio around it, so it
 		// reaches the client in step with what the client is hearing.
@@ -610,13 +641,30 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) {
 		// A frame that carries no audio has waited behind the audio it belongs
 		// to (a word-aligned text frame, say). Give the concrete transport a
 		// chance to act on it now that that audio has played.
-		if err := s.out.self.WriteTransportFrame(ctx, f); err != nil {
+		if err := s.out.self.WriteTransportFrame(ctx, f); err != nil && !canceled(ctx) {
 			slog.Error("write transport frame",
 				"processor", s.out.Name(), "frame", f.Name(), "err", err)
 		}
 	}
 
+	// Whichever of those calls the cancellation landed in, and whether or not it
+	// reported anything back, the frame goes no further: one the transport never
+	// finished sending is not forwarded as though it had been heard.
+	if canceled(ctx) {
+		return false
+	}
 	if pushDownstream {
 		_ = s.out.PushFrame(ctx, f, processor.Downstream)
 	}
+	return true
 }
+
+// canceled reports whether ctx is done, which is how a barge-in restarting the
+// audio loop, or a stop tearing it down, cuts short whatever send is in flight
+// at the time. That is the interruption doing its job rather than the transport
+// failing, so the send it caught is abandoned instead of being reported.
+//
+// It tests the caller's own context rather than the error the send returned, so
+// that a context.Canceled surfacing from inside a transport (its connection
+// going away mid-send, say) is still reported as the failure it is.
+func canceled(ctx context.Context) bool { return ctx.Err() != nil }

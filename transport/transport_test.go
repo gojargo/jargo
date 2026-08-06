@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -239,7 +241,7 @@ func newFakeOutput(p transport.Params) *fakeOutput {
 	return o
 }
 
-func (o *fakeOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+func (o *fakeOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
 	pcm := f.AudioData().Audio
 	cp := make([]byte, len(pcm))
 	copy(cp, pcm)
@@ -248,9 +250,10 @@ func (o *fakeOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) 
 	// would hold the shutdown open the way a real transport never may.
 	select {
 	case o.writes <- cp:
+		return true, nil
 	case <-ctx.Done():
+		return false, ctx.Err()
 	}
-	return nil
 }
 
 // fakeFilter is an AudioFilter that increments every byte and records its
@@ -390,10 +393,10 @@ func newPacedOutput(p transport.Params) *pacedOutput {
 	return o
 }
 
-func (o *pacedOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error {
+func (o *pacedOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool, error) {
 	time.Sleep(3 * time.Millisecond) // stand in for real-time pacing
 	o.writes.Add(1)
-	return nil
+	return true, nil
 }
 
 // TestBaseOutputEndFrameDrainsAudio is the regression test for the farewell
@@ -626,7 +629,7 @@ func newBlockingOutput(p transport.Params) *blockingOutput {
 	return o
 }
 
-func (o *blockingOutput) WriteAudio(ctx context.Context, _ frames.OutputAudioFrame) error {
+func (o *blockingOutput) WriteAudio(ctx context.Context, _ frames.OutputAudioFrame) (bool, error) {
 	o.writes.Add(1)
 	select {
 	case o.entered <- struct{}{}:
@@ -634,9 +637,12 @@ func (o *blockingOutput) WriteAudio(ctx context.Context, _ frames.OutputAudioFra
 	}
 	select {
 	case <-o.release:
+		return true, nil
 	case <-ctx.Done():
+		// What a real transport reports when the send loop is stopped under it,
+		// which is how a barge-in cuts short the write it interrupts.
+		return false, ctx.Err()
 	}
-	return nil
 }
 
 // TestBaseOutputKeepsUninterruptibleFramesThroughBargeIn covers the frames that
@@ -808,9 +814,9 @@ func (o *readyOutput) StartWriting(context.Context) error {
 	return nil
 }
 
-func (o *readyOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error {
+func (o *readyOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool, error) {
 	o.record("WriteAudio")
-	return nil
+	return true, nil
 }
 
 // TestBaseOutputReportsReady covers the readiness handshake: the transport's own
@@ -885,15 +891,16 @@ func (o *multiDestOutput) RegisterAudioDestination(_ context.Context, destinatio
 	return nil
 }
 
-func (o *multiDestOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+func (o *multiDestOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
 	pcm := f.AudioData().Audio
 	cp := make([]byte, len(pcm))
 	copy(cp, pcm)
 	select {
 	case o.writes <- addressedWrite{destination: f.Base().TransportDestination(), pcm: cp}:
+		return true, nil
 	case <-ctx.Done():
+		return false, ctx.Err()
 	}
-	return nil
 }
 
 // TestBaseOutputRoutesByDestination covers a transport carrying more than one
@@ -1265,7 +1272,9 @@ func (o *failingMessageOutput) SendMessage(context.Context, []byte) error {
 	return errClosedForTest
 }
 
-func (o *failingMessageOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error { return nil }
+func (o *failingMessageOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool, error) {
+	return true, nil
+}
 
 // A message that cannot be sent must not become an error frame. Anything that
 // reports errors to the client would turn that into another message to send,
@@ -1300,4 +1309,213 @@ func TestBaseOutputDoesNotEscalateSendFailures(t *testing.T) {
 		t.Fatalf("a failed send produced an error frame (%q); it would feed itself", got)
 	default:
 	}
+}
+
+// errorLogHandler records the messages logged at ERROR or above.
+type errorLogHandler struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (h *errorLogHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelError
+}
+
+func (h *errorLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.msgs = append(h.msgs, r.Message)
+	return nil
+}
+
+func (h *errorLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *errorLogHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *errorLogHandler) logged() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.msgs)
+}
+
+// captureErrorLogs redirects the default logger for the rest of the test and
+// returns what has been logged at ERROR or above so far.
+func captureErrorLogs(t *testing.T) func() []string {
+	t.Helper()
+	h := &errorLogHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return h.logged
+}
+
+// TestBaseOutputBargeInIsNotReportedAsAFailure covers the send the barge-in
+// itself cuts short. Restarting the audio loop cancels the send in flight on
+// purpose, so the interruption does not have to wait behind it, and the
+// transport reports that cancellation back. It is the interruption working as
+// designed, so nothing about it may be logged as a failure.
+//
+// Upstream gets this for free: canceling its audio task raises
+// asyncio.CancelledError, which derives from BaseException and so passes
+// straight through the handler that logs a failed send, unwinding the task.
+func TestBaseOutputBargeInIsNotReportedAsAFailure(t *testing.T) {
+	logged := captureErrorLogs(t)
+
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	o := newBlockingOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// The first chunk is taken up by the loop and blocks in the write, so the
+	// barge-in lands with a write in flight for it to cut short.
+	task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x01}, 1920*2), 48000, 1))
+	select {
+	case <-o.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the transport was never asked to write")
+	}
+
+	task.QueueFrame(frames.NewInterruptionFrame())
+	time.Sleep(200 * time.Millisecond)
+
+	if got := logged(); len(got) > 0 {
+		t.Errorf("the barge-in reported itself as a failure: %v", got)
+	}
+
+	close(o.release)
+	task.Cancel()
+	<-runDone
+}
+
+// decliningOutput reports every chunk as unsent without failing, the way a
+// transport reports audio it has nowhere to put: its track not live yet, its
+// stream closed, its serializer producing nothing for the frame.
+type decliningOutput struct {
+	*transport.BaseOutput
+	asked atomic.Int32
+}
+
+func newDecliningOutput(p transport.Params) *decliningOutput {
+	o := &decliningOutput{}
+	o.BaseOutput = transport.NewBaseOutput("DecliningOutput", p, o)
+	return o
+}
+
+func (o *decliningOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool, error) {
+	o.asked.Add(1)
+	return false, nil
+}
+
+// TestBaseOutputDoesNotForwardAudioTheTransportDeclined covers the third thing a
+// transport can say about a chunk, alongside sending it and failing. A transport
+// with nowhere to put the audio reports it as unsent without an error: nothing
+// went wrong, so there is nothing to log, but the audio will not be heard, so it
+// is not forwarded downstream as though it had been.
+func TestBaseOutputDoesNotForwardAudioTheTransportDeclined(t *testing.T) {
+	logged := captureErrorLogs(t)
+
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+
+	forwarded := make(chan struct{}, 4)
+	o := newDecliningOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.TTSAudioRawFrame); ok {
+				forwarded <- struct{}{}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x01}, 1920), 48000, 1))
+	time.Sleep(300 * time.Millisecond)
+
+	if got := o.asked.Load(); got == 0 {
+		t.Fatal("the transport was never asked to write, so nothing was declined")
+	}
+	select {
+	case <-forwarded:
+		t.Error("audio the transport did not send was forwarded downstream as though it had been heard")
+	default:
+	}
+	if got := logged(); len(got) > 0 {
+		t.Errorf("declining to send is not a failure, but it was reported as one: %v", got)
+	}
+
+	task.Cancel()
+	<-runDone
+}
+
+// blockingSyncFrameOutput holds every frame that carries no audio inside
+// WriteTransportFrame until the transport is stopped, so a test can leave the
+// audio loop inside that call when an interruption lands.
+type blockingSyncFrameOutput struct {
+	*transport.BaseOutput
+	entered chan struct{}
+}
+
+func newBlockingSyncFrameOutput(p transport.Params) *blockingSyncFrameOutput {
+	o := &blockingSyncFrameOutput{entered: make(chan struct{}, 8)}
+	o.BaseOutput = transport.NewBaseOutput("BlockingSyncFrameOutput", p, o)
+	return o
+}
+
+func (o *blockingSyncFrameOutput) WriteTransportFrame(ctx context.Context, _ frames.Frame) error {
+	select {
+	case o.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestBaseOutputBargeInDropsAFrameItCutShort covers the same cancellation one
+// frame type over. A frame carrying no audio waits in the same queue and is
+// handed to the transport the same way, so a barge-in can cut that call short
+// too. The frame it caught belongs to the turn that was interrupted: it is
+// neither reported as a failure nor forwarded downstream as though the client
+// had received it.
+func TestBaseOutputBargeInDropsAFrameItCutShort(t *testing.T) {
+	logged := captureErrorLogs(t)
+
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000
+
+	forwarded := make(chan struct{}, 4)
+	o := newBlockingSyncFrameOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*markerFrame); ok {
+				forwarded <- struct{}{}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(newMarkerFrame())
+	select {
+	case <-o.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the transport was never handed the frame")
+	}
+
+	task.QueueFrame(frames.NewInterruptionFrame())
+	time.Sleep(200 * time.Millisecond)
+
+	if got := logged(); len(got) > 0 {
+		t.Errorf("the barge-in reported itself as a failure: %v", got)
+	}
+	select {
+	case <-forwarded:
+		t.Error("a frame the transport never finished sending was forwarded downstream")
+	default:
+	}
+
+	task.Cancel()
+	<-runDone
 }

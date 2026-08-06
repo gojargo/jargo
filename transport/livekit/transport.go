@@ -165,7 +165,7 @@ func (out *outputTransport) SendMessage(_ context.Context, data []byte) error {
 // instant it is called, so writing a whole utterance back-to-back floods the
 // client's jitter buffer; we pace explicitly, exactly as the Pion transport
 // does. Audio that does not fill a whole frame is held until the next call.
-func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
 	pcm := f.AudioData().Audio
 	ch := channels(out.Params().AudioOutChannels)
 	if out.enc == nil {
@@ -177,7 +177,7 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 			ExpectedPacketLoss: p.AudioOutExpectedPacketLoss,
 		})
 		if err != nil {
-			return err
+			return false, err
 		}
 		out.enc = enc
 	}
@@ -187,15 +187,15 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 	for len(out.tail) >= frameBytes {
 		packet, err := out.enc.Encode(out.tail[:frameBytes])
 		if err != nil {
-			return err
+			return false, err
 		}
 		out.pace(ctx)
 		if err := out.conn.WriteAudio(packet, opus.FrameDuration); err != nil {
-			return err
+			return false, err
 		}
 		out.tail = out.tail[frameBytes:]
 	}
-	return nil
+	return true, nil
 }
 
 // pace blocks until it is time to send the next 20 ms Opus frame, keeping output

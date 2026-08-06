@@ -77,8 +77,11 @@ func (bo *BaseOutput) ChunkSize() int { return bo.chunkSize }
 // Params returns the transport parameters.
 func (bo *BaseOutput) Params() Params { return bo.params }
 
-// WriteAudio is the default no-op; a concrete transport overrides it.
-func (bo *BaseOutput) WriteAudio(context.Context, frames.OutputAudioFrame) error { return nil }
+// WriteAudio is the default no-op; a concrete transport overrides it. A base
+// with no transport under it sends nothing, so it reports the audio as unsent.
+func (bo *BaseOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool, error) {
+	return false, nil
+}
 
 // SendMessage is the default no-op; a concrete transport overrides it.
 func (bo *BaseOutput) SendMessage(context.Context, []byte) error { return nil }
@@ -309,7 +312,7 @@ func (bo *BaseOutput) sendTransportMessage(ctx context.Context, message any) {
 	if err == nil {
 		err = bo.self.SendMessage(ctx, data)
 	}
-	if err != nil {
+	if err != nil && !canceled(ctx) {
 		slog.Error("send transport message", "processor", bo.Name(), "err", err)
 	}
 }

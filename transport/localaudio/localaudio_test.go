@@ -28,7 +28,7 @@ func TestInt16ToPCMRoundTrip(t *testing.T) {
 func TestFillDrainsThenPads(t *testing.T) {
 	out := newOutput(nil, transport.DefaultParams())
 	chunk := frames.NewOutputAudioRawFrame(int16ToPCM([]int16{100, -200}), 24000, 1)
-	if err := out.WriteAudio(context.Background(), chunk); err != nil {
+	if _, err := out.WriteAudio(context.Background(), chunk); err != nil {
 		t.Fatalf("WriteAudio: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestWriteAudioCapsBacklog(t *testing.T) {
 	out := newOutput(nil, transport.DefaultParams())
 	capacity := maxBufferBytes(0)
 	chunk := frames.NewOutputAudioRawFrame(make([]byte, capacity+4096), 24000, 1)
-	if err := out.WriteAudio(context.Background(), chunk); err != nil {
+	if _, err := out.WriteAudio(context.Background(), chunk); err != nil {
 		t.Fatalf("WriteAudio: %v", err)
 	}
 	if len(out.buf) > capacity {

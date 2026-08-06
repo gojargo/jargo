@@ -44,7 +44,7 @@ func TestWriteAudioRunsAheadOfTheSender(t *testing.T) {
 	pcm := make([]byte, frameBytes*nFrames)
 
 	started := time.Now()
-	if err := out.WriteAudio(context.Background(), frames.NewOutputAudioRawFrame(pcm, 48000, 1)); err != nil {
+	if _, err := out.WriteAudio(context.Background(), frames.NewOutputAudioRawFrame(pcm, 48000, 1)); err != nil {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(started)
@@ -69,7 +69,7 @@ func TestWriteAudioBlocksOncePastTheCushion(t *testing.T) {
 	pcm := make([]byte, frameBytes*nFrames)
 
 	started := time.Now()
-	if err := out.WriteAudio(context.Background(), frames.NewOutputAudioRawFrame(pcm, 48000, 1)); err != nil {
+	if _, err := out.WriteAudio(context.Background(), frames.NewOutputAudioRawFrame(pcm, 48000, 1)); err != nil {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(started)

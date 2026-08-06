@@ -414,14 +414,15 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 // pipeline to real time; waiting on each frame individually would instead keep
 // the queue empty and starve the sender. Audio that does not fill a whole frame
 // is held until the next call.
-func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
 	pcm := f.AudioData().Audio
 
 	out.mu.Lock()
 	q, running := out.queue, out.running
 	if !running {
 		out.mu.Unlock()
-		return nil
+		// The outgoing track is not live, so there is nowhere to send it.
+		return false, nil
 	}
 	frameBytes := opus.FrameBytes(channels(out.Params().AudioOutChannels))
 	out.tail = append(out.tail, pcm...)
@@ -440,11 +441,13 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 		case q <- frame:
 		case <-ctx.Done():
 			out.queued.Add(-1)
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-out.conn.Done():
 			out.queued.Add(-1)
-			return nil
+			// The connection went away with the chunk part queued, so the rest
+			// of it is never heard.
+			return false, nil
 		}
 	}
-	return nil
+	return true, nil
 }

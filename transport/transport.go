@@ -124,7 +124,14 @@ type OutputDriver interface {
 	// past cancellation holds the pipeline open for good. A transport that
 	// paces its sends, or waits for room downstream, waits on ctx.Done()
 	// alongside whatever else it waits for.
-	WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error
+	//
+	// It reports whether the chunk was sent. A transport with nowhere to put it
+	// returns false and no error: its track is not live yet, its stream has
+	// closed, its serializer produced nothing for this frame. Nothing failed,
+	// but the audio will not be heard, so the base does not forward the frame
+	// downstream as though it had been. An error is a genuine failure, which
+	// the base logs; audio that errored counts as unsent either way.
+	WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (sent bool, err error)
 	// SendMessage sends an application message to the client (for example over
 	// a data channel).
 	SendMessage(ctx context.Context, data []byte) error

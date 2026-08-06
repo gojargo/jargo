@@ -241,7 +241,7 @@ const drainPoll = 2 * time.Millisecond
 // PulseAudio pulls through fill rather than accepting a blocking write, so the
 // wait is on the backlog draining instead of on a write returning. It ends early
 // if the stream closes or the pipeline stops, so a stop is never held up.
-func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) error {
+func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
 	pcm := f.AudioData().Audio
 
 	out.mu.Lock()
@@ -257,12 +257,16 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 		out.mu.Lock()
 		queued, open := len(out.buf), out.stream != nil
 		out.mu.Unlock()
-		if !open || queued <= len(pcm) {
-			return nil
+		if !open {
+			// The device is gone, so what is buffered for it never plays.
+			return false, nil
+		}
+		if queued <= len(pcm) {
+			return true, nil
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return false, ctx.Err()
 		case <-time.After(drainPoll):
 		}
 	}
