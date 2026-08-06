@@ -19,6 +19,14 @@ import (
 // NewSTT builds a Gladia streaming STT service. It works best behind a turn
 // detector: Gladia finalizes per utterance rather than per turn.
 func NewSTT(cfg Config) *stt.StreamService {
+	cfg = withDefaults(cfg)
+	return stt.NewStream("GladiaSTT", &connector{cfg: cfg, http: &http.Client{}}, cfg.SampleRate)
+}
+
+// withDefaults fills in what the service supplies for a caller who left it
+// unset. The audio shape has to be sent on every session, so it defaults to what
+// the pipeline produces rather than being left empty.
+func withDefaults(cfg Config) Config {
 	if cfg.URL == "" {
 		cfg.URL = liveURL
 	}
@@ -34,7 +42,7 @@ func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	return stt.NewStream("GladiaSTT", &connector{cfg: cfg, http: &http.Client{}}, cfg.SampleRate)
+	return cfg
 }
 
 type connector struct {
