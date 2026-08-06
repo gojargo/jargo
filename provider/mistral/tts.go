@@ -30,8 +30,10 @@ const (
 	// ttsSampleRate is the native PCM rate of Mistral speech audio.
 	ttsSampleRate = 24000
 
-	// Streamed event types.
-	ttsEventAudioDone = "speech.audio.done"
+	// ttsEventAudioDelta is the only streamed event that carries speech. The
+	// stream's other events (its closing "speech.audio.done", which reports
+	// usage) carry none, and are passed over.
+	ttsEventAudioDelta = "speech.audio.delta"
 )
 
 // errTTSStatus is returned when the speech API responds with a non-200 status.
@@ -160,8 +162,12 @@ func streamEvents(r io.Reader, emit func(pcm []byte) error) error {
 }
 
 // speechChunk decodes one SSE event's audio payload to 16-bit PCM, returning nil
-// when the event carries no audio: a non-audio event, the done marker, or an
+// when the event carries no audio: any event other than the audio delta, or an
 // empty or unparseable payload.
+//
+// Only the delta event yields audio. Every other event is passed over, the done
+// marker included, so an event that happens to carry an audio field without
+// being a delta is not played.
 func speechChunk(eventName, payload string) []byte {
 	if payload == "" {
 		return nil
@@ -174,7 +180,7 @@ func speechChunk(eventName, payload string) []byte {
 	if ev.Event != "" {
 		typ = ev.Event
 	}
-	if typ == ttsEventAudioDone {
+	if typ != ttsEventAudioDelta {
 		return nil
 	}
 	audio := ev.AudioData
