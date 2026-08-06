@@ -5,6 +5,7 @@
 **A WebRTC-native, audio-first conversational-AI framework for Go.**
 
 [![CI](https://github.com/gojargo/jargo/actions/workflows/ci.yml/badge.svg)](https://github.com/gojargo/jargo/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/gojargo/jargo/graph/badge.svg)](https://codecov.io/gh/gojargo/jargo)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gojargo/jargo.svg)](https://pkg.go.dev/github.com/gojargo/jargo)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/gojargo/jargo/badge)](https://securityscorecards.dev/viewer/?uri=github.com/gojargo/jargo)
 ![Go version](https://img.shields.io/github/go-mod/go-version/gojargo/jargo)
