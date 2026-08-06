@@ -330,8 +330,14 @@ func (s *Service) handleText(ctx context.Context, role, content string) {
 		Interrupted bool `json:"interrupted"`
 	}
 	if json.Unmarshal([]byte(content), &probe) == nil && probe.Interrupted {
+		// The bot was cut off, so it gives the floor up and the pipeline is
+		// interrupted. No user-speaking frame goes with it: this service reports
+		// a barge-in but never a turn starting or ending, so a start emitted
+		// here would have no stop to match it, and everything keyed off those
+		// frames (turn tracking, the idle watch, mute strategies) would be left
+		// believing the user is still speaking. A pipeline that needs turn
+		// boundaries runs its own detection alongside this service.
 		s.setSpeaking(ctx, false)
-		_ = s.PushFrame(ctx, frames.NewUserStartedSpeakingFrame(), processor.Downstream)
 		_ = s.PushFrame(ctx, frames.NewInterruptionFrame(), processor.Downstream)
 		return
 	}

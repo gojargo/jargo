@@ -34,6 +34,7 @@ func fakeRealtime(t *testing.T, audio []byte) *httptest.Server {
 		`{"type":"response.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(audio) + `"}`,
 		`{"type":"response.audio_transcript.delta","delta":"hello"}`,
 		`{"type":"input_audio_buffer.speech_started"}`,
+		`{"type":"input_audio_buffer.speech_stopped"}`,
 		`{"type":"conversation.item.input_audio_transcription.completed","transcript":"hi there"}`,
 		`{"type":"response.done"}`,
 	}
@@ -110,6 +111,7 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 		botText, userTranscript string
 		interrupted, botStarted bool
 		botStopped, userStarted bool
+		userStopped             bool
 	)
 	for _, f := range got {
 		switch fr := f.(type) {
@@ -126,6 +128,8 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 			interrupted = true
 		case *frames.UserStartedSpeakingFrame:
 			userStarted = true
+		case *frames.UserStoppedSpeakingFrame:
+			userStopped = true
 		case *frames.BotStartedSpeakingFrame:
 			botStarted = true
 		case *frames.BotStoppedSpeakingFrame:
@@ -144,6 +148,13 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 	}
 	if !interrupted || !userStarted {
 		t.Error("speech_started did not produce barge-in (interruption + user-started)")
+	}
+	// The stop matters as much as the start. This service reports real speech
+	// boundaries, so the two go out as a pair; a start with no stop would leave
+	// everything keyed off these frames believing the user never finished.
+	if !userStopped {
+		t.Error("speech_stopped did not produce user-stopped-speaking: " +
+			"the user-started frame it pairs with would never be closed")
 	}
 	if !botStarted || !botStopped {
 		t.Error("response lifecycle did not produce bot started/stopped speaking")
