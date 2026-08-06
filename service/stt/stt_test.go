@@ -293,3 +293,88 @@ func TestStreamServiceFinalizesOnVADStop(t *testing.T) {
 	task.StopWhenDone()
 	<-runDone
 }
+
+// answeringStream says nothing until it is told the speech ended, then answers
+// that finalize the way a provider that confirms its flushes does.
+type answeringStream struct {
+	told chan struct{}
+	sent bool
+	ctx  context.Context //nolint:containedctx // the session context, set on dial
+}
+
+func (s *answeringStream) Send([]byte) error { return nil }
+
+func (s *answeringStream) Close() error { return nil }
+
+func (s *answeringStream) Finalize() error {
+	select {
+	case s.told <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *answeringStream) Recv() ([]stt.Result, error) {
+	if !s.sent {
+		select {
+		case <-s.told:
+		case <-s.ctx.Done():
+			return nil, s.ctx.Err()
+		}
+		s.sent = true
+		return []stt.Result{{Text: "hello world", Final: true, FromFinalize: true}}, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+type answeringConnector struct{ stream *answeringStream }
+
+func (c *answeringConnector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+// The transcript answering a finalize the provider confirms is the last one for
+// the utterance, and the frame says so. A provider calling a result final is not
+// the same claim: it means the words will not change, not that the turn is over.
+func TestStreamServiceMarksTheAnswerToAFinalizeFinal(t *testing.T) {
+	stream := &answeringStream{told: make(chan struct{}, 1)}
+	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
+
+	var mu sync.Mutex
+	var finalized bool
+	done := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			fr, ok := f.(*frames.TranscriptionFrame)
+			if !ok {
+				return
+			}
+			mu.Lock()
+			finalized = fr.Finalized
+			mu.Unlock()
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no transcription arrived after the finalize")
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !finalized {
+		t.Fatal("the transcript answering a confirmed finalize was not marked final")
+	}
+}

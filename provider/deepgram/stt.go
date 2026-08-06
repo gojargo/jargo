@@ -3,6 +3,8 @@ package deepgram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,11 +20,25 @@ import (
 )
 
 const (
-	listenURL       = "wss://api.deepgram.com/v1/listen"
-	keepAlivePeriod = 8 * time.Second
+	listenURL = "wss://api.deepgram.com/v1/listen"
+	// keepAlivePeriod is how often the session is held open. Deepgram closes a
+	// connection that carries nothing for 10 seconds, and asks for a keepalive
+	// every 3 to 5 seconds, so the interval is the slow end of what it asks for
+	// rather than the fast end of what it tolerates.
+	keepAlivePeriod = 5 * time.Second
 	defaultSTTModel = "nova-3"
 	defaultEncoding = "linear16"
 	defaultChannels = 1
+)
+
+// The messages Deepgram sends on a live transcription session. Only Results
+// carries a transcript; the rest are named so that a message outside the set
+// stands out as one this reader does not know about.
+const (
+	msgResults       = "Results"
+	msgMetadata      = "Metadata"
+	msgSpeechStarted = "SpeechStarted"
+	msgUtteranceEnd  = "UtteranceEnd"
 )
 
 // Config configures the STT service. Fields left at their zero value fall back
@@ -354,8 +370,11 @@ type dgMessage struct {
 			Transcript string `json:"transcript"`
 		} `json:"alternatives"`
 	} `json:"channel"`
-	IsFinal     bool `json:"is_final"`
-	SpeechFinal bool `json:"speech_final"`
+	IsFinal bool `json:"is_final"`
+	// FromFinalize marks the result Deepgram sends in answer to a Finalize,
+	// which is what says the utterance is closed rather than merely transcribed
+	// this far.
+	FromFinalize bool `json:"from_finalize"`
 }
 
 // Send writes a chunk of PCM audio as a binary frame.
@@ -365,8 +384,15 @@ func (s *stream) Send(audio []byte) error {
 	return s.conn.Write(s.ctx, websocket.MessageBinary, audio)
 }
 
-// Recv reads the next result. A finalized result carries Deepgram's speech_final
-// as the end-of-turn signal.
+// Recv reads the next result. The transcript that closes an utterance is the
+// one Deepgram sends in answer to a Finalize, which it marks with from_finalize.
+//
+// The other messages a session sends carry no transcript and are skipped; one of
+// a type this reader does not know about is logged before it is skipped, since
+// that is where a session that has stopped transcribing shows itself. A message
+// that does not parse at all ends the session, which the read loop then reopens:
+// the session is talking in something other than what was agreed, and there is
+// nothing to be gained by reading the rest of it.
 func (s *stream) Recv() ([]stt.Result, error) {
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -375,17 +401,43 @@ func (s *stream) Recv() ([]stt.Result, error) {
 		}
 		var m dgMessage
 		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, fmt.Errorf("deepgram: reading the session message: %w", err)
+		}
+		switch m.Type {
+		case msgResults:
+		case msgMetadata, msgSpeechStarted, msgUtteranceEnd:
+			// Nothing here consumes them: the turn machinery runs on the
+			// transcripts and on the pipeline's own speech detection.
+			continue
+		default:
+			slog.Warn("skipping an unknown deepgram message", "type", m.Type)
 			continue
 		}
-		if m.Type != "Results" || len(m.Channel.Alternatives) == 0 {
+		if len(m.Channel.Alternatives) == 0 {
 			continue
 		}
 		text := m.Channel.Alternatives[0].Transcript
-		if text == "" {
+		// A finalize Deepgram answers with nothing left to say still confirms
+		// the flush, and the confirmation is what closes the utterance the
+		// transcript already sent belongs to.
+		confirms := m.IsFinal && m.FromFinalize
+		if text == "" && !confirms {
 			continue
 		}
-		return []stt.Result{{Text: text, Final: m.IsFinal, EndOfTurn: m.SpeechFinal}}, nil
+		return []stt.Result{{Text: text, Final: m.IsFinal, FromFinalize: m.FromFinalize}}, nil
 	}
+}
+
+// Finalize asks Deepgram to transcribe what it is holding rather than wait on
+// its own endpointing, which is what the VAD reporting the speech ended calls
+// for. Deepgram answers with a result marked from_finalize, and that answer is
+// what closes the utterance.
+//
+// https://developers.deepgram.com/docs/finalize
+func (s *stream) Finalize() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"Finalize"}`))
 }
 
 // keepAlive sends a periodic KeepAlive so Deepgram does not close an idle
@@ -399,8 +451,14 @@ func (s *stream) keepAlive() {
 			return
 		case <-ticker.C:
 			s.writeMu.Lock()
-			_ = s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"KeepAlive"}`))
+			err := s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"KeepAlive"}`))
 			s.writeMu.Unlock()
+			if err != nil {
+				// Deepgram closes the session ten seconds after the last thing
+				// it heard, so a keepalive that does not land is the session
+				// about to go with it.
+				slog.Warn("keeping the deepgram transcription session alive failed", "err", err)
+			}
 		}
 	}
 }

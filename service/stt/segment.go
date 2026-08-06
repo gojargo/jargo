@@ -28,6 +28,8 @@ type SegmentService struct {
 	cfgRate int
 	model   string
 
+	ttfb *ttfbTracker
+
 	sampleRate int
 	mu         sync.Mutex
 	buf        []byte
@@ -43,8 +45,14 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 		s.model = d.Metadata().Model
 	}
 	s.Base = processor.New(name, s)
+	s.ttfb = newTTFBTracker(s.Base, func() string { return s.model })
 	return s
 }
+
+// SetTTFBTimeout sets how long the service waits after the speech ends for the
+// transcript that closes it, before reporting the latency against whatever
+// arrived in the meantime. Zero restores DefaultTTFBTimeout.
+func (s *SegmentService) SetTTFBTimeout(d time.Duration) { s.ttfb.setTimeout(d) }
 
 // ProcessFrame buffers speech audio and transcribes each completed segment.
 func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
@@ -81,9 +89,29 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		}
 		s.transcribe(ctx)
 		return nil
+	case *frames.VADUserStartedSpeakingFrame:
+		s.ttfb.speechStarted()
+		return s.PushFrame(ctx, f, dir)
+	case *frames.VADUserStoppedSpeakingFrame:
+		s.ttfb.speechEnded(ctx, fr)
+		return s.PushFrame(ctx, f, dir)
+	case *frames.InterruptionFrame:
+		// The utterance being measured is not the one that matters any more.
+		s.ttfb.interrupted()
+		return s.PushFrame(ctx, f, dir)
 	default:
 		return s.PushFrame(ctx, f, dir)
 	}
+}
+
+// PushFrame pushes a frame on, timing the transcripts on their way out: a
+// segment's transcript closes the utterance it was cut from, and ends the wait
+// the VAD started when it reported the speech over.
+func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if tf, ok := f.(*frames.TranscriptionFrame); ok {
+		s.ttfb.transcript(ctx, tf.Finalized)
+	}
+	return s.Base.PushFrame(ctx, f, dir)
 }
 
 // broadcastMetadata pushes the STT service's metadata frame downstream at
@@ -102,6 +130,7 @@ func (s *SegmentService) broadcastMetadata(ctx context.Context) {
 // Cleanup waits for any in-flight transcription before tearing down.
 func (s *SegmentService) Cleanup(ctx context.Context) error {
 	s.wg.Wait()
+	s.ttfb.close()
 	return s.Base.Cleanup(ctx)
 }
 

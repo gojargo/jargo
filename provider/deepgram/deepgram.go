@@ -3,9 +3,10 @@
 // service (see tts.go), and its Flux streaming STT and TTS services (see
 // flux.go and flux_tts.go).
 //
-// The STT service pushes InterimTranscriptionFrames and finalized
-// TranscriptionFrames downstream; a finalized transcript with Deepgram's
-// speech_final marks the end of the user's turn.
+// The STT service pushes InterimTranscriptionFrames and TranscriptionFrames
+// downstream. It asks Deepgram to flush the transcript as soon as the speech
+// ends rather than wait on Deepgram's own endpointing, and the answer to that
+// request is what marks the end of the user's turn.
 package deepgram
 
 import "errors"

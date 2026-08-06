@@ -55,6 +55,13 @@ type Result struct {
 	// boundary, which is what a barge-in on the provider's own detection means.
 	// It is ignored on any other boundary.
 	Interrupt bool
+	// FromFinalize reports that this result is the provider answering the
+	// finalize it was asked for. Only a provider that confirms a flush sets it,
+	// and only then is the transcript that follows the last one for the
+	// utterance: a result may be final without being the end of the turn. A
+	// provider that flushes without confirming leaves it unset and says what it
+	// knows through EndOfTurn instead.
+	FromFinalize bool
 }
 
 // SpeechState is a speech boundary a provider detected on its own.
@@ -209,10 +216,19 @@ type StreamService struct {
 	cfgRate int
 	model   string
 	ws      *wsservice.Base
+	ttfb    *ttfbTracker
 
 	sampleRate int
 	mu         sync.Mutex
 	stream     Stream
+	// sendFailed records that the session refused the audio it was last given,
+	// which takes it out of use until the read loop replaces it. Writing on
+	// indefinitely is how a call goes quiet with nothing in the log to say
+	// whether the provider heard nothing or the audio never reached it, and
+	// repeating the send would repeat the warning for every 20ms of speech.
+	// What the session no longer takes is still audio the call submitted, so it
+	// still counts towards usage.
+	sendFailed bool
 	// sessionCancel ends the current session, replaced on every reconnect.
 	sessionCancel context.CancelFunc
 	// readCancel ends the read loop, and with it the whole connection. It
@@ -225,6 +241,18 @@ type StreamService struct {
 	// itself.
 	speaking bool
 	wg       sync.WaitGroup
+
+	// The finalize asked of the provider and the answer that came back. A
+	// provider that confirms the flush it was asked for is the only one that
+	// says which transcript closes the utterance, so the request is recorded and
+	// matched against the confirmation rather than read off any one result.
+	//
+	// finalizeRequested is set when the provider is told the speech ended, and
+	// stands unanswered for a provider that does not confirm.
+	finalizeRequested bool
+	// finalizePending is set once the provider confirms, and marks the next
+	// transcript as the last one for the utterance.
+	finalizePending bool
 
 	// keepalive is what the provider asked for; a zero Timeout means none.
 	keepalive KeepaliveOptions
@@ -274,7 +302,22 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s.canReopen = true
 	s.Base = processor.New(name, s)
 	s.ws = wsservice.New(s, wsservice.Config{})
+	s.ttfb = newTTFBTracker(s.Base, s.modelName)
 	return s
+}
+
+// SetTTFBTimeout sets how long the service waits after the speech ends for the
+// transcript that closes it, before reporting the latency against whatever
+// arrived in the meantime. Zero restores DefaultTTFBTimeout. Raise it for a
+// provider whose final transcript regularly takes longer than the default, which
+// would otherwise be timed against an interim.
+func (s *StreamService) SetTTFBTimeout(d time.Duration) { s.ttfb.setTimeout(d) }
+
+// modelName is the model the transcription is measured and priced against.
+func (s *StreamService) modelName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model
 }
 
 // ProcessFrame manages the connection lifecycle and streams audio.
@@ -306,10 +349,20 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 	case *frames.VADUserStartedSpeakingFrame:
 		s.mu.Lock()
 		s.canReopen = false
+		// A finalize left over from the utterance before it would mark the
+		// first transcript of this one as the last, so the pair starts clean.
+		s.finalizeRequested = false
+		s.finalizePending = false
 		s.mu.Unlock()
+		s.ttfb.speechStarted()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.VADUserStoppedSpeakingFrame:
+		s.ttfb.speechEnded(ctx, fr)
 		s.finalize()
+		return s.PushFrame(ctx, f, dir)
+	case *frames.InterruptionFrame:
+		// The utterance being measured is not the one that matters any more.
+		s.ttfb.interrupted()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.UserStoppedSpeakingFrame:
 		s.reopenIfDeferred(ctx)
@@ -325,7 +378,22 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 // Cleanup tears down the session and the processor.
 func (s *StreamService) Cleanup(ctx context.Context) error {
 	s.disconnect(ctx)
+	s.ttfb.close()
 	return s.Base.Cleanup(ctx)
+}
+
+// PushFrame pushes a frame on, timing the transcripts on their way out. A
+// transcript answering a finalize the provider confirmed is marked as the one
+// that closes the utterance, and the transcript that closes it ends the wait the
+// VAD started when it reported the speech over.
+func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if tf, ok := f.(*frames.TranscriptionFrame); ok {
+		if s.takeFinalizePending() {
+			tf.Finalized = true
+		}
+		s.ttfb.transcript(ctx, tf.Finalized)
+	}
+	return s.Base.PushFrame(ctx, f, dir)
 }
 
 // broadcastMetadata pushes the STT service's metadata frame downstream at
@@ -407,6 +475,7 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 	s.mu.Lock()
 	s.stream = stream
 	s.sessionCancel = cancel
+	s.sendFailed = false
 	s.mu.Unlock()
 	// Every session gets its own keepalive, the first and each replacement
 	// alike: the goroutine gives up on a failed send, so the one belonging to
@@ -665,6 +734,7 @@ func (s *StreamService) send(audio []byte) {
 		return
 	}
 	stream := s.stream
+	failed := s.sendFailed
 	// Stamped whether or not there is a session to send on: audio arriving is
 	// what says the call is not idle, and a session that opens a moment later
 	// has no catching up to do.
@@ -673,8 +743,18 @@ func (s *StreamService) send(audio []byte) {
 		s.audioBytes += int64(len(audio))
 	}
 	s.mu.Unlock()
-	if stream != nil {
-		_ = stream.Send(audio)
+	if stream == nil || failed {
+		return
+	}
+	if err := stream.Send(audio); err != nil {
+		// The session is gone as far as the audio is concerned. Reopening it is
+		// the read loop's job, which the same failure ends; this only says so
+		// once, and stops feeding a session that is not listening.
+		slog.Warn("sending audio to the transcription session failed",
+			"service", s.Name(), "err", err)
+		s.mu.Lock()
+		s.sendFailed = true
+		s.mu.Unlock()
 	}
 }
 
@@ -694,9 +774,38 @@ func (s *StreamService) finalize() {
 	if !ok {
 		return
 	}
+	// Recorded before the request goes out, so a provider that answers straight
+	// away has something to be matched against. A provider that never confirms
+	// leaves it standing, and it is cleared at the next utterance.
+	s.mu.Lock()
+	s.finalizeRequested = true
+	s.mu.Unlock()
 	if err := fin.Finalize(); err != nil {
 		slog.Debug("stt finalize failed", "service", s.Name(), "err", err)
 	}
+}
+
+// confirmFinalize takes the provider's word that it flushed what it was asked
+// to, which marks the next transcript as the last one for the utterance. A
+// confirmation for a finalize that was never asked for says nothing and is
+// ignored.
+func (s *StreamService) confirmFinalize() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finalizeRequested {
+		s.finalizePending = true
+		s.finalizeRequested = false
+	}
+}
+
+// takeFinalizePending reports whether a confirmed finalize is waiting for the
+// transcript it belongs to, and clears it so it marks only that one.
+func (s *StreamService) takeFinalizePending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.finalizePending
+	s.finalizePending = false
+	return pending
 }
 
 // startKeepalive replaces the running keepalive, if any, with one for the
@@ -789,7 +898,19 @@ func (s *StreamService) sendKeepalive() error {
 
 func (s *StreamService) emit(ctx context.Context, r Result) {
 	s.emitSpeech(ctx, r)
+	// Taken before the text is, since a provider with nothing left to say still
+	// answers the finalize it was asked for, and that answer is what says the
+	// transcript already sent closed the utterance.
+	answered := r.Final && r.FromFinalize
+	if answered {
+		s.confirmFinalize()
+	}
 	if r.Text == "" {
+		if answered {
+			// The transcript went out ahead of the confirmation, so the wait
+			// ended with it. Reported now rather than left to the deadline.
+			s.ttfb.answered(ctx)
+		}
 		return
 	}
 	ts := time.Now().UTC().Format(time.RFC3339)

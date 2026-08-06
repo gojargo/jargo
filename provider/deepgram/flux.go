@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -254,6 +255,10 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 		}
 		var m fluxMessage
 		if err := json.Unmarshal(data, &m); err != nil {
+			// Skipped rather than fatal, unlike the listen session: Flux reads
+			// its own stream and keeps the turn state, so one message that does
+			// not parse is not worth the turn in progress.
+			slog.Error("decoding a deepgram flux message failed", "err", err)
 			continue
 		}
 		switch m.Type {

@@ -206,6 +206,38 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A streaming STT session that stops taking audio says so.** The audio was
+  written with the result thrown away, so a session that had dropped underneath
+  was fed for the rest of the call without one line in the log, and a call that
+  went quiet gave nothing to say whether the provider heard nothing or the audio
+  never reached it. A failed send is now logged once and takes the session out of
+  use until the read loop opens another.
+- **The Deepgram reader logs a message it does not know about.** A session sends
+  `Results`, `Metadata`, `SpeechStarted` and `UtteranceEnd`; anything else was
+  dropped as quietly as those, which is where a session that has stopped
+  transcribing hid. A message that does not parse at all now ends the session for
+  the read loop to reopen, rather than being read past. Its keepalive moved from
+  eight seconds to five, the interval Deepgram asks for, and a keepalive that
+  fails to land is logged rather than discarded. The Flux reader logs a message
+  that does not decode, which it still skips.
+- **An STT service reports how long its transcript kept the conversation
+  waiting.** Neither STT service measured anything, so the one latency that
+  decides how quickly a bot can answer was the only one missing from the
+  pipeline's metrics. Both now measure from the moment the speech ended (the
+  VAD's determination less the silence it required, not the moment it decided) to
+  the transcript that closes the utterance, and report it as `TTFBMetricsData` and
+  to OpenTelemetry under `stt`. When no closing transcript arrives, a deadline
+  reports the wait to the last one that did, and reports nothing when there was
+  none. `SetTTFBTimeout` sets that deadline, two seconds by default.
+- **A transcript is marked final on the provider's word, not on its endpointing.**
+  A streaming STT service now records the finalize it asks for when the speech
+  ends and matches it against the provider's confirmation, and only the
+  transcript answering a confirmed finalize is marked as closing the utterance.
+  `stt.Result` gains `FromFinalize` for a provider to report that confirmation; a
+  provider that flushes without confirming still says what it knows through
+  `EndOfTurn`. Deepgram now sends that finalize (it never did) and reads
+  `from_finalize` in the answer, in place of treating its own `speech_final` as
+  the end of the turn.
 - **A WebSocket service stops redialing a handshake the server refused.** A
   rejected key or a model an account cannot use was retried three times with a
   backoff in between, delaying the error the caller needed to see. `wsutil.Dial`
