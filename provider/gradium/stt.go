@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -127,7 +128,16 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 	}
 
 	chunkBytes := sttChunkMS * sampleRate * 2 / 1000
-	return &sttStream{conn: conn, ctx: ctx, chunkBytes: chunkBytes, lang: c.cfg.Language.Code()}, nil
+	s := &sttStream{
+		conn:       conn,
+		ctx:        ctx,
+		chunkBytes: chunkBytes,
+		lang:       c.cfg.Language.Code(),
+		reads:      make(chan sttRead, 8),
+		done:       make(chan struct{}),
+	}
+	go s.readLoop()
+	return s, nil
 }
 
 // setup builds the initial setup message carrying the model, input format, and
@@ -176,6 +186,13 @@ func awaitReady(ctx context.Context, conn *wsutil.Conn) error {
 	}
 }
 
+// transcriptAggregationDelay is how long the transcript stays open after a
+// flush. The flush only says the buffered audio has been processed: the words at
+// the end of it can still be on their way, so settling the transcript the moment
+// it arrives drops the last of the utterance, and those words then turn up at
+// the front of the next one.
+const transcriptAggregationDelay = 100 * time.Millisecond
+
 type sttStream struct {
 	conn       *wsutil.Conn
 	ctx        context.Context
@@ -187,6 +204,83 @@ type sttStream struct {
 	buf     []byte
 
 	accumulated []string
+	// reads carries what the reader goroutine has read. Waiting for trailing
+	// text on a timer needs a read that can be given up on, and giving up on a
+	// read by canceling its context closes the connection under it, so the read
+	// runs on its own and the wait happens here instead.
+	reads chan sttRead
+	// pending holds a message taken off reads while waiting for trailing text
+	// that was not text itself, so it is acted on rather than dropped.
+	pending *sttRead
+	// done stops the reader when the stream is closed.
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+// sttRead is one message from the reader goroutine, or the failure that ended
+// it.
+type sttRead struct {
+	msg sttMessage
+	err error
+}
+
+// readLoop reads messages until the connection fails or the stream is closed. It
+// reads under the stream's own context, which outlives any single wait.
+func (s *sttStream) readLoop() {
+	defer close(s.reads)
+	for {
+		_, data, err := s.conn.Read(s.ctx)
+		if err != nil {
+			select {
+			case s.reads <- sttRead{err: err}:
+			case <-s.done:
+			}
+			return
+		}
+		var m sttMessage
+		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		select {
+		case s.reads <- sttRead{msg: m}:
+		case <-s.done:
+			return
+		}
+	}
+}
+
+// next returns the next message, preferring one already taken off the channel
+// while waiting for trailing text.
+func (s *sttStream) next() (sttRead, bool) {
+	if p := s.pending; p != nil {
+		s.pending = nil
+		return *p, true
+	}
+	r, ok := <-s.reads
+	return r, ok
+}
+
+// aggregateTrailing keeps the transcript open for a moment after a flush,
+// folding in the words still arriving. Anything else read in that window is held
+// for the next call rather than dropped.
+func (s *sttStream) aggregateTrailing() {
+	timer := time.NewTimer(transcriptAggregationDelay)
+	defer timer.Stop()
+	for {
+		select {
+		case r, ok := <-s.reads:
+			if !ok {
+				return
+			}
+			if r.err != nil || r.msg.Type != msgText {
+				s.pending = &r
+				return
+			}
+			s.accumulated = append(s.accumulated, r.msg.Text)
+		case <-timer.C:
+			return
+		}
+	}
 }
 
 // sttMessage is the subset of a Gradium ASR message we use.
@@ -222,33 +316,35 @@ func (s *sttStream) Send(audio []byte) error {
 // finalizes the accumulated transcript with EndOfTurn set.
 func (s *sttStream) Recv() ([]stt.Result, error) {
 	for {
-		_, data, err := s.conn.Read(s.ctx)
-		if err != nil {
-			return nil, err
+		r, ok := s.next()
+		if !ok {
+			return nil, io.EOF
 		}
-		var m sttMessage
-		if json.Unmarshal(data, &m) != nil {
-			continue
+		if r.err != nil {
+			return nil, r.err
 		}
-		switch m.Type {
+		switch r.msg.Type {
 		case msgText:
-			s.accumulated = append(s.accumulated, m.Text)
+			s.accumulated = append(s.accumulated, r.msg.Text)
 			text := strings.Join(s.accumulated, " ")
 			return []stt.Result{{Text: text, Final: false, Language: s.lang}}, nil
-		case "flushed", msgEndStream:
+		case msgFlushed, msgEndStream:
 			if len(s.accumulated) == 0 {
 				continue
 			}
+			// The words that end the utterance can still be arriving.
+			s.aggregateTrailing()
 			text := strings.Join(s.accumulated, " ")
 			s.accumulated = nil
 			return []stt.Result{{Text: text, Final: true, EndOfTurn: true, Language: s.lang}}, nil
 		case msgError:
-			return nil, fmt.Errorf("%w: %s", errSTTProtocol, m.Message)
+			return nil, fmt.Errorf("%w: %s", errSTTProtocol, r.msg.Message)
 		}
 	}
 }
 
-// Close tears the session down.
+// Close tears the session down and stops the reader.
 func (s *sttStream) Close() error {
+	s.closeOnce.Do(func() { close(s.done) })
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

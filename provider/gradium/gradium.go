@@ -15,6 +15,8 @@ const (
 	msgAudio = "audio"
 	// msgText is the transcript/text field key.
 	msgText = "text"
+	// msgFlushed says the buffered audio has been processed.
+	msgFlushed = "flushed"
 	// msgEndStream is the end-of-stream message type.
 	msgEndStream = "end_of_stream"
 	// keyClientReqID is the client request-id field key.
