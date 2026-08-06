@@ -45,7 +45,31 @@ type Result struct {
 	EndOfTurn bool
 	// Language is the detected language as a BCP-47 tag, or "" when unknown.
 	Language string
+	// Speech reports a speech boundary the provider detected itself. Most
+	// providers leave it unset and let the pipeline's own detection decide when
+	// the user is speaking; a provider running detection server-side sets it so
+	// the pipeline can defer to that instead. A result may carry a boundary and
+	// no text.
+	Speech SpeechState
+	// Interrupt asks for the bot to be interrupted along with a SpeechStarted
+	// boundary, which is what a barge-in on the provider's own detection means.
+	// It is ignored on any other boundary.
+	Interrupt bool
 }
+
+// SpeechState is a speech boundary a provider detected on its own.
+type SpeechState int
+
+const (
+	// SpeechUnknown means the result says nothing about speech boundaries,
+	// which is the case for every provider that leaves detection to the
+	// pipeline.
+	SpeechUnknown SpeechState = iota
+	// SpeechStarted means the provider heard the user begin speaking.
+	SpeechStarted
+	// SpeechStopped means the provider heard the user stop.
+	SpeechStopped
+)
 
 // Stream is a live STT session opened by a Connector. The service writes audio
 // with Send and reads results with Recv until Recv returns an error (including
@@ -196,7 +220,11 @@ type StreamService struct {
 	readCancel  context.CancelFunc
 	connectedAt time.Time
 	audioBytes  int64
-	wg          sync.WaitGroup
+	// speaking tracks the boundary a provider that runs its own detection last
+	// reported, so the frames go out in pairs however the provider repeats
+	// itself.
+	speaking bool
+	wg       sync.WaitGroup
 
 	// keepalive is what the provider asked for; a zero Timeout means none.
 	keepalive KeepaliveOptions
@@ -760,6 +788,7 @@ func (s *StreamService) sendKeepalive() error {
 }
 
 func (s *StreamService) emit(ctx context.Context, r Result) {
+	s.emitSpeech(ctx, r)
 	if r.Text == "" {
 		return
 	}
@@ -774,6 +803,43 @@ func (s *StreamService) emit(ctx context.Context, r Result) {
 	f.Finalized = r.EndOfTurn
 	f.Language = r.Language
 	_ = s.PushFrame(ctx, f, processor.Downstream)
+}
+
+// emitSpeech broadcasts the speech boundary a provider reported. The frames go
+// out in pairs and only on a change: a provider repeating itself, or reporting a
+// stop for speech that never started here, must not leave the pipeline holding a
+// start that nothing closes.
+//
+// They are broadcast rather than pushed downstream because a turn beginning
+// concerns both directions, and a barge-in on the provider's own detection has
+// to reach the output to stop the bot as well as the aggregator to open the
+// turn.
+func (s *StreamService) emitSpeech(ctx context.Context, r Result) {
+	switch r.Speech {
+	case SpeechStarted:
+		s.mu.Lock()
+		already := s.speaking
+		s.speaking = true
+		s.mu.Unlock()
+		if already {
+			return
+		}
+		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewUserStartedSpeakingFrame() })
+		if r.Interrupt {
+			_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
+		}
+	case SpeechStopped:
+		s.mu.Lock()
+		speaking := s.speaking
+		s.speaking = false
+		s.mu.Unlock()
+		if !speaking {
+			return
+		}
+		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() })
+	case SpeechUnknown:
+		// The provider leaves speech detection to the pipeline.
+	}
 }
 
 // pcmDuration is how long n bytes of 16-bit mono PCM play for at sampleRate.

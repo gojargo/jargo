@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -50,6 +51,18 @@ type connector struct {
 	http *http.Client
 }
 
+// Metadata describes the service downstream. With Gladia's own detection driving
+// the turn, the service reports when the user starts and stops speaking, so the
+// aggregator is asked to defer to those reports rather than running its own
+// detection alongside them. Without it the pipeline's defaults stand.
+func (c *connector) Metadata() stt.Metadata {
+	m := stt.Metadata{Model: c.cfg.Model}
+	if c.cfg.EnableVAD {
+		m.RecommendedUserTurns = frames.UserTurnExternal
+	}
+	return m
+}
+
 // Connect initializes a session over REST then dials the returned WebSocket.
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	wsURL, err := c.initSession(ctx, sampleRate)
@@ -60,7 +73,12 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	if err != nil {
 		return nil, err
 	}
-	return &stream{conn: conn, ctx: ctx}, nil
+	return &stream{
+		conn:      conn,
+		ctx:       ctx,
+		vad:       c.cfg.EnableVAD,
+		interrupt: c.cfg.InterruptOnSpeech == nil || *c.cfg.InterruptOnSpeech,
+	}, nil
 }
 
 // settings builds the session-init body for the given sample rate.
@@ -94,6 +112,15 @@ func (cfg *Config) settings(sampleRate int) map[string]any {
 	if mc == nil {
 		on := true
 		mc = &MessagesConfig{ReceivePartialTranscripts: &on, ReceiveFinalTranscripts: &on}
+	}
+	if cfg.EnableVAD && mc.ReceiveSpeechEvents == nil {
+		// The turn is driven by Gladia's own detection, so the messages that
+		// report it have to be asked for. A caller who set the field themselves
+		// is left alone, including one who deliberately turned it off.
+		on := true
+		filtered := *mc
+		filtered.ReceiveSpeechEvents = &on
+		mc = &filtered
 	}
 	s["messages_config"] = mc
 	maps.Copy(s, cfg.ExtraSettings)
@@ -138,6 +165,11 @@ type stream struct {
 	conn    *wsutil.Conn
 	ctx     context.Context
 	writeMu sync.Mutex
+	// vad is whether Gladia's own detection drives the turn, which is what makes
+	// its speech boundaries something to act on.
+	vad bool
+	// interrupt is whether a boundary opening speech also barges in.
+	interrupt bool
 }
 
 // message is the subset of a Gladia transcript message we read.
@@ -170,16 +202,40 @@ func (s *stream) Recv() ([]stt.Result, error) {
 		if err := json.Unmarshal(data, &m); err != nil {
 			continue
 		}
-		if m.Type != "transcript" || m.Data.Utterance.Text == "" {
-			continue
+		if r, ok := s.result(m); ok {
+			return []stt.Result{r}, nil
 		}
-		return []stt.Result{{
+	}
+}
+
+// result maps one message to a result, reporting whether it carried anything.
+// The speech boundaries are only acted on when Gladia's own detection is what
+// drives the turn; otherwise the pipeline's detection decides and a boundary
+// from here would compete with it.
+func (s *stream) result(m message) (stt.Result, bool) {
+	switch m.Type {
+	case msgTranscript:
+		if m.Data.Utterance.Text == "" {
+			return stt.Result{}, false
+		}
+		return stt.Result{
 			Text:      m.Data.Utterance.Text,
 			Final:     m.Data.IsFinal,
 			EndOfTurn: m.Data.IsFinal,
 			Language:  m.Data.Utterance.Language,
-		}}, nil
+		}, true
+	case msgSpeechStart:
+		if !s.vad {
+			return stt.Result{}, false
+		}
+		return stt.Result{Speech: stt.SpeechStarted, Interrupt: s.interrupt}, true
+	case msgSpeechEnd:
+		if !s.vad {
+			return stt.Result{}, false
+		}
+		return stt.Result{Speech: stt.SpeechStopped}, true
 	}
+	return stt.Result{}, false
 }
 
 // Close stops the session and closes the socket.

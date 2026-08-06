@@ -25,6 +25,11 @@ const (
 	defaultChannels = 1
 	// readLimit bounds a single WebSocket message.
 	readLimit = 1 << 20
+
+	// Message types the session can carry.
+	msgTranscript  = "transcript"
+	msgSpeechStart = "speech_start"
+	msgSpeechEnd   = "speech_end"
 )
 
 // LanguageConfig configures language detection and handling.
@@ -90,6 +95,16 @@ type Config struct {
 	// MessagesConfig filters received messages; nil defaults to partial+final
 	// transcripts, matching jargo's needs.
 	MessagesConfig *MessagesConfig
+	// EnableVAD lets Gladia's own voice-activity detection drive the turn. With
+	// it set the service reports when the user starts and stops speaking, the
+	// speech events are requested, and the turn strategy recommended downstream
+	// becomes the external one so the aggregator defers to those reports rather
+	// than running its own detection. Left unset, speech detection stays with
+	// the pipeline.
+	EnableVAD bool
+	// InterruptOnSpeech barges in when Gladia reports the user starting to
+	// speak; nil enables it. It only applies with EnableVAD set.
+	InterruptOnSpeech *bool
 	// CustomMetadata attaches metadata to the session; nil omits it.
 	CustomMetadata map[string]any
 	// ExtraSettings sets arbitrary additional session-init fields not modeled
