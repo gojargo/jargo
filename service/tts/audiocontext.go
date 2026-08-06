@@ -131,12 +131,12 @@ type audioContext struct {
 	pendingWords []ctxItem
 }
 
-func newAudioContext(rate int, spanCtx context.Context, span trace.Span) *audioContext {
+func newAudioContext(rate int, report bool, spanCtx context.Context, span trace.Span) *audioContext {
 	return &audioContext{
 		notify:               make(chan struct{}, 1),
 		start:                time.Now(),
 		rate:                 rate,
-		meter:                ttfaMeter{rate: rate},
+		meter:                ttfaMeter{rate: rate, report: report},
 		span:                 span,
 		spanCtx:              spanCtx,
 		initialWordTimestamp: -1,
@@ -364,7 +364,7 @@ func (b *Base) CreateAudioContext(contextID string) {
 	if b.audioContexts == nil {
 		b.audioContexts = map[string]*audioContext{}
 	}
-	b.audioContexts[contextID] = newAudioContext(b.syn.SampleRate(), spanCtx, span)
+	b.audioContexts[contextID] = newAudioContext(b.syn.SampleRate(), b.BeginTTFB(), spanCtx, span)
 	serial := b.serial
 	b.audioCtxMu.Unlock()
 	if serial != nil {

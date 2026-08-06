@@ -85,6 +85,10 @@ func (t *ttfbTracker) speechEnded(ctx context.Context, f *frames.VADUserStoppedS
 	if f.StopSecs == 0 || f.Timestamp.IsZero() {
 		return
 	}
+	if !t.svc.BeginTTFB() {
+		// The pipeline has had the one measurement it asked for.
+		return
+	}
 	silence := time.Duration(f.StopSecs * float64(time.Second))
 	t.mu.Lock()
 	t.start = f.Timestamp.Add(-silence)
@@ -108,11 +112,11 @@ func (t *ttfbTracker) transcript(ctx context.Context, finalized bool) {
 	t.report(ctx, now)
 }
 
-// answered reports the wait now rather than leaving it to the deadline, for a
-// provider that has confirmed it has nothing further to send. The transcript
-// went out ahead of the confirmation, so the wait is already over and there is
-// nothing to be gained by waiting the deadline out.
-func (t *ttfbTracker) answered(ctx context.Context) {
+// reportNow ends the wait where it stands and reports it, rather than leaving it
+// to the deadline: the provider has said it will send nothing further, or the
+// connection carrying it has failed. Either way waiting the deadline out would
+// only delay the same measurement.
+func (t *ttfbTracker) reportNow(ctx context.Context) {
 	t.stopDeadline()
 	t.report(ctx, time.Now())
 }

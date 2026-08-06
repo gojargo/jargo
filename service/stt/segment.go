@@ -29,6 +29,7 @@ type SegmentService struct {
 	model   string
 
 	ttfb *ttfbTracker
+	work *processingMeter
 
 	sampleRate int
 	mu         sync.Mutex
@@ -46,6 +47,7 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 	}
 	s.Base = processor.New(name, s)
 	s.ttfb = newTTFBTracker(s.Base, func() string { return s.model })
+	s.work = newProcessingMeter(s.Base, func() string { return s.model })
 	return s
 }
 
@@ -168,7 +170,7 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 			}
 			return
 		}
-		metrics.RecordProcessing(sctx, "stt", s.Name(), s.model, time.Since(start).Seconds())
+		s.work.reportElapsed(sctx, time.Since(start))
 		if text == "" {
 			return
 		}

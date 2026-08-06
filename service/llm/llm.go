@@ -145,13 +145,19 @@ func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error
 }
 
 // StartTTFBMetrics starts this generation's time-to-first-byte clock. A service
-// calls it immediately before issuing the request.
+// calls it immediately before issuing the request. It measures nothing once the
+// pipeline has had the only measurement it asked for, which leaves the clock
+// unstarted and so reports no time to first byte for this generation.
 func (b *Base) StartTTFBMetrics() {
+	armed := b.BeginTTFB()
 	b.ttfbMu.Lock()
 	defer b.ttfbMu.Unlock()
-	b.ttfbStart = time.Now()
+	b.ttfbStart = time.Time{}
 	b.ttfb = 0
 	b.hasTTFB = false
+	if armed {
+		b.ttfbStart = time.Now()
+	}
 }
 
 // StopTTFBMetrics records time to first byte. A service calls it as soon as the

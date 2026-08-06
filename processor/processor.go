@@ -175,6 +175,18 @@ type Base struct {
 	// establishes the happens-before for reads from ProcessFrame.
 	metricsEnabled      bool
 	usageMetricsEnabled bool
+	// reportOnlyInitialTTFB asks for the first time-to-first-byte of the run and
+	// no more, for a caller who wants the figure a call opened with rather than
+	// one per turn.
+	reportOnlyInitialTTFB bool
+
+	// ttfbMu guards armTTFB, which unlike the flags above is written on every
+	// measurement rather than once at the start.
+	ttfbMu sync.Mutex
+	// armTTFB says whether another time-to-first-byte may be measured. It stays
+	// true throughout unless only the initial one was asked for, in which case
+	// arming the first measurement is what clears it.
+	armTTFB bool
 
 	cancelMu  sync.Mutex
 	canceling bool
@@ -199,6 +211,9 @@ func New(name string, self Processor, opts ...Option) *Base {
 		id:         nextID(),
 		inputQueue: newQueue(),
 		procQueue:  newQueue(),
+		// Armed before any StartFrame, so a measurement started early is not
+		// declined for a restriction nothing has asked for yet.
+		armTTFB: true,
 	}
 	b.name = fmt.Sprintf("%s#%d", name, b.id)
 	for _, opt := range opts {
@@ -357,6 +372,10 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) 
 	case *frames.StartFrame:
 		b.metricsEnabled = fr.EnableMetrics
 		b.usageMetricsEnabled = fr.EnableUsageMetrics
+		b.reportOnlyInitialTTFB = fr.ReportOnlyInitialTTFB
+		b.ttfbMu.Lock()
+		b.armTTFB = true
+		b.ttfbMu.Unlock()
 		b.start()
 	case *frames.InterruptionFrame:
 		b.startInterruption()
@@ -377,6 +396,23 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) 
 // MetricsEnabled reports whether performance-metrics collection was enabled by
 // the StartFrame. It is valid once the processor has received its StartFrame.
 func (b *Base) MetricsEnabled() bool { return b.metricsEnabled }
+
+// BeginTTFB reports whether a time-to-first-byte measurement should be started,
+// and records that one was. A service calls it where it would start the clock,
+// and measures nothing when it reports false.
+//
+// It answers true every time unless the StartFrame asked for only the initial
+// TTFB, in which case the first measurement is the only one armed: a caller who
+// wants the figure the call opened with gets it once rather than on every turn.
+func (b *Base) BeginTTFB() bool {
+	b.ttfbMu.Lock()
+	defer b.ttfbMu.Unlock()
+	if !b.armTTFB {
+		return false
+	}
+	b.armTTFB = !b.reportOnlyInitialTTFB
+	return true
+}
 
 // UsageMetricsEnabled reports whether usage-metrics collection was enabled by
 // the StartFrame. It is valid once the processor has received its StartFrame.

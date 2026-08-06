@@ -217,6 +217,7 @@ type StreamService struct {
 	model   string
 	ws      *wsservice.Base
 	ttfb    *ttfbTracker
+	work    *processingMeter
 
 	sampleRate int
 	mu         sync.Mutex
@@ -303,6 +304,7 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s.Base = processor.New(name, s)
 	s.ws = wsservice.New(s, wsservice.Config{})
 	s.ttfb = newTTFBTracker(s.Base, s.modelName)
+	s.work = newProcessingMeter(s.Base, s.modelName)
 	return s
 }
 
@@ -355,6 +357,9 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		s.finalizePending = false
 		s.mu.Unlock()
 		s.ttfb.speechStarted()
+		// The service is at work on this utterance from here until it produces
+		// the transcript for it.
+		s.work.begin()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.VADUserStoppedSpeakingFrame:
 		s.ttfb.speechEnded(ctx, fr)
@@ -387,13 +392,20 @@ func (s *StreamService) Cleanup(ctx context.Context) error {
 // that closes the utterance, and the transcript that closes it ends the wait the
 // VAD started when it reported the speech over.
 func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if tf, ok := f.(*frames.TranscriptionFrame); ok {
+	tf, isTranscript := f.(*frames.TranscriptionFrame)
+	if isTranscript {
 		if s.takeFinalizePending() {
 			tf.Finalized = true
 		}
 		s.ttfb.transcript(ctx, tf.Finalized)
 	}
-	return s.Base.PushFrame(ctx, f, dir)
+	err := s.Base.PushFrame(ctx, f, dir)
+	if isTranscript {
+		// Reported after the transcript rather than before it: the work the
+		// measurement covers is not done until the transcript is out.
+		s.work.report(ctx)
+	}
+	return err
 }
 
 // broadcastMetadata pushes the STT service's metadata frame downstream at
@@ -542,6 +554,11 @@ func (s *StreamService) Connected() bool {
 // not fatal: the call continues, and the application decides what losing
 // transcription for part of it means.
 func (s *StreamService) reportConnectionError(ctx context.Context, message string) {
+	// Whatever was being measured ends here. The transcript it was waiting on is
+	// not coming on this connection, and holding the measurement open would
+	// carry it into the utterance after the one it belongs to.
+	s.ttfb.reportNow(ctx)
+	s.work.report(ctx)
 	s.PushError(ctx, message, nil, false)
 }
 
@@ -909,7 +926,7 @@ func (s *StreamService) emit(ctx context.Context, r Result) {
 		if answered {
 			// The transcript went out ahead of the confirmation, so the wait
 			// ended with it. Reported now rather than left to the deadline.
-			s.ttfb.answered(ctx)
+			s.ttfb.reportNow(ctx)
 		}
 		return
 	}

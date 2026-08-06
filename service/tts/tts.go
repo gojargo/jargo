@@ -848,6 +848,10 @@ func (b *Base) broadcastMetadata(ctx context.Context) {
 // leading-silence duration.
 type ttfaMeter struct {
 	rate int
+	// report says whether this synthesis is measured at all. It is false once
+	// the pipeline has had the only measurement it asked for, and nothing is
+	// timed or scanned from then on.
+	report bool
 
 	hadTTFB bool
 	ttfb    time.Duration
@@ -862,6 +866,9 @@ type ttfaMeter struct {
 // observe folds one non-empty PCM chunk into the measurement, relative to the
 // synthesis start time.
 func (m *ttfaMeter) observe(pcm []byte, start time.Time) {
+	if !m.report {
+		return
+	}
 	if !m.hadTTFB {
 		m.hadTTFB = true
 		m.ttfb = time.Since(start)

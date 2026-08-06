@@ -144,6 +144,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`pipeline.TaskParams.ReportOnlyInitialTTFB` reports each service's first
+  time-to-first-byte and no more**, for a consumer who wants the figure the call
+  opened with rather than one reading per turn. The `StartFrame` has carried the
+  setting since the field existed; nothing read it, so asking for it changed
+  nothing. The LLM, TTS and STT services now measure the first and decline the
+  rest, and `processor.Base.BeginTTFB` is where a service asks whether to measure.
+- **An STT service reports how long it worked on an utterance**, as
+  `ProcessingMetricsData` alongside the wait it left behind. A streaming service
+  is timed from the VAD reporting speech to the transcript it produced; a
+  segmented one keeps timing the transcription itself, and now puts the figure on
+  the pipeline as well as into OpenTelemetry.
 - **The Smallest AI transcription carries every option the service accepts**:
   `WordTimestamps`, `FullTranscript`, `SentenceTimestamps`, `RedactPII`,
   `RedactPCI`, `Numerals`, `Diarize`, `Endpointing`, `Keywords` and `Format`,

@@ -113,6 +113,143 @@ func TestStreamServiceReportsNothingWithoutATranscript(t *testing.T) {
 	<-runDone
 }
 
+// processingWatcher collects the processing time a service reports.
+type processingWatcher struct {
+	mu   sync.Mutex
+	seen []time.Duration
+	got  chan struct{}
+}
+
+func newProcessingWatcher() *processingWatcher {
+	return &processingWatcher{got: make(chan struct{}, 1)}
+}
+
+func (w *processingWatcher) observe(f frames.Frame) {
+	mf, ok := f.(*frames.MetricsFrame)
+	if !ok {
+		return
+	}
+	for _, d := range mf.Data {
+		pd, ok := d.(frames.ProcessingMetricsData)
+		if !ok {
+			continue
+		}
+		w.mu.Lock()
+		w.seen = append(w.seen, pd.Value)
+		w.mu.Unlock()
+		select {
+		case w.got <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// The work a service did on an utterance is reported alongside the wait it cost.
+// The two answer different questions: a streaming service is at work for the
+// length of the utterance, where the wait it leaves behind is only what follows
+// the speech.
+func TestStreamServiceReportsTheWorkItDid(t *testing.T) {
+	stream := &answeringStream{told: make(chan struct{}, 1)}
+	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
+	w := newProcessingWatcher()
+	no := false
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		EnableMetrics:           true,
+		SendInitialEmptyMetrics: &no,
+		OnReachedDownstream:     w.observe,
+	})
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	select {
+	case <-w.got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no processing time was reported for the utterance")
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.seen) != 1 {
+		t.Fatalf("reported %d measurements, want 1: %v", len(w.seen), w.seen)
+	}
+	if w.seen[0] <= 0 {
+		t.Fatalf("processing time = %v, want the stretch the service was at work", w.seen[0])
+	}
+}
+
+// repeatAnsweringStream answers every finalize it is told to make, so a test can
+// run more than one utterance through it.
+type repeatAnsweringStream struct {
+	told chan struct{}
+	ctx  context.Context //nolint:containedctx // the session context, set on dial
+}
+
+func (s *repeatAnsweringStream) Send([]byte) error { return nil }
+
+func (s *repeatAnsweringStream) Close() error { return nil }
+
+func (s *repeatAnsweringStream) Finalize() error {
+	select {
+	case s.told <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *repeatAnsweringStream) Recv() ([]stt.Result, error) {
+	select {
+	case <-s.told:
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+	return []stt.Result{{Text: "hello world", Final: true, FromFinalize: true}}, nil
+}
+
+type repeatAnsweringConnector struct{ stream *repeatAnsweringStream }
+
+func (c *repeatAnsweringConnector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+// Asked for the initial figure alone, a service measures the first utterance and
+// leaves the rest alone.
+func TestStreamServiceReportsOnlyTheInitialTTFBWhenAsked(t *testing.T) {
+	stream := &repeatAnsweringStream{told: make(chan struct{}, 1)}
+	svc := stt.NewStream("OnceOnlySTT", &repeatAnsweringConnector{stream: stream}, 16000)
+	w := newTTFBWatcher()
+	no := false
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		EnableMetrics:           true,
+		SendInitialEmptyMetrics: &no,
+		ReportOnlyInitialTTFB:   true,
+		OnReachedDownstream:     w.observe,
+	})
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	for range 2 {
+		task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+		task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+		select {
+		case <-w.got:
+		case <-time.After(time.Second):
+		}
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	if seen := w.reported(); len(seen) != 1 {
+		t.Fatalf("reported %d measurements, want only the initial one: %v", len(seen), seen)
+	}
+}
+
 // A transcript that does not close the utterance still says the service
 // answered. When nothing closes it, the wait reported is the one to that
 // transcript rather than the one to the deadline that gave up on it.

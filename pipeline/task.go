@@ -31,6 +31,10 @@ type TaskParams struct {
 	// EnableUsageMetrics enables usage-metrics collection (e.g. LLM token usage)
 	// across the pipeline.
 	EnableUsageMetrics bool
+	// ReportOnlyInitialTTFB reports each service's first time-to-first-byte and
+	// no more, for a consumer who wants the figure the call opened with rather
+	// than one per turn. It only applies when EnableMetrics is set.
+	ReportOnlyInitialTTFB bool
 	// SendInitialEmptyMetrics sends a zeroed MetricsFrame for every processor
 	// that reports metrics once the pipeline is ready, so a consumer knows which
 	// processors to expect metrics from before any have been measured; nil
@@ -257,6 +261,7 @@ func (t *Task) runLoop(ctx context.Context) error {
 	start.AudioOutSampleRate = t.params.AudioOutSampleRate
 	start.EnableMetrics = t.params.EnableMetrics
 	start.EnableUsageMetrics = t.params.EnableUsageMetrics
+	start.ReportOnlyInitialTTFB = t.params.ReportOnlyInitialTTFB
 	if err := t.pipeline.QueueFrame(ctx, start, processor.Downstream); err != nil {
 		return err
 	}
