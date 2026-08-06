@@ -152,31 +152,32 @@ func (s *stream) Recv() ([]stt.Result, error) {
 	}
 }
 
-// results maps Transcribe segment results onto STT results. A non-partial
+// results maps a Transcribe transcript event onto an STT result. A non-partial
 // segment is final and marks the end of the current segment's transcription.
+//
+// One event describes one stretch of speech: its first segment, read through the
+// service's own best alternative for it. The transcript is labeled with the
+// language the session was opened with, which is the language the service was
+// asked to transcribe.
 func (s *stream) results(segments []types.Result) []stt.Result {
-	var out []stt.Result
-	for _, r := range segments {
-		if len(r.Alternatives) == 0 || r.Alternatives[0].Transcript == nil {
-			continue
-		}
-		text := *r.Alternatives[0].Transcript
-		if text == "" {
-			continue
-		}
-		lang := s.lang
-		if r.LanguageCode != "" {
-			lang = string(r.LanguageCode)
-		}
-		final := !r.IsPartial
-		out = append(out, stt.Result{
-			Text:      text,
-			Final:     final,
-			EndOfTurn: final,
-			Language:  lang,
-		})
+	if len(segments) == 0 {
+		return nil
 	}
-	return out
+	r := segments[0]
+	if len(r.Alternatives) == 0 || r.Alternatives[0].Transcript == nil {
+		return nil
+	}
+	text := *r.Alternatives[0].Transcript
+	if text == "" {
+		return nil
+	}
+	final := !r.IsPartial
+	return []stt.Result{{
+		Text:      text,
+		Final:     final,
+		EndOfTurn: final,
+		Language:  s.lang,
+	}}
 }
 
 // Close tears down the event stream.

@@ -22,22 +22,42 @@ func segment(text string, partial bool, lang types.LanguageCode) types.Result {
 func TestResultsMarksFinalSegments(t *testing.T) {
 	s := &stream{lang: "en-US"}
 
-	got := s.results([]types.Result{
-		segment("hello th", true, ""),
-		segment("hello there", false, ""),
-	})
-
-	if len(got) != 2 {
-		t.Fatalf("mapped %d results, want 2", len(got))
+	partial := s.results([]types.Result{segment("hello th", true, "")})
+	if len(partial) != 1 {
+		t.Fatalf("mapped %d results, want 1", len(partial))
 	}
-	if got[0].Final || got[0].EndOfTurn {
+	if partial[0].Final || partial[0].EndOfTurn {
 		t.Error("a partial segment was reported as settled")
 	}
-	if !got[1].Final || !got[1].EndOfTurn {
+
+	settled := s.results([]types.Result{segment("hello there", false, "")})
+	if len(settled) != 1 {
+		t.Fatalf("mapped %d results, want 1", len(settled))
+	}
+	if !settled[0].Final || !settled[0].EndOfTurn {
 		t.Error("a settled segment was reported as still being revised")
 	}
-	if got[1].Text != "hello there" {
-		t.Errorf("text = %q, want %q", got[1].Text, "hello there")
+	if settled[0].Text != "hello there" {
+		t.Errorf("text = %q, want %q", settled[0].Text, "hello there")
+	}
+}
+
+// TestResultsReadsTheFirstSegment covers an event carrying more than one
+// segment. One event describes one stretch of speech, so the first segment is
+// the transcript for it and the rest are not more of the same utterance.
+func TestResultsReadsTheFirstSegment(t *testing.T) {
+	s := &stream{lang: "en-US"}
+
+	got := s.results([]types.Result{
+		segment("the first", false, ""),
+		segment("something else", false, ""),
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("mapped %d results, want 1", len(got))
+	}
+	if got[0].Text != "the first" {
+		t.Errorf("text = %q, want %q", got[0].Text, "the first")
 	}
 }
 
@@ -48,37 +68,40 @@ func TestResultsMarksFinalSegments(t *testing.T) {
 func TestResultsSkipsSegmentsWithNothingInThem(t *testing.T) {
 	s := &stream{lang: "en-US"}
 
-	got := s.results([]types.Result{
-		{IsPartial: false}, // no alternatives at all
-		{IsPartial: false, Alternatives: []types.Alternative{{}}}, // an alternative with no transcript
-		segment("", false, ""), // an empty transcript
-	})
+	tests := []struct {
+		name    string
+		segment types.Result
+	}{
+		{"no alternatives at all", types.Result{}},
+		{"an alternative with no transcript", types.Result{Alternatives: []types.Alternative{{}}}},
+		{"an empty transcript", segment("", false, "")},
+	}
 
-	if len(got) != 0 {
-		t.Errorf("mapped %d results, want none: none of the segments carried speech", len(got))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := s.results([]types.Result{tt.segment}); len(got) != 0 {
+				t.Errorf("mapped %d results, want none: the segment carried no speech", len(got))
+			}
+		})
+	}
+
+	if got := s.results(nil); len(got) != 0 {
+		t.Errorf("mapped %d results from an event with no segments, want none", len(got))
 	}
 }
 
-// TestResultsPrefersTheDetectedLanguage covers automatic language
-// identification. The configured language is what the session was opened with,
-// but a segment that names its own language was recognized as that one, and the
-// transcript has to be labeled with what was actually spoken.
-func TestResultsPrefersTheDetectedLanguage(t *testing.T) {
+// TestResultsLabelWithTheSessionLanguage covers how a transcript is labeled. The
+// session was opened to transcribe one language, and that is the language the
+// transcript is reported in, whatever a segment names itself.
+func TestResultsLabelWithTheSessionLanguage(t *testing.T) {
 	s := &stream{lang: "en-US"}
 
-	got := s.results([]types.Result{
-		segment("bonjour", false, "fr-FR"),
-		segment("hello", false, ""),
-	})
-
-	if len(got) != 2 {
-		t.Fatalf("mapped %d results, want 2", len(got))
+	got := s.results([]types.Result{segment("hello", false, "fr-FR")})
+	if len(got) != 1 {
+		t.Fatalf("mapped %d results, want 1", len(got))
 	}
-	if got[0].Language != "fr-FR" {
-		t.Errorf("language = %q, want the detected fr-FR", got[0].Language)
-	}
-	if got[1].Language != "en-US" {
-		t.Errorf("language = %q, want the session's en-US where none was detected", got[1].Language)
+	if got[0].Language != "en-US" {
+		t.Errorf("language = %q, want the session's en-US", got[0].Language)
 	}
 }
 
