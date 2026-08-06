@@ -1,66 +1,117 @@
 package hume
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
-// TestVoiceSelectorPrefersAnID covers how a voice is named. An id names one
-// exactly, so it wins over a name whenever both are configured.
-func TestVoiceSelectorPrefersAnID(t *testing.T) {
-	s := &synthesizer{cfg: Config{
-		VoiceID:       "abc123",
-		VoiceName:     "Aria",
-		VoiceProvider: defaultVoiceProvider,
-	}}
+// requestOf builds the synthesis body for text and decodes it back from JSON, so
+// the wire field names are covered alongside the values.
+func requestOf(t *testing.T, cfg Config, text string) map[string]any {
+	t.Helper()
+	s := &synthesizer{cfg: cfg}
+	raw, err := json.Marshal(s.request(text))
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	return out
+}
 
-	got := s.voice()
-	if got == nil {
-		t.Fatal("no voice was selected with one configured")
+// utteranceOf returns the single utterance the request carries.
+func utteranceOf(t *testing.T, req map[string]any) map[string]any {
+	t.Helper()
+	list, ok := req["utterances"].([]any)
+	if !ok || len(list) != 1 {
+		t.Fatalf("utterances = %v, want exactly one", req["utterances"])
 	}
-	if got["id"] != "abc123" {
-		t.Errorf("id = %v, want the configured id", got["id"])
+	u, ok := list[0].(map[string]any)
+	if !ok {
+		t.Fatalf("utterance = %v, want an object", list[0])
 	}
-	if _, named := got["name"]; named {
-		t.Errorf("the selector carried a name as well as an id: %v", got)
+	return u
+}
+
+// TestRequestNamesTheVoiceByID covers how the voice is chosen. Hume names a
+// voice by id and by nothing else, so that is all that is sent: a name or a
+// provider alongside it would be fields the request does not have.
+func TestRequestNamesTheVoiceByID(t *testing.T) {
+	req := requestOf(t, Config{APIKey: "k", VoiceID: "abc123"}, "hello")
+
+	u := utteranceOf(t, req)
+	if u["text"] != "hello" {
+		t.Errorf("text = %v, want %q", u["text"], "hello")
 	}
-	if got["provider"] != defaultVoiceProvider {
-		t.Errorf("provider = %v, want %q", got["provider"], defaultVoiceProvider)
+	voice, ok := u["voice"].(map[string]any)
+	if !ok {
+		t.Fatalf("voice = %v, want an object", u["voice"])
+	}
+	if voice["id"] != "abc123" {
+		t.Errorf("voice id = %v, want the configured id", voice["id"])
+	}
+	if len(voice) != 1 {
+		t.Errorf("voice = %v, want the id alone", voice)
 	}
 }
 
-// TestVoiceSelectorFallsBackToAName covers a caller who knows the voice by name
-// rather than by id.
-func TestVoiceSelectorFallsBackToAName(t *testing.T) {
-	s := &synthesizer{cfg: Config{VoiceName: "Aria", VoiceProvider: defaultVoiceProvider}}
+// TestRequestAlwaysUsesInstantMode covers the mode the service runs in. It is
+// not a choice, and it needs a named voice, which is what requiring one buys.
+func TestRequestAlwaysUsesInstantMode(t *testing.T) {
+	req := requestOf(t, Config{APIKey: "k", VoiceID: "abc123"}, "hello")
 
-	got := s.voice()
-	if got == nil {
-		t.Fatal("no voice was selected with a name configured")
+	if req["instant_mode"] != true {
+		t.Errorf("instant_mode = %v, want it always on", req["instant_mode"])
 	}
-	if got["name"] != "Aria" {
-		t.Errorf("name = %v, want the configured name", got["name"])
+	if req["strip_headers"] != true {
+		t.Errorf("strip_headers = %v, want the container stripped", req["strip_headers"])
 	}
-	if _, byID := got["id"]; byID {
-		t.Errorf("the selector carried an id with none configured: %v", got)
-	}
-}
-
-// TestVoiceSelectorCarriesTheProvider covers a custom voice, which is named the
-// same way as a stock one but has to say where it comes from or the wrong
-// library is searched.
-func TestVoiceSelectorCarriesTheProvider(t *testing.T) {
-	s := &synthesizer{cfg: Config{VoiceID: "mine", VoiceProvider: "CUSTOM_VOICE"}}
-
-	if got := s.voice()["provider"]; got != "CUSTOM_VOICE" {
-		t.Errorf("provider = %v, want the configured CUSTOM_VOICE", got)
+	format, ok := req["format"].(map[string]any)
+	if !ok || format["type"] != "pcm" {
+		t.Errorf("format = %v, want raw samples", req["format"])
 	}
 }
 
-// TestNoVoiceSelectsNone covers leaving the voice unset: nothing is sent, so the
-// service is left to its own default rather than being handed an empty
-// selector it would have to reject.
-func TestNoVoiceSelectsNone(t *testing.T) {
-	s := &synthesizer{cfg: Config{VoiceProvider: defaultVoiceProvider}}
+// TestRequestOmitsWhatWasNotConfigured covers the optional half: a field left
+// unset is left out entirely, so the service applies its own default rather than
+// being handed a zero value.
+func TestRequestOmitsWhatWasNotConfigured(t *testing.T) {
+	req := requestOf(t, Config{APIKey: "k", VoiceID: "abc123"}, "hello")
+	u := utteranceOf(t, req)
 
-	if got := s.voice(); got != nil {
-		t.Errorf("voice = %v, want none selected", got)
+	for _, k := range []string{"description", "speed"} {
+		if _, present := u[k]; present {
+			t.Errorf("%s was sent without being configured: %v", k, u[k])
+		}
+	}
+	if _, present := req["version"]; present {
+		t.Errorf("version was sent without being configured: %v", req["version"])
+	}
+}
+
+// TestRequestIncludesWhatWasConfigured is the other half: what was set reaches
+// the service under the name it expects, the delivery prompt and the rate on the
+// utterance and the model version on the request itself.
+func TestRequestIncludesWhatWasConfigured(t *testing.T) {
+	speed := 1.25
+	req := requestOf(t, Config{
+		APIKey:      "k",
+		VoiceID:     "abc123",
+		Description: "warm and unhurried",
+		Speed:       &speed,
+		Version:     "2",
+	}, "hello")
+
+	u := utteranceOf(t, req)
+	if u["description"] != "warm and unhurried" {
+		t.Errorf("description = %v, want the configured prompt", u["description"])
+	}
+	if u["speed"] != 1.25 {
+		t.Errorf("speed = %v, want 1.25", u["speed"])
+	}
+	if req["version"] != "2" {
+		t.Errorf("version = %v, want %q", req["version"], "2")
 	}
 }

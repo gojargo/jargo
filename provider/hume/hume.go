@@ -11,8 +11,7 @@ import (
 const (
 	defaultBaseURL = "https://api.hume.ai"
 	// humeSampleRate is Hume's fixed PCM output rate.
-	humeSampleRate       = 48000
-	defaultVoiceProvider = "HUME_AI"
+	humeSampleRate = 48000
 )
 
 // Config configures the Hume TTS service.
@@ -21,14 +20,10 @@ type Config struct {
 	APIKey string `validate:"required"`
 	// BaseURL overrides the API base; empty uses the hosted API.
 	BaseURL string
-	// VoiceID selects a Hume voice by id. Setting a voice (id or name) is
-	// recommended; with none, Hume invents a new voice each call.
-	VoiceID string
-	// VoiceName selects a Hume voice by name, when VoiceID is empty.
-	VoiceName string
-	// VoiceProvider is the voice's provider, "HUME_AI" (default) or
-	// "CUSTOM_VOICE".
-	VoiceProvider string
+	// VoiceID selects the Hume voice to speak with. Required: a voice is named
+	// by id and by nothing else, and without one Hume invents a new voice on
+	// every call, so the bot would not sound like itself twice running.
+	VoiceID string `validate:"required"`
 	// Description is an optional acting/voice prompt steering delivery.
 	Description string
 	// Version pins the Octave model version (e.g. "2"); empty leaves it unset.

@@ -15,9 +15,6 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
-	if cfg.VoiceProvider == "" {
-		cfg.VoiceProvider = defaultVoiceProvider
-	}
 	return tts.New("HumeTTS", &synthesizer{cfg: cfg, http: &http.Client{}})
 }
 
@@ -32,30 +29,7 @@ func (s *synthesizer) SampleRate() int { return humeSampleRate }
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
-	utterance := map[string]any{"text": text}
-	if voice := s.voice(); voice != nil {
-		utterance["voice"] = voice
-	}
-	if s.cfg.Description != "" {
-		utterance["description"] = s.cfg.Description
-	}
-	if s.cfg.Speed != nil {
-		utterance["speed"] = *s.cfg.Speed
-	}
-
-	payload := map[string]any{
-		"utterances":    []any{utterance},
-		"format":        map[string]any{"type": "pcm"},
-		"strip_headers": true,
-	}
-	if _, ok := utterance["voice"]; ok {
-		payload["instant_mode"] = true // requires a specified voice
-	}
-	if s.cfg.Version != "" {
-		payload["version"] = s.cfg.Version
-	}
-
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(s.request(text))
 	if err != nil {
 		return err
 	}
@@ -69,15 +43,29 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	return tts.StreamResponse(s.http, req, emit)
 }
 
-// voice builds the voice selector, preferring an id over a name; nil when no
-// voice is configured.
-func (s *synthesizer) voice() map[string]any {
-	switch {
-	case s.cfg.VoiceID != "":
-		return map[string]any{"id": s.cfg.VoiceID, "provider": s.cfg.VoiceProvider}
-	case s.cfg.VoiceName != "":
-		return map[string]any{"name": s.cfg.VoiceName, "provider": s.cfg.VoiceProvider}
-	default:
-		return nil
+// request builds the synthesis body for one utterance. The voice is named by id
+// and by nothing else, and instant mode is always on, which is what a voice
+// being required buys: it cannot be used without one.
+func (s *synthesizer) request(text string) map[string]any {
+	utterance := map[string]any{
+		"text":  text,
+		"voice": map[string]any{"id": s.cfg.VoiceID},
 	}
+	if s.cfg.Description != "" {
+		utterance["description"] = s.cfg.Description
+	}
+	if s.cfg.Speed != nil {
+		utterance["speed"] = *s.cfg.Speed
+	}
+
+	payload := map[string]any{
+		"utterances":    []any{utterance},
+		"format":        map[string]any{"type": "pcm"},
+		"strip_headers": true,
+		"instant_mode":  true,
+	}
+	if s.cfg.Version != "" {
+		payload["version"] = s.cfg.Version
+	}
+	return payload
 }
