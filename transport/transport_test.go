@@ -1004,6 +1004,108 @@ func TestBaseOutputMixerFillsGaps(t *testing.T) {
 	<-runDone
 }
 
+// botAudioByte marks a chunk as the bot's own speech. The mixer's gap-filling
+// audio is silence, so a chunk carrying this byte can only have come from the
+// turn that was queued.
+const botAudioByte = 0x01
+
+// mixerBargeInOutput holds its first write until the test releases it, leaving
+// the send loop stuck in flight so audio can be queued behind it, and records
+// whether any of the bot's own audio was written once it resumes.
+type mixerBargeInOutput struct {
+	*transport.BaseOutput
+	entered chan struct{}
+	release chan struct{}
+	hold    sync.Once
+
+	mu        sync.Mutex
+	writes    int
+	botChunks int
+}
+
+func newMixerBargeInOutput(p transport.Params) *mixerBargeInOutput {
+	o := &mixerBargeInOutput{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	o.BaseOutput = transport.NewBaseOutput("MixerBargeInOutput", p, o)
+	return o
+}
+
+func (o *mixerBargeInOutput) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
+	o.hold.Do(func() {
+		select {
+		case o.entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-o.release:
+		case <-ctx.Done():
+		}
+	})
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.writes++
+	if bytes.IndexByte(f.AudioData().Audio, botAudioByte) >= 0 {
+		o.botChunks++
+	}
+	return true, nil
+}
+
+func (o *mixerBargeInOutput) counts() (writes, botChunks int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.writes, o.botChunks
+}
+
+// TestBaseOutputMixerBargeInStillDropsQueuedBotAudio covers the half of the
+// mixer branch that TestBaseOutputMixerFillsGaps does not. A mixer keeps the
+// send loop running through a barge-in, since canceling it would silence the
+// background audio too, but the bot's own audio queued behind the interruption
+// still belongs to the turn that was cut off and must never be played.
+func TestBaseOutputMixerBargeInStillDropsQueuedBotAudio(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+	params.AudioOutMixer = passthroughMixer{}
+
+	o := newMixerBargeInOutput(params)
+	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// The loop blocks in its first gap-filling write, so nothing queued behind
+	// it can be consumed before the barge-in lands.
+	select {
+	case <-o.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the transport was never asked to write")
+	}
+
+	task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{botAudioByte}, 1920*4), 48000, 1))
+	time.Sleep(200 * time.Millisecond)
+
+	task.QueueFrame(frames.NewInterruptionFrame())
+	time.Sleep(200 * time.Millisecond)
+
+	close(o.release)
+
+	// Give the loop time to drain anything the barge-in failed to drop, and to
+	// show it is still running.
+	time.Sleep(300 * time.Millisecond)
+
+	writes, botChunks := o.counts()
+	if botChunks != 0 {
+		t.Errorf("the barge-in played %d chunks of the interrupted turn, want 0", botChunks)
+	}
+	if writes == 0 {
+		t.Error("the mixer stopped playing across the barge-in: the loop was torn down with the turn")
+	}
+
+	task.Cancel()
+	<-runDone
+}
+
 // waitForFullWrites blocks until nothing more can be recorded, which is what
 // leaves the send loop stuck inside a write.
 func waitForFullWrites(t *testing.T, o *fakeOutput) {
