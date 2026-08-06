@@ -69,7 +69,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	return scanSSE(resp.Body, func(data []byte) error {
 		var chunk t2aChunk
 		_ = json.Unmarshal(data, &chunk) // a non-audio event leaves Audio empty
-		if chunk.Data.Audio == "" || chunk.Data.Status == statusFinal {
+		if chunk.Data.Audio == "" || chunk.summary() {
 			return nil
 		}
 		pcm, err := hex.DecodeString(chunk.Data.Audio)
@@ -106,10 +106,21 @@ func (s *synthesizer) request(text string) map[string]any {
 
 // t2aChunk is the subset of a MiniMax SSE event we use.
 type t2aChunk struct {
-	Data struct {
+	// ExtraInfo is carried only by the summary event that closes the stream. It
+	// is what marks that event, alongside its status: the audio it repeats has
+	// already been played, so it names the event either way it is reported.
+	ExtraInfo json.RawMessage `json:"extra_info"`
+	Data      struct {
 		Audio  string `json:"audio"`
 		Status int    `json:"status"`
 	} `json:"data"`
+}
+
+// summary reports whether this is the event that closes the stream. Its audio,
+// when it carries any, repeats what has already been played, so playing it again
+// would say the whole utterance twice.
+func (c t2aChunk) summary() bool {
+	return len(c.ExtraInfo) > 0 || c.Data.Status == statusFinal
 }
 
 // scanSSE reads a Server-Sent Events stream, invoking fn for each non-empty

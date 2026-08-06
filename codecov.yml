@@ -22,10 +22,17 @@ coverage:
 # ~13 points of real library coverage. `rivapb` is protoc output.
 # `internal/providertest` is test scaffolding: it runs on every provider test but
 # is credited to none of them, so it would read 0% forever.
+#
+# The `onnxrt` backends are the FFI into libonnxruntime: symbol lookup, unsafe
+# pointer arithmetic, and a cgo alternative behind a build tag. Exercising them
+# needs the shared library, which CI does not have, and faking it would test the
+# fake. Only the two backend files are excluded, so the wrapper around them
+# (locating the library, the session lifecycle, the tensors) still counts.
 ignore:
   - "examples/**"
   - "**/internal/rivapb/**"
   - "internal/providertest/**"
+  - "internal/onnxrt/backend_*.go"
 
 comment:
   layout: "reach, diff, flags, files"
