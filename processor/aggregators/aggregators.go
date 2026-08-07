@@ -186,6 +186,23 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 // handleFrame folds one frame into the aggregation and forwards it.
 func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
+	case *frames.EndFrame:
+		// The session is over, so whatever the user said last is committed
+		// rather than lost with the processor. It happens after the frame has
+		// been forwarded, so the end of the pipeline is not held up behind it.
+		if err := u.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		return u.maybeRun(ctx)
+
+	case *frames.CancelFrame:
+		// Same, the other way round: a cancel tears the pipeline down at once, so
+		// what is held is committed before the frame that stops everything.
+		if err := u.maybeRun(ctx); err != nil {
+			return err
+		}
+		return u.PushFrame(ctx, f, dir)
+
 	case *frames.InterimTranscriptionFrame:
 		// Interim (partial) speech is forwarded for downstream consumers (e.g.
 		// RTVI) but not aggregated; the turn processor drives end-of-turn.

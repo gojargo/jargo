@@ -423,3 +423,42 @@ func TestUserAggregatorRunsInferenceBeforeDeferredFinalization(t *testing.T) {
 		t.Fatal("task did not finish")
 	}
 }
+
+// What the user said last is committed when the session ends. A transcript that
+// arrived without the turn being finalized, because the call dropped or the
+// scenario's last turn was the user's, would otherwise be lost with the
+// processor, leaving a saved conversation ending on the bot's turn with no
+// record that the user answered.
+func TestUserAggregatorCommitsWhatIsHeldWhenTheSessionEnds(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+		},
+		StopTimeout: 3 * time.Second,
+	}))
+
+	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// The user speaks, and the turn is never finalized before the end.
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	tf := frames.NewTranscriptionFrame("actually make it two", "u", "ts")
+	tf.Finalized = true
+	task.QueueFrame(tf)
+
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleUser || msgs[0].Text != "actually make it two" {
+		t.Fatalf("messages = %+v, want one user 'actually make it two': the last thing "+
+			"the user said was dropped at the end of the session", msgs)
+	}
+}
