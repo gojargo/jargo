@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
@@ -75,6 +77,19 @@ type timedSynthesizer struct {
 
 // SampleRate reports the requested PCM output rate.
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
+
+// spacelessLanguage reports whether the configured language is written without
+// spaces between words. Chinese and Japanese are, and this provider reports
+// their characters separately but grouped into one message, which is what makes
+// the message rather than the character the unit worth reporting.
+func (s *synthesizer) spacelessLanguage() bool {
+	switch s.cfg.Language.BaseCode() {
+	case "zh", "ja":
+		return true
+	default:
+		return false
+	}
+}
 
 // cartesiaLanguage maps a Language to Cartesia's language code: Cartesia wants
 // the base code, returned only for languages it supports; otherwise "" (Cartesia
@@ -213,7 +228,7 @@ func (s *synthesizer) receive(
 			}
 		case "timestamps":
 			if word != nil {
-				if err := emitWordTimings(m.WordTimestamps, word); err != nil {
+				if err := emitWordTimings(m.WordTimestamps, s.spacelessLanguage(), word); err != nil {
 					return err
 				}
 			}
@@ -225,19 +240,63 @@ func (s *synthesizer) receive(
 	}
 }
 
-// emitWordTimings merges punctuation-only tokens into the preceding word and
-// forwards each resulting (word, start) pair to word.
-func emitWordTimings(wt *wsWordTimings, word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error) error {
+// cartesiaTagPattern matches the markup this provider accepts in the text it is
+// given and reports back in its timings.
+//
+//nolint:gochecknoglobals // compiled once, read-only
+var cartesiaTagPattern = regexp.MustCompile(`(?i)</?(?:spell|emotion|break|volume|speed)\b[^>]*>`)
+
+// stripCartesiaTags removes that markup from one reported token, collapsing the
+// whitespace it leaves behind. A token that was nothing but markup comes back
+// empty and is dropped by the caller.
+func stripCartesiaTags(text string) string {
+	text = cartesiaTagPattern.ReplaceAllString(text, " ")
+	return strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+}
+
+// emitWordTimings normalizes one batch of reported timings and forwards it.
+//
+// The markup this provider was given comes back in the tokens it reports, and
+// has to come off before anything downstream tries to match them against the
+// text. A language written without spaces between words has its characters
+// reported separately but grouped into one message, so the message is joined
+// into a single token at the offset of its first character: that is the unit a
+// reader of the language recognizes, where the characters alone are not.
+func emitWordTimings(
+	wt *wsWordTimings,
+	spaceless bool,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+) error {
 	if wt == nil {
 		return nil
 	}
+	opts := tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless}
+
+	if spaceless {
+		var combined strings.Builder
+		for _, w := range wt.Words {
+			combined.WriteString(stripCartesiaTags(w))
+		}
+		if combined.Len() == 0 || len(wt.Start) == 0 {
+			return nil
+		}
+		return word([]uctx.WordTiming{{Word: combined.String(), Offset: wt.Start[0]}}, opts)
+	}
+
 	batch := make([]uctx.WordTiming, 0, len(wt.Words))
 	for i, w := range wt.Words {
+		cleaned := stripCartesiaTags(w)
+		if cleaned == "" {
+			continue
+		}
 		var start float64
 		if i < len(wt.Start) {
 			start = wt.Start[i]
 		}
-		batch = append(batch, uctx.WordTiming{Word: w, Offset: start})
+		batch = append(batch, uctx.WordTiming{Word: cleaned, Offset: start})
 	}
-	return word(batch, tts.WordTimingOptions{PreMergeTokens: true})
+	if len(batch) == 0 {
+		return nil
+	}
+	return word(batch, opts)
 }

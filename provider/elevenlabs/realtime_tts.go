@@ -210,6 +210,19 @@ func (s *realtimeSynthesizer) Metadata() tts.Metadata {
 	return tts.Metadata{Model: s.cfg.Model, VoiceID: s.cfg.VoiceID}
 }
 
+// spacelessLanguage reports whether the configured language is written without
+// spaces between words. Chinese and Japanese are, so the tokens this provider
+// times already read as continuous text and a consumer joining them must add no
+// spacing of its own.
+func (s *realtimeSynthesizer) spacelessLanguage() bool {
+	switch s.cfg.Language.BaseCode() {
+	case "zh", "ja":
+		return true
+	default:
+		return false
+	}
+}
+
 // endpoint builds the multi-stream-input URL. The voice, model and output format
 // are fixed for the connection; only the text varies per message.
 func (s *realtimeSynthesizer) endpoint() string {
@@ -389,16 +402,18 @@ func (s *realtimeSynthesizer) reportWords(
 	}
 	st.cumulative = alignment.end(st.cumulative)
 
-	// This provider splits punctuation into tokens of its own, so it asks for
-	// them to be merged. The merging itself is the base's, so every provider
-	// that needs it gets the same treatment.
+	// The words are reported as this provider timed them. Assembling the
+	// characters on spaces has already attached each word's punctuation to it,
+	// and punctuation the writing separates from its word (as French does before
+	// "?") is a token in its own right, which is what the text says it is.
+	opts := tts.WordTimingOptions{IncludesInterFrameSpaces: s.spacelessLanguage()}
 	if st.direct == nil {
 		if host != nil {
-			host.AddWordTimestamps(msg.ContextID, words, tts.WordTimingOptions{PreMergeTokens: true})
+			host.AddWordTimestamps(msg.ContextID, words, opts)
 		}
 		return nil
 	}
-	for _, wt := range uctx.MergePunctTokens(words) {
+	for _, wt := range words {
 		if err := st.direct.word(wt.Word, wt.Offset); err != nil {
 			return err
 		}

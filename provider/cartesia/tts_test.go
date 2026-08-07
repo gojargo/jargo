@@ -22,14 +22,13 @@ func TestPlainConfigDoesNotOptIn(t *testing.T) {
 	}
 }
 
-// TestEmitWordTimingsForwardsRawAndAsksForMerging checks the provider hands its
-// tokens over as they came and asks for them to be normalized, rather than
-// normalizing them itself. This API splits punctuation and spaces into tokens of
-// their own, so the merging matters; doing it here rather than in the base is
-// what left other providers reporting tokens nothing downstream expects.
-func TestEmitWordTimingsForwardsRawAndAsksForMerging(t *testing.T) {
+// The tokens are reported as this provider timed them, with the markup it was
+// given stripped back off and anything that was only markup or spacing dropped.
+// Punctuation the writing separates from its word stays a token of its own,
+// which is what the text says it is.
+func TestEmitWordTimingsStripsMarkupAndKeepsTokens(t *testing.T) {
 	in := &wsWordTimings{
-		Words: []string{"Hello", ",", " ", "world"},
+		Words: []string{"<spell>Hello</spell>", ",", " ", "world"},
 		Start: []float64{0.0, 0.4, 0.45, 0.5},
 	}
 	type wt struct {
@@ -38,7 +37,7 @@ func TestEmitWordTimingsForwardsRawAndAsksForMerging(t *testing.T) {
 	}
 	var got []wt
 	var asked tts.WordTimingOptions
-	err := emitWordTimings(in, func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
+	err := emitWordTimings(in, false, func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
 		asked = opts
 		for _, w := range words {
 			got = append(got, wt{w.Word, w.Offset})
@@ -48,13 +47,12 @@ func TestEmitWordTimingsForwardsRawAndAsksForMerging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("emitWordTimings: %v", err)
 	}
-	if !asked.PreMergeTokens {
-		t.Error("the provider did not ask for its punctuation tokens to be merged")
+	if asked.IncludesInterFrameSpaces {
+		t.Error("a language written with spaces was reported as carrying its own")
 	}
-	// Forwarded as they came: the merging happens in the base.
-	want := []wt{{"Hello", 0.0}, {",", 0.4}, {" ", 0.45}, {"world", 0.5}}
+	want := []wt{{"Hello", 0.0}, {",", 0.4}, {"world", 0.5}}
 	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
+		t.Fatalf("got %v, want %v: the markup comes off and the spacing token is dropped", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -63,10 +61,59 @@ func TestEmitWordTimingsForwardsRawAndAsksForMerging(t *testing.T) {
 	}
 }
 
+// A language written without spaces has its characters reported separately but
+// grouped into one message. The message is the unit a reader recognizes, so it
+// is joined into one token at the offset of its first character, and it says it
+// carries its own spacing so nothing adds any.
+func TestEmitWordTimingsJoinsASpacelessMessage(t *testing.T) {
+	in := &wsWordTimings{
+		Words: []string{"こ", "ん", "に", "ち", "は", "。"},
+		Start: []float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+	}
+	var got []uctx.WordTiming
+	var asked tts.WordTimingOptions
+	err := emitWordTimings(in, true, func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
+		asked = opts
+		got = append(got, words...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("emitWordTimings: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tokens, want the message joined into one", len(got))
+	}
+	if got[0].Word != "こんにちは。" {
+		t.Fatalf("token = %q, want the whole message", got[0].Word)
+	}
+	if got[0].Offset != 0.0 {
+		t.Fatalf("offset = %v, want the first character's, 0", got[0].Offset)
+	}
+	if !asked.IncludesInterFrameSpaces {
+		t.Error("the message was reported as needing spacing supplied around it")
+	}
+}
+
+// A message that was nothing but markup reports nothing.
+func TestEmitWordTimingsDropsAMessageOfOnlyMarkup(t *testing.T) {
+	in := &wsWordTimings{Words: []string{"<break/>", " "}, Start: []float64{0.0, 0.1}}
+	called := false
+	err := emitWordTimings(in, false, func([]uctx.WordTiming, tts.WordTimingOptions) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("emitWordTimings: %v", err)
+	}
+	if called {
+		t.Fatal("a message holding no words was reported")
+	}
+}
+
 func TestEmitWordTimingsNilIsNoop(t *testing.T) {
 	called := false
 	emit := func([]uctx.WordTiming, tts.WordTimingOptions) error { called = true; return nil }
-	if err := emitWordTimings(nil, emit); err != nil {
+	if err := emitWordTimings(nil, false, emit); err != nil {
 		t.Fatalf("emitWordTimings(nil): %v", err)
 	}
 	if called {

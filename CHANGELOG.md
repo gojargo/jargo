@@ -63,6 +63,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Cartesia and ElevenLabs normalize their own word timings, and say when their
+  tokens carry their own spacing.** Both asked the TTS base to merge punctuation
+  into the preceding word, which is not what either needs: assembling ElevenLabs'
+  characters on spaces already attaches each word's punctuation to it, and
+  Cartesia reports whole words. The merging changed what a locale spacing its
+  punctuation produces, turning "va" and "?" into "va?" and leaving the tracker
+  matching against text that reads otherwise. Cartesia now strips the markup it
+  was given back out of the tokens it reports, drops what was only markup or
+  spacing, and joins a message of Chinese or Japanese characters into the one
+  token a reader of the language recognizes. Both providers now report whether
+  their language is written without spaces between words, so a turn in one is
+  assembled with no spacing added.
+
 - **The recorder can hand over each turn's audio on its own.** Set
   `EnableTurnAudio` and the user's audio arrives through `OnUserTurnAudioData`
   when they stop speaking, the bot's through `OnBotTurnAudioData` when it does.
