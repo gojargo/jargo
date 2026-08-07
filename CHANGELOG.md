@@ -63,6 +63,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The end of a model response now lands behind the words it ends.** Where the
+  provider times its words, those words carry the moment they are spoken and
+  travel the transport's queue for timed frames, which holds each until then. The
+  frame ending the response carried no timing, so it took the other queue and
+  could overtake the tail of the very response it closed: anything keying off it,
+  a turn observer or a client's bot-stopped event, saw the response end while its
+  last words were still being said. It is now held until the audio for that turn
+  has been heard and stamped with the last word's moment. The frame held is the
+  frame pushed, id and all, so a consumer recognizing one it has already seen is
+  not told twice that the same response ended.
+
 - **An utterance the service speaks is recorded as one assistant message, closed
   where it ends.** The assistant aggregator wrote spoken text into the
   conversation word by word, rewriting the message in place as each one arrived,

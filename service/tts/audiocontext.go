@@ -304,6 +304,10 @@ func (b *Base) startAudioContexts(ctx context.Context) {
 	b.audioCtxMu.Lock()
 	b.audioContexts = map[string]*audioContext{}
 	b.ttsContexts = map[string]ttsContext{}
+	// Held response ends go with the contexts they were waiting on. An
+	// interruption comes through here, and what it cut off is not to be reported
+	// as having finished.
+	b.pendingResponseEnd = map[string]*frames.LLMFullResponseEndFrame{}
 	b.serial = newSerialQueue()
 	b.ctxDone = done
 	b.audioCtxMu.Unlock()
@@ -456,6 +460,26 @@ func (b *Base) appendsToContext(contextID string) bool {
 	return !ok || c.appendToContext
 }
 
+// holdResponseEnd keeps the frame ending a model response until the speech sent
+// on contextID has been heard.
+func (b *Base) holdResponseEnd(contextID string, f *frames.LLMFullResponseEndFrame) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	if b.pendingResponseEnd == nil {
+		b.pendingResponseEnd = map[string]*frames.LLMFullResponseEndFrame{}
+	}
+	b.pendingResponseEnd[contextID] = f
+}
+
+// takeResponseEnd returns the frame held for a context and forgets it.
+func (b *Base) takeResponseEnd(contextID string) (*frames.LLMFullResponseEndFrame, bool) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	f, ok := b.pendingResponseEnd[contextID]
+	delete(b.pendingResponseEnd, contextID)
+	return f, ok
+}
+
 // takeTTSContext returns what a context carries and forgets it, so the answer is
 // acted on once.
 func (b *Base) takeTTSContext(contextID string) (ttsContext, bool) {
@@ -595,7 +619,34 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) {
 		stopped.ContextID = contextID
 		_ = b.PushFrame(ctx, stopped, processor.Downstream)
 	}
+	b.releaseResponseEnd(ctx, contextID)
 	b.finishAudioContext(ctx, c)
+}
+
+// releaseResponseEnd reports the end of the model's response now that the audio
+// for this context has been heard, stamped with the moment its last word was
+// spoken so it lands behind that word rather than ahead of it.
+//
+// The frame held at the end of the turn is the one pushed, id and all, so a
+// consumer recognizing a frame it has already seen is not told twice that the
+// same response ended. A response that was under way with nothing held for this
+// context is reported with a fresh frame rather than not at all.
+func (b *Base) releaseResponseEnd(ctx context.Context, contextID string) {
+	if !b.wordPath() {
+		// Nothing to release: the end went out on the serialization queue, behind
+		// the text this provider pushes a whole unit at a time.
+		return
+	}
+	f, ok := b.takeResponseEnd(contextID)
+	if !ok {
+		if !b.llmResponding() {
+			return
+		}
+		f = frames.NewLLMFullResponseEndFrame()
+	}
+	b.setLLMResponding(false)
+	f.SetPTS(int64(b.lastWordPTS()))
+	_ = b.PushFrame(ctx, f, processor.Downstream)
 }
 
 // finishAudioContext records what the context cost and closes its span.

@@ -201,8 +201,13 @@ type Base struct {
 	// on the drain goroutine, long after the call that set it, which is why the
 	// answers are kept here rather than passed along with each frame.
 	ttsContexts map[string]ttsContext
-	serial      *serialQueue
-	ctxCancel   context.CancelFunc
+	// pendingResponseEnd holds the frame ending a model response, keyed by the
+	// context its speech was sent on, until that speech has been heard. Several
+	// contexts can be in flight at once, so each is held under its own key and
+	// released by its own context finishing.
+	pendingResponseEnd map[string]*frames.LLMFullResponseEndFrame
+	serial             *serialQueue
+	ctxCancel          context.CancelFunc
 	// ctxDone is closed when the drain goroutine exits, so a graceful end can
 	// wait for the queue it asked to shut down.
 	ctxDone chan struct{}
@@ -454,9 +459,22 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 	// call and nothing else, has no audio to wait for.
 	b.maybePauseFrameProcessing(ctx)
 	b.setProcessingText(false)
+	// Taken before the turn is closed out, which is what forgets the id.
+	turnContext := b.turnContext
 	b.onTurnContextCompleted(ctx)
 	if isEnd {
 		return b.PushFrame(ctx, f, dir)
+	}
+	// A provider that times its words has its response end held back until the
+	// audio for it has been heard, and stamped with the moment of the last word,
+	// so it cannot overtake the words it is ending. One that does not time them
+	// pushes text a whole unit at a time on the serialization queue, and the end
+	// goes out behind that.
+	if end, ok := f.(*frames.LLMFullResponseEndFrame); ok && b.wordPath() {
+		if turnContext != "" {
+			b.holdResponseEnd(turnContext, end)
+		}
+		return nil
 	}
 	return b.queueSerial(ctx, f, dir)
 }

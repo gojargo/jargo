@@ -496,3 +496,68 @@ func TestSpeakFrameClosesTheAssistantTurnItOpened(t *testing.T) {
 		})
 	}
 }
+
+// The end of a response lands behind the words it ends, and reports the same
+// response once.
+//
+// Word frames carry the moment they are spoken and travel the transport's queue
+// for timed frames, which holds each until then. An end frame with no timing of
+// its own takes the other queue, so it would overtake the tail of the very
+// response it closes: a consumer keying off it, a turn observer or a client's
+// bot-stopped event, would see the response end while its last words were still
+// being said. It is held until the audio for the turn has been heard and stamped
+// with the last word's moment, and the frame held is the frame pushed, so a
+// consumer that recognizes a frame it has already seen is not told twice.
+func TestResponseEndFollowsTheWordsItEnds(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	var endPTS []int64
+	var endIDs []uint64
+
+	synth := &fakeTimedSynth{rate: 24000, words: []timedWord{
+		{text: "Hello", offset: 0, pcm: make([]byte, 4800)},
+		{text: "there.", offset: 0.1, pcm: make([]byte, 4800)},
+	}}
+	base := tts.New("TimedTTS", synth)
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch fr := f.(type) {
+			case *frames.TTSTextFrame:
+				order = append(order, "word:"+fr.Text)
+			case *frames.LLMFullResponseEndFrame:
+				order = append(order, "end")
+				pts, _ := fr.PTS()
+				endPTS = append(endPTS, pts)
+				endIDs = append(endIDs, fr.ID())
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
+	task.QueueFrame(frames.NewLLMTextFrame("Hello there."))
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+	time.Sleep(600 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(endIDs) != 1 {
+		t.Fatalf("the response was reported as ending %d times, want once: %v", len(endIDs), order)
+	}
+	if len(order) == 0 || order[len(order)-1] != "end" {
+		t.Fatalf("frames reached the pipeline as %v, want the end of the response last", order)
+	}
+	if endPTS[0] <= 0 {
+		t.Fatalf("the end of the response was timed at %d, want the moment of the last word "+
+			"so it cannot overtake it", endPTS[0])
+	}
+}
