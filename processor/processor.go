@@ -393,6 +393,18 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) 
 	return nil
 }
 
+// HasQueuedFrame reports whether a frame satisfying match is still waiting in
+// this processor's in-order queue, behind the one being handled now. A
+// processor uses it to tell that more of the same work is already on its way, so
+// it can hold off on an action until the last of it arrives rather than
+// repeating the action once per frame.
+//
+// Only data and control frames are considered. A system frame is handled the
+// moment it is queued and so never waits.
+func (b *Base) HasQueuedFrame(match func(frames.Frame) bool) bool {
+	return b.procQueue.hasFrame(match)
+}
+
 // MetricsEnabled reports whether performance-metrics collection was enabled by
 // the StartFrame. It is valid once the processor has received its StartFrame.
 func (b *Base) MetricsEnabled() bool { return b.metricsEnabled }

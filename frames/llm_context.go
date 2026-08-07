@@ -18,6 +18,11 @@ const (
 	RoleUser Role = "user"
 	// RoleAssistant is a message from the assistant.
 	RoleAssistant Role = "assistant"
+	// RoleDeveloper is an out-of-band instruction to the model. It carries the
+	// results an asynchronous tool reports after its turn has moved on (see
+	// AsyncToolMessage). Providers without a developer role take it as a user
+	// message.
+	RoleDeveloper Role = "developer"
 )
 
 // Tool is a function the model may call. Parameters is a JSON-Schema object
@@ -42,7 +47,6 @@ type ToolResult struct {
 	ID      string
 	Name    string
 	Content string
-	IsError bool
 }
 
 // Message is a single conversation turn. A plain turn carries Text; an assistant
@@ -248,21 +252,52 @@ func (c *LLMContext) ReplaceLastAssistantText(text string) bool {
 	return false
 }
 
-// AddAssistantToolCalls appends an assistant message carrying optional preamble
-// text and the tool calls the model requested in the same turn.
-func (c *LLMContext) AddAssistantToolCalls(text string, calls []ToolCall) {
+// AddMessage appends a message as it stands. The assistant aggregator uses it
+// for the developer messages an asynchronous tool call reports its progress
+// through (see AsyncToolMessage).
+func (c *LLMContext) AddMessage(m Message) {
 	c.mu.Lock()
-	c.messages = append(c.messages, Message{Role: RoleAssistant, Text: text, ToolCalls: calls})
+	c.messages = append(c.messages, m)
 	c.mu.Unlock()
 }
 
-// AddToolResults appends a user message returning the outputs of one or more
-// tool calls. The results of all calls in an assistant turn belong in a single
-// message.
-func (c *LLMContext) AddToolResults(results []ToolResult) {
+// AddAssistantToolCall appends an assistant message requesting a single tool
+// call. One message per call, each followed straight away by that call's result
+// message, is what keeps every tool-use block adjacent to the tool-result block
+// answering it, so the conversation is a valid one at every moment rather than
+// only once a turn has finished.
+func (c *LLMContext) AddAssistantToolCall(call ToolCall) {
 	c.mu.Lock()
-	c.messages = append(c.messages, Message{Role: RoleUser, ToolResults: results})
+	c.messages = append(c.messages, Message{Role: RoleAssistant, ToolCalls: []ToolCall{call}})
 	c.mu.Unlock()
+}
+
+// AddToolResult appends a message returning the output of a single tool call.
+// It is written as soon as the call starts, carrying a placeholder, and updated
+// in place by UpdateToolResult once the call reports.
+func (c *LLMContext) AddToolResult(r ToolResult) {
+	c.mu.Lock()
+	c.messages = append(c.messages, Message{Role: RoleUser, ToolResults: []ToolResult{r}})
+	c.mu.Unlock()
+}
+
+// UpdateToolResult rewrites the content of the result message belonging to
+// toolCallID, reporting whether it found one. Updating in place, rather than
+// appending, is what stops a late result from landing after messages that were
+// added while the call was running, which would separate it from the tool call
+// it answers.
+func (c *LLMContext) UpdateToolResult(toolCallID, content string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.messages {
+		for j := range c.messages[i].ToolResults {
+			if c.messages[i].ToolResults[j].ID == toolCallID {
+				c.messages[i].ToolResults[j].Content = content
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Messages returns a copy of the conversation messages.

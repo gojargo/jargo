@@ -19,11 +19,25 @@ package aggregators
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
+)
+
+// The placeholder contents a tool-result message holds while its call has not
+// reported a result of its own.
+const (
+	// toolResultInProgress is written the moment a call starts, so the tool-use
+	// block it answers is never left unanswered.
+	toolResultInProgress = "IN_PROGRESS"
+	// toolResultCancelled replaces the placeholder when the call is canceled.
+	toolResultCancelled = "CANCELLED"
+	// toolResultCompleted stands in for a call that finished having produced no
+	// result of its own.
+	toolResultCompleted = "COMPLETED"
 )
 
 // Pair is a user and assistant aggregator sharing one conversation context.
@@ -342,22 +356,55 @@ type AssistantAggregator struct {
 	// the context yet, so later words update it in place rather than appending.
 	spoken          string
 	spokenCommitted bool
-	// Tool-call state for the current assistant turn. pendingIDs holds the
-	// calls still awaiting a result; pendingResults collects results until all
-	// have arrived and they can be written as one tool-result message.
-	pendingResults []frames.ToolResult
-	pendingIDs     map[string]bool
-	// suppressRun is set when a result asks not to re-run (a stopped turn).
-	suppressRun bool
+	// inProgress holds every tool call of the current turn that has not reported
+	// a final result yet, keyed by tool call id. The value is nil between the
+	// FunctionCallsStartedFrame that announced the call and the
+	// FunctionCallInProgressFrame that starts it.
+	inProgress map[string]*frames.FunctionCallInProgressFrame
+	// userSpeaking and botSpeaking track who holds the floor. A tool result that
+	// arrives while the user is speaking never re-runs generation, and one that
+	// arrives while the bot is speaking defers it until the bot finishes.
+	userSpeaking bool
+	botSpeaking  bool
+	// pushOnBotStopped records a deferred re-run, so several results arriving
+	// while the bot speaks are answered by a single inference once it stops.
+	pushOnBotStopped bool
+
+	// Lifetime of the context-updated callbacks, which run off the frame path.
+	// Cleanup cancels them and waits for them to return.
+	taskCtx    context.Context
+	taskCancel context.CancelFunc
+	taskWG     sync.WaitGroup
 }
 
 func newAssistant(ctx *frames.LLMContext, sc *SummarizeConfig) *AssistantAggregator {
-	a := &AssistantAggregator{context: ctx, pendingIDs: make(map[string]bool)}
+	a := &AssistantAggregator{
+		context:    ctx,
+		inProgress: make(map[string]*frames.FunctionCallInProgressFrame),
+	}
 	if sc != nil && sc.Summarizer != nil {
 		a.summarize = newSummarizer(*sc)
 	}
 	a.Base = processor.New("AssistantContextAggregator", a)
 	return a
+}
+
+// Setup opens the lifetime the context-updated callbacks run under.
+func (a *AssistantAggregator) Setup(ctx context.Context, s processor.Setup) error {
+	if err := a.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	a.taskCtx, a.taskCancel = context.WithCancel(ctx)
+	return nil
+}
+
+// Cleanup cancels the context-updated callbacks and waits for them to return.
+func (a *AssistantAggregator) Cleanup(ctx context.Context) error {
+	if a.taskCancel != nil {
+		a.taskCancel()
+	}
+	a.taskWG.Wait()
+	return a.Base.Cleanup(ctx)
 }
 
 // ProcessFrame collects LLM text into an assistant message.
@@ -389,10 +436,14 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		a.handleSpoken(fr)
 	case *frames.FunctionCallsStartedFrame:
 		a.handleFunctionCallsStarted(fr)
+	case *frames.FunctionCallInProgressFrame:
+		a.handleFunctionCallInProgress(fr)
 	case *frames.FunctionCallResultFrame:
 		if err := a.handleFunctionCallResult(ctx, fr); err != nil {
 			return err
 		}
+	case *frames.FunctionCallCancelFrame:
+		a.handleFunctionCallCancel(fr)
 	case *frames.LLMFullResponseEndFrame:
 		a.commit()
 	case *frames.TTSSpeakFrame:
@@ -400,9 +451,24 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		if fr.AppendToContext {
 			a.context.AddAssistantMessage(fr.Text)
 		}
+	case *frames.UserStartedSpeakingFrame:
+		a.setUserSpeaking(true)
+	case *frames.UserStoppedSpeakingFrame:
+		a.setUserSpeaking(false)
+	case *frames.BotStartedSpeakingFrame:
+		a.setBotSpeaking(true)
+	case *frames.BotStoppedSpeakingFrame:
+		a.setBotSpeaking(false)
+		if err := a.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		return a.pushDeferredContext(ctx)
 	case *frames.InterruptionFrame:
-		// The response was cut off; keep whatever the bot already said and
-		// balance any tool calls that never got a result.
+		// The response was cut off; keep whatever the bot already said. The tool
+		// calls still running are left alone: each already has a placeholder
+		// result in the context, so the turn is balanced as it stands, and the
+		// LLM service resolves them by canceling the calls it registered to
+		// cancel.
 		a.commitInterrupted()
 	}
 	return a.PushFrame(ctx, f, dir)
@@ -438,56 +504,260 @@ func (a *AssistantAggregator) handleSpoken(fr *frames.TTSTextFrame) {
 	a.context.AddAssistantMessage(spoken)
 }
 
-// handleFunctionCallsStarted writes the assistant turn that requested the tool
-// calls — any preamble text plus the tool-use blocks — and records the calls as
-// awaiting results.
+// handleFunctionCallsStarted records the announced calls as awaiting results. It
+// writes nothing to the context: each call's own FunctionCallInProgressFrame
+// writes its tool-use block and the placeholder answering it, which is what keeps
+// the conversation balanced at every instant rather than only once the turn ends.
 func (a *AssistantAggregator) handleFunctionCallsStarted(fr *frames.FunctionCallsStartedFrame) {
 	a.mu.Lock()
-	text := a.aggregation
-	a.aggregation = ""
+	defer a.mu.Unlock()
 	for _, c := range fr.Calls {
-		a.pendingIDs[c.ID] = true
+		a.inProgress[c.ID] = nil
 	}
-	a.mu.Unlock()
-	a.context.AddAssistantToolCalls(text, fr.Calls)
 }
 
-// handleFunctionCallResult buffers a tool result and, once every call from the
-// assistant turn has one, writes them as a single tool-result message and
-// re-triggers generation — unless a result asked to stop the turn. Writing the
-// results before re-triggering keeps the tool calls balanced for the next
-// inference.
-func (a *AssistantAggregator) handleFunctionCallResult(ctx context.Context, fr *frames.FunctionCallResultFrame) error {
+// handleFunctionCallInProgress writes the assistant message requesting this one
+// call, immediately followed by the message that answers it: a placeholder
+// result for an ordinary call, or an async-tool started message for a call the
+// model does not wait on. The pair is written together, so no inference can ever
+// read a tool-use block with nothing answering it.
+func (a *AssistantAggregator) handleFunctionCallInProgress(fr *frames.FunctionCallInProgressFrame) {
+	a.context.AddAssistantToolCall(frames.ToolCall{ID: fr.ToolCallID, Name: fr.ToolName, Args: fr.Args})
+	if fr.CancelOnInterruption {
+		a.context.AddToolResult(frames.ToolResult{
+			ID:      fr.ToolCallID,
+			Name:    fr.ToolName,
+			Content: toolResultInProgress,
+		})
+	} else {
+		a.context.AddMessage(frames.NewAsyncToolStartedMessage(fr.ToolCallID))
+	}
 	a.mu.Lock()
-	a.pendingResults = append(a.pendingResults, frames.ToolResult{
-		ID:      fr.ToolCallID,
-		Name:    fr.ToolName,
-		Content: fr.Result,
-		IsError: fr.IsError,
-	})
-	if !fr.RunLLM {
-		a.suppressRun = true
-	}
-	delete(a.pendingIDs, fr.ToolCallID)
-	var results []frames.ToolResult
-	complete := len(a.pendingIDs) == 0
-	if complete {
-		results = a.pendingResults
-		a.pendingResults = nil
-	}
-	runLLM := complete && !a.suppressRun
-	if complete {
-		a.suppressRun = false
-	}
+	a.inProgress[fr.ToolCallID] = fr
 	a.mu.Unlock()
+}
 
-	if results != nil {
-		a.context.AddToolResults(results)
+// handleFunctionCallResult applies one tool result to the context and decides
+// whether generation re-runs on it. A final result replaces the call's
+// placeholder in place, which is what keeps it next to the tool call it answers
+// however long the call took and whatever was appended meanwhile.
+func (a *AssistantAggregator) handleFunctionCallResult(
+	ctx context.Context, fr *frames.FunctionCallResultFrame,
+) error {
+	a.mu.Lock()
+	started, running := a.inProgress[fr.ToolCallID]
+	a.mu.Unlock()
+	if !running {
+		slog.WarnContext(ctx, "tool result for a call that is not running",
+			"processor", a.Name(), "tool", fr.ToolName, "tool_call_id", fr.ToolCallID)
+		return nil
 	}
-	if runLLM {
-		return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
+
+	groupID := ""
+	if started != nil {
+		groupID = started.GroupID
+	}
+	props := fr.Properties
+	if props.Final() {
+		a.finishFunctionCall(fr, started)
+	} else {
+		a.recordIntermediateResult(ctx, fr)
+	}
+
+	if a.shouldRunLLM(fr, props, groupID) {
+		a.mu.Lock()
+		speaking := a.userSpeaking
+		a.mu.Unlock()
+		if !speaking {
+			if err := a.maybePushContextAfterFunctionResult(ctx); err != nil {
+				return err
+			}
+		}
+	}
+
+	// The callback is told the context now holds the result. It runs off the
+	// frame path so that whatever it does cannot hold up the pipeline.
+	if props != nil && props.OnContextUpdated != nil {
+		a.runContextUpdated(props.OnContextUpdated)
 	}
 	return nil
+}
+
+// shouldRunLLM decides whether this result re-runs generation. An explicit
+// choice, from the properties or the frame, wins. Otherwise a call that belongs
+// to a group re-runs only as the last of its group to report, so a turn that
+// requested several calls answers once rather than once per call; a call with no
+// group re-runs on its own.
+func (a *AssistantAggregator) shouldRunLLM(
+	fr *frames.FunctionCallResultFrame, props *frames.FunctionCallResultProperties, groupID string,
+) bool {
+	if fr.Result == "" {
+		return false
+	}
+	switch {
+	case props != nil && props.RunLLM != nil:
+		return *props.RunLLM
+	case fr.RunLLM != nil:
+		return *fr.RunLLM
+	case groupID != "":
+		return !a.groupStillRunning(groupID, fr.ToolCallID)
+	default:
+		return true
+	}
+}
+
+// groupStillRunning reports whether a call of groupID other than exclude has yet
+// to report. exclude is the call reporting now, which an intermediate result
+// leaves in the map.
+func (a *AssistantAggregator) groupStillRunning(groupID, exclude string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, started := range a.inProgress {
+		if started != nil && started.GroupID == groupID && id != exclude {
+			return true
+		}
+	}
+	return false
+}
+
+// finishFunctionCall applies a call's final result and stops tracking it. An
+// ordinary call's placeholder is replaced in place; a call the model did not wait
+// on gets an async-tool final message appended instead, since by now the
+// conversation has moved past the point its placeholder sits at.
+func (a *AssistantAggregator) finishFunctionCall(
+	fr *frames.FunctionCallResultFrame, started *frames.FunctionCallInProgressFrame,
+) {
+	// A result that arrives before the call's in-progress frame leaves nothing to
+	// read the registration off, so treat it as an ordinary call: that is the
+	// shape whose placeholder is waiting to be replaced.
+	async := started != nil && !started.CancelOnInterruption
+
+	a.mu.Lock()
+	delete(a.inProgress, fr.ToolCallID)
+	a.mu.Unlock()
+
+	result := fr.Result
+	if result == "" {
+		result = toolResultCompleted
+	}
+	if async {
+		a.context.AddMessage(frames.NewAsyncToolFinalMessage(fr.ToolCallID, result))
+		return
+	}
+	a.context.UpdateToolResult(fr.ToolCallID, result)
+}
+
+// recordIntermediateResult appends an async-tool intermediate message, leaving
+// the call running. Only a call the model does not wait on reports these.
+func (a *AssistantAggregator) recordIntermediateResult(
+	ctx context.Context, fr *frames.FunctionCallResultFrame,
+) {
+	if fr.Result == "" {
+		slog.WarnContext(ctx, "intermediate tool result with no result",
+			"processor", a.Name(), "tool", fr.ToolName, "tool_call_id", fr.ToolCallID)
+		return
+	}
+	a.context.AddMessage(frames.NewAsyncToolIntermediateMessage(fr.ToolCallID, fr.Result))
+}
+
+// handleFunctionCallCancel marks a canceled call's placeholder result canceled,
+// so the tool-use block it answers stays answered. A call the model does not wait
+// on is left alone: it survives the interruption that canceled the others.
+func (a *AssistantAggregator) handleFunctionCallCancel(fr *frames.FunctionCallCancelFrame) {
+	a.mu.Lock()
+	started, running := a.inProgress[fr.ToolCallID]
+	if !running || started == nil || !started.CancelOnInterruption {
+		a.mu.Unlock()
+		return
+	}
+	delete(a.inProgress, fr.ToolCallID)
+	a.mu.Unlock()
+	a.context.UpdateToolResult(fr.ToolCallID, toolResultCancelled)
+}
+
+// maybePushContextAfterFunctionResult re-runs generation on the updated context,
+// unless doing so now would produce an answer that another result is about to
+// make stale, or one spoken over the bot's current turn.
+//
+// A cascaded LLM reads the new result out of the context frame; a realtime
+// service reads it out of the context the same way, since neither is handed the
+// result frame itself. The push is what carries the result to the model in both.
+func (a *AssistantAggregator) maybePushContextAfterFunctionResult(ctx context.Context) error {
+	if a.HasQueuedFrame(isFunctionCallResult) {
+		// More results are already on their way. Leaving the push to the last of
+		// them answers the whole batch with one inference instead of one each.
+		return nil
+	}
+
+	a.mu.Lock()
+	speaking := a.botSpeaking
+	if speaking {
+		// Deferred rather than dropped: BotStoppedSpeakingFrame pushes it. Results
+		// arriving meanwhile accumulate in the context and share this one push, so
+		// the bot answers once rather than talking over itself.
+		a.pushOnBotStopped = true
+	}
+	a.mu.Unlock()
+	if speaking {
+		return nil
+	}
+	return a.pushContextFrame(ctx)
+}
+
+// isFunctionCallResult reports whether f is a tool result, for the queue check
+// above.
+func isFunctionCallResult(f frames.Frame) bool {
+	_, ok := f.(*frames.FunctionCallResultFrame)
+	return ok
+}
+
+// pushContextFrame runs generation on the current context, clearing any deferred
+// push since this one covers it.
+func (a *AssistantAggregator) pushContextFrame(ctx context.Context) error {
+	a.mu.Lock()
+	a.pushOnBotStopped = false
+	a.mu.Unlock()
+	return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
+}
+
+// pushDeferredContext runs the generation a tool result deferred while the bot
+// was speaking. It stays deferred while the user is speaking, whose turn ends by
+// running the LLM anyway.
+func (a *AssistantAggregator) pushDeferredContext(ctx context.Context) error {
+	a.mu.Lock()
+	deferred := a.pushOnBotStopped && !a.userSpeaking
+	a.mu.Unlock()
+	if !deferred {
+		return nil
+	}
+	return a.pushContextFrame(ctx)
+}
+
+// runContextUpdated runs a result's context-updated callback on a goroutine of
+// its own, tracked so Cleanup can cancel it and wait for it.
+func (a *AssistantAggregator) runContextUpdated(fn func(ctx context.Context) error) {
+	taskCtx := a.taskCtx
+	if taskCtx == nil {
+		// Setup has not run, so there is no lifetime to attach to.
+		return
+	}
+	a.taskWG.Go(func() {
+		if err := fn(taskCtx); err != nil && taskCtx.Err() == nil {
+			slog.Error("tool result context-updated callback", "processor", a.Name(), "err", err)
+		}
+	})
+}
+
+func (a *AssistantAggregator) setUserSpeaking(v bool) {
+	a.mu.Lock()
+	a.userSpeaking = v
+	a.mu.Unlock()
+}
+
+func (a *AssistantAggregator) setBotSpeaking(v bool) {
+	a.mu.Lock()
+	a.botSpeaking = v
+	a.mu.Unlock()
 }
 
 // commit appends the aggregated assistant message to the context, if any, and
@@ -504,32 +774,27 @@ func (a *AssistantAggregator) commit() {
 	a.maybeSummarize()
 }
 
-// commitInterrupted closes out a turn cut off by an interruption. Any tool calls
-// still awaiting a result get a synthetic error result so the assistant turn
-// that requested them stays balanced (a tool-use block always has a matching
-// tool-result), then any partial assistant text is committed. This keeps the
-// context valid for the next turn.
+// commitInterrupted closes out a turn cut off by an interruption: any partial
+// assistant text is committed so the context reflects what the bot actually said.
+//
+// It does no tool balancing. Every call in flight already has a message
+// answering it, written when the call started, so the context is valid as it
+// stands. A call the interruption cancels is resolved by its own cancel frame,
+// which marks that message canceled where it sits. Appending anything here
+// instead would put it after whatever a new user turn has meanwhile added,
+// separating a result from the call it answers for the rest of the session.
 func (a *AssistantAggregator) commitInterrupted() {
 	a.mu.Lock()
-	results := a.pendingResults
-	a.pendingResults = nil
-	for id := range a.pendingIDs {
-		results = append(results, frames.ToolResult{ID: id, Content: "interrupted", IsError: true})
-		delete(a.pendingIDs, id)
-	}
-	a.suppressRun = false
 	text := a.aggregation
 	a.aggregation = ""
 	a.started = false
+	a.pushOnBotStopped = false
 	// Word-timestamp path: the spoken text was written to the context live as
 	// each word played, so it already holds exactly what was spoken before the
 	// interruption. Just close the turn so the next one starts fresh.
 	a.spoken = ""
 	a.spokenCommitted = false
 	a.mu.Unlock()
-	if len(results) > 0 {
-		a.context.AddToolResults(results)
-	}
 	if text != "" {
 		a.context.AddAssistantMessage(text)
 	}

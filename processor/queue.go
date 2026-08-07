@@ -78,6 +78,20 @@ func (q *queue) get(ctx context.Context) (item, bool) {
 	}
 }
 
+// hasFrame reports whether a queued frame satisfies match. Only the data and
+// control frames are considered: a system frame never waits here, it is handled
+// on the input goroutine as it arrives.
+func (q *queue) hasFrame(match func(frames.Frame) bool) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, it := range q.other {
+		if match(it.frame) {
+			return true
+		}
+	}
+	return false
+}
+
 // reset drops every data and control frame that is not uninterruptible, keeping
 // uninterruptible frames so they are still delivered after an interruption.
 // System frames are untouched. It is used when an interruption flushes the
