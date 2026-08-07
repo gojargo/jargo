@@ -63,6 +63,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Punctuation a synthesizer reports twice is no longer spoken into the
+  conversation twice, and no longer costs the word its written form.**
+  Punctuation trailing a word is attributed to the word it trails, so a provider
+  that instead reports it with the word after it (", I" rather than "Yeah,")
+  presents it a second time. The duplicate is now dropped from that word and the
+  attribution kept. Before, the whole attribution was discarded: the comma was
+  recorded twice and the word lost its mapping back to the written text, so what
+  reached the conversation was the spoken form rather than what the model wrote.
+
 - **A provider can report tokens that carry their own spacing.** A language
   written without spaces between words, Chinese or Japanese, has its timings
   reported per character or per segment, so the tokens already read as continuous

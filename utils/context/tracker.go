@@ -1,6 +1,7 @@
 package context
 
 import (
+	"log/slog"
 	"strings"
 	"unicode"
 )
@@ -144,9 +145,25 @@ func (t *WordCompletionTracker) discardLLMSpanIfFrameWordMissing() {
 	if frameWord == "" {
 		return
 	}
-	if strings.Contains(foldForComparison(t.llmConsumed), foldForComparison(frameWord)) {
+	foldedSpan := foldForComparison(t.llmConsumed)
+	if strings.Contains(foldedSpan, foldForComparison(frameWord)) {
 		return
 	}
+
+	// The word may lead with punctuation the word before it already took:
+	// advancing sweeps the punctuation trailing a word into that word's span, so
+	// a provider that reports it with the following word instead (", I" rather
+	// than "Yeah,") presents it a second time. Drop the duplicate from the frame
+	// word rather than the whole attribution, which would otherwise lose the
+	// written form of a word that was spoken perfectly well.
+	if trimmed := stripLeadingPunctuation(frameWord); trimmed != "" &&
+		strings.Contains(foldedSpan, foldForComparison(trimmed)) {
+		t.frameWord = stripLeadingPunctuation(t.frameWord)
+		return
+	}
+
+	slog.Warn("tracker: the span attributed to a word does not contain it, discarding",
+		"span", t.llmConsumed, "word", t.frameWord)
 	t.llmConsumed, t.llmSet = "", false
 }
 

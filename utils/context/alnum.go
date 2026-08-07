@@ -45,6 +45,17 @@ func stripTrailingPunctuation(text string) string {
 	return string(r[:i])
 }
 
+// stripLeadingPunctuation removes any leading run of Unicode punctuation and
+// whitespace from text.
+func stripLeadingPunctuation(text string) string {
+	r := []rune(text)
+	i := 0
+	for i < len(r) && (unicode.IsSpace(r[i]) || isPunct(r[i])) {
+		i++
+	}
+	return string(r[i:])
+}
+
 // foldAccentedChar lowercases r, reducing it to its base letter when it carries
 // a combining accent. NFD decomposition splits an accented character into a base
 // letter plus a combining mark (category Mn); dropping the mark keeps the base.
