@@ -862,3 +862,181 @@ func TestSynthesizedAudioLandsOnTheBotTrack(t *testing.T) {
 		t.Fatalf("user track = %x, want silence of the same length", gotUser)
 	}
 }
+
+// Per-turn audio has no tests upstream, so the ones below are ours. What they
+// pin is the behavior of upstream's implementation, which is what was ported.
+
+// turnCapture collects the turns handed over.
+type turnCapture struct {
+	mu   sync.Mutex
+	user [][]byte
+	bot  [][]byte
+	rate int
+	ch   int
+}
+
+func (c *turnCapture) config() Config {
+	return Config{
+		EnableTurnAudio: true,
+		OnUserTurnAudioData: func(audio []byte, rate, ch int) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.user = append(c.user, audio)
+			c.rate, c.ch = rate, ch
+		},
+		OnBotTurnAudioData: func(audio []byte, rate, ch int) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.bot = append(c.bot, audio)
+			c.rate, c.ch = rate, ch
+		},
+	}
+}
+
+// A turn's audio is handed over as that turn ends, so it can be scored,
+// transcribed again or handed to something that works one utterance at a time.
+// The session tracks cannot be cut up that way afterwards: nothing in them says
+// where a turn began.
+func TestTurnAudio(t *testing.T) {
+	t.Run("the user's turn is handed over when they stop", func(t *testing.T) {
+		turns := &turnCapture{}
+		got := &capture{}
+		p := newProc(t, turns.config(), got, true)
+
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{1, 2, 3, 4})
+		userAudio(t, p, []byte{5, 6, 7, 8})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		if len(turns.user) != 1 {
+			t.Fatalf("%d user turns handed over, want one", len(turns.user))
+		}
+		if want := []byte{1, 2, 3, 4, 5, 6, 7, 8}; !bytes.Equal(turns.user[0], want) {
+			t.Fatalf("the turn holds %x, want everything said in it, %x", turns.user[0], want)
+		}
+		if turns.rate != testRate || turns.ch != 1 {
+			t.Fatalf("handed over at %d Hz on %d channels, want %d on 1",
+				turns.rate, turns.ch, testRate)
+		}
+	})
+
+	t.Run("the next turn starts empty", func(t *testing.T) {
+		turns := &turnCapture{}
+		got := &capture{}
+		p := newProc(t, turns.config(), got, true)
+
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{1, 2, 3, 4})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{9, 10, 11, 12})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		if len(turns.user) != 2 {
+			t.Fatalf("%d user turns handed over, want two", len(turns.user))
+		}
+		if want := []byte{9, 10, 11, 12}; !bytes.Equal(turns.user[1], want) {
+			t.Fatalf("the second turn holds %x, want only its own audio %x", turns.user[1], want)
+		}
+	})
+
+	t.Run("what the user said before anyone noticed is kept", func(t *testing.T) {
+		// The report that they started speaking arrives after they did. A turn
+		// that only began recording then would have lost its first syllable.
+		turns := &turnCapture{}
+		got := &capture{}
+		p := newProc(t, turns.config(), got, true)
+
+		userAudio(t, p, []byte{1, 2, 3, 4}) // before anyone knew
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{5, 6, 7, 8})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		if want := []byte{1, 2, 3, 4, 5, 6, 7, 8}; !bytes.Equal(turns.user[0], want) {
+			t.Fatalf("the turn holds %x, want the run-up with it, %x", turns.user[0], want)
+		}
+	})
+
+	t.Run("the run-up is held to a second", func(t *testing.T) {
+		// Silence between turns must not accumulate into the next one.
+		turns := &turnCapture{}
+		got := &capture{}
+		p := newProc(t, turns.config(), got, true)
+
+		// Two seconds of audio with nobody speaking.
+		chunk := make([]byte, testRate/10*2) // 100ms
+		for range 20 {
+			userAudio(t, p, chunk)
+		}
+
+		p.mu.Lock()
+		held := len(p.userTurnBuf)
+		p.mu.Unlock()
+		if held != testRate*2 {
+			t.Fatalf("the run-up holds %d bytes, want one second, %d", held, testRate*2)
+		}
+	})
+
+	t.Run("the bot's turn holds only what it said while speaking", func(t *testing.T) {
+		turns := &turnCapture{}
+		got := &capture{}
+		p := newProc(t, turns.config(), got, true)
+
+		botAudio(t, p, []byte{1, 2, 3, 4}) // not speaking yet: not its turn
+		send(t, p, frames.NewBotStartedSpeakingFrame())
+		botAudio(t, p, []byte{5, 6, 7, 8})
+		send(t, p, frames.NewBotStoppedSpeakingFrame())
+
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		if len(turns.bot) != 1 {
+			t.Fatalf("%d bot turns handed over, want one", len(turns.bot))
+		}
+		if want := []byte{5, 6, 7, 8}; !bytes.Equal(turns.bot[0], want) {
+			t.Fatalf("the turn holds %x, want only what it said while speaking, %x",
+				turns.bot[0], want)
+		}
+	})
+
+	t.Run("the session tracks are untouched by it", func(t *testing.T) {
+		turns := &turnCapture{}
+		got := &capture{}
+		p := newProc(t, turns.config(), got, true)
+
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{1, 2, 3, 4})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+		p.StopRecording()
+
+		gotUser, _ := got.tracks()
+		if want := []byte{1, 2, 3, 4}; !bytes.Equal(gotUser, want) {
+			t.Fatalf("the session track holds %x, want %x: handing a turn over does not "+
+				"take it out of the recording", gotUser, want)
+		}
+	})
+
+	t.Run("nothing is handed over when it was not asked for", func(t *testing.T) {
+		turns := &turnCapture{}
+		cfg := turns.config()
+		cfg.EnableTurnAudio = false
+		got := &capture{}
+		p := newProc(t, cfg, got, true)
+
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{1, 2, 3, 4})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		if len(turns.user) != 0 {
+			t.Fatalf("%d turns handed over with turn audio switched off", len(turns.user))
+		}
+	})
+}

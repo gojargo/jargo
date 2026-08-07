@@ -63,6 +63,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The recorder can hand over each turn's audio on its own.** Set
+  `EnableTurnAudio` and the user's audio arrives through `OnUserTurnAudioData`
+  when they stop speaking, the bot's through `OnBotTurnAudioData` when it does.
+  It is what scoring a single utterance, transcribing one again, or handing one
+  to a classifier needs: the session tracks cannot be cut into turns afterwards,
+  because nothing in them marks where a turn began. The user's audio is buffered
+  continuously and trimmed to the last second while they are not known to be
+  speaking, since the report that they started arrives after they did, and a
+  buffer that began filling only then would have lost the first syllable.
+
 - **Every spoken word names the synthesis it came from.** The frames carrying
   the words of a turn left the sequencer with no context on them, so a consumer
   could not tell which synthesis a word belonged to, which is what telling two

@@ -50,6 +50,20 @@ type Config struct {
 	// OnTrackAudioData receives the separate, time-aligned user and bot tracks at
 	// each BufferSize boundary and once more on stop.
 	OnTrackAudioData func(user, bot []byte, sampleRate, numChannels int)
+
+	// EnableTurnAudio delivers each turn's audio on its own, as that turn ends,
+	// through OnUserTurnAudioData and OnBotTurnAudioData. It is off by default:
+	// the session tracks are what a recording wants, and a turn's audio is for
+	// something that works turn by turn, scoring one utterance or handing it to a
+	// classifier. The session tracks cannot be cut into turns afterwards, since
+	// nothing in them marks where a turn began.
+	EnableTurnAudio bool
+	// OnUserTurnAudioData receives the audio of one user turn, mono, once they
+	// stop speaking.
+	OnUserTurnAudioData func(audio []byte, sampleRate, numChannels int)
+	// OnBotTurnAudioData receives the audio of one bot turn, mono, once it stops
+	// speaking.
+	OnBotTurnAudioData func(audio []byte, sampleRate, numChannels int)
 }
 
 // Processor records the pipeline's audio. It is placed downstream, typically
@@ -71,6 +85,16 @@ type Processor struct {
 	botSpeaking  bool
 	lastUser     *time.Time
 	lastBot      *time.Time
+
+	// userTurnBuf and botTurnBuf hold the audio of the turn being spoken, kept
+	// apart from the session tracks so a turn can be handed over on its own.
+	userTurnBuf []byte
+	botTurnBuf  []byte
+	// oneSecond is what a second of the recording weighs. The user's audio is
+	// buffered continuously and trimmed to this while they are not known to be
+	// speaking, because the report that they started comes after they did: the
+	// run-up is what keeps the first syllable of a turn.
+	oneSecond int
 
 	inRes   *resample.Resampler
 	inRate  int
@@ -150,6 +174,7 @@ func (p *Processor) onStart(f *frames.StartFrame) {
 		p.sampleRate = f.AudioOutSampleRate
 	}
 	p.bufSize = p.cfg.BufferSize
+	p.oneSecond = p.sampleRate * 2
 	p.mu.Unlock()
 	if p.cfg.AutoStart {
 		p.startRecording()
@@ -207,13 +232,15 @@ func (p *Processor) record(f frames.Frame) {
 		p.botSpeaking = false
 	}
 
-	switch audio, rate, ch, kind := classify(f); kind {
+	audio, rate, ch, kind := classify(f)
+	var res []byte
+	switch kind {
 	case kindUser:
-		if res := p.resampleInput(audio, rate, ch); len(res) > 0 {
+		if res = p.resampleInput(audio, rate, ch); len(res) > 0 {
 			p.addUserAudio(res)
 		}
 	case kindBot:
-		if res := p.resampleOutput(audio, rate, ch); len(res) > 0 {
+		if res = p.resampleOutput(audio, rate, ch); len(res) > 0 {
 			p.addBotAudio(res)
 		}
 	case kindNone:
@@ -225,9 +252,72 @@ func (p *Processor) record(f frames.Frame) {
 		snap = p.snapshot()
 		p.resetPrimary()
 	}
+
+	var turn *turnRecording
+	if p.cfg.EnableTurnAudio {
+		turn = p.recordTurn(f, kind, res)
+	}
 	p.mu.Unlock()
 
 	p.deliver(snap)
+	p.deliverTurn(turn)
+}
+
+// turnRecording is one turn's audio, ready to hand over.
+type turnRecording struct {
+	user       bool
+	audio      []byte
+	sampleRate int
+}
+
+// recordTurn folds one frame into the turn buffers and reports a turn that has
+// just ended. It runs with the lock held; the callback fires after it is
+// released.
+//
+// The user's audio is buffered whether or not they are known to be speaking,
+// and trimmed to the last second while they are not: the report that they
+// started arrives after they did, so a buffer that only began filling then
+// would have lost the beginning of the turn. The bot's is buffered only while it
+// speaks, since nothing precedes a turn it decides to take.
+func (p *Processor) recordTurn(f frames.Frame, kind audioKind, res []byte) *turnRecording {
+	var ended *turnRecording
+	switch f.(type) {
+	case *frames.UserStoppedSpeakingFrame:
+		ended = &turnRecording{user: true, audio: p.userTurnBuf, sampleRate: p.sampleRate}
+		p.userTurnBuf = nil
+	case *frames.BotStoppedSpeakingFrame:
+		ended = &turnRecording{audio: p.botTurnBuf, sampleRate: p.sampleRate}
+		p.botTurnBuf = nil
+	}
+
+	switch {
+	case kind == kindUser && len(res) > 0:
+		p.userTurnBuf = append(p.userTurnBuf, res...)
+		if !p.userSpeaking && p.oneSecond > 0 && len(p.userTurnBuf) > p.oneSecond {
+			p.userTurnBuf = p.userTurnBuf[len(p.userTurnBuf)-p.oneSecond:]
+		}
+	case p.botSpeaking && kind == kindBot && len(res) > 0:
+		p.botTurnBuf = append(p.botTurnBuf, res...)
+	}
+	return ended
+}
+
+// deliverTurn hands one turn's audio over, outside the lock. A turn that
+// produced no audio is still reported, so a consumer counting turns sees them
+// all.
+func (p *Processor) deliverTurn(r *turnRecording) {
+	if r == nil {
+		return
+	}
+	if r.user {
+		if p.cfg.OnUserTurnAudioData != nil {
+			p.cfg.OnUserTurnAudioData(r.audio, r.sampleRate, 1)
+		}
+		return
+	}
+	if p.cfg.OnBotTurnAudioData != nil {
+		p.cfg.OnBotTurnAudioData(r.audio, r.sampleRate, 1)
+	}
 }
 
 // addUserAudio appends resampled user audio, padding the silence gap since the
@@ -298,11 +388,14 @@ func (p *Processor) snapshot() *recording {
 	return &recording{merged: merged, user: user, bot: bot, sampleRate: p.sampleRate, channels: p.channels}
 }
 
-// reset clears all recording state. The optional now sets the last-write
-// timestamps; nil leaves them unset so the first audio injects no silence.
+// reset clears all recording state, the turn buffers included. The optional now
+// sets the last-write timestamps; nil leaves them unset so the first audio
+// injects no silence.
 func (p *Processor) reset(now *time.Time) {
 	p.userBuf = nil
 	p.botBuf = nil
+	p.userTurnBuf = nil
+	p.botTurnBuf = nil
 	p.lastUser = now
 	p.lastBot = now
 }
