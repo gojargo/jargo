@@ -86,6 +86,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   for it to travel further, so nothing is lost by keeping them out of the rest of
   the pipeline.
 
+- **`TTSStartedFrame` and `TTSStoppedFrame` name the context they belong to.**
+  Both fields were declared, documented and never set, so a consumer could not
+  attribute a boundary to a synthesis, which is what telling two overlapping
+  contexts apart requires.
+
+- **What the user said last is committed when the session ends.** A transcript
+  aggregated but not yet finalized into a message was discarded with the
+  processor, so a call that dropped just after the user spoke left the
+  conversation ending on the bot's turn with no record that they answered.
+
 - **A transcript arriving outside a turn is no longer answered on its own.** With
   turn taking, the user aggregator committed the aggregation whenever it held
   text and end-of-turn had been reported, and the flag saying so was left set
