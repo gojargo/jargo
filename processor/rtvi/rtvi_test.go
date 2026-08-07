@@ -222,3 +222,49 @@ func waitMessage(t *testing.T, ch <-chan rtvi.Message) rtvi.Message {
 		return rtvi.Message{}
 	}
 }
+
+// A client is told what the user said even though the user aggregator consumes
+// the transcript. The observer watches the frame where the transcription service
+// pushes it, so the aggregator taking it out of the stream (a transcript is not
+// something the model downstream is given) costs the client nothing.
+func TestTranscriptIsReportedThoughTheAggregatorConsumesIt(t *testing.T) {
+	out := make(chan rtvi.Message, 8)
+	proc := rtvi.NewProcessor()
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo)
+	task := pipeline.NewTask(pipeline.New(proc, pair.User()), pipeline.TaskParams{
+		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
+		OnReachedDownstream: func(f frames.Frame) {
+			if fr, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
+				if msg, ok := fr.Message.(rtvi.Message); ok {
+					select {
+					case out <- msg:
+					default:
+					}
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	tf := frames.NewTranscriptionFrame("hello there", "user-1", "ts")
+	tf.Finalized = true
+	task.QueueFrame(tf)
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case msg := <-out:
+			if msg.Type == rtvi.TypeUserTranscription {
+				task.StopWhenDone()
+				<-runDone
+				return
+			}
+		case <-deadline:
+			task.StopWhenDone()
+			<-runDone
+			t.Fatal("no user-transcription reached the client")
+		}
+	}
+}

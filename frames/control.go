@@ -105,6 +105,21 @@ func NewLLMFullResponseEndFrame() *LLMFullResponseEndFrame {
 	return &LLMFullResponseEndFrame{BaseControlFrame: NewBaseControlFrame("LLMFullResponseEndFrame")}
 }
 
+// LLMAssistantPushAggregationFrame makes the assistant aggregator commit what it
+// has gathered to the conversation as an assistant message, without waiting for
+// an LLMFullResponseEndFrame. It closes out an utterance the service spoke on
+// its own, which has no LLM response around it to end. It is a control frame.
+type LLMAssistantPushAggregationFrame struct {
+	BaseControlFrame
+}
+
+// NewLLMAssistantPushAggregationFrame builds an LLMAssistantPushAggregationFrame.
+func NewLLMAssistantPushAggregationFrame() *LLMAssistantPushAggregationFrame {
+	return &LLMAssistantPushAggregationFrame{
+		BaseControlFrame: NewBaseControlFrame("LLMAssistantPushAggregationFrame"),
+	}
+}
+
 // TTSStartedFrame marks the beginning of a TTS response. The following
 // TTSAudioRawFrames are part of the response until a TTSStoppedFrame. It is a
 // control frame.
@@ -184,6 +199,7 @@ var (
 	_ Uninterruptible = (*PipelineFlushFrame)(nil)
 	_ ControlFrame    = (*LLMFullResponseStartFrame)(nil)
 	_ ControlFrame    = (*LLMFullResponseEndFrame)(nil)
+	_ ControlFrame    = (*LLMAssistantPushAggregationFrame)(nil)
 	_ ControlFrame    = (*TTSStartedFrame)(nil)
 	_ ControlFrame    = (*TTSStoppedFrame)(nil)
 )

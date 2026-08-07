@@ -63,6 +63,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An utterance the service speaks is recorded as one assistant message, closed
+  where it ends.** The assistant aggregator wrote spoken text into the
+  conversation word by word, rewriting the message in place as each one arrived,
+  and had no way to close a turn that no model response surrounded. It now
+  gathers what the turn said and writes it once: the start of speech that will be
+  recorded opens the turn, the words fill it, and the end of the speech closes
+  it. A fixed utterance therefore lands as a message of its own rather than
+  merged into whatever the model says next, and an interruption still records
+  exactly the words that were heard, since only those have arrived by then. The
+  pieces are joined by whether each carries its own spacing, so a model's
+  streamed text and a synthesizer's word-by-word report can make up one turn
+  without doubled or missing spaces. A unit held back from the synthesizer, a
+  code block, reaches the conversation this way too, where before it was dropped
+  from it entirely.
+
+- **The user's transcripts and a fixed utterance's request no longer travel past
+  the processor that consumes them.** A transcript stops at the user aggregator
+  and a `TTSSpeakFrame` stops at the TTS service. What reaches the model is the
+  conversation, not the frames it was built from. A client is told about both by
+  the RTVI observer, which watches each where it is pushed rather than waiting
+  for it to travel further, so nothing is lost by keeping them out of the rest of
+  the pipeline.
+
 - **A transcript arriving outside a turn is no longer answered on its own.** With
   turn taking, the user aggregator committed the aggregation whenever it held
   text and end-of-turn had been reported, and the flag saying so was left set

@@ -197,11 +197,10 @@ type Base struct {
 	// holds each open context's queue. See audiocontext.go.
 	audioCtxMu    sync.Mutex
 	audioContexts map[string]*audioContext
-	// ttsContexts records, per context, whether what is spoken on it belongs in
-	// the conversation. It is read on the drain goroutine, long after the call
-	// that set it, which is why the answer is kept here rather than passed along
-	// with each frame.
-	ttsContexts map[string]bool
+	// ttsContexts records what each context carries beyond its audio. It is read
+	// on the drain goroutine, long after the call that set it, which is why the
+	// answers are kept here rather than passed along with each frame.
+	ttsContexts map[string]ttsContext
 	serial      *serialQueue
 	ctxCancel   context.CancelFunc
 	// ctxDone is closed when the drain goroutine exits, so a graceful end can
@@ -221,6 +220,12 @@ type Base struct {
 	// empty between turns. Reusing it is what keeps the provider from opening a
 	// cold context per sentence.
 	turnContext string
+
+	// llmResponseStarted reports whether a model response is driving the speech.
+	// It is what tells an utterance the service says on its own from one the
+	// model composed: the first has no response around it to close the assistant
+	// turn, so the service closes it itself.
+	llmResponseStarted bool
 
 	// Pausing frame handling while a turn's audio is generated. See pause.go.
 	pauseStateMu sync.Mutex
@@ -313,6 +318,7 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	case *frames.TTSSpeakFrame:
 		return b.handleSpeak(ctx, fr, dir)
 	case *frames.LLMFullResponseStartFrame:
+		b.setLLMResponding(true)
 		// A new turn gets one context id, shared by all of its sentences.
 		b.turnContext = b.createContextID()
 		if c, ok := b.syn.(TurnContextCreator); ok {
@@ -542,6 +548,7 @@ func (b *Base) onTurnContextCompleted(ctx context.Context) {
 func (b *Base) handleInterruption(ctx context.Context) {
 	b.setProcessingText(false)
 	b.setBotSpeaking(false)
+	b.setLLMResponding(false)
 	if b.aggregator != nil {
 		b.aggregator.Reset()
 	}
@@ -577,22 +584,21 @@ func (b *Base) handleInterruption(ctx context.Context) {
 }
 
 // handleSpeak speaks fixed text immediately, bypassing sentence aggregation.
-func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir processor.Direction) error {
-	// The conversation is built from what was actually spoken, never from the
-	// text on its way to the synthesizer. Word timings or not, this utterance
-	// reaches the context as TTSTextFrames: per word where the provider times
-	// them, as one whole unit where it does not. Letting the aggregator record
-	// the fixed text as well would enter it twice.
-	//
-	// The caller's answer is carried to those frames instead, so an utterance
-	// the service says rather than the assistant (a phrase covering a tool call,
-	// a stall while something is fetched) stays out of the conversation when the
-	// caller asked for that.
+//
+// The frame is consumed rather than forwarded: it is a request to speak, and
+// what the pipeline behind this service is told is the speech it produced. The
+// conversation is built from what was actually spoken, never from the text on
+// its way to the synthesizer, so this utterance reaches it as TTSTextFrames, per
+// word where the provider times them and as one whole unit where it does not.
+// The caller's answer about whether it belongs there is carried to those frames,
+// so an utterance the service says rather than the assistant (a phrase covering
+// a tool call, a stall while something is fetched) stays out of the conversation
+// when the caller asked for that.
+func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, _ processor.Direction) error {
 	appendToContext := fr.AppendToContext
-	fr.AppendToContext = false
-	if err := b.PushFrame(ctx, fr, dir); err != nil {
-		return err
-	}
+	// With no model response driving this, nothing else will close the assistant
+	// turn the speech opens, so the service closes it once the words are out.
+	pushAssistantAggregation := appendToContext && !b.llmResponding()
 	// A fixed utterance is independent of any LLM turn, so it gets a context of
 	// its own that is opened and closed around it. Whether a turn was mid-flight
 	// is saved and put back, so speaking this does not look like the end of one.
@@ -602,7 +608,7 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir pr
 	if c, ok := b.syn.(TurnContextCreator); ok {
 		c.OnTurnContextCreated(ctx, b.turnContext)
 	}
-	if err := b.pushTTSFrames(ctx, fr.Text, appendToContext); err != nil {
+	if err := b.pushTTSFrames(ctx, fr.Text, appendToContext, pushAssistantAggregation); err != nil {
 		return err
 	}
 	b.onTurnContextCompleted(ctx)
@@ -658,7 +664,7 @@ func (b *Base) aggregate(ctx context.Context, text string) error {
 			// was waiting for. Later ones find it already stopped.
 			b.stopTextAggregationMetrics(ctx)
 		}
-		if err := b.pushTTSFrames(ctx, agg.Text, true); err != nil {
+		if err := b.pushTTSFrames(ctx, agg.Text, true, false); err != nil {
 			return err
 		}
 	}
@@ -677,7 +683,21 @@ func (b *Base) flush(ctx context.Context) error {
 	if !ok || strings.TrimSpace(rest.Text) == "" {
 		return nil
 	}
-	return b.pushTTSFrames(ctx, rest.Text, true)
+	return b.pushTTSFrames(ctx, rest.Text, true, false)
+}
+
+// setLLMResponding records whether a model response is driving the speech.
+func (b *Base) setLLMResponding(v bool) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	b.llmResponseStarted = v
+}
+
+// llmResponding reports whether a model response is driving the speech.
+func (b *Base) llmResponding() bool {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	return b.llmResponseStarted
 }
 
 // setYieldsSync records whether the provider yielded its audio.
@@ -702,17 +722,55 @@ func (b *Base) wordPath() bool {
 	return ok
 }
 
+// PushFrame pushes a frame on, closing the assistant turn behind an utterance
+// the service said on its own.
+//
+// It is done here rather than where the stop frame is built because there is
+// more than one place that builds one, the base's own and a provider's, and
+// every one of them passes through here.
+func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if stopped, ok := f.(*frames.TTSStoppedFrame); ok && stopped.ContextID != "" {
+		if err := b.maybeCloseAssistantTurn(ctx, stopped.ContextID); err != nil {
+			return err
+		}
+	}
+	return b.Base.PushFrame(ctx, f, dir)
+}
+
+// maybeCloseAssistantTurn tells the aggregator to commit, for a context that
+// asked for it when it was opened. The answer is taken rather than read, so the
+// turn is closed once however many stop frames the context produces.
+func (b *Base) maybeCloseAssistantTurn(ctx context.Context, contextID string) error {
+	c, known := b.takeTTSContext(contextID)
+	if !known || !c.pushAssistantAggregation {
+		return nil
+	}
+	push := frames.NewLLMAssistantPushAggregationFrame()
+	// The words of this utterance travel the transport's clock queue, which
+	// holds each until its moment. A frame with no timing of its own takes the
+	// other queue and would overtake them, closing the turn before the last
+	// words had been said, so it is timed just past the last of them.
+	if pts := b.lastWordPTS(); pts > 0 {
+		push.Base().SetPTS(int64(pts) + 1)
+	}
+	return b.Base.PushFrame(ctx, push, processor.Downstream)
+}
+
 // pushTTSFrames synthesizes one piece of text on the turn's audio context,
 // opening the context if this is the turn's first sentence. original is the
 // pre-filter text; the configured filters produce the text sent to the provider.
 // appendToContext says whether what is spoken here belongs in the conversation;
 // it is recorded on the context and stamped onto every frame emitted from it.
+// pushAssistantAggregation says whether the assistant turn has to be closed
+// once it has been said.
 //
 // The audio does not go downstream from here. It is appended to the context and
 // pushed by the context's drain loop, so a provider whose audio arrives later on
 // its own receive loop and one that returns it inline reach the pipeline the
 // same way, in the order the audio was generated.
-func (b *Base) pushTTSFrames(ctx context.Context, original string, appendToContext bool) error {
+func (b *Base) pushTTSFrames(
+	ctx context.Context, original string, appendToContext, pushAssistantAggregation bool,
+) error {
 	filtered := original
 	for _, f := range b.filters {
 		// A stateful filter is told the interruption is over just before it is
@@ -743,9 +801,12 @@ func (b *Base) pushTTSFrames(ctx context.Context, original string, appendToConte
 	aggregated.WillBeSpoken = true
 	aggregated.AppendToContext = false
 
-	// Recorded before the context opens, so the drain loop has the answer in hand
-	// by the time the first frame of the context reaches it.
-	b.setTTSContext(contextID, appendToContext)
+	// Recorded before the context opens, so the drain loop has the answers in
+	// hand by the time the first frame of the context reaches it.
+	b.setTTSContext(contextID, ttsContext{
+		appendToContext:          appendToContext,
+		pushAssistantAggregation: pushAssistantAggregation,
+	})
 
 	if !b.AudioContextAvailable(contextID) {
 		// Serialized so it lands immediately before the start of the context it

@@ -110,10 +110,14 @@ func TestSendTextRunImmediatelyCommitsBeforeAppending(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The claim under test is the order of these three. The second turn's own
+	// answer may follow them: this bot answers open-endedly and the end of the
+	// session commits whatever it had said by then, so whether there is a fourth
+	// message depends on how far it got, which is not what this test is about.
 	want := []string{"tell me about Paris", "I was still talking", "actually, never mind"}
 	got := texts(convo)
-	if len(got) != len(want) {
-		t.Fatalf("context has %d messages, want %d: %v", len(got), len(want), got)
+	if len(got) < len(want) {
+		t.Fatalf("context has %d messages, want at least %d: %v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {

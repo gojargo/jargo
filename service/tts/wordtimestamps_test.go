@@ -435,3 +435,64 @@ func TestSpeakFrameEntersTheContextOnce(t *testing.T) {
 		})
 	}
 }
+
+// An utterance the service says on its own has no model response around it to
+// mark where the assistant turn ends, so the service closes it: once the last
+// word is out it tells the aggregator to commit. Without that the utterance
+// would sit in the aggregation until something else happened to close the turn,
+// and would be recorded merged with whatever the model said next.
+//
+// It is sent only for an utterance that belongs in the conversation. One the
+// caller kept out of it has nothing to commit.
+func TestSpeakFrameClosesTheAssistantTurnItOpened(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		appendToContext bool
+		want            bool
+	}{
+		{"recorded", true, true},
+		{"kept out of the conversation", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var pushes int
+			synth := &fakeTimedSynth{rate: 24000, words: []timedWord{
+				{text: "One", offset: 0, pcm: make([]byte, 4800)},
+				{text: "moment.", offset: 0.1, pcm: make([]byte, 4800)},
+			}}
+			base := tts.New("FixedTTS", synth)
+			task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+				OnReachedDownstream: func(f frames.Frame) {
+					if _, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
+						mu.Lock()
+						pushes++
+						mu.Unlock()
+					}
+				},
+			})
+			runDone := make(chan error, 1)
+			go func() { runDone <- task.Run(context.Background()) }()
+
+			speak := frames.NewTTSSpeakFrame("One moment.")
+			speak.AppendToContext = tc.appendToContext
+			task.QueueFrame(speak)
+			time.Sleep(500 * time.Millisecond)
+			task.StopWhenDone()
+			select {
+			case <-runDone:
+			case <-time.After(3 * time.Second):
+				t.Fatal("task did not finish")
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case tc.want && pushes != 1:
+				t.Fatalf("the assistant turn was closed %d times, want once", pushes)
+			case !tc.want && pushes != 0:
+				t.Fatalf("the assistant turn was closed %d times for an utterance that "+
+					"was never meant to be recorded", pushes)
+			}
+		})
+	}
+}

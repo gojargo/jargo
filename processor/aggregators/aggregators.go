@@ -25,6 +25,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // The placeholder contents a tool-result message holds while its call has not
@@ -204,12 +205,14 @@ func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir pr
 		return u.PushFrame(ctx, f, dir)
 
 	case *frames.InterimTranscriptionFrame:
-		// Interim (partial) speech is forwarded for downstream consumers (e.g.
-		// RTVI) but not aggregated; the turn processor drives end-of-turn.
-		return u.PushFrame(ctx, f, dir)
+		// Consumed here, like the final transcript below: partial speech is not
+		// aggregated either, and the turn strategies that read it run inside this
+		// processor. What is downstream is the model, which is given the
+		// conversation rather than the transcripts it was built from.
+		return nil
 
 	case *frames.TranscriptionFrame:
-		return u.handleTranscription(ctx, fr, dir)
+		return u.handleTranscription(ctx, fr)
 
 	case *frames.LLMRunFrame:
 		// Explicit trigger: run the LLM on the current context now (e.g. to make
@@ -275,8 +278,13 @@ func (u *UserAggregator) appendMessages(msgs []frames.Message) {
 	}
 }
 
+// handleTranscription folds one transcript into the aggregation. The frame is
+// consumed rather than forwarded: what the user said reaches the model as the
+// conversation, and a client is told about the transcript by the RTVI observer,
+// which watches it where the transcription service pushes it rather than
+// waiting for it to travel any further.
 func (u *UserAggregator) handleTranscription(
-	ctx context.Context, fr *frames.TranscriptionFrame, dir processor.Direction,
+	ctx context.Context, fr *frames.TranscriptionFrame,
 ) error {
 	u.mu.Lock()
 	if fr.Text != "" {
@@ -286,11 +294,6 @@ func (u *UserAggregator) handleTranscription(
 		u.aggregation += fr.Text
 	}
 	u.mu.Unlock()
-
-	// Forward the transcription so downstream processors (e.g. RTVI) see it.
-	if err := u.PushFrame(ctx, fr, dir); err != nil {
-		return err
-	}
 
 	if u.turnTaking {
 		// A transcript only adds to the aggregation. What is aggregated is
@@ -341,16 +344,17 @@ type AssistantAggregator struct {
 	// compacts older turns in the background once the context grows too large.
 	summarize *summarizer
 
-	mu          sync.Mutex
-	aggregation string
-	started     bool
-	// spoken accumulates the words actually spoken this turn, in their original
-	// written form, from the playback-aligned TTSTextFrames a word-timestamp TTS
-	// service emits. It drives the assistant message when the TTS reports word
-	// timings; spokenCommitted tracks whether that message has been written to
-	// the context yet, so later words update it in place rather than appending.
-	spoken          string
-	spokenCommitted bool
+	mu sync.Mutex
+	// aggregation is what the turn has said so far, in the order it was said:
+	// the model's own text where that is what reaches the conversation, and the
+	// playback-aligned words a word-timestamp TTS reports where it is not. The
+	// two kinds space themselves differently, so each piece carries the answer
+	// and the join respects it.
+	aggregation []text.Part
+	// turnStarted reports whether an assistant turn is open. A turn opens on the
+	// model's response starting, or, for an utterance the service speaks with no
+	// response around it, on the start of that speech.
+	turnStarted bool
 	// inProgress holds every tool call of the current turn that has not reported
 	// a final result yet, keyed by tool call id. The value is nil between the
 	// FunctionCallsStartedFrame that announced the call and the
@@ -409,26 +413,30 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	}
 	switch fr := f.(type) {
 	case *frames.LLMFullResponseStartFrame:
-		a.mu.Lock()
-		a.started = true
-		a.aggregation = ""
-		a.spoken = ""
-		a.spokenCommitted = false
-		a.mu.Unlock()
+		a.openTurn()
+	case *frames.TTSStartedFrame:
+		// Speech that will be recorded opens a turn of its own when none is open.
+		// It is how an utterance the service speaks, with no response around it to
+		// mark where the turn begins, still gets one, while deferring to a turn the
+		// model already started.
+		if fr.AppendToContext {
+			a.openTurn()
+		}
 	case *frames.LLMTextFrame:
 		// When a word-timestamp TTS drives the turn it excludes its text from the
 		// context (AppendToContext == false); the spoken words arrive as
 		// TTSTextFrames instead. Otherwise (the default) accumulate as before.
-		if !fr.AppendToContext {
-			break
-		}
-		a.mu.Lock()
-		if a.started {
-			a.aggregation += fr.Text
-		}
-		a.mu.Unlock()
+		a.handleText(&fr.TextFrame, fr.Text)
 	case *frames.TTSTextFrame:
-		a.handleSpoken(fr)
+		a.handleText(&fr.TextFrame, fr.Original())
+	case *frames.AggregatedTextFrame:
+		// A unit that is not spoken at all, a code block held back from the
+		// synthesizer, reaches the conversation as itself once the speech ahead of
+		// it has been said.
+		a.handleText(&fr.TextFrame, rawOrText(fr))
+	case *frames.LLMAssistantPushAggregationFrame:
+		// The end of an utterance that had no response around it to end.
+		a.commit()
 	case *frames.FunctionCallsStartedFrame, *frames.FunctionCallInProgressFrame,
 		*frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame:
 		// Consumed, not forwarded. This aggregator is where a tool call becomes
@@ -440,11 +448,10 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		return a.handleFunctionCallFrame(ctx, f)
 	case *frames.LLMFullResponseEndFrame:
 		a.commit()
-	case *frames.TTSSpeakFrame:
-		// Fixed bot speech becomes part of the conversation unless opted out.
-		if fr.AppendToContext {
-			a.context.AddAssistantMessage(fr.Text)
-		}
+	case *frames.EndFrame, *frames.CancelFrame:
+		// The session is over, so the turn is closed out where it stands rather
+		// than lost with the processor.
+		a.commit()
 	case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
 		*frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
 		return a.handleSpeakingState(ctx, f, dir)
@@ -459,34 +466,33 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	return a.PushFrame(ctx, f, dir)
 }
 
-// handleSpoken records one playback-aligned spoken word into the assistant
-// turn. The word's original written form is appended to the running spoken text
-// and the in-progress assistant message is kept up to date in the context, so
-// that if the turn is interrupted the context already holds exactly the words
-// spoken so far. Because the TTSTextFrames flow in step with audio playback,
-// only the words already spoken have arrived at any given moment.
-func (a *AssistantAggregator) handleSpoken(fr *frames.TTSTextFrame) {
-	if !fr.AppendToContext {
-		return
-	}
-	text := fr.Original()
-	if text == "" {
+// handleText folds one piece of the turn's text into the aggregation. original
+// is what the piece contributes to the conversation, which for a spoken word is
+// its written form rather than the pronunciation handed to the synthesizer.
+//
+// A piece that says it does not belong in the conversation is dropped here. That
+// is how a turn driven by a word-timestamp TTS keeps the model's own text out:
+// the text arrives saying so, and the words the synthesizer actually spoke
+// arrive later saying the opposite, which is what makes an interruption leave
+// exactly the words that were heard.
+func (a *AssistantAggregator) handleText(fr *frames.TextFrame, original string) {
+	if !fr.AppendToContext || fr.Text == "" {
 		return
 	}
 	a.mu.Lock()
-	if a.spoken != "" {
-		a.spoken += " "
-	}
-	a.spoken += text
-	spoken := a.spoken
-	committed := a.spokenCommitted
-	a.spokenCommitted = true
+	a.aggregation = append(a.aggregation,
+		text.Part{Text: original, IncludesInterPartSpaces: fr.IncludesInterFrameSpaces})
 	a.mu.Unlock()
+}
 
-	if committed && a.context.ReplaceLastAssistantText(spoken) {
-		return
+// rawOrText returns what an aggregated unit contributes to the conversation: its
+// original written form where it has one, such as a code block with its
+// delimiters, and its text otherwise.
+func rawOrText(fr *frames.AggregatedTextFrame) string {
+	if fr.RawText != "" {
+		return fr.RawText
 	}
-	a.context.AddAssistantMessage(spoken)
+	return fr.Text
 }
 
 // handleFunctionCallFrame applies one frame of a tool call's life to the
@@ -779,22 +785,52 @@ func (a *AssistantAggregator) handleSpeakingState(
 	return a.pushDeferredContext(ctx)
 }
 
-// commit appends the aggregated assistant message to the context, if any, and
-// resets the response state.
+// openTurn marks an assistant turn open. Opening one that is already open
+// changes nothing: the turn belongs to the response, not to each frame of it.
+func (a *AssistantAggregator) openTurn() {
+	a.mu.Lock()
+	a.turnStarted = true
+	a.mu.Unlock()
+}
+
+// commit closes the assistant turn out, writing what it said to the
+// conversation as one message. A turn that was never opened writes nothing, so
+// text arriving with no turn around it waits for one rather than landing on its
+// own.
 func (a *AssistantAggregator) commit() {
 	a.mu.Lock()
-	text := a.aggregation
-	a.aggregation = ""
-	a.started = false
+	open := a.turnStarted
+	a.turnStarted = false
 	a.mu.Unlock()
-	if text != "" {
-		a.context.AddAssistantMessage(text)
+	if !open {
+		return
 	}
+	a.pushAggregation()
+}
+
+// pushAggregation writes what the turn has said so far to the conversation and
+// empties the aggregation. Nothing is written when nothing was said.
+func (a *AssistantAggregator) pushAggregation() {
+	a.mu.Lock()
+	parts := a.aggregation
+	a.aggregation = nil
+	// This covers whatever a tool result deferred, so the deferred run is
+	// dropped rather than repeated behind it.
+	a.pushOnBotStopped = false
+	a.mu.Unlock()
+
+	said := text.Concatenate(parts)
+	if said == "" {
+		return
+	}
+	a.context.AddAssistantMessage(said)
 	a.maybeSummarize()
 }
 
-// commitInterrupted closes out a turn cut off by an interruption: any partial
-// assistant text is committed so the context reflects what the bot actually said.
+// commitInterrupted closes out a turn cut off by an interruption: whatever the
+// bot had said by then is committed, so the context reflects what was actually
+// heard, and anything left over is dropped rather than carried into the next
+// turn.
 //
 // It does no tool balancing. Every call in flight already has a message
 // answering it, written when the call started, so the context is valid as it
@@ -803,21 +839,11 @@ func (a *AssistantAggregator) commit() {
 // instead would put it after whatever a new user turn has meanwhile added,
 // separating a result from the call it answers for the rest of the session.
 func (a *AssistantAggregator) commitInterrupted() {
+	a.commit()
 	a.mu.Lock()
-	text := a.aggregation
-	a.aggregation = ""
-	a.started = false
+	a.aggregation = nil
 	a.pushOnBotStopped = false
-	// Word-timestamp path: the spoken text was written to the context live as
-	// each word played, so it already holds exactly what was spoken before the
-	// interruption. Just close the turn so the next one starts fresh.
-	a.spoken = ""
-	a.spokenCommitted = false
 	a.mu.Unlock()
-	if text != "" {
-		a.context.AddAssistantMessage(text)
-	}
-	a.maybeSummarize()
 }
 
 // suppressed runs the mute strategies and reports whether this user-input frame

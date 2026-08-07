@@ -303,7 +303,7 @@ func (b *Base) startAudioContexts(ctx context.Context) {
 	done := make(chan struct{})
 	b.audioCtxMu.Lock()
 	b.audioContexts = map[string]*audioContext{}
-	b.ttsContexts = map[string]bool{}
+	b.ttsContexts = map[string]ttsContext{}
 	b.serial = newSerialQueue()
 	b.ctxDone = done
 	b.audioCtxMu.Unlock()
@@ -425,15 +425,26 @@ func (b *Base) refreshAudioContext(contextID string) {
 	}
 }
 
-// setTTSContext records whether what is spoken on a context belongs in the
-// conversation.
-func (b *Base) setTTSContext(contextID string, appendToContext bool) {
+// ttsContext is what a synthesis context carries beyond its audio.
+type ttsContext struct {
+	// appendToContext reports whether what is spoken on this context belongs in
+	// the conversation.
+	appendToContext bool
+	// pushAssistantAggregation reports whether the assistant aggregator has to be
+	// told to commit once this context has finished speaking. It is set for an
+	// utterance the service says on its own, which has no model response around
+	// it to close the assistant turn.
+	pushAssistantAggregation bool
+}
+
+// setTTSContext records what a context carries.
+func (b *Base) setTTSContext(contextID string, c ttsContext) {
 	b.audioCtxMu.Lock()
 	defer b.audioCtxMu.Unlock()
 	if b.ttsContexts == nil {
-		b.ttsContexts = map[string]bool{}
+		b.ttsContexts = map[string]ttsContext{}
 	}
-	b.ttsContexts[contextID] = appendToContext
+	b.ttsContexts[contextID] = c
 }
 
 // appendsToContext reports what setTTSContext recorded for a context. A context
@@ -441,8 +452,18 @@ func (b *Base) setTTSContext(contextID string, appendToContext bool) {
 func (b *Base) appendsToContext(contextID string) bool {
 	b.audioCtxMu.Lock()
 	defer b.audioCtxMu.Unlock()
-	appendTo, ok := b.ttsContexts[contextID]
-	return !ok || appendTo
+	c, ok := b.ttsContexts[contextID]
+	return !ok || c.appendToContext
+}
+
+// takeTTSContext returns what a context carries and forgets it, so the answer is
+// acted on once.
+func (b *Base) takeTTSContext(contextID string) (ttsContext, bool) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	c, ok := b.ttsContexts[contextID]
+	delete(b.ttsContexts, contextID)
+	return c, ok
 }
 
 // deleteTTSContext forgets a context that has finished.

@@ -137,18 +137,15 @@ func TestUserAggregatorDropsInputWhileMuted(t *testing.T) {
 
 	var mu sync.Mutex
 	var muteStarted, muteStopped int
-	var transcripts []string
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
-			switch fr := f.(type) {
+			switch f.(type) {
 			case *frames.UserMuteStartedFrame:
 				muteStarted++
 			case *frames.UserMuteStoppedFrame:
 				muteStopped++
-			case *frames.TranscriptionFrame:
-				transcripts = append(transcripts, fr.Text)
 			}
 		},
 	})
@@ -165,12 +162,6 @@ func TestUserAggregatorDropsInputWhileMuted(t *testing.T) {
 	task.QueueFrame(muted)
 	time.Sleep(200 * time.Millisecond)
 
-	mu.Lock()
-	got := append([]string(nil), transcripts...)
-	mu.Unlock()
-	if len(got) != 0 {
-		t.Errorf("speech while muted got through: %q", got)
-	}
 	if msgs := convo.Messages(); len(msgs) != 0 {
 		t.Errorf("context messages = %+v, want none: speech while muted reached the conversation", msgs)
 	}
@@ -190,12 +181,60 @@ func TestUserAggregatorDropsInputWhileMuted(t *testing.T) {
 		t.Fatal("task did not finish")
 	}
 
+	// The transcripts themselves are consumed here, so what says the mute lifted
+	// is the conversation: only the words spoken once the floor was free are in
+	// it.
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleUser || msgs[0].Text != "now can you hear me" {
+		t.Errorf("messages = %+v, want only the words spoken after the mute ended", msgs)
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
-	if len(transcripts) != 1 || transcripts[0] != "now can you hear me" {
-		t.Errorf("transcripts through = %q, want only the one spoken after the mute ended", transcripts)
-	}
 	if muteStarted != 1 || muteStopped != 1 {
 		t.Errorf("announced %d mute starts and %d stops, want 1 of each", muteStarted, muteStopped)
+	}
+}
+
+// Speech with no model response around it still becomes one assistant message.
+// The start of the speech opens the assistant turn, the words spoken fill it,
+// and the frame that closes it commits them as a single message rather than one
+// per word: the conversation records what the bot said, not the order the
+// synthesizer happened to report it in.
+func TestAssistantAggregatorCommitsSpeechThatHasNoResponseAroundIt(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo)
+
+	task := pipeline.NewTask(pipeline.New(pair.Assistant()), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	started := frames.NewTTSStartedFrame()
+	started.AppendToContext = true
+	task.QueueFrame(started)
+	for _, w := range []string{"One", "moment", "please."} {
+		task.QueueFrame(frames.NewTTSTextFrame(w))
+	}
+
+	// Nothing is written while the words are still arriving: the message is the
+	// turn, and the turn is not over.
+	time.Sleep(200 * time.Millisecond)
+	if msgs := convo.Messages(); len(msgs) != 0 {
+		t.Fatalf("messages = %+v, want none until the turn is closed", msgs)
+	}
+
+	task.QueueFrame(frames.NewLLMAssistantPushAggregationFrame())
+	time.Sleep(200 * time.Millisecond)
+
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleAssistant || msgs[0].Text != "One moment please." {
+		t.Fatalf("messages = %+v, want one assistant 'One moment please.'", msgs)
 	}
 }
