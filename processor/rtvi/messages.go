@@ -32,6 +32,7 @@ const (
 	TypeUserStoppedSpeaking   = "user-stopped-speaking"
 	TypeBotStartedSpeaking    = "bot-started-speaking"
 	TypeBotStoppedSpeaking    = "bot-stopped-speaking"
+	TypeBotInterrupted        = "bot-interrupted"
 	TypeBotLLMStarted         = "bot-llm-started"
 	TypeBotLLMStopped         = "bot-llm-stopped"
 	TypeBotTTSStarted         = "bot-tts-started"
@@ -141,36 +142,49 @@ func BotLLMText(text string) Message {
 }
 
 // LLMFunctionCallData is the payload of a llm-function-call-in-progress message.
-// Arguments are intentionally omitted: the call name and id are enough for a
-// client to surface an "in progress" indication without exposing argument
-// values.
+// The tool call id is always present; the name and the arguments are omitted
+// unless the observer's report level for the function allows them (see
+// FunctionCallReportLevel), because either can carry information a client has no
+// business seeing.
 type LLMFunctionCallData struct {
-	FunctionName string `json:"function_name"`
-	ToolCallID   string `json:"tool_call_id"`
+	ToolCallID   string          `json:"tool_call_id"`
+	FunctionName string          `json:"function_name,omitempty"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
 }
 
-// LLMFunctionCall builds a llm-function-call-in-progress message.
-func LLMFunctionCall(name, toolCallID string) Message {
-	return newMessage(TypeLLMFunctionCall, "", LLMFunctionCallData{
-		FunctionName: name,
-		ToolCallID:   toolCallID,
-	})
+// LLMFunctionCall builds a llm-function-call-in-progress message carrying as
+// much of the call as level allows.
+func LLMFunctionCall(name, toolCallID string, args json.RawMessage, level FunctionCallReportLevel) Message {
+	d := LLMFunctionCallData{ToolCallID: toolCallID}
+	if level == ReportName || level == ReportFull {
+		d.FunctionName = name
+	}
+	if level == ReportFull {
+		d.Arguments = args
+	}
+	return newMessage(TypeLLMFunctionCall, "", d)
 }
 
-// LLMFunctionCallResultData is the payload of a llm-function-call-result message.
+// LLMFunctionCallResultData is the payload of a llm-function-call-result
+// message. As with the in-progress payload, the name and the result are omitted
+// unless the observer's report level for the function allows them.
 type LLMFunctionCallResultData struct {
-	FunctionName string `json:"function_name"`
 	ToolCallID   string `json:"tool_call_id"`
-	Result       string `json:"result"`
+	FunctionName string `json:"function_name,omitempty"`
+	Result       string `json:"result,omitempty"`
 }
 
-// LLMFunctionCallResult builds a llm-function-call-result message.
-func LLMFunctionCallResult(name, toolCallID, result string) Message {
-	return newMessage(TypeLLMFunctionCallResult, "", LLMFunctionCallResultData{
-		FunctionName: name,
-		ToolCallID:   toolCallID,
-		Result:       result,
-	})
+// LLMFunctionCallResult builds a llm-function-call-result message carrying as
+// much of the result as level allows.
+func LLMFunctionCallResult(name, toolCallID, result string, level FunctionCallReportLevel) Message {
+	d := LLMFunctionCallResultData{ToolCallID: toolCallID}
+	if level == ReportName || level == ReportFull {
+		d.FunctionName = name
+	}
+	if level == ReportFull {
+		d.Result = result
+	}
+	return newMessage(TypeLLMFunctionCallResult, "", d)
 }
 
 // UserTranscriptionData is the payload of a user-transcription message.

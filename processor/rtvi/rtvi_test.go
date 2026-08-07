@@ -97,13 +97,18 @@ func TestProcessorHandshakeAndTranscript(t *testing.T) {
 
 // TestProcessorLifecycleAndFunctionCalls drives the LLM/TTS lifecycle frames and
 // function-call frames through the RTVI processor and checks each maps to its
-// wire message.
+// wire message. The observer reports tool calls in full, so the mapping of every
+// field can be checked; TestObserverFunctionCallReportLevel covers what the
+// default withholds.
 func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	out := make(chan rtvi.Message, 16)
 	proc := rtvi.NewProcessor()
+	params := rtvi.ObserverParams{
+		FunctionCallReportLevel: map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportFull},
+	}
 	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
 		// Events are reported by the observer; the processor only carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
+		Observers: []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {

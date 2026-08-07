@@ -57,12 +57,39 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 
 // messageFor maps a pipeline frame to the RTVI server message it should emit,
 // reporting false for frames that produce no message. The mapping is split into
-// user- and bot-originated frames to keep each dispatch small.
-func messageFor(f frames.Frame) (Message, bool) {
+// user- and bot-originated frames to keep each dispatch small; the tool-call
+// frames are separate again because how much of them is reported depends on the
+// observer's per-function report level.
+func (o *Observer) messageFor(f frames.Frame) (Message, bool) {
 	if msg, ok := userMessageFor(f); ok {
 		return msg, true
 	}
+	if msg, ok := o.functionCallMessageFor(f); ok {
+		return msg, true
+	}
 	return botMessageFor(f)
+}
+
+// functionCallMessageFor maps a tool-call frame to its message, reporting only
+// what the function's report level allows. A disabled function produces no
+// message at all.
+func (o *Observer) functionCallMessageFor(f frames.Frame) (Message, bool) {
+	switch fr := f.(type) {
+	case *frames.FunctionCallInProgressFrame:
+		level := o.reportLevelFor(fr.ToolName)
+		if level == ReportDisabled {
+			return Message{}, false
+		}
+		return LLMFunctionCall(fr.ToolName, fr.ToolCallID, fr.Args, level), true
+	case *frames.FunctionCallResultFrame:
+		level := o.reportLevelFor(fr.ToolName)
+		if level == ReportDisabled {
+			return Message{}, false
+		}
+		return LLMFunctionCallResult(fr.ToolName, fr.ToolCallID, fr.Result, level), true
+	default:
+		return Message{}, false
+	}
 }
 
 // userMessageFor maps user- and system-originated frames.
@@ -92,6 +119,11 @@ func botMessageFor(f frames.Frame) (Message, bool) {
 		return event(TypeBotStartedSpeaking), true
 	case *frames.BotStoppedSpeakingFrame:
 		return event(TypeBotStoppedSpeaking), true
+	case *frames.InterruptionFrame:
+		// The bot's in-flight output was cut off, by a VAD barge-in or by a
+		// programmatic interrupt such as send-text with run_immediately. A client
+		// drops whatever the bot was mid-saying.
+		return event(TypeBotInterrupted), true
 	case *frames.LLMFullResponseStartFrame:
 		return event(TypeBotLLMStarted), true
 	case *frames.LLMFullResponseEndFrame:
@@ -104,10 +136,6 @@ func botMessageFor(f frames.Frame) (Message, bool) {
 		return event(TypeBotTTSStopped), true
 	case *frames.TTSSpeakFrame:
 		return BotTTSText(fr.Text), true
-	case *frames.FunctionCallInProgressFrame:
-		return LLMFunctionCall(fr.ToolName, fr.ToolCallID), true
-	case *frames.FunctionCallResultFrame:
-		return LLMFunctionCallResult(fr.ToolName, fr.ToolCallID, fr.Result), true
 	default:
 		return Message{}, false
 	}

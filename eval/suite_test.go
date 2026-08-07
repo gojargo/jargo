@@ -40,6 +40,7 @@ turns:
     expect:
       - event: llm_response
         text_contains: "goodbye"
+        within_ms: 2000
 `)
 	writeFile(t, dir, "manifest.yaml", fmt.Sprintf(`concurrency: 2
 suite:

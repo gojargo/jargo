@@ -49,7 +49,6 @@ func evalRunCmd() *cobra.Command {
 		if botURL == "" {
 			return errBotURLRequired
 		}
-		judge := getJudge()
 		out := cmd.OutOrStdout()
 		failed := 0
 		for _, path := range args {
@@ -57,7 +56,9 @@ func evalRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := eval.RunURL(cmd.Context(), scenario, botURL, judge)
+			// A fresh judge per scenario: it holds the conversation it grades
+			// against, so one scenario's turns must not reach the next one's.
+			res, err := eval.RunURL(cmd.Context(), scenario, botURL, getJudge())
 			if err != nil {
 				return fmt.Errorf("%s: %w", scenario.Name, err)
 			}
@@ -88,7 +89,7 @@ func evalSuiteCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		results := eval.RunSuite(cmd.Context(), m, getJudge())
+		results := eval.RunSuite(cmd.Context(), m, getJudge)
 		out := cmd.OutOrStdout()
 		p := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
 

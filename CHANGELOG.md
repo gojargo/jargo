@@ -12,6 +12,86 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **An eval scenario can assert what a tool was called with, and that a call was
+  not made.** A `function_call` expectation used to carry a single tool name, so
+  a scenario passed when the model called the right tool with the wrong city,
+  which is the failure worth catching. It now holds a set of calls, matched by
+  name in any order and complete only when every one is found, written as the
+  `name:`/`args:` shorthand for a single call or under `calls:` for several.
+  `args:` is a subset check: the arguments listed must be present with those
+  values, and anything further the model passed is ignored. `absent: true`
+  inverts an expectation, so "must not answer twice" is a regression guard a
+  scenario can express rather than something a judge has to be asked about.
+
+- **A turn can be scheduled rather than sent as soon as the last one finishes.**
+  `send_after: {event: llm_started, delay_ms: 500}` on a turn waits for that
+  event to have been seen and then 500ms longer before sending, which is how an
+  interruption is written. An event seen earlier in the run anchors the delay at
+  that earlier sighting, so the turn may fire at once; the wait for one that has
+  not been seen is bounded at 30s, and a schedule that never fires fails the
+  turn itself rather than any of its expectations. `event` is optional: on its
+  own, `delay_ms` is a pure delay from the previous turn's send.
+
+- **`bot_interrupted` is an event a scenario can assert on and schedule from.**
+  The RTVI observer now reports an interruption as `bot-interrupted`, matching
+  the protocol, so a client can drop whatever the bot was mid-saying.
+
+- **The RTVI observer decides how much of a tool call a client is told about.**
+  `ObserverParams.FunctionCallReportLevel` maps a function name to one of
+  `disabled`, `none`, `name` or `full`, with `"*"` setting the default for the
+  rest. This is what lets the eval harness assert on call arguments without
+  every bot exposing them.
+
+### Changed
+
+- **An eval content assertion aggregates the bot's reply instead of judging its
+  first segment.** A turn often answers in more than one response: an interim
+  filler ("Let me check on that.") and then the answer. Checking the first one
+  failed the assertion on the filler. A `text_contains` or `judge:` on
+  `llm_response` now accumulates successive segments and re-checks on each, until
+  the check passes, the judge rejects, or the `within_ms` budget expires. A
+  missing substring is no longer a failure on its own, since more text may
+  follow, so a scenario asserting text that never arrives now waits out its
+  budget: set `within_ms` on such an assertion.
+
+- **The judge grades the conversation, not one reply in isolation.** It is fed
+  each user turn and each segment of the bot's reply, and returns yes, no or
+  **continue**, where continue means the reply so far is only filler and the
+  criterion should be judged again once more arrives. That is what lets a terse
+  reply ("that's four") be graded against the question it answers. The `Judge`
+  interface changed to match: `AddUserMessage`, `AddAssistantMessage` and
+  `Evaluate(ctx, criterion) JudgeVerdict`. A judge that cannot answer reports a
+  no with the reason rather than failing the run. Because a judge now holds a
+  conversation, it is per-scenario: `RunSuite` takes a `func() Judge` rather than
+  a `Judge`.
+
+- **An interrupted response is no longer attributed to the next turn.** On a
+  barge-in or a run-immediately interrupt the harness drops the bot's queued,
+  unmatched output, and ignores the trailing token an interrupted response can
+  still flush, until the next response genuinely begins. A user transcription
+  survives the discard, because a keypress emits one immediately before the
+  turn-start interruption and that is the turn's input.
+
+- **A failed turn ends the scenario.** It leaves the conversation in an unknown
+  state, so the turns after it only burn another budget each.
+
+- **`text_contains` is case-sensitive**, and the default latency budget for an
+  expectation without `within_ms` is 60s rather than 15s. The handshake keeps its
+  own, much shorter budget: a bot has 10s to announce readiness.
+
+- **RTVI function-call events now report the tool call id alone by default.**
+  The function name, its arguments and its result are withheld until the
+  observer is configured to expose them (see `FunctionCallReportLevel` above); a
+  call's name and arguments can carry information a client has no business
+  seeing, and the safe default is the one that leaks nothing. A client that
+  relied on `function_name` being present needs
+  `rtvi.NewObserverWithParams(proc, rtvi.ObserverParams{FunctionCallReportLevel:
+  map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportName}})`. Raising the
+  level over the wire is possible only through the eval serializer, so a remote
+  client cannot elevate a production bot.
+
 ### Fixed
 
 - **`LLMContext.Messages` handed out an aliased tool result.** It copied the

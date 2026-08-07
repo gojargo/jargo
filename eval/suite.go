@@ -121,8 +121,12 @@ func (m *Manifest) jobs() []job {
 
 // RunSuite runs every scenario in the manifest against its bot, up to
 // Concurrency at once, and returns one result per scenario in manifest order.
-// judge may be nil when no scenario uses `judge:`.
-func RunSuite(ctx context.Context, m *Manifest, judge Judge) []SuiteResult {
+//
+// newJudge builds the judge for one scenario, and is called once per scenario
+// rather than once for the suite: a judge holds the conversation it grades
+// against, so scenarios running at the same time cannot share one. It may
+// return nil, and may itself be nil, when no scenario uses `judge:`.
+func RunSuite(ctx context.Context, m *Manifest, newJudge func() Judge) []SuiteResult {
 	js := m.jobs()
 	results := make([]SuiteResult, len(js))
 
@@ -134,6 +138,10 @@ func RunSuite(ctx context.Context, m *Manifest, judge Judge) []SuiteResult {
 		go func(i int, j job) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			var judge Judge
+			if newJudge != nil {
+				judge = newJudge()
+			}
 			results[i] = runOne(ctx, j, judge)
 		}(i, j)
 	}

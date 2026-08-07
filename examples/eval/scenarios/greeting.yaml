@@ -4,8 +4,19 @@ turns:
     expect:
       - event: llm_started
       - event: llm_response
-        text_contains: "how can I help"
+        text_contains: "How can I help"
   - user: "I'd like a coffee"
     expect:
       - event: llm_response
         text_contains: "what kind of coffee"
+      # The bot should ask, not order on the customer's behalf.
+      - event: function_call
+        absent: true
+        within_ms: 500
+  - user: "a large latte, please"
+    expect:
+      # Asserting the size is the point: the right tool with the wrong size is
+      # the failure worth catching.
+      - event: function_call
+        name: place_order
+        args: {size: large}

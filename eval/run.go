@@ -12,7 +12,6 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
-	"github.com/gojargo/jargo/transport/wsserver/rtviws"
 )
 
 // Bot builds the bot's pipeline task around the harness-provided transport
@@ -24,6 +23,8 @@ type Bot func(in, out processor.Processor) *pipeline.Task
 // Options configures a scenario run.
 type Options struct {
 	// Judge grades `judge:` assertions; nil is fine when no scenario uses one.
+	// It holds the conversation it grades against, so give each scenario its own
+	// rather than reusing one across scenarios.
 	Judge Judge
 	// UserTTS selects audio mode. When set, each user turn is synthesized with
 	// this TTS service and streamed to the bot as microphone audio (so the bot's
@@ -77,11 +78,17 @@ func Host(ctx context.Context, scenario *Scenario, buildBot Bot, opts Options) (
 // Handler serves buildBot over RTVI on a plain WebSocket: it accepts one client
 // per connection, wires the transport into the bot's pipeline, and runs it until
 // the client disconnects. Mount it in a bot's own HTTP server to expose an eval
-// endpoint that `jargo eval run` — or any RTVI WebSocket client — can drive. The
+// endpoint that `jargo eval run`, or any RTVI WebSocket client, can drive. The
 // in-process Host uses it too.
+//
+// The endpoint speaks RTVI through the eval serializer, which additionally
+// understands the harness's own control messages. Serving the bot's production
+// RTVI endpoint to the harness instead works, but a scenario asserting on tool
+// arguments will not see them: raising the report level is deliberately
+// something only this serializer allows.
 func Handler(buildBot Bot) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tr, err := wsserver.Accept(w, r, rtviws.New(), transport.DefaultParams())
+		tr, err := wsserver.Accept(w, r, newSerializer(), transport.DefaultParams())
 		if err != nil {
 			return
 		}

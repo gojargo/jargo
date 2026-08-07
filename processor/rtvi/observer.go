@@ -2,6 +2,7 @@ package rtvi
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
@@ -25,6 +26,46 @@ type Observer struct {
 	mu    sync.Mutex
 	seen  map[uint64]struct{}
 	order []uint64
+
+	// paramsMu guards params, which a ConfigureObserverFrame rewrites while the
+	// pipeline is running.
+	paramsMu sync.Mutex
+	params   ObserverParams
+}
+
+// FunctionCallReportLevel is how much of a tool call is exposed in the RTVI
+// function-call events. A call's name and its arguments can carry information a
+// client has no business seeing, so what is reported is a per-function setting
+// rather than a fixed payload.
+type FunctionCallReportLevel string
+
+// The report levels, in increasing order of disclosure.
+const (
+	// ReportDisabled emits no function-call event at all for the call.
+	ReportDisabled FunctionCallReportLevel = "disabled"
+	// ReportNone emits the event with the tool call id only. This is the default:
+	// a client learns that a call is running, and nothing more.
+	ReportNone FunctionCallReportLevel = "none"
+	// ReportName adds the function's name, still without arguments or result.
+	ReportName FunctionCallReportLevel = "name"
+	// ReportFull adds the function's name, its arguments and its result.
+	ReportFull FunctionCallReportLevel = "full"
+)
+
+// ObserverParams configures what an Observer reports.
+type ObserverParams struct {
+	// FunctionCallReportLevel maps a function name to the level of detail its
+	// events carry. The "*" key sets the level for functions not listed; when it
+	// is absent too, ReportNone applies.
+	FunctionCallReportLevel map[string]FunctionCallReportLevel
+}
+
+// DefaultObserverParams is the configuration NewObserver uses: function-call
+// events carry the tool call id alone.
+func DefaultObserverParams() ObserverParams {
+	return ObserverParams{
+		FunctionCallReportLevel: map[string]FunctionCallReportLevel{"*": ReportNone},
+	}
 }
 
 // seenCap bounds the ids remembered for deduplication. A frame is reported once
@@ -32,9 +73,21 @@ type Observer struct {
 // be kept: by the time an id is evicted the frame has long since left.
 const seenCap = 4096
 
-// NewObserver builds an observer that sends through sink.
+// NewObserver builds an observer that sends through sink, with the default
+// parameters. Use NewObserverWithParams to report more of a tool call than its
+// id.
 func NewObserver(sink *Processor) *Observer {
-	return &Observer{sink: sink, seen: make(map[uint64]struct{}, seenCap)}
+	return NewObserverWithParams(sink, DefaultObserverParams())
+}
+
+// NewObserverWithParams builds an observer that sends through sink and reports
+// what params allows.
+func NewObserverWithParams(sink *Processor, params ObserverParams) *Observer {
+	return &Observer{
+		sink:   sink,
+		seen:   make(map[uint64]struct{}, seenCap),
+		params: params,
+	}
 }
 
 // OnPushFrame implements processor.Observer.
@@ -48,11 +101,40 @@ func (o *Observer) OnPushFrame(data processor.FramePushed) {
 	if o.alreadySeen(f.ID()) {
 		return
 	}
-	msg, ok := messageFor(f)
+	if cfg, ok := f.(*ConfigureObserverFrame); ok {
+		o.applyConfig(cfg)
+		return
+	}
+	msg, ok := o.messageFor(f)
 	if !ok {
 		return
 	}
 	o.sink.Send(msg)
+}
+
+// applyConfig applies a runtime reconfiguration, leaving unset fields alone.
+func (o *Observer) applyConfig(f *ConfigureObserverFrame) {
+	if f.FunctionCallReportLevel == nil {
+		return
+	}
+	o.paramsMu.Lock()
+	o.params.FunctionCallReportLevel = f.FunctionCallReportLevel
+	o.paramsMu.Unlock()
+	slog.Debug("RTVI observer reconfigured", "function_call_report_level", f.FunctionCallReportLevel)
+}
+
+// reportLevelFor is the level to report a call to name at: the function's own
+// entry, else the "*" default, else ReportNone.
+func (o *Observer) reportLevelFor(name string) FunctionCallReportLevel {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	if level, ok := o.params.FunctionCallReportLevel[name]; ok {
+		return level
+	}
+	if level, ok := o.params.FunctionCallReportLevel["*"]; ok {
+		return level
+	}
+	return ReportNone
 }
 
 // alreadySeen reports whether the frame has been reported, recording it when it

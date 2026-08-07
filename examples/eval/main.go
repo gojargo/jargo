@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"log/slog"
 	"net/http"
@@ -80,7 +81,15 @@ func (m *demoLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	if err := m.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
 		return err
 	}
-	if err := m.PushFrame(ctx, frames.NewLLMTextFrame(reply(last)), processor.Downstream); err != nil {
+	// An order places the order rather than answering in text, so the example
+	// shows a scenario asserting on a tool call and its arguments.
+	if size, ok := order(last); ok {
+		args := json.RawMessage(`{"drink":"latte","size":"` + size + `"}`)
+		call := frames.NewFunctionCallInProgressFrame("call-1", "place_order", args, true, "g1")
+		if err := m.PushFrame(ctx, call, processor.Downstream); err != nil {
+			return err
+		}
+	} else if err := m.PushFrame(ctx, frames.NewLLMTextFrame(reply(last)), processor.Downstream); err != nil {
 		return err
 	}
 	return m.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
@@ -93,8 +102,21 @@ func reply(userText string) string {
 	case strings.Contains(lower, "hello"), strings.Contains(lower, "hey"):
 		return "Hello! How can I help you today?"
 	case strings.Contains(lower, "coffee"):
-		return "Sure — what kind of coffee would you like?"
+		return "Sure, what kind of coffee would you like?"
 	default:
 		return "You said: " + userText
 	}
+}
+
+// order reads a drink size out of the user's turn, reporting whether the turn
+// is an order at all.
+func order(userText string) (string, bool) {
+	lower := strings.ToLower(userText)
+	if !strings.Contains(lower, "latte") {
+		return "", false
+	}
+	if strings.Contains(lower, "large") {
+		return "large", true
+	}
+	return "small", true
 }
