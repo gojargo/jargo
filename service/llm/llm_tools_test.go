@@ -65,32 +65,34 @@ func TestBaseRunsToolLoop(t *testing.T) {
 	var got []string
 	ends := 0
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc, pair.Assistant()), pipeline.TaskParams{
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.LLMFullResponseStartFrame:
-				got = append(got, "start")
-			case *frames.FunctionCallsStartedFrame:
-				got = append(got, "calls-started")
-			case *frames.FunctionCallInProgressFrame:
-				got = append(got, "in-progress:"+fr.ToolName)
-			case *frames.FunctionCallResultFrame:
-				got = append(got, "result:"+fr.Result)
-			case *frames.LLMTextFrame:
-				got = append(got, "text:"+fr.Text)
-			case *frames.LLMFullResponseEndFrame:
-				ends++
-				if ends == 2 {
-					select {
-					case done <- struct{}{}:
-					default:
-					}
+	// The assistant aggregator consumes the function-call frames, so watch them
+	// where anything else would: between the LLM and the aggregator, which is
+	// where an RTVI processor sits.
+	probe := newProbe(func(f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.LLMFullResponseStartFrame:
+			got = append(got, "start")
+		case *frames.FunctionCallsStartedFrame:
+			got = append(got, "calls-started")
+		case *frames.FunctionCallInProgressFrame:
+			got = append(got, "in-progress:"+fr.ToolName)
+		case *frames.FunctionCallResultFrame:
+			got = append(got, "result:"+fr.Result)
+		case *frames.LLMTextFrame:
+			got = append(got, "text:"+fr.Text)
+		case *frames.LLMFullResponseEndFrame:
+			ends++
+			if ends == 2 {
+				select {
+				case done <- struct{}{}:
+				default:
 				}
 			}
-		},
+		}
 	})
+	task := pipeline.NewTask(pipeline.New(svc, probe, pair.Assistant()), pipeline.TaskParams{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -532,4 +534,29 @@ func TestMissingFunctionAnswersTheCall(t *testing.T) {
 
 	task.StopWhenDone()
 	<-runDone
+}
+
+// probe reports every frame passing through it and forwards it untouched. It
+// stands where an RTVI processor would, between the LLM and the assistant
+// aggregator, which is where the function-call frames can be seen: the
+// aggregator consumes them, so they never reach the end of the pipeline.
+type probe struct {
+	*processor.Base
+	seen func(frames.Frame)
+}
+
+func newProbe(seen func(frames.Frame)) *probe {
+	p := &probe{seen: seen}
+	p.Base = processor.New("Probe", p)
+	return p
+}
+
+func (p *probe) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if dir == processor.Downstream {
+		p.seen(f)
+	}
+	return p.PushFrame(ctx, f, dir)
 }

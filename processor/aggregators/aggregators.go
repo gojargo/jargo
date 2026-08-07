@@ -437,9 +437,13 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		a.handleSpoken(fr)
 	case *frames.FunctionCallsStartedFrame, *frames.FunctionCallInProgressFrame,
 		*frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame:
-		if err := a.handleFunctionCallFrame(ctx, f); err != nil {
-			return err
-		}
+		// Consumed, not forwarded. This aggregator is where a tool call becomes
+		// conversation, and it is the last processor in the pipeline, so there is
+		// nothing beyond it to tell. Every other consumer is reached by the LLM
+		// service broadcasting each of these frames upstream as well as down: the
+		// idle watchdog and the mute strategies run inside the user aggregator, and
+		// an RTVI processor sits between the LLM and the output.
+		return a.handleFunctionCallFrame(ctx, f)
 	case *frames.LLMFullResponseEndFrame:
 		a.commit()
 	case *frames.TTSSpeakFrame:
