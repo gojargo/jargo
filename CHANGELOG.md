@@ -63,6 +63,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Every spoken word names the synthesis it came from.** The frames carrying
+  the words of a turn left the sequencer with no context on them, so a consumer
+  could not tell which synthesis a word belonged to, which is what telling two
+  overlapping ones apart requires. The whole-unit frame a provider without word
+  timings produces already carried it; the per-word frames now do too.
+
 - **Punctuation a synthesizer reports twice is no longer spoken into the
   conversation twice, and no longer costs the word its written form.**
   Punctuation trailing a word is attributed to the word it trails, so a provider

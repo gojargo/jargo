@@ -499,6 +499,7 @@ func (s *AggregatedFrameSequencer) buildWordFrame(
 ) *frames.TTSTextFrame {
 	f := frames.NewTTSTextFrame(text)
 	f.SetPTS(pts)
+	f.ContextID = contextID
 	f.RawText = rawText
 	f.IncludesInterFrameSpaces = includesInterFrame
 	switch {
