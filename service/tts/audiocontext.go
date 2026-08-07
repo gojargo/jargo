@@ -303,6 +303,7 @@ func (b *Base) startAudioContexts(ctx context.Context) {
 	done := make(chan struct{})
 	b.audioCtxMu.Lock()
 	b.audioContexts = map[string]*audioContext{}
+	b.ttsContexts = map[string]bool{}
 	b.serial = newSerialQueue()
 	b.ctxDone = done
 	b.audioCtxMu.Unlock()
@@ -424,6 +425,33 @@ func (b *Base) refreshAudioContext(contextID string) {
 	}
 }
 
+// setTTSContext records whether what is spoken on a context belongs in the
+// conversation.
+func (b *Base) setTTSContext(contextID string, appendToContext bool) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	if b.ttsContexts == nil {
+		b.ttsContexts = map[string]bool{}
+	}
+	b.ttsContexts[contextID] = appendToContext
+}
+
+// appendsToContext reports what setTTSContext recorded for a context. A context
+// nothing was recorded for appends, which is the default everywhere else.
+func (b *Base) appendsToContext(contextID string) bool {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	appendTo, ok := b.ttsContexts[contextID]
+	return !ok || appendTo
+}
+
+// deleteTTSContext forgets a context that has finished.
+func (b *Base) deleteTTSContext(contextID string) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	delete(b.ttsContexts, contextID)
+}
+
 // audioContextFor looks a context up, or nil when it is not open.
 func (b *Base) audioContextFor(contextID string) *audioContext {
 	if contextID == "" {
@@ -483,6 +511,7 @@ func (b *Base) audioContextLoop(ctx context.Context, done chan struct{}) {
 		}
 		b.handleAudioContext(ctx, it.contextID)
 		b.deleteAudioContext(it.contextID)
+		b.deleteTTSContext(it.contextID)
 		if c, ok := b.syn.(AudioContextCompleter); ok {
 			c.OnAudioContextCompleted(ctx, it.contextID)
 		}
@@ -519,6 +548,10 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) {
 		switch fr := it.frame.(type) {
 		case *frames.TTSStartedFrame:
 			shouldPushStop = true
+			// Stamped here rather than where the frame is built: this is the one
+			// point every started frame passes through, the base's own and the ones
+			// a provider emits for itself.
+			fr.AppendToContext = b.appendsToContext(contextID)
 		case *frames.TTSAudioRawFrame:
 			// The first chunk of audio is what the context's words are timed
 			// from: it is the point the audio starts being heard.

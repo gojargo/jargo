@@ -78,6 +78,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a turn closed joins the next turn rather than opening a second answer to the
   one that just ended.
 
+- **`TTSSpeakFrame.AppendToContext` is honoured.** A fixed utterance queued with
+  the flag set to `false` still reached the conversation as an assistant message.
+  The service cleared the flag on the frame, which is what stops the text being
+  recorded twice, but the caller's answer went no further: the frames that
+  actually build the conversation were emitted saying `true` whatever was asked
+  for. It is now carried on the context the utterance is spoken on and stamped
+  onto every frame emitted from it, on both paths, the per-word frames a provider
+  that times its words produces and the whole unit emitted for one that does not.
+  The flag exists for text the service says rather than the assistant, a phrase
+  covering a tool call or a stall while something is fetched, and recording those
+  tells the model it said things it never composed.
+
 - **A `send-text` that runs immediately now cuts the bot off, and waits for the
   pipeline to settle before appending.** It used to append the new user message
   and re-run the LLM without interrupting, so whatever the bot was mid-saying

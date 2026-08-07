@@ -197,8 +197,13 @@ type Base struct {
 	// holds each open context's queue. See audiocontext.go.
 	audioCtxMu    sync.Mutex
 	audioContexts map[string]*audioContext
-	serial        *serialQueue
-	ctxCancel     context.CancelFunc
+	// ttsContexts records, per context, whether what is spoken on it belongs in
+	// the conversation. It is read on the drain goroutine, long after the call
+	// that set it, which is why the answer is kept here rather than passed along
+	// with each frame.
+	ttsContexts map[string]bool
+	serial      *serialQueue
+	ctxCancel   context.CancelFunc
 	// ctxDone is closed when the drain goroutine exits, so a graceful end can
 	// wait for the queue it asked to shut down.
 	ctxDone chan struct{}
@@ -576,6 +581,12 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir pr
 	// reaches the context as TTSTextFrames: per word where the provider times
 	// them, as one whole unit where it does not. Letting the aggregator record
 	// the fixed text as well would enter it twice.
+	//
+	// The caller's answer is carried to those frames instead, so an utterance
+	// the service says rather than the assistant (a phrase covering a tool call,
+	// a stall while something is fetched) stays out of the conversation when the
+	// caller asked for that.
+	appendToContext := fr.AppendToContext
 	fr.AppendToContext = false
 	if err := b.PushFrame(ctx, fr, dir); err != nil {
 		return err
@@ -589,7 +600,7 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, dir pr
 	if c, ok := b.syn.(TurnContextCreator); ok {
 		c.OnTurnContextCreated(ctx, b.turnContext)
 	}
-	if err := b.pushTTSFrames(ctx, fr.Text); err != nil {
+	if err := b.pushTTSFrames(ctx, fr.Text, appendToContext); err != nil {
 		return err
 	}
 	b.onTurnContextCompleted(ctx)
@@ -645,7 +656,7 @@ func (b *Base) aggregate(ctx context.Context, text string) error {
 			// was waiting for. Later ones find it already stopped.
 			b.stopTextAggregationMetrics(ctx)
 		}
-		if err := b.pushTTSFrames(ctx, agg.Text); err != nil {
+		if err := b.pushTTSFrames(ctx, agg.Text, true); err != nil {
 			return err
 		}
 	}
@@ -664,7 +675,7 @@ func (b *Base) flush(ctx context.Context) error {
 	if !ok || strings.TrimSpace(rest.Text) == "" {
 		return nil
 	}
-	return b.pushTTSFrames(ctx, rest.Text)
+	return b.pushTTSFrames(ctx, rest.Text, true)
 }
 
 // setYieldsSync records whether the provider yielded its audio.
@@ -692,12 +703,14 @@ func (b *Base) wordPath() bool {
 // pushTTSFrames synthesizes one piece of text on the turn's audio context,
 // opening the context if this is the turn's first sentence. original is the
 // pre-filter text; the configured filters produce the text sent to the provider.
+// appendToContext says whether what is spoken here belongs in the conversation;
+// it is recorded on the context and stamped onto every frame emitted from it.
 //
 // The audio does not go downstream from here. It is appended to the context and
 // pushed by the context's drain loop, so a provider whose audio arrives later on
 // its own receive loop and one that returns it inline reach the pipeline the
 // same way, in the order the audio was generated.
-func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
+func (b *Base) pushTTSFrames(ctx context.Context, original string, appendToContext bool) error {
 	filtered := original
 	for _, f := range b.filters {
 		// A stateful filter is told the interruption is over just before it is
@@ -728,6 +741,10 @@ func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
 	aggregated.WillBeSpoken = true
 	aggregated.AppendToContext = false
 
+	// Recorded before the context opens, so the drain loop has the answer in hand
+	// by the time the first frame of the context reaches it.
+	b.setTTSContext(contextID, appendToContext)
+
 	if !b.AudioContextAvailable(contextID) {
 		// Serialized so it lands immediately before the start of the context it
 		// describes, rather than racing ahead of audio still draining from the
@@ -746,14 +763,16 @@ func (b *Base) pushTTSFrames(ctx context.Context, original string) error {
 	// character twice.
 	c.addChars(utf8.RuneCountInString(filtered))
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
-		aggregated, contextID, filtered, true, b.wordPath(), false))
-	return b.runTTS(ctx, c, contextID, original, filtered)
+		aggregated, contextID, filtered, appendToContext, b.wordPath(), false))
+	return b.runTTS(ctx, c, contextID, original, filtered, appendToContext)
 }
 
 // runTTS asks the provider to speak one unit of text and routes what it yields
 // to the synthesis context. A provider whose audio arrives later on its own
 // receive loop yields nothing here and appends it itself.
-func (b *Base) runTTS(ctx context.Context, c *audioContext, contextID, original, filtered string) error {
+func (b *Base) runTTS(
+	ctx context.Context, c *audioContext, contextID, original, filtered string, appendToContext bool,
+) error {
 	// Every frame the provider yields is routed to its context, so audio and
 	// anything else it reports stay in the order it produced them.
 	yielded := false
@@ -794,6 +813,7 @@ func (b *Base) runTTS(ctx context.Context, c *audioContext, contextID, original,
 		// that left every one of its turns out of the context entirely.
 		text := frames.NewTTSTextFrame(original)
 		text.ContextID = contextID
+		text.AppendToContext = appendToContext
 		b.AppendToAudioContext(contextID, text)
 		b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot())
 	}

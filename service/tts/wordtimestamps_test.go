@@ -337,6 +337,58 @@ func TestNoTimestampsRecordsTurnWhenAudioArrivesLater(t *testing.T) {
 	}
 }
 
+// A fixed utterance the caller kept out of the conversation must stay out of it,
+// whichever way the provider reports what it spoke. The flag is the caller's
+// answer for text the service says rather than the assistant: a phrase covering
+// a tool call, a stall while something is fetched. Recording it tells the model
+// it said something it never composed, and an utterance that announces an action
+// with no tool call beside it is a pattern the model reproduces.
+//
+// Both emission paths carry it. A provider that times its words emits them
+// through the sequencer; one that does not emits the unit whole. Stamping only
+// one of them leaves every provider on the other side of that line recording
+// what it was told not to.
+func TestSpeakFrameHonoursAppendToContext(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		syn  tts.Synthesizer
+	}{
+		{"audio inline", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}}},
+		{"audio later", &asyncSynth{rate: 24000}},
+		{"word timings", &fakeTimedSynth{rate: 24000, words: []timedWord{
+			{text: "One", offset: 0, pcm: make([]byte, 4800)},
+			{text: "moment", offset: 0.1, pcm: make([]byte, 4800)},
+			{text: "please.", offset: 0.2, pcm: make([]byte, 4800)},
+		}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			convo := frames.NewLLMContext("system")
+			base := tts.New("FixedTTS", tc.syn)
+			pair := aggregators.New(convo)
+
+			task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+			runDone := make(chan error, 1)
+			go func() { runDone <- task.Run(context.Background()) }()
+
+			speak := frames.NewTTSSpeakFrame("One moment please.")
+			speak.AppendToContext = false
+			task.QueueFrame(speak)
+			time.Sleep(500 * time.Millisecond)
+			task.StopWhenDone()
+			select {
+			case <-runDone:
+			case <-time.After(3 * time.Second):
+				t.Fatal("task did not finish")
+			}
+
+			if msgs := convo.Messages(); len(msgs) != 0 {
+				t.Fatalf("messages = %+v, want none: the caller asked for this utterance "+
+					"to stay out of the conversation", msgs)
+			}
+		})
+	}
+}
+
 // TestSpeakFrameEntersTheContextOnce covers a fixed utterance on a provider with
 // no word timings.
 //
