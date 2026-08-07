@@ -519,3 +519,516 @@ func TestCJKCompletion(t *testing.T) {
 		}
 	})
 }
+
+// Ported from upstream. A transformed span whose written form ends in
+// punctuation the synthesizer never speaks ("$42.50," read as "forty two
+// dollars and fifty cents"): the word after it has to be placed past
+// punctuation the cursor reached by the span's jump rather than by speaking it.
+func TestATransformFollowedByPunctuationNobodySpeaks(t *testing.T) {
+	const spoken = "Your balance is forty two dollars and fifty cents, and it is ready"
+	const written = "Your balance is $42.50, and it is ready"
+
+	t.Run("the words after it are still attributed", func(t *testing.T) {
+		tr := NewWordCompletionTracker(spoken, written, written)
+		words := []string{
+			"Your", "balance", "is", "forty", "two", "dollars", "and", "fifty", "cents",
+			"and", "it", "is", "ready",
+		}
+		for _, w := range words {
+			if !tr.WordBelongsHere(w) {
+				t.Fatalf("%q was rejected", w)
+			}
+			tr.AddWord(w)
+		}
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete")
+		}
+	})
+
+	t.Run("the span is attributed once, on the word completing it", func(t *testing.T) {
+		tr := NewWordCompletionTracker(spoken, written, written)
+		for _, w := range []string{"Your", "balance", "is", "forty", "two", "dollars", "and", "fifty"} {
+			tr.AddWord(w)
+		}
+		// The words inside the expansion carry no written form of their own.
+		if raw, ok := tr.RawText(); ok && raw != "" {
+			t.Fatalf("a word inside the expansion was attributed %q, want nothing", raw)
+		}
+
+		tr.AddWord("cents")
+		if raw, _ := tr.RawText(); raw != "$42.50," {
+			t.Fatalf("the completing word was attributed %q, want the whole written span %q",
+				raw, "$42.50,")
+		}
+
+		tr.AddWord("and")
+		if raw, _ := tr.RawText(); raw != "and" {
+			t.Fatalf("the word after the span was attributed %q, want %q", raw, "and")
+		}
+	})
+}
+
+// Ported from upstream. French and other typographies put a space before ?, !,
+// : and ;. The cursor stops at that space, so once the last word is spoken it
+// still has to reach the end of the text. Otherwise what is left never empties,
+// the segment stays open, and a client that commits its caption when the
+// segment completes drops the sentence as the next one begins.
+func TestPunctuationSeparatedFromItsWordByASpace(t *testing.T) {
+	t.Run("a question mark completes the frame", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Comment ça va ?", "", "")
+		tr.AddWord("Comment")
+		tr.AddWord("ça")
+		if tr.AddWord("va") {
+			t.Fatal("the frame completed before its punctuation was spoken")
+		}
+		if got := tr.RemainingUserFacingText(false); got != " ?" {
+			t.Fatalf("what is left = %q, want %q", got, " ?")
+		}
+		if got := tr.AccumulatedUserFacingText(); got != "Comment ça va" {
+			t.Fatalf("what has been said = %q, want %q", got, "Comment ça va")
+		}
+		if !tr.AddWord("?") {
+			t.Fatal("the frame did not complete on the punctuation")
+		}
+	})
+
+	t.Run("an exclamation mark completes the frame", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Bonjour !", "", "")
+		if tr.AddWord("Bonjour") {
+			t.Fatal("the frame completed before its punctuation was spoken")
+		}
+		if got := tr.RemainingUserFacingText(false); got != " !" {
+			t.Fatalf("what is left = %q, want %q", got, " !")
+		}
+		if !tr.AddWord("!") {
+			t.Fatal("the frame did not complete on the punctuation")
+		}
+	})
+
+	t.Run("the space before it may be a non-breaking one", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Ça va ?", "", "")
+		tr.AddWord("Ça")
+		if tr.AddWord("va") {
+			t.Fatal("the frame completed before its punctuation was spoken")
+		}
+		if got := tr.AccumulatedUserFacingText(); got != "Ça va" {
+			t.Fatalf("what has been said = %q, want %q", got, "Ça va")
+		}
+		if !tr.AddWord(" ?") {
+			t.Fatal("the frame did not complete on the punctuation")
+		}
+	})
+
+	t.Run("English, with no space, is unchanged", func(t *testing.T) {
+		tr := NewWordCompletionTracker("How are you?", "", "")
+		tr.AddWord("How")
+		tr.AddWord("are")
+		if !tr.AddWord("you") {
+			t.Fatal("the frame did not complete on its last word")
+		}
+		if got := tr.RemainingUserFacingText(false); got != "" {
+			t.Fatalf("what is left = %q, want nothing", got)
+		}
+		if got := tr.AccumulatedUserFacingText(); got != "How are you?" {
+			t.Fatalf("what has been said = %q, want the whole sentence", got)
+		}
+	})
+
+	t.Run("a colon mid-sentence appears as soon as it is spoken", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Attention : ceci est un test", "", "")
+		tr.AddWord("Attention")
+		if got := tr.AccumulatedUserFacingText(); got != "Attention" {
+			t.Fatalf("what has been said = %q, want %q", got, "Attention")
+		}
+		tr.AddWord(":")
+		if got := tr.AccumulatedUserFacingText(); got != "Attention :" {
+			t.Fatalf("what has been said = %q, want %q: a colon mid-sentence is followed by "+
+				"more of the same segment, so it cannot lag behind", got, "Attention :")
+		}
+		tr.AddWord("ceci")
+		if got := tr.AccumulatedUserFacingText(); got != "Attention : ceci" {
+			t.Fatalf("what has been said = %q, want %q", got, "Attention : ceci")
+		}
+	})
+
+	t.Run("a question mark between two sentences drains on its own word", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Comment ça va ? Bien merci.", "", "")
+		for _, w := range []string{"Comment", "ça", "va"} {
+			tr.AddWord(w)
+		}
+		if got := tr.AccumulatedUserFacingText(); got != "Comment ça va" {
+			t.Fatalf("what has been said = %q, want %q", got, "Comment ça va")
+		}
+		if tr.AddWord("?") {
+			t.Fatal("the frame completed with a sentence still to come")
+		}
+		if got := tr.AccumulatedUserFacingText(); got != "Comment ça va ?" {
+			t.Fatalf("what has been said = %q, want %q", got, "Comment ça va ?")
+		}
+		tr.AddWord("Bien")
+		if got := tr.AccumulatedUserFacingText(); got != "Comment ça va ? Bien" {
+			t.Fatalf("what has been said = %q, want %q", got, "Comment ça va ? Bien")
+		}
+	})
+}
+
+// Ported from upstream. A transformed span that ends the utterance completes on
+// its last spoken word, and that word will not appear in the written text: the
+// synthesizer says "dollars" for "$5". The written form has to survive anyway,
+// or the conversation records the expansion rather than what the model wrote.
+func TestATransformThatEndsTheUtterance(t *testing.T) {
+	t.Run("the written form survives the last word", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Your total is five dollars",
+			"Your total is $5", "Your total is $5")
+		for _, w := range []string{"Your", "total", "is", "five"} {
+			tr.AddWord(w)
+		}
+		if !tr.AddWord("dollars") {
+			t.Fatal("the frame did not complete on its last word")
+		}
+		raw, ok := tr.RawText()
+		if !ok || raw != "$5" {
+			t.Fatalf("attributed %q (set=%v), want the written form %q", raw, ok, "$5")
+		}
+	})
+
+	t.Run("a closing tag around it is swept in", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Total is fifty percent",
+			"Total is 50%", "<price>Total is 50%</price>")
+		for _, w := range []string{"Total", "is", "fifty"} {
+			tr.AddWord(w)
+		}
+		if !tr.AddWord("percent") {
+			t.Fatal("the frame did not complete on its last word")
+		}
+		raw, ok := tr.RawText()
+		if !ok || !strings.Contains(raw, "50%") {
+			t.Fatalf("attributed %q (set=%v), want it to carry %q", raw, ok, "50%")
+		}
+	})
+
+	t.Run("a transform mid-sentence is unaffected", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Your balance is five dollars due now",
+			"Your balance is $5 due now", "Your balance is $5 due now")
+		for _, w := range []string{"Your", "balance", "is", "five"} {
+			tr.AddWord(w)
+		}
+		if raw, ok := tr.RawText(); ok && raw != "" {
+			t.Fatalf("a word inside the expansion was attributed %q, want nothing", raw)
+		}
+		tr.AddWord("dollars")
+		if raw, _ := tr.RawText(); raw != "$5" {
+			t.Fatalf("the completing word was attributed %q, want %q", raw, "$5")
+		}
+		tr.AddWord("due")
+		if raw, ok := tr.RawText(); !ok || raw == "" {
+			t.Fatal("the word after the expansion was attributed nothing")
+		}
+		tr.AddWord("now")
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete")
+		}
+	})
+}
+
+// Ported from upstream. A pronunciation replacement can change how the text is
+// broken into words, or only its case or its connector. Whichever it does, the
+// conversation has to record what the model wrote rather than the respelling
+// the synthesizer was handed.
+func TestReplacementsThatChangeTheShapeOfAWord(t *testing.T) {
+	t.Run("one word split into two commits the original on the second", func(t *testing.T) {
+		const written = "Try BODYPUMP on Monday morning."
+		const spoken = "Try body pump on Monday morning."
+		tr := NewWordCompletionTracker(spoken, written, written)
+
+		tr.AddWord("Try")
+		tr.AddWord("body")
+		if raw, ok := tr.RawText(); ok && raw != "" {
+			t.Fatalf("the first half was attributed %q, want nothing", raw)
+		}
+		if !tr.Suppress() {
+			t.Fatal("the first half was not held back from the conversation")
+		}
+
+		tr.AddWord("pump")
+		if raw, _ := tr.RawText(); raw != "BODYPUMP" {
+			t.Fatalf("the second half was attributed %q, want the written word %q", raw, "BODYPUMP")
+		}
+		if tr.Suppress() {
+			t.Fatal("the word completing the replacement was held back")
+		}
+
+		for _, w := range []string{"on", "Monday", "morning."} {
+			tr.AddWord(w)
+		}
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete")
+		}
+	})
+
+	t.Run("a difference of case alone keeps the written form", func(t *testing.T) {
+		const written = "Contact SQL support today."
+		const spoken = "Contact sql support today."
+		tr := NewWordCompletionTracker(spoken, written, written)
+
+		tr.AddWord("Contact")
+		tr.AddWord("sql")
+		if raw, _ := tr.RawText(); raw != "SQL" {
+			t.Fatalf("attributed %q, want the written form %q", raw, "SQL")
+		}
+		for _, w := range []string{"support", "today."} {
+			tr.AddWord(w)
+		}
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete")
+		}
+	})
+
+	t.Run("a hyphen standing in for nothing keeps the written form", func(t *testing.T) {
+		const written = "Try BODYPUMP on Monday morning."
+		const spoken = "Try body-pump on Monday morning."
+		tr := NewWordCompletionTracker(spoken, written, written)
+
+		tr.AddWord("Try")
+		tr.AddWord("body-pump")
+		if raw, _ := tr.RawText(); raw != "BODYPUMP" {
+			t.Fatalf("attributed %q, want the written form %q", raw, "BODYPUMP")
+		}
+	})
+
+	t.Run("the cursor ends past the whole written sentence", func(t *testing.T) {
+		const written = "Try BODYPUMP on Monday morning."
+		const spoken = "Try body pump on Monday morning."
+		tr := NewWordCompletionTracker(spoken, written, written)
+		for w := range strings.FieldsSeq(spoken) {
+			tr.AddWord(w)
+		}
+		got, ok := tr.AccumulatedRawText()
+		if !ok || got != written {
+			t.Fatalf("consumed %q (set=%v), want the whole written sentence %q", got, ok, written)
+		}
+	})
+
+	t.Run("a respelling of a different length still maps back", func(t *testing.T) {
+		const written = "The leisure center opens at six."
+		const spoken = "The lezher center opens at six."
+		tr := NewWordCompletionTracker(spoken, written, written)
+		tr.AddWord("The")
+		tr.AddWord("lezher")
+		if raw, _ := tr.RawText(); !strings.Contains(raw, "leisure") {
+			t.Fatalf("attributed %q, want it to carry the written word %q", raw, "leisure")
+		}
+	})
+
+	t.Run("an inline pronunciation tag does not steal the next word's letters", func(t *testing.T) {
+		const written = "The leisure center opens at six."
+		const spoken = "The <<l|ɛ|ʒ|ə|r>> center opens at six."
+		tr := NewWordCompletionTracker(spoken, written, written)
+
+		tr.AddWord("The")
+		tr.AddWord("<<l|ɛ|ʒ|ə|r>>")
+		tr.AddWord("center")
+		if raw, _ := tr.RawText(); raw != "center" {
+			t.Fatalf("the word after the tag was attributed %q, want its own span %q", raw, "center")
+		}
+	})
+}
+
+// Ported from upstream. A sentence carrying emoji, alongside tags and currency
+// in the written text. An emoji contributes no letters or digits, so it moves
+// no cursor of its own and has to be found where it sits; the words after it
+// must not lose their own span to it.
+func TestEmojiInASentence(t *testing.T) {
+	// step is one spoken word and what it should produce.
+	type step struct {
+		word      string
+		frameWord string
+		raw       string
+		rawSet    bool
+	}
+	run := func(t *testing.T, spoken, written string, steps []step) {
+		t.Helper()
+		tr := NewWordCompletionTracker(spoken, "", written)
+		for i, s := range steps {
+			complete := tr.AddWord(s.word)
+			if word, _ := tr.FrameWord(); word != s.frameWord {
+				t.Fatalf("word %d (%q): frame word = %q, want %q", i+1, s.word, word, s.frameWord)
+			}
+			raw, ok := tr.RawText()
+			if ok != s.rawSet || (s.rawSet && raw != s.raw) {
+				t.Fatalf("word %d (%q): attributed %q (set=%v), want %q (set=%v)",
+					i+1, s.word, raw, ok, s.raw, s.rawSet)
+			}
+			if last := i == len(steps)-1; complete != last {
+				t.Fatalf("word %d (%q): complete = %v, want %v", i+1, s.word, complete, last)
+			}
+		}
+	}
+
+	t.Run("an emoji mid-sentence, inside tags", func(t *testing.T) {
+		const sentence = "Great job! 🎉 Well done."
+		run(t, sentence, "<praise>"+sentence+"</praise>", []step{
+			{"Great", "Great", "<praise>Great", true},
+			{"job!", "job!", "job!", true},
+			{"🎉", "🎉", "🎉", true},
+			{"Well", "Well", "Well", true},
+			{"done.", "done.", "done.</praise>", true},
+		})
+	})
+
+	t.Run("an emoji beside currency", func(t *testing.T) {
+		const sentence = "Pay $50 😊 today!"
+		run(t, sentence, "<promo>"+sentence+"</promo>", []step{
+			{"Pay", "Pay", "<promo>Pay", true},
+			{"$50", "$50", "$50", true},
+			{"😊", "😊", "😊", true},
+			{"today!", "today!", "today!</promo>", true},
+		})
+	})
+
+	t.Run("several emoji, no tags", func(t *testing.T) {
+		const sentence = "Hello 😊 world 🎉 there!"
+		run(t, sentence, sentence, []step{
+			{"Hello", "Hello", "Hello", true},
+			{"😊", "😊", "😊", true},
+			{"world", "world", "world", true},
+			{"🎉", "🎉", "🎉", true},
+			{"there!", "there!", "there!", true},
+		})
+	})
+
+	t.Run("an emoji the written text does not have is attributed nothing", func(t *testing.T) {
+		tr := NewWordCompletionTracker("See you soon 😊", "", "<note>See you soon</note>")
+		for _, w := range []string{"See", "you", "soon"} {
+			tr.AddWord(w)
+		}
+		tr.AddWord("😊")
+		if word, _ := tr.FrameWord(); word != "😊" {
+			t.Fatalf("frame word = %q, want the emoji: it was spoken, so it is part of the frame", word)
+		}
+		if raw, ok := tr.RawText(); ok && raw != "" {
+			t.Fatalf("attributed %q, want nothing: the written text does not carry it", raw)
+		}
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete")
+		}
+	})
+}
+
+// Ported from upstream. The tracker as the sequencer drives it: several frames
+// of one turn, with words arriving in order, dropped, or straddling a boundary,
+// and the written text carrying tags around a span the model produced.
+func TestSeveralFramesOfOneTurn(t *testing.T) {
+	t.Run("two plain frames, words in order", func(t *testing.T) {
+		first := NewWordCompletionTracker("Your credit card", "", "")
+		second := NewWordCompletionTracker("number is 42", "", "")
+
+		for _, w := range []string{"Your", "credit", "card"} {
+			first.AddWord(w)
+		}
+		if !first.IsComplete() {
+			t.Fatal("the first frame did not complete")
+		}
+		for _, w := range []string{"number", "is"} {
+			if second.AddWord(w) {
+				t.Fatalf("the second frame completed early, on %q", w)
+			}
+		}
+		if !second.AddWord("42") {
+			t.Fatal("the second frame did not complete")
+		}
+	})
+
+	t.Run("tags around the written span are kept with its ends", func(t *testing.T) {
+		first := NewWordCompletionTracker("Your credit card number is", "", "")
+		second := NewWordCompletionTracker("4111 1111 1111 1111", "",
+			"<card>4111 1111 1111 1111</card>")
+
+		for _, w := range []string{"Your", "credit", "card", "number", "is"} {
+			first.AddWord(w)
+		}
+
+		second.AddWord("4111")
+		if raw, _ := second.RawText(); raw != "<card>4111" {
+			t.Fatalf("the first word was attributed %q, want the opening tag with it", raw)
+		}
+		second.AddWord("1111")
+		second.AddWord("1111")
+		if !second.AddWord("1111") {
+			t.Fatal("the frame did not complete on its last word")
+		}
+		if raw, _ := second.RawText(); raw != "1111</card>" {
+			t.Fatalf("the last word was attributed %q, want the closing tag with it", raw)
+		}
+	})
+
+	t.Run("dropped words close the frame out and the next one carries on", func(t *testing.T) {
+		first := NewWordCompletionTracker("Your credit card number is", "", "")
+		second := NewWordCompletionTracker("4111 1111 1111 1111", "",
+			"<card>4111 1111 1111 1111</card>")
+
+		for _, w := range []string{"Your", "credit", "card"} {
+			first.AddWord(w)
+		}
+		// "number" and "is" never arrive; the next frame's first word does.
+		if !first.AddWord("4111") {
+			t.Fatal("the first frame was not closed out")
+		}
+		if word, _ := first.FrameWord(); word != "number is" {
+			t.Fatalf("frame word = %q, want the unspoken remainder %q", word, "number is")
+		}
+		over, _ := first.OverflowWord()
+
+		second.AddWord(over)
+		if raw, _ := second.RawText(); raw != "<card>4111" {
+			t.Fatalf("the handed-on word was attributed %q in the next frame", raw)
+		}
+		second.AddWord("1111")
+		second.AddWord("1111")
+		if !second.AddWord("1111") {
+			t.Fatal("the second frame did not complete")
+		}
+	})
+
+	t.Run("a straddling word carries its written span with it", func(t *testing.T) {
+		first := NewWordCompletionTracker("4111 1111", "", "<card>4111 1111</card>")
+		second := NewWordCompletionTracker("And", "", "")
+
+		first.AddWord("4111")
+		if raw, _ := first.RawText(); raw != "<card>4111" {
+			t.Fatalf("attributed %q, want the opening tag with the first word", raw)
+		}
+		if !first.AddWord("1111And") {
+			t.Fatal("the frame did not complete on the straddling word")
+		}
+		if raw, _ := first.RawText(); raw != "1111</card>" {
+			t.Fatalf("attributed %q, want the closing tag with the last word", raw)
+		}
+		over, _ := first.OverflowWord()
+		if over != "And" {
+			t.Fatalf("overflow = %q, want %q", over, "And")
+		}
+		if !second.AddWord(over) {
+			t.Fatal("the next frame did not complete on the overflow")
+		}
+	})
+
+	t.Run("a whole frame of dropped words is closed out at once", func(t *testing.T) {
+		first := NewWordCompletionTracker("one two three", "", "")
+		second := NewWordCompletionTracker("four five", "", "")
+
+		// Nothing of the first frame is ever reported.
+		if !first.AddWord("four") {
+			t.Fatal("the frame was not closed out")
+		}
+		if word, _ := first.FrameWord(); word != "one two three" {
+			t.Fatalf("frame word = %q, want the whole frame %q", word, "one two three")
+		}
+		if second.AddWord("four") {
+			t.Fatal("the next frame completed on its first of two words")
+		}
+		if !second.AddWord("five") {
+			t.Fatal("the next frame did not complete")
+		}
+	})
+}
