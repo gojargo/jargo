@@ -16,12 +16,13 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -32,10 +33,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ErrStopTurn is returned by a ToolHandler to end the current turn after
-// recording the tool result instead of generating a further model response. Use
-// it for tools that conclude the interaction, such as ending the session.
-var ErrStopTurn = errors.New("stop turn")
+// missingFunctionMessage is the tool result returned when the model calls a
+// function no handler is registered for. It is a terminal result rather than an
+// error, so the call completes normally and the model is told the function is
+// unavailable instead of being left waiting.
+const missingFunctionMessage = "The function `%s` is not currently available."
 
 // Emit pushes a chunk of generated text downstream as an LLMTextFrame. A
 // Generator calls it once per delta received from the provider; empty deltas are
@@ -64,10 +66,83 @@ type ToolGenerator interface {
 	GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink Sink) error
 }
 
-// ToolHandler runs a tool call and returns the content to feed back to the model
-// as the tool result. A handler that does blocking work must honor ctx; if it
-// ignores cancellation an interruption is delayed until it returns.
-type ToolHandler func(ctx context.Context, args json.RawMessage) (string, error)
+// FunctionCallResultCallback delivers a tool call's result to the conversation.
+// props tunes how the result is applied and may be nil for the defaults: a final
+// result, on which the aggregator decides whether to re-generate.
+//
+// It is how a handler reports, rather than returning a value, because a call can
+// have more than one thing to say. A handler registered to survive interruptions
+// calls it repeatedly with props.IsFinal false to stream progress, and once more
+// without to finish.
+type FunctionCallResultCallback func(
+	ctx context.Context, result string, props *frames.FunctionCallResultProperties,
+) error
+
+// FunctionCallParams is everything a tool handler is given for one call.
+type FunctionCallParams struct {
+	// FunctionName is the name of the tool being called.
+	FunctionName string
+	// ToolCallID identifies this invocation.
+	ToolCallID string
+	// Arguments is the raw JSON the model produced for the call.
+	Arguments json.RawMessage
+	// LLM is the service running the call.
+	LLM *Base
+	// Context is the conversation the call was made in.
+	Context *frames.LLMContext
+	// Result delivers what the call produced. A handler that returns without
+	// calling it reports nothing, and the call is left showing as in progress
+	// until it is canceled.
+	Result FunctionCallResultCallback
+}
+
+// FunctionCallHandler runs one tool call, reporting what it produced through
+// params.Result. A returned error is reported as a non-fatal pipeline error and
+// no result reaches the conversation, so a handler that wants the model to see a
+// failure should report the failure as its result instead of returning it.
+//
+// A handler that does blocking work must honor ctx: it is canceled when the call
+// is, which for an ordinary tool means the moment the user interrupts.
+type FunctionCallHandler func(ctx context.Context, params FunctionCallParams) error
+
+// registryItem is a registered handler and the call options it was registered
+// with.
+type registryItem struct {
+	name                 string
+	handler              FunctionCallHandler
+	cancelOnInterruption bool
+}
+
+// RegisterOption configures how a registered function's calls are run.
+type RegisterOption func(*registryItem)
+
+// WithCancelOnInterruption sets whether a call to this function is canceled when
+// the user interrupts. It is true by default.
+//
+// Registering with false makes the tool asynchronous: the model carries on with
+// the conversation rather than waiting, the call outlives the turn that made it,
+// and everything the handler reports arrives as async-tool messages the model
+// reads on a later turn.
+func WithCancelOnInterruption(cancel bool) RegisterOption {
+	return func(i *registryItem) { i.cancelOnInterruption = cancel }
+}
+
+// functionCall is one call in flight, tracked so it can be canceled.
+type functionCall struct {
+	item       registryItem
+	name       string
+	toolCallID string
+	args       json.RawMessage
+	convo      *frames.LLMContext
+	groupID    string
+
+	cancel context.CancelFunc
+	// canceled stops the result callback from reporting after the call was
+	// canceled. A goroutine cannot be killed the way a task can, so a handler
+	// that ignores cancellation and reports anyway is silenced here: the
+	// conversation already records the call as canceled.
+	canceled bool
+}
 
 // SettingsHolder is an optional interface a Generator implements when part of
 // what it was built with can change while the pipeline runs: the model, the
@@ -100,7 +175,16 @@ type Base struct {
 	model   string // reported as a span attribute; set by the provider via SetModel
 
 	handlersMu sync.RWMutex
-	handlers   map[string]ToolHandler
+	handlers   map[string]registryItem
+
+	// Tool calls in flight, keyed by tool call id. They run off the frame path,
+	// on a lifetime of their own, so that a handler taking its time does not hold
+	// up the frames queued behind it — including the speech that covers the wait.
+	callsMu     sync.Mutex
+	calls       map[string]*functionCall
+	callsCtx    context.Context
+	callsCancel context.CancelFunc
+	callsWG     sync.WaitGroup
 
 	ttfbMu    sync.Mutex
 	ttfbStart time.Time
@@ -111,9 +195,31 @@ type Base struct {
 // New builds an LLM Base named name driven by gen. The concrete service passes
 // itself as gen and embeds the returned Base.
 func New(name string, gen Generator) *Base {
-	b := &Base{gen: gen}
+	b := &Base{gen: gen, calls: make(map[string]*functionCall)}
 	b.Base = processor.New(name, b)
 	return b
+}
+
+// Setup opens the lifetime the tool calls run under. It is the session's, not
+// the turn's: a call must be able to outlive the frame that started it, so that
+// canceling it is a decision this service makes rather than a side effect of the
+// turn ending.
+func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
+	if err := b.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	b.callsCtx, b.callsCancel = context.WithCancel(ctx)
+	return nil
+}
+
+// Cleanup cancels every tool call still running and waits for the handlers to
+// return.
+func (b *Base) Cleanup(ctx context.Context) error {
+	if b.callsCancel != nil {
+		b.callsCancel()
+	}
+	b.callsWG.Wait()
+	return b.Base.Cleanup(ctx)
 }
 
 // SetModel records the model id the service generates with, reported as the
@@ -270,14 +376,39 @@ func traceMessages(convo *frames.LLMContext) string {
 }
 
 // RegisterFunction registers a handler for the named tool. During a tool-capable
-// generation, a call to that tool is dispatched to the handler.
-func (b *Base) RegisterFunction(name string, h ToolHandler) {
+// generation, a call to that tool is dispatched to the handler. By default the
+// call is canceled when the user interrupts; see WithCancelOnInterruption.
+func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...RegisterOption) {
+	item := registryItem{name: name, handler: h, cancelOnInterruption: true}
+	for _, opt := range opts {
+		opt(&item)
+	}
 	b.handlersMu.Lock()
 	defer b.handlersMu.Unlock()
 	if b.handlers == nil {
-		b.handlers = make(map[string]ToolHandler)
+		b.handlers = make(map[string]registryItem)
 	}
-	b.handlers[name] = h
+	b.handlers[name] = item
+}
+
+// lookupFunction returns the registered entry for name. When there is none it
+// returns one routed to the missing-function handler, so a call to a tool that
+// was never registered (or has since been unregistered) still completes with an
+// ordinary tool result rather than leaving the model waiting on it forever.
+func (b *Base) lookupFunction(name string) registryItem {
+	b.handlersMu.RLock()
+	item, ok := b.handlers[name]
+	b.handlersMu.RUnlock()
+	if ok {
+		return item
+	}
+	return registryItem{name: name, handler: missingFunctionHandler, cancelOnInterruption: true}
+}
+
+// missingFunctionHandler answers a call to an unregistered tool with a terminal
+// result naming it.
+func missingFunctionHandler(ctx context.Context, params FunctionCallParams) error {
+	return params.Result(ctx, fmt.Sprintf(missingFunctionMessage, params.FunctionName), nil)
 }
 
 // updateSettings merges an update into the provider's own settings and lets it
@@ -335,6 +466,9 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	switch fr := f.(type) {
 	case *frames.LLMContextFrame:
 		return b.run(ctx, fr.Context)
+	case *frames.InterruptionFrame:
+		b.cancelFunctionCalls(ctx)
+		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
 		if err := b.PushFrame(ctx, f, dir); err != nil {
 			return err
@@ -440,69 +574,143 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	if err := tg.GenerateWithTools(ctx, convo, s); err != nil && ctx.Err() == nil {
 		b.PushError(ctx, "llm generation failed", err, false)
 	} else if ctx.Err() == nil && len(calls) > 0 {
-		started := frames.NewFunctionCallsStartedFrame(preamble.String(), calls)
-		if err := b.PushFrame(ctx, started, processor.Downstream); err != nil {
+		if err := b.Broadcast(ctx, func() frames.Frame {
+			return frames.NewFunctionCallsStartedFrame(calls)
+		}); err != nil {
 			return err
 		}
-		b.runTools(ctx, calls)
+		b.runFunctionCalls(convo, calls)
 	}
 	traceOutput(span, preamble.String())
 	b.emitTiming(ctx, span, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
-// runTools starts each tool call on its own goroutine and returns. A handler
-// runs for as long as the work it does takes, and running it here — on the
-// goroutine that processes this service's frames — would hold up every frame
-// queued behind it, including the speech a bot plays to cover the wait. The
-// assistant aggregator holds the results until the last call has returned, so
-// the calls finishing out of order costs nothing.
-func (b *Base) runTools(ctx context.Context, calls []frames.ToolCall) {
+// runFunctionCalls starts every call the model requested this turn, each on its
+// own goroutine, and returns without waiting. A handler runs for as long as the
+// work it does takes, and running it here — on the goroutine that processes this
+// service's frames — would hold up every frame queued behind it, including the
+// speech a bot plays to cover the wait.
+//
+// The calls share a group id, which is how the aggregator recognizes them as one
+// batch and answers the batch with a single inference once the last of them has
+// reported, rather than once per call.
+func (b *Base) runFunctionCalls(convo *frames.LLMContext, calls []frames.ToolCall) {
+	groupID := uuid.NewString()
 	for _, c := range calls {
-		go b.runTool(ctx, c)
+		call := &functionCall{
+			item:       b.lookupFunction(c.Name),
+			name:       c.Name,
+			toolCallID: c.ID,
+			args:       c.Args,
+			convo:      convo,
+			groupID:    groupID,
+		}
+		b.callsWG.Go(func() { b.runFunctionCall(call) })
 	}
 }
 
-// runTool executes one tool call, emitting an in-progress frame and a result
-// frame. A handler that returns ErrStopTurn marks its result so the aggregator
-// does not re-trigger generation. Nothing is reported once ctx is canceled: an
-// interruption already balanced the call the aggregator was waiting on, and a
-// late result would be a second one.
-func (b *Base) runTool(ctx context.Context, c frames.ToolCall) {
-	if ctx.Err() != nil {
+// runFunctionCall executes one tool call: it announces the call as in progress,
+// which is what writes it and the message answering it to the conversation, then
+// dispatches it to its handler.
+//
+// The call runs under a context of its own, derived from the session's rather
+// than the turn's, so that whether it survives an interruption is decided by how
+// it was registered and not by the turn ending.
+func (b *Base) runFunctionCall(call *functionCall) {
+	ctx, cancel := context.WithCancel(b.callsCtx)
+	defer cancel()
+
+	b.callsMu.Lock()
+	call.cancel = cancel
+	b.calls[call.toolCallID] = call
+	b.callsMu.Unlock()
+	defer func() {
+		b.callsMu.Lock()
+		// Only if it is still this call: a cancellation may already have dropped
+		// it, and the model may have called the same tool again since.
+		if b.calls[call.toolCallID] == call {
+			delete(b.calls, call.toolCallID)
+		}
+		b.callsMu.Unlock()
+	}()
+
+	slog.DebugContext(ctx, "calling function", "service", b.Name(),
+		"function", call.name, "tool_call_id", call.toolCallID)
+
+	if err := b.Broadcast(ctx, func() frames.Frame {
+		return frames.NewFunctionCallInProgressFrame(
+			call.toolCallID, call.name, call.args, call.item.cancelOnInterruption, call.groupID,
+		)
+	}); err != nil {
 		return
 	}
-	inProgress := frames.NewFunctionCallInProgressFrame(c.ID, c.Name)
-	if err := b.PushFrame(ctx, inProgress, processor.Downstream); err != nil {
-		return
+
+	params := FunctionCallParams{
+		FunctionName: call.name,
+		ToolCallID:   call.toolCallID,
+		Arguments:    call.args,
+		LLM:          b,
+		Context:      call.convo,
+		Result:       b.resultCallback(call),
 	}
-	result, isErr, stopTurn := b.invoke(ctx, c)
-	if ctx.Err() != nil {
-		return
+	if err := call.item.handler(ctx, params); err != nil {
+		// The conversation is told nothing. A handler that failed has no result to
+		// report, and inventing one would put words in the tool's mouth; the call
+		// stays in progress until it is canceled.
+		b.PushError(ctx, fmt.Sprintf("error executing function call [%s]: %v", call.name, err), err, false)
 	}
-	resultFrame := frames.NewFunctionCallResultFrame(c.ID, c.Name, result, isErr)
-	resultFrame.RunLLM = !stopTurn
-	_ = b.PushFrame(ctx, resultFrame, processor.Downstream)
 }
 
-// invoke dispatches a tool call to its handler, returning the result content,
-// whether it was an error, and whether the turn should stop without
-// re-generating (a handler that returned ErrStopTurn).
-func (b *Base) invoke(ctx context.Context, c frames.ToolCall) (result string, isError, stop bool) {
-	b.handlersMu.RLock()
-	h := b.handlers[c.Name]
-	b.handlersMu.RUnlock()
-	if h == nil {
-		return fmt.Sprintf("unknown tool %q", c.Name), true, false
+// resultCallback builds the callback the handler reports through. It is bound to
+// the call rather than to a turn, so a result reports against the call that
+// produced it however much has happened since.
+func (b *Base) resultCallback(call *functionCall) FunctionCallResultCallback {
+	return func(ctx context.Context, result string, props *frames.FunctionCallResultProperties) error {
+		b.callsMu.Lock()
+		canceled := call.canceled
+		b.callsMu.Unlock()
+		if canceled {
+			return nil
+		}
+		if !props.Final() && call.item.cancelOnInterruption {
+			slog.WarnContext(ctx, "intermediate result from a tool that is not asynchronous",
+				"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
+			return nil
+		}
+		return b.Broadcast(ctx, func() frames.Frame {
+			f := frames.NewFunctionCallResultFrame(call.toolCallID, call.name, call.args, result)
+			f.Properties = props
+			return f
+		})
 	}
-	out, err := h(ctx, c.Args)
-	if errors.Is(err, ErrStopTurn) {
-		return out, false, true
+}
+
+// cancelFunctionCalls cancels every call in flight that was registered to be
+// canceled on interruption, and announces each one so the conversation records
+// it as canceled rather than as still running. A call registered to survive an
+// interruption is left to finish.
+func (b *Base) cancelFunctionCalls(ctx context.Context) {
+	b.callsMu.Lock()
+	var canceled []*functionCall
+	for id, call := range b.calls {
+		if !call.item.cancelOnInterruption {
+			continue
+		}
+		call.canceled = true
+		delete(b.calls, id)
+		canceled = append(canceled, call)
 	}
-	if err != nil {
-		return err.Error(), true, false
+	b.callsMu.Unlock()
+
+	for _, call := range canceled {
+		slog.DebugContext(ctx, "canceling function call", "service", b.Name(),
+			"function", call.name, "tool_call_id", call.toolCallID)
+		call.cancel()
+		_ = b.Broadcast(ctx, func() frames.Frame {
+			return frames.NewFunctionCallCancelFrame(call.toolCallID, call.name)
+		})
 	}
-	return out, false, false
 }
 
 // CanGenerateMetrics reports that this service times inference and reports
