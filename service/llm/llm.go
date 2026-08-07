@@ -178,7 +178,7 @@ type Base struct {
 
 	// Tool calls in flight, keyed by tool call id. They run off the frame path,
 	// on a lifetime of their own, so that a handler taking its time does not hold
-	// up the frames queued behind it — including the speech that covers the wait.
+	// up the frames queued behind it, including the speech that covers the wait.
 	callsMu     sync.Mutex
 	calls       map[string]*functionCall
 	callsCtx    context.Context
@@ -587,8 +587,8 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 
 // runFunctionCalls starts every call the model requested this turn, each on its
 // own goroutine, and returns without waiting. A handler runs for as long as the
-// work it does takes, and running it here — on the goroutine that processes this
-// service's frames — would hold up every frame queued behind it, including the
+// work it does takes. Running it here, on the goroutine that processes this
+// service's frames, would hold up every frame queued behind it, including the
 // speech a bot plays to cover the wait.
 //
 // The calls share a group id, which is how the aggregator recognizes them as one

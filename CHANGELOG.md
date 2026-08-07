@@ -14,6 +14,43 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A tool call and the message answering it are now written together**, the
+  moment the call starts, and the result replaces that placeholder where it sits
+  rather than being appended at the tail. The conversation used to hold the
+  tool-call message from the moment the model asked for it but buffer the
+  results until every call had reported, which left two ways for it to go wrong.
+  Any inference in that window sent the model a tool call with nothing answering
+  it. Worse, the user aggregator sits upstream of the LLM and writes to the same
+  conversation, so a new user turn could land while a tool was still running and
+  the buffered results would then be appended after it, separated from the calls
+  they answered for the rest of the session. A tool that ended the turn made this
+  reachable in ordinary use. Every call now carries a placeholder from the
+  instant it starts, so the conversation is valid at every moment and a
+  barge-in needs no balancing of its own: it marks the placeholder canceled where
+  it already is. Each call gets a message of its own, which the Anthropic
+  provider merges back into the grouped form that API documents, and which the
+  Gemini provider now pairs by call id rather than by tool name. `LLMContext`
+  gains `AddAssistantToolCall`, `AddToolResult`, `AddMessage` and
+  `UpdateToolResult` in place of `AddAssistantToolCalls` and `AddToolResults`;
+  `ToolResult.IsError` and `FunctionCallsStartedFrame.PreambleText` are gone, and
+  the function-call frames change class: the two that write to the conversation
+  are uninterruptible, the two that announce a change of state are system frames.
+- **A tool handler reports its result through a callback** rather than returning
+  it, so a call can have more than one thing to say. `llm.ToolHandler` becomes
+  `llm.FunctionCallHandler`, taking an `llm.FunctionCallParams` and reporting
+  through `params.Result`. A returned error now means the handler failed: it is
+  reported as a non-fatal pipeline error and puts nothing in the tool's mouth,
+  so a failure the model should see belongs in the result instead.
+  `llm.ErrStopTurn` is gone; a handler that does not want generation re-run
+  reports `frames.FunctionCallResultProperties{RunLLM: &no}`. Registering with
+  `llm.WithCancelOnInterruption(false)` makes a tool asynchronous: the model
+  carries on rather than waiting, the call survives a barge-in, and each result
+  it reports reaches the model on a later turn as a developer message. Calls made
+  in one response share a group id, so a turn that requested several answers with
+  a single inference rather than one per call. An interruption now cancels the
+  calls registered to be canceled and announces each one, in place of dropping
+  whatever result happened to arrive after the frame context was canceled, which
+  lost results that had already been produced.
 - **The Kyutai moshi-server services moved to `provider/kyutai/moshi`.** Kyutai
   now offers two self-hosted models in the tree, moshi-server and Pocket TTS, so
   the vendor directory holds one package per server the way `aws`, `azure` and
@@ -144,6 +181,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`processor.Base.HasQueuedFrame` reports whether a matching frame is still
+  waiting** in a processor's in-order queue, behind the one it is handling. A
+  processor uses it to tell that more of the same work is already on its way, so
+  it can act once on the batch instead of once per frame. The assistant
+  aggregator uses it to answer a batch of tool results with a single inference.
 - **`pipeline.TaskParams.ReportOnlyInitialTTFB` reports each service's first
   time-to-first-byte and no more**, for a consumer who wants the figure the call
   opened with rather than one reading per turn. The `StartFrame` has carried the
