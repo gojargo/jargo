@@ -104,12 +104,20 @@ type FunctionCallParams struct {
 // is, which for an ordinary tool means the moment the user interrupts.
 type FunctionCallHandler func(ctx context.Context, params FunctionCallParams) error
 
+// catchAllFunction is the registry key of the handler that takes every call no
+// named handler claims. Registering under it is how one handler serves a whole
+// toolset, a proxy to another system for instance.
+const catchAllFunction = ""
+
 // registryItem is a registered handler and the call options it was registered
 // with.
 type registryItem struct {
 	name                 string
 	handler              FunctionCallHandler
 	cancelOnInterruption bool
+	// timeout bounds one call to this function, overriding the service's own.
+	// Zero means the service's.
+	timeout time.Duration
 }
 
 // RegisterOption configures how a registered function's calls are run.
@@ -126,6 +134,46 @@ func WithCancelOnInterruption(cancel bool) RegisterOption {
 	return func(i *registryItem) { i.cancelOnInterruption = cancel }
 }
 
+// WithTimeout bounds how long one call to this function may take before it is
+// given up on, overriding whatever the service was built with. Zero restores the
+// service's own bound.
+func WithTimeout(d time.Duration) RegisterOption {
+	return func(i *registryItem) { i.timeout = d }
+}
+
+// Option configures an LLM Base at construction.
+type Option func(*Base)
+
+// WithFunctionCallTimeout bounds how long any tool call may take before it is
+// given up on. A call that overruns reports no result of its own, which records
+// it as completed and leaves generation to whatever comes next rather than
+// answering on the tool's behalf.
+//
+// Zero, the default, means no bound: a call runs until it reports, is canceled,
+// or the session ends. WithTimeout overrides it for one function.
+func WithFunctionCallTimeout(d time.Duration) Option {
+	return func(b *Base) { b.callTimeout = d }
+}
+
+// WithSequentialFunctionCalls runs the calls of one response one after another
+// rather than at the same time. Use it when the tools share something that does
+// not take concurrent use, or when a later call is only meaningful once an
+// earlier one has taken effect.
+func WithSequentialFunctionCalls() Option {
+	return func(b *Base) { b.runInParallel = false }
+}
+
+// WithUngroupedFunctionCalls makes each tool result re-run generation on its own
+// instead of the batch answering once its last call reports. The model then
+// answers as many times as it made calls, which is rarely what a spoken
+// conversation wants, so grouping is the default.
+func WithUngroupedFunctionCalls() Option {
+	return func(b *Base) { b.groupCalls = false }
+}
+
+// FunctionCallsHandler is notified about the tool calls of one response.
+type FunctionCallsHandler func(ctx context.Context, calls []frames.ToolCall)
+
 // functionCall is one call in flight, tracked so it can be canceled.
 type functionCall struct {
 	item       registryItem
@@ -141,6 +189,9 @@ type functionCall struct {
 	// that ignores cancellation and reports anyway is silenced here: the
 	// conversation already records the call as canceled.
 	canceled bool
+	// stopTimeout disarms the bound on how long the call may take. Reporting
+	// anything at all disarms it: a tool that has spoken is not stuck.
+	stopTimeout func()
 }
 
 // SettingsHolder is an optional interface a Generator implements when part of
@@ -176,6 +227,11 @@ type Base struct {
 	handlersMu sync.RWMutex
 	handlers   map[string]registryItem
 
+	// How the tool calls of one response are run, fixed at construction.
+	callTimeout   time.Duration
+	runInParallel bool
+	groupCalls    bool
+
 	// Tool calls in flight, keyed by tool call id. They run off the frame path,
 	// on a lifetime of their own, so that a handler taking its time does not hold
 	// up the frames queued behind it, including the speech that covers the wait.
@@ -184,6 +240,14 @@ type Base struct {
 	callsCtx    context.Context
 	callsCancel context.CancelFunc
 	callsWG     sync.WaitGroup
+	// sequential carries the calls of a response to the runner that takes them
+	// one at a time. Nil unless the service was built to run them that way.
+	sequential chan *functionCall
+
+	// Notifications about the calls of a response, set by the application.
+	eventsMu   sync.RWMutex
+	onStarted  FunctionCallsHandler
+	onCanceled FunctionCallsHandler
 
 	ttfbMu    sync.Mutex
 	ttfbStart time.Time
@@ -193,10 +257,44 @@ type Base struct {
 
 // New builds an LLM Base named name driven by gen. The concrete service passes
 // itself as gen and embeds the returned Base.
-func New(name string, gen Generator) *Base {
-	b := &Base{gen: gen, calls: make(map[string]*functionCall)}
+func New(name string, gen Generator, opts ...Option) *Base {
+	b := &Base{
+		gen:           gen,
+		calls:         make(map[string]*functionCall),
+		runInParallel: true,
+		groupCalls:    true,
+	}
+	for _, opt := range opts {
+		opt(b)
+	}
 	b.Base = processor.New(name, b)
 	return b
+}
+
+// OnFunctionCallsStarted registers a callback run when the model requests tool
+// calls, with the calls of that response. It runs off the frame path, so what it
+// does cannot hold up the pipeline.
+func (b *Base) OnFunctionCallsStarted(h FunctionCallsHandler) {
+	b.eventsMu.Lock()
+	b.onStarted = h
+	b.eventsMu.Unlock()
+}
+
+// OnFunctionCallsCanceled registers a callback run when tool calls are
+// canceled, with the calls that were. It runs off the frame path.
+func (b *Base) OnFunctionCallsCanceled(h FunctionCallsHandler) {
+	b.eventsMu.Lock()
+	b.onCanceled = h
+	b.eventsMu.Unlock()
+}
+
+// notify runs one of the two callbacks on a goroutine of its own, tracked so
+// Cleanup waits for it.
+func (b *Base) notify(ctx context.Context, h FunctionCallsHandler, calls []frames.ToolCall) {
+	if h == nil || len(calls) == 0 {
+		return
+	}
+	b.callsWG.Go(func() { h(ctx, calls) })
 }
 
 // Setup opens the lifetime the tool calls run under. It is the session's, not
@@ -208,7 +306,29 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 		return err
 	}
 	b.callsCtx, b.callsCancel = context.WithCancel(ctx)
+	if !b.runInParallel {
+		b.sequential = make(chan *functionCall, sequentialQueueDepth)
+		b.callsWG.Go(b.runSequentially)
+	}
 	return nil
+}
+
+// sequentialQueueDepth bounds the calls waiting for the sequential runner. It is
+// generous: a response requesting more calls than this at once would be
+// remarkable, and a full queue only makes the service wait its turn to enqueue.
+const sequentialQueueDepth = 64
+
+// runSequentially takes queued calls one at a time, so a service built with
+// WithSequentialFunctionCalls never has two handlers running at once.
+func (b *Base) runSequentially() {
+	for {
+		select {
+		case <-b.callsCtx.Done():
+			return
+		case call := <-b.sequential:
+			b.runFunctionCall(call)
+		}
+	}
 }
 
 // Cleanup cancels every tool call still running and waits for the handlers to
@@ -377,6 +497,9 @@ func traceMessages(convo *frames.LLMContext) string {
 // RegisterFunction registers a handler for the named tool. During a tool-capable
 // generation, a call to that tool is dispatched to the handler. By default the
 // call is canceled when the user interrupts; see WithCancelOnInterruption.
+//
+// Registering under the empty name registers a catch-all: it takes every call no
+// named handler claims, which is how one handler serves a whole toolset.
 func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...RegisterOption) {
 	item := registryItem{name: name, handler: h, cancelOnInterruption: true}
 	for _, opt := range opts {
@@ -390,18 +513,67 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 	b.handlers[name] = item
 }
 
-// lookupFunction returns the registered entry for name. When there is none it
-// returns one routed to the missing-function handler, so a call to a tool that
-// was never registered (or has since been unregistered) still completes with an
-// ordinary tool result rather than leaving the model waiting on it forever.
-func (b *Base) lookupFunction(name string) registryItem {
+// UnregisterFunction removes the handler registered for name, reporting whether
+// there was one.
+//
+// It stops the tool being handled, not being offered. To withdraw a tool
+// properly, push an [frames.LLMSetToolsFrame] with the tool left out: that stops
+// advertising it as well, rather than leaving the model free to call something
+// that answers only that it is unavailable.
+func (b *Base) UnregisterFunction(name string) bool {
+	b.handlersMu.Lock()
+	defer b.handlersMu.Unlock()
+	_, ok := b.handlers[name]
+	delete(b.handlers, name)
+	return ok
+}
+
+// HasFunction reports whether a handler is registered for name. A catch-all
+// counts: it would take the call.
+func (b *Base) HasFunction(name string) bool {
+	b.handlersMu.RLock()
+	defer b.handlersMu.RUnlock()
+	if _, ok := b.handlers[name]; ok {
+		return true
+	}
+	_, ok := b.handlers[catchAllFunction]
+	return ok
+}
+
+// lookupFunction returns the entry that runs a call to name: its own handler, or
+// else the catch-all. It reports false when nothing claims the call, which the
+// caller answers with the missing-function handler.
+func (b *Base) lookupFunction(name string) (registryItem, bool) {
 	b.handlersMu.RLock()
 	item, ok := b.handlers[name]
-	b.handlersMu.RUnlock()
-	if ok {
-		return item
+	if !ok {
+		item, ok = b.handlers[catchAllFunction]
 	}
-	return registryItem{name: name, handler: missingFunctionHandler, cancelOnInterruption: true}
+	b.handlersMu.RUnlock()
+	if !ok {
+		return registryItem{}, false
+	}
+	// The catch-all is registered under the empty name; a call runs under the
+	// name the model actually used.
+	item.name = name
+	return item, true
+}
+
+// logMissingFunction says why a call had no handler, telling apart the two cases
+// that lead here. A tool the conversation advertises with nothing behind it is
+// almost always a wiring mistake, and reads as an error. A tool nothing
+// advertises is the model inventing one, which an application can do little
+// about beyond answering that it is unavailable.
+func (b *Base) logMissingFunction(ctx context.Context, name string, convo *frames.LLMContext) {
+	for _, t := range convo.Tools() {
+		if t.Name == name {
+			slog.ErrorContext(ctx, "tool is advertised to the model but has no handler",
+				"service", b.Name(), "function", name)
+			return
+		}
+	}
+	slog.WarnContext(ctx, "model called a tool that is not in the advertised toolset",
+		"service", b.Name(), "function", name)
 }
 
 // missingFunctionHandler answers a call to an unregistered tool with a terminal
@@ -573,39 +745,62 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	if err := tg.GenerateWithTools(ctx, convo, s); err != nil && ctx.Err() == nil {
 		b.PushError(ctx, "llm generation failed", err, false)
 	} else if ctx.Err() == nil && len(calls) > 0 {
+		b.eventsMu.RLock()
+		started := b.onStarted
+		b.eventsMu.RUnlock()
+		b.notify(ctx, started, calls)
 		if err := b.Broadcast(ctx, func() frames.Frame {
 			return frames.NewFunctionCallsStartedFrame(calls)
 		}); err != nil {
 			return err
 		}
-		b.runFunctionCalls(convo, calls)
+		b.runFunctionCalls(ctx, convo, calls)
 	}
 	traceOutput(span, preamble.String())
 	b.emitTiming(ctx, span, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
-// runFunctionCalls starts every call the model requested this turn, each on its
-// own goroutine, and returns without waiting. A handler runs for as long as the
-// work it does takes. Running it here, on the goroutine that processes this
-// service's frames, would hold up every frame queued behind it, including the
-// speech a bot plays to cover the wait.
+// runFunctionCalls starts every call the model requested this turn and returns
+// without waiting. A handler runs for as long as the work it does takes. Running
+// it here, on the goroutine that processes this service's frames, would hold up
+// every frame queued behind it, including the speech a bot plays to cover the
+// wait.
 //
 // The calls share a group id, which is how the aggregator recognizes them as one
 // batch and answers the batch with a single inference once the last of them has
 // reported, rather than once per call.
-func (b *Base) runFunctionCalls(convo *frames.LLMContext, calls []frames.ToolCall) {
-	groupID := uuid.NewString()
+func (b *Base) runFunctionCalls(ctx context.Context, convo *frames.LLMContext, calls []frames.ToolCall) {
+	groupID := ""
+	if b.groupCalls {
+		groupID = uuid.NewString()
+	}
 	for _, c := range calls {
+		item, claimed := b.lookupFunction(c.Name)
+		if !claimed {
+			// Nothing claims it, so say which of the two ways that happened before
+			// the missing-function handler answers the model.
+			b.logMissingFunction(ctx, c.Name, convo)
+			item = registryItem{name: c.Name, handler: missingFunctionHandler, cancelOnInterruption: true}
+		}
 		call := &functionCall{
-			item:       b.lookupFunction(c.Name),
+			item:       item,
 			name:       c.Name,
 			toolCallID: c.ID,
 			args:       c.Args,
 			convo:      convo,
 			groupID:    groupID,
 		}
-		b.callsWG.Go(func() { b.runFunctionCall(call) })
+		if b.runInParallel {
+			b.callsWG.Go(func() { b.runFunctionCall(call) })
+			continue
+		}
+		// Sequential: one runner takes them in turn, so no two handlers overlap.
+		select {
+		case b.sequential <- call:
+		case <-b.callsCtx.Done():
+			return
+		}
 	}
 }
 
@@ -645,13 +840,20 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		return
 	}
 
+	report := b.resultCallback(call)
+	stopTimeout := b.startCallTimeout(ctx, call, report)
+	defer stopTimeout()
+	b.callsMu.Lock()
+	call.stopTimeout = stopTimeout
+	b.callsMu.Unlock()
+
 	params := FunctionCallParams{
 		FunctionName: call.name,
 		ToolCallID:   call.toolCallID,
 		Arguments:    call.args,
 		LLM:          b,
 		Context:      call.convo,
-		Result:       b.resultCallback(call),
+		Result:       report,
 	}
 	if err := call.item.handler(ctx, params); err != nil {
 		// The conversation is told nothing. A handler that failed has no result to
@@ -659,6 +861,32 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		// stays in progress until it is canceled.
 		b.PushError(ctx, fmt.Sprintf("error executing function call [%s]: %v", call.name, err), err, false)
 	}
+}
+
+// startCallTimeout arms the bound on how long a call may take, returning the
+// function that disarms it. A call that overruns reports no result of its own,
+// which records it as completed and leaves generation to whatever comes next
+// rather than answering on the tool's behalf. The handler is not canceled: it
+// may still be doing something worth finishing, and the result callback ignores
+// it from here.
+//
+// It returns a no-op when no bound applies, so a call with none costs nothing.
+func (b *Base) startCallTimeout(
+	ctx context.Context, call *functionCall, report FunctionCallResultCallback,
+) func() {
+	timeout := call.item.timeout
+	if timeout == 0 {
+		timeout = b.callTimeout
+	}
+	if timeout <= 0 {
+		return func() {}
+	}
+	timer := time.AfterFunc(timeout, func() {
+		slog.WarnContext(ctx, "function call timed out", "service", b.Name(),
+			"function", call.name, "tool_call_id", call.toolCallID, "timeout", timeout)
+		_ = report(ctx, "", nil)
+	})
+	return func() { timer.Stop() }
 }
 
 // resultCallback builds the callback the handler reports through. It is bound to
@@ -676,6 +904,14 @@ func (b *Base) resultCallback(call *functionCall) FunctionCallResultCallback {
 			slog.WarnContext(ctx, "intermediate result from a tool that is not asynchronous",
 				"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
 			return nil
+		}
+		// A tool that has spoken is not stuck, so reporting anything at all,
+		// intermediate results included, disarms the bound on how long it may take.
+		b.callsMu.Lock()
+		stop := call.stopTimeout
+		b.callsMu.Unlock()
+		if stop != nil {
+			stop()
 		}
 		return b.Broadcast(ctx, func() frames.Frame {
 			f := frames.NewFunctionCallResultFrame(call.toolCallID, call.name, call.args, result)
@@ -702,6 +938,7 @@ func (b *Base) cancelFunctionCalls(ctx context.Context) {
 	}
 	b.callsMu.Unlock()
 
+	dropped := make([]frames.ToolCall, 0, len(canceled))
 	for _, call := range canceled {
 		slog.DebugContext(ctx, "canceling function call", "service", b.Name(),
 			"function", call.name, "tool_call_id", call.toolCallID)
@@ -709,7 +946,13 @@ func (b *Base) cancelFunctionCalls(ctx context.Context) {
 		_ = b.Broadcast(ctx, func() frames.Frame {
 			return frames.NewFunctionCallCancelFrame(call.toolCallID, call.name)
 		})
+		dropped = append(dropped, frames.ToolCall{ID: call.toolCallID, Name: call.name, Args: call.args})
 	}
+
+	b.eventsMu.RLock()
+	h := b.onCanceled
+	b.eventsMu.RUnlock()
+	b.notify(ctx, h, dropped)
 }
 
 // CanGenerateMetrics reports that this service times inference and reports

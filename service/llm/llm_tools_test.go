@@ -560,3 +560,377 @@ func (p *probe) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.
 	}
 	return p.PushFrame(ctx, f, dir)
 }
+
+// TestFunctionCallTimeout checks a call that overruns its bound is given up on:
+// it reports no result of its own, which records it as completed rather than
+// answering on the tool's behalf, and generation is not re-run on it.
+func TestFunctionCallTimeout(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{},
+		llm.WithFunctionCallTimeout(50*time.Millisecond))
+
+	release := make(chan struct{})
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		<-release
+		return p.Result(ctx, "far too late", nil)
+	})
+
+	result := make(chan *frames.FunctionCallResultFrame, 4)
+	probe := newProbe(func(f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+			select {
+			case result <- fr:
+			default:
+			}
+		}
+	})
+	convo := toolConvo("get_weather")
+	pair := aggregators.New(convo)
+	task := pipeline.NewTask(pipeline.New(svc, probe, pair.Assistant()), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+
+	select {
+	case fr := <-result:
+		if fr.Result != "" {
+			t.Errorf("result = %q, want none: the call was given up on", fr.Result)
+		}
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("the overrunning call was never given up on")
+	}
+
+	// The conversation records it as completed, not as still running: the user
+	// turn, the call, then the placeholder settled to COMPLETED.
+	if !waitForContext(convo, func(msgs []frames.Message) bool {
+		return len(msgs) == 3 && len(msgs[2].ToolResults) == 1 &&
+			msgs[2].ToolResults[0].Content == "COMPLETED"
+	}) {
+		t.Errorf("messages = %+v, want the call recorded as completed", convo.Messages())
+	}
+
+	close(release)
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestFunctionCallTimeoutPerFunction checks a per-function bound overrides the
+// service's, so one slow tool need not loosen the bound for every other.
+func TestFunctionCallTimeoutPerFunction(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{},
+		llm.WithFunctionCallTimeout(20*time.Millisecond))
+
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		time.Sleep(80 * time.Millisecond)
+		return p.Result(ctx, "sunny", nil)
+	}, llm.WithTimeout(3*time.Second))
+
+	result := make(chan string, 4)
+	probe := newProbe(func(f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+			select {
+			case result <- fr.Result:
+			default:
+			}
+		}
+	})
+	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("get_weather")))
+
+	select {
+	case got := <-result:
+		if got != "sunny" {
+			t.Errorf("result = %q, want the tool's own: its bound is the looser one", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the call never reported")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestCatchAllFunction checks the handler registered under the empty name takes
+// a call no named handler claims, and runs under the name the model used.
+func TestCatchAllFunction(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	name := make(chan string, 1)
+	svc.RegisterFunction("", func(ctx context.Context, p llm.FunctionCallParams) error {
+		select {
+		case name <- p.FunctionName:
+		default:
+		}
+		return p.Result(ctx, "handled", nil)
+	})
+	if !svc.HasFunction("anything_at_all") {
+		t.Error("a catch-all should claim any call")
+	}
+
+	result := make(chan string, 4)
+	probe := newProbe(func(f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+			select {
+			case result <- fr.Result:
+			default:
+			}
+		}
+	})
+	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("get_weather")))
+
+	select {
+	case got := <-result:
+		if got != "handled" {
+			t.Errorf("result = %q, want the catch-all's", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the catch-all never ran")
+	}
+	if got := <-name; got != "get_weather" {
+		t.Errorf("FunctionName = %q, want the name the model used", got)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestUnregisterFunction checks a withdrawn handler stops claiming calls, which
+// then fall through to the missing-function answer.
+func TestUnregisterFunction(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		return p.Result(ctx, "sunny", nil)
+	})
+	if !svc.HasFunction("get_weather") {
+		t.Fatal("the handler was just registered")
+	}
+	if !svc.UnregisterFunction("get_weather") {
+		t.Error("UnregisterFunction should report that it removed one")
+	}
+	if svc.HasFunction("get_weather") {
+		t.Error("the handler was withdrawn")
+	}
+	if svc.UnregisterFunction("get_weather") {
+		t.Error("UnregisterFunction should report false the second time")
+	}
+}
+
+// TestFunctionCallEvents checks the application is told which calls a response
+// started and which an interruption canceled.
+func TestFunctionCallEvents(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	started := make(chan []frames.ToolCall, 1)
+	canceled := make(chan []frames.ToolCall, 1)
+	svc.OnFunctionCallsStarted(func(_ context.Context, calls []frames.ToolCall) {
+		select {
+		case started <- calls:
+		default:
+		}
+	})
+	svc.OnFunctionCallsCanceled(func(_ context.Context, calls []frames.ToolCall) {
+		select {
+		case canceled <- calls:
+		default:
+		}
+	})
+
+	running := make(chan struct{})
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		close(running)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("get_weather")))
+
+	select {
+	case calls := <-started:
+		if len(calls) != 1 || calls[0].Name != "get_weather" {
+			t.Errorf("started = %+v, want the one call", calls)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the started callback never ran")
+	}
+
+	<-running
+	task.QueueFrame(frames.NewInterruptionFrame())
+
+	select {
+	case calls := <-canceled:
+		if len(calls) != 1 || calls[0].Name != "get_weather" {
+			t.Errorf("canceled = %+v, want the one call", calls)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the canceled callback never ran")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// waitForContext polls the conversation until cond holds or a deadline passes.
+func waitForContext(convo *frames.LLMContext, cond func([]frames.Message) bool) bool {
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond(convo.Messages()) {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return cond(convo.Messages())
+}
+
+// twoCallGen requests two tool calls in one response, which is what the runner
+// options are about.
+type twoCallGen struct{}
+
+func (twoCallGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
+
+func (twoCallGen) GenerateWithTools(_ context.Context, _ *frames.LLMContext, sink llm.Sink) error {
+	if err := sink.Tool(frames.ToolCall{ID: "c1", Name: "tool", Args: json.RawMessage(`{}`)}); err != nil {
+		return err
+	}
+	return sink.Tool(frames.ToolCall{ID: "c2", Name: "tool", Args: json.RawMessage(`{}`)})
+}
+
+// TestSequentialFunctionCalls checks that with sequential running no two
+// handlers overlap, so tools sharing something that does not take concurrent use
+// stay safe.
+func TestSequentialFunctionCalls(t *testing.T) {
+	svc := llm.New("FakeToolLLM", twoCallGen{}, llm.WithSequentialFunctionCalls())
+
+	var mu sync.Mutex
+	running, maxRunning := 0, 0
+	done := make(chan struct{}, 2)
+	svc.RegisterFunction("tool", func(ctx context.Context, p llm.FunctionCallParams) error {
+		mu.Lock()
+		running++
+		if running > maxRunning {
+			maxRunning = running
+		}
+		mu.Unlock()
+
+		time.Sleep(30 * time.Millisecond)
+
+		mu.Lock()
+		running--
+		mu.Unlock()
+		if err := p.Result(ctx, "ok", nil); err != nil {
+			return err
+		}
+		done <- struct{}{}
+		return nil
+	})
+
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("tool")))
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("both calls should run, one after the other")
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if maxRunning != 1 {
+		t.Errorf("handlers running at once = %d, want 1", maxRunning)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestUngroupedFunctionCalls checks that without grouping each call carries no
+// group id, so each result re-runs generation on its own.
+func TestUngroupedFunctionCalls(t *testing.T) {
+	svc := llm.New("FakeToolLLM", twoCallGen{}, llm.WithUngroupedFunctionCalls())
+	svc.RegisterFunction("tool", func(ctx context.Context, p llm.FunctionCallParams) error {
+		return p.Result(ctx, "ok", nil)
+	})
+
+	groups := make(chan string, 4)
+	probe := newProbe(func(f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallInProgressFrame); ok {
+			select {
+			case groups <- fr.GroupID:
+			default:
+			}
+		}
+	})
+	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("tool")))
+	for range 2 {
+		select {
+		case got := <-groups:
+			if got != "" {
+				t.Errorf("GroupID = %q, want none: the calls are not grouped", got)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("both calls should start")
+		}
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestGroupedFunctionCallsShareAGroup checks the default: the calls of one
+// response carry the same group id, which is what lets the aggregator answer the
+// batch with a single inference.
+func TestGroupedFunctionCallsShareAGroup(t *testing.T) {
+	svc := llm.New("FakeToolLLM", twoCallGen{})
+	svc.RegisterFunction("tool", func(ctx context.Context, p llm.FunctionCallParams) error {
+		return p.Result(ctx, "ok", nil)
+	})
+
+	groups := make(chan string, 4)
+	probe := newProbe(func(f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallInProgressFrame); ok {
+			select {
+			case groups <- fr.GroupID:
+			default:
+			}
+		}
+	})
+	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("tool")))
+	var seen []string
+	for range 2 {
+		select {
+		case got := <-groups:
+			seen = append(seen, got)
+		case <-time.After(3 * time.Second):
+			t.Fatal("both calls should start")
+		}
+	}
+	if seen[0] == "" || seen[0] != seen[1] {
+		t.Errorf("group ids = %q, want one shared id", seen)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
