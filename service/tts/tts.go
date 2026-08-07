@@ -521,7 +521,9 @@ func (b *Base) onTurnContextCompleted(ctx context.Context) {
 		return
 	}
 	if b.yieldingSync() && b.AudioContextAvailable(id) {
-		b.AppendToAudioContext(id, frames.NewTTSStoppedFrame())
+		stopped := frames.NewTTSStoppedFrame()
+		stopped.ContextID = id
+		b.AppendToAudioContext(id, stopped)
 		b.RemoveAudioContext(id)
 	}
 	// Anything the provider is still holding is flushed before the context is
@@ -751,7 +753,9 @@ func (b *Base) pushTTSFrames(ctx context.Context, original string, appendToConte
 		// turn before.
 		_ = b.queueSerial(ctx, aggregated, processor.Downstream)
 		b.CreateAudioContext(contextID)
-		b.AppendToAudioContext(contextID, frames.NewTTSStartedFrame())
+		started := frames.NewTTSStartedFrame()
+		started.ContextID = contextID
+		b.AppendToAudioContext(contextID, started)
 	} else {
 		b.AppendToAudioContext(contextID, aggregated)
 	}

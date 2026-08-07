@@ -440,3 +440,53 @@ func TestSecondTurnDoesNotOvertakeFirst(t *testing.T) {
 			seq, want, names(got))
 	}
 }
+
+// Every boundary frame names the synthesis it belongs to. A turn opens one
+// context and its start, its audio and its stop all carry that context's id, so
+// a consumer watching the stream can tell two overlapping syntheses apart
+// instead of guessing from arrival order.
+func TestBoundaryFramesCarryTheirContext(t *testing.T) {
+	var mu sync.Mutex
+	var announced string
+	var started, stopped []string
+	base := tts.New("ContextTTS", &inlineSynth{})
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch fr := f.(type) {
+			case *frames.AggregatedTextFrame:
+				announced = fr.ContextID
+			case *frames.TTSStartedFrame:
+				started = append(started, fr.ContextID)
+			case *frames.TTSStoppedFrame:
+				stopped = append(stopped, fr.ContextID)
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	speak := frames.NewTTSSpeakFrame("Hello there.")
+	speak.AppendToContext = false
+	task.QueueFrame(speak)
+	time.Sleep(300 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if announced == "" {
+		t.Fatal("the aggregated text frame named no context")
+	}
+	if len(started) != 1 || started[0] != announced {
+		t.Fatalf("started frame contexts = %q, want one carrying %q", started, announced)
+	}
+	if len(stopped) != 1 || stopped[0] != announced {
+		t.Fatalf("stopped frame contexts = %q, want one carrying %q", stopped, announced)
+	}
+}

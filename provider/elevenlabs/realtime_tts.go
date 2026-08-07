@@ -438,7 +438,9 @@ func (s *realtimeSynthesizer) finishContext(contextID string, st *contextState, 
 	if host != nil {
 		// The stop frame rides the queue behind the audio, so it is pushed only
 		// once the last of that audio has been.
-		host.AppendToAudioContext(contextID, frames.NewTTSStoppedFrame())
+		stopped := frames.NewTTSStoppedFrame()
+		stopped.ContextID = contextID
+		host.AppendToAudioContext(contextID, stopped)
 		host.RemoveAudioContext(contextID)
 	}
 	return err

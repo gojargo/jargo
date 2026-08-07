@@ -570,7 +570,9 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) {
 	}
 	b.applyForceComplete(ctx, contextID)
 	if shouldPushStop {
-		_ = b.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+		stopped := frames.NewTTSStoppedFrame()
+		stopped.ContextID = contextID
+		_ = b.PushFrame(ctx, stopped, processor.Downstream)
 	}
 	b.finishAudioContext(ctx, c)
 }
