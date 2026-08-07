@@ -12,6 +12,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `send-text` that runs immediately now cuts the bot off, and waits for the
+  pipeline to settle before appending.** It used to append the new user message
+  and re-run the LLM without interrupting, so whatever the bot was mid-saying
+  kept going and its text was committed to the context afterwards, behind the
+  new message. The model then saw the two the wrong way round and carried on
+  with the turn it should have been interrupted out of. The processor now
+  broadcasts an interruption, which commits the in-progress answer, waits for
+  that to land, and only then appends and runs. The wait is bounded at 5s; on
+  timeout the turn goes ahead anyway rather than the client being unable to say
+  anything.
+
+  This is what makes a typed barge-in work, so an eval scenario can now schedule
+  a turn mid-answer and assert `bot_interrupted`.
+
 ### Added
 
 - **An eval scenario can assert what a tool was called with, and that a call was
@@ -37,6 +53,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **`bot_interrupted` is an event a scenario can assert on and schedule from.**
   The RTVI observer now reports an interruption as `bot-interrupted`, matching
   the protocol, so a client can drop whatever the bot was mid-saying.
+
+- **A processor can reach the pipeline it runs in**, through
+  `processor.Setup.Running`, for the few things the frame path cannot express.
+  It carries one method today, `Flush`, which blocks until the pipeline has
+  drained. Never call it from the goroutine that processes frames: the probe it
+  waits on has to pass through the caller to complete its round trip.
 
 - **The RTVI observer decides how much of a tool call a client is told about.**
   `ObserverParams.FunctionCallReportLevel` maps a function name to one of

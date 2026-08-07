@@ -43,6 +43,18 @@ func (d Direction) String() string {
 // guards against a ProcessFrame implementation that ignores cancellation.
 const processCancelTimeout = 3 * time.Second
 
+// Running is the pipeline a processor belongs to, for the few things a
+// processor needs from it that the frame path cannot express on its own. It is
+// an interface rather than the concrete task because the task is built on top of
+// processors, so naming that type here would be circular.
+type Running interface {
+	// Flush blocks until every frame queued ahead of the call has traveled the
+	// whole pipeline, so the pipeline has settled. Never call it from the
+	// goroutine that processes frames: the probe has to pass through this
+	// processor to complete its round trip.
+	Flush(ctx context.Context) error
+}
+
 // Setup carries the shared components a processor needs, propagated down the
 // pipeline when it is set up.
 type Setup struct {
@@ -50,6 +62,9 @@ type Setup struct {
 	Clock clock.Clock
 	// Observers watch every frame handed between processors.
 	Observers []Observer
+	// Running is the pipeline this processor is part of. Nil for a processor
+	// driven outside a pipeline task.
+	Running Running
 	// Tracing is the session's tracing state: the conversation span the trace
 	// hangs from and the turn being spoken. Processors parent their spans to it,
 	// so a span raised away from the frame path still lands under the turn it
@@ -148,6 +163,7 @@ type Base struct {
 	clock      clock.Clock
 	observers  []Observer
 	tracing    *tracing.TracingContext
+	running    Running
 
 	// Lifetime context for the processor's goroutines, canceled on Cleanup.
 	baseCtx    context.Context
@@ -280,6 +296,7 @@ func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.clock = s.Clock
 	b.observers = s.Observers
 	b.tracing = s.Tracing
+	b.running = s.Running
 	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
 	if !b.directMode {
 		b.pauseMu.Lock()
@@ -449,6 +466,24 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir Direction) err
 		}
 	}
 	return nil
+}
+
+// FlushPipeline blocks until every frame queued ahead of the call has traveled
+// the whole pipeline. Use it to let the pipeline settle, after an interruption
+// say, before injecting new work.
+//
+// Never call it from the goroutine that processes frames: the probe it waits on
+// has to pass through this processor to complete its round trip, so a processor
+// blocking its own frame path would wait forever. A processor that needs this
+// runs it from a goroutine of its own.
+//
+// It is a no-op for a processor driven outside a pipeline task, which has
+// nothing to drain.
+func (b *Base) FlushPipeline(ctx context.Context) error {
+	if b.running == nil {
+		return nil
+	}
+	return b.running.Flush(ctx)
 }
 
 // Broadcast sends a frame both downstream and upstream, so an event that the

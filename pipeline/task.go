@@ -230,7 +230,7 @@ func (t *Task) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	setup := processor.Setup{Clock: t.clk, Observers: t.observers, Tracing: t.tracing}
+	setup := processor.Setup{Clock: t.clk, Observers: t.observers, Tracing: t.tracing, Running: t}
 	if err := t.pipeline.Setup(runCtx, setup); err != nil {
 		return err
 	}

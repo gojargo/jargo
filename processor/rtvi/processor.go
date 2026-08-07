@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -24,7 +25,20 @@ type Processor struct {
 	// mu guards baseCtx, which an Observer uses to send from its own goroutine.
 	mu      sync.Mutex
 	baseCtx context.Context //nolint:containedctx // outlives the frame that set it
+
+	// messages carries client messages from the frame path to the goroutine that
+	// carries them out. Acting on one can mean waiting for the pipeline to
+	// settle, and the probe that reports settling has to travel through this
+	// processor, so the wait cannot happen on the frame path.
+	messages chan Incoming
+	// messagesWG tracks that goroutine, so cleanup does not race it.
+	messagesWG sync.WaitGroup
 }
+
+// messageBuffer is how many client messages may be queued for the handler
+// goroutine. A client sends control messages, not a stream, so a handful in
+// flight is generous.
+const messageBuffer = 32
 
 // NewProcessor builds an RTVI processor.
 func NewProcessor() *Processor {
@@ -33,12 +47,49 @@ func NewProcessor() *Processor {
 	return p
 }
 
-// Setup records the context an out-of-band send runs under.
+// Setup records the context an out-of-band send runs under, and starts the
+// goroutine that carries out client messages.
 func (p *Processor) Setup(ctx context.Context, s processor.Setup) error {
 	p.mu.Lock()
 	p.baseCtx = ctx
 	p.mu.Unlock()
-	return p.Base.Setup(ctx, s)
+	if err := p.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	p.messages = make(chan Incoming, messageBuffer)
+	p.messagesWG.Add(1)
+	go p.messageLoop(ctx)
+	return nil
+}
+
+// Cleanup stops the message goroutine and waits for it.
+func (p *Processor) Cleanup(ctx context.Context) error {
+	err := p.Base.Cleanup(ctx)
+	if p.messages != nil {
+		close(p.messages)
+		p.messagesWG.Wait()
+		p.messages = nil
+	}
+	return err
+}
+
+// messageLoop carries out client messages, one at a time and in order, off the
+// frame path.
+func (p *Processor) messageLoop(ctx context.Context) {
+	defer p.messagesWG.Done()
+	for {
+		select {
+		case in, ok := <-p.messages:
+			if !ok {
+				return
+			}
+			if err := p.handleMessage(ctx, in); err != nil {
+				slog.Warn("RTVI message failed", "type", in.Type, "err", err)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // ProcessFrame handles messages arriving from the client and forwards every
@@ -188,7 +239,10 @@ func metricsMessage(f *frames.MetricsFrame) Message {
 	return Metrics(d)
 }
 
-// handleIncoming processes a message received from the client.
+// handleIncoming parses a message received from the client and hands it to the
+// goroutine that carries it out. Parsing is cheap and stays on the frame path;
+// acting on the message does not, because it may have to wait for the pipeline
+// to settle.
 func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransportMessageFrame) error {
 	in, err := ParseIncoming(f.Message)
 	if err != nil {
@@ -199,6 +253,16 @@ func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransport
 		// Not an RTVI message (e.g. transport signaling); ignore.
 		return nil
 	}
+	select {
+	case p.messages <- in:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+// handleMessage carries out one client message. It runs on the message
+// goroutine, never the frame path.
+func (p *Processor) handleMessage(ctx context.Context, in Incoming) error {
 	switch in.Type {
 	case TypeClientReady:
 		slog.Debug("RTVI client-ready", "id", in.ID)
@@ -213,9 +277,12 @@ func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransport
 
 // handleSendText injects a text user turn. The processor sits downstream of the
 // context aggregator, so the injected frames are pushed upstream to reach it:
-// the append adds the user message to the shared context, and — unless the
-// client opted out — the run makes the LLM respond immediately, bypassing the
+// the append adds the user message to the shared context, and, unless the client
+// opted out, the run makes the LLM respond immediately, bypassing the
 // VAD/turn-taking gating that governs spoken turns.
+//
+// Running immediately also cuts the bot off mid-answer, which is what makes it a
+// barge-in the client typed rather than spoke.
 func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 	d, err := ParseSendTextData(in.Data)
 	if err != nil {
@@ -224,6 +291,11 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 	}
 	if d.Content == "" {
 		return nil
+	}
+	if d.RunImmediately() {
+		if err := p.interruptAndSettle(ctx); err != nil {
+			return err
+		}
 	}
 	appendMsg := frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: d.Content}})
 	if err := p.PushFrame(ctx, appendMsg, processor.Upstream); err != nil {
@@ -234,6 +306,35 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 	}
 	return nil
 }
+
+// interruptAndSettle cuts off whatever the bot is saying, then waits for the
+// pipeline to drain.
+//
+// The wait is the point. An interruption commits the in-progress assistant
+// response into the context, and draining guarantees that lands before the new
+// user message is appended and run. Without it the append can overtake the
+// commit, and the model, seeing the new message ahead of what it was already
+// saying, carries on with the turn it was interrupted out of.
+//
+// The wait is bounded: a processor that swallows the probe would otherwise stop
+// the client being able to say anything at all. On timeout the turn goes ahead
+// without the guarantee, which is what the client asked for, rather than
+// nothing happening.
+func (p *Processor) interruptAndSettle(ctx context.Context) error {
+	err := p.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
+	if err != nil {
+		return err
+	}
+	flushCtx, cancel := context.WithTimeout(ctx, flushTimeout)
+	defer cancel()
+	if err := p.FlushPipeline(flushCtx); err != nil {
+		slog.Warn("RTVI pipeline flush did not settle", "within", flushTimeout, "err", err)
+	}
+	return nil
+}
+
+// flushTimeout bounds the wait for the pipeline to settle after an interruption.
+const flushTimeout = 5 * time.Second
 
 // send pushes an RTVI message toward the output transport.
 func (p *Processor) send(ctx context.Context, msg Message) error {

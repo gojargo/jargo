@@ -507,3 +507,25 @@ turns:
 		t.Fatalf("want a turn-level failure naming the anchor, got %+v", f)
 	}
 }
+
+// A turn sent while the bot is still answering cuts it off, which is a barge-in
+// the client typed rather than spoke. The scheduled turn is what makes it land
+// mid-answer.
+func TestHarnessBargeInInterruptsTheBot(t *testing.T) {
+	res := host(t, `
+name: barge-in
+turns:
+  - user: "can you check the weather?"
+    expect:
+      - event: llm_started
+        within_ms: 2000
+  - user: "actually, never mind"
+    send_after: {event: llm_started, delay_ms: 50}
+    expect:
+      - event: bot_interrupted
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected the barge-in to interrupt the bot, got:\n%s", res)
+	}
+}
