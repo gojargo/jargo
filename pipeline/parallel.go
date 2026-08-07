@@ -152,17 +152,22 @@ func (p *ParallelPipeline) sinkPush(ctx context.Context, f frames.Frame, dir pro
 	}
 	// Last branch in: release the synchronized frame and any buffered frames.
 	delete(p.counter, f.ID())
-	p.syncing = false
 	p.mu.Unlock()
 
 	// A StartFrame must precede the frames buffered behind it; an EndFrame or
 	// CancelFrame must follow them.
+	//
+	// The synchronizing flag stays set until the buffer has drained, and the
+	// lifecycle frame goes out past it. Clearing the flag first would open a
+	// window in which a frame another branch pushes goes straight out, ahead of
+	// the StartFrame it is supposed to follow. The branches here are goroutines,
+	// so that window is real.
 	if _, isStart := f.(*frames.StartFrame); isStart {
-		_ = p.emit(ctx, f, dir)
+		_ = p.emitSynchronized(ctx, f, dir)
 		p.flushBuffered(ctx)
 	} else {
 		p.flushBuffered(ctx)
-		_ = p.emit(ctx, f, dir)
+		_ = p.emitSynchronized(ctx, f, dir)
 	}
 
 	p.ResumeProcessingSystemFrames()
@@ -170,12 +175,29 @@ func (p *ParallelPipeline) sinkPush(ctx context.Context, f frames.Frame, dir pro
 	return nil
 }
 
+// emitSynchronized pushes the lifecycle frame itself, past the buffer still
+// holding everything else back. It deduplicates like emit, since a frame the
+// parallel pipeline fanned out comes back once per branch.
+func (p *ParallelPipeline) emitSynchronized(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	p.mu.Lock()
+	if _, ok := p.seen[f.ID()]; ok {
+		p.mu.Unlock()
+		return nil
+	}
+	p.seen[f.ID()] = struct{}{}
+	p.mu.Unlock()
+	return p.PushFrame(ctx, f, dir)
+}
+
 // flushBuffered pushes out the frames held back while a lifecycle frame was
 // synchronizing. They were deduplicated on the way in, so they go straight out.
+// Synchronizing ends here, once there is nothing left held back, so a frame
+// arriving meanwhile joins the queue rather than overtaking what is in it.
 func (p *ParallelPipeline) flushBuffered(ctx context.Context) {
 	for {
 		p.mu.Lock()
 		if len(p.buffered) == 0 {
+			p.syncing = false
 			p.mu.Unlock()
 			return
 		}
