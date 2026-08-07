@@ -110,11 +110,9 @@ func (o *Observer) OnPushFrame(data processor.FramePushed) {
 		o.applyConfig(cfg)
 		return
 	}
-	msg, ok := o.messageFor(f)
-	if !ok {
-		return
+	for _, msg := range o.messagesFor(f) {
+		o.sink.Send(msg)
 	}
-	o.sink.Send(msg)
 }
 
 // applyConfig applies a runtime reconfiguration, leaving unset fields alone.

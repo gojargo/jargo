@@ -150,6 +150,10 @@ func TestLoadRejectsInvalid(t *testing.T) {
 			body: "name: empty\n",
 			want: "no turns",
 		},
+		"turns not a list": {
+			body: "name: x\nturns: nope\n",
+			want: "cannot unmarshal",
+		},
 		"user and dtmf together": {
 			body: "name: x\nturns:\n  - user: hi\n    dtmf: \"1\"\n    expect: [{event: llm_started}]\n",
 			want: "user or dtmf, not both",
@@ -163,17 +167,13 @@ func TestLoadRejectsInvalid(t *testing.T) {
 				"    expect: [{event: llm_started}]\n",
 			want: "send_after needs a user or dtmf turn",
 		},
-		"unknown event": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - event: teleport\n",
-			want: "unknown event",
+		"expectation with no event": {
+			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - text_contains: hi\n",
+			want: "expectation has no event",
 		},
-		"name on wrong event": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - event: llm_response\n        name: foo\n",
-			want: "name, args and calls need a function_call event",
-		},
-		"eval on wrong event": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - event: function_call\n        eval: nice\n",
-			want: "eval is only valid",
+		"empty dtmf": {
+			body: "name: x\nturns:\n  - dtmf: \"\"\n    expect: [{event: llm_started}]\n",
+			want: "dtmf must be a string of keypad keys",
 		},
 		"empty calls": {
 			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - event: function_call\n        calls: []\n",
@@ -367,6 +367,67 @@ func TestLoadIncludeCycleRejected(t *testing.T) {
 	if _, err := eval.Load(filepath.Join(dir, "loop.yaml")); err == nil {
 		t.Fatal("expected an error for the include cycle")
 	} else if !strings.Contains(err.Error(), "nested too deep") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// The event names a scenario may use are open: the harness matches whatever the
+// bot reports, so an unrecognized name loads and fails at match time, naming the
+// event, rather than being rejected up front.
+func TestLoadAcceptsAnyEventName(t *testing.T) {
+	s, err := eval.Load(writeScenario(t,
+		"name: x\nturns: [{user: hi, expect: [{event: something_new}]}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Turns[0].Expect[0].Event != "something_new" {
+		t.Fatalf("unexpected expectation: %+v", s.Turns[0].Expect[0])
+	}
+}
+
+// A field written on an event it does not apply to is dropped rather than
+// rejected: calls only mean something on a function_call.
+func TestLoadIgnoresCallFieldsOffFunctionCall(t *testing.T) {
+	s, err := eval.Load(writeScenario(t,
+		"name: x\nturns: [{user: hi, expect: [{event: llm_response, name: foo}]}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Turns[0].Expect[0].Calls != nil {
+		t.Fatalf("calls should be dropped off a function_call, got %+v", s.Turns[0].Expect[0].Calls)
+	}
+}
+
+// An empty turns: list only asserts that the bot completes the handshake, which
+// upstream allows; a missing one is the mistake.
+func TestLoadEmptyTurnsAllowed(t *testing.T) {
+	if _, err := eval.Load(writeScenario(t, "name: handshake_only\nturns: []\n")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A keypad sequence keeps every digit as written. YAML would otherwise read
+// `012` as 10 and `0x10` as 16, rewriting the keys the scenario typed.
+func TestLoadDTMFKeepsDigitsAsWritten(t *testing.T) {
+	s, err := eval.Load(writeScenario(t,
+		"name: keys\nturns: [{dtmf: 012, expect: [{event: user_transcription}]}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Turns[0].DTMF != "012" {
+		t.Fatalf("dtmf = %q, want %q", s.Turns[0].DTMF, "012")
+	}
+}
+
+// A hex-looking sequence reaches the keypad check with its characters intact,
+// and is rejected there rather than silently read as a number.
+func TestLoadDTMFHexRejected(t *testing.T) {
+	_, err := eval.Load(writeScenario(t,
+		"name: keys\nturns: [{dtmf: 0x10, expect: [{event: user_transcription}]}]\n"))
+	if err == nil {
+		t.Fatal("expected an error for the hex-looking keypad sequence")
+	}
+	if !strings.Contains(err.Error(), "invalid keypad key") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

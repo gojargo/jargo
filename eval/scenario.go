@@ -131,10 +131,9 @@ package eval
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/gojargo/jargo/frames"
 	"gopkg.in/yaml.v3"
@@ -151,9 +150,7 @@ var (
 	errDTMFNotKeys     = errors.New("dtmf must be a string of keypad keys")
 	errDTMFKey         = errors.New("invalid keypad key")
 	errScheduleNoInput = errors.New("send_after needs a user or dtmf turn to schedule")
-	errUnknownEvent    = errors.New("unknown event")
-	errFieldForEvent   = errors.New("field not valid for this event")
-	errNegativeBudget  = errors.New("within_ms must not be negative")
+	errNoEvent         = errors.New("expectation has no event")
 	errEmptyCalls      = errors.New("calls must not be empty")
 	errAbsentWithCheck = errors.New("absent cannot be combined with a content or call check")
 	errNegativeDelay   = errors.New("send_after delay_ms must be non-negative")
@@ -192,20 +189,14 @@ const (
 	EventVADUserStoppedSpeaking = "vad_user_stopped_speaking"
 )
 
-// knownEvents is the set of event names a scenario may assert on. The user_*
-// events only fire in audio mode (see Options.UserTTS).
+// judgeableEvents carry text the bot itself produced, which is the only thing a
+// judge can sensibly grade. A criterion on anything else (a user transcript, a
+// tool call, a speaking signal) draws a warning: the test controls the user's
+// input, so judging it costs a round trip and tells you nothing.
 //
 //nolint:gochecknoglobals // fixed lookup table
-var knownEvents = map[string]bool{
-	EventUserStartedSpeaking:    true,
-	EventUserStoppedSpeaking:    true,
-	EventUserTranscription:      true,
-	EventLLMStarted:             true,
-	EventLLMResponse:            true,
-	EventFunctionCall:           true,
-	EventBotInterrupted:         true,
-	EventVADUserStartedSpeaking: true,
-	EventVADUserStoppedSpeaking: true,
+var judgeableEvents = map[string]bool{
+	EventLLMResponse: true,
 }
 
 // vadEvents are the events the bot reports only when asked to. The harness asks
@@ -227,6 +218,22 @@ type Scenario struct {
 	// the harness sends it once the bot is ready, replacing whatever context the
 	// bot built for itself. Leave it out to test the bot's own opening state.
 	Context []frames.Message `yaml:"context,omitempty"`
+
+	// hasTurns records that the scenario wrote a `turns:` key, which is how an
+	// empty list is told from an omitted one.
+	hasTurns bool `yaml:"-"`
+}
+
+// UnmarshalYAML decodes a scenario, recording whether `turns:` was written out.
+func (s *Scenario) UnmarshalYAML(node *yaml.Node) error {
+	type raw Scenario // a distinct type, so decoding does not recurse here
+	var r raw
+	if err := node.Decode(&r); err != nil {
+		return err
+	}
+	*s = Scenario(r)
+	s.hasTurns = hasKey(node, "turns")
+	return nil
 }
 
 // Turn is one step of a scenario: input for the bot, expectations about what it
@@ -248,28 +255,26 @@ type Turn struct {
 	// SendAfter, when set, schedules when the turn's input is sent rather than
 	// sending it as soon as the previous turn finishes.
 	SendAfter *SendAfter `yaml:"send_after,omitempty"`
+
+	// hasDTMF records that the scenario wrote a `dtmf:` key, which is how an
+	// empty sequence is told from an omitted one.
+	hasDTMF bool `yaml:"-"`
 }
 
-// UnmarshalYAML decodes a turn, normalizing a keypad sequence written as a bare
-// number. YAML reads `dtmf: 123` as an integer, and the digits matter.
+// UnmarshalYAML decodes a turn, reading its keypad sequence from the text as
+// written.
+//
+// dtmf is not decoded like the other fields because YAML reinterprets an
+// unquoted number before any of this sees it: `dtmf: 012` would arrive as 10 and
+// `dtmf: 0x10` as 16, silently rewriting the keys the scenario typed. Taking the
+// raw scalar keeps every digit, so `dtmf: 123` still works unquoted while a
+// leading zero or a hex-looking token reaches the keypad check with its
+// characters intact, and is rejected there rather than misread here.
 func (t *Turn) UnmarshalYAML(node *yaml.Node) error {
-	type raw Turn // a distinct type, so decoding does not recurse here
-	var r raw
-	if err := node.Decode(&r); err != nil {
-		// A bare numeric dtmf fails to decode into a string, so retry with the
-		// keys the strict decode choked on read as scalars.
-		return decodeTurnWithNumericDTMF(node, t)
-	}
-	*t = Turn(r)
-	return nil
-}
-
-// decodeTurnWithNumericDTMF re-reads a turn whose dtmf: was written unquoted, so
-// `dtmf: 123` and `dtmf: "123#"` mean the same thing.
-func decodeTurnWithNumericDTMF(node *yaml.Node, t *Turn) error {
+	// A distinct type without DTMF, so decoding neither recurses here nor reads
+	// the reinterpreted number.
 	type raw struct {
 		User      string        `yaml:"user,omitempty"`
-		DTMF      any           `yaml:"dtmf,omitempty"`
 		Expect    []Expectation `yaml:"expect,omitempty"`
 		SendAfter *SendAfter    `yaml:"send_after,omitempty"`
 	}
@@ -278,16 +283,32 @@ func decodeTurnWithNumericDTMF(node *yaml.Node, t *Turn) error {
 		return err
 	}
 	*t = Turn{User: r.User, Expect: r.Expect, SendAfter: r.SendAfter}
-	switch v := r.DTMF.(type) {
-	case nil:
-	case string:
-		t.DTMF = v
-	case int:
-		t.DTMF = strconv.Itoa(v)
-	default:
-		return fmt.Errorf("%w: %v", errDTMFNotKeys, r.DTMF)
+
+	keys, written, ok := rawScalar(node, "dtmf")
+	if written && !ok {
+		return errDTMFNotKeys
 	}
+	t.DTMF, t.hasDTMF = keys, written
 	return nil
+}
+
+// rawScalar reads a mapping's value for key as the text it was written as,
+// reporting whether the key was there at all and whether it held a scalar.
+func rawScalar(node *yaml.Node, key string) (value string, written, scalar bool) {
+	if node.Kind != yaml.MappingNode {
+		return "", false, false
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value != key {
+			continue
+		}
+		v := node.Content[i+1]
+		if v.Kind != yaml.ScalarNode {
+			return "", true, false
+		}
+		return v.Value, true, true
+	}
+	return "", false, false
 }
 
 // SendAfter schedules when a turn's input is sent. The harness waits for Event
@@ -420,13 +441,15 @@ func resolveIncludes(node *yaml.Node, dir string, depth int) error {
 	return nil
 }
 
-// validate checks the scenario is well-formed and only references known events.
+// validate checks the scenario is well-formed. An empty turns: list is allowed,
+// and only asserts that the bot completes the handshake; a missing one is the
+// mistake worth reporting.
 func (s *Scenario) validate() error {
-	if strings.TrimSpace(s.Name) == "" {
+	if s.Name == "" {
 		return errNoName
 	}
-	if len(s.Turns) == 0 {
-		return fmt.Errorf("%w: %q", errNoTurns, s.Name)
+	if !s.hasTurns {
+		return errNoTurns
 	}
 	for i, turn := range s.Turns {
 		if err := turn.validate(); err != nil {
@@ -459,8 +482,11 @@ func (t Turn) input() string {
 // validate checks a turn is well-formed. Both kinds of input are optional, but
 // a turn takes one kind or the other, and a schedule needs input to schedule.
 func (t *Turn) validate() error {
-	if t.User != "" && t.DTMF != "" {
+	if t.User != "" && t.hasDTMF {
 		return errUserAndDTMF
+	}
+	if t.hasDTMF && t.DTMF == "" {
+		return errDTMFNotKeys
 	}
 	for _, key := range t.DTMF {
 		if !frames.KeypadEntry(key).Valid() {
@@ -532,40 +558,29 @@ func (c *FunctionCall) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// validate checks a single expectation is well-formed for its event type, and
-// normalizes its expected tool calls.
+// validate checks a single expectation is well-formed, and normalizes its
+// expected tool calls.
+//
+// Only what cannot mean anything is an error. A field written on an event it
+// does not apply to is dropped, and a criterion on an event whose text no judge
+// can read is warned about, because the event names a scenario may use are open:
+// the harness matches whatever the bot reports, so a name it does not recognize
+// today may be one the bot emits tomorrow. What a scenario gets wrong that way
+// shows up as the assertion never matching, with the event named in the failure.
 func (e *Expectation) validate() error {
-	if !knownEvents[e.Event] {
-		return fmt.Errorf("%w %q", errUnknownEvent, e.Event)
+	if e.Event == "" {
+		return errNoEvent
 	}
-	if err := e.validateFields(); err != nil {
-		return err
-	}
-	if e.WithinMS < 0 {
-		return errNegativeBudget
-	}
-	return e.normalizeCalls()
-}
-
-// validateFields checks each content assertion against the event it was written
-// on, and against absence.
-func (e *Expectation) validateFields() error {
-	callFields := e.Name != "" || e.Args != nil || e.hasCalls
-	if callFields && e.Event != EventFunctionCall {
-		return fmt.Errorf("%w: name, args and calls need a %s event", errFieldForEvent, EventFunctionCall)
-	}
-	if e.Eval != "" && e.Event != EventLLMResponse {
-		return fmt.Errorf("%w: eval is only valid on a %s event", errFieldForEvent, EventLLMResponse)
-	}
-	if e.TextContains != "" && e.Event != EventLLMResponse && e.Event != EventUserTranscription {
-		return fmt.Errorf("%w: text_contains needs %s or %s", errFieldForEvent, EventLLMResponse, EventUserTranscription)
+	if e.Eval != "" && !judgeableEvents[e.Event] {
+		slog.Warn("eval: a judge criterion is only meaningful on an event carrying the bot's own text",
+			"event", e.Event, "judgeable", EventLLMResponse)
 	}
 	// An absent expectation matches on event type only: a content or call check
 	// describes an event that must arrive, which contradicts absence.
-	if e.Absent && (e.TextContains != "" || e.Eval != "" || callFields) {
+	if e.Absent && (e.TextContains != "" || e.Eval != "" || e.Name != "" || e.Args != nil || e.hasCalls) {
 		return errAbsentWithCheck
 	}
-	return nil
+	return e.normalizeCalls()
 }
 
 // normalizeCalls resolves an expectation's expected tool calls into Calls: the

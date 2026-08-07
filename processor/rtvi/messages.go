@@ -20,29 +20,30 @@ const (
 
 // Message types exchanged over the data channel.
 const (
-	TypeClientReady           = "client-ready"
-	TypeSendText              = "send-text"
-	TypeBotReady              = "bot-ready"
-	TypeError                 = "error"
-	TypeUserTranscription     = "user-transcription"
-	TypeBotTranscription      = "bot-transcription"
-	TypeBotTTSText            = "bot-tts-text"
-	TypeBotLLMText            = "bot-llm-text"
-	TypeUserStartedSpeaking   = "user-started-speaking"
-	TypeUserStoppedSpeaking   = "user-stopped-speaking"
-	TypeVADUserStarted        = "vad-user-started-speaking"
-	TypeVADUserStopped        = "vad-user-stopped-speaking"
-	TypeDTMF                  = "dtmf"
-	TypeBotStartedSpeaking    = "bot-started-speaking"
-	TypeBotStoppedSpeaking    = "bot-stopped-speaking"
-	TypeBotInterrupted        = "bot-interrupted"
-	TypeBotLLMStarted         = "bot-llm-started"
-	TypeBotLLMStopped         = "bot-llm-stopped"
-	TypeBotTTSStarted         = "bot-tts-started"
-	TypeBotTTSStopped         = "bot-tts-stopped"
-	TypeLLMFunctionCall       = "llm-function-call-in-progress"
-	TypeLLMFunctionCallResult = "llm-function-call-result"
-	TypeMetrics               = "metrics"
+	TypeClientReady          = "client-ready"
+	TypeSendText             = "send-text"
+	TypeBotReady             = "bot-ready"
+	TypeError                = "error"
+	TypeUserTranscription    = "user-transcription"
+	TypeBotTranscription     = "bot-transcription"
+	TypeBotTTSText           = "bot-tts-text"
+	TypeBotLLMText           = "bot-llm-text"
+	TypeUserStartedSpeaking  = "user-started-speaking"
+	TypeUserStoppedSpeaking  = "user-stopped-speaking"
+	TypeVADUserStarted       = "vad-user-started-speaking"
+	TypeVADUserStopped       = "vad-user-stopped-speaking"
+	TypeDTMF                 = "dtmf"
+	TypeBotStartedSpeaking   = "bot-started-speaking"
+	TypeBotStoppedSpeaking   = "bot-stopped-speaking"
+	TypeBotInterrupted       = "bot-interrupted"
+	TypeBotLLMStarted        = "bot-llm-started"
+	TypeBotLLMStopped        = "bot-llm-stopped"
+	TypeBotTTSStarted        = "bot-tts-started"
+	TypeBotTTSStopped        = "bot-tts-stopped"
+	TypeLLMFunctionCallStart = "llm-function-call-started"
+	TypeLLMFunctionCall      = "llm-function-call-in-progress"
+	TypeLLMFunctionCallStop  = "llm-function-call-stopped"
+	TypeMetrics              = "metrics"
 )
 
 // Message is the RTVI message envelope. Outgoing event messages omit id; bot-ready
@@ -168,26 +169,49 @@ func LLMFunctionCall(name, toolCallID string, args json.RawMessage, level Functi
 	return newMessage(TypeLLMFunctionCall, "", d)
 }
 
-// LLMFunctionCallResultData is the payload of a llm-function-call-result
-// message. As with the in-progress payload, the name and the result are omitted
-// unless the observer's report level for the function allows them.
-type LLMFunctionCallResultData struct {
-	ToolCallID   string `json:"tool_call_id"`
+// LLMFunctionCallStartData is the payload of a llm-function-call-started
+// message: the model has asked for a call, before it begins executing. The name
+// is omitted unless the observer's report level for the function allows it.
+type LLMFunctionCallStartData struct {
+	FunctionName string `json:"function_name,omitempty"`
+}
+
+// LLMFunctionCallStart builds a llm-function-call-started message carrying as
+// much of the call as level allows.
+func LLMFunctionCallStart(name string, level FunctionCallReportLevel) Message {
+	var d LLMFunctionCallStartData
+	if level == ReportName || level == ReportFull {
+		d.FunctionName = name
+	}
+	return newMessage(TypeLLMFunctionCallStart, "", d)
+}
+
+// LLMFunctionCallStoppedData is the payload of a llm-function-call-stopped
+// message, sent when a call completes with a result or is canceled. As with the
+// in-progress payload, the name and the result are omitted unless the observer's
+// report level for the function allows them.
+type LLMFunctionCallStoppedData struct {
+	ToolCallID string `json:"tool_call_id"`
+	// Canceled reports whether the call was canceled rather than completing. The
+	// wire name keeps the protocol's spelling, which the clients already send.
+	Canceled     bool   `json:"cancelled"` //nolint:misspell // the protocol spells it this way
 	FunctionName string `json:"function_name,omitempty"`
 	Result       string `json:"result,omitempty"`
 }
 
-// LLMFunctionCallResult builds a llm-function-call-result message carrying as
-// much of the result as level allows.
-func LLMFunctionCallResult(name, toolCallID, result string, level FunctionCallReportLevel) Message {
-	d := LLMFunctionCallResultData{ToolCallID: toolCallID}
+// LLMFunctionCallStopped builds a llm-function-call-stopped message carrying as
+// much of the outcome as level allows. A canceled call has no result to report.
+func LLMFunctionCallStopped(
+	name, toolCallID, result string, canceled bool, level FunctionCallReportLevel,
+) Message {
+	d := LLMFunctionCallStoppedData{ToolCallID: toolCallID, Canceled: canceled}
 	if level == ReportName || level == ReportFull {
 		d.FunctionName = name
 	}
-	if level == ReportFull {
+	if level == ReportFull && !canceled {
 		d.Result = result
 	}
-	return newMessage(TypeLLMFunctionCallResult, "", d)
+	return newMessage(TypeLLMFunctionCallStop, "", d)
 }
 
 // DTMFData is the payload of a dtmf message: the keypad keys the client

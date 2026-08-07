@@ -39,19 +39,13 @@ type Result struct {
 	// they arrived, what each expectation waited for, what the judge said. It is
 	// what makes a run that failed once and passed the next time diagnosable.
 	DebugLog []string
-	// Skipped, when set, says why the scenario was not run. Such a result neither
-	// passed nor failed.
-	Skipped string
 }
 
-// Passed reports whether the scenario ran and every expectation was met.
-func (r Result) Passed() bool { return r.Skipped == "" && len(r.Failures) == 0 }
+// Passed reports whether every expectation was met.
+func (r Result) Passed() bool { return len(r.Failures) == 0 }
 
 // String renders a human-readable summary of the run.
 func (r Result) String() string {
-	if r.Skipped != "" {
-		return fmt.Sprintf("SKIP %s (%s)", r.Scenario, r.Skipped)
-	}
 	if r.Passed() {
 		return "PASS " + r.Scenario
 	}

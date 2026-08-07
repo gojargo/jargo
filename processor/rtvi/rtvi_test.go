@@ -150,11 +150,12 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 
 	task.QueueFrame(frames.NewFunctionCallResultFrame("call-1", "get_weather", nil, "sunny, 24C"))
 	got = waitMessage(t, out)
-	if got.Type != rtvi.TypeLLMFunctionCallResult {
-		t.Fatalf("expected llm-function-call-result, got %+v", got)
+	if got.Type != rtvi.TypeLLMFunctionCallStop {
+		t.Fatalf("expected llm-function-call-stopped, got %+v", got)
 	}
-	if d, ok := got.Data.(rtvi.LLMFunctionCallResultData); !ok || d.Result != "sunny, 24C" {
-		t.Fatalf("unexpected function-call-result data: %+v", got.Data)
+	d, ok := got.Data.(rtvi.LLMFunctionCallStoppedData)
+	if !ok || d.Result != "sunny, 24C" || d.Canceled {
+		t.Fatalf("unexpected function-call-stopped data: %+v", got.Data)
 	}
 
 	task.StopWhenDone()

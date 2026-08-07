@@ -60,16 +60,39 @@ speaks protocol version `2.0.0`.
 | `bot-transcription` | What the bot said. |
 | `bot-llm-text` / `bot-tts-text` | Streamed response text, per stage. |
 | `user-started-speaking` / `user-stopped-speaking` | Turn boundaries. |
+| `vad-user-started-speaking` / `vad-user-stopped-speaking` | The raw VAD signal, off by default. |
 | `bot-started-speaking` / `bot-stopped-speaking` | Bot speech boundaries. |
+| `bot-interrupted` | The bot was cut off; drop what it was mid-saying. |
 | `bot-llm-started` / `bot-llm-stopped` | Model is generating. |
 | `bot-tts-started` / `bot-tts-stopped` | Speech is being synthesized. |
-| `llm-function-call-in-progress` / `llm-function-call-result` | Tool activity. |
+| `llm-function-call-started` / `-in-progress` / `-stopped` | Tool activity, stage by stage. |
+| `dtmf` | Client presses keypad keys. |
 | `metrics` | TTFB, processing time, token usage. |
 | `send-text` | Client sends text instead of speech. |
 | `error` | Something failed. |
 
 The constants live in `processor/rtvi` (`rtvi.TypeUserTranscription` and so on),
 so you do not hand-write the strings.
+
+### How much a tool call reports
+
+A tool call's name and its arguments can carry information a client has no
+business seeing, so the observer reports the tool call id alone by default. Raise
+it per function, with `"*"` setting the default for the rest:
+
+```go
+params := rtvi.ObserverParams{
+    FunctionCallReportLevel: map[string]rtvi.FunctionCallReportLevel{
+        "*":           rtvi.ReportNone, // id only
+        "get_weather": rtvi.ReportFull, // name, arguments and result
+    },
+}
+observer := rtvi.NewObserverWithParams(proc, params)
+```
+
+The levels are `disabled` (no event at all), `none`, `name` and `full`. The raw
+VAD speaking events are off by default in the same way, under
+`VADUserSpeakingEnabled`.
 
 ## Clients
 

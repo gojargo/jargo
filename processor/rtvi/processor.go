@@ -112,17 +112,22 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 // user- and bot-originated frames to keep each dispatch small; the tool-call
 // frames are separate again because how much of them is reported depends on the
 // observer's per-function report level.
-func (o *Observer) messageFor(f frames.Frame) (Message, bool) {
+// A frame usually maps to one message, but a tool-call batch reports each call
+// in it separately, so the result is a list.
+func (o *Observer) messagesFor(f frames.Frame) []Message {
 	if msg, ok := userMessageFor(f); ok {
-		return msg, true
+		return []Message{msg}
 	}
-	if msg, ok := o.functionCallMessageFor(f); ok {
-		return msg, true
+	if msgs, ok := o.functionCallMessagesFor(f); ok {
+		return msgs
 	}
 	if msg, ok := o.vadMessageFor(f); ok {
-		return msg, true
+		return []Message{msg}
 	}
-	return botMessageFor(f)
+	if msg, ok := botMessageFor(f); ok {
+		return []Message{msg}
+	}
+	return nil
 }
 
 // vadMessageFor maps the raw VAD speaking frames, which are reported only when
@@ -140,26 +145,47 @@ func (o *Observer) vadMessageFor(f frames.Frame) (Message, bool) {
 	}
 }
 
-// functionCallMessageFor maps a tool-call frame to its message, reporting only
-// what the function's report level allows. A disabled function produces no
-// message at all.
-func (o *Observer) functionCallMessageFor(f frames.Frame) (Message, bool) {
+// functionCallMessagesFor maps a tool-call frame to its messages, reporting only
+// what each function's report level allows. A disabled function produces no
+// message at all, and the second result reports whether the frame was a
+// tool-call frame in the first place.
+func (o *Observer) functionCallMessagesFor(f frames.Frame) ([]Message, bool) {
 	switch fr := f.(type) {
+	case *frames.FunctionCallsStartedFrame:
+		// The model asked for these calls; none has begun executing yet. Each is
+		// reported on its own, at its own level.
+		var msgs []Message
+		for _, call := range fr.Calls {
+			if level := o.reportLevelFor(call.Name); level != ReportDisabled {
+				msgs = append(msgs, LLMFunctionCallStart(call.Name, level))
+			}
+		}
+		return msgs, true
 	case *frames.FunctionCallInProgressFrame:
-		level := o.reportLevelFor(fr.ToolName)
-		if level == ReportDisabled {
-			return Message{}, false
-		}
-		return LLMFunctionCall(fr.ToolName, fr.ToolCallID, fr.Args, level), true
+		return o.callMessage(fr.ToolName, func(level FunctionCallReportLevel) Message {
+			return LLMFunctionCall(fr.ToolName, fr.ToolCallID, fr.Args, level)
+		})
 	case *frames.FunctionCallResultFrame:
-		level := o.reportLevelFor(fr.ToolName)
-		if level == ReportDisabled {
-			return Message{}, false
-		}
-		return LLMFunctionCallResult(fr.ToolName, fr.ToolCallID, fr.Result, level), true
+		return o.callMessage(fr.ToolName, func(level FunctionCallReportLevel) Message {
+			return LLMFunctionCallStopped(fr.ToolName, fr.ToolCallID, fr.Result, false, level)
+		})
+	case *frames.FunctionCallCancelFrame:
+		return o.callMessage(fr.ToolName, func(level FunctionCallReportLevel) Message {
+			return LLMFunctionCallStopped(fr.ToolName, fr.ToolCallID, "", true, level)
+		})
 	default:
-		return Message{}, false
+		return nil, false
 	}
+}
+
+// callMessage builds one tool-call message at the function's report level, or
+// none when the function is disabled.
+func (o *Observer) callMessage(name string, build func(FunctionCallReportLevel) Message) ([]Message, bool) {
+	level := o.reportLevelFor(name)
+	if level == ReportDisabled {
+		return nil, true
+	}
+	return []Message{build(level)}, true
 }
 
 // userMessageFor maps user- and system-originated frames.

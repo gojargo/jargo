@@ -21,7 +21,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   from. A turn's `user:` and `expect:` are both optional now, so a turn can wait
   and assert without saying anything (a bot-first greeting) or send without
   asserting (pacing). `!include` pulls any value from a separate file, resolved
-  against the scenario, so scenarios can share a block they all need.
+  against the scenario, so scenarios can share a block they all need. A keypad
+  sequence is read as the text it was written as, because YAML would otherwise
+  reinterpret `dtmf: 012` as 10 and `dtmf: 0x10` as 16, rewriting the keys.
 
 - **The raw VAD speaking signal is available as `vad_user_started_speaking` and
   `vad_user_stopped_speaking`.** They reflect the VAD directly where the
@@ -36,6 +38,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rather than by re-running it.
 
 ### Changed
+
+- **A tool call is reported at each stage, and the completion message is
+  `llm-function-call-stopped`.** The model asking for calls now emits one
+  `llm-function-call-started` per call, and a call that finishes emits
+  `llm-function-call-stopped` carrying `cancelled`, so a cancellation is
+  reported where nothing was reported before. This replaces
+  `llm-function-call-result`, whose payload the stopped message subsumes. Every
+  stage honours the function's report level, and a disabled function stays
+  silent throughout.
+
+- **A scenario is validated only for what cannot mean anything.** An
+  unrecognized event name, a `name:`/`args:`/`calls:` written on an event they
+  do not apply to, and a criterion on an event carrying no bot text used to be
+  errors. The first two are now accepted (the field is dropped; an event the
+  harness does not recognize simply never matches, and says so by name) and the
+  third warns. The event names a scenario may use are open, so rejecting one up
+  front rejects events a bot may legitimately emit. An empty `turns:` list is
+  allowed too; a missing one is still the error.
 
 - **A scenario's judge criterion is written `eval:`, not `judge:`.** The block
   naming the judge is separate from the criterion it checks, and one word for

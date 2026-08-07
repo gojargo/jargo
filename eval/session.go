@@ -88,7 +88,7 @@ type Progress struct {
 	Expectation int
 	// Event is the expectation's event name, or the turn's input for a header.
 	Event string
-	// Status is "turn", "matched", "failed" or "absent".
+	// Status is "turn", "matched", "failed" or "timeout".
 	Status string
 	// Detail is the failure reason, or what was matched.
 	Detail string
@@ -102,8 +102,9 @@ const (
 	StatusMatched = "matched"
 	// StatusFailed means the event arrived but did not satisfy the expectation.
 	StatusFailed = "failed"
-	// StatusAbsent means nothing of the expectation's kind arrived at all.
-	StatusAbsent = "absent"
+	// StatusTimeout means nothing of the expectation's kind arrived at all
+	// before its budget expired.
+	StatusTimeout = "timeout"
 )
 
 // session drives one scenario against a connected bot.
@@ -423,7 +424,7 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 			}
 			reason := fmt.Sprintf("%v", err)
 			s.debugf("FAIL: %s: %s", name, reason)
-			s.progress(Progress{Turn: turnNum, Event: name, Status: StatusAbsent, Detail: reason})
+			s.progress(Progress{Turn: turnNum, Event: name, Status: StatusTimeout, Detail: reason})
 			return []Failure{{
 				Turn: turnNum, Expectation: 0, Event: name, Reason: reason,
 			}}, nil
@@ -451,7 +452,7 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 			s.debugf("FAIL: %s: %s", exp.Event, fail.Reason)
 			status := StatusFailed
 			if absent {
-				status = StatusAbsent
+				status = StatusTimeout
 			}
 			s.progress(Progress{
 				Turn: turnNum, Expectation: j + 1, Event: exp.Event,

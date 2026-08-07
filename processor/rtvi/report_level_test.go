@@ -2,6 +2,7 @@ package rtvi_test
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -187,5 +188,58 @@ func TestObserverVADUserSpeaking(t *testing.T) {
 	if len(msgs) != 2 ||
 		msgs[0].Type != rtvi.TypeVADUserStarted || msgs[1].Type != rtvi.TypeVADUserStopped {
 		t.Fatalf("expected both raw VAD messages, got %+v", msgs)
+	}
+}
+
+// TestObserverReportsTheWholeCallLifecycle checks each stage of a tool call is
+// reported: the model asking for it, it beginning, and it finishing, whether it
+// finished with a result or was canceled.
+func TestObserverReportsTheWholeCallLifecycle(t *testing.T) {
+	started := frames.NewFunctionCallsStartedFrame([]frames.ToolCall{
+		{ID: "call-1", Name: "get_weather"},
+		{ID: "call-2", Name: "get_restaurants"},
+	})
+	result := frames.NewFunctionCallResultFrame("call-1", "get_weather", nil, "sunny")
+	cancel := frames.NewFunctionCallCancelFrame("call-2", "get_restaurants")
+
+	msgs := observerHarness(t, levels(rtvi.ReportFull), started, weatherCall(), result, cancel)
+
+	var types []string
+	for _, m := range msgs {
+		types = append(types, m.Type)
+	}
+	want := []string{
+		// One started message per call in the batch.
+		rtvi.TypeLLMFunctionCallStart, rtvi.TypeLLMFunctionCallStart,
+		rtvi.TypeLLMFunctionCall,
+		rtvi.TypeLLMFunctionCallStop, rtvi.TypeLLMFunctionCallStop,
+	}
+	if !slices.Equal(types, want) {
+		t.Fatalf("got %v, want %v", types, want)
+	}
+
+	if d, ok := msgs[0].Data.(rtvi.LLMFunctionCallStartData); !ok || d.FunctionName != "get_weather" {
+		t.Fatalf("unexpected started data: %+v", msgs[0].Data)
+	}
+	done, ok := msgs[3].Data.(rtvi.LLMFunctionCallStoppedData)
+	if !ok || done.Canceled || done.Result != "sunny" {
+		t.Fatalf("a completed call should report its result: %+v", msgs[3].Data)
+	}
+	canceled, ok := msgs[4].Data.(rtvi.LLMFunctionCallStoppedData)
+	if !ok || !canceled.Canceled || canceled.Result != "" {
+		t.Fatalf("a canceled call should report no result: %+v", msgs[4].Data)
+	}
+}
+
+// TestObserverDisabledFunctionIsSilentThroughout checks a disabled function
+// reports nothing at any stage, not even that something happened.
+func TestObserverDisabledFunctionIsSilentThroughout(t *testing.T) {
+	started := frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "call-1", Name: "get_weather"}})
+	result := frames.NewFunctionCallResultFrame("call-1", "get_weather", nil, "sunny")
+	cancel := frames.NewFunctionCallCancelFrame("call-1", "get_weather")
+
+	msgs := observerHarness(t, levels(rtvi.ReportDisabled), started, weatherCall(), result, cancel)
+	if len(msgs) != 0 {
+		t.Fatalf("expected no messages, got %+v", msgs)
 	}
 }
