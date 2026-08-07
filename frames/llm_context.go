@@ -61,6 +61,30 @@ type Message struct {
 	ToolResults []ToolResult
 }
 
+// clone returns a message that shares nothing with this one. Copying the struct
+// alone would copy the slice headers, leaving both messages pointing at one
+// array: a tool result updated in place would then be rewritten under whoever
+// holds the other copy, mid-read.
+func (m Message) clone() Message {
+	if len(m.ToolCalls) > 0 {
+		m.ToolCalls = append([]ToolCall(nil), m.ToolCalls...)
+	}
+	if len(m.ToolResults) > 0 {
+		m.ToolResults = append([]ToolResult(nil), m.ToolResults...)
+	}
+	return m
+}
+
+// cloneMessages returns a deep copy of msgs, one that no later in-place update
+// can reach.
+func cloneMessages(msgs []Message) []Message {
+	out := make([]Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.clone()
+	}
+	return out
+}
+
 // LLMContext holds the conversation so far: a system prompt plus the running
 // list of user and assistant messages. The user and assistant aggregators
 // append to a shared context as the conversation proceeds, and the LLM service
@@ -216,7 +240,7 @@ func (c *LLMContext) SetToolChoice(choice ToolChoice) {
 // ordered against the conversation rather than racing an in-flight generation.
 func (c *LLMContext) SetMessages(messages []Message) {
 	c.mu.Lock()
-	c.messages = append([]Message(nil), messages...)
+	c.messages = cloneMessages(messages)
 	c.mu.Unlock()
 }
 
@@ -300,13 +324,14 @@ func (c *LLMContext) UpdateToolResult(toolCallID, content string) bool {
 	return false
 }
 
-// Messages returns a copy of the conversation messages.
+// Messages returns a copy of the conversation messages, deep enough that a
+// later update cannot reach it. A tool result is rewritten in place once its
+// call reports, so a caller reading a shallow copy would be reading an array
+// being written under it.
 func (c *LLMContext) Messages() []Message {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]Message, len(c.messages))
-	copy(out, c.messages)
-	return out
+	return cloneMessages(c.messages)
 }
 
 // EstimatedTokens is a rough estimate of the context's size in tokens, used to
@@ -351,7 +376,7 @@ func (c *LLMContext) Compact(
 		c.mu.Unlock()
 		return false, nil
 	}
-	dropped := append([]Message(nil), c.messages[:cut]...)
+	dropped := cloneMessages(c.messages[:cut])
 	prior := c.summary
 	c.mu.Unlock()
 

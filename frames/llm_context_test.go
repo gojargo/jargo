@@ -445,3 +445,46 @@ func TestCompactCutsPastDeveloperMessages(t *testing.T) {
 		t.Fatalf("dropped %d messages, want the three before u2", len(dropped))
 	}
 }
+
+// TestMessagesDoesNotAliasToolResults is the regression test for a data race in
+// the tool-result design. A tool result is rewritten in place once its call
+// reports, so a caller holding a shallow copy of the messages would be reading
+// an array being written under it. Messages must hand out a copy deep enough
+// that no later update can reach it.
+func TestMessagesDoesNotAliasToolResults(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	c.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "get_weather", Args: []byte(`{}`)})
+	c.AddToolResult(frames.ToolResult{ID: "c1", Name: "get_weather", Content: "IN_PROGRESS"})
+
+	snapshot := c.Messages()
+	c.UpdateToolResult("c1", "sunny")
+
+	if got := snapshot[1].ToolResults[0].Content; got != "IN_PROGRESS" {
+		t.Errorf("snapshot result = %q, want the value it held when it was taken", got)
+	}
+	if got := c.Messages()[1].ToolResults[0].Content; got != "sunny" {
+		t.Errorf("context result = %q, want the update", got)
+	}
+
+	// The tool calls are copied too, for the same reason.
+	snapshot[0].ToolCalls[0].Name = "mutated by the caller"
+	if got := c.Messages()[0].ToolCalls[0].Name; got != "get_weather" {
+		t.Errorf("context call = %q, want it untouched by a caller's copy", got)
+	}
+}
+
+// TestSetMessagesDoesNotAliasTheCaller checks the write path too: a caller that
+// keeps the slice it passed must not be able to reach into the conversation.
+func TestSetMessagesDoesNotAliasTheCaller(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	in := []frames.Message{{
+		Role:        frames.RoleUser,
+		ToolResults: []frames.ToolResult{{ID: "c1", Content: "sunny"}},
+	}}
+	c.SetMessages(in)
+
+	in[0].ToolResults[0].Content = "mutated by the caller"
+	if got := c.Messages()[0].ToolResults[0].Content; got != "sunny" {
+		t.Errorf("context result = %q, want it untouched by the caller's slice", got)
+	}
+}
