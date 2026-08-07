@@ -35,7 +35,7 @@ A `Message` is a role plus text, and optionally tool calls or tool results:
 
 ```go
 type Message struct {
-    Role        Role        // RoleSystem | RoleUser | RoleAssistant
+    Role        Role        // RoleSystem | RoleUser | RoleAssistant | RoleDeveloper
     Text        string
     ToolCalls   []ToolCall  // on an assistant message that requested tools
     ToolResults []ToolResult
@@ -153,17 +153,32 @@ sequenceDiagram
     participant A as agg.Assistant()
 
     L->>L: model requests a tool
-    L->>A: FunctionCallsStartedFrame (control)
-    L->>H: FunctionCallInProgressFrame (control)
-    H->>A: FunctionCallResultFrame (control, uninterruptible)
-    Note over A: tool call + result<br/>appended to context
+    L->>A: FunctionCallsStartedFrame (system)
+    L->>H: dispatch to the handler
+    L->>A: FunctionCallInProgressFrame (control, uninterruptible)
+    Note over A: tool call + IN_PROGRESS<br/>placeholder appended
+    H->>A: FunctionCallResultFrame (data, uninterruptible)
+    Note over A: placeholder replaced<br/>in place, by call id
     A->>L: LLMContextFrame
     L->>L: model continues with the result
 ```
 
+The call and the message answering it are appended **together**, the moment the
+call starts, and the result replaces that placeholder where it sits rather than
+being appended at the tail. That is what keeps the conversation valid at every
+instant: no inference ever sees a tool call with nothing answering it, and a
+result cannot be separated from its call by whatever was appended while the tool
+ran. A call the user interrupts has its placeholder marked `CANCELLED` the same
+way.
+
 `FunctionCallResultFrame` is **uninterruptible**: a tool that already ran has
 side effects, so its result must reach the context even if the user barged in
 meanwhile. See [Interruptions](interruptions.md#surviving-an-interruption).
+
+A tool registered with `llm.WithCancelOnInterruption(false)` is asynchronous: it
+survives the barge-in and the model does not wait for it. Its results arrive as
+`RoleDeveloper` messages appended when they are ready, since by then the
+conversation has moved past where its placeholder sits.
 
 ## Long conversations
 

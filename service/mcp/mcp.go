@@ -129,8 +129,12 @@ func (c *Client) Register(ctx context.Context, base *llm.Base, convo *frames.LLM
 	}
 	for _, t := range tools {
 		name := t.Name
-		base.RegisterFunction(name, func(ctx context.Context, args json.RawMessage) (string, error) {
-			return c.call(ctx, name, args)
+		base.RegisterFunction(name, func(ctx context.Context, params llm.FunctionCallParams) error {
+			result, err := c.call(ctx, name, params.Arguments)
+			if err != nil {
+				return err
+			}
+			return params.Result(ctx, result, nil)
 		})
 	}
 	convo.SetTools(append(convo.Tools(), tools...))

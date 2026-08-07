@@ -2,7 +2,6 @@ package flows
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,7 +32,7 @@ var errFuncDuplicate = errors.New("flows: duplicate function name")
 // for each node function so the service dispatches matching calls to it. The
 // concrete services satisfy it through the embedded llm.Base.
 type LLM interface {
-	RegisterFunction(name string, h llm.ToolHandler)
+	RegisterFunction(name string, h llm.FunctionCallHandler, opts ...llm.RegisterOption)
 }
 
 // Enqueuer injects a frame into the running pipeline; *pipeline.Task satisfies
@@ -160,29 +159,36 @@ func (fm *FlowManager) setNode(ctx context.Context, node *NodeConfig) error {
 	return nil
 }
 
-// wrap adapts a node function's Handler into the llm.ToolHandler the service
-// calls. When the handler returns a next node, wrap performs the transition in
-// place: it swaps the node, then either lets the tool loop regenerate (the new
-// node responds on entry) or ends the turn so the assistant waits for the user.
-func (fm *FlowManager) wrap(fn NodeFunction) llm.ToolHandler {
-	return func(ctx context.Context, args json.RawMessage) (string, error) {
-		result, next, err := fn.Handler(ctx, args, fm)
+// wrap adapts a node function's Handler into the llm.FunctionCallHandler the
+// service calls. When the handler returns a next node, wrap performs the
+// transition in place: it swaps the node, then either lets the tool loop
+// regenerate (the new node responds on entry) or ends the turn so the assistant
+// waits for the user.
+func (fm *FlowManager) wrap(fn NodeFunction) llm.FunctionCallHandler {
+	return func(ctx context.Context, params llm.FunctionCallParams) error {
+		result, next, err := fn.Handler(ctx, params.Arguments, fm)
 		if err != nil {
-			return "", err
+			return err
 		}
 		if next == nil {
-			return result, nil
+			return params.Result(ctx, result, nil)
 		}
 		if result == "" {
 			result = acknowledged
 		}
 		if terr := fm.setNode(ctx, next); terr != nil {
-			return result, terr
+			// The result still goes back: the model called the function and is
+			// owed an answer whether or not the transition took.
+			_ = params.Result(ctx, result, nil)
+			return terr
 		}
 		if !respondsImmediately(next) {
-			return result, llm.ErrStopTurn
+			// The node entered waits for the user, so the result is recorded
+			// without the assistant being asked to say anything about it.
+			stay := false
+			return params.Result(ctx, result, &frames.FunctionCallResultProperties{RunLLM: &stay})
 		}
-		return result, nil
+		return params.Result(ctx, result, nil)
 	}
 }
 

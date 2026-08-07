@@ -134,12 +134,16 @@ lets an interrupted response be recorded truncated rather than whole.
 Register a handler by name, then advertise the tool on the context:
 
 ```go
-llm.RegisterFunction("get_order_status", func(ctx context.Context, args json.RawMessage) (string, error) {
+llm.RegisterFunction("get_order_status", func(ctx context.Context, p llm.FunctionCallParams) error {
     var in struct{ OrderID string `json:"order_id"` }
-    if err := json.Unmarshal(args, &in); err != nil {
-        return "", err
+    if err := json.Unmarshal(p.Arguments, &in); err != nil {
+        return err
     }
-    return lookup(ctx, in.OrderID)
+    status, err := lookup(ctx, in.OrderID)
+    if err != nil {
+        return err
+    }
+    return p.Result(ctx, status, nil)
 })
 
 convo.SetTools([]frames.Tool{{
@@ -153,11 +157,22 @@ convo.SetTools([]frames.Tool{{
 }})
 ```
 
-`Parameters` is a raw JSON-Schema object. A handler that blocks **must honor
-`ctx`**, the same interruption rule as `Generate`.
+`Parameters` is a raw JSON-Schema object. A handler reports what it produced
+through `p.Result` rather than returning it, because a call can have more than
+one thing to say. A returned error is reported as a non-fatal pipeline error and
+puts nothing in the tool's mouth, so a failure the model should see belongs in
+the result instead.
 
-Tool results reach the context on an uninterruptible frame, so a tool that has
-already run is never lost to a barge-in. See
+A handler that blocks **must honor `ctx`**, the same interruption rule as
+`Generate`: the call's context is canceled when the user barges in.
+
+The call and the message answering it are written together the moment the call
+starts, so the conversation is valid at every instant, and the result replaces
+that placeholder in place. Registering with
+`llm.WithCancelOnInterruption(false)` makes the tool asynchronous: the model
+carries on rather than waiting, the call survives a barge-in, and each result the
+handler reports (call `p.Result` with `IsFinal` false for the ones before the
+last) reaches the model on a later turn. See
 [LLM context](../concepts/llm-context.md#tool-calls).
 
 ## Speech-to-speech

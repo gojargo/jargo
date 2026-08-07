@@ -57,6 +57,7 @@ import (
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/twilio"
@@ -324,16 +325,16 @@ func recordInfoSchema() json.RawMessage {
 // recordInfo returns the handler for the record_info tool. It logs the captured
 // fields and flips collected so the hang-up processor ends the call once the
 // goodbye has been spoken.
-func recordInfo(collected *atomic.Bool) func(context.Context, json.RawMessage) (string, error) {
-	return func(_ context.Context, args json.RawMessage) (string, error) {
+func recordInfo(collected *atomic.Bool) llm.FunctionCallHandler {
+	return func(ctx context.Context, params llm.FunctionCallParams) error {
 		var info struct {
 			FullName       string `json:"full_name"`
 			Reason         string `json:"reason"`
 			CallbackMethod string `json:"callback_method"`
 			CallbackValue  string `json:"callback_value"`
 		}
-		if err := json.Unmarshal(args, &info); err != nil {
-			return "", fmt.Errorf("decode record_info args: %w", err)
+		if err := json.Unmarshal(params.Arguments, &info); err != nil {
+			return fmt.Errorf("decode record_info args: %w", err)
 		}
 		slog.Info("collected contact info",
 			"full_name", info.FullName,
@@ -342,7 +343,7 @@ func recordInfo(collected *atomic.Bool) func(context.Context, json.RawMessage) (
 			"callback_value", info.CallbackValue,
 		)
 		collected.Store(true)
-		return `{"status": "saved"}`, nil
+		return params.Result(ctx, `{"status": "saved"}`, nil)
 	}
 }
 

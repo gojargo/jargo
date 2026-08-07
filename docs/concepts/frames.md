@@ -217,15 +217,17 @@ conversation that has already moved on.
 
 ### Tool calls
 
-Every tool-call frame is a **control** frame, so the whole round trip stays
-ordered against the response it belongs to.
+The two frames that write to the conversation are **uninterruptible**, so a call
+that started and a result that was produced always reach it. The two that
+announce a change of state are **system** frames, so they overtake the queued
+frames of the turn they are changing.
 
 | Frame | Category | Purpose |
 |---|---|---|
-| `FunctionCallsStartedFrame` | control | The model requested one or more tools. |
-| `FunctionCallInProgressFrame` | control | A specific call started. |
-| `FunctionCallResultFrame` | control | The result. **Uninterruptible.** |
-| `FunctionCallCancelFrame` | control | The call was canceled. |
+| `FunctionCallsStartedFrame` | system | The model requested one or more tools. |
+| `FunctionCallInProgressFrame` | control | A specific call started. **Uninterruptible.** |
+| `FunctionCallResultFrame` | data | The result. **Uninterruptible.** |
+| `FunctionCallCancelFrame` | system | The call was canceled. |
 
 ### TTS
 
