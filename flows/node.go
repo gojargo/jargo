@@ -11,8 +11,20 @@ import (
 // arguments the model produced, and fm is the manager driving the flow. It
 // returns the result to feed back to the model as the tool result and,
 // optionally, the next node to move to: a non-nil next transitions the flow, a
-// nil next leaves it on the current node.
+// nil next leaves it on the current node, and NoResponse leaves it there without
+// the assistant being asked to say anything.
 type Handler func(ctx context.Context, args json.RawMessage, fm *FlowManager) (string, *NodeConfig, error)
+
+// NoResponse is the sentinel a Handler returns in its next-node slot to finish
+// the call without transitioning and without generation re-running.
+//
+// It is for a tool that has already said its piece: one that plays audio of its
+// own, or that ends the conversation. A result ordinarily goes back to the model
+// for it to answer from, and that answer would be spoken over whatever the tool
+// started.
+//
+//nolint:gochecknoglobals // sentinel node, compared by identity
+var NoResponse = &NodeConfig{Name: "no-response"}
 
 // NodeFunction is a tool offered to the model at a node. It pairs the schema the
 // model sees with the handler that runs when the model calls it.

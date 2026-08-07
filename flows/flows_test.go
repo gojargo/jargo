@@ -198,3 +198,34 @@ func TestDataFunctionKeepsNode(t *testing.T) {
 		t.Errorf("CurrentNode = %q, want first (no transition)", fm.CurrentNode())
 	}
 }
+
+// A tool that has already spoken for itself — one that plays audio of its own,
+// or that ends the call — must not have the model answer from its result: that
+// answer is synthesized over whatever the tool started.
+func TestNoResponseKeepsNodeAndStopsTurn(t *testing.T) {
+	fm, fake, _, _ := newManager(t)
+	play := func(_ context.Context, _ json.RawMessage, _ *FlowManager) (string, *NodeConfig, error) {
+		return "playing", NoResponse, nil
+	}
+	start := &NodeConfig{Name: "first", Functions: []NodeFunction{{Name: "play", Handler: play}}}
+	if err := fm.Initialize(context.Background(), start); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	res, props, err := fake.call(t, "play")
+	if err != nil {
+		t.Fatalf("play handler: %v", err)
+	}
+	// The model is still owed its answer: it has to know what was put on when
+	// the user speaks next.
+	if res != "playing" {
+		t.Errorf("result = %q, want 'playing'", res)
+	}
+	if props == nil || props.RunLLM == nil || *props.RunLLM {
+		t.Errorf("properties = %+v, want RunLLM false", props)
+	}
+	// The sentinel is not a node: it must not be entered.
+	if fm.CurrentNode() != "first" {
+		t.Errorf("CurrentNode = %q, want first (no transition)", fm.CurrentNode())
+	}
+}

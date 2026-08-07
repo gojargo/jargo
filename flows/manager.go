@@ -163,12 +163,18 @@ func (fm *FlowManager) setNode(ctx context.Context, node *NodeConfig) error {
 // service calls. When the handler returns a next node, wrap performs the
 // transition in place: it swaps the node, then either lets the tool loop
 // regenerate (the new node responds on entry) or ends the turn so the assistant
-// waits for the user.
+// waits for the user. NoResponse ends the turn without a transition.
 func (fm *FlowManager) wrap(fn NodeFunction) llm.FunctionCallHandler {
 	return func(ctx context.Context, params llm.FunctionCallParams) error {
 		result, next, err := fn.Handler(ctx, params.Arguments, fm)
 		if err != nil {
 			return err
+		}
+		if next == NoResponse {
+			// The function spoke for itself, so the result is recorded without
+			// the assistant being asked to answer from it.
+			stay := false
+			return params.Result(ctx, result, &frames.FunctionCallResultProperties{RunLLM: &stay})
 		}
 		if next == nil {
 			return params.Result(ctx, result, nil)
