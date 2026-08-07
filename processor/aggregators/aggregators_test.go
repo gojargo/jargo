@@ -166,6 +166,75 @@ func TestUserAggregatorKeepsTheTranscriptThatEndsTheTurn(t *testing.T) {
 	<-runDone
 }
 
+// A streaming STT is entitled to deliver one utterance as more than one final
+// transcript. The tail of it arrives after the turn it belongs to has closed,
+// and it must not be answered on its own: with turn taking, only the turn
+// controller decides when what the user said becomes a message. Answering the
+// tail costs an inference, a second user message holding half a sentence, and,
+// where the turn calls a tool, a second call to whatever is behind it.
+func TestUserAggregatorDoesNotAnswerATranscriptOutsideATurn(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			// VAD alone opens turns, so the trailing transcript below opens none:
+			// what it must not do is produce an answer without one.
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop: []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{
+				UserSpeechTimeout: 20 * time.Millisecond,
+			})},
+		},
+		StopTimeout: 3 * time.Second,
+	}))
+
+	runs := make(chan struct{}, 4)
+	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.LLMContextFrame); ok {
+				runs <- struct{}{}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// One turn, answered once.
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	first := frames.NewTranscriptionFrame("what time do you close", "u", "ts")
+	first.Finalized = true
+	task.QueueFrame(first)
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+
+	select {
+	case <-runs:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the turn was never answered")
+	}
+
+	// The tail of the same utterance, transcribed late. No VAD onset stands
+	// behind it, and the turn it belongs to has already been answered.
+	tail := frames.NewTranscriptionFrame("on sundays", "u", "ts")
+	tail.Finalized = true
+	task.QueueFrame(tail)
+
+	select {
+	case <-runs:
+		t.Fatal("a transcript arriving outside a turn was answered on its own")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleUser || msgs[0].Text != "what time do you close" {
+		t.Fatalf("messages = %+v, want one user 'what time do you close'", msgs)
+	}
+
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+}
+
 func TestAssistantAggregatorCommitsPartialOnInterruption(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)

@@ -112,9 +112,8 @@ type UserAggregator struct {
 	muteMu         sync.Mutex
 	muted          bool
 
-	mu           sync.Mutex
-	aggregation  string
-	turnComplete bool // turn taking: end-of-turn reported
+	mu          sync.Mutex
+	aggregation string
 }
 
 func newUser(ctx *frames.LLMContext, cfg *turns.Config) *UserAggregator {
@@ -187,28 +186,6 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 // handleFrame folds one frame into the aggregation and forwards it.
 func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
-	case *frames.UserStartedSpeakingFrame:
-		// A new turn begins. The aggregation is left alone for the reason given on
-		// onTurnStarted: the speech that opened the turn belongs to it.
-		if u.turnTaking {
-			u.mu.Lock()
-			u.turnComplete = false
-			u.mu.Unlock()
-		}
-		return u.PushFrame(ctx, f, dir)
-
-	case *frames.UserStoppedSpeakingFrame:
-		if err := u.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		if u.turnTaking {
-			u.mu.Lock()
-			u.turnComplete = true
-			u.mu.Unlock()
-			return u.maybeRun(ctx)
-		}
-		return nil
-
 	case *frames.InterimTranscriptionFrame:
 		// Interim (partial) speech is forwarded for downstream consumers (e.g.
 		// RTVI) but not aggregated; the turn processor drives end-of-turn.
@@ -299,34 +276,34 @@ func (u *UserAggregator) handleTranscription(
 	}
 
 	if u.turnTaking {
-		return u.maybeRun(ctx)
+		// A transcript only adds to the aggregation. What is aggregated is
+		// committed when the turn controller says the turn is over, or when a stop
+		// strategy says there is enough to answer: a transcript on its own is not
+		// an end of turn, and one arriving after a turn closed is the beginning of
+		// the next one rather than a second answer to the one that just ended.
+		return nil
 	}
-	// Default: STT finalization marks the end of the user's turn.
+	// Without turn taking, STT finalization marks the end of the user's turn.
 	if fr.Finalized {
 		return u.maybeRun(ctx)
 	}
 	return nil
 }
 
-// maybeRun commits the aggregated user message and triggers the LLM when the
-// turn-completion conditions hold. With turn taking, the turn processor's
-// end-of-turn is authoritative: the transcripts aggregated during the turn are
-// committed then. It does not additionally require the STT's end-of-utterance
-// flag, which some providers omit (dropping the turn). Without turn taking, a
-// finalized transcript alone suffices.
+// maybeRun commits the aggregated user message and triggers the LLM on it.
+// Nothing is committed when the user has said nothing since the last time.
+//
+// With turn taking it is called only from the turn controller's hooks, which
+// are the sole authority on when the aggregation becomes a message. Without turn
+// taking a finalized transcript alone suffices.
 func (u *UserAggregator) maybeRun(ctx context.Context) error {
 	u.mu.Lock()
-	ready := u.aggregation != ""
-	if u.turnTaking {
-		ready = ready && u.turnComplete
-	}
-	if !ready {
+	if u.aggregation == "" {
 		u.mu.Unlock()
 		return nil
 	}
 	text := u.aggregation
 	u.aggregation = ""
-	u.turnComplete = false
 	u.mu.Unlock()
 
 	u.context.AddUserMessage(text)
@@ -883,9 +860,6 @@ func (u *UserAggregator) Push(ctx context.Context, f frames.Frame, dir processor
 // is dropped explicitly instead, by a strategy asking for it through
 // onResetAggregation.
 func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTurnStartedParams) {
-	u.mu.Lock()
-	u.turnComplete = false
-	u.mu.Unlock()
 	if params.EnableUserSpeakingFrames {
 		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserStartedSpeakingFrame() })
 	}
@@ -905,9 +879,6 @@ func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTur
 // rather than after it. Anything the user adds before the turn actually ends is
 // committed by onTurnStopped, which runs the LLM again on it.
 func (u *UserAggregator) onInferenceTriggered(ctx context.Context) {
-	u.mu.Lock()
-	u.turnComplete = true
-	u.mu.Unlock()
 	_ = u.maybeRun(ctx)
 }
 
@@ -934,9 +905,6 @@ func (u *UserAggregator) onTurnStopped(ctx context.Context, params turns.UserTur
 		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() })
 	}
 	u.idle.Process(frames.NewUserStoppedSpeakingFrame())
-	u.mu.Lock()
-	u.turnComplete = true
-	u.mu.Unlock()
 	_ = u.maybeRun(ctx)
 }
 

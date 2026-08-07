@@ -63,6 +63,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A transcript arriving outside a turn is no longer answered on its own.** With
+  turn taking, the user aggregator committed the aggregation whenever it held
+  text and end-of-turn had been reported, and the flag saying so was left set
+  whenever a turn ended with nothing new to commit. A stop strategy signals
+  inference first and finalization second, so an ordinary turn commits on the
+  first and leaves the flag set on the second: from then on the next transcript,
+  whenever it landed, became a user message and ran the model with no turn behind
+  it. A streaming STT delivering one utterance as two final transcripts therefore
+  had its tail answered separately, so the conversation held half a sentence as
+  its own user message and the turn was answered twice. Where it called a tool,
+  the tool ran twice. The turn controller is now the only thing that commits: a
+  transcript adds to the aggregation and nothing else, and a tail arriving after
+  a turn closed joins the next turn rather than opening a second answer to the
+  one that just ended.
+
 - **A `send-text` that runs immediately now cuts the bot off, and waits for the
   pipeline to settle before appending.** It used to append the new user message
   and re-run the LLM without interrupting, so whatever the bot was mid-saying
