@@ -333,8 +333,18 @@ func ensureLastMessageIsUser(msgs []sdk.MessageParam) []sdk.MessageParam {
 	return msgs
 }
 
+// emptyText stands in for a message whose content came out empty. Anthropic
+// rejects an empty text block, and a message can end up with nothing to say:
+// an assistant turn that only requested tools has its text dropped below.
+const emptyText = "(empty)"
+
 // toMessages converts the conversation into Anthropic message params. Tool turns
 // become the assistant(tool_use) and user(tool_result) blocks the API requires.
+//
+// The conversation records one tool call per message, each followed by the
+// message answering it, so that it is valid at every instant. Anthropic wants
+// the two sides of a batch of parallel calls each in a single message, which is
+// what merging consecutive messages of the same role produces.
 func toMessages(msgs []frames.Message) []sdk.MessageParam {
 	out := make([]sdk.MessageParam, 0, len(msgs))
 	for _, m := range msgs {
@@ -342,14 +352,15 @@ func toMessages(msgs []frames.Message) []sdk.MessageParam {
 		case len(m.ToolResults) > 0:
 			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolResults))
 			for _, r := range m.ToolResults {
-				blocks = append(blocks, sdk.NewToolResultBlock(r.ID, r.Content, r.IsError))
+				blocks = append(blocks, sdk.NewToolResultBlock(r.ID, r.Content, false))
 			}
 			out = append(out, sdk.NewUserMessage(blocks...))
 		case len(m.ToolCalls) > 0:
-			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
-			if m.Text != "" {
-				blocks = append(blocks, sdk.NewTextBlock(m.Text))
-			}
+			// Any text the model spoke alongside the calls is dropped. It was
+			// already pushed downstream to be spoken and is committed as an
+			// assistant message of its own when the turn ends, so keeping it here
+			// too would say it twice.
+			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolCalls))
 			for _, c := range m.ToolCalls {
 				input := any(c.Args)
 				if len(c.Args) == 0 {
@@ -358,12 +369,44 @@ func toMessages(msgs []frames.Message) []sdk.MessageParam {
 				blocks = append(blocks, sdk.NewToolUseBlock(c.ID, input, c.Name))
 			}
 			out = append(out, sdk.NewAssistantMessage(blocks...))
-		case m.Role == frames.RoleUser:
-			out = append(out, sdk.NewUserMessage(sdk.NewTextBlock(m.Text)))
 		case m.Role == frames.RoleAssistant:
-			out = append(out, sdk.NewAssistantMessage(sdk.NewTextBlock(m.Text)))
-		default:
+			out = append(out, sdk.NewAssistantMessage(sdk.NewTextBlock(text(m.Text))))
+		case m.Role == frames.RoleSystem:
 			// The system prompt is sent separately, not as a message.
+		default:
+			// A user message, and a developer message too: Anthropic has neither a
+			// developer nor a system input role, so both enter as the user.
+			out = append(out, sdk.NewUserMessage(sdk.NewTextBlock(text(m.Text))))
+		}
+	}
+	return mergeSameRole(out)
+}
+
+// text substitutes the empty-content placeholder for an empty string.
+func text(s string) string {
+	if s == "" {
+		return emptyText
+	}
+	return s
+}
+
+// mergeSameRole folds each run of consecutive messages of the same role into one
+// message holding all their blocks. Anthropic pairs a tool result to its call by
+// id within the request, so the merge is what lets the conversation hold each
+// call in a message of its own while the request still presents a batch of
+// parallel calls the way the API expects it.
+func mergeSameRole(msgs []sdk.MessageParam) []sdk.MessageParam {
+	out := make([]sdk.MessageParam, 0, len(msgs))
+	for _, m := range msgs {
+		if n := len(out); n > 0 && out[n-1].Role == m.Role {
+			out[n-1].Content = append(out[n-1].Content, m.Content...)
+			continue
+		}
+		out = append(out, m)
+	}
+	for i := range out {
+		if len(out[i].Content) == 0 {
+			out[i].Content = []sdk.ContentBlockParamUnion{sdk.NewTextBlock(emptyText)}
 		}
 	}
 	return out

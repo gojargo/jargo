@@ -250,17 +250,24 @@ func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
 	})
 }
 
+// unnamedToolResult names a tool result whose call cannot be found. Gemini
+// requires a name on every functionResponse, and a result can outlive the call
+// it answers: an asynchronous tool's messages carry only the call's id.
+const unnamedToolResult = "tool_call_result"
+
 // toContents converts the conversation into Gemini contents. The system prompt
 // is sent separately as systemInstruction, and the assistant role maps to
-// "model". Tool turns become functionCall parts (model) and functionResponse
-// parts (user); Gemini pairs results to calls by name.
+// "model". A developer message enters as the user, Gemini having no developer
+// input role. Tool turns become functionCall parts (model) and functionResponse
+// parts (user), paired by the call id carried on both.
 func toContents(convo *frames.LLMContext) []map[string]any {
 	msgs := convo.Messages()
+	names := toolCallNames(msgs)
 	out := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
 		switch {
 		case len(m.ToolResults) > 0:
-			out = append(out, map[string]any{keyRole: "user", keyParts: toolResultParts(m.ToolResults)})
+			out = append(out, map[string]any{keyRole: "user", keyParts: toolResultParts(m.ToolResults, names)})
 		case len(m.ToolCalls) > 0:
 			out = append(out, map[string]any{keyRole: "model", keyParts: toolCallParts(m.Text, m.ToolCalls)})
 		default:
@@ -277,6 +284,19 @@ func toContents(convo *frames.LLMContext) []map[string]any {
 	return out
 }
 
+// toolCallNames maps each tool call in the conversation to the name it was made
+// with, so a result can be named after the call it answers rather than after
+// whatever it happens to carry itself.
+func toolCallNames(msgs []frames.Message) map[string]string {
+	names := make(map[string]string)
+	for _, m := range msgs {
+		for _, c := range m.ToolCalls {
+			names[c.ID] = c.Name
+		}
+	}
+	return names
+}
+
 // toolCallParts renders an assistant turn's optional preamble and tool calls as
 // Gemini parts.
 func toolCallParts(text string, calls []frames.ToolCall) []map[string]any {
@@ -290,24 +310,39 @@ func toolCallParts(text string, calls []frames.ToolCall) []map[string]any {
 			args = json.RawMessage("{}")
 		}
 		parts = append(parts, map[string]any{
-			"functionCall": map[string]any{keyName: c.Name, "args": args},
+			"functionCall": map[string]any{keyID: c.ID, keyName: c.Name, "args": args},
 		})
 	}
 	return parts
 }
 
-// toolResultParts renders tool outputs as Gemini functionResponse parts.
-func toolResultParts(results []frames.ToolResult) []map[string]any {
+// toolResultParts renders tool outputs as Gemini functionResponse parts. Each
+// carries the id of the call it answers, which is what tells apart the results
+// of a batch of parallel calls to the same tool.
+func toolResultParts(results []frames.ToolResult, names map[string]string) []map[string]any {
 	parts := make([]map[string]any, 0, len(results))
 	for _, r := range results {
 		parts = append(parts, map[string]any{
 			"functionResponse": map[string]any{
-				keyName:    r.Name,
+				keyID:      r.ID,
+				keyName:    toolResultName(r, names),
 				"response": functionResponseDict(r.Content),
 			},
 		})
 	}
 	return parts
+}
+
+// toolResultName names a result after the call it answers, falling back to the
+// name recorded on the result itself and then to a placeholder.
+func toolResultName(r frames.ToolResult, names map[string]string) string {
+	if name, ok := names[r.ID]; ok && name != "" {
+		return name
+	}
+	if r.Name != "" {
+		return r.Name
+	}
+	return unnamedToolResult
 }
 
 // functionResponseDict shapes a tool result for Gemini's functionResponse,

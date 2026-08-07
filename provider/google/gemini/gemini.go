@@ -28,6 +28,7 @@ const (
 	keyParts = "parts"
 	keyName  = "name"
 	keyText  = "text"
+	keyID    = "id"
 )
 
 // SafetySetting is one content-safety filter: a category of harm and the
