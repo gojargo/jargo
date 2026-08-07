@@ -3,6 +3,8 @@ package eval_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/dtmf"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
 
@@ -45,6 +48,11 @@ func (f *fakeLLM) ProcessFrame(ctx context.Context, frame frames.Frame, dir proc
 	}
 
 	lower := strings.ToLower(last)
+	// A turn asking how much it remembers reports the size of its context, which
+	// is how a scenario checks that its context: was seeded.
+	if strings.Contains(lower, "how many") {
+		return f.respond(ctx, fmt.Sprintf("I have %d messages", len(msgs)))
+	}
 	// A turn that asks the bot to check something answers in two responses, an
 	// interim filler and then the answer, which is what an aggregating
 	// expectation has to roll past.
@@ -106,7 +114,25 @@ func buildFakeBot(in, out processor.Processor) *pipeline.Task {
 	})
 }
 
+// buildDTMFBot is the fake bot with a DTMF aggregator in front of it, so a
+// keypress turn produces the transcription a bot reacts to.
+func buildDTMFBot(in, out processor.Processor) *pipeline.Task {
+	agg := aggregators.New(frames.NewLLMContext("test system"))
+	rtviProc := rtvi.NewProcessor()
+	keys := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: "DTMF: "})
+	return pipeline.NewTask(pipeline.New(
+		in, keys, agg.User(), newFakeLLM(), rtviProc, out, agg.Assistant(),
+	), pipeline.TaskParams{
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+	})
+}
+
 func host(t *testing.T, body string) eval.Result {
+	t.Helper()
+	return hostWith(t, buildFakeBot, body)
+}
+
+func hostWith(t *testing.T, build eval.Bot, body string) eval.Result {
 	t.Helper()
 	scenario, err := eval.Load(writeScenario(t, body))
 	if err != nil {
@@ -114,7 +140,7 @@ func host(t *testing.T, body string) eval.Result {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	res, err := eval.Host(ctx, scenario, buildFakeBot, eval.Options{})
+	res, err := eval.Host(ctx, scenario, build, eval.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +333,7 @@ turns:
   - user: "can you check the weather?"
     expect:
       - event: llm_response
-        judge: "reports the weather"
+        eval: "reports the weather"
         within_ms: 3000
 `))
 	if err != nil {
@@ -335,7 +361,7 @@ turns:
   - user: "can you check the weather?"
     expect:
       - event: llm_response
-        judge: "reports the weather"
+        eval: "reports the weather"
         within_ms: 30000
 `))
 	if err != nil {
@@ -527,5 +553,127 @@ turns:
 `)
 	if !res.Passed() {
 		t.Fatalf("expected the barge-in to interrupt the bot, got:\n%s", res)
+	}
+}
+
+// A keypad turn reaches the bot as real keypresses, which its DTMF aggregator
+// turns into a transcription it can react to.
+func TestHarnessDTMFTurn(t *testing.T) {
+	res := hostWith(t, buildDTMFBot, `
+name: keypad
+turns:
+  - dtmf: "123#"
+    expect:
+      - event: user_transcription
+        text_contains: "DTMF: 123"
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected pass, got:\n%s", res)
+	}
+}
+
+// A scenario's context seeds the conversation the bot starts from, so a turn
+// can refer back to something the scenario, not the bot, established.
+func TestHarnessContextSeeded(t *testing.T) {
+	res := host(t, `
+name: seeded
+context:
+  - role: user
+    text: "remember the number four"
+  - role: assistant
+    text: "four, noted"
+turns:
+  - user: "how many messages do you have?"
+    expect:
+      # Two seeded plus this turn. Without the seeding it would be one.
+      - event: llm_response
+        text_contains: "I have 3 messages"
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected pass, got:\n%s", res)
+	}
+}
+
+// A turn with no input only waits and asserts, which is how a bot-first
+// scenario checks an opening greeting.
+func TestHarnessObserveOnlyTurn(t *testing.T) {
+	res := host(t, `
+name: observe
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_started
+        within_ms: 2000
+  - expect:
+      - event: function_call
+        absent: true
+        within_ms: 500
+`)
+	if !res.Passed() {
+		t.Fatalf("expected pass, got:\n%s", res)
+	}
+}
+
+// A run reports what it saw and what it decided, so a failure can be read
+// against what the bot actually did.
+func TestHarnessReportsDiagnostics(t *testing.T) {
+	res := host(t, `
+name: diagnosed
+turns:
+  - user: "hello world"
+    expect:
+      - event: llm_response
+        text_contains: "hello world"
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected pass, got:\n%s", res)
+	}
+	if res.Duration <= 0 {
+		t.Fatalf("the run should be timed, got %s", res.Duration)
+	}
+	var kinds []string
+	for _, ev := range res.Events {
+		kinds = append(kinds, ev.Kind)
+	}
+	for _, want := range []string{eval.EventLLMStarted, eval.EventLLMResponse} {
+		if !slices.Contains(kinds, want) {
+			t.Fatalf("events seen %v should include %q", kinds, want)
+		}
+	}
+	trace := strings.Join(res.DebugLog, "\n")
+	for _, want := range []string{`send: "hello world"`, "event: llm_response"} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("the trace should mention %q:\n%s", want, trace)
+		}
+	}
+}
+
+// A caller can watch a run as it happens rather than waiting for the result.
+func TestHarnessReportsProgress(t *testing.T) {
+	scenario, err := eval.Load(writeScenario(t, `
+name: watched
+turns:
+  - user: "hello world"
+    expect:
+      - event: llm_response
+        text_contains: "hello world"
+        within_ms: 2000
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	opts := eval.Options{OnProgress: func(p eval.Progress) {
+		got = append(got, p.Status+":"+p.Event)
+	}}
+	if _, err := eval.Host(t.Context(), scenario, buildFakeBot, opts); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"turn:hello world", "matched:llm_response"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("progress %v, want %v", got, want)
 	}
 }

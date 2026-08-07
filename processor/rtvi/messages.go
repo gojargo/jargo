@@ -30,6 +30,9 @@ const (
 	TypeBotLLMText            = "bot-llm-text"
 	TypeUserStartedSpeaking   = "user-started-speaking"
 	TypeUserStoppedSpeaking   = "user-stopped-speaking"
+	TypeVADUserStarted        = "vad-user-started-speaking"
+	TypeVADUserStopped        = "vad-user-stopped-speaking"
+	TypeDTMF                  = "dtmf"
 	TypeBotStartedSpeaking    = "bot-started-speaking"
 	TypeBotStoppedSpeaking    = "bot-stopped-speaking"
 	TypeBotInterrupted        = "bot-interrupted"
@@ -185,6 +188,12 @@ func LLMFunctionCallResult(name, toolCallID, result string, level FunctionCallRe
 		d.Result = result
 	}
 	return newMessage(TypeLLMFunctionCallResult, "", d)
+}
+
+// DTMFData is the payload of a dtmf message: the keypad keys the client
+// pressed, in the order they were pressed.
+type DTMFData struct {
+	Buttons []string `json:"buttons"`
 }
 
 // UserTranscriptionData is the payload of a user-transcription message.

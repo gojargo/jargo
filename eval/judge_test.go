@@ -166,7 +166,7 @@ turns:
   - user: "hello there"
     expect:
       - event: llm_response
-        judge: "acknowledges the user's greeting"
+        eval: "acknowledges the user's greeting"
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ turns:
   - user: "hello there"
     expect:
       - event: llm_response
-        judge: "asks a clarifying question"
+        eval: "asks a clarifying question"
         within_ms: 2000
 `))
 	if err != nil {
@@ -216,7 +216,7 @@ turns:
   - user: "hello there"
     expect:
       - event: llm_response
-        judge: "acknowledges the greeting"
+        eval: "acknowledges the greeting"
 `)
 	if res.Passed() {
 		t.Fatal("expected a failure for the criterion with no judge")
@@ -235,7 +235,7 @@ turns:
   - user: "what is two plus two?"
     expect:
       - event: llm_response
-        judge: "answers with four"
+        eval: "answers with four"
 `))
 	if err != nil {
 		t.Fatal(err)

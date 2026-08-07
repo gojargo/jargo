@@ -12,6 +12,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **A scenario can press keypad keys, start from a context, observe without
+  speaking, and share blocks between files.** `dtmf: "123#"` on a turn sends the
+  keys the way a telephony caller's arrive, so a bot with a DTMF aggregator can
+  be driven without a phone. `context:` seeds the conversation the bot starts
+  from. A turn's `user:` and `expect:` are both optional now, so a turn can wait
+  and assert without saying anything (a bot-first greeting) or send without
+  asserting (pacing). `!include` pulls any value from a separate file, resolved
+  against the scenario, so scenarios can share a block they all need.
+
+- **The raw VAD speaking signal is available as `vad_user_started_speaking` and
+  `vad_user_stopped_speaking`.** They reflect the VAD directly where the
+  turn-level events reflect a turn a strategy may gate or defer, which is what
+  makes them useful as a timing anchor. Off by default in the RTVI observer, and
+  the harness asks for them only when a scenario references one.
+
+- **A run reports how it went, not just whether it passed.** `Result` carries the
+  duration, every event the bot emitted in order, and a timestamped trace of the
+  harness's own decisions; `Options.OnProgress` reports the same as it happens.
+  A scenario that fails once and passes the next time is readable from the trace
+  rather than by re-running it.
+
+### Changed
+
+- **A scenario's judge criterion is written `eval:`, not `judge:`.** The block
+  naming the judge is separate from the criterion it checks, and one word for
+  both read as though a criterion configured the judge.
+
 ### Fixed
 
 - **A `send-text` that runs immediately now cuts the bot off, and waits for the

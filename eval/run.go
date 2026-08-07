@@ -31,6 +31,10 @@ type Options struct {
 	// real VAD, turn detection and STT run), instead of the text-mode send-text.
 	// Any jargo TTS service works, e.g. cartesia.NewTTS(...).
 	UserTTS *tts.Base
+	// OnProgress, when set, is called as each turn and expectation resolves, for
+	// a caller reporting a long run as it happens rather than at the end. It runs
+	// on the harness's own goroutine, so keep it quick.
+	OnProgress func(Progress)
 }
 
 // Run plays the scenario at path against buildBot, hosted in-process over a
@@ -116,7 +120,13 @@ func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Option
 	}
 	defer c.close()
 
-	sess := &session{client: c, scenario: scenario, judge: opts.Judge, userTTS: opts.UserTTS}
+	sess := &session{
+		client:     c,
+		scenario:   scenario,
+		judge:      opts.Judge,
+		userTTS:    opts.UserTTS,
+		onProgress: opts.OnProgress,
+	}
 	return sess.run(ctx)
 }
 

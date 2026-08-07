@@ -2,6 +2,7 @@ package rtvi
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
@@ -118,7 +119,25 @@ func (o *Observer) messageFor(f frames.Frame) (Message, bool) {
 	if msg, ok := o.functionCallMessageFor(f); ok {
 		return msg, true
 	}
+	if msg, ok := o.vadMessageFor(f); ok {
+		return msg, true
+	}
 	return botMessageFor(f)
+}
+
+// vadMessageFor maps the raw VAD speaking frames, which are reported only when
+// the observer is configured to expose them. They reflect the VAD signal
+// directly, where the user-started/stopped-speaking events reflect the turn a
+// strategy may gate or defer.
+func (o *Observer) vadMessageFor(f frames.Frame) (Message, bool) {
+	switch f.(type) {
+	case *frames.VADUserStartedSpeakingFrame:
+		return event(TypeVADUserStarted), o.vadUserSpeakingEnabled()
+	case *frames.VADUserStoppedSpeakingFrame:
+		return event(TypeVADUserStopped), o.vadUserSpeakingEnabled()
+	default:
+		return Message{}, false
+	}
 }
 
 // functionCallMessageFor maps a tool-call frame to its message, reporting only
@@ -269,6 +288,8 @@ func (p *Processor) handleMessage(ctx context.Context, in Incoming) error {
 		return p.send(ctx, BotReady(in.ID))
 	case TypeSendText:
 		return p.handleSendText(ctx, in)
+	case TypeDTMF:
+		return p.handleDTMF(ctx, in)
 	default:
 		slog.Debug("unhandled RTVI message", "type", in.Type)
 		return nil
@@ -303,6 +324,34 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 	}
 	if d.RunImmediately() {
 		return p.PushFrame(ctx, frames.NewLLMRunFrame(), processor.Upstream)
+	}
+	return nil
+}
+
+// handleDTMF injects the keys the client pressed, one frame each. A
+// DTMFAggregator in the pipeline accumulates them and flushes, on its
+// terminator key or its idle timeout, into a transcription the bot reacts to:
+// the same path a telephony caller's keypress takes.
+//
+// The keys go upstream, like the user message a send-text appends, because this
+// processor sits after the aggregators that consume user input. A keypress is
+// user input arriving from the client, so it travels the way the rest of it
+// does.
+func (p *Processor) handleDTMF(ctx context.Context, in Incoming) error {
+	var d DTMFData
+	if err := json.Unmarshal(in.Data, &d); err != nil {
+		slog.Warn("invalid RTVI dtmf", "err", err)
+		return nil
+	}
+	for _, button := range d.Buttons {
+		key := frames.KeypadEntry(button)
+		if !key.Valid() {
+			slog.Warn("ignoring invalid DTMF key", "key", button)
+			continue
+		}
+		if err := p.PushFrame(ctx, frames.NewInputDTMFFrame(key), processor.Upstream); err != nil {
+			return err
+		}
 	}
 	return nil
 }

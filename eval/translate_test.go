@@ -21,29 +21,29 @@ func msg(t *testing.T, msgType string, data any) rtvi.Incoming {
 	return in
 }
 
-// wantEvent asserts translate produced exactly the given event.
-func wantEvent(t *testing.T, got *event, kind, text string) {
+// wantEvent asserts translate produced exactly the given Event.
+func wantEvent(t *testing.T, got *Event, kind, text string) {
 	t.Helper()
 	if got == nil {
-		t.Fatalf("expected a %s event, got none", kind)
+		t.Fatalf("expected a %s Event, got none", kind)
 	}
-	if got.kind != kind || got.text != text {
+	if got.Kind != kind || got.Text != text {
 		t.Fatalf("got %+v, want kind %q text %q", *got, kind, text)
 	}
 }
 
 // wantNoEvent asserts translate produced nothing.
-func wantNoEvent(t *testing.T, got *event) {
+func wantNoEvent(t *testing.T, got *Event) {
 	t.Helper()
 	if got != nil {
-		t.Fatalf("expected no event, got %+v", *got)
+		t.Fatalf("expected no Event, got %+v", *got)
 	}
 }
 
 // TestTranslateAccumulatesLLMText checks the bot's text is joined across the
 // response and emitted once, at the boundary.
 func TestTranslateAccumulatesLLMText(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
+	s := &session{events: make(chan Event, eventBuffer)}
 
 	wantEvent(t, s.translate(msg(t, rtvi.TypeBotLLMStarted, nil)), EventLLMStarted, "")
 	wantNoEvent(t, s.translate(msg(t, rtvi.TypeBotLLMText, rtvi.TextData{Text: "Hello "})))
@@ -55,7 +55,7 @@ func TestTranslateAccumulatesLLMText(t *testing.T) {
 // text still emits an llm_response. The matcher's aggregation decides whether
 // that should pass or fail.
 func TestTranslateEmptyResponseStillEmitted(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
+	s := &session{events: make(chan Event, eventBuffer)}
 
 	wantEvent(t, s.translate(msg(t, rtvi.TypeBotLLMStarted, nil)), EventLLMStarted, "")
 	wantEvent(t, s.translate(msg(t, rtvi.TypeBotLLMStopped, nil)), EventLLMResponse, "")
@@ -66,7 +66,7 @@ func TestTranslateEmptyResponseStillEmitted(t *testing.T) {
 // that it is dropped rather than attributed to the new turn. The genuinely new
 // response begins at the next bot-llm-started.
 func TestTranslateInterruptionSuppressesStraggler(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
+	s := &session{events: make(chan Event, eventBuffer)}
 
 	s.translate(msg(t, rtvi.TypeBotLLMStarted, nil))
 	s.translate(msg(t, rtvi.TypeBotLLMText, rtvi.TextData{Text: "Tell me about Paris"}))
@@ -89,13 +89,13 @@ func TestTranslateInterruptionSuppressesStraggler(t *testing.T) {
 // the bot output queued from a prior one, so a greeting the user interrupted
 // cannot be matched against this turn.
 func TestTranslateUserStartedSpeakingDiscardsOutput(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
-	s.events <- event{kind: EventLLMResponse, text: "the greeting"}
+	s := &session{events: make(chan Event, eventBuffer)}
+	s.events <- Event{Kind: EventLLMResponse, Text: "the greeting"}
 
 	wantEvent(t, s.translate(msg(t, rtvi.TypeUserStartedSpeaking, nil)), EventUserStartedSpeaking, "")
 
 	if len(s.events) != 0 {
-		t.Fatalf("expected the queued bot output to be dropped, %d event(s) left", len(s.events))
+		t.Fatalf("expected the queued bot output to be dropped, %d Event(s) left", len(s.events))
 	}
 }
 
@@ -104,24 +104,24 @@ func TestTranslateUserStartedSpeakingDiscardsOutput(t *testing.T) {
 // turn-start interruption, and that transcription is the turn's input, not the
 // stale bot output the discard is meant to clear.
 func TestTranslateDiscardPreservesUserTranscription(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
-	s.events <- event{kind: EventLLMResponse, text: "the greeting"}
-	s.events <- event{kind: EventUserTranscription, text: "DTMF: 123#"}
+	s := &session{events: make(chan Event, eventBuffer)}
+	s.events <- Event{Kind: EventLLMResponse, Text: "the greeting"}
+	s.events <- Event{Kind: EventUserTranscription, Text: "DTMF: 123#"}
 
 	s.translate(msg(t, rtvi.TypeUserStartedSpeaking, nil))
 
 	if len(s.events) != 1 {
-		t.Fatalf("expected only the transcription to survive, %d event(s) left", len(s.events))
+		t.Fatalf("expected only the transcription to survive, %d Event(s) left", len(s.events))
 	}
-	if ev := <-s.events; ev.kind != EventUserTranscription || ev.text != "DTMF: 123#" {
-		t.Fatalf("unexpected surviving event: %+v", ev)
+	if ev := <-s.events; ev.Kind != EventUserTranscription || ev.Text != "DTMF: 123#" {
+		t.Fatalf("unexpected surviving Event: %+v", ev)
 	}
 }
 
 // TestTranslateUserTranscriptionFinalOnly checks an interim transcription is not
-// a turn-level event.
+// a turn-level Event.
 func TestTranslateUserTranscriptionFinalOnly(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
+	s := &session{events: make(chan Event, eventBuffer)}
 
 	interim := rtvi.UserTranscriptionData{Text: "hel", Final: false}
 	wantNoEvent(t, s.translate(msg(t, rtvi.TypeUserTranscription, interim)))
@@ -133,7 +133,7 @@ func TestTranslateUserTranscriptionFinalOnly(t *testing.T) {
 // TestTranslateFunctionCall checks the call's name and arguments both reach the
 // matcher.
 func TestTranslateFunctionCall(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
+	s := &session{events: make(chan Event, eventBuffer)}
 
 	data := rtvi.LLMFunctionCallData{
 		ToolCallID:   "call-1",
@@ -141,17 +141,17 @@ func TestTranslateFunctionCall(t *testing.T) {
 		Arguments:    json.RawMessage(`{"city":"Paris"}`),
 	}
 	ev := s.translate(msg(t, rtvi.TypeLLMFunctionCall, data))
-	if ev == nil || ev.kind != EventFunctionCall || ev.function != "get_weather" {
-		t.Fatalf("unexpected event: %+v", ev)
+	if ev == nil || ev.Kind != EventFunctionCall || ev.Function != "get_weather" {
+		t.Fatalf("unexpected Event: %+v", ev)
 	}
-	if ev.args["city"] != "Paris" {
-		t.Fatalf("unexpected args: %+v", ev.args)
+	if ev.Args["city"] != "Paris" {
+		t.Fatalf("unexpected args: %+v", ev.Args)
 	}
 }
 
 // TestTranslateUnmappedMessageIgnored checks a message the scenario format has
-// no event for carries none.
+// no Event for carries none.
 func TestTranslateUnmappedMessageIgnored(t *testing.T) {
-	s := &session{events: make(chan event, eventBuffer)}
+	s := &session{events: make(chan Event, eventBuffer)}
 	wantNoEvent(t, s.translate(msg(t, rtvi.TypeMetrics, nil)))
 }

@@ -16,14 +16,33 @@
 //	event: <name>            required: the event to match
 //	within_ms: <int>         latency budget, measured from the turn's user input
 //	text_contains: <str>     substring check on the event's text, case-sensitive
-//	judge: <str>             criterion an LLM judge checks the bot's reply against
+//	eval: <str>              criterion an LLM judge checks the bot's reply against
 //	name: <str>              for function_call: the tool the call must be to
 //	args: <mapping>          for function_call: an argument subset the call must carry
 //	calls: <list>            for function_call: several calls, in any order
 //	absent: true             assert the event does NOT arrive
 //
-// A turn takes one further field of its own, send_after, which schedules when
-// its input is sent. See "Scheduling a turn" below.
+// # Turn fields
+//
+//	user: <str>              what the user says, sent as text or synthesized
+//	dtmf: <str>              keypad keys the user presses; quote it, # is a comment
+//	expect: <list>           the events to match, in order
+//	send_after: <mapping>    when to send this turn's input (see below)
+//
+// user and dtmf are mutually exclusive, and both are optional: a turn with
+// neither only waits and asserts, which is what a bot-first scenario needs to
+// check an opening greeting. expect is optional too, for a turn that only sends.
+//
+// # Scenario fields
+//
+//	name: <str>              required: the scenario's name
+//	turns: <list>            the turns, played in order
+//	context: <list>          messages the bot's context starts from
+//
+// Any value can come from a separate file with !include, resolved against the
+// scenario file's directory, so scenarios can share a block they all need:
+//
+//	turns: !include shared_turns.yaml
 //
 // A turn often answers in more than one response: an interim filler ("Let me
 // check on that.") and then the answer. So a content check on llm_response
@@ -68,7 +87,7 @@
 //
 //	expect:
 //	  - event: llm_response
-//	    judge: "answers the question"
+//	    eval: "answers the question"
 //	  - event: llm_response
 //	    absent: true
 //	    within_ms: 5000
@@ -99,14 +118,25 @@
 //
 // event is optional. On its own, delay_ms is a pure time delay measured from the
 // previous turn's send, for pacing turns where there is no event to anchor on.
+//
+// # Diagnosing a run
+//
+// A Result carries more than its failures: how long the run took, every event
+// the bot emitted whether or not the scenario asserted on it, and a timestamped
+// trace of what the harness itself decided. Together they are what makes a
+// scenario that failed once and passed the next time readable. Options.OnProgress
+// reports the same as it happens, for a caller watching a long run.
 package eval
 
 import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/gojargo/jargo/frames"
 	"gopkg.in/yaml.v3"
 )
 
@@ -117,8 +147,10 @@ import (
 var (
 	errNoName          = errors.New("scenario has no name")
 	errNoTurns         = errors.New("scenario has no turns")
-	errNoUser          = errors.New("turn has no user input")
-	errNoExpect        = errors.New("turn has no expectations")
+	errUserAndDTMF     = errors.New("a turn takes user or dtmf, not both")
+	errDTMFNotKeys     = errors.New("dtmf must be a string of keypad keys")
+	errDTMFKey         = errors.New("invalid keypad key")
+	errScheduleNoInput = errors.New("send_after needs a user or dtmf turn to schedule")
 	errUnknownEvent    = errors.New("unknown event")
 	errFieldForEvent   = errors.New("field not valid for this event")
 	errNegativeBudget  = errors.New("within_ms must not be negative")
@@ -126,6 +158,8 @@ var (
 	errAbsentWithCheck = errors.New("absent cannot be combined with a content or call check")
 	errNegativeDelay   = errors.New("send_after delay_ms must be non-negative")
 	errEmptySendAfter  = errors.New("send_after needs an event or a positive delay_ms")
+	errIncludeNotPath  = errors.New("!include expects a file path")
+	errIncludeTooDeep  = errors.New("!include nested too deep, check for a cycle")
 )
 
 // Event names a scenario can assert on. These are the friendly names scenarios
@@ -149,6 +183,13 @@ const (
 	// barge-in or by a turn sent with send_after. It is the event a barge-in
 	// scenario asserts on.
 	EventBotInterrupted = "bot_interrupted"
+	// EventVADUserStartedSpeaking is the raw VAD signal, ungated by turn
+	// detection (audio mode only). Useful as a timing anchor when a turn strategy
+	// gates or defers the turn-level user_stopped_speaking.
+	EventVADUserStartedSpeaking = "vad_user_started_speaking"
+	// EventVADUserStoppedSpeaking is the raw VAD signal for the end of speech
+	// (audio mode only).
+	EventVADUserStoppedSpeaking = "vad_user_stopped_speaking"
 )
 
 // knownEvents is the set of event names a scenario may assert on. The user_*
@@ -156,13 +197,24 @@ const (
 //
 //nolint:gochecknoglobals // fixed lookup table
 var knownEvents = map[string]bool{
-	EventUserStartedSpeaking: true,
-	EventUserStoppedSpeaking: true,
-	EventUserTranscription:   true,
-	EventLLMStarted:          true,
-	EventLLMResponse:         true,
-	EventFunctionCall:        true,
-	EventBotInterrupted:      true,
+	EventUserStartedSpeaking:    true,
+	EventUserStoppedSpeaking:    true,
+	EventUserTranscription:      true,
+	EventLLMStarted:             true,
+	EventLLMResponse:            true,
+	EventFunctionCall:           true,
+	EventBotInterrupted:         true,
+	EventVADUserStartedSpeaking: true,
+	EventVADUserStoppedSpeaking: true,
+}
+
+// vadEvents are the events the bot reports only when asked to. The harness asks
+// when a scenario references one, and not otherwise.
+//
+//nolint:gochecknoglobals // fixed lookup table
+var vadEvents = map[string]bool{
+	EventVADUserStartedSpeaking: true,
+	EventVADUserStoppedSpeaking: true,
 }
 
 // Scenario is a scripted conversation and the events it should produce.
@@ -171,17 +223,71 @@ type Scenario struct {
 	Name string `yaml:"name"`
 	// Turns are played in order.
 	Turns []Turn `yaml:"turns"`
+	// Context is the conversation the bot's context should start from. When set,
+	// the harness sends it once the bot is ready, replacing whatever context the
+	// bot built for itself. Leave it out to test the bot's own opening state.
+	Context []frames.Message `yaml:"context,omitempty"`
 }
 
-// Turn is one user utterance and the events expected in response.
+// Turn is one step of a scenario: input for the bot, expectations about what it
+// does, or both.
+//
+// A turn drives the bot one of two ways: the harness sends a user utterance, or
+// it sends a sequence of keypad presses. The two are mutually exclusive, and
+// both are optional. A turn with neither only waits and asserts, which is what a
+// bot-first scenario needs: nothing to say, only an opening greeting to check.
 type Turn struct {
 	// User is the text the user "says" this turn (sent as RTVI send-text).
-	User string `yaml:"user"`
-	// Expect lists the events to match, in order, after the user input.
-	Expect []Expectation `yaml:"expect"`
+	User string `yaml:"user,omitempty"`
+	// DTMF is a keypad sequence the user presses, one frame per key. Mutually
+	// exclusive with User. Quote it in YAML: an unquoted # starts a comment.
+	DTMF string `yaml:"dtmf,omitempty"`
+	// Expect lists the events to match, in order, after the turn's input.
+	// Optional: a turn may just send input, with the assertion on a later turn.
+	Expect []Expectation `yaml:"expect,omitempty"`
 	// SendAfter, when set, schedules when the turn's input is sent rather than
 	// sending it as soon as the previous turn finishes.
 	SendAfter *SendAfter `yaml:"send_after,omitempty"`
+}
+
+// UnmarshalYAML decodes a turn, normalizing a keypad sequence written as a bare
+// number. YAML reads `dtmf: 123` as an integer, and the digits matter.
+func (t *Turn) UnmarshalYAML(node *yaml.Node) error {
+	type raw Turn // a distinct type, so decoding does not recurse here
+	var r raw
+	if err := node.Decode(&r); err != nil {
+		// A bare numeric dtmf fails to decode into a string, so retry with the
+		// keys the strict decode choked on read as scalars.
+		return decodeTurnWithNumericDTMF(node, t)
+	}
+	*t = Turn(r)
+	return nil
+}
+
+// decodeTurnWithNumericDTMF re-reads a turn whose dtmf: was written unquoted, so
+// `dtmf: 123` and `dtmf: "123#"` mean the same thing.
+func decodeTurnWithNumericDTMF(node *yaml.Node, t *Turn) error {
+	type raw struct {
+		User      string        `yaml:"user,omitempty"`
+		DTMF      any           `yaml:"dtmf,omitempty"`
+		Expect    []Expectation `yaml:"expect,omitempty"`
+		SendAfter *SendAfter    `yaml:"send_after,omitempty"`
+	}
+	var r raw
+	if err := node.Decode(&r); err != nil {
+		return err
+	}
+	*t = Turn{User: r.User, Expect: r.Expect, SendAfter: r.SendAfter}
+	switch v := r.DTMF.(type) {
+	case nil:
+	case string:
+		t.DTMF = v
+	case int:
+		t.DTMF = strconv.Itoa(v)
+	default:
+		return fmt.Errorf("%w: %v", errDTMFNotKeys, r.DTMF)
+	}
+	return nil
 }
 
 // SendAfter schedules when a turn's input is sent. The harness waits for Event
@@ -218,9 +324,9 @@ type Expectation struct {
 	// TextContains, when set, requires the event's text to contain this
 	// substring (case-insensitive). Applies to llm_response.
 	TextContains string `yaml:"text_contains,omitempty"`
-	// Judge, when set, is a natural-language criterion an LLM judge checks the
-	// event's text against. Applies to llm_response.
-	Judge string `yaml:"judge,omitempty"`
+	// Eval, when set, is a natural-language criterion an LLM judge checks the
+	// bot's reply against. Applies to llm_response.
+	Eval string `yaml:"eval,omitempty"`
 	// Name is the single-call shorthand for Calls: the tool name a function_call
 	// event must match.
 	Name string `yaml:"name,omitempty"`
@@ -245,20 +351,73 @@ type Expectation struct {
 	hasCalls bool `yaml:"-"`
 }
 
+// includeDepth bounds how deep !include may nest, so a file that includes
+// itself is reported rather than exhausting the stack.
+const includeDepth = 16
+
 // Load reads and validates a scenario YAML file.
 func Load(path string) (*Scenario, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // scenario path is operator-supplied
+	node, err := loadNode(path, includeDepth)
 	if err != nil {
-		return nil, fmt.Errorf("eval: read scenario: %w", err)
+		return nil, err
 	}
 	var s Scenario
-	if err := yaml.Unmarshal(data, &s); err != nil {
+	if err := node.Decode(&s); err != nil {
 		return nil, fmt.Errorf("eval: parse %s: %w", path, err)
 	}
 	if err := s.validate(); err != nil {
 		return nil, fmt.Errorf("eval: %s: %w", path, err)
 	}
 	return &s, nil
+}
+
+// loadNode parses a YAML file and resolves the !include tags in it.
+func loadNode(path string, depth int) (*yaml.Node, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // scenario path is operator-supplied
+	if err != nil {
+		return nil, fmt.Errorf("eval: read scenario: %w", err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("eval: parse %s: %w", path, err)
+	}
+	if err := resolveIncludes(&doc, filepath.Dir(path), depth); err != nil {
+		return nil, fmt.Errorf("eval: %s: %w", path, err)
+	}
+	return &doc, nil
+}
+
+// resolveIncludes replaces every `!include <path>` node in the tree with the
+// contents of the file it names, resolved against dir. Included files are parsed
+// the same way, so an include may itself include.
+//
+// It is what lets scenarios share a block they all need, rather than each
+// repeating it.
+func resolveIncludes(node *yaml.Node, dir string, depth int) error {
+	if node.Tag == "!include" {
+		if depth <= 0 {
+			return errIncludeTooDeep
+		}
+		if node.Kind != yaml.ScalarNode {
+			return errIncludeNotPath
+		}
+		included, err := loadNode(filepath.Join(dir, node.Value), depth-1)
+		if err != nil {
+			return err
+		}
+		// A parsed file is a document node wrapping the value it holds.
+		if included.Kind == yaml.DocumentNode && len(included.Content) == 1 {
+			included = included.Content[0]
+		}
+		*node = *included
+		return nil
+	}
+	for _, child := range node.Content {
+		if err := resolveIncludes(child, dir, depth); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validate checks the scenario is well-formed and only references known events.
@@ -270,13 +429,7 @@ func (s *Scenario) validate() error {
 		return fmt.Errorf("%w: %q", errNoTurns, s.Name)
 	}
 	for i, turn := range s.Turns {
-		if strings.TrimSpace(turn.User) == "" {
-			return fmt.Errorf("turn %d: %w", i+1, errNoUser)
-		}
-		if len(turn.Expect) == 0 {
-			return fmt.Errorf("turn %d: %w", i+1, errNoExpect)
-		}
-		if err := turn.SendAfter.validate(); err != nil {
+		if err := turn.validate(); err != nil {
 			return fmt.Errorf("turn %d: %w", i+1, err)
 		}
 		for j := range turn.Expect {
@@ -288,6 +441,36 @@ func (s *Scenario) validate() error {
 		}
 	}
 	return nil
+}
+
+// input is what the turn sends, for a report: the utterance, the keys, or a
+// note that the turn only observes.
+func (t Turn) input() string {
+	switch {
+	case t.User != "":
+		return t.User
+	case t.DTMF != "":
+		return "dtmf " + t.DTMF
+	default:
+		return "(observe only)"
+	}
+}
+
+// validate checks a turn is well-formed. Both kinds of input are optional, but
+// a turn takes one kind or the other, and a schedule needs input to schedule.
+func (t *Turn) validate() error {
+	if t.User != "" && t.DTMF != "" {
+		return errUserAndDTMF
+	}
+	for _, key := range t.DTMF {
+		if !frames.KeypadEntry(key).Valid() {
+			return fmt.Errorf("%w %q", errDTMFKey, string(key))
+		}
+	}
+	if t.SendAfter != nil && t.User == "" && t.DTMF == "" {
+		return errScheduleNoInput
+	}
+	return t.SendAfter.validate()
 }
 
 // validate checks a turn's schedule is well-formed. A nil schedule is valid:
@@ -371,15 +554,15 @@ func (e *Expectation) validateFields() error {
 	if callFields && e.Event != EventFunctionCall {
 		return fmt.Errorf("%w: name, args and calls need a %s event", errFieldForEvent, EventFunctionCall)
 	}
-	if e.Judge != "" && e.Event != EventLLMResponse {
-		return fmt.Errorf("%w: judge is only valid on a %s event", errFieldForEvent, EventLLMResponse)
+	if e.Eval != "" && e.Event != EventLLMResponse {
+		return fmt.Errorf("%w: eval is only valid on a %s event", errFieldForEvent, EventLLMResponse)
 	}
 	if e.TextContains != "" && e.Event != EventLLMResponse && e.Event != EventUserTranscription {
 		return fmt.Errorf("%w: text_contains needs %s or %s", errFieldForEvent, EventLLMResponse, EventUserTranscription)
 	}
 	// An absent expectation matches on event type only: a content or call check
 	// describes an event that must arrive, which contradicts absence.
-	if e.Absent && (e.TextContains != "" || e.Judge != "" || callFields) {
+	if e.Absent && (e.TextContains != "" || e.Eval != "" || callFields) {
 		return errAbsentWithCheck
 	}
 	return nil

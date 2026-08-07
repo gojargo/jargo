@@ -58,6 +58,11 @@ type ObserverParams struct {
 	// events carry. The "*" key sets the level for functions not listed; when it
 	// is absent too, ReportNone applies.
 	FunctionCallReportLevel map[string]FunctionCallReportLevel
+	// VADUserSpeakingEnabled reports the raw VAD speaking signal as well as the
+	// turn-level one. The two differ whenever a turn strategy gates or defers a
+	// turn, which is what makes the raw signal useful as a timing anchor. Off by
+	// default, because a client wants turns rather than the signal behind them.
+	VADUserSpeakingEnabled bool
 }
 
 // DefaultObserverParams is the configuration NewObserver uses: function-call
@@ -114,13 +119,24 @@ func (o *Observer) OnPushFrame(data processor.FramePushed) {
 
 // applyConfig applies a runtime reconfiguration, leaving unset fields alone.
 func (o *Observer) applyConfig(f *ConfigureObserverFrame) {
-	if f.FunctionCallReportLevel == nil {
-		return
-	}
 	o.paramsMu.Lock()
-	o.params.FunctionCallReportLevel = f.FunctionCallReportLevel
+	if f.FunctionCallReportLevel != nil {
+		o.params.FunctionCallReportLevel = f.FunctionCallReportLevel
+	}
+	if f.VADUserSpeakingEnabled != nil {
+		o.params.VADUserSpeakingEnabled = *f.VADUserSpeakingEnabled
+	}
 	o.paramsMu.Unlock()
-	slog.Debug("RTVI observer reconfigured", "function_call_report_level", f.FunctionCallReportLevel)
+	slog.Debug("RTVI observer reconfigured",
+		"function_call_report_level", f.FunctionCallReportLevel,
+		"vad_user_speaking", f.VADUserSpeakingEnabled)
+}
+
+// vadUserSpeakingEnabled reports whether the raw VAD speaking signal is exposed.
+func (o *Observer) vadUserSpeakingEnabled() bool {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	return o.params.VADUserSpeakingEnabled
 }
 
 // reportLevelFor is the level to report a call to name at: the function's own

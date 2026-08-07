@@ -3,6 +3,7 @@ package rtvi_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
@@ -140,7 +141,7 @@ func TestObserverReportLevelPerFunction(t *testing.T) {
 // trusted, server-side source raises it.
 func TestObserverConfigureRaisesLevelAtRuntime(t *testing.T) {
 	configure := rtvi.NewConfigureObserverFrame(
-		map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportFull})
+		map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportFull}, nil)
 	msgs := observerHarness(t, rtvi.DefaultObserverParams(), weatherCall(), configure, weatherCall())
 
 	if len(msgs) != 2 {
@@ -158,12 +159,33 @@ func TestObserverConfigureRaisesLevelAtRuntime(t *testing.T) {
 // TestObserverConfigureNilLeavesLevelUnchanged checks an unset field leaves the
 // observer's current configuration alone.
 func TestObserverConfigureNilLeavesLevelUnchanged(t *testing.T) {
-	msgs := observerHarness(t, levels(rtvi.ReportName), rtvi.NewConfigureObserverFrame(nil), weatherCall())
+	msgs := observerHarness(t, levels(rtvi.ReportName), rtvi.NewConfigureObserverFrame(nil, nil), weatherCall())
 
 	if len(msgs) != 1 {
 		t.Fatalf("expected one message, got %+v", msgs)
 	}
 	if d := callData(t, msgs, 0); d.FunctionName != "get_weather" {
 		t.Fatalf("the level should be unchanged, got %+v", d)
+	}
+}
+
+// TestObserverVADUserSpeaking checks the raw VAD speaking signal is withheld by
+// default and reported once asked for, at runtime.
+func TestObserverVADUserSpeaking(t *testing.T) {
+	speaking := []frames.Frame{
+		frames.NewVADUserStartedSpeakingFrame(0),
+		frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}),
+	}
+
+	if msgs := observerHarness(t, rtvi.DefaultObserverParams(), speaking...); len(msgs) != 0 {
+		t.Fatalf("the raw VAD signal is off by default, got %+v", msgs)
+	}
+
+	on := true
+	queue := append([]frames.Frame{rtvi.NewConfigureObserverFrame(nil, &on)}, speaking...)
+	msgs := observerHarness(t, rtvi.DefaultObserverParams(), queue...)
+	if len(msgs) != 2 ||
+		msgs[0].Type != rtvi.TypeVADUserStarted || msgs[1].Type != rtvi.TypeVADUserStopped {
+		t.Fatalf("expected both raw VAD messages, got %+v", msgs)
 	}
 }

@@ -20,17 +20,24 @@ type ConfigureObserverFrame struct {
 	// FunctionCallReportLevel is the per-function report-level map to apply, or
 	// nil to leave the observer's current map unchanged.
 	FunctionCallReportLevel map[string]FunctionCallReportLevel
+	// VADUserSpeakingEnabled turns the raw VAD speaking events on or off, or is
+	// nil to leave the observer's current setting unchanged.
+	VADUserSpeakingEnabled *bool
 }
 
 // NewConfigureObserverFrame builds a ConfigureObserverFrame.
-func NewConfigureObserverFrame(level map[string]FunctionCallReportLevel) *ConfigureObserverFrame {
+func NewConfigureObserverFrame(
+	level map[string]FunctionCallReportLevel, vadUserSpeaking *bool,
+) *ConfigureObserverFrame {
 	return &ConfigureObserverFrame{
 		BaseSystemFrame:         frames.NewBaseSystemFrame("RTVIConfigureObserverFrame"),
 		FunctionCallReportLevel: level,
+		VADUserSpeakingEnabled:  vadUserSpeaking,
 	}
 }
 
 // String implements fmt.Stringer.
 func (f *ConfigureObserverFrame) String() string {
-	return fmt.Sprintf("%s(function_call_report_level: %v)", f.Name(), f.FunctionCallReportLevel)
+	return fmt.Sprintf("%s(function_call_report_level: %v, vad_user_speaking: %v)",
+		f.Name(), f.FunctionCallReportLevel, f.VADUserSpeakingEnabled)
 }
