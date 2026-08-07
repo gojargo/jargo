@@ -63,6 +63,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A provider can report tokens that carry their own spacing.** A language
+  written without spaces between words, Chinese or Japanese, has its timings
+  reported per character or per segment, so the tokens already read as continuous
+  text. There was no way to say so: every timed token was emitted saying it
+  carried no spacing, and consumers joining them put a space between characters
+  belonging to one word, which is how a Japanese turn reached the conversation as
+  "こんにちは、私は... AIアシスタントです。". `WordTimingOptions` now carries
+  `IncludesInterFrameSpaces`, threaded to the text frames the words produce, and
+  the Soniox provider sets it for the languages it already detects as spaceless.
+
 - **The end of a model response now lands behind the words it ends.** Where the
   provider times its words, those words carry the moment they are spoken and
   travel the transport's queue for timed frames, which holds each until then. The

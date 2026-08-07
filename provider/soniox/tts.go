@@ -309,8 +309,12 @@ func (s *ttsSynthesizer) reportWords(
 	if err != nil {
 		return err
 	}
+	// A language written without spaces has its timings reported per character,
+	// so each token already reads as continuous text: a consumer joining them
+	// must add no spacing of its own.
+	opts := tts.WordTimingOptions{IncludesInterFrameSpaces: s.spacelessLanguage()}
 	for _, w := range words {
-		if err := word([]uctx.WordTiming{w}, tts.WordTimingOptions{}); err != nil {
+		if err := word([]uctx.WordTiming{w}, opts); err != nil {
 			return err
 		}
 	}

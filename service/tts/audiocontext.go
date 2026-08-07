@@ -96,10 +96,14 @@ type ctxItem struct {
 	word  string
 	// offset is where the word starts, in seconds from the beginning of the
 	// context's audio.
-	offset    float64
-	isWord    bool
-	keepalive bool
-	end       bool
+	offset float64
+	// includesInterFrame reports whether the token carries whatever spacing
+	// separates it from the ones around it, so a consumer joining them adds none
+	// of its own.
+	includesInterFrame bool
+	isWord             bool
+	keepalive          bool
+	end                bool
 }
 
 // audioContext is one context's queue of audio, in the order the provider
@@ -394,8 +398,17 @@ func (b *Base) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts
 	if opts.PreMergeTokens {
 		words = uctx.MergePunctTokens(words)
 	}
+	c := b.audioContextFor(contextID)
+	if c == nil {
+		return
+	}
 	for _, w := range words {
-		b.AppendWordToAudioContext(contextID, w.Word, w.Offset)
+		c.push(ctxItem{
+			word:               w.Word,
+			offset:             w.Offset,
+			includesInterFrame: opts.IncludesInterFrameSpaces,
+			isWord:             true,
+		})
 	}
 }
 
@@ -676,7 +689,8 @@ func (b *Base) pushWord(ctx context.Context, c *audioContext, contextID string, 
 		c.holdWord(it)
 		return
 	}
-	b.pushSequencerFrames(ctx, b.sequencer.ProcessWord(it.word, int64(pts), contextID, false))
+	b.pushSequencerFrames(ctx,
+		b.sequencer.ProcessWord(it.word, int64(pts), contextID, it.includesInterFrame))
 }
 
 // pushSequencerFrames emits what the sequencer returned, recording when the last

@@ -2,6 +2,7 @@ package tts_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // timedWord is one spoken token the fake provider reports, with its start offset
@@ -560,4 +562,242 @@ func TestResponseEndFollowsTheWordsItEnds(t *testing.T) {
 		t.Fatalf("the end of the response was timed at %d, want the moment of the last word "+
 			"so it cannot overtake it", endPTS[0])
 	}
+}
+
+// Ported from upstream's frame-ordering suite. The frame closing the assistant
+// turn has to be timed past the last word of the utterance. Word frames carry
+// their moment and travel the transport's queue for timed frames; an untimed
+// frame takes the other queue and would overtake them, leaving the last words
+// out of the message it commits.
+func TestPushAggregationTimedAfterTheLastWord(t *testing.T) {
+	var mu sync.Mutex
+	var wordPTS []int64
+	var pushPTS []int64
+	var pushTimed []bool
+
+	synth := &fakeTimedSynth{rate: 24000, words: []timedWord{
+		{text: "hello", offset: 0, pcm: make([]byte, 4800)},
+		{text: "world", offset: 0.2, pcm: make([]byte, 4800)},
+	}}
+	base := tts.New("TimedTTS", synth)
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch fr := f.(type) {
+			case *frames.TTSTextFrame:
+				pts, _ := fr.PTS()
+				wordPTS = append(wordPTS, pts)
+			case *frames.LLMAssistantPushAggregationFrame:
+				pts, has := fr.PTS()
+				pushPTS = append(pushPTS, pts)
+				pushTimed = append(pushTimed, has)
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	speak := frames.NewTTSSpeakFrame("hello world")
+	speak.AppendToContext = true
+	task.QueueFrame(speak)
+	time.Sleep(500 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(pushPTS) != 1 {
+		t.Fatalf("the assistant turn was closed %d times, want once", len(pushPTS))
+	}
+	if len(wordPTS) == 0 {
+		t.Fatal("no spoken words reached the pipeline")
+	}
+	last := slices.Max(wordPTS)
+	if !pushTimed[0] || pushPTS[0] <= last {
+		t.Fatalf("the turn was closed at %d, want a moment past the last word at %d",
+			pushPTS[0], last)
+	}
+}
+
+// The other half of the same rule: with no word timings there is nothing to
+// come after, and every frame travels the one queue in order, so timing the
+// frame that closes the turn would route it through the other queue for no
+// reason.
+func TestPushAggregationUntimedWithoutWordTimestamps(t *testing.T) {
+	var mu sync.Mutex
+	var timed []bool
+
+	base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if fr, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
+				_, has := fr.PTS()
+				mu.Lock()
+				timed = append(timed, has)
+				mu.Unlock()
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	speak := frames.NewTTSSpeakFrame("hello world")
+	speak.AppendToContext = true
+	task.QueueFrame(speak)
+	time.Sleep(400 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(timed) != 1 {
+		t.Fatalf("the assistant turn was closed %d times, want once", len(timed))
+	}
+	if timed[0] {
+		t.Fatal("the frame closing the turn was timed, with no word timings to come after it")
+	}
+}
+
+// Ported from upstream. The started frame is what tells the aggregator whether
+// this speech opens an assistant turn, so it has to carry the caller's answer
+// either way round.
+func TestStartedFrameCarriesAppendToContext(t *testing.T) {
+	for _, appendToContext := range []bool{true, false} {
+		t.Run(map[bool]string{true: "recorded", false: "not recorded"}[appendToContext], func(t *testing.T) {
+			var mu sync.Mutex
+			var got []bool
+			base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
+			task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+				OnReachedDownstream: func(f frames.Frame) {
+					if fr, ok := f.(*frames.TTSStartedFrame); ok {
+						mu.Lock()
+						got = append(got, fr.AppendToContext)
+						mu.Unlock()
+					}
+				},
+			})
+			runDone := make(chan error, 1)
+			go func() { runDone <- task.Run(context.Background()) }()
+
+			speak := frames.NewTTSSpeakFrame("hello world")
+			speak.AppendToContext = appendToContext
+			task.QueueFrame(speak)
+			time.Sleep(400 * time.Millisecond)
+			task.StopWhenDone()
+			select {
+			case <-runDone:
+			case <-time.After(3 * time.Second):
+				t.Fatal("task did not finish")
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(got) != 1 {
+				t.Fatalf("%d started frames reached the pipeline, want one", len(got))
+			}
+			if got[0] != appendToContext {
+				t.Fatalf("the started frame says append=%v, want %v", got[0], appendToContext)
+			}
+		})
+	}
+}
+
+// Ported from upstream's frame-ordering suite. A language written without
+// spaces between words, Chinese or Japanese, has its tokens reported as
+// continuous text, so each says it carries whatever spacing separates it from
+// the ones around it and a consumer joining them adds none of its own. Without
+// that the turn is assembled with a space between every token, which is how the
+// conversation ends up holding "こんにちは、私は... AIアシスタントです。" with
+// spaces that were never spoken.
+func TestWordsCarryingTheirOwnSpacingAssembleWithNone(t *testing.T) {
+	var mu sync.Mutex
+	var parts []text.Part
+
+	rate := 24000
+	chunk := make([]byte, rate/10*2)
+	synth := &spacingSynth{rate: rate, words: []timedWord{
+		{text: "こんにちは、私はあなたのお手伝いをする", offset: 0, pcm: chunk},
+		{text: "AIアシスタントです。", offset: 0.1, pcm: chunk},
+	}}
+	base := tts.New("CJKTTS", synth)
+	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if fr, ok := f.(*frames.TTSTextFrame); ok {
+				mu.Lock()
+				parts = append(parts, text.Part{
+					Text:                    fr.Original(),
+					IncludesInterPartSpaces: fr.IncludesInterFrameSpaces,
+				})
+				mu.Unlock()
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	speak := frames.NewTTSSpeakFrame("こんにちは、私はあなたのお手伝いをするAIアシスタントです。")
+	speak.AppendToContext = false
+	task.QueueFrame(speak)
+	time.Sleep(500 * time.Millisecond)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	const want = "こんにちは、私はあなたのお手伝いをするAIアシスタントです。"
+	if got := text.Concatenate(parts); got != want {
+		t.Fatalf("the turn assembles to %q, want %q with no spacing added between tokens", got, want)
+	}
+}
+
+// spacingSynth reports word timings whose tokens carry their own spacing, the
+// way a provider does for a language written without spaces between words.
+type spacingSynth struct {
+	rate  int
+	words []timedWord
+}
+
+func (s *spacingSynth) SampleRate() int { return s.rate }
+
+func (s *spacingSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
+	for _, w := range s.words {
+		if err := emit(w.pcm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *spacingSynth) RunTTSTimed(
+	_ context.Context,
+	_, _ string,
+	yield func(f frames.Frame) error,
+	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+) error {
+	emit := tts.PCMYielder(yield, s.SampleRate())
+	for _, w := range s.words {
+		err := word([]uctx.WordTiming{{Word: w.text, Offset: w.offset}},
+			tts.WordTimingOptions{IncludesInterFrameSpaces: true})
+		if err != nil {
+			return err
+		}
+		if err := emit(w.pcm); err != nil {
+			return err
+		}
+	}
+	return nil
 }

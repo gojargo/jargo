@@ -374,3 +374,48 @@ func runPCMTimed(s tts.WordTimestamps, ctx context.Context, text string,
 		return nil
 	})
 }
+
+// A language written without spaces reports its timings per character, so each
+// token already reads as continuous text. The tokens have to say so, or every
+// consumer joining them puts a space between characters that belong to one word.
+func TestTTSTimedSpacelessTokensCarryTheirOwnSpacing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lang language.Language
+		want bool
+	}{
+		{"a language written without spaces", language.ChineseCN, true},
+		{"a language written with them", language.English, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint, _ := ttsServer(t, []map[string]any{
+				audioEvent(nil, []string{"你", "好"}, []float64{0.0, 0.2}),
+				{"terminated": true},
+			})
+			s := &timedTTSSynthesizer{ttsSynthesizer: &ttsSynthesizer{
+				cfg: TTSConfig{APIKey: "k", URL: endpoint, Language: tc.lang}.withTTSDefaults(),
+			}}
+
+			var got []bool
+			err := s.RunTTSTimed(context.Background(), "你好", "",
+				func(frames.Frame) error { return nil },
+				func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
+					for range words {
+						got = append(got, opts.IncludesInterFrameSpaces)
+					}
+					return nil
+				})
+			if err != nil {
+				t.Fatalf("RunTTSTimed: %v", err)
+			}
+			if len(got) == 0 {
+				t.Fatal("no word timings were reported")
+			}
+			for i, carries := range got {
+				if carries != tc.want {
+					t.Fatalf("token %d says it carries its own spacing = %v, want %v", i, carries, tc.want)
+				}
+			}
+		})
+	}
+}

@@ -100,6 +100,16 @@ type WordTimestamps interface {
 // WordTimingOptions says how a batch of word timings should be treated, for the
 // shapes a provider's token stream can take.
 type WordTimingOptions struct {
+	// IncludesInterFrameSpaces marks each token as carrying whatever spacing
+	// separates it from the ones around it, so a consumer joining them adds none
+	// of its own. Set it for a language written without spaces between words,
+	// Chinese and Japanese, where a provider reports tokens that already read as
+	// continuous text and inserting spaces between them is wrong. Off by default:
+	// a stream of words in a spaced language needs the separator supplied.
+	//
+	// Leave it off when PreMergeTokens is set. Merging produces clean word
+	// strings, which is the spaced shape.
+	IncludesInterFrameSpaces bool
 	// PreMergeTokens merges punctuation- and space-only tokens into the word
 	// before them, for a provider that reports those as tokens of their own
 	// rather than attached to the word they belong to. Off by default: a
