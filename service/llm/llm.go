@@ -118,6 +118,10 @@ type registryItem struct {
 	// timeout bounds one call to this function, overriding the service's own.
 	// Zero means the service's.
 	timeout time.Duration
+	// fromToolset marks a handler registered because an advertised tool carried
+	// it, so it is dropped again when the toolset stops advertising the tool. A
+	// handler registered by hand is never dropped.
+	fromToolset bool
 }
 
 // RegisterOption configures how a registered function's calls are run.
@@ -687,8 +691,11 @@ func (b *Base) broadcastMetadata(ctx context.Context) {
 // context carries tools and the generator supports them. It runs under the
 // process goroutine's context, so an interruption cancels the in-flight work.
 func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
-	// Bring what this service adds on its own account into line with what is
-	// registered, before anything reads the conversation to build the request.
+	// The conversation carries its current toolset on every inference, so this is
+	// the one place tool changes take effect: pick up the handler any advertised
+	// tool carries, drop the ones for tools no longer advertised, and only then
+	// settle what this service adds on its own account.
+	b.syncToolHandlers(ctx, convo)
 	b.applyAsyncToolCancellation(convo)
 	if len(convo.Tools()) > 0 {
 		if tg, ok := b.gen.(ToolGenerator); ok {

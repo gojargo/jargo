@@ -32,6 +32,19 @@ type Tool struct {
 	Name        string
 	Description string
 	Parameters  json.RawMessage
+	// Handler runs the tool. Setting it means the tool carries its own
+	// implementation: the LLM service registers it when the toolset is
+	// advertised and drops it again when the toolset stops advertising it, so
+	// what the model can call and what actually answers stay the same thing.
+	//
+	// A tool with no Handler is advertise-only, and something must have called
+	// RegisterFunction for it. Registering explicitly always wins: a handler
+	// registered by hand is never replaced by a tool's own, and never dropped.
+	//
+	// It is typed as any because the handler signature belongs to the LLM
+	// service, which is built on this package. Set it to an llm.FunctionCallHandler;
+	// anything else is reported and ignored.
+	Handler any
 }
 
 // ToolCall is a request from the model to invoke a tool. Args is the raw JSON

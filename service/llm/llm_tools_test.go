@@ -1116,3 +1116,147 @@ func runToolTurn(t *testing.T, svc *llm.Base, tool string) {
 	task.StopWhenDone()
 	<-runDone
 }
+
+// TestToolCarriedHandlerIsRegistered checks a tool that carries its own handler
+// needs no separate registration: advertising it is enough.
+func TestToolCarriedHandlerIsRegistered(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	convo := frames.NewLLMContext("be brief")
+	convo.SetTools([]frames.Tool{{
+		Name:        "get_weather",
+		Description: "weather",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "sunny", nil)
+		},
+	}})
+	convo.AddUserMessage("weather?")
+
+	result := make(chan string, 4)
+	probe := newProbe(func(f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+			select {
+			case result <- fr.Result:
+			default:
+			}
+		}
+	})
+	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	select {
+	case got := <-result:
+		if got != "sunny" {
+			t.Errorf("result = %q, want the tool's own handler to have run", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the handler the tool carries never ran")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestToolCarriedHandlerIsDroppedWhenWithdrawn checks a handler that came from a
+// toolset goes when the toolset stops advertising it, so what the model can call
+// and what answers stay the same set.
+func TestToolCarriedHandlerIsDroppedWhenWithdrawn(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	weather := frames.Tool{
+		Name: "get_weather", Description: "weather", Parameters: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "sunny", nil)
+		},
+	}
+	convo := frames.NewLLMContext("be brief")
+	convo.SetTools([]frames.Tool{weather})
+	convo.AddUserMessage("weather?")
+
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return svc.HasFunction("get_weather") }) {
+		t.Fatal("advertising the tool should have registered the handler it carries")
+	}
+
+	// The toolset stops advertising it.
+	convo.SetTools(nil)
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return !svc.HasFunction("get_weather") }) {
+		t.Error("withdrawing the tool should have taken its handler with it")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestRegisteredHandlerWinsOverToolCarried checks a handler registered by hand
+// is neither replaced by a tool's own nor dropped when the tool is withdrawn.
+// Registering is the deliberate act, and it is the application's to undo.
+func TestRegisteredHandlerWinsOverToolCarried(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		return p.Result(ctx, "registered by hand", nil)
+	})
+
+	convo := frames.NewLLMContext("be brief")
+	convo.SetTools([]frames.Tool{{
+		Name: "get_weather", Description: "weather", Parameters: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "carried by the tool", nil)
+		},
+	}})
+	convo.AddUserMessage("weather?")
+
+	result := make(chan string, 4)
+	probe := newProbe(func(f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+			select {
+			case result <- fr.Result:
+			default:
+			}
+		}
+	})
+	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	select {
+	case got := <-result:
+		if got != "registered by hand" {
+			t.Errorf("result = %q, want the hand-registered handler to win", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no handler ran")
+	}
+
+	// Withdrawing the tool must not take the hand-registered handler with it.
+	convo.SetTools(nil)
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	time.Sleep(100 * time.Millisecond)
+	if !svc.HasFunction("get_weather") {
+		t.Error("a hand-registered handler is the application's to remove")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// waitFor polls cond until it holds or the timeout elapses.
+func waitFor(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return cond()
+}
