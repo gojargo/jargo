@@ -934,3 +934,185 @@ func TestGroupedFunctionCallsShareAGroup(t *testing.T) {
 	task.StopWhenDone()
 	<-runDone
 }
+
+// asyncToolGen requests the named tool once, then answers with text.
+type asyncToolGen struct {
+	mu   sync.Mutex
+	turn int
+	name string
+	// tools records what the model was offered on the first inference.
+	tools []frames.Tool
+	// system records the prompt it was given on the first inference.
+	system string
+}
+
+func (g *asyncToolGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
+
+func (g *asyncToolGen) GenerateWithTools(
+	_ context.Context, convo *frames.LLMContext, sink llm.Sink,
+) error {
+	g.mu.Lock()
+	turn := g.turn
+	g.turn++
+	if turn == 0 {
+		g.tools = convo.Tools()
+		g.system = convo.System()
+	}
+	g.mu.Unlock()
+	if turn == 0 {
+		return sink.Tool(frames.ToolCall{ID: "c1", Name: g.name, Args: json.RawMessage(`{}`)})
+	}
+	return sink.Text("done")
+}
+
+// TestAsyncToolCancellationOffersTheBuiltInTool checks the built-in tool and its
+// instructions appear only while an asynchronous tool is registered, and only
+// when the service was built to offer them.
+func TestAsyncToolCancellationOffersTheBuiltInTool(t *testing.T) {
+	hasCancel := func(tools []frames.Tool) bool {
+		for _, tool := range tools {
+			if tool.Name == llm.CancelAsyncToolName {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("offered alongside an async tool", func(t *testing.T) {
+		gen := &asyncToolGen{name: "watch"}
+		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
+		svc.RegisterFunction("watch", func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "watching", nil)
+		}, llm.WithCancelOnInterruption(false))
+
+		runToolTurn(t, svc, "watch")
+
+		gen.mu.Lock()
+		defer gen.mu.Unlock()
+		if !hasCancel(gen.tools) {
+			t.Errorf("tools = %+v, want the built-in cancel tool among them", gen.tools)
+		}
+		if !strings.Contains(gen.system, "ASYNC TOOL CANCELLATION") {
+			t.Errorf("system = %q, want the cancellation instructions", gen.system)
+		}
+	})
+
+	t.Run("not offered without an async tool", func(t *testing.T) {
+		gen := &asyncToolGen{name: "lookup"}
+		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
+		// Registered the ordinary way, so it is canceled on interruption.
+		svc.RegisterFunction("lookup", func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "found", nil)
+		})
+
+		runToolTurn(t, svc, "lookup")
+
+		gen.mu.Lock()
+		defer gen.mu.Unlock()
+		if hasCancel(gen.tools) {
+			t.Errorf("tools = %+v, want no cancel tool: nothing runs in the background", gen.tools)
+		}
+		if strings.Contains(gen.system, "ASYNC TOOL CANCELLATION") {
+			t.Error("the instructions should not be added when the tool is not offered")
+		}
+	})
+
+	t.Run("not offered unless asked for", func(t *testing.T) {
+		gen := &asyncToolGen{name: "watch"}
+		svc := llm.New("FakeToolLLM", gen)
+		svc.RegisterFunction("watch", func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "watching", nil)
+		}, llm.WithCancelOnInterruption(false))
+
+		runToolTurn(t, svc, "watch")
+
+		gen.mu.Lock()
+		defer gen.mu.Unlock()
+		if hasCancel(gen.tools) {
+			t.Errorf("tools = %+v, want none: cancellation was not enabled", gen.tools)
+		}
+	})
+}
+
+// TestCancelAsyncToolCallAbandonsTheCall checks the model can abandon a call
+// that outlives an interruption: its context is canceled, the cancellation is
+// announced, and anything it reports afterwards is ignored.
+func TestCancelAsyncToolCallAbandonsTheCall(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{}, llm.WithAsyncToolCancellation())
+
+	running := make(chan struct{})
+	canceled := make(chan struct{})
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		close(running)
+		<-ctx.Done()
+		close(canceled)
+		return p.Result(context.Background(), "far too late", nil)
+	}, llm.WithCancelOnInterruption(false))
+
+	var mu sync.Mutex
+	var results []string
+	cancels := 0
+	probe := newProbe(func(f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.FunctionCallResultFrame:
+			results = append(results, fr.Result)
+		case *frames.FunctionCallCancelFrame:
+			cancels++
+		}
+	})
+	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("get_weather")))
+	select {
+	case <-running:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the async handler never ran")
+	}
+
+	// The model asks for it back.
+	if err := svc.CancelAsyncToolCall(context.Background(), "call_1"); err != nil {
+		t.Fatalf("CancelAsyncToolCall: %v", err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request did not cancel the call's context")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if cancels == 0 {
+		t.Error("the cancellation was never announced")
+	}
+	for _, r := range results {
+		if r == "far too late" {
+			t.Error("a result reported after cancellation must not reach the conversation")
+		}
+	}
+}
+
+// runToolTurn drives one tool-calling turn through svc and waits for it to
+// settle, so a test can inspect what the model was shown.
+func runToolTurn(t *testing.T, svc *llm.Base, tool string) {
+	t.Helper()
+	convo := toolConvo(tool)
+	pair := aggregators.New(convo)
+	task := pipeline.NewTask(pipeline.New(svc, pair.Assistant()), pipeline.TaskParams{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitForContext(convo, func(msgs []frames.Message) bool { return len(msgs) >= 3 }) {
+		t.Fatal("the tool turn never settled")
+	}
+	task.StopWhenDone()
+	<-runDone
+}

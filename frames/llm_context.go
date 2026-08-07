@@ -97,6 +97,14 @@ type LLMContext struct {
 	messages   []Message
 	tools      []Tool
 	toolChoice ToolChoice
+
+	// What the LLM service adds on its own account for the next generation: a
+	// built-in tool it implements, and the instructions that go with it. They are
+	// kept apart from the application's own so that the service can add and
+	// withdraw them as its registrations change, without ever editing what the
+	// application set.
+	serviceTools        []Tool
+	serviceInstructions string
 }
 
 // summaryHeader introduces the rolling summary appended to the system prompt
@@ -117,10 +125,11 @@ func (c *LLMContext) System() string {
 	return c.systemLocked()
 }
 
-// systemLocked composes the base system prompt with the rolling summary and any
-// transient recalled context. The caller must hold c.mu.
+// systemLocked composes the base system prompt with the rolling summary, any
+// transient recalled context, and whatever the LLM service adds for its own
+// built-in tools. The caller must hold c.mu.
 func (c *LLMContext) systemLocked() string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if c.system != "" {
 		parts = append(parts, c.system)
 	}
@@ -129,6 +138,9 @@ func (c *LLMContext) systemLocked() string {
 	}
 	if c.recall != "" {
 		parts = append(parts, c.recall)
+	}
+	if c.serviceInstructions != "" {
+		parts = append(parts, c.serviceInstructions)
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -191,13 +203,43 @@ func (c *LLMContext) SetSystem(system string) {
 	c.mu.Unlock()
 }
 
-// Tools returns a copy of the tools the model may call.
+// Tools returns a copy of the tools the model may call: the conversation's own,
+// followed by any the LLM service implements itself.
 func (c *LLMContext) Tools() []Tool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]Tool, len(c.tools))
-	copy(out, c.tools)
+	out := make([]Tool, 0, len(c.tools)+len(c.serviceTools))
+	out = append(out, c.tools...)
+	out = append(out, c.serviceTools...)
 	return out
+}
+
+// AppTools returns a copy of the tools the application advertised, without the
+// ones the LLM service adds on its own account. It is what to ask when the
+// question is what the application offers, rather than what the model is being
+// shown.
+func (c *LLMContext) AppTools() []Tool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]Tool(nil), c.tools...)
+}
+
+// SetServiceTools replaces the tools the LLM service implements itself, which
+// Tools appends to the conversation's own. Only the LLM service calls it; an
+// application sets its tools with SetTools or an [LLMSetToolsFrame].
+func (c *LLMContext) SetServiceTools(tools []Tool) {
+	c.mu.Lock()
+	c.serviceTools = append([]Tool(nil), tools...)
+	c.mu.Unlock()
+}
+
+// SetServiceInstructions replaces the instructions the LLM service adds to the
+// system prompt for the tools it implements itself. Only the LLM service calls
+// it; an application sets the prompt with SetSystem.
+func (c *LLMContext) SetServiceInstructions(instructions string) {
+	c.mu.Lock()
+	c.serviceInstructions = instructions
+	c.mu.Unlock()
 }
 
 // SetTools replaces the set of tools the model may call.

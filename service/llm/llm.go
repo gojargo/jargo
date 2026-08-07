@@ -231,6 +231,12 @@ type Base struct {
 	callTimeout   time.Duration
 	runInParallel bool
 	groupCalls    bool
+	// asyncToolCancellation offers the model a built-in tool for abandoning an
+	// asynchronous call, while any asynchronous tool is registered.
+	asyncToolCancellation bool
+	// cancelToolActive tracks whether that tool is currently offered, so it is
+	// added and withdrawn exactly once. Guarded by handlersMu.
+	cancelToolActive bool
 
 	// Tool calls in flight, keyed by tool call id. They run off the frame path,
 	// on a lifetime of their own, so that a handler taking its time does not hold
@@ -501,16 +507,25 @@ func traceMessages(convo *frames.LLMContext) string {
 // Registering under the empty name registers a catch-all: it takes every call no
 // named handler claims, which is how one handler serves a whole toolset.
 func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...RegisterOption) {
+	if name == CancelAsyncToolName {
+		slog.Error("refusing to register a reserved built-in tool name",
+			"service", b.Name(), "function", name)
+		return
+	}
 	item := registryItem{name: name, handler: h, cancelOnInterruption: true}
 	for _, opt := range opts {
 		opt(&item)
 	}
 	b.handlersMu.Lock()
-	defer b.handlersMu.Unlock()
 	if b.handlers == nil {
 		b.handlers = make(map[string]registryItem)
 	}
 	b.handlers[name] = item
+	b.handlersMu.Unlock()
+
+	// Registering the first asynchronous tool is what brings the built-in
+	// cancellation tool in.
+	b.syncAsyncToolCancellation()
 }
 
 // UnregisterFunction removes the handler registered for name, reporting whether
@@ -522,9 +537,13 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 // that answers only that it is unavailable.
 func (b *Base) UnregisterFunction(name string) bool {
 	b.handlersMu.Lock()
-	defer b.handlersMu.Unlock()
 	_, ok := b.handlers[name]
 	delete(b.handlers, name)
+	b.handlersMu.Unlock()
+
+	// Withdrawing the last asynchronous tool takes the built-in cancellation
+	// tool away with it.
+	b.syncAsyncToolCancellation()
 	return ok
 }
 
@@ -668,6 +687,9 @@ func (b *Base) broadcastMetadata(ctx context.Context) {
 // context carries tools and the generator supports them. It runs under the
 // process goroutine's context, so an interruption cancels the in-flight work.
 func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
+	// Bring what this service adds on its own account into line with what is
+	// registered, before anything reads the conversation to build the request.
+	b.applyAsyncToolCancellation(convo)
 	if len(convo.Tools()) > 0 {
 		if tg, ok := b.gen.(ToolGenerator); ok {
 			return b.runWithTools(ctx, convo, tg)
