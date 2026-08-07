@@ -1032,3 +1032,513 @@ func TestSeveralFramesOfOneTurn(t *testing.T) {
 		}
 	})
 }
+
+// The shape of the contract: a frame is complete once its text has been
+// accounted for, and the call that completes it says so.
+func TestTrackerBasics(t *testing.T) {
+	t.Run("a frame with words still to come is not complete", func(t *testing.T) {
+		if NewWordCompletionTracker("Hello world", "", "").IsComplete() {
+			t.Fatal("the frame reported itself complete before a word was spoken")
+		}
+	})
+
+	t.Run("it completes when its last word is spoken", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Hello world", "", "")
+		if tr.AddWord("Hello") || tr.IsComplete() {
+			t.Fatal("the frame completed on its first of two words")
+		}
+		if !tr.AddWord("world") || !tr.IsComplete() {
+			t.Fatal("the frame did not complete on its last word")
+		}
+	})
+
+	t.Run("one word can be a whole frame", func(t *testing.T) {
+		if !NewWordCompletionTracker("Hello", "", "").AddWord("Hello") {
+			t.Fatal("the frame did not complete")
+		}
+	})
+
+	t.Run("it stays complete once it is", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Hi", "", "")
+		tr.AddWord("Hi")
+		if !tr.AddWord("extra") || !tr.IsComplete() {
+			t.Fatal("a word arriving after the frame was done unsettled it")
+		}
+	})
+
+	t.Run("a word arriving late is dropped, not handed on", func(t *testing.T) {
+		// Handing it on would put it into the next sentence, which never
+		// contained it: the same word would be recorded twice.
+		tr := NewWordCompletionTracker("Hello world", "", "")
+		tr.AddWord("Hello")
+		tr.AddWord("world")
+
+		if !tr.AddWord("extra") {
+			t.Fatal("the frame stopped reporting itself complete")
+		}
+		if over, ok := tr.OverflowWord(); ok && over != "" {
+			t.Fatalf("the late word was handed on as %q, which would put it in the "+
+				"next sentence", over)
+		}
+		if word, ok := tr.FrameWord(); ok && word != "" {
+			t.Fatalf("the late word was emitted as %q", word)
+		}
+	})
+}
+
+// Resetting returns a tracker to its beginning without changing what it expects,
+// so the same frame can be spoken again.
+func TestTrackerReset(t *testing.T) {
+	t.Run("it clears what was spoken", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Hello world", "", "")
+		tr.AddWord("Hello")
+		tr.AddWord("world")
+		tr.Reset()
+		if tr.IsComplete() {
+			t.Fatal("the frame is still complete after being reset")
+		}
+	})
+
+	t.Run("the frame can be spoken again", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Hello world", "", "")
+		tr.AddWord("Hello")
+		tr.AddWord("world")
+		tr.Reset()
+		if tr.AddWord("Hello") {
+			t.Fatal("the frame completed on its first word")
+		}
+		if !tr.AddWord("world") {
+			t.Fatal("the frame did not complete the second time through")
+		}
+	})
+
+	t.Run("the written text starts over too", func(t *testing.T) {
+		const written = "<card>4111</card>"
+		tr := NewWordCompletionTracker("4111", "", written)
+		tr.AddWord("4111")
+		if raw, _ := tr.RawText(); raw != written {
+			t.Fatalf("attributed %q, want %q", raw, written)
+		}
+		tr.Reset()
+		tr.AddWord("4111")
+		if raw, _ := tr.RawText(); raw != written {
+			t.Fatalf("after the reset, attributed %q, want %q again", raw, written)
+		}
+	})
+
+	t.Run("closing out after a reset sees the whole frame again", func(t *testing.T) {
+		tr := NewWordCompletionTracker("number is", "", "")
+		tr.AddWord("number")
+		tr.AddWord("4111") // closes the frame out with " is" unspoken
+		if word, _ := tr.FrameWord(); word != "is" {
+			t.Fatalf("frame word = %q, want %q", word, "is")
+		}
+
+		tr.Reset()
+		tr.AddWord("4111")
+		if word, _ := tr.FrameWord(); word != "number is" {
+			t.Fatalf("after the reset, frame word = %q, want the whole frame", word)
+		}
+	})
+}
+
+// The edges: nothing to say, nothing said, and a token that covers more than it
+// was asked to.
+func TestTrackerEdges(t *testing.T) {
+	t.Run("a frame with no text is complete already", func(t *testing.T) {
+		if !NewWordCompletionTracker("", "", "").IsComplete() {
+			t.Fatal("an empty frame is waiting for something to be spoken")
+		}
+	})
+
+	t.Run("an empty word says nothing", func(t *testing.T) {
+		tr := NewWordCompletionTracker("hello", "", "")
+		tr.AddWord("")
+		if tr.IsComplete() {
+			t.Fatal("an empty word completed the frame")
+		}
+	})
+
+	t.Run("one token can cover the whole frame", func(t *testing.T) {
+		if !NewWordCompletionTracker("ab", "", "").AddWord("ab") {
+			t.Fatal("the frame did not complete")
+		}
+	})
+
+	t.Run("a token saying more than the frame holds still completes it", func(t *testing.T) {
+		if !NewWordCompletionTracker("Hi", "", "").AddWord("Hieveryone") {
+			t.Fatal("the frame did not complete")
+		}
+	})
+}
+
+// What is left of a frame is what closes it out when the synthesizer stops
+// reporting, so the conversation still records the text nobody heard reported.
+func TestRemainingText(t *testing.T) {
+	t.Run("before anything is spoken, all of it is left", func(t *testing.T) {
+		tr := NewWordCompletionTracker("hello world", "", "")
+		if got := tr.RemainingTTSText(true); got != "hello world" {
+			t.Fatalf("what is left = %q, want the whole frame", got)
+		}
+	})
+
+	t.Run("partway through, the rest is left", func(t *testing.T) {
+		tr := NewWordCompletionTracker("hello world", "", "")
+		tr.AddWord("hello")
+		if got := tr.RemainingTTSText(true); got != "world" {
+			t.Fatalf("what is left = %q, want %q", got, "world")
+		}
+	})
+
+	t.Run("once it is all spoken, nothing is left", func(t *testing.T) {
+		tr := NewWordCompletionTracker("hello world", "", "")
+		tr.AddWord("hello")
+		tr.AddWord("world")
+		if got := tr.RemainingTTSText(true); got != "" {
+			t.Fatalf("what is left = %q, want nothing", got)
+		}
+	})
+
+	t.Run("punctuation inside it is kept", func(t *testing.T) {
+		tr := NewWordCompletionTracker("Hello, world!", "", "")
+		tr.AddWord("Hello,")
+		if got := tr.RemainingTTSText(true); got != "world!" {
+			t.Fatalf("what is left = %q, want %q", got, "world!")
+		}
+	})
+
+	t.Run("closing the frame out leaves the text it was closed out with", func(t *testing.T) {
+		tr := NewWordCompletionTracker("number is", "", "")
+		tr.AddWord("4111")
+		if !tr.IsComplete() {
+			t.Fatal("the frame was not closed out")
+		}
+		if got := tr.RemainingTTSText(true); got != "number is" {
+			t.Fatalf("what is left = %q, want the text nobody spoke", got)
+		}
+	})
+
+	t.Run("a reset puts it all back", func(t *testing.T) {
+		tr := NewWordCompletionTracker("hello world", "", "")
+		tr.AddWord("hello")
+		tr.AddWord("world")
+		tr.Reset()
+		if got := tr.RemainingTTSText(true); got != "hello world" {
+			t.Fatalf("what is left = %q, want the whole frame again", got)
+		}
+	})
+}
+
+// The same for the written text, which is what a closed-out frame contributes to
+// the conversation.
+func TestRemainingWrittenText(t *testing.T) {
+	t.Run("with no written text there is none to report", func(t *testing.T) {
+		tr := NewWordCompletionTracker("hello world", "", "")
+		if _, ok := tr.RemainingRawTextOnly(); ok {
+			t.Fatal("a frame with no written text reported some")
+		}
+	})
+
+	t.Run("before anything is spoken, all of it is left", func(t *testing.T) {
+		const written = "<card>4111 1111</card>"
+		tr := NewWordCompletionTracker("4111 1111", "", written)
+		got, ok := tr.RemainingRawTextOnly()
+		if !ok || got != written {
+			t.Fatalf("what is left = %q (set=%v), want %q", got, ok, written)
+		}
+	})
+
+	t.Run("partway through, the tail is left", func(t *testing.T) {
+		tr := NewWordCompletionTracker("4111 1111", "", "<card>4111 1111</card>")
+		tr.AddWord("4111")
+		got, _ := tr.RemainingRawTextOnly()
+		if got != "1111</card>" {
+			t.Fatalf("what is left = %q, want %q", got, "1111</card>")
+		}
+	})
+
+	t.Run("once it is all spoken, nothing is left", func(t *testing.T) {
+		tr := NewWordCompletionTracker("4111 1111", "", "<card>4111 1111</card>")
+		tr.AddWord("4111")
+		tr.AddWord("1111")
+		if got, _ := tr.RemainingRawTextOnly(); got != "" {
+			t.Fatalf("what is left = %q, want nothing", got)
+		}
+	})
+
+	t.Run("closing the frame out takes all of it", func(t *testing.T) {
+		tr := NewWordCompletionTracker("4111 1111 1111 1111", "", "<card>4111 1111 1111 1111</card>")
+		tr.AddWord("4111")
+		tr.AddWord("WRONG") // closes the frame out
+		if !tr.IsComplete() {
+			t.Fatal("the frame was not closed out")
+		}
+		if got, _ := tr.RemainingRawTextOnly(); got != "" {
+			t.Fatalf("what is left = %q, want nothing: closing out sweeps the rest", got)
+		}
+	})
+
+	t.Run("a reset puts it all back", func(t *testing.T) {
+		const written = "<card>hello world</card>"
+		tr := NewWordCompletionTracker("hello world", "", written)
+		tr.AddWord("hello")
+		tr.AddWord("world")
+		tr.Reset()
+		got, _ := tr.RemainingRawTextOnly()
+		if got != written {
+			t.Fatalf("what is left = %q, want the whole written text again", got)
+		}
+	})
+}
+
+// What a client shows as the bot speaks is the user-facing text, which carries
+// neither the synthesis markup nor the model's delimiters. Its cursor is what a
+// live caption is drawn from, so what has been said plus what is left has to
+// reconstruct the sentence exactly at every step.
+func TestUserFacingText(t *testing.T) {
+	const spoken = "<spell>4111 1111 1111 1111</spell>"
+	const written = "<card>4111 1111 1111 1111</card>"
+	const shown = "4111 1111 1111 1111"
+	words := []string{"4111", "1111", "1111", "1111"}
+
+	newTracker := func() *WordCompletionTracker {
+		return NewWordCompletionTracker(spoken, shown, written)
+	}
+
+	t.Run("with none given, it follows the text sent to the synthesizer", func(t *testing.T) {
+		tr := NewWordCompletionTracker("hello world", "", "")
+		tr.AddWord("hello")
+		if got, want := tr.AccumulatedUserFacingText(), tr.AccumulatedTTSText(); got != want {
+			t.Fatalf("shown %q, want it to follow the spoken text %q", got, want)
+		}
+	})
+
+	t.Run("before anything is said, nothing is shown", func(t *testing.T) {
+		tr := newTracker()
+		if got := tr.AccumulatedUserFacingText(); got != "" {
+			t.Fatalf("shown %q, want nothing yet", got)
+		}
+		if got := tr.RemainingUserFacingText(true); got != shown {
+			t.Fatalf("left to say = %q, want the whole sentence", got)
+		}
+	})
+
+	t.Run("the markup is not shown", func(t *testing.T) {
+		tr := newTracker()
+		tr.AddWord("4111")
+		if got := tr.AccumulatedUserFacingText(); got != "4111" {
+			t.Fatalf("shown %q, want %q", got, "4111")
+		}
+		if got := tr.AccumulatedTTSText(); got != "<spell>4111" {
+			t.Fatalf("spoken text consumed = %q, want the markup with it", got)
+		}
+	})
+
+	t.Run("it advances word by word", func(t *testing.T) {
+		tr := newTracker()
+		want := []struct{ shown, left string }{
+			{"4111", " 1111 1111 1111"},
+			{"4111 1111", " 1111 1111"},
+			{"4111 1111 1111", " 1111"},
+			{"4111 1111 1111 1111", ""},
+		}
+		for i, w := range words {
+			tr.AddWord(w)
+			if got := tr.AccumulatedUserFacingText(); got != want[i].shown {
+				t.Fatalf("after word %d, shown %q, want %q", i+1, got, want[i].shown)
+			}
+			if got := tr.RemainingUserFacingText(false); got != want[i].left {
+				t.Fatalf("after word %d, left %q, want %q", i+1, got, want[i].left)
+			}
+		}
+	})
+
+	t.Run("what is shown and what is left reconstruct the sentence", func(t *testing.T) {
+		tr := newTracker()
+		for i, w := range words {
+			tr.AddWord(w)
+			got := tr.AccumulatedUserFacingText() + tr.RemainingUserFacingText(false)
+			if got != shown {
+				t.Fatalf("after word %d, the two halves make %q, want %q", i+1, got, shown)
+			}
+		}
+	})
+
+	t.Run("closing the frame out shows all of it", func(t *testing.T) {
+		tr := newTracker()
+		tr.AddWord("4111")
+		tr.AddWord("WRONG") // closes the frame out
+		if !tr.IsComplete() {
+			t.Fatal("the frame was not closed out")
+		}
+		if got := tr.AccumulatedUserFacingText(); got != shown {
+			t.Fatalf("shown %q, want the whole sentence: it was closed out", got)
+		}
+		if got := tr.RemainingUserFacingText(true); got != "" {
+			t.Fatalf("left to say = %q, want nothing", got)
+		}
+	})
+
+	t.Run("a reset takes the caption back to the start", func(t *testing.T) {
+		tr := newTracker()
+		for _, w := range words {
+			tr.AddWord(w)
+		}
+		tr.Reset()
+		if got := tr.AccumulatedUserFacingText(); got != "" {
+			t.Fatalf("shown %q after the reset, want nothing", got)
+		}
+		if got := tr.RemainingUserFacingText(true); got != shown {
+			t.Fatalf("left to say = %q, want the whole sentence again", got)
+		}
+	})
+}
+
+// A lone angle bracket is content, not the start of markup: "<3" is an
+// emoticon. Everything after it has to survive, and it has to be recognized as
+// a word in its own right when the synthesizer reports it as one.
+func TestALoneAngleBracketIsContent(t *testing.T) {
+	const text = "I love you <3 always"
+
+	t.Run("nothing after it is dropped", func(t *testing.T) {
+		tr := NewWordCompletionTracker(text, "", "")
+		for w := range strings.FieldsSeq(text) {
+			tr.AddWord(w)
+		}
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete")
+		}
+		if got := tr.AccumulatedUserFacingText(); got != text {
+			t.Fatalf("shown %q, want the whole sentence", got)
+		}
+	})
+
+	t.Run("it is a word of its own and does not close the frame out", func(t *testing.T) {
+		tr := NewWordCompletionTracker(text, "", "")
+		for _, w := range []string{"I", "love", "you"} {
+			tr.AddWord(w)
+		}
+		if !tr.WordBelongsHere("<3") {
+			t.Fatal("the emoticon was rejected as not belonging to this frame")
+		}
+		if tr.AddWord("<3") {
+			t.Fatal("the frame completed on the emoticon, with a word still to come")
+		}
+		if over, ok := tr.OverflowWord(); ok && over != "" {
+			t.Fatalf("the emoticon was handed on as %q, want it kept here", over)
+		}
+		if !tr.AddWord("always") {
+			t.Fatal("the frame did not complete on its last word")
+		}
+		if got := tr.AccumulatedUserFacingText(); got != text {
+			t.Fatalf("shown %q, want the whole sentence", got)
+		}
+	})
+}
+
+// A synthesis tag with several attributes has spaces inside it, and a provider
+// that splits its report on spaces sends the opening tag as several words. Each
+// piece belongs to this frame, and only the one that closes the tag finishes it.
+func TestSynthesisTagSplitAcrossWords(t *testing.T) {
+	const spoken = `My name is <phoneme alphabet="ipa" ph="ʃəˈvɔːn">Siobhan</phoneme>.`
+	words := []string{
+		"My", "name", "is",
+		"<phoneme", `alphabet="ipa"`, `ph="ʃəˈvɔːn">Siobhan</phoneme>.`,
+	}
+
+	t.Run("every piece of the tag belongs here", func(t *testing.T) {
+		tr := NewWordCompletionTracker(spoken, "", "")
+		for _, w := range words[:3] {
+			tr.AddWord(w)
+		}
+		for i, w := range words[3:] {
+			if !tr.WordBelongsHere(w) {
+				t.Fatalf("%q is part of the open tag and was rejected", w)
+			}
+			complete := tr.AddWord(w)
+			if last := i == len(words[3:])-1; complete != last {
+				t.Fatalf("after %q, complete = %v, want %v", w, complete, last)
+			}
+		}
+	})
+
+	t.Run("the opening piece does not close the frame out", func(t *testing.T) {
+		tr := NewWordCompletionTracker(spoken, "", "")
+		for _, w := range words[:3] {
+			tr.AddWord(w)
+		}
+		if tr.AddWord("<phoneme") {
+			t.Fatal("the frame completed on an unclosed tag, with the name still unspoken")
+		}
+	})
+
+	t.Run("the pieces map back to the one word they stand for", func(t *testing.T) {
+		const written = "My name is Siobhan."
+		tr := NewWordCompletionTracker(spoken, "", written)
+		for _, w := range words[:len(words)-1] {
+			tr.AddWord(w)
+		}
+		if !tr.AddWord(words[len(words)-1]) {
+			t.Fatal("the frame did not complete on the piece closing the tag")
+		}
+		if raw, _ := tr.RawText(); raw != "Siobhan." {
+			t.Fatalf("attributed %q, want the written word %q", raw, "Siobhan.")
+		}
+	})
+}
+
+// A synthesizer may report a symbol as a different one: an arrow comes back as
+// a hyphen. The word still belongs where the symbol sits, and mistaking it for
+// a word of the next frame would close this one out with most of it unsaid.
+func TestASymbolReportedAsAnother(t *testing.T) {
+	const sentence = "- Example route: São Paulo → Santiago (Chile) → Auckland (New Zealand)."
+	// Both arrows come back as hyphens.
+	spokenWords := []string{
+		"-", "Example", "route:", "São", "Paulo",
+		"-", "Santiago", "(Chile)",
+		"-", "Auckland", "(New", "Zealand).",
+	}
+
+	t.Run("the substitute belongs where the symbol is", func(t *testing.T) {
+		tr := NewWordCompletionTracker(sentence, "", "")
+		for _, w := range []string{"-", "Example", "route:", "São", "Paulo"} {
+			tr.AddWord(w)
+		}
+		if !tr.WordBelongsHere("-") {
+			t.Fatal("the substituted symbol was rejected as not belonging here")
+		}
+	})
+
+	t.Run("it does not close the frame out", func(t *testing.T) {
+		tr := NewWordCompletionTracker(sentence, "", "")
+		for _, w := range []string{"-", "Example", "route:", "São", "Paulo"} {
+			tr.AddWord(w)
+		}
+		if tr.AddWord("-") || tr.IsComplete() {
+			t.Fatal("the frame was closed out on the substituted symbol, losing the rest " +
+				"of the sentence")
+		}
+	})
+
+	t.Run("the second one is recognized too", func(t *testing.T) {
+		tr := NewWordCompletionTracker(sentence, "", "")
+		for _, w := range []string{"-", "Example", "route:", "São", "Paulo", "-", "Santiago", "(Chile)"} {
+			tr.AddWord(w)
+		}
+		if !tr.WordBelongsHere("-") {
+			t.Fatal("the second substituted symbol was rejected")
+		}
+	})
+
+	t.Run("the whole sentence completes, and only on its last word", func(t *testing.T) {
+		tr := NewWordCompletionTracker(sentence, "", "")
+		for _, w := range spokenWords[:len(spokenWords)-1] {
+			if tr.AddWord(w) {
+				t.Fatalf("the frame completed early, on %q", w)
+			}
+		}
+		if !tr.AddWord(spokenWords[len(spokenWords)-1]) {
+			t.Fatal("the frame did not complete on its last word")
+		}
+	})
+}
