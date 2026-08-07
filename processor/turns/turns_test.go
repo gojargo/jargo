@@ -558,7 +558,7 @@ func TestIdleUpdateDoesNotArmOutsideTheWaitingWindow(t *testing.T) {
 		"a tool call is in flight": {
 			frames.NewBotStartedSpeakingFrame(),
 			frames.NewBotStoppedSpeakingFrame(),
-			frames.NewFunctionCallsStartedFrame("", []frames.ToolCall{{ID: "1", Name: "f"}}),
+			frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "1", Name: "f"}}),
 		},
 	}
 	for name, prelude := range cases {

@@ -56,7 +56,9 @@ type FunctionCallInProgressFrame struct {
 }
 
 // NewFunctionCallInProgressFrame builds a FunctionCallInProgressFrame.
-func NewFunctionCallInProgressFrame(toolCallID, name string, args json.RawMessage, cancelOnInterruption bool, groupID string) *FunctionCallInProgressFrame {
+func NewFunctionCallInProgressFrame(
+	toolCallID, name string, args json.RawMessage, cancelOnInterruption bool, groupID string,
+) *FunctionCallInProgressFrame {
 	return &FunctionCallInProgressFrame{
 		BaseControlFrame:     NewBaseControlFrame("FunctionCallInProgressFrame"),
 		ToolCallID:           toolCallID,

@@ -96,8 +96,8 @@ func TestCompactCutsOnCleanTurnBoundary(t *testing.T) {
 	// from its tool call, so the preserved tail starts at a plain user turn.
 	c := frames.NewLLMContext("sys")
 	c.AddUserMessage("u1")
-	c.AddAssistantToolCalls("", []frames.ToolCall{{ID: "t1", Name: "lookup"}})
-	c.AddToolResults([]frames.ToolResult{{ID: "t1", Name: "lookup", Content: "42"}})
+	c.AddAssistantToolCall(frames.ToolCall{ID: "t1", Name: "lookup"})
+	c.AddToolResult(frames.ToolResult{ID: "t1", Name: "lookup", Content: "42"})
 	c.AddAssistantMessage("a1")
 	c.AddUserMessage("u2")
 	c.AddAssistantMessage("a2")
@@ -123,8 +123,8 @@ func TestCompactRefusesToOrphanToolResult(t *testing.T) {
 	// decline rather than produce an invalid message list.
 	c := frames.NewLLMContext("sys")
 	c.AddUserMessage("u1")
-	c.AddAssistantToolCalls("", []frames.ToolCall{{ID: "t1", Name: "lookup"}})
-	c.AddToolResults([]frames.ToolResult{{ID: "t1", Name: "lookup", Content: "42"}})
+	c.AddAssistantToolCall(frames.ToolCall{ID: "t1", Name: "lookup"})
+	c.AddToolResult(frames.ToolResult{ID: "t1", Name: "lookup", Content: "42"})
 	c.AddAssistantMessage("a1")
 
 	called := false
@@ -267,7 +267,7 @@ func TestReplaceLastAssistantText(t *testing.T) {
 
 	t.Run("assistant turn carrying tool calls", func(t *testing.T) {
 		c := frames.NewLLMContext("")
-		c.AddAssistantToolCalls("thinking", []frames.ToolCall{{ID: "a", Name: "one"}})
+		c.AddAssistantToolCall(frames.ToolCall{ID: "a", Name: "one"})
 		if c.ReplaceLastAssistantText("x") {
 			t.Error("want false for a tool-call turn; its text is not spoken output")
 		}
@@ -301,8 +301,8 @@ func TestEstimatedTokens(t *testing.T) {
 
 	// Tool calls and results are part of what the model reads.
 	before := c.EstimatedTokens()
-	c.AddAssistantToolCalls("", []frames.ToolCall{{ID: "a", Name: "get_weather", Args: []byte(`{"city":"Paris"}`)}})
-	c.AddToolResults([]frames.ToolResult{{ID: "a", Name: "get_weather", Content: strings.Repeat("d", 40)}})
+	c.AddAssistantToolCall(frames.ToolCall{ID: "a", Name: "get_weather", Args: []byte(`{"city":"Paris"}`)})
+	c.AddToolResult(frames.ToolResult{ID: "a", Name: "get_weather", Content: strings.Repeat("d", 40)})
 	if c.EstimatedTokens() <= before {
 		t.Error("tool calls and results should count toward the estimate")
 	}
@@ -342,5 +342,106 @@ func TestContextSetMessages(t *testing.T) {
 	in[0].Text = "mutated by the caller"
 	if again := c.Messages(); again[0].Text != "new" {
 		t.Error("SetMessages should copy its input, not alias the caller's slice")
+	}
+}
+
+// TestUpdateToolResult checks a result settles into the placeholder its call
+// wrote, wherever that placeholder has ended up. Appending instead would put a
+// slow tool's result after whatever landed while it ran, separating it from the
+// call it answers.
+func TestUpdateToolResult(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	c.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "get_weather"})
+	c.AddToolResult(frames.ToolResult{ID: "c1", Name: "get_weather", Content: "IN_PROGRESS"})
+	c.AddUserMessage("actually, what time is it?")
+
+	if !c.UpdateToolResult("c1", "sunny") {
+		t.Fatal("UpdateToolResult reported no result to update")
+	}
+	msgs := c.Messages()
+	if len(msgs) != 3 {
+		t.Fatalf("messages = %+v, want the update to replace rather than append", msgs)
+	}
+	if msgs[1].ToolResults[0].Content != "sunny" {
+		t.Errorf("msg[1] = %+v, want the placeholder replaced in place", msgs[1])
+	}
+	if msgs[2].Text != "actually, what time is it?" {
+		t.Errorf("msg[2] = %+v, want the later turn undisturbed", msgs[2])
+	}
+
+	if c.UpdateToolResult("nope", "x") {
+		t.Error("UpdateToolResult should report false for a call with no result message")
+	}
+}
+
+// TestAddAssistantToolCallWritesOneCallPerMessage checks each call is its own
+// message. That is what lets each be followed straight away by the message
+// answering it, so the conversation is valid at every instant rather than only
+// once the whole batch has reported.
+func TestAddAssistantToolCallWritesOneCallPerMessage(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	c.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "a"})
+	c.AddToolResult(frames.ToolResult{ID: "c1", Content: "ra"})
+	c.AddAssistantToolCall(frames.ToolCall{ID: "c2", Name: "b"})
+	c.AddToolResult(frames.ToolResult{ID: "c2", Content: "rb"})
+
+	msgs := c.Messages()
+	if len(msgs) != 4 {
+		t.Fatalf("messages = %+v, want a message each for both calls and both results", msgs)
+	}
+	for i, id := range []string{"c1", "c2"} {
+		call, res := msgs[i*2], msgs[i*2+1]
+		if call.Role != frames.RoleAssistant || len(call.ToolCalls) != 1 || call.ToolCalls[0].ID != id {
+			t.Fatalf("msg[%d] = %+v, want the single assistant call %s", i*2, call, id)
+		}
+		if res.Role != frames.RoleUser || len(res.ToolResults) != 1 || res.ToolResults[0].ID != id {
+			t.Fatalf("msg[%d] = %+v, want the single result for %s", i*2+1, res, id)
+		}
+	}
+}
+
+// TestAddMessage checks a message is appended as it stands, which is how the
+// developer messages an asynchronous tool reports through reach the context.
+func TestAddMessage(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	c.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "an update"})
+
+	msgs := c.Messages()
+	if len(msgs) != 1 || msgs[0].Role != frames.RoleDeveloper || msgs[0].Text != "an update" {
+		t.Fatalf("messages = %+v, want the developer message as it stands", msgs)
+	}
+}
+
+// TestCompactCutsPastDeveloperMessages checks a developer message is never taken
+// for the start of a user turn. Cutting there would strand it from the tool call
+// whose progress it reports.
+func TestCompactCutsPastDeveloperMessages(t *testing.T) {
+	c := frames.NewLLMContext("system")
+	c.AddUserMessage("u1")
+	c.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "watch"})
+	c.AddMessage(frames.NewAsyncToolStartedMessage("c1"))
+	c.AddUserMessage("u2")
+	c.AddMessage(frames.NewAsyncToolFinalMessage("c1", "done"))
+	c.AddAssistantMessage("a1")
+
+	var dropped []frames.Message
+	ok, err := c.Compact(context.Background(), 2, keep(nil, &dropped, "S"))
+	if err != nil || !ok {
+		t.Fatalf("Compact: ok=%v err=%v", ok, err)
+	}
+	// The only clean cut point is u2: neither the developer message nor the
+	// async-tool started message, which is a tool result, may start a turn.
+	msgs := c.Messages()
+	if len(msgs) != 3 {
+		t.Fatalf("tail = %+v, want the cut at the one plain user turn", msgs)
+	}
+	if msgs[0].Role != frames.RoleUser || msgs[0].Text != "u2" || len(msgs[0].ToolResults) != 0 {
+		t.Fatalf("tail starts at %+v, want the plain user turn u2", msgs[0])
+	}
+	if msgs[1].Role != frames.RoleDeveloper {
+		t.Fatalf("msg[1] = %+v, want the developer message kept with the tail", msgs[1])
+	}
+	if len(dropped) != 3 {
+		t.Fatalf("dropped %d messages, want the three before u2", len(dropped))
 	}
 }

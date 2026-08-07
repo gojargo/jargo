@@ -21,12 +21,10 @@ func (f *fakeSink) Tool(c frames.ToolCall) error { f.calls = append(f.calls, c);
 func TestToContentsToolTurn(t *testing.T) {
 	convo := frames.NewLLMContext("be helpful")
 	convo.AddUserMessage("weather in Paris?")
-	convo.AddAssistantToolCalls("", []frames.ToolCall{
-		{ID: "call_0", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`)},
+	convo.AddAssistantToolCall(frames.ToolCall{
+		ID: "call_0", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`),
 	})
-	convo.AddToolResults([]frames.ToolResult{
-		{ID: "call_0", Name: "get_weather", Content: "sunny"},
-	})
+	convo.AddToolResult(frames.ToolResult{ID: "call_0", Name: "get_weather", Content: "sunny"})
 
 	b, err := json.Marshal(toContents(convo))
 	if err != nil {
@@ -38,8 +36,8 @@ func TestToContentsToolTurn(t *testing.T) {
 	wants := []string{
 		`"role":"user"`,
 		`"role":"model"`,
-		`"functionCall":{"args":{"location":"Paris"},"name":"get_weather"}`,
-		`"functionResponse":{"name":"get_weather","response":{"value":"sunny"}}`,
+		`"functionCall":{"args":{"location":"Paris"},"id":"call_0","name":"get_weather"}`,
+		`"functionResponse":{"id":"call_0","name":"get_weather","response":{"value":"sunny"}}`,
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {

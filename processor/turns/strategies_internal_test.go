@@ -692,7 +692,7 @@ func TestFunctionCallUserMute(t *testing.T) {
 		t.Error("no calls in flight: want unmuted")
 	}
 
-	started := frames.NewFunctionCallsStartedFrame("", []frames.ToolCall{
+	started := frames.NewFunctionCallsStartedFrame([]frames.ToolCall{
 		{ID: "a", Name: "lookup"},
 		{ID: "b", Name: "book"},
 	})
@@ -700,7 +700,7 @@ func TestFunctionCallUserMute(t *testing.T) {
 		t.Error("calls in flight: want muted")
 	}
 
-	if !s.ShouldMute(frames.NewFunctionCallResultFrame("a", "lookup", "ok", false)) {
+	if !s.ShouldMute(frames.NewFunctionCallResultFrame("a", "lookup", nil, "ok")) {
 		t.Error("one call still in flight: want muted")
 	}
 	if s.ShouldMute(frames.NewFunctionCallCancelFrame("b", "book")) {
@@ -709,7 +709,7 @@ func TestFunctionCallUserMute(t *testing.T) {
 
 	// An unknown ID must not unmute anything or corrupt the set.
 	s.ShouldMute(started)
-	if s.ShouldMute(frames.NewFunctionCallResultFrame("zzz", "other", "ok", false)) != true {
+	if s.ShouldMute(frames.NewFunctionCallResultFrame("zzz", "other", nil, "ok")) != true {
 		t.Error("an unrelated result must leave the in-flight calls muted")
 	}
 }

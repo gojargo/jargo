@@ -11,6 +11,7 @@ package frames_test
 // concrete_test.go.
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -346,22 +347,26 @@ func catalog() []catalogEntry {
 				return frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: "hi"}})
 			},
 		},
+		// The function-call frames span three classes rather than one: the two
+		// that write to the conversation are uninterruptible so they always reach
+		// it, and the two that announce a change of state are system frames so
+		// they overtake the queued frames of the turn they change.
 		{
-			label: "FunctionCallsStartedFrame", cat: control, wantString: "calls: 1",
+			label: "FunctionCallsStartedFrame", cat: system, wantString: "calls: 1",
 			build: func() frames.Frame {
-				return frames.NewFunctionCallsStartedFrame("", []frames.ToolCall{{ID: "a", Name: "get_weather"}})
+				return frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "a", Name: "get_weather"}})
 			},
 		},
 		{
-			label: "FunctionCallInProgressFrame", cat: control, wantString: "get_weather",
-			build: func() frames.Frame { return frames.NewFunctionCallInProgressFrame("a", "get_weather") },
+			label: "FunctionCallInProgressFrame", cat: control, uninterruptible: true, wantString: "get_weather",
+			build: func() frames.Frame { return frames.NewFunctionCallInProgressFrame("a", "get_weather", nil, true, "g1") },
 		},
 		{
-			label: "FunctionCallResultFrame", cat: control, wantString: "get_weather",
-			build: func() frames.Frame { return frames.NewFunctionCallResultFrame("a", "get_weather", "sunny", false) },
+			label: "FunctionCallResultFrame", cat: data, uninterruptible: true, wantString: "get_weather",
+			build: func() frames.Frame { return frames.NewFunctionCallResultFrame("a", "get_weather", nil, "sunny") },
 		},
 		{
-			label: "FunctionCallCancelFrame", cat: control, wantString: "get_weather",
+			label: "FunctionCallCancelFrame", cat: system, wantString: "get_weather",
 			build: func() frames.Frame { return frames.NewFunctionCallCancelFrame("a", "get_weather") },
 		},
 		{
@@ -447,23 +452,35 @@ func TestConstructorFields(t *testing.T) {
 
 	t.Run("function calls", func(t *testing.T) {
 		calls := []frames.ToolCall{{ID: "a", Name: "one"}, {ID: "b", Name: "two"}}
-		started := frames.NewFunctionCallsStartedFrame("thinking", calls)
-		if started.PreambleText != "thinking" || len(started.Calls) != 2 {
-			t.Errorf("started = %+v, want the preamble and both calls", started)
+		started := frames.NewFunctionCallsStartedFrame(calls)
+		if len(started.Calls) != 2 {
+			t.Errorf("started = %+v, want both calls", started)
 		}
 
-		prog := frames.NewFunctionCallInProgressFrame("a", "one")
-		if prog.ToolCallID != "a" || prog.ToolName != "one" {
+		args := json.RawMessage(`{"x":1}`)
+		prog := frames.NewFunctionCallInProgressFrame("a", "one", args, true, "g1")
+		if prog.ToolCallID != "a" || prog.ToolName != "one" || string(prog.Args) != `{"x":1}` {
 			t.Errorf("in-progress = %+v", prog)
 		}
+		if !prog.CancelOnInterruption || prog.GroupID != "g1" {
+			t.Errorf("in-progress call options = %+v", prog)
+		}
 
-		res := frames.NewFunctionCallResultFrame("a", "one", "done", false)
-		if res.ToolCallID != "a" || res.Result != "done" || res.IsError {
+		res := frames.NewFunctionCallResultFrame("a", "one", args, "done")
+		if res.ToolCallID != "a" || res.Result != "done" || string(res.Args) != `{"x":1}` {
 			t.Errorf("result = %+v", res)
 		}
-		// Generation re-runs after a tool result unless a handler stops the turn.
-		if !res.RunLLM {
-			t.Error("RunLLM should default to true")
+		// Whether generation re-runs is left to the aggregator unless something
+		// says otherwise, so neither the frame nor absent properties decide it.
+		if res.RunLLM != nil || res.Properties != nil {
+			t.Errorf("result should carry no decision by default: %+v", res)
+		}
+		if !res.Properties.Final() {
+			t.Error("absent properties describe a final result")
+		}
+		notFinal := false
+		if (&frames.FunctionCallResultProperties{IsFinal: &notFinal}).Final() {
+			t.Error("IsFinal false describes an intermediate result")
 		}
 
 		cancel := frames.NewFunctionCallCancelFrame("a", "one")

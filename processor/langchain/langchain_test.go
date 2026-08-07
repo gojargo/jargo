@@ -154,8 +154,8 @@ func TestUsesLatestUserMessage(t *testing.T) {
 func TestSkipsToolResultTurns(t *testing.T) {
 	c := frames.NewLLMContext("")
 	c.AddUserMessage("weather in Paris?")
-	c.AddAssistantToolCalls("", []frames.ToolCall{{ID: "a", Name: "get_weather"}})
-	c.AddToolResults([]frames.ToolResult{{ID: "a", Name: "get_weather", Content: "sunny"}})
+	c.AddAssistantToolCall(frames.ToolCall{ID: "a", Name: "get_weather"})
+	c.AddToolResult(frames.ToolResult{ID: "a", Name: "get_weather", Content: "sunny"})
 
 	got := make(chan string, 1)
 	capture := func(_ context.Context, input string, _ func(string) error) error {

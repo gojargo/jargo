@@ -134,7 +134,7 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 		t.Fatalf("expected bot-tts-stopped, got %+v", got)
 	}
 
-	task.QueueFrame(frames.NewFunctionCallInProgressFrame("call-1", "get_weather"))
+	task.QueueFrame(frames.NewFunctionCallInProgressFrame("call-1", "get_weather", nil, true, "g1"))
 	got := waitMessage(t, out)
 	if got.Type != rtvi.TypeLLMFunctionCall {
 		t.Fatalf("expected llm-function-call-in-progress, got %+v", got)
@@ -143,7 +143,7 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 		t.Fatalf("unexpected function-call data: %+v", got.Data)
 	}
 
-	task.QueueFrame(frames.NewFunctionCallResultFrame("call-1", "get_weather", "sunny, 24C", false))
+	task.QueueFrame(frames.NewFunctionCallResultFrame("call-1", "get_weather", nil, "sunny, 24C"))
 	got = waitMessage(t, out)
 	if got.Type != rtvi.TypeLLMFunctionCallResult {
 		t.Fatalf("expected llm-function-call-result, got %+v", got)

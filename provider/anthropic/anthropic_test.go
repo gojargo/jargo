@@ -194,7 +194,7 @@ func TestToMessagesBuildsToolTurns(t *testing.T) {
 			{ID: "c1", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`)},
 		}},
 		{Role: frames.RoleUser, ToolResults: []frames.ToolResult{
-			{ID: "c1", Name: "get_weather", Content: "sunny", IsError: false},
+			{ID: "c1", Name: "get_weather", Content: "sunny"},
 		}},
 		{Role: frames.RoleAssistant, Text: "It is sunny."},
 	}

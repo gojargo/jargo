@@ -3,7 +3,6 @@ package flows
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -13,14 +12,40 @@ import (
 // fakeLLM records the handlers a FlowManager registers so a test can invoke them
 // directly, standing in for the LLM service's tool loop.
 type fakeLLM struct {
-	funcs map[string]llm.ToolHandler
+	funcs map[string]llm.FunctionCallHandler
 }
 
-func (f *fakeLLM) RegisterFunction(name string, h llm.ToolHandler) {
+func (f *fakeLLM) RegisterFunction(name string, h llm.FunctionCallHandler, _ ...llm.RegisterOption) {
 	if f.funcs == nil {
-		f.funcs = make(map[string]llm.ToolHandler)
+		f.funcs = make(map[string]llm.FunctionCallHandler)
 	}
 	f.funcs[name] = h
+}
+
+// call runs a registered handler the way the service would and reports what it
+// delivered through the result callback: the result, the properties it set, and
+// whether it reported at all.
+func (f *fakeLLM) call(
+	t *testing.T, name string,
+) (result string, props *frames.FunctionCallResultProperties, err error) {
+	t.Helper()
+	reported := false
+	h, ok := f.funcs[name]
+	if !ok {
+		t.Fatalf("no handler registered for %q", name)
+	}
+	err = h(context.Background(), llm.FunctionCallParams{
+		FunctionName: name,
+		ToolCallID:   "call-1",
+		Result: func(_ context.Context, r string, p *frames.FunctionCallResultProperties) error {
+			reported, result, props = true, r, p
+			return nil
+		},
+	})
+	if err == nil && !reported {
+		t.Fatalf("handler %q returned without reporting a result", name)
+	}
+	return result, props, err
 }
 
 // fakeEnq records the frames a FlowManager queues.
@@ -112,7 +137,7 @@ func TestTransitionSwapsNode(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	res, err := fake.funcs["advance"](context.Background(), nil)
+	res, _, err := fake.call(t, "advance")
 	if err != nil {
 		t.Fatalf("advance handler: %v", err)
 	}
@@ -141,12 +166,17 @@ func TestTransitionToWaitNodeStopsTurn(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	res, err := fake.funcs["advance"](context.Background(), nil)
-	if !errors.Is(err, llm.ErrStopTurn) {
-		t.Fatalf("err = %v, want ErrStopTurn", err)
+	res, props, err := fake.call(t, "advance")
+	if err != nil {
+		t.Fatalf("advance handler: %v", err)
 	}
 	if res != "done" {
 		t.Errorf("result = %q, want 'done'", res)
+	}
+	// The node entered waits for the user, so the result is recorded without
+	// the assistant being asked to say anything about it.
+	if props == nil || props.RunLLM == nil || *props.RunLLM {
+		t.Errorf("properties = %+v, want RunLLM false", props)
 	}
 }
 
@@ -157,7 +187,7 @@ func TestDataFunctionKeepsNode(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	res, err := fake.funcs["note"](context.Background(), nil)
+	res, _, err := fake.call(t, "note")
 	if err != nil {
 		t.Fatalf("note handler: %v", err)
 	}

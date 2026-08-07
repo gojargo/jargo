@@ -29,12 +29,10 @@ func toolDelta(index int, id, name, args string) toolCallDelta {
 func TestToMessagesToolTurn(t *testing.T) {
 	convo := frames.NewLLMContext("be helpful")
 	convo.AddUserMessage("weather in Paris?")
-	convo.AddAssistantToolCalls("", []frames.ToolCall{
-		{ID: "call_a", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`)},
+	convo.AddAssistantToolCall(frames.ToolCall{
+		ID: "call_a", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`),
 	})
-	convo.AddToolResults([]frames.ToolResult{
-		{ID: "call_a", Name: "get_weather", Content: "sunny, 20C"},
-	})
+	convo.AddToolResult(frames.ToolResult{ID: "call_a", Name: "get_weather", Content: "sunny, 20C"})
 
 	msgs := toMessages(convo)
 	if len(msgs) != 4 {
@@ -64,7 +62,7 @@ func TestToMessagesToolTurn(t *testing.T) {
 
 func TestToMessagesEmptyArgsDefaults(t *testing.T) {
 	convo := frames.NewLLMContext("")
-	convo.AddAssistantToolCalls("", []frames.ToolCall{{ID: "c1", Name: "now"}})
+	convo.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "now"})
 	msgs := toMessages(convo)
 	if got := msgs[0].ToolCalls[0].Function.Arguments; got != "{}" {
 		t.Errorf("empty args should default to {}, got %q", got)

@@ -69,10 +69,11 @@ func TestBuildInputConfiguredInstructions(t *testing.T) {
 func TestBuildInputToolTurn(t *testing.T) {
 	convo := frames.NewLLMContext("")
 	convo.AddUserMessage("weather?")
-	convo.AddAssistantToolCalls("let me check", []frames.ToolCall{
-		{ID: "call_1", Name: "get_weather", Args: json.RawMessage(`{"city":"Paris"}`)},
+	convo.AddAssistantMessage("let me check")
+	convo.AddAssistantToolCall(frames.ToolCall{
+		ID: "call_1", Name: "get_weather", Args: json.RawMessage(`{"city":"Paris"}`),
 	})
-	convo.AddToolResults([]frames.ToolResult{{ID: "call_1", Content: "sunny"}})
+	convo.AddToolResult(frames.ToolResult{ID: "call_1", Content: "sunny"})
 
 	items, _ := Config{}.buildInput(convo)
 	if len(items) != 4 {
@@ -96,7 +97,7 @@ func TestBuildInputToolTurn(t *testing.T) {
 // object, which the API requires, rather than an empty string.
 func TestBuildInputEmptyArguments(t *testing.T) {
 	convo := frames.NewLLMContext("")
-	convo.AddAssistantToolCalls("", []frames.ToolCall{{ID: "c1", Name: "now"}})
+	convo.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "now"})
 	items, _ := Config{}.buildInput(convo)
 	if len(items) != 1 || items[0].Arguments != "{}" {
 		t.Errorf("items = %+v, want a call with empty-object arguments", items)

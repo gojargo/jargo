@@ -46,7 +46,7 @@ func (f *fakeLLM) ProcessFrame(ctx context.Context, frame frames.Frame, dir proc
 		return err
 	}
 	if strings.Contains(strings.ToLower(last), "weather") {
-		call := frames.NewFunctionCallInProgressFrame("call-1", "get_weather")
+		call := frames.NewFunctionCallInProgressFrame("call-1", "get_weather", nil, true, "g1")
 		if err := f.PushFrame(ctx, call, processor.Downstream); err != nil {
 			return err
 		}

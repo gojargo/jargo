@@ -34,7 +34,8 @@ const (
 	// block it answers is never left unanswered.
 	toolResultInProgress = "IN_PROGRESS"
 	// toolResultCancelled replaces the placeholder when the call is canceled.
-	toolResultCancelled = "CANCELLED"
+	// The spelling is the protocol's, not prose.
+	toolResultCancelled = "CANCELLED" //nolint:misspell // the literal written to the conversation
 	// toolResultCompleted stands in for a call that finished having produced no
 	// result of its own.
 	toolResultCompleted = "COMPLETED"
@@ -434,16 +435,11 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		a.mu.Unlock()
 	case *frames.TTSTextFrame:
 		a.handleSpoken(fr)
-	case *frames.FunctionCallsStartedFrame:
-		a.handleFunctionCallsStarted(fr)
-	case *frames.FunctionCallInProgressFrame:
-		a.handleFunctionCallInProgress(fr)
-	case *frames.FunctionCallResultFrame:
-		if err := a.handleFunctionCallResult(ctx, fr); err != nil {
+	case *frames.FunctionCallsStartedFrame, *frames.FunctionCallInProgressFrame,
+		*frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame:
+		if err := a.handleFunctionCallFrame(ctx, f); err != nil {
 			return err
 		}
-	case *frames.FunctionCallCancelFrame:
-		a.handleFunctionCallCancel(fr)
 	case *frames.LLMFullResponseEndFrame:
 		a.commit()
 	case *frames.TTSSpeakFrame:
@@ -451,18 +447,9 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 		if fr.AppendToContext {
 			a.context.AddAssistantMessage(fr.Text)
 		}
-	case *frames.UserStartedSpeakingFrame:
-		a.setUserSpeaking(true)
-	case *frames.UserStoppedSpeakingFrame:
-		a.setUserSpeaking(false)
-	case *frames.BotStartedSpeakingFrame:
-		a.setBotSpeaking(true)
-	case *frames.BotStoppedSpeakingFrame:
-		a.setBotSpeaking(false)
-		if err := a.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		return a.pushDeferredContext(ctx)
+	case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
+		*frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
+		return a.handleSpeakingState(ctx, f, dir)
 	case *frames.InterruptionFrame:
 		// The response was cut off; keep whatever the bot already said. The tool
 		// calls still running are left alone: each already has a placeholder
@@ -502,6 +489,24 @@ func (a *AssistantAggregator) handleSpoken(fr *frames.TTSTextFrame) {
 		return
 	}
 	a.context.AddAssistantMessage(spoken)
+}
+
+// handleFunctionCallFrame applies one frame of a tool call's life to the
+// conversation. The four arrive on two different goroutines: the two system
+// frames as they are queued, the other two in turn behind the frames of the turn
+// they belong to.
+func (a *AssistantAggregator) handleFunctionCallFrame(ctx context.Context, f frames.Frame) error {
+	switch fr := f.(type) {
+	case *frames.FunctionCallsStartedFrame:
+		a.handleFunctionCallsStarted(fr)
+	case *frames.FunctionCallInProgressFrame:
+		a.handleFunctionCallInProgress(fr)
+	case *frames.FunctionCallResultFrame:
+		return a.handleFunctionCallResult(ctx, fr)
+	case *frames.FunctionCallCancelFrame:
+		a.handleFunctionCallCancel(fr)
+	}
+	return nil
 }
 
 // handleFunctionCallsStarted records the announced calls as awaiting results. It
@@ -748,16 +753,32 @@ func (a *AssistantAggregator) runContextUpdated(fn func(ctx context.Context) err
 	})
 }
 
-func (a *AssistantAggregator) setUserSpeaking(v bool) {
+// handleSpeakingState tracks who holds the floor, which is what tells a tool
+// result whether re-running generation now would talk over somebody. The bot
+// falling silent is also when a deferred re-run finally happens.
+func (a *AssistantAggregator) handleSpeakingState(
+	ctx context.Context, f frames.Frame, dir processor.Direction,
+) error {
 	a.mu.Lock()
-	a.userSpeaking = v
+	switch f.(type) {
+	case *frames.UserStartedSpeakingFrame:
+		a.userSpeaking = true
+	case *frames.UserStoppedSpeakingFrame:
+		a.userSpeaking = false
+	case *frames.BotStartedSpeakingFrame:
+		a.botSpeaking = true
+	case *frames.BotStoppedSpeakingFrame:
+		a.botSpeaking = false
+	}
 	a.mu.Unlock()
-}
 
-func (a *AssistantAggregator) setBotSpeaking(v bool) {
-	a.mu.Lock()
-	a.botSpeaking = v
-	a.mu.Unlock()
+	if err := a.PushFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, stopped := f.(*frames.BotStoppedSpeakingFrame); !stopped {
+		return nil
+	}
+	return a.pushDeferredContext(ctx)
 }
 
 // commit appends the aggregated assistant message to the context, if any, and
