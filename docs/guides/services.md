@@ -168,12 +168,39 @@ A handler that blocks **must honor `ctx`**, the same interruption rule as
 
 The call and the message answering it are written together the moment the call
 starts, so the conversation is valid at every instant, and the result replaces
-that placeholder in place. Registering with
-`llm.WithCancelOnInterruption(false)` makes the tool asynchronous: the model
-carries on rather than waiting, the call survives a barge-in, and each result the
-handler reports (call `p.Result` with `IsFinal` false for the ones before the
-last) reaches the model on a later turn. See
+that placeholder in place. See
 [LLM context](../concepts/llm-context.md#tool-calls).
+
+A tool can carry its own handler instead, which saves keeping two lists in step:
+
+```go
+convo.SetTools([]frames.Tool{{
+    Name:        "get_order_status",
+    Description: "Look up the status of an order by its ID.",
+    Parameters:  schema,
+    Handler:     lookupOrder,
+}})
+```
+
+The handler is registered when the toolset is advertised and dropped when it
+stops being advertised, so what the model can call and what answers are the same
+set. A handler registered by hand always wins and is never dropped.
+
+### Tuning how calls run
+
+| Option | What it does |
+|---|---|
+| `llm.WithCancelOnInterruption(false)` | Registers an **asynchronous** tool: the model carries on rather than waiting, the call survives a barge-in, and every result the handler reports reaches the model on a later turn as a developer message. Call `p.Result` with `IsFinal` false for the ones before the last. |
+| `llm.WithTimeout(d)` | Bounds one function's calls. |
+| `llm.WithFunctionCallTimeout(d)` | Bounds every call. One that overruns is given up on: it records as completed rather than answering on the tool's behalf. |
+| `llm.WithSequentialFunctionCalls()` | Runs the calls of one response one after another, for tools that share something not safe to use concurrently. |
+| `llm.WithUngroupedFunctionCalls()` | Re-runs generation per result instead of once the batch finishes. |
+| `llm.WithAsyncToolCancellation()` | Offers the model a built-in `cancel_async_tool_call`, while any asynchronous tool is registered, so it can abandon background work it no longer needs. |
+
+Register the empty name for a **catch-all** that takes any call no named handler
+claims. `UnregisterFunction` withdraws a handler, `HasFunction` asks whether a
+call would be claimed, and `OnFunctionCallsStarted` / `OnFunctionCallsCanceled`
+report which calls a response started and which an interruption took away.
 
 ## Speech-to-speech
 

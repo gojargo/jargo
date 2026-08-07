@@ -12,8 +12,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **`LLMContext.Messages` handed out an aliased tool result.** It copied the
+  message slice but not what each message pointed at, so every caller shared one
+  `ToolResults` array with the conversation. That was safe while results were
+  only ever appended. It stopped being safe once a result started being rewritten
+  in place when its call reports: a provider rendering a request could be reading
+  the very element the aggregator was writing. Messages now copies deep enough
+  that a snapshot means what it said when it was taken, and `SetMessages` copies
+  its input so a caller keeping that slice cannot reach back into the
+  conversation.
+
 ### Changed
 
+- **The assistant aggregator consumes the function-call frames** rather than
+  forwarding them. It is where a tool call becomes conversation and it is the
+  last processor in the pipeline, so forwarding them told nobody anything.
+  Everything that needs them is reached another way: the LLM service broadcasts
+  each one upstream as well as down, which is how the idle watchdog and the mute
+  strategies see them from inside the user aggregator, and an RTVI processor sits
+  between the LLM and the output.
 - **A tool call and the message answering it are now written together**, the
   moment the call starts, and the result replaces that placeholder where it sits
   rather than being appended at the tail. The conversation used to hold the
@@ -181,6 +200,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A tool can carry the handler that answers it.** `frames.Tool` gains a
+  `Handler`, so advertising the tool is enough: the LLM service registers the
+  handler when the toolset is advertised and drops it when the toolset stops
+  advertising it, and what the model can call and what actually answers are the
+  same set by construction. Registering by hand still wins and is never dropped.
+- **Tool calls can be bounded, sequenced and observed.**
+  `llm.WithFunctionCallTimeout` bounds every call and `llm.WithTimeout` bounds
+  one function's; a call that overruns is given up on and records as completed
+  rather than answering on the tool's behalf.
+  `llm.WithSequentialFunctionCalls` runs the calls of one response one after
+  another, for tools that share something not safe to use concurrently.
+  `llm.WithUngroupedFunctionCalls` re-runs generation per result instead of once
+  the batch finishes. A handler registered under the empty name is a catch-all,
+  taking any call no named handler claims; `llm.Base.UnregisterFunction` and
+  `HasFunction` manage the registry, and `OnFunctionCallsStarted` /
+  `OnFunctionCallsCanceled` report which calls a response started and which an
+  interruption took away. A call nothing claims now says which of the two ways
+  that happened: a tool advertised with nothing behind it reads as the wiring
+  mistake it almost always is, while a tool nothing advertises is the model
+  inventing one.
+- **`llm.WithAsyncToolCancellation` lets the model abandon background work it no
+  longer needs.** A tool registered to survive an interruption keeps running
+  through a barge-in, so its result can arrive into a conversation that has moved
+  on. With this on, the service offers a built-in `cancel_async_tool_call`
+  alongside the conversation's own tools, and appends instructions telling the
+  model how to read the id of a call still running out of the async-tool messages
+  already in the conversation. Both appear only while such a tool is registered.
+  `llm.Base.CancelAsyncToolCall` does the same on the application's own account.
+  What the service adds is kept apart from what the application set:
+  `LLMContext.Tools` and `System` fold it in for the request, and
+  `LLMContext.AppTools` answers what the application itself offers.
 - **`processor.Base.HasQueuedFrame` reports whether a matching frame is still
   waiting** in a processor's in-order queue, behind the one it is handling. A
   processor uses it to tell that more of the same work is already on its way, so
