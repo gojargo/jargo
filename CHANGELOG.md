@@ -147,6 +147,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Anthropic no longer drops a system message from the conversation.** A
+  `RoleSystem` message in the message list was skipped outright, on the grounds
+  that the system prompt is sent beside the conversation, so anything a caller
+  put there was silently lost. Anthropic has no system input role, so such a
+  message now enters as the user, which is where its content belongs. A
+  conversation carrying nothing but a system prompt is sent the same way rather
+  than reaching the API with an empty message list, which it rejects.
+
+- **Anthropic caches the conversation, not just the system prompt.** The
+  ephemeral cache breakpoint was placed only on the system prompt, so everything
+  said in the conversation was re-read on every turn. The two most recent user
+  messages are now marked as well: the marker on the last tells Anthropic to
+  cache the prompt up to that point, and the one before it tells Anthropic to
+  read back the cache written on the previous turn. Marking only the last would
+  write a cache every turn and never read one. The system-prompt breakpoint is
+  unchanged, so recalled context still sits outside the cached prefix.
+
 - **Perplexity is sent a conversation it accepts.** Perplexity is stricter than
   OpenAI about the shape of a message history in three ways, and jargo honored
   none of them, so a conversation it could not read was sent as though it could:

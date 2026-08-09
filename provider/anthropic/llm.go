@@ -2,12 +2,13 @@ package anthropic
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
+	"github.com/gojargo/jargo/adapter"
+	anthropicadapter "github.com/gojargo/jargo/adapter/anthropic"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 )
@@ -23,7 +24,9 @@ type Service struct {
 	temperature param.Opt[float64]
 	topP        param.Opt[float64]
 	topK        param.Opt[int64]
-	// cachePrompt gates the ephemeral cache breakpoint on the system prompt.
+	// adapter converts the conversation into the request Anthropic takes.
+	adapter anthropicadapter.Adapter
+	// cachePrompt gates the ephemeral cache breakpoints on the prompt.
 	cachePrompt bool
 	// thinking is the extended-thinking config sent on each request; thinkingSet
 	// reports whether it was configured (an unset union means "omit").
@@ -105,19 +108,25 @@ func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *
 }
 
 // newParams builds the request params shared by both generation paths: model,
-// token cap, the converted conversation, sampling controls and the cached
-// system prompt.
-func (s *Service) newParams(convo *frames.LLMContext) sdk.MessageNewParams {
-	messages := toMessages(convo.Messages())
-	// Models without assistant-prefill support reject a request whose message
-	// list ends with an assistant message; give them a trailing user turn.
-	if !supportsPrefill(s.model) {
-		messages = ensureLastMessageIsUser(messages)
+// token cap, the converted conversation, sampling controls and the system
+// prompt.
+func (s *Service) newParams(
+	convo *frames.LLMContext, opts adapter.Options,
+) (sdk.MessageNewParams, error) {
+	opts.EnablePromptCaching = s.cachePrompt
+	// A model without assistant-prefill support rejects a request whose message
+	// list ends with an assistant message; give it a trailing user turn.
+	opts.EnsureLastMessageIsUser = !supportsPrefill(s.model)
+	p, err := s.adapter.LLMInvocationParams(convo, opts)
+	if err != nil {
+		return sdk.MessageNewParams{}, err
 	}
 	params := sdk.MessageNewParams{
 		Model:       s.model,
 		MaxTokens:   s.maxTokens,
-		Messages:    messages,
+		Messages:    p.Messages,
+		System:      p.System,
+		Tools:       p.Tools,
 		Temperature: s.temperature,
 		TopP:        s.topP,
 		TopK:        s.topK,
@@ -125,42 +134,7 @@ func (s *Service) newParams(convo *frames.LLMContext) sdk.MessageNewParams {
 	if s.thinkingSet {
 		params.Thinking = s.thinking
 	}
-	params.System = s.systemBlocks(convo)
-	return params
-}
-
-// systemBlocks renders the system prompt, with the cache breakpoint on the part
-// of it that survives between turns.
-//
-// A cached prefix is only reused while it stays byte-identical, and everything
-// after the breakpoint is free to vary without disturbing it. The recalled
-// context a memory service refreshes every turn is exactly that: putting it
-// inside the breakpoint rewrites the cache on every request and never reads one
-// back, which costs more than not caching at all.
-func (s *Service) systemBlocks(convo *frames.LLMContext) []sdk.TextBlockParam {
-	if !s.cachePrompt {
-		system := convo.System()
-		if system == "" {
-			return nil
-		}
-		return []sdk.TextBlockParam{{Text: system}}
-	}
-
-	stable, volatile := convo.SystemParts()
-	blocks := make([]sdk.TextBlockParam, 0, 2)
-	if stable != "" {
-		blocks = append(blocks, sdk.TextBlockParam{
-			Text:         stable,
-			CacheControl: sdk.NewCacheControlEphemeralParam(),
-		})
-	}
-	if volatile != "" {
-		blocks = append(blocks, sdk.TextBlockParam{Text: volatile})
-	}
-	if len(blocks) == 0 {
-		return nil
-	}
-	return blocks
+	return params, nil
 }
 
 // toUsage converts the SDK's per-request usage into the pipeline's token usage.
@@ -183,8 +157,15 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	report := s.UsageMetricsEnabled()
 	var acc sdk.Message
+	params, err := s.newParams(convo, adapter.Options{})
+	if err != nil {
+		return err
+	}
+	// A text-only generation advertises no tools, so the model has nothing to
+	// call and a reported call would be the provider inventing one.
+	params.Tools = nil
 	s.StartTTFBMetrics()
-	stream := s.client.Messages.NewStreaming(ctx, s.newParams(convo))
+	stream := s.client.Messages.NewStreaming(ctx, params)
 	s.StopTTFBMetrics()
 	for stream.Next() {
 		event := stream.Current()
@@ -220,9 +201,9 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 // the request, and any tool-use / tool-result turns already in the context are
 // replayed as the matching Anthropic blocks.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	params := s.newParams(convo)
-	if tools := convo.Tools(); len(tools) > 0 {
-		params.Tools = toTools(tools)
+	params, err := s.newParams(convo, adapter.Options{})
+	if err != nil {
+		return err
 	}
 
 	var acc sdk.Message
@@ -265,16 +246,17 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 func (s *Service) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
-	params := s.newParams(convo)
+	params, err := s.newParams(
+		convo, adapter.Options{SystemInstruction: opts.SystemInstruction},
+	)
+	if err != nil {
+		return "", err
+	}
 	if opts.MaxTokens > 0 {
 		params.MaxTokens = int64(opts.MaxTokens)
 	}
-	if opts.SystemInstruction != "" {
-		// Anthropic carries the instruction beside the conversation rather than
-		// in it, so the one this inference was given stands in place of the
-		// conversation's own.
-		params.System = []sdk.TextBlockParam{{Text: opts.SystemInstruction}}
-	}
+	// An inference wants an answer, not a tool call, so the toolset is left off.
+	params.Tools = nil
 	msg, err := s.client.Messages.New(ctx, params)
 	if err != nil {
 		return "", llm.AsCompletionTimeout(ctx, err)
@@ -285,34 +267,6 @@ func (s *Service) RunInference(
 		}
 	}
 	return "", nil
-}
-
-// toTools converts the context's tools into Anthropic tool params. Each tool's
-// Parameters JSON-Schema object supplies the input schema's properties and
-// required fields.
-func toTools(tools []frames.Tool) []sdk.ToolUnionParam {
-	out := make([]sdk.ToolUnionParam, 0, len(tools))
-	for _, t := range tools {
-		var schema struct {
-			Properties json.RawMessage `json:"properties"`
-			Required   []string        `json:"required"`
-		}
-		if len(t.Parameters) > 0 {
-			_ = json.Unmarshal(t.Parameters, &schema)
-		}
-		tool := &sdk.ToolParam{
-			Name:        t.Name,
-			InputSchema: sdk.ToolInputSchemaParam{Required: schema.Required},
-		}
-		if t.Description != "" {
-			tool.Description = param.NewOpt(t.Description)
-		}
-		if len(schema.Properties) > 0 {
-			tool.InputSchema.Properties = schema.Properties
-		}
-		out = append(out, sdk.ToolUnionParam{OfTool: tool})
-	}
-	return out
 }
 
 // prefillSupportedPatterns lists the Claude models that still accept a request
@@ -348,93 +302,4 @@ func supportsPrefill(model string) bool {
 		}
 	}
 	return false
-}
-
-// ensureLastMessageIsUser appends a minimal user message when the list ends with
-// an assistant message, so a model without prefill support accepts the request.
-// The "." is a language-neutral no-op user turn; the stored context is untouched.
-func ensureLastMessageIsUser(msgs []sdk.MessageParam) []sdk.MessageParam {
-	if n := len(msgs); n > 0 && msgs[n-1].Role == sdk.MessageParamRoleAssistant {
-		return append(msgs, sdk.NewUserMessage(sdk.NewTextBlock(".")))
-	}
-	return msgs
-}
-
-// emptyText stands in for a message whose content came out empty. Anthropic
-// rejects an empty text block, and a message can end up with nothing to say:
-// an assistant turn that only requested tools has its text dropped below.
-const emptyText = "(empty)"
-
-// toMessages converts the conversation into Anthropic message params. Tool turns
-// become the assistant(tool_use) and user(tool_result) blocks the API requires.
-//
-// The conversation records one tool call per message, each followed by the
-// message answering it, so that it is valid at every instant. Anthropic wants
-// the two sides of a batch of parallel calls each in a single message, which is
-// what merging consecutive messages of the same role produces.
-func toMessages(msgs []frames.Message) []sdk.MessageParam {
-	out := make([]sdk.MessageParam, 0, len(msgs))
-	for _, m := range msgs {
-		switch {
-		case len(m.ToolResults) > 0:
-			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolResults))
-			for _, r := range m.ToolResults {
-				blocks = append(blocks, sdk.NewToolResultBlock(r.ID, r.Content, false))
-			}
-			out = append(out, sdk.NewUserMessage(blocks...))
-		case len(m.ToolCalls) > 0:
-			// Any text the model spoke alongside the calls is dropped. It was
-			// already pushed downstream to be spoken and is committed as an
-			// assistant message of its own when the turn ends, so keeping it here
-			// too would say it twice.
-			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolCalls))
-			for _, c := range m.ToolCalls {
-				input := any(c.Args)
-				if len(c.Args) == 0 {
-					input = json.RawMessage("{}")
-				}
-				blocks = append(blocks, sdk.NewToolUseBlock(c.ID, input, c.Name))
-			}
-			out = append(out, sdk.NewAssistantMessage(blocks...))
-		case m.Role == frames.RoleAssistant:
-			out = append(out, sdk.NewAssistantMessage(sdk.NewTextBlock(text(m.Text))))
-		case m.Role == frames.RoleSystem:
-			// The system prompt is sent separately, not as a message.
-		default:
-			// A user message, and a developer message too: Anthropic has neither a
-			// developer nor a system input role, so both enter as the user.
-			out = append(out, sdk.NewUserMessage(sdk.NewTextBlock(text(m.Text))))
-		}
-	}
-	return mergeSameRole(out)
-}
-
-// text substitutes the empty-content placeholder for an empty string.
-func text(s string) string {
-	if s == "" {
-		return emptyText
-	}
-	return s
-}
-
-// mergeSameRole folds each run of consecutive messages of the same role into one
-// message holding all their blocks. Anthropic pairs a tool result to its call by
-// id within the request, so the merge is what lets the conversation hold each
-// call in a message of its own while the request still presents a batch of
-// parallel calls the way the API expects it.
-func mergeSameRole(msgs []sdk.MessageParam) []sdk.MessageParam {
-	out := make([]sdk.MessageParam, 0, len(msgs))
-	for _, m := range msgs {
-		if n := len(out); n > 0 && out[n-1].Role == m.Role {
-			out[n-1].Content = append(out[n-1].Content, m.Content...)
-			continue
-		}
-		out = append(out, m)
-	}
-	for i := range out {
-		if len(out[i].Content) == 0 {
-			out[i].Content = []sdk.ContentBlockParamUnion{sdk.NewTextBlock(emptyText)}
-		}
-	}
-	return out
 }

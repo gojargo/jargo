@@ -6,29 +6,19 @@ import (
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 )
 
-func TestToToolsMapsSchema(t *testing.T) {
-	tools := []frames.Tool{{
-		Name:        "get_weather",
-		Description: "Get the weather",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}`),
-	}}
-	out := toTools(tools)
-	if len(out) != 1 {
-		t.Fatalf("len = %d, want 1", len(out))
-	}
-	b, err := json.Marshal(out[0])
+// mustParams converts the conversation and fails the test if the conversion
+// did.
+func (s *Service) mustParams(t *testing.T, convo *frames.LLMContext) sdk.MessageNewParams {
+	t.Helper()
+	p, err := s.newParams(convo, adapter.Options{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("newParams: %v", err)
 	}
-	s := string(b)
-	for _, want := range []string{`"name":"get_weather"`, `"Get the weather"`, `"location"`, `"required":["location"]`} {
-		if !strings.Contains(s, want) {
-			t.Fatalf("tool JSON %s missing %q", s, want)
-		}
-	}
+	return p
 }
 
 func TestSupportsPrefill(t *testing.T) {
@@ -57,38 +47,19 @@ func TestSupportsPrefill(t *testing.T) {
 	}
 }
 
-func TestEnsureLastMessageIsUser(t *testing.T) {
-	user := sdk.NewUserMessage(sdk.NewTextBlock("hi"))
-	assistant := sdk.NewAssistantMessage(sdk.NewTextBlock("hello"))
-
-	got := ensureLastMessageIsUser([]sdk.MessageParam{user, assistant})
-	if len(got) != 3 || got[2].Role != sdk.MessageParamRoleUser {
-		t.Fatalf("ending on assistant should append a user message; got %d messages", len(got))
-	}
-
-	got = ensureLastMessageIsUser([]sdk.MessageParam{assistant, user})
-	if len(got) != 2 {
-		t.Fatalf("ending on user should be unchanged; got %d messages", len(got))
-	}
-
-	if got := ensureLastMessageIsUser(nil); len(got) != 0 {
-		t.Fatalf("empty list should stay empty; got %d messages", len(got))
-	}
-}
-
 func TestNewParamsPrefillFixup(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	convo.AddUserMessage("hi")
 	convo.AddAssistantMessage("hello") // context ends on an assistant message
 
 	// A no-prefill model gets a trailing user message injected.
-	noPrefill := NewLLM(Config{Model: "claude-opus-4-8"}).newParams(convo).Messages
+	noPrefill := NewLLM(Config{Model: "claude-opus-4-8"}).mustParams(t, convo).Messages
 	if n := len(noPrefill); n != 3 || noPrefill[n-1].Role != sdk.MessageParamRoleUser {
 		t.Fatalf("no-prefill model: want 3 messages ending in a user turn, got %d", n)
 	}
 
 	// A prefill-supported model keeps the assistant message last.
-	prefill := NewLLM(Config{Model: "claude-haiku-4-5"}).newParams(convo).Messages
+	prefill := NewLLM(Config{Model: "claude-haiku-4-5"}).mustParams(t, convo).Messages
 	if n := len(prefill); n != 2 || prefill[n-1].Role != sdk.MessageParamRoleAssistant {
 		t.Fatalf("prefill model: want the assistant message to stay last, got %d messages", n)
 	}
@@ -100,7 +71,7 @@ func TestNewParamsAppliesSampling(t *testing.T) {
 	s := NewLLM(Config{Temperature: &temp, TopP: &topP, TopK: &topK})
 	convo := frames.NewLLMContext("be brief")
 	convo.AddUserMessage("hi")
-	b, err := json.Marshal(s.newParams(convo))
+	b, err := json.Marshal(s.mustParams(t, convo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +87,7 @@ func TestNewParamsOmitsUnsetSampling(t *testing.T) {
 	s := NewLLM(Config{})
 	convo := frames.NewLLMContext("")
 	convo.AddUserMessage("hi")
-	b, err := json.Marshal(s.newParams(convo))
+	b, err := json.Marshal(s.mustParams(t, convo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +108,7 @@ func TestNewParamsAppliesThinking(t *testing.T) {
 		"adaptive": `"thinking":{"type":"adaptive"}`,
 	} {
 		s := NewLLM(Config{Thinking: &ThinkingConfig{Type: mode}})
-		b, err := json.Marshal(s.newParams(convo))
+		b, err := json.Marshal(s.mustParams(t, convo))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +119,7 @@ func TestNewParamsAppliesThinking(t *testing.T) {
 
 	// "enabled" carries the token budget.
 	s := NewLLM(Config{MaxTokens: 4096, Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 2048}})
-	b, err := json.Marshal(s.newParams(convo))
+	b, err := json.Marshal(s.mustParams(t, convo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +134,7 @@ func TestNewParamsOmitsThinkingWhenUnset(t *testing.T) {
 	s := NewLLM(Config{})
 	convo := frames.NewLLMContext("")
 	convo.AddUserMessage("hi")
-	b, err := json.Marshal(s.newParams(convo))
+	b, err := json.Marshal(s.mustParams(t, convo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,33 +158,6 @@ func TestToUsageMapsFields(t *testing.T) {
 	}
 }
 
-func TestToMessagesBuildsToolTurns(t *testing.T) {
-	msgs := []frames.Message{
-		{Role: frames.RoleUser, Text: "weather?"},
-		{Role: frames.RoleAssistant, ToolCalls: []frames.ToolCall{
-			{ID: "c1", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`)},
-		}},
-		{Role: frames.RoleUser, ToolResults: []frames.ToolResult{
-			{ID: "c1", Name: "get_weather", Content: "sunny"},
-		}},
-		{Role: frames.RoleAssistant, Text: "It is sunny."},
-	}
-	out := toMessages(msgs)
-	if len(out) != 4 {
-		t.Fatalf("len = %d, want 4", len(out))
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(b)
-	for _, want := range []string{`"tool_use"`, `"c1"`, `"get_weather"`, `"tool_result"`, `"tool_use_id":"c1"`, `sunny`} {
-		if !strings.Contains(s, want) {
-			t.Fatalf("messages JSON missing %q:\n%s", want, s)
-		}
-	}
-}
-
 // A cached prefix is only reused while it stays byte-identical. Recalled context
 // is replaced every turn, so the breakpoint has to sit before it: inside it, the
 // cache would be written on every request and never read back, which costs more
@@ -224,7 +168,7 @@ func TestNewParamsKeepsTheCachedPrefixStableAcrossRecall(t *testing.T) {
 	convo.AddUserMessage("hi")
 
 	cachedPrefix := func() string {
-		params := s.newParams(convo)
+		params := s.mustParams(t, convo)
 		var prefix []string
 		for _, block := range params.System {
 			if block.CacheControl.Type != "" {
@@ -257,7 +201,7 @@ func TestNewParamsStillSendsRecall(t *testing.T) {
 	convo.AddUserMessage("hi")
 	convo.SetRecall("I recall: the user has a cat")
 
-	b, err := json.Marshal(s.newParams(convo))
+	b, err := json.Marshal(s.mustParams(t, convo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +218,7 @@ func TestNewParamsWithoutCaching(t *testing.T) {
 	convo.AddUserMessage("hi")
 	convo.SetRecall("I recall: the user has a cat")
 
-	params := s.newParams(convo)
+	params := s.mustParams(t, convo)
 	if len(params.System) != 1 {
 		t.Fatalf("got %d system blocks, want 1", len(params.System))
 	}

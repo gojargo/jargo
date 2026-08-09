@@ -51,6 +51,13 @@ type Options struct {
 	// an asynchronous tool, is worth more to the model than the role it arrives
 	// under.
 	ConvertDeveloperToUser bool
+	// EnablePromptCaching marks the conversation so the provider caches the
+	// prompt and reads the cache back on the next turn.
+	EnablePromptCaching bool
+	// EnsureLastMessageIsUser appends a minimal user message when the converted
+	// conversation ends on an assistant message. It is for a model without
+	// assistant-prefill support, which rejects a request ending that way.
+	EnsureLastMessageIsUser bool
 }
 
 // LLMAdapter converts a universal conversation into one provider's invocation
