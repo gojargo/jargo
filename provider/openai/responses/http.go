@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 )
@@ -56,7 +57,11 @@ func (s *HTTPService) RunInference(
 
 // run issues one turn and feeds its event stream to the state machine.
 func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
-	body, err := encodeBody(s.cfg.newRequest(convo, withTools), s.cfg.Extra)
+	reqBody, err := s.cfg.newRequest(convo, adapter.Options{}, withTools)
+	if err != nil {
+		return err
+	}
+	body, err := encodeBody(reqBody, s.cfg.Extra)
 	if err != nil {
 		return err
 	}

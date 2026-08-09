@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gojargo/jargo/adapter"
+	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/llm"
@@ -100,29 +102,15 @@ type Config struct {
 // Validate reports whether the configuration is usable.
 func (c Config) Validate() error { return validate.Struct(c) }
 
-// inputItem is one entry of a Responses request's input list: a message, a
-// function call the model made, or the result of one.
-type inputItem struct {
-	Type string `json:"type"`
-	// Role and Content carry a message.
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
-	// CallID, Name and Arguments carry a function call.
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-	// Output carries a function call's result.
-	Output string `json:"output,omitempty"`
-}
-
-// responsesTool is a function tool advertised on the request. The Responses API
-// flattens the function fields onto the tool rather than nesting them.
-type responsesTool struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-}
+// The Responses wire types. They live in the adapter, which is what converts a
+// conversation into them; these aliases keep them reachable under this
+// package's name.
+type (
+	// inputItem is one entry of a Responses request's input list.
+	inputItem = responsesadapter.InputItem
+	// responsesTool is a function tool advertised on the request.
+	responsesTool = responsesadapter.Tool
+)
 
 // request is a Responses API request.
 type request struct {
@@ -143,88 +131,36 @@ type request struct {
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 }
 
-// buildInput converts a conversation into the Responses input list, and returns
-// the system instructions to send alongside it. The Responses API takes the
-// system prompt as its own field rather than as a leading message, so the
-// context's system prompt (which already folds in any rolling summary and
-// recalled memories) becomes the instructions. It wins over the configured one.
-func (c Config) buildInput(convo *frames.LLMContext) ([]inputItem, string) {
-	instructions := c.Instructions
-	if sys := convo.System(); sys != "" {
-		instructions = sys
-	}
-	messages := convo.Messages()
-	items := make([]inputItem, 0, len(messages))
-
-	for _, m := range messages {
-		switch {
-		case len(m.ToolResults) > 0:
-			for _, r := range m.ToolResults {
-				items = append(items, inputItem{
-					Type: itemFuncOutput, CallID: r.ID, Output: r.Content,
-				})
-			}
-		case len(m.ToolCalls) > 0:
-			if m.Text != "" {
-				items = append(items, inputItem{
-					Type: itemMessage, Role: string(frames.RoleAssistant), Content: m.Text,
-				})
-			}
-			for _, call := range m.ToolCalls {
-				args := string(call.Args)
-				if args == "" {
-					args = "{}"
-				}
-				items = append(items, inputItem{
-					Type: itemFuncCall, CallID: call.ID, Name: call.Name, Arguments: args,
-				})
-			}
-		default:
-			items = append(items, inputItem{
-				Type: itemMessage, Role: string(m.Role), Content: m.Text,
-			})
-		}
-	}
-	return items, instructions
-}
-
-// buildTools renders the tools a conversation advertises.
-func buildTools(convo *frames.LLMContext) []responsesTool {
-	tools := convo.Tools()
-	if len(tools) == 0 {
-		return nil
-	}
-	out := make([]responsesTool, 0, len(tools))
-	for _, t := range tools {
-		out = append(out, responsesTool{
-			Type:        "function",
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  t.Parameters,
-		})
-	}
-	return out
-}
-
 // newRequest builds the request for a conversation, without the streaming or
 // continuation fields the transports set themselves.
-func (c Config) newRequest(convo *frames.LLMContext, withTools bool) request {
-	input, instructions := c.buildInput(convo)
+func (c Config) newRequest(
+	convo *frames.LLMContext, opts adapter.Options, withTools bool,
+) (request, error) {
+	var a responsesadapter.Adapter
+	// The configured instructions are this service's own default, standing in
+	// when neither the call nor the conversation states one.
+	if opts.SystemInstruction == "" && convo.System() == "" {
+		opts.SystemInstruction = c.Instructions
+	}
+	p, err := a.LLMInvocationParams(convo, opts)
+	if err != nil {
+		return request{}, err
+	}
 	req := request{
 		Model:           c.Model,
-		Input:           input,
+		Input:           p.Input,
 		Stream:          true,
 		Store:           c.Store,
-		Instructions:    instructions,
+		Instructions:    p.Instructions,
 		MaxOutputTokens: c.MaxOutputTokens,
 		Temperature:     c.Temperature,
 		TopP:            c.TopP,
 		ServiceTier:     c.ServiceTier,
 	}
 	if withTools {
-		req.Tools = buildTools(convo)
+		req.Tools = p.Tools
 	}
-	return req
+	return req, nil
 }
 
 // runInference answers the conversation once over HTTP and returns the text.
@@ -235,7 +171,12 @@ func runInference(
 	ctx context.Context, cfg Config, client *http.Client,
 	convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
-	body := cfg.newRequest(convo, false)
+	body, err := cfg.newRequest(
+		convo, adapter.Options{SystemInstruction: opts.SystemInstruction}, false,
+	)
+	if err != nil {
+		return "", err
+	}
 	body.Stream = false
 	if opts.MaxTokens > 0 {
 		body.MaxOutputTokens = opts.MaxTokens
