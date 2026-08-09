@@ -134,13 +134,27 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	if got := waitMessage(t, out); got.Type != rtvi.TypeBotTTSStarted {
 		t.Fatalf("expected bot-tts-started, got %+v", got)
 	}
+	// The text the TTS reports speaking, not the text on its way into it.
+	task.QueueFrame(frames.NewTTSTextFrame("sunny"))
+	got := waitMessage(t, out)
+	if got.Type != rtvi.TypeBotTTSText {
+		t.Fatalf("expected bot-tts-text, got %+v", got)
+	}
+	if d, ok := got.Data.(rtvi.TextData); !ok || d.Text != "sunny" {
+		t.Fatalf("unexpected bot-tts-text data: %+v", got.Data)
+	}
+
+	// A TTSSpeakFrame is input to the service, so it reports nothing spoken. The
+	// bot-tts-stopped that follows is what proves nothing was emitted for it.
+	task.QueueFrame(frames.NewTTSSpeakFrame("not spoken yet"))
+
 	task.QueueFrame(frames.NewTTSStoppedFrame())
 	if got := waitMessage(t, out); got.Type != rtvi.TypeBotTTSStopped {
 		t.Fatalf("expected bot-tts-stopped, got %+v", got)
 	}
 
 	task.QueueFrame(frames.NewFunctionCallInProgressFrame("call-1", "get_weather", nil, true, "g1"))
-	got := waitMessage(t, out)
+	got = waitMessage(t, out)
 	if got.Type != rtvi.TypeLLMFunctionCall {
 		t.Fatalf("expected llm-function-call-in-progress, got %+v", got)
 	}
