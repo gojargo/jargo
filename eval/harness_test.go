@@ -21,7 +21,8 @@ import (
 // fakeLLM answers each turn deterministically so the harness can be exercised
 // end-to-end without a real model: it echoes the user's text, and on a weather
 // question it emits a get_weather tool call, followed by a get_restaurants call
-// when the turn asks about food too.
+// when the turn asks about food too. A turn that asks twice gets the weather
+// call twice, which is the repeated call a scenario has to be able to catch.
 type fakeLLM struct {
 	*processor.Base
 }
@@ -83,6 +84,14 @@ func (f *fakeLLM) ProcessFrame(ctx context.Context, frame frames.Frame, dir proc
 		call := frames.NewFunctionCallInProgressFrame("call-1", "get_weather", args, true, "g1")
 		if err := f.PushFrame(ctx, call, processor.Downstream); err != nil {
 			return err
+		}
+		// The same call a second time, standing in for a provider that re-requests
+		// a call it already made.
+		if strings.Contains(lower, "twice") {
+			again := frames.NewFunctionCallInProgressFrame("call-1b", "get_weather", args, true, "g1")
+			if err := f.PushFrame(ctx, again, processor.Downstream); err != nil {
+				return err
+			}
 		}
 	default:
 		if err := f.PushFrame(ctx, frames.NewLLMTextFrame("you said: "+last), processor.Downstream); err != nil {
@@ -266,6 +275,49 @@ turns:
 		t.Fatal("expected a failure for the reply that must not arrive")
 	}
 	if !strings.Contains(res.Failures[0].Reason, "you said: hello") {
+		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
+	}
+}
+
+// "this tool was called, and not again" is the two-expectation pattern: the call
+// itself, then an absent one holding a quiet window open behind it. A turn that
+// calls once satisfies both.
+func TestHarnessCallNotRepeatedPasses(t *testing.T) {
+	res := host(t, `
+name: calls-the-tool-once
+turns:
+  - user: "what's the weather in Paris?"
+    expect:
+      - event: function_call
+        name: get_weather
+      - event: function_call
+        absent: true
+        within_ms: 700
+`)
+	if !res.Passed() {
+		t.Fatalf("expected pass, got:\n%s", res)
+	}
+}
+
+// The same pattern against a turn that calls the tool twice: the first call
+// satisfies the first expectation, and the repeat trips the absent one. This is
+// what fails if a filter that drops an already-made call regresses.
+func TestHarnessCallRepeatedFailsAbsent(t *testing.T) {
+	res := host(t, `
+name: calls-the-tool-twice
+turns:
+  - user: "what's the weather in Paris? ask twice"
+    expect:
+      - event: function_call
+        name: get_weather
+      - event: function_call
+        absent: true
+        within_ms: 2000
+`)
+	if res.Passed() {
+		t.Fatal("expected a failure for the tool call the bot repeated")
+	}
+	if !strings.Contains(res.Failures[0].Reason, "get_weather") {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
 }

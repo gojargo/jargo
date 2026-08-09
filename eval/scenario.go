@@ -112,6 +112,23 @@
 // and it waits out its whole budget: set within_ms explicitly to keep the quiet
 // window short.
 //
+// The same two-expectation shape is how "this tool was called, and not again"
+// is written. The first expectation claims the call, and the absent one behind
+// it holds a quiet window open that a repeat trips:
+//
+//	expect:
+//	  - event: function_call
+//	    name: dispatch_alert
+//	  - event: function_call
+//	    absent: true
+//	    within_ms: 3000
+//
+// That is the assertion to reach for against a provider that re-requests a call
+// it already made, where running the tool twice is the expensive fault. Because
+// absent matches on event type, the window forbids any further call, not only
+// another dispatch_alert, so put it on a turn whose tool calls are all listed
+// above it.
+//
 // # Scheduling a turn
 //
 // A turn's input goes out as soon as the previous turn finishes, unless the turn
