@@ -135,6 +135,12 @@ func (c TTSConfig) Validate() error { return validate.Struct(c) }
 
 // NewTTS builds a Sarvam WebSocket TTS service.
 func NewTTS(cfg TTSConfig) *tts.Base {
+	return tts.New("SarvamTTS", newSynthesizer(cfg))
+}
+
+// newSynthesizer builds the synthesizer NewTTS drives, applying the defaults and
+// dropping the controls the configured model does not support.
+func newSynthesizer(cfg TTSConfig) *synthesizer {
 	if cfg.URL == "" {
 		cfg.URL = defaultTTSURL
 	}
@@ -170,7 +176,7 @@ func NewTTS(cfg TTSConfig) *tts.Base {
 	if mc.supportsTemperature {
 		s.temperature = cfg.Temperature
 	}
-	return tts.New("SarvamTTS", s)
+	return s
 }
 
 // resolveTTSLanguage maps a Language to Sarvam's regional code, defaulting to
