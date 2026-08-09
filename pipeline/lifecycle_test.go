@@ -48,6 +48,18 @@ func runTask(t *testing.T, task *pipeline.Task) chan error {
 	return done
 }
 
+// started blocks until the StartFrame has traveled the whole pipeline, so a test
+// injecting a frame directly does not race the pipeline coming up. Pair it with
+// a TaskParams whose OnReachedDownstream closes ch on the StartFrame.
+func started(t *testing.T, ch chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the pipeline never started")
+	}
+}
+
 // waitDone fails the test if the task does not finish promptly.
 func waitDone(t *testing.T, done chan error) {
 	t.Helper()
@@ -163,28 +175,65 @@ func TestCancelWorkerFrameCarriesReason(t *testing.T) {
 	}
 }
 
-// TestFlushProbeRoundTrip checks Flush returns only after the frames queued ahead
-// of the probe have been processed — the guarantee a caller relies on to let the
-// pipeline settle before injecting new work.
+// pacedEcho forwards frames after a short pause, so a test can be sure work is
+// still in flight in the pipeline when it injects something behind it.
+type pacedEcho struct {
+	*processor.Base
+}
+
+func newPacedEcho() *pacedEcho {
+	p := &pacedEcho{}
+	p.Base = processor.New("PacedEcho", p)
+	return p
+}
+
+func (p *pacedEcho) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.TextFrame); ok {
+		time.Sleep(100 * time.Millisecond)
+	}
+	return p.PushFrame(ctx, f, dir)
+}
+
+// TestFlushProbeRoundTrip checks Flush returns only after the work already in
+// the pipeline ahead of the probe has been processed, which is the guarantee a
+// caller relies on to let the pipeline settle before injecting new work.
+//
+// The wait for the first frame is what makes it deterministic: once that has
+// come out the far end, the second is inside the pipeline, so the probe injected
+// behind it has to wait for it.
 func TestFlushProbeRoundTrip(t *testing.T) {
 	var mu sync.Mutex
 	var seen []string
 
-	pipe := pipeline.New(newEcho())
+	up := make(chan struct{})
+	first := make(chan struct{})
+	var startOnce, firstOnce sync.Once
+	pipe := pipeline.New(newPacedEcho())
 	task := pipeline.NewTask(pipe, pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.StartFrame); ok {
+				startOnce.Do(func() { close(up) })
+			}
 			if tf, ok := f.(*frames.TextFrame); ok {
 				mu.Lock()
 				seen = append(seen, tf.Text)
 				mu.Unlock()
+				if tf.Text == "first" {
+					firstOnce.Do(func() { close(first) })
+				}
 			}
 		},
 	})
 
 	done := runTask(t, task)
+	started(t, up)
 
 	task.QueueFrame(frames.NewTextFrame("first"))
 	task.QueueFrame(frames.NewTextFrame("second"))
+	started(t, first)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -196,10 +245,81 @@ func TestFlushProbeRoundTrip(t *testing.T) {
 	got := append([]string(nil), seen...)
 	mu.Unlock()
 	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
-		t.Errorf("frames processed at flush = %v, want both queued frames done", got)
+		t.Errorf("frames processed at flush = %v, want the in-flight frames done", got)
 	}
 
 	task.StopWhenDone()
+	waitDone(t, done)
+}
+
+// flushSpy records the flush probes that reach it, so a test can tell whether a
+// probe entered the pipeline at all.
+type flushSpy struct {
+	*processor.Base
+	mu   sync.Mutex
+	seen int
+}
+
+func newFlushSpy() *flushSpy {
+	p := &flushSpy{}
+	p.Base = processor.New("FlushSpy", p)
+	return p
+}
+
+func (p *flushSpy) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.PipelineFlushFrame); ok {
+		p.mu.Lock()
+		p.seen++
+		p.mu.Unlock()
+	}
+	return p.PushFrame(ctx, f, dir)
+}
+
+func (p *flushSpy) probes() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.seen
+}
+
+// TestFlushAfterPipelineEndQueued checks a flush probe still reaches the
+// pipeline once a pipeline-ending frame has been queued ahead of it.
+//
+// The task stops draining the push queue as soon as one goes in, since it then
+// waits for that frame to travel through. A probe put through the queue behind
+// it would never enter the pipeline at all, and the caller would wait out its
+// whole timeout for a pipeline that was never asked anything. A tool handler
+// that ends the session leaves exactly that behind.
+//
+// It asserts the probe arrived rather than that the flush settled: once the end
+// frame is released the pipeline tears down, so whether the probe finishes its
+// round trip before that is a race by nature. Entering at all is the part the
+// caller was being denied.
+func TestFlushAfterPipelineEndQueued(t *testing.T) {
+	up := make(chan struct{})
+	var once sync.Once
+	spy := newFlushSpy()
+	task := pipeline.NewTask(pipeline.New(spy, newSlowEnd(300*time.Millisecond)), pipeline.TaskParams{
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.StartFrame); ok {
+				once.Do(func() { close(up) })
+			}
+		},
+	})
+	done := runTask(t, task)
+	started(t, up)
+
+	task.StopWhenDone()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = task.Flush(ctx)
+
+	if spy.probes() == 0 {
+		t.Error("the flush probe never entered the pipeline behind the end frame")
+	}
 	waitDone(t, done)
 }
 

@@ -176,14 +176,42 @@ func (t *Task) QueueFrames(fs []frames.Frame) {
 // processed, by queueing an EndFrame.
 func (t *Task) StopWhenDone() { t.QueueFrame(frames.NewEndFrame()) }
 
-// Flush waits for the pipeline to drain: it queues a PipelineFlushFrame probe
-// and blocks until the probe has traveled down to the sink and back up to the
-// source, meaning every frame queued ahead of it has been processed. Use it to
-// let the pipeline settle — after an interruption, say — before injecting new
-// work. It returns ctx.Err() if ctx is done first.
+// Flush waits for the pipeline to drain: it sends a PipelineFlushFrame probe and
+// blocks until the probe has traveled down to the sink and back up to the
+// source, meaning everything already in the pipeline ahead of it has been
+// processed. Use it to let the pipeline settle, after an interruption say,
+// before injecting new work. It returns ctx.Err() if ctx is done first.
+//
+// The probe is injected straight into the pipeline rather than queued with
+// QueueFrame. The queue stops being drained the moment a pipeline-ending frame
+// goes into it, since the task then waits for that frame to travel through, so a
+// probe queued behind one would never enter the pipeline at all and the caller
+// would wait out its whole timeout. A tool handler that ends the session leaves
+// exactly that behind.
+//
+// What it covers follows from that: the frames in the pipeline, not the ones
+// still waiting in the task's own queue. A frame handed to QueueFrame just
+// before this call may still be in that queue, and the probe will not wait for
+// it. That is what a caller wants of it, since what has to settle is the work
+// the pipeline is in the middle of.
 func (t *Task) Flush(ctx context.Context) error {
+	// Nothing goes into the pipeline before it is running. Injecting straight
+	// into it, rather than through the queue the task drains once it is up,
+	// means arriving during setup is possible, and a processor being set up on
+	// the task's goroutine must not be read from this one. Waiting here also
+	// means the probe is never handed to a processor that has yet to see its
+	// StartFrame, which would drop it and leave the caller waiting out the whole
+	// timeout for nothing.
+	select {
+	case <-t.startSig:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	probe := frames.NewPipelineFlushFrame()
-	t.QueueFrame(probe)
+	if err := t.pipeline.QueueFrame(ctx, probe, processor.Downstream); err != nil {
+		return err
+	}
 	select {
 	case <-probe.Done:
 		return nil
