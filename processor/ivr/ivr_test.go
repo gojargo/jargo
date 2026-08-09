@@ -29,7 +29,7 @@ func TestNavigatesAndStripsTags(t *testing.T) {
 			defer mu.Unlock()
 			switch fr := f.(type) {
 			case *frames.OutputDTMFFrame:
-				dtmf = append(dtmf, fr.Button)
+				dtmf = append(dtmf, fr.Buttons...)
 			case *frames.LLMTextFrame:
 				spoken += fr.Text
 			case *frames.LLMFullResponseEndFrame:

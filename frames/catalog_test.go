@@ -313,8 +313,12 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewUserTurnInferenceCompletedFrame() },
 		},
 		{
-			label: "OutputDTMFFrame", cat: control, wantString: "button: 7",
+			label: "OutputDTMFFrame", cat: control, wantString: "buttons: 7",
 			build: func() frames.Frame { return frames.NewOutputDTMFFrame(frames.KeypadSeven) },
+		},
+		{
+			label: "OutputDTMFUrgentFrame", cat: system, wantString: "buttons: 9",
+			build: func() frames.Frame { return frames.NewOutputDTMFUrgentFrame(frames.KeypadNine) },
 		},
 		{
 			label: "MixerUpdateSettingsFrame", cat: control, wantString: "settings: 1",
@@ -441,15 +445,6 @@ func TestCatalogIDsAreUnique(t *testing.T) {
 }
 
 func TestConstructorFields(t *testing.T) {
-	t.Run("DTMF", func(t *testing.T) {
-		if got := frames.NewInputDTMFFrame(frames.KeypadStar).Button; got != frames.KeypadStar {
-			t.Errorf("Button = %q, want *", got)
-		}
-		if got := frames.NewOutputDTMFFrame(frames.KeypadPound).Button; got != frames.KeypadPound {
-			t.Errorf("Button = %q, want #", got)
-		}
-	})
-
 	t.Run("function calls", func(t *testing.T) {
 		calls := []frames.ToolCall{{ID: "a", Name: "one"}, {ID: "b", Name: "two"}}
 		started := frames.NewFunctionCallsStartedFrame(calls)
@@ -645,5 +640,24 @@ func TestFramePTSRendering(t *testing.T) {
 	f.SetPTS(1234)
 	if got := f.String(); !strings.Contains(got, "pts: 1234") {
 		t.Errorf("String() = %q, want the pts value", got)
+	}
+}
+
+// TestDTMFConstructorFields checks the keypad frames carry the keys they were
+// built with. The output frames take a run of keys, since a caller entering an
+// account number presses several and the order is the number.
+func TestDTMFConstructorFields(t *testing.T) {
+	if got := frames.NewInputDTMFFrame(frames.KeypadStar).Button; got != frames.KeypadStar {
+		t.Errorf("Button = %q, want *", got)
+	}
+	if got := frames.NewOutputDTMFFrame(frames.KeypadPound).Buttons; len(got) != 1 || got[0] != frames.KeypadPound {
+		t.Errorf("Buttons = %q, want #", got)
+	}
+	seq := []frames.KeypadEntry{frames.KeypadOne, frames.KeypadTwo, frames.KeypadPound}
+	if got := frames.NewOutputDTMFSequenceFrame(seq).Keys(); frames.KeypadString(got) != "12#" {
+		t.Errorf("Keys() = %q, want 12#", frames.KeypadString(got))
+	}
+	if got := frames.NewOutputDTMFUrgentFrame(frames.KeypadStar).Keys(); frames.KeypadString(got) != "*" {
+		t.Errorf("urgent Keys() = %q, want *", frames.KeypadString(got))
 	}
 }

@@ -3,14 +3,22 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/audio/dtmf"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
+
+// errNativeDTMFUnimplemented is returned by a transport that reports native DTMF
+// support without providing it.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNativeDTMFUnimplemented = errors.New("transport: native DTMF reported as supported but not implemented")
 
 const (
 	// botVADStop is how long a speech stream has to stay silent before the
@@ -86,6 +94,49 @@ func (bo *BaseOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool
 // SendMessage is the default no-op; a concrete transport overrides it.
 func (bo *BaseOutput) SendMessage(context.Context, []byte) error { return nil }
 
+// SupportsNativeDTMF reports whether the transport signals a keypress itself.
+// The default is false, so the keys are sounded as audio instead. A transport
+// whose protocol carries keypresses overrides this and WriteDTMFNative, which
+// keeps the keys out of the audio a recording would capture.
+func (bo *BaseOutput) SupportsNativeDTMF() bool { return false }
+
+// WriteDTMFNative signals the keys over the transport's own protocol. A
+// transport that answers true to SupportsNativeDTMF overrides this; the default
+// says it did not, which is what makes claiming support without implementing it
+// an error rather than silence.
+func (bo *BaseOutput) WriteDTMFNative(context.Context, frames.DTMFOutput) error {
+	return errNativeDTMFUnimplemented
+}
+
+// WriteDTMF sends the keys the frame carries, natively when the transport can
+// and as audio when it cannot.
+func (bo *BaseOutput) WriteDTMF(ctx context.Context, f frames.DTMFOutput) error {
+	if bo.self.SupportsNativeDTMF() {
+		return bo.self.WriteDTMFNative(ctx, f)
+	}
+	return bo.writeDTMFAudio(ctx, f)
+}
+
+// writeDTMFAudio sounds each key in turn as a tone and writes it like any other
+// audio, which is how a keypress reaches a call that has only an audio path.
+func (bo *BaseOutput) writeDTMFAudio(ctx context.Context, f frames.DTMFOutput) error {
+	for _, button := range f.Keys() {
+		pcm, err := dtmf.Tone(button, bo.sampleRate)
+		if err != nil {
+			// A key with no tone is skipped rather than failing the rest: the
+			// caller still means the keys around it.
+			slog.Warn("skipping a key with no DTMF tone", "transport", bo.Name(), "err", err)
+			continue
+		}
+		audio := frames.NewOutputAudioRawFrame(pcm, bo.sampleRate, 1)
+		audio.SetTransportDestination(f.Base().TransportDestination())
+		if _, err := bo.self.WriteAudio(ctx, audio); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // WriteTransportFrame is the default no-op; a concrete transport overrides it.
 func (bo *BaseOutput) WriteTransportFrame(context.Context, frames.Frame) error { return nil }
 
@@ -127,12 +178,20 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 		if err := bo.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		// A barge-in cuts every outgoing stream, not only the one the frame
-		// happens to name.
-		bo.eachSender(func(s *mediaSender) {
+		// The barge-in cuts the stream the frame names. Another destination is
+		// carrying something else (background audio, say), and cutting that too
+		// would silence what the interruption was never about.
+		if s := bo.senderFor(f); s != nil {
 			s.handleInterruption()
 			s.botStoppedSpeaking(ctx)
-		})
+		}
+		return nil
+	case *frames.OutputDTMFUrgentFrame:
+		// Urgent, so the keys go out ahead of the audio already queued, for a
+		// keypress answering a prompt that is still playing.
+		if err := bo.WriteDTMF(ctx, fr); err != nil {
+			return err
+		}
 		return nil
 	case *frames.OutputTransportMessageUrgentFrame:
 		// Urgent, so it goes out at once, ahead of whatever is queued, and is

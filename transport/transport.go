@@ -135,6 +135,14 @@ type OutputDriver interface {
 	// SendMessage sends an application message to the client (for example over
 	// a data channel).
 	SendMessage(ctx context.Context, data []byte) error
+	// SupportsNativeDTMF reports whether the transport signals a keypress over
+	// its own protocol. A transport that does overrides this and
+	// WriteDTMFNative; one that does not has its keys sounded as audio, which
+	// is the only way a keypress travels a call that carries nothing but audio.
+	SupportsNativeDTMF() bool
+	// WriteDTMFNative signals the frame's keys over the transport's protocol.
+	// It is called only when SupportsNativeDTMF reports true.
+	WriteDTMFNative(ctx context.Context, f frames.DTMFOutput) error
 	// WriteTransportFrame handles a queued frame that carries no audio, once the
 	// audio ahead of it has been sent. A transport overrides it to act on frame
 	// types it carries itself; the default does nothing.

@@ -14,6 +14,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A bot can send DTMF keypresses.** `OutputDTMFFrame` and the new
+  `OutputDTMFUrgentFrame` were defined but nothing ever played them, so there was
+  no way to answer an IVR. The output transport now sounds each key as the tone
+  pair that names it on the keypad, queued behind the audio already playing so
+  the keys land where the caller meant them; the urgent frame goes out at once,
+  for a key answering a prompt that is still playing. A transport whose protocol
+  carries keypresses reports `SupportsNativeDTMF` and is handed them instead, so
+  the tones stay out of the audio. Both frames now carry a run of keys rather
+  than one, since a caller entering an account number presses several.
+
 - **A scenario can press keypad keys, start from a context, observe without
   speaking, and share blocks between files.** `dtmf: "123#"` on a turn sends the
   keys the way a telephony caller's arrive, so a bot with a DTMF aggregator can
@@ -38,6 +48,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rather than by re-running it.
 
 ### Changed
+
+- **A barge-in cuts the stream it names, not every stream.** An interruption
+  stopped every outgoing destination, so background audio on another destination
+  went silent whenever the user cut in. It now reaches the sender the frame
+  addresses, leaving the other streams playing.
 
 - **A function filter passes the frames that start and stop a pipeline, and the
   service switcher decides the rest of the system frames.** The filter dropped

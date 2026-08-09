@@ -637,6 +637,13 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 		s.out.sendTransportMessage(ctx, af.Message)
 	case *frames.TTSStoppedFrame:
 		s.ttsStopped(ctx)
+	case *frames.OutputDTMFFrame:
+		// The keys waited behind the audio around them, so they land where the
+		// caller meant them rather than over what was still being said.
+		if err := s.out.WriteDTMF(ctx, af); err != nil && !canceled(ctx) {
+			slog.Error("write dtmf to transport",
+				"processor", s.out.Name(), "destination", s.destination, "err", err)
+		}
 	default:
 		// A frame that carries no audio has waited behind the audio it belongs
 		// to (a word-aligned text frame, say). Give the concrete transport a
