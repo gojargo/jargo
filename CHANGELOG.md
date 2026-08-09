@@ -70,6 +70,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A tool the LLM service implements itself lives on its adapter, not on the
+  conversation.** `LLMContext.SetServiceTools`, `LLMContext.SetServiceInstructions`
+  and `LLMContext.AppTools` are gone, and `LLMContext.Tools` returns exactly what
+  the application advertised. The built-in async-cancellation tool was written
+  into the shared conversation, which edited a context the application owns and
+  offered the tool to every other service reading that conversation. It now sits
+  on the adapter the service converts through, which renders it in that
+  provider's own format. A service that wants to offer one implements
+  `llm.AdapterHolder`; every jargo LLM service does.
+
 - **An OpenAI-compatible endpoint states its adapter rather than a message
   hook.** `chat.Compat.ShapeMessages` is gone; `chat.Compat.Adapter` takes an
   `adapter.LLMAdapter[openai.Params, openai.Tool]` instead. An endpoint that

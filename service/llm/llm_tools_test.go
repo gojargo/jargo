@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -935,16 +936,24 @@ func TestGroupedFunctionCallsShareAGroup(t *testing.T) {
 	<-runDone
 }
 
-// asyncToolGen requests the named tool once, then answers with text.
+// asyncToolGen requests the named tool once, then answers with text. It stands
+// in for a service that converts through an adapter, which is where the tools
+// the service implements itself are added.
 type asyncToolGen struct {
-	mu   sync.Mutex
-	turn int
-	name string
+	// adapter is what the base adds its built-in tools to, and what this
+	// generator reads back to see what the model was actually offered.
+	adapter adapter.Base
+	mu      sync.Mutex
+	turn    int
+	name    string
 	// tools records what the model was offered on the first inference.
 	tools []frames.Tool
 	// system records the prompt it was given on the first inference.
 	system string
 }
+
+// LLMAdapter implements llm.AdapterHolder.
+func (g *asyncToolGen) LLMAdapter() llm.BuiltinToolHolder { return &g.adapter }
 
 func (g *asyncToolGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
 
@@ -955,8 +964,9 @@ func (g *asyncToolGen) GenerateWithTools(
 	turn := g.turn
 	g.turn++
 	if turn == 0 {
-		g.tools = convo.Tools()
-		g.system = convo.System()
+		// What an adapter would send, which is where a built-in tool now lives.
+		g.tools = g.adapter.WithBuiltins(convo.Tools())
+		g.system = g.adapter.SystemWithBuiltins(convo.System())
 	}
 	g.mu.Unlock()
 	if turn == 0 {

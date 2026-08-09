@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -142,24 +143,53 @@ func (b *Base) cancelToolEnabled() bool {
 	return b.cancelToolActive
 }
 
+// BuiltinToolHolder is implemented by an adapter the service can add the tools
+// it implements itself to. adapter.Base satisfies it, so every jargo adapter
+// does.
+type BuiltinToolHolder interface {
+	// SetBuiltin adds a tool sent on every request from now on.
+	SetBuiltin(adapter.Builtin)
+	// RemoveBuiltin withdraws the tool registered under name.
+	RemoveBuiltin(name string) bool
+}
+
+// AdapterHolder is implemented by a service that converts a conversation
+// through an adapter, which is where a tool the service implements itself
+// belongs: the conversation is shared, so writing the tool into it would offer
+// it to every other service reading that conversation.
+type AdapterHolder interface {
+	// LLMAdapter returns the adapter this service converts through.
+	LLMAdapter() BuiltinToolHolder
+}
+
 // applyAsyncToolCancellation adds the built-in tool and its instructions to what
-// this inference sends, without touching the stored conversation. They belong to
-// the service rather than to the conversation, so they come and go with what is
-// registered instead of being written into a context the application owns.
-func (b *Base) applyAsyncToolCancellation(convo *frames.LLMContext) {
+// this service sends, or withdraws them. They belong to the service rather than
+// to the conversation, so they come and go with what is registered instead of
+// being written into a context the application owns.
+func (b *Base) applyAsyncToolCancellation() {
 	if !b.asyncToolCancellation {
-		// The service never offers the tool, so it has nothing to say about the
-		// conversation either way. Leaving it alone matters: another service may
-		// share this conversation and have its own to add.
+		// The service never offers the tool, so it has nothing to add either way.
+		return
+	}
+	holder, ok := b.gen.(AdapterHolder)
+	if !ok {
+		// A service that converts without an adapter has nowhere to put the tool.
+		// It cannot offer cancellation, and saying so once is better than the model
+		// being told to call a tool it is never sent.
+		b.warnNoAdapter.Do(func() {
+			slog.Warn("async tool cancellation needs a service that converts through an adapter",
+				"service", b.Name())
+		})
 		return
 	}
 	if !b.cancelToolEnabled() {
-		convo.SetServiceTools(nil)
-		convo.SetServiceInstructions("")
+		holder.LLMAdapter().RemoveBuiltin(CancelAsyncToolName)
 		return
 	}
-	convo.SetServiceTools([]frames.Tool{cancelAsyncToolSchema})
-	convo.SetServiceInstructions(asyncToolCancellationInstructions)
+	holder.LLMAdapter().SetBuiltin(adapter.Builtin{
+		Tool:         cancelAsyncToolSchema,
+		Instructions: asyncToolCancellationInstructions,
+	})
 }
 
 // cancelAsyncToolHandler abandons the call the model named. It reports which id

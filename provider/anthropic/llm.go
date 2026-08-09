@@ -303,3 +303,8 @@ func supportsPrefill(model string) bool {
 	}
 	return false
 }
+
+// LLMAdapter returns the adapter this service converts through, so the base can
+// add the tools it implements itself to what every request advertises. It
+// implements llm.AdapterHolder.
+func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }

@@ -60,7 +60,7 @@ func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
 	fromContext, msgs := a.ExtractInitialSystem(
-		convo.System(), opts.SystemInstruction, convo.Messages(),
+		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction, convo.Messages(),
 	)
 	system := a.ResolveSystemInstruction(fromContext, opts.SystemInstruction, true)
 
@@ -74,7 +74,7 @@ func (a *Adapter) LLMInvocationParams(
 	contents = dropEmpty(contents)
 
 	params := Params{SystemInstruction: system, Contents: contents}
-	if tools := convo.Tools(); len(tools) > 0 {
+	if tools := a.WithBuiltins(convo.Tools()); len(tools) > 0 {
 		params.Tools = a.ToProviderToolsFormat(tools)
 	}
 	return params, nil

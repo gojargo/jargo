@@ -597,3 +597,14 @@ func (s *LLMService) params(
 	opts.ConvertDeveloperToUser = s.noDeveloperRole
 	return s.adapter.LLMInvocationParams(convo, opts)
 }
+
+// LLMAdapter returns the adapter this service converts through, so the base can
+// add the tools it implements itself to what every request advertises. It
+// implements llm.AdapterHolder.
+func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder {
+	holder, ok := s.adapter.(llm.BuiltinToolHolder)
+	if !ok {
+		return nil
+	}
+	return holder
+}

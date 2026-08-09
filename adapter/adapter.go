@@ -16,6 +16,9 @@ package adapter
 import (
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gojargo/jargo/frames"
@@ -92,6 +95,96 @@ type Base struct {
 	// given for a call and the conversation's own prompt has been reported, so it
 	// is reported once rather than on every generation of the session.
 	warnedSystemInstruction atomic.Bool
+
+	// mu guards the built-in tools below, which the service adds and withdraws
+	// as its registrations change while generations are converting.
+	mu sync.RWMutex
+	// builtins are the tools the service implements itself, sent on every
+	// request without the application having advertised them, each with the
+	// instructions that go with it. They are keyed by tool name.
+	builtins map[string]Builtin
+	// builtinOrder keeps the order they were added in, so a request carries them
+	// the same way twice running and a cached prompt prefix stays byte-identical.
+	builtinOrder []string
+}
+
+// Builtin is a tool the LLM service implements itself, and whatever the model
+// has to be told to use it.
+type Builtin struct {
+	// Tool is the declaration advertised to the model.
+	Tool frames.Tool
+	// Instructions are appended to the system prompt while the tool is offered.
+	// Empty adds nothing.
+	Instructions string
+}
+
+// SetBuiltin adds a tool the service implements itself, replacing any already
+// registered under the same name. It is sent on every request from now on,
+// without the application having to advertise it.
+//
+// It lives here rather than on the conversation because it belongs to the
+// service: a conversation is shared, and writing the tool into it would offer
+// it to every other service reading that conversation, and edit a context the
+// application owns.
+func (b *Base) SetBuiltin(builtin Builtin) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.builtins == nil {
+		b.builtins = make(map[string]Builtin)
+	}
+	if _, seen := b.builtins[builtin.Tool.Name]; !seen {
+		b.builtinOrder = append(b.builtinOrder, builtin.Tool.Name)
+	}
+	b.builtins[builtin.Tool.Name] = builtin
+}
+
+// RemoveBuiltin withdraws the tool registered under name, reporting whether
+// there was one.
+func (b *Base) RemoveBuiltin(name string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.builtins[name]; !ok {
+		return false
+	}
+	delete(b.builtins, name)
+	b.builtinOrder = slices.DeleteFunc(b.builtinOrder, func(s string) bool { return s == name })
+	return true
+}
+
+// WithBuiltins returns the conversation's tools followed by the ones the
+// service implements itself. An adapter renders the result, so a built-in tool
+// reaches the model in the provider's own format rather than in one shape that
+// has to suit every provider.
+func (b *Base) WithBuiltins(tools []frames.Tool) []frames.Tool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if len(b.builtinOrder) == 0 {
+		return tools
+	}
+	out := make([]frames.Tool, 0, len(tools)+len(b.builtinOrder))
+	out = append(out, tools...)
+	for _, name := range b.builtinOrder {
+		out = append(out, b.builtins[name].Tool)
+	}
+	return out
+}
+
+// SystemWithBuiltins appends the instructions of every built-in tool currently
+// offered to the system prompt, so the model is told how to use what it is being
+// sent. It returns system unchanged when there are none.
+func (b *Base) SystemWithBuiltins(system string) string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	parts := make([]string, 0, len(b.builtinOrder)+1)
+	if system != "" {
+		parts = append(parts, system)
+	}
+	for _, name := range b.builtinOrder {
+		if text := b.builtins[name].Instructions; text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // ExtractInitialSystem reports the system prompt a provider should send beside

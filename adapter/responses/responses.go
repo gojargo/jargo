@@ -81,7 +81,9 @@ func (*Adapter) IDForLLMSpecificMessages() string { return "openai" }
 func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
-	instructions := a.ResolveSystemInstruction(convo.System(), opts.SystemInstruction, true)
+	instructions := a.ResolveSystemInstruction(
+		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction, true,
+	)
 	params := Params{
 		Input:        ToInput(convo.Messages()),
 		Instructions: instructions,
@@ -95,7 +97,7 @@ func (a *Adapter) LLMInvocationParams(
 		}
 		params.Instructions = ""
 	}
-	if tools := convo.Tools(); len(tools) > 0 {
+	if tools := a.WithBuiltins(convo.Tools()); len(tools) > 0 {
 		params.Tools = a.ToProviderToolsFormat(tools)
 	}
 	return params, nil
