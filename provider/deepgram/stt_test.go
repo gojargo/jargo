@@ -69,7 +69,7 @@ func TestRecvSkipsWhatCarriesNoTranscript(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	conn := &connector{cfg: Config{APIKey: "k", ListenURL: wsURL(srv.URL)}, live: newSettings(Config{})}
+	conn := &connector{cfg: Config{APIKey: "k", BaseURL: srv.URL}, live: newSettings(Config{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := conn.Connect(ctx, 16000)
 	if err != nil {
@@ -107,7 +107,7 @@ func TestRecvKeepsAnEmptyFinalizeAnswer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	conn := &connector{cfg: Config{APIKey: "k", ListenURL: wsURL(srv.URL)}, live: newSettings(Config{})}
+	conn := &connector{cfg: Config{APIKey: "k", BaseURL: srv.URL}, live: newSettings(Config{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := conn.Connect(ctx, 16000)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestRecvEndsTheSessionOnAMessageThatDoesNotParse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	conn := &connector{cfg: Config{APIKey: "k", ListenURL: wsURL(srv.URL)}, live: newSettings(Config{})}
+	conn := &connector{cfg: Config{APIKey: "k", BaseURL: srv.URL}, live: newSettings(Config{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := conn.Connect(ctx, 16000)
 	if err != nil {

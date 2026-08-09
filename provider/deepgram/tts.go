@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	speakURL = "https://api.deepgram.com/v1/speak"
+	// speakPath is the synthesis route appended to the configured base URL.
+	speakPath = "/v1/speak"
 	// defaultTTSModel is a current Aura-2 English voice.
 	defaultTTSModel = "aura-2-thalia-en"
 	// defaultTTSEncoding is the audio encoding jargo requests from Aura.
@@ -25,6 +26,10 @@ const (
 type TTSConfig struct {
 	// APIKey is the Deepgram API key. Required.
 	APIKey string `validate:"required"`
+	// BaseURL overrides the Deepgram host, for a private or air-gapped
+	// deployment. It is taken as given, scheme included; empty uses Deepgram's
+	// hosted API.
+	BaseURL string
 	// Model is the Aura voice model; empty uses a default.
 	Model string
 	// SampleRate is the PCM rate requested from Aura and emitted downstream;
@@ -47,6 +52,9 @@ func NewTTS(cfg TTSConfig) *tts.Base {
 	}
 	if cfg.Encoding == "" {
 		cfg.Encoding = defaultTTSEncoding
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://" + defaultHost
 	}
 	return tts.New("DeepgramTTS", &synthesizer{cfg: cfg, http: &http.Client{}})
 }
@@ -78,7 +86,8 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, speakURL+"?"+q.Encode(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.cfg.BaseURL+speakPath+"?"+q.Encode(), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

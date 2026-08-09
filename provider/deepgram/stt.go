@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	listenURL = "wss://api.deepgram.com/v1/listen"
+	// listenPath is the live-transcription route appended to the derived host.
+	listenPath = "/v1/listen"
 	// keepAlivePeriod is how often the session is held open. Deepgram closes a
 	// connection that carries nothing for 10 seconds, and asks for a keepalive
 	// every 3 to 5 seconds, so the interval is the slow end of what it asks for
@@ -48,9 +49,12 @@ const (
 type Config struct {
 	// APIKey is the Deepgram API key. Required.
 	APIKey string `validate:"required"`
-	// ListenURL overrides the live-transcription WebSocket endpoint; empty uses
-	// Deepgram's hosted endpoint.
-	ListenURL string
+	// BaseURL overrides the Deepgram host, for a private or air-gapped
+	// deployment. It takes a host with an optional scheme, port and path, and the
+	// scheme it carries decides whether the session is opened securely: "ws://"
+	// or "http://" for an insecure one, "wss://" or "https://" for a secure one,
+	// and a bare host for a secure one. Empty uses Deepgram's hosted API.
+	BaseURL string
 	// Model is the Deepgram model; empty uses "nova-3".
 	Model string
 	// Language is the transcription language; empty uses English (US).
@@ -131,8 +135,8 @@ func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.Channels == 0 {
 		cfg.Channels = defaultChannels
 	}
-	if cfg.ListenURL == "" {
-		cfg.ListenURL = listenURL
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultHost
 	}
 	return stt.NewStream("DeepgramSTT", &connector{cfg: cfg, live: newSettings(cfg)}, cfg.SampleRate)
 }
@@ -346,7 +350,8 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	header := http.Header{}
 	header.Set("Authorization", authToken(c.cfg.APIKey))
 
-	conn, err := wsutil.Dial(ctx, c.cfg.ListenURL+"?"+q.Encode(), header, 0)
+	wsURL, _ := deriveDeepgramURLs(c.cfg.BaseURL)
+	conn, err := wsutil.Dial(ctx, wsURL+listenPath+"?"+q.Encode(), header, 0)
 	if err != nil {
 		return nil, err
 	}
