@@ -8,6 +8,8 @@
 package realtime
 
 import (
+	"log/slog"
+
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 )
@@ -58,27 +60,28 @@ func (*Adapter) IDForLLMSpecificMessages() string { return "openai_realtime" }
 func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, _ adapter.Options,
 ) (Params, error) {
-	return a.SessionParams(convo.Tools(), convo.ToolChoice()), nil
+	return a.SessionParams(convo.ToolsSchema(), convo.ToolChoice()), nil
 }
 
 // SessionParams renders a toolset and choice for a session. It is what the
 // service calls when the toolset changes mid-conversation, which reaches a
 // realtime model as a session update rather than on the next request.
-func (a *Adapter) SessionParams(tools []frames.Tool, choice frames.ToolChoice) Params {
+func (a *Adapter) SessionParams(schema frames.ToolsSchema, choice frames.ToolChoice) Params {
 	if choice == "" {
 		choice = frames.ToolChoiceAuto
 	}
-	return Params{Tools: a.ToProviderToolsFormat(a.WithBuiltins(tools)), ToolChoice: string(choice)}
+	return Params{
+		Tools:      a.ToProviderToolsFormat(a.WithBuiltins(schema)),
+		ToolChoice: string(choice),
+	}
 }
 
 // ToProviderToolsFormat implements adapter.LLMAdapter. The Realtime API
-// flattens the function fields onto the tool rather than nesting them.
-func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []map[string]any {
-	if len(tools) == 0 {
-		return nil
-	}
-	out := make([]map[string]any, 0, len(tools))
-	for _, t := range tools {
+// flattens the function fields onto the tool rather than nesting them, and
+// reads the custom tools written for OpenAI like the other OpenAI APIs.
+func (*Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []map[string]any {
+	var out []map[string]any
+	for _, t := range schema.Standard {
 		spec := map[string]any{keyType: toolTypeFunction, keyName: t.Name}
 		if t.Description != "" {
 			spec[keyDescription] = t.Description
@@ -88,7 +91,12 @@ func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []map[string]any {
 		}
 		out = append(out, spec)
 	}
-	return out
+	custom, err := adapter.CustomToolsFor[map[string]any](schema, frames.AdapterTypeOpenAI)
+	if err != nil {
+		slog.Error("leaving out a custom tool the adapter cannot read", "err", err)
+		return out
+	}
+	return append(out, custom...)
 }
 
 // MessagesForLogging implements adapter.LLMAdapter. A realtime session carries

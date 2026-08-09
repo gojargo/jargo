@@ -38,7 +38,7 @@ func TestBuiltinsFollowTheConversationsOwn(t *testing.T) {
 	var b adapter.Base
 	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "cancel"}})
 
-	wantNames(t, b.WithBuiltins([]frames.Tool{{Name: "watch"}}), "watch", "cancel")
+	wantNames(t, b.WithBuiltins(frames.ToolsSchema{Standard: []frames.Tool{{Name: "watch"}}}).Standard, "watch", "cancel")
 }
 
 // TestBuiltinsKeepTheirOrder checks two built-in tools are sent the same way
@@ -50,7 +50,7 @@ func TestBuiltinsKeepTheirOrder(t *testing.T) {
 	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "second"}})
 
 	for range 3 {
-		wantNames(t, b.WithBuiltins(nil), "first", "second")
+		wantNames(t, b.WithBuiltins(frames.ToolsSchema{}).Standard, "first", "second")
 	}
 }
 
@@ -62,7 +62,7 @@ func TestSetBuiltinReplacesWithoutReordering(t *testing.T) {
 	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "second"}})
 	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "first", Description: "updated"}})
 
-	tools := b.WithBuiltins(nil)
+	tools := b.WithBuiltins(frames.ToolsSchema{}).Standard
 	wantNames(t, tools, "first", "second")
 	if tools[0].Description != "updated" {
 		t.Errorf("description = %q, want the re-registered tool's", tools[0].Description)
@@ -78,7 +78,7 @@ func TestRemoveBuiltin(t *testing.T) {
 	if !b.RemoveBuiltin("cancel") {
 		t.Error("RemoveBuiltin said there was no such tool, want it removed")
 	}
-	wantNames(t, b.WithBuiltins([]frames.Tool{{Name: "watch"}}), "watch")
+	wantNames(t, b.WithBuiltins(frames.ToolsSchema{Standard: []frames.Tool{{Name: "watch"}}}).Standard, "watch")
 
 	if b.RemoveBuiltin("cancel") {
 		t.Error("RemoveBuiltin said it removed a tool that was not registered")
@@ -92,7 +92,7 @@ func TestWithBuiltinsLeavesTheConversationAlone(t *testing.T) {
 	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "cancel"}})
 
 	tools := []frames.Tool{{Name: "watch"}}
-	b.WithBuiltins(tools)
+	b.WithBuiltins(frames.ToolsSchema{Standard: tools})
 	wantNames(t, tools, "watch")
 }
 

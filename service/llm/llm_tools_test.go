@@ -965,7 +965,7 @@ func (g *asyncToolGen) GenerateWithTools(
 	g.turn++
 	if turn == 0 {
 		// What an adapter would send, which is where a built-in tool now lives.
-		g.tools = g.adapter.WithBuiltins(convo.Tools())
+		g.tools = g.adapter.WithBuiltins(convo.ToolsSchema()).Standard
 		g.system = g.adapter.SystemWithBuiltins(convo.System())
 	}
 	g.mu.Unlock()

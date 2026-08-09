@@ -327,7 +327,7 @@ func TestToProviderToolsFormatMapsSchema(t *testing.T) {
 			`{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}`,
 		),
 	}}
-	out := (&Adapter{}).ToProviderToolsFormat(tools)
+	out := (&Adapter{}).ToProviderToolsFormat(frames.ToolsSchema{Standard: tools})
 	if len(out) != 1 {
 		t.Fatalf("len = %d, want 1", len(out))
 	}

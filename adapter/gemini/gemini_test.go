@@ -260,11 +260,11 @@ func TestFunctionResponseDict(t *testing.T) {
 }
 
 func TestToProviderToolsFormatStripsAdditionalProperties(t *testing.T) {
-	out := (&Adapter{}).ToProviderToolsFormat([]frames.Tool{{
+	out := (&Adapter{}).ToProviderToolsFormat(frames.ToolsSchema{Standard: []frames.Tool{{
 		Name:        "get_weather",
 		Description: "Look up the weather",
 		Parameters:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"loc":{"type":"string"}}}`),
-	}})
+	}}})
 	b, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

@@ -14,6 +14,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A toolset can carry tools written in one provider's own format.**
+  `frames.ToolsSchema` holds the standard tools every provider is offered
+  alongside custom ones keyed by `frames.AdapterType`, and
+  `LLMContext.SetToolsSchema` / `LLMContext.ToolsSchema` are how it is set and
+  read. It is what advertises a tool the provider implements itself, which no
+  common description fits: Gemini search grounding, an OpenAI hosted tool. Each
+  provider is sent only the custom tools written for its own format, so a
+  conversation carrying them stays usable everywhere. `openai.Tool` and
+  `responses.Tool` grew a `Raw` field for a tool the function schema has no
+  place for. Anthropic reads no custom tools, so anything keyed for another
+  format is left out there.
+
 - **A conversation can carry a message written in one provider's own format.**
   `frames.NewLLMSpecificMessage` builds a message for a named provider, and
   `LLMContext.MessagesFor` returns what one provider is sent: every universal

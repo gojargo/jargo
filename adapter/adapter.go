@@ -75,9 +75,10 @@ type LLMAdapter[P, T any] interface {
 	// takes. It returns a [ConversionError] for a conversation the provider has
 	// no representation for.
 	LLMInvocationParams(convo *frames.LLMContext, opts Options) (P, error)
-	// ToProviderToolsFormat renders the advertised tools in this provider's
-	// format.
-	ToProviderToolsFormat(tools []frames.Tool) []T
+	// ToProviderToolsFormat renders the advertised toolset in this provider's
+	// format, including the custom tools written for it and leaving out those
+	// written for another.
+	ToProviderToolsFormat(schema frames.ToolsSchema) []T
 	// MessagesForLogging renders the conversation as this provider will see it,
 	// for a log or a trace.
 	MessagesForLogging(convo *frames.LLMContext) []map[string]any
@@ -197,22 +198,57 @@ func (b *Base) RemoveBuiltin(name string) bool {
 	return true
 }
 
-// WithBuiltins returns the conversation's tools followed by the ones the
-// service implements itself. An adapter renders the result, so a built-in tool
-// reaches the model in the provider's own format rather than in one shape that
-// has to suit every provider.
-func (b *Base) WithBuiltins(tools []frames.Tool) []frames.Tool {
+// WithBuiltins returns the toolset with the tools the service implements itself
+// appended to the standard ones. An adapter renders the result, so a built-in
+// tool reaches the model in the provider's own format rather than in one shape
+// that has to suit every provider.
+func (b *Base) WithBuiltins(schema frames.ToolsSchema) frames.ToolsSchema {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if len(b.builtinOrder) == 0 {
-		return tools
+		return schema
 	}
-	out := make([]frames.Tool, 0, len(tools)+len(b.builtinOrder))
-	out = append(out, tools...)
+	out := schema
+	out.Standard = make([]frames.Tool, 0, len(schema.Standard)+len(b.builtinOrder))
+	out.Standard = append(out.Standard, schema.Standard...)
 	for _, name := range b.builtinOrder {
-		out = append(out, b.builtins[name].Tool)
+		out.Standard = append(out.Standard, b.builtins[name].Tool)
 	}
 	return out
+}
+
+// CustomToolsFor reads the custom tools written for one format back as the tool
+// type that adapter defines, reporting a conversion failure for anything else.
+func CustomToolsFor[T any](schema frames.ToolsSchema, t frames.AdapterType) ([]T, error) {
+	raw := schema.CustomFor(t)
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]T, 0, len(raw))
+	for _, v := range raw {
+		tool, ok := v.(T)
+		if !ok {
+			var want T
+			return nil, &ConversionError{Cause: &customToolTypeError{
+				adapter: string(t), got: fmt.Sprintf("%T", v), want: fmt.Sprintf("%T", want),
+			}}
+		}
+		out = append(out, tool)
+	}
+	return out, nil
+}
+
+// customToolTypeError reports a custom tool holding something its adapter
+// cannot read.
+type customToolTypeError struct {
+	adapter string
+	got     string
+	want    string
+}
+
+// Error implements error.
+func (e *customToolTypeError) Error() string {
+	return fmt.Sprintf("custom tool for %q holds %s, want %s", e.adapter, e.got, e.want)
 }
 
 // SystemWithBuiltins appends the instructions of every built-in tool currently

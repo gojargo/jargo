@@ -5,6 +5,7 @@ package responses
 
 import (
 	"encoding/json"
+	"log/slog"
 
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
@@ -44,13 +45,31 @@ type InputItem struct {
 	Output string `json:"output,omitempty"`
 }
 
-// Tool is a function tool advertised on the request. The Responses API flattens
-// the function fields onto the tool rather than nesting them.
+// Tool is a tool advertised on the request. The Responses API flattens the
+// function fields onto the tool rather than nesting them. A tool the provider
+// implements itself, which this schema has no place for, is carried whole in
+// Raw.
 type Tool struct {
 	Type        string          `json:"type"`
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	// Raw is the tool exactly as the provider takes it, and replaces the modeled
+	// fields entirely when set. It is how a provider-native tool (a hosted search
+	// tool, say, which the model runs itself rather than calling back for) is
+	// advertised without being forced into the function shape.
+	Raw map[string]any `json:"-"`
+}
+
+// MarshalJSON encodes the tool, sending Raw in place of the modeled fields when
+// it is set.
+func (t Tool) MarshalJSON() ([]byte, error) {
+	if len(t.Raw) > 0 {
+		return json.Marshal(t.Raw)
+	}
+	// plain drops the method set, so marshaling it does not recurse.
+	type plain Tool
+	return json.Marshal(plain(t))
 }
 
 // Params is what one Responses call takes from the conversation: the input list,
@@ -98,7 +117,8 @@ func (a *Adapter) LLMInvocationParams(
 		}
 		params.Instructions = ""
 	}
-	if tools := a.WithBuiltins(convo.Tools()); len(tools) > 0 {
+	if tools := a.WithBuiltins(convo.ToolsSchema()); len(tools.Standard) > 0 ||
+		len(tools.Custom) > 0 {
 		params.Tools = a.ToProviderToolsFormat(tools)
 	}
 	return params, nil
@@ -169,9 +189,9 @@ func toolCallItems(m frames.Message) []InputItem {
 }
 
 // ToProviderToolsFormat implements adapter.LLMAdapter.
-func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []Tool {
-	out := make([]Tool, 0, len(tools))
-	for _, t := range tools {
+func (*Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []Tool {
+	out := make([]Tool, 0, len(schema.Standard))
+	for _, t := range schema.Standard {
 		out = append(out, Tool{
 			Type:        toolTypeFunction,
 			Name:        t.Name,
@@ -179,7 +199,12 @@ func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []Tool {
 			Parameters:  t.Parameters,
 		})
 	}
-	return out
+	custom, err := adapter.CustomToolsFor[Tool](schema, frames.AdapterTypeOpenAI)
+	if err != nil {
+		slog.Error("leaving out a custom tool the adapter cannot read", "err", err)
+		return out
+	}
+	return append(out, custom...)
 }
 
 // MessagesForLogging implements adapter.LLMAdapter.
