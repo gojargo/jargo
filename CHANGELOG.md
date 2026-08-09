@@ -39,6 +39,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A function filter passes the frames that start and stop a pipeline, and the
+  service switcher decides the rest of the system frames.** The filter dropped
+  whatever its predicate rejected, lifecycle and system frames included, so a
+  branch gated off by one would never have been started or shut down. Those pass
+  now whatever the predicate says. Every other system frame passes as well unless
+  the filter is built to decide them, which the service switcher now asks for: a
+  branch that is gated off stops following the conversation rather than hearing
+  all of it in the background. The direction a filter gates is optional, and one
+  built without a direction decides both. The predicate is consulted for every
+  frame, including those that pass regardless, so a predicate watching the stream
+  sees all of it.
+
 - **Deepgram takes a base URL, and derives its endpoints from it.** The STT
   service's `ListenURL` is replaced by `BaseURL`, and the Aura TTS service gains
   one. It takes a host with an optional scheme, port and path, and the scheme

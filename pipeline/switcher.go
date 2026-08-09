@@ -72,12 +72,18 @@ func NewServiceSwitcher(services []processor.Processor, strategy SwitcherStrateg
 	}
 	state := &switcherState{services: services, active: services[0], mode: strategy}
 
+	// The filters decide system frames too, so a branch that is gated off stops
+	// hearing the conversation rather than following it in the background. The
+	// lifecycle frames still reach it, so it starts and shuts down with the rest.
+	down, up := processor.Downstream, processor.Upstream
 	branches := make([][]processor.Processor, len(services))
 	for i, svc := range services {
 		branches[i] = []processor.Processor{
-			processor.NewFunctionFilter(fmt.Sprintf("Switch::In%d", i), processor.Downstream, gate(state, svc)),
+			processor.NewFunctionFilter(fmt.Sprintf("Switch::In%d", i), &down, gate(state, svc),
+				processor.WithFilterSystemFrames()),
 			svc,
-			processor.NewFunctionFilter(fmt.Sprintf("Switch::Out%d", i), processor.Upstream, gate(state, svc)),
+			processor.NewFunctionFilter(fmt.Sprintf("Switch::Out%d", i), &up, gate(state, svc),
+				processor.WithFilterSystemFrames()),
 		}
 	}
 	pp, err := NewParallel(branches...)
@@ -97,13 +103,13 @@ func (s *ServiceSwitcher) ActiveService() processor.Processor { return s.state.a
 // OnSwitch registers fn to be called whenever the active service changes.
 func (s *ServiceSwitcher) OnSwitch(fn func(processor.Processor)) { s.state.setOnSwitch(fn) }
 
-// gate returns the filter predicate for svc: lifecycle and system frames always
-// pass (so the service stays started and ready), a settings update meant for a
-// service that is not in use passes as well, and other frames pass only while
-// svc is the active service.
+// gate returns the filter predicate for svc: a settings update meant for a
+// service that is not in use passes, and other frames pass only while svc is the
+// active service. The lifecycle frames are not decided here; the filter passes
+// those whatever this says, so the service stays started and ready.
 func gate(state *switcherState, svc processor.Processor) processor.FilterFunc {
 	return func(f frames.Frame) bool {
-		return alwaysPass(f) || reachesInactiveService(f, svc) || state.isActive(svc)
+		return reachesInactiveService(f, svc) || state.isActive(svc)
 	}
 }
 
@@ -128,17 +134,6 @@ func reachesInactiveService(f frames.Frame, svc processor.Processor) bool {
 		return update.Service == frames.ServiceTarget(svc)
 	}
 	return update.ReachInactiveServices
-}
-
-// alwaysPass reports whether a frame must reach every branch regardless of which
-// service is active: every system frame, and the EndFrame (a control frame the
-// parallel pipeline synchronizes across all branches).
-func alwaysPass(f frames.Frame) bool {
-	if _, ok := f.(frames.SystemFrame); ok {
-		return true
-	}
-	_, ok := f.(*frames.EndFrame)
-	return ok
 }
 
 // switcherState holds the shared, concurrency-safe switching state.
