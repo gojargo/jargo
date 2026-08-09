@@ -230,7 +230,11 @@ func botMessageFor(f frames.Frame) (Message, bool) {
 		return event(TypeBotTTSStarted), true
 	case *frames.TTSStoppedFrame:
 		return event(TypeBotTTSStopped), true
-	case *frames.TTSSpeakFrame:
+	case *frames.TTSTextFrame:
+		// The text the TTS reports speaking, aligned to playback, which is what a
+		// client renders as the spoken caption. Not TTSSpeakFrame: that is text on
+		// its way into the service, and it never reaches a client as something
+		// spoken, because nothing guarantees the synthesizer accepted it.
 		return BotTTSText(fr.Text), true
 	default:
 		return Message{}, false
