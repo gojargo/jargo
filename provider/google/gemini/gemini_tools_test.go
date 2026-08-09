@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -18,64 +19,14 @@ type fakeSink struct {
 func (f *fakeSink) Text(t string) error          { f.text.WriteString(t); return nil }
 func (f *fakeSink) Tool(c frames.ToolCall) error { f.calls = append(f.calls, c); return nil }
 
-func TestToContentsToolTurn(t *testing.T) {
-	convo := frames.NewLLMContext("be helpful")
-	convo.AddUserMessage("weather in Paris?")
-	convo.AddAssistantToolCall(frames.ToolCall{
-		ID: "call_0", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`),
-	})
-	convo.AddToolResult(frames.ToolResult{ID: "call_0", Name: "get_weather", Content: "sunny"})
-
-	b, err := json.Marshal(toContents(convo))
+// mustBody builds a request body and fails the test if the conversion did.
+func mustBody(t *testing.T, s *Service, convo *frames.LLMContext) map[string]any {
+	t.Helper()
+	body, err := s.requestBody(convo, adapter.Options{}, false)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf("requestBody: %v", err)
 	}
-	got := string(b)
-	// user turn + tool-result turn use role "user"; the assistant tool-call turn
-	// uses role "model". Map keys marshal in alphabetical order.
-	wants := []string{
-		`"role":"user"`,
-		`"role":"model"`,
-		`"functionCall":{"args":{"location":"Paris"},"id":"call_0","name":"get_weather"}`,
-		`"functionResponse":{"id":"call_0","name":"get_weather","response":{"value":"sunny"}}`,
-	}
-	for _, want := range wants {
-		if !strings.Contains(got, want) {
-			t.Errorf("contents missing %s\nin: %s", want, got)
-		}
-	}
-}
-
-func TestFunctionResponseDict(t *testing.T) {
-	// A JSON object passes through unchanged.
-	raw, ok := functionResponseDict(`{"temp":20}`).(json.RawMessage)
-	if !ok || string(raw) != `{"temp":20}` {
-		t.Errorf("object should pass through, got %v", functionResponseDict(`{"temp":20}`))
-	}
-	// A plain string is wrapped under "value".
-	m, ok := functionResponseDict("sunny").(map[string]any)
-	if !ok || m["value"] != "sunny" {
-		t.Errorf("non-object should wrap as {value}, got %v", functionResponseDict("sunny"))
-	}
-}
-
-func TestToToolsStripsAdditionalProperties(t *testing.T) {
-	out := toTools([]frames.Tool{{
-		Name:        "get_weather",
-		Description: "Look up the weather",
-		Parameters:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"loc":{"type":"string"}}}`),
-	}})
-	b, err := json.Marshal(out)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	got := string(b)
-	if strings.Contains(got, "additionalProperties") {
-		t.Errorf("additionalProperties should be stripped: %s", got)
-	}
-	if !strings.Contains(got, `"functionDeclarations"`) || !strings.Contains(got, `"name":"get_weather"`) {
-		t.Errorf("declaration shape wrong: %s", got)
-	}
+	return body
 }
 
 func TestGeminiToolStreamParsesParts(t *testing.T) {
@@ -118,7 +69,7 @@ func TestRequestBodyCarriesSafetySettings(t *testing.T) {
 	}
 	s := NewLLM(Config{APIKey: "k", SafetySettings: safety})
 
-	b, err := json.Marshal(s.requestBody(frames.NewLLMContext(""), false))
+	b, err := json.Marshal(mustBody(t, s, frames.NewLLMContext("")))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -140,7 +91,7 @@ func TestRequestBodyCarriesSafetySettings(t *testing.T) {
 func TestRequestBodyOmitsSafetySettingsByDefault(t *testing.T) {
 	s := NewLLM(Config{APIKey: "k"})
 
-	b, err := json.Marshal(s.requestBody(frames.NewLLMContext(""), false))
+	b, err := json.Marshal(mustBody(t, s, frames.NewLLMContext("")))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
