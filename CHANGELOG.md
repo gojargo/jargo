@@ -14,6 +14,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A one-shot inference, off to the side of the pipeline.** `RunInference` on
+  the chat-completions service answers a conversation once and returns the text:
+  no streaming, no frames, an instruction and a token bound of its own. It is
+  what a summarizer, a judge or a classifier wants, none of which wants the
+  answer spoken. `llm.Inferencer` is the interface to accept.
+
+- **A completion timeout is reported as one.** `OnCompletionTimeout` fires when a
+  generation gives up waiting for the provider, and the error frame says so,
+  which is the signal to fail over on rather than an error like any other. The
+  chat service can be built to retry a request that has not started in time
+  (`RetryOnTimeout`, `RetryTimeout`); the retry is unbounded, so a slow answer is
+  never cut off part way. `ServiceTier` selects the tier an endpoint serves the
+  request under.
+
 - **A bot can send DTMF keypresses.** `OutputDTMFFrame` and the new
   `OutputDTMFUrgentFrame` were defined but nothing ever played them, so there was
   no way to answer an IVR. The output transport now sounds each key as the tone
@@ -48,6 +62,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rather than by re-running it.
 
 ### Changed
+
+- **An OpenAI-compatible provider is now described by a `chat.Compat` struct.**
+  `chat.NewCompatLLM` takes it in place of the name, base URL and default model
+  it took as arguments, and `chat.NewShapedLLM` is gone: a custom request shaper
+  is one of its fields. The struct is where an endpoint states how it departs
+  from OpenAI's own API, which is what the developer-role and message-shape
+  fixes above are carried by.
 
 - **A barge-in cuts the stream it names, not every stream.** An interruption
   stopped every outgoing destination, so background audio on another destination
@@ -98,6 +119,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   both read as though a criterion configured the judge.
 
 ### Fixed
+
+- **Every OpenAI-compatible provider reports its token usage.** The
+  chat-completions service never asked for the counts and never reported any, so
+  eighteen providers produced no LLM usage metrics at all while the other
+  services produced them. The request now asks for usage on the stream and the
+  counts are reported once per completion, cached and reasoning tokens included,
+  and reported even when the response is cut off part way, because the tokens
+  were spent either way. Traces are labeled with the model the provider says
+  answered, which is more specific than the one asked for.
+
+- **The conversation's tool choice is sent.** `LLMContext.SetToolChoice` was
+  honored by the realtime services and dropped by every OpenAI-compatible one, so
+  a conversation that required a tool call was sent as though it did not.
+
+- **A tool call whose arguments are not valid JSON is dropped.** The raw text
+  reached the handler, which failed on it, and the model read that as the tool
+  having failed rather than as its own arguments being malformed.
+
+- **`max_tokens` is no longer defaulted to 1024.** The service capped every
+  response at a bound the caller never asked for, truncating long answers. It is
+  now sent only when set. Set `MaxTokens` explicitly to keep a cap.
+
+- **Mistral no longer runs a tool call the conversation has already answered.**
+  Mistral reports the calls to make from the whole message history rather than
+  from what it just streamed, so the completion that answers a tool result asks
+  for the same call again and its handler ran a second time: the message sent
+  twice, the playback started twice. A call whose result is already in the
+  conversation is now dropped before anything is announced, so the repeat raises
+  no event, no frame and no handler. LLM services take a
+  `llm.WithFunctionCallFilter` option for the purpose, since a provider that
+  reads its calls back out of the history is unlikely to stay the only one.
+
+- **Mistral is sent a conversation it accepts.** Beyond the OpenAI schema it
+  requires a tool result to be followed by an assistant message, accepts system
+  messages only in the opening block, and continues a trailing assistant message
+  only when it is marked as a prefix. None of that was applied, so a tool-calling
+  turn could be rejected outright. The seed is also sent under the name Mistral
+  reads it by.
+
+- **Twelve OpenAI-compatible endpoints stop being sent a role they reject.**
+  Cerebras, DeepSeek, Inception, Mistral, Nebius, Ollama, OpenRouter,
+  Perplexity, Qwen, SambaNova, Sarvam and Together have no developer role, which
+  is the role an asynchronous tool's late results travel under. Those messages
+  now go to them as user messages, so what the tool reported reaches the model
+  instead of failing the turn.
+
+- **The built-in async-cancellation tool is no longer announced as a tool call.**
+  It is how the model abandons an asynchronous call, an internal mechanism, but
+  it was reported through `OnFunctionCallsStarted` and `FunctionCallsStartedFrame`
+  alongside the application's own tools. It still runs; it is no longer reported.
 
 - **A resume reaches the pipeline before the frames it releases.** A processor
   paused by a frame addressed to it was released the moment that frame was

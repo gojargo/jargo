@@ -9,5 +9,10 @@ const (
 
 // NewLLM builds a Sarvam LLM service over its OpenAI-compatible endpoint.
 func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
-	return chat.NewCompatLLM("SarvamLLM", llmBaseURL, defaultLLMModel, cfg)
+	return chat.NewCompatLLM(chat.Compat{
+		Name:            "SarvamLLM",
+		BaseURL:         llmBaseURL,
+		DefaultModel:    defaultLLMModel,
+		NoDeveloperRole: true,
+	}, cfg)
 }

@@ -4,5 +4,9 @@ import "github.com/gojargo/jargo/provider/openai/chat"
 
 // NewLLM builds an xAI (Grok) LLM service.
 func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
-	return chat.NewCompatLLM("XAILLM", baseURL, defaultModel, cfg)
+	return chat.NewCompatLLM(chat.Compat{
+		Name:         "XAILLM",
+		BaseURL:      baseURL,
+		DefaultModel: defaultModel,
+	}, cfg)
 }

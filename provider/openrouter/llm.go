@@ -5,5 +5,10 @@ import "github.com/gojargo/jargo/provider/openai/chat"
 // NewLLM builds an OpenRouter LLM service. Set cfg.Model to any "vendor/model"
 // slug OpenRouter exposes.
 func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
-	return chat.NewCompatLLM("OpenRouterLLM", baseURL, defaultModel, cfg)
+	return chat.NewCompatLLM(chat.Compat{
+		Name:            "OpenRouterLLM",
+		BaseURL:         baseURL,
+		DefaultModel:    defaultModel,
+		NoDeveloperRole: true,
+	}, cfg)
 }

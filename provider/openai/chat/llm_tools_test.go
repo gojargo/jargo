@@ -34,7 +34,7 @@ func TestToMessagesToolTurn(t *testing.T) {
 	})
 	convo.AddToolResult(frames.ToolResult{ID: "call_a", Name: "get_weather", Content: "sunny, 20C"})
 
-	msgs := toMessages(convo)
+	msgs := toMessages(convo, false)
 	if len(msgs) != 4 {
 		t.Fatalf("want 4 messages (system, user, assistant, tool), got %d", len(msgs))
 	}
@@ -63,7 +63,7 @@ func TestToMessagesToolTurn(t *testing.T) {
 func TestToMessagesEmptyArgsDefaults(t *testing.T) {
 	convo := frames.NewLLMContext("")
 	convo.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "now"})
-	msgs := toMessages(convo)
+	msgs := toMessages(convo, false)
 	if got := msgs[0].ToolCalls[0].Function.Arguments; got != "{}" {
 		t.Errorf("empty args should default to {}, got %q", got)
 	}

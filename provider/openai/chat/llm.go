@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
@@ -16,10 +20,23 @@ import (
 )
 
 const (
-	defaultLLMModel     = "gpt-4o-mini"
-	defaultLLMMaxTokens = 1024
+	defaultLLMModel = "gpt-4o-mini"
+	// defaultRetryTimeout bounds the first attempt when a service was built to
+	// retry a request that times out.
+	defaultRetryTimeout = 5 * time.Second
 	// toolTypeFunction is the only tool type OpenAI's chat API defines.
 	toolTypeFunction = "function"
+)
+
+// The message roles the chat-completions API defines. They are exported for a
+// provider that has to rewrite the conversation before it is sent (see
+// Compat.ShapeMessages).
+const (
+	RoleSystem    = "system"
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+	RoleTool      = "tool"
+	RoleDeveloper = "developer"
 )
 
 // LLMConfig configures an OpenAI (or OpenAI-compatible) LLM service. The
@@ -34,7 +51,7 @@ type LLMConfig struct {
 	BaseURL string
 	// Model is the model id; empty uses the provider default.
 	Model string
-	// MaxTokens caps the response length; 0 uses a small default suited to voice.
+	// MaxTokens caps the response length; 0 omits it, leaving the API default.
 	MaxTokens int
 	// MaxCompletionTokens caps the completion length on models that require it in
 	// place of MaxTokens; nil omits it.
@@ -49,6 +66,17 @@ type LLMConfig struct {
 	PresencePenalty *float64
 	// Seed requests deterministic sampling for a fixed seed; nil omits it.
 	Seed *int
+	// ServiceTier selects the tier the request is served under (e.g. "auto",
+	// "flex", "priority") on an endpoint that offers them; empty omits it.
+	ServiceTier string
+	// RetryOnTimeout runs a request that takes longer than RetryTimeout a second
+	// time, that one unbounded. It is for an endpoint that occasionally stalls on
+	// the first token, where waiting out the stall costs more than asking again.
+	RetryOnTimeout bool
+	// RetryTimeout is how long the first attempt may take before RetryOnTimeout
+	// gives up on it. Zero uses five seconds. It bounds nothing unless
+	// RetryOnTimeout is set.
+	RetryTimeout time.Duration
 	// Extra sets arbitrary additional request-body fields not modeled above
 	// (e.g. provider-specific parameters), applied to every request.
 	Extra map[string]any
@@ -81,57 +109,114 @@ type LLMService struct {
 	cfg    LLMConfig
 	http   *http.Client
 	shaper RequestShaper
+	// How this endpoint departs from OpenAI's own API, fixed at construction.
+	noDeveloperRole bool
+	shapeMessages   func([]Message) []Message
 }
 
 // Validate reports whether the configuration is usable.
 func (c LLMConfig) Validate() error { return validate.Struct(c) }
 
+// Compat describes an OpenAI-compatible endpoint: the label its service runs
+// under, where it lives, and the ways it departs from OpenAI's own API. The
+// zero value of every optional field is OpenAI's own behavior, so a provider
+// only states what differs.
+type Compat struct {
+	// Name is the processor label the service is known by in logs, metrics and
+	// traces.
+	Name string
+	// BaseURL is the API base used when the config leaves it empty.
+	BaseURL string
+	// DefaultModel is the model used when the config leaves it empty.
+	DefaultModel string
+	// Shaper addresses and authorizes the request. Nil means OpenAI's own
+	// layout: <base>/chat/completions with a Bearer token.
+	Shaper RequestShaper
+	// NoDeveloperRole marks an endpoint with no developer role. Its messages are
+	// sent as user messages instead, which is what carries an asynchronous
+	// tool's late results to a model that would otherwise reject the role.
+	NoDeveloperRole bool
+	// ShapeMessages rewrites the conversation once it has been converted, just
+	// before it is sent. It is for an endpoint that constrains the shape of a
+	// conversation beyond what OpenAI's schema says, and it may add, drop or
+	// rewrite messages. Nil sends the conversation as converted.
+	ShapeMessages func([]Message) []Message
+	// Base configures the shared LLM base this service is built on.
+	Base []llm.Option
+}
+
 // NewLLM builds an OpenAI LLM service.
 func NewLLM(cfg LLMConfig) *LLMService {
-	return NewCompatLLM("OpenAILLM", defaultLLMBaseURL, defaultLLMModel, cfg)
+	return NewCompatLLM(Compat{
+		Name:         "OpenAILLM",
+		BaseURL:      defaultLLMBaseURL,
+		DefaultModel: defaultLLMModel,
+	}, cfg)
 }
 
-// NewCompatLLM builds an LLM service for any OpenAI-compatible endpoint. name is
-// the processor label, baseURL the API base, and defaultModel the model used
-// when cfg.Model is empty.
-func NewCompatLLM(name, baseURL, defaultModel string, cfg LLMConfig) *LLMService {
-	return NewShapedLLM(name, baseURL, defaultModel, defaultShaper{}, cfg)
-}
-
-// NewShapedLLM builds an OpenAI-compatible LLM service whose requests are
-// addressed and authorized by shaper. It is the base for deployments that don't
-// use OpenAI's URL layout or Bearer auth, such as Azure OpenAI.
-func NewShapedLLM(name, baseURL, defaultModel string, shaper RequestShaper, cfg LLMConfig) *LLMService {
+// NewCompatLLM builds an LLM service for an OpenAI-compatible endpoint
+// described by c.
+func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = baseURL
+		cfg.BaseURL = c.BaseURL
 	}
 	if cfg.Model == "" {
-		cfg.Model = defaultModel
+		cfg.Model = c.DefaultModel
 	}
-	if cfg.MaxTokens == 0 {
-		cfg.MaxTokens = defaultLLMMaxTokens
+	if cfg.RetryTimeout == 0 {
+		cfg.RetryTimeout = defaultRetryTimeout
 	}
-	s := &LLMService{cfg: cfg, http: &http.Client{}, shaper: shaper}
-	s.Base = llm.New(name, s)
+	shaper := c.Shaper
+	if shaper == nil {
+		shaper = defaultShaper{}
+	}
+	s := &LLMService{
+		cfg:             cfg,
+		http:            &http.Client{},
+		shaper:          shaper,
+		noDeveloperRole: c.NoDeveloperRole,
+		shapeMessages:   c.ShapeMessages,
+	}
+	s.Base = llm.New(c.Name, s, c.Base...)
 	s.Base.SetModel(cfg.Model)
 	return s
 }
 
-type chatMessage struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content"`
-	ToolCalls  []toolCallMsg `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
+// Message is one message of the conversation as the chat-completions API takes
+// it. It is exported for Compat.ShapeMessages, which sees the whole
+// conversation just before it is sent.
+type Message struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Extra sets fields on this message that OpenAI's schema has no place for,
+	// merged over the modeled ones when the message is encoded. It is how an
+	// endpoint that reads a field of its own is served without that field
+	// reaching the endpoints that would reject it.
+	Extra map[string]any `json:"-"`
 }
 
-// toolCallMsg is an assistant tool-call entry in a request message.
-type toolCallMsg struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Function toolCallFunc `json:"function"`
+// MarshalJSON encodes the message, merging Extra over the modeled fields.
+func (m Message) MarshalJSON() ([]byte, error) {
+	// plain drops the method set, so marshaling it does not recurse.
+	type plain Message
+	if len(m.Extra) == 0 {
+		return json.Marshal(plain(m))
+	}
+	return mergeExtra(plain(m), m.Extra)
 }
 
-type toolCallFunc struct {
+// ToolCall is an assistant tool-call entry on a message.
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction is the function a tool call invokes, with its arguments as
+// the raw JSON string the model produced.
+type ToolCallFunction struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
@@ -149,17 +234,26 @@ type openaiFunc struct {
 }
 
 type chatRequest struct {
-	Model               string        `json:"model"`
-	Messages            []chatMessage `json:"messages"`
-	Stream              bool          `json:"stream"`
-	MaxTokens           int           `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int          `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64      `json:"temperature,omitempty"`
-	TopP                *float64      `json:"top_p,omitempty"`
-	FrequencyPenalty    *float64      `json:"frequency_penalty,omitempty"`
-	PresencePenalty     *float64      `json:"presence_penalty,omitempty"`
-	Seed                *int          `json:"seed,omitempty"`
-	Tools               []openaiTool  `json:"tools,omitempty"`
+	Model               string         `json:"model"`
+	Messages            []Message      `json:"messages"`
+	Stream              bool           `json:"stream"`
+	StreamOptions       *streamOptions `json:"stream_options,omitempty"`
+	MaxTokens           int            `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int           `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64       `json:"temperature,omitempty"`
+	TopP                *float64       `json:"top_p,omitempty"`
+	FrequencyPenalty    *float64       `json:"frequency_penalty,omitempty"`
+	PresencePenalty     *float64       `json:"presence_penalty,omitempty"`
+	Seed                *int           `json:"seed,omitempty"`
+	ServiceTier         string         `json:"service_tier,omitempty"`
+	Tools               []openaiTool   `json:"tools,omitempty"`
+	ToolChoice          string         `json:"tool_choice,omitempty"`
+}
+
+// streamOptions asks for the token counts to be reported on the stream. Without
+// it a streamed completion carries no usage at all.
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // encodeBody marshals the request, merging any extra fields over the modeled
@@ -168,7 +262,13 @@ func encodeBody(req chatRequest, extra map[string]any) ([]byte, error) {
 	if len(extra) == 0 {
 		return json.Marshal(req)
 	}
-	raw, err := json.Marshal(req)
+	return mergeExtra(req, extra)
+}
+
+// mergeExtra encodes v and merges extra over the fields it produced, so a
+// caller-supplied field wins over the modeled one of the same name.
+func mergeExtra(v any, extra map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
@@ -194,71 +294,59 @@ type chatDelta struct {
 	ToolCalls []toolCallDelta `json:"tool_calls"`
 }
 
+// chatUsage is the token accounting a completion reports. It arrives on a chunk
+// of its own at the end of the stream, or repeated on every chunk as a running
+// total, depending on the provider.
+type chatUsage struct {
+	PromptTokens        int64 `json:"prompt_tokens"`
+	CompletionTokens    int64 `json:"completion_tokens"`
+	TotalTokens         int64 `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int64 `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+// tokenUsage converts the reported counts into the shape the pipeline carries.
+func (u chatUsage) tokenUsage() frames.LLMTokenUsage {
+	out := frames.LLMTokenUsage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+	if u.PromptTokensDetails != nil {
+		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
+	}
+	if u.CompletionTokensDetails != nil {
+		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	return out
+}
+
 type chatChunk struct {
+	// Model is the model that answered, which is more specific than the one
+	// asked for: an alias resolves to a dated build here.
+	Model   string     `json:"model"`
+	Usage   *chatUsage `json:"usage"`
 	Choices []struct {
 		Delta chatDelta `json:"delta"`
 	} `json:"choices"`
 }
 
+// textSink adapts a text-only generation to the streaming loop, which is shared
+// with the tool-capable one. A request advertising no tools gives the model
+// nothing to call, so a reported call would be the provider inventing one.
+type textSink struct{ emit llm.Emit }
+
+func (t textSink) Text(text string) error { return t.emit(text) }
+
+func (textSink) Tool(frames.ToolCall) error { return nil }
+
 // Generate streams a chat completion, emitting each content delta.
 func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	body, err := encodeBody(s.baseRequest(convo), s.cfg.Extra)
-	if err != nil {
-		return err
-	}
-	req, err := s.newHTTPRequest(ctx, body)
-	if err != nil {
-		return err
-	}
-	return s.stream(req, emit)
-}
-
-// baseRequest builds the streaming request shared by both generation paths.
-func (s *LLMService) baseRequest(convo *frames.LLMContext) chatRequest {
-	return chatRequest{
-		Model:               s.cfg.Model,
-		Messages:            toMessages(convo),
-		Stream:              true,
-		MaxTokens:           s.cfg.MaxTokens,
-		MaxCompletionTokens: s.cfg.MaxCompletionTokens,
-		Temperature:         s.cfg.Temperature,
-		TopP:                s.cfg.TopP,
-		FrequencyPenalty:    s.cfg.FrequencyPenalty,
-		PresencePenalty:     s.cfg.PresencePenalty,
-		Seed:                s.cfg.Seed,
-	}
-}
-
-// newHTTPRequest builds the POST request to the chat-completions endpoint.
-func (s *LLMService) newHTTPRequest(ctx context.Context, body []byte) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.shaper.Endpoint(s.cfg.BaseURL), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	s.shaper.Authorize(req, s.cfg.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-	return req, nil
-}
-
-func (s *LLMService) stream(req *http.Request, emit llm.Emit) error {
-	s.StartTTFBMetrics()
-	resp, err := s.http.Do(req)
-	s.StopTTFBMetrics()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
-	}
-	return llm.ScanSSE(resp.Body, func(data string) error {
-		var chunk chatChunk
-		if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
-			return emit(chunk.Choices[0].Delta.Content)
-		}
-		return nil // Skip empty or malformed chunks.
-	})
+	return s.generate(ctx, s.baseRequest(convo), textSink{emit})
 }
 
 // GenerateWithTools streams a tool-capable completion. It emits text deltas to
@@ -269,16 +357,155 @@ func (s *LLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMCon
 	reqBody := s.baseRequest(convo)
 	if tools := convo.Tools(); len(tools) > 0 {
 		reqBody.Tools = toTools(tools)
+		reqBody.ToolChoice = string(convo.ToolChoice())
 	}
+	return s.generate(ctx, reqBody, sink)
+}
+
+// baseRequest builds the streaming request shared by both generation paths.
+func (s *LLMService) baseRequest(convo *frames.LLMContext) chatRequest {
+	return chatRequest{
+		Model:               s.cfg.Model,
+		Messages:            s.messages(convo),
+		Stream:              true,
+		StreamOptions:       &streamOptions{IncludeUsage: true},
+		MaxTokens:           s.cfg.MaxTokens,
+		MaxCompletionTokens: s.cfg.MaxCompletionTokens,
+		Temperature:         s.cfg.Temperature,
+		TopP:                s.cfg.TopP,
+		FrequencyPenalty:    s.cfg.FrequencyPenalty,
+		PresencePenalty:     s.cfg.PresencePenalty,
+		Seed:                s.cfg.Seed,
+		ServiceTier:         s.cfg.ServiceTier,
+	}
+}
+
+// generate sends one streaming request and feeds what comes back to sink.
+func (s *LLMService) generate(ctx context.Context, reqBody chatRequest, sink llm.Sink) error {
 	body, err := encodeBody(reqBody, s.cfg.Extra)
 	if err != nil {
 		return err
 	}
-	req, err := s.newHTTPRequest(ctx, body)
+	s.StartTTFBMetrics()
+	resp, err := s.send(ctx, body)
+	s.StopTTFBMetrics()
 	if err != nil {
 		return err
 	}
-	return s.streamTools(req, sink)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+	}
+	return s.consume(ctx, resp.Body, sink)
+}
+
+// consume reads the stream: text and tool-call fragments reach the sink as they
+// arrive, whole calls once the stream ends.
+//
+// Providers differ over how often they report the token counts, some once at
+// the end and some as a running total on every chunk, so the latest is held and
+// reported when the stream finishes: one report per completion either way. It is
+// reported even when the stream fails or is cut off part way, because the
+// tokens were spent regardless.
+func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink) error {
+	c := &toolCoalescer{calls: map[int]*toolAccumulator{}}
+	var usage *chatUsage
+	scanErr := llm.ScanSSE(body, func(data string) error {
+		var chunk chatChunk
+		if json.Unmarshal([]byte(data), &chunk) == nil {
+			if chunk.Usage != nil {
+				usage = chunk.Usage
+			}
+			if chunk.Model != "" {
+				s.SetFullModelName(chunk.Model)
+			}
+			// The chunk carrying the counts has no choices of its own.
+			if len(chunk.Choices) > 0 {
+				return c.add(chunk.Choices[0].Delta, sink)
+			}
+		}
+		return nil // Skip empty or malformed chunks.
+	})
+	if usage != nil && s.UsageMetricsEnabled() {
+		if err := s.PushTokenUsage(ctx, usage.tokenUsage()); err != nil {
+			return err
+		}
+	}
+	if scanErr != nil {
+		return scanErr
+	}
+	return c.emit(sink)
+}
+
+// send posts the encoded body to the chat-completions endpoint. A service built
+// to retry a timed-out request bounds the wait for the first attempt and, if
+// nothing has come back by then, asks again with no bound at all: the point is
+// to give up on an attempt that has stalled, not on one that is answering
+// slowly.
+func (s *LLMService) send(ctx context.Context, body []byte) (*http.Response, error) {
+	if !s.cfg.RetryOnTimeout {
+		return s.sendOnce(ctx, body, 0)
+	}
+	resp, err := s.sendOnce(ctx, body, s.cfg.RetryTimeout)
+	if err == nil || !errors.Is(err, llm.ErrCompletionTimeout) || ctx.Err() != nil {
+		return resp, err
+	}
+	slog.DebugContext(ctx, "retrying the completion the endpoint did not start in time",
+		"service", s.Name(), "waited", s.cfg.RetryTimeout)
+	return s.sendOnce(ctx, body, 0)
+}
+
+// sendOnce makes one attempt. A non-zero bound applies to the wait for the
+// response only: once the response has started the bound is lifted, so a long
+// completion is never cut off part way. A timeout is reported as one, which is
+// what a switcher fails over on.
+func (s *LLMService) sendOnce(ctx context.Context, body []byte, bound time.Duration) (*http.Response, error) {
+	attemptCtx, cancel := context.WithCancel(ctx)
+	var expired *time.Timer
+	if bound > 0 {
+		expired = time.AfterFunc(bound, cancel)
+	}
+
+	req, err := http.NewRequestWithContext(
+		attemptCtx, http.MethodPost, s.shaper.Endpoint(s.cfg.BaseURL), bytes.NewReader(body),
+	)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s.shaper.Authorize(req, s.cfg.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.http.Do(req)
+	if err != nil {
+		cancel()
+		// The parent still being live is what says the bound expired rather than
+		// the turn being interrupted.
+		if ctx.Err() == nil && (attemptCtx.Err() != nil || os.IsTimeout(err)) {
+			return nil, fmt.Errorf("%w: %w", llm.ErrCompletionTimeout, err)
+		}
+		return nil, err
+	}
+	if expired != nil {
+		expired.Stop()
+	}
+	// The body is read after this returns, so the attempt is released when the
+	// caller closes it rather than here.
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// cancelOnClose releases an attempt's context once its body is closed.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 // toolAccumulator coalesces the streamed fragments of one tool call.
@@ -318,6 +545,11 @@ func (c *toolCoalescer) add(delta chatDelta, sink llm.Sink) error {
 
 // emit reports the assembled calls to the sink in arrival order, defaulting
 // empty arguments to an empty JSON object.
+//
+// A call whose arguments did not arrive as valid JSON is dropped rather than
+// passed on: nothing downstream can act on arguments that cannot be read, and a
+// handler given them would fail on its own account, which the model would read
+// as the tool having failed.
 func (c *toolCoalescer) emit(sink llm.Sink) error {
 	for _, idx := range c.order {
 		a := c.calls[idx]
@@ -328,6 +560,11 @@ func (c *toolCoalescer) emit(sink llm.Sink) error {
 		if args == "" {
 			args = "{}"
 		}
+		if !json.Valid([]byte(args)) {
+			slog.Warn("dropping a function call whose arguments are not valid JSON",
+				"function", a.name, "tool_call_id", a.id, "arguments", args)
+			continue
+		}
 		if err := sink.Tool(frames.ToolCall{ID: a.id, Name: a.name, Args: json.RawMessage(args)}); err != nil {
 			return err
 		}
@@ -335,66 +572,105 @@ func (c *toolCoalescer) emit(sink llm.Sink) error {
 	return nil
 }
 
-// streamTools streams a tool-capable completion, emitting text deltas live and
-// coalescing the streamed tool_call fragments into whole calls reported once the
-// stream completes.
-func (s *LLMService) streamTools(req *http.Request, sink llm.Sink) error {
-	s.StartTTFBMetrics()
-	resp, err := s.http.Do(req)
-	s.StopTTFBMetrics()
+// RunInference answers the conversation once, off to the side of the pipeline:
+// no streaming, no frames, just the text. It implements llm.Inferencer.
+func (s *LLMService) RunInference(
+	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	reqBody := s.baseRequest(convo)
+	reqBody.Stream = false
+	reqBody.StreamOptions = nil
+	if opts.SystemInstruction != "" {
+		reqBody.Messages = append(
+			[]Message{{Role: RoleSystem, Content: opts.SystemInstruction}}, reqBody.Messages...,
+		)
+	}
+	if opts.MaxTokens > 0 {
+		// Whichever bound this service states is the one to override; a model
+		// that reads only one of the two is told through the field it reads.
+		if reqBody.MaxCompletionTokens != nil {
+			reqBody.MaxCompletionTokens = &opts.MaxTokens
+		} else {
+			reqBody.MaxTokens = opts.MaxTokens
+		}
+	}
+	body, err := encodeBody(reqBody, s.cfg.Extra)
 	if err != nil {
-		return err
+		return "", err
+	}
+	resp, err := s.send(ctx, body)
+	if err != nil {
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+		return "", fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
 	}
+	var completion struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&completion); err != nil {
+		return "", err
+	}
+	if len(completion.Choices) == 0 {
+		return "", nil
+	}
+	return completion.Choices[0].Message.Content, nil
+}
 
-	c := &toolCoalescer{calls: map[int]*toolAccumulator{}}
-	scanErr := llm.ScanSSE(resp.Body, func(data string) error {
-		var chunk chatChunk
-		if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
-			return c.add(chunk.Choices[0].Delta, sink)
-		}
-		return nil // Skip empty or malformed chunks.
-	})
-	if scanErr != nil {
-		return scanErr
+// messages converts the conversation for this endpoint: the shared conversion,
+// then whatever the endpoint insists on beyond it.
+func (s *LLMService) messages(convo *frames.LLMContext) []Message {
+	msgs := toMessages(convo, s.noDeveloperRole)
+	if s.shapeMessages != nil {
+		msgs = s.shapeMessages(msgs)
 	}
-	return c.emit(sink)
+	return msgs
 }
 
 // toMessages converts the conversation into OpenAI chat messages, with the
 // system prompt as the leading system message. Tool turns become an assistant
 // message carrying tool_calls and one "tool" message per result.
-func toMessages(convo *frames.LLMContext) []chatMessage {
-	var out []chatMessage
+//
+// developerAsUser sends a developer message as a user message, for an endpoint
+// that has no developer role. What the role carries, the late results of an
+// asynchronous tool, is worth more to the model than the role it arrives under.
+func toMessages(convo *frames.LLMContext, developerAsUser bool) []Message {
+	var out []Message
 	if sys := convo.System(); sys != "" {
-		out = append(out, chatMessage{Role: "system", Content: sys})
+		out = append(out, Message{Role: RoleSystem, Content: sys})
 	}
 	for _, m := range convo.Messages() {
 		switch {
 		case len(m.ToolResults) > 0:
 			for _, r := range m.ToolResults {
-				out = append(out, chatMessage{Role: "tool", ToolCallID: r.ID, Content: r.Content})
+				out = append(out, Message{Role: RoleTool, ToolCallID: r.ID, Content: r.Content})
 			}
 		case len(m.ToolCalls) > 0:
-			msg := chatMessage{Role: string(frames.RoleAssistant), Content: m.Text}
+			msg := Message{Role: RoleAssistant, Content: m.Text}
 			for _, c := range m.ToolCalls {
 				args := string(c.Args)
 				if args == "" {
 					args = "{}"
 				}
-				msg.ToolCalls = append(msg.ToolCalls, toolCallMsg{
+				msg.ToolCalls = append(msg.ToolCalls, ToolCall{
 					ID:       c.ID,
 					Type:     toolTypeFunction,
-					Function: toolCallFunc{Name: c.Name, Arguments: args},
+					Function: ToolCallFunction{Name: c.Name, Arguments: args},
 				})
 			}
 			out = append(out, msg)
 		default:
-			out = append(out, chatMessage{Role: string(m.Role), Content: m.Text})
+			role := string(m.Role)
+			if developerAsUser && m.Role == frames.RoleDeveloper {
+				role = RoleUser
+			}
+			out = append(out, Message{Role: role, Content: m.Text})
 		}
 	}
 	return out

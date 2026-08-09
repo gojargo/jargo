@@ -31,6 +31,10 @@ type LLMTokenUsage struct {
 	CacheCreationTokens int64
 	// TotalTokens is every token the generation used, cached input included.
 	TotalTokens int64
+	// ReasoningTokens is the number of completion tokens the model spent
+	// reasoning before answering, on a model that reports them. It is a subset
+	// of CompletionTokens.
+	ReasoningTokens int64
 	// InputAudioTokens is the number of input (prompt) tokens that were audio,
 	// as reported by realtime models. It is a subset of PromptTokens.
 	InputAudioTokens int64

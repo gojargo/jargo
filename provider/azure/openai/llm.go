@@ -33,5 +33,10 @@ func NewLLM(cfg Config) *chat.LLMService {
 	if llmCfg.Model == "" {
 		llmCfg.Model = cfg.Deployment
 	}
-	return chat.NewShapedLLM("AzureOpenAILLM", base, cfg.Deployment, shaper{apiVersion: apiVersion}, llmCfg)
+	return chat.NewCompatLLM(chat.Compat{
+		Name:         "AzureOpenAILLM",
+		BaseURL:      base,
+		DefaultModel: cfg.Deployment,
+		Shaper:       shaper{apiVersion: apiVersion},
+	}, llmCfg)
 }

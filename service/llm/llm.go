@@ -16,8 +16,10 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +58,31 @@ type Sink interface {
 	Text(text string) error
 	Tool(call frames.ToolCall) error
 }
+
+// InferenceOptions tunes a one-shot inference. The zero value runs it the way
+// the service was built.
+type InferenceOptions struct {
+	// MaxTokens caps this completion, overriding the service's own bound. Zero
+	// leaves the service's in place.
+	MaxTokens int
+	// SystemInstruction is prepended as a system message for this completion
+	// only, ahead of whatever the conversation carries. Empty leaves the
+	// conversation's own instruction to stand alone.
+	SystemInstruction string
+}
+
+// Inferencer is implemented by a service that can answer a conversation once,
+// off to the side of the pipeline: no frames, no context of its own, just the
+// text. It is what a summarizer, a judge or a classifier runs on, none of which
+// wants the answer spoken.
+type Inferencer interface {
+	RunInference(ctx context.Context, convo *frames.LLMContext, opts InferenceOptions) (string, error)
+}
+
+// ErrCompletionTimeout marks a generation that gave up waiting for the
+// provider. A service wraps its own timeout in it, which is what tells the base
+// to report the failure as a timeout and notify anything watching for one.
+var ErrCompletionTimeout = errors.New("llm completion timeout")
 
 // ToolGenerator is implemented by services that support tool calling. It streams
 // text to sink.Text and reports each tool call the model requests to sink.Tool.
@@ -178,6 +205,28 @@ func WithUngroupedFunctionCalls() Option {
 // FunctionCallsHandler is notified about the tool calls of one response.
 type FunctionCallsHandler func(ctx context.Context, calls []frames.ToolCall)
 
+// CompletionTimeoutHandler is notified when a generation timed out waiting for
+// the provider.
+type CompletionTimeoutHandler func(ctx context.Context)
+
+// FunctionCallFilter narrows the calls one response requested to the ones that
+// should actually run. It is given the conversation the calls were made in and
+// returns the calls to keep, in the order they should run.
+//
+// It exists for a provider that reports the calls it finds across the whole
+// message history rather than only the ones it just streamed. Such a provider
+// asks for a call it already made again on the completion that answers the
+// first one's result, and running it twice would repeat whatever the tool did.
+// A dropped call raises no event, no frame and no handler: for everything
+// downstream, the response did not request it.
+type FunctionCallFilter func(convo *frames.LLMContext, calls []frames.ToolCall) []frames.ToolCall
+
+// WithFunctionCallFilter decides, per response, which of the calls the model
+// requested are run. The default runs all of them.
+func WithFunctionCallFilter(f FunctionCallFilter) Option {
+	return func(b *Base) { b.callFilter = f }
+}
+
 // functionCall is one call in flight, tracked so it can be canceled.
 type functionCall struct {
 	item       registryItem
@@ -227,6 +276,8 @@ type Base struct {
 	// modelMu guards model, which labels the metrics and can change mid-call.
 	modelMu sync.Mutex
 	model   string // reported as a span attribute; set by the provider via SetModel
+	// fullModel is the model the provider reported answering, when it says.
+	fullModel string
 
 	handlersMu sync.RWMutex
 	handlers   map[string]registryItem
@@ -238,6 +289,9 @@ type Base struct {
 	// asyncToolCancellation offers the model a built-in tool for abandoning an
 	// asynchronous call, while any asynchronous tool is registered.
 	asyncToolCancellation bool
+	// callFilter narrows the calls of a response to the ones that run. Nil, the
+	// default, runs every call the model requested.
+	callFilter FunctionCallFilter
 	// cancelToolActive tracks whether that tool is currently offered, so it is
 	// added and withdrawn exactly once. Guarded by handlersMu.
 	cancelToolActive bool
@@ -258,6 +312,7 @@ type Base struct {
 	eventsMu   sync.RWMutex
 	onStarted  FunctionCallsHandler
 	onCanceled FunctionCallsHandler
+	onTimeout  CompletionTimeoutHandler
 
 	ttfbMu    sync.Mutex
 	ttfbStart time.Time
@@ -296,6 +351,32 @@ func (b *Base) OnFunctionCallsCanceled(h FunctionCallsHandler) {
 	b.eventsMu.Lock()
 	b.onCanceled = h
 	b.eventsMu.Unlock()
+}
+
+// OnCompletionTimeout registers a callback run when a generation gives up
+// waiting for the provider. It is the signal a switcher fails over on, so it is
+// reported apart from the error frame that also goes out. It runs off the frame
+// path.
+func (b *Base) OnCompletionTimeout(h CompletionTimeoutHandler) {
+	b.eventsMu.Lock()
+	b.onTimeout = h
+	b.eventsMu.Unlock()
+}
+
+// reportGenerationFailure pushes the error a generation failed with. A timeout
+// is reported as one, and anything watching for a timeout is told first.
+func (b *Base) reportGenerationFailure(ctx context.Context, err error) {
+	if !errors.Is(err, ErrCompletionTimeout) {
+		b.PushError(ctx, "llm generation failed", err, false)
+		return
+	}
+	b.eventsMu.RLock()
+	h := b.onTimeout
+	b.eventsMu.RUnlock()
+	if h != nil {
+		go h(context.WithoutCancel(ctx))
+	}
+	b.PushError(ctx, "LLM completion timeout", err, false)
 }
 
 // notify runs one of the two callbacks on a goroutine of its own, tracked so
@@ -363,6 +444,30 @@ func (b *Base) SetModel(model string) {
 func (b *Base) modelName() string {
 	b.modelMu.Lock()
 	defer b.modelMu.Unlock()
+	return b.model
+}
+
+// SetFullModelName records the model the provider says answered, which is more
+// specific than the one asked for: an alias resolves to a dated build. A service
+// calls it with what the response reported.
+//
+// It labels the trace, where knowing which build answered is the point. Metrics
+// stay on the model the service was configured with, so a series is not split in
+// two the day the alias moves.
+func (b *Base) SetFullModelName(model string) {
+	b.modelMu.Lock()
+	defer b.modelMu.Unlock()
+	b.fullModel = model
+}
+
+// tracedModelName is the model a span is labeled with: what answered, when the
+// provider said, and what was asked for otherwise.
+func (b *Base) tracedModelName() string {
+	b.modelMu.Lock()
+	defer b.modelMu.Unlock()
+	if b.fullModel != "" {
+		return b.fullModel
+	}
 	return b.model
 }
 
@@ -445,7 +550,7 @@ func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.
 func (b *Base) startSpan(ctx context.Context) (context.Context, trace.Span) {
 	ctx, span := tracing.Tracer().Start(b.Tracing().Parent(ctx), "llm")
 	span.SetAttributes(attribute.String("llm.service", b.Name()))
-	if model := b.modelName(); model != "" {
+	if model := b.tracedModelName(); model != "" {
 		span.SetAttributes(attribute.String("llm.model", model))
 	}
 	return ctx, span
@@ -460,7 +565,7 @@ func (b *Base) traceRequest(span trace.Span, convo *frames.LLMContext) {
 		attribute.String("gen_ai.output.type", "text"),
 		attribute.Bool("stream", true),
 	)
-	if model := b.modelName(); model != "" {
+	if model := b.tracedModelName(); model != "" {
 		span.SetAttributes(attribute.String("gen_ai.request.model", model))
 	}
 	if in := traceMessages(convo); in != "" {
@@ -726,7 +831,7 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 	}
 	if err := b.gen.Generate(ctx, convo, emit); err != nil && ctx.Err() == nil {
 		span.RecordError(err)
-		b.PushError(ctx, "llm generation failed", err, false)
+		b.reportGenerationFailure(ctx, err)
 	}
 	traceOutput(span, out.String())
 	b.emitTiming(ctx, span, time.Since(start))
@@ -772,22 +877,57 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 		},
 	}
 	if err := tg.GenerateWithTools(ctx, convo, s); err != nil && ctx.Err() == nil {
-		b.PushError(ctx, "llm generation failed", err, false)
-	} else if ctx.Err() == nil && len(calls) > 0 {
-		b.eventsMu.RLock()
-		started := b.onStarted
-		b.eventsMu.RUnlock()
-		b.notify(ctx, started, calls)
-		if err := b.Broadcast(ctx, func() frames.Frame {
-			return frames.NewFunctionCallsStartedFrame(calls)
-		}); err != nil {
+		b.reportGenerationFailure(ctx, err)
+	} else if ctx.Err() == nil {
+		if err := b.startFunctionCalls(ctx, convo, calls); err != nil {
 			return err
 		}
-		b.runFunctionCalls(ctx, convo, calls)
 	}
 	traceOutput(span, preamble.String())
 	b.emitTiming(ctx, span, time.Since(start))
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+}
+
+// startFunctionCalls narrows the calls a response requested to the ones that
+// run, announces them, and sets them going. A response left with no call to run
+// is a response that requested none: nothing is announced.
+func (b *Base) startFunctionCalls(
+	ctx context.Context, convo *frames.LLMContext, calls []frames.ToolCall,
+) error {
+	if b.callFilter != nil {
+		calls = b.callFilter(convo, calls)
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	// The built-in cancellation tool is how the model abandons an asynchronous
+	// call, an internal mechanism rather than a tool the application put up, so
+	// it is announced to neither the application nor the pipeline.
+	if visible := userVisibleCalls(calls); len(visible) > 0 {
+		b.eventsMu.RLock()
+		started := b.onStarted
+		b.eventsMu.RUnlock()
+		b.notify(ctx, started, visible)
+		if err := b.Broadcast(ctx, func() frames.Frame {
+			return frames.NewFunctionCallsStartedFrame(visible)
+		}); err != nil {
+			return err
+		}
+	}
+	b.runFunctionCalls(ctx, convo, calls)
+	return nil
+}
+
+// userVisibleCalls drops the built-in cancellation tool from the calls, leaving
+// the ones the application put up. It returns the calls untouched when there is
+// nothing to drop, which is every response but the rare one that abandons an
+// asynchronous call.
+func userVisibleCalls(calls []frames.ToolCall) []frames.ToolCall {
+	internal := func(c frames.ToolCall) bool { return c.Name == CancelAsyncToolName }
+	if !slices.ContainsFunc(calls, internal) {
+		return calls
+	}
+	return slices.DeleteFunc(slices.Clone(calls), internal)
 }
 
 // runFunctionCalls starts every call the model requested this turn and returns

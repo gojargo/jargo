@@ -116,6 +116,7 @@ func SetTokenUsage(ctx context.Context, u frames.LLMTokenUsage) {
 	setPositive(span, "gen_ai.usage.output_text_tokens", u.OutputTextTokens)
 	setPositive(span, "gen_ai.usage.cache_read.input_tokens", u.CacheReadTokens)
 	setPositive(span, "gen_ai.usage.cache_creation.input_tokens", u.CacheCreationTokens)
+	setPositive(span, "gen_ai.usage.reasoning_tokens", u.ReasoningTokens)
 }
 
 // setPositive sets an int64 span attribute only when v is positive, keeping

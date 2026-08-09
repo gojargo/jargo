@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,18 +122,19 @@ func TestNewServices(t *testing.T) {
 // TestNewCompatLLMDefaults checks the three fields a compatible provider hands
 // in are used only to fill gaps: a caller who sets them keeps their own.
 func TestNewCompatLLMDefaults(t *testing.T) {
-	svc := NewCompatLLM("GroqLLM", "https://base.example", "default-model", LLMConfig{APIKey: "k"})
+	compat := Compat{Name: "GroqLLM", BaseURL: "https://base.example", DefaultModel: "default-model"}
+	svc := NewCompatLLM(compat, LLMConfig{APIKey: "k"})
 	if svc.cfg.BaseURL != "https://base.example" {
 		t.Errorf("BaseURL = %q, want the provider default", svc.cfg.BaseURL)
 	}
 	if svc.cfg.Model != "default-model" {
 		t.Errorf("Model = %q, want the provider default", svc.cfg.Model)
 	}
-	if svc.cfg.MaxTokens != defaultLLMMaxTokens {
-		t.Errorf("MaxTokens = %d, want the voice-sized default %d", svc.cfg.MaxTokens, defaultLLMMaxTokens)
+	if svc.cfg.MaxTokens != 0 {
+		t.Errorf("MaxTokens = %d, want it left unset so the API's own bound stands", svc.cfg.MaxTokens)
 	}
 
-	override := NewCompatLLM("GroqLLM", "https://base.example", "default-model", LLMConfig{
+	override := NewCompatLLM(compat, LLMConfig{
 		BaseURL: "https://mine.example", Model: "mine", MaxTokens: 7,
 	})
 	if override.cfg.BaseURL != "https://mine.example" || override.cfg.Model != "mine" || override.cfg.MaxTokens != 7 {
@@ -175,8 +177,11 @@ func TestGenerateRequestShape(t *testing.T) {
 	if srv.body["model"] != defaultLLMModel {
 		t.Errorf("model = %v, want %q", srv.body["model"], defaultLLMModel)
 	}
-	if got := srv.body["max_tokens"]; got != float64(defaultLLMMaxTokens) {
-		t.Errorf("max_tokens = %v, want the default %d", got, defaultLLMMaxTokens)
+	if _, ok := srv.body["max_tokens"]; ok {
+		t.Errorf("body carries a max_tokens nobody asked for: %v", srv.body)
+	}
+	if got := srv.body["stream_options"]; !reflect.DeepEqual(got, map[string]any{"include_usage": true}) {
+		t.Errorf("stream_options = %v, want the usage counts requested", got)
 	}
 }
 
@@ -428,12 +433,15 @@ func (s *shaper) Authorize(req *http.Request, apiKey string) {
 	req.Header.Set("api-key", apiKey)
 }
 
-// TestNewShapedLLMUsesShaper checks a custom shaper decides both the URL and the
-// authorization, so a non-OpenAI URL layout reuses this implementation whole.
-func TestNewShapedLLMUsesShaper(t *testing.T) {
+// TestCompatShaperUsedForURLAndAuth checks a custom shaper decides both the URL
+// and the authorization, so a non-OpenAI URL layout reuses this implementation
+// whole.
+func TestCompatShaperUsedForURLAndAuth(t *testing.T) {
 	srv := newLLMServer(t, sse(contentChunk("ok")))
 	sh := &shaper{}
-	svc := NewShapedLLM("AzureLLM", srv.URL, "gpt-4o", sh, LLMConfig{APIKey: "azure-key"})
+	svc := NewCompatLLM(Compat{
+		Name: "AzureLLM", BaseURL: srv.URL, DefaultModel: "gpt-4o", Shaper: sh,
+	}, LLMConfig{APIKey: "azure-key"})
 
 	if err := svc.Generate(t.Context(), frames.NewLLMContext(""), func(string) error { return nil }); err != nil {
 		t.Fatalf("Generate: %v", err)
