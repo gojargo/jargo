@@ -39,6 +39,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Deepgram takes a base URL, and derives its endpoints from it.** The STT
+  service's `ListenURL` is replaced by `BaseURL`, and the Aura TTS service gains
+  one. It takes a host with an optional scheme, port and path, and the scheme
+  decides whether the connection is opened securely: `ws://` or `http://` for an
+  insecure one, `wss://` or `https://` for a secure one, and a bare host for a
+  secure one. A private or air-gapped deployment is named once rather than once
+  per modality, and the streaming and REST endpoints cannot drift apart in how
+  secure they are. The Flux services still take the full URL they address.
+
 - **A tool call is reported at each stage, and the completion message is
   `llm-function-call-stopped`.** The model asking for calls now emits one
   `llm-function-call-started` per call, and a call that finishes emits
@@ -62,6 +71,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   both read as though a criterion configured the judge.
 
 ### Fixed
+
+- **ElevenLabs carries a turn's text into its next sentence, and times the words
+  it speaks over HTTP.** The HTTP service synthesized every sentence as though it
+  were the first: nothing told the model what had already been said, so the
+  prosody restarted at each sentence boundary. It now sends what has been spoken
+  so far in the turn as context, drops it when the turn ends, is interrupted, or
+  the pipeline starts, and leaves it off the models that reject it. The service
+  also asks for timestamps and reports word timing, so the conversation records
+  what was actually spoken before an interruption rather than the whole sentence,
+  and a language code now reaches only the models that accept one. Both the HTTP
+  and the WebSocket paths strip an utterance's leading spaces and no others,
+  keeping the space that separates a word split across two chunks.
 
 - **Cartesia and ElevenLabs normalize their own word timings, and say when their
   tokens carry their own spacing.** Both asked the TTS base to merge punctuation
