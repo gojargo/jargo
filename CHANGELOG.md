@@ -147,6 +147,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The Responses API is sent a developer message, not a system one.** A
+  `RoleSystem` message in the conversation went out under the role "system",
+  which the Responses API does not define. It is now sent as a developer
+  message, the role the API reserves for instructions given out of band. A
+  conversation with nothing said yet carries its instructions as a developer
+  message too, rather than beside an empty input list, which the API refuses.
+
 - **Gemini answers a conversation of nothing but tool turns.** Gemini reads the
   system instruction as framing rather than as something to act on, so a
   conversation whose messages are all tool calls and results gave the model
