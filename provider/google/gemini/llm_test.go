@@ -12,6 +12,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // sse renders data lines as streamGenerateContent delivers them with alt=sse.
@@ -67,8 +68,11 @@ type testShaper struct {
 	authed bool
 }
 
-func (s *testShaper) Endpoint(model string) string {
+func (s *testShaper) Endpoint(model string, stream bool) string {
 	s.model = model
+	if !stream {
+		return s.base + "/" + model + ":generateContent"
+	}
 	return s.base + "/" + model + ":streamGenerateContent?alt=sse"
 }
 
@@ -143,8 +147,12 @@ func TestNewLLMDefaults(t *testing.T) {
 // header Google expects rather than the query string.
 func TestAPIKeyShaper(t *testing.T) {
 	sh := apiKeyShaper{apiKey: "secret"}
+	oneShot := apiBase + "/gemini-2.5-flash:generateContent"
+	if got := sh.Endpoint("gemini-2.5-flash", false); got != oneShot {
+		t.Errorf("Endpoint(one-shot) = %q, want %q", got, oneShot)
+	}
 	want := apiBase + "/gemini-2.5-flash:streamGenerateContent?alt=sse"
-	if got := sh.Endpoint("gemini-2.5-flash"); got != want {
+	if got := sh.Endpoint("gemini-2.5-flash", true); got != want {
 		t.Errorf("Endpoint() = %q, want %q", got, want)
 	}
 
@@ -324,7 +332,7 @@ func TestGenerateStatusError(t *testing.T) {
 // failingShaper refuses to authorize, standing in for a token mint that fails.
 type failingShaper struct{ base string }
 
-func (s failingShaper) Endpoint(model string) string { return s.base + "/" + model }
+func (s failingShaper) Endpoint(model string, _ bool) string { return s.base + "/" + model }
 
 func (failingShaper) Authorize(context.Context, *http.Request) error { return errNoToken }
 
@@ -458,4 +466,51 @@ func TestGenerateWithToolsStatusError(t *testing.T) {
 	if !errors.Is(err, errStatus) {
 		t.Fatalf("GenerateWithTools error = %v, want errStatus", err)
 	}
+}
+
+// TestRunInferenceAnswersOnce checks the one-shot path: the request addresses
+// the non-streaming method, carries the instruction and bound this inference was
+// given, and the answer is handed straight back.
+func TestRunInferenceAnswersOnce(t *testing.T) {
+	srv := newGenServer(t, `{"candidates":[{"content":{"parts":[{"text":"a short summary"}]}}]}`)
+	svc := serviceFor(srv, &testShaper{base: srv.URL}, Config{APIKey: "k"})
+
+	convo := frames.NewLLMContext("be brief")
+	convo.AddUserMessage("what did we agree?")
+
+	got, err := svc.RunInference(t.Context(), convo, llm.InferenceOptions{
+		MaxTokens:         64,
+		SystemInstruction: "Summarize the conversation.",
+	})
+	if err != nil {
+		t.Fatalf("RunInference: %v", err)
+	}
+	if got != "a short summary" {
+		t.Errorf("answer = %q, want the candidate's text", got)
+	}
+	if strings.Contains(srv.path, "streamGenerateContent") {
+		t.Errorf("path = %q, want the one-shot method", srv.path)
+	}
+	cfg, ok := srv.body["generationConfig"].(map[string]any)
+	if !ok || cfg["maxOutputTokens"] != float64(64) {
+		t.Errorf("generationConfig = %v, want the bound this inference was given", srv.body["generationConfig"])
+	}
+	sys, ok := srv.body["systemInstruction"].(map[string]any)
+	if !ok {
+		t.Fatalf("systemInstruction = %v, want the instruction this inference was given", srv.body["systemInstruction"])
+	}
+	parts, _ := sys["parts"].([]any)
+	if len(parts) != 1 {
+		t.Fatalf("systemInstruction parts = %v, want one", parts)
+	}
+	part, _ := parts[0].(map[string]any)
+	if part["text"] != "Summarize the conversation." {
+		t.Errorf("systemInstruction = %v, want it to stand in for the conversation's own", part)
+	}
+}
+
+// TestServiceRunsOneShotInferences checks the service satisfies the interface a
+// summarizer or a judge asks for.
+func TestServiceRunsOneShotInferences(t *testing.T) {
+	var _ llm.Inferencer = (*Service)(nil)
 }

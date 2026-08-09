@@ -46,6 +46,14 @@ func (s *HTTPService) GenerateWithTools(ctx context.Context, convo *frames.LLMCo
 	return s.run(ctx, convo, sink, true)
 }
 
+// RunInference answers the conversation once, off to the side of the pipeline:
+// no streaming, no frames, just the text. It implements llm.Inferencer.
+func (s *HTTPService) RunInference(
+	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	return runInference(ctx, s.cfg, s.http, convo, opts)
+}
+
 // run issues one turn and feeds its event stream to the state machine.
 func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
 	body, err := encodeBody(s.cfg.newRequest(convo, withTools), s.cfg.Extra)
@@ -63,7 +71,7 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 	resp, err := s.http.Do(req)
 	s.StopTTFBMetrics()
 	if err != nil {
-		return err
+		return llm.AsCompletionTimeout(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

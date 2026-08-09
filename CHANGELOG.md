@@ -14,15 +14,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- **A one-shot inference, off to the side of the pipeline.** `RunInference` on
-  the chat-completions service answers a conversation once and returns the text:
-  no streaming, no frames, an instruction and a token bound of its own. It is
-  what a summarizer, a judge or a classifier wants, none of which wants the
-  answer spoken. `llm.Inferencer` is the interface to accept.
+- **A one-shot inference, off to the side of the pipeline.** `RunInference`
+  answers a conversation once and returns the text: no streaming, no frames, an
+  instruction and a token bound of its own. Every LLM service has it now
+  (chat-completions, Anthropic and so Bedrock, Gemini and so Vertex, and both
+  Responses services, the WebSocket one answering over HTTP so the connection it
+  holds for its turns is left to them). `llm.Inferencer` is the interface to
+  accept. The summarizer and the eval judge run through it rather than through a
+  streamed generation, which is what lets the judge bound its own verdict.
 
 - **A completion timeout is reported as one.** `OnCompletionTimeout` fires when a
   generation gives up waiting for the provider, and the error frame says so,
-  which is the signal to fail over on rather than an error like any other. The
+  which is the signal to fail over on rather than an error like any other.
+  Anthropic, Gemini, the Responses services and the chat-completions one all
+  report theirs through it, and a turn cut short by an interruption is not
+  mistaken for one: the pipeline's own doing is not the provider running out of
+  time. The
   chat service can be built to retry a request that has not started in time
   (`RetryOnTimeout`, `RetryTimeout`); the retry is unbounded, so a slow answer is
   never cut off part way. `ServiceTier` selects the tier an endpoint serves the
@@ -62,6 +69,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rather than by re-running it.
 
 ### Changed
+
+- **A summarizer and a judge are built on a service that answers once, not on a
+  streaming generator.** `llm.NewSummarizer` and `eval.NewLLMJudge` take an
+  `llm.Inferencer`. Every jargo LLM service satisfies it, so a caller passing one
+  is unaffected.
+
+- **A Gemini request shaper addresses both forms of the method.**
+  `gemini.RequestShaper.Endpoint` takes whether the streaming form is wanted,
+  because a one-shot inference is a different method on the same model rather
+  than a flag on the request. Only a custom shaper is affected.
 
 - **An OpenAI-compatible provider is now described by a `chat.Compat` struct.**
   `chat.NewCompatLLM` takes it in place of the name, base URL and default model

@@ -72,10 +72,13 @@ type llmShaper struct {
 
 // Endpoint addresses the model by project and location on the regional
 // endpoint, rather than by name on the shared Gemini API.
-func (s *llmShaper) Endpoint(model string) string {
+func (s *llmShaper) Endpoint(model string, stream bool) string {
 	host := s.host
 	if host == "" {
 		host = fmt.Sprintf("https://%s-aiplatform.googleapis.com", s.location)
+	}
+	if !stream {
+		return fmt.Sprintf("%s/v1/%s:generateContent", host, modelPath(s.projectID, s.location, model))
 	}
 	return fmt.Sprintf(
 		"%s/v1/%s:streamGenerateContent?alt=sse",

@@ -20,14 +20,19 @@ type fakeGen struct {
 	reply string
 	err   error
 	calls atomic.Int32
+	// opts records what the last inference was asked for.
+	opts llm.InferenceOptions
 }
 
-func (g *fakeGen) Generate(_ context.Context, _ *frames.LLMContext, emit llm.Emit) error {
+func (g *fakeGen) RunInference(
+	_ context.Context, _ *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
 	g.calls.Add(1)
+	g.opts = opts
 	if g.err != nil {
-		return g.err
+		return "", g.err
 	}
-	return emit(g.reply)
+	return g.reply, nil
 }
 
 // TestLLMJudgeVerdicts covers the verdict the judge reads out of each shape of
@@ -266,3 +271,22 @@ func (j *recordingJudge) AddAssistantMessage(text string) {
 }
 
 func (j *recordingJudge) Evaluate(context.Context, string) eval.JudgeVerdict { return j.verdict }
+
+// TestJudgeRunsAOneShotInference checks the judge asks for its verdict off to
+// the side of the pipeline, with the instruction that makes it a judge and a
+// bound short enough to keep the answer to a verdict and a reason.
+func TestJudgeRunsAOneShotInference(t *testing.T) {
+	gen := &fakeGen{reply: `{"verdict": "yes", "reason": "greets"}`}
+	j := eval.NewLLMJudge(gen)
+	j.AddAssistantMessage("hi there")
+
+	if v := j.Evaluate(t.Context(), "greets warmly"); v.Verdict != eval.VerdictYes {
+		t.Fatalf("verdict = %q, want yes", v.Verdict)
+	}
+	if gen.opts.MaxTokens != 200 {
+		t.Errorf("max tokens = %d, want a verdict-sized bound", gen.opts.MaxTokens)
+	}
+	if !strings.Contains(gen.opts.SystemInstruction, "judge") {
+		t.Errorf("system instruction = %q, want the judging instruction", gen.opts.SystemInstruction)
+	}
+}

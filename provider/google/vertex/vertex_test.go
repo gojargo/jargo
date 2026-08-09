@@ -179,12 +179,18 @@ func TestLocationDefault(t *testing.T) {
 // project and location, which is what distinguishes Vertex from the Gemini API.
 func TestLLMShaperEndpoint(t *testing.T) {
 	s := &llmShaper{projectID: "my-project", location: "europe-west4"}
-	got := s.Endpoint("gemini-2.5-flash")
-	want := "https://europe-west4-aiplatform.googleapis.com/v1/" +
+	model := "https://europe-west4-aiplatform.googleapis.com/v1/" +
 		"projects/my-project/locations/europe-west4/publishers/google/models/" +
-		"gemini-2.5-flash:streamGenerateContent?alt=sse"
-	if got != want {
-		t.Errorf("Endpoint =\n  %q\nwant\n  %q", got, want)
+		"gemini-2.5-flash"
+
+	want := model + ":streamGenerateContent?alt=sse"
+	if got := s.Endpoint("gemini-2.5-flash", true); got != want {
+		t.Errorf("Endpoint(streaming) =\n  %q\nwant\n  %q", got, want)
+	}
+	// A one-shot inference is a different method on the same model.
+	want = model + ":generateContent"
+	if got := s.Endpoint("gemini-2.5-flash", false); got != want {
+		t.Errorf("Endpoint(one-shot) =\n  %q\nwant\n  %q", got, want)
 	}
 }
 
@@ -259,7 +265,8 @@ func TestLLMRequestReachesVertex(t *testing.T) {
 		location:  "us-east4",
 		host:      srv.URL,
 	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, shaper.Endpoint("gemini-2.5-flash"), nil)
+	endpoint := shaper.Endpoint("gemini-2.5-flash", true)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

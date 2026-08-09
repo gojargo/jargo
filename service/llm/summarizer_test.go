@@ -9,25 +9,24 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 )
 
-// recordGen records the conversation it is asked to generate from and emits a
-// fixed list of deltas.
+// recordGen records what it was asked to summarize and answers with a fixed
+// text.
 type recordGen struct {
 	deltas    []string
 	gotSystem string
 	gotUser   string
 }
 
-func (g *recordGen) Generate(_ context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	g.gotSystem = convo.System()
+func (g *recordGen) RunInference(
+	_ context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	// The instruction travels with the inference rather than on the
+	// conversation, so it is read from there.
+	g.gotSystem = opts.SystemInstruction
 	if msgs := convo.Messages(); len(msgs) > 0 {
 		g.gotUser = msgs[0].Text
 	}
-	for _, d := range g.deltas {
-		if err := emit(d); err != nil {
-			return err
-		}
-	}
-	return nil
+	return strings.Join(g.deltas, ""), nil
 }
 
 func TestSummarizerBuildsPromptAndCollectsText(t *testing.T) {

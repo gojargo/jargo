@@ -67,6 +67,10 @@ type Judge interface {
 
 // judgeSystemInstruction steers the grading model toward a parseable verdict,
 // and tells it what the conversation it is reading actually is.
+// defaultJudgeMaxTokens caps a verdict: enough for the verdict word and a short
+// reason, and no room for the model to start explaining itself at length.
+const defaultJudgeMaxTokens = 200
+
 const judgeSystemInstruction = "You are a strict but fair judge evaluating a conversation between a user and a " +
 	"bot under test. The 'user' messages are the user; the 'assistant' messages are " +
 	"the bot's replies. Judge only the bot's most recent reply, which may have " +
@@ -101,7 +105,8 @@ const judgeAsk = "Does the bot's most recent reply satisfy this criterion?\n\n" 
 // (criterion, conversation) so re-runs are stable and a repeated assertion over
 // an unchanged conversation pays only one round-trip.
 type LLMJudge struct {
-	gen llm.Generator
+	inf       llm.Inferencer
+	maxTokens int
 
 	// convo is the conversation the judge evaluates against, grown by the
 	// harness over the scenario.
@@ -111,13 +116,14 @@ type LLMJudge struct {
 	cache map[string]JudgeVerdict
 }
 
-// NewLLMJudge builds a judge backed by gen. Any jargo LLM service works, e.g.
-// eval.NewLLMJudge(chat.NewLLM(chat.LLMConfig{APIKey: key})).
-func NewLLMJudge(gen llm.Generator) *LLMJudge {
+// NewLLMJudge builds a judge backed by inf, an LLM service that can answer a
+// conversation once, e.g. eval.NewLLMJudge(chat.NewLLM(chat.LLMConfig{APIKey: key})).
+func NewLLMJudge(inf llm.Inferencer) *LLMJudge {
 	return &LLMJudge{
-		gen:   gen,
-		convo: frames.NewLLMContext(judgeSystemInstruction),
-		cache: make(map[string]JudgeVerdict),
+		inf:       inf,
+		maxTokens: defaultJudgeMaxTokens,
+		convo:     frames.NewLLMContext(judgeSystemInstruction),
+		cache:     make(map[string]JudgeVerdict),
 	}
 }
 
@@ -171,16 +177,14 @@ func (j *LLMJudge) callJudge(ctx context.Context, criterion string, messages []f
 	convo.SetMessages(messages)
 	convo.AddUserMessage(fmt.Sprintf(judgeAsk, criterion))
 
-	var b strings.Builder
-	if err := j.gen.Generate(ctx, convo, func(text string) error {
-		b.WriteString(text)
-		return nil
-	}); err != nil {
+	out, err := j.inf.RunInference(ctx, convo, llm.InferenceOptions{
+		MaxTokens:         j.maxTokens,
+		SystemInstruction: judgeSystemInstruction,
+	})
+	if err != nil {
 		slog.Error("eval: judge call failed", "err", err)
 		return JudgeVerdict{Verdict: VerdictNo, Reason: "judge call failed: " + err.Error()}
 	}
-
-	out := b.String()
 	if out == "" {
 		return JudgeVerdict{Verdict: VerdictNo, Reason: "judge returned empty response"}
 	}

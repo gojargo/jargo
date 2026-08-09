@@ -19,9 +19,10 @@ import (
 // OAuth token) can reuse this implementation. The default shaper targets the
 // Gemini API with an api-key header.
 type RequestShaper interface {
-	// Endpoint returns the full streaming generateContent URL for model,
-	// including any query string.
-	Endpoint(model string) string
+	// Endpoint returns the full generateContent URL for model, including any
+	// query string. stream asks for the streaming form of it, which is a
+	// different method on the same model rather than a flag on the request.
+	Endpoint(model string, stream bool) string
 	// Authorize sets the authorization headers on req. It takes a context
 	// because a scheme may have to mint or refresh a token to do so.
 	Authorize(ctx context.Context, req *http.Request) error
@@ -30,7 +31,10 @@ type RequestShaper interface {
 // apiKeyShaper is the standard Gemini API addressing and api-key authorization.
 type apiKeyShaper struct{ apiKey string }
 
-func (apiKeyShaper) Endpoint(model string) string {
+func (apiKeyShaper) Endpoint(model string, stream bool) string {
+	if !stream {
+		return fmt.Sprintf("%s/%s:generateContent", apiBase, model)
+	}
 	return fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse", apiBase, model)
 }
 
@@ -95,6 +99,52 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 	return s.stream(req, emit)
 }
 
+// RunInference answers the conversation once, off to the side of the pipeline:
+// no streaming, no frames, just the text. It implements llm.Inferencer.
+func (s *Service) RunInference(
+	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	body := s.requestBody(convo, false)
+	if opts.MaxTokens > 0 {
+		if cfg, ok := body["generationConfig"].(map[string]any); ok {
+			cfg["maxOutputTokens"] = opts.MaxTokens
+		}
+	}
+	if opts.SystemInstruction != "" {
+		// Gemini carries the instruction beside the conversation rather than in
+		// it, so the one this inference was given stands in place of the
+		// conversation's own.
+		body["systemInstruction"] = map[string]any{
+			keyParts: []map[string]any{{keyText: opts.SystemInstruction}},
+		}
+	}
+	req, err := s.newRequestTo(ctx, body, false)
+	if err != nil {
+		return "", err
+	}
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return "", llm.AsCompletionTimeout(ctx, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+	}
+	var answer genChunk
+	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+		return "", err
+	}
+	for _, c := range answer.Candidates {
+		for _, p := range c.Content.Parts {
+			if p.Text != "" {
+				return p.Text, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 // genConfig builds the generationConfig block from the configured controls.
 func (s *Service) genConfig() map[string]any {
 	g := map[string]any{"maxOutputTokens": s.cfg.MaxTokens}
@@ -131,14 +181,21 @@ func (s *Service) requestBody(convo *frames.LLMContext, withTools bool) map[stri
 	return body
 }
 
-// newRequest marshals reqBody and builds the streamGenerateContent request.
+// newRequest marshals reqBody and builds the streaming generateContent request.
 func (s *Service) newRequest(ctx context.Context, reqBody map[string]any) (*http.Request, error) {
+	return s.newRequestTo(ctx, reqBody, true)
+}
+
+// newRequestTo marshals reqBody and builds the request, streaming or not.
+func (s *Service) newRequestTo(
+	ctx context.Context, reqBody map[string]any, stream bool,
+) (*http.Request, error) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, s.shaper.Endpoint(s.cfg.Model), bytes.NewReader(body),
+		ctx, http.MethodPost, s.shaper.Endpoint(s.cfg.Model, stream), bytes.NewReader(body),
 	)
 	if err != nil {
 		return nil, err
@@ -155,7 +212,7 @@ func (s *Service) stream(req *http.Request, emit llm.Emit) error {
 	resp, err := s.http.Do(req)
 	s.StopTTFBMetrics()
 	if err != nil {
-		return err
+		return llm.AsCompletionTimeout(req.Context(), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -233,7 +290,7 @@ func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
 	resp, err := s.http.Do(req)
 	s.StopTTFBMetrics()
 	if err != nil {
-		return err
+		return llm.AsCompletionTimeout(req.Context(), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

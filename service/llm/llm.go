@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -83,6 +84,24 @@ type Inferencer interface {
 // provider. A service wraps its own timeout in it, which is what tells the base
 // to report the failure as a timeout and notify anything watching for one.
 var ErrCompletionTimeout = errors.New("llm completion timeout")
+
+// AsCompletionTimeout marks err as a completion timeout when that is what it
+// is, and returns it untouched otherwise. A service passes what its provider
+// reported through this, so a provider that stopped answering is told apart
+// from one that failed for a reason of its own.
+//
+// ctx is the context the generation ran under. Its still being live is what
+// says the provider ran out of time rather than the turn being cut short, which
+// is not a timeout: an interruption is the pipeline's own doing.
+func AsCompletionTimeout(ctx context.Context, err error) error {
+	if err == nil || errors.Is(err, ErrCompletionTimeout) {
+		return err
+	}
+	if ctx.Err() == nil && os.IsTimeout(err) {
+		return fmt.Errorf("%w: %w", ErrCompletionTimeout, err)
+	}
+	return err
+}
 
 // ToolGenerator is implemented by services that support tool calling. It streams
 // text to sink.Text and reports each tool call the model requests to sink.Tool.

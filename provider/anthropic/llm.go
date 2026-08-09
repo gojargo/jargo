@@ -206,7 +206,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return err
+		return llm.AsCompletionTimeout(ctx, err)
 	}
 	if report {
 		return s.PushTokenUsage(ctx, toUsage(acc.Usage))
@@ -245,7 +245,7 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return err
+		return llm.AsCompletionTimeout(ctx, err)
 	}
 	for _, blk := range acc.Content {
 		if blk.Type == "tool_use" {
@@ -258,6 +258,33 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 		return s.PushTokenUsage(ctx, toUsage(acc.Usage))
 	}
 	return nil
+}
+
+// RunInference answers the conversation once, off to the side of the pipeline:
+// no streaming, no frames, just the text. It implements llm.Inferencer.
+func (s *Service) RunInference(
+	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	params := s.newParams(convo)
+	if opts.MaxTokens > 0 {
+		params.MaxTokens = int64(opts.MaxTokens)
+	}
+	if opts.SystemInstruction != "" {
+		// Anthropic carries the instruction beside the conversation rather than
+		// in it, so the one this inference was given stands in place of the
+		// conversation's own.
+		params.System = []sdk.TextBlockParam{{Text: opts.SystemInstruction}}
+	}
+	msg, err := s.client.Messages.New(ctx, params)
+	if err != nil {
+		return "", llm.AsCompletionTimeout(ctx, err)
+	}
+	for _, blk := range msg.Content {
+		if text := blk.Text; text != "" {
+			return text, nil
+		}
+	}
+	return "", nil
 }
 
 // toTools converts the context's tools into Anthropic tool params. Each tool's

@@ -13,12 +13,19 @@
 package responses
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"maps"
+	"net/http"
+	"strings"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 const (
@@ -218,6 +225,69 @@ func (c Config) newRequest(convo *frames.LLMContext, withTools bool) request {
 		req.Tools = buildTools(convo)
 	}
 	return req
+}
+
+// runInference answers the conversation once over HTTP and returns the text.
+// Both services share it: a one-shot inference is a plain request either way,
+// so the connection the WebSocket service holds open for its turns is left to
+// them.
+func runInference(
+	ctx context.Context, cfg Config, client *http.Client,
+	convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	body := cfg.newRequest(convo, false)
+	body.Stream = false
+	if opts.MaxTokens > 0 {
+		body.MaxOutputTokens = opts.MaxTokens
+	}
+	if opts.SystemInstruction != "" {
+		// The Responses API carries the instruction beside the conversation
+		// rather than in it, so the one this inference was given stands in place
+		// of the conversation's own.
+		body.Instructions = opts.SystemInstruction
+	}
+	raw, err := encodeBody(body, cfg.Extra)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, cfg.BaseURL+"/responses", bytes.NewReader(raw),
+	)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", llm.AsCompletionTimeout(ctx, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+	}
+	var answer struct {
+		Output []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	for _, item := range answer.Output {
+		for _, c := range item.Content {
+			if c.Type == "output_text" {
+				out.WriteString(c.Text)
+			}
+		}
+	}
+	return out.String(), nil
 }
 
 // encodeBody marshals the request, merging any extra fields over the modeled

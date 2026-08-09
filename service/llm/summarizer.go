@@ -14,18 +14,17 @@ const defaultSummaryInstruction = "You maintain a running summary of a conversat
 	"that preserves the user's goals, decisions, stated facts, names, and any open questions. " +
 	"Write terse third-person notes, not a transcript, and add no greetings, commentary, or speculation."
 
-// Summarizer condenses older conversation turns into a compact summary using a
-// Generator. It satisfies aggregators.Summarizer, so the same kind of provider
-// that answers can also compress history. Give it its own service instance —
-// ideally a small, fast model — rather than the one wired into the live
-// pipeline: it is invoked off to the side, and a standalone instance emits no
-// pipeline frames.
+// Summarizer condenses older conversation turns into a compact summary. It
+// satisfies aggregators.Summarizer, so the same kind of provider that answers
+// can also compress history. Give it its own service instance, ideally a small
+// and fast model, rather than the one wired into the live pipeline: the summary
+// is run off to the side, and a standalone instance emits no pipeline frames.
 //
 //	sum := llm.NewSummarizer(anthropic.NewLLM(anthropic.Config{}))
 //	pair := aggregators.New(ctx, aggregators.WithSummarization(
 //	    aggregators.SummarizeConfig{Summarizer: sum}))
 type Summarizer struct {
-	gen         Generator
+	inf         Inferencer
 	instruction string
 }
 
@@ -42,9 +41,10 @@ func WithInstruction(instruction string) SummarizerOption {
 	}
 }
 
-// NewSummarizer builds a Summarizer backed by gen.
-func NewSummarizer(gen Generator, opts ...SummarizerOption) *Summarizer {
-	s := &Summarizer{gen: gen, instruction: defaultSummaryInstruction}
+// NewSummarizer builds a Summarizer backed by inf, an LLM service that can
+// answer a conversation once.
+func NewSummarizer(inf Inferencer, opts ...SummarizerOption) *Summarizer {
+	s := &Summarizer{inf: inf, instruction: defaultSummaryInstruction}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -52,20 +52,17 @@ func NewSummarizer(gen Generator, opts ...SummarizerOption) *Summarizer {
 }
 
 // Summarize renders the prior summary and the dropped messages into a prompt,
-// runs the generator, and returns the collected summary text. It pushes no
-// frames: Generate only streams text deltas to the supplied callback.
+// answers it once, and returns the summary text. It pushes no frames: a one-shot
+// inference runs off to the side of the pipeline.
 func (s *Summarizer) Summarize(ctx context.Context, prior string, dropped []frames.Message) (string, error) {
-	convo := frames.NewLLMContext(s.instruction)
+	convo := frames.NewLLMContext("")
 	convo.AddUserMessage(buildSummaryPrompt(prior, dropped))
 
-	var b strings.Builder
-	if err := s.gen.Generate(ctx, convo, func(text string) error {
-		b.WriteString(text)
-		return nil
-	}); err != nil {
+	summary, err := s.inf.RunInference(ctx, convo, InferenceOptions{SystemInstruction: s.instruction})
+	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(b.String()), nil
+	return strings.TrimSpace(summary), nil
 }
 
 // buildSummaryPrompt renders the prior summary (if any) and the dropped turns as

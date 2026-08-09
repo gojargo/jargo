@@ -63,6 +63,9 @@ type session struct {
 type Service struct {
 	*llm.Base
 	cfg Config
+	// http answers a one-shot inference. It is a plain request, so it does not
+	// go near the connection this service holds open for its turns.
+	http *http.Client
 
 	mu   sync.Mutex
 	sess *session
@@ -102,10 +105,13 @@ func NewLLM(cfg Config) *Service {
 	if cfg.WSURL == "" {
 		cfg.WSURL = defaultWSURL
 	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultBaseURL
+	}
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	s := &Service{cfg: cfg}
+	s := &Service{cfg: cfg, http: &http.Client{}}
 	s.Base = llm.New("OpenAIResponsesLLM", s)
 	s.Base.SetModel(cfg.Model)
 	return s
@@ -120,6 +126,14 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 // model requests. It implements llm.ToolGenerator.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
 	return s.run(ctx, convo, sink, true)
+}
+
+// RunInference answers the conversation once, off to the side of the pipeline:
+// no streaming, no frames, just the text. It implements llm.Inferencer.
+func (s *Service) RunInference(
+	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	return runInference(ctx, s.cfg, s.http, convo, opts)
 }
 
 // Cleanup closes the connection and tears the processor down.
