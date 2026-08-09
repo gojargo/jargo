@@ -108,10 +108,9 @@ type LLMService struct {
 	http   *http.Client
 	shaper RequestShaper
 	// adapter converts the conversation into the request this endpoint takes.
-	adapter openai.Adapter
+	adapter adapter.LLMAdapter[openai.Params, openai.Tool]
 	// How this endpoint departs from OpenAI's own API, fixed at construction.
 	noDeveloperRole bool
-	shapeMessages   func([]Message) []Message
 }
 
 // Validate reports whether the configuration is usable.
@@ -136,11 +135,11 @@ type Compat struct {
 	// sent as user messages instead, which is what carries an asynchronous
 	// tool's late results to a model that would otherwise reject the role.
 	NoDeveloperRole bool
-	// ShapeMessages rewrites the conversation once it has been converted, just
-	// before it is sent. It is for an endpoint that constrains the shape of a
-	// conversation beyond what OpenAI's schema says, and it may add, drop or
-	// rewrite messages. Nil sends the conversation as converted.
-	ShapeMessages func([]Message) []Message
+	// Adapter converts the conversation into the request this endpoint takes. It
+	// is for an endpoint that constrains the shape of a conversation beyond what
+	// OpenAI's schema says: such an adapter embeds the OpenAI one and rewrites
+	// what it produced. Nil converts the conversation as OpenAI itself takes it.
+	Adapter adapter.LLMAdapter[openai.Params, openai.Tool]
 	// Base configures the shared LLM base this service is built on.
 	Base []llm.Option
 }
@@ -170,12 +169,16 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 	if shaper == nil {
 		shaper = defaultShaper{}
 	}
+	a := c.Adapter
+	if a == nil {
+		a = &openai.Adapter{}
+	}
 	s := &LLMService{
 		cfg:             cfg,
 		http:            &http.Client{},
 		shaper:          shaper,
+		adapter:         a,
 		noDeveloperRole: c.NoDeveloperRole,
-		shapeMessages:   c.ShapeMessages,
 	}
 	s.Base = llm.New(c.Name, s, c.Base...)
 	s.Base.SetModel(cfg.Model)
@@ -587,18 +590,10 @@ func (s *LLMService) RunInference(
 	return completion.Choices[0].Message.Content, nil
 }
 
-// params converts the conversation for this endpoint: the adapter's conversion,
-// then whatever the endpoint insists on beyond it.
+// params converts the conversation into what this endpoint takes.
 func (s *LLMService) params(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (openai.Params, error) {
 	opts.ConvertDeveloperToUser = s.noDeveloperRole
-	p, err := s.adapter.LLMInvocationParams(convo, opts)
-	if err != nil {
-		return openai.Params{}, err
-	}
-	if s.shapeMessages != nil {
-		p.Messages = s.shapeMessages(p.Messages)
-	}
-	return p, nil
+	return s.adapter.LLMInvocationParams(convo, opts)
 }

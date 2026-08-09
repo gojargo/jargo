@@ -1,9 +1,10 @@
 package chat
 
 import (
-	"encoding/json"
 	"testing"
 
+	"github.com/gojargo/jargo/adapter"
+	openaiadapter "github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -38,9 +39,31 @@ func messagesOf(t *testing.T, body map[string]any) []map[string]any {
 	return out
 }
 
-// TestShapeMessagesRewritesWhatIsSent checks the hook sees the converted
-// conversation and decides what actually goes out.
-func TestShapeMessagesRewritesWhatIsSent(t *testing.T) {
+// shapingAdapter converts the conversation as OpenAI does and then appends a
+// message of its own, standing in for an endpoint that constrains the shape of
+// a conversation beyond what OpenAI's schema says.
+type shapingAdapter struct {
+	openaiadapter.Adapter
+	saw *[]string
+}
+
+func (a *shapingAdapter) LLMInvocationParams(
+	convo *frames.LLMContext, opts adapter.Options,
+) (openaiadapter.Params, error) {
+	p, err := a.Adapter.LLMInvocationParams(convo, opts)
+	if err != nil {
+		return openaiadapter.Params{}, err
+	}
+	for _, m := range p.Messages {
+		*a.saw = append(*a.saw, m.Role)
+	}
+	p.Messages = append(p.Messages, Message{Role: RoleAssistant, Content: "partial"})
+	return p, nil
+}
+
+// TestAdapterDecidesWhatIsSent checks the endpoint's own adapter sees the
+// converted conversation and decides what actually goes out.
+func TestAdapterDecidesWhatIsSent(t *testing.T) {
 	convo := frames.NewLLMContext("be brief")
 	convo.AddUserMessage("hello")
 
@@ -48,54 +71,15 @@ func TestShapeMessagesRewritesWhatIsSent(t *testing.T) {
 	body := bodyOf(t, Compat{
 		Name:         "ShapedLLM",
 		DefaultModel: "m",
-		ShapeMessages: func(msgs []Message) []Message {
-			for _, m := range msgs {
-				saw = append(saw, m.Role)
-			}
-			return append(msgs, Message{Role: RoleAssistant, Content: "partial"})
-		},
+		Adapter:      &shapingAdapter{saw: &saw},
 	}, LLMConfig{APIKey: "k"}, convo)
 
 	if len(saw) != 2 || saw[0] != RoleSystem || saw[1] != RoleUser {
-		t.Errorf("the hook saw %v, want the converted conversation", saw)
+		t.Errorf("the adapter saw %v, want the converted conversation", saw)
 	}
 	msgs := messagesOf(t, body)
 	if len(msgs) != 3 || msgs[2]["role"] != RoleAssistant || msgs[2]["content"] != "partial" {
-		t.Errorf("messages sent = %v, want the hook's rewrite", msgs)
-	}
-}
-
-// TestMessageExtraIsMerged checks a field OpenAI's schema has no place for is
-// encoded alongside the modeled ones, and that it wins where the names collide.
-func TestMessageExtraIsMerged(t *testing.T) {
-	raw, err := json.Marshal(Message{
-		Role:    RoleAssistant,
-		Content: "half a thought",
-		Extra:   map[string]any{"prefix": true},
-	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got["prefix"] != true || got["role"] != RoleAssistant || got["content"] != "half a thought" {
-		t.Errorf("encoded message = %v, want the extra field alongside the modeled ones", got)
-	}
-	if _, ok := got["extra"]; ok {
-		t.Error("the extra map was encoded as a field of its own")
-	}
-
-	raw, err = json.Marshal(Message{Role: RoleAssistant, Extra: map[string]any{"role": "user"}})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got["role"] != RoleUser {
-		t.Errorf("role = %v, want the extra field to win over the modeled one", got["role"])
+		t.Errorf("messages sent = %v, want the adapter's rewrite", msgs)
 	}
 }
 

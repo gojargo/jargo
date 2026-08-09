@@ -70,6 +70,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **An OpenAI-compatible endpoint states its adapter rather than a message
+  hook.** `chat.Compat.ShapeMessages` is gone; `chat.Compat.Adapter` takes an
+  `adapter.LLMAdapter[openai.Params, openai.Tool]` instead. An endpoint that
+  constrains the shape of a conversation embeds the OpenAI adapter and rewrites
+  what it produced, which puts the whole conversion in one place instead of
+  splitting it between a shared function and a hook that patched up the result.
+  The chat-completions wire types (`chat.Message`, `chat.ToolCall`,
+  `chat.ToolCallFunction`) now live in `adapter/openai` and are aliased under
+  their old names, so referring to them is unaffected.
+
 - **A summarizer and a judge are built on a service that answers once, not on a
   streaming generator.** `llm.NewSummarizer` and `eval.NewLLMJudge` take an
   `llm.Inferencer`. Every jargo LLM service satisfies it, so a caller passing one
