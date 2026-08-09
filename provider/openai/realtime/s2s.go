@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	realtimeadapter "github.com/gojargo/jargo/adapter/realtime"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -20,6 +21,8 @@ import (
 
 // Service is the Realtime speech-to-speech processor.
 type Service struct {
+	// adapter converts the conversation into what a session takes from it.
+	adapter realtimeadapter.Adapter
 	*processor.Base
 	cfg Config
 
@@ -208,27 +211,9 @@ func (s *Service) sessionUpdate() sessionUpdateMsg {
 }
 
 // toolSession renders the function-calling part of a session payload. It is
-// empty when no tools are advertised, so a session without function calling is
-// configured exactly as before.
+// nil when the conversation advertises no tools.
 func (s *Service) toolSession(tools []frames.Tool, choice frames.ToolChoice) map[string]any {
-	if len(tools) == 0 {
-		return nil
-	}
-	specs := make([]map[string]any, 0, len(tools))
-	for _, t := range tools {
-		spec := map[string]any{keyType: "function", "name": t.Name}
-		if t.Description != "" {
-			spec["description"] = t.Description
-		}
-		if len(t.Parameters) > 0 {
-			spec["parameters"] = t.Parameters
-		}
-		specs = append(specs, spec)
-	}
-	if choice == "" {
-		choice = frames.ToolChoiceAuto
-	}
-	return map[string]any{"tools": specs, "tool_choice": string(choice)}
+	return s.adapter.SessionParams(tools, choice).Session()
 }
 
 // currentTools returns the tools currently advertised to the session.
