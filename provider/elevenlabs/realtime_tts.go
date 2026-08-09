@@ -175,6 +175,9 @@ type contextState struct {
 	// without that every message after the first reports its words as starting
 	// near zero.
 	cumulative float64
+	// alignmentStarted reports whether this context has been given an alignment
+	// yet, which is what makes the next one utterance-leading or not.
+	alignmentStarted bool
 	// direct, when set, takes the audio instead of the host. It is the standalone
 	// Synthesize path, which has no audio context to append to.
 	direct *directSink
@@ -392,6 +395,12 @@ func (s *realtimeSynthesizer) reportWords(
 	if alignment == nil {
 		return nil
 	}
+	// A turn must not open with whitespace, but a leading space on a later
+	// message is a real word separator: the flash models split a sentence that
+	// way, and dropping it would leave the word carried over from the message
+	// before never flushed.
+	alignment = alignment.stripLeadingSpaces(!st.alignmentStarted)
+	st.alignmentStarted = true
 	starts := make([]float64, len(alignment.CharStartTimesMs))
 	for i, ms := range alignment.CharStartTimesMs {
 		starts[i] = st.cumulative + ms/1000
@@ -672,6 +681,25 @@ type charAlignment struct {
 	Chars            []string  `json:"chars"`
 	CharStartTimesMs []float64 `json:"charStartTimesMs"` //nolint:tagliatelle // ElevenLabs wire keys are camelCase
 	CharDurationsMs  []float64 `json:"charDurationsMs"`  //nolint:tagliatelle // ElevenLabs wire keys are camelCase
+}
+
+// stripLeadingSpaces drops the spaces this alignment opens with, but only when
+// it is the first of an utterance. It is the WebSocket schema's counterpart to
+// the same trim on the HTTP one, which names its three parallel arrays
+// differently.
+func (a *charAlignment) stripLeadingSpaces(shouldStrip bool) *charAlignment {
+	if !shouldStrip || len(a.Chars) == 0 || a.Chars[0] != " " {
+		return a
+	}
+	n := 0
+	for n < len(a.Chars) && a.Chars[n] == " " {
+		n++
+	}
+	return &charAlignment{
+		Chars:            a.Chars[n:],
+		CharStartTimesMs: cutFrom(a.CharStartTimesMs, n),
+		CharDurationsMs:  cutFrom(a.CharDurationsMs, n),
+	}
 }
 
 // end reports where the context's timeline stands once this message's audio has

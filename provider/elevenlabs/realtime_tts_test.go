@@ -345,6 +345,13 @@ func (h *fakeHost) AddWordTimestamps(contextID string, words []uctx.WordTiming, 
 	}
 }
 
+// spokenWords is the tokens reported so far.
+func (h *fakeHost) spokenWords() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.words...)
+}
+
 func (h *fakeHost) RemoveAudioContext(string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -604,4 +611,74 @@ func speakOne(t *testing.T, s *realtimeSynthesizer, text string) []byte {
 	host.waitForClose(t)
 	audio, _, _, _ := host.snapshot() //nolint:dogsled // only the audio matters here
 	return audio
+}
+
+// A turn must not open with whitespace, but a leading space on a later message
+// is a real word separator: the flash models split a sentence that way, and
+// dropping it would leave the word carried over from the message before glued to
+// the next one. Only the utterance's own leading space comes off.
+func TestRealtimeTTSStripsOnlyUtteranceLeadingSpaces(t *testing.T) {
+	host, _ := realtimeTTSServer(t, [][]map[string]any{{
+		{"alignment": map[string]any{
+			"chars":            []string{" ", " ", "W", "h", "y"},
+			"charStartTimesMs": []float64{0, 50, 100, 150, 200},
+		}},
+		{"alignment": map[string]any{
+			"chars":            []string{" ", "n", "o", "t"},
+			"charStartTimesMs": []float64{250, 300, 350, 400},
+		}},
+		{"isFinal": true},
+	}})
+
+	s := &timedRealtimeSynthesizer{realtimeSynthesizer: &realtimeSynthesizer{
+		cfg: RealtimeTTSConfig{APIKey: "k", Host: host, WordTimestamps: true}.withDefaults(),
+	}}
+	t.Cleanup(func() { _ = s.Close() })
+
+	rec := &fakeHost{}
+	s.SetAudioContextHost(rec)
+	ctx := context.Background()
+	if err := s.RunTTSTimed(ctx, "Why not", "c1", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	s.OnTurnContextCompleted(ctx, "c1")
+	rec.waitForClose(t)
+
+	words := rec.spokenWords()
+	want := []string{"Why", "not"}
+	if len(words) != len(want) {
+		t.Fatalf("words = %v, want %v", words, want)
+	}
+	for i := range want {
+		if words[i] != want[i] {
+			t.Fatalf("words = %v, want %v", words, want)
+		}
+	}
+}
+
+// The strip works on the WebSocket schema's own array names, and leaves a later
+// message's separating space in place.
+func TestRealtimeCharAlignmentStripLeadingSpaces(t *testing.T) {
+	a := &charAlignment{
+		Chars:            []string{" ", " ", "H", "i"},
+		CharStartTimesMs: []float64{0, 50, 100, 150},
+		CharDurationsMs:  []float64{50, 50, 50, 50},
+	}
+
+	first := a.stripLeadingSpaces(true)
+	if strings.Join(first.Chars, "") != "Hi" {
+		t.Errorf("chars = %q, want the leading spaces gone", strings.Join(first.Chars, ""))
+	}
+	if len(first.CharStartTimesMs) != 2 || len(first.CharDurationsMs) != 2 {
+		t.Errorf("times = %d/%d, want them cut alongside the characters",
+			len(first.CharStartTimesMs), len(first.CharDurationsMs))
+	}
+	if first.CharStartTimesMs[0] != 100 {
+		t.Errorf("first start = %v, want the surviving character's own time", first.CharStartTimesMs[0])
+	}
+
+	later := a.stripLeadingSpaces(false)
+	if strings.Join(later.Chars, "") != "  Hi" {
+		t.Errorf("chars = %q, want a later message's spacing kept", strings.Join(later.Chars, ""))
+	}
 }
