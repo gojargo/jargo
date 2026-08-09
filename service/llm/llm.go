@@ -340,6 +340,13 @@ type Base struct {
 	ttfbStart time.Time
 	ttfb      time.Duration
 	hasTTFB   bool
+
+	// skipTTSMu guards skipTTS, which an LLMConfigureOutputFrame sets from the
+	// frame path while a response is being pushed from the process goroutine.
+	skipTTSMu sync.Mutex
+	// skipTTS is what the tokens of a response are stamped with, nil until
+	// something configures the output.
+	skipTTS *bool
 }
 
 // New builds an LLM Base named name driven by gen. The concrete service passes
@@ -796,6 +803,9 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		}
 		b.broadcastMetadata(ctx)
 		return nil
+	case *frames.LLMConfigureOutputFrame:
+		b.setSkipTTS(fr.SkipTTS)
+		return b.PushFrame(ctx, f, dir)
 	case *frames.LLMUpdateSettingsFrame:
 		if !fr.TargetsService(b) {
 			// Meant for another service; leave it untouched for that one.
@@ -806,6 +816,48 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	default:
 		return b.PushFrame(ctx, f, dir)
 	}
+}
+
+// PushFrame stamps the frames of a response with the output configuration in
+// effect before pushing them on, so a TTS service downstream knows whether to
+// speak them. Only the frames that describe the model's own output are stamped:
+// the ones a TTS service reads to decide what it synthesizes.
+//
+// Nothing is stamped until something configures the output, which leaves the
+// decision to whatever else in the pipeline may set it on a frame.
+func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if skip, ok := b.currentSkipTTS(); ok {
+		// A copy per frame: the frames travel on their own from here, and one
+		// must not be able to change what another says.
+		switch fr := f.(type) {
+		case *frames.LLMTextFrame:
+			fr.SkipTTS = &skip
+		case *frames.LLMFullResponseStartFrame:
+			fr.SkipTTS = &skip
+		case *frames.LLMFullResponseEndFrame:
+			fr.SkipTTS = &skip
+		}
+	}
+	return b.Base.PushFrame(ctx, f, dir)
+}
+
+// setSkipTTS records what the tokens of a response are stamped with from here
+// on.
+func (b *Base) setSkipTTS(v bool) {
+	b.skipTTSMu.Lock()
+	b.skipTTS = &v
+	b.skipTTSMu.Unlock()
+}
+
+// currentSkipTTS returns the configuration to stamp with, reporting false while
+// nothing has configured the output.
+func (b *Base) currentSkipTTS() (bool, bool) {
+	b.skipTTSMu.Lock()
+	defer b.skipTTSMu.Unlock()
+	if b.skipTTS == nil {
+		return false, false
+	}
+	return *b.skipTTS, true
 }
 
 // broadcastMetadata pushes the LLM service's metadata frame downstream at

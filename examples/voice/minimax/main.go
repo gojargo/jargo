@@ -97,7 +97,8 @@ func runBot(conn *rtc.Connection) {
 	// the bot still works, falling back to STT endpointing and losing barge-in.
 	vadProc, turnsCfg := buildTurnStack()
 
-	procs := []processor.Processor{t.Input()}
+	rtviProc := rtvi.NewProcessor()
+	procs := []processor.Processor{rtviProc, t.Input()}
 	if vadProc != nil {
 		procs = append(procs, vadProc)
 	}
@@ -109,8 +110,7 @@ func runBot(conn *rtc.Connection) {
 		aggOpts = append(aggOpts, aggregators.WithTurns(*turnsCfg))
 	}
 	agg := aggregators.New(convo, aggOpts...)
-	rtviProc := rtvi.NewProcessor()
-	procs = append(procs, agg.User(), llm, tts, rtviProc, t.Output(), agg.Assistant())
+	procs = append(procs, agg.User(), llm, tts, t.Output(), agg.Assistant())
 
 	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
 		// The observer reports pipeline events; the processor carries them.

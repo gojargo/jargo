@@ -233,6 +233,10 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewLLMContextFrame(frames.NewLLMContext("be brief")) },
 		},
 		{
+			label: "LLMConfigureOutputFrame", cat: data,
+			build: func() frames.Frame { return frames.NewLLMConfigureOutputFrame(true) },
+		},
+		{
 			label: "LLMMarkerFrame", cat: data,
 			build: func() frames.Frame { return frames.NewLLMMarkerFrame("check") },
 		},

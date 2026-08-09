@@ -186,7 +186,8 @@ func runBot(conn *rtc.Connection, v *viper.Viper) {
 	// turn-taking and losing barge-in.
 	vadProc, turnsCfg := buildTurnStack()
 
-	procs := []processor.Processor{t.Input()}
+	rtviProc := rtvi.NewProcessor()
+	procs := []processor.Processor{rtviProc, t.Input()}
 	if vadProc != nil {
 		procs = append(procs, vadProc)
 	}
@@ -204,11 +205,9 @@ func runBot(conn *rtc.Connection, v *viper.Viper) {
 	if mem := buildMemory(v); mem != nil {
 		procs = append(procs, mem)
 	}
-	rtviProc := rtvi.NewProcessor()
 	procs = append(procs,
 		llm,
 		tts,
-		rtviProc,
 		t.Output(),
 		agg.Assistant(),
 	)

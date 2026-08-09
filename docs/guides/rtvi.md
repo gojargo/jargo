@@ -15,14 +15,16 @@ jargo server works with clients you did not write.
 
 ## Adding it
 
-One processor, placed **upstream of the output transport**, which is what
-actually carries the messages to the client:
+One processor, placed **at the top of the pipeline**, ahead of the input
+transport. What the client sends travels down the pipeline from there, by the
+same path a real caller's input takes, and the messages it sends back reach the
+output transport at the far end:
 
 ```go
 pipeline.New(
+    rtvi.NewProcessor(),   // <- here
     t.Input(), vadProc, stt, turnsProc,
     agg.User(), llm, tts,
-    rtvi.NewProcessor(),   // <- here
     t.Output(), agg.Assistant(),
 )
 ```

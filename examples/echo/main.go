@@ -82,7 +82,7 @@ func runEcho(conn *rtc.Connection) {
 	// The RTVI processor handles the client handshake (client-ready -> bot-ready)
 	// and reports pipeline events to the client over the data channel.
 	rtviProc := rtvi.NewProcessor()
-	pipe := pipeline.New(t.Input(), rtviProc, newEcho(), t.Output())
+	pipe := pipeline.New(rtviProc, t.Input(), newEcho(), t.Output())
 	task := pipeline.NewTask(pipe, pipeline.TaskParams{
 		AudioInSampleRate:  opus.SampleRate,
 		AudioOutSampleRate: opus.SampleRate,

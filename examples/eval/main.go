@@ -46,7 +46,7 @@ func buildBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("You are a friendly demo assistant."))
 	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, agg.User(), newDemoLLM(), rtviProc, out, agg.Assistant(),
+		rtviProc, in, agg.User(), newDemoLLM(), out, agg.Assistant(),
 	), pipeline.TaskParams{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},

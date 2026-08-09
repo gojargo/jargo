@@ -116,7 +116,7 @@ func buildFakeBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("test system"))
 	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, agg.User(), newFakeLLM(), rtviProc, out, agg.Assistant(),
+		rtviProc, in, agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.TaskParams{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
@@ -130,7 +130,7 @@ func buildDTMFBot(in, out processor.Processor) *pipeline.Task {
 	rtviProc := rtvi.NewProcessor()
 	keys := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: "DTMF: "})
 	return pipeline.NewTask(pipeline.New(
-		in, keys, agg.User(), newFakeLLM(), rtviProc, out, agg.Assistant(),
+		rtviProc, in, keys, agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.TaskParams{
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 	})

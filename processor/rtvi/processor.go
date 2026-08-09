@@ -13,19 +13,32 @@ import (
 
 // Processor bridges a pipeline to an RTVI client. It completes the handshake,
 // replying to client-ready with bot-ready, and carries out what the client asks
-// of the pipeline. Place it upstream of the output transport, which carries its
-// messages to the client.
+// of the pipeline.
+//
+// Place it at the top of the pipeline, ahead of the input transport. What the
+// client injects is pushed downstream from there, so it travels the pipeline by
+// the same path a real caller's input takes: a typed message reaches the
+// context aggregator, a keypress reaches the DTMF handling, and each arrives in
+// order with everything the turn is made of. Its own messages to the client are
+// pushed downstream too, and reach the output transport at the far end.
 //
 // It does not report pipeline events: pair it with an Observer, which watches
 // the whole pipeline and sends through this processor. Incoming client messages
-// arrive as InputTransportMessageFrames; outgoing messages are pushed downstream
-// as OutputTransportMessageUrgentFrames.
+// arrive as InputTransportMessageFrames, which the input transport broadcasts so
+// they reach this processor from either side; outgoing messages are pushed
+// downstream as OutputTransportMessageUrgentFrames.
 type Processor struct {
 	*processor.Base
 
-	// mu guards baseCtx, which an Observer uses to send from its own goroutine.
+	// mu guards baseCtx, which an Observer uses to send from its own goroutine,
+	// and llmSkipTTS, which the message goroutine reads while the frame path
+	// updates it.
 	mu      sync.Mutex
 	baseCtx context.Context //nolint:containedctx // outlives the frame that set it
+	// llmSkipTTS is the output configuration the LLM service is running under,
+	// so a turn that changes it for itself can put back what it found. It starts
+	// false, which is what an LLM service nothing has configured does.
+	llmSkipTTS bool
 
 	// messages carries client messages from the frame path to the goroutine that
 	// carries them out. Acting on one can mean waiting for the pipeline to
@@ -103,6 +116,13 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 	// Client messages are consumed here, not forwarded downstream.
 	if fr, ok := f.(*frames.InputTransportMessageFrame); ok {
 		return p.handleIncoming(ctx, fr)
+	}
+	// Whatever configures the LLM's output is followed, so a turn asking for a
+	// different setting knows what to put back after it.
+	if fr, ok := f.(*frames.LLMConfigureOutputFrame); ok {
+		p.mu.Lock()
+		p.llmSkipTTS = fr.SkipTTS
+		p.mu.Unlock()
 	}
 	return p.PushFrame(ctx, f, dir)
 }
@@ -326,14 +346,20 @@ func (p *Processor) handleMessage(ctx context.Context, in Incoming) error {
 	}
 }
 
-// handleSendText injects a text user turn. The processor sits downstream of the
-// context aggregator, so the injected frames are pushed upstream to reach it:
-// the append adds the user message to the shared context, and, unless the client
-// opted out, the run makes the LLM respond immediately, bypassing the
-// VAD/turn-taking gating that governs spoken turns.
+// handleSendText injects a text user turn. The processor sits at the top of the
+// pipeline, so the injected frames are pushed downstream to reach the context
+// aggregator: the append adds the user message to the shared context, and,
+// unless the client opted out, the run makes the LLM respond immediately,
+// bypassing the VAD/turn-taking gating that governs spoken turns.
 //
 // Running immediately also cuts the bot off mid-answer, which is what makes it a
 // barge-in the client typed rather than spoke.
+//
+// A turn the client asked not to be spoken is bracketed by the output
+// configuration it wants and the one that was in effect before it, so the
+// setting applies to this turn alone. The three travel one behind the other in
+// the same direction, which is what keeps the restore from overtaking the turn
+// it closes.
 func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 	d, err := ParseSendTextData(in.Data)
 	if err != nil {
@@ -348,12 +374,29 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 			return err
 		}
 	}
+
+	p.mu.Lock()
+	current := p.llmSkipTTS
+	p.mu.Unlock()
+	skip := !d.AudioResponse()
+	toggle := current != skip
+	if toggle {
+		if err := p.PushFrame(ctx, frames.NewLLMConfigureOutputFrame(skip), processor.Downstream); err != nil {
+			return err
+		}
+	}
+
 	appendMsg := frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: d.Content}})
-	if err := p.PushFrame(ctx, appendMsg, processor.Upstream); err != nil {
+	if err := p.PushFrame(ctx, appendMsg, processor.Downstream); err != nil {
 		return err
 	}
 	if d.RunImmediately() {
-		return p.PushFrame(ctx, frames.NewLLMRunFrame(), processor.Upstream)
+		if err := p.PushFrame(ctx, frames.NewLLMRunFrame(), processor.Downstream); err != nil {
+			return err
+		}
+	}
+	if toggle {
+		return p.PushFrame(ctx, frames.NewLLMConfigureOutputFrame(current), processor.Downstream)
 	}
 	return nil
 }
@@ -363,10 +406,10 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming) error {
 // terminator key or its idle timeout, into a transcription the bot reacts to:
 // the same path a telephony caller's keypress takes.
 //
-// The keys go upstream, like the user message a send-text appends, because this
-// processor sits after the aggregators that consume user input. A keypress is
-// user input arriving from the client, so it travels the way the rest of it
-// does.
+// The keys go downstream, like the user message a send-text appends, because
+// this processor sits at the top of the pipeline. A keypress is user input
+// arriving from the client, so it travels the way the rest of it does, reaching
+// the input transport and the DTMF handling behind it.
 func (p *Processor) handleDTMF(ctx context.Context, in Incoming) error {
 	var d DTMFData
 	if err := json.Unmarshal(in.Data, &d); err != nil {
@@ -379,7 +422,7 @@ func (p *Processor) handleDTMF(ctx context.Context, in Incoming) error {
 			slog.Warn("ignoring invalid DTMF key", "key", button)
 			continue
 		}
-		if err := p.PushFrame(ctx, frames.NewInputDTMFFrame(key), processor.Upstream); err != nil {
+		if err := p.PushFrame(ctx, frames.NewInputDTMFFrame(key), processor.Downstream); err != nil {
 			return err
 		}
 	}

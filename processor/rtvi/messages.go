@@ -96,6 +96,12 @@ func (d SendTextData) RunImmediately() bool {
 	return d.Options == nil || d.Options.RunImmediately == nil || *d.Options.RunImmediately
 }
 
+// AudioResponse reports whether the reply to the injected text should be
+// spoken. Absent options (or an absent flag) default to true.
+func (d SendTextData) AudioResponse() bool {
+	return d.Options == nil || d.Options.AudioResponse == nil || *d.Options.AudioResponse
+}
+
 // ParseSendTextData decodes the data payload of a send-text message.
 func ParseSendTextData(raw json.RawMessage) (SendTextData, error) {
 	var d SendTextData

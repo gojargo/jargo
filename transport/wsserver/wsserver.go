@@ -223,6 +223,12 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 			in.PushAudioFrame(ctx, af)
 			continue
 		}
+		if mf, ok := f.(*frames.InputTransportMessageFrame); ok {
+			// Broadcast, so whatever handles client messages hears them whether
+			// it sits ahead of this transport or behind it.
+			in.PushTransportMessage(ctx, mf.Message)
+			continue
+		}
 		_ = in.PushFrame(ctx, f, processor.Downstream)
 	}
 }

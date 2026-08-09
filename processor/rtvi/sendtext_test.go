@@ -83,7 +83,7 @@ func TestSendTextRunImmediatelyCommitsBeforeAppending(t *testing.T) {
 	llm := newOpenEndedLLM()
 
 	task := pipeline.NewTask(
-		pipeline.New(agg.User(), llm, proc, agg.Assistant()),
+		pipeline.New(proc, agg.User(), llm, agg.Assistant()),
 		pipeline.TaskParams{},
 	)
 	done := make(chan error, 1)

@@ -49,7 +49,7 @@ func echoBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, agg.User(), newEchoLLM(), rtviProc, out, agg.Assistant(),
+		rtviProc, in, agg.User(), newEchoLLM(), out, agg.Assistant(),
 	), pipeline.TaskParams{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},

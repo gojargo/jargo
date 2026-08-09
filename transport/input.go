@@ -76,11 +76,19 @@ func (bi *BaseInput) PushAudioFrame(ctx context.Context, f *frames.InputAudioRaw
 	sendAudio(ctx, ch, f)
 }
 
-// PushTransportMessage pushes a message received from the client downstream as
-// an InputTransportMessageFrame. A concrete transport calls it when an
-// application message arrives (for example off a data channel).
+// PushTransportMessage emits a message received from the client as an
+// InputTransportMessageFrame. A concrete transport calls it when an application
+// message arrives (for example off a data channel).
+//
+// It is broadcast rather than pushed one way, so whatever handles client
+// messages hears them wherever it sits: a processor placed ahead of the input
+// transport reads them traveling upstream, one placed behind it reads them
+// traveling downstream. Only the copy going its way reaches it, so it handles
+// the message once.
 func (bi *BaseInput) PushTransportMessage(ctx context.Context, raw []byte) {
-	_ = bi.PushFrame(ctx, frames.NewInputTransportMessageFrame(raw), processor.Downstream)
+	_ = bi.Broadcast(ctx, func() frames.Frame {
+		return frames.NewInputTransportMessageFrame(raw)
+	})
 }
 
 // ProcessFrame handles the transport lifecycle and forwards frames.

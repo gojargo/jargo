@@ -185,7 +185,7 @@ func TestProcessorSendTextInjectsUserTurn(t *testing.T) {
 	pair := aggregators.New(convo)
 
 	got := make(chan *frames.LLMContextFrame, 1)
-	task := pipeline.NewTask(pipeline.New(pair.User(), rtvi.NewProcessor()), pipeline.TaskParams{
+	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor(), pair.User()), pipeline.TaskParams{
 		OnReachedDownstream: func(f frames.Frame) {
 			if cf, ok := f.(*frames.LLMContextFrame); ok {
 				select {

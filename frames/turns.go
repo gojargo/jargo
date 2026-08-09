@@ -195,6 +195,25 @@ func NewLLMMarkerFrame(marker string) *LLMMarkerFrame {
 	return &LLMMarkerFrame{BaseDataFrame: NewBaseDataFrame("LLMMarkerFrame"), Marker: marker}
 }
 
+// LLMConfigureOutputFrame configures how an LLM service produces output. It
+// tells the service to stamp the tokens it emits so a TTS service downstream
+// passes them through instead of speaking them: the reply is added to the
+// conversation but never said out loud. It is a data frame.
+type LLMConfigureOutputFrame struct {
+	BaseDataFrame
+	// SkipTTS reports whether the tokens the LLM emits should skip the TTS
+	// service, if the pipeline has one.
+	SkipTTS bool
+}
+
+// NewLLMConfigureOutputFrame builds an LLMConfigureOutputFrame.
+func NewLLMConfigureOutputFrame(skipTTS bool) *LLMConfigureOutputFrame {
+	return &LLMConfigureOutputFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMConfigureOutputFrame"),
+		SkipTTS:       skipTTS,
+	}
+}
+
 // LLMMessagesAppendFrame asks the context aggregator to append messages to the
 // LLM context (used by the turn-completion re-prompt). It is a control frame.
 type LLMMessagesAppendFrame struct {
@@ -224,5 +243,6 @@ var (
 	_ ControlFrame = (*VADParamsUpdateFrame)(nil)
 	_ ControlFrame = (*UserTurnInferenceCompletedFrame)(nil)
 	_ DataFrame    = (*LLMMarkerFrame)(nil)
+	_ DataFrame    = (*LLMConfigureOutputFrame)(nil)
 	_ ControlFrame = (*LLMMessagesAppendFrame)(nil)
 )

@@ -77,6 +77,7 @@ turnsProc := turns.NewUserTurnProcessor(turns.Config{
 })
 
 pipe := pipeline.New(
+    rtvi.NewProcessor(),
     t.Input(),
     vadProc,
     stt,
@@ -84,7 +85,6 @@ pipe := pipeline.New(
     agg.User(), // built with aggregators.WithTurnTaking()
     llm,
     tts,
-    rtvi.NewProcessor(),
     t.Output(),
     agg.Assistant(),
 )

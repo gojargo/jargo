@@ -14,6 +14,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A client can ask for a reply it is not read aloud.** `audio_response: false`
+  on an RTVI send-text is now honored: the turn is answered and added to the
+  conversation, but the reply is not synthesized. It is carried by
+  `frames.LLMConfigureOutputFrame`, which an LLM service records and stamps onto
+  the frames of its response, and which a TTS service reads to pass a stamped
+  frame through instead of speaking it. The setting applies to the turn that
+  asked for it: the turns around it are spoken as before.
+
 - **A toolset can carry tools written in one provider's own format.**
   `frames.ToolsSchema` holds the standard tools every provider is offered
   alongside custom ones keyed by `frames.AdapterType`, and
@@ -100,6 +108,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   asks for no spoken response, so no synthesis runs.
 
 ### Changed
+
+- **The RTVI processor now belongs at the top of the pipeline.** Place it ahead
+  of the input transport, not before the output transport:
+
+  ```go
+  // before
+  procs := []processor.Processor{t.Input(), vadProc, stt}
+  procs = append(procs, agg.User(), llm, tts, rtviProc, t.Output(), agg.Assistant())
+
+  // after
+  procs := []processor.Processor{rtviProc, t.Input(), vadProc, stt}
+  procs = append(procs, agg.User(), llm, tts, t.Output(), agg.Assistant())
+  ```
+
+  A pipeline left as it was keeps working for events reported to the client, but
+  send-text and DTMF silently stop reaching the aggregator, because what the
+  client injects is now pushed downstream rather than upstream. Everything the
+  client sends travels the pipeline by the same path a real caller's input
+  takes, which is what lets a turn carry settings of its own. The input
+  transport broadcasts client messages, so the processor hears them from either
+  side.
 
 - **A tool the LLM service implements itself lives on its adapter, not on the
   conversation.** `LLMContext.SetServiceTools`, `LLMContext.SetServiceInstructions`

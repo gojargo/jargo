@@ -325,6 +325,13 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
+	// Text the LLM service stamped to skip synthesis passes straight through: it
+	// belongs in the conversation, but it is not to be spoken. The response
+	// brackets are stamped with it too, so the turn they describe is not opened
+	// and closed here for speech that never happens.
+	if skipsTTS(f) {
+		return b.PushFrame(ctx, f, dir)
+	}
 	switch fr := f.(type) {
 	case *frames.LLMTextFrame:
 		return b.handleText(ctx, &fr.TextFrame, f, dir)
@@ -357,17 +364,42 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	case *frames.StartFrame:
 		return b.handleStart(ctx, f, dir)
 	case *frames.TTSUpdateSettingsFrame:
-		if !fr.TargetsService(b) {
-			// Meant for another service; leave it untouched for that one.
-			return b.PushFrame(ctx, f, dir)
-		}
-		b.updateSettings(ctx, fr)
-		return nil
+		return b.handleSettingsUpdate(ctx, fr, dir)
 	case *frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
 		return b.handleBotSpeaking(ctx, f, dir)
 	default:
 		return b.queueSerial(ctx, f, dir)
 	}
+}
+
+// handleSettingsUpdate applies an update addressed to this service, and leaves
+// one meant for another service untouched for that one.
+func (b *Base) handleSettingsUpdate(
+	ctx context.Context, f *frames.TTSUpdateSettingsFrame, dir processor.Direction,
+) error {
+	if !f.TargetsService(b) {
+		return b.PushFrame(ctx, f, dir)
+	}
+	b.updateSettings(ctx, f)
+	return nil
+}
+
+// skipsTTS reports whether the frame was stamped to bypass synthesis. Only the
+// frames describing the model's output carry the stamp, and an unstamped frame
+// is not one to skip.
+func skipsTTS(f frames.Frame) bool {
+	var skip *bool
+	switch fr := f.(type) {
+	case *frames.LLMTextFrame:
+		skip = fr.SkipTTS
+	case *frames.TextFrame:
+		skip = fr.SkipTTS
+	case *frames.LLMFullResponseStartFrame:
+		skip = fr.SkipTTS
+	case *frames.LLMFullResponseEndFrame:
+		skip = fr.SkipTTS
+	}
+	return skip != nil && *skip
 }
 
 // updateSettings merges an update into the provider's own settings and lets it

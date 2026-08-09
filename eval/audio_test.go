@@ -107,7 +107,7 @@ func buildAudioBot(in, out processor.Processor) *pipeline.Task {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
 	return pipeline.NewTask(pipeline.New(
-		in, newFakeAudioSTT(), agg.User(), newFakeLLM(), rtviProc, out, agg.Assistant(),
+		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.TaskParams{
 		AudioInSampleRate: audioRate,
 		// The observer reports pipeline events; the processor carries them.
@@ -177,7 +177,7 @@ func buildSilentBot(in, out processor.Processor) *pipeline.Task {
 	speech := tts.New("fakeTTS", fakeSynth{})
 	speech.SetTextFilters(unspeakable{})
 	return pipeline.NewTask(pipeline.New(
-		in, newFakeAudioSTT(), agg.User(), newFakeLLM(), speech, rtviProc, out, agg.Assistant(),
+		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), speech, out, agg.Assistant(),
 	), pipeline.TaskParams{
 		AudioInSampleRate: audioRate,
 		Observers:         []pipeline.Observer{rtvi.NewObserver(rtviProc)},

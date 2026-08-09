@@ -92,7 +92,8 @@ func runBot(conn *rtc.Connection) {
 	convo := frames.NewLLMContext("") // the flow's opening node sets the persona.
 
 	vadProc, turnsCfg := buildTurnStack()
-	procs := []processor.Processor{t.Input()}
+	rtviProc := rtvi.NewProcessor()
+	procs := []processor.Processor{rtviProc, t.Input()}
 	if vadProc != nil {
 		procs = append(procs, vadProc)
 	}
@@ -104,8 +105,7 @@ func runBot(conn *rtc.Connection) {
 		aggOpts = append(aggOpts, aggregators.WithTurns(*turnsCfg))
 	}
 	agg := aggregators.New(convo, aggOpts...)
-	rtviProc := rtvi.NewProcessor()
-	procs = append(procs, agg.User(), llmSvc, tts, rtviProc, t.Output(), agg.Assistant())
+	procs = append(procs, agg.User(), llmSvc, tts, t.Output(), agg.Assistant())
 
 	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
 		// The observer reports pipeline events; the processor carries them.

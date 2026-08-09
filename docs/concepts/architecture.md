@@ -25,9 +25,9 @@ flowchart LR
 
     subgraph Pipeline["pipeline.Pipeline"]
         direction LR
-        In["Input"] --> VAD["VAD"] --> STT["STT"] --> Turn["UserTurn"]
-        Turn --> AggU["agg.User"] --> LLM["LLM"] --> TTS["TTS"]
-        TTS --> RTVI["RTVI"] --> Out["Output"] --> AggA["agg.Assistant"]
+        RTVI["RTVI"] --> In["Input"] --> VAD["VAD"] --> STT["STT"]
+        STT --> Turn["UserTurn"] --> AggU["agg.User"] --> LLM["LLM"]
+        LLM --> TTS["TTS"] --> Out["Output"] --> AggA["agg.Assistant"]
     end
 
     Browser -- "Opus / WebRTC" --> In
@@ -46,8 +46,8 @@ In code, that diagram is a slice:
 
 ```go
 procs := []processor.Processor{
-    t.Input(), vadProc, stt, turnsProc,
-    agg.User(), llm, tts, rtvi.NewProcessor(), t.Output(), agg.Assistant(),
+    rtvi.NewProcessor(), t.Input(), vadProc, stt, turnsProc,
+    agg.User(), llm, tts, t.Output(), agg.Assistant(),
 }
 task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{})
 task.Run(ctx)
@@ -63,6 +63,11 @@ the design:
   turn is over, and that decision needs transcriptions and LLM/TTS activity, not
   just raw speech energy. It reaches the processors *behind* it by pushing frames
   upstream.
+- **The RTVI processor sits at the very top, ahead of the input transport.** What
+  the client injects (a typed message, a keypress) is pushed downstream from
+  there, so it travels the pipeline by the same path a real caller's speech
+  takes. Its messages back to the client travel downstream too, and reach the
+  output transport at the far end.
 
 ## Frames flow both ways
 

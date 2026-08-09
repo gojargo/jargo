@@ -90,6 +90,7 @@ Order matters. This is the reference wiring:
 
 ```go
 task := pipeline.NewTask(pipeline.New(
+    rtvi.NewProcessor(), // client events over the data channel
     t.Input(),          // audio in
     vadProc,            // is the user speaking?
     stt,                // audio → text
@@ -97,7 +98,6 @@ task := pipeline.NewTask(pipeline.New(
     agg.User(),         // text → context, triggers the LLM
     llm,                // context → response tokens
     tts,                // tokens → audio
-    rtvi.NewProcessor(), // client events over the data channel
     t.Output(),         // audio out
     agg.Assistant(),    // record what was actually said
 ), pipeline.TaskParams{
