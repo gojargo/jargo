@@ -68,7 +68,7 @@ func (a *Adapter) SessionParams(tools []frames.Tool, choice frames.ToolChoice) P
 	if choice == "" {
 		choice = frames.ToolChoiceAuto
 	}
-	return Params{Tools: a.ToProviderToolsFormat(tools), ToolChoice: string(choice)}
+	return Params{Tools: a.ToProviderToolsFormat(a.WithBuiltins(tools)), ToolChoice: string(choice)}
 }
 
 // ToProviderToolsFormat implements adapter.LLMAdapter. The Realtime API

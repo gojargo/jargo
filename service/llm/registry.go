@@ -17,7 +17,7 @@ import (
 // each time. Only handlers registered from a toolset are ever dropped: one
 // registered by hand is the application's to remove.
 func (b *Base) syncToolHandlers(ctx context.Context, convo *frames.LLMContext) {
-	tools := convo.AppTools()
+	tools := convo.Tools()
 
 	advertised := make(map[string]bool, len(tools))
 	for _, t := range tools {
