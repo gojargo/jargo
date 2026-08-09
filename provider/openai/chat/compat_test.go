@@ -38,57 +38,6 @@ func messagesOf(t *testing.T, body map[string]any) []map[string]any {
 	return out
 }
 
-// TestDeveloperMessagesConvertedToUser checks the role an asynchronous tool's
-// late results travel under: kept as it is for an endpoint that has the
-// developer role, and sent as a user message for one that does not, which is
-// what stops such an endpoint rejecting the turn. The conversation itself is
-// left as it was either way: the conversion is how this endpoint is addressed,
-// not a change to what was said.
-func TestDeveloperMessagesConvertedToUser(t *testing.T) {
-	convo := frames.NewLLMContext("")
-	convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Extra context."})
-	convo.AddUserMessage("Hello")
-
-	kept := toMessages(convo, false)
-	if kept[0].Role != RoleDeveloper {
-		t.Errorf("role = %q, want it left as the developer role", kept[0].Role)
-	}
-
-	converted := toMessages(convo, true)
-	if converted[0].Role != RoleUser {
-		t.Errorf("role = %q, want the developer message sent as a user message", converted[0].Role)
-	}
-	if converted[0].Content != "Extra context." {
-		t.Errorf("content = %q, want what the developer message carried", converted[0].Content)
-	}
-	if got := convo.Messages()[0].Role; got != frames.RoleDeveloper {
-		t.Errorf("the conversation now reads %q, want the developer message untouched", got)
-	}
-}
-
-// TestDeveloperConversionDoesNotAffectOtherRoles checks the conversion reaches
-// the developer role and nothing else.
-func TestDeveloperConversionDoesNotAffectOtherRoles(t *testing.T) {
-	convo := frames.NewLLMContext("System prompt.")
-	convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Dev guidance."})
-	convo.AddUserMessage("Hello")
-	convo.AddAssistantMessage("Hi")
-
-	msgs := toMessages(convo, true)
-	want := []string{RoleSystem, RoleUser, RoleUser, RoleAssistant}
-	if len(msgs) != len(want) {
-		t.Fatalf("messages = %+v, want %d of them", msgs, len(want))
-	}
-	for i, role := range want {
-		if msgs[i].Role != role {
-			t.Errorf("message %d role = %q, want %q", i, msgs[i].Role, role)
-		}
-	}
-	if msgs[1].Content != "Dev guidance." {
-		t.Errorf("content = %q, want what the developer message carried", msgs[1].Content)
-	}
-}
-
 // TestShapeMessagesRewritesWhatIsSent checks the hook sees the converted
 // conversation and decides what actually goes out.
 func TestShapeMessagesRewritesWhatIsSent(t *testing.T) {

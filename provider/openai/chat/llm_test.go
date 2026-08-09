@@ -348,8 +348,8 @@ func TestGenerateWithToolsAdvertisesTools(t *testing.T) {
 		t.Fatalf("tools = %v, want the one advertised tool", srv.body["tools"])
 	}
 	tool, _ := tools[0].(map[string]any)
-	if tool["type"] != toolTypeFunction {
-		t.Errorf("tool type = %v, want %q", tool["type"], toolTypeFunction)
+	if tool["type"] != "function" {
+		t.Errorf("tool type = %v, want %q", tool["type"], "function")
 	}
 	fn, _ := tool["function"].(map[string]any)
 	if fn["name"] != "get_weather" || fn["description"] != "Look up the weather" {

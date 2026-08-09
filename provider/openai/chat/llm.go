@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/gojargo/jargo/adapter"
+	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/llm"
@@ -24,19 +25,16 @@ const (
 	// defaultRetryTimeout bounds the first attempt when a service was built to
 	// retry a request that times out.
 	defaultRetryTimeout = 5 * time.Second
-	// toolTypeFunction is the only tool type OpenAI's chat API defines.
-	toolTypeFunction = "function"
 )
 
-// The message roles the chat-completions API defines. They are exported for a
-// provider that has to rewrite the conversation before it is sent (see
-// Compat.ShapeMessages).
+// The message roles the chat-completions API defines. They are aliases of the
+// adapter's own, which is where the wire format lives.
 const (
-	RoleSystem    = "system"
-	RoleUser      = "user"
-	RoleAssistant = "assistant"
-	RoleTool      = "tool"
-	RoleDeveloper = "developer"
+	RoleSystem    = openai.RoleSystem
+	RoleUser      = openai.RoleUser
+	RoleAssistant = openai.RoleAssistant
+	RoleTool      = openai.RoleTool
+	RoleDeveloper = openai.RoleDeveloper
 )
 
 // LLMConfig configures an OpenAI (or OpenAI-compatible) LLM service. The
@@ -109,6 +107,8 @@ type LLMService struct {
 	cfg    LLMConfig
 	http   *http.Client
 	shaper RequestShaper
+	// adapter converts the conversation into the request this endpoint takes.
+	adapter openai.Adapter
 	// How this endpoint departs from OpenAI's own API, fixed at construction.
 	noDeveloperRole bool
 	shapeMessages   func([]Message) []Message
@@ -182,56 +182,19 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 	return s
 }
 
-// Message is one message of the conversation as the chat-completions API takes
-// it. It is exported for Compat.ShapeMessages, which sees the whole
-// conversation just before it is sent.
-type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	// Extra sets fields on this message that OpenAI's schema has no place for,
-	// merged over the modeled ones when the message is encoded. It is how an
-	// endpoint that reads a field of its own is served without that field
-	// reaching the endpoints that would reject it.
-	Extra map[string]any `json:"-"`
-}
-
-// MarshalJSON encodes the message, merging Extra over the modeled fields.
-func (m Message) MarshalJSON() ([]byte, error) {
-	// plain drops the method set, so marshaling it does not recurse.
-	type plain Message
-	if len(m.Extra) == 0 {
-		return json.Marshal(plain(m))
-	}
-	return mergeExtra(plain(m), m.Extra)
-}
-
-// ToolCall is an assistant tool-call entry on a message.
-type ToolCall struct {
-	ID       string           `json:"id"`
-	Type     string           `json:"type"`
-	Function ToolCallFunction `json:"function"`
-}
-
-// ToolCallFunction is the function a tool call invokes, with its arguments as
-// the raw JSON string the model produced.
-type ToolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-// openaiTool is a function tool advertised on the request.
-type openaiTool struct {
-	Type     string     `json:"type"`
-	Function openaiFunc `json:"function"`
-}
-
-type openaiFunc struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-}
+// The chat-completions wire types. They live in the adapter, which is what
+// converts a conversation into them; these aliases keep them reachable under
+// this package's name.
+type (
+	// Message is one message of the conversation as the chat-completions API
+	// takes it.
+	Message = openai.Message
+	// ToolCall is an assistant tool-call entry on a message.
+	ToolCall = openai.ToolCall
+	// ToolCallFunction is the function a tool call invokes, with its arguments as
+	// the raw JSON string the model produced.
+	ToolCallFunction = openai.ToolCallFunction
+)
 
 type chatRequest struct {
 	Model               string         `json:"model"`
@@ -246,7 +209,7 @@ type chatRequest struct {
 	PresencePenalty     *float64       `json:"presence_penalty,omitempty"`
 	Seed                *int           `json:"seed,omitempty"`
 	ServiceTier         string         `json:"service_tier,omitempty"`
-	Tools               []openaiTool   `json:"tools,omitempty"`
+	Tools               []openai.Tool  `json:"tools,omitempty"`
 	ToolChoice          string         `json:"tool_choice,omitempty"`
 }
 
@@ -262,22 +225,7 @@ func encodeBody(req chatRequest, extra map[string]any) ([]byte, error) {
 	if len(extra) == 0 {
 		return json.Marshal(req)
 	}
-	return mergeExtra(req, extra)
-}
-
-// mergeExtra encodes v and merges extra over the fields it produced, so a
-// caller-supplied field wins over the modeled one of the same name.
-func mergeExtra(v any, extra map[string]any) ([]byte, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, err
-	}
-	maps.Copy(m, extra)
-	return json.Marshal(m)
+	return openai.MergeExtra(req, extra)
 }
 
 type toolCallDelta struct {
@@ -346,7 +294,15 @@ func (textSink) Tool(frames.ToolCall) error { return nil }
 
 // Generate streams a chat completion, emitting each content delta.
 func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	return s.generate(ctx, s.baseRequest(convo), textSink{emit})
+	reqBody, err := s.baseRequest(convo, adapter.Options{})
+	if err != nil {
+		return err
+	}
+	// A text-only generation advertises no tools, so the model has nothing to
+	// call and a reported call would be the provider inventing one.
+	reqBody.Tools = nil
+	reqBody.ToolChoice = ""
+	return s.generate(ctx, reqBody, textSink{emit})
 }
 
 // GenerateWithTools streams a tool-capable completion. It emits text deltas to
@@ -354,19 +310,26 @@ func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emi
 // the model produced. The conversation's tools are sent on the request, and any
 // tool turns already in the context are replayed as the matching messages.
 func (s *LLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	reqBody := s.baseRequest(convo)
-	if tools := convo.Tools(); len(tools) > 0 {
-		reqBody.Tools = toTools(tools)
-		reqBody.ToolChoice = string(convo.ToolChoice())
+	reqBody, err := s.baseRequest(convo, adapter.Options{})
+	if err != nil {
+		return err
 	}
 	return s.generate(ctx, reqBody, sink)
 }
 
 // baseRequest builds the streaming request shared by both generation paths.
-func (s *LLMService) baseRequest(convo *frames.LLMContext) chatRequest {
+func (s *LLMService) baseRequest(
+	convo *frames.LLMContext, opts adapter.Options,
+) (chatRequest, error) {
+	p, err := s.params(convo, opts)
+	if err != nil {
+		return chatRequest{}, err
+	}
 	return chatRequest{
 		Model:               s.cfg.Model,
-		Messages:            s.messages(convo),
+		Messages:            p.Messages,
+		Tools:               p.Tools,
+		ToolChoice:          p.ToolChoice,
 		Stream:              true,
 		StreamOptions:       &streamOptions{IncludeUsage: true},
 		MaxTokens:           s.cfg.MaxTokens,
@@ -377,7 +340,7 @@ func (s *LLMService) baseRequest(convo *frames.LLMContext) chatRequest {
 		PresencePenalty:     s.cfg.PresencePenalty,
 		Seed:                s.cfg.Seed,
 		ServiceTier:         s.cfg.ServiceTier,
-	}
+	}, nil
 }
 
 // generate sends one streaming request and feeds what comes back to sink.
@@ -577,14 +540,15 @@ func (c *toolCoalescer) emit(sink llm.Sink) error {
 func (s *LLMService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
-	reqBody := s.baseRequest(convo)
+	reqBody, err := s.baseRequest(convo, adapter.Options{SystemInstruction: opts.SystemInstruction})
+	if err != nil {
+		return "", err
+	}
 	reqBody.Stream = false
 	reqBody.StreamOptions = nil
-	if opts.SystemInstruction != "" {
-		reqBody.Messages = append(
-			[]Message{{Role: RoleSystem, Content: opts.SystemInstruction}}, reqBody.Messages...,
-		)
-	}
+	// An inference wants an answer, not a tool call, so the toolset is left off.
+	reqBody.Tools = nil
+	reqBody.ToolChoice = ""
 	if opts.MaxTokens > 0 {
 		// Whichever bound this service states is the one to override; a model
 		// that reads only one of the two is told through the field it reads.
@@ -623,71 +587,18 @@ func (s *LLMService) RunInference(
 	return completion.Choices[0].Message.Content, nil
 }
 
-// messages converts the conversation for this endpoint: the shared conversion,
+// params converts the conversation for this endpoint: the adapter's conversion,
 // then whatever the endpoint insists on beyond it.
-func (s *LLMService) messages(convo *frames.LLMContext) []Message {
-	msgs := toMessages(convo, s.noDeveloperRole)
+func (s *LLMService) params(
+	convo *frames.LLMContext, opts adapter.Options,
+) (openai.Params, error) {
+	opts.ConvertDeveloperToUser = s.noDeveloperRole
+	p, err := s.adapter.LLMInvocationParams(convo, opts)
+	if err != nil {
+		return openai.Params{}, err
+	}
 	if s.shapeMessages != nil {
-		msgs = s.shapeMessages(msgs)
+		p.Messages = s.shapeMessages(p.Messages)
 	}
-	return msgs
-}
-
-// toMessages converts the conversation into OpenAI chat messages, with the
-// system prompt as the leading system message. Tool turns become an assistant
-// message carrying tool_calls and one "tool" message per result.
-//
-// developerAsUser sends a developer message as a user message, for an endpoint
-// that has no developer role. What the role carries, the late results of an
-// asynchronous tool, is worth more to the model than the role it arrives under.
-func toMessages(convo *frames.LLMContext, developerAsUser bool) []Message {
-	var out []Message
-	if sys := convo.System(); sys != "" {
-		out = append(out, Message{Role: RoleSystem, Content: sys})
-	}
-	for _, m := range convo.Messages() {
-		switch {
-		case len(m.ToolResults) > 0:
-			for _, r := range m.ToolResults {
-				out = append(out, Message{Role: RoleTool, ToolCallID: r.ID, Content: r.Content})
-			}
-		case len(m.ToolCalls) > 0:
-			msg := Message{Role: RoleAssistant, Content: m.Text}
-			for _, c := range m.ToolCalls {
-				args := string(c.Args)
-				if args == "" {
-					args = "{}"
-				}
-				msg.ToolCalls = append(msg.ToolCalls, ToolCall{
-					ID:       c.ID,
-					Type:     toolTypeFunction,
-					Function: ToolCallFunction{Name: c.Name, Arguments: args},
-				})
-			}
-			out = append(out, msg)
-		default:
-			role := string(m.Role)
-			if developerAsUser && m.Role == frames.RoleDeveloper {
-				role = RoleUser
-			}
-			out = append(out, Message{Role: role, Content: m.Text})
-		}
-	}
-	return out
-}
-
-// toTools converts the context's tools into OpenAI function tools.
-func toTools(tools []frames.Tool) []openaiTool {
-	out := make([]openaiTool, 0, len(tools))
-	for _, t := range tools {
-		out = append(out, openaiTool{
-			Type: toolTypeFunction,
-			Function: openaiFunc{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
-		})
-	}
-	return out
+	return p, nil
 }
