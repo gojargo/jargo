@@ -91,6 +91,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   A scenario that fails once and passes the next time is readable from the trace
   rather than by re-running it.
 
+- **A scenario can assert on what reached synthesis.** The `tts_response` event
+  carries the text the bot's TTS reports speaking, one segment as each arrives,
+  and takes `text_contains` and `eval` like `llm_response` does, aggregating
+  across the segments of a turn. Every assertion before it stopped at the text
+  the model produced, so a turn whose reply never reached the speech service
+  passed while the caller heard nothing. It is audio mode only: a text-mode turn
+  asks for no spoken response, so no synthesis runs.
+
 ### Changed
 
 - **A tool the LLM service implements itself lives on its adapter, not on the
@@ -222,6 +230,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   system message is deliberately left alone: demoting it would depend on how much
   of the conversation had happened so far, and Perplexity rejects a message whose
   role changes between turns.
+
+- **`bot-tts-text` reports what the TTS spoke, not what it was asked to speak.**
+  The RTVI processor built the message from `TTSSpeakFrame`, which is text on its
+  way into the service: a client rendered it as spoken caption before synthesis
+  had happened, and nothing was sent for a reply the LLM produced, which is the
+  ordinary path. It is built from `TTSTextFrame` now, the text the service
+  reports speaking, aligned to playback.
 
 - **Every OpenAI-compatible provider reports its token usage.** The
   chat-completions service never asked for the counts and never reported any, so

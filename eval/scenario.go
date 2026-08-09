@@ -1,15 +1,16 @@
 // Package eval is a behavioral eval harness for jargo bots. It drives a real
 // bot over RTVI, plays scripted conversation turns, and asserts on the semantic
-// events the bot emits — a level above unit tests, which check one processor at
-// a time.
+// events the bot emits. That is a level above unit tests, which check one
+// processor at a time.
 //
 // A scenario is a YAML file of turns and the events each turn should produce.
 // The same scenario runs from a Go test (the bot hosted in-process, see Run) or
-// from the command line against a running bot. This first iteration covers
-// text-mode scenarios: each user turn is delivered as RTVI send-text and the
-// assertions read the bot's LLM output and tool calls. Audio-mode scenarios
-// (synthesized user speech, transcription of the bot's audio) build on the same
-// core later.
+// from the command line against a running bot. In text mode each user turn is
+// delivered as RTVI send-text, so the audio processors sit idle; in audio mode
+// (Options.UserTTS) it is synthesized and streamed as microphone audio, so the
+// bot's own VAD, turn detection and STT run for real. Transcribing the bot's
+// audio back, to assert on what was actually heard, builds on the same core
+// later.
 //
 // # Expectation fields
 //
@@ -17,6 +18,7 @@
 //	within_ms: <int>         latency budget, measured from the turn's user input
 //	text_contains: <str>     substring check on the event's text, case-sensitive
 //	eval: <str>              criterion an LLM judge checks the bot's reply against
+//	                         (llm_response and tts_response, which carry its text)
 //	name: <str>              for function_call: the tool the call must be to
 //	args: <mapping>          for function_call: an argument subset the call must carry
 //	calls: <list>            for function_call: several calls, in any order
@@ -44,9 +46,23 @@
 //
 //	turns: !include shared_turns.yaml
 //
+// # Asserting on the bot's reply
+//
+// Two events carry the bot's own words, and they sit at different points in the
+// pipeline:
+//
+//	llm_response   the text the model produced (bot-llm-text)
+//	tts_response   the text the TTS reports speaking (bot-tts-text)
+//
+// llm_response is available in both modes. tts_response is audio mode only: a
+// text-mode turn asks for no spoken response, so no TTS runs and no segment is
+// produced. Assert on it when what matters is that the reply reached synthesis
+// rather than that the model wrote it, which is the difference between a turn
+// that answered and a turn that was heard.
+//
 // A turn often answers in more than one response: an interim filler ("Let me
-// check on that.") and then the answer. So a content check on llm_response
-// aggregates. It accumulates the text of successive responses and re-checks on
+// check on that.") and then the answer. So a content check on either of them
+// aggregates. It accumulates the text of successive segments and re-checks on
 // each, until the check passes, the judge rejects, or within_ms expires. A
 // missing substring is not a failure on its own, because more text may follow,
 // which is why an assertion on text the bot never produces waits out its whole
@@ -174,6 +190,10 @@ const (
 	EventLLMStarted = "llm_started"
 	// EventLLMResponse carries the bot's LLM text, joined across the response.
 	EventLLMResponse = "llm_response"
+	// EventTTSResponse carries the text the bot's TTS reports speaking, one
+	// segment as each arrives (audio mode only: a text-mode turn asks for no
+	// spoken response, so no TTS runs and no segment is ever produced).
+	EventTTSResponse = "tts_response"
 	// EventFunctionCall fires when the bot invokes a tool.
 	EventFunctionCall = "function_call"
 	// EventBotInterrupted fires when the bot's in-flight output is cut off, by a
@@ -197,6 +217,7 @@ const (
 //nolint:gochecknoglobals // fixed lookup table
 var judgeableEvents = map[string]bool{
 	EventLLMResponse: true,
+	EventTTSResponse: true,
 }
 
 // vadEvents are the events the bot reports only when asked to. The harness asks
@@ -343,10 +364,11 @@ type Expectation struct {
 	// Event is the friendly event name to match (see the Event constants).
 	Event string `yaml:"event"`
 	// TextContains, when set, requires the event's text to contain this
-	// substring (case-insensitive). Applies to llm_response.
+	// substring, case-sensitively. Applies to llm_response and tts_response.
 	TextContains string `yaml:"text_contains,omitempty"`
 	// Eval, when set, is a natural-language criterion an LLM judge checks the
-	// bot's reply against. Applies to llm_response.
+	// bot's reply against. Applies to llm_response and tts_response, the two
+	// events carrying text the bot itself produced.
 	Eval string `yaml:"eval,omitempty"`
 	// Name is the single-call shorthand for Calls: the tool name a function_call
 	// event must match.
@@ -573,7 +595,7 @@ func (e *Expectation) validate() error {
 	}
 	if e.Eval != "" && !judgeableEvents[e.Event] {
 		slog.Warn("eval: a judge criterion is only meaningful on an event carrying the bot's own text",
-			"event", e.Event, "judgeable", EventLLMResponse)
+			"event", e.Event, "judgeable", []string{EventLLMResponse, EventTTSResponse})
 	}
 	// An absent expectation matches on event type only: a content or call check
 	// describes an event that must arrive, which contradicts absence.

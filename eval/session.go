@@ -57,8 +57,9 @@ var errSendAfterNotSeen = errors.New("send_after never fired")
 type Event struct {
 	// Kind is one of the Event* name constants.
 	Kind string
-	// Text is the reply text on an llm_response, or the transcript on a
-	// user_transcription. Empty for events that carry no text.
+	// Text is the reply text on an llm_response, the spoken text on a
+	// tts_response, or the transcript on a user_transcription. Empty for events
+	// that carry no text.
 	Text string
 	// Function is the tool name on a function_call.
 	Function string
@@ -617,7 +618,10 @@ func (s *session) matchExpectation(
 // bot's own text does; a bare event, or a check on a user transcription,
 // matches once.
 func (s *session) aggregates(exp Expectation) bool {
-	return exp.Event == EventLLMResponse && (exp.TextContains != "" || exp.Eval != "")
+	if exp.Event != EventLLMResponse && exp.Event != EventTTSResponse {
+		return false
+	}
+	return exp.TextContains != "" || exp.Eval != ""
 }
 
 // matchAggregate accumulates response segments and re-checks the expectation on
@@ -902,6 +906,17 @@ func (s *session) translate(in rtvi.Incoming) *Event {
 		return &Event{Kind: EventUserTranscription, Text: d.Text}
 	case rtvi.TypeBotLLMStarted, rtvi.TypeBotLLMText, rtvi.TypeBotLLMStopped:
 		return s.translateLLM(in)
+	case rtvi.TypeBotTTSText:
+		// The text the TTS reports speaking, one segment per spoken sentence,
+		// emitted as it arrives. It cannot be bounded on bot-tts-stopped the way
+		// llm_response is bounded on bot-llm-stopped, because some services report
+		// the text after the audio has finished. The matcher aggregates the
+		// segments of the turn instead.
+		var d rtvi.TextData
+		if json.Unmarshal(in.Data, &d) != nil {
+			return nil
+		}
+		return &Event{Kind: EventTTSResponse, Text: d.Text}
 	case rtvi.TypeLLMFunctionCall:
 		var d rtvi.LLMFunctionCallData
 		_ = json.Unmarshal(in.Data, &d)
