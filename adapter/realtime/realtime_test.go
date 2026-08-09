@@ -17,11 +17,11 @@ func TestIDForLLMSpecificMessages(t *testing.T) {
 // TestToProviderToolsFormat checks the Realtime API's flattened tool shape: the
 // function fields sit on the tool rather than nested under a "function" key.
 func TestToProviderToolsFormat(t *testing.T) {
-	out := (&Adapter{}).ToProviderToolsFormat([]frames.Tool{{
+	out := (&Adapter{}).ToProviderToolsFormat(frames.ToolsSchema{Standard: []frames.Tool{{
 		Name:        "get_weather",
 		Description: "Look it up",
 		Parameters:  json.RawMessage(`{"type":"object"}`),
-	}})
+	}}})
 	if len(out) != 1 {
 		t.Fatalf("tools = %+v, want one", out)
 	}
@@ -36,7 +36,7 @@ func TestToProviderToolsFormat(t *testing.T) {
 // TestToProviderToolsFormatOmitsEmptyFields checks a tool with no description or
 // schema states neither, rather than sending them empty.
 func TestToProviderToolsFormatOmitsEmptyFields(t *testing.T) {
-	out := (&Adapter{}).ToProviderToolsFormat([]frames.Tool{{Name: "now"}})
+	out := (&Adapter{}).ToProviderToolsFormat(frames.ToolsSchema{Standard: []frames.Tool{{Name: "now"}}})
 	if _, ok := out[0][keyDescription]; ok {
 		t.Errorf("tool = %+v, want no description key", out[0])
 	}
@@ -49,7 +49,7 @@ func TestToProviderToolsFormatOmitsEmptyFields(t *testing.T) {
 // is sent the default rather than an empty one, which would leave the model
 // without an answer to whether it may call a tool.
 func TestSessionParamsDefaultsTheChoice(t *testing.T) {
-	p := (&Adapter{}).SessionParams([]frames.Tool{{Name: "now"}}, "")
+	p := (&Adapter{}).SessionParams(frames.ToolsSchema{Standard: []frames.Tool{{Name: "now"}}}, "")
 	if p.ToolChoice != string(frames.ToolChoiceAuto) {
 		t.Errorf("choice = %q, want %q", p.ToolChoice, frames.ToolChoiceAuto)
 	}
@@ -58,7 +58,7 @@ func TestSessionParamsDefaultsTheChoice(t *testing.T) {
 // TestSessionIsNilWithoutTools checks a conversation advertising no tools
 // renders no function-calling block at all.
 func TestSessionIsNilWithoutTools(t *testing.T) {
-	if got := (&Adapter{}).SessionParams(nil, frames.ToolChoiceAuto).Session(); got != nil {
+	if got := (&Adapter{}).SessionParams(frames.ToolsSchema{}, frames.ToolChoiceAuto).Session(); got != nil {
 		t.Errorf("session = %+v, want nil", got)
 	}
 }
@@ -66,7 +66,9 @@ func TestSessionIsNilWithoutTools(t *testing.T) {
 // TestSessionCarriesToolsAndChoice checks both halves reach the session payload.
 func TestSessionCarriesToolsAndChoice(t *testing.T) {
 	got := (&Adapter{}).
-		SessionParams([]frames.Tool{{Name: "now"}}, frames.ToolChoiceRequired).
+		SessionParams(
+			frames.ToolsSchema{Standard: []frames.Tool{{Name: "now"}}}, frames.ToolChoiceRequired,
+		).
 		Session()
 	tools, ok := got[keyTools].([]map[string]any)
 	if !ok || len(tools) != 1 {

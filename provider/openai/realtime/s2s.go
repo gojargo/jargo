@@ -38,7 +38,7 @@ type Service struct {
 	// advertised to the session. The model generates continuously, so it does not
 	// re-read the context between turns: every change must be pushed to it with a
 	// session.update. They are guarded by mu.
-	tools      []frames.Tool
+	tools      frames.ToolsSchema
 	toolChoice frames.ToolChoice
 
 	connector Connector
@@ -124,13 +124,13 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	case *frames.LLMContextFrame:
 		// Seed the function-calling configuration from the shared context.
 		if fr.Context != nil {
-			s.syncTools(fr.Context.Tools(), fr.Context.ToolChoice())
+			s.syncTools(fr.Context.ToolsSchema(), fr.Context.ToolChoice())
 		}
 		return s.PushFrame(ctx, f, dir)
 	case *frames.LLMSetToolsFrame:
 		// The toolset changed mid-conversation. A text LLM would pick this up on
 		// its next run; this model is generating continuously, so tell it now.
-		s.syncTools(fr.Tools, s.currentToolChoice())
+		s.syncTools(frames.ToolsSchema{Standard: fr.Tools}, s.currentToolChoice())
 		return s.PushFrame(ctx, f, dir)
 	case *frames.LLMSetToolChoiceFrame:
 		s.syncTools(s.currentTools(), fr.ToolChoice)
@@ -213,12 +213,14 @@ func (s *Service) sessionUpdate() sessionUpdateMsg {
 
 // toolSession renders the function-calling part of a session payload. It is
 // nil when the conversation advertises no tools.
-func (s *Service) toolSession(tools []frames.Tool, choice frames.ToolChoice) map[string]any {
-	return s.adapter.SessionParams(tools, choice).Session()
+func (s *Service) toolSession(
+	schema frames.ToolsSchema, choice frames.ToolChoice,
+) map[string]any {
+	return s.adapter.SessionParams(schema, choice).Session()
 }
 
-// currentTools returns the tools currently advertised to the session.
-func (s *Service) currentTools() []frames.Tool {
+// currentTools returns the toolset currently advertised to the session.
+func (s *Service) currentTools() frames.ToolsSchema {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.tools
@@ -235,13 +237,13 @@ func (s *Service) currentToolChoice() frames.ToolChoice {
 // what the live session was told, pushes a session.update so the continuously
 // running model picks the change up. It is a no-op before the session connects;
 // the initial sessionUpdate carries whatever has been recorded by then.
-func (s *Service) syncTools(tools []frames.Tool, choice frames.ToolChoice) {
+func (s *Service) syncTools(schema frames.ToolsSchema, choice frames.ToolChoice) {
 	s.mu.Lock()
-	if sameTools(s.tools, tools) && s.toolChoice == choice {
+	if sameTools(s.tools, schema) && s.toolChoice == choice {
 		s.mu.Unlock()
 		return
 	}
-	s.tools = tools
+	s.tools = schema
 	s.toolChoice = choice
 	live := s.conn != nil
 	s.mu.Unlock()
@@ -249,7 +251,7 @@ func (s *Service) syncTools(tools []frames.Tool, choice frames.ToolChoice) {
 	if !live {
 		return
 	}
-	session := s.toolSession(tools, choice)
+	session := s.toolSession(schema, choice)
 	if session == nil {
 		// Clearing the toolset still has to reach the model.
 		session = map[string]any{"tools": []map[string]any{}}
@@ -260,14 +262,21 @@ func (s *Service) syncTools(tools []frames.Tool, choice frames.ToolChoice) {
 }
 
 // sameTools reports whether two toolsets are equivalent for session purposes.
-func sameTools(a, b []frames.Tool) bool {
-	if len(a) != len(b) {
+// A custom tool is compared by identity of the slice it came in, which is enough
+// to tell a toolset that was replaced from one that was not.
+func sameTools(a, b frames.ToolsSchema) bool {
+	if len(a.Standard) != len(b.Standard) || len(a.Custom) != len(b.Custom) {
 		return false
 	}
-	for i := range a {
-		if a[i].Name != b[i].Name ||
-			a[i].Description != b[i].Description ||
-			!bytes.Equal(a[i].Parameters, b[i].Parameters) {
+	for i := range a.Standard {
+		if a.Standard[i].Name != b.Standard[i].Name ||
+			a.Standard[i].Description != b.Standard[i].Description ||
+			!bytes.Equal(a.Standard[i].Parameters, b.Standard[i].Parameters) {
+			return false
+		}
+	}
+	for k, av := range a.Custom {
+		if len(b.Custom[k]) != len(av) {
 			return false
 		}
 	}

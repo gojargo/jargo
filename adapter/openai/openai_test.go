@@ -289,11 +289,11 @@ func TestToolCallEmptyArgsDefaults(t *testing.T) {
 // TestToProviderToolsFormat checks an advertised tool reaches the request as an
 // OpenAI function tool with its schema passed through untouched.
 func TestToProviderToolsFormat(t *testing.T) {
-	out := (&Adapter{}).ToProviderToolsFormat([]frames.Tool{{
+	out := (&Adapter{}).ToProviderToolsFormat(frames.ToolsSchema{Standard: []frames.Tool{{
 		Name:        "get_weather",
 		Description: "Look up the weather",
 		Parameters:  json.RawMessage(`{"type":"object"}`),
-	}})
+	}}})
 	if len(out) != 1 {
 		t.Fatalf("want 1 tool, got %d", len(out))
 	}

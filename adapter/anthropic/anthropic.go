@@ -73,7 +73,8 @@ func (a *Adapter) LLMInvocationParams(
 		Messages: converted,
 		System:   a.systemBlocks(convo, fromContext, opts),
 	}
-	if tools := a.WithBuiltins(convo.Tools()); len(tools) > 0 {
+	if tools := a.WithBuiltins(convo.ToolsSchema()); len(tools.Standard) > 0 ||
+		len(tools.Custom) > 0 {
 		params.Tools = a.ToProviderToolsFormat(tools)
 	}
 	return params, nil
@@ -333,9 +334,12 @@ func markCacheControl(b *sdk.ContentBlockParamUnion) bool {
 }
 
 // ToProviderToolsFormat implements adapter.LLMAdapter.
-func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []sdk.ToolUnionParam {
-	out := make([]sdk.ToolUnionParam, 0, len(tools))
-	for _, t := range tools {
+//
+// Anthropic takes no custom tools: it has no tool this schema cannot describe,
+// so anything under a custom key is not for it and is left out.
+func (*Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []sdk.ToolUnionParam {
+	out := make([]sdk.ToolUnionParam, 0, len(schema.Standard))
+	for _, t := range schema.Standard {
 		var schema struct {
 			Properties json.RawMessage `json:"properties"`
 			Required   []string        `json:"required"`

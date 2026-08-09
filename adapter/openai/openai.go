@@ -8,6 +8,7 @@ package openai
 
 import (
 	"encoding/json"
+	"log/slog"
 	"maps"
 
 	"github.com/gojargo/jargo/adapter"
@@ -118,10 +119,28 @@ type ToolCallFunction struct {
 	Arguments string `json:"arguments"`
 }
 
-// Tool is a function tool advertised on the request.
+// Tool is a tool advertised on the request. A function tool is described by
+// Type and Function; a tool the provider implements itself, which this schema
+// has no place for, is carried whole in Raw.
 type Tool struct {
 	Type     string   `json:"type"`
 	Function Function `json:"function"`
+	// Raw is the tool exactly as the provider takes it, and replaces the modeled
+	// fields entirely when set. It is how a provider-native tool (a hosted search
+	// tool, say, which the model runs itself rather than calling back for) is
+	// advertised without being forced into the function shape.
+	Raw map[string]any `json:"-"`
+}
+
+// MarshalJSON encodes the tool, sending Raw in place of the modeled fields when
+// it is set.
+func (t Tool) MarshalJSON() ([]byte, error) {
+	if len(t.Raw) > 0 {
+		return json.Marshal(t.Raw)
+	}
+	// plain drops the method set, so marshaling it does not recurse.
+	type plain Tool
+	return json.Marshal(plain(t))
 }
 
 // Function describes the tool a model may call.
@@ -199,7 +218,8 @@ func (a *Adapter) LLMInvocationParams(
 	out = append(out, converted...)
 
 	params := Params{Messages: out}
-	if tools := a.WithBuiltins(convo.Tools()); len(tools) > 0 {
+	if tools := a.WithBuiltins(convo.ToolsSchema()); len(tools.Standard) > 0 ||
+		len(tools.Custom) > 0 {
 		params.Tools = a.ToProviderToolsFormat(tools)
 		params.ToolChoice = string(convo.ToolChoice())
 	}
@@ -262,9 +282,9 @@ func assistantToolCalls(m frames.Message) Message {
 }
 
 // ToProviderToolsFormat implements adapter.LLMAdapter.
-func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []Tool {
-	out := make([]Tool, 0, len(tools))
-	for _, t := range tools {
+func (*Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []Tool {
+	out := make([]Tool, 0, len(schema.Standard))
+	for _, t := range schema.Standard {
 		out = append(out, Tool{
 			Type: toolTypeFunction,
 			Function: Function{
@@ -274,7 +294,15 @@ func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []Tool {
 			},
 		})
 	}
-	return out
+	// A custom tool that cannot be read is left out rather than failing the whole
+	// conversion: the tools are advertised alongside a conversation that is
+	// otherwise sendable, and the mismatch is reported when the schema is built.
+	custom, err := adapter.CustomToolsFor[Tool](schema, frames.AdapterTypeOpenAI)
+	if err != nil {
+		slog.Error("leaving out a custom tool the adapter cannot read", "err", err)
+		return out
+	}
+	return append(out, custom...)
 }
 
 // MessagesForLogging implements adapter.LLMAdapter. It renders the conversation

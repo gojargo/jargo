@@ -48,6 +48,54 @@ type Tool struct {
 	Handler any
 }
 
+// AdapterType names the wire format a custom tool is written in. Several
+// providers share one: everything speaking OpenAI's API reads a tool written
+// for OpenAI, whether it arrives over chat completions, the Responses API or a
+// realtime session.
+type AdapterType string
+
+const (
+	// AdapterTypeOpenAI is OpenAI's tool format: chat completions, the Responses
+	// API and the Realtime API alike.
+	AdapterTypeOpenAI AdapterType = "openai"
+	// AdapterTypeGemini is Gemini's tool format.
+	AdapterTypeGemini AdapterType = "gemini"
+)
+
+// ToolsSchema is the toolset a conversation advertises.
+//
+// Standard holds the tools every provider is offered, described the same way
+// for all of them. Custom holds tools written in one provider's own format, for
+// the ones no common description fits: a hosted search tool, say, which the
+// provider implements itself rather than calling back for. A provider is only
+// ever sent the custom tools written for its own format, so a conversation
+// carrying them is still usable with every other provider.
+//
+// Each custom tool must be the tool type its adapter's package defines. Not
+// every provider takes them: Anthropic has no custom tools, and anything under
+// a key it does not read is left out.
+type ToolsSchema struct {
+	Standard []Tool
+	Custom   map[AdapterType][]any
+}
+
+// clone returns a schema sharing nothing with this one, so a later change to
+// either is invisible to the other.
+func (s ToolsSchema) clone() ToolsSchema {
+	out := ToolsSchema{Standard: append([]Tool(nil), s.Standard...)}
+	if len(s.Custom) > 0 {
+		out.Custom = make(map[AdapterType][]any, len(s.Custom))
+		for k, v := range s.Custom {
+			out.Custom[k] = append([]any(nil), v...)
+		}
+	}
+	return out
+}
+
+// CustomFor returns the custom tools written for the named format, or nil if
+// there are none.
+func (s ToolsSchema) CustomFor(t AdapterType) []any { return s.Custom[t] }
+
 // ToolCall is a request from the model to invoke a tool. Args is the raw JSON
 // arguments the model produced.
 type ToolCall struct {
@@ -142,7 +190,7 @@ type LLMContext struct {
 	summary    string // rolling summary of compacted older turns; empty until the first Compact
 	recall     string // transient retrieved context (e.g. long-term memories) for the next generation
 	messages   []Message
-	tools      []Tool
+	tools      ToolsSchema
 	toolChoice ToolChoice
 }
 
@@ -239,7 +287,9 @@ func (c *LLMContext) SetSystem(system string) {
 	c.mu.Unlock()
 }
 
-// Tools returns a copy of the tools the model may call.
+// Tools returns a copy of the standard tools the model may call: the ones
+// described the same way for every provider. For the whole toolset, custom
+// tools included, see ToolsSchema.
 //
 // It is what the conversation advertises. A tool the LLM service implements
 // itself is not here: that belongs to the service, and lives on the adapter it
@@ -248,7 +298,16 @@ func (c *LLMContext) SetSystem(system string) {
 func (c *LLMContext) Tools() []Tool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]Tool(nil), c.tools...)
+	return append([]Tool(nil), c.tools.Standard...)
+}
+
+// ToolsSchema returns a copy of the whole toolset the conversation advertises,
+// the tools written in one provider's own format included. It is what an
+// adapter reads.
+func (c *LLMContext) ToolsSchema() ToolsSchema {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tools.clone()
 }
 
 // SetTools replaces the set of tools the model may call.
@@ -261,7 +320,17 @@ func (c *LLMContext) Tools() []Tool {
 // told. Use this directly only to seed the toolset before the pipeline starts.
 func (c *LLMContext) SetTools(tools []Tool) {
 	c.mu.Lock()
-	c.tools = tools
+	c.tools = ToolsSchema{Standard: tools}
+	c.mu.Unlock()
+}
+
+// SetToolsSchema replaces the whole toolset, the tools written in one
+// provider's own format included. The same caveat as SetTools applies: on a
+// running pipeline push an [LLMSetToolsFrame] so realtime services learn of the
+// change.
+func (c *LLMContext) SetToolsSchema(schema ToolsSchema) {
+	c.mu.Lock()
+	c.tools = schema.clone()
 	c.mu.Unlock()
 }
 

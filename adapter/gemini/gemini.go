@@ -4,6 +4,7 @@ package gemini
 
 import (
 	"encoding/json"
+	"log/slog"
 
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
@@ -78,7 +79,8 @@ func (a *Adapter) LLMInvocationParams(
 	contents = dropEmpty(contents)
 
 	params := Params{SystemInstruction: system, Contents: contents}
-	if tools := a.WithBuiltins(convo.Tools()); len(tools) > 0 {
+	if tools := a.WithBuiltins(convo.ToolsSchema()); len(tools.Standard) > 0 ||
+		len(tools.Custom) > 0 {
 		params.Tools = a.ToProviderToolsFormat(tools)
 	}
 	return params, nil
@@ -222,21 +224,34 @@ func FunctionResponseDict(content string) any {
 	return map[string]any{"value": content}
 }
 
-// ToProviderToolsFormat implements adapter.LLMAdapter, rendering the tools as
-// Gemini functionDeclarations.
-func (*Adapter) ToProviderToolsFormat(tools []frames.Tool) []map[string]any {
-	decls := make([]map[string]any, 0, len(tools))
-	for _, t := range tools {
-		d := map[string]any{keyName: t.Name}
-		if t.Description != "" {
-			d["description"] = t.Description
+// ToProviderToolsFormat implements adapter.LLMAdapter, rendering the standard
+// tools as Gemini functionDeclarations and appending the custom tools written
+// for Gemini beside them.
+func (*Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []map[string]any {
+	var out []map[string]any
+	if len(schema.Standard) > 0 {
+		decls := make([]map[string]any, 0, len(schema.Standard))
+		for _, t := range schema.Standard {
+			d := map[string]any{keyName: t.Name}
+			if t.Description != "" {
+				d["description"] = t.Description
+			}
+			if params := geminiParameters(t.Parameters); params != nil {
+				d["parameters"] = params
+			}
+			decls = append(decls, d)
 		}
-		if params := geminiParameters(t.Parameters); params != nil {
-			d["parameters"] = params
-		}
-		decls = append(decls, d)
+		out = append(out, map[string]any{"functionDeclarations": decls})
 	}
-	return []map[string]any{{"functionDeclarations": decls}}
+	// A custom tool that cannot be read is left out rather than failing the whole
+	// conversion: the tools are advertised alongside a conversation that is
+	// otherwise sendable.
+	custom, err := adapter.CustomToolsFor[map[string]any](schema, frames.AdapterTypeGemini)
+	if err != nil {
+		slog.Error("leaving out a custom tool the adapter cannot read", "err", err)
+		return out
+	}
+	return append(out, custom...)
 }
 
 // geminiParameters returns the tool's JSON-Schema parameters with
