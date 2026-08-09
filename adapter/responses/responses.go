@@ -84,10 +84,11 @@ func (a *Adapter) LLMInvocationParams(
 	instructions := a.ResolveSystemInstruction(
 		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction, true,
 	)
-	params := Params{
-		Input:        ToInput(convo.Messages()),
-		Instructions: instructions,
+	input, err := ToInput(convo.MessagesFor(a.IDForLLMSpecificMessages()))
+	if err != nil {
+		return Params{}, err
 	}
+	params := Params{Input: input, Instructions: instructions}
 	// The API requires at least one input item when instructions are given, so a
 	// conversation with nothing said yet carries the instruction as a developer
 	// message instead of beside an empty list.
@@ -106,10 +107,16 @@ func (a *Adapter) LLMInvocationParams(
 // ToInput converts the conversation's messages into the Responses input list. A
 // tool turn becomes a function_call item and a function_call_output item
 // answering it, paired by the call id.
-func ToInput(msgs []frames.Message) []InputItem {
+func ToInput(msgs []frames.Message) ([]InputItem, error) {
 	items := make([]InputItem, 0, len(msgs))
 	for _, m := range msgs {
 		switch {
+		case m.IsLLMSpecific():
+			native, err := adapter.NativeMessage[InputItem](m)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, native)
 		case len(m.ToolResults) > 0:
 			for _, r := range m.ToolResults {
 				items = append(items, InputItem{
@@ -124,7 +131,7 @@ func ToInput(msgs []frames.Message) []InputItem {
 			})
 		}
 	}
-	return items
+	return items, nil
 }
 
 // inputRole maps a conversation role to the one the Responses API takes. It has

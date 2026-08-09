@@ -83,6 +83,52 @@ type LLMAdapter[P, T any] interface {
 	MessagesForLogging(convo *frames.LLMContext) []map[string]any
 }
 
+// Identifier is the part of an adapter that names the provider it converts for.
+// Every [LLMAdapter] satisfies it.
+type Identifier interface {
+	IDForLLMSpecificMessages() string
+}
+
+// CreateLLMSpecificMessage builds a conversation message written in a's
+// provider's own format, for something the universal conversation has no
+// representation for. Only a's provider is sent it; every other adapter leaves
+// it out.
+//
+// native must be the message type a's own package defines, which is what its
+// conversion reads back. Anything else is reported as a conversion failure when
+// the conversation is sent.
+func CreateLLMSpecificMessage(a Identifier, native any) frames.Message {
+	return frames.NewLLMSpecificMessage(a.IDForLLMSpecificMessages(), native)
+}
+
+// NativeMessage reads a provider-native message back as the type that
+// provider's adapter defines, reporting a conversion failure when it holds
+// something else. An adapter calls it on a message it has already established
+// is its own.
+func NativeMessage[T any](m frames.Message) (T, error) {
+	native, ok := m.Native.(T)
+	if !ok {
+		var want T
+		return want, &ConversionError{Cause: &nativeTypeError{
+			llm: m.LLM, got: fmt.Sprintf("%T", m.Native), want: fmt.Sprintf("%T", want),
+		}}
+	}
+	return native, nil
+}
+
+// nativeTypeError reports a provider-native message holding something its own
+// adapter cannot read.
+type nativeTypeError struct {
+	llm  string
+	got  string
+	want string
+}
+
+// Error implements error.
+func (e *nativeTypeError) Error() string {
+	return fmt.Sprintf("message for %q holds %s, want %s", e.llm, e.got, e.want)
+}
+
 // Base carries the state an adapter keeps between conversions, and the handling
 // of a system prompt that every provider shares. Embed it in a provider adapter
 // to inherit both.

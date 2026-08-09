@@ -423,3 +423,71 @@ func TestSystemPromptKeepsTheCachedPrefixStable(t *testing.T) {
 		t.Errorf("block 1 = %+v, want the recalled context outside the breakpoint", p.System[1])
 	}
 }
+
+// TestThoughtBecomesAThinkingBlock checks a reasoning block kept in the
+// conversation is handed back as a thinking block, which is what lets the model
+// carry its reasoning across a turn.
+func TestThoughtBecomesAThinkingBlock(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddMessage(NewThought(Thought{Text: "let me think", Signature: "sig"}))
+
+	p := paramsOf(t, convo, adapter.Options{})
+	wantRoles(t, p.Messages, sdk.MessageParamRoleUser, sdk.MessageParamRoleAssistant)
+	blk := p.Messages[1].Content[0]
+	if blk.OfThinking == nil {
+		t.Fatalf("block = %+v, want a thinking block", blk)
+	}
+	if blk.OfThinking.Thinking != "let me think" || blk.OfThinking.Signature != "sig" {
+		t.Errorf("thinking block = %+v, want the thought it was written with", blk.OfThinking)
+	}
+}
+
+// TestThoughtWithEmptyTextIsKept checks a model set to omit its reasoning still
+// round-trips: the block carries no text but the signature is what matters.
+func TestThoughtWithEmptyTextIsKept(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddMessage(NewThought(Thought{Signature: "sig"}))
+
+	p := paramsOf(t, convo, adapter.Options{})
+	if len(p.Messages) != 1 || p.Messages[0].Content[0].OfThinking == nil {
+		t.Fatalf("messages = %+v, want the thinking block kept", p.Messages)
+	}
+}
+
+// TestThoughtWithoutSignatureIsDropped checks a thought that cannot be
+// round-tripped is left out rather than sent: Anthropic decrypts a thinking
+// block by its signature, and refuses one without.
+func TestThoughtWithoutSignatureIsDropped(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddMessage(NewThought(Thought{Text: "unsigned"}))
+
+	p := paramsOf(t, convo, adapter.Options{})
+	wantRoles(t, p.Messages, sdk.MessageParamRoleUser)
+}
+
+// TestNativeAnthropicMessagePassedThrough checks a message already written in
+// Anthropic's own format is sent as it stands.
+func TestNativeAnthropicMessagePassedThrough(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddMessage(adapter.CreateLLMSpecificMessage(
+		&Adapter{}, sdk.NewAssistantMessage(sdk.NewTextBlock("written for anthropic")),
+	))
+
+	p := paramsOf(t, convo, adapter.Options{})
+	if len(p.Messages) != 1 || textOf(p.Messages[0]) != "written for anthropic" {
+		t.Errorf("messages = %+v, want the provider's own message", p.Messages)
+	}
+}
+
+// TestAnotherProvidersMessageIsLeftOut checks a message written for a different
+// provider never reaches this one.
+func TestAnotherProvidersMessageIsLeftOut(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddMessage(frames.NewLLMSpecificMessage("openai", "not for anthropic"))
+
+	p := paramsOf(t, convo, adapter.Options{})
+	wantRoles(t, p.Messages, sdk.MessageParamRoleUser)
+}

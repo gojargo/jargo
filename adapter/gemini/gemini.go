@@ -60,11 +60,15 @@ func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
 	fromContext, msgs := a.ExtractInitialSystem(
-		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction, convo.Messages(),
+		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction,
+		convo.MessagesFor(a.IDForLLMSpecificMessages()),
 	)
 	system := a.ResolveSystemInstruction(fromContext, opts.SystemInstruction, true)
 
-	contents := ToContents(msgs)
+	contents, err := ToContents(msgs)
+	if err != nil {
+		return Params{}, err
+	}
 	// A conversation of nothing but tool turns gives the model no prose to answer,
 	// and Gemini reads the system instruction as framing rather than as something
 	// to act on. Saying it again as a user message is what prompts a reply.
@@ -85,11 +89,17 @@ func (a *Adapter) LLMInvocationParams(
 // the user, Gemini having neither input role. Tool turns become functionCall
 // parts (model) and functionResponse parts (user), paired by the call id
 // carried on both.
-func ToContents(msgs []frames.Message) []map[string]any {
+func ToContents(msgs []frames.Message) ([]map[string]any, error) {
 	names := toolCallNames(msgs)
 	out := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
 		switch {
+		case m.IsLLMSpecific():
+			native, err := adapter.NativeMessage[map[string]any](m)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, native)
 		case len(m.ToolResults) > 0:
 			out = append(out, map[string]any{
 				keyRole: roleUser, keyParts: toolResultParts(m.ToolResults, names),
@@ -106,7 +116,7 @@ func ToContents(msgs []frames.Message) []map[string]any {
 			out = append(out, textContent(role, m.Text))
 		}
 	}
-	return out
+	return out, nil
 }
 
 // textContent builds a content carrying one text part.

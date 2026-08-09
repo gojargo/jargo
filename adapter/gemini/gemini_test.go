@@ -56,6 +56,16 @@ func textAt(t *testing.T, c map[string]any) string {
 	return text
 }
 
+// mustContents converts messages and fails the test if the conversion did.
+func mustContents(t *testing.T, msgs []frames.Message) []map[string]any {
+	t.Helper()
+	got, err := ToContents(msgs)
+	if err != nil {
+		t.Fatalf("ToContents: %v", err)
+	}
+	return got
+}
+
 func TestIDForLLMSpecificMessages(t *testing.T) {
 	if got := (&Adapter{}).IDForLLMSpecificMessages(); got != "google" {
 		t.Errorf("id = %q, want %q", got, "google")
@@ -184,7 +194,7 @@ func TestToolResultNamedAfterItsCall(t *testing.T) {
 		{Role: frames.RoleAssistant, ToolCalls: []frames.ToolCall{{ID: "c1", Name: "get_weather"}}},
 		{Role: frames.RoleUser, ToolResults: []frames.ToolResult{{ID: "c1", Content: "sunny"}}},
 	}
-	b, err := json.Marshal(ToContents(msgs))
+	b, err := json.Marshal(mustContents(t, msgs))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -199,7 +209,7 @@ func TestUnnamedToolResultGetsAPlaceholder(t *testing.T) {
 	msgs := []frames.Message{
 		{Role: frames.RoleUser, ToolResults: []frames.ToolResult{{ID: "gone", Content: "sunny"}}},
 	}
-	b, err := json.Marshal(ToContents(msgs))
+	b, err := json.Marshal(mustContents(t, msgs))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -216,7 +226,7 @@ func TestToContentsToolTurn(t *testing.T) {
 	})
 	convo.AddToolResult(frames.ToolResult{ID: "call_0", Name: "get_weather", Content: "sunny"})
 
-	b, err := json.Marshal(ToContents(convo.Messages()))
+	b, err := json.Marshal(mustContents(t, convo.Messages()))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

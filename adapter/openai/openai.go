@@ -184,7 +184,7 @@ func (a *Adapter) LLMInvocationParams(
 	// carries the conversation's prompt in the messages either way.
 	instruction := a.ResolveSystemInstruction(system, opts.SystemInstruction, false)
 
-	msgs := convo.Messages()
+	msgs := convo.MessagesFor(a.IDForLLMSpecificMessages())
 	out := make([]Message, 0, len(msgs)+2)
 	if instruction != "" {
 		out = append(out, Message{Role: RoleSystem, Content: instruction})
@@ -192,7 +192,11 @@ func (a *Adapter) LLMInvocationParams(
 	if system != "" {
 		out = append(out, Message{Role: RoleSystem, Content: system})
 	}
-	out = append(out, ToMessages(msgs, opts.ConvertDeveloperToUser)...)
+	converted, err := ToMessages(msgs, opts.ConvertDeveloperToUser)
+	if err != nil {
+		return Params{}, err
+	}
+	out = append(out, converted...)
 
 	params := Params{Messages: out}
 	if tools := a.WithBuiltins(convo.Tools()); len(tools) > 0 {
@@ -209,12 +213,20 @@ func (a *Adapter) LLMInvocationParams(
 // convertDeveloperToUser sends a developer message as a user message, for an
 // endpoint that has no developer role.
 //
+// A message already written in this format is passed through as it stands.
+//
 // It is exported so an adapter that embeds this one can convert the conversation
 // once and then rewrite what came out.
-func ToMessages(msgs []frames.Message, convertDeveloperToUser bool) []Message {
+func ToMessages(msgs []frames.Message, convertDeveloperToUser bool) ([]Message, error) {
 	out := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
 		switch {
+		case m.IsLLMSpecific():
+			native, err := adapter.NativeMessage[Message](m)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, native)
 		case len(m.ToolResults) > 0:
 			for _, r := range m.ToolResults {
 				out = append(out, Message{Role: RoleTool, ToolCallID: r.ID, Content: r.Content})
@@ -229,7 +241,7 @@ func ToMessages(msgs []frames.Message, convertDeveloperToUser bool) []Message {
 			out = append(out, Message{Role: role, Content: m.Text})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // assistantToolCalls renders an assistant turn that requested tool calls.
