@@ -182,6 +182,9 @@ type Base struct {
 	inputEvent        *event
 	blockFrames       bool
 	processEvent      *event
+	// pendingResume is a resume this processor was asked for by a frame it is
+	// still handling. It is applied once that frame has gone on.
+	pendingResume bool
 
 	startedMu sync.Mutex
 	started   bool
@@ -373,6 +376,10 @@ func (b *Base) processLoop(ctx context.Context, done chan struct{}) {
 // processing error into an ErrorFrame pushed upstream.
 func (b *Base) processFrame(ctx context.Context, it item) error {
 	b.notifyProcess(it.frame, it.dir)
+	// A resume this frame carried takes effect once the frame itself has gone on,
+	// so what it released cannot overtake it. Deferred so a processor is released
+	// even when handling the frame failed.
+	defer b.applyPendingResume()
 	if err := b.self.ProcessFrame(ctx, it.frame, it.dir); err != nil {
 		b.PushError(ctx, fmt.Sprintf("error processing frame: %v", err), err, false)
 		return err

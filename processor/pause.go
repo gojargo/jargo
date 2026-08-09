@@ -144,9 +144,28 @@ func (b *Base) pauseIfAddressed(target frames.ProcessorTarget) {
 	}
 }
 
-// resumeIfAddressed resumes this processor when a resume frame names it.
+// resumeIfAddressed arranges for this processor to resume when a resume frame
+// names it. The release is held until the frame carrying it has been handled and
+// forwarded, so the resume reaches the rest of the pipeline ahead of the frames
+// it let through. The two travel on different goroutines here, and without this
+// the released frames can overtake the resume that released them.
 func (b *Base) resumeIfAddressed(target frames.ProcessorTarget) {
-	if target != nil && target.Name() == b.name {
+	if target == nil || target.Name() != b.name {
+		return
+	}
+	b.pauseMu.Lock()
+	b.pendingResume = true
+	b.pauseMu.Unlock()
+}
+
+// applyPendingResume releases a processor whose resume frame has now been
+// forwarded. It runs after every frame, so a resume is never left pending.
+func (b *Base) applyPendingResume() {
+	b.pauseMu.Lock()
+	pending := b.pendingResume
+	b.pendingResume = false
+	b.pauseMu.Unlock()
+	if pending {
 		b.ResumeProcessingFrames()
 	}
 }

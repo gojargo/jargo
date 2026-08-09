@@ -192,3 +192,35 @@ func TestCleanupReleasesAPausedProcessor(t *testing.T) {
 		t.Fatal("Cleanup blocked on a paused processor")
 	}
 }
+
+// A resume reaches the rest of the pipeline before the frames it let through.
+// The frame carrying the resume and the frames it releases travel on different
+// goroutines, so without ordering the released ones can overtake the resume that
+// released them, and a processor downstream sees a paused branch's backlog
+// arrive before it is told the branch was resumed.
+func TestResumeFramePrecedesTheFramesItReleases(t *testing.T) {
+	e, c, done := pausePair(t)
+	defer done()
+
+	ctx := context.Background()
+	_ = e.QueueFrame(ctx, frames.NewFrameProcessorPauseFrame(e), processor.Downstream)
+	mustReceive[*frames.FrameProcessorPauseFrame](t, c.got, "FrameProcessorPauseFrame")
+
+	for _, text := range []string{"one", "two", "three"} {
+		_ = e.QueueFrame(ctx, frames.NewTextFrame(text), processor.Downstream)
+	}
+	if !silentFor(c.got, 200*time.Millisecond) {
+		t.Fatal("a frame was handled while the processor was paused")
+	}
+
+	_ = e.QueueFrame(ctx, frames.NewFrameProcessorResumeUrgentFrame(e), processor.Downstream)
+
+	// The resume comes out first, then everything it was holding, in order.
+	mustReceive[*frames.FrameProcessorResumeUrgentFrame](t, c.got, "FrameProcessorResumeUrgentFrame")
+	for _, want := range []string{"one", "two", "three"} {
+		got := mustReceive[*frames.TextFrame](t, c.got, "TextFrame")
+		if got.Text != want {
+			t.Fatalf("Text = %q, want %q: the held frames must keep their order", got.Text, want)
+		}
+	}
+}

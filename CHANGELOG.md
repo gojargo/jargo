@@ -84,6 +84,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A resume reaches the pipeline before the frames it releases.** A processor
+  paused by a frame addressed to it was released the moment that frame was
+  handled, before the frame itself had been forwarded. The release and the
+  forwarding run on different goroutines, so the backlog could overtake the
+  resume that freed it, and a processor downstream saw a paused branch's frames
+  arrive before it was told the branch had resumed. The release now waits until
+  the frame carrying it has gone on.
+
 - **ElevenLabs carries a turn's text into its next sentence, and times the words
   it speaks over HTTP.** The HTTP service synthesized every sentence as though it
   were the first: nothing told the model what had already been said, so the
