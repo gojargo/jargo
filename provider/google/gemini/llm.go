@@ -9,6 +9,8 @@ import (
 	"maps"
 	"net/http"
 
+	"github.com/gojargo/jargo/adapter"
+	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 )
@@ -46,9 +48,11 @@ func (s apiKeyShaper) Authorize(_ context.Context, req *http.Request) error {
 // Service is a streaming Gemini LLM processor.
 type Service struct {
 	*llm.Base
-	cfg    Config
-	http   *http.Client
-	shaper RequestShaper
+	// adapter converts the conversation into the request Gemini takes.
+	adapter geminiadapter.Adapter
+	cfg     Config
+	http    *http.Client
+	shaper  RequestShaper
 }
 
 // NewLLM builds a Gemini LLM service.
@@ -92,7 +96,11 @@ type genChunk struct {
 
 // Generate streams a Gemini completion, emitting each text delta.
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	req, err := s.newRequest(ctx, s.requestBody(convo, false))
+	body, err := s.requestBody(convo, adapter.Options{}, false)
+	if err != nil {
+		return err
+	}
+	req, err := s.newRequest(ctx, body)
 	if err != nil {
 		return err
 	}
@@ -104,18 +112,15 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 func (s *Service) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
-	body := s.requestBody(convo, false)
+	body, err := s.requestBody(
+		convo, adapter.Options{SystemInstruction: opts.SystemInstruction}, false,
+	)
+	if err != nil {
+		return "", err
+	}
 	if opts.MaxTokens > 0 {
 		if cfg, ok := body["generationConfig"].(map[string]any); ok {
 			cfg["maxOutputTokens"] = opts.MaxTokens
-		}
-	}
-	if opts.SystemInstruction != "" {
-		// Gemini carries the instruction beside the conversation rather than in
-		// it, so the one this inference was given stands in place of the
-		// conversation's own.
-		body["systemInstruction"] = map[string]any{
-			keyParts: []map[string]any{{keyText: opts.SystemInstruction}},
 		}
 	}
 	req, err := s.newRequestTo(ctx, body, false)
@@ -162,23 +167,29 @@ func (s *Service) genConfig() map[string]any {
 }
 
 // requestBody builds the generateContent body, optionally advertising tools.
-func (s *Service) requestBody(convo *frames.LLMContext, withTools bool) map[string]any {
+func (s *Service) requestBody(
+	convo *frames.LLMContext, opts adapter.Options, withTools bool,
+) (map[string]any, error) {
+	p, err := s.adapter.LLMInvocationParams(convo, opts)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
-		"contents":         toContents(convo),
+		"contents":         p.Contents,
 		"generationConfig": s.genConfig(),
 	}
 	if len(s.cfg.SafetySettings) > 0 {
 		body["safetySettings"] = s.cfg.SafetySettings
 	}
-	if sys := convo.System(); sys != "" {
-		body["systemInstruction"] = map[string]any{keyParts: []map[string]any{{keyText: sys}}}
-	}
-	if withTools {
-		if tools := convo.Tools(); len(tools) > 0 {
-			body["tools"] = toTools(tools)
+	if p.SystemInstruction != "" {
+		body["systemInstruction"] = map[string]any{
+			keyParts: []map[string]any{{keyText: p.SystemInstruction}},
 		}
 	}
-	return body
+	if withTools && len(p.Tools) > 0 {
+		body["tools"] = p.Tools
+	}
+	return body, nil
 }
 
 // newRequest marshals reqBody and builds the streaming generateContent request.
@@ -239,7 +250,11 @@ func (s *Service) stream(req *http.Request, emit llm.Emit) error {
 // conversation's tools are sent on the request, and any tool turns already in
 // the context are replayed as functionCall / functionResponse parts.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	req, err := s.newRequest(ctx, s.requestBody(convo, true))
+	body, err := s.requestBody(convo, adapter.Options{}, true)
+	if err != nil {
+		return err
+	}
+	req, err := s.newRequest(ctx, body)
 	if err != nil {
 		return err
 	}
@@ -305,156 +320,4 @@ func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
 		}
 		return nil // Skip malformed chunks.
 	})
-}
-
-// unnamedToolResult names a tool result whose call cannot be found. Gemini
-// requires a name on every functionResponse, and a result can outlive the call
-// it answers: an asynchronous tool's messages carry only the call's id.
-const unnamedToolResult = "tool_call_result"
-
-// toContents converts the conversation into Gemini contents. The system prompt
-// is sent separately as systemInstruction, and the assistant role maps to
-// "model". A developer message enters as the user, Gemini having no developer
-// input role. Tool turns become functionCall parts (model) and functionResponse
-// parts (user), paired by the call id carried on both.
-func toContents(convo *frames.LLMContext) []map[string]any {
-	msgs := convo.Messages()
-	names := toolCallNames(msgs)
-	out := make([]map[string]any, 0, len(msgs))
-	for _, m := range msgs {
-		switch {
-		case len(m.ToolResults) > 0:
-			out = append(out, map[string]any{keyRole: "user", keyParts: toolResultParts(m.ToolResults, names)})
-		case len(m.ToolCalls) > 0:
-			out = append(out, map[string]any{keyRole: "model", keyParts: toolCallParts(m.Text, m.ToolCalls)})
-		default:
-			role := "user"
-			if m.Role == frames.RoleAssistant {
-				role = "model"
-			}
-			out = append(out, map[string]any{
-				keyRole:  role,
-				keyParts: []map[string]any{{keyText: m.Text}},
-			})
-		}
-	}
-	return out
-}
-
-// toolCallNames maps each tool call in the conversation to the name it was made
-// with, so a result can be named after the call it answers rather than after
-// whatever it happens to carry itself.
-func toolCallNames(msgs []frames.Message) map[string]string {
-	names := make(map[string]string)
-	for _, m := range msgs {
-		for _, c := range m.ToolCalls {
-			names[c.ID] = c.Name
-		}
-	}
-	return names
-}
-
-// toolCallParts renders an assistant turn's optional preamble and tool calls as
-// Gemini parts.
-func toolCallParts(text string, calls []frames.ToolCall) []map[string]any {
-	parts := make([]map[string]any, 0, len(calls)+1)
-	if text != "" {
-		parts = append(parts, map[string]any{keyText: text})
-	}
-	for _, c := range calls {
-		args := c.Args
-		if len(args) == 0 {
-			args = json.RawMessage("{}")
-		}
-		parts = append(parts, map[string]any{
-			"functionCall": map[string]any{keyID: c.ID, keyName: c.Name, "args": args},
-		})
-	}
-	return parts
-}
-
-// toolResultParts renders tool outputs as Gemini functionResponse parts. Each
-// carries the id of the call it answers, which is what tells apart the results
-// of a batch of parallel calls to the same tool.
-func toolResultParts(results []frames.ToolResult, names map[string]string) []map[string]any {
-	parts := make([]map[string]any, 0, len(results))
-	for _, r := range results {
-		parts = append(parts, map[string]any{
-			"functionResponse": map[string]any{
-				keyID:      r.ID,
-				keyName:    toolResultName(r, names),
-				"response": functionResponseDict(r.Content),
-			},
-		})
-	}
-	return parts
-}
-
-// toolResultName names a result after the call it answers, falling back to the
-// name recorded on the result itself and then to a placeholder.
-func toolResultName(r frames.ToolResult, names map[string]string) string {
-	if name, ok := names[r.ID]; ok && name != "" {
-		return name
-	}
-	if r.Name != "" {
-		return r.Name
-	}
-	return unnamedToolResult
-}
-
-// functionResponseDict shapes a tool result for Gemini's functionResponse,
-// which requires an object: a JSON object passes through, anything else is
-// wrapped as {"value": content}.
-func functionResponseDict(content string) any {
-	var obj map[string]any
-	if json.Unmarshal([]byte(content), &obj) == nil {
-		return json.RawMessage(content)
-	}
-	return map[string]any{"value": content}
-}
-
-// toTools converts the context's tools into Gemini functionDeclarations.
-func toTools(tools []frames.Tool) []map[string]any {
-	decls := make([]map[string]any, 0, len(tools))
-	for _, t := range tools {
-		d := map[string]any{keyName: t.Name}
-		if t.Description != "" {
-			d["description"] = t.Description
-		}
-		if params := geminiParameters(t.Parameters); params != nil {
-			d["parameters"] = params
-		}
-		decls = append(decls, d)
-	}
-	return []map[string]any{{"functionDeclarations": decls}}
-}
-
-// geminiParameters returns the tool's JSON-Schema parameters with
-// "additionalProperties" stripped (Gemini rejects it). On a parse error the raw
-// schema passes through unchanged.
-func geminiParameters(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	var schema map[string]any
-	if json.Unmarshal(raw, &schema) != nil {
-		return raw
-	}
-	stripAdditionalProperties(schema)
-	return schema
-}
-
-// stripAdditionalProperties recursively removes "additionalProperties" keys.
-func stripAdditionalProperties(v any) {
-	switch t := v.(type) {
-	case map[string]any:
-		delete(t, "additionalProperties")
-		for _, val := range t {
-			stripAdditionalProperties(val)
-		}
-	case []any:
-		for _, val := range t {
-			stripAdditionalProperties(val)
-		}
-	}
 }

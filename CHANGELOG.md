@@ -147,6 +147,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Gemini answers a conversation of nothing but tool turns.** Gemini reads the
+  system instruction as framing rather than as something to act on, so a
+  conversation whose messages are all tool calls and results gave the model
+  nothing to reply to. The instruction is now said again as a user message when
+  that is all the conversation holds. Contents carrying no parts are dropped
+  rather than sent, which Gemini rejects.
+
 - **Anthropic no longer drops a system message from the conversation.** A
   `RoleSystem` message in the message list was skipped outright, on the grounds
   that the system prompt is sent beside the conversation, so anything a caller
