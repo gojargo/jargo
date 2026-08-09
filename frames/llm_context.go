@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 )
@@ -65,6 +66,9 @@ type ToolResult struct {
 // Message is a single conversation turn. A plain turn carries Text; an assistant
 // turn that invoked tools also carries ToolCalls; a turn returning tool outputs
 // carries ToolResults.
+//
+// A message may instead be written in one provider's own format, which is what
+// LLM and Native carry. See [NewLLMSpecificMessage].
 type Message struct {
 	Role Role
 	Text string
@@ -72,12 +76,42 @@ type Message struct {
 	ToolCalls []ToolCall
 	// ToolResults is set on a message returning the outputs of tool calls.
 	ToolResults []ToolResult
+	// LLM names the provider this message is written for. When it is set the
+	// message is that provider's own and no other's: only its adapter sends it,
+	// and every other adapter leaves it out (see LLMContext.MessagesFor).
+	LLM string
+	// Native is the message as that provider's API takes it, in the type that
+	// provider's adapter defines. It is only read when LLM is set, and the
+	// adapter it names is the only thing that knows how to read it.
+	Native any
 }
+
+// NewLLMSpecificMessage builds a message written in one provider's own format,
+// for something the universal conversation has no representation for: a
+// reasoning block a model wants handed back to it, a content type only one
+// provider takes.
+//
+// llm is the identifier that provider's adapter answers to
+// (adapter.LLMAdapter.IDForLLMSpecificMessages), and native is the message in
+// the type that adapter defines. A conversation carrying one can still be sent
+// to any provider: the ones it was not written for leave it out.
+func NewLLMSpecificMessage(llm string, native any) Message {
+	return Message{LLM: llm, Native: native}
+}
+
+// IsLLMSpecific reports whether the message is written in one provider's own
+// format rather than in the universal one.
+func (m Message) IsLLMSpecific() bool { return m.LLM != "" }
 
 // clone returns a message that shares nothing with this one. Copying the struct
 // alone would copy the slice headers, leaving both messages pointing at one
 // array: a tool result updated in place would then be rewritten under whoever
 // holds the other copy, mid-read.
+//
+// Native is copied as it stands. What it points at belongs to the provider's
+// adapter, which is the only thing that can read it, so there is nothing here
+// that could copy it; treat a native message as written once and not edited
+// afterwards.
 func (m Message) clone() Message {
 	if len(m.ToolCalls) > 0 {
 		m.ToolCalls = append([]ToolCall(nil), m.ToolCalls...)
@@ -351,14 +385,50 @@ func (c *LLMContext) Messages() []Message {
 	return cloneMessages(c.messages)
 }
 
+// MessagesFor returns the messages to send to the named provider: every
+// universal one, plus the provider's own, and none written for a different
+// provider. It is what an adapter reads rather than Messages, so a conversation
+// carrying one provider's native messages can still be sent to another.
+//
+// Leaving a message out is reported: a message written for a provider that
+// never sees it is almost always a mistake, and it would otherwise go missing
+// in silence.
+func (c *LLMContext) MessagesFor(llm string) []Message {
+	c.mu.Lock()
+	msgs := cloneMessages(c.messages)
+	c.mu.Unlock()
+
+	out := make([]Message, 0, len(msgs))
+	dropped := 0
+	for _, m := range msgs {
+		if m.IsLLMSpecific() && m.LLM != llm {
+			dropped++
+			continue
+		}
+		out = append(out, m)
+	}
+	if dropped > 0 {
+		slog.Error("leaving out conversation messages written for another provider",
+			"llm", llm, "messages", dropped)
+	}
+	return out
+}
+
 // EstimatedTokens is a rough estimate of the context's size in tokens, used to
 // decide when to compact. It approximates four characters per token across the
 // system prompt, the rolling summary, and every message.
+//
+// A message in a provider's own format is counted by what its rendering
+// measures, since nothing here can read the format itself.
 func (c *LLMContext) EstimatedTokens() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	n := len(c.system) + len(c.summary) + len(c.recall)
 	for _, m := range c.messages {
+		if m.IsLLMSpecific() {
+			n += len(fmt.Sprint(m.Native))
+			continue
+		}
 		n += len(m.Text)
 		for _, tc := range m.ToolCalls {
 			n += len(tc.Name) + len(tc.Args)
@@ -425,7 +495,13 @@ func cleanCut(msgs []Message, limit int) int {
 		limit = len(msgs) - 1
 	}
 	for i := limit; i >= 1; i-- {
-		if msgs[i].Role == RoleUser && len(msgs[i].ToolResults) == 0 {
+		m := msgs[i]
+		// A message in a provider's own format is not a turn this can read, so it
+		// is never a boundary to cut on.
+		if m.IsLLMSpecific() {
+			continue
+		}
+		if m.Role == RoleUser && len(m.ToolResults) == 0 {
 			return i
 		}
 	}

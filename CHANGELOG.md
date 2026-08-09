@@ -14,6 +14,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A conversation can carry a message written in one provider's own format.**
+  `frames.NewLLMSpecificMessage` builds a message for a named provider, and
+  `LLMContext.MessagesFor` returns what one provider is sent: every universal
+  message plus its own, and none written for another. It is how an application
+  says something the universal conversation has no representation for without
+  the conversation becoming unusable with every other provider. Anthropic reads
+  a reasoning block written with `anthropic.NewThought`, handing it back as a
+  thinking block so the model keeps its reasoning across a turn; one without a
+  signature is left out, since the API decrypts a thinking block by that
+  signature and refuses one without.
+
 - **A one-shot inference, off to the side of the pipeline.** `RunInference`
   answers a conversation once and returns the text: no streaming, no frames, an
   instruction and a token bound of its own. Every LLM service has it now

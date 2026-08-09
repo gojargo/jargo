@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -368,5 +369,50 @@ func TestMessageExtraMergedOverModeledFields(t *testing.T) {
 	}
 	if got["role"] != RoleAssistant {
 		t.Errorf("role = %v, want the modeled field kept", got["role"])
+	}
+}
+
+// TestLLMSpecificMessagePassedThrough checks a message already written in this
+// format is sent as it stands, which is what an application uses to say
+// something the universal conversation has no representation for.
+func TestLLMSpecificMessagePassedThrough(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddMessage(adapter.CreateLLMSpecificMessage(
+		&Adapter{}, Message{Role: RoleAssistant, Content: "written for openai"},
+	))
+
+	p := paramsOf(t, convo, adapter.Options{})
+	wantRoles(t, p.Messages, RoleUser, RoleAssistant)
+	if p.Messages[1].Content != "written for openai" {
+		t.Errorf("message 1 = %+v, want the provider's own message", p.Messages[1])
+	}
+}
+
+// TestAnotherProvidersMessageIsLeftOut checks a message written for a different
+// provider never reaches this one, so a conversation carrying one can still be
+// sent here.
+func TestAnotherProvidersMessageIsLeftOut(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddMessage(frames.NewLLMSpecificMessage("anthropic", "not for openai"))
+
+	p := paramsOf(t, convo, adapter.Options{})
+	wantRoles(t, p.Messages, RoleUser)
+}
+
+// TestLLMSpecificMessageOfTheWrongTypeFails checks a message written for this
+// provider but holding something it cannot read is reported rather than sent.
+func TestLLMSpecificMessageOfTheWrongTypeFails(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddMessage(frames.NewLLMSpecificMessage("openai", "a bare string"))
+
+	_, err := (&Adapter{}).LLMInvocationParams(convo, adapter.Options{})
+	if err == nil {
+		t.Fatal("LLMInvocationParams succeeded, want a conversion error")
+	}
+	var convErr *adapter.ConversionError
+	if !errors.As(err, &convErr) {
+		t.Fatalf("err = %v, want an adapter.ConversionError", err)
 	}
 }

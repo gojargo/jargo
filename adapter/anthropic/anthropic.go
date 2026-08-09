@@ -4,6 +4,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
@@ -53,7 +54,8 @@ func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
 	fromContext, msgs := a.ExtractInitialSystem(
-		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction, convo.Messages(),
+		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction,
+		convo.MessagesFor(a.IDForLLMSpecificMessages()),
 	)
 
 	converted, err := ToMessages(msgs)
@@ -125,34 +127,81 @@ func (a *Adapter) systemBlocks(
 func ToMessages(msgs []frames.Message) ([]sdk.MessageParam, error) {
 	out := make([]sdk.MessageParam, 0, len(msgs))
 	for _, m := range msgs {
-		converted, err := toMessage(m)
+		converted, send, err := toMessage(m)
 		if err != nil {
+			var convErr *adapter.ConversionError
+			if errors.As(err, &convErr) {
+				return nil, err
+			}
 			return nil, &adapter.ConversionError{Cause: err}
+		}
+		if !send {
+			continue
 		}
 		out = append(out, converted)
 	}
 	return mergeSameRole(out), nil
 }
 
-// toMessage converts one message.
-func toMessage(m frames.Message) (sdk.MessageParam, error) {
+// toMessage converts one message, reporting whether there is one to send: a
+// thought Anthropic cannot read is left out rather than sent as something else.
+func toMessage(m frames.Message) (sdk.MessageParam, bool, error) {
 	switch {
+	case m.IsLLMSpecific():
+		return nativeMessage(m)
 	case len(m.ToolResults) > 0:
 		blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolResults))
 		for _, r := range m.ToolResults {
 			blocks = append(blocks, sdk.NewToolResultBlock(r.ID, r.Content, false))
 		}
-		return sdk.NewUserMessage(blocks...), nil
+		return sdk.NewUserMessage(blocks...), true, nil
 	case len(m.ToolCalls) > 0:
-		return toolCallMessage(m)
+		msg, err := toolCallMessage(m)
+		return msg, err == nil, err
 	case m.Role == frames.RoleAssistant:
-		return sdk.NewAssistantMessage(sdk.NewTextBlock(text(m.Text))), nil
+		return sdk.NewAssistantMessage(sdk.NewTextBlock(text(m.Text))), true, nil
 	default:
 		// A user message, and a system or developer message too: Anthropic has
 		// neither a system nor a developer input role, so all three enter as the
 		// user rather than being dropped.
-		return sdk.NewUserMessage(sdk.NewTextBlock(text(m.Text))), nil
+		return sdk.NewUserMessage(sdk.NewTextBlock(text(m.Text))), true, nil
 	}
+}
+
+// Thought is a reasoning block the model produced, kept in the conversation so
+// it can be handed back on the next turn.
+//
+// Signature is the encrypted reasoning Anthropic decrypts when the block is
+// passed back. A thinking block is only valid with one, so a thought without a
+// signature cannot be sent and is left out of the conversation entirely. The
+// text may legitimately be empty: a model set to omit its reasoning returns
+// thinking blocks with none.
+type Thought struct {
+	Text      string
+	Signature string
+}
+
+// NewThought builds a conversation message carrying a reasoning block, written
+// for Anthropic and sent to no other provider.
+func NewThought(t Thought) frames.Message {
+	return adapter.CreateLLMSpecificMessage(&Adapter{}, t)
+}
+
+// nativeMessage reads a message written for Anthropic. It is either a thought,
+// which becomes a thinking block, or a message already in Anthropic's format.
+func nativeMessage(m frames.Message) (sdk.MessageParam, bool, error) {
+	if t, ok := m.Native.(Thought); ok {
+		if t.Signature == "" {
+			// Nothing to send: the block cannot be round-tripped without the
+			// signature the API decrypts it by.
+			return sdk.MessageParam{}, false, nil
+		}
+		return sdk.NewAssistantMessage(
+			sdk.NewThinkingBlock(t.Signature, t.Text),
+		), true, nil
+	}
+	native, err := adapter.NativeMessage[sdk.MessageParam](m)
+	return native, err == nil, err
 }
 
 // toolCallMessage renders an assistant turn that requested tool calls.
