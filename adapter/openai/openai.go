@@ -26,6 +26,21 @@ const (
 // toolTypeFunction is the only tool type OpenAI's chat API defines.
 const toolTypeFunction = "function"
 
+// ContentPartText is the only content part type this format needs today.
+const ContentPartText = "text"
+
+// ContentPart is one part of a message's content. The API takes content either
+// as a plain string or as a list of parts.
+type ContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// TextPart builds a text content part.
+func TextPart(text string) ContentPart {
+	return ContentPart{Type: ContentPartText, Text: text}
+}
+
 // Message is one message of the conversation as the chat-completions API takes
 // it.
 type Message struct {
@@ -33,6 +48,11 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// ContentParts carries the content as a list of parts instead of a plain
+	// string, and replaces Content when it is set. It is what lets an endpoint
+	// that takes two same-role messages as one keep what each said distinct,
+	// rather than running their text together.
+	ContentParts []ContentPart `json:"-"`
 	// Extra sets fields on this message that OpenAI's schema has no place for,
 	// merged over the modeled ones when the message is encoded. It is how an
 	// endpoint that reads a field of its own is served without that field
@@ -40,14 +60,48 @@ type Message struct {
 	Extra map[string]any `json:"-"`
 }
 
-// MarshalJSON encodes the message, merging Extra over the modeled fields.
+// MarshalJSON encodes the message, sending the content as parts when it has
+// them and merging Extra over the modeled fields.
 func (m Message) MarshalJSON() ([]byte, error) {
 	// plain drops the method set, so marshaling it does not recurse.
 	type plain Message
-	if len(m.Extra) == 0 {
+	if len(m.Extra) == 0 && len(m.ContentParts) == 0 {
 		return json.Marshal(plain(m))
 	}
-	return MergeExtra(plain(m), m.Extra)
+	over := map[string]any{}
+	if len(m.ContentParts) > 0 {
+		over["content"] = m.ContentParts
+	}
+	// Extra is the explicit override, so it wins over the parts.
+	maps.Copy(over, m.Extra)
+	return MergeExtra(plain(m), over)
+}
+
+// Parts returns the message's content as parts, whichever way it carries it. A
+// plain string becomes the single text part it stands for.
+func (m Message) Parts() []ContentPart {
+	if len(m.ContentParts) > 0 {
+		return m.ContentParts
+	}
+	return []ContentPart{TextPart(m.Content)}
+}
+
+// DemoteLateSystem sends every system message past the leading run as a user
+// message. Several endpoints that otherwise speak this API accept a system
+// message only at the start of a conversation and reject one that follows any
+// other message.
+func DemoteLateSystem(msgs []Message) {
+	for i := range msgs {
+		if msgs[i].Role == RoleSystem {
+			continue
+		}
+		for j := i; j < len(msgs); j++ {
+			if msgs[j].Role == RoleSystem {
+				msgs[j].Role = RoleUser
+			}
+		}
+		return
+	}
 }
 
 // ToolCall is an assistant tool-call entry on a message.

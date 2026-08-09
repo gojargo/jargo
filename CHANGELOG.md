@@ -147,6 +147,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Perplexity is sent a conversation it accepts.** Perplexity is stricter than
+  OpenAI about the shape of a message history in three ways, and jargo honored
+  none of them, so a conversation it could not read was sent as though it could:
+  roles must strictly alternate, a system message is only accepted at the start,
+  and the last message must be a user or tool message. Its adapter now demotes a
+  late system message, merges each run of same-role messages into one carrying
+  both contents, and drops a trailing assistant message (which is what OpenAI
+  does with one server-side, so the turn reads the same either way). A trailing
+  system message is deliberately left alone: demoting it would depend on how much
+  of the conversation had happened so far, and Perplexity rejects a message whose
+  role changes between turns.
+
 - **Every OpenAI-compatible provider reports its token usage.** The
   chat-completions service never asked for the counts and never reported any, so
   eighteen providers produced no LLM usage metrics at all while the other
