@@ -67,7 +67,7 @@ func TransformMessages(msgs []openai.Message) []openai.Message {
 		}
 	}
 
-	demoteLateSystem(out)
+	openai.DemoteLateSystem(out)
 
 	if last := &out[len(out)-1]; last.Role == openai.RoleAssistant {
 		if _, ok := last.Extra["prefix"]; !ok {
@@ -80,20 +80,4 @@ func TransformMessages(msgs []openai.Message) []openai.Message {
 		}
 	}
 	return out
-}
-
-// demoteLateSystem sends every system message past the leading run as a user
-// message, which is the only place Mistral accepts one.
-func demoteLateSystem(msgs []openai.Message) {
-	for i := range msgs {
-		if msgs[i].Role == openai.RoleSystem {
-			continue
-		}
-		for j := i; j < len(msgs); j++ {
-			if msgs[j].Role == openai.RoleSystem {
-				msgs[j].Role = openai.RoleUser
-			}
-		}
-		return
-	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -74,10 +75,13 @@ func TestDeveloperRoleRoster(t *testing.T) {
 func developerRoleAsSent(t *testing.T, build CompatLLMBuilder) string {
 	t.Helper()
 
+	// Content is decoded loosely: an endpoint that merges two same-role messages
+	// sends the result as a list of parts rather than a string, so the shape
+	// varies across the roster even though the question asked of it does not.
 	var body struct {
 		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
 		} `json:"messages"`
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,10 +102,30 @@ func developerRoleAsSent(t *testing.T, build CompatLLMBuilder) string {
 		t.Fatalf("Generate: %v", err)
 	}
 	for _, m := range body.Messages {
-		if m.Content == "a tool reported late" {
+		if slices.Contains(contentTexts(m.Content), "a tool reported late") {
 			return m.Role
 		}
 	}
 	t.Fatalf("the developer message never reached the endpoint: %+v", body.Messages)
 	return ""
+}
+
+// contentTexts returns every text a message's content carries, whether it was
+// sent as a plain string or as a list of parts.
+func contentTexts(raw json.RawMessage) []string {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return []string{text}
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, p.Text)
+	}
+	return out
 }
