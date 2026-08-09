@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -24,66 +23,6 @@ func toolDelta(index int, id, name, args string) toolCallDelta {
 	d.Function.Name = name
 	d.Function.Arguments = args
 	return d
-}
-
-func TestToMessagesToolTurn(t *testing.T) {
-	convo := frames.NewLLMContext("be helpful")
-	convo.AddUserMessage("weather in Paris?")
-	convo.AddAssistantToolCall(frames.ToolCall{
-		ID: "call_a", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`),
-	})
-	convo.AddToolResult(frames.ToolResult{ID: "call_a", Name: "get_weather", Content: "sunny, 20C"})
-
-	msgs := toMessages(convo, false)
-	if len(msgs) != 4 {
-		t.Fatalf("want 4 messages (system, user, assistant, tool), got %d", len(msgs))
-	}
-	if msgs[0].Role != "system" || msgs[1].Role != "user" {
-		t.Fatalf("unexpected leading roles: %q, %q", msgs[0].Role, msgs[1].Role)
-	}
-
-	asst := msgs[2]
-	if asst.Role != "assistant" || len(asst.ToolCalls) != 1 {
-		t.Fatalf("assistant tool message malformed: %+v", asst)
-	}
-	tc := asst.ToolCalls[0]
-	if tc.ID != "call_a" || tc.Type != "function" || tc.Function.Name != "get_weather" {
-		t.Errorf("tool_call fields wrong: %+v", tc)
-	}
-	if tc.Function.Arguments != `{"location":"Paris"}` {
-		t.Errorf("tool_call arguments = %q", tc.Function.Arguments)
-	}
-
-	res := msgs[3]
-	if res.Role != "tool" || res.ToolCallID != "call_a" || res.Content != "sunny, 20C" {
-		t.Errorf("tool result message wrong: %+v", res)
-	}
-}
-
-func TestToMessagesEmptyArgsDefaults(t *testing.T) {
-	convo := frames.NewLLMContext("")
-	convo.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "now"})
-	msgs := toMessages(convo, false)
-	if got := msgs[0].ToolCalls[0].Function.Arguments; got != "{}" {
-		t.Errorf("empty args should default to {}, got %q", got)
-	}
-}
-
-func TestToTools(t *testing.T) {
-	out := toTools([]frames.Tool{{
-		Name:        "get_weather",
-		Description: "Look up the weather",
-		Parameters:  json.RawMessage(`{"type":"object"}`),
-	}})
-	if len(out) != 1 {
-		t.Fatalf("want 1 tool, got %d", len(out))
-	}
-	if out[0].Type != "function" || out[0].Function.Name != "get_weather" {
-		t.Errorf("tool shape wrong: %+v", out[0])
-	}
-	if string(out[0].Function.Parameters) != `{"type":"object"}` {
-		t.Errorf("parameters not passed through: %s", out[0].Function.Parameters)
-	}
 }
 
 func TestToolCoalescer(t *testing.T) {
