@@ -904,7 +904,7 @@ func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
 	// the one place tool changes take effect: pick up the handler any advertised
 	// tool carries, drop the ones for tools no longer advertised, and only then
 	// settle what this service adds on its own account.
-	b.syncToolHandlers(ctx, convo)
+	b.SyncToolHandlers(ctx, convo)
 	b.applyAsyncToolCancellation()
 	if len(convo.Tools()) > 0 {
 		if tg, ok := b.gen.(ToolGenerator); ok {

@@ -8,7 +8,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 )
 
-// syncToolHandlers brings the registry into line with the toolset the
+// SyncToolHandlers brings the registry into line with the toolset the
 // conversation advertises: it registers the handler any advertised tool carries,
 // and drops the ones it registered that way for tools no longer advertised. What
 // the model can call and what actually answers therefore stay the same thing,
@@ -17,7 +17,7 @@ import (
 // It runs on every inference, since the conversation carries its current toolset
 // each time. Only handlers registered from a toolset are ever dropped: one
 // registered by hand is the application's to remove.
-func (b *Base) syncToolHandlers(ctx context.Context, convo *frames.LLMContext) {
+func (b *Base) SyncToolHandlers(ctx context.Context, convo *frames.LLMContext) {
 	tools := convo.Tools()
 
 	advertised := make(map[string]bool, len(tools))

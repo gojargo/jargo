@@ -1,0 +1,148 @@
+package pipeline_test
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/llm"
+)
+
+// waitFor blocks until cond holds, failing the test with what it was waiting
+// for if it does not hold in time.
+func waitFor(t *testing.T, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// fakeLLM records what the switcher asks of it. It stands in for a language
+// model service without needing a provider.
+type fakeLLM struct {
+	*processor.Base
+
+	mu         sync.Mutex
+	synced     []string
+	registered []string
+}
+
+func newFakeLLM(name string) *fakeLLM {
+	l := &fakeLLM{}
+	l.Base = processor.New(name, l)
+	return l
+}
+
+func (l *fakeLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := l.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	return l.PushFrame(ctx, f, dir)
+}
+
+func (l *fakeLLM) SyncToolHandlers(_ context.Context, convo *frames.LLMContext) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, t := range convo.Tools() {
+		l.synced = append(l.synced, t.Name)
+	}
+}
+
+func (l *fakeLLM) RegisterFunction(name string, _ llm.FunctionCallHandler, _ ...llm.RegisterOption) {
+	l.mu.Lock()
+	l.registered = append(l.registered, name)
+	l.mu.Unlock()
+}
+
+func (l *fakeLLM) syncedTools() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.synced...)
+}
+
+func (l *fakeLLM) registeredTools() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.registered...)
+}
+
+// TestLLMSwitcherSyncsToolsOnEveryMember checks the tools a conversation
+// advertises reach every member, not just the one in use. Only the active
+// service is sent the conversation, so an inactive one would otherwise be out
+// of step with what the model is told it can call the moment it takes over.
+func TestLLMSwitcherSyncsToolsOnEveryMember(t *testing.T) {
+	a, b := newFakeLLM("A"), newFakeLLM("B")
+	sw, err := pipeline.NewLLMSwitcher([]pipeline.LLMMember{a, b}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewLLMSwitcher: %v", err)
+	}
+
+	task, _, stop := runCollector(t, sw)
+	defer stop()
+
+	convo := frames.NewLLMContext("")
+	convo.SetTools([]frames.Tool{{Name: "book_table"}})
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+
+	waitFor(t, func() bool {
+		return len(a.syncedTools()) > 0 && len(b.syncedTools()) > 0
+	}, "both members to be synced with the advertised tools")
+
+	for _, l := range []*fakeLLM{a, b} {
+		got := l.syncedTools()
+		if len(got) == 0 || got[0] != "book_table" {
+			t.Errorf("%s synced tools = %v, want [book_table]", l.Name(), got)
+		}
+	}
+}
+
+// TestLLMSwitcherRegistersOnEveryMember checks a handler registered on the
+// switcher reaches every member, so a tool keeps working across a switch.
+func TestLLMSwitcherRegistersOnEveryMember(t *testing.T) {
+	a, b := newFakeLLM("A"), newFakeLLM("B")
+	sw, err := pipeline.NewLLMSwitcher([]pipeline.LLMMember{a, b}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewLLMSwitcher: %v", err)
+	}
+
+	sw.RegisterFunction("book_table", func(context.Context, llm.FunctionCallParams) error { return nil })
+
+	for _, l := range []*fakeLLM{a, b} {
+		got := l.registeredTools()
+		if len(got) != 1 || got[0] != "book_table" {
+			t.Errorf("%s registered = %v, want [book_table]", l.Name(), got)
+		}
+	}
+}
+
+// TestLLMSwitcherReportsTheActiveLLM checks the switcher tracks which model is
+// answering, and that switching moves it.
+func TestLLMSwitcherReportsTheActiveLLM(t *testing.T) {
+	a, b := newFakeLLM("A"), newFakeLLM("B")
+	sw, err := pipeline.NewLLMSwitcher([]pipeline.LLMMember{a, b}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewLLMSwitcher: %v", err)
+	}
+
+	if got := sw.ActiveLLM(); got != a {
+		t.Errorf("ActiveLLM() = %v, want the first member", got)
+	}
+	if !sw.SwitchTo(b) {
+		t.Fatal("SwitchTo(b) = false, want the switch accepted")
+	}
+	if got := sw.ActiveLLM(); got != b {
+		t.Errorf("ActiveLLM() after the switch = %v, want b", got)
+	}
+	if got := len(sw.LLMs()); got != 2 {
+		t.Errorf("LLMs() = %d members, want 2", got)
+	}
+}

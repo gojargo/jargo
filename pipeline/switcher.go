@@ -79,6 +79,18 @@ type ServiceSwitcher struct {
 func NewServiceSwitcher(
 	services []processor.Processor, newStrategy StrategyFunc,
 ) (*ServiceSwitcher, error) {
+	return newServiceSwitcherAs(nil, "ServiceSwitcher", services, newStrategy)
+}
+
+// newServiceSwitcherAs builds a switcher on behalf of self, the processor
+// embedding it, under the given name. A nil self means the switcher is the
+// outermost processor and stands for itself.
+func newServiceSwitcherAs(
+	self processor.Processor,
+	name string,
+	services []processor.Processor,
+	newStrategy StrategyFunc,
+) (*ServiceSwitcher, error) {
 	if len(services) == 0 {
 		return nil, errNoServices
 	}
@@ -87,6 +99,9 @@ func NewServiceSwitcher(
 	}
 
 	s := &ServiceSwitcher{strategy: newStrategy(services)}
+	if self == nil {
+		self = s
+	}
 
 	// The filters decide system frames too, so a branch that is gated off stops
 	// hearing the conversation rather than following it in the background. The
@@ -105,7 +120,7 @@ func NewServiceSwitcher(
 
 	// The parallel pipeline is built on the switcher's behalf, so the frames its
 	// branches produce leave through the switcher's own PushFrame.
-	pp, err := newParallelAs(s, "ServiceSwitcher", branches...)
+	pp, err := newParallelAs(self, name, branches...)
 	if err != nil {
 		return nil, err
 	}
