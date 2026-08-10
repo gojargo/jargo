@@ -448,3 +448,94 @@ func TestActivityKeepsThePipelineAlive(t *testing.T) {
 	task.StopWhenDone()
 	waitDone(t, done)
 }
+
+// TestStartMetadataRidesTheStartFrame checks the values a session is stamped
+// with reach every processor, which they do by traveling on the StartFrame.
+func TestStartMetadataRidesTheStartFrame(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen map[string]any
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		StartMetadata:           map[string]any{"call_id": "abc-123"},
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.StartFrame{}),
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			seen = f.Base().Metadata()
+			mu.Unlock()
+		},
+	})
+
+	done := runTask(t, task)
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if seen["call_id"] != "abc-123" {
+		t.Errorf("StartFrame metadata = %v, want it carrying call_id", seen)
+	}
+}
+
+// TestQueueFrameUpstreamEntersAtTheEnd checks a frame can be queued into the far
+// end of the pipeline, which is how a caller answers something the pipeline sent
+// it rather than starting something new.
+func TestQueueFrameUpstreamEntersAtTheEnd(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		ReachedUpstreamFilter: pipeline.FrameTypes(&frames.TextFrame{}),
+		OnReachedUpstream: func(f frames.Frame) {
+			tf, ok := f.(*frames.TextFrame)
+			if !ok {
+				return
+			}
+			mu.Lock()
+			seen = append(seen, tf.Text)
+			mu.Unlock()
+		},
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.StartFrame{}),
+		OnReachedDownstream:     func(frames.Frame) {},
+	})
+
+	done := runTask(t, task)
+	// Give the pipeline a moment to come up: a frame pushed before the
+	// StartFrame has crossed is dropped.
+	time.Sleep(100 * time.Millisecond)
+	task.QueueFrames([]frames.Frame{
+		frames.NewTextFrame("first"),
+		frames.NewTextFrame("second"),
+	}, processor.Upstream)
+	time.Sleep(100 * time.Millisecond)
+
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 || seen[0] != "first" || seen[1] != "second" {
+		t.Errorf("frames reaching the start = %v, want [first second]", seen)
+	}
+}
+
+// TestTurnTrackingRunsWithoutTracing checks the turns are followed in a session
+// that is not traced, since where the turns fell is worth knowing either way.
+func TestTurnTrackingRunsWithoutTracing(t *testing.T) {
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{})
+	if task.TurnTracking() == nil {
+		t.Error("TurnTracking() = nil, want the turns followed in an untraced task")
+	}
+	if task.TurnTrace() != nil {
+		t.Error("TurnTrace() is set on a task that does not trace")
+	}
+
+	off := false
+	quiet := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		EnableTurnTracking: &off,
+	})
+	if quiet.TurnTracking() != nil {
+		t.Error("TurnTracking() is set on a task that turned it off")
+	}
+}

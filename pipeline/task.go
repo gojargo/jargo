@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -49,6 +50,11 @@ type TaskParams struct {
 	// EnableUsageMetrics enables usage-metrics collection (e.g. LLM token usage)
 	// across the pipeline.
 	EnableUsageMetrics bool
+	// StartMetadata is carried on the StartFrame, where every processor sees it
+	// at setup. It is for the values a whole session is stamped with, a call id
+	// or a tenant say, that a processor or an observer needs and the framework
+	// knows nothing about.
+	StartMetadata map[string]any
 	// ReportOnlyInitialTTFB reports each service's first time-to-first-byte and
 	// no more, for a consumer who wants the figure the call opened with rather
 	// than one per turn. It only applies when EnableMetrics is set.
@@ -126,10 +132,11 @@ type TaskParams struct {
 	// Observers watch every frame reaching either end of the pipeline. They are
 	// notified after the OnReached callbacks.
 	Observers []Observer
-	// EnableTurnTracking tracks the conversation's turns and raises a span for
-	// each; nil defaults to true. Turning it off leaves a traced task with the
-	// conversation span and the service spans beneath it. It says nothing about
-	// an untraced task, which has nowhere to report turns to.
+	// EnableTurnTracking follows the conversation's turns; nil defaults to true.
+	// It applies whether or not the task traces, since where the turns fell is
+	// worth knowing either way; see Task.TurnTracking. Tracing hangs off it, so
+	// turning it off turns tracing off too: there would be nothing to hang the
+	// turn spans from.
 	EnableTurnTracking *bool
 	// EnableTracing opens a span for the conversation and one for each turn
 	// beneath it, and gives the processors the tracing context their own spans
@@ -166,6 +173,9 @@ type Task struct {
 	tracing *tracing.TracingContext
 	// turnTrace writes the conversation and turn spans; nil when not tracing.
 	turnTrace *observers.TurnTrace
+	// turnTracking follows the conversation's turns; nil only when turn tracking
+	// has been turned off.
+	turnTracking *observers.TurnTracking
 
 	// reachedDownstream are the handlers registered after construction, called
 	// for the frames reaching the end of the pipeline alongside the one
@@ -192,6 +202,9 @@ type Task struct {
 	mu        sync.Mutex
 	finished  bool
 	canceling bool
+	// runCtx is the context the run is under, kept so a frame queued from
+	// outside the pipeline has one to enter with.
+	runCtx context.Context
 }
 
 // NewTask wraps pipe in a Task. pipe is usually a *Pipeline but may be any
@@ -255,43 +268,89 @@ func (t *Task) buildObservers() {
 			sig:   t.idleSig,
 		})
 	}
-	if !t.params.EnableTracing {
+
+	// Turn tracking runs whether or not the task traces: a caller wants to know
+	// where the turns fell in an untraced session too. Tracing is what hangs off
+	// it, not the other way round, so turning turn tracking off turns tracing off
+	// with it: there would be nothing to hang the turn spans from.
+	if !boolValue(t.params.EnableTurnTracking, true) {
 		return
 	}
-	t.tracing = tracing.NewTracingContext()
-	t.turnTrace = observers.NewTurnTrace(observers.TurnTraceConfig{
-		Tracing:        t.tracing,
-		ConversationID: t.params.ConversationID,
-		Attributes:     t.params.AdditionalSpanAttributes,
-	})
-	t.observers = append(t.observers, t.turnTrace)
-	if t.params.EnableTurnTracking != nil && !*t.params.EnableTurnTracking {
-		return
+
+	if t.params.EnableTracing {
+		t.tracing = tracing.NewTracingContext()
+		t.turnTrace = observers.NewTurnTrace(observers.TurnTraceConfig{
+			Tracing:        t.tracing,
+			ConversationID: t.params.ConversationID,
+			Attributes:     t.params.AdditionalSpanAttributes,
+		})
 	}
-	t.observers = append(t.observers,
-		observers.NewTurnTracking(observers.TurnTrackingConfig{
-			OnTurnStarted: t.turnTrace.TurnStarted,
-			OnTurnEnded:   t.turnTrace.TurnEnded,
-		}),
-		observers.NewUserBotLatency(observers.LatencyConfig{
-			OnLatency: t.turnTrace.LatencyMeasured,
-		}),
-	)
+
+	// The turn tracking feeds the tracing when there is any, and stands on its
+	// own when there is not.
+	cfg := observers.TurnTrackingConfig{}
+	if t.turnTrace != nil {
+		cfg.OnTurnStarted = t.turnTrace.TurnStarted
+		cfg.OnTurnEnded = t.turnTrace.TurnEnded
+	}
+	t.turnTracking = observers.NewTurnTracking(cfg)
+	t.observers = append(t.observers, t.turnTracking)
+
+	if t.turnTrace != nil {
+		t.observers = append(t.observers,
+			observers.NewUserBotLatency(observers.LatencyConfig{
+				OnLatency: t.turnTrace.LatencyMeasured,
+			}),
+			t.turnTrace,
+		)
+	}
 }
+
+// TurnTracking is the observer following the conversation's turns. It is nil
+// only when turn tracking has been turned off.
+func (t *Task) TurnTracking() *observers.TurnTracking { return t.turnTracking }
+
+// TurnTrace is the observer writing the conversation and turn spans. It is nil
+// unless the task traces.
+func (t *Task) TurnTrace() *observers.TurnTrace { return t.turnTrace }
 
 // Tracing is the session's tracing state: the conversation span the trace hangs
 // from and the turn being spoken. It is nil unless the task traces, and is what
 // the processors are given at setup so their spans land under the right turn.
 func (t *Task) Tracing() *tracing.TracingContext { return t.tracing }
 
-// QueueFrame queues a frame to be pushed downstream through the pipeline.
-func (t *Task) QueueFrame(f frames.Frame) { t.pushQueue.push(f) }
-
-// QueueFrames queues several frames to be pushed downstream, in order.
-func (t *Task) QueueFrames(fs []frames.Frame) {
-	for _, f := range fs {
-		t.pushQueue.push(f)
+// QueueFrame queues a frame to be pushed through the pipeline. The direction is
+// optional and defaults to downstream, which enters at the start of the
+// pipeline; pass processor.Upstream to enter at the end instead, which is how a
+// caller replies to something the pipeline sent it. Only the first direction is
+// read.
+func (t *Task) QueueFrame(f frames.Frame, dir ...processor.Direction) {
+	if len(dir) > 0 && dir[0] == processor.Upstream {
+		// Straight into the sink, the far end of the pipeline, rather than the
+		// queue the run loop drains from the near end.
+		_ = t.sink.QueueFrame(t.runContext(), f, processor.Upstream)
+		return
 	}
+	t.pushQueue.push(f)
+}
+
+// QueueFrames queues several frames, in order. See QueueFrame for the direction.
+func (t *Task) QueueFrames(fs []frames.Frame, dir ...processor.Direction) {
+	for _, f := range fs {
+		t.QueueFrame(f, dir...)
+	}
+}
+
+// runContext is the context the run is under, or a background context before it
+// has started. A frame entering the pipeline needs one, and the caller of
+// QueueFrame has none to give.
+func (t *Task) runContext() context.Context {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.runCtx != nil {
+		return t.runCtx
+	}
+	return context.Background()
 }
 
 // OnReachedDownstream registers a handler called for every frame that reaches
@@ -481,6 +540,10 @@ func (t *Task) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	t.mu.Lock()
+	t.runCtx = runCtx
+	t.mu.Unlock()
+
 	setup := processor.Setup{Clock: t.clk, Observers: t.observers, Tracing: t.tracing, Running: t}
 	if err := t.pipeline.Setup(runCtx, setup); err != nil {
 		return err
@@ -532,6 +595,9 @@ func (t *Task) runLoop(ctx context.Context) (frames.Frame, error) {
 	start.EnableMetrics = t.params.EnableMetrics
 	start.EnableUsageMetrics = t.params.EnableUsageMetrics
 	start.ReportOnlyInitialTTFB = t.params.ReportOnlyInitialTTFB
+	if len(t.params.StartMetadata) > 0 {
+		maps.Copy(start.Metadata(), t.params.StartMetadata)
+	}
 	if err := t.pipeline.QueueFrame(ctx, start, processor.Downstream); err != nil {
 		return nil, err
 	}
