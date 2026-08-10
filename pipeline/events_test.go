@@ -236,3 +236,105 @@ func TestAddReachedFilterWidensTheSelection(t *testing.T) {
 		t.Errorf("frames reported = %v, want the StartFrame left out", seen)
 	}
 }
+
+// heartbeatEater drops every heartbeat, so none reaches the end of the
+// pipeline. It stands in for a processor that has stopped moving frames.
+type heartbeatEater struct {
+	*processor.Base
+}
+
+func newHeartbeatEater() *heartbeatEater {
+	h := &heartbeatEater{}
+	h.Base = processor.New("HeartbeatEater", h)
+	return h
+}
+
+func (h *heartbeatEater) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := h.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.HeartbeatFrame); ok {
+		return nil
+	}
+	return h.PushFrame(ctx, f, dir)
+}
+
+// TestHeartbeatsCrossThePipeline checks heartbeats are sent once the pipeline is
+// up and arrive at the far end, and that they stop when the run does.
+func TestHeartbeatsCrossThePipeline(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		beats int
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		EnableHeartbeats:        true,
+		HeartbeatPeriod:         20 * time.Millisecond,
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.HeartbeatFrame{}),
+		OnReachedDownstream: func(frames.Frame) {
+			mu.Lock()
+			beats++
+			mu.Unlock()
+		},
+	})
+
+	done := runTask(t, task)
+	time.Sleep(150 * time.Millisecond)
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	mu.Lock()
+	got := beats
+	mu.Unlock()
+	if got < 3 {
+		t.Errorf("heartbeats reaching the end = %d, want at least 3", got)
+	}
+
+	// The run is over, so the pusher must have stopped with it.
+	time.Sleep(80 * time.Millisecond)
+	mu.Lock()
+	after := beats
+	mu.Unlock()
+	if after != got {
+		t.Errorf("heartbeats kept arriving after the run ended: %d then %d", got, after)
+	}
+}
+
+// TestHeartbeatTimeoutKeepsReporting checks a stalled pipeline is reported over
+// and over rather than once: one still stuck a while later is still worth
+// hearing about.
+func TestHeartbeatTimeoutKeepsReporting(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		reports int
+	)
+	enough := make(chan struct{})
+	var once sync.Once
+
+	task := pipeline.NewTask(pipeline.New(newHeartbeatEater()), pipeline.TaskParams{
+		EnableHeartbeats:        true,
+		HeartbeatPeriod:         10 * time.Millisecond,
+		HeartbeatMonitorTimeout: 40 * time.Millisecond,
+		OnHeartbeatTimeout: func() {
+			mu.Lock()
+			reports++
+			done := reports >= 2
+			mu.Unlock()
+			if done {
+				once.Do(func() { close(enough) })
+			}
+		},
+	})
+
+	runDone := runTask(t, task)
+	select {
+	case <-enough:
+	case <-time.After(3 * time.Second):
+		mu.Lock()
+		got := reports
+		mu.Unlock()
+		t.Fatalf("heartbeat timeout reported %d times, want it to keep reporting", got)
+	}
+
+	task.StopWhenDone()
+	waitDone(t, runDone)
+}

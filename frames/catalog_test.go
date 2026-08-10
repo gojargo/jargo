@@ -285,6 +285,10 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewStopFrame() },
 		},
 		{
+			label: "HeartbeatFrame", cat: control, wantString: "timestamp: 1.5s",
+			build: func() frames.Frame { return frames.NewHeartbeatFrame(1500 * time.Millisecond) },
+		},
+		{
 			label: "StopWorkerFrame", cat: control, uninterruptible: true,
 			build: func() frames.Frame { return frames.NewStopWorkerFrame() },
 		},

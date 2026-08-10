@@ -20,9 +20,18 @@ const (
 	defaultAudioOutSampleRate = 24000
 )
 
-// defaultCancelTimeout bounds how long the task waits for a CancelFrame to
-// reach the end of the pipeline before giving up on it.
-const defaultCancelTimeout = 20 * time.Second
+// Timing defaults for the task's own lifecycle and monitoring.
+const (
+	// defaultCancelTimeout bounds how long the task waits for a CancelFrame to
+	// reach the end of the pipeline before giving up on it.
+	defaultCancelTimeout = 20 * time.Second
+	// defaultHeartbeatPeriod is how often a heartbeat is sent when heartbeats
+	// are enabled.
+	defaultHeartbeatPeriod = time.Second
+	// defaultHeartbeatMonitorTimeout is how long the monitor goes without a
+	// heartbeat before reporting the silence.
+	defaultHeartbeatMonitorTimeout = 10 * time.Second
+)
 
 // TaskParams configures a Task.
 type TaskParams struct {
@@ -54,6 +63,21 @@ type TaskParams struct {
 	// EndFrame is not bounded this way, since a graceful shutdown is expected to
 	// flush whatever is in flight however long that takes.
 	CancelTimeout time.Duration
+	// EnableHeartbeats sends a heartbeat through the pipeline at a fixed
+	// interval and reports when one stops coming out the far end, which is how a
+	// caller tells a pipeline that is quiet from one that is stuck.
+	EnableHeartbeats bool
+	// HeartbeatPeriod is how often a heartbeat is sent; zero defaults to one
+	// second. It only applies when EnableHeartbeats is set.
+	HeartbeatPeriod time.Duration
+	// HeartbeatMonitorTimeout is how long to go without a heartbeat reaching the
+	// end of the pipeline before saying so; zero defaults to ten seconds. It only
+	// applies when EnableHeartbeats is set.
+	HeartbeatMonitorTimeout time.Duration
+	// OnHeartbeatTimeout, if set, is called when no heartbeat has reached the end
+	// of the pipeline within HeartbeatMonitorTimeout. It is called again every
+	// interval for as long as the silence lasts.
+	OnHeartbeatTimeout func()
 	// OnPipelineStarted, if set, is called once the StartFrame has traveled the
 	// whole pipeline, meaning every processor is up and the pipeline is ready.
 	OnPipelineStarted func(*frames.StartFrame)
@@ -135,6 +159,12 @@ type Task struct {
 	reachedDownFilter FrameFilter
 	reachedUpFilter   FrameFilter
 
+	// monitors is the scope the task's background goroutines run in, and
+	// heartbeats is the queue the sink hands each arriving heartbeat to for the
+	// monitor to time.
+	monitors   monitors
+	heartbeats *frameQueue
+
 	startOnce sync.Once
 	startSig  chan struct{}
 	endOnce   sync.Once
@@ -157,10 +187,17 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 	if params.CancelTimeout == 0 {
 		params.CancelTimeout = defaultCancelTimeout
 	}
+	if params.HeartbeatPeriod == 0 {
+		params.HeartbeatPeriod = defaultHeartbeatPeriod
+	}
+	if params.HeartbeatMonitorTimeout == 0 {
+		params.HeartbeatMonitorTimeout = defaultHeartbeatMonitorTimeout
+	}
 	t := &Task{
 		params:            params,
 		clk:               params.Clock,
 		pushQueue:         newFrameQueue(),
+		heartbeats:        newFrameQueue(),
 		startSig:          make(chan struct{}),
 		endSig:            make(chan struct{}),
 		reachedDownFilter: params.ReachedDownstreamFilter,
@@ -407,7 +444,12 @@ func (t *Task) Run(ctx context.Context) error {
 		return err
 	}
 
-	endFrame, runErr := t.runLoop(runCtx)
+	monCtx := t.monitors.start(runCtx)
+	endFrame, runErr := t.runLoop(monCtx)
+
+	// Stop the monitors before the pipeline is torn down, so none of them is
+	// still pushing frames into processors that are shutting down.
+	t.monitors.stop()
 
 	// A StopFrame ends the run but leaves the processors up, connections and
 	// all, ready for another one. Cleaning up here would shut down the very
@@ -559,7 +601,11 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 		if t.params.OnPipelineStarted != nil {
 			t.params.OnPipelineStarted(fr)
 		}
+		t.startHeartbeats()
 		t.startOnce.Do(func() { close(t.startSig) })
+	case *frames.HeartbeatFrame:
+		// Hand it to the monitor, which times how long it took to get here.
+		t.heartbeats.push(fr)
 	case *frames.EndFrame, *frames.StopFrame:
 		if t.params.OnPipelineFinished != nil {
 			t.params.OnPipelineFinished(f)

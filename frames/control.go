@@ -3,6 +3,7 @@ package frames
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 // EndFrame indicates the pipeline has ended and processors should shut down. As
@@ -187,8 +188,35 @@ func NewFrameProcessorResumeFrame(p ProcessorTarget) *FrameProcessorResumeFrame 
 	}
 }
 
+// HeartbeatFrame is pushed through the pipeline at a fixed interval so the Task
+// can tell frames are still moving. It travels in order like any control frame,
+// which is what makes it a measure of the path real work takes. It is
+// interruptible on purpose: a barge-in drops the ones in flight, and the next
+// interval sends another. It is a control frame.
+type HeartbeatFrame struct {
+	BaseControlFrame
+	// Timestamp is the pipeline clock reading when the heartbeat was created.
+	// Comparing it with the clock on arrival gives the time the frame spent
+	// crossing the pipeline.
+	Timestamp time.Duration
+}
+
+// NewHeartbeatFrame builds a HeartbeatFrame stamped with ts.
+func NewHeartbeatFrame(ts time.Duration) *HeartbeatFrame {
+	return &HeartbeatFrame{
+		BaseControlFrame: NewBaseControlFrame("HeartbeatFrame"),
+		Timestamp:        ts,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *HeartbeatFrame) String() string {
+	return fmt.Sprintf("%s(timestamp: %s)", f.Name(), f.Timestamp)
+}
+
 // Compile-time interface checks.
 var (
+	_ ControlFrame    = (*HeartbeatFrame)(nil)
 	_ ControlFrame    = (*FrameProcessorPauseFrame)(nil)
 	_ ControlFrame    = (*FrameProcessorResumeFrame)(nil)
 	_ ControlFrame    = (*EndFrame)(nil)
