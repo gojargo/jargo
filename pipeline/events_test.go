@@ -539,3 +539,83 @@ func TestTurnTrackingRunsWithoutTracing(t *testing.T) {
 		t.Error("TurnTracking() is set on a task that turned it off")
 	}
 }
+
+// slowObserver takes its time over every frame, standing in for one that logs
+// to disk or ships events over the network.
+type slowObserver struct {
+	delay time.Duration
+	mu    sync.Mutex
+	seen  int
+}
+
+func (o *slowObserver) OnPushFrame(processor.FramePushed) {
+	time.Sleep(o.delay)
+	o.mu.Lock()
+	o.seen++
+	o.mu.Unlock()
+}
+
+func (o *slowObserver) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.seen
+}
+
+// TestASlowObserverDoesNotHoldUpThePipeline checks watching the pipeline does
+// not change how it runs. An observer is reported to for every handover, so one
+// that is slow would otherwise put its own delay between every pair of
+// processors.
+func TestASlowObserverDoesNotHoldUpThePipeline(t *testing.T) {
+	slow := &slowObserver{delay: 50 * time.Millisecond}
+
+	arrived := make(chan struct{})
+	var once sync.Once
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		Observers:               []pipeline.Observer{slow},
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TextFrame{}),
+		OnReachedDownstream: func(frames.Frame) {
+			once.Do(func() { close(arrived) })
+		},
+	})
+
+	done := runTask(t, task)
+	start := time.Now()
+	task.QueueFrame(frames.NewTextFrame("hello"))
+
+	select {
+	case <-arrived:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the frame never crossed the pipeline")
+	}
+
+	// The frame crosses several handovers. Reported inline, the slow observer
+	// would add its delay to each of them.
+	if elapsed := time.Since(start); elapsed > 40*time.Millisecond {
+		t.Errorf("the frame took %s to cross, want the slow observer kept off the path", elapsed)
+	}
+
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	// Everything queued for it is still handed over before the run is done.
+	if slow.count() == 0 {
+		t.Error("the slow observer saw nothing, want the reports delivered")
+	}
+}
+
+// TestAddObserverWhileRunning checks something built after the task can still
+// watch the frames going by.
+func TestAddObserverWhileRunning(t *testing.T) {
+	late := &slowObserver{}
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{})
+
+	done := runTask(t, task)
+	task.AddObserver(late)
+	task.QueueFrame(frames.NewTextFrame("hello"))
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	if late.count() == 0 {
+		t.Error("the observer added while running saw nothing")
+	}
+}

@@ -176,6 +176,9 @@ type Task struct {
 	// turnTracking follows the conversation's turns; nil only when turn tracking
 	// has been turned off.
 	turnTracking *observers.TurnTracking
+	// observerProxy is the single observer the processors are given. It passes
+	// each report on to the real observers, off the frame path.
+	observerProxy *observerProxy
 
 	// reachedDownstream are the handlers registered after construction, called
 	// for the frames reaching the end of the pipeline alongside the one
@@ -249,6 +252,7 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 		t.clk = clock.NewSystem()
 	}
 	t.buildObservers()
+	t.observerProxy = newObserverProxy(t.observers)
 	// The source observes upstream frames, the sink observes downstream frames.
 	// They bracket the user pipeline so the task can inject and observe frames.
 	t.source = processor.NewSource("Task::Source", t.sourcePush)
@@ -304,6 +308,16 @@ func (t *Task) buildObservers() {
 			t.turnTrace,
 		)
 	}
+}
+
+// AddObserver registers an observer while the pipeline runs, for something built
+// after the task that wants to watch the frames going by. It watches from here
+// on; what already happened is not replayed.
+func (t *Task) AddObserver(o Observer) {
+	if o == nil {
+		return
+	}
+	t.observerProxy.add(o)
 }
 
 // TurnTracking is the observer following the conversation's turns. It is nil
@@ -544,7 +558,15 @@ func (t *Task) Run(ctx context.Context) error {
 	t.runCtx = runCtx
 	t.mu.Unlock()
 
-	setup := processor.Setup{Clock: t.clk, Observers: t.observers, Tracing: t.tracing, Running: t}
+	// The processors are handed one observer, the proxy, which passes each
+	// report on to the real ones off the frame path.
+	t.observerProxy.start()
+	setup := processor.Setup{
+		Clock:     t.clk,
+		Observers: []processor.Observer{t.observerProxy},
+		Tracing:   t.tracing,
+		Running:   t,
+	}
 	if err := t.pipeline.Setup(runCtx, setup); err != nil {
 		return err
 	}
@@ -565,6 +587,10 @@ func (t *Task) Run(ctx context.Context) error {
 	if _, stopped := endFrame.(*frames.StopFrame); !stopped {
 		_ = t.pipeline.Cleanup(context.Background())
 	}
+
+	// The observers stop once the pipeline has, so the reports raised as it shut
+	// down are delivered rather than lost.
+	t.observerProxy.stop()
 
 	// The conversation span closes last, once the processors have stopped and
 	// the spans raised beneath it have ended.
