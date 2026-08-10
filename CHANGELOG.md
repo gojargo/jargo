@@ -12,7 +12,105 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **Canceling a task no longer hangs.** A cancel raised before the pipeline had
+  finished starting was never acted on: the run loop waits for the StartFrame to
+  reach the end before it drains the queue the CancelFrame goes into, so the
+  frame sat there and the run never ended. A CancelFrame that never came back
+  was also waited on for good; the wait is now bounded by
+  `TaskParams.CancelTimeout`, twenty seconds by default. An EndFrame is still
+  waited out in full, since a graceful shutdown is meant to flush what is in
+  flight.
+
+- **A wedged processor no longer holds up the whole shutdown.** Cleanup waited
+  on a processor's input goroutine without a bound. Canceling its context only
+  releases that goroutine between frames, so a processor blocked inside a frame
+  never came back and teardown never finished. The wait is now bounded, and says
+  so.
+
+- **A `StopFrame` leaves the processors up.** It stops the run while the
+  processors keep their connections open, ready for another one, which is the
+  whole difference between it and an `EndFrame`. The task tore them down anyway.
+
+- **A fatal error reported by type now cancels the pipeline.**
+  `frames.FatalErrorFrame` is its own type, so matching `*frames.ErrorFrame`
+  never caught it and reporting an unrecoverable failure by type did nothing.
+  Match `frames.ErrorReport` to catch both.
+
+- **A service switcher passes on a switch request it does not own.** It
+  swallowed every request, so a second switcher in the same pipeline could never
+  be reached.
+
+- **Only the active service describes a switcher.** Every service broadcasts its
+  metadata at startup, since the lifecycle frames reach them all, and every copy
+  escaped; whatever arrived last then described a service that was not in use,
+  which for transcription decides the turn-stop latency. A switch now also asks
+  the newly active service to describe itself.
+
 ### Added
+
+- **A pipeline can be watched without being slowed down.** Observers were called
+  on the goroutine carrying the frame, once per handover, so a slow one changed
+  how the pipeline ran. Each observer now has a queue and a goroutine of its own.
+  `Task.AddObserver` registers one while the pipeline runs.
+
+- **Heartbeats tell a quiet pipeline from a stuck one.**
+  `TaskParams.EnableHeartbeats` sends a frame through at a fixed interval and
+  calls `OnHeartbeatTimeout` when none reaches the far end, repeating for as long
+  as the silence lasts.
+
+- **An idle pipeline is canceled.** `TaskParams.IdleTimeout` (five minutes by
+  default) watches for the conversation going quiet. `IdleTimeoutFrames` chooses
+  what counts as activity, `OnIdleTimeout` hears about it, and
+  `CancelOnIdleTimeout` set to false leaves the run alone.
+
+- **The task reports its lifecycle.** `OnPipelineStarted`, `OnPipelineFinished`
+  and `OnPipelineError` on `TaskParams`.
+
+- **Frames reaching either end of the pipeline can be selected.**
+  `ReachedDownstreamFilter` and `ReachedUpstreamFilter`, built with
+  `pipeline.FrameTypes` or `pipeline.AnyFrame`.
+
+- **Frames can be queued into the far end of the pipeline.** `Task.QueueFrame`
+  takes an optional direction, for answering something the pipeline sent rather
+  than starting something new.
+
+- **A session can be stamped.** `TaskParams.StartMetadata` rides the StartFrame,
+  where every processor sees it.
+
+- **Turns are followed whether or not the session is traced.** See
+  `Task.TurnTracking` and `Task.TurnTrace`.
+
+- **Every AI service shares a base.** `service.Base` is what transcription,
+  generation and synthesis have in common. A service describes itself by
+  implementing `service.MetadataDescriber`, and is asked to do so again when a
+  switcher makes it active.
+
+- **An LLM switcher keeps every model in step.** `pipeline.NewLLMSwitcher` syncs
+  the tools a conversation advertises on every member and fans a registered
+  handler out to all of them, so a tool keeps working across a switch.
+
+### Changed
+
+- **Switching services is chosen by a strategy.** `pipeline.NewServiceSwitcher`
+  takes `pipeline.NewManualStrategy` or `pipeline.NewFailoverStrategy` instead of
+  the `SwitchManual` and `SwitchFailover` constants, or any
+  `pipeline.SwitcherStrategy`. `pipeline.SwitchServiceFrame` is now
+  `frames.ManuallySwitchServiceFrame`.
+
+- **The reached handlers report what their filter selects.** They used to fire
+  for every frame; an unset filter now selects nothing, so a handler says what it
+  wants to hear about. `pipeline.AnyFrame` restores the old behavior.
+
+- **Turning turn tracking off turns tracing off with it.** The turn spans are
+  what the trace is made of.
+
+- **The STT, TTS and LLM bases embed `*service.Base`.** A service built directly
+  on `processor.Base` no longer describes itself and should embed `service.Base`.
+
+- **`flows.Enqueuer` and `frames.SettingsUpdate` gained methods.** The optional
+  direction on `QueueFrame` and `QueueFrames`, and `Copy` on a settings update.
 
 - **A flow can be moved from outside the graph.** `flows.FlowManager.SetNode`
   transitions to a node without a tool call having asked for it, for a caller
