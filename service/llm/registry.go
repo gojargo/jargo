@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -58,7 +59,7 @@ func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 		h = fn
 	}
 
-	b.RegisterFunction(t.Name, h)
+	b.RegisterFunction(t.Name, h, toolCallOptions(t)...)
 	b.handlersMu.Lock()
 	if item, ok := b.handlers[t.Name]; ok {
 		// Marked as the toolset's, so a later sync that stops advertising the tool
@@ -70,6 +71,21 @@ func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 
 	slog.DebugContext(ctx, "registered the handler an advertised tool carries",
 		"service", b.Name(), "function", t.Name)
+}
+
+// toolCallOptions turns the call options a tool carries into registration
+// options. A tool that sets neither registers with the service's own defaults,
+// which is what an advertised tool that says nothing about how it runs should
+// get.
+func toolCallOptions(t frames.Tool) []RegisterOption {
+	var opts []RegisterOption
+	if t.CancelOnInterruption != nil {
+		opts = append(opts, WithCancelOnInterruption(*t.CancelOnInterruption))
+	}
+	if t.TimeoutSecs != nil {
+		opts = append(opts, WithTimeout(time.Duration(*t.TimeoutSecs*float64(time.Second))))
+	}
+	return opts
 }
 
 // dropUnadvertisedToolHandlers removes the handlers that came from a toolset no

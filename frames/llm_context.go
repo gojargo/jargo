@@ -46,6 +46,18 @@ type Tool struct {
 	// service, which is built on this package. Set it to an llm.FunctionCallHandler;
 	// anything else is reported and ignored.
 	Handler any
+	// CancelOnInterruption sets whether a call to this tool is canceled when the
+	// user interrupts. Nil leaves the service's default, which cancels. It is
+	// only read for a tool that carries its own Handler: a handler registered by
+	// hand carries the options its own registration gave it.
+	//
+	// A tool that is not canceled is asynchronous: the conversation continues
+	// without waiting for it, and its result is delivered whenever it arrives.
+	CancelOnInterruption *bool
+	// TimeoutSecs bounds how long a call to this tool may take, overriding the
+	// service-wide bound. Nil leaves the service-wide one. Like
+	// CancelOnInterruption it is only read for a tool that carries a Handler.
+	TimeoutSecs *float64
 }
 
 // AdapterType names the wire format a custom tool is written in. Several
