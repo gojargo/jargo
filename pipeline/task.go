@@ -90,6 +90,12 @@ type Task struct {
 	// turnTrace writes the conversation and turn spans; nil when not tracing.
 	turnTrace *observers.TurnTrace
 
+	// reachedDownstream are the handlers registered after construction, called
+	// for every frame reaching the end of the pipeline alongside the one
+	// TaskParams carries. See OnReachedDownstream.
+	reachedMu         sync.Mutex
+	reachedDownstream []func(frames.Frame)
+
 	startOnce sync.Once
 	startSig  chan struct{}
 	endOnce   sync.Once
@@ -170,6 +176,23 @@ func (t *Task) QueueFrames(fs []frames.Frame) {
 	for _, f := range fs {
 		t.pushQueue.push(f)
 	}
+}
+
+// OnReachedDownstream registers a handler called for every frame that reaches
+// the end of the pipeline, in addition to the one TaskParams carries.
+//
+// It exists because the things that watch the end of the pipeline are usually
+// built after the task is: something that queues frames needs the task to queue
+// them on, so it cannot also have been passed to NewTask. Handlers are called in
+// the order they were registered, on the goroutine the frame arrived on, so a
+// handler that does real work should hand it off rather than block the sink.
+func (t *Task) OnReachedDownstream(fn func(frames.Frame)) {
+	if fn == nil {
+		return
+	}
+	t.reachedMu.Lock()
+	t.reachedDownstream = append(t.reachedDownstream, fn)
+	t.reachedMu.Unlock()
 }
 
 // StopWhenDone schedules the pipeline to stop once all queued frames have been
@@ -373,6 +396,12 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 	}
 	if t.params.OnReachedDownstream != nil {
 		t.params.OnReachedDownstream(f)
+	}
+	t.reachedMu.Lock()
+	handlers := t.reachedDownstream
+	t.reachedMu.Unlock()
+	for _, h := range handlers {
+		h(f)
 	}
 	return nil
 }
