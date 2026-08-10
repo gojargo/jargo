@@ -23,6 +23,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   waited out in full, since a graceful shutdown is meant to flush what is in
   flight.
 
+- **Canceling a run's context shuts the pipeline down in order.** The processors
+  were handed a context derived from the caller's, so canceling it stopped them
+  where they stood: no CancelFrame ever travelled the pipeline, and the services
+  were never told the call had ended, left to their own timeouts to close what
+  they had open. The pipeline is now set up detached from the caller's context,
+  and a context that ends the run drives a real CancelFrame through it first.
+
 - **A wedged processor no longer holds up the whole shutdown.** Cleanup waited
   on a processor's input goroutine without a bound. Canceling its context only
   releases that goroutine between frames, so a processor blocked inside a frame

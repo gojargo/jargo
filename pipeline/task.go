@@ -533,6 +533,36 @@ func (t *Task) isCanceling() bool {
 	return t.canceling
 }
 
+// cancelOnContextEnd shuts the pipeline down after the caller's context ended
+// the run, and returns the frame that did it.
+//
+// The run loop has stopped by now, so nothing is draining the task's queue and
+// the frame goes straight into the pipeline. Everything else about the shutdown
+// is what any other cancellation does: the frame travels the whole pipeline, so
+// each processor stops in its turn and gets to close what it had open, and the
+// wait for it is bounded so a wedged one cannot hold the run open.
+func (t *Task) cancelOnContextEnd(ctx context.Context) frames.Frame {
+	t.mu.Lock()
+	if t.canceling {
+		// Something already canceled and the run loop was on its way out; there
+		// is nothing left to send.
+		t.mu.Unlock()
+		return nil
+	}
+	t.canceling = true
+	t.mu.Unlock()
+
+	slog.Debug("the run's context ended, canceling the pipeline")
+
+	cancelFrame := frames.NewCancelFrame()
+	cancelFrame.Reason = "context canceled"
+	if err := t.pipeline.QueueFrame(ctx, cancelFrame, processor.Downstream); err != nil {
+		return nil
+	}
+	_ = t.waitPipelineEnd(ctx, cancelFrame)
+	return cancelFrame
+}
+
 // HasFinished reports whether the task has finished running.
 func (t *Task) HasFinished() bool {
 	t.mu.Lock()
@@ -554,8 +584,17 @@ func (t *Task) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// The pipeline is set up detached from the caller's context, so canceling
+	// that context does not kill the processors where they stand. Shutting a
+	// pipeline down means sending a CancelFrame through it, and a pipeline whose
+	// processors have already stopped cannot carry one: the services would never
+	// hear that the call ended, and would be left to their own timeouts to close
+	// what they had open. The processors are stopped by the cleanup below
+	// instead, once the frame has been through them.
+	pipeCtx := context.WithoutCancel(ctx)
+
 	t.mu.Lock()
-	t.runCtx = runCtx
+	t.runCtx = pipeCtx
 	t.mu.Unlock()
 
 	// The processors are handed one observer, the proxy, which passes each
@@ -567,12 +606,18 @@ func (t *Task) Run(ctx context.Context) error {
 		Tracing:   t.tracing,
 		Running:   t,
 	}
-	if err := t.pipeline.Setup(runCtx, setup); err != nil {
+	if err := t.pipeline.Setup(pipeCtx, setup); err != nil {
 		return err
 	}
 
 	monCtx := t.monitors.start(runCtx)
 	endFrame, runErr := t.runLoop(monCtx)
+
+	// The caller's context ended the run rather than a frame doing it, so the
+	// pipeline has not been told. Tell it now, on the still-living processors.
+	if runErr != nil && ctx.Err() != nil {
+		endFrame = t.cancelOnContextEnd(pipeCtx)
+	}
 
 	// Stop the monitors before the pipeline is torn down, so none of them is
 	// still pushing frames into processors that are shutting down.

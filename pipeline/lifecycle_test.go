@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -550,5 +551,96 @@ func TestStopFrameLeavesTheProcessorsUp(t *testing.T) {
 				t.Errorf("processor cleanups = %d, want %d", got, tt.wantCleanup)
 			}
 		})
+	}
+}
+
+// frameRecorder records the frames it handles and whether it was cleaned up, so
+// a test can tell an orderly shutdown from processors simply stopping.
+type frameRecorder struct {
+	*processor.Base
+	mu      sync.Mutex
+	seen    []frames.Frame
+	cleaned bool
+}
+
+func newFrameRecorder() *frameRecorder {
+	r := &frameRecorder{}
+	r.Base = processor.New("FrameRecorder", r)
+	return r
+}
+
+func (r *frameRecorder) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := r.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.seen = append(r.seen, f)
+	r.mu.Unlock()
+	return r.PushFrame(ctx, f, dir)
+}
+
+func (r *frameRecorder) Cleanup(ctx context.Context) error {
+	r.mu.Lock()
+	r.cleaned = true
+	r.mu.Unlock()
+	return r.Base.Cleanup(ctx)
+}
+
+func (r *frameRecorder) sawCancel() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, f := range r.seen {
+		if _, ok := f.(*frames.CancelFrame); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *frameRecorder) wasCleaned() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cleaned
+}
+
+// TestCancelingTheContextShutsThePipelineDown checks that ending the run by
+// canceling its context still takes the pipeline down in order: a CancelFrame
+// travels the whole of it, so each processor is told the call is over and can
+// close what it had open, rather than being stopped where it stands and left to
+// its own timeouts.
+func TestCancelingTheContextShutsThePipelineDown(t *testing.T) {
+	rec := newFrameRecorder()
+	startedCh := make(chan struct{})
+	var once sync.Once
+	task := pipeline.NewTask(pipeline.New(rec), pipeline.TaskParams{
+		CancelTimeout:           time.Second,
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.StartFrame{}),
+		OnReachedDownstream:     func(frames.Frame) { once.Do(func() { close(startedCh) }) },
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- task.Run(ctx) }()
+
+	started(t, startedCh)
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run() = %v, want the context's error reported to the caller", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run did not finish after its context was canceled")
+	}
+
+	if !rec.sawCancel() {
+		t.Error("the processor never saw a CancelFrame, so it was stopped rather than told")
+	}
+	if !rec.wasCleaned() {
+		t.Error("the processor was not cleaned up")
+	}
+	if !task.HasFinished() {
+		t.Error("HasFinished() = false, want true")
 	}
 }
