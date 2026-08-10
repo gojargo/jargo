@@ -24,6 +24,7 @@ func runAggregator(t *testing.T, convo *frames.LLMContext) (*pipeline.Task, chan
 	pair := aggregators.New(convo)
 	seen := make(chan frames.Frame, 32)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			select {
 			case seen <- f:

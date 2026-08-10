@@ -38,6 +38,7 @@ func collectTextAggregation(
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
 		EnableMetrics:           metricsEnabled,
 		SendInitialEmptyMetrics: &off,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mf, ok := f.(*frames.MetricsFrame)
 			if !ok {

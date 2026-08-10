@@ -24,6 +24,7 @@ func TestNavigatesAndStripsTags(t *testing.T) {
 		mu.Unlock()
 	}})
 	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()

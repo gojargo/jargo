@@ -243,6 +243,7 @@ func TestWordTimestampsCarryPresentationTimestamps(t *testing.T) {
 	var got []stamped
 	var firstAudio int64 = -1
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -464,6 +465,7 @@ func TestSpeakFrameClosesTheAssistantTurnItOpened(t *testing.T) {
 			}}
 			base := tts.New("FixedTTS", synth)
 			task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+				ReachedDownstreamFilter: pipeline.AnyFrame,
 				OnReachedDownstream: func(f frames.Frame) {
 					if _, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
 						mu.Lock()
@@ -522,6 +524,7 @@ func TestResponseEndFollowsTheWordsItEnds(t *testing.T) {
 	}}
 	base := tts.New("TimedTTS", synth)
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -581,6 +584,7 @@ func TestPushAggregationTimedAfterTheLastWord(t *testing.T) {
 	}}
 	base := tts.New("TimedTTS", synth)
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -634,6 +638,7 @@ func TestPushAggregationUntimedWithoutWordTimestamps(t *testing.T) {
 
 	base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
 				_, has := fr.PTS()
@@ -677,6 +682,7 @@ func TestStartedFrameCarriesAppendToContext(t *testing.T) {
 			var got []bool
 			base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
 			task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+				ReachedDownstreamFilter: pipeline.AnyFrame,
 				OnReachedDownstream: func(f frames.Frame) {
 					if fr, ok := f.(*frames.TTSStartedFrame); ok {
 						mu.Lock()
@@ -730,6 +736,7 @@ func TestWordsCarryingTheirOwnSpacingAssembleWithNone(t *testing.T) {
 	}}
 	base := tts.New("CJKTTS", synth)
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.TTSTextFrame); ok {
 				mu.Lock()

@@ -41,7 +41,7 @@ func runStamped(t *testing.T, configure *bool) []*bool {
 
 	task := pipeline.NewTask(
 		pipeline.New(llm.New("StampLLM", stampGen{})),
-		pipeline.TaskParams{OnReachedDownstream: record},
+		pipeline.TaskParams{ReachedDownstreamFilter: pipeline.AnyFrame, OnReachedDownstream: record},
 	)
 	done := make(chan error, 1)
 	go func() { done <- task.Run(t.Context()) }()

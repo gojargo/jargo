@@ -45,6 +45,7 @@ func runParallel(t *testing.T, pp *pipeline.ParallelPipeline, in []frames.Frame)
 	var mu sync.Mutex
 	var got []frames.Frame
 	task := pipeline.NewTask(pipeline.New(pp), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			got = append(got, f)
@@ -260,6 +261,7 @@ func TestParallelBranchGeneratedLifecycleFrameEscapes(t *testing.T) {
 	sawEnd := make(chan struct{})
 	var once sync.Once
 	task := pipeline.NewTask(pipeline.New(pp), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -395,6 +397,7 @@ func TestParallelHoldsSystemFramesWhileSynchronizing(t *testing.T) {
 	task := pipeline.NewTask(
 		pipeline.New(newInterruptAfterEnd(150*time.Millisecond), pp),
 		pipeline.TaskParams{
+			ReachedDownstreamFilter: pipeline.AnyFrame,
 			OnReachedDownstream: func(f frames.Frame) {
 				if _, ok := f.(*frames.EndFrame); ok {
 					mu.Lock()

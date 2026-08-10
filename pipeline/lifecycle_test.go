@@ -122,6 +122,7 @@ func TestWorkerFramesEndTheRun(t *testing.T) {
 
 			pipe := pipeline.New(newUpstreamOnce(tt.send()))
 			task := pipeline.NewTask(pipe, pipeline.TaskParams{
+				ReachedDownstreamFilter: pipeline.AnyFrame,
 				OnReachedDownstream: func(f frames.Frame) {
 					if tt.wantEnd(f) {
 						mu.Lock()
@@ -156,6 +157,7 @@ func TestCancelWorkerFrameCarriesReason(t *testing.T) {
 
 	pipe := pipeline.New(newUpstreamOnce(cancel))
 	task := pipeline.NewTask(pipe, pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -220,6 +222,7 @@ func TestFlushProbeRoundTrip(t *testing.T) {
 	var startOnce, firstOnce sync.Once
 	pipe := pipeline.New(newPacedEcho())
 	task := pipeline.NewTask(pipe, pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.StartFrame); ok {
 				startOnce.Do(func() { close(up) })
@@ -309,6 +312,7 @@ func TestFlushAfterPipelineEndQueued(t *testing.T) {
 	var once sync.Once
 	spy := newFlushSpy()
 	task := pipeline.NewTask(pipeline.New(spy, newSlowEnd(300*time.Millisecond)), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.StartFrame); ok {
 				once.Do(func() { close(up) })
@@ -437,6 +441,7 @@ func TestCancelTimesOutOnASwallowedFrame(t *testing.T) {
 			finished = f
 			mu.Unlock()
 		},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.StartFrame); ok {
 				close(startedCh)

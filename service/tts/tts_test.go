@@ -37,6 +37,7 @@ func runTTS(t *testing.T, syn *fakeSynth, feed func(task *pipeline.Task)) []stri
 	var seq []string
 	stopped := make(chan struct{}, 4)
 	task := pipeline.NewTask(pipeline.New(tts.New("FakeTTS", syn)), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -122,6 +123,7 @@ func TestSynthesisReportsCharacterUsage(t *testing.T) {
 
 	stopped := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.TTSStoppedFrame); ok {
 				select {

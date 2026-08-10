@@ -72,8 +72,9 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 	var mu sync.Mutex
 	var got []frames.Frame
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		AudioInSampleRate:  24000,
-		AudioOutSampleRate: 24000,
+		AudioInSampleRate:       24000,
+		AudioOutSampleRate:      24000,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			got = append(got, f)

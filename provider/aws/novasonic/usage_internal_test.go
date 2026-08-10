@@ -31,7 +31,8 @@ func runUsage(t *testing.T, ev outputEvent) []frames.LLMTokenUsage {
 	got := make(chan frames.LLMTokenUsage, 4)
 	started := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(s), pipeline.TaskParams{
-		EnableUsageMetrics: true,
+		EnableUsageMetrics:      true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			switch fr := f.(type) {
 			case *frames.TextFrame:

@@ -55,7 +55,10 @@ func runTurns(t *testing.T, cfg turns.Config) (*recorder, *pipeline.Task, chan e
 	t.Helper()
 	rec := newRecorder()
 	agg := aggregators.New(frames.NewLLMContext("test"), aggregators.WithTurns(cfg))
-	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{OnReachedDownstream: rec.onDown})
+	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream:     rec.onDown,
+	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return rec, task, done
@@ -301,6 +304,7 @@ func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
 	var mu sync.Mutex
 	var pred *frames.TurnMetricsData
 	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mf, ok := f.(*frames.MetricsFrame)
 			if !ok {

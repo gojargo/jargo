@@ -15,7 +15,8 @@ func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 	rtviProc := rtvi.NewProcessor()
 	task := pipeline.NewTask(pipeline.New(rtviProc), pipeline.TaskParams{
 		// Events are reported by the observer; the processor only carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers:               []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {

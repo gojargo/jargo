@@ -37,7 +37,8 @@ func TestBasePushesTokenUsageWhenEnabled(t *testing.T) {
 	var got *frames.LLMTokenUsage
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(gen), pipeline.TaskParams{
-		EnableUsageMetrics: true,
+		EnableUsageMetrics:      true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -89,6 +90,7 @@ func TestBaseSkipsTokenUsageWhenDisabled(t *testing.T) {
 	sawMetrics := false
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(gen), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()

@@ -146,8 +146,10 @@ func (c *collector) wait(t *testing.T, what string, cond func() bool) {
 func runService(t *testing.T, svc *stt.StreamService, c *collector) (stop func()) {
 	t.Helper()
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		OnReachedDownstream: c.downstream,
-		OnReachedUpstream:   c.upstream,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream:     c.downstream,
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+		OnReachedUpstream:       c.upstream,
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

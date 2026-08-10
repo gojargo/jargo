@@ -53,6 +53,7 @@ func TestACompletionTimeoutIsReportedAndAnnounced(t *testing.T) {
 	starts, ends := 0, 0
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedUpstreamFilter: pipeline.AnyFrame,
 		OnReachedUpstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.ErrorFrame); ok {
 				mu.Lock()
@@ -60,6 +61,7 @@ func TestACompletionTimeoutIsReportedAndAnnounced(t *testing.T) {
 				mu.Unlock()
 			}
 		},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -122,6 +124,7 @@ func TestAnOrdinaryFailureIsNotAnnouncedAsATimeout(t *testing.T) {
 	var errs []string
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedUpstreamFilter: pipeline.AnyFrame,
 		OnReachedUpstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.ErrorFrame); ok {
 				mu.Lock()
@@ -129,6 +132,7 @@ func TestAnOrdinaryFailureIsNotAnnouncedAsATimeout(t *testing.T) {
 				mu.Unlock()
 			}
 		},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()

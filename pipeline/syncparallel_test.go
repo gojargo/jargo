@@ -61,6 +61,7 @@ func runSyncParallel(t *testing.T, spp *pipeline.SyncParallelPipeline, in []fram
 	var mu sync.Mutex
 	var got []frames.Frame
 	task := pipeline.NewTask(pipeline.New(spp), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			got = append(got, f)

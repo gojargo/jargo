@@ -18,6 +18,7 @@ func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
 
 	triggered := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMContextFrame); ok {
 				select {
@@ -64,6 +65,7 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 
 	triggered := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMContextFrame); ok {
 				select {
@@ -127,6 +129,7 @@ func TestUserAggregatorKeepsTheTranscriptThatEndsTheTurn(t *testing.T) {
 
 	triggered := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMContextFrame); ok {
 				select {
@@ -188,6 +191,7 @@ func TestUserAggregatorDoesNotAnswerATranscriptOutsideATurn(t *testing.T) {
 
 	runs := make(chan struct{}, 4)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMContextFrame); ok {
 				runs <- struct{}{}
@@ -312,6 +316,7 @@ func TestUserAggregatorKeepsTheSpeechThatOpensTheTurn(t *testing.T) {
 
 	triggered := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMContextFrame); ok {
 				select {
@@ -385,6 +390,7 @@ func TestUserAggregatorRunsInferenceBeforeDeferredFinalization(t *testing.T) {
 
 	triggered := make(chan struct{}, 4)
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMContextFrame); ok {
 				select {

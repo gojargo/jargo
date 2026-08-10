@@ -119,6 +119,7 @@ func TestTTSSpeaksThroughThePipeline(t *testing.T) {
 
 	audio := make(chan []byte, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.TTSAudioRawFrame); ok {
 				select {

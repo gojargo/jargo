@@ -135,6 +135,7 @@ func TestEndFrameWaitsForAudioStillInFlight(t *testing.T) {
 	synth := &trailingAsyncSynth{}
 	base := tts.New("EndTTS", synth)
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			got = append(got, f)
@@ -290,6 +291,7 @@ func runOrdering(t *testing.T, synth tts.Synthesizer) []frames.Frame {
 	var got []frames.Frame
 	base := tts.New("OrderingTTS", synth)
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			got = append(got, f)
@@ -344,6 +346,7 @@ func runTurns(t *testing.T, synth tts.Synthesizer, send []frames.Frame) []frames
 	var got []frames.Frame
 	base := tts.New("TurnsTTS", synth)
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			got = append(got, f)
@@ -451,6 +454,7 @@ func TestBoundaryFramesCarryTheirContext(t *testing.T) {
 	var started, stopped []string
 	base := tts.New("ContextTTS", &inlineSynth{})
 	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()

@@ -55,6 +55,7 @@ func TestBaseInputPushesAudioDownstream(t *testing.T) {
 	var got atomic.Int32
 	done := make(chan struct{})
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.InputAudioRawFrame); ok {
 				if got.Add(1) == 3 {
@@ -92,6 +93,7 @@ func TestBaseInputRoutesUpstreamAudioThroughFilter(t *testing.T) {
 
 	got := make(chan []byte, 4)
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(fr frames.Frame) {
 			if af, ok := fr.(*frames.InputAudioRawFrame); ok {
 				got <- af.Audio
@@ -304,6 +306,7 @@ func TestBaseInputAppliesFilter(t *testing.T) {
 	var got atomic.Int32
 	done := make(chan struct{})
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(fr frames.Frame) {
 			af, ok := fr.(*frames.InputAudioRawFrame)
 			if !ok {
@@ -481,11 +484,13 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 	var mu sync.Mutex
 	var down, up []frames.Frame
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			down = append(down, f)
 			mu.Unlock()
 		},
+		ReachedUpstreamFilter: pipeline.AnyFrame,
 		OnReachedUpstream: func(f frames.Frame) {
 			mu.Lock()
 			up = append(up, f)
@@ -656,6 +661,7 @@ func TestBaseOutputKeepsUninterruptibleFramesThroughBargeIn(t *testing.T) {
 
 	seen := make(chan struct{}, 4)
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*uninterruptibleMarkerFrame); ok {
 				seen <- struct{}{}
@@ -730,6 +736,7 @@ func TestBaseOutputOrdersSyncFramesWithAudio(t *testing.T) {
 	var order []string
 	seen := make(chan struct{}, 8)
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			switch f.(type) {
 			case *frames.TTSAudioRawFrame:
@@ -829,6 +836,7 @@ func TestBaseOutputReportsReady(t *testing.T) {
 
 	ready := make(chan struct{}, 4)
 	taskParams := pipeline.TaskParams{
+		ReachedUpstreamFilter: pipeline.AnyFrame,
 		OnReachedUpstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.OutputTransportReadyFrame); ok {
 				ready <- struct{}{}
@@ -1215,6 +1223,7 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 	}
 	wordSeen := make(chan struct{}, 1)
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -1281,6 +1290,7 @@ func TestBaseOutputInterruptionDropsUnplayedWordFrames(t *testing.T) {
 
 	lateSeen := make(chan string, 4)
 	taskParams := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.TTSTextFrame); ok {
 				lateSeen <- fr.Text
@@ -1389,6 +1399,7 @@ func TestBaseOutputDoesNotEscalateSendFailures(t *testing.T) {
 	errs := make(chan string, 8)
 	o := newFailingMessageOutput(params)
 	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+		ReachedUpstreamFilter: pipeline.AnyFrame,
 		OnReachedUpstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.ErrorFrame); ok {
 				select {
@@ -1524,6 +1535,7 @@ func TestBaseOutputDoesNotForwardAudioTheTransportDeclined(t *testing.T) {
 	forwarded := make(chan struct{}, 4)
 	o := newDecliningOutput(params)
 	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.TTSAudioRawFrame); ok {
 				forwarded <- struct{}{}
@@ -1590,6 +1602,7 @@ func TestBaseOutputBargeInDropsAFrameItCutShort(t *testing.T) {
 	forwarded := make(chan struct{}, 4)
 	o := newBlockingSyncFrameOutput(params)
 	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*markerFrame); ok {
 				forwarded <- struct{}{}

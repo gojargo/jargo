@@ -64,8 +64,10 @@ func runCompletion(t *testing.T, f *turns.CompletionFilter) (*cfRecorder, *pipel
 	t.Helper()
 	rec := newCFRecorder()
 	task := pipeline.NewTask(pipeline.New(f), pipeline.TaskParams{
-		OnReachedDownstream: rec.onDown,
-		OnReachedUpstream:   rec.onUp,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream:     rec.onDown,
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+		OnReachedUpstream:       rec.onUp,
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

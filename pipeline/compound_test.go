@@ -144,7 +144,8 @@ func TestTaskSendsInitialEmptyMetrics(t *testing.T) {
 	var mu sync.Mutex
 	var got []*frames.MetricsFrame
 	task := pipeline.NewTask(p, pipeline.TaskParams{
-		EnableMetrics: true,
+		EnableMetrics:           true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if mf, ok := f.(*frames.MetricsFrame); ok {
 				mu.Lock()

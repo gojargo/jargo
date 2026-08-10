@@ -106,7 +106,8 @@ func TestLLMSettingsUpdateRelabelsTheModel(t *testing.T) {
 
 	var reported []string
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableUsageMetrics: true,
+		EnableUsageMetrics:      true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mf, ok := f.(*frames.MetricsFrame)
 			if !ok {

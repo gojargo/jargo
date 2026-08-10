@@ -138,6 +138,7 @@ func TestUserAggregatorDropsInputWhileMuted(t *testing.T) {
 	var mu sync.Mutex
 	var muteStarted, muteStopped int
 	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()

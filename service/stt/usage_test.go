@@ -21,7 +21,8 @@ func collectSTTUsage(t *testing.T, svc processor.Processor, usageMetrics bool) [
 	var got []frames.STTUsageMetricsData
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableUsageMetrics: usageMetrics,
+		EnableUsageMetrics:      usageMetrics,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			switch fr := f.(type) {
 			case *frames.MetricsFrame:

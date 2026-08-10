@@ -86,6 +86,7 @@ func TestStreamServiceEmitsInterimAndFinal(t *testing.T) {
 	var finalized bool
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -142,6 +143,7 @@ func TestSegmentServiceTranscribesBufferedSpeech(t *testing.T) {
 	var captured string
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.TranscriptionFrame); ok {
 				captured = fr.Text
@@ -200,6 +202,7 @@ func TestStreamServiceReportsAudioUsage(t *testing.T) {
 
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.TranscriptionFrame); ok {
 				select {
@@ -346,6 +349,7 @@ func TestStreamServiceMarksTheAnswerToAFinalizeFinal(t *testing.T) {
 	var finalized bool
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			fr, ok := f.(*frames.TranscriptionFrame)
 			if !ok {

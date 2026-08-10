@@ -104,6 +104,7 @@ func TestSTTSegmentTranscribesBufferedSpeech(t *testing.T) {
 
 	transcripts := make(chan string, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.TranscriptionFrame); ok {
 				select {

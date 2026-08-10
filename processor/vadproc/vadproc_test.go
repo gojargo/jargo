@@ -43,6 +43,7 @@ func runVAD(t *testing.T, states []vad.State, nframes int) []string {
 	var mu sync.Mutex
 	var events []string
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -100,6 +101,7 @@ func TestVADAudioIdleForcesSpeechStop(t *testing.T) {
 
 	stopped := make(chan struct{}, 4)
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
 				stopped <- struct{}{}
@@ -133,6 +135,7 @@ func TestVADAudioIdleStaysQuiet(t *testing.T) {
 
 	stopped := make(chan struct{}, 4)
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
 				stopped <- struct{}{}
@@ -162,6 +165,7 @@ func TestVADReportsParamsOnStart(t *testing.T) {
 
 	got := make(chan *frames.SpeechControlParamsFrame, 4)
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
 				got <- sc
@@ -196,6 +200,7 @@ func TestVADParamsUpdateTakesEffect(t *testing.T) {
 
 	got := make(chan *frames.SpeechControlParamsFrame, 8)
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
 				got <- sc

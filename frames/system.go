@@ -77,6 +77,19 @@ type ErrorFrame struct {
 	Err error
 }
 
+// ErrorInfo implements [ErrorReport].
+func (f *ErrorFrame) ErrorInfo() *ErrorFrame { return f }
+
+// ErrorReport is implemented by every frame that reports an error: [ErrorFrame]
+// and the frames embedding it, such as [FatalErrorFrame]. Match on it rather
+// than on [ErrorFrame] itself, which a frame that embeds it does not satisfy, so
+// an error reported by type is not missed.
+type ErrorReport interface {
+	Frame
+	// ErrorInfo returns the error the frame carries.
+	ErrorInfo() *ErrorFrame
+}
+
 // NewErrorFrame builds a non-fatal ErrorFrame describing message.
 func NewErrorFrame(message string) *ErrorFrame {
 	return &ErrorFrame{BaseSystemFrame: NewBaseSystemFrame("ErrorFrame"), Error: message}
@@ -215,7 +228,9 @@ var (
 	_ SystemFrame = (*StartFrame)(nil)
 	_ SystemFrame = (*CancelFrame)(nil)
 	_ SystemFrame = (*ErrorFrame)(nil)
+	_ ErrorReport = (*ErrorFrame)(nil)
 	_ SystemFrame = (*FatalErrorFrame)(nil)
+	_ ErrorReport = (*FatalErrorFrame)(nil)
 	_ SystemFrame = (*InterruptionFrame)(nil)
 	_ SystemFrame = (*FrameProcessorPauseUrgentFrame)(nil)
 	_ SystemFrame = (*FrameProcessorResumeUrgentFrame)(nil)

@@ -35,6 +35,7 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
 		EnableMetrics:           true,
 		SendInitialEmptyMetrics: &noInitial,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mf, ok := f.(*frames.MetricsFrame)
 			if !ok {
@@ -87,6 +88,7 @@ func TestNoMetricsFrameWhenDisabled(t *testing.T) {
 	seen := make(chan struct{}, 1)
 	end := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			switch f.(type) {
 			case *frames.MetricsFrame:

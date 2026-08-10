@@ -27,6 +27,7 @@ func TestGenerationEmitsSpan(t *testing.T) {
 
 	done := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
 				select {

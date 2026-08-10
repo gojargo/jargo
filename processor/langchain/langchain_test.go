@@ -61,8 +61,10 @@ func runChain(t *testing.T, chain langchain.Chain, in ...frames.Frame) *recorder
 	rec := &recorder{}
 	p := langchain.New(chain)
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
-		OnReachedDownstream: rec.down,
-		OnReachedUpstream:   rec.up,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream:     rec.down,
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+		OnReachedUpstream:       rec.up,
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
@@ -240,6 +242,7 @@ func TestOtherFramesPassThrough(t *testing.T) {
 	seen := make(chan struct{}, 1)
 	p := langchain.New(echo)
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.TTSSpeakFrame); ok {
 				select {

@@ -50,6 +50,7 @@ func runCollector(t *testing.T, proc processor.Processor) (*pipeline.Task, <-cha
 	t.Helper()
 	out := make(chan string, 64)
 	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if tf, ok := f.(*frames.TextFrame); ok {
 				select {

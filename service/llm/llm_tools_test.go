@@ -183,6 +183,7 @@ func TestToolHandlerDoesNotBlockFrames(t *testing.T) {
 
 	spoken := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.TTSSpeakFrame); ok {
 				select {
@@ -291,6 +292,7 @@ func TestToolContinuationSeesToolResult(t *testing.T) {
 	var mu sync.Mutex
 	pipe := pipeline.New(svc, newDelayResults(50*time.Millisecond), pair.Assistant())
 	task := pipeline.NewTask(pipe, pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
 				mu.Lock()
@@ -403,6 +405,7 @@ func TestInterruptionCancelsTheCall(t *testing.T) {
 	var mu sync.Mutex
 	var results, cancels int
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -465,6 +468,7 @@ func TestAsyncToolSurvivesInterruption(t *testing.T) {
 
 	result := make(chan string, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
 				select {
@@ -509,6 +513,7 @@ func TestMissingFunctionAnswersTheCall(t *testing.T) {
 
 	result := make(chan string, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
 				select {

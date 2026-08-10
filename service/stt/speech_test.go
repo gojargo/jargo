@@ -22,6 +22,7 @@ func runSpeechResults(t *testing.T, results [][]stt.Result) []string {
 	var mu sync.Mutex
 	var seq []string
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -138,6 +139,7 @@ func TestSpeechBoundaryCanCarryText(t *testing.T) {
 	var mu sync.Mutex
 	var text string
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.TranscriptionFrame); ok {
 				mu.Lock()

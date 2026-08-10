@@ -33,6 +33,7 @@ func newPauseHarness(t *testing.T, opts tts.PauseOptions) *pauseHarness {
 
 	h := &pauseHarness{base: base, runDone: make(chan error, 1)}
 	h.task = pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if tf, ok := f.(*frames.AggregatedTextFrame); ok {
 				h.mu.Lock()
@@ -40,6 +41,7 @@ func newPauseHarness(t *testing.T, opts tts.PauseOptions) *pauseHarness {
 				h.mu.Unlock()
 			}
 		},
+		ReachedUpstreamFilter: pipeline.AnyFrame,
 		OnReachedUpstream: func(f frames.Frame) {
 			if ef, ok := f.(*frames.ErrorFrame); ok {
 				h.mu.Lock()

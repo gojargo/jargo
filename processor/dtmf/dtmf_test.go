@@ -34,6 +34,7 @@ func TestAggregatorFlushesOnTerminator(t *testing.T) {
 	got := make(chan string, 1)
 	agg := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: "digits: "})
 	task := pipeline.NewTask(pipeline.New(agg), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if tf, ok := f.(*frames.TranscriptionFrame); ok {
 				select {

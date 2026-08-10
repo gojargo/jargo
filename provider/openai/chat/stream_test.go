@@ -69,7 +69,8 @@ func reportedUsage(t *testing.T, replies ...string) []frames.LLMTokenUsage {
 	var reported []frames.LLMTokenUsage
 	ends := make(chan struct{}, len(replies))
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableUsageMetrics: true,
+		EnableUsageMetrics:      true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()

@@ -82,6 +82,10 @@ func synthesize(ctx context.Context, ttsService *tts.Base, text string) ([]byte,
 	)
 	done := make(chan struct{})
 	task := pipeline.NewTask(pipeline.New(ttsService), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.FrameTypes(
+			&frames.TTSAudioRawFrame{},
+			&frames.TTSStoppedFrame{},
+		),
 		OnReachedDownstream: func(f frames.Frame) {
 			switch fr := f.(type) {
 			case *frames.TTSAudioRawFrame:

@@ -54,17 +54,33 @@ type TaskParams struct {
 	// EndFrame is not bounded this way, since a graceful shutdown is expected to
 	// flush whatever is in flight however long that takes.
 	CancelTimeout time.Duration
+	// OnPipelineStarted, if set, is called once the StartFrame has traveled the
+	// whole pipeline, meaning every processor is up and the pipeline is ready.
+	OnPipelineStarted func(*frames.StartFrame)
 	// OnPipelineFinished, if set, is called once the pipeline has reached a
 	// terminal state, with the frame that ended it: an EndFrame, a StopFrame or
 	// a CancelFrame. It is called for a CancelFrame even when the frame never
 	// arrived and the wait timed out, so a caller always hears the run end.
 	OnPipelineFinished func(frames.Frame)
-	// OnReachedDownstream, if set, is called for every frame that reaches the
-	// end of the pipeline.
+	// OnPipelineError, if set, is called for every error frame reaching the
+	// start of the pipeline, fatal or not. A fatal one also cancels the task,
+	// after the handler has run.
+	OnPipelineError func(*frames.ErrorFrame)
+	// OnReachedDownstream, if set, is called for the frames reaching the end of
+	// the pipeline that ReachedDownstreamFilter selects.
 	OnReachedDownstream func(frames.Frame)
-	// OnReachedUpstream, if set, is called for every frame that reaches the
-	// start of the pipeline.
+	// OnReachedUpstream, if set, is called for the frames reaching the start of
+	// the pipeline that ReachedUpstreamFilter selects.
 	OnReachedUpstream func(frames.Frame)
+	// ReachedDownstreamFilter selects which frames reaching the end of the
+	// pipeline are reported. Nil selects nothing, so a handler without a filter
+	// is never called; that is the default because a handler on every frame sits
+	// on the path of everything the pipeline does. Use AnyFrame to watch the
+	// whole stream anyway.
+	ReachedDownstreamFilter FrameFilter
+	// ReachedUpstreamFilter selects which frames reaching the start of the
+	// pipeline are reported. Nil selects nothing. See ReachedDownstreamFilter.
+	ReachedUpstreamFilter FrameFilter
 	// Observers watch every frame reaching either end of the pipeline. They are
 	// notified after the OnReached callbacks.
 	Observers []Observer
@@ -110,10 +126,14 @@ type Task struct {
 	turnTrace *observers.TurnTrace
 
 	// reachedDownstream are the handlers registered after construction, called
-	// for every frame reaching the end of the pipeline alongside the one
-	// TaskParams carries. See OnReachedDownstream.
+	// for the frames reaching the end of the pipeline alongside the one
+	// TaskParams carries. See OnReachedDownstream. The filters alongside them
+	// select which frames are reported, and start out as the ones TaskParams
+	// carries.
 	reachedMu         sync.Mutex
 	reachedDownstream []func(frames.Frame)
+	reachedDownFilter FrameFilter
+	reachedUpFilter   FrameFilter
 
 	startOnce sync.Once
 	startSig  chan struct{}
@@ -138,11 +158,13 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 		params.CancelTimeout = defaultCancelTimeout
 	}
 	t := &Task{
-		params:    params,
-		clk:       params.Clock,
-		pushQueue: newFrameQueue(),
-		startSig:  make(chan struct{}),
-		endSig:    make(chan struct{}),
+		params:            params,
+		clk:               params.Clock,
+		pushQueue:         newFrameQueue(),
+		startSig:          make(chan struct{}),
+		endSig:            make(chan struct{}),
+		reachedDownFilter: params.ReachedDownstreamFilter,
+		reachedUpFilter:   params.ReachedUpstreamFilter,
 	}
 	if t.clk == nil {
 		t.clk = clock.NewSystem()
@@ -215,6 +237,74 @@ func (t *Task) OnReachedDownstream(fn func(frames.Frame)) {
 	t.reachedMu.Lock()
 	t.reachedDownstream = append(t.reachedDownstream, fn)
 	t.reachedMu.Unlock()
+}
+
+// SetReachedDownstreamFilter replaces the filter selecting which frames reaching
+// the end of the pipeline are reported.
+func (t *Task) SetReachedDownstreamFilter(f FrameFilter) {
+	t.reachedMu.Lock()
+	t.reachedDownFilter = f
+	t.reachedMu.Unlock()
+}
+
+// SetReachedUpstreamFilter replaces the filter selecting which frames reaching
+// the start of the pipeline are reported.
+func (t *Task) SetReachedUpstreamFilter(f FrameFilter) {
+	t.reachedMu.Lock()
+	t.reachedUpFilter = f
+	t.reachedMu.Unlock()
+}
+
+// AddReachedDownstreamFilter widens the downstream filter to select what f
+// selects as well, so two consumers of the same task can each ask for their own
+// frames without knowing about each other.
+func (t *Task) AddReachedDownstreamFilter(f FrameFilter) {
+	t.reachedMu.Lock()
+	t.reachedDownFilter = Or(t.reachedDownFilter, f)
+	t.reachedMu.Unlock()
+}
+
+// AddReachedUpstreamFilter widens the upstream filter to select what f selects
+// as well. See AddReachedDownstreamFilter.
+func (t *Task) AddReachedUpstreamFilter(f FrameFilter) {
+	t.reachedMu.Lock()
+	t.reachedUpFilter = Or(t.reachedUpFilter, f)
+	t.reachedMu.Unlock()
+}
+
+// notifyReachedDownstream reports a frame reaching the end of the pipeline to
+// the handlers, if the filter selects it. Handlers run in the order they were
+// registered, on the goroutine the frame arrived on.
+func (t *Task) notifyReachedDownstream(f frames.Frame) {
+	t.reachedMu.Lock()
+	filter := t.reachedDownFilter
+	handlers := t.reachedDownstream
+	t.reachedMu.Unlock()
+
+	if !filter.selects(f) {
+		return
+	}
+	if t.params.OnReachedDownstream != nil {
+		t.params.OnReachedDownstream(f)
+	}
+	for _, h := range handlers {
+		h(f)
+	}
+}
+
+// notifyReachedUpstream reports a frame reaching the start of the pipeline, if
+// the filter selects it.
+func (t *Task) notifyReachedUpstream(f frames.Frame) {
+	t.reachedMu.Lock()
+	filter := t.reachedUpFilter
+	t.reachedMu.Unlock()
+
+	if !filter.selects(f) {
+		return
+	}
+	if t.params.OnReachedUpstream != nil {
+		t.params.OnReachedUpstream(f)
+	}
 }
 
 // StopWhenDone schedules the pipeline to stop once all queued frames have been
@@ -446,6 +536,10 @@ func boolValue(p *bool, def bool) bool {
 // sinkPush observes frames reaching the end of the pipeline and signals the
 // lifecycle events the run loop waits on.
 func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
+	// Reported first, so a caller watching the end of the pipeline sees every
+	// frame that gets here, including the ones handled and consumed below.
+	t.notifyReachedDownstream(f)
+
 	// The flush probe reached the sink. Bounce the same instance back upstream so
 	// it returns to the source and the round trip covers both directions.
 	if probe, ok := f.(*frames.PipelineFlushFrame); ok {
@@ -460,8 +554,11 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 		return t.sink.PushFrame(ctx, back, processor.Upstream)
 	}
 
-	switch f.(type) {
+	switch fr := f.(type) {
 	case *frames.StartFrame:
+		if t.params.OnPipelineStarted != nil {
+			t.params.OnPipelineStarted(fr)
+		}
 		t.startOnce.Do(func() { close(t.startSig) })
 	case *frames.EndFrame, *frames.StopFrame:
 		if t.params.OnPipelineFinished != nil {
@@ -473,15 +570,6 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 		// arrive, so the run loop reports it instead, on arrival or on timeout.
 		t.endOnce.Do(func() { close(t.endSig) })
 	}
-	if t.params.OnReachedDownstream != nil {
-		t.params.OnReachedDownstream(f)
-	}
-	t.reachedMu.Lock()
-	handlers := t.reachedDownstream
-	t.reachedMu.Unlock()
-	for _, h := range handlers {
-		h(f)
-	}
 	return nil
 }
 
@@ -489,15 +577,15 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 // worker frames a processor pushed upstream into the corresponding pipeline-wide
 // frame. A fatal error cancels the pipeline.
 func (t *Task) sourcePush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
+	// Reported first, so a caller watching the start of the pipeline sees every
+	// frame that gets here, including the ones handled and consumed below.
+	t.notifyReachedUpstream(f)
+
 	// The flush probe completed its round trip: everything queued ahead of it has
 	// been processed, so release whoever is waiting on it.
 	if probe, ok := f.(*frames.PipelineFlushFrame); ok {
 		probe.CloseDone()
 		return nil
-	}
-
-	if ef, ok := f.(*frames.ErrorFrame); ok && ef.Fatal {
-		t.Cancel()
 	}
 
 	switch fr := f.(type) {
@@ -519,9 +607,19 @@ func (t *Task) sourcePush(ctx context.Context, f frames.Frame, _ processor.Direc
 		if err := t.pipeline.QueueFrame(ctx, frames.NewInterruptionFrame(), processor.Downstream); err != nil {
 			return err
 		}
-	}
-	if t.params.OnReachedUpstream != nil {
-		t.params.OnReachedUpstream(f)
+	case frames.ErrorReport:
+		// Matched by interface, so a frame reporting an unrecoverable failure by
+		// type is caught alongside a plain error frame carrying the flag.
+		ef := fr.ErrorInfo()
+		if t.params.OnPipelineError != nil {
+			t.params.OnPipelineError(ef)
+		}
+		if ef.Fatal {
+			slog.Error("fatal error reached the start of the pipeline, canceling", "err", ef.Error)
+			t.Cancel()
+		} else {
+			slog.Warn("error reached the start of the pipeline", "err", ef.Error)
+		}
 	}
 	return nil
 }

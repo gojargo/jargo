@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
 )
 
 // The built-in action types.
@@ -56,9 +57,11 @@ func NewActionFinishedFrame() *ActionFinishedFrame {
 
 // Watcher reports frames that reach the end of the pipeline. *pipeline.Task
 // satisfies it. The action manager uses it to learn when its actions have
-// finished and when the assistant's turn is over.
+// finished and when the assistant's turn is over, and says which frames it
+// wants to hear about.
 type Watcher interface {
 	OnReachedDownstream(fn func(frames.Frame))
+	SetReachedDownstreamFilter(f pipeline.FrameFilter)
 }
 
 // actionManager registers and runs a flow's actions.
@@ -99,6 +102,11 @@ func newActionManager(enq Enqueuer, watch Watcher, fm *FlowManager) *actionManag
 	_ = am.register(actionFunction, am.handleFunction)
 
 	if watch != nil {
+		watch.SetReachedDownstreamFilter(pipeline.FrameTypes(
+			&ActionFinishedFrame{},
+			&FunctionActionFrame{},
+			&frames.BotStoppedSpeakingFrame{},
+		))
 		watch.OnReachedDownstream(am.frameReachedDownstream)
 	}
 	return am

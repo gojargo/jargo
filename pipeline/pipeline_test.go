@@ -35,6 +35,7 @@ func TestTaskEchoEndToEnd(t *testing.T) {
 	var mu sync.Mutex
 	var texts []string
 	params := pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if tf, ok := f.(*frames.TextFrame); ok {
 				mu.Lock()

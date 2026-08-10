@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
@@ -28,6 +29,7 @@ type fakeEnq struct {
 	mu       sync.Mutex
 	queued   []frames.Frame
 	watchers []func(frames.Frame)
+	filter   pipeline.FrameFilter
 }
 
 func (e *fakeEnq) QueueFrame(f frames.Frame) {
@@ -35,7 +37,12 @@ func (e *fakeEnq) QueueFrame(f frames.Frame) {
 	e.queued = append(e.queued, f)
 	watchers := make([]func(frames.Frame), len(e.watchers))
 	copy(watchers, e.watchers)
+	filter := e.filter
 	e.mu.Unlock()
+	// Report the frame the way the task does, to the watchers that asked for it.
+	if filter == nil || !filter(f) {
+		return
+	}
 	for _, w := range watchers {
 		w(f)
 	}
@@ -50,6 +57,12 @@ func (e *fakeEnq) QueueFrames(fs []frames.Frame) {
 func (e *fakeEnq) OnReachedDownstream(fn func(frames.Frame)) {
 	e.mu.Lock()
 	e.watchers = append(e.watchers, fn)
+	e.mu.Unlock()
+}
+
+func (e *fakeEnq) SetReachedDownstreamFilter(f pipeline.FrameFilter) {
+	e.mu.Lock()
+	e.filter = f
 	e.mu.Unlock()
 }
 

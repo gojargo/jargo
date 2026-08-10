@@ -56,6 +56,7 @@ func newMeasuredTask(svc processor.Processor, w *ttfbWatcher) *pipeline.Task {
 	return pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
 		EnableMetrics:           true,
 		SendInitialEmptyMetrics: &no,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream:     w.observe,
 	})
 }
@@ -156,6 +157,7 @@ func TestStreamServiceReportsTheWorkItDid(t *testing.T) {
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
 		EnableMetrics:           true,
 		SendInitialEmptyMetrics: &no,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream:     w.observe,
 	})
 
@@ -228,6 +230,7 @@ func TestStreamServiceReportsOnlyTheInitialTTFBWhenAsked(t *testing.T) {
 		EnableMetrics:           true,
 		SendInitialEmptyMetrics: &no,
 		ReportOnlyInitialTTFB:   true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream:     w.observe,
 	})
 

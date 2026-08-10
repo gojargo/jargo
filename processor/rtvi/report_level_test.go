@@ -18,7 +18,8 @@ func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.F
 	out := make(chan rtvi.Message, 16)
 	proc := rtvi.NewProcessor()
 	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
-		Observers: []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
+		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {

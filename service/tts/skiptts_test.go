@@ -46,7 +46,7 @@ func runResponse(t *testing.T, skipStamp *bool) (spoken []string, reached []fram
 	var got []frames.Frame
 	task := pipeline.NewTask(
 		pipeline.New(tts.New("SkipTTS", synth)),
-		pipeline.TaskParams{OnReachedDownstream: func(f frames.Frame) {
+		pipeline.TaskParams{ReachedDownstreamFilter: pipeline.AnyFrame, OnReachedDownstream: func(f frames.Frame) {
 			mu.Lock()
 			got = append(got, f)
 			mu.Unlock()

@@ -56,7 +56,8 @@ func TestProcessorHandshakeAndTranscript(t *testing.T) {
 	proc := rtvi.NewProcessor()
 	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
 		// Events are reported by the observer; the processor only carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
+		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
@@ -108,7 +109,8 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	}
 	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
 		// Events are reported by the observer; the processor only carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
+		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
@@ -186,6 +188,7 @@ func TestProcessorSendTextInjectsUserTurn(t *testing.T) {
 
 	got := make(chan *frames.LLMContextFrame, 1)
 	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor(), pair.User()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if cf, ok := f.(*frames.LLMContextFrame); ok {
 				select {
@@ -247,7 +250,8 @@ func TestTranscriptIsReportedThoughTheAggregatorConsumesIt(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)
 	task := pipeline.NewTask(pipeline.New(proc, pair.User()), pipeline.TaskParams{
-		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
+		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if fr, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := fr.Message.(rtvi.Message); ok {

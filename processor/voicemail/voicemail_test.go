@@ -28,6 +28,7 @@ func run(t *testing.T, cfg voicemail.Config) *harness {
 	h := &harness{done: make(chan error, 1)}
 	p := voicemail.New(cfg)
 	h.task = pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if tf, ok := f.(*frames.LLMTextFrame); ok {
 				h.mu.Lock()
@@ -235,6 +236,7 @@ func TestNonTextFramesPassThrough(t *testing.T) {
 	got := make(chan struct{}, 1)
 	p := voicemail.New(voicemail.Config{})
 	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.TTSSpeakFrame); ok {
 				select {
