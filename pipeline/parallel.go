@@ -61,6 +61,19 @@ type bufferedFrame struct {
 // NewParallel builds a ParallelPipeline from one or more branches, each a list of
 // processors connected in order. It returns an error if no branch is given.
 func NewParallel(branches ...[]processor.Processor) (*ParallelPipeline, error) {
+	return newParallelAs(nil, "ParallelPipeline", branches...)
+}
+
+// newParallelAs builds a ParallelPipeline on behalf of self, the processor
+// embedding it, under the given name. A nil self means the parallel pipeline is
+// the outermost processor and stands for itself.
+//
+// Naming the outer value matters because the frames a branch produces leave
+// through it: an embedding type overrides PushFrame to decide what escapes, and
+// the pushes below go through Self so that override is honored.
+func newParallelAs(
+	self processor.Processor, name string, branches ...[]processor.Processor,
+) (*ParallelPipeline, error) {
 	if len(branches) == 0 {
 		return nil, errNoBranches
 	}
@@ -68,9 +81,12 @@ func NewParallel(branches ...[]processor.Processor) (*ParallelPipeline, error) {
 		seen:    map[uint64]struct{}{},
 		counter: map[uint64]int{},
 	}
+	if self == nil {
+		self = p
+	}
 	// Not direct mode: the synchronization pauses frame handling, which needs the
 	// processor's queues.
-	p.Base = processor.New("ParallelPipeline", p)
+	p.Base = processor.New(name, self)
 	for i, procs := range branches {
 		// A source and sink bracket each branch so the parallel pipeline controls
 		// the frames pushed out of it: the source handles upstream frames, the
@@ -125,7 +141,7 @@ func (p *ParallelPipeline) emit(ctx context.Context, f frames.Frame, dir process
 		return nil
 	}
 	p.mu.Unlock()
-	return p.PushFrame(ctx, f, dir)
+	return p.Self().PushFrame(ctx, f, dir)
 }
 
 // sinkPush is the branch sinks' downstream handler. Lifecycle frames decrement
@@ -186,7 +202,7 @@ func (p *ParallelPipeline) emitSynchronized(ctx context.Context, f frames.Frame,
 	}
 	p.seen[f.ID()] = struct{}{}
 	p.mu.Unlock()
-	return p.PushFrame(ctx, f, dir)
+	return p.Self().PushFrame(ctx, f, dir)
 }
 
 // flushBuffered pushes out the frames held back while a lifecycle frame was
@@ -205,7 +221,7 @@ func (p *ParallelPipeline) flushBuffered(ctx context.Context) {
 		p.buffered = p.buffered[1:]
 		p.mu.Unlock()
 
-		_ = p.PushFrame(ctx, bf.frame, bf.dir)
+		_ = p.Self().PushFrame(ctx, bf.frame, bf.dir)
 	}
 }
 

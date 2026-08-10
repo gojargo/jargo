@@ -478,6 +478,16 @@ func (b *Base) BeginTTFB() bool {
 // the StartFrame. It is valid once the processor has received its StartFrame.
 func (b *Base) UsageMetricsEnabled() bool { return b.usageMetricsEnabled }
 
+// Self is the processor this base belongs to: the concrete value passed to New,
+// or the base itself when none was.
+//
+// Push through it, rather than through the embedded base, whenever a frame
+// leaving a processor should go through whatever the outer type does on its way
+// out. A type embedding another processor overrides PushFrame to inspect,
+// rewrite or drop what leaves it, and a push made on the inner value would go
+// straight past that.
+func (b *Base) Self() Processor { return b.self }
+
 // PushFrame implements Processor. It forwards a frame to the neighbor in dir.
 // Frames pushed before the processor has received its StartFrame are dropped.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir Direction) error {
@@ -529,10 +539,10 @@ func (b *Base) Broadcast(ctx context.Context, build func() frames.Frame) error {
 	down.Base().SetBroadcastSiblingID(up.ID())
 	up.Base().SetBroadcastSiblingID(down.ID())
 
-	if err := b.PushFrame(ctx, down, Downstream); err != nil {
+	if err := b.self.PushFrame(ctx, down, Downstream); err != nil {
 		return err
 	}
-	return b.PushFrame(ctx, up, Upstream)
+	return b.self.PushFrame(ctx, up, Upstream)
 }
 
 // PushTokenUsage reports LLM token usage measured by a service that does not run
@@ -556,7 +566,7 @@ func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTok
 		BaseMetricsData: frames.BaseMetricsData{Processor: b.name, Model: model},
 		Value:           u,
 	})
-	return b.PushFrame(ctx, f, Downstream)
+	return b.self.PushFrame(ctx, f, Downstream)
 }
 
 // PushError builds an ErrorFrame for msg and pushes it upstream.
@@ -566,7 +576,7 @@ func (b *Base) PushError(ctx context.Context, msg string, err error, fatal bool)
 	ef.Err = err
 	ef.Source = b.self
 	slog.Error("processor error", "processor", b.name, "msg", msg, "err", err, "fatal", fatal)
-	_ = b.PushFrame(ctx, ef, Upstream)
+	_ = b.self.PushFrame(ctx, ef, Upstream)
 }
 
 func (b *Base) start() {
