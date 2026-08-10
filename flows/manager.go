@@ -412,15 +412,15 @@ func (fm *FlowManager) transitionFunc(fn NodeFunction) llm.FunctionCallHandler {
 			return params.Result(ctx, fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()), nil)
 		}
 
-		switch {
-		case next == NoResponse:
+		switch next {
+		case NoResponse:
 			// The function has already said its piece. The result still reaches the
 			// conversation, so the model knows what happened when the user speaks
 			// next, but nothing is generated from it.
 			stay := false
 			return params.Result(ctx, result, &frames.FunctionCallResultProperties{RunLLM: &stay})
 
-		case next == nil:
+		case nil:
 			// A node function: stay here and answer from the result.
 			run := true
 			return params.Result(ctx, result, &frames.FunctionCallResultProperties{RunLLM: &run})

@@ -14,6 +14,13 @@ import (
 	"github.com/gojargo/jargo/service/settings"
 )
 
+// Failures the fakes below are told to return, so a test can assert on what the
+// manager does with a handler or an inference that did not work.
+var (
+	errTestHandler   = errors.New("kaboom")
+	errTestInference = errors.New("no")
+)
+
 // fakeEnq records the frames a FlowManager queues and, like the pipeline,
 // reports each one as having reached the end so the actions waiting on them do
 // not hang.
@@ -242,7 +249,7 @@ func TestSetNodeQueuesPersonaObjectiveAndTools(t *testing.T) {
 	fs := enq.frames()
 
 	// The persona is the LLM service's system instruction, not something said.
-	var settingsIdx, appendIdx, toolsIdx, runIdx = -1, -1, -1, -1
+	settingsIdx, appendIdx, toolsIdx, runIdx := -1, -1, -1, -1
 	for i, f := range fs {
 		switch fr := f.(type) {
 		case *frames.LLMUpdateSettingsFrame:
@@ -572,7 +579,7 @@ func TestTransitionRunsOnlyOnce(t *testing.T) {
 func TestFailingHandlerAnswersTheModel(t *testing.T) {
 	fm, enq := newManager(t)
 	boom := func(_ context.Context, _ json.RawMessage, _ *FlowManager) (string, *NodeConfig, error) {
-		return "", nil, errors.New("kaboom")
+		return "", nil, errTestHandler
 	}
 	if err := fm.Initialize(context.Background(), node("first",
 		NodeFunction{Name: "boom", Handler: boom})); err != nil {
@@ -717,7 +724,7 @@ func TestResetWithSummaryPutsTheSummaryFirst(t *testing.T) {
 }
 
 func TestSummaryFailureFallsBackToAppending(t *testing.T) {
-	inf := &fakeInferencer{err: errors.New("no")}
+	inf := &fakeInferencer{err: errTestInference}
 	strategy := ContextStrategyConfig{
 		Strategy: ContextStrategyResetWithSummary, SummaryPrompt: "Summarize",
 	}
@@ -801,7 +808,7 @@ func TestEndConversationSpeaksThenEnds(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	var speakIdx, endIdx = -1, -1
+	speakIdx, endIdx := -1, -1
 	for i, f := range enq.frames() {
 		switch f.(type) {
 		case *frames.TTSSpeakFrame:

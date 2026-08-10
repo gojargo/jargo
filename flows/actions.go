@@ -92,9 +92,11 @@ func newActionManager(enq Enqueuer, watch Watcher, fm *FlowManager) *actionManag
 	}
 	am.cond = sync.NewCond(&am.mu)
 
-	am.register(actionTTSSay, am.handleTTSSay)
-	am.register(actionEndConversation, am.handleEndConversation)
-	am.register(actionFunction, am.handleFunction)
+	// register only fails on a nil handler, and these three are method values
+	// on am, so none of them can be.
+	_ = am.register(actionTTSSay, am.handleTTSSay)
+	_ = am.register(actionEndConversation, am.handleEndConversation)
+	_ = am.register(actionFunction, am.handleFunction)
 
 	if watch != nil {
 		watch.OnReachedDownstream(am.frameReachedDownstream)
