@@ -19,6 +19,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/telemetry/metrics"
@@ -211,7 +212,7 @@ type Describer interface {
 // gap, which is why the reconnect is immediate rather than waiting for the next
 // utterance.
 type StreamService struct {
-	*processor.Base
+	*service.Base
 	conn    Connector
 	cfgRate int
 	model   string
@@ -301,10 +302,10 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 		}
 	}
 	s.canReopen = true
-	s.Base = processor.New(name, s)
+	s.Base = service.New(name, s)
 	s.ws = wsservice.New(s, wsservice.Config{})
-	s.ttfb = newTTFBTracker(s.Base, s.modelName)
-	s.work = newProcessingMeter(s.Base, s.modelName)
+	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
+	s.work = newProcessingMeter(s.Base.Base, s.modelName)
 	return s
 }
 
@@ -332,7 +333,6 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		if err := s.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		s.broadcastMetadata(ctx)
 		s.sampleRate = s.cfgRate
 		if s.sampleRate == 0 {
 			s.sampleRate = fr.AudioInSampleRate
@@ -408,9 +408,10 @@ func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir proce
 	return err
 }
 
-// broadcastMetadata pushes the STT service's metadata frame downstream at
-// pipeline start, enriched from the Connector when it implements Describer.
-func (s *StreamService) broadcastMetadata(ctx context.Context) {
+// ServiceMetadataFrame implements service.MetadataDescriber, describing this
+// transcriber to the rest of the pipeline, enriched from the Connector when it
+// implements Describer.
+func (s *StreamService) ServiceMetadataFrame() frames.ServiceMetadata {
 	mf := frames.NewSTTMetadataFrame(0)
 	mf.ServiceName = s.Name()
 	if d, ok := s.conn.(Describer); ok {
@@ -418,7 +419,7 @@ func (s *StreamService) broadcastMetadata(ctx context.Context) {
 		mf.UserTurns = m.RecommendedUserTurns
 		mf.TTFSP99Latency = m.TTFSP99
 	}
-	_ = s.PushFrame(ctx, mf, processor.Downstream)
+	return mf
 }
 
 // connect opens the session and starts the read loop that owns it from here on.

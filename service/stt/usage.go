@@ -28,10 +28,10 @@ func pushUsageMetrics(ctx context.Context, p *processor.Base, model string, audi
 
 // pushUsageMetrics reports the audio this service was given.
 func (s *StreamService) pushUsageMetrics(ctx context.Context, audio time.Duration) {
-	pushUsageMetrics(ctx, s.Base, s.model, audio)
+	pushUsageMetrics(ctx, s.Base.Base, s.model, audio)
 }
 
 // pushUsageMetrics reports the audio this service was given.
 func (s *SegmentService) pushUsageMetrics(ctx context.Context, audio time.Duration) {
-	pushUsageMetrics(ctx, s.Base, s.model, audio)
+	pushUsageMetrics(ctx, s.Base.Base, s.model, audio)
 }

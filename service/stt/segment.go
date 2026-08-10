@@ -7,6 +7,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	"go.opentelemetry.io/otel/attribute"
@@ -23,7 +24,7 @@ type Transcriber interface {
 // Transcriber. It requires a turn detector upstream (turntaking.Detector) to
 // delimit segments; without those frames it never transcribes.
 type SegmentService struct {
-	*processor.Base
+	*service.Base
 	tr      Transcriber
 	cfgRate int
 	model   string
@@ -45,9 +46,9 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 	if d, ok := tr.(Describer); ok {
 		s.model = d.Metadata().Model
 	}
-	s.Base = processor.New(name, s)
-	s.ttfb = newTTFBTracker(s.Base, func() string { return s.model })
-	s.work = newProcessingMeter(s.Base, func() string { return s.model })
+	s.Base = service.New(name, s)
+	s.ttfb = newTTFBTracker(s.Base.Base, func() string { return s.model })
+	s.work = newProcessingMeter(s.Base.Base, func() string { return s.model })
 	return s
 }
 
@@ -70,7 +71,6 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		if err := s.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		s.broadcastMetadata(ctx)
 		return nil
 	case *frames.UserStartedSpeakingFrame:
 		s.mu.Lock()
@@ -116,9 +116,10 @@ func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir proc
 	return s.Base.PushFrame(ctx, f, dir)
 }
 
-// broadcastMetadata pushes the STT service's metadata frame downstream at
-// pipeline start, enriched from the Transcriber when it implements Describer.
-func (s *SegmentService) broadcastMetadata(ctx context.Context) {
+// ServiceMetadataFrame implements service.MetadataDescriber, describing this
+// transcriber to the rest of the pipeline, enriched from the Transcriber when it
+// implements Describer.
+func (s *SegmentService) ServiceMetadataFrame() frames.ServiceMetadata {
 	mf := frames.NewSTTMetadataFrame(0)
 	mf.ServiceName = s.Name()
 	if d, ok := s.tr.(Describer); ok {
@@ -126,7 +127,7 @@ func (s *SegmentService) broadcastMetadata(ctx context.Context) {
 		mf.UserTurns = m.RecommendedUserTurns
 		mf.TTFSP99Latency = m.TTFSP99
 	}
-	_ = s.PushFrame(ctx, mf, processor.Downstream)
+	return mf
 }
 
 // Cleanup waits for any in-flight transcription before tearing down.

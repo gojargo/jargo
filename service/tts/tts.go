@@ -27,6 +27,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	uctx "github.com/gojargo/jargo/utils/context"
@@ -189,7 +190,7 @@ type Starter interface {
 // synthesizes each one, and routes the audio through an audio context so it
 // reaches the pipeline in the order it was generated. See audiocontext.go.
 type Base struct {
-	*processor.Base
+	*service.Base
 	syn     Synthesizer
 	meta    Metadata
 	filters []ttstext.Filter
@@ -284,7 +285,7 @@ func New(name string, syn Synthesizer) *Base {
 	if d, ok := syn.(Describer); ok {
 		b.meta = d.Metadata()
 	}
-	b.Base = processor.New(name, b)
+	b.Base = service.New(name, b)
 	if cs, ok := syn.(ContextSynthesizer); ok {
 		cs.SetAudioContextHost(b)
 	}
@@ -691,7 +692,6 @@ func (b *Base) handleStart(ctx context.Context, f frames.Frame, dir processor.Di
 		return err
 	}
 	b.startAudioContexts(ctx)
-	b.broadcastMetadata(ctx)
 	if st, ok := b.syn.(Starter); ok {
 		// Detached: the setup outlives this frame, and a turn canceled by an
 		// interruption must not abandon a connection half-dialed.
@@ -981,10 +981,10 @@ func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processi
 	_ = b.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
 }
 
-// broadcastMetadata pushes the TTS service's metadata frame downstream at
-// pipeline start so downstream processors can discover the service.
-func (b *Base) broadcastMetadata(ctx context.Context) {
-	_ = b.PushFrame(ctx, frames.NewServiceMetadataFrame(b.Name()), processor.Downstream)
+// ServiceMetadataFrame implements service.MetadataDescriber, describing this
+// synthesizer to the rest of the pipeline.
+func (b *Base) ServiceMetadataFrame() frames.ServiceMetadata {
+	return frames.NewServiceMetadataFrame(b.Name())
 }
 
 // ttfaMeter measures a synthesis's time-to-first-byte and time-to-first-audible

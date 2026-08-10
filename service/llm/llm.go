@@ -27,6 +27,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
@@ -289,7 +290,7 @@ type SettingsUpdater interface {
 // frames. When the context carries tools and the generator supports them, it
 // runs the tool loop instead.
 type Base struct {
-	*processor.Base
+	*service.Base
 	gen Generator
 
 	// modelMu guards model, which labels the metrics and can change mid-call.
@@ -376,7 +377,7 @@ func New(name string, gen Generator, opts ...Option) *Base {
 	for _, opt := range opts {
 		opt(b)
 	}
-	b.Base = processor.New(name, b)
+	b.Base = service.New(name, b)
 	return b
 }
 
@@ -831,7 +832,6 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		if err := b.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		b.broadcastMetadata(ctx)
 		return nil
 	case *frames.LLMConfigureOutputFrame:
 		b.setSkipTTS(fr.SkipTTS)
@@ -890,10 +890,10 @@ func (b *Base) currentSkipTTS() (bool, bool) {
 	return *b.skipTTS, true
 }
 
-// broadcastMetadata pushes the LLM service's metadata frame downstream at
-// pipeline start so downstream processors can discover the service.
-func (b *Base) broadcastMetadata(ctx context.Context) {
-	_ = b.PushFrame(ctx, frames.NewLLMServiceMetadataFrame(b.Name()), processor.Downstream)
+// ServiceMetadataFrame implements service.MetadataDescriber, describing this
+// language model service to the rest of the pipeline.
+func (b *Base) ServiceMetadataFrame() frames.ServiceMetadata {
+	return frames.NewLLMServiceMetadataFrame(b.Name())
 }
 
 // run streams a response for the conversation, choosing the tool loop when the
