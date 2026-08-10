@@ -314,11 +314,35 @@ func (b *Base) Setup(ctx context.Context, s Setup) error {
 // Cleanup implements Processor. It stops the process and input goroutines.
 func (b *Base) Cleanup(ctx context.Context) error {
 	b.cancelProcessTask()
+	b.cancelInputTask()
+	return nil
+}
+
+// cancelInputTask cancels the input goroutine and waits for it to exit, bounded
+// by processCancelTimeout.
+//
+// The bound is what keeps one stuck processor from holding up the whole
+// shutdown. Canceling the context only unblocks the loop between frames: a
+// system frame is handled on this goroutine, so a ProcessFrame that blocks
+// leaves the loop inside the call, where cancellation cannot reach it. Waiting
+// for it without a bound would hang teardown for good.
+func (b *Base) cancelInputTask() {
 	if b.baseCancel != nil {
 		b.baseCancel()
 	}
-	b.inputWG.Wait()
-	return nil
+	if b.directMode {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		b.inputWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(processCancelTimeout):
+		slog.Warn("timed out canceling input goroutine", "processor", b.name)
+	}
 }
 
 // QueueFrame implements Processor.
