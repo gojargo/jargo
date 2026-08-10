@@ -17,7 +17,10 @@ import (
 const acknowledged = `{"status": "acknowledged"}`
 
 //nolint:gochecknoglobals // sentinel error
-var errNilNode = errors.New("flows: initial node is nil")
+var errNilNode = errors.New("flows: node is nil")
+
+//nolint:gochecknoglobals // sentinel error
+var errNotInitialized = errors.New("flows: manager must be initialized first")
 
 //nolint:gochecknoglobals // sentinel error
 var errFuncNoName = errors.New("flows: function has an empty name")
@@ -97,6 +100,32 @@ func (fm *FlowManager) Initialize(ctx context.Context, node *NodeConfig) error {
 	if node == nil {
 		return errNilNode
 	}
+	return fm.enter(ctx, node)
+}
+
+// SetNode transitions the flow to node, and unless the node waits for the user,
+// triggers a response from it. Enter the flow with Initialize before calling it.
+//
+// It is the manual transition, for a caller that is not part of the graph: a
+// processor moving the conversation on something the model was never asked
+// about. A node function transitions by returning the next node instead, which
+// keeps the move on the tool loop that made it.
+func (fm *FlowManager) SetNode(ctx context.Context, node *NodeConfig) error {
+	if node == nil {
+		return errNilNode
+	}
+	fm.mu.Lock()
+	entered := fm.current != nil
+	fm.mu.Unlock()
+	if !entered {
+		return errNotInitialized
+	}
+	return fm.enter(ctx, node)
+}
+
+// enter makes node current and, unless it waits for the user, asks the assistant
+// to respond from it.
+func (fm *FlowManager) enter(ctx context.Context, node *NodeConfig) error {
 	if err := fm.setNode(ctx, node); err != nil {
 		return err
 	}

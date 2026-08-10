@@ -1,7 +1,8 @@
 // Package flows builds structured, multi-step conversations on top of jargo's
 // LLM service. A conversation is a graph of nodes; each node sets the
 // assistant's task and the tools it may call, and a tool whose handler returns
-// the next node moves the conversation on.
+// the next node moves the conversation on. A caller outside the graph moves it
+// with SetNode, for a transition the conversation never asked for.
 //
 // A FlowManager sits beside the pipeline rather than in it. It shares the LLM
 // service and the conversation context with the pipeline and steers the

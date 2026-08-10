@@ -3,6 +3,7 @@ package flows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -227,5 +228,82 @@ func TestNoResponseKeepsNodeAndStopsTurn(t *testing.T) {
 	// The sentinel is not a node: it must not be entered.
 	if fm.CurrentNode() != "first" {
 		t.Errorf("CurrentNode = %q, want first (no transition)", fm.CurrentNode())
+	}
+}
+
+func TestSetNodeTransitionsFromOutsideTheGraph(t *testing.T) {
+	fm, fake, enq, convo := newManager(t)
+	start := &NodeConfig{Name: "first", Functions: []NodeFunction{{Name: "stay", Handler: stay}}}
+	if err := fm.Initialize(context.Background(), start); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	enq.queued = nil
+
+	next := &NodeConfig{
+		Name:        "second",
+		RoleMessage: "second persona",
+		Functions:   []NodeFunction{{Name: "other", Handler: stay}},
+	}
+	if err := fm.SetNode(context.Background(), next); err != nil {
+		t.Fatalf("SetNode: %v", err)
+	}
+
+	if fm.CurrentNode() != "second" {
+		t.Errorf("CurrentNode = %q, want second", fm.CurrentNode())
+	}
+	if convo.System() != "second persona" {
+		t.Errorf("System = %q, want 'second persona'", convo.System())
+	}
+	if tools := convo.Tools(); len(tools) != 1 || tools[0].Name != "other" {
+		t.Errorf("tools = %+v, want [other]", tools)
+	}
+	if _, ok := fake.funcs["other"]; !ok {
+		t.Error("handler other was not registered")
+	}
+	// No tool loop is running behind a manual transition, so the node is asked to
+	// respond here the way Initialize asks the opening one.
+	if len(enq.queued) != 1 {
+		t.Fatalf("queued %d frames, want 1 (LLMRunFrame)", len(enq.queued))
+	}
+	if _, ok := enq.queued[0].(*frames.LLMRunFrame); !ok {
+		t.Errorf("queued frame = %T, want *frames.LLMRunFrame", enq.queued[0])
+	}
+}
+
+func TestSetNodeToWaitNodeDoesNotTriggerRun(t *testing.T) {
+	fm, _, enq, _ := newManager(t)
+	if err := fm.Initialize(context.Background(), &NodeConfig{Name: "first"}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	enq.queued = nil
+
+	if err := fm.SetNode(context.Background(), &NodeConfig{Name: "wait", RespondImmediately: new(false)}); err != nil {
+		t.Fatalf("SetNode: %v", err)
+	}
+	if len(enq.queued) != 0 {
+		t.Errorf("queued %d frames, want 0", len(enq.queued))
+	}
+}
+
+func TestSetNodeRejectsBeforeInitializeAndOnNil(t *testing.T) {
+	fm, _, enq, _ := newManager(t)
+	if err := fm.SetNode(context.Background(), &NodeConfig{Name: "second"}); !errors.Is(err, errNotInitialized) {
+		t.Errorf("SetNode before Initialize = %v, want errNotInitialized", err)
+	}
+	if err := fm.Initialize(context.Background(), &NodeConfig{Name: "first"}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	enq.queued = nil
+
+	if err := fm.SetNode(context.Background(), nil); !errors.Is(err, errNilNode) {
+		t.Errorf("SetNode(nil) = %v, want errNilNode", err)
+	}
+	if fm.CurrentNode() != "first" {
+		t.Errorf("CurrentNode = %q, want first", fm.CurrentNode())
+	}
+	// A transition that was refused asks for nothing: a response generated here
+	// would answer from the node the caller failed to leave.
+	if len(enq.queued) != 0 {
+		t.Errorf("queued %d frames after a refused transition, want 0", len(enq.queued))
 	}
 }

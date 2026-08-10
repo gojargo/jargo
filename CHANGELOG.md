@@ -14,6 +14,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A flow can be moved from outside the graph.** `flows.FlowManager.SetNode`
+  transitions to a node without a tool call having asked for it, for a caller
+  that is not part of the conversation — a processor acting on something the
+  model was never consulted about. It applies the node the way entering one
+  always does and, unless the node waits for the user, asks the assistant to
+  respond from it. The flow has to have been entered with `Initialize` first.
+  A node function still transitions by returning the next node, which keeps
+  that move on the tool loop that made it.
+
 - **A client can ask for a reply it is not read aloud.** `audio_response: false`
   on an RTVI send-text is now honored: the turn is answered and added to the
   conversation, but the reply is not synthesized. It is carried by
