@@ -247,6 +247,12 @@ type Base struct {
 	pauseStateMu sync.Mutex
 	// pauseOpts is how the service was configured; pausing is off by default.
 	pauseOpts PauseOptions
+
+	// outMu guards how what leaves the service is shaped: the silence padding
+	// each utterance and the transport stream the audio is addressed to.
+	outMu       sync.Mutex
+	silence     SilenceOptions
+	destination string
 	// processingText records that text for this turn reached the provider, so
 	// there is audio worth waiting for.
 	processingText bool
@@ -789,11 +795,19 @@ func (b *Base) wordPath() bool {
 // more than one place that builds one, the base's own and a provider's, and
 // every one of them passes through here.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if stopped, ok := f.(*frames.TTSStoppedFrame); ok && stopped.ContextID != "" {
-		if err := b.maybeCloseAssistantTurn(ctx, stopped.ContextID); err != nil {
+	if stopped, ok := f.(*frames.TTSStoppedFrame); ok {
+		if stopped.ContextID != "" {
+			if err := b.maybeCloseAssistantTurn(ctx, stopped.ContextID); err != nil {
+				return err
+			}
+		}
+		// Ahead of the stop frame, so the padding is part of the utterance
+		// rather than something arriving after it has been called finished.
+		if err := b.pushTrailingSilence(ctx); err != nil {
 			return err
 		}
 	}
+	b.stampDestination(f)
 	return b.Base.PushFrame(ctx, f, dir)
 }
 

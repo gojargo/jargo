@@ -57,6 +57,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A speech service can pad the end of an utterance.**
+  `tts.Base.SetSilenceAfterStop` sends silence ahead of the frame that says the
+  utterance stopped, for a transport that stops sending the moment audio runs
+  out and would otherwise clip the last word.
+
+- **A speech service can name the stream it speaks on.**
+  `tts.Base.SetDestination` addresses the frames it produces, so a transport
+  carrying several streams can tell them apart. The transports already read the
+  destination; nothing could set it.
+
 - **A pipeline can be watched without being slowed down.** Observers were called
   on the goroutine carrying the frame, once per handover, so a slow one changed
   how the pipeline ran. Each observer now has a queue and a goroutine of its own.
