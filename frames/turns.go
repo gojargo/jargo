@@ -215,18 +215,23 @@ func NewLLMConfigureOutputFrame(skipTTS bool) *LLMConfigureOutputFrame {
 }
 
 // LLMMessagesAppendFrame asks the context aggregator to append messages to the
-// LLM context (used by the turn-completion re-prompt). It is a control frame.
+// LLM context, in contrast to LLMMessagesUpdateFrame which replaces them. The
+// turn-completion re-prompt and a conversation flow entering a node both use it.
+// It is a data frame, so the messages are ordered against the surrounding
+// conversation.
 type LLMMessagesAppendFrame struct {
-	BaseControlFrame
+	BaseDataFrame
 	// Messages are the messages to append.
 	Messages []Message
+	// RunLLM reports whether the LLM should run on the updated context.
+	RunLLM bool
 }
 
 // NewLLMMessagesAppendFrame builds an LLMMessagesAppendFrame.
 func NewLLMMessagesAppendFrame(messages []Message) *LLMMessagesAppendFrame {
 	return &LLMMessagesAppendFrame{
-		BaseControlFrame: NewBaseControlFrame("LLMMessagesAppendFrame"),
-		Messages:         messages,
+		BaseDataFrame: NewBaseDataFrame("LLMMessagesAppendFrame"),
+		Messages:      messages,
 	}
 }
 
@@ -244,5 +249,5 @@ var (
 	_ ControlFrame = (*UserTurnInferenceCompletedFrame)(nil)
 	_ DataFrame    = (*LLMMarkerFrame)(nil)
 	_ DataFrame    = (*LLMConfigureOutputFrame)(nil)
-	_ ControlFrame = (*LLMMessagesAppendFrame)(nil)
+	_ DataFrame    = (*LLMMessagesAppendFrame)(nil)
 )

@@ -350,7 +350,7 @@ func catalog() []catalogEntry {
 			build:      func() frames.Frame { return frames.NewSTTUpdateSettingsFrame(nil) },
 		},
 		{
-			label: "LLMMessagesAppendFrame", cat: control,
+			label: "LLMMessagesAppendFrame", cat: data,
 			build: func() frames.Frame {
 				return frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: "hi"}})
 			},

@@ -84,10 +84,10 @@ func New(ctx *frames.LLMContext, opts ...Option) *Pair {
 }
 
 // User returns the user-side aggregator.
-func (p *Pair) User() processor.Processor { return p.user }
+func (p *Pair) User() *UserAggregator { return p.user }
 
 // Assistant returns the assistant-side aggregator.
-func (p *Pair) Assistant() processor.Processor { return p.assistant }
+func (p *Pair) Assistant() *AssistantAggregator { return p.assistant }
 
 // Context returns the shared conversation context.
 func (p *Pair) Context() *frames.LLMContext { return p.context }
@@ -241,8 +241,10 @@ func (u *UserAggregator) handleContextUpdate(
 	switch fr := f.(type) {
 	case *frames.LLMMessagesAppendFrame:
 		// The turn-completion re-prompt appends a message to the context before a
-		// follow-up LLMRunFrame.
+		// follow-up LLMRunFrame; a conversation flow appends the node's objective
+		// on entry.
 		u.appendMessages(fr.Messages)
+		runLLM = fr.RunLLM
 
 	case *frames.LLMMessagesUpdateFrame:
 		// Wholesale replacement of the conversation (restoring a saved session,
@@ -266,15 +268,13 @@ func (u *UserAggregator) handleContextUpdate(
 	return nil
 }
 
-// appendMessages adds messages to the context (used by the turn-completion
-// re-prompt).
+// appendMessages adds messages to the context as they were written. The role
+// each message carries is kept: a developer message is an out-of-band
+// instruction to the model and reads differently from something the user said,
+// and every adapter renders the distinction.
 func (u *UserAggregator) appendMessages(msgs []frames.Message) {
 	for _, m := range msgs {
-		if m.Role == frames.RoleAssistant {
-			u.context.AddAssistantMessage(m.Text)
-			continue
-		}
-		u.context.AddUserMessage(m.Text)
+		u.context.AddMessage(m)
 	}
 }
 
@@ -386,6 +386,19 @@ func newAssistant(ctx *frames.LLMContext, sc *SummarizeConfig) *AssistantAggrega
 	}
 	a.Base = processor.New("AssistantContextAggregator", a)
 	return a
+}
+
+// HasFunctionCallsInProgress reports whether any tool call of the current turn
+// has yet to report a final result.
+//
+// It is what tells something waiting on the whole batch, rather than on one
+// call, that the turn's calls are done: a caller acting on a tool result in its
+// context-updated callback reads this to know whether it is the last one, since
+// acting while siblings are still running would act on a half-finished turn.
+func (a *AssistantAggregator) HasFunctionCallsInProgress() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.inProgress) > 0
 }
 
 // Setup opens the lifetime the context-updated callbacks run under.
