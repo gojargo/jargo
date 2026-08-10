@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
@@ -17,6 +19,10 @@ const (
 	defaultAudioInSampleRate  = 16000
 	defaultAudioOutSampleRate = 24000
 )
+
+// defaultCancelTimeout bounds how long the task waits for a CancelFrame to
+// reach the end of the pipeline before giving up on it.
+const defaultCancelTimeout = 20 * time.Second
 
 // TaskParams configures a Task.
 type TaskParams struct {
@@ -40,6 +46,19 @@ type TaskParams struct {
 	// processors to expect metrics from before any have been measured; nil
 	// defaults to true. It only applies when EnableMetrics is set.
 	SendInitialEmptyMetrics *bool
+	// CancelTimeout bounds the wait for a CancelFrame to travel the pipeline;
+	// zero defaults to 20 seconds. Canceling is what a caller reaches for when
+	// something has already gone wrong, so it must not be the thing that hangs:
+	// a processor wedged somewhere would otherwise hold the shutdown open for
+	// good. Reaching the timeout gives up on the frame and finishes the run. An
+	// EndFrame is not bounded this way, since a graceful shutdown is expected to
+	// flush whatever is in flight however long that takes.
+	CancelTimeout time.Duration
+	// OnPipelineFinished, if set, is called once the pipeline has reached a
+	// terminal state, with the frame that ended it: an EndFrame, a StopFrame or
+	// a CancelFrame. It is called for a CancelFrame even when the frame never
+	// arrived and the wait timed out, so a caller always hears the run end.
+	OnPipelineFinished func(frames.Frame)
 	// OnReachedDownstream, if set, is called for every frame that reaches the
 	// end of the pipeline.
 	OnReachedDownstream func(frames.Frame)
@@ -114,6 +133,9 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 	}
 	if params.AudioOutSampleRate == 0 {
 		params.AudioOutSampleRate = defaultAudioOutSampleRate
+	}
+	if params.CancelTimeout == 0 {
+		params.CancelTimeout = defaultCancelTimeout
 	}
 	t := &Task{
 		params:    params,
@@ -243,18 +265,27 @@ func (t *Task) Flush(ctx context.Context) error {
 	}
 }
 
-// Cancel stops the pipeline immediately by queueing a CancelFrame.
+// Cancel stops the pipeline immediately by queueing a CancelFrame. It does
+// nothing once the task has finished.
 func (t *Task) Cancel() { t.cancelWithReason("") }
 
 // cancelWithReason queues a CancelFrame carrying reason, at most once.
 func (t *Task) cancelWithReason(reason string) {
 	t.mu.Lock()
-	if t.canceling {
+	if t.canceling || t.finished {
 		t.mu.Unlock()
 		return
 	}
 	t.canceling = true
 	t.mu.Unlock()
+
+	// Release the run loop if it is still waiting for the StartFrame to reach
+	// the sink. Canceling before the pipeline is up is exactly the case where
+	// something is wedged during startup, and the run loop only starts draining
+	// the queue this frame goes into once it has stopped waiting. Without this
+	// the CancelFrame would sit in the queue and the run would never end.
+	t.startOnce.Do(func() { close(t.startSig) })
+
 	cancel := frames.NewCancelFrame()
 	cancel.Reason = reason
 	t.QueueFrame(cancel)
@@ -338,14 +369,47 @@ func (t *Task) runLoop(ctx context.Context) error {
 			return err
 		}
 		if isPipelineEnd(f) {
-			select {
-			case <-t.endSig:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			return nil
+			return t.waitPipelineEnd(ctx, f)
 		}
 	}
+}
+
+// waitPipelineEnd blocks until f has traveled all the way through the pipeline.
+//
+// The wait for a CancelFrame is bounded by CancelTimeout, and the finished
+// handler runs whether or not the frame arrived: canceling is the path taken
+// when something is already wrong, so it has to complete even when a processor
+// is wedged and the frame never comes back. An EndFrame is waited out in full,
+// since a graceful shutdown is meant to flush what is in flight.
+func (t *Task) waitPipelineEnd(ctx context.Context, f frames.Frame) error {
+	if _, isCancel := f.(*frames.CancelFrame); !isCancel {
+		select {
+		case <-t.endSig:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// The sink does not report a CancelFrame as finished, so that this runs
+	// exactly once either way: here, on arrival or on timeout.
+	defer func() {
+		if t.params.OnPipelineFinished != nil {
+			t.params.OnPipelineFinished(f)
+		}
+	}()
+
+	timeout := time.NewTimer(t.params.CancelTimeout)
+	defer timeout.Stop()
+	select {
+	case <-t.endSig:
+	case <-timeout.C:
+		slog.Warn("timed out waiting for the cancel frame to reach the end of the pipeline",
+			"timeout", t.params.CancelTimeout)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 // initialMetricsFrame builds one MetricsFrame carrying a zeroed time to first
@@ -391,7 +455,14 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 	switch f.(type) {
 	case *frames.StartFrame:
 		t.startOnce.Do(func() { close(t.startSig) })
-	case *frames.EndFrame, *frames.CancelFrame, *frames.StopFrame:
+	case *frames.EndFrame, *frames.StopFrame:
+		if t.params.OnPipelineFinished != nil {
+			t.params.OnPipelineFinished(f)
+		}
+		t.endOnce.Do(func() { close(t.endSig) })
+	case *frames.CancelFrame:
+		// The finished handler is not called here. A CancelFrame may never
+		// arrive, so the run loop reports it instead, on arrival or on timeout.
 		t.endOnce.Do(func() { close(t.endSig) })
 	}
 	if t.params.OnReachedDownstream != nil {

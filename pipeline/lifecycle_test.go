@@ -63,12 +63,19 @@ func started(t *testing.T, ch chan struct{}) {
 // waitDone fails the test if the task does not finish promptly.
 func waitDone(t *testing.T, done chan error) {
 	t.Helper()
+	waitDoneWithin(t, done, 3*time.Second)
+}
+
+// waitDoneWithin is waitDone with an explicit deadline, for the tests that wedge
+// a processor on purpose and so have to wait out a teardown bound.
+func waitDoneWithin(t *testing.T, done chan error, d time.Duration) {
+	t.Helper()
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatalf("task run error: %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(d):
 		t.Fatal("task did not finish")
 	}
 }
@@ -339,4 +346,142 @@ func TestFlushHonorsContext(t *testing.T) {
 
 	task.StopWhenDone()
 	waitDone(t, done)
+}
+
+// startBlocker holds the StartFrame so it never reaches the sink, standing in
+// for a processor wedged during startup.
+type startBlocker struct {
+	*processor.Base
+	reached chan struct{}
+	once    sync.Once
+	release chan struct{}
+}
+
+func newStartBlocker() *startBlocker {
+	b := &startBlocker{reached: make(chan struct{}), release: make(chan struct{})}
+	b.Base = processor.New("StartBlocker", b)
+	return b
+}
+
+func (b *startBlocker) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.StartFrame); ok {
+		b.once.Do(func() { close(b.reached) })
+		<-b.release
+	}
+	return b.PushFrame(ctx, f, dir)
+}
+
+// TestCancelBeforeStartReachesSink checks canceling while the pipeline is
+// still coming up ends the run. The run loop waits for the StartFrame to reach
+// the sink before it drains the queue the CancelFrame goes into, so canceling
+// has to release that wait or the frame would never be pushed at all.
+func TestCancelBeforeStartReachesSink(t *testing.T) {
+	blocker := newStartBlocker()
+	task := pipeline.NewTask(pipeline.New(blocker), pipeline.TaskParams{
+		CancelTimeout: 100 * time.Millisecond,
+	})
+
+	done := runTask(t, task)
+
+	<-blocker.reached
+	task.Cancel()
+
+	// The blocker is still wedged inside ProcessFrame, which no context
+	// cancellation can reach, so teardown has to wait out its bound before the
+	// run can return.
+	waitDoneWithin(t, done, 10*time.Second)
+	if !task.HasFinished() {
+		t.Error("HasFinished() = false, want true")
+	}
+	close(blocker.release)
+}
+
+// cancelSwallower drops the CancelFrame, so it never reaches the sink.
+type cancelSwallower struct {
+	*processor.Base
+}
+
+func newCancelSwallower() *cancelSwallower {
+	c := &cancelSwallower{}
+	c.Base = processor.New("CancelSwallower", c)
+	return c
+}
+
+func (c *cancelSwallower) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := c.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.CancelFrame); ok {
+		return nil
+	}
+	return c.PushFrame(ctx, f, dir)
+}
+
+// TestCancelTimesOutOnASwallowedFrame checks a CancelFrame that never reaches
+// the sink still ends the run, and still reports the pipeline as finished.
+// Canceling is what a caller reaches for when something has already gone
+// wrong, so it must not be the thing that hangs.
+func TestCancelTimesOutOnASwallowedFrame(t *testing.T) {
+	startedCh := make(chan struct{})
+	var (
+		mu       sync.Mutex
+		finished frames.Frame
+	)
+	task := pipeline.NewTask(pipeline.New(newCancelSwallower()), pipeline.TaskParams{
+		CancelTimeout: 100 * time.Millisecond,
+		OnPipelineFinished: func(f frames.Frame) {
+			mu.Lock()
+			finished = f
+			mu.Unlock()
+		},
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.StartFrame); ok {
+				close(startedCh)
+			}
+		},
+	})
+
+	done := runTask(t, task)
+	started(t, startedCh)
+	task.Cancel()
+
+	waitDone(t, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := finished.(*frames.CancelFrame); !ok {
+		t.Errorf("OnPipelineFinished frame = %v, want a CancelFrame", finished)
+	}
+}
+
+// TestPipelineFinishedReportsTheEndFrame checks the finished handler reports a
+// graceful shutdown too, and reports it once.
+func TestPipelineFinishedReportsTheEndFrame(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		calls []frames.Frame
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		OnPipelineFinished: func(f frames.Frame) {
+			mu.Lock()
+			calls = append(calls, f)
+			mu.Unlock()
+		},
+	})
+
+	done := runTask(t, task)
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("OnPipelineFinished called %d times, want 1: %v", len(calls), calls)
+	}
+	if _, ok := calls[0].(*frames.EndFrame); !ok {
+		t.Errorf("OnPipelineFinished frame = %v, want an EndFrame", calls[0])
+	}
 }
