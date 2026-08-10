@@ -222,19 +222,32 @@ answers, or swap just the voice.
 ## Switching at runtime
 
 `pipeline.NewServiceSwitcher` routes to one of several services, changed mid-call
-by pushing a `SwitchServiceFrame`:
+by pushing a `ManuallySwitchServiceFrame`:
 
 ```go
 sw, err := pipeline.NewServiceSwitcher(
     []processor.Processor{fastLLM, smartLLM},
-    pipeline.SwitchManual,   // or pipeline.SwitchFailover
+    pipeline.NewManualStrategy, // or pipeline.NewFailoverStrategy
 )
 ...
-task.QueueFrame(pipeline.NewSwitchServiceFrame(smartLLM))
+task.QueueFrame(frames.NewManuallySwitchServiceFrame(smartLLM))
 ```
 
-`SwitchFailover` additionally moves to the next service when the active one
-reports a non-fatal error, which is the cheap way to survive a provider outage.
+The second argument is the strategy that decides when the active service
+changes. `NewManualStrategy` changes it only when asked. `NewFailoverStrategy`
+additionally moves to the next service when the active one reports a non-fatal
+error, which is the cheap way to survive a provider outage. Implement
+`pipeline.SwitcherStrategy` for anything else, and pass its constructor: the
+switcher builds the strategy over the services it manages, so the two cannot
+drift apart.
+
+Every service is started and kept warm, but only the active one receives data
+and only the active one is heard from: the metadata a service broadcasts about
+itself reaches the rest of the pipeline only while it is in use, and a switch
+asks the new service to describe itself again.
+
+A switch request naming a service this switcher does not manage travels on, so
+several switchers can sit in one pipeline and each pick up its own.
 
 Useful for escalating to a stronger model when a conversation gets hard, without
 rebuilding the pipeline.

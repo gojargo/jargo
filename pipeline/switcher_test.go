@@ -100,7 +100,7 @@ func TestFunctionFilterGatesDirection(t *testing.T) {
 func TestServiceSwitcherRouting(t *testing.T) {
 	a := newTagSvc("A:", "")
 	b := newTagSvc("B:", "")
-	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.SwitchManual)
+	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.NewManualStrategy)
 	if err != nil {
 		t.Fatalf("NewServiceSwitcher: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestServiceSwitcherRouting(t *testing.T) {
 func TestServiceSwitcherInBandSwitch(t *testing.T) {
 	a := newTagSvc("A:", "")
 	b := newTagSvc("B:", "")
-	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.SwitchManual)
+	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.NewManualStrategy)
 	if err != nil {
 		t.Fatalf("NewServiceSwitcher: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestServiceSwitcherInBandSwitch(t *testing.T) {
 
 	// A SwitchServiceFrame queued in-band switches the active service before the
 	// following text is routed.
-	task.QueueFrame(pipeline.NewSwitchServiceFrame(b))
+	task.QueueFrame(frames.NewManuallySwitchServiceFrame(b))
 	task.QueueFrame(frames.NewTextFrame("x"))
 	wantText(t, out, "B:x")
 }
@@ -140,7 +140,7 @@ func TestServiceSwitcherInBandSwitch(t *testing.T) {
 func TestServiceSwitcherFailover(t *testing.T) {
 	a := newTagSvc("A:", "FAIL") // errors on "FAIL"
 	b := newTagSvc("B:", "")
-	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.SwitchFailover)
+	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.NewFailoverStrategy)
 	if err != nil {
 		t.Fatalf("NewServiceSwitcher: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestServiceSwitcherFailover(t *testing.T) {
 }
 
 func TestServiceSwitcherNoServices(t *testing.T) {
-	if _, err := pipeline.NewServiceSwitcher(nil, pipeline.SwitchManual); err == nil {
+	if _, err := pipeline.NewServiceSwitcher(nil, pipeline.NewManualStrategy); err == nil {
 		t.Fatal("NewServiceSwitcher(nil): want error, got nil")
 	}
 }
@@ -219,7 +219,7 @@ func switcherWithSettingsServices(t *testing.T) (*pipeline.ServiceSwitcher, []*s
 	for i, s := range svcs {
 		procs[i] = s
 	}
-	sw, err := pipeline.NewServiceSwitcher(procs, pipeline.SwitchManual)
+	sw, err := pipeline.NewServiceSwitcher(procs, pipeline.NewManualStrategy)
 	if err != nil {
 		t.Fatalf("NewServiceSwitcher: %v", err)
 	}
@@ -345,4 +345,144 @@ func TestServiceSwitcherSettingsUpdateTravelingUpstream(t *testing.T) {
 
 	task.QueueFrame(frames.NewTextFrame("tick")) // reaches the raiser, which replies
 	wantUpdates(t, svcs, []int{1, 1, 1})
+}
+
+// metaSvc broadcasts a metadata frame naming itself whenever it is started or
+// asked to, standing in for a real service describing itself to the pipeline.
+type metaSvc struct {
+	*processor.Base
+	name string
+}
+
+func newMetaSvc(name string) *metaSvc {
+	s := &metaSvc{name: name}
+	s.Base = processor.New("MetaSvc:"+name, s)
+	return s
+}
+
+func (s *metaSvc) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if err := s.PushFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	switch f.(type) {
+	case *frames.StartFrame, *frames.ServiceSwitcherRequestMetadataFrame:
+		// A service names itself by its processor name, as the real ones do.
+		return s.PushFrame(ctx, frames.NewServiceMetadataFrame(s.Name()), processor.Downstream)
+	}
+	return nil
+}
+
+// collectMetadata runs a switcher and returns the service names whose metadata
+// escaped it.
+func collectMetadata(t *testing.T, sw *pipeline.ServiceSwitcher) (*pipeline.Task, func() []string, func()) {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	task := pipeline.NewTask(pipeline.New(sw), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream: func(f frames.Frame) {
+			if mf, ok := f.(frames.ServiceMetadata); ok {
+				mu.Lock()
+				seen = append(seen, mf.Service())
+				mu.Unlock()
+			}
+		},
+	})
+	done := make(chan struct{})
+	go func() { _ = task.Run(context.Background()); close(done) }()
+
+	return task, func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]string(nil), seen...)
+		}, func() {
+			task.Cancel()
+			<-done
+		}
+}
+
+// TestOnlyTheActiveServiceDescribesTheSwitcher checks the metadata leaving a
+// switcher is the active service's alone. Every service is started, so every
+// one of them broadcasts; letting them all out would leave whatever arrived
+// last describing a service that is not in use.
+func TestOnlyTheActiveServiceDescribesTheSwitcher(t *testing.T) {
+	a, b := newMetaSvc("A"), newMetaSvc("B")
+	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewServiceSwitcher: %v", err)
+	}
+
+	_, metadata, stop := collectMetadata(t, sw)
+	defer stop()
+
+	time.Sleep(300 * time.Millisecond)
+	got := metadata()
+	if len(got) != 1 || got[0] != a.Name() {
+		t.Errorf("metadata leaving the switcher = %v, want just the active service %q", got, a.Name())
+	}
+}
+
+// TestSwitchingAsksTheNewServiceToDescribeItself checks that after a switch the
+// pipeline is told about the service now in use, rather than being left with
+// what the one it replaced had said.
+func TestSwitchingAsksTheNewServiceToDescribeItself(t *testing.T) {
+	a, b := newMetaSvc("A"), newMetaSvc("B")
+	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewServiceSwitcher: %v", err)
+	}
+
+	_, metadata, stop := collectMetadata(t, sw)
+	defer stop()
+
+	time.Sleep(200 * time.Millisecond)
+	if !sw.SwitchTo(b) {
+		t.Fatal("SwitchTo(b) = false, want the switch accepted")
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	got := metadata()
+	if len(got) == 0 || got[len(got)-1] != b.Name() {
+		t.Errorf("metadata leaving the switcher = %v, want it ending with the newly active %q", got, b.Name())
+	}
+}
+
+// TestSwitchRequestForAnotherSwitcherTravelsOn checks a switcher leaves alone a
+// request naming a service it does not manage, so the switcher that does manage
+// it gets its turn. Swallowing the request would strand every switcher but the
+// first.
+func TestSwitchRequestForAnotherSwitcherTravelsOn(t *testing.T) {
+	a1, a2 := newTagSvc("A1:", ""), newTagSvc("A2:", "")
+	b1, b2 := newTagSvc("B1:", ""), newTagSvc("B2:", "")
+
+	swA, err := pipeline.NewServiceSwitcher([]processor.Processor{a1, a2}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewServiceSwitcher: %v", err)
+	}
+	swB, err := pipeline.NewServiceSwitcher([]processor.Processor{b1, b2}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewServiceSwitcher: %v", err)
+	}
+
+	task, out, stop := runCollector(t, pipeline.New(swA, swB))
+	defer stop()
+
+	// b2 belongs to the second switcher, so the first must pass the request on.
+	task.QueueFrame(frames.NewManuallySwitchServiceFrame(b2))
+	time.Sleep(300 * time.Millisecond)
+
+	if got := swB.ActiveService(); got != b2 {
+		t.Errorf("the downstream switcher's active service = %v, want b2", got)
+	}
+	if got := swA.ActiveService(); got != a1 {
+		t.Errorf("the upstream switcher's active service = %v, want a1 unchanged", got)
+	}
+
+	task.QueueFrame(frames.NewTextFrame("x"))
+	wantText(t, out, "B2:A1:x")
 }

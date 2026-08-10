@@ -44,9 +44,10 @@ Three composites build on that:
   arrive, or `pipeline.FrameOrderPipeline` to release them branch by branch when
   the order between branches matters, an image ahead of the speech describing it.
   It needs the last processor of each branch to be synchronous.
-- **`pipeline.NewServiceSwitcher(services, strategy)`**: route frames to exactly
-  one of several services, switched at runtime by pushing a
-  `SwitchServiceFrame`. Useful for swapping an LLM mid-conversation.
+- **`pipeline.NewServiceSwitcher(services, newStrategy)`**: route frames to
+  exactly one of several services, switched at runtime by pushing a
+  `frames.ManuallySwitchServiceFrame`. Useful for swapping an LLM
+  mid-conversation.
 
 A parallel pipeline synchronizes the lifecycle frames (`StartFrame`, `EndFrame`
 and `CancelFrame`): it pauses its own frame handling until every branch has

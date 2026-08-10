@@ -4,73 +4,89 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
 
-// errNoServices is returned by NewServiceSwitcher when no service is supplied.
+// errNoServices is returned when a switcher is built without a service.
 //
 //nolint:gochecknoglobals // sentinel error
 var errNoServices = errors.New("pipeline: service switcher needs at least one service")
 
-// SwitcherStrategy selects how a ServiceSwitcher changes its active service.
-type SwitcherStrategy int
+// inactiveUpdateRing is how many settings updates handed to inactive services
+// are remembered so they can be consumed on the way out. An update crosses its
+// service long before the ring wraps.
+const inactiveUpdateRing = 64
 
-const (
-	// SwitchManual changes the active service only on an explicit request.
-	SwitchManual SwitcherStrategy = iota
-	// SwitchFailover additionally moves to the next service when the active one
-	// reports a non-fatal error.
-	SwitchFailover
-)
-
-// SwitchServiceFrame requests that a ServiceSwitcher make Service active. Queue
-// it downstream into the pipeline, or call ServiceSwitcher.SwitchTo directly.
-type SwitchServiceFrame struct {
-	frames.BaseControlFrame
-	// Service is the service to activate; it must belong to the switcher.
-	Service processor.Processor
+// SwitcherStrategy decides which of a switcher's services is active and when
+// that changes. Build one with a StrategyFunc.
+//
+// Two are supplied: NewManualStrategy switches only when asked, and
+// NewFailoverStrategy additionally moves on when the active service reports an
+// error. Implement the interface for anything else.
+type SwitcherStrategy interface {
+	// Services are the services the strategy chooses between.
+	Services() []processor.Processor
+	// ActiveService is the service currently in use.
+	ActiveService() processor.Processor
+	// HandleFrame acts on a frame that steers the switcher, returning the
+	// service it switched to, or nil if it did not switch. A frame it does not
+	// act on travels on, so another switcher can have its turn.
+	HandleFrame(f frames.Frame, dir processor.Direction) processor.Processor
+	// HandleError reacts to a non-fatal error from the active service,
+	// returning the service it switched to, or nil if it did not switch.
+	HandleError(ef *frames.ErrorFrame) processor.Processor
+	// OnServiceSwitched registers fn to be called whenever the active service
+	// changes.
+	OnServiceSwitched(fn func(processor.Processor))
 }
 
-// NewSwitchServiceFrame builds a SwitchServiceFrame targeting svc.
-func NewSwitchServiceFrame(svc processor.Processor) *SwitchServiceFrame {
-	return &SwitchServiceFrame{
-		BaseControlFrame: frames.NewBaseControlFrame("SwitchServiceFrame"),
-		Service:          svc,
-	}
-}
+// StrategyFunc builds a strategy over a set of services. A switcher is given the
+// constructor rather than a built strategy, so the strategy is always paired
+// with the services the switcher actually manages.
+type StrategyFunc func(services []processor.Processor) SwitcherStrategy
 
 // ServiceSwitcher routes the pipeline through one of several interchangeable
 // services at a time. Every service is started and kept warm, but only the
-// active one receives data; the rest are gated off. Switching is manual (via
-// SwitchTo or a SwitchServiceFrame) and, under SwitchFailover, automatic when
-// the active service reports a non-fatal error.
+// active one receives data; the rest are gated off.
 //
-// It is built on a ParallelPipeline: each service becomes a branch wrapped in a
-// pair of filters that pass lifecycle and system frames (so every service stays
-// ready) but gate data frames on whether the service is active. A control
-// processor in front consumes switch requests and watches for the errors that
-// drive failover.
+// It is a ParallelPipeline: each service becomes a branch wrapped in a pair of
+// filters that pass lifecycle frames (so every service stays ready) but gate
+// everything else on whether that service is active. What leaves the switcher is
+// decided on the way out, which is where the copies the gating produces are
+// dropped so the rest of the pipeline sees one service, not several.
 //
 // A settings update is the exception to the gating. One addressed to a member
 // service reaches it whether or not it is in use, and one marked
 // ReachInactiveServices reaches every member, so whichever service becomes
-// active later is already configured. Any other settings update applies to the
-// active service alone.
+// active later is already configured.
 type ServiceSwitcher struct {
-	*Pipeline
-	state *switcherState
+	*ParallelPipeline
+	strategy SwitcherStrategy
+
+	mu sync.Mutex
+	// inactiveUpdates are the ids of the settings updates handed to services
+	// that were not active, so they can be consumed again on their way out.
+	inactiveUpdates []uint64
 }
 
 // NewServiceSwitcher builds a switcher over services, the first of which starts
-// active, using the given switching strategy.
-func NewServiceSwitcher(services []processor.Processor, strategy SwitcherStrategy) (*ServiceSwitcher, error) {
+// active, choosing between them with the strategy newStrategy builds. A nil
+// newStrategy switches only when asked.
+func NewServiceSwitcher(
+	services []processor.Processor, newStrategy StrategyFunc,
+) (*ServiceSwitcher, error) {
 	if len(services) == 0 {
 		return nil, errNoServices
 	}
-	state := &switcherState{services: services, active: services[0], mode: strategy}
+	if newStrategy == nil {
+		newStrategy = NewManualStrategy
+	}
+
+	s := &ServiceSwitcher{strategy: newStrategy(services)}
 
 	// The filters decide system frames too, so a branch that is gated off stops
 	// hearing the conversation rather than following it in the background. The
@@ -79,165 +95,301 @@ func NewServiceSwitcher(services []processor.Processor, strategy SwitcherStrateg
 	branches := make([][]processor.Processor, len(services))
 	for i, svc := range services {
 		branches[i] = []processor.Processor{
-			processor.NewFunctionFilter(fmt.Sprintf("Switch::In%d", i), &down, gate(state, svc),
+			processor.NewFunctionFilter(fmt.Sprintf("Switch::In%d", i), &down, s.gate(svc),
 				processor.WithFilterSystemFrames()),
 			svc,
-			processor.NewFunctionFilter(fmt.Sprintf("Switch::Out%d", i), &up, gate(state, svc),
+			processor.NewFunctionFilter(fmt.Sprintf("Switch::Out%d", i), &up, s.gate(svc),
 				processor.WithFilterSystemFrames()),
 		}
 	}
-	pp, err := NewParallel(branches...)
+
+	// The parallel pipeline is built on the switcher's behalf, so the frames its
+	// branches produce leave through the switcher's own PushFrame.
+	pp, err := newParallelAs(s, "ServiceSwitcher", branches...)
 	if err != nil {
 		return nil, err
 	}
-	return &ServiceSwitcher{Pipeline: New(newSwitchControl(state), pp), state: state}, nil
+	s.ParallelPipeline = pp
+	return s, nil
 }
 
-// SwitchTo makes svc the active service, returning false if svc is not one of
-// the switcher's services.
-func (s *ServiceSwitcher) SwitchTo(svc processor.Processor) bool { return s.state.switchTo(svc) }
+// Strategy is the strategy choosing between the switcher's services.
+func (s *ServiceSwitcher) Strategy() SwitcherStrategy { return s.strategy }
 
-// ActiveService returns the currently active service.
-func (s *ServiceSwitcher) ActiveService() processor.Processor { return s.state.activeService() }
+// Services are the services the switcher manages.
+func (s *ServiceSwitcher) Services() []processor.Processor { return s.strategy.Services() }
+
+// ActiveService is the service currently in use.
+func (s *ServiceSwitcher) ActiveService() processor.Processor { return s.strategy.ActiveService() }
+
+// SwitchTo makes svc the active service, reporting false if svc is not one of
+// the switcher's services.
+func (s *ServiceSwitcher) SwitchTo(svc processor.Processor) bool {
+	return s.switchTo(svc) != nil
+}
 
 // OnSwitch registers fn to be called whenever the active service changes.
-func (s *ServiceSwitcher) OnSwitch(fn func(processor.Processor)) { s.state.setOnSwitch(fn) }
+func (s *ServiceSwitcher) OnSwitch(fn func(processor.Processor)) {
+	s.strategy.OnServiceSwitched(fn)
+}
 
-// gate returns the filter predicate for svc: a settings update meant for a
-// service that is not in use passes, and other frames pass only while svc is the
-// active service. The lifecycle frames are not decided here; the filter passes
-// those whatever this says, so the service stays started and ready.
-func gate(state *switcherState, svc processor.Processor) processor.FilterFunc {
-	return func(f frames.Frame) bool {
-		return reachesInactiveService(f, svc) || state.isActive(svc)
+// switchTo asks the strategy to activate svc and, when it does, asks the new
+// service to broadcast its metadata, so what the rest of the pipeline knows
+// describes the service now in use.
+func (s *ServiceSwitcher) switchTo(svc processor.Processor) processor.Processor {
+	switched := s.strategy.HandleFrame(frames.NewManuallySwitchServiceFrame(svc), processor.Downstream)
+	if switched != nil {
+		s.requestMetadata(switched)
+	}
+	return switched
+}
+
+// requestMetadata asks svc to broadcast its metadata again. It is queued
+// straight onto the service, past the filters, since the switch has only just
+// happened.
+func (s *ServiceSwitcher) requestMetadata(svc processor.Processor) {
+	req := frames.NewServiceSwitcherRequestMetadataFrame(frames.ServiceTarget(svc))
+	_ = svc.QueueFrame(context.Background(), req, processor.Downstream)
+}
+
+// ProcessFrame steers the switcher on the frames that ask it to, and hands every
+// settings update to the member services the gating would otherwise keep it from.
+func (s *ServiceSwitcher) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if _, isSwitcher := f.(frames.SwitcherFrame); isSwitcher {
+		if switched := s.strategy.HandleFrame(f, dir); switched != nil {
+			s.requestMetadata(switched)
+			// The request was ours to answer, so it stops here.
+			return nil
+		}
+		// Not one of ours. Pass it on for the switcher that manages it.
+	}
+
+	if err := s.ParallelPipeline.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+
+	if u, ok := f.(frames.SettingsUpdate); ok {
+		s.updateInactiveServices(ctx, u, dir)
+	}
+	return nil
+}
+
+// PushFrame decides what leaves the switcher.
+//
+// The branches are copies of one another as far as the rest of the pipeline is
+// concerned, so what escapes has to be the active service's alone: its metadata,
+// its settings update, its errors. It is also where a non-fatal error from the
+// active service reaches the strategy, which is what drives failover.
+func (s *ServiceSwitcher) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	switch fr := f.(type) {
+	case *frames.ServiceSwitcherRequestMetadataFrame:
+		// The service it was aimed at has answered it, so it goes no further.
+		if fr.Service == frames.ServiceTarget(s.ActiveService()) {
+			return nil
+		}
+	case frames.ServiceMetadata:
+		// Only the active service describes the switcher. Every service
+		// broadcasts at startup, since the lifecycle frames reach them all.
+		if fr.Service() != s.ActiveService().Name() {
+			return nil
+		}
+	case frames.SettingsUpdate:
+		// The copies handed to the inactive services have been delivered; the
+		// one the rest of the pipeline sees is the active service's.
+		if s.consumeInactiveUpdate(fr.ID()) {
+			return nil
+		}
+	case frames.ErrorReport:
+		// Let the strategy react to the active service failing, while the error
+		// still travels on so the application hears about it too.
+		ef := fr.ErrorInfo()
+		if !ef.Fatal && ef.Source != nil && ef.Source.Name() == s.ActiveService().Name() {
+			if switched := s.strategy.HandleError(ef); switched != nil {
+				s.requestMetadata(switched)
+			}
+		}
+	}
+	return s.ParallelPipeline.Base.PushFrame(ctx, f, dir)
+}
+
+// updateInactiveServices hands a settings update to the member services the
+// gating keeps it from, when it is one they should have.
+//
+// The active service receives the update through its branch like any other
+// frame. Each inactive one is handed a copy of its own, so the copies can be
+// told apart from the original and dropped on the way out.
+func (s *ServiceSwitcher) updateInactiveServices(
+	ctx context.Context, u frames.SettingsUpdate, dir processor.Direction,
+) {
+	for _, svc := range s.inactiveUpdateTargets(u) {
+		copied := u.Copy()
+		s.rememberInactiveUpdate(copied.ID())
+		_ = svc.QueueFrame(ctx, copied, dir)
 	}
 }
 
-// reachesInactiveService reports whether f is a settings update that must reach
-// svc even while another service is in use: one addressed to svc, applied by the
-// service it names whether or not that service is active, or one that asks to
-// reach every service the switcher manages, so whichever becomes active later is
-// already configured. Any other update applies to the active service alone,
-// since a setting is usually specific to one provider.
-//
-// Only one copy leaves the switcher: the branches are handed the same frame, and
-// the merge deduplicates by frame id.
-func reachesInactiveService(f frames.Frame, svc processor.Processor) bool {
-	u, ok := f.(frames.SettingsUpdate)
-	if !ok {
-		return false
+// inactiveUpdateTargets are the inactive member services that should apply an
+// update, which may be none.
+func (s *ServiceSwitcher) inactiveUpdateTargets(u frames.SettingsUpdate) []processor.Processor {
+	active := s.ActiveService()
+	var inactive []processor.Processor
+	for _, svc := range s.Services() {
+		if svc != active {
+			inactive = append(inactive, svc)
+		}
 	}
+
 	update := u.ServiceUpdate()
 	if update.Service != nil {
-		// An update addressed elsewhere in the pipeline is left to the switcher
-		// that manages that service.
-		return update.Service == frames.ServiceTarget(svc)
+		// An addressed update goes to its service alone, active or not. One
+		// addressed elsewhere is left for the switcher that manages it.
+		for _, svc := range inactive {
+			if update.Service == frames.ServiceTarget(svc) {
+				return []processor.Processor{svc}
+			}
+		}
+		return nil
 	}
-	return update.ReachInactiveServices
+	// Any other update crosses to the inactive services only if it opts in,
+	// since a setting is usually specific to one provider.
+	if update.ReachInactiveServices {
+		return inactive
+	}
+	return nil
 }
 
-// switcherState holds the shared, concurrency-safe switching state.
-type switcherState struct {
+func (s *ServiceSwitcher) rememberInactiveUpdate(id uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.inactiveUpdates) == inactiveUpdateRing {
+		s.inactiveUpdates = s.inactiveUpdates[1:]
+	}
+	s.inactiveUpdates = append(s.inactiveUpdates, id)
+}
+
+// consumeInactiveUpdate reports whether id is one of the copies handed to an
+// inactive service, removing it when it is.
+func (s *ServiceSwitcher) consumeInactiveUpdate(id uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, seen := range s.inactiveUpdates {
+		if seen == id {
+			s.inactiveUpdates = append(s.inactiveUpdates[:i], s.inactiveUpdates[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// gate returns the filter predicate for svc: frames pass only while svc is the
+// active service. The lifecycle frames are not decided here; the filter passes
+// those whatever this says, so every service starts and shuts down with the
+// pipeline and stays ready to take over.
+//
+// A settings update meant for a service that is not in use is not let through
+// here. It is handed to that service directly instead, as a copy of its own, so
+// only one of them travels on through the pipeline.
+func (s *ServiceSwitcher) gate(svc processor.Processor) processor.FilterFunc {
+	return func(frames.Frame) bool { return s.ActiveService() == svc }
+}
+
+// manualStrategy switches only when asked.
+type manualStrategy struct {
 	mu       sync.Mutex
 	services []processor.Processor
 	active   processor.Processor
-	mode     SwitcherStrategy
 	onSwitch func(processor.Processor)
 }
 
-func (s *switcherState) isActive(svc processor.Processor) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.active == svc
+// NewManualStrategy builds a strategy that changes the active service only on an
+// explicit request. The first service starts active.
+func NewManualStrategy(services []processor.Processor) SwitcherStrategy {
+	return &manualStrategy{services: services, active: services[0]}
 }
 
-func (s *switcherState) activeService() processor.Processor {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.active
+func (m *manualStrategy) Services() []processor.Processor { return m.services }
+
+func (m *manualStrategy) ActiveService() processor.Processor {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.active
 }
 
-func (s *switcherState) setOnSwitch(fn func(processor.Processor)) {
-	s.mu.Lock()
-	s.onSwitch = fn
-	s.mu.Unlock()
+func (m *manualStrategy) OnServiceSwitched(fn func(processor.Processor)) {
+	m.mu.Lock()
+	m.onSwitch = fn
+	m.mu.Unlock()
 }
 
-// switchTo activates svc if it belongs to the switcher, firing the on-switch
-// callback when the active service actually changes.
-func (s *switcherState) switchTo(svc processor.Processor) bool {
-	s.mu.Lock()
-	if indexOf(s.services, svc) < 0 {
-		s.mu.Unlock()
-		return false
+// HandleFrame activates the service a manual switch request names.
+func (m *manualStrategy) HandleFrame(f frames.Frame, _ processor.Direction) processor.Processor {
+	sf, ok := f.(*frames.ManuallySwitchServiceFrame)
+	if !ok {
+		return nil
 	}
-	changed := s.active != svc
-	s.active = svc
-	cb := s.onSwitch
-	s.mu.Unlock()
-	if changed && cb != nil {
-		cb(svc)
-	}
-	return true
+	return m.setActiveIfAvailable(sf.Service)
 }
 
-// failover advances to the next service when failover is enabled and the named
-// source is the active service.
-func (s *switcherState) failover(sourceName string) {
-	s.mu.Lock()
-	if s.mode != SwitchFailover || len(s.services) <= 1 || s.active.Name() != sourceName {
-		s.mu.Unlock()
-		return
+// HandleError does nothing: switching is manual.
+func (m *manualStrategy) HandleError(*frames.ErrorFrame) processor.Processor { return nil }
+
+// setActiveIfAvailable activates target if it is one of the strategy's services.
+// A target it does not manage is left alone, since the request was meant for
+// another switcher.
+func (m *manualStrategy) setActiveIfAvailable(target frames.ServiceTarget) processor.Processor {
+	m.mu.Lock()
+	var found processor.Processor
+	for _, svc := range m.services {
+		if frames.ServiceTarget(svc) == target {
+			found = svc
+			break
+		}
 	}
-	idx := indexOf(s.services, s.active)
-	next := s.services[(idx+1)%len(s.services)]
-	s.active = next
-	cb := s.onSwitch
-	s.mu.Unlock()
+	if found == nil {
+		m.mu.Unlock()
+		return nil
+	}
+	m.active = found
+	cb := m.onSwitch
+	m.mu.Unlock()
+
 	if cb != nil {
-		cb(next)
+		cb(found)
 	}
+	return found
 }
 
-// indexOf returns the position of svc in services, or -1.
-func indexOf(services []processor.Processor, svc processor.Processor) int {
-	for i, x := range services {
-		if x == svc {
-			return i
+// failoverStrategy switches when asked, and moves on when the active service
+// reports an error.
+type failoverStrategy struct {
+	*manualStrategy
+}
+
+// NewFailoverStrategy builds a strategy that switches to the next service when
+// the active one reports a non-fatal error, and can still be switched by hand.
+// The failed service stays in the list and can be switched back to.
+func NewFailoverStrategy(services []processor.Processor) SwitcherStrategy {
+	return &failoverStrategy{manualStrategy: &manualStrategy{services: services, active: services[0]}}
+}
+
+// HandleError moves to the next service in the list.
+func (f *failoverStrategy) HandleError(ef *frames.ErrorFrame) processor.Processor {
+	f.mu.Lock()
+	if len(f.services) <= 1 {
+		f.mu.Unlock()
+		slog.Error("no other service to switch to", "err", ef.Error)
+		return nil
+	}
+	idx := 0
+	for i, svc := range f.services {
+		if svc == f.active {
+			idx = i
+			break
 		}
 	}
-	return -1
-}
+	next := f.services[(idx+1)%len(f.services)]
+	f.mu.Unlock()
 
-// switchControl sits in front of the parallel pipeline: it consumes downstream
-// SwitchServiceFrames and watches upstream non-fatal ErrorFrames to drive
-// failover. Every other frame passes through untouched.
-type switchControl struct {
-	*processor.Base
-	state *switcherState
-}
-
-func newSwitchControl(state *switcherState) *switchControl {
-	c := &switchControl{state: state}
-	c.Base = processor.New("ServiceSwitcher::Control", c)
-	return c
-}
-
-// ProcessFrame intercepts switch requests and failover-triggering errors.
-func (c *switchControl) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if err := c.Base.ProcessFrame(ctx, f, dir); err != nil {
-		return err
-	}
-	switch dir {
-	case processor.Downstream:
-		if sf, ok := f.(*SwitchServiceFrame); ok {
-			c.state.switchTo(sf.Service)
-			return nil // The request is consumed, not forwarded.
-		}
-	case processor.Upstream:
-		if ef, ok := f.(*frames.ErrorFrame); ok && !ef.Fatal && ef.Source != nil {
-			c.state.failover(ef.Source.Name())
-		}
-	}
-	return c.PushFrame(ctx, f, dir)
+	slog.Warn("service reported an error, switching", "service", ef.Source.Name(), "err", ef.Error)
+	return f.setActiveIfAvailable(frames.ServiceTarget(next))
 }

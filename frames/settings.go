@@ -53,6 +53,11 @@ type SettingsUpdate interface {
 	Frame
 	// ServiceUpdate returns the update itself.
 	ServiceUpdate() *ServiceUpdateSettingsFrame
+	// Copy returns the same update as a new frame with an id of its own, and of
+	// the same concrete kind so whatever handles the original handles the copy.
+	// It is how one update is delivered to several services and still told apart
+	// afterwards.
+	Copy() SettingsUpdate
 }
 
 // ServiceUpdate implements SettingsUpdate. The frame for each kind of service
@@ -90,6 +95,13 @@ func NewLLMUpdateSettingsFrame(delta any) *LLMUpdateSettingsFrame {
 // String implements fmt.Stringer.
 func (f *LLMUpdateSettingsFrame) String() string { return f.describe(f.Name()) }
 
+// Copy implements SettingsUpdate.
+func (f *LLMUpdateSettingsFrame) Copy() SettingsUpdate {
+	c := *f
+	c.BaseControlFrame = NewBaseControlFrame("LLMUpdateSettingsFrame")
+	return &c
+}
+
 // TTSUpdateSettingsFrame changes a speech synthesis service's settings.
 type TTSUpdateSettingsFrame struct {
 	ServiceUpdateSettingsFrame
@@ -106,6 +118,13 @@ func NewTTSUpdateSettingsFrame(delta any) *TTSUpdateSettingsFrame {
 
 // String implements fmt.Stringer.
 func (f *TTSUpdateSettingsFrame) String() string { return f.describe(f.Name()) }
+
+// Copy implements SettingsUpdate.
+func (f *TTSUpdateSettingsFrame) Copy() SettingsUpdate {
+	c := *f
+	c.BaseControlFrame = NewBaseControlFrame("TTSUpdateSettingsFrame")
+	return &c
+}
 
 // STTUpdateSettingsFrame changes a transcription service's settings.
 type STTUpdateSettingsFrame struct {
@@ -124,7 +143,17 @@ func NewSTTUpdateSettingsFrame(delta any) *STTUpdateSettingsFrame {
 // String implements fmt.Stringer.
 func (f *STTUpdateSettingsFrame) String() string { return f.describe(f.Name()) }
 
+// Copy implements SettingsUpdate.
+func (f *STTUpdateSettingsFrame) Copy() SettingsUpdate {
+	c := *f
+	c.BaseControlFrame = NewBaseControlFrame("STTUpdateSettingsFrame")
+	return &c
+}
+
 var (
+	_ SettingsUpdate  = (*LLMUpdateSettingsFrame)(nil)
+	_ SettingsUpdate  = (*TTSUpdateSettingsFrame)(nil)
+	_ SettingsUpdate  = (*STTUpdateSettingsFrame)(nil)
 	_ Uninterruptible = (*LLMUpdateSettingsFrame)(nil)
 	_ Uninterruptible = (*TTSUpdateSettingsFrame)(nil)
 	_ Uninterruptible = (*STTUpdateSettingsFrame)(nil)

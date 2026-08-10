@@ -289,6 +289,18 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewHeartbeatFrame(1500 * time.Millisecond) },
 		},
 		{
+			label: "ManuallySwitchServiceFrame", cat: control, wantString: "service: svc",
+			build: func() frames.Frame {
+				return frames.NewManuallySwitchServiceFrame(namedProcessor("svc"))
+			},
+		},
+		{
+			label: "ServiceSwitcherRequestMetadataFrame", cat: control, wantString: "service: svc",
+			build: func() frames.Frame {
+				return frames.NewServiceSwitcherRequestMetadataFrame(namedProcessor("svc"))
+			},
+		},
+		{
 			label: "StopWorkerFrame", cat: control, uninterruptible: true,
 			build: func() frames.Frame { return frames.NewStopWorkerFrame() },
 		},
