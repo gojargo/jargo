@@ -317,11 +317,17 @@ func (t *Task) Run(ctx context.Context) error {
 		return err
 	}
 
-	runErr := t.runLoop(runCtx)
+	endFrame, runErr := t.runLoop(runCtx)
 
+	// A StopFrame ends the run but leaves the processors up, connections and
+	// all, ready for another one. Cleaning up here would shut down the very
+	// thing it asked to keep. Every other way of ending tears the pipeline down.
+	//
 	// Clean up with a fresh context so a canceled runCtx does not abort the
 	// goroutine shutdown.
-	_ = t.pipeline.Cleanup(context.Background())
+	if _, stopped := endFrame.(*frames.StopFrame); !stopped {
+		_ = t.pipeline.Cleanup(context.Background())
+	}
 
 	// The conversation span closes last, once the processors have stopped and
 	// the spans raised beneath it have ended.
@@ -334,8 +340,10 @@ func (t *Task) Run(ctx context.Context) error {
 }
 
 // runLoop sends the StartFrame, waits for the pipeline to be ready, then pushes
-// queued frames until a pipeline-ending frame has traveled through.
-func (t *Task) runLoop(ctx context.Context) error {
+// queued frames until a pipeline-ending frame has traveled through. It returns
+// that frame, so the caller can tell a StopFrame from the ways of ending that
+// shut the processors down, and nil when the context ended the run instead.
+func (t *Task) runLoop(ctx context.Context) (frames.Frame, error) {
 	t.clk.Start()
 
 	start := frames.NewStartFrame()
@@ -345,31 +353,31 @@ func (t *Task) runLoop(ctx context.Context) error {
 	start.EnableUsageMetrics = t.params.EnableUsageMetrics
 	start.ReportOnlyInitialTTFB = t.params.ReportOnlyInitialTTFB
 	if err := t.pipeline.QueueFrame(ctx, start, processor.Downstream); err != nil {
-		return err
+		return nil, err
 	}
 
 	select {
 	case <-t.startSig:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 
 	if t.params.EnableMetrics && boolValue(t.params.SendInitialEmptyMetrics, true) {
 		if err := t.pipeline.QueueFrame(ctx, t.initialMetricsFrame(), processor.Downstream); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	for {
 		f, ok := t.pushQueue.get(ctx)
 		if !ok {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		if err := t.pipeline.QueueFrame(ctx, f, processor.Downstream); err != nil {
-			return err
+			return nil, err
 		}
 		if isPipelineEnd(f) {
-			return t.waitPipelineEnd(ctx, f)
+			return f, t.waitPipelineEnd(ctx, f)
 		}
 	}
 }

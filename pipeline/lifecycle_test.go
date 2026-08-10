@@ -485,3 +485,65 @@ func TestPipelineFinishedReportsTheEndFrame(t *testing.T) {
 		t.Errorf("OnPipelineFinished frame = %v, want an EndFrame", calls[0])
 	}
 }
+
+// cleanupCounter records whether the pipeline tore it down.
+type cleanupCounter struct {
+	*processor.Base
+	mu      sync.Mutex
+	cleaned int
+}
+
+func newCleanupCounter() *cleanupCounter {
+	c := &cleanupCounter{}
+	c.Base = processor.New("CleanupCounter", c)
+	return c
+}
+
+func (c *cleanupCounter) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := c.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	return c.PushFrame(ctx, f, dir)
+}
+
+func (c *cleanupCounter) Cleanup(ctx context.Context) error {
+	c.mu.Lock()
+	c.cleaned++
+	c.mu.Unlock()
+	return c.Base.Cleanup(ctx)
+}
+
+func (c *cleanupCounter) cleanups() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cleaned
+}
+
+// TestStopFrameLeavesTheProcessorsUp checks a StopFrame ends the run without
+// tearing the pipeline down, which is the whole difference between it and an
+// EndFrame: the processors keep their connections open, ready for another run.
+func TestStopFrameLeavesTheProcessorsUp(t *testing.T) {
+	tests := []struct {
+		name        string
+		end         func() frames.Frame
+		wantCleanup int
+	}{
+		{"EndFrame tears the pipeline down", func() frames.Frame { return frames.NewEndFrame() }, 1},
+		{"StopFrame leaves it up", func() frames.Frame { return frames.NewStopFrame() }, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := newCleanupCounter()
+			task := pipeline.NewTask(pipeline.New(counter), pipeline.TaskParams{})
+
+			done := runTask(t, task)
+			task.QueueFrame(tt.end())
+			waitDone(t, done)
+
+			if got := counter.cleanups(); got != tt.wantCleanup {
+				t.Errorf("processor cleanups = %d, want %d", got, tt.wantCleanup)
+			}
+		})
+	}
+}
