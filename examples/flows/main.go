@@ -116,7 +116,12 @@ func runBot(conn *rtc.Connection) {
 		EnableUsageMetrics: true,
 	})
 
-	fm, err := flows.New(flows.Config{LLM: llmSvc, Context: convo, Enqueuer: task})
+	fm, err := flows.New(flows.Config{
+		Enqueuer:    task,
+		Watcher:     task,
+		Aggregators: agg,
+		LLM:         llmSvc,
+	})
 	if err != nil {
 		slog.Error("build flow manager", "err", err)
 		return
@@ -154,7 +159,6 @@ func startNode() *flows.NodeConfig {
 		Functions: []flows.NodeFunction{{
 			Name:        "start_order",
 			Description: "The customer is ready to place their order.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
 			Handler:     startOrder,
 		}},
 	}
@@ -172,15 +176,12 @@ func orderNode() *flows.NodeConfig {
 		Functions: []flows.NodeFunction{{
 			Name:        "record_order",
 			Description: "Record the order once the drink and size are known.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"drink": {"type": "string", "description": "The drink the customer ordered."},
-					"size": {"type": "string", "description": "The size of the drink."}
-				},
-				"required": ["drink", "size"]
-			}`),
-			Handler: recordOrder,
+			Properties: map[string]any{
+				"drink": map[string]any{"type": "string", "description": "The drink the customer ordered."},
+				"size":  map[string]any{"type": "string", "description": "The size of the drink."},
+			},
+			Required: []string{"drink", "size"},
+			Handler:  recordOrder,
 		}},
 	}
 }
