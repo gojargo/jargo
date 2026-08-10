@@ -177,7 +177,7 @@ func (s *Service) turn(ctx context.Context, convo *frames.LLMContext, sink llm.S
 		return err
 	}
 
-	req, err := s.cfg.newRequest(convo, adapter.Options{}, withTools)
+	req, err := s.cfg.newRequest(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools)
 	if err != nil {
 		return err
 	}

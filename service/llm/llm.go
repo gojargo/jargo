@@ -341,6 +341,21 @@ type Base struct {
 	ttfb      time.Duration
 	hasTTFB   bool
 
+	// The system instruction this service sends, and the parts it is composed
+	// from. baseSystemInstruction is the prompt the application set, which every
+	// rebuild starts from; appendedSystemInstructions are the additions a
+	// framework component made; systemInstruction is the composition of the two,
+	// which is what a generation reads. See system.go.
+	systemMu                   sync.Mutex
+	baseSystemInstruction      string
+	appendedSystemInstructions []string
+	systemInstruction          string
+
+	// settings are the general LLM settings, used when the provider keeps none of
+	// its own. A provider with settings of its own carries these fields inside
+	// them, so an update reaches whichever store the service actually has.
+	settings settings.LLM
+
 	// skipTTSMu guards skipTTS, which an LLMConfigureOutputFrame sets from the
 	// frame path while a response is being pushed from the process goroutine.
 	skipTTSMu sync.Mutex
@@ -743,12 +758,7 @@ func missingFunctionHandler(ctx context.Context, params FunctionCallParams) erro
 // act on what changed. There is no reconnection here: a generation is a request
 // of its own, so a provider reads its settings the next time it generates.
 func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFrame) {
-	holder, ok := b.gen.(SettingsHolder)
-	if !ok {
-		slog.Warn("settings update for a service whose provider has none", "service", b.Name())
-		return
-	}
-	store := holder.Settings()
+	store := b.settingsStore()
 
 	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
 	if err != nil {
@@ -778,11 +788,31 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		b.SetModel(model)
 	}
 
+	if changed.Has("system_instruction") {
+		// The application replaced the base prompt, so it is re-read and the
+		// composed instruction rebuilt from it. Rebuilding rather than assigning is
+		// what keeps whatever was composed onto the prompt in place.
+		instruction, _ := settings.Get(store, "system_instruction")
+		text, _ := instruction.(string)
+		b.SetSystemInstruction(text)
+	}
+
 	if updater, ok := b.gen.(SettingsUpdater); ok {
 		if err := updater.UpdateSettings(ctx, changed); err != nil {
 			b.PushError(ctx, "llm: settings update", err, false)
 		}
 	}
+}
+
+// settingsStore returns the settings an update is applied to: the provider's
+// own where it keeps any, and otherwise the general LLM settings the base holds
+// for it. Every LLM service therefore answers a settings update, whether or not
+// its provider has settings of its own to add.
+func (b *Base) settingsStore() any {
+	if holder, ok := b.gen.(SettingsHolder); ok {
+		return holder.Settings()
+	}
+	return &b.settings
 }
 
 // ProcessFrame runs the generator on each LLMContextFrame and forwards other

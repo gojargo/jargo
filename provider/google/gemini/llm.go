@@ -96,7 +96,7 @@ type genChunk struct {
 
 // Generate streams a Gemini completion, emitting each text delta.
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	body, err := s.requestBody(convo, adapter.Options{}, false)
+	body, err := s.requestBody(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, false)
 	if err != nil {
 		return err
 	}
@@ -250,7 +250,7 @@ func (s *Service) stream(req *http.Request, emit llm.Emit) error {
 // conversation's tools are sent on the request, and any tool turns already in
 // the context are replayed as functionCall / functionResponse parts.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	body, err := s.requestBody(convo, adapter.Options{}, true)
+	body, err := s.requestBody(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, true)
 	if err != nil {
 		return err
 	}

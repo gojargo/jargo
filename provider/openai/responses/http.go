@@ -57,7 +57,7 @@ func (s *HTTPService) RunInference(
 
 // run issues one turn and feeds its event stream to the state machine.
 func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
-	reqBody, err := s.cfg.newRequest(convo, adapter.Options{}, withTools)
+	reqBody, err := s.cfg.newRequest(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools)
 	if err != nil {
 		return err
 	}

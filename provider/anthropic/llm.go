@@ -157,7 +157,7 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	report := s.UsageMetricsEnabled()
 	var acc sdk.Message
-	params, err := s.newParams(convo, adapter.Options{})
+	params, err := s.newParams(convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
 	if err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 // the request, and any tool-use / tool-result turns already in the context are
 // replayed as the matching Anthropic blocks.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	params, err := s.newParams(convo, adapter.Options{})
+	params, err := s.newParams(convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
 	if err != nil {
 		return err
 	}

@@ -297,7 +297,7 @@ func (textSink) Tool(frames.ToolCall) error { return nil }
 
 // Generate streams a chat completion, emitting each content delta.
 func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	reqBody, err := s.baseRequest(convo, adapter.Options{})
+	reqBody, err := s.baseRequest(convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
 	if err != nil {
 		return err
 	}
@@ -313,7 +313,7 @@ func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emi
 // the model produced. The conversation's tools are sent on the request, and any
 // tool turns already in the context are replayed as the matching messages.
 func (s *LLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	reqBody, err := s.baseRequest(convo, adapter.Options{})
+	reqBody, err := s.baseRequest(convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
 	if err != nil {
 		return err
 	}
