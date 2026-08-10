@@ -136,6 +136,72 @@ func (t *Task) heartbeatPushLoop(ctx context.Context) {
 	}
 }
 
+// idleObserver signals activity whenever a frame the caller counts as activity
+// is pushed anywhere in the pipeline. It is how the task tells a conversation
+// that has gone quiet from one that is merely between turns.
+type idleObserver struct {
+	match FrameFilter
+	sig   chan<- struct{}
+}
+
+// OnPushFrame implements processor.Observer.
+func (o *idleObserver) OnPushFrame(data processor.FramePushed) {
+	// The StartFrame counts, so the first idle interval is measured from the
+	// pipeline coming up rather than from the task being built.
+	if _, isStart := data.Frame.(*frames.StartFrame); !isStart && !o.match.selects(data.Frame) {
+		return
+	}
+	// A frame is reported at every handover, so the same one arrives many times.
+	// A non-blocking send onto a channel holding one signal absorbs that: the
+	// monitor only needs to know something happened, not how often.
+	select {
+	case o.sig <- struct{}{}:
+	default:
+	}
+}
+
+// idleMonitorLoop watches for the pipeline going quiet for longer than the idle
+// timeout.
+func (t *Task) idleMonitorLoop(ctx context.Context) {
+	for {
+		timer := time.NewTimer(t.params.IdleTimeout)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-t.idleSig:
+			timer.Stop()
+		case <-timer.C:
+			if !t.idleTimeoutReached() {
+				return
+			}
+		}
+	}
+}
+
+// idleTimeoutReached reports the pipeline going quiet and returns whether to
+// keep watching.
+func (t *Task) idleTimeoutReached() bool {
+	// Already on the way out, so there is nothing left to notice.
+	if t.isCanceling() {
+		return false
+	}
+
+	slog.Warn("the pipeline has gone quiet", "timeout", t.params.IdleTimeout)
+	if t.params.OnIdleTimeout != nil {
+		t.params.OnIdleTimeout()
+	}
+	if !boolValue(t.params.CancelOnIdleTimeout, true) {
+		// The caller wants to hear about it and decide for itself, so keep
+		// watching and report the next stretch of quiet too.
+		return true
+	}
+
+	slog.Warn("canceling the idle pipeline")
+	t.cancelWithReason("idle timeout")
+	return false
+}
+
 // heartbeatMonitorLoop watches the heartbeats arriving at the end of the
 // pipeline and reports the interval passing with none.
 //

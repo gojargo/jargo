@@ -31,6 +31,9 @@ const (
 	// defaultHeartbeatMonitorTimeout is how long the monitor goes without a
 	// heartbeat before reporting the silence.
 	defaultHeartbeatMonitorTimeout = 10 * time.Second
+	// defaultIdleTimeout is how long the pipeline may go without the frames that
+	// count as activity before it is considered idle.
+	defaultIdleTimeout = 5 * time.Minute
 )
 
 // TaskParams configures a Task.
@@ -78,6 +81,21 @@ type TaskParams struct {
 	// of the pipeline within HeartbeatMonitorTimeout. It is called again every
 	// interval for as long as the silence lasts.
 	OnHeartbeatTimeout func()
+	// IdleTimeout is how long the pipeline may go without any of the frames
+	// IdleTimeoutFrames selects before it counts as idle; zero defaults to five
+	// minutes and a negative value turns idle detection off.
+	IdleTimeout time.Duration
+	// IdleTimeoutFrames selects the frames that count as the pipeline being
+	// busy; nil counts the assistant or the user speaking. The StartFrame always
+	// counts, so the first stretch is measured from the pipeline coming up.
+	IdleTimeoutFrames FrameFilter
+	// CancelOnIdleTimeout cancels the task once the pipeline has gone idle; nil
+	// defaults to true. Setting it false reports the idle pipeline and leaves it
+	// running, and goes on reporting each further stretch of quiet.
+	CancelOnIdleTimeout *bool
+	// OnIdleTimeout, if set, is called when the pipeline has gone idle, before
+	// it is canceled.
+	OnIdleTimeout func()
 	// OnPipelineStarted, if set, is called once the StartFrame has traveled the
 	// whole pipeline, meaning every processor is up and the pipeline is ready.
 	OnPipelineStarted func(*frames.StartFrame)
@@ -159,11 +177,12 @@ type Task struct {
 	reachedDownFilter FrameFilter
 	reachedUpFilter   FrameFilter
 
-	// monitors is the scope the task's background goroutines run in, and
-	// heartbeats is the queue the sink hands each arriving heartbeat to for the
-	// monitor to time.
+	// monitors is the scope the task's background goroutines run in, heartbeats
+	// is the queue the sink hands each arriving heartbeat to for the monitor to
+	// time, and idleSig carries the activity the idle observer reports.
 	monitors   monitors
 	heartbeats *frameQueue
+	idleSig    chan struct{}
 
 	startOnce sync.Once
 	startSig  chan struct{}
@@ -193,11 +212,21 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 	if params.HeartbeatMonitorTimeout == 0 {
 		params.HeartbeatMonitorTimeout = defaultHeartbeatMonitorTimeout
 	}
+	if params.IdleTimeout == 0 {
+		params.IdleTimeout = defaultIdleTimeout
+	}
+	if params.IdleTimeoutFrames == nil {
+		params.IdleTimeoutFrames = FrameTypes(
+			&frames.BotSpeakingFrame{},
+			&frames.UserSpeakingFrame{},
+		)
+	}
 	t := &Task{
 		params:            params,
 		clk:               params.Clock,
 		pushQueue:         newFrameQueue(),
 		heartbeats:        newFrameQueue(),
+		idleSig:           make(chan struct{}, 1),
 		startSig:          make(chan struct{}),
 		endSig:            make(chan struct{}),
 		reachedDownFilter: params.ReachedDownstreamFilter,
@@ -220,6 +249,12 @@ func NewTask(pipe processor.Processor, params TaskParams) *Task {
 // latency measurement that feed it.
 func (t *Task) buildObservers() {
 	t.observers = append([]Observer(nil), t.params.Observers...)
+	if t.params.IdleTimeout > 0 {
+		t.observers = append(t.observers, &idleObserver{
+			match: t.params.IdleTimeoutFrames,
+			sig:   t.idleSig,
+		})
+	}
 	if !t.params.EnableTracing {
 		return
 	}
@@ -418,6 +453,13 @@ func (t *Task) cancelWithReason(reason string) {
 	t.QueueFrame(cancel)
 }
 
+// isCanceling reports whether a CancelFrame has already been queued.
+func (t *Task) isCanceling() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.canceling
+}
+
 // HasFinished reports whether the task has finished running.
 func (t *Task) HasFinished() bool {
 	t.mu.Lock()
@@ -477,6 +519,12 @@ func (t *Task) Run(ctx context.Context) error {
 // shut the processors down, and nil when the context ended the run instead.
 func (t *Task) runLoop(ctx context.Context) (frames.Frame, error) {
 	t.clk.Start()
+
+	// Watching starts before the StartFrame goes out, so a pipeline that never
+	// comes to life is noticed too.
+	if t.params.IdleTimeout > 0 {
+		t.monitors.spawn(t.idleMonitorLoop)
+	}
 
 	start := frames.NewStartFrame()
 	start.AudioInSampleRate = t.params.AudioInSampleRate

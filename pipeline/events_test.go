@@ -338,3 +338,113 @@ func TestHeartbeatTimeoutKeepsReporting(t *testing.T) {
 	task.StopWhenDone()
 	waitDone(t, runDone)
 }
+
+// TestIdlePipelineIsCanceled checks a pipeline that goes quiet is reported and
+// canceled, which is what keeps an abandoned session from running forever.
+func TestIdlePipelineIsCanceled(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		reports  int
+		finished frames.Frame
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		IdleTimeout: 80 * time.Millisecond,
+		OnIdleTimeout: func() {
+			mu.Lock()
+			reports++
+			mu.Unlock()
+		},
+		OnPipelineFinished: func(f frames.Frame) {
+			mu.Lock()
+			finished = f
+			mu.Unlock()
+		},
+	})
+
+	done := runTask(t, task)
+	waitDone(t, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if reports != 1 {
+		t.Errorf("OnIdleTimeout called %d times, want 1", reports)
+	}
+	if _, ok := finished.(*frames.CancelFrame); !ok {
+		t.Errorf("run ended with %v, want a CancelFrame", finished)
+	}
+}
+
+// TestIdleTimeoutCanLeaveTheRunAlone checks a caller can hear about the quiet
+// and decide for itself, and that it keeps hearing about it.
+func TestIdleTimeoutCanLeaveTheRunAlone(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		reports int
+	)
+	enough := make(chan struct{})
+	var once sync.Once
+
+	no := false
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		IdleTimeout:         50 * time.Millisecond,
+		CancelOnIdleTimeout: &no,
+		OnIdleTimeout: func() {
+			mu.Lock()
+			reports++
+			done := reports >= 2
+			mu.Unlock()
+			if done {
+				once.Do(func() { close(enough) })
+			}
+		},
+	})
+
+	done := runTask(t, task)
+	select {
+	case <-enough:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the idle pipeline was reported once and then went unwatched")
+	}
+	if task.HasFinished() {
+		t.Error("the task was canceled despite CancelOnIdleTimeout being false")
+	}
+
+	task.StopWhenDone()
+	waitDone(t, done)
+}
+
+// TestActivityKeepsThePipelineAlive checks the frames that count as activity
+// hold the idle timeout off.
+func TestActivityKeepsThePipelineAlive(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		reports int
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		IdleTimeout: 100 * time.Millisecond,
+		OnIdleTimeout: func() {
+			mu.Lock()
+			reports++
+			mu.Unlock()
+		},
+	})
+
+	done := runTask(t, task)
+	// Speak often enough that the pipeline is never quiet for a whole interval.
+	for range 8 {
+		task.QueueFrame(&frames.BotSpeakingFrame{
+			BaseSystemFrame: frames.NewBaseSystemFrame("BotSpeakingFrame"),
+		})
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	mu.Lock()
+	got := reports
+	mu.Unlock()
+	if got != 0 {
+		t.Errorf("OnIdleTimeout called %d times, want 0 while the bot was speaking", got)
+	}
+
+	task.StopWhenDone()
+	waitDone(t, done)
+}
