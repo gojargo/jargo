@@ -42,6 +42,9 @@ vendor/
 # Per-developer local Claude memory (never committed)
 CLAUDE.local.md
 
+# Native runtimes fetched by `make deps-onnx` / `make deps-rnnoise`
+/.native/
+
 # Hugo documentation site build output (website/; sources are in docs/)
 /website/public/
 /website/resources/_gen/
