@@ -44,6 +44,22 @@ Formatting and lint are enforced by **golangci-lint** (`.golangci.yml`):
 - `golangci-lint fmt` — apply the configured formatters (`gofmt -s`, `gofumpt`,
   `goimports`). Code must be clean under all three.
 
+Everything above is a one-liner and stays here. Anything longer lives in the
+[`Makefile`](Makefile), which the workflows call for the steps they share, so a
+CI failure can be reproduced locally. `make help` lists the targets; the ones
+worth knowing:
+
+- `make build-matrix`: compile all five cgo tag combinations, as CI does.
+- `make cover`: the coverage run and its total, the profile CI uploads. Break it
+  down with `make cover-func` or `make cover-html`.
+- `make generate`: regenerate the Riva protobuf clients with pinned tool
+  versions. CI runs `make generate-check` and fails if the tree is stale.
+- `make docs-check`: build the site and fail on unresolved documentation links.
+- `make deps`, `make deps-onnx`, `make deps-rnnoise`: install the cgo headers
+  and the two native runtimes above. The last two need no root: they install
+  under `.native/` and print the `JARGO_*_LIB` values to export.
+- `make vuln`, `make secrets`: the govulncheck and gitleaks scans CI gates on.
+
 ## Conventions
 
 - **No upstream references in code.** Keep Pipecat/Python out of `.go` comments;
