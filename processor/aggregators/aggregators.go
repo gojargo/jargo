@@ -286,14 +286,7 @@ func (u *UserAggregator) appendMessages(msgs []frames.Message) {
 func (u *UserAggregator) handleTranscription(
 	ctx context.Context, fr *frames.TranscriptionFrame,
 ) error {
-	u.mu.Lock()
-	if fr.Text != "" {
-		if u.aggregation != "" {
-			u.aggregation += " "
-		}
-		u.aggregation += fr.Text
-	}
-	u.mu.Unlock()
+	u.aggregate(fr.Text)
 
 	if u.turnTaking {
 		// A transcript only adds to the aggregation. What is aggregated is
@@ -308,6 +301,37 @@ func (u *UserAggregator) handleTranscription(
 		return u.maybeRun(ctx)
 	}
 	return nil
+}
+
+// aggregate folds a transcript into what the turn has said so far.
+//
+// With turn taking it runs under the turn controller's lock. Ending a turn
+// commits the aggregation twice: once when a stop strategy says there is enough
+// to answer, and again when it finalizes, so that anything the user added
+// between the two still reaches the model. Both run from the strategy's timer,
+// under that lock, and a transcript folded in between them would be committed on
+// its own: a second user message holding the tail of a sentence, and a second
+// inference answering it. A streaming service is entitled to deliver one
+// utterance as several final transcripts, so this is speech arriving as
+// expected, not a fault. Taking the lock puts the transcript either side of the
+// pair rather than inside it.
+func (u *UserAggregator) aggregate(text string) {
+	if text == "" {
+		return
+	}
+	fold := func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		if u.aggregation != "" {
+			u.aggregation += " "
+		}
+		u.aggregation += text
+	}
+	if u.turn != nil {
+		u.turn.Locked(fold)
+		return
+	}
+	fold()
 }
 
 // maybeRun commits the aggregated user message and triggers the LLM on it.

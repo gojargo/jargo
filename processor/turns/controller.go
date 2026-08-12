@@ -85,6 +85,22 @@ func (c *UserTurnController) Cleanup() {
 	}
 }
 
+// Locked runs fn with the controller's lock held, so a caller can keep its own
+// turn-scoped state in step with the decisions the strategies make.
+//
+// A strategy decides a turn is over from a timer, and the whole stop sequence
+// runs from that timer under this lock: the inference trigger and the
+// finalization that follows it are one indivisible step. State a caller updates
+// through here therefore cannot land in the middle of that step, only before or
+// after it, which is what keeps a turn's end from being observed half-made.
+//
+// fn must not push frames or re-enter the controller.
+func (c *UserTurnController) Locked(fn func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fn()
+}
+
 // Process taps one frame: it updates the speaking flag, re-arms the watchdog, and
 // runs the start then stop strategy chains. It holds the mutex throughout, so the
 // strategies' synchronous Trigger* callbacks run safely without re-locking.
