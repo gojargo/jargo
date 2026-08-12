@@ -92,3 +92,11 @@ func TestSerializeInterruption(t *testing.T) {
 		t.Fatalf("clear = %+v", out)
 	}
 }
+
+// TestSetupIsANoOp checks the serializer needs nothing from the StartFrame:
+// Exotel audio is always 8 kHz, so there is no rate to reconcile.
+func TestSetupIsANoOp(t *testing.T) {
+	if err := New(Config{}).Setup(frames.NewStartFrame()); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+}
