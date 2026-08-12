@@ -607,6 +607,15 @@ func (t *Task) Run(ctx context.Context) error {
 	t.runCtx = pipeCtx
 	t.mu.Unlock()
 
+	// The conversation span opens before anything can be traced under it. The
+	// turn-trace observer opens it on the StartFrame too, which is the only
+	// chance an observer wired up by hand gets, but that report reaches it off
+	// the frame path: a service raising its span for the first frame of the
+	// conversation can win the race and leave its span rooted in a trace of its
+	// own. Opening it here settles the order, and the observer then finds it
+	// already open.
+	t.turnTrace.StartConversation(t.params.ConversationID)
+
 	// The processors are handed one observer, the proxy, which passes each
 	// report on to the real ones off the frame path.
 	t.observerProxy.start()

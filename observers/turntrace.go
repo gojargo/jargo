@@ -69,9 +69,14 @@ func (o *TurnTrace) OnPushFrame(data processor.FramePushed) {
 }
 
 // StartConversation opens the conversation span under id, generating one when id
-// is empty. It is called for you on the pipeline's StartFrame; call it earlier
-// only to open the conversation before the pipeline runs.
+// is empty. The task calls it before the pipeline runs, and the StartFrame
+// handler above calls it for an observer wired up by hand. Whichever comes
+// first opens the span; the other finds it open and returns. A nil observer (a
+// task that is not tracing) has nothing to open.
 func (o *TurnTrace) StartConversation(id string) {
+	if o == nil {
+		return
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.conversation != nil {
