@@ -326,3 +326,15 @@ func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
 // add the tools it implements itself to what every request advertises. It
 // implements llm.AdapterHolder.
 func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+
+// MessagesForLogging renders the conversation as this provider will see it, for
+// the generation span. It implements llm.TraceRenderer.
+func (s *Service) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
+	return s.adapter.MessagesForLogging(convo)
+}
+
+// ToolsForLogging renders the toolset as this provider will see it, for the
+// generation span. It implements llm.TraceRenderer.
+func (s *Service) ToolsForLogging(schema frames.ToolsSchema) []any {
+	return adapter.ToolsForLogging(&s.adapter, schema)
+}

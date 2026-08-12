@@ -21,7 +21,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gojargo/jargo/audio/onset"
 	"github.com/gojargo/jargo/frames"
@@ -898,9 +897,7 @@ func (b *Base) pushTTSFrames(
 	if c == nil {
 		return nil
 	}
-	// Providers bill per character, so count runes: len would charge an accented
-	// character twice.
-	c.addChars(utf8.RuneCountInString(filtered))
+	c.addText(filtered)
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
 		aggregated, contextID, filtered, appendToContext, b.wordPath(), false))
 	return b.runTTS(ctx, c, contextID, original, filtered, appendToContext)

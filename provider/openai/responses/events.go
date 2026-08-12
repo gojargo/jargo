@@ -93,7 +93,7 @@ func (u usage) tokenUsage() frames.LLMTokenUsage {
 		TotalTokens:      u.TotalTokens,
 	}
 	if u.InputTokensDetails != nil {
-		out.CacheReadTokens = u.InputTokensDetails.CachedTokens
+		out.CacheReadTokens = new(u.InputTokensDetails.CachedTokens)
 	}
 	return out
 }

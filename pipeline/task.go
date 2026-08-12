@@ -601,10 +601,11 @@ func (t *Task) Run(ctx context.Context) error {
 	// report on to the real ones off the frame path.
 	t.observerProxy.start()
 	setup := processor.Setup{
-		Clock:     t.clk,
-		Observers: []processor.Observer{t.observerProxy},
-		Tracing:   t.tracing,
-		Running:   t,
+		Clock:          t.clk,
+		Observers:      []processor.Observer{t.observerProxy},
+		Tracing:        t.tracing,
+		TracingEnabled: t.params.EnableTracing,
+		Running:        t,
 	}
 	if err := t.pipeline.Setup(pipeCtx, setup); err != nil {
 		return err

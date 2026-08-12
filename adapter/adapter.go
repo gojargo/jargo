@@ -90,6 +90,24 @@ type Identifier interface {
 	IDForLLMSpecificMessages() string
 }
 
+// ToolsForLogging renders the advertised toolset in the provider's own format,
+// boxed so that a caller which cannot name that provider's tool type can still
+// carry it. It is for a log or a trace, where what matters is showing the
+// toolset the model was actually sent rather than the universal form it was
+// converted from.
+//
+// It is a function rather than a method because an adapter's tool type is a
+// parameter of its interface, and a service reporting on itself is reached
+// through an interface that cannot name it.
+func ToolsForLogging[P, T any](a LLMAdapter[P, T], schema frames.ToolsSchema) []any {
+	tools := a.ToProviderToolsFormat(schema)
+	out := make([]any, len(tools))
+	for i, t := range tools {
+		out[i] = t
+	}
+	return out
+}
+
 // CreateLLMSpecificMessage builds a conversation message written in a's
 // provider's own format, for something the universal conversation has no
 // representation for. Only a's provider is sent it; every other adapter leaves

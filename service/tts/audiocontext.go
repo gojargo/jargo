@@ -2,14 +2,16 @@ package tts
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	uctx "github.com/gojargo/jargo/utils/context"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -121,6 +123,11 @@ type audioContext struct {
 	start time.Time
 	rate  int
 	chars int
+	// texts are the sentences spoken on this context, in the order they were
+	// sent. One context covers a whole utterance, which sentence aggregation
+	// splits into several synthesis calls, so the span reports the utterance
+	// rather than whichever sentence happened to be last.
+	texts []string
 	meter ttfaMeter
 	span  trace.Span
 	// spanCtx carries span, so the usage recorded when the context finishes
@@ -147,12 +154,15 @@ func newAudioContext(rate int, report bool, spanCtx context.Context, span trace.
 	}
 }
 
-// addChars records the characters of a sentence sent on this context. Providers
-// bill per character.
-func (c *audioContext) addChars(n int) {
+// addText records a sentence sent on this context, and the characters it cost.
+// Providers bill per character, and the count is in runes because that is the
+// unit they bill in: an accented character is one character, not the two bytes
+// it occupies.
+func (c *audioContext) addText(text string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.chars += n
+	c.texts = append(c.texts, text)
+	c.chars += utf8.RuneCountInString(text)
 }
 
 // observe folds one chunk of this context's audio into the measurement.
@@ -206,6 +216,13 @@ func (c *audioContext) measurement() (chars int, meter ttfaMeter, elapsed time.D
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.chars, c.meter, time.Since(c.start)
+}
+
+// spoken is everything sent on this context, as one utterance.
+func (c *audioContext) spoken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.texts, " ")
 }
 
 // push appends an item and wakes the drain loop. It never blocks.
@@ -332,6 +349,37 @@ func (b *Base) stopAudioContexts() {
 	}
 	cancel()
 	b.ctxWG.Wait()
+	b.abandonOpenAudioContexts()
+}
+
+// abandonOpenAudioContexts closes the spans of the contexts still open once the
+// drain loop has stopped. The context that was playing closed its own span on
+// the way out; these are the ones queued behind it, which an interruption drops
+// without ever speaking. Their spans would otherwise stay open and never be
+// exported, so the utterance the user cut off would vanish from the trace
+// instead of being recorded as cut off.
+func (b *Base) abandonOpenAudioContexts() {
+	b.audioCtxMu.Lock()
+	open := b.audioContexts
+	b.audioContexts = map[string]*audioContext{}
+	b.audioCtxMu.Unlock()
+	for _, c := range open {
+		b.abandonAudioContext(c)
+	}
+}
+
+// traceSettings renders the provider's settings for a synthesis span. A provider
+// that keeps no settings of its own contributes none.
+func (b *Base) traceSettings() map[string]any {
+	holder, ok := b.syn.(SettingsHolder)
+	if !ok {
+		return nil
+	}
+	given, err := settings.Given(holder.Settings())
+	if err != nil {
+		return nil
+	}
+	return given
 }
 
 // drainAudioContexts shuts the serialization queue down gracefully and returns
@@ -360,15 +408,13 @@ func (b *Base) CreateAudioContext(contextID string) {
 	// The context is played out on the serialization queue, long after the frame
 	// that opened it was processed, so the span is parented explicitly to the
 	// turn being spoken rather than through a context that is already gone.
-	spanCtx, span := tracing.Tracer().Start(b.Tracing().Parent(context.Background()), "tts")
-	span.SetAttributes(
-		attribute.String("tts.service", b.Name()),
-		attribute.Int("tts.sample_rate", b.syn.SampleRate()),
-		attribute.String("gen_ai.output.type", "speech"),
-	)
-	if b.meta.VoiceID != "" {
-		span.SetAttributes(attribute.String("gen_ai.request.voice", b.meta.VoiceID))
-	}
+	spanCtx, span := b.StartSpan(context.Background(), "tts")
+	tracing.SetTTSAttributes(span, tracing.TTSAttributes{
+		Service:  b.TypeName(),
+		Model:    b.meta.Model,
+		VoiceID:  b.meta.VoiceID,
+		Settings: b.traceSettings(),
+	})
 	b.audioCtxMu.Lock()
 	if b.audioContexts == nil {
 		b.audioContexts = map[string]*audioContext{}
@@ -665,15 +711,44 @@ func (b *Base) releaseResponseEnd(ctx context.Context, contextID string) {
 // finishAudioContext records what the context cost and closes its span.
 func (b *Base) finishAudioContext(ctx context.Context, c *audioContext) {
 	chars, meter, elapsed := c.measurement()
-	c.span.SetAttributes(attribute.Int("tts.chars", chars))
+	attrs := tracing.TTSAttributes{
+		Service:        b.TypeName(),
+		Model:          b.meta.Model,
+		VoiceID:        b.meta.VoiceID,
+		Text:           c.spoken(),
+		CharacterCount: &chars,
+		Settings:       b.traceSettings(),
+	}
 	if meter.hadTTFB {
-		c.span.SetAttributes(attribute.Int64("tts.ttfb_ms", meter.ttfb.Milliseconds()))
+		ttfb := meter.ttfb.Seconds()
+		attrs.TTFB = &ttfb
 	}
 	if meter.hadTTFA {
-		c.span.SetAttributes(attribute.Int64("tts.ttfa_ms", meter.ttfa.Milliseconds()))
+		// Time to the first audible sample has no key in the GenAI conventions,
+		// which measure the response rather than when it starts being heard.
+		attrs.Extra = map[string]any{"metrics.ttfa": meter.ttfa.Seconds()}
 	}
+	tracing.SetTTSAttributes(c.span, attrs)
 	tracing.SetTTSUsage(c.spanCtx, b.meta.Model, chars)
 	b.emitTiming(ctx, chars, &meter, elapsed)
+	c.span.End()
+}
+
+// abandonAudioContext closes the span of a context an interruption dropped
+// before it was ever played. The contexts queued behind the one being spoken are
+// discarded whole when the user cuts in, and without this their spans would stay
+// open and never be exported.
+func (b *Base) abandonAudioContext(c *audioContext) {
+	chars, _, _ := c.measurement()
+	tracing.SetTTSAttributes(c.span, tracing.TTSAttributes{
+		Service:        b.TypeName(),
+		Model:          b.meta.Model,
+		VoiceID:        b.meta.VoiceID,
+		Text:           c.spoken(),
+		CharacterCount: &chars,
+		Settings:       b.traceSettings(),
+		Extra:          map[string]any{"tts.interrupted": true},
+	})
 	c.span.End()
 }
 

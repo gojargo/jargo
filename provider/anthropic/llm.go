@@ -142,8 +142,8 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 	return frames.LLMTokenUsage{
 		PromptTokens:        u.InputTokens,
 		CompletionTokens:    u.OutputTokens,
-		CacheReadTokens:     u.CacheReadInputTokens,
-		CacheCreationTokens: u.CacheCreationInputTokens,
+		CacheReadTokens:     new(u.CacheReadInputTokens),
+		CacheCreationTokens: new(u.CacheCreationInputTokens),
 		// The input count is reported net of the cache, so the cached tokens are
 		// added back: the total stays the gross figure, comparable with a
 		// service whose provider supplies it that way already.
@@ -308,3 +308,15 @@ func supportsPrefill(model string) bool {
 // add the tools it implements itself to what every request advertises. It
 // implements llm.AdapterHolder.
 func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+
+// MessagesForLogging renders the conversation as this provider will see it, for
+// the generation span. It implements llm.TraceRenderer.
+func (s *Service) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
+	return s.adapter.MessagesForLogging(convo)
+}
+
+// ToolsForLogging renders the toolset as this provider will see it, for the
+// generation span. It implements llm.TraceRenderer.
+func (s *Service) ToolsForLogging(schema frames.ToolsSchema) []any {
+	return adapter.ToolsForLogging(&s.adapter, schema)
+}

@@ -2,6 +2,7 @@ package tracing_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/gojargo/jargo/telemetry/tracing"
@@ -85,6 +86,76 @@ func TestNilTracingContext(t *testing.T) {
 	if tc.ConversationID() != "" {
 		t.Fatal("a nil tracing context should report no conversation")
 	}
+}
+
+// TestTracingContextsAreIsolated checks that two pipelines running at once do
+// not see each other's spans. Each task creates its own context, and that is
+// what keeps concurrent conversations in separate traces.
+func TestTracingContextsAreIsolated(t *testing.T) {
+	a, b := tracing.NewTracingContext(), tracing.NewTracingContext()
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2},
+	})
+
+	a.SetConversationContext(sc, "conv-a")
+	a.SetTurnContext(sc)
+
+	if b.ConversationContext().IsValid() || b.TurnContext().IsValid() {
+		t.Fatal("one pipeline's spans should not be visible to another")
+	}
+	if b.ConversationID() != "" {
+		t.Fatalf("ConversationID() = %q, want empty", b.ConversationID())
+	}
+}
+
+// TestTracingContextClearsTurnOnly checks that closing a turn leaves the
+// conversation open, so the turn after it still has something to hang from.
+func TestTracingContextClearsTurnOnly(t *testing.T) {
+	tc := tracing.NewTracingContext()
+	conversation := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2},
+	})
+	turn := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{3},
+	})
+	tc.SetConversationContext(conversation, "conv-1")
+	tc.SetTurnContext(turn)
+
+	tc.SetTurnContext(trace.SpanContext{})
+	if tc.TurnContext().IsValid() {
+		t.Fatal("the turn should be cleared")
+	}
+	if !tc.ConversationContext().Equal(conversation) || tc.ConversationID() != "conv-1" {
+		t.Fatal("clearing the turn should leave the conversation open")
+	}
+}
+
+// TestTracingContextConcurrentAccess exercises the lock the tracing context
+// carries. Upstream runs single-threaded and needs none; here the observer
+// writes the turn from the frame path while services read it from goroutines of
+// their own, so the race detector has something to check.
+func TestTracingContextConcurrentAccess(t *testing.T) {
+	tc := tracing.NewTracingContext()
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2},
+	})
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 100 {
+				tc.SetTurnContext(sc)
+				tc.SetTurnContext(trace.SpanContext{})
+			}
+		})
+		wg.Go(func() {
+			for range 100 {
+				tc.Parent(context.Background())
+				tc.ConversationID()
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func TestGenerateConversationID(t *testing.T) {

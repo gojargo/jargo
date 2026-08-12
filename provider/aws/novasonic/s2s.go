@@ -315,10 +315,10 @@ func (s *Service) handleUsage(ctx context.Context, delta usageDelta) {
 		PromptTokens:      prompt,
 		CompletionTokens:  completion,
 		TotalTokens:       prompt + completion,
-		InputAudioTokens:  delta.Input.SpeechTokens,
-		OutputAudioTokens: delta.Output.SpeechTokens,
-		InputTextTokens:   delta.Input.TextTokens,
-		OutputTextTokens:  delta.Output.TextTokens,
+		InputAudioTokens:  new(delta.Input.SpeechTokens),
+		OutputAudioTokens: new(delta.Output.SpeechTokens),
+		InputTextTokens:   new(delta.Input.TextTokens),
+		OutputTextTokens:  new(delta.Output.TextTokens),
 	})
 }
 

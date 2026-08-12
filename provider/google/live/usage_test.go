@@ -2,6 +2,7 @@ package live
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -41,13 +42,13 @@ func TestUsageMetadataParsing(t *testing.T) {
 		PromptTokens:      100,
 		CompletionTokens:  40,
 		TotalTokens:       140,
-		CacheReadTokens:   12,
-		InputTextTokens:   30,
-		InputAudioTokens:  70,
-		OutputTextTokens:  5,
-		OutputAudioTokens: 35,
+		CacheReadTokens:   new(int64(12)),
+		InputTextTokens:   new(int64(30)),
+		InputAudioTokens:  new(int64(70)),
+		OutputTextTokens:  new(int64(5)),
+		OutputAudioTokens: new(int64(35)),
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("tokenUsage = %+v, want %+v", got, want)
 	}
 }

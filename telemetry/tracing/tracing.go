@@ -95,35 +95,33 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 	return tp.Shutdown, nil
 }
 
-// SetTokenUsage records LLM token usage on the span in ctx. It dual-writes the
-// legacy llm.tokens.* attributes and the OpenTelemetry GenAI gen_ai.usage.*
-// attributes, so both existing dashboards and OTel-native backends see the
-// counts under a single set of keys. The per-modality audio/text and cache
-// breakdowns (reported by realtime speech-to-speech models) are written only
-// when nonzero, so a text-only generation carries no empty realtime attributes.
+// SetTokenUsage records LLM token usage on the span in ctx, under the
+// OpenTelemetry GenAI gen_ai.usage.* keys.
+//
+// The input and output counts are always recorded. The cache and per-modality
+// breakdowns are recorded whenever the service accounted for them, a reported
+// zero included: on a model that caches, no cache read this generation is a
+// measurement, and one worth telling apart from a model that does not cache at
+// all. A count the service left unreported carries no attribute.
 func SetTokenUsage(ctx context.Context, u frames.LLMTokenUsage) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
-		attribute.Int64("llm.tokens.input", u.PromptTokens),
-		attribute.Int64("llm.tokens.output", u.CompletionTokens),
-		attribute.Int64("llm.tokens.total", u.TotalTokens),
 		attribute.Int64("gen_ai.usage.input_tokens", u.PromptTokens),
 		attribute.Int64("gen_ai.usage.output_tokens", u.CompletionTokens),
 	)
-	setPositive(span, "gen_ai.usage.input_audio_tokens", u.InputAudioTokens)
-	setPositive(span, "gen_ai.usage.output_audio_tokens", u.OutputAudioTokens)
-	setPositive(span, "gen_ai.usage.input_text_tokens", u.InputTextTokens)
-	setPositive(span, "gen_ai.usage.output_text_tokens", u.OutputTextTokens)
-	setPositive(span, "gen_ai.usage.cache_read.input_tokens", u.CacheReadTokens)
-	setPositive(span, "gen_ai.usage.cache_creation.input_tokens", u.CacheCreationTokens)
-	setPositive(span, "gen_ai.usage.reasoning_tokens", u.ReasoningTokens)
+	setReported(span, "gen_ai.usage.cache_read.input_tokens", u.CacheReadTokens)
+	setReported(span, "gen_ai.usage.cache_creation.input_tokens", u.CacheCreationTokens)
+	setReported(span, "gen_ai.usage.reasoning.output_tokens", u.ReasoningTokens)
+	setReported(span, "gen_ai.usage.audio.input_tokens", u.InputAudioTokens)
+	setReported(span, "gen_ai.usage.audio.output_tokens", u.OutputAudioTokens)
+	setReported(span, "gen_ai.usage.audio.cache_read.input_tokens", u.CacheReadAudioTokens)
 }
 
-// setPositive sets an int64 span attribute only when v is positive, keeping
-// unmeasured breakdown counts off spans that don't carry them.
-func setPositive(span trace.Span, key string, v int64) {
-	if v > 0 {
-		span.SetAttributes(attribute.Int64(key, v))
+// setReported sets an int64 span attribute for a count the service reported,
+// zero included, and leaves the attribute off one it did not report.
+func setReported(span trace.Span, key string, v *int64) {
+	if v != nil {
+		span.SetAttributes(attribute.Int64(key, *v))
 	}
 }
 

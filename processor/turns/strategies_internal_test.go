@@ -122,7 +122,7 @@ func TestVADStart(t *testing.T) {
 		t.Error("a transcript must not open a VAD-gated turn")
 	}
 
-	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0)); got != Stop {
+	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0, time.Now())); got != Stop {
 		t.Errorf("Process(vad start) = %v, want Stop", got)
 	}
 	if spy.starts() != 1 {
@@ -456,7 +456,7 @@ func TestExternalStart(t *testing.T) {
 	s := NewExternalStart()
 	spy := attachStart(s)
 
-	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0)); got != Continue {
+	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0, time.Now())); got != Continue {
 		t.Errorf("Process(vad) = %v, want Continue", got)
 	}
 	if spy.starts() != 0 {
@@ -1061,7 +1061,7 @@ func TestTurnAnalyzerSTTTimeoutAnchoredToSpeechEnd(t *testing.T) {
 	spy := attachStop(s)
 
 	spy.sendStop(s, frames.NewSTTMetadataFrame(sttP99))
-	spy.sendStop(s, frames.NewVADUserStartedSpeakingFrame(stopSecs))
+	spy.sendStop(s, frames.NewVADUserStartedSpeakingFrame(stopSecs, time.Now()))
 
 	// A transcript that is not final: only the safety net can release the turn.
 	spy.sendStop(s, transcript("hello"))

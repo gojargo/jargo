@@ -154,11 +154,11 @@ func TestCachedAndReasoningCountsReachTheReport(t *testing.T) {
 	if len(reported) != 1 {
 		t.Fatalf("reports = %+v, want exactly one", reported)
 	}
-	if reported[0].CacheReadTokens != 15 {
-		t.Errorf("cache-read tokens = %d, want 15", reported[0].CacheReadTokens)
+	if n, ok := frames.TokenCount(reported[0].CacheReadTokens); !ok || n != 15 {
+		t.Errorf("cache-read tokens = %d (reported: %v), want 15", n, ok)
 	}
-	if reported[0].ReasoningTokens != 8 {
-		t.Errorf("reasoning tokens = %d, want 8", reported[0].ReasoningTokens)
+	if n, ok := frames.TokenCount(reported[0].ReasoningTokens); !ok || n != 8 {
+		t.Errorf("reasoning tokens = %d (reported: %v), want 8", n, ok)
 	}
 }
 

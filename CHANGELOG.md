@@ -12,7 +12,60 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- **Service spans carry the standard GenAI attributes.** The STT, LLM and TTS
+  spans previously carried keys of jargo's own (`llm.model`, `tts.chars`,
+  `stt.audio_ms`, `llm.ttfb_ms`). They now carry the conventional ones:
+  `gen_ai.provider.name`, `gen_ai.request.model`, `metrics.ttfb` in seconds,
+  `metrics.character_count`, `metrics.audio_seconds`, plus the request itself
+  (`input`, `output`, `tools`, `tool_count`, `gen_ai.system_instructions`, the
+  `gen_ai.request.*` generation parameters and the service's own settings under
+  `settings.*`). A dashboard reading the old keys has to be repointed.
+
+- **Token usage keys follow the GenAI conventions.** `gen_ai.usage.audio.*`
+  replaces `gen_ai.usage.*_audio_tokens`, and
+  `gen_ai.usage.reasoning.output_tokens` replaces
+  `gen_ai.usage.reasoning_tokens`. The `llm.tokens.*` keys are gone;
+  `gen_ai.usage.audio.cache_read.input_tokens` is new, as is the
+  `LLMTokenUsage.CacheReadAudioTokens` behind it. The counts a service may or
+  may not account for are now pointers, so a reported zero is distinguishable
+  from a figure the service does not report at all, and a reported zero is
+  recorded rather than dropped.
+
+- **A transcription span covers one segment, not the connection.** A streaming
+  STT service opened a single span for the life of its provider connection,
+  which outlived every turn in the session and so could not sit under the turn
+  it belonged to. Each segment now gets its own span, anchored at the moment the
+  speech began and closed by the transcript that finalizes it; a turn producing
+  several finalized transcripts produces several spans. The audio the connection
+  was given is still reported in full, as usage rather than as a span.
+  `VADUserStartedSpeakingFrame` carries a `Timestamp` for the anchor, matching
+  its stopped counterpart.
+
+- **Service spans are raised only when the pipeline is traced.** They were
+  raised whenever a `TracerProvider` was installed, so an application tracing
+  its own server got a service span per turn with no conversation or turn to
+  hang from. `TaskParams.EnableTracing` now gates them.
+
+### Added
+
+- **The speech-to-speech services are traced.** Gemini Live and OpenAI Realtime
+  raised no spans at all. Each now records the session's configuration
+  (`llm_setup`, and again on a Realtime session whose toolset changes
+  mid-conversation) and each completed model turn (`llm_response`), carrying the
+  voice, modalities, the toolset offered, what the model said, and, for
+  Realtime, how the turn ended and the functions it asked to have called. The
+  token accounting for a turn now lands on that turn's span rather than on a
+  span raised just to hold it.
+
 ### Fixed
+
+- **A synthesis an interruption drops is recorded.** The audio contexts queued
+  behind the one being spoken were discarded whole when the user cut in, and
+  their spans stayed open and were never exported, so the utterance the user
+  interrupted vanished from the trace. They are now closed and marked
+  `tts.interrupted`.
 
 - **Canceling a task no longer hangs.** A cancel raised before the pipeline had
   finished starting was never acted on: the run loop waits for the StartFrame to

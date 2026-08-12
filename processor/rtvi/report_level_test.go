@@ -175,7 +175,7 @@ func TestObserverConfigureNilLeavesLevelUnchanged(t *testing.T) {
 // default and reported once asked for, at runtime.
 func TestObserverVADUserSpeaking(t *testing.T) {
 	speaking := []frames.Frame{
-		frames.NewVADUserStartedSpeakingFrame(0),
+		frames.NewVADUserStartedSpeakingFrame(0, time.Now()),
 		frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}),
 	}
 

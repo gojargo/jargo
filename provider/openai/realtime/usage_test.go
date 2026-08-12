@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -43,13 +44,13 @@ func TestResponseDoneUsageParsing(t *testing.T) {
 		PromptTokens:      150,
 		CompletionTokens:  50,
 		TotalTokens:       200,
-		CacheReadTokens:   20,
-		InputTextTokens:   100,
-		InputAudioTokens:  50,
-		OutputTextTokens:  10,
-		OutputAudioTokens: 40,
+		CacheReadTokens:   new(int64(20)),
+		InputTextTokens:   new(int64(100)),
+		InputAudioTokens:  new(int64(50)),
+		OutputTextTokens:  new(int64(10)),
+		OutputAudioTokens: new(int64(40)),
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("tokenUsage = %+v, want %+v", got, want)
 	}
 }

@@ -24,8 +24,6 @@ import (
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // errNoSession is returned when a Connector reports neither a session nor an
@@ -219,6 +217,7 @@ type StreamService struct {
 	ws      *wsservice.Base
 	ttfb    *ttfbTracker
 	work    *processingMeter
+	tracer  *segmentTracer
 
 	sampleRate int
 	mu         sync.Mutex
@@ -306,7 +305,37 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s.ws = wsservice.New(s, wsservice.Config{})
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
 	s.work = newProcessingMeter(s.Base.Base, s.modelName)
+	s.tracer = newSegmentTracer(s.Base.Base, func() tracing.STTAttributes {
+		return tracing.STTAttributes{
+			Service:  s.TypeName(),
+			Model:    s.modelName(),
+			Settings: s.traceSettings(),
+			// A streaming service is sent audio continuously and is told where
+			// the speech is by the voice activity detector upstream of it.
+			VADEnabled: true,
+		}
+	})
+	s.ttfb.onReport = func(d time.Duration, end time.Time) {
+		s.tracer.recordTTFB(d)
+		// A wait that ended without the transcript it was for leaves a segment
+		// nothing will close, so it is closed here at the moment measured to.
+		s.tracer.abandon(end)
+	}
 	return s
+}
+
+// traceSettings renders the provider's settings for a transcription span. A
+// provider that keeps no settings of its own contributes none.
+func (s *StreamService) traceSettings() map[string]any {
+	holder, ok := s.conn.(SettingsHolder)
+	if !ok {
+		return nil
+	}
+	given, err := settings.Given(holder.Settings())
+	if err != nil {
+		return nil
+	}
+	return given
 }
 
 // SetTTFBTimeout sets how long the service waits after the speech ends for the
@@ -357,6 +386,7 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		s.finalizePending = false
 		s.mu.Unlock()
 		s.ttfb.speechStarted()
+		s.tracer.speechStarted(fr.SpeechStart())
 		// The service is at work on this utterance from here until it produces
 		// the transcript for it.
 		s.work.begin()
@@ -370,8 +400,15 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		s.ttfb.interrupted()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.UserStoppedSpeakingFrame:
+		if err := s.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		// A provider that never marks a transcript as the last one leaves the
+		// segment open. The user turn is over, so whatever it heard is what it
+		// heard, and the segment is closed as one that never finalized.
+		s.tracer.abandon(time.Time{})
 		s.reopenIfDeferred(ctx)
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect(ctx)
 		return s.PushFrame(ctx, f, dir)
@@ -397,10 +434,14 @@ func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir proce
 		if s.takeFinalizePending() {
 			tf.Finalized = true
 		}
+		// Opened before the push so that the metrics frame the timing raises,
+		// which is pushed from inside this call, finds its span already open.
+		s.tracer.open()
 		s.ttfb.transcript(ctx, tf.Finalized)
 	}
 	err := s.Base.PushFrame(ctx, f, dir)
 	if isTranscript {
+		s.tracer.record(tf)
 		// Reported after the transcript rather than before it: the work the
 		// measurement covers is not done until the transcript is out.
 		s.work.report(ctx)
@@ -563,8 +604,12 @@ func (s *StreamService) reportConnectionError(ctx context.Context, message strin
 	s.PushError(ctx, message, nil, false)
 }
 
-// recordUsage emits the session's STT span, spanning the life of the connection.
+// recordUsage reports the audio the connection was given. The measurement covers
+// the whole connection, which is what a stream-priced provider bills, so it is
+// reported as usage rather than as a span: a span covering the connection would
+// outlive every turn in it and could not sit under the one it belongs to.
 func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, audioBytes int64) {
+	_ = connectedAt
 	audio := pcmDuration(audioBytes, s.sampleRate)
 	if audio == 0 {
 		return
@@ -574,15 +619,6 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 	s.mu.Unlock()
 	metrics.RecordSTTAudio(ctx, s.Name(), model, audio.Seconds())
 	s.pushUsageMetrics(ctx, audio)
-	sctx, span := tracing.Tracer().Start(
-		s.Tracing().Parent(ctx), "stt", trace.WithTimestamp(connectedAt))
-	defer span.End()
-	span.SetAttributes(
-		attribute.String("stt.service", s.Name()),
-		attribute.Int("stt.sample_rate", s.sampleRate),
-		attribute.Int64("stt.audio_ms", audio.Milliseconds()),
-	)
-	tracing.SetSTTUsage(sctx, model, audio)
 }
 
 // updateSettings merges an update into the provider's own settings and lets it

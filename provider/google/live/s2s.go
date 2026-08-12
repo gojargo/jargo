@@ -134,6 +134,7 @@ func (s *Service) connect(ctx context.Context) error {
 	s.cancel = cancel
 	s.mu.Unlock()
 
+	s.traceSetup(ctx)
 	if err := s.send(s.setup()); err != nil {
 		cancel()
 		_ = conn.Close(websocket.StatusInternalError, "setup failed")
@@ -237,6 +238,12 @@ type usageMetadata struct {
 	CachedContentTokenCount int64                `json:"cachedContentTokenCount"` //nolint:tagliatelle // Gemini wire field
 	PromptTokensDetails     []modalityTokenCount `json:"promptTokensDetails"`     //nolint:tagliatelle // Gemini wire field
 	ResponseTokensDetails   []modalityTokenCount `json:"responseTokensDetails"`   //nolint:tagliatelle // Gemini wire field
+	// CacheTokensDetails splits the cached-content count by modality. Cached
+	// audio is priced apart from cached text.
+	CacheTokensDetails []modalityTokenCount `json:"cacheTokensDetails"` //nolint:tagliatelle // Gemini wire field
+	// ThoughtsTokenCount is the number of completion tokens the model spent
+	// reasoning. It is absent on a model that does not reason.
+	ThoughtsTokenCount *int64 `json:"thoughtsTokenCount"` //nolint:tagliatelle // Gemini wire field
 }
 
 // modalityTokenCount is a token count attributed to one modality (e.g. TEXT or
@@ -253,25 +260,34 @@ func (u usageMetadata) tokenUsage() frames.LLMTokenUsage {
 		PromptTokens:     u.PromptTokenCount,
 		CompletionTokens: u.ResponseTokenCount,
 		TotalTokens:      u.TotalTokenCount,
-		CacheReadTokens:  u.CachedContentTokenCount,
+		CacheReadTokens:  new(u.CachedContentTokenCount),
+		ReasoningTokens:  u.ThoughtsTokenCount,
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
+	// A modality with no tokens is left out of the breakdown entirely, and the
+	// breakdown itself is absent when the model reports none, so a modality that
+	// does not appear is unaccounted for rather than zero.
 	for _, d := range u.PromptTokensDetails {
 		switch d.Modality {
 		case modalityAudio:
-			usage.InputAudioTokens += d.TokenCount
+			usage.InputAudioTokens = frames.AddTokens(usage.InputAudioTokens, d.TokenCount)
 		case modalityText:
-			usage.InputTextTokens += d.TokenCount
+			usage.InputTextTokens = frames.AddTokens(usage.InputTextTokens, d.TokenCount)
 		}
 	}
 	for _, d := range u.ResponseTokensDetails {
 		switch d.Modality {
 		case modalityAudio:
-			usage.OutputAudioTokens += d.TokenCount
+			usage.OutputAudioTokens = frames.AddTokens(usage.OutputAudioTokens, d.TokenCount)
 		case modalityText:
-			usage.OutputTextTokens += d.TokenCount
+			usage.OutputTextTokens = frames.AddTokens(usage.OutputTextTokens, d.TokenCount)
+		}
+	}
+	for _, d := range u.CacheTokensDetails {
+		if d.Modality == modalityAudio {
+			usage.CacheReadAudioTokens = frames.AddTokens(usage.CacheReadAudioTokens, d.TokenCount)
 		}
 	}
 	return usage
@@ -323,8 +339,14 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 	if msg.SetupComplete != nil {
 		s.ready.Store(true)
 	}
-	if msg.UsageMetadata != nil && s.UsageMetricsEnabled() {
-		_ = s.PushTokenUsage(ctx, s.cfg.Model, msg.UsageMetadata.tokenUsage())
+	if msg.UsageMetadata != nil {
+		// The accounting arrives with the turn it belongs to, so the span
+		// covering that turn is opened here and the usage recorded against it.
+		spanCtx, end := s.traceResponse(ctx, msg)
+		if s.UsageMetricsEnabled() {
+			_ = s.PushTokenUsage(spanCtx, s.cfg.Model, msg.UsageMetadata.tokenUsage())
+		}
+		end()
 	}
 	sc := msg.ServerContent
 	if sc == nil {

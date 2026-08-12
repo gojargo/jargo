@@ -52,8 +52,11 @@ func New(cfg Config) *Processor {
 	p.controller = controller.New(cfg.VAD, controller.Handlers{
 		OnSpeechStarted: func(ctx context.Context) {
 			startSecs := p.controller.Params().StartSecs
+			// Taken once, outside the builder, so the frame sent each way
+			// reports the same moment.
+			ts := time.Now()
 			_ = p.Broadcast(ctx, func() frames.Frame {
-				return frames.NewVADUserStartedSpeakingFrame(startSecs)
+				return frames.NewVADUserStartedSpeakingFrame(startSecs, ts)
 			})
 		},
 		OnSpeechStopped: func(ctx context.Context) {

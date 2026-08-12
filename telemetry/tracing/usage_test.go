@@ -10,11 +10,12 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // TestSetTokenUsageWritesAttributes checks that token usage lands on the span
-// under both the legacy llm.tokens.* and the standard gen_ai.usage.* keys, and
-// that the audio/text/cache breakdowns are written when nonzero.
+// under the standard gen_ai.usage.* keys, cache and per-modality breakdowns
+// included.
 func TestSetTokenUsageWritesAttributes(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
@@ -24,14 +25,15 @@ func TestSetTokenUsageWritesAttributes(t *testing.T) {
 
 	ctx, span := tracing.Tracer().Start(context.Background(), "llm")
 	tracing.SetTokenUsage(ctx, frames.LLMTokenUsage{
-		PromptTokens:      150,
-		CompletionTokens:  50,
-		TotalTokens:       200,
-		CacheReadTokens:   20,
-		InputAudioTokens:  50,
-		OutputAudioTokens: 40,
-		InputTextTokens:   100,
-		OutputTextTokens:  10,
+		PromptTokens:         150,
+		CompletionTokens:     50,
+		TotalTokens:          200,
+		CacheReadTokens:      new(int64(20)),
+		CacheCreationTokens:  new(int64(5)),
+		ReasoningTokens:      new(int64(12)),
+		InputAudioTokens:     new(int64(50)),
+		OutputAudioTokens:    new(int64(40)),
+		CacheReadAudioTokens: new(int64(8)),
 	})
 	span.End()
 
@@ -45,16 +47,14 @@ func TestSetTokenUsageWritesAttributes(t *testing.T) {
 	}
 
 	want := map[string]int64{
-		"llm.tokens.input":                     150,
-		"llm.tokens.output":                    50,
-		"llm.tokens.total":                     200,
-		"gen_ai.usage.input_tokens":            150,
-		"gen_ai.usage.output_tokens":           50,
-		"gen_ai.usage.input_audio_tokens":      50,
-		"gen_ai.usage.output_audio_tokens":     40,
-		"gen_ai.usage.input_text_tokens":       100,
-		"gen_ai.usage.output_text_tokens":      10,
-		"gen_ai.usage.cache_read.input_tokens": 20,
+		"gen_ai.usage.input_tokens":                  150,
+		"gen_ai.usage.output_tokens":                 50,
+		"gen_ai.usage.cache_read.input_tokens":       20,
+		"gen_ai.usage.cache_creation.input_tokens":   5,
+		"gen_ai.usage.reasoning.output_tokens":       12,
+		"gen_ai.usage.audio.input_tokens":            50,
+		"gen_ai.usage.audio.output_tokens":           40,
+		"gen_ai.usage.audio.cache_read.input_tokens": 8,
 	}
 	for k, v := range want {
 		if attrs[k] != v {
@@ -63,9 +63,44 @@ func TestSetTokenUsageWritesAttributes(t *testing.T) {
 	}
 }
 
-// TestSetTokenUsageOmitsZeroBreakdowns confirms a text-only generation carries
-// no empty realtime/cache attributes.
-func TestSetTokenUsageOmitsZeroBreakdowns(t *testing.T) {
+// TestSetTokenUsageRecordsReportedZero checks that a count the service measured
+// as zero lands on the span. On a model that caches, a generation that read
+// nothing from the cache is a measurement, and it has to be distinguishable
+// from a model that does not cache at all.
+func TestSetTokenUsageRecordsReportedZero(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prev)
+
+	ctx, span := tracing.Tracer().Start(context.Background(), "llm")
+	tracing.SetTokenUsage(ctx, frames.LLMTokenUsage{
+		PromptTokens:     12,
+		CompletionTokens: 3,
+		TotalTokens:      15,
+		CacheReadTokens:  new(int64(0)),
+	})
+	span.End()
+
+	var found bool
+	for _, kv := range rec.Ended()[0].Attributes() {
+		if string(kv.Key) == "gen_ai.usage.cache_read.input_tokens" {
+			found = true
+			if got := kv.Value.AsInt64(); got != 0 {
+				t.Fatalf("cache-read tokens = %d, want the reported 0", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("a cache read the service reported as zero should still be recorded")
+	}
+}
+
+// TestSetTokenUsageOmitsUnreportedBreakdowns confirms a generation whose service
+// accounts for none of the cache or per-modality counts carries no attribute for
+// them, rather than a run of zeroes.
+func TestSetTokenUsageOmitsUnreportedBreakdowns(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
 	prev := otel.GetTracerProvider()
@@ -82,16 +117,19 @@ func TestSetTokenUsageOmitsZeroBreakdowns(t *testing.T) {
 
 	for _, kv := range rec.Ended()[0].Attributes() {
 		switch string(kv.Key) {
-		case "gen_ai.usage.input_audio_tokens",
-			"gen_ai.usage.output_audio_tokens",
-			"gen_ai.usage.input_text_tokens",
-			"gen_ai.usage.output_text_tokens",
-			"gen_ai.usage.cache_read.input_tokens",
-			"gen_ai.usage.cache_creation.input_tokens":
-			t.Fatalf("unexpected breakdown attribute %q on a text-only generation", kv.Key)
+		case "gen_ai.usage.cache_read.input_tokens",
+			"gen_ai.usage.cache_creation.input_tokens",
+			"gen_ai.usage.reasoning.output_tokens",
+			"gen_ai.usage.audio.input_tokens",
+			"gen_ai.usage.audio.output_tokens",
+			"gen_ai.usage.audio.cache_read.input_tokens":
+			t.Fatalf("unexpected breakdown attribute %q for a service that reported none", kv.Key)
 		}
 	}
 }
+
+// spanOf is the span carried by a context handed to a stringAttrs callback.
+func spanOf(ctx context.Context) trace.Span { return trace.SpanFromContext(ctx) }
 
 // stringAttrs runs fn against a live span and returns the attributes it wrote.
 func stringAttrs(t *testing.T, fn func(ctx context.Context)) map[string]string {

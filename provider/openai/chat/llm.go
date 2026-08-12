@@ -268,10 +268,10 @@ func (u chatUsage) tokenUsage() frames.LLMTokenUsage {
 		TotalTokens:      u.TotalTokens,
 	}
 	if u.PromptTokensDetails != nil {
-		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
+		out.CacheReadTokens = new(u.PromptTokensDetails.CachedTokens)
 	}
 	if u.CompletionTokensDetails != nil {
-		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+		out.ReasoningTokens = new(u.CompletionTokensDetails.ReasoningTokens)
 	}
 	return out
 }
@@ -607,4 +607,16 @@ func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder {
 		return nil
 	}
 	return holder
+}
+
+// MessagesForLogging renders the conversation as this endpoint will see it, for
+// the generation span. It implements llm.TraceRenderer.
+func (s *LLMService) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
+	return s.adapter.MessagesForLogging(convo)
+}
+
+// ToolsForLogging renders the toolset as this endpoint will see it, for the
+// generation span. It implements llm.TraceRenderer.
+func (s *LLMService) ToolsForLogging(schema frames.ToolsSchema) []any {
+	return adapter.ToolsForLogging(s.adapter, schema)
 }

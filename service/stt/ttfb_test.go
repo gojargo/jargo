@@ -164,7 +164,7 @@ func TestStreamServiceReportsTheWorkItDid(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	select {
 	case <-w.got:
@@ -238,7 +238,7 @@ func TestStreamServiceReportsOnlyTheInitialTTFBWhenAsked(t *testing.T) {
 	go func() { runDone <- task.Run(context.Background()) }()
 
 	for range 2 {
-		task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+		task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 		task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 		select {
 		case <-w.got:

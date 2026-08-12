@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -74,8 +75,11 @@ func TestStreamStateText(t *testing.T) {
 	if state.usage == nil {
 		t.Fatal("usage not captured")
 	}
-	want := frames.LLMTokenUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CacheReadTokens: 4}
-	if got := state.usage.tokenUsage(); got != want {
+	want := frames.LLMTokenUsage{
+		PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
+		CacheReadTokens: new(int64(4)),
+	}
+	if got := state.usage.tokenUsage(); !reflect.DeepEqual(got, want) {
 		t.Errorf("tokenUsage = %+v, want %+v", got, want)
 	}
 	if state.outputItems() != 1 {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -184,16 +183,11 @@ func TestSegmentServiceTranscribesBufferedSpeech(t *testing.T) {
 	}
 }
 
-// TestStreamServiceReportsAudioUsage checks that the session span carries the
-// model and the whole duration of audio streamed to the provider — streaming
-// STT is billed on connection time, so silence counts too.
+// TestStreamServiceReportsAudioUsage checks that the audio streamed to the
+// provider is reported as usage. Streaming STT is billed on connection time, so
+// silence counts too, and the whole connection is measured rather than the
+// segments cut out of it.
 func TestStreamServiceReportsAudioUsage(t *testing.T) {
-	rec := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
-	prev := otel.GetTracerProvider()
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(prev)
-
 	conn := &fakeConnector{
 		model:  "nova-3",
 		stream: &fakeStream{results: [][]stt.Result{{{Text: "hello", Final: true, EndOfTurn: true}}}},
@@ -201,9 +195,21 @@ func TestStreamServiceReportsAudioUsage(t *testing.T) {
 	svc := stt.NewStream("FakeSTT", conn, 16000)
 
 	done := make(chan struct{}, 1)
+	var usage []frames.STTUsageMetricsData
+	var usageMu sync.Mutex
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		EnableUsageMetrics:      true,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
+			if mf, ok := f.(*frames.MetricsFrame); ok {
+				usageMu.Lock()
+				for _, d := range mf.Data {
+					if u, ok := d.(frames.STTUsageMetricsData); ok {
+						usage = append(usage, u)
+					}
+				}
+				usageMu.Unlock()
+			}
 			if _, ok := f.(*frames.TranscriptionFrame); ok {
 				select {
 				case done <- struct{}{}:
@@ -225,6 +231,64 @@ func TestStreamServiceReportsAudioUsage(t *testing.T) {
 	task.StopWhenDone()
 	<-runDone
 
+	usageMu.Lock()
+	defer usageMu.Unlock()
+	var total float64
+	for _, u := range usage {
+		total += u.Value.AudioSeconds
+		if u.Model != "nova-3" {
+			t.Errorf("usage model = %q, want nova-3", u.Model)
+		}
+	}
+	if total != 0.5 {
+		t.Errorf("reported audio = %vs, want the 0.5s streamed (reports: %+v)", total, usage)
+	}
+}
+
+// TestStreamServiceSpansOneSegment checks that a transcription span covers the
+// segment it transcribed rather than the connection it arrived on: it is
+// anchored where the speech began, carries the transcript and the model, and
+// closes on the transcript that finalizes it.
+func TestStreamServiceSpansOneSegment(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prev)
+
+	conn := &fakeConnector{
+		model:  "nova-3",
+		stream: &fakeStream{results: [][]stt.Result{{{Text: "hello", Final: true, EndOfTurn: true}}}},
+	}
+	svc := stt.NewStream("FakeSTT", conn, 16000)
+
+	done := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		EnableTracing:           true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.TranscriptionFrame); ok {
+				select {
+				case done <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	speechStart := time.Now()
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, speechStart.Add(200*time.Millisecond)))
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream service did not emit a transcription")
+	}
+	task.StopWhenDone()
+	<-runDone
+
 	var span sdktrace.ReadOnlySpan
 	for _, s := range rec.Ended() {
 		if s.Name() == "stt" {
@@ -239,18 +303,22 @@ func TestStreamServiceReportsAudioUsage(t *testing.T) {
 		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	want := map[string]string{
-		"stt.audio_ms":                       "500",
-		"gen_ai.request.model":               "nova-3",
-		"langfuse.observation.usage_details": `{"milliseconds":500}`,
+		"gen_ai.provider.name":  "fake",
+		"gen_ai.request.model":  "nova-3",
+		"gen_ai.operation.name": "stt",
+		"transcript":            "hello",
+		"is_final":              "true",
+		"vad_enabled":           "true",
 	}
 	for k, v := range want {
 		if attrs[k] != v {
 			t.Errorf("attr %q = %q, want %q (all: %v)", k, attrs[k], v, attrs)
 		}
 	}
-	// The processor name is uniquified per instance ("FakeSTT#3").
-	if got := attrs["stt.service"]; !strings.HasPrefix(got, "FakeSTT") {
-		t.Errorf("stt.service = %q, want a FakeSTT instance", got)
+	// Anchored where the speech began, which is earlier than the VAD's
+	// determination by the delay it took to confirm it.
+	if got := span.StartTime(); got.After(speechStart.Add(10 * time.Millisecond)) {
+		t.Errorf("span starts at %v, want it anchored at the speech start %v", got, speechStart)
 	}
 }
 
@@ -380,5 +448,84 @@ func TestStreamServiceMarksTheAnswerToAFinalizeFinal(t *testing.T) {
 	defer mu.Unlock()
 	if !finalized {
 		t.Fatal("the transcript answering a confirmed finalize was not marked final")
+	}
+}
+
+// TestSegmentServiceSpansOneSegment checks that a segmented service records the
+// segment it transcribed: the transcript it produced, the audio it was billed
+// for, and the model it ran against.
+func TestSegmentServiceSpansOneSegment(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prev)
+
+	tr := &fakeTranscriber{text: "buffered words", got: make(chan []byte, 1)}
+	svc := stt.NewSegment("FakeSegmentSTT", tr, 16000)
+
+	done := make(chan struct{}, 1)
+	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		EnableTracing:           true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream: func(f frames.Frame) {
+			if _, ok := f.(*frames.TranscriptionFrame); ok {
+				select {
+				case done <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	speechStart := time.Now()
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, speechStart.Add(200*time.Millisecond)))
+	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	// 16000 bytes of 16-bit mono at 16 kHz is 500 ms of audio.
+	task.QueueFrame(frames.NewInputAudioRawFrame(make([]byte, 16000), 16000, 1))
+	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+
+	select {
+	case <-tr.got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("segment service did not call the transcriber")
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("segment service did not emit a transcription")
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	var span sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "stt" {
+			span = s
+		}
+	}
+	if span == nil {
+		t.Fatal("no stt span recorded")
+	}
+	attrs := map[string]string{}
+	for _, kv := range span.Attributes() {
+		attrs[string(kv.Key)] = kv.Value.String()
+	}
+	want := map[string]string{
+		"gen_ai.provider.name":  "fakesegment",
+		"gen_ai.operation.name": "stt",
+		"transcript":            "buffered words",
+		"is_final":              "true",
+		"metrics.audio_seconds": "0.5",
+	}
+	for k, v := range want {
+		if attrs[k] != v {
+			t.Errorf("attr %q = %q, want %q (all: %v)", k, attrs[k], v, attrs)
+		}
+	}
+	if got := span.StartTime(); got.After(speechStart.Add(10 * time.Millisecond)) {
+		t.Errorf("span starts at %v, want it anchored at the speech start %v", got, speechStart)
 	}
 }

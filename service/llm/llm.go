@@ -575,7 +575,7 @@ func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.
 	model := b.modelName()
 	metrics.RecordProcessing(ctx, "llm", b.Name(), model, processing.Seconds())
 	if hadTTFB {
-		span.SetAttributes(attribute.Int64("llm.ttfb_ms", ttfb.Milliseconds()))
+		span.SetAttributes(attribute.Float64("metrics.ttfb", ttfb.Seconds()))
 		metrics.RecordTTFB(ctx, "llm", b.Name(), model, ttfb.Seconds())
 	}
 	if !b.MetricsEnabled() {
@@ -589,33 +589,47 @@ func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.
 	_ = b.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
 }
 
-// startSpan opens the generation span, tagging it with the service name and
-// model. The returned context carries the span so PushTokenUsage and any nested
-// work attach to it.
-func (b *Base) startSpan(ctx context.Context) (context.Context, trace.Span) {
-	ctx, span := tracing.Tracer().Start(b.Tracing().Parent(ctx), "llm")
-	span.SetAttributes(attribute.String("llm.service", b.Name()))
-	if model := b.tracedModelName(); model != "" {
-		span.SetAttributes(attribute.String("llm.model", model))
-	}
-	return ctx, span
+// TraceRenderer is a generator that can render the conversation and the toolset
+// the way its provider will see them. A generator that converts through an
+// adapter implements it by delegating to that adapter, so the generation span
+// shows what the model was actually sent rather than the universal form it was
+// converted from. A generator that does not implement it has its conversation
+// rendered in the universal form instead.
+type TraceRenderer interface {
+	// MessagesForLogging renders the conversation as the provider will see it.
+	MessagesForLogging(convo *frames.LLMContext) []map[string]any
+	// ToolsForLogging renders the toolset as the provider will see it.
+	ToolsForLogging(schema frames.ToolsSchema) []any
 }
 
-// traceRequest tags the generation span with the gen_ai.* request attributes and
-// the serialized input messages, so a trace backend (e.g. Langfuse) renders the
-// prompt. Mirrors Pipecat's add_llm_span_attributes (input + gen_ai.request.*).
+// notGiven marks a setting the application cleared. A cleared setting is
+// reported rather than dropped, so a span shows the service was told to send
+// nothing for it rather than leaving it ambiguous with a setting never touched.
+const notGiven = "NOT_GIVEN"
+
+// startSpan opens the generation span. The returned context carries the span so
+// PushTokenUsage and any nested work attach to it. On an untraced pipeline the
+// span is a no-op and the attributes below cost nothing.
+func (b *Base) startSpan(ctx context.Context) (context.Context, trace.Span) {
+	return b.StartSpan(ctx, "llm")
+}
+
+// traceRequest records the generation's request on its span: the provider and
+// model, the generation parameters, the conversation sent and the toolset
+// offered, so a trace backend renders the prompt the model answered.
 func (b *Base) traceRequest(span trace.Span, convo *frames.LLMContext) {
-	span.SetAttributes(
-		attribute.String("gen_ai.operation.name", "chat"),
-		attribute.String("gen_ai.output.type", "text"),
-		attribute.Bool("stream", true),
-	)
-	if model := b.tracedModelName(); model != "" {
-		span.SetAttributes(attribute.String("gen_ai.request.model", model))
+	attrs := tracing.LLMAttributes{
+		Service:            b.TypeName(),
+		Model:              b.tracedModelName(),
+		Stream:             true,
+		Messages:           b.traceMessages(convo),
+		SystemInstructions: b.traceSystemInstruction(convo),
+		Parameters:         b.traceParameters(),
 	}
-	if in := traceMessages(convo); in != "" {
-		span.SetAttributes(attribute.String("input", in))
+	if tools, n := b.traceTools(convo); tools != "" {
+		attrs.Tools, attrs.ToolCount = tools, &n
 	}
+	tracing.SetLLMAttributes(span, attrs)
 }
 
 // traceOutput records the model's reply text as the span's output attribute.
@@ -625,10 +639,76 @@ func traceOutput(span trace.Span, text string) {
 	}
 }
 
-// traceMessages renders the context (system prompt plus conversation) as a JSON
-// array of role/content messages for the span's input attribute — the shape
-// Langfuse and the gen_ai convention read.
-func traceMessages(convo *frames.LLMContext) string {
+// traceSystemInstruction is the system instruction the generation ran under: the
+// service's composed instruction, and the conversation's own system prompt when
+// the service has none of its own. The service's takes priority because that is
+// what it sends.
+func (b *Base) traceSystemInstruction(convo *frames.LLMContext) string {
+	if s := b.SystemInstruction(); s != "" {
+		return s
+	}
+	return convo.System()
+}
+
+// traceParameters renders the service's settings as the generation parameters.
+// The system instruction is left out: it has an attribute of its own.
+func (b *Base) traceParameters() map[string]any {
+	given, err := settings.Given(b.settingsStore())
+	if err != nil {
+		return nil
+	}
+	delete(given, "system_instruction")
+	for k, v := range given {
+		if v == nil {
+			given[k] = notGiven
+		}
+	}
+	return given
+}
+
+// traceMessages renders the conversation for the span's input attribute, in the
+// provider's own format where the generator can produce it.
+func (b *Base) traceMessages(convo *frames.LLMContext) string {
+	if r, ok := b.gen.(TraceRenderer); ok {
+		return marshalTrace(r.MessagesForLogging(convo))
+	}
+	return universalMessages(convo)
+}
+
+// traceTools renders the toolset for the span, with the number of tools offered.
+// An empty toolset renders as nothing, which leaves both attributes off.
+func (b *Base) traceTools(convo *frames.LLMContext) (string, int) {
+	schema := convo.ToolsSchema()
+	var tools []any
+	if r, ok := b.gen.(TraceRenderer); ok {
+		tools = r.ToolsForLogging(schema)
+	} else {
+		for _, t := range schema.Standard {
+			tools = append(tools, t)
+		}
+	}
+	if len(tools) == 0 {
+		return "", 0
+	}
+	return marshalTrace(tools), len(tools)
+}
+
+// marshalTrace serializes a value for a span attribute, rendering as nothing
+// what will not serialize. A span attribute is a report on the call, not part of
+// it, so a value that cannot be rendered leaves the attribute off rather than
+// failing the generation it describes.
+func marshalTrace(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// universalMessages renders the context (system prompt plus conversation) as a
+// JSON array of role/content messages, for a generator that cannot render the
+// conversation in its provider's own format.
+func universalMessages(convo *frames.LLMContext) string {
 	type msg struct {
 		Role        string              `json:"role"`
 		Content     string              `json:"content,omitempty"`
@@ -647,11 +727,7 @@ func traceMessages(convo *frames.LLMContext) string {
 			ToolResults: m.ToolResults,
 		})
 	}
-	data, err := json.Marshal(out)
-	if err != nil {
-		return ""
-	}
-	return string(data)
+	return marshalTrace(out)
 }
 
 // RegisterFunction registers a handler for the named tool. During a tool-capable
@@ -959,7 +1035,6 @@ func (s sink) Tool(c frames.ToolCall) error { return s.tool(c) }
 func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg ToolGenerator) error {
 	ctx, span := b.startSpan(ctx)
 	defer span.End()
-	span.SetAttributes(attribute.Bool("llm.tools", true))
 	b.traceRequest(span, convo)
 	if err := b.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
 		return err

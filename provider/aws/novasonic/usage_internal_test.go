@@ -98,9 +98,20 @@ func TestUsageEventReportsTheDelta(t *testing.T) {
 	if u.PromptTokens != 3 || u.CompletionTokens != 20 || u.TotalTokens != 23 {
 		t.Errorf("usage = %+v, want 3 prompt, 20 completion, 23 total", u)
 	}
-	if u.InputTextTokens != 3 || u.OutputAudioTokens != 20 ||
-		u.InputAudioTokens != 0 || u.OutputTextTokens != 0 {
-		t.Errorf("modality breakdown = %+v", u)
+	// The service splits every direction, so a modality with no tokens is
+	// reported as zero rather than left unaccounted for.
+	want := map[string]int64{
+		"input text": 3, "output audio": 20, "input audio": 0, "output text": 0,
+	}
+	got := map[string]*int64{
+		"input text": u.InputTextTokens, "output audio": u.OutputAudioTokens,
+		"input audio": u.InputAudioTokens, "output text": u.OutputTextTokens,
+	}
+	for name, wantN := range want {
+		n, ok := frames.TokenCount(got[name])
+		if !ok || n != wantN {
+			t.Errorf("%s tokens = %d (reported: %v), want %d", name, n, ok, wantN)
+		}
 	}
 }
 

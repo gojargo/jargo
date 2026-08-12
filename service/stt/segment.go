@@ -10,7 +10,6 @@ import (
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 // Transcriber turns a complete audio segment into text. The audio is 16-bit
@@ -29,8 +28,9 @@ type SegmentService struct {
 	cfgRate int
 	model   string
 
-	ttfb *ttfbTracker
-	work *processingMeter
+	ttfb   *ttfbTracker
+	work   *processingMeter
+	tracer *segmentTracer
 
 	sampleRate int
 	mu         sync.Mutex
@@ -49,6 +49,21 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 	s.Base = service.New(name, s)
 	s.ttfb = newTTFBTracker(s.Base.Base, func() string { return s.model })
 	s.work = newProcessingMeter(s.Base.Base, func() string { return s.model })
+	s.tracer = newSegmentTracer(s.Base.Base, func() tracing.STTAttributes {
+		return tracing.STTAttributes{
+			Service: s.TypeName(),
+			Model:   s.model,
+			// A segmented service is handed the speech a turn detector cut out
+			// for it, so voice activity detection is what drives it.
+			VADEnabled: true,
+		}
+	})
+	s.ttfb.onReport = func(d time.Duration, end time.Time) {
+		s.tracer.recordTTFB(d)
+		// A wait that ended without the transcript it was for leaves a segment
+		// nothing will close, so it is closed here at the moment measured to.
+		s.tracer.abandon(end)
+	}
 	return s
 }
 
@@ -93,6 +108,7 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		return nil
 	case *frames.VADUserStartedSpeakingFrame:
 		s.ttfb.speechStarted()
+		s.tracer.speechStarted(fr.SpeechStart())
 		return s.PushFrame(ctx, f, dir)
 	case *frames.VADUserStoppedSpeakingFrame:
 		s.ttfb.speechEnded(ctx, fr)
@@ -109,11 +125,21 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 // PushFrame pushes a frame on, timing the transcripts on their way out: a
 // segment's transcript closes the utterance it was cut from, and ends the wait
 // the VAD started when it reported the speech over.
+//
+// The segment's span is opened before the transcript is pushed and written after
+// it. Opening first is what lets the metrics frame that the timing raises, which
+// is pushed from inside this call, find the span it belongs to already open.
 func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if tf, ok := f.(*frames.TranscriptionFrame); ok {
+	tf, isTranscript := f.(*frames.TranscriptionFrame)
+	if isTranscript {
+		s.tracer.open()
 		s.ttfb.transcript(ctx, tf.Finalized)
 	}
-	return s.Base.PushFrame(ctx, f, dir)
+	err := s.Base.PushFrame(ctx, f, dir)
+	if isTranscript {
+		s.tracer.record(tf)
+	}
+	return err
 }
 
 // ServiceMetadataFrame implements service.MetadataDescriber, describing this
@@ -134,6 +160,7 @@ func (s *SegmentService) ServiceMetadataFrame() frames.ServiceMetadata {
 func (s *SegmentService) Cleanup(ctx context.Context) error {
 	s.wg.Wait()
 	s.ttfb.close()
+	s.tracer.close()
 	return s.Base.Cleanup(ctx)
 }
 
@@ -150,34 +177,30 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		return
 	}
 	s.wg.Go(func() {
-		sctx, span := tracing.Tracer().Start(s.Tracing().Parent(ctx), "stt")
-		defer span.End()
+		// The audio handed to the transcriber is what this segment is billed on,
+		// and it is reported against the segment's own span, which the transcript
+		// this call produces will open and close.
 		played := pcmDuration(int64(len(audio)), rate)
-		span.SetAttributes(
-			attribute.String("stt.service", s.Name()),
-			attribute.Int("stt.sample_rate", rate),
-			attribute.Int64("stt.audio_ms", played.Milliseconds()),
-		)
-		tracing.SetSTTUsage(sctx, s.model, played)
-		metrics.RecordSTTAudio(sctx, s.Name(), s.model, played.Seconds())
-		s.pushUsageMetrics(sctx, played)
+		s.tracer.addUsage(frames.STTUsage{AudioSeconds: played.Seconds()})
+		metrics.RecordSTTAudio(ctx, s.Name(), s.model, played.Seconds())
+		s.pushUsageMetrics(ctx, played)
 
 		start := time.Now()
-		text, err := s.tr.Transcribe(sctx, audio, rate)
+		text, err := s.tr.Transcribe(ctx, audio, rate)
 		if err != nil {
-			if sctx.Err() == nil {
-				span.RecordError(err)
-				s.PushError(sctx, "stt transcription failed", err, false)
+			if ctx.Err() == nil {
+				s.tracer.recordError(err)
+				s.PushError(ctx, "stt transcription failed", err, false)
 			}
 			return
 		}
-		s.work.reportElapsed(sctx, time.Since(start))
+		s.work.reportElapsed(ctx, time.Since(start))
 		if text == "" {
 			return
 		}
 		tf := frames.NewTranscriptionFrame(text, "", time.Now().UTC().Format(time.RFC3339))
 		tf.Finalized = true
-		_ = s.PushFrame(sctx, tf, processor.Downstream)
+		_ = s.PushFrame(ctx, tf, processor.Downstream)
 	})
 }
 

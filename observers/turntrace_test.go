@@ -1,6 +1,7 @@
 package observers_test
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // recordSpans installs a recording tracer provider for the test.
@@ -222,6 +224,99 @@ func TestTurnTraceStartsConversationOnce(t *testing.T) {
 	o.EndConversation()
 	if got := len(rec.Ended()); got != 1 {
 		t.Fatalf("ended spans = %v, want one conversation", spanNames(rec))
+	}
+}
+
+// TestTurnTraceSpansEveryTurn checks that each turn of a conversation gets its
+// own span, numbered, and all of them hang from the one conversation.
+func TestTurnTraceSpansEveryTurn(t *testing.T) {
+	rec := recordSpans(t)
+	tc := tracing.NewTracingContext()
+	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc, ConversationID: "sess-1"})
+
+	o.OnPushFrame(startFrame())
+	conversation := tc.ConversationContext()
+	for turn := 1; turn <= 3; turn++ {
+		o.TurnStarted(turn)
+		o.TurnEnded(turn, time.Second, false)
+	}
+	o.EndConversation()
+
+	numbers := map[int64]bool{}
+	for _, s := range rec.Ended() {
+		if s.Name() != "turn" {
+			continue
+		}
+		if parent := s.Parent(); parent.SpanID() != conversation.SpanID() {
+			t.Errorf("turn parent = %v, want the conversation span", parent.SpanID())
+		}
+		v, ok := attrOf(s, "turn.number")
+		if !ok {
+			t.Fatal("turn span is missing turn.number")
+		}
+		numbers[v.AsInt64()] = true
+	}
+	if len(numbers) != 3 || !numbers[1] || !numbers[2] || !numbers[3] {
+		t.Fatalf("turn numbers = %v, want one span each for turns 1, 2 and 3", numbers)
+	}
+}
+
+// TestTurnTraceConcurrentPipelinesIsolated checks that two conversations running
+// at once keep their turns apart: a turn belongs to the conversation whose
+// observer opened it, never to the other one's.
+func TestTurnTraceConcurrentPipelinesIsolated(t *testing.T) {
+	rec := recordSpans(t)
+	build := func(id string) (*observers.TurnTrace, *tracing.TracingContext) {
+		tc := tracing.NewTracingContext()
+		return observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc, ConversationID: id}), tc
+	}
+	a, _ := build("conv-a")
+	b, _ := build("conv-b")
+
+	var wg sync.WaitGroup
+	for _, o := range []*observers.TurnTrace{a, b} {
+		wg.Go(func() {
+			o.OnPushFrame(startFrame())
+			for turn := 1; turn <= 3; turn++ {
+				o.TurnStarted(turn)
+				o.LatencyMeasured(100 * time.Millisecond)
+				o.TurnEnded(turn, time.Second, false)
+			}
+			o.EndConversation()
+		})
+	}
+	wg.Wait()
+
+	// Map each conversation span to its id, then check every turn names the
+	// conversation it is actually parented under.
+	conversations := map[trace.SpanID]string{}
+	for _, s := range rec.Ended() {
+		if s.Name() != "conversation" {
+			continue
+		}
+		v, _ := attrOf(s, "conversation.id")
+		conversations[s.SpanContext().SpanID()] = v.AsString()
+	}
+	if len(conversations) != 2 {
+		t.Fatalf("conversation spans = %d, want one per pipeline", len(conversations))
+	}
+	var turns int
+	for _, s := range rec.Ended() {
+		if s.Name() != "turn" {
+			continue
+		}
+		turns++
+		named, _ := attrOf(s, "conversation.id")
+		parent, ok := conversations[s.Parent().SpanID()]
+		if !ok {
+			t.Fatalf("turn span is parented outside both conversations")
+		}
+		if named.AsString() != parent {
+			t.Errorf("turn names conversation %q but hangs from %q", named.AsString(), parent)
+		}
+	}
+	if turns != 6 {
+		t.Fatalf("turn spans = %d, want three per pipeline", turns)
 	}
 }
 

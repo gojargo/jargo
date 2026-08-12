@@ -255,7 +255,7 @@ func TestSettingsReopenWaitsForTheUserToStopSpeaking(t *testing.T) {
 	defer stop()
 	waitUntil(t, "the session to open", func() bool { return conn.dialCount() == 1 })
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.5))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.5, time.Now()))
 	waitUntil(t, "the speech to register", func() bool {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()

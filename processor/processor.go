@@ -17,7 +17,8 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // Direction is the direction a frame flows through the pipeline.
@@ -70,6 +71,12 @@ type Setup struct {
 	// so a span raised away from the frame path still lands under the turn it
 	// belongs to. Nil when the pipeline is not traced.
 	Tracing *tracing.TracingContext
+	// TracingEnabled reports whether this pipeline is traced, and is what the
+	// processors gate their spans on. It is separate from Tracing being present
+	// because an installed TracerProvider is not on its own a request to trace
+	// the pipeline: an application that traces its own server would otherwise
+	// get a service span per turn with nothing to hang it from.
+	TracingEnabled bool
 }
 
 // Processor is a node in a pipeline. Concrete processors embed *Base, which
@@ -153,17 +160,19 @@ func WithDirectMode() Option {
 //	    return e.PushFrame(ctx, f, dir)
 //	}
 type Base struct {
-	id   uint64
-	name string
-	self Processor
+	id       uint64
+	name     string
+	typeName string
+	self     Processor
 
 	next, prev Processor
 
-	directMode bool
-	clock      clock.Clock
-	observers  []Observer
-	tracing    *tracing.TracingContext
-	running    Running
+	directMode     bool
+	clock          clock.Clock
+	observers      []Observer
+	tracing        *tracing.TracingContext
+	tracingEnabled bool
+	running        Running
 
 	// Lifetime context for the processor's goroutines, canceled on Cleanup.
 	baseCtx    context.Context
@@ -234,6 +243,7 @@ func New(name string, self Processor, opts ...Option) *Base {
 		// declined for a restriction nothing has asked for yet.
 		armTTFB: true,
 	}
+	b.typeName = name
 	b.name = fmt.Sprintf("%s#%d", name, b.id)
 	for _, opt := range opts {
 		opt(b)
@@ -251,6 +261,12 @@ func (b *Base) ID() uint64 { return b.id }
 
 // Name implements Processor.
 func (b *Base) Name() string { return b.name }
+
+// TypeName is the name the processor was built with, without the instance
+// number Name appends ("OpenAILLM", where Name is "OpenAILLM#3"). It names the
+// kind of processor rather than this one, which is what identifies the provider
+// behind a service on its spans and what a metric is grouped by.
+func (b *Base) TypeName() string { return b.typeName }
 
 // Processors implements Processor. A plain processor contains none; a compound
 // processor overrides this.
@@ -293,12 +309,33 @@ func (b *Base) Clock() clock.Clock { return b.clock }
 // Tracing().Parent(ctx) without checking.
 func (b *Base) Tracing() *tracing.TracingContext { return b.tracing }
 
+// TracingEnabled reports whether this pipeline is traced. A processor that
+// raises spans of its own opens them through StartSpan, which checks this.
+func (b *Base) TracingEnabled() bool { return b.tracingEnabled }
+
+// StartSpan opens a span for work this processor is doing, parented to the turn
+// being spoken (or to the conversation between turns), and returns it with a
+// context carrying it.
+//
+// On a pipeline that is not traced the span is a no-op and nothing is recorded
+// or exported, so a caller opens one unconditionally and sets attributes on it
+// without guarding: the cost of an untraced pipeline is the branch taken here.
+func (b *Base) StartSpan(
+	ctx context.Context, name string, opts ...trace.SpanStartOption,
+) (context.Context, trace.Span) {
+	if !b.tracingEnabled {
+		return ctx, noop.Span{}
+	}
+	return tracing.Tracer().Start(b.tracing.Parent(ctx), name, opts...)
+}
+
 // Setup implements Processor. It stores shared components and starts the input
 // goroutine (unless the processor is in direct mode).
 func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.clock = s.Clock
 	b.observers = s.Observers
 	b.tracing = s.Tracing
+	b.tracingEnabled = s.TracingEnabled
 	b.running = s.Running
 	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
 	if !b.directMode {
@@ -546,21 +583,20 @@ func (b *Base) Broadcast(ctx context.Context, build func() frames.Frame) error {
 }
 
 // PushTokenUsage reports LLM token usage measured by a service that does not run
-// through the LLM base — a realtime (speech-to-speech) service that receives a
-// usage event from its provider. It opens a short "llm" span carrying the
-// gen_ai.usage.* attributes, records the aggregate token counts as metrics, and
-// emits a MetricsFrame downstream for in-band consumers (e.g. an RTVI client).
-// The caller passes the model id and gates the call on UsageMetricsEnabled, so
-// the conversion from the provider's usage shape happens only when metrics are
-// collected.
+// through the LLM base: a realtime (speech-to-speech) service that receives a
+// usage event from its provider. It records the aggregate token counts as
+// metrics and emits a MetricsFrame downstream for in-band consumers (e.g. an
+// RTVI client). The caller passes the model id and gates the call on
+// UsageMetricsEnabled, so the conversion from the provider's usage shape happens
+// only when metrics are collected.
+//
+// The gen_ai.usage.* attributes go on the span already covering the work the
+// usage was measured for, which the caller supplies through ctx. A service that
+// reports usage outside any span of its own records it in metrics alone: usage
+// belongs to the operation that incurred it, and a span raised here just to hold
+// it would have nothing to say about what the model actually did.
 func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTokenUsage) error {
-	ctx, span := tracing.Tracer().Start(b.tracing.Parent(ctx), "llm")
-	span.SetAttributes(attribute.String("llm.service", b.name))
-	if model != "" {
-		span.SetAttributes(attribute.String("llm.model", model))
-	}
 	tracing.SetTokenUsage(ctx, u)
-	span.End()
 	metrics.RecordTokens(ctx, b.name, model, u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
 		BaseMetricsData: frames.BaseMetricsData{Processor: b.name, Model: model},

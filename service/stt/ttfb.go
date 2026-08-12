@@ -32,6 +32,10 @@ const DefaultTTFBTimeout = 2 * time.Second
 type ttfbTracker struct {
 	svc   *processor.Base
 	model func() string
+	// onReport is told each latency reported, and the moment it was measured to.
+	// It is how the segment being traced learns its own latency, and when the
+	// wait ended without the transcript it was for, when to close.
+	onReport func(ttfb time.Duration, end time.Time)
 
 	mu      sync.Mutex
 	timeout time.Duration
@@ -138,6 +142,9 @@ func (t *ttfbTracker) report(ctx context.Context, end time.Time) {
 		return
 	}
 	ttfb := end.Sub(start)
+	if t.onReport != nil {
+		t.onReport(ttfb, end)
+	}
 
 	model := t.model()
 	slog.Debug("stt ttfb", "service", t.svc.Name(), "ttfb", ttfb)

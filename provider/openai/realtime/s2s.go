@@ -169,7 +169,9 @@ func (s *Service) connect(ctx context.Context) error {
 	s.cancel = cancel
 	s.mu.Unlock()
 
-	if err := s.send(s.sessionUpdate()); err != nil {
+	setup := s.sessionUpdate()
+	s.traceSetup(ctx, setup.Session)
+	if err := s.send(setup); err != nil {
 		cancel()
 		_ = conn.Close(websocket.StatusInternalError, "session update failed")
 		return err
@@ -256,6 +258,10 @@ func (s *Service) syncTools(schema frames.ToolsSchema, choice frames.ToolChoice)
 		// Clearing the toolset still has to reach the model.
 		session = map[string]any{"tools": []map[string]any{}}
 	}
+	// Reconfiguring a live session is the same operation as configuring it at the
+	// start, so it is recorded the same way: a trace shows every toolset the
+	// model was given, not just the one it opened with.
+	s.traceSetup(context.Background(), session)
 	if err := s.send(sessionUpdateMsg{Type: msgSessionUpdate, Session: session}); err != nil {
 		slog.Warn("openai realtime tool update failed", "err", err)
 	}
@@ -340,43 +346,74 @@ type serverEvent struct {
 	} `json:"error"`
 }
 
-// responseObject is the completed-response payload on a response.done event; the
-// service reads only its usage.
+// responseObject is the completed-response payload on a response.done event: the
+// token accounting the turn is billed on, and what the model produced.
 type responseObject struct {
-	Usage *usage `json:"usage"`
+	ID     string               `json:"id"`
+	Status string               `json:"status"`
+	Usage  *usage               `json:"usage"`
+	Output []responseOutputItem `json:"output"`
+}
+
+// responseOutputItem is one item the model produced: a spoken message, or a
+// function it asked to have called.
+type responseOutputItem struct {
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Name    string `json:"name"`
+	CallID  string `json:"call_id"` //nolint:tagliatelle // OpenAI wire field
+	Content []struct {
+		Transcript string `json:"transcript"`
+	} `json:"content"`
 }
 
 // usage is the Realtime API's per-response token accounting. The *_token_details
 // break the input and output token counts down by modality (text vs audio),
 // which is how a speech-to-speech model exposes its audio-token billing.
 type usage struct {
-	TotalTokens        int64        `json:"total_tokens"`         //nolint:tagliatelle // OpenAI wire field
-	InputTokens        int64        `json:"input_tokens"`         //nolint:tagliatelle // OpenAI wire field
-	OutputTokens       int64        `json:"output_tokens"`        //nolint:tagliatelle // OpenAI wire field
-	InputTokenDetails  tokenDetails `json:"input_token_details"`  //nolint:tagliatelle // OpenAI wire field
-	OutputTokenDetails tokenDetails `json:"output_token_details"` //nolint:tagliatelle // OpenAI wire field
+	TotalTokens        int64         `json:"total_tokens"`         //nolint:tagliatelle // OpenAI wire field
+	InputTokens        int64         `json:"input_tokens"`         //nolint:tagliatelle // OpenAI wire field
+	OutputTokens       int64         `json:"output_tokens"`        //nolint:tagliatelle // OpenAI wire field
+	InputTokenDetails  *tokenDetails `json:"input_token_details"`  //nolint:tagliatelle // OpenAI wire field
+	OutputTokenDetails *tokenDetails `json:"output_token_details"` //nolint:tagliatelle // OpenAI wire field
 }
 
 // tokenDetails is the per-modality (and cache) breakdown of one direction's
-// token count.
+// token count. The counts are pointers because the model reports only the ones
+// that apply to it, and a breakdown it omits is not the same as one it reports
+// as zero.
 type tokenDetails struct {
-	TextTokens   int64 `json:"text_tokens"`   //nolint:tagliatelle // OpenAI wire field
-	AudioTokens  int64 `json:"audio_tokens"`  //nolint:tagliatelle // OpenAI wire field
-	CachedTokens int64 `json:"cached_tokens"` //nolint:tagliatelle // OpenAI wire field
+	TextTokens   *int64 `json:"text_tokens"`   //nolint:tagliatelle // OpenAI wire field
+	AudioTokens  *int64 `json:"audio_tokens"`  //nolint:tagliatelle // OpenAI wire field
+	CachedTokens *int64 `json:"cached_tokens"` //nolint:tagliatelle // OpenAI wire field
+	// CachedTokenDetails splits the cache-read count by modality. Cached audio
+	// is priced apart from cached text, so it is reported separately.
+	CachedTokenDetails *struct {
+		TextTokens  *int64 `json:"text_tokens"`  //nolint:tagliatelle // OpenAI wire field
+		AudioTokens *int64 `json:"audio_tokens"` //nolint:tagliatelle // OpenAI wire field
+	} `json:"cached_tokens_details"` //nolint:tagliatelle // OpenAI wire field
 }
 
 // tokenUsage converts the wire accounting into the framework's usage shape.
 func (u usage) tokenUsage() frames.LLMTokenUsage {
-	return frames.LLMTokenUsage{
-		PromptTokens:      u.InputTokens,
-		CompletionTokens:  u.OutputTokens,
-		TotalTokens:       u.TotalTokens,
-		CacheReadTokens:   u.InputTokenDetails.CachedTokens,
-		InputAudioTokens:  u.InputTokenDetails.AudioTokens,
-		OutputAudioTokens: u.OutputTokenDetails.AudioTokens,
-		InputTextTokens:   u.InputTokenDetails.TextTokens,
-		OutputTextTokens:  u.OutputTokenDetails.TextTokens,
+	out := frames.LLMTokenUsage{
+		PromptTokens:     u.InputTokens,
+		CompletionTokens: u.OutputTokens,
+		TotalTokens:      u.TotalTokens,
 	}
+	if d := u.InputTokenDetails; d != nil {
+		out.CacheReadTokens = d.CachedTokens
+		out.InputAudioTokens = d.AudioTokens
+		out.InputTextTokens = d.TextTokens
+		if c := d.CachedTokenDetails; c != nil {
+			out.CacheReadAudioTokens = c.AudioTokens
+		}
+	}
+	if d := u.OutputTokenDetails; d != nil {
+		out.OutputAudioTokens = d.AudioTokens
+		out.OutputTextTokens = d.TextTokens
+	}
+	return out
 }
 
 // readLoop reads server events until the connection is closed or canceled.
@@ -429,13 +466,16 @@ func (s *Service) handleEvent(ctx context.Context, ev serverEvent) {
 	}
 }
 
-// reportUsage forwards the token accounting on a response.done event to metrics
-// and telemetry, when usage metrics are enabled.
+// reportUsage records the completed turn and the token accounting it was billed
+// on. The accounting arrives with the response it belongs to, so the span
+// covering that response is opened here and the usage recorded against it.
 func (s *Service) reportUsage(ctx context.Context, ev serverEvent) {
+	spanCtx, end := s.traceResponse(ctx, ev.Response)
+	defer end()
 	if ev.Response == nil || ev.Response.Usage == nil || !s.UsageMetricsEnabled() {
 		return
 	}
-	_ = s.PushTokenUsage(ctx, s.cfg.Model, ev.Response.Usage.tokenUsage())
+	_ = s.PushTokenUsage(spanCtx, s.cfg.Model, ev.Response.Usage.tokenUsage())
 }
 
 // CanGenerateMetrics reports that this service times the conversation and reports

@@ -123,6 +123,7 @@ func TestSynthesisReportsCharacterUsage(t *testing.T) {
 
 	stopped := make(chan struct{}, 1)
 	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+		EnableTracing:           true,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		OnReachedDownstream: func(f frames.Frame) {
 			if _, ok := f.(*frames.TTSStoppedFrame); ok {
@@ -161,9 +162,12 @@ func TestSynthesisReportsCharacterUsage(t *testing.T) {
 		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	want := map[string]string{
-		"tts.chars":                          "11",
+		"metrics.character_count":            "11",
+		"text":                               text,
+		"gen_ai.provider.name":               "fake",
 		"gen_ai.request.model":               "eleven_flash_v2_5",
-		"gen_ai.request.voice":               "XB0fDUnXU5powFXDhCwa",
+		"voice_id":                           "XB0fDUnXU5powFXDhCwa",
+		"gen_ai.operation.name":              "tts",
 		"gen_ai.output.type":                 "speech",
 		"langfuse.observation.type":          "generation",
 		"langfuse.observation.usage_details": `{"characters":11}`,

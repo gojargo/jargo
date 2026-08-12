@@ -94,7 +94,7 @@ func TestVADStartSpeechTimeoutStop(t *testing.T) {
 	}
 	rec, task, done := runTurns(t, cfg)
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 
@@ -118,7 +118,7 @@ func TestWatchdogForceStop(t *testing.T) {
 	}
 	rec, task, done := runTurns(t, cfg)
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 	// User went silent; the watchdog force-stops after StopTimeout.
@@ -152,7 +152,7 @@ func TestTurnAnalyzerStop(t *testing.T) {
 	}
 	rec, task, done := runTurns(t, cfg)
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 
@@ -184,7 +184,7 @@ func TestTurnAnalyzerClearedOnStopNotStart(t *testing.T) {
 	}
 	rec, task, done := runTurns(t, cfg)
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 	if n := analyzer.clears.Load(); n != 0 {
@@ -216,7 +216,7 @@ func TestDeferredFinalization(t *testing.T) {
 	}
 	rec, task, done := runTurns(t, cfg)
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 
@@ -246,11 +246,11 @@ func TestMuteSuppressesDuringBotSpeech(t *testing.T) {
 	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewBotStartedSpeakingFrame())
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2)) // muted: suppressed
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now())) // muted: suppressed
 	rec.expectNone(t, 150*time.Millisecond)
 
 	task.QueueFrame(frames.NewBotStoppedSpeakingFrame()) // unmute
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 
 	finish(t, task, done)
@@ -322,7 +322,7 @@ func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	time.Sleep(300 * time.Millisecond)
 	task.StopWhenDone()
@@ -389,7 +389,7 @@ func TestTurnAnalyzerInterimReopensFinalizedTranscript(t *testing.T) {
 	rec, task, done := runTurns(t, cfg)
 
 	task.QueueFrame(frames.NewSTTMetadataFrame(500 * time.Millisecond))
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 
@@ -454,7 +454,7 @@ func TestNoFinalizeWhileUserIsSpeaking(t *testing.T) {
 	}
 	rec, task, done := runTurns(t, cfg)
 
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	rec.expect(t, "started")
 	rec.expect(t, "interruption")
 

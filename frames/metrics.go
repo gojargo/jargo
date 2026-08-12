@@ -17,37 +17,69 @@ import (
 //
 // The per-modality audio and text counts are subsets, of the prompt tokens
 // (input) and completion tokens (output). Realtime (speech-to-speech) models
-// bill audio and text at different rates and report this breakdown; a text-only
-// generation leaves the audio fields zero.
+// bill audio and text at different rates and report this breakdown.
+//
+// The counts a service may or may not account for are pointers, so that a
+// service which reports a figure of zero is distinguishable from one that does
+// not report the figure at all. A model with no prompt cache leaves
+// CacheReadTokens nil; a model with one that served nothing from it this
+// generation reports zero. Only the second is worth showing on a cost
+// dashboard, and only the pointer tells them apart.
 type LLMTokenUsage struct {
 	// PromptTokens is the number of input tokens. It is net of the cache on a
 	// service that reports its cache reads separately.
 	PromptTokens int64
 	// CompletionTokens is the number of output tokens.
 	CompletionTokens int64
-	// CacheReadTokens is the number of input tokens read from the prompt cache.
-	CacheReadTokens int64
-	// CacheCreationTokens is the number of input tokens written to the prompt cache.
-	CacheCreationTokens int64
 	// TotalTokens is every token the generation used, cached input included.
 	TotalTokens int64
+	// CacheReadTokens is the number of input tokens read from the prompt cache.
+	CacheReadTokens *int64
+	// CacheCreationTokens is the number of input tokens written to the prompt cache.
+	CacheCreationTokens *int64
 	// ReasoningTokens is the number of completion tokens the model spent
 	// reasoning before answering, on a model that reports them. It is a subset
 	// of CompletionTokens.
-	ReasoningTokens int64
+	ReasoningTokens *int64
 	// InputAudioTokens is the number of input (prompt) tokens that were audio,
 	// as reported by realtime models. It is a subset of PromptTokens.
-	InputAudioTokens int64
+	InputAudioTokens *int64
 	// OutputAudioTokens is the number of output (completion) tokens that were
 	// audio. It is a subset of CompletionTokens.
-	OutputAudioTokens int64
+	OutputAudioTokens *int64
+	// CacheReadAudioTokens is the number of cache-read input tokens that were
+	// audio. It is a subset of CacheReadTokens, and realtime models price it
+	// apart from cached text.
+	CacheReadAudioTokens *int64
 	// InputTextTokens is the number of input (prompt) tokens that were text,
 	// when the model reports a per-modality breakdown. Subset of PromptTokens.
-	InputTextTokens int64
+	InputTextTokens *int64
 	// OutputTextTokens is the number of output (completion) tokens that were
 	// text, when the model reports a per-modality breakdown. Subset of
 	// CompletionTokens.
-	OutputTextTokens int64
+	OutputTextTokens *int64
+}
+
+// AddTokens accumulates n into a reported count, starting the count at n when
+// the service had not reported one yet. It is for a service whose accounting
+// arrives split across several entries, such as a per-modality breakdown.
+func AddTokens(count *int64, n int64) *int64 {
+	if count == nil {
+		return new(n)
+	}
+	*count += n
+	return count
+}
+
+// TokenCount reads one of the optional counts: the number of tokens, and
+// whether the service accounted for them at all. A count that was not reported
+// reads as zero and false, which a caller adding up a bill must not treat as a
+// measured zero.
+func TokenCount(count *int64) (int64, bool) {
+	if count == nil {
+		return 0, false
+	}
+	return *count, true
 }
 
 // STTUsage is how much audio a speech-to-text service was given. It is raw

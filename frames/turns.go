@@ -17,14 +17,27 @@ type VADUserStartedSpeakingFrame struct {
 	// StartSecs is the VAD's confirmation delay (how long speech persisted
 	// before onset was confirmed), in seconds.
 	StartSecs float64
+	// Timestamp is the wall-clock time at which the VAD made its determination.
+	// Subtracting StartSecs from it gives the moment the speech itself began,
+	// which is what a measurement of the whole utterance is anchored to.
+	Timestamp time.Time
 }
 
 // NewVADUserStartedSpeakingFrame builds a VADUserStartedSpeakingFrame.
-func NewVADUserStartedSpeakingFrame(startSecs float64) *VADUserStartedSpeakingFrame {
+func NewVADUserStartedSpeakingFrame(
+	startSecs float64, timestamp time.Time,
+) *VADUserStartedSpeakingFrame {
 	return &VADUserStartedSpeakingFrame{
 		BaseSystemFrame: NewBaseSystemFrame("VADUserStartedSpeakingFrame"),
 		StartSecs:       startSecs,
+		Timestamp:       timestamp,
 	}
+}
+
+// SpeechStart is the moment the speech this frame reports actually began, which
+// is earlier than the determination by the confirmation delay.
+func (f *VADUserStartedSpeakingFrame) SpeechStart() time.Time {
+	return f.Timestamp.Add(-time.Duration(f.StartSecs * float64(time.Second)))
 }
 
 // String implements fmt.Stringer.
