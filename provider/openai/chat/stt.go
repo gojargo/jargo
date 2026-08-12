@@ -101,10 +101,10 @@ type transcriber struct {
 	shaper STTRequestShaper
 }
 
-// Metadata reports the transcript latency the turn strategies size their
-// wait by.
+// Metadata reports the model in use and the transcript latency the turn
+// strategies size their wait by.
 func (t *transcriber) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.OpenAITTFSP99)}
+	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.OpenAITTFSP99), Model: t.cfg.Model}
 }
 
 // writeFields writes the transcription form fields, omitting optional ones that

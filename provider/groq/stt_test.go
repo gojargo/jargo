@@ -258,3 +258,16 @@ func TestNewSTTDefaults(t *testing.T) {
 		t.Errorf("language = %q, want the default en", req.fields["language"])
 	}
 }
+
+// TestSTTMetadataReportsTheModel checks the transcriber names the model it is
+// transcribing with, which is what labels the service's metrics and spans.
+func TestSTTMetadataReportsTheModel(t *testing.T) {
+	tr := &sttTranscriber{cfg: STTConfig{Model: "whisper-custom"}}
+	if got := tr.Metadata().Model; got != "whisper-custom" {
+		t.Errorf("Model = %q, want the configured model", got)
+	}
+	def := &sttTranscriber{cfg: STTConfig{Model: defaultSTTModel}}
+	if got := def.Metadata().Model; got != defaultSTTModel {
+		t.Errorf("Model = %q, want the default %q", got, defaultSTTModel)
+	}
+}

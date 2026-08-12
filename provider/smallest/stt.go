@@ -92,10 +92,10 @@ type connector struct {
 	cfg STTConfig
 }
 
-// Metadata reports the transcript latency the turn strategies size their
-// wait by.
+// Metadata reports the model in use and the transcript latency the turn
+// strategies size their wait by.
 func (c *connector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SmallestTTFSP99)}
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SmallestTTFSP99), Model: c.cfg.Model}
 }
 
 // query builds the session's query string for the given input sample rate.

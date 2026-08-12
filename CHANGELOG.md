@@ -102,6 +102,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Six transcription services report the model they are using.** Groq,
+  Mistral, OpenAI, Sarvam, Smallest and Together each take a model and each
+  left it out of the metadata the service reads, so their spans and metrics
+  carried an empty `gen_ai.request.model` and their usage was priced against
+  nothing. They now report it, as the other transcription services already did.
+
 - **Turn detection resamples through a filter.** A turn stream at a rate other
   than the model's 16 kHz was converted by linear interpolation, with nothing
   to band-limit it first, so everything above the new Nyquist folded back down

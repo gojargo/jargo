@@ -183,10 +183,10 @@ type connector struct {
 	mc  sttModelConfig
 }
 
-// Metadata reports the transcript latency the turn strategies size their
-// wait by.
+// Metadata reports the model in use and the transcript latency the turn
+// strategies size their wait by.
 func (c *connector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SarvamTTFSP99)}
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SarvamTTFSP99), Model: c.cfg.Model}
 }
 
 // endpoint returns the WebSocket URL for the configured model.
