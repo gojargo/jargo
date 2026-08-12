@@ -3,6 +3,7 @@ package rtvi_test
 import (
 	"encoding/json"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,9 +14,21 @@ import (
 
 // observerHarness runs frames through an observer built with params and returns
 // the RTVI messages it sends.
+//
+// An observer watches from off the frame path, so a report reaches it on a
+// goroutine of its own and the message it sends has to travel the pipeline in
+// turn. Ending the run does not wait for any of that: whatever is still queued
+// for an observer when the pipeline stops is dropped. So the harness collects
+// while the pipeline is still running, and only stops it once the messages have
+// stopped arriving. Ending the run first would race the observer and read back
+// however much of the conversation happened to have made it through.
 func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.Frame) []rtvi.Message {
 	t.Helper()
-	out := make(chan rtvi.Message, 16)
+
+	var (
+		mu   sync.Mutex
+		msgs []rtvi.Message
+	)
 	proc := rtvi.NewProcessor()
 	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
@@ -23,28 +36,51 @@ func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.F
 		OnReachedDownstream: func(f frames.Frame) {
 			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 				if msg, ok := m.Message.(rtvi.Message); ok {
-					out <- msg
+					mu.Lock()
+					msgs = append(msgs, msg)
+					mu.Unlock()
 				}
 			}
 		},
 	})
+
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(msgs)
+	}
 
 	done := make(chan error, 1)
 	go func() { done <- task.Run(t.Context()) }()
 	for _, f := range queue {
 		task.QueueFrame(f)
 	}
+
+	// Settle: stop once nothing new has arrived for a while, so a test
+	// expecting no messages waits just as long as one expecting several.
+	const (
+		quiet = 200 * time.Millisecond
+		limit = 5 * time.Second
+	)
+	deadline := time.Now().Add(limit)
+	for last, lastAt := count(), time.Now(); time.Since(lastAt) < quiet; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the observer was still sending after %v (%d messages)", limit, count())
+		}
+		time.Sleep(5 * time.Millisecond)
+		if n := count(); n != last {
+			last, lastAt = n, time.Now()
+		}
+	}
+
 	task.StopWhenDone()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	close(out)
 
-	var msgs []rtvi.Message
-	for msg := range out {
-		msgs = append(msgs, msg)
-	}
-	return msgs
+	mu.Lock()
+	defer mu.Unlock()
+	return append([]rtvi.Message(nil), msgs...)
 }
 
 // levels builds the params for one report level applied to every function.
