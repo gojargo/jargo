@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/settings"
 )
 
@@ -53,39 +54,74 @@ func TestServiceWithoutADescriberHasNoModel(t *testing.T) {
 	}
 }
 
-// TestSyncModelRelabelsFromTheSettingsStore checks the relabeling a mid-call
-// model change triggers: what follows the change is labeled with the model now
-// in force, or its cost lands against the one it is no longer using.
-func TestSyncModelRelabelsFromTheSettingsStore(t *testing.T) {
-	s := NewStream("TestSTT", &describingConnector{meta: Metadata{Model: "old-model"}}, 0)
+// settingsProvider is a connector that holds a settings store, the way a
+// provider whose model or language can change mid-call does.
+type settingsProvider struct {
+	describingConnector
+	store STTSettings
+}
+
+func (c *settingsProvider) Settings() any { return &c.store }
+
+// TestModelFollowsASettingsChange checks the relabeling a mid-call model change
+// triggers: what follows is labeled with the model now in force, or its cost
+// lands against the one it is no longer using.
+func TestModelFollowsASettingsChange(t *testing.T) {
+	c := &settingsProvider{describingConnector: describingConnector{meta: Metadata{Model: "old-model"}}}
+	if err := settings.SetNamed(&c.store, "model", "old-model"); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStream("TestSTT", c, 0)
 	if s.modelName() != "old-model" {
 		t.Fatalf("model = %q, want the connector's", s.modelName())
 	}
 
-	store := &STTSettings{}
-	if err := settings.SetNamed(store, "model", "new-model"); err != nil {
-		t.Fatalf("SetNamed: %v", err)
+	delta := &STTSettings{}
+	if err := settings.SetNamed(delta, "model", "new-model"); err != nil {
+		t.Fatal(err)
 	}
-	s.syncModel(store)
+	if _, err := s.set.apply(context.Background(), frames.NewSTTUpdateSettingsFrame(delta)); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 
 	if s.modelName() != "new-model" {
 		t.Errorf("model = %q after the change, want the one now in force", s.modelName())
 	}
+	if v, _ := settings.Get(&c.store, "model"); v != "new-model" {
+		t.Errorf("the store holds %v, want the new model", v)
+	}
 }
 
-// TestSyncModelFollowsAClearedModel checks a model cleared mid-call clears the
-// label too. Naming no model is a request in its own right, and the label has to
-// follow the store rather than keep reporting a model no longer in use.
-func TestSyncModelFollowsAClearedModel(t *testing.T) {
-	s := NewStream("TestSTT", &describingConnector{meta: Metadata{Model: "old-model"}}, 0)
+// TestModelIsLeftAloneWhenSomethingElseChanges checks a change to another
+// setting does not disturb the label.
+func TestModelIsLeftAloneWhenSomethingElseChanges(t *testing.T) {
+	c := &settingsProvider{describingConnector: describingConnector{meta: Metadata{Model: "kept"}}}
+	s := NewStream("TestSTT", c, 0)
 
-	store := &STTSettings{}
-	if err := settings.SetNamed(store, "model", nil); err != nil {
-		t.Fatalf("SetNamed: %v", err)
+	delta := &STTSettings{}
+	if err := settings.SetNamed(delta, "language", "fr"); err != nil {
+		t.Fatal(err)
 	}
-	s.syncModel(store)
+	if _, err := s.set.apply(context.Background(), frames.NewSTTUpdateSettingsFrame(delta)); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 
-	if s.modelName() != "" {
-		t.Errorf("model = %q after it was cleared, want it empty", s.modelName())
+	if s.modelName() != "kept" {
+		t.Errorf("model = %q, want it left alone", s.modelName())
+	}
+}
+
+// TestApplyIgnoresAProviderWithoutSettings checks an update aimed at a provider
+// that holds none is reported rather than panicking.
+func TestApplyIgnoresAProviderWithoutSettings(t *testing.T) {
+	s := NewStream("TestSTT", &plainConnector{}, 0)
+
+	delta := &STTSettings{}
+	if err := settings.SetNamed(delta, "model", "whatever"); err != nil {
+		t.Fatal(err)
+	}
+	reopen, err := s.set.apply(context.Background(), frames.NewSTTUpdateSettingsFrame(delta))
+	if err != nil || reopen {
+		t.Errorf("apply = (%v, %v), want it to do nothing quietly", reopen, err)
 	}
 }

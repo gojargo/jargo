@@ -32,6 +32,9 @@ type SegmentService struct {
 	work   *processingMeter
 	tracer *segmentTracer
 
+	// set applies settings updates to the provider's own store.
+	set *providerSettings
+
 	sampleRate int
 	mu         sync.Mutex
 	buf        []byte
@@ -47,12 +50,14 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 		s.model = d.Metadata().Model
 	}
 	s.Base = service.New(name, s)
-	s.ttfb = newTTFBTracker(s.Base.Base, func() string { return s.model })
-	s.work = newProcessingMeter(s.Base.Base, func() string { return s.model })
+	s.set = &providerSettings{provider: tr, name: s.Name, onModel: s.setModel}
+	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
+	s.work = newProcessingMeter(s.Base.Base, s.modelName)
 	s.tracer = newSegmentTracer(s.Base.Base, func() tracing.STTAttributes {
 		return tracing.STTAttributes{
-			Service: s.TypeName(),
-			Model:   s.model,
+			Service:  s.TypeName(),
+			Model:    s.modelName(),
+			Settings: s.set.traceSettings(),
 			// A segmented service is handed the speech a turn detector cut out
 			// for it, so voice activity detection is what drives it.
 			VADEnabled: true,
@@ -72,6 +77,46 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 // arrived in the meantime. Zero restores DefaultTTFBTimeout.
 func (s *SegmentService) SetTTFBTimeout(d time.Duration) { s.ttfb.setTimeout(d) }
 
+// modelName is the model in force, which labels what this service reports.
+func (s *SegmentService) modelName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model
+}
+
+// setModel relabels what this service reports with the model now in force.
+func (s *SegmentService) setModel(model string) {
+	s.mu.Lock()
+	s.model = model
+	s.mu.Unlock()
+}
+
+// handleSettings applies an update meant for this service. One naming another
+// service is left untouched and travels on, so the service it was meant for
+// gets it.
+func (s *SegmentService) handleSettings(
+	ctx context.Context, f *frames.STTUpdateSettingsFrame, dir processor.Direction,
+) error {
+	if !f.TargetsService(s) {
+		return s.PushFrame(ctx, f, dir)
+	}
+	s.updateSettings(ctx, f)
+	return nil
+}
+
+// updateSettings merges an update into the provider's own settings and lets it
+// act on what changed.
+//
+// A provider may ask for its session to be replaced, which a streaming service
+// does by reopening the connection. There is no session here: each segment is
+// transcribed on its own, so the next one simply reads the settings as they now
+// stand, and the request is nothing this service has to act on.
+func (s *SegmentService) updateSettings(ctx context.Context, f *frames.STTUpdateSettingsFrame) {
+	if _, err := s.set.apply(ctx, f); err != nil {
+		s.PushError(ctx, "stt: settings update", err, false)
+	}
+}
+
 // ProcessFrame buffers speech audio and transcribes each completed segment.
 func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -87,6 +132,8 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 			return err
 		}
 		return nil
+	case *frames.STTUpdateSettingsFrame:
+		return s.handleSettings(ctx, fr, dir)
 	case *frames.UserStartedSpeakingFrame:
 		s.mu.Lock()
 		s.buf = nil
@@ -183,7 +230,7 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		// this call produces will open and close.
 		played := pcmDuration(int64(len(audio)), rate)
 		s.tracer.addUsage(frames.STTUsage{AudioSeconds: played.Seconds()})
-		metrics.RecordSTTAudio(ctx, s.Name(), s.model, played.Seconds())
+		metrics.RecordSTTAudio(ctx, s.Name(), s.modelName(), played.Seconds())
 		s.pushUsageMetrics(ctx, played)
 
 		start := time.Now()

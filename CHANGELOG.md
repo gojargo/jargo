@@ -91,6 +91,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   token accounting for a turn now lands on that turn's span rather than on a
   span raised just to hold it.
 
+- **A segmented transcription service takes settings updates.** Only the
+  streaming services acted on an `STTUpdateSettingsFrame`; a segmented one
+  ignored it, so the model and the language a batch provider transcribes with
+  were fixed for the length of the call. Both kinds now apply an update the same
+  way: the language is named the provider's way before it is stored, only what
+  actually changed is reported to the provider, and a change of model relabels
+  what the service reports. A provider asking for its session to be replaced is
+  ignored by a segmented service, which has none: the next segment is
+  transcribed with the settings as they then stand. `SettingsHolder`,
+  `SettingsUpdater` and `LanguageNamer` may now be implemented by a Transcriber
+  as well as a Connector.
+
 - **RTVI reports how loud each side is.** The observer now sends
   `user-audio-level` and `bot-audio-level`, the loudness of the user's input and
   the bot's synthesized speech on a 0..1 scale, for a client drawing a speaking

@@ -144,30 +144,34 @@ type Finalizer interface {
 	Finalize() error
 }
 
-// SettingsHolder is an optional interface a Connector implements when part of
+// SettingsHolder is an optional interface a provider implements when part of
 // what it was built with can change while the pipeline runs: the language it
 // transcribes, the model it uses. The value returned is the provider's own
 // store, a pointer to a settings value, which an update is merged into.
+//
+// Either kind of provider may implement it, a Connector or a Transcriber, and
+// either kind of service applies an update the same way.
 type SettingsHolder interface {
 	Settings() any
 }
 
-// SettingsUpdater is an optional interface a Connector implements to act on a
-// settings change. A Connector that holds settings without implementing this
-// still has them updated; it simply picks them up the next time it opens a
-// session.
+// SettingsUpdater is an optional interface a provider implements to act on a
+// settings change. A provider that holds settings without implementing this
+// still has them updated; it simply picks them up the next time it is used.
 type SettingsUpdater interface {
 	SettingsHolder
 	// UpdateSettings is called once the changed fields have been written to the
 	// store, with what changed and what each field held before. Returning true
 	// asks for the session to be reopened, which is what a provider needs when
 	// the setting is fixed at the point the session opens and cannot be changed
-	// on a session already running.
+	// on a session already running. A segmented service has no session to
+	// reopen and transcribes the next segment with the settings as they stand,
+	// so it ignores the request.
 	UpdateSettings(ctx context.Context, changed settings.Changed) (reopen bool, err error)
 }
 
-// LanguageNamer is an optional interface a Connector implements to name a
-// language the way its provider does. Providers disagree on the codes, so a
+// LanguageNamer is an optional interface a provider implements to name a
+// language the way that provider does. Providers disagree on the codes, so a
 // caller naming a language neutrally has it converted before it is stored,
 // leaving the store holding the code the provider itself uses. Without that the
 // stored value and the next update would be in different vocabularies, and a
@@ -302,9 +306,8 @@ type StreamService struct {
 
 	// settingsMu serializes reading the provider's settings against changing
 	// them. A session is opened from the read loop when one drops, and an update
-	// is applied on the frame goroutine, so without this a session could be
-	// opened from settings that are half written.
-	settingsMu sync.Mutex
+	// set applies settings updates to the provider's own store.
+	set *providerSettings
 }
 
 // NewStream builds a streaming STT service named name driven by conn. A non-zero
@@ -322,6 +325,7 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	}
 	s.canReopen = true
 	s.Base = service.New(name, s)
+	s.set = &providerSettings{provider: conn, name: s.Name, onModel: s.setModel}
 	s.ws = wsservice.New(s, wsservice.Config{})
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
 	s.work = newProcessingMeter(s.Base.Base, s.modelName)
@@ -346,16 +350,13 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 
 // traceSettings renders the provider's settings for a transcription span. A
 // provider that keeps no settings of its own contributes none.
-func (s *StreamService) traceSettings() map[string]any {
-	holder, ok := s.conn.(SettingsHolder)
-	if !ok {
-		return nil
-	}
-	given, err := settings.Given(holder.Settings())
-	if err != nil {
-		return nil
-	}
-	return given
+func (s *StreamService) traceSettings() map[string]any { return s.set.traceSettings() }
+
+// setModel relabels what this service reports with the model now in force.
+func (s *StreamService) setModel(model string) {
+	s.mu.Lock()
+	s.model = model
+	s.mu.Unlock()
 }
 
 // SetTTFBTimeout sets how long the service waits after the speech ends for the
@@ -536,9 +537,11 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 	// Held across the dial: the provider reads its settings to build the
 	// session, and a session opened from settings changing underneath it would
 	// be neither the old configuration nor the new one.
-	s.settingsMu.Lock()
-	stream, err := s.conn.Connect(sessionCtx, s.sampleRate)
-	s.settingsMu.Unlock()
+	var (
+		stream Stream
+		err    error
+	)
+	s.set.hold(func() { stream, err = s.conn.Connect(sessionCtx, s.sampleRate) })
 	if err != nil {
 		cancel()
 		return err
@@ -645,19 +648,11 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 // updateSettings merges an update into the provider's own settings and lets it
 // act on what changed, reopening the session when the provider says the change
 // cannot take effect on the one already running.
+//
+// The reopen is taken after the merge has released its lock, or it would
+// deadlock against the dial it goes on to make.
 func (s *StreamService) updateSettings(ctx context.Context, f *frames.STTUpdateSettingsFrame) {
-	holder, ok := s.conn.(SettingsHolder)
-	if !ok {
-		slog.Warn("settings update for a service whose provider has none", "service", s.Name())
-		return
-	}
-	store := holder.Settings()
-
-	// The reopen this may ask for is taken after the lock is released, or it
-	// would deadlock against the dial it goes on to make.
-	s.settingsMu.Lock()
-	reopen, err := s.applySettings(ctx, store, f)
-	s.settingsMu.Unlock()
+	reopen, err := s.set.apply(ctx, f)
 	if err != nil {
 		s.PushError(ctx, "stt: settings update", err, false)
 		return
@@ -665,83 +660,6 @@ func (s *StreamService) updateSettings(ctx context.Context, f *frames.STTUpdateS
 	if reopen {
 		s.requestReopen(ctx)
 	}
-}
-
-// applySettings merges the update and lets the provider act on it, reporting
-// whether the provider wants the session reopened. It runs under settingsMu.
-func (s *StreamService) applySettings(
-	ctx context.Context, store any, f *frames.STTUpdateSettingsFrame,
-) (bool, error) {
-	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, nil
-	}
-
-	// Naming the language the provider's way before applying is what keeps the
-	// comparison honest: the store holds the provider's code, so a neutral name
-	// that means the same language must be converted first or it reads as a
-	// change when nothing changed.
-	s.nameLanguage(delta)
-
-	changed, err := settings.Apply(store, delta)
-	if err != nil {
-		return false, err
-	}
-	if len(changed) == 0 {
-		return false, nil
-	}
-	slog.Info("updated settings", "service", s.Name(), "fields", changed.String())
-
-	if changed.Has("model") {
-		// The model labels the usage this service reports, and it is priced
-		// against it, so a model that changed mid-call has to relabel what
-		// follows or the cost lands against the wrong one.
-		s.syncModel(store)
-	}
-
-	updater, ok := s.conn.(SettingsUpdater)
-	if !ok {
-		return false, nil
-	}
-	return updater.UpdateSettings(ctx, changed)
-}
-
-// nameLanguage rewrites a language the delta gives into the code the provider
-// uses, when the provider says how. A code the provider does not recognize is
-// left as it came, since it may be one the service accepts directly.
-func (s *StreamService) nameLanguage(delta any) {
-	namer, ok := s.conn.(LanguageNamer)
-	if !ok {
-		return
-	}
-	value, ok := settings.Get(delta, "language")
-	if !ok {
-		return
-	}
-	code, ok := value.(string)
-	if !ok || code == "" {
-		return
-	}
-	named := namer.ServiceLanguage(language.Language(code))
-	if named == "" || named == code {
-		return
-	}
-	if err := settings.SetNamed(delta, "language", named); err != nil {
-		slog.Warn("naming the language the provider's way failed",
-			"service", s.Name(), "err", err)
-	}
-}
-
-// syncModel relabels the metrics with the model now in force.
-func (s *StreamService) syncModel(store any) {
-	name, _ := settings.Get(store, "model")
-	model, _ := name.(string)
-	s.mu.Lock()
-	s.model = model
-	s.mu.Unlock()
 }
 
 // requestReopen replaces the session now, or as soon as the user has finished
