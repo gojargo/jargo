@@ -112,7 +112,53 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a rolling 400 ms window rather than per frame, so it reads 0 until enough
   audio has arrived to measure.
 
+- **Two text aggregators that read structure in what the model writes.**
+  `text.SkipTagsAggregator` never looks for a sentence boundary between a pair
+  of tags, so a pronunciation tag full of periods reaches the synthesizer whole
+  instead of in pieces. `text.PatternPairAggregator` recognizes runs delimited
+  by a registered pair and, per pattern, drops the run, keeps its content, or
+  returns it as a unit of its own; a handler is called as each run completes.
+  Both recognize a delimiter split across arriving text. `text.StartEndTags`,
+  `text.ParseStartEndTags` and `text.LongestTrailingPartialMatch` are the
+  scanning they share.
+
+- **Processors for wiring a pipeline to itself.** `processor.ProducerProcessor`
+  picks frames out of the stream passing through it and hands them to any
+  number of `processor.ConsumerProcessor`s elsewhere, so a frame can reach a
+  part of the pipeline it does not flow through. `processor.IdleFrameProcessor`
+  calls back when the frames it watches for stop arriving.
+  `processor.StatelessTextTransformer` rewrites the text of every text frame.
+
+- **Three more filters, and the notifier they signal.** `processor.FrameFilter`
+  passes only the frame types it was built for, `processor.IdentityFilter`
+  passes everything, and `processor.NullFilter` passes nothing but what the
+  pipeline needs to keep working. `processor.WakeNotifierFilter` signals a
+  `notify.Notifier` when a frame it watches satisfies a predicate, which is how
+  a condition seen at one point in the pipeline releases something held at
+  another. `notify.EventNotifier` in the new `utils/notify` is the notifier.
+
+- **Two gates on the conversation.** `aggregators.Gated` holds frames until
+  something opens it, then releases the opening frame ahead of everything it
+  held. `aggregators.GatedContext` holds the conversation back from the model
+  until a notifier fires, keeping only the most recent one. Neither holds a
+  system frame. Note that ending a run is not a system frame, so a pipeline
+  carrying a gate has to open it before shutting down.
+
 ### Fixed
+
+- **A service span lands in the conversation it belongs to.** The conversation
+  span was opened by the turn-trace observer when the `StartFrame` reached it,
+  which is off the frame path: a service raising its own span for the first
+  frame of the call could get there first and root its span in a trace of its
+  own. The task now opens the conversation before the pipeline runs, and the
+  observer finds it already open.
+
+- **An aggregated text frame says how the text was grouped, and what it was cut
+  from.** `AggregatedTextFrame.AggregatedBy` was always `sentence`, even for a
+  service passing tokens straight through, and `RawText` was declared but never
+  set. Both now carry what the aggregator reported, which is what lets a
+  consumer record the written form of a unit whose spoken form is only part of
+  it.
 
 - **Rime speaks to the model it is actually using.** Four things had drifted
   from the provider. The default model was `arcana`, where Rime's current one
