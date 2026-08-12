@@ -69,3 +69,12 @@ func TestIsSentenceEnding(t *testing.T) {
 		}
 	}
 }
+
+// A tokenizer for another language is built from the training data the Punkt
+// project publishes; data that is not a trained model is refused rather than
+// producing a tokenizer that finds no boundaries.
+func TestNewPunktRejectsInvalidTraining(t *testing.T) {
+	if _, err := text.NewPunkt([]byte("not a trained model")); err == nil {
+		t.Fatal("NewPunkt accepted training data that is not a model")
+	}
+}

@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -144,5 +145,117 @@ func TestLLMSwitcherReportsTheActiveLLM(t *testing.T) {
 	}
 	if got := len(sw.LLMs()); got != 2 {
 		t.Errorf("LLMs() = %d members, want 2", got)
+	}
+}
+
+// errProviderRefused stands in for whatever a provider reports when it will
+// not answer.
+//
+//nolint:gochecknoglobals // sentinel error for the test below
+var errProviderRefused = errors.New("provider refused")
+
+// inferringLLM is a member that can also answer off to the side of the
+// pipeline, recording what it was asked and returning a canned answer.
+type inferringLLM struct {
+	*fakeLLM
+
+	answer string
+	err    error
+
+	mu   sync.Mutex
+	got  *frames.LLMContext
+	opts llm.InferenceOptions
+}
+
+func newInferringLLM(name, answer string, err error) *inferringLLM {
+	l := &inferringLLM{answer: answer, err: err}
+	l.fakeLLM = &fakeLLM{}
+	l.fakeLLM.Base = processor.New(name, l)
+	return l
+}
+
+func (l *inferringLLM) RunInference(
+	_ context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
+) (string, error) {
+	l.mu.Lock()
+	l.got, l.opts = convo, opts
+	l.mu.Unlock()
+	return l.answer, l.err
+}
+
+func (l *inferringLLM) asked() (*frames.LLMContext, llm.InferenceOptions) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.got, l.opts
+}
+
+// TestLLMSwitcherRunInference checks the off-pipeline answer goes to whichever
+// model is active, and that a member that cannot answer that way says so rather
+// than failing.
+func TestLLMSwitcherRunInference(t *testing.T) {
+	answering := newInferringLLM("Answering", "the answer", nil)
+	plain := newFakeLLM("Plain")
+
+	sw, err := pipeline.NewLLMSwitcher(
+		[]pipeline.LLMMember{answering, plain}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewLLMSwitcher: %v", err)
+	}
+
+	convo := frames.NewLLMContext("you are helpful")
+	opts := llm.InferenceOptions{MaxTokens: 64, SystemInstruction: "answer briefly"}
+
+	out, ok, err := sw.RunInference(context.Background(), convo, opts)
+	if err != nil {
+		t.Fatalf("RunInference: %v", err)
+	}
+	if !ok {
+		t.Fatal("RunInference reported the active model cannot answer off-pipeline")
+	}
+	if out != "the answer" {
+		t.Errorf("RunInference = %q, want the answer", out)
+	}
+	gotConvo, gotOpts := answering.asked()
+	if gotConvo != convo {
+		t.Error("the model was given a different conversation")
+	}
+	if gotOpts != opts {
+		t.Errorf("the model was given options %+v, want %+v", gotOpts, opts)
+	}
+
+	// Switching moves the inference to the model now answering, which here
+	// cannot answer off-pipeline at all.
+	if !sw.SwitchTo(plain) {
+		t.Fatal("SwitchTo(plain) = false, want the switch accepted")
+	}
+	out, ok, err = sw.RunInference(context.Background(), convo, opts)
+	if err != nil {
+		t.Fatalf("RunInference after the switch: %v", err)
+	}
+	if ok {
+		t.Errorf("RunInference = (%q, true), want false for a model that cannot answer", out)
+	}
+	if out != "" {
+		t.Errorf("RunInference = %q, want no text when the model cannot answer", out)
+	}
+}
+
+// TestLLMSwitcherRunInferenceReportsAnError checks a failure from the model is
+// passed back rather than swallowed, and still reports that the model tried.
+func TestLLMSwitcherRunInferenceReportsAnError(t *testing.T) {
+	failing := newInferringLLM("Failing", "", errProviderRefused)
+
+	sw, err := pipeline.NewLLMSwitcher([]pipeline.LLMMember{failing}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewLLMSwitcher: %v", err)
+	}
+
+	_, ok, err := sw.RunInference(
+		context.Background(), frames.NewLLMContext(""), llm.InferenceOptions{})
+	if !ok {
+		t.Error("RunInference reported the model cannot answer, want it tried and failed")
+	}
+	if !errors.Is(err, errProviderRefused) {
+		t.Errorf("RunInference error = %v, want the provider's", err)
 	}
 }

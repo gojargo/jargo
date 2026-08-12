@@ -486,3 +486,31 @@ func TestSwitchRequestForAnotherSwitcherTravelsOn(t *testing.T) {
 	task.QueueFrame(frames.NewTextFrame("x"))
 	wantText(t, out, "B2:A1:x")
 }
+
+// TestManualStrategyIgnoresErrors checks the strategy a switcher gets when
+// switching is manual: an error from the active service is not a reason to move
+// off it, since the caller decides when to switch.
+func TestManualStrategyIgnoresErrors(t *testing.T) {
+	a, b := newEcho(), newEcho()
+	sw, err := pipeline.NewServiceSwitcher(
+		[]processor.Processor{a, b}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewServiceSwitcher: %v", err)
+	}
+
+	strategy := sw.Strategy()
+	if strategy == nil {
+		t.Fatal("Strategy() is nil, want the strategy choosing between the services")
+	}
+	if got := strategy.ActiveService(); got != processor.Processor(a) {
+		t.Fatalf("ActiveService() = %v, want the first service", got)
+	}
+
+	ef := frames.NewErrorFrame("the provider failed")
+	if got := strategy.HandleError(ef); got != nil {
+		t.Errorf("HandleError switched to %v, want no switch", got)
+	}
+	if got := strategy.ActiveService(); got != processor.Processor(a) {
+		t.Errorf("ActiveService() = %v, want it left on the first service", got)
+	}
+}

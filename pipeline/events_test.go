@@ -780,3 +780,137 @@ func TestPipelineStartedReachesObservers(t *testing.T) {
 		t.Errorf("%d frames were reported before the pipeline started", early)
 	}
 }
+
+// TestOnReachedDownstreamRegistersLateHandlers checks handlers can be added
+// after the task is built. Something that queues frames needs the task to queue
+// them on, so it cannot also have been passed to NewTask.
+func TestOnReachedDownstreamRegistersLateHandlers(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		first []frames.Frame
+		later []frames.Frame
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TextFrame{}),
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			first = append(first, f)
+			mu.Unlock()
+		},
+	})
+	task.OnReachedDownstream(func(f frames.Frame) {
+		mu.Lock()
+		later = append(later, f)
+		mu.Unlock()
+	})
+	// A nil handler is ignored rather than panicking on the frame path.
+	task.OnReachedDownstream(nil)
+
+	done := runTask(t, task)
+	task.QueueFrame(frames.NewTextFrame("hello"))
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(first) != 1 || len(later) != 1 {
+		t.Fatalf("handlers saw %d and %d frames, want one each", len(first), len(later))
+	}
+	if first[0] != later[0] {
+		t.Error("the two handlers were given different frames")
+	}
+}
+
+// TestSetReachedFilterReplacesTheSelection checks a filter set after the task
+// was built replaces the one it was built with, rather than widening it.
+func TestSetReachedFilterReplacesTheSelection(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []frames.Frame
+	)
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		OnReachedDownstream: func(f frames.Frame) {
+			mu.Lock()
+			seen = append(seen, f)
+			mu.Unlock()
+		},
+	})
+	task.SetReachedDownstreamFilter(pipeline.FrameTypes(&frames.TextFrame{}))
+
+	done := runTask(t, task)
+	task.QueueFrame(frames.NewTextFrame("hello"))
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 {
+		t.Fatalf("frames reported = %v, want only the text frame", seen)
+	}
+	if _, ok := seen[0].(*frames.TextFrame); !ok {
+		t.Errorf("frames reported = %v, want only the text frame", seen)
+	}
+}
+
+// TestUpstreamReachedFiltersSelectWhatIsReported checks the same two controls on
+// the upstream side, where a processor deep in the pipeline reports back to the
+// task.
+func TestUpstreamReachedFiltersSelectWhatIsReported(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*pipeline.Task)
+		want  bool
+	}{
+		{
+			name:  "a filter that selects the frame",
+			apply: func(task *pipeline.Task) { task.SetReachedUpstreamFilter(pipeline.AnyFrame) },
+			want:  true,
+		},
+		{
+			name: "a filter that does not",
+			apply: func(task *pipeline.Task) {
+				task.SetReachedUpstreamFilter(pipeline.FrameTypes(&frames.TextFrame{}))
+			},
+		},
+		{
+			name: "a filter widened to select it",
+			apply: func(task *pipeline.Task) {
+				task.SetReachedUpstreamFilter(pipeline.FrameTypes(&frames.TextFrame{}))
+				task.AddReachedUpstreamFilter(pipeline.FrameTypes(&frames.ErrorFrame{}))
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				mu      sync.Mutex
+				sawErr  bool
+				errFrom = frames.NewErrorFrame("upstream report")
+			)
+			task := pipeline.NewTask(pipeline.New(newUpstreamOnce(errFrom)), pipeline.TaskParams{
+				OnReachedUpstream: func(f frames.Frame) {
+					if _, ok := f.(*frames.ErrorFrame); ok {
+						mu.Lock()
+						sawErr = true
+						mu.Unlock()
+					}
+				},
+			})
+			tt.apply(task)
+
+			done := runTask(t, task)
+			task.QueueFrame(frames.NewTextFrame("go"))
+			task.StopWhenDone()
+			waitDone(t, done)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if sawErr != tt.want {
+				t.Errorf("the error frame was reported = %v, want %v", sawErr, tt.want)
+			}
+		})
+	}
+}

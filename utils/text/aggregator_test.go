@@ -86,3 +86,34 @@ func TestSimpleAggregatorTokenModePassesThrough(t *testing.T) {
 		t.Fatal("token aggregation buffers nothing to flush")
 	}
 }
+
+// The aggregator reports how it was built and what it is still holding, which
+// is how a caller running channels of text in parallel tells whether its own
+// buffer still mirrors this one.
+func TestSimpleAggregatorReportsItsState(t *testing.T) {
+	a := newAggregator(t, frames.AggregationSentence)
+	if a.Type() != frames.AggregationSentence {
+		t.Errorf("Type() = %v, want sentence aggregation", a.Type())
+	}
+
+	if a.Buffer() != "" {
+		t.Errorf("a fresh aggregator buffers %q, want nothing", a.Buffer())
+	}
+
+	// Partial text stays buffered, with the raw text kept untrimmed.
+	a.Aggregate("  Hello wor")
+	if got := a.Buffer(); got != "  Hello wor" {
+		t.Errorf("Buffer() = %q, want the raw text", got)
+	}
+	if got := a.Text(); got.Text != "Hello wor" {
+		t.Errorf("Text() = %q, want it trimmed", got.Text)
+	}
+	if got := a.Text(); got.Type != frames.AggregationSentence {
+		t.Errorf("Text() type = %v, want sentence aggregation", got.Type)
+	}
+
+	a.Reset()
+	if a.Buffer() != "" {
+		t.Errorf("Buffer() = %q after a reset, want nothing", a.Buffer())
+	}
+}
