@@ -13,6 +13,19 @@ type Aggregation struct {
 	Text string
 	// Type is how it was aggregated.
 	Type frames.AggregationType
+	// RawText is the text this unit was cut from, delimiters and all, set when
+	// the unit came from a matched pattern such as a code block. Empty for an
+	// ordinary aggregation, where Text is already the written form.
+	RawText string
+}
+
+// Original returns the text to record as written: RawText when the unit was cut
+// from a larger match, and Text otherwise.
+func (a Aggregation) Original() string {
+	if a.RawText != "" {
+		return a.RawText
+	}
+	return a.Text
 }
 
 // Aggregator groups streamed text into the units a synthesizer is given.
