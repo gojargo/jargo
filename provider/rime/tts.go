@@ -15,9 +15,6 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	if cfg.Speaker == "" {
-		cfg.Speaker = defaultSpeaker
-	}
 	if cfg.Lang == "" {
 		cfg.Lang = defaultLang
 	}
@@ -35,26 +32,42 @@ type synthesizer struct {
 // SampleRate reports the requested PCM output rate.
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
-// requestBody builds the Rime request body for text, including any set
-// model-specific controls.
+// requestBody builds the Rime request body for text, including the controls the
+// chosen model accepts.
+//
+// Rime's models take different controls, and each rejects the other's, so which
+// ones are sent follows the model rather than what happens to be configured. A
+// speaker left unset is sent as null, which is Rime's own way of being asked to
+// pick the voice.
 func (s *synthesizer) requestBody(text string) ([]byte, error) {
 	m := map[string]any{
 		"text":         text,
-		"speaker":      s.cfg.Speaker,
 		"modelId":      s.cfg.Model,
-		"lang":         s.cfg.Lang,
 		"samplingRate": s.cfg.SampleRate,
+		"speaker":      nil,
 	}
-	setFloat(m, "repetition_penalty", s.cfg.RepetitionPenalty)
-	setFloat(m, "temperature", s.cfg.Temperature)
-	setFloat(m, "top_p", s.cfg.TopP)
+	if s.cfg.Speaker != "" {
+		m["speaker"] = s.cfg.Speaker
+	}
+	if s.cfg.Lang != "" {
+		m["lang"] = s.cfg.Lang
+	}
+
+	// Speed is accepted by every model.
 	setFloat(m, "speedAlpha", s.cfg.SpeedAlpha)
-	setFloat(m, "timeScaleFactor", s.cfg.TimeScaleFactor)
-	setBool(m, "reduceLatency", s.cfg.ReduceLatency)
-	setBool(m, "pauseBetweenBrackets", s.cfg.PauseBetweenBrackets)
-	setBool(m, "phonemizeBetweenBrackets", s.cfg.PhonemizeBetweenBrackets)
 	if s.cfg.InlineSpeedAlpha != "" {
 		m["inlineSpeedAlpha"] = s.cfg.InlineSpeedAlpha
+	}
+
+	if s.cfg.Model == modelCoda {
+		setFloat(m, "repetition_penalty", s.cfg.RepetitionPenalty)
+		setFloat(m, "temperature", s.cfg.Temperature)
+		setFloat(m, "top_p", s.cfg.TopP)
+		setFloat(m, "timeScaleFactor", s.cfg.TimeScaleFactor)
+	} else {
+		setBool(m, "reduceLatency", s.cfg.ReduceLatency)
+		setBool(m, "pauseBetweenBrackets", s.cfg.PauseBetweenBrackets)
+		setBool(m, "phonemizeBetweenBrackets", s.cfg.PhonemizeBetweenBrackets)
 	}
 	return json.Marshal(m)
 }

@@ -114,6 +114,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Rime speaks to the model it is actually using.** Four things had drifted
+  from the provider. The default model was `arcana`, where Rime's current one
+  is `coda`. The language was sent as `en`, where Rime names languages with
+  three letters (`eng`, `fra`, `ger`, `spa`, `hin`) and takes nothing else, so
+  the default request named a language that does not exist. The voice defaulted
+  to `astra` rather than letting Rime pick, pinning a voice that need not suit
+  the model. And every model control was sent whatever the model, where coda
+  takes the sampling controls (`repetition_penalty`, `temperature`, `top_p`,
+  `timeScaleFactor`) and the older mist models take the bracket and latency
+  ones, each rejecting the other's. The controls now follow the model, and an
+  unset voice goes as null, which is how Rime is asked to choose. A caller who
+  named a model, a voice or a language explicitly is unaffected.
+
 - **Six transcription services report the model they are using.** Groq,
   Mistral, OpenAI, Sarvam, Smallest and Together each take a model and each
   left it out of the metadata the service reads, so their spans and metrics
