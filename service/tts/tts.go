@@ -674,7 +674,10 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, _ proc
 	if c, ok := b.syn.(TurnContextCreator); ok {
 		c.OnTurnContextCreated(ctx, b.turnContext)
 	}
-	if err := b.pushTTSFrames(ctx, fr.Text, appendToContext, pushAssistantAggregation); err != nil {
+	// A fixed utterance was never aggregated, so it stands as one sentence and
+	// the text is its own written form.
+	spoken := ttstext.Aggregation{Text: fr.Text, Type: frames.AggregationSentence}
+	if err := b.pushTTSFrames(ctx, spoken, appendToContext, pushAssistantAggregation); err != nil {
 		return err
 	}
 	b.onTurnContextCompleted(ctx)
@@ -729,7 +732,7 @@ func (b *Base) aggregate(ctx context.Context, text string) error {
 			// was waiting for. Later ones find it already stopped.
 			b.stopTextAggregationMetrics(ctx)
 		}
-		if err := b.pushTTSFrames(ctx, agg.Text, true, false); err != nil {
+		if err := b.pushTTSFrames(ctx, agg, true, false); err != nil {
 			return err
 		}
 	}
@@ -748,7 +751,7 @@ func (b *Base) flush(ctx context.Context) error {
 	if !ok || strings.TrimSpace(rest.Text) == "" {
 		return nil
 	}
-	return b.pushTTSFrames(ctx, rest.Text, true, false)
+	return b.pushTTSFrames(ctx, rest, true, false)
 }
 
 // setLLMResponding records whether a model response is driving the speech.
@@ -842,8 +845,9 @@ func (b *Base) maybeCloseAssistantTurn(ctx context.Context, contextID string) er
 // its own receive loop and one that returns it inline reach the pipeline the
 // same way, in the order the audio was generated.
 func (b *Base) pushTTSFrames(
-	ctx context.Context, original string, appendToContext, pushAssistantAggregation bool,
+	ctx context.Context, agg ttstext.Aggregation, appendToContext, pushAssistantAggregation bool,
 ) error {
+	original := agg.Text
 	filtered := original
 	for _, f := range b.filters {
 		// A stateful filter is told the interruption is over just before it is
@@ -869,7 +873,11 @@ func (b *Base) pushTTSFrames(
 	// refer back to it. It carries the text as written, before the filters, and
 	// does not itself go into the conversation, which is built from what was
 	// actually spoken.
-	aggregated := frames.NewAggregatedTextFrame(original, frames.AggregationSentence)
+	aggregated := frames.NewAggregatedTextFrame(original, agg.Type)
+	// The written form this unit was cut from. It differs from the text only
+	// when the unit came from a matched pattern, where the text is the content
+	// and the delimiters around it are what the model actually wrote.
+	aggregated.RawText = agg.Original()
 	aggregated.ContextID = contextID
 	aggregated.WillBeSpoken = true
 	aggregated.AppendToContext = false
