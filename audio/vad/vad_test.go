@@ -161,3 +161,39 @@ func TestStateMachineGatesOnVolume(t *testing.T) {
 		}
 	})
 }
+
+// TestSetParamsKeepsBufferedAudio checks that changing a parameter mid-stream
+// restarts the decision without discarding the audio already buffered behind it.
+// The stream carries on across a settings change, so a partial frame is still
+// the audio that comes next; dropping it would put a gap in what is analyzed.
+func TestSetParamsKeepsBufferedAudio(t *testing.T) {
+	fc := &fakeConfidencer{frameSamples: 1600, confs: []float64{1.0}}
+	m := newStateMachine(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3})
+	m.setSampleRate(16000)
+
+	// Half an analysis frame, which stays buffered because it cannot be decided.
+	half := make([]byte, frameBytes/2)
+	if got := m.AnalyzeAudio(half); got != StateQuiet {
+		t.Fatalf("state = %v, want quiet with only half a frame in", got)
+	}
+	if len(m.buf) != frameBytes/2 {
+		t.Fatalf("buffered %d bytes, want the half frame held", len(m.buf))
+	}
+
+	m.SetParams(Params{Confidence: 0.5, StartSecs: 0.2, StopSecs: 0.3})
+
+	if len(m.buf) != frameBytes/2 {
+		t.Errorf("buffered %d bytes after a parameter change, want the half frame kept", len(m.buf))
+	}
+	// The detection itself starts over.
+	if m.state != StateQuiet || m.startingCount != 0 || m.stoppingCount != 0 {
+		t.Errorf("state = %v (%d starting, %d stopping), want a restarted decision",
+			m.state, m.startingCount, m.stoppingCount)
+	}
+
+	// The other half completes the frame that was waiting.
+	m.AnalyzeAudio(make([]byte, frameBytes/2))
+	if len(m.buf) != 0 {
+		t.Errorf("buffered %d bytes, want the completed frame consumed", len(m.buf))
+	}
+}

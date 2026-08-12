@@ -93,6 +93,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Voice detection measures loudness over a gating block again.** The minimum
+  volume a frame had to reach before it counted as speech was measured on that
+  frame alone, about 32 ms of audio. Loudness is defined over a BS.1770 gating
+  block of 400 ms, so a fraction of one is not a reading at all, and the gate
+  was deciding on a figure that did not mean what it was compared against.
+  Audio now accumulates into a rolling 400 ms window (`loudness.Tracker`), which
+  is what the gate measures; the window reads zero until it holds a full block.
+  A parameter change also no longer discards the audio buffered behind it: the
+  decision restarts, the stream does not.
+
 - **Filtering code blocks out of speech works again.** The Markdown filter's
   `FilterCode` option tracks a fenced block across the chunks it arrives in by
   looking for its fences in the converted text. The converter understood a

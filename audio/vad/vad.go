@@ -132,8 +132,15 @@ type stateMachine struct {
 	stoppingCount int
 	state         State
 	buf           []byte
-	// prevVolume is the running volume each new reading is smoothed against. It
-	// carries across a parameter or rate change, as the detection state does not.
+	// volume measures the stream over a rolling window, which is what loudness
+	// needs: a gating block is far longer than one analysis frame, so a frame
+	// measured on its own is not a loudness reading at all.
+	//
+	// It and prevVolume carry across a parameter or rate change, as the
+	// detection state does not: the rolling window and its smoothing follow the
+	// audio stream, which is continuous across such a change.
+	volume loudness.Tracker
+	// prevVolume is the running volume each new reading is smoothed against.
 	prevVolume float64
 }
 
@@ -163,13 +170,23 @@ func (m *stateMachine) setSampleRate(sampleRate int) {
 	framesPerSec := float64(frames) / float64(sampleRate)
 	m.startFrames = int(math.Round(m.params.StartSecs / framesPerSec))
 	m.stopFrames = int(math.Round(m.params.StopSecs / framesPerSec))
-	m.reset()
+	m.resetDetection()
 }
 
-func (m *stateMachine) reset() {
+// resetDetection returns the decision to its starting point without touching the
+// audio waiting to be decided on. Changing a parameter mid-stream restarts the
+// decision, but the stream itself carries on, so the partial frame already
+// buffered is still the audio that comes next.
+func (m *stateMachine) resetDetection() {
 	m.startingCount = 0
 	m.stoppingCount = 0
 	m.state = StateQuiet
+}
+
+// reset clears everything the machine holds, the buffered audio included. It is
+// for a break in the stream rather than a change of mind about it.
+func (m *stateMachine) reset() {
+	m.resetDetection()
 	m.buf = m.buf[:0]
 }
 
@@ -217,8 +234,8 @@ func (m *stateMachine) AnalyzeAudio(buffer []byte) State {
 		frame := m.buf[:m.frameNumBytes]
 		m.buf = m.buf[m.frameNumBytes:]
 		confidence := m.self.voiceConfidence(frame)
-		m.prevVolume = loudness.Smooth(
-			loudness.Volume(frame, m.sampleRate), m.prevVolume, loudness.SmoothingFactor)
+		m.volume.Update(frame, m.sampleRate)
+		m.prevVolume = loudness.Smooth(m.volume.Volume(), m.prevVolume, loudness.SmoothingFactor)
 		m.advance(confidence >= m.params.Confidence && m.prevVolume >= m.params.MinVolume)
 	}
 
