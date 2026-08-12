@@ -99,6 +99,17 @@ func TestTextAggregationMeasuredFromTheFirstToken(t *testing.T) {
 	// from the first of it, so a later token must not push the clock forward.
 	const gap = 200 * time.Millisecond
 
+	// What separates the two readings is the whole gap, so the bound is set at
+	// half of it. The clock is started and stopped by the service as it
+	// processes the tokens, not by the test as it queues them, and the first
+	// token crosses a pipeline that has only just started where the last
+	// crosses a warm one. That difference lands on the measurement, and it is
+	// enough to read a few hundred microseconds under the gap. A bound at the
+	// gap itself tests the scheduler; the defect this test is for, a clock
+	// restarted by every token, reports the wait before the last token instead,
+	// which is near zero.
+	const least = gap / 2
+
 	got := collectTextAggregation(t, true, nil, func(task *pipeline.Task) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("Hello "))
@@ -112,9 +123,9 @@ func TestTextAggregationMeasuredFromTheFirstToken(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("no text aggregation reported")
 	}
-	if got[0].Value < gap {
+	if got[0].Value < least {
 		t.Errorf("aggregation time = %v, want at least %v: it must run from the first token, not the last",
-			got[0].Value, gap)
+			got[0].Value, least)
 	}
 }
 
