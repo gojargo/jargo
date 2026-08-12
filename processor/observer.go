@@ -56,6 +56,18 @@ type ProcessObserver interface {
 	OnProcessFrame(data FrameProcessed)
 }
 
+// PipelineStartedObserver is an optional interface an Observer implements to
+// hear that the pipeline has fully started, which is the StartFrame having been
+// handled by every processor, including the branches of a parallel pipeline.
+//
+// It is reported in order with the frames, so an observer that sets itself up
+// here has done so before the first frame of the conversation reaches it.
+type PipelineStartedObserver interface {
+	Observer
+	// OnPipelineStarted reports that the pipeline has started.
+	OnPipelineStarted()
+}
+
 // notifyPush reports a handover to every observer.
 func (b *Base) notifyPush(f frames.Frame, dir Direction, dst Processor) {
 	if len(b.observers) == 0 {

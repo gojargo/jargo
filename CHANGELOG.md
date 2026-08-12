@@ -14,6 +14,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Watching stops when the pipeline does.** A task used to hand over everything
+  still queued for an observer before its run returned. It now ends the observer
+  goroutines instead, so the reports an observer is behind on when the pipeline
+  stops are not delivered.
+
 - **Service spans carry the standard GenAI attributes.** The STT, LLM and TTS
   spans previously carried keys of jargo's own (`llm.model`, `tts.chars`,
   `stt.audio_ms`, `llm.ttfb_ms`). They now carry the conventional ones:
@@ -50,6 +55,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **An observer hears the pipeline start, and can be dropped.** An observer
+  implementing `processor.PipelineStartedObserver` is told once the `StartFrame`
+  has been handled by every processor, including the branches of a parallel
+  pipeline. It arrives in order with the frames rather than ahead of them, so an
+  observer setting itself up there has done so before the first frame of the
+  conversation reaches it. `Task.RemoveObserver` drops an observer while the
+  pipeline runs and has stopped reporting to it by the time it returns.
+
 - **The speech-to-speech services are traced.** Gemini Live and OpenAI Realtime
   raised no spans at all. Each now records the session's configuration
   (`llm_setup`, and again on a Realtime session whose toolset changes
@@ -60,6 +73,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   span raised just to hold it.
 
 ### Fixed
+
+- **An observer no longer misses the reports it has fallen behind on.** Each
+  observer's queue held 512 reports and discarded the oldest past that, so one
+  that could not keep up watched a conversation with holes in it, and the count
+  of what had been discarded was written from every processor goroutine without
+  synchronization. The queues are unbounded: nothing is dropped while the
+  pipeline runs, however far behind an observer falls.
 
 - **A synthesis an interruption drops is recorded.** The audio contexts queued
   behind the one being spoken were discarded whole when the user cut in, and

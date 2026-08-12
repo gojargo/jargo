@@ -23,33 +23,41 @@ type observerProxy struct {
 	observers []*observerWorker
 	started   bool
 	stopped   bool
-	quit      chan struct{}
-	wg        sync.WaitGroup
 }
 
 // observerWorker is one observer with the queue of reports waiting for it.
+//
+// Each has a quit of its own rather than sharing the proxy's, so a single
+// observer can be dropped while the pipeline runs without disturbing the rest.
 type observerWorker struct {
 	observer processor.Observer
-	queue    chan any
-	// dropped counts the reports discarded because the observer fell too far
-	// behind, so the pipeline is never blocked by one that cannot keep up.
-	dropped int
+	queue    *reportQueue
+	quit     chan struct{}
+	done     chan struct{}
+	// stopping makes cancel idempotent, so an observer removed after the
+	// pipeline stopped is not canceled twice.
+	stopping sync.Once
 }
 
-// observerQueueSize is how many reports may be waiting for one observer before
-// the oldest are dropped. An observer that falls this far behind is not going to
-// catch up, and holding frames for it would make watching the pipeline change
-// how the pipeline runs.
-const observerQueueSize = 512
+// pipelineStarted is what a worker queues to itself to report the pipeline
+// having started, so the report reaches the observer in order with the frames
+// rather than overtaking them.
+type pipelineStarted struct{}
+
+func newObserverWorker(o processor.Observer) *observerWorker {
+	return &observerWorker{
+		observer: o,
+		queue:    newReportQueue(),
+		quit:     make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+}
 
 // newObserverProxy builds a proxy over the given observers.
 func newObserverProxy(observers []processor.Observer) *observerProxy {
-	p := &observerProxy{quit: make(chan struct{})}
+	p := &observerProxy{}
 	for _, o := range observers {
-		p.observers = append(p.observers, &observerWorker{
-			observer: o,
-			queue:    make(chan any, observerQueueSize),
-		})
+		p.observers = append(p.observers, newObserverWorker(o))
 	}
 	return p
 }
@@ -64,17 +72,13 @@ func (p *observerProxy) start() {
 	}
 	p.started = true
 	for _, w := range p.observers {
-		p.wg.Go(func() { w.run(p.quit) })
+		go w.run()
 	}
 }
 
-// stop delivers what is still queued and waits for the observer goroutines to
-// finish.
-//
-// Everything queued is handed over rather than dropped. The end of a call is
-// exactly when the reports that complete a picture arrive, the last of a turn or
-// the close of a tool call, and an observer that lost them would be reporting a
-// conversation that never finished.
+// stop ends the observer goroutines and waits for them to finish. A report still
+// waiting for an observer is not delivered: watching stops when the pipeline
+// does.
 func (p *observerProxy) stop() {
 	p.mu.Lock()
 	if p.stopped || !p.started {
@@ -83,10 +87,12 @@ func (p *observerProxy) stop() {
 		return
 	}
 	p.stopped = true
+	workers := p.observers
 	p.mu.Unlock()
 
-	close(p.quit)
-	p.wg.Wait()
+	for _, w := range workers {
+		w.cancel()
+	}
 }
 
 // add registers another observer while the pipeline runs, starting its goroutine
@@ -97,13 +103,41 @@ func (p *observerProxy) add(o processor.Observer) {
 	if p.stopped {
 		return
 	}
-	w := &observerWorker{observer: o, queue: make(chan any, observerQueueSize)}
+	w := newObserverWorker(o)
 	p.observers = append(p.observers, w)
 	if !p.started {
 		return
 	}
-	p.wg.Go(func() { w.run(p.quit) })
+	go w.run()
 }
+
+// remove drops an observer while the pipeline runs. It stops reporting to it
+// before returning, so a caller may release whatever the observer holds.
+func (p *observerProxy) remove(o processor.Observer) {
+	p.mu.Lock()
+	var found *observerWorker
+	kept := p.observers[:0:0]
+	for _, w := range p.observers {
+		if found == nil && w.observer == o {
+			found = w
+			continue
+		}
+		kept = append(kept, w)
+	}
+	p.observers = kept
+	started := p.started
+	p.mu.Unlock()
+
+	// Nothing is running before the pipeline starts, so there is no goroutine to
+	// end: dropping it from the list is the whole of it.
+	if found != nil && started {
+		found.cancel()
+	}
+}
+
+// pipelineStarted reports the pipeline having started to every observer. It goes
+// through the same queues as the frames, so an observer hears it in order.
+func (p *observerProxy) pipelineStarted() { p.send(pipelineStarted{}) }
 
 // OnPushFrame implements processor.Observer.
 func (p *observerProxy) OnPushFrame(data processor.FramePushed) { p.send(data) }
@@ -121,53 +155,27 @@ func (p *observerProxy) send(data any) {
 		return
 	}
 	for _, w := range workers {
-		w.offer(data)
+		w.queue.push(data)
 	}
 }
 
-// offer queues a report, dropping the oldest waiting one when the observer has
-// fallen behind. Frames matter more than watching them.
-func (w *observerWorker) offer(data any) {
-	select {
-	case w.queue <- data:
-		return
-	default:
-	}
-	select {
-	case <-w.queue:
-		w.dropped++
-	default:
-	}
-	select {
-	case w.queue <- data:
-	default:
-	}
-}
-
-// run delivers this observer's reports, in order, until the proxy stops, then
-// hands over whatever is still waiting.
-func (w *observerWorker) run(quit <-chan struct{}) {
+// run delivers this observer's reports, in order, until the worker is canceled.
+func (w *observerWorker) run() {
+	defer close(w.done)
 	for {
-		select {
-		case data := <-w.queue:
-			w.deliver(data)
-		case <-quit:
-			w.drain()
+		data, ok := w.queue.get(w.quit)
+		if !ok {
 			return
 		}
+		w.deliver(data)
 	}
 }
 
-// drain delivers the reports already queued and returns.
-func (w *observerWorker) drain() {
-	for {
-		select {
-		case data := <-w.queue:
-			w.deliver(data)
-		default:
-			return
-		}
-	}
+// cancel ends this worker's goroutine and waits for it to finish. It is safe to
+// call more than once, and from more than one goroutine.
+func (w *observerWorker) cancel() {
+	w.stopping.Do(func() { close(w.quit) })
+	<-w.done
 }
 
 // deliver passes one report to the observer.
@@ -178,6 +186,76 @@ func (w *observerWorker) deliver(data any) {
 	case processor.FrameProcessed:
 		if po, ok := w.observer.(processor.ProcessObserver); ok {
 			po.OnProcessFrame(d)
+		}
+	case pipelineStarted:
+		if ps, ok := w.observer.(processor.PipelineStartedObserver); ok {
+			ps.OnPipelineStarted()
+		}
+	}
+}
+
+// reportQueue is an unbounded, concurrency-safe FIFO of reports with a single
+// consumer, holding what is waiting for one observer.
+//
+// It is unbounded because nothing is dropped while the pipeline runs, however
+// far behind an observer falls. The stateful ones are counting, and one that
+// lost the start of a turn or the close of a tool call would report a
+// conversation that never happened. Producers never block, so an observer that
+// cannot keep up grows its queue rather than holding up the frames.
+type reportQueue struct {
+	mu     sync.Mutex
+	items  []any
+	notify chan struct{}
+}
+
+func newReportQueue() *reportQueue {
+	return &reportQueue{notify: make(chan struct{}, 1)}
+}
+
+// push appends a report. It never blocks and never drops.
+func (q *reportQueue) push(data any) {
+	q.mu.Lock()
+	q.items = append(q.items, data)
+	q.mu.Unlock()
+
+	// Wake a waiting get. The buffer of one means a signal is never lost: if no
+	// one is waiting the pending wake is coalesced and drained on the next get.
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+// tryGet pops the next report without blocking, reporting false when none is
+// waiting.
+func (q *reportQueue) tryGet() (any, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return nil, false
+	}
+	data := q.items[0]
+	q.items = q.items[1:]
+	return data, true
+}
+
+// get returns the next report, blocking until one is waiting or quit is closed.
+// It reports ok=false as soon as quit closes, whether or not reports are still
+// waiting: watching stops when the pipeline does.
+func (q *reportQueue) get(quit <-chan struct{}) (any, bool) {
+	for {
+		select {
+		case <-quit:
+			return nil, false
+		default:
+		}
+		if data, ok := q.tryGet(); ok {
+			return data, true
+		}
+		select {
+		case <-quit:
+			return nil, false
+		case <-q.notify:
 		}
 	}
 }

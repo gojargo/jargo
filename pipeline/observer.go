@@ -14,3 +14,6 @@ type FrameProcessed = processor.FrameProcessed
 
 // ProcessObserver also sees a frame as it reaches a processor.
 type ProcessObserver = processor.ProcessObserver
+
+// PipelineStartedObserver also hears that the pipeline has fully started.
+type PipelineStartedObserver = processor.PipelineStartedObserver

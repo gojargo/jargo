@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -594,13 +595,72 @@ func TestASlowObserverDoesNotHoldUpThePipeline(t *testing.T) {
 		t.Errorf("the frame took %s to cross, want the slow observer kept off the path", elapsed)
 	}
 
+	// Kept off the frame path, but still reported to: it works through its queue
+	// on its own time while the pipeline runs.
+	waitFor(t, func() bool { return slow.count() > 0 }, "the slow observer to be reported to")
+
 	task.StopWhenDone()
 	waitDone(t, done)
+}
 
-	// Everything queued for it is still handed over before the run is done.
-	if slow.count() == 0 {
-		t.Error("the slow observer saw nothing, want the reports delivered")
+// stalledObserver holds up its first report until it is released, so everything
+// reported meanwhile piles up behind it.
+type stalledObserver struct {
+	release chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	seen    int
+}
+
+func newStalledObserver() *stalledObserver {
+	return &stalledObserver{release: make(chan struct{})}
+}
+
+func (o *stalledObserver) OnPushFrame(processor.FramePushed) {
+	<-o.release
+	o.mu.Lock()
+	o.seen++
+	o.mu.Unlock()
+}
+
+func (o *stalledObserver) let() { o.once.Do(func() { close(o.release) }) }
+
+func (o *stalledObserver) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.seen
+}
+
+// TestAnObserverFarBehindLosesNothing checks nothing waiting for an observer is
+// dropped while the pipeline runs, however far behind it falls, so watching
+// slowly shows the same run as watching quickly. The stateful observers are
+// counting, and one that lost the start of a turn or the close of a tool call
+// would report a conversation that never happened.
+func TestAnObserverFarBehindLosesNothing(t *testing.T) {
+	stalled := newStalledObserver()
+	keeping := &slowObserver{}
+
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		Observers: []pipeline.Observer{stalled, keeping},
+	})
+
+	done := runTask(t, task)
+	// Enough frames that a queue with any bound on it would have to drop some.
+	const sent = 600
+	for i := range sent {
+		task.QueueFrame(frames.NewTextFrame(fmt.Sprintf("frame %d", i)))
 	}
+
+	// Released while the run is still going, so it catches up on the reports
+	// that piled up rather than on whatever survived the end of the run.
+	stalled.let()
+	waitFor(t, func() bool {
+		kept := keeping.count()
+		return kept > sent && stalled.count() == kept
+	}, "the observer that fell behind to catch up with the one that kept up")
+
+	task.StopWhenDone()
+	waitDone(t, done)
 }
 
 // TestAddObserverWhileRunning checks something built after the task can still
@@ -612,10 +672,111 @@ func TestAddObserverWhileRunning(t *testing.T) {
 	done := runTask(t, task)
 	task.AddObserver(late)
 	task.QueueFrame(frames.NewTextFrame("hello"))
+
+	waitFor(t, func() bool { return late.count() > 0 },
+		"the observer added while running to be reported to")
+
+	task.StopWhenDone()
+	waitDone(t, done)
+}
+
+// TestRemoveObserverStopsReporting checks an observer dropped while the pipeline
+// runs hears nothing more, so a caller may release what it holds.
+func TestRemoveObserverStopsReporting(t *testing.T) {
+	watching := &slowObserver{}
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		Observers: []pipeline.Observer{watching},
+	})
+
+	done := runTask(t, task)
+	task.QueueFrame(frames.NewTextFrame("before"))
+	waitFor(t, func() bool { return watching.count() > 0 }, "the observer to be reported to")
+
+	task.RemoveObserver(watching)
+	settled := watching.count()
+
+	task.QueueFrame(frames.NewTextFrame("after"))
 	task.StopWhenDone()
 	waitDone(t, done)
 
-	if late.count() == 0 {
-		t.Error("the observer added while running saw nothing")
+	if got := watching.count(); got != settled {
+		t.Errorf("the removed observer saw %d reports, want the %d it had already", got, settled)
+	}
+}
+
+// TestRemoveObserverAfterTheRun checks dropping an observer once the run is over
+// is harmless, so a caller tidying up does not have to know whether the pipeline
+// stopped first.
+func TestRemoveObserverAfterTheRun(t *testing.T) {
+	watching := &slowObserver{}
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		Observers: []pipeline.Observer{watching},
+	})
+
+	done := runTask(t, task)
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	task.RemoveObserver(watching)
+	task.RemoveObserver(watching)
+}
+
+// startedObserver records the pipeline having started, and whether anything
+// queued for the conversation was reported before it.
+type startedObserver struct {
+	mu     sync.Mutex
+	starts int
+	texts  int
+	early  int
+}
+
+func (o *startedObserver) OnPushFrame(data processor.FramePushed) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if _, ok := data.Frame.(*frames.TextFrame); ok {
+		o.texts++
+		if o.starts == 0 {
+			o.early++
+		}
+	}
+}
+
+func (o *startedObserver) OnPipelineStarted() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.starts++
+}
+
+func (o *startedObserver) counts() (starts, texts, early int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.starts, o.texts, o.early
+}
+
+// TestPipelineStartedReachesObservers checks an observer hears that the pipeline
+// has started, once, and in order with the frames: it arrives before anything
+// the conversation queued behind the StartFrame.
+func TestPipelineStartedReachesObservers(t *testing.T) {
+	watching := &startedObserver{}
+	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
+		Observers: []pipeline.Observer{watching},
+	})
+
+	done := runTask(t, task)
+	task.QueueFrame(frames.NewTextFrame("hello"))
+	waitFor(t, func() bool {
+		_, texts, _ := watching.counts()
+		return texts > 0
+	}, "the text frame to be reported")
+
+	task.StopWhenDone()
+	waitDone(t, done)
+
+	starts, _, early := watching.counts()
+	if starts != 1 {
+		t.Errorf("the pipeline started %d times, want 1", starts)
+	}
+	if early != 0 {
+		t.Errorf("%d frames were reported before the pipeline started", early)
 	}
 }

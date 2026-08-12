@@ -320,6 +320,16 @@ func (t *Task) AddObserver(o Observer) {
 	t.observerProxy.add(o)
 }
 
+// RemoveObserver stops reporting to an observer registered earlier. It has
+// stopped by the time this returns, so whatever the observer holds may be
+// released. Removing one that was never registered does nothing.
+func (t *Task) RemoveObserver(o Observer) {
+	if o == nil {
+		return
+	}
+	t.observerProxy.remove(o)
+}
+
 // TurnTracking is the observer following the conversation's turns. It is nil
 // only when turn tracking has been turned off.
 func (t *Task) TurnTracking() *observers.TurnTracking { return t.turnTracking }
@@ -787,6 +797,7 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 		if t.params.OnPipelineStarted != nil {
 			t.params.OnPipelineStarted(fr)
 		}
+		t.observerProxy.pipelineStarted()
 		t.startHeartbeats()
 		t.startOnce.Do(func() { close(t.startSig) })
 	case *frames.HeartbeatFrame:
