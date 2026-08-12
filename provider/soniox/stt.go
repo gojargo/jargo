@@ -1,6 +1,7 @@
 package soniox
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -114,6 +115,12 @@ type connector struct {
 	// language, which is the set Soniox treats as changeable and that jargo's
 	// configuration carries.
 	live *Settings
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (c *connector) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SonioxTTFSP99)}
 }
 
 // Settings is the configuration a caller may change while the pipeline runs.

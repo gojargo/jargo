@@ -2,6 +2,7 @@ package elevenlabs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,8 +29,6 @@ const (
 	defaultSTTBaseURL = "https://api.elevenlabs.io"
 	// defaultSTTModel is the ElevenLabs scribe transcription model.
 	defaultSTTModel = "scribe_v2"
-	// sttTTFSP99 is the time-to-final-segment P99 latency reported to downstream.
-	sttTTFSP99 = 2010 * time.Millisecond
 )
 
 // STTConfig configures the ElevenLabs batch STT service. It transcribes one
@@ -51,6 +50,10 @@ type STTConfig struct {
 	Keyterms []string
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.ElevenLabsTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -77,7 +80,7 @@ type sttTranscriber struct {
 // Metadata reports ElevenLabs' time-to-final-segment latency to downstream
 // processors.
 func (t *sttTranscriber) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99, Model: t.cfg.Model}
+	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.ElevenLabsTTFSP99), Model: t.cfg.Model}
 }
 
 // elevenlabsSTTLanguage maps a Language to ElevenLabs' ISO-639-3 STT language

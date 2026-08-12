@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -39,6 +41,10 @@ type STTConfig struct {
 	// defaults. Supply one to set a longer timeout, a proxy, or connection
 	// limits of your own.
 	HTTPClient *http.Client
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.OpenAITTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -93,6 +99,12 @@ type transcriber struct {
 	cfg    STTConfig
 	http   *http.Client
 	shaper STTRequestShaper
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (t *transcriber) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.OpenAITTFSP99)}
 }
 
 // writeFields writes the transcription form fields, omitting optional ones that

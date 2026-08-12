@@ -17,8 +17,6 @@ const (
 	defaultLanguage    = "en-US"
 	defaultStability   = "high"
 	fallbackSampleRate = 16000
-	// ttfsP99 is the reported time-to-final-segment P99 latency.
-	ttfsP99 = 1900 * time.Millisecond
 )
 
 // Config configures the Amazon Transcribe streaming STT service.
@@ -48,6 +46,10 @@ type Config struct {
 	VocabularyName string
 	// VocabularyFilterName selects a custom vocabulary filter; empty omits it.
 	VocabularyFilterName string
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.AWSTranscribeTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.

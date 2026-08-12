@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -108,6 +109,10 @@ type Config struct {
 	// ExtraQuery sets arbitrary additional query parameters not modeled above
 	// (e.g. U3 Pro-only options); values override any param of the same name.
 	ExtraQuery map[string]string
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.AssemblyAITTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable. An over-long list of

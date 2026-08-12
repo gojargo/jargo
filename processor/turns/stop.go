@@ -5,18 +5,37 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/turn"
+	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
 
-const (
-	// defaultSTTTimeout is the safety-net wait for a finalized transcript after
-	// speech stops, used when no STTMetadataFrame reports the real p99 latency.
-	defaultSTTTimeout = 2 * time.Second
-	// defaultUserSpeechTimeout is the policy floor a speech-timeout stop waits
-	// after the VAD reports the user stopped.
-	defaultUserSpeechTimeout = 600 * time.Millisecond
-)
+// defaultUserSpeechTimeout is the policy floor a speech-timeout stop waits
+// after the VAD reports the user stopped.
+const defaultUserSpeechTimeout = 600 * time.Millisecond
+
+// warnStopWindow reports a stop window the STT latencies were not measured
+// against, and one wide enough to leave no transcript wait at all. Both show up
+// as turns that end late, and both are settings rather than anything about this
+// turn, so each is said once.
+func warnStopWindow(warned *bool, stopWindow, sttTimeout time.Duration) {
+	if *warned {
+		return
+	}
+	recommended := time.Duration(vad.DefaultStopSecs * float64(time.Second))
+	if stopWindow != recommended {
+		*warned = true
+		slog.Warn("turns: the VAD stop window is not the one the STT latencies were "+
+			"measured with; re-measure and set TTFSP99 on the STT config",
+			"stop_window", stopWindow, "recommended", recommended)
+	}
+	if sttTimeout > 0 && stopWindow >= sttTimeout {
+		*warned = true
+		slog.Warn("turns: the VAD stop window covers the STT p99 latency, leaving no "+
+			"transcript wait; a turn now ends on the stop timeout",
+			"stop_window", stopWindow, "stt_p99", sttTimeout)
+	}
+}
 
 // boolValue returns *p, or def when p is nil.
 func boolValue(p *bool, def bool) bool {
@@ -43,13 +62,16 @@ const analyzerMetricsProcessor = "TurnAnalyzer"
 // Smart-Turn stop strategy.
 type TurnAnalyzerStop struct {
 	StopStrategyBase
-	analyzer   turn.Analyzer
-	waitForTx  bool
+	analyzer  turn.Analyzer
+	waitForTx bool
+	// sttTimeout is the transcript wait, the p99 the STT publishes at start. Zero
+	// until it does, and zero for a service the wait means nothing for.
 	sttTimeout time.Duration
 	// stopWindow is the silence window the VAD required before its last stop. It
 	// outlives the turn that observed it, so a transcript arriving with no VAD
 	// stop behind it can still discount it from the STT budget.
-	stopWindow time.Duration
+	stopWindow     time.Duration
+	stopSecsWarned bool
 
 	text           string
 	turnComplete   bool
@@ -63,9 +85,8 @@ type TurnAnalyzerStop struct {
 // NewTurnAnalyzerStop builds a Smart-Turn stop strategy.
 func NewTurnAnalyzerStop(cfg TurnAnalyzerConfig) *TurnAnalyzerStop {
 	s := &TurnAnalyzerStop{
-		analyzer:   cfg.Analyzer,
-		waitForTx:  boolValue(cfg.WaitForTranscript, true),
-		sttTimeout: defaultSTTTimeout,
+		analyzer:  cfg.Analyzer,
+		waitForTx: boolValue(cfg.WaitForTranscript, true),
 	}
 	s.EnableUserSpeakingFrames = true
 	return s
@@ -77,9 +98,8 @@ func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 	case *frames.StartFrame:
 		s.analyzer.SetSampleRate(fr.AudioInSampleRate)
 	case *frames.STTMetadataFrame:
-		if fr.TTFSP99Latency > 0 {
-			s.sttTimeout = fr.TTFSP99Latency
-		}
+		s.sttTimeout = fr.TTFSP99Latency
+		s.stopSecsWarned = false
 	case *frames.VADUserStartedSpeakingFrame:
 		s.analyzer.UpdateVADStartSecs(fr.StartSecs)
 		s.vadSpeaking = true
@@ -118,6 +138,7 @@ func (s *TurnAnalyzerStop) handleVADStopped(fr *frames.VADUserStoppedSpeakingFra
 	s.vadSpeaking = false
 	s.stopWindow = time.Duration(fr.StopSecs * float64(time.Second))
 	s.vadStopped = true
+	warnStopWindow(&s.stopSecsWarned, s.stopWindow, s.sttTimeout)
 
 	// The STT budget is measured from the moment the user actually stopped
 	// speaking, which the VAD only reports a stop window later. Anchoring the
@@ -303,9 +324,12 @@ type SpeechTimeoutStop struct {
 	StopStrategyBase
 	userSpeechTimeout time.Duration
 	waitForTx         bool
-	sttTimeout        time.Duration
+	// sttTimeout is the transcript wait, the p99 the STT publishes at start. Zero
+	// until it does, and zero for a service the wait means nothing for.
+	sttTimeout time.Duration
 	// stopWindow is the silence window the VAD required before its last stop.
-	stopWindow time.Duration
+	stopWindow     time.Duration
+	stopSecsWarned bool
 
 	haveText       bool
 	vadSpeaking    bool
@@ -326,7 +350,6 @@ func NewSpeechTimeoutStop(cfg SpeechTimeoutConfig) *SpeechTimeoutStop {
 	s := &SpeechTimeoutStop{
 		userSpeechTimeout: timeout,
 		waitForTx:         boolValue(cfg.WaitForTranscript, true),
-		sttTimeout:        defaultSTTTimeout,
 	}
 	s.EnableUserSpeakingFrames = true
 	return s
@@ -336,9 +359,8 @@ func NewSpeechTimeoutStop(cfg SpeechTimeoutConfig) *SpeechTimeoutStop {
 func (s *SpeechTimeoutStop) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
 	case *frames.STTMetadataFrame:
-		if fr.TTFSP99Latency > 0 {
-			s.sttTimeout = fr.TTFSP99Latency
-		}
+		s.sttTimeout = fr.TTFSP99Latency
+		s.stopSecsWarned = false
 	case *frames.VADUserStartedSpeakingFrame:
 		s.vadSpeaking = true
 		s.discardPendingEndOfTurn()
@@ -360,6 +382,7 @@ func (s *SpeechTimeoutStop) handleVADStopped(fr *frames.VADUserStoppedSpeakingFr
 	s.vadSpeaking = false
 	s.stopWindow = time.Duration(fr.StopSecs * float64(time.Second))
 	s.vadStopped = true
+	warnStopWindow(&s.stopSecsWarned, s.stopWindow, s.sttTimeout)
 
 	// The speech timeout is the policy floor and always runs. Any earlier run of
 	// it, from the fallback below, is superseded here.

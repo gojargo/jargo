@@ -1,6 +1,7 @@
 package together
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
@@ -47,6 +49,10 @@ type STTConfig struct {
 	SampleRate int
 	// TurnDetection selects server-side endpointing; empty uses "server_vad".
 	TurnDetection string
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.TogetherTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -68,6 +74,12 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 
 type connector struct {
 	cfg STTConfig
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (c *connector) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.TogetherTTFSP99)}
 }
 
 // Connect dials the realtime transcription WebSocket for the given sample rate.

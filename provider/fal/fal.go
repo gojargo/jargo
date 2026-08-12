@@ -5,6 +5,7 @@ package fal
 
 import (
 	"errors"
+	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -32,6 +33,10 @@ type Config struct {
 	Version string
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.FalTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.

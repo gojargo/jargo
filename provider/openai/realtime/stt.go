@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -24,8 +25,6 @@ const (
 	// transcription session is configured for it, so run the transport's input
 	// at 24 kHz.
 	sttSampleRate = 24000
-	// sttTTFSP99 is the time-to-final-segment P99 latency reported downstream.
-	sttTTFSP99 = 1200 * time.Millisecond
 )
 
 // Transcription session message types.
@@ -61,6 +60,10 @@ type STTConfig struct {
 	// SilenceMS is how long the server waits through silence before ending an
 	// utterance; 0 uses the server default.
 	SilenceMS int `validate:"omitempty,min=0"`
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.OpenAIRealtimeTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -90,7 +93,7 @@ type sttConnector struct {
 func (c *sttConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
 		RecommendedUserTurns: frames.UserTurnExternal,
-		TTFSP99:              sttTTFSP99,
+		TTFSP99:              cmp.Or(c.cfg.TTFSP99, stt.OpenAIRealtimeTTFSP99),
 		Model:                c.cfg.Model,
 	}
 }

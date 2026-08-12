@@ -19,6 +19,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   goroutines instead, so the reports an observer is behind on when the pipeline
   stops are not delivered.
 
+- **A turn-based transcription service is waited on for nothing.** Cartesia
+  Turns and Deepgram Flux define the turn boundary on the server, so there is no
+  interval between the speech ending and the transcript to measure; they report
+  `SupportsTTFS` false rather than a latency, and the stop strategies now take a
+  published zero as "no wait" instead of keeping whatever they last held.
+
 - **Service spans carry the standard GenAI attributes.** The STT, LLM and TTS
   spans previously carried keys of jargo's own (`llm.model`, `tts.chars`,
   `stt.audio_ms`, `llm.ttfb_ms`). They now carry the conventional ones:
@@ -62,6 +68,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   observer setting itself up there has done so before the first frame of the
   conversation reaches it. `Task.RemoveObserver` drops an observer while the
   pipeline runs and has stopped reporting to it by the time it returns.
+
+- **Every transcription service publishes its measured latency.** A turn cannot
+  end until the words are in hand, so a stop strategy waits out a p99
+  time-to-final-segment budget for the closing transcript. Only seven services
+  carried a measurement, and a service that carried none was waited on for a
+  flat 2s — Deepgram, whose p99 is 350ms, spent 1.8s of silence on every turn
+  its own endpointing closed. The measurements now live together in
+  `service/stt` as `stt.DeepgramTTFSP99` and the rest, one per service, and each
+  service's config takes a `TTFSP99` overriding it for a deployment that
+  measured its own. Anything still unmeasured is described with
+  `stt.DefaultTTFSP99` (1s) and says so. All of the values assume the
+  recommended `vad.DefaultStopSecs`, now exported; a pipeline running a
+  different stop window is warned that they no longer hold.
 
 - **The speech-to-speech services are traced.** Gemini Live and OpenAI Realtime
   raised no spans at all. Each now records the session's configuration

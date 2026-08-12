@@ -12,6 +12,7 @@ package soniox
 
 import (
 	"errors"
+	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -75,6 +76,10 @@ type Config struct {
 	// ClientReferenceID labels the session in Soniox's own records; empty omits
 	// it.
 	ClientReferenceID string
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.SonioxTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.

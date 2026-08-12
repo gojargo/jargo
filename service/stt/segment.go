@@ -148,11 +148,12 @@ func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir proc
 func (s *SegmentService) ServiceMetadataFrame() frames.ServiceMetadata {
 	mf := frames.NewSTTMetadataFrame(0)
 	mf.ServiceName = s.Name()
+	var m Metadata
 	if d, ok := s.tr.(Describer); ok {
-		m := d.Metadata()
+		m = d.Metadata()
 		mf.UserTurns = m.RecommendedUserTurns
-		mf.TTFSP99Latency = m.TTFSP99
 	}
+	mf.TTFSP99Latency = m.ttfs(s.Name())
 	return mf
 }
 

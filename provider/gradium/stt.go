@@ -1,6 +1,7 @@
 package gradium
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -33,8 +34,6 @@ const (
 	defaultDelayInFrames = 12
 	// sttChunkMS is the audio chunk size streamed to the server.
 	sttChunkMS = 80
-	// sttTTFSP99 is the time-to-final-segment P99 latency reported to downstream.
-	sttTTFSP99 = 620 * time.Millisecond
 )
 
 // STTConfig configures the Gradium STT service.
@@ -58,6 +57,10 @@ type STTConfig struct {
 	// DelayInFrames delays text generation by this many 80 ms frames; nil uses a
 	// default. Allowed values: 7, 8, 10, 12, 14, 16, 20, 24, 36, 48.
 	DelayInFrames *int `validate:"omitempty,oneof=7 8 10 12 14 16 20 24 36 48"`
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.GradiumTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -84,7 +87,7 @@ type sttConnector struct {
 // Metadata reports Gradium's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99, Model: c.cfg.Model}
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.GradiumTTFSP99), Model: c.cfg.Model}
 }
 
 // inputFormat builds Gradium's input_format from the encoding and sample rate.

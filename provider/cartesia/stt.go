@@ -1,6 +1,7 @@
 package cartesia
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,8 +35,6 @@ const (
 	defaultSTTEncoding = "pcm_s16le"
 	// defaultSTTLanguage is Cartesia's default transcription language.
 	defaultSTTLanguage = "en"
-	// sttTTFSP99 is the time-to-final-segment P99 latency reported to downstream.
-	sttTTFSP99 = 810 * time.Millisecond
 
 	// Cartesia caps a connection at 100 keyterms totaling 1200 characters.
 	maxKeyterms     = 100
@@ -65,6 +64,10 @@ type STTConfig struct {
 	// binds them to a connection and only the ink-2 model family honors them, so
 	// changing them while the pipeline runs reopens the session.
 	Keyterm []string
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.CartesiaTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -127,7 +130,7 @@ func newSTTSettings(cfg STTConfig) *STTSettings {
 // Metadata reports Cartesia's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99, Model: c.live.Model.Or(c.cfg.Model)}
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.CartesiaTTFSP99), Model: c.live.Model.Or(c.cfg.Model)}
 }
 
 // Settings is the configuration a caller may change while the pipeline runs.

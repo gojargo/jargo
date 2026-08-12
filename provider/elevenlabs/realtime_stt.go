@@ -1,6 +1,7 @@
 package elevenlabs
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -30,9 +31,6 @@ const (
 	// realtimeSTTFormat is raw 16-bit little-endian PCM, the format the pipeline
 	// carries.
 	realtimeSTTFormat = "pcm_s16le_16"
-	// realtimeSTTTTFSP99 is the time-to-final-segment P99 latency reported
-	// downstream.
-	realtimeSTTTTFSP99 = 500 * time.Millisecond
 )
 
 // ElevenLabs realtime transcription message types.
@@ -76,6 +74,10 @@ type RealtimeSTTConfig struct {
 	// FilterBackgroundAudio has the service strip background audio before it
 	// transcribes; nil uses the service default.
 	FilterBackgroundAudio *bool
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.ElevenLabsRealtimeTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -104,7 +106,7 @@ type realtimeSTTConnector struct {
 func (c *realtimeSTTConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
 		RecommendedUserTurns: frames.UserTurnExternal,
-		TTFSP99:              realtimeSTTTTFSP99,
+		TTFSP99:              cmp.Or(c.cfg.TTFSP99, stt.ElevenLabsRealtimeTTFSP99),
 		Model:                c.cfg.Model,
 	}
 }

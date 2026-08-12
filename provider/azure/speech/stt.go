@@ -1,6 +1,7 @@
 package speech
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -27,8 +28,6 @@ const (
 	sttPath = "/speech/recognition/conversation/cognitiveservices/v1"
 	// defaultSTTLocale is the recognition locale used when none is configured.
 	defaultSTTLocale = "en-US"
-	// sttTTFSP99 is the time-to-final-segment P99 latency reported downstream.
-	sttTTFSP99 = 1800 * time.Millisecond
 	// sttReadLimit bounds a single inbound message.
 	sttReadLimit = 1 << 20
 	// wavHeaderLen is the size of the RIFF header that opens each turn.
@@ -94,6 +93,10 @@ type STTConfig struct {
 	// EndpointID selects a custom speech model by its deployment id; empty uses
 	// the base model. Azure ignores the language when a custom model is chosen.
 	EndpointID string
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.AzureTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -113,7 +116,7 @@ type sttConnector struct {
 // Metadata reports Azure's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: sttTTFSP99}
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.AzureTTFSP99)}
 }
 
 // azureBaseLocales expands the common base language codes to the locale Azure

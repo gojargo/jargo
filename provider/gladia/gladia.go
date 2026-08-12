@@ -6,6 +6,7 @@ package gladia
 
 import (
 	"errors"
+	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
 )
@@ -110,6 +111,10 @@ type Config struct {
 	// ExtraSettings sets arbitrary additional session-init fields not modeled
 	// above; values override any field of the same name.
 	ExtraSettings map[string]any
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.GladiaTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.

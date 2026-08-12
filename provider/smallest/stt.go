@@ -1,6 +1,7 @@
 package smallest
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
@@ -60,6 +62,10 @@ type STTConfig struct {
 	Keywords string
 	// Format punctuates and capitalizes the transcripts; nil defaults to true.
 	Format *bool
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.SmallestTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -84,6 +90,12 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 
 type connector struct {
 	cfg STTConfig
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (c *connector) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SmallestTTFSP99)}
 }
 
 // query builds the session's query string for the given input sample rate.

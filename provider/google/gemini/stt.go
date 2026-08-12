@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -28,6 +30,10 @@ type STTConfig struct {
 	Language language.Language
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.GoogleTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -44,6 +50,12 @@ func NewSTT(cfg STTConfig) *stt.SegmentService {
 type sttTranscriber struct {
 	cfg  STTConfig
 	http *http.Client
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (t *sttTranscriber) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.GoogleTTFSP99)}
 }
 
 // sttResponse is the subset of a recognize response the transcriber reads.

@@ -184,12 +184,32 @@ type Metadata struct {
 	// frames.UserTurnExternal so the user aggregator can adopt external strategies.
 	RecommendedUserTurns frames.UserTurnRecommendation
 	// TTFSP99 is the time-to-final-segment P99 latency reported on the metadata
-	// frame (see frames.STTMetadataFrame).
+	// frame (see frames.STTMetadataFrame). Left unset, the service is described
+	// with DefaultTTFSP99.
 	TTFSP99 time.Duration
+	// SupportsTTFS reports whether TTFS means anything for this service; nil
+	// defaults to true. A service whose server defines the turn boundary sets it
+	// false, and is described with no wait at all rather than a measured one.
+	SupportsTTFS *bool
 	// Model is the provider's model identifier, e.g. "nova-3". It labels the
 	// metrics and is what a cost-tracking backend prices the transcription
 	// against, so it should be the identifier the provider bills under.
 	Model string
+}
+
+// ttfs is the latency a described service is published with: none when TTFS
+// does not apply to it, its own measurement when it carries one, and the
+// fallback when it does not.
+func (m Metadata) ttfs(service string) time.Duration {
+	if m.SupportsTTFS != nil && !*m.SupportsTTFS {
+		return 0
+	}
+	if m.TTFSP99 > 0 {
+		return m.TTFSP99
+	}
+	slog.Warn("stt: no TTFS p99 latency measured for this service, using the fallback",
+		"service", service, "fallback", DefaultTTFSP99)
+	return DefaultTTFSP99
 }
 
 // Describer is an optional interface a Connector or Transcriber implements to
@@ -455,11 +475,12 @@ func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir proce
 func (s *StreamService) ServiceMetadataFrame() frames.ServiceMetadata {
 	mf := frames.NewSTTMetadataFrame(0)
 	mf.ServiceName = s.Name()
+	var m Metadata
 	if d, ok := s.conn.(Describer); ok {
-		m := d.Metadata()
+		m = d.Metadata()
 		mf.UserTurns = m.RecommendedUserTurns
-		mf.TTFSP99Latency = m.TTFSP99
 	}
+	mf.TTFSP99Latency = m.ttfs(s.Name())
 	return mf
 }
 

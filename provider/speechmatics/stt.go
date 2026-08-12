@@ -1,6 +1,7 @@
 package speechmatics
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,12 @@ func NewSTT(cfg Config) *stt.StreamService {
 
 type connector struct {
 	cfg Config
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (c *connector) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SpeechmaticsTTFSP99)}
 }
 
 // Connect dials the real-time WebSocket, sends StartRecognition, and waits for

@@ -5,6 +5,7 @@ package speechmatics
 
 import (
 	"errors"
+	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -45,6 +46,10 @@ type Config struct {
 	// EndOfUtteranceSilence is the silence in seconds that ends an utterance; nil
 	// uses 0.5. Set 0 to disable end-of-utterance detection (must be < MaxDelay).
 	EndOfUtteranceSilence *float64
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.SpeechmaticsTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.

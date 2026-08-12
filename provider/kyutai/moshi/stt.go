@@ -1,6 +1,7 @@
 package moshi
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"strings"
@@ -41,6 +42,14 @@ func NewSTT(cfg Config) *stt.StreamService {
 
 type connector struct {
 	cfg Config
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+// Moshi runs wherever it is hosted, so it carries no measurement of its own:
+// measure yours and set TTFSP99.
+func (c *connector) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.DefaultTTFSP99)}
 }
 
 // Connect dials the moshi-server ASR WebSocket and prepares a resampler from the

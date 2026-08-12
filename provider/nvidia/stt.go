@@ -1,6 +1,7 @@
 package nvidia
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"sync"
@@ -22,8 +23,6 @@ const (
 	// locally deployed Riva/NIM (for example a parakeet model) with its address
 	// and UseSSL set to false.
 	defaultSTTServer = "grpc.nvcf.nvidia.com:443"
-	// sttTTFSP99 is the time-to-final-segment P99 latency reported downstream.
-	sttTTFSP99 = time.Second
 )
 
 // Endpointing tunes Riva's server-side start/end-of-utterance detector. Every
@@ -87,6 +86,10 @@ type STTConfig struct {
 	// Endpointing tunes the server-side utterance detector; nil uses the server
 	// defaults.
 	Endpointing *Endpointing
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.NvidiaTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -152,7 +155,7 @@ type sttConnector struct {
 func (c *sttConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
 		RecommendedUserTurns: frames.UserTurnUnspecified,
-		TTFSP99:              sttTTFSP99,
+		TTFSP99:              cmp.Or(c.cfg.TTFSP99, stt.NvidiaTTFSP99),
 		Model:                c.cfg.Model,
 	}
 }

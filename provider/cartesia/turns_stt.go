@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
@@ -23,10 +22,6 @@ import (
 const (
 	defaultTurnsURL   = "wss://api.cartesia.ai/stt/turns/websocket"
 	defaultTurnsModel = "ink-2"
-	// turnsTTFSP99 is the time-to-final-segment P99 latency reported downstream.
-	// The server ends a turn itself, so the final transcript arrives with the
-	// boundary rather than after a separate finalize.
-	turnsTTFSP99 = 400 * time.Millisecond
 )
 
 // Cartesia turn-detection message types.
@@ -142,9 +137,10 @@ func (c *turnsConnector) UpdateSettings(_ context.Context, changed settings.Chan
 // Metadata tells downstream processors the service detects turns itself, so the
 // user aggregator adopts external turn strategies rather than running its own.
 func (c *turnsConnector) Metadata() stt.Metadata {
+	noTTFS := false
 	return stt.Metadata{
 		RecommendedUserTurns: frames.UserTurnExternal,
-		TTFSP99:              turnsTTFSP99,
+		SupportsTTFS:         &noTTFS,
 		Model:                c.live.Model.Or(c.cfg.Model),
 	}
 }

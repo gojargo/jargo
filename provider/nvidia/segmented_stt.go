@@ -1,6 +1,7 @@
 package nvidia
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"sync"
@@ -16,11 +17,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
-
-// segmentedTTFSP99 is the time-to-final-segment P99 latency reported downstream.
-// A batch model transcribes only once the utterance is complete, so it trails
-// the streaming service.
-const segmentedTTFSP99 = 1500 * time.Millisecond
 
 // SegmentedSTTConfig configures the NVIDIA Riva batch speech-to-text service.
 // It transcribes one complete utterance per call against Riva's offline models,
@@ -62,6 +58,10 @@ type SegmentedSTTConfig struct {
 	// CustomConfiguration passes request-level options to the model pipeline,
 	// keyed by option name.
 	CustomConfiguration map[string]string
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.NvidiaTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -106,7 +106,7 @@ type segmentedTranscriber struct {
 func (t *segmentedTranscriber) Metadata() stt.Metadata {
 	return stt.Metadata{
 		RecommendedUserTurns: frames.UserTurnUnspecified,
-		TTFSP99:              segmentedTTFSP99,
+		TTFSP99:              cmp.Or(t.cfg.TTFSP99, stt.NvidiaTTFSP99),
 		Model:                t.cfg.Model,
 	}
 }

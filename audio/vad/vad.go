@@ -49,8 +49,13 @@ func (s State) String() string {
 const (
 	defaultConfidence = 0.7
 	defaultStartSecs  = 0.2
-	defaultStopSecs   = 0.2
 	defaultMinVolume  = 0.6
+
+	// DefaultStopSecs is the recommended silence window before a stop is
+	// reported. It is exported because the measured STT latencies a turn
+	// strategy sizes its safety net against were taken with it, so a strategy
+	// can say so when a pipeline runs a different one.
+	DefaultStopSecs = 0.2
 )
 
 // Params configures voice activity detection.
@@ -75,7 +80,7 @@ func DefaultParams() Params {
 	return Params{
 		Confidence: defaultConfidence,
 		StartSecs:  defaultStartSecs,
-		StopSecs:   defaultStopSecs,
+		StopSecs:   DefaultStopSecs,
 		MinVolume:  defaultMinVolume,
 	}
 }

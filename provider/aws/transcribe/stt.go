@@ -1,6 +1,7 @@
 package transcribe
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"sync"
@@ -53,7 +54,7 @@ type connector struct {
 func (c *connector) Metadata() stt.Metadata {
 	return stt.Metadata{
 		RecommendedUserTurns: frames.UserTurnUnspecified,
-		TTFSP99:              ttfsP99,
+		TTFSP99:              cmp.Or(c.cfg.TTFSP99, stt.AWSTranscribeTTFSP99),
 	}
 }
 

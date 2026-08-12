@@ -2,6 +2,7 @@ package gladia
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -56,7 +57,7 @@ type connector struct {
 // aggregator is asked to defer to those reports rather than running its own
 // detection alongside them. Without it the pipeline's defaults stand.
 func (c *connector) Metadata() stt.Metadata {
-	m := stt.Metadata{Model: c.cfg.Model}
+	m := stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.GladiaTTFSP99), Model: c.cfg.Model}
 	if c.cfg.EnableVAD {
 		m.RecommendedUserTurns = frames.UserTurnExternal
 	}

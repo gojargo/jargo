@@ -1084,3 +1084,25 @@ func TestTurnAnalyzerSTTTimeoutAnchoredToSpeechEnd(t *testing.T) {
 			"the budget rather than taken out of it", elapsed, want)
 	}
 }
+
+// A service whose server decides where a turn ends publishes no latency, and
+// none is what the strategy must wait: there is no closing transcript still on
+// its way to leave room for.
+func TestTurnAnalyzerNoPublishedLatencyWaitsNothing(t *testing.T) {
+	const stopSecs = 0.2
+
+	s := NewTurnAnalyzerStop(TurnAnalyzerConfig{Analyzer: slowAnalyzer{}})
+	spy := attachStop(s)
+
+	spy.sendStop(s, frames.NewSTTMetadataFrame(0))
+	spy.sendStop(s, frames.NewVADUserStartedSpeakingFrame(stopSecs, time.Now()))
+	spy.sendStop(s, transcript("hello"))
+
+	start := time.Now()
+	spy.sendStop(s, frames.NewVADUserStoppedSpeakingFrame(stopSecs, time.Now()))
+
+	eventually(t, func() bool { return spy.stops() == 1 }, time.Second, "turn never released")
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Errorf("released after %v, want no wait at all", elapsed)
+	}
+}

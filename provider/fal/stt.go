@@ -2,6 +2,7 @@ package fal
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -25,6 +26,12 @@ func NewSTT(cfg Config) *stt.SegmentService {
 type transcriber struct {
 	cfg  Config
 	http *http.Client
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (t *transcriber) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.FalTTFSP99)}
 }
 
 // Transcribe uploads the segment as a WAV data URI and returns the transcript.

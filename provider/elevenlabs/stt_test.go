@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 // uploadedSTT is the transcription request as the endpoint received it. The
@@ -99,8 +101,18 @@ func TestSTTMetadata(t *testing.T) {
 	if meta.Model != defaultSTTModel {
 		t.Errorf("Metadata().Model = %q, want %q", meta.Model, defaultSTTModel)
 	}
-	if meta.TTFSP99 != sttTTFSP99 {
-		t.Errorf("Metadata().TTFSP99 = %v, want %v", meta.TTFSP99, sttTTFSP99)
+	if meta.TTFSP99 != stt.ElevenLabsTTFSP99 {
+		t.Errorf("Metadata().TTFSP99 = %v, want %v", meta.TTFSP99, stt.ElevenLabsTTFSP99)
+	}
+}
+
+// TestSTTMetadataConfiguredLatency checks a deployment that measured its own
+// latency is described with that rather than the built-in one.
+func TestSTTMetadataConfiguredLatency(t *testing.T) {
+	measured := 1234 * time.Millisecond
+	tr := &sttTranscriber{cfg: STTConfig{APIKey: "k", TTFSP99: measured}}
+	if got := tr.Metadata().TTFSP99; got != measured {
+		t.Errorf("Metadata().TTFSP99 = %v, want %v", got, measured)
 	}
 }
 

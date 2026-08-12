@@ -5,6 +5,7 @@
 package mistral
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
@@ -59,6 +61,10 @@ type STTConfig struct {
 	// TargetStreamingDelayMs trades latency for accuracy: higher values may
 	// improve accuracy at the cost of latency. 0 uses the server default.
 	TargetStreamingDelayMs int
+
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; 0 uses stt.MistralTTFSP99.
+	TTFSP99 time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -77,6 +83,12 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 
 type sttConnector struct {
 	cfg STTConfig
+}
+
+// Metadata reports the transcript latency the turn strategies size their
+// wait by.
+func (c *sttConnector) Metadata() stt.Metadata {
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.MistralTTFSP99)}
 }
 
 // Connect dials the realtime WebSocket and sends the session configuration. The
