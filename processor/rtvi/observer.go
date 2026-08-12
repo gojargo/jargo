@@ -4,7 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
+	"github.com/gojargo/jargo/audio/loudness"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
@@ -31,6 +33,14 @@ type Observer struct {
 	// pipeline is running.
 	paramsMu sync.Mutex
 	params   ObserverParams
+
+	// levelMu guards the volume tracking below. Audio for the two sides arrives
+	// from different processors, so on different goroutines.
+	levelMu      sync.Mutex
+	userVolume   loudness.Tracker
+	botVolume    loudness.Tracker
+	lastUserSent time.Time
+	lastBotSent  time.Time
 }
 
 // FunctionCallReportLevel is how much of a tool call is exposed in the RTVI
@@ -63,6 +73,30 @@ type ObserverParams struct {
 	// turn, which is what makes the raw signal useful as a timing anchor. Off by
 	// default, because a client wants turns rather than the signal behind them.
 	VADUserSpeakingEnabled bool
+	// UserAudioLevelEnabled reports how loud the user is, for a client drawing a
+	// speaking meter. Off by default: it is a message every AudioLevelPeriod for
+	// as long as the call lasts, which a client that draws nothing does not want.
+	UserAudioLevelEnabled bool
+	// BotAudioLevelEnabled reports how loud the bot is. Off by default, for the
+	// same reason.
+	BotAudioLevelEnabled bool
+	// AudioLevelPeriod is how often an audio level is reported while it is
+	// enabled; zero defaults to 150 ms. Audio arrives far more often than a
+	// meter can usefully be redrawn, and measuring loudness is not free, so the
+	// level is reported on a period rather than per frame.
+	AudioLevelPeriod time.Duration
+}
+
+// defaultAudioLevelPeriod is how often an audio level is reported when
+// AudioLevelPeriod is unset.
+const defaultAudioLevelPeriod = 150 * time.Millisecond
+
+// audioLevelPeriod is the configured reporting period, or the default.
+func (p ObserverParams) audioLevelPeriod() time.Duration {
+	if p.AudioLevelPeriod <= 0 {
+		return defaultAudioLevelPeriod
+	}
+	return p.AudioLevelPeriod
 }
 
 // DefaultObserverParams is the configuration NewObserver uses: function-call
@@ -70,6 +104,7 @@ type ObserverParams struct {
 func DefaultObserverParams() ObserverParams {
 	return ObserverParams{
 		FunctionCallReportLevel: map[string]FunctionCallReportLevel{"*": ReportNone},
+		AudioLevelPeriod:        defaultAudioLevelPeriod,
 	}
 }
 
@@ -128,6 +163,54 @@ func (o *Observer) applyConfig(f *ConfigureObserverFrame) {
 	slog.Debug("RTVI observer reconfigured",
 		"function_call_report_level", f.FunctionCallReportLevel,
 		"vad_user_speaking", f.VADUserSpeakingEnabled)
+}
+
+// audioLevelMessageFor feeds the audio to the rolling window for its side of the
+// conversation and reports the level when one is due.
+//
+// Every frame feeds the window, but the window is only measured when a level is
+// due to be sent: audio arrives far more often than a meter can be redrawn, and
+// measuring loudness costs a few hundred microseconds. The second result reports
+// whether the frame was audio at all, so the dispatch can stop looking.
+func (o *Observer) audioLevelMessageFor(f frames.Frame) (Message, bool, bool) {
+	var (
+		audio    frames.AudioRawData
+		tracker  *loudness.Tracker
+		lastSent *time.Time
+		enabled  bool
+		build    func(float64) Message
+	)
+
+	o.paramsMu.Lock()
+	params := o.params
+	o.paramsMu.Unlock()
+
+	switch fr := f.(type) {
+	case *frames.InputAudioRawFrame:
+		audio, enabled, build = fr.AudioRawData, params.UserAudioLevelEnabled, UserAudioLevel
+		tracker, lastSent = &o.userVolume, &o.lastUserSent
+	case *frames.TTSAudioRawFrame:
+		audio, enabled, build = fr.AudioRawData, params.BotAudioLevelEnabled, BotAudioLevel
+		tracker, lastSent = &o.botVolume, &o.lastBotSent
+	default:
+		return Message{}, false, false
+	}
+
+	if !enabled {
+		return Message{}, false, true
+	}
+
+	o.levelMu.Lock()
+	defer o.levelMu.Unlock()
+
+	tracker.Update(audio.Audio, audio.SampleRate)
+
+	now := time.Now()
+	if !lastSent.IsZero() && now.Sub(*lastSent) <= params.audioLevelPeriod() {
+		return Message{}, false, true
+	}
+	*lastSent = now
+	return build(tracker.Volume()), true, true
 }
 
 // vadUserSpeakingEnabled reports whether the raw VAD speaking signal is exposed.

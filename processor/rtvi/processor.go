@@ -144,6 +144,12 @@ func (o *Observer) messagesFor(f frames.Frame) []Message {
 	if msg, ok := o.vadMessageFor(f); ok {
 		return []Message{msg}
 	}
+	if msg, send, isAudio := o.audioLevelMessageFor(f); isAudio {
+		if send {
+			return []Message{msg}
+		}
+		return nil
+	}
 	if msg, ok := botMessageFor(f); ok {
 		return []Message{msg}
 	}

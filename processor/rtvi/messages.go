@@ -44,6 +44,8 @@ const (
 	TypeLLMFunctionCall      = "llm-function-call-in-progress"
 	TypeLLMFunctionCallStop  = "llm-function-call-stopped"
 	TypeMetrics              = "metrics"
+	TypeUserAudioLevel       = "user-audio-level"
+	TypeBotAudioLevel        = "bot-audio-level"
 )
 
 // Message is the RTVI message envelope. Outgoing event messages omit id; bot-ready
@@ -298,6 +300,22 @@ type TurnMetricData struct {
 // Metrics builds a metrics message from data.
 func Metrics(data MetricsData) Message {
 	return newMessage(TypeMetrics, "", data)
+}
+
+// AudioLevelData is how loud one side of the conversation currently is.
+type AudioLevelData struct {
+	// Value is the volume on the 0..1 scale audio/loudness measures.
+	Value float64 `json:"value"`
+}
+
+// UserAudioLevel builds a message reporting how loud the user is.
+func UserAudioLevel(level float64) Message {
+	return newMessage(TypeUserAudioLevel, "", AudioLevelData{Value: level})
+}
+
+// BotAudioLevel builds a message reporting how loud the bot is.
+func BotAudioLevel(level float64) Message {
+	return newMessage(TypeBotAudioLevel, "", AudioLevelData{Value: level})
 }
 
 // event builds a data-less event message (speaking events).

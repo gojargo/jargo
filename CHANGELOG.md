@@ -91,6 +91,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   token accounting for a turn now lands on that turn's span rather than on a
   span raised just to hold it.
 
+- **RTVI reports how loud each side is.** The observer now sends
+  `user-audio-level` and `bot-audio-level`, the loudness of the user's input and
+  the bot's synthesized speech on a 0..1 scale, for a client drawing a speaking
+  meter. Both are off by default (`UserAudioLevelEnabled`,
+  `BotAudioLevelEnabled`) since they are a message every `AudioLevelPeriod`
+  (150 ms by default) for as long as the call lasts. The level is measured over
+  a rolling 400 ms window rather than per frame, so it reads 0 until enough
+  audio has arrived to measure.
+
 ### Fixed
 
 - **Turn detection resamples through a filter.** A turn stream at a rate other

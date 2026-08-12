@@ -68,6 +68,7 @@ speaks protocol version `2.0.0`.
 | `bot-llm-started` / `bot-llm-stopped` | Model is generating. |
 | `bot-tts-started` / `bot-tts-stopped` | Speech is being synthesized. |
 | `llm-function-call-started` / `-in-progress` / `-stopped` | Tool activity, stage by stage. |
+| `user-audio-level` / `bot-audio-level` | How loud each side is, for a speaking meter. Off by default. |
 | `dtmf` | Client presses keypad keys. |
 | `metrics` | TTFB, processing time, token usage. |
 | `send-text` | Client sends text instead of speech. |
@@ -95,6 +96,13 @@ observer := rtvi.NewObserverWithParams(proc, params)
 The levels are `disabled` (no event at all), `none`, `name` and `full`. The raw
 VAD speaking events are off by default in the same way, under
 `VADUserSpeakingEnabled`.
+
+So are the audio levels a client draws a speaking meter from, under
+`UserAudioLevelEnabled` and `BotAudioLevelEnabled`. They are a message every
+`AudioLevelPeriod` (150 ms by default) for as long as the call lasts, which a
+client that draws no meter does not want. The level is loudness on a 0..1 scale,
+measured over a rolling 400 ms window rather than per frame, so it reads 0 until
+enough audio has arrived to measure.
 
 ## Clients
 
