@@ -93,6 +93,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Turn detection resamples through a filter.** A turn stream at a rate other
+  than the model's 16 kHz was converted by linear interpolation, with nothing
+  to band-limit it first, so everything above the new Nyquist folded back down
+  into the band below. A 12 kHz tone in a 48 kHz stream came out at 4 kHz and
+  full amplitude, in the middle of the speech the model reads its features
+  from. The conversion now goes through the pipeline's own converter, a sinc
+  polyphase filter (libsoxr under the `libsoxr` tag), which leaves that tone
+  about 51 dB down. Pipelines feeding the analyzer 16 kHz, which is the usual
+  arrangement, are unaffected.
+
 - **Voice detection measures loudness over a gating block again.** The minimum
   volume a frame had to reach before it counted as speech was measured on that
   frame alone, about 32 ms of audio. Loudness is defined over a BS.1770 gating

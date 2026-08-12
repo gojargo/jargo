@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/internal/onnxrt"
 )
 
@@ -207,8 +208,9 @@ func NewSmartTurnV3(opts ...TurnOption) (*SmartTurnV3, error) {
 // the segment and runs the model, returning whether the turn is complete and
 // the completion probability.
 func (s *SmartTurnV3) predictEndpoint(audio []float32) (bool, float64, error) {
-	if s.sampleRate != melSR && s.sampleRate != 0 {
-		audio = resampleLinear(audio, s.sampleRate, melSR)
+	audio, err := resampleToModelRate(audio, s.sampleRate)
+	if err != nil {
+		return false, 0, err
 	}
 	audio = lastNSamples(audio, nSamples) // keep the last 8s, zero-pad the front
 	features := computeLogMel(audio)
@@ -258,27 +260,61 @@ func lastNSamples(audio []float32, n int) []float32 {
 	return out
 }
 
-// resampleLinear resamples float32 PCM from inRate to outRate by linear
-// interpolation. It is used only when a non-16 kHz turn stream is configured;
+// resampleToModelRate converts audio to the 16 kHz the model expects, through
+// the pipeline's own converter: a sinc polyphase filter, or libsoxr itself under
+// the libsoxr tag. It is used only when a non-16 kHz turn stream is configured;
 // the turntaking processor normally feeds 16 kHz directly.
-func resampleLinear(in []float32, inRate, outRate int) []float32 {
-	if inRate == outRate || len(in) == 0 {
-		return in
+//
+// The filter is the point. Rate conversion without one folds everything above
+// the new Nyquist back down into the band below it, and for a 48 kHz stream that
+// is most of the spectrum landing on top of the speech. The model reads log-mel
+// features of exactly that band, so the aliases would not be noise it could see
+// past: they would be the features.
+//
+// The audio reached the analyzer as 16-bit PCM and is converted back to it here,
+// which is what the converter takes and costs nothing that was not already spent
+// quantizing it in the first place.
+func resampleToModelRate(audio []float32, inRate int) ([]float32, error) {
+	if inRate == melSR || inRate == 0 || len(audio) == 0 {
+		return audio, nil
 	}
-	outLen := len(in) * outRate / inRate
-	out := make([]float32, outLen)
-	ratio := float64(inRate) / float64(outRate)
-	for i := range out {
-		src := float64(i) * ratio
-		j := int(src)
-		frac := src - float64(j)
-		if j+1 < len(in) {
-			out[i] = in[j]*(1-float32(frac)) + in[j+1]*float32(frac)
-		} else {
-			out[i] = in[len(in)-1]
-		}
+
+	r, err := resample.New(inRate, melSR, 1)
+	if err != nil {
+		return nil, fmt.Errorf("turn: resample %d Hz to %d Hz: %w", inRate, melSR, err)
 	}
-	return out
+	defer r.Close()
+
+	pcm := make([]byte, len(audio)*2)
+	for i, s := range audio {
+		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(f32ToS16(s)))
+	}
+
+	out := r.Process(pcm)
+	res := make([]float32, len(out)/2)
+	for i := range res {
+		res[i] = float32(int16(binary.LittleEndian.Uint16(out[i*2:]))) / 32768
+	}
+	return res, nil
+}
+
+// f32ToS16 converts a normalized float sample to S16 with rounding and clamping.
+// Sinc interpolation can overshoot past [-1, 1), so the clamp is load-bearing.
+func f32ToS16(f float32) int16 {
+	v := float64(f) * 32768
+	if v >= 0 {
+		v += 0.5
+	} else {
+		v -= 0.5
+	}
+	switch {
+	case v > 32767:
+		return 32767
+	case v < -32768:
+		return -32768
+	default:
+		return int16(v)
+	}
 }
 
 // pcmToInt16 reinterprets mono 16-bit little-endian PCM as int16 samples.
