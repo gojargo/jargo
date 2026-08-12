@@ -93,6 +93,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Filtering code blocks out of speech works again.** The Markdown filter's
+  `FilterCode` option tracks a fenced block across the chunks it arrives in by
+  looking for its fences in the converted text. The converter understood a
+  fenced code block itself and consumed the fence, so there was never a fence
+  left to find: the tracking never started and the contents of every code block
+  were spoken. The converter is now built without fenced-code parsing, so the
+  fence survives for the filter to act on. With `FilterCode` off, a fence is
+  spoken as written rather than silently dropped.
+
 - **An observer no longer misses the reports it has fallen behind on.** Each
   observer's queue held 512 reports and discarded the oldest past that, so one
   that could not keep up watched a conversation with holes in it, and the count

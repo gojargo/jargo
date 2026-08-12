@@ -8,7 +8,9 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/util"
 )
 
 // MarkdownFilterOptions configures a MarkdownFilter. The zero value filters
@@ -71,9 +73,35 @@ func NewMarkdownFilter(opts MarkdownFilterOptions) *MarkdownFilter {
 	// the tags the conversion produced and whatever the model wrote alike.
 	md := goldmark.New(
 		goldmark.WithExtensions(exts...),
+		goldmark.WithParser(newParser()),
 		goldmark.WithRendererOptions(html.WithUnsafe()),
 	)
 	return &MarkdownFilter{opts: opts, md: md}
+}
+
+// newParser builds the conversion's grammar: everything the converter
+// understands by default, less the fenced code block.
+//
+// A fence has to survive the conversion as text. Text arrives a chunk at a time
+// and a code block spans several of them, so the block is tracked across calls
+// by looking for its fences in the converted output. A converter that took the
+// fence itself would leave nothing to find: the tracking would never start and
+// the code inside the block would be spoken. An indented code block spans no
+// chunks and needs no marker, so it is left to the converter.
+func newParser() parser.Parser {
+	fenced := parser.NewFencedCodeBlockParser()
+	defaults := parser.DefaultBlockParsers()
+	blocks := make([]util.PrioritizedValue, 0, len(defaults))
+	for _, p := range defaults {
+		if p.Value != fenced {
+			blocks = append(blocks, p)
+		}
+	}
+	return parser.NewParser(
+		parser.WithBlockParsers(blocks...),
+		parser.WithInlineParsers(parser.DefaultInlineParsers()...),
+		parser.WithParagraphTransformers(parser.DefaultParagraphTransformers()...),
+	)
 }
 
 // HandleInterruption abandons any code block or table the filter was reading
