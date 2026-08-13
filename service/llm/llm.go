@@ -392,7 +392,17 @@ func New(name string, gen Generator, opts ...Option) *Base {
 	for _, opt := range opts {
 		opt(b)
 	}
-	b.Base = service.New(name, b)
+	// The base dispatches through the concrete service, not through itself. A
+	// service embeds the base, so the base embedded in it is not the processor
+	// the pipeline runs: handing the base its own address would leave anything
+	// the service defines for the base to reach, such as answering a
+	// conversation off the pipeline, unreachable behind the embedded value.
+	// Every service passes itself as its Generator, which is that value.
+	var self processor.Processor = b
+	if p, ok := gen.(processor.Processor); ok {
+		self = p
+	}
+	b.Base = service.New(name, self)
 	return b
 }
 

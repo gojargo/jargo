@@ -92,6 +92,12 @@ func (b *Base) handleSummaryRequest(request *frames.LLMContextSummaryRequestFram
 }
 
 // generateSummaryTask runs one summary generation and broadcasts its outcome.
+//
+// A generation that ran out of time is told apart from one that failed. Both
+// are reported to the pipeline, but only a failure is carried on the result:
+// running out of time closes the request out with a summary that covers
+// nothing, where a failure is handed on so whatever asked for the summary
+// learns why there is none.
 func (b *Base) generateSummaryTask(request *frames.LLMContextSummaryRequestFrame) {
 	timeout := request.SummarizationTimeout
 	if timeout == 0 {
@@ -107,11 +113,16 @@ func (b *Base) generateSummaryTask(request *frames.LLMContextSummaryRequestFrame
 	}
 
 	var result *frames.LLMContextSummaryResultFrame
-	if err != nil {
+	switch {
+	case err == nil:
+		result = frames.NewLLMContextSummaryResultFrame(request.RequestID, summary, lastIndex)
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		b.PushError(b.summaryCtx,
+			fmt.Sprintf("context summarization timed out after %s", timeout), err, false)
+		result = frames.NewLLMContextSummaryResultFrame(request.RequestID, "", -1)
+	default:
 		b.PushError(b.summaryCtx, "context summarization failed", err, false)
 		result = frames.NewLLMContextSummaryErrorFrame(request.RequestID, err.Error())
-	} else {
-		result = frames.NewLLMContextSummaryResultFrame(request.RequestID, summary, lastIndex)
 	}
 
 	if err := b.Broadcast(b.summaryCtx, func() frames.Frame {
