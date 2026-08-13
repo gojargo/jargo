@@ -18,18 +18,20 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
 )
 
 // spy records everything a strategy signals through its environment.
 type spy struct {
 	mu sync.Mutex
 
-	started    []UserTurnStartedParams
-	stopped    []UserTurnStoppedParams
-	resets     int
-	inferences int
-	pushed     []processor.Direction
-	broadcast  []frames.Frame
+	started     []UserTurnStartedParams
+	stopped     []UserTurnStoppedParams
+	resets      int
+	inferences  int
+	pushed      []processor.Direction
+	pushedFrame []frames.Frame
+	broadcast   []frames.Frame
 }
 
 func newSpy() *spy { return &spy{} }
@@ -41,8 +43,11 @@ func (s *spy) env() strategyEnv {
 		stopped:            func(p UserTurnStoppedParams) { s.stopped = append(s.stopped, p) },
 		resetAggregation:   func() { s.resets++ },
 		inferenceTriggered: func() { s.inferences++ },
-		push:               func(_ frames.Frame, d processor.Direction) { s.pushed = append(s.pushed, d) },
-		broadcast:          func(build func() frames.Frame) { s.broadcast = append(s.broadcast, build()) },
+		push: func(f frames.Frame, d processor.Direction) {
+			s.pushed = append(s.pushed, d)
+			s.pushedFrame = append(s.pushedFrame, f)
+		},
+		broadcast: func(build func() frames.Frame) { s.broadcast = append(s.broadcast, build()) },
 	}
 }
 
@@ -846,6 +851,54 @@ func TestDeferredStopDelegates(t *testing.T) {
 	}
 	spy.mu.Unlock()
 	d.Cleanup()
+}
+
+// TestLLMTurnCompletionStopConfiguresTheLLM checks the gate turns the marker
+// protocol on when the pipeline starts. Nothing else configures the LLM, so a
+// gate that failed to send this would leave the model answering without the
+// protocol and every turn would fall through the unmarked-response path.
+func TestLLMTurnCompletionStopConfiguresTheLLM(t *testing.T) {
+	cfg := llm.UserTurnCompletionConfig{
+		IncompleteShortTimeout: 3 * time.Second,
+		IncompleteShortPrompt:  "Go on.",
+	}
+	spy := newSpy()
+	gate := NewLLMTurnCompletionStop(cfg)
+	gate.attach(spy.env())
+
+	spy.sendStop(gate, frames.NewStartFrame())
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.pushedFrame) != 1 {
+		t.Fatalf("the gate pushed %d frames on start, want 1 settings update", len(spy.pushedFrame))
+	}
+	if spy.pushed[0] != processor.Downstream {
+		t.Errorf("the settings update went %v, want downstream to the LLM", spy.pushed[0])
+	}
+
+	update, ok := spy.pushedFrame[0].(*frames.LLMUpdateSettingsFrame)
+	if !ok {
+		t.Fatalf("pushed %T, want an LLMUpdateSettingsFrame", spy.pushedFrame[0])
+	}
+	if !update.ReachInactiveServices {
+		t.Error("the update must reach every LLM behind a switcher, not only the active one")
+	}
+
+	delta, ok := update.Delta.(*settings.LLM)
+	if !ok {
+		t.Fatalf("the update carries %T, want *settings.LLM", update.Delta)
+	}
+	if on, given := delta.FilterIncompleteUserTurns.Value(); !given || !on {
+		t.Error("the update does not turn the gating on")
+	}
+	got, given := delta.UserTurnCompletionConfig.Value()
+	if !given {
+		t.Fatal("the update carries no turn-completion configuration")
+	}
+	if c, ok := got.(llm.UserTurnCompletionConfig); !ok || c.IncompleteShortPrompt != "Go on." {
+		t.Errorf("the update carries %v, want the configuration the gate was built with", got)
+	}
 }
 
 // TestNewLLMTurnCompletionStop checks the gate finalizes on the completion the
