@@ -133,6 +133,16 @@ type Worker interface {
 	// OnJobCancelled is called when a job this worker is doing is called off.
 	OnJobCancelled(ctx context.Context, m *bus.JobCancelMessage)
 
+	// HandleWorkerEnd is called when this worker is asked to end gracefully.
+	// The default passes the end to the children and stops; a worker with a
+	// runtime of its own drives that runtime's shutdown instead, so that it
+	// finishes at the right moment.
+	HandleWorkerEnd(ctx context.Context, m *bus.EndWorkerMessage)
+	// HandleWorkerCancel is called when this worker is asked to stop at once.
+	// The default passes the cancel to the children and stops; see
+	// HandleWorkerEnd.
+	HandleWorkerCancel(ctx context.Context, m *bus.CancelWorkerMessage)
+
 	// base is the embedded Base, which is how a parent reaches a child's
 	// lifecycle. It is unexported so that only a worker built on Base can be
 	// one.
@@ -651,9 +661,9 @@ func (w *Base) handleLifecycleMessage(ctx context.Context, m bus.Message) bool {
 	case *bus.DeactivateWorkerMessage:
 		w.handleWorkerDeactivate(ctx)
 	case *bus.EndWorkerMessage:
-		w.handleWorkerEnd(ctx, msg)
+		w.self.HandleWorkerEnd(ctx, msg)
 	case *bus.CancelWorkerMessage:
-		w.handleWorkerCancel(ctx, msg)
+		w.self.HandleWorkerCancel(ctx, msg)
 	default:
 		return false
 	}
@@ -805,17 +815,19 @@ func (w *Base) handleWorkerDeactivate(ctx context.Context) {
 	w.Call(ctx, EventDeactivated, w.self)
 }
 
-// handleWorkerEnd passes the end on to the children, waits for them, and then
-// stops. A worker with a runtime of its own calls PropagateEndToChildren and
-// drives its own shutdown, so that it finishes at the right moment.
-func (w *Base) handleWorkerEnd(ctx context.Context, m *bus.EndWorkerMessage) {
+// HandleWorkerEnd passes the end on to the children, waits for them, and then
+// stops. A worker with a runtime of its own overrides it, calls
+// PropagateEndToChildren and drives its own shutdown, so that it finishes at
+// the right moment.
+func (w *Base) HandleWorkerEnd(ctx context.Context, m *bus.EndWorkerMessage) {
 	slog.Debug("worker received end", "worker", w.name)
 	w.PropagateEndToChildren(ctx, m.Reason)
 	w.self.Stop(ctx)
 }
 
-// handleWorkerCancel passes the cancel on to the children and stops.
-func (w *Base) handleWorkerCancel(ctx context.Context, m *bus.CancelWorkerMessage) {
+// HandleWorkerCancel passes the cancel on to the children and stops. See
+// HandleWorkerEnd.
+func (w *Base) HandleWorkerCancel(ctx context.Context, m *bus.CancelWorkerMessage) {
 	slog.Debug("worker received cancel", "worker", w.name)
 	w.PropagateCancelToChildren(ctx, m.Reason)
 	w.self.Stop(ctx)
