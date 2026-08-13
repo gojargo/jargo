@@ -29,11 +29,10 @@ import (
 )
 
 // The placeholder contents a tool-result message holds while its call has not
-// reported a result of its own.
+// reported a result of its own. The one written while a call is still running is
+// frames.ToolResultInProgress, which lives beside the async-tool protocol
+// because summarization has to recognize it too.
 const (
-	// toolResultInProgress is written the moment a call starts, so the tool-use
-	// block it answers is never left unanswered.
-	toolResultInProgress = "IN_PROGRESS"
 	// toolResultCancelled replaces the placeholder when the call is canceled.
 	// The spelling is the protocol's, not prose.
 	toolResultCancelled = "CANCELLED" //nolint:misspell // the literal written to the conversation
@@ -573,7 +572,7 @@ func (a *AssistantAggregator) handleFunctionCallInProgress(fr *frames.FunctionCa
 		a.context.AddToolResult(frames.ToolResult{
 			ID:      fr.ToolCallID,
 			Name:    fr.ToolName,
-			Content: toolResultInProgress,
+			Content: frames.ToolResultInProgress,
 		})
 	} else {
 		a.context.AddMessage(frames.NewAsyncToolStartedMessage(fr.ToolCallID))

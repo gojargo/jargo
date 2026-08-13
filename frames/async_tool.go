@@ -32,14 +32,19 @@ const (
 )
 
 const (
-	// asyncToolPayloadType identifies an async-tool payload. Both the builders and
+	// AsyncToolPayloadType identifies an async-tool payload. Both the builders and
 	// the parser use it; the literal is not duplicated anywhere else.
-	asyncToolPayloadType = "async_tool"
-	// asyncToolStatusRunning is the status of a started or intermediate message.
-	asyncToolStatusRunning = "running"
-	// asyncToolStatusFinished is the status of a final message.
-	asyncToolStatusFinished = "finished"
+	AsyncToolPayloadType = "async_tool"
+	// AsyncToolStatusRunning is the status of a started or intermediate message.
+	AsyncToolStatusRunning = "running"
+	// AsyncToolStatusFinished is the status of a final message.
+	AsyncToolStatusFinished = "finished"
 )
+
+// ToolResultInProgress is the placeholder written as a tool call's result the
+// moment the call starts, so the tool-use block is never left unanswered while
+// the call runs. It is replaced in place once the call reports.
+const ToolResultInProgress = "IN_PROGRESS"
 
 // The descriptions shipped on each stage are deliberately self-explanatory, so a
 // model reading the context can tell what is happening without out-of-band
@@ -96,7 +101,7 @@ type asyncToolPayload struct {
 // message, whose task has not produced one yet.
 func (m AsyncToolMessage) json() string {
 	p := asyncToolPayload{
-		Type:        asyncToolPayloadType,
+		Type:        AsyncToolPayloadType,
 		Status:      m.Status,
 		ToolCallID:  m.ToolCallID,
 		Description: m.Description,
@@ -134,7 +139,7 @@ func NewAsyncToolStartedMessage(toolCallID string) Message {
 	return AsyncToolMessage{
 		Kind:        AsyncToolStarted,
 		ToolCallID:  toolCallID,
-		Status:      asyncToolStatusRunning,
+		Status:      AsyncToolStatusRunning,
 		Description: asyncToolStartedDescription,
 	}.message()
 }
@@ -145,7 +150,7 @@ func NewAsyncToolIntermediateMessage(toolCallID, result string) Message {
 	return AsyncToolMessage{
 		Kind:        AsyncToolIntermediate,
 		ToolCallID:  toolCallID,
-		Status:      asyncToolStatusRunning,
+		Status:      AsyncToolStatusRunning,
 		Description: asyncToolIntermediateDescription,
 		Result:      result,
 		HasResult:   true,
@@ -160,7 +165,7 @@ func NewAsyncToolFinalMessage(toolCallID, result string) Message {
 	return AsyncToolMessage{
 		Kind:        AsyncToolFinal,
 		ToolCallID:  toolCallID,
-		Status:      asyncToolStatusFinished,
+		Status:      AsyncToolStatusFinished,
 		Description: asyncToolFinalDescription,
 		Result:      result,
 		HasResult:   true,
@@ -180,13 +185,13 @@ func ParseAsyncToolMessage(m Message) (AsyncToolMessage, bool) {
 	if err := json.Unmarshal([]byte(content), &p); err != nil {
 		return AsyncToolMessage{}, false
 	}
-	if p.Type != asyncToolPayloadType {
+	if p.Type != AsyncToolPayloadType {
 		return AsyncToolMessage{}, false
 	}
 	if p.ToolCallID == "" {
 		return AsyncToolMessage{}, false
 	}
-	if p.Status != asyncToolStatusRunning && p.Status != asyncToolStatusFinished {
+	if p.Status != AsyncToolStatusRunning && p.Status != AsyncToolStatusFinished {
 		return AsyncToolMessage{}, false
 	}
 	out := AsyncToolMessage{
@@ -197,7 +202,7 @@ func ParseAsyncToolMessage(m Message) (AsyncToolMessage, bool) {
 	switch {
 	case p.Result == nil:
 		out.Kind = AsyncToolStarted
-	case p.Status == asyncToolStatusFinished:
+	case p.Status == AsyncToolStatusFinished:
 		out.Kind = AsyncToolFinal
 		out.Result = *p.Result
 		out.HasResult = true
