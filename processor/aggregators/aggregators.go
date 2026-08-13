@@ -247,10 +247,14 @@ func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir pr
 	}
 }
 
-// handleContextUpdate applies a frame that mutates the shared LLM context and
-// then forwards it. Forwarding matters: a text LLM reads the context on its next
-// run, but a realtime (speech-to-speech) service generates continuously and
-// learns of a tool or message change only from the frame itself.
+// handleContextUpdate applies a frame that mutates the shared LLM context.
+//
+// Only the toolset change is forwarded. A text LLM picks up a context change on
+// its next run, but a speech-to-speech service is generating continuously and
+// would never learn that the tools it may call had changed, so that one frame
+// travels on. The message changes are consumed: the aggregators share the
+// context, so a frame that reached one of them has already been applied, and
+// forwarding it would let the other apply it a second time.
 func (u *UserAggregator) handleContextUpdate(
 	ctx context.Context, f frames.Frame, dir processor.Direction,
 ) error {
@@ -272,14 +276,16 @@ func (u *UserAggregator) handleContextUpdate(
 
 	case *frames.LLMSetToolsFrame:
 		u.context.SetTools(fr.Tools)
+		// The one frame that travels on, for a speech-to-speech service that
+		// cannot pick the change up on a next run because it never stops running.
+		if err := u.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
 
 	case *frames.LLMSetToolChoiceFrame:
 		u.context.SetToolChoice(fr.ToolChoice)
 	}
 
-	if err := u.PushFrame(ctx, f, dir); err != nil {
-		return err
-	}
 	if runLLM {
 		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
 	}
@@ -495,6 +501,9 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	if mf, ok := f.(*frames.LLMMarkerFrame); ok {
 		return a.handleMarker(ctx, mf)
 	}
+	if handled, err := a.handleContextUpdate(ctx, f); handled {
+		return err
+	}
 	return a.route(ctx, f, dir)
 }
 
@@ -579,6 +588,48 @@ func (a *AssistantAggregator) handleMarker(ctx context.Context, fr *frames.LLMMa
 	a.aggregation = append(a.aggregation, text.Part{Text: fr.Marker, IncludesInterPartSpaces: false})
 	a.mu.Unlock()
 	return nil
+}
+
+// handleContextUpdate applies a conversation change arriving from this side of
+// the pipeline, reporting whether it was one. Both halves of the pair handle
+// these, and both consume them: they share the conversation, so a frame that
+// reached one of them has been applied and must not travel on to the other.
+func (a *AssistantAggregator) handleContextUpdate(ctx context.Context, f frames.Frame) (bool, error) {
+	switch fr := f.(type) {
+	case *frames.LLMMessagesAppendFrame:
+		return true, a.handleMessagesAppend(ctx, fr)
+	case *frames.LLMMessagesUpdateFrame:
+		return true, a.handleMessagesUpdate(ctx, fr)
+	}
+	return false, nil
+}
+
+// handleMessagesAppend adds messages to the conversation from this side of the
+// pipeline, and runs the model on them when asked. It is what the LLM service's
+// own re-prompt reaches: the service pushes it downstream, so it arrives here
+// rather than at the user aggregator, and the run it asks for has to travel back
+// upstream to the service.
+//
+// The frame is consumed, like its counterpart on the user side, so a
+// conversation both halves share is never appended to twice.
+func (a *AssistantAggregator) handleMessagesAppend(ctx context.Context, fr *frames.LLMMessagesAppendFrame) error {
+	for _, m := range fr.Messages {
+		a.context.AddMessage(m)
+	}
+	if !fr.RunLLM {
+		return nil
+	}
+	return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
+}
+
+// handleMessagesUpdate replaces the conversation from this side of the pipeline,
+// and runs the model on it when asked.
+func (a *AssistantAggregator) handleMessagesUpdate(ctx context.Context, fr *frames.LLMMessagesUpdateFrame) error {
+	a.context.SetMessages(fr.Messages)
+	if !fr.RunLLM {
+		return nil
+	}
+	return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
 }
 
 // handleText folds one piece of the turn's text into the aggregation. original

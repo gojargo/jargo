@@ -38,6 +38,23 @@ func runAggregator(t *testing.T, convo *frames.LLMContext) (*pipeline.Task, chan
 }
 
 // awaitFrame waits for a frame the predicate accepts.
+// sawFrame reports whether a matching frame reached the end of the pipeline
+// within a short grace period. It is the negative counterpart of awaitFrame: a
+// frame that should have been consumed must not arrive.
+func sawFrame(seen chan frames.Frame, match func(frames.Frame) bool) bool {
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case f := <-seen:
+			if match(f) {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
+}
+
 func awaitFrame(t *testing.T, seen chan frames.Frame, match func(frames.Frame) bool, what string) frames.Frame {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
@@ -84,8 +101,11 @@ func TestSetToolsFrameAppliesAndForwards(t *testing.T) {
 	<-runDone
 }
 
-// TestSetToolChoiceFrameAppliesAndForwards covers the tool-choice counterpart.
-func TestSetToolChoiceFrameAppliesAndForwards(t *testing.T) {
+// TestSetToolChoiceFrameIsAppliedAndConsumed covers the tool-choice counterpart.
+// Unlike the toolset, it is consumed: a speech-to-speech service is told which
+// tools exist because it cannot pick that up on a next run, but the choice of
+// how to use them is read from the shared conversation like any other setting.
+func TestSetToolChoiceFrameIsAppliedAndConsumed(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	if got := convo.ToolChoice(); got != frames.ToolChoiceAuto {
 		t.Errorf("ToolChoice() = %q, want auto by default", got)
@@ -94,13 +114,14 @@ func TestSetToolChoiceFrameAppliesAndForwards(t *testing.T) {
 	task, seen, runDone := runAggregator(t, convo)
 	task.QueueFrame(frames.NewLLMSetToolChoiceFrame(frames.ToolChoiceRequired))
 
-	awaitFrame(t, seen, func(f frames.Frame) bool {
+	if !waitFor(2*time.Second, func() bool { return convo.ToolChoice() == frames.ToolChoiceRequired }) {
+		t.Errorf("ToolChoice() = %q, want required", convo.ToolChoice())
+	}
+	if sawFrame(seen, func(f frames.Frame) bool {
 		_, ok := f.(*frames.LLMSetToolChoiceFrame)
 		return ok
-	}, "LLMSetToolChoiceFrame")
-
-	if got := convo.ToolChoice(); got != frames.ToolChoiceRequired {
-		t.Errorf("ToolChoice() = %q, want required", got)
+	}) {
+		t.Error("the tool-choice frame was forwarded, want it consumed once applied")
 	}
 
 	task.StopWhenDone()
@@ -108,7 +129,9 @@ func TestSetToolChoiceFrameAppliesAndForwards(t *testing.T) {
 }
 
 // TestMessagesUpdateFrameReplacesConversation checks the update frame replaces
-// the messages rather than appending, and leaves the system prompt alone.
+// the messages rather than appending, leaves the system prompt alone, and is
+// consumed: both halves of the pair share the conversation, so a frame that
+// reached one of them has been applied and must not travel on to the other.
 func TestMessagesUpdateFrameReplacesConversation(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	convo.AddUserMessage("old one")
@@ -119,10 +142,15 @@ func TestMessagesUpdateFrameReplacesConversation(t *testing.T) {
 		{Role: frames.RoleUser, Text: "restored"},
 	}))
 
-	awaitFrame(t, seen, func(f frames.Frame) bool {
+	if !waitFor(2*time.Second, func() bool { return len(convo.Messages()) == 1 }) {
+		t.Fatalf("the update was never applied; messages = %+v", convo.Messages())
+	}
+	if sawFrame(seen, func(f frames.Frame) bool {
 		_, ok := f.(*frames.LLMMessagesUpdateFrame)
 		return ok
-	}, "LLMMessagesUpdateFrame")
+	}) {
+		t.Error("the update frame was forwarded, want it consumed once applied")
+	}
 
 	msgs := convo.Messages()
 	if len(msgs) != 1 || msgs[0].Text != "restored" {
