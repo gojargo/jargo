@@ -200,44 +200,71 @@ type JobRequestMessage struct {
 	Payload map[string]any
 }
 
-// JobResponseMessage reports how a job ended.
-type JobResponseMessage struct {
-	BaseDataMessage
+// A job's progress and its outcome each travel in either band: ordinarily in
+// send order, or urgently, ahead of the work already queued. The two versions
+// of each carry the same body, so a handler takes whichever arrived through the
+// JobResponse or JobUpdate interface and reads it the same way.
+
+// JobResult is the body of a message reporting how a job ended.
+type JobResult struct {
 	// JobID identifies the job.
 	JobID string
 	// Status is how it ended.
 	Status jobcontext.JobStatus
 	// Response is the job's output, and may be nil.
 	Response map[string]any
+}
+
+// Result is the body, and is what makes a message a JobResponse.
+func (r *JobResult) Result() *JobResult { return r }
+
+// JobResponse reports how a job ended, whichever band it travels in.
+type JobResponse interface {
+	Message
+	// Result is what the message reports.
+	Result() *JobResult
+}
+
+// JobProgress is the body of a message reporting progress on a running job.
+type JobProgress struct {
+	// JobID identifies the job.
+	JobID string
+	// Update is the progress being reported, and may be nil.
+	Update map[string]any
+}
+
+// Progress is the body, and is what makes a message a JobUpdate.
+func (p *JobProgress) Progress() *JobProgress { return p }
+
+// JobUpdate reports progress on a running job, whichever band it travels in.
+type JobUpdate interface {
+	Message
+	// Progress is what the message reports.
+	Progress() *JobProgress
+}
+
+// JobResponseMessage reports how a job ended.
+type JobResponseMessage struct {
+	BaseDataMessage
+	JobResult
 }
 
 // JobResponseUrgentMessage reports how a job ended, ahead of the queued work.
 type JobResponseUrgentMessage struct {
 	BaseSystemMessage
-	// JobID identifies the job.
-	JobID string
-	// Status is how it ended.
-	Status jobcontext.JobStatus
-	// Response is the job's output, and may be nil.
-	Response map[string]any
+	JobResult
 }
 
 // JobUpdateMessage reports progress on a job still running.
 type JobUpdateMessage struct {
 	BaseDataMessage
-	// JobID identifies the job.
-	JobID string
-	// Update is the progress being reported, and may be nil.
-	Update map[string]any
+	JobProgress
 }
 
 // JobUpdateUrgentMessage reports progress ahead of the queued work.
 type JobUpdateUrgentMessage struct {
 	BaseSystemMessage
-	// JobID identifies the job.
-	JobID string
-	// Update is the progress being reported, and may be nil.
-	Update map[string]any
+	JobProgress
 }
 
 // JobUpdateRequestMessage asks for the current progress of a job.
@@ -302,10 +329,12 @@ var (
 	_ SystemMessage = (*WorkerLocalErrorMessage)(nil)
 	_ LocalMessage  = (*WorkerLocalErrorMessage)(nil)
 	_ Message       = (*JobRequestMessage)(nil)
-	_ Message       = (*JobResponseMessage)(nil)
+	_ JobResponse   = (*JobResponseMessage)(nil)
 	_ SystemMessage = (*JobResponseUrgentMessage)(nil)
-	_ Message       = (*JobUpdateMessage)(nil)
+	_ JobResponse   = (*JobResponseUrgentMessage)(nil)
+	_ JobUpdate     = (*JobUpdateMessage)(nil)
 	_ SystemMessage = (*JobUpdateUrgentMessage)(nil)
+	_ JobUpdate     = (*JobUpdateUrgentMessage)(nil)
 	_ Message       = (*JobUpdateRequestMessage)(nil)
 	_ SystemMessage = (*JobCancelMessage)(nil)
 	_ Message       = (*JobStreamStartMessage)(nil)

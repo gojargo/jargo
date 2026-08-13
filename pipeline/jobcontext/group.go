@@ -63,7 +63,8 @@ var ErrGroup = errors.New("job group stopped before it finished")
 type Group struct {
 	// JobID is the identifier every worker in the group shares.
 	JobID string
-	// WorkerNames are the workers the job went to.
+	// WorkerNames are the workers the job went to, each named once however many
+	// times the caller listed it.
 	WorkerNames []string
 	// CancelOnError reports whether one worker failing calls off the rest.
 	CancelOnError bool
@@ -76,13 +77,27 @@ type Group struct {
 	closed    bool
 	err       error
 	events    chan GroupEvent
+	// stopTimeout calls off the group's timeout, and is nil when it is running
+	// without one.
+	stopTimeout func()
 }
 
-// NewGroup builds a group for the named workers.
+// NewGroup builds a group for the named workers. A name listed twice is one
+// worker, which is why the group holds a set: it answers once, and calling the
+// group off tells it once.
 func NewGroup(jobID string, workerNames []string, cancelOnError bool) *Group {
+	names := make([]string, 0, len(workerNames))
+	seen := make(map[string]struct{}, len(workerNames))
+	for _, name := range workerNames {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
 	return &Group{
 		JobID:         jobID,
-		WorkerNames:   append([]string(nil), workerNames...),
+		WorkerNames:   names,
 		CancelOnError: cancelOnError,
 		responses:     make(map[string]map[string]any),
 		done:          make(chan struct{}),
@@ -94,6 +109,34 @@ func NewGroup(jobID string, workerNames []string, cancelOnError bool) *Group {
 // reading them. A caller need not read at all, so reporting must never block
 // the worker doing the job; past the buffer the oldest events are dropped.
 const eventBuffer = 64
+
+// SetTimeout records how to call off the group's timeout. The worker running
+// the group starts the timeout and hands the cancellation here, so completing
+// in time can stop it.
+func (g *Group) SetTimeout(stop func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stopTimeout = stop
+}
+
+// HasTimeout reports whether the group is running under a timeout.
+func (g *Group) HasTimeout() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.stopTimeout != nil
+}
+
+// CancelTimeout calls off the group's timeout, if it has one. It is a no-op
+// otherwise, and calling it twice is harmless.
+func (g *Group) CancelTimeout() {
+	g.mu.Lock()
+	stop := g.stopTimeout
+	g.stopTimeout = nil
+	g.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
 
 // IsDone reports whether the group has finished, either way.
 func (g *Group) IsDone() bool {
