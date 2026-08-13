@@ -17,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // spy records everything a strategy signals through its environment.
@@ -771,15 +772,16 @@ func TestExternalStrategies(t *testing.T) {
 // deferred (they may only trigger inference) and the LLM decides the turn end.
 func TestFilterIncompleteUserTurnStrategies(t *testing.T) {
 	t.Run("wraps supplied detectors", func(t *testing.T) {
-		got := FilterIncompleteUserTurnStrategies([]StopStrategy{NewExternalStop(ExternalStopConfig{})})
+		got := FilterIncompleteUserTurnStrategies(
+			[]StopStrategy{NewExternalStop(ExternalStopConfig{})}, llm.UserTurnCompletionConfig{})
 		if len(got.Stop) != 2 {
 			t.Fatalf("stop len = %d, want detector + completion", len(got.Stop))
 		}
 		if _, ok := got.Stop[0].(*deferredStop); !ok {
 			t.Errorf("detector = %T, want *deferredStop", got.Stop[0])
 		}
-		if _, ok := got.Stop[1].(*ExternalCompletionStop); !ok {
-			t.Errorf("finalizer = %T, want *ExternalCompletionStop", got.Stop[1])
+		if _, ok := got.Stop[1].(*LLMTurnCompletionStop); !ok {
+			t.Errorf("finalizer = %T, want *LLMTurnCompletionStop", got.Stop[1])
 		}
 		if len(got.Start) != 0 {
 			t.Error("the start chain should be left to fillDefaults")
@@ -787,7 +789,7 @@ func TestFilterIncompleteUserTurnStrategies(t *testing.T) {
 	})
 
 	t.Run("empty detectors use the defaults", func(t *testing.T) {
-		got := FilterIncompleteUserTurnStrategies(nil)
+		got := FilterIncompleteUserTurnStrategies(nil, llm.UserTurnCompletionConfig{})
 		if len(got.Stop) != len(DefaultStopStrategies())+1 {
 			t.Errorf("stop len = %d, want defaults + completion", len(got.Stop))
 		}
@@ -846,19 +848,17 @@ func TestDeferredStopDelegates(t *testing.T) {
 	d.Cleanup()
 }
 
+// TestNewLLMTurnCompletionStop checks the gate finalizes on the completion the
+// LLM service reports, which it inherits, and carries the configuration it
+// applies to the service on start.
 func TestNewLLMTurnCompletionStop(t *testing.T) {
-	if _, ok := NewLLMTurnCompletionStop().(*ExternalCompletionStop); !ok {
-		t.Error("NewLLMTurnCompletionStop should build an *ExternalCompletionStop")
+	cfg := llm.UserTurnCompletionConfig{IncompleteShortTimeout: time.Second}
+	s := NewLLMTurnCompletionStop(cfg)
+	if s.ExternalCompletionStop == nil {
+		t.Fatal("the gate should be built on an ExternalCompletionStop")
 	}
-}
-
-func TestCompletionInstructions(t *testing.T) {
-	if got := CompletionInstructions(UserTurnCompletionConfig{}); got != defaultCompletionInstructions {
-		t.Error("an empty config should yield the default marker-protocol instructions")
-	}
-	const custom = "answer only in haiku"
-	if got := CompletionInstructions(UserTurnCompletionConfig{Instructions: custom}); got != custom {
-		t.Errorf("CompletionInstructions = %q, want the override", got)
+	if s.Config().IncompleteShortTimeout != time.Second {
+		t.Errorf("Config() did not carry the configuration it was built with")
 	}
 }
 

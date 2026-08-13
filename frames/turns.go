@@ -201,11 +201,22 @@ type LLMMarkerFrame struct {
 	BaseDataFrame
 	// Marker is the marker text.
 	Marker string
+	// AppendToContextImmediately asks for the marker to be written to the
+	// conversation as an assistant message of its own, as soon as it arrives.
+	// Clear it to have the marker held and flushed together with the text that
+	// follows, as one message, which is what makes a gated reply read as the
+	// marker followed by the response rather than as two entries.
+	AppendToContextImmediately bool
 }
 
-// NewLLMMarkerFrame builds an LLMMarkerFrame.
+// NewLLMMarkerFrame builds an LLMMarkerFrame that is written to the
+// conversation on its own.
 func NewLLMMarkerFrame(marker string) *LLMMarkerFrame {
-	return &LLMMarkerFrame{BaseDataFrame: NewBaseDataFrame("LLMMarkerFrame"), Marker: marker}
+	return &LLMMarkerFrame{
+		BaseDataFrame:              NewBaseDataFrame("LLMMarkerFrame"),
+		Marker:                     marker,
+		AppendToContextImmediately: true,
+	}
 }
 
 // LLMConfigureOutputFrame configures how an LLM service produces output. It

@@ -208,6 +208,10 @@ type LLM struct {
 	PresencePenalty Opt[float64] `settings:"presence_penalty"`
 	// Seed makes generation reproducible where the provider supports it.
 	Seed Opt[int] `settings:"seed"`
+	// FilterIncompleteUserTurns gates each reply on the model's own verdict of
+	// whether the user had finished speaking. It is set by the turn strategy that
+	// drives the protocol rather than by an application directly.
+	FilterIncompleteUserTurns Opt[bool] `settings:"filter_incomplete_user_turns"`
 }
 
 // TTS is the runtime-updatable settings of a speech synthesis service.

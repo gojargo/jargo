@@ -331,6 +331,14 @@ type Base struct {
 	// one at a time. Nil unless the service was built to run them that way.
 	sequential chan *functionCall
 
+	// Turn-completion gating: the marker protocol the model answers under, and
+	// the state of the response being parsed. Its re-prompt runs on the
+	// session's lifetime, like the tool calls and summaries above.
+	turnCompletion turnCompletionState
+	turnCtx        context.Context
+	turnCancel     context.CancelFunc
+	turnWG         sync.WaitGroup
+
 	// Summary generations in flight. They run on the session's lifetime rather
 	// than the turn's, like the tool calls above: compressing the conversation
 	// must not be abandoned because the turn that crossed the threshold ended.
@@ -450,6 +458,7 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 	}
 	b.callsCtx, b.callsCancel = context.WithCancel(ctx)
 	b.summaryCtx, b.summaryCancel = context.WithCancel(ctx)
+	b.turnCtx, b.turnCancel = context.WithCancel(ctx)
 	if !b.runInParallel {
 		b.sequential = make(chan *functionCall, sequentialQueueDepth)
 		b.callsWG.Go(b.runSequentially)
@@ -486,6 +495,10 @@ func (b *Base) Cleanup(ctx context.Context) error {
 		b.summaryCancel()
 	}
 	b.summaryWG.Wait()
+	if b.turnCancel != nil {
+		b.turnCancel()
+	}
+	b.turnWG.Wait()
 	return b.Base.Cleanup(ctx)
 }
 
@@ -877,6 +890,12 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		b.SetModel(model)
 	}
 
+	if changed.Has("filter_incomplete_user_turns") {
+		on, _ := settings.Get(store, "filter_incomplete_user_turns")
+		enabled, _ := on.(bool)
+		b.SetFilterIncompleteUserTurns(enabled)
+	}
+
 	if changed.Has("system_instruction") {
 		// The application replaced the base prompt, so it is re-read and the
 		// composed instruction rebuilt from it. Rebuilding rather than assigning is
@@ -909,6 +928,9 @@ func (b *Base) settingsStore() any {
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
+	}
+	if b.FilterIncompleteUserTurns() {
+		b.handleTurnCompletionProcessFrame(ctx, f)
 	}
 	switch fr := f.(type) {
 	case *frames.LLMContextFrame:
@@ -947,6 +969,12 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 // Nothing is stamped until something configures the output, which leaves the
 // decision to whatever else in the pipeline may set it on a frame.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	// The gating sees the response-lifecycle frames the service generates before
+	// anything downstream does. They never arrive as input, so this is the only
+	// place they can be intercepted.
+	if b.FilterIncompleteUserTurns() {
+		b.handleTurnCompletionPushFrame(ctx, f)
+	}
 	if skip, ok := b.currentSkipTTS(); ok {
 		// A copy per frame: the frames travel on their own from here, and one
 		// must not be able to change what another says.
@@ -1022,7 +1050,7 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 			return nil
 		}
 		out.WriteString(text)
-		return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
+		return b.pushLLMText(ctx, text)
 	}
 	if err := b.gen.Generate(ctx, convo, emit); err != nil && ctx.Err() == nil {
 		span.RecordError(err)
@@ -1063,7 +1091,7 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 				return nil
 			}
 			preamble.WriteString(t)
-			return b.PushFrame(ctx, frames.NewLLMTextFrame(t), processor.Downstream)
+			return b.pushLLMText(ctx, t)
 		},
 		tool: func(c frames.ToolCall) error {
 			calls = append(calls, c)

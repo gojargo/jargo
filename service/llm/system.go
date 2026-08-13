@@ -65,6 +65,17 @@ func (b *Base) composeSystemInstruction() {
 			parts = append(parts, p)
 		}
 	}
+	b.systemMu.Unlock()
+
+	// The marker protocol is composed on rather than appended, so turning the
+	// gating off takes it back out again.
+	b.turnCompletion.mu.Lock()
+	if b.turnCompletion.enabled {
+		parts = append(parts, b.turnCompletion.config.CompletionInstructions())
+	}
+	b.turnCompletion.mu.Unlock()
+
+	b.systemMu.Lock()
 	composed := strings.Join(parts, "\n\n")
 	b.systemInstruction = composed
 	b.systemMu.Unlock()

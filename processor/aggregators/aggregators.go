@@ -492,6 +492,16 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	if err := a.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
+	if mf, ok := f.(*frames.LLMMarkerFrame); ok {
+		return a.handleMarker(ctx, mf)
+	}
+	return a.route(ctx, f, dir)
+}
+
+// route folds one frame into the turn being aggregated and forwards it. It is
+// split from ProcessFrame so each stays readable: this is the frame taxonomy,
+// ProcessFrame is the sideband handling that runs ahead of it.
+func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
 	case *frames.LLMFullResponseStartFrame:
 		a.openTurn()
@@ -550,6 +560,24 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	// The summarizer watches the conversation from beside it, and sees each
 	// frame once it has gone on, so compressing never delays a turn.
 	a.summarizer.ProcessFrame(ctx, f)
+	return nil
+}
+
+// handleMarker records a sideband marker the LLM service emitted.
+//
+// A marker that stands alone is the whole assistant turn, which is what an
+// incomplete-turn signal is: the spoken reply was suppressed and the marker is
+// the only thing that happened. A marker that does not is the prefix of a reply
+// still being aggregated, so it joins the aggregation and is written with the
+// text as one message.
+func (a *AssistantAggregator) handleMarker(ctx context.Context, fr *frames.LLMMarkerFrame) error {
+	if fr.AppendToContextImmediately {
+		a.context.AddAssistantMessage(fr.Marker)
+		return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
+	}
+	a.mu.Lock()
+	a.aggregation = append(a.aggregation, text.Part{Text: fr.Marker, IncludesInterPartSpaces: false})
+	a.mu.Unlock()
 	return nil
 }
 
