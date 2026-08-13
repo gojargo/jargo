@@ -48,6 +48,7 @@ func (s *LLMTurnCompletionStop) Process(f frames.Frame) ProcessFrameResult {
 func (s *LLMTurnCompletionStop) configureLLM() {
 	var delta settings.LLM
 	delta.FilterIncompleteUserTurns = settings.Set(true)
+	delta.UserTurnCompletionConfig = settings.Set[any](s.config)
 	update := frames.NewLLMUpdateSettingsFrame(&delta)
 	update.ReachInactiveServices = true
 	s.env.push(update, processor.Downstream)

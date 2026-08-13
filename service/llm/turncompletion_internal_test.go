@@ -8,6 +8,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/settings"
 )
 
 // Ported from upstream's turn-completion suite. Upstream drives the mixin by
@@ -695,6 +696,32 @@ func TestIncompleteTimeoutRepromptsTheModel(t *testing.T) {
 	defer svc.turnCompletion.mu.Unlock()
 	if svc.turnCompletion.marker != turnMarkerNone {
 		t.Errorf("marker = %v, want it cleared before the re-prompt ran", svc.turnCompletion.marker)
+	}
+}
+
+// The strategy that drives the protocol configures the service over a settings
+// update once the pipeline is running, so both halves of that update have to
+// land: the enable flag and the configuration it runs under.
+func TestSettingsUpdateEnablesGatingAndCarriesItsConfig(t *testing.T) {
+	svc := New("FakeLLM", generatorFunc(func(context.Context, *frames.LLMContext, Emit) error { return nil }))
+	svc.SetSystemInstruction("Base prompt.")
+
+	var delta settings.LLM
+	delta.FilterIncompleteUserTurns = settings.Set(true)
+	delta.UserTurnCompletionConfig = settings.Set[any](UserTurnCompletionConfig{
+		Instructions:           "Custom turn instructions.",
+		IncompleteShortTimeout: 3 * time.Second,
+	})
+	svc.updateSettings(t.Context(), frames.NewLLMUpdateSettingsFrame(&delta))
+
+	if !svc.FilterIncompleteUserTurns() {
+		t.Error("the update did not enable the gating")
+	}
+	if got := svc.UserTurnCompletionConfig().IncompleteShortTimeout; got != 3*time.Second {
+		t.Errorf("IncompleteShortTimeout = %v, want the configured 3s", got)
+	}
+	if got := svc.SystemInstruction(); got != "Base prompt.\n\nCustom turn instructions." {
+		t.Errorf("SystemInstruction() = %q, want the custom protocol composed on", got)
 	}
 }
 

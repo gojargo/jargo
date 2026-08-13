@@ -212,6 +212,14 @@ type LLM struct {
 	// whether the user had finished speaking. It is set by the turn strategy that
 	// drives the protocol rather than by an application directly.
 	FilterIncompleteUserTurns Opt[bool] `settings:"filter_incomplete_user_turns"`
+	// UserTurnCompletionConfig configures that gating: the protocol taught to the
+	// model, the waits before re-prompting, and the re-prompts themselves. It is
+	// set by the same turn strategy.
+	//
+	// It is typed loosely because the type belongs to the LLM service, which is
+	// built on this package and so cannot be named here. Set it to an
+	// llm.UserTurnCompletionConfig; anything else is reported and ignored.
+	UserTurnCompletionConfig Opt[any] `settings:"user_turn_completion_config"`
 }
 
 // TTS is the runtime-updatable settings of a speech synthesis service.

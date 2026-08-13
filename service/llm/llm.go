@@ -890,6 +890,16 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		b.SetModel(model)
 	}
 
+	if changed.Has("user_turn_completion_config") {
+		v, _ := settings.Get(store, "user_turn_completion_config")
+		if cfg, ok := v.(UserTurnCompletionConfig); ok {
+			b.SetUserTurnCompletionConfig(cfg)
+		} else if v != nil {
+			slog.Error("the turn-completion configuration is not the expected type; ignoring it",
+				"service", b.Name(), "type", fmt.Sprintf("%T", v))
+		}
+	}
+
 	if changed.Has("filter_incomplete_user_turns") {
 		on, _ := settings.Get(store, "filter_incomplete_user_turns")
 		enabled, _ := on.(bool)
