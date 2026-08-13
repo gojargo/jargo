@@ -6,12 +6,15 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gojargo/jargo/bus"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
+	"github.com/gojargo/jargo/registry"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -1161,6 +1164,332 @@ func TestSequentialIsPerJobName(t *testing.T) {
 		defer mu.Unlock()
 		return running == 0
 	})
+}
+
+// A worker built without a name is named after its own type, which suits one
+// taking no part in worker-to-worker messaging.
+func TestWorkerWithoutANameIsNamedAfterItsType(t *testing.T) {
+	t.Parallel()
+
+	first := &stubWorker{}
+	first.Base = workers.New(workers.Config{}, first)
+	second := &stubWorker{}
+	second.Base = workers.New(workers.Config{}, second)
+
+	if !strings.HasPrefix(first.Name(), "stubWorker#") {
+		t.Errorf("name = %q, want it named after the worker's type", first.Name())
+	}
+	if first.Name() == second.Name() {
+		t.Errorf("two unnamed workers share the name %q, want them told apart", first.Name())
+	}
+}
+
+func TestBaseActivationArgsCarryTheirMetadata(t *testing.T) {
+	t.Parallel()
+
+	metadata := map[string]any{"locale": "en"}
+	m := workers.BaseActivationArgs{Metadata: metadata}.ToMap()
+
+	if !reflect.DeepEqual(m["metadata"], metadata) {
+		t.Errorf("ToMap() = %v, want it to carry the metadata", m)
+	}
+	if got := workers.BaseActivationArgsFrom(m); !reflect.DeepEqual(got.Metadata, metadata) {
+		t.Errorf("read back = %v, want the metadata that was sent", got.Metadata)
+	}
+}
+
+// The arguments leave out what is unset, and reading them back ignores anything
+// they do not describe.
+func TestBaseActivationArgsLeaveOutWhatIsUnset(t *testing.T) {
+	t.Parallel()
+
+	if m := (workers.BaseActivationArgs{}).ToMap(); len(m) != 0 {
+		t.Errorf("ToMap() = %v, want nothing for arguments that carry nothing", m)
+	}
+
+	got := workers.BaseActivationArgsFrom(map[string]any{"metadata": "not a map", "other": 1})
+	if got.Metadata != nil {
+		t.Errorf("metadata = %v, want none read out of arguments that describe none", got.Metadata)
+	}
+}
+
+func TestActivateWorkerCarriesItsArgs(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	worker := newStubWorker("worker")
+	env.setup(worker)
+	env.register("target")
+
+	metadata := map[string]any{"locale": "en"}
+	worker.ActivateWorker(env.ctx, "target", workers.ActivateOptions{
+		Args: workers.BaseActivationArgs{Metadata: metadata},
+	})
+
+	msgs := await[*bus.ActivateWorkerMessage](t, env.recorder, 1)
+	if msgs[0].To != "target" {
+		t.Errorf("the message went to %q, want target", msgs[0].To)
+	}
+	if !reflect.DeepEqual(msgs[0].Args["metadata"], metadata) {
+		t.Errorf("args = %v, want them to carry the metadata", msgs[0].Args)
+	}
+}
+
+// A worker already in a tree stays where it is, so adding it again somewhere
+// else does not move it.
+func TestAddWorkersLeavesAChildThatHasAParent(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	first := newStubWorker("first")
+	second := newStubWorker("second")
+	env.setup(first)
+	env.setup(second)
+	child := newStubWorker("child")
+
+	first.AddWorkers(env.ctx, child)
+	second.AddWorkers(env.ctx, child)
+
+	if got := child.Parent(); got != "first" {
+		t.Errorf("parent = %q, want the worker that added the child first to keep it", got)
+	}
+	if got := second.Children(); len(got) != 0 {
+		t.Errorf("the second worker took %d children, want none", len(got))
+	}
+}
+
+func TestAddWorkersUnwatchedStillParentsTheChild(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	child := newStubWorker("child")
+
+	parent.AddWorkersUnwatched(env.ctx, child)
+
+	if got := child.Parent(); got != "parent" {
+		t.Errorf("parent = %q, want parent", got)
+	}
+	if got := parent.Children(); len(got) != 1 {
+		t.Errorf("got %d children, want the one that was added", len(got))
+	}
+}
+
+// A worker that stops calls off the jobs it asked others for, so nothing is
+// left running for a worker that has gone.
+func TestStopCallsOffTheJobsItAskedFor(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	env.setup(newStubWorker("worker"))
+
+	if _, err := parent.RequestJob(env.ctx, "worker", jobcontext.Request{}); err != nil {
+		t.Fatalf("request job: %v", err)
+	}
+	env.recorder.clear()
+
+	parent.Stop(env.ctx)
+
+	cancels := await[*bus.JobCancelMessage](t, env.recorder, 1)
+	if !strings.Contains(cancels[0].Reason, "stopped") {
+		t.Errorf("reason = %q, want it to say the worker stopped", cancels[0].Reason)
+	}
+}
+
+// A worker that stops answers the jobs it was working on, so whoever asked is
+// not left waiting on a worker that has stopped.
+func TestStopAnswersTheJobsItIsWorkingOnAsCancelled(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	worker := newSlowWorker("worker")
+	env.setup(worker)
+
+	if _, err := parent.RequestJob(env.ctx, "worker", jobcontext.Request{}); err != nil {
+		t.Fatalf("request job: %v", err)
+	}
+	select {
+	case <-worker.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the worker never started the job")
+	}
+	env.recorder.clear()
+
+	worker.Stop(env.ctx)
+
+	responses := await[*bus.JobResponseMessage](t, env.recorder, 1)
+	if responses[0].Status != jobcontext.JobCancelled {
+		t.Errorf("status = %v, want the job answered as canceled", responses[0].Status)
+	}
+	select {
+	case <-worker.Finished():
+	default:
+		t.Error("the worker did not report itself finished after stopping")
+	}
+	eventually(t, "the handler still running is stopped", worker.canceled)
+}
+
+// A root worker reports an error to everyone, over the network.
+func TestSendBusErrorMessageFromARootWorker(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	worker := newStubWorker("worker")
+	env.setup(worker)
+
+	worker.SendBusErrorMessage(env.ctx, "it went wrong")
+
+	msgs := await[*bus.WorkerErrorMessage](t, env.recorder, 1)
+	if msgs[0].Error != "it went wrong" {
+		t.Errorf("error = %q, want the one that was reported", msgs[0].Error)
+	}
+	if local := of[*bus.WorkerLocalErrorMessage](env.recorder); len(local) != 0 {
+		t.Errorf("a root worker sent %d local errors, want none", len(local))
+	}
+}
+
+// A child reports an error to its parent, in this process only.
+func TestSendBusErrorMessageFromAChild(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	child := newStubWorker("child")
+	env.setup(child)
+	parent.AddWorkers(env.ctx, child)
+	env.recorder.clear()
+
+	child.SendBusErrorMessage(env.ctx, "it went wrong")
+
+	msgs := await[*bus.WorkerLocalErrorMessage](t, env.recorder, 1)
+	if msgs[0].Error != "it went wrong" {
+		t.Errorf("error = %q, want the one that was reported", msgs[0].Error)
+	}
+	if global := of[*bus.WorkerErrorMessage](env.recorder); len(global) != 0 {
+		t.Errorf("a child sent %d errors over the network, want none", len(global))
+	}
+}
+
+// A child's error reaches the parent that added it.
+func TestWorkerErrorReachesTheParent(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	child := newStubWorker("child")
+	env.setup(child)
+	parent.AddWorkers(env.ctx, child)
+
+	var mu sync.Mutex
+	var got []registry.WorkerErrorData
+	events.On(parent.Events(), workers.EventWorkerFailed,
+		func(_ context.Context, data registry.WorkerErrorData) {
+			mu.Lock()
+			got = append(got, data)
+			mu.Unlock()
+		})
+
+	child.SendBusErrorMessage(env.ctx, "it went wrong")
+
+	eventually(t, "the parent is told its child failed", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) == 1
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got[0].WorkerName != "child" {
+		t.Errorf("worker = %q, want child", got[0].WorkerName)
+	}
+	if got[0].Error != "it went wrong" {
+		t.Errorf("error = %q, want the one the child reported", got[0].Error)
+	}
+}
+
+// An error from a worker this one did not add is not its business.
+func TestWorkerErrorFromAnotherWorkerIsIgnored(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	other := newStubWorker("other")
+	env.setup(other)
+
+	var mu sync.Mutex
+	fired := 0
+	parent.Add(workers.EventWorkerFailed, func(_ context.Context, _ any, _ ...any) {
+		mu.Lock()
+		fired++
+		mu.Unlock()
+	})
+
+	other.SendBusErrorMessage(env.ctx, "it went wrong")
+	settle()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if fired != 0 {
+		t.Errorf("the worker was told %d times about one that is not its child, want 0", fired)
+	}
+}
+
+// Asking a worker how far along it is reaches that worker.
+func TestRequestJobUpdateReachesTheWorker(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+
+	parent.RequestJobUpdate(env.ctx, "job-1", "worker")
+
+	msgs := await[*bus.JobUpdateRequestMessage](t, env.recorder, 1)
+	if msgs[0].JobID != "job-1" {
+		t.Errorf("job id = %q, want job-1", msgs[0].JobID)
+	}
+	if msgs[0].To != "worker" {
+		t.Errorf("the request went to %q, want worker", msgs[0].To)
+	}
+}
+
+// A worker-ready handler runs when the worker it watches becomes ready.
+func TestWorkerReadyHandlerRunsForTheWatchedWorker(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	var mu sync.Mutex
+	var got []registry.WorkerReadyData
+	watcher := newStubWorker("watcher")
+	watcher.HandleWorkerReady("watched", func(_ context.Context, data registry.WorkerReadyData) {
+		mu.Lock()
+		got = append(got, data)
+		mu.Unlock()
+	})
+	env.setup(watcher)
+	watcher.Start(env.ctx)
+
+	env.register("watched")
+
+	eventually(t, "the handler runs for the worker it watches", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) == 1
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got[0].WorkerName != "watched" {
+		t.Errorf("worker = %q, want watched", got[0].WorkerName)
+	}
 }
 
 // giveJob hands a worker a job request from "parent", as the bus would.
