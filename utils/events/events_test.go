@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -277,5 +278,75 @@ func TestAHandlerMayRaiseAnotherEvent(t *testing.T) {
 	case <-second:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the event raised from a handler never fired")
+	}
+}
+
+// A typed handler is written against what the event carries, rather than
+// against a slice of any.
+func TestOnReadsTheValueTheEventCarries(t *testing.T) {
+	s := &source{}
+	s.Register("on_thing", false)
+
+	var mu sync.Mutex
+	var got []string
+	On(&s.Registry, "on_thing", func(_ context.Context, v string) {
+		mu.Lock()
+		got = append(got, v)
+		mu.Unlock()
+	})
+
+	s.Call(t.Context(), "on_thing", s, "first")
+	s.Call(t.Context(), "on_thing", s, "second")
+	s.Cleanup(t.Context())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"first", "second"}; !slices.Equal(got, want) {
+		t.Errorf("handler saw %v, want %v", got, want)
+	}
+}
+
+// A firing carrying something else is reported and skipped, rather than
+// reaching a handler that cannot read it.
+func TestOnSkipsAValueOfAnotherType(t *testing.T) {
+	s := &source{}
+	s.Register("on_thing", false)
+
+	var mu sync.Mutex
+	called := 0
+	On(&s.Registry, "on_thing", func(context.Context, string) {
+		mu.Lock()
+		called++
+		mu.Unlock()
+	})
+
+	s.Call(t.Context(), "on_thing", s, 42)
+	s.Cleanup(t.Context())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if called != 0 {
+		t.Errorf("the handler ran %d times for a value it cannot read, want 0", called)
+	}
+}
+
+// An event that carries nothing says only that something happened.
+func TestOnSignalRunsForAnEventCarryingNothing(t *testing.T) {
+	s := &source{}
+	s.Register("on_thing", false)
+
+	fired := make(chan struct{})
+	var once sync.Once
+	OnSignal(&s.Registry, "on_thing", func(context.Context) {
+		once.Do(func() { close(fired) })
+	})
+
+	s.Call(t.Context(), "on_thing", s)
+	s.Cleanup(t.Context())
+
+	select {
+	case <-fired:
+	default:
+		t.Error("the handler never ran")
 	}
 }

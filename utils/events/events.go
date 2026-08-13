@@ -144,6 +144,41 @@ func (r *Registry) Add(name string, h Handler) HandlerID {
 	return id
 }
 
+// On attaches a typed handler to an event carrying a single value, which is the
+// shape of most of them, and returns the id that removes it again.
+//
+// It is Add with the value already read out of the arguments, so a handler is
+// written against what the event carries rather than against a slice of any. A
+// firing that carries something else is reported and skipped, since a handler
+// that cannot read its own event would otherwise do so silently.
+//
+//	events.On(&worker.Registry, workers.EventJobCompleted,
+//	    func(ctx context.Context, result jobcontext.GroupResponse) { … })
+func On[T any](r *Registry, name string, fn func(ctx context.Context, value T)) HandlerID {
+	return r.Add(name, func(ctx context.Context, _ any, args ...any) {
+		if len(args) == 0 {
+			slog.Warn("event carries no value for a typed handler", "event", name)
+			return
+		}
+		value, ok := args[0].(T)
+		if !ok {
+			slog.Warn("event carries a value of another type than the handler reads",
+				"event", name,
+				"carried", fmt.Sprintf("%T", args[0]),
+				"wanted", fmt.Sprintf("%T", value))
+			return
+		}
+		fn(ctx, value)
+	})
+}
+
+// OnSignal attaches a handler to an event that carries nothing, and returns the
+// id that removes it again. Such an event says only that something happened: a
+// pipeline went idle, a heartbeat stopped arriving.
+func OnSignal(r *Registry, name string, fn func(ctx context.Context)) HandlerID {
+	return r.Add(name, func(ctx context.Context, _ any, _ ...any) { fn(ctx) })
+}
+
 // Remove detaches the handler Add returned id for. It is a no-op if the event
 // was never declared, or the handler was already removed, or id is zero.
 func (r *Registry) Remove(name string, id HandlerID) {
