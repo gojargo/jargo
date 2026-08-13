@@ -199,13 +199,20 @@ directions never share a frame.
 ## Runner
 
 ```go
-runner := pipeline.NewRunner()
-err := runner.Run(ctx, task)
+runner := workers.NewRunner(workers.RunnerConfig{})
+runner.AddWorkers(ctx, worker)
+err := runner.Run(ctx, workers.RunOptions{})
 ```
 
-Runs the task and cancels it on `SIGINT`/`SIGTERM`. For a server that runs one
-task per connection, call `task.Run` directly and cancel on connection close,
-which is what the examples do:
+The runner owns the bus its workers talk over, the registry they find each
+other through, and the goroutines they run on. It ends once every root worker
+has finished, so a bot with one pipeline ends when that pipeline does, and it
+cancels its workers on `SIGINT` (add `HandleTerminate` for `SIGTERM`), which
+drains a `CancelFrame` through each pipeline rather than dropping it where it
+stands.
+
+For a server that runs one worker per connection, call `worker.Run` directly
+and cancel on connection close, which is what the examples do:
 
 ```go
 ctx, cancel := context.WithCancel(context.Background())

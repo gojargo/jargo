@@ -43,6 +43,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Base.Cancel`, which is what an idle pipeline uses to take the rest of the
   session down with it.
 
+- **`pipeline.Runner` is gone; use `workers.Runner`.** Running one pipeline and
+  running a session of workers were the same job done twice, and only the
+  worker runner knows about the bus, the registry and the other workers. It
+  cancels on `SIGINT` by default, where the old runner also took `SIGTERM`; ask
+  for that with `HandleTerminate`.
+
 - **`flows.Watcher` watches through the event registry.** It takes `Events()
   *events.Registry` in place of `OnReachedDownstream(fn)`.
 
