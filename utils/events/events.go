@@ -200,35 +200,3 @@ func run(ctx context.Context, name string, fn Handler, source any, args []any) {
 	}()
 	fn(ctx, source, args...)
 }
-
-// On attaches a handler to an event that carries exactly one argument, which is
-// the shape of nearly every event, and gives it that argument's type:
-//
-//	events.On(&s.Registry, "on_summary_applied",
-//	    func(ctx context.Context, s *Summarizer, e SummaryApplied) { … })
-//
-// It reports rather than panics when the event fires with an argument of another
-// type, or with none, so a mismatch between what an event carries and what a
-// handler expects is caught at the one call rather than taking the process down.
-func On[S any, T any](r *Registry, name string, fn func(ctx context.Context, source S, arg T)) HandlerID {
-	return r.Add(name, func(ctx context.Context, source any, args ...any) {
-		src, ok := source.(S)
-		if !ok {
-			slog.Error("event source is not the expected type",
-				"event", name, "got", fmt.Sprintf("%T", source), "want", fmt.Sprintf("%T", *new(S)))
-			return
-		}
-		if len(args) != 1 {
-			slog.Error("event does not carry exactly one argument",
-				"event", name, "args", len(args))
-			return
-		}
-		arg, ok := args[0].(T)
-		if !ok {
-			slog.Error("event argument is not the expected type",
-				"event", name, "got", fmt.Sprintf("%T", args[0]), "want", fmt.Sprintf("%T", *new(T)))
-			return
-		}
-		fn(ctx, src, arg)
-	})
-}

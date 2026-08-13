@@ -187,35 +187,3 @@ func TestAHandlerMayChangeTheHandlersWhileTheEventFires(t *testing.T) {
 
 	s.Call(t.Context(), "on_thing", s)
 }
-
-func TestOnGivesTheHandlerItsArgumentType(t *testing.T) {
-	s := &source{}
-	s.Register("on_thing", true)
-
-	var got string
-	On(&s.Registry, "on_thing", func(_ context.Context, _ *source, arg string) { got = arg })
-
-	s.Call(t.Context(), "on_thing", s, "payload")
-
-	if got != "payload" {
-		t.Errorf("the typed handler received %q, want %q", got, "payload")
-	}
-}
-
-// A mismatch between what the event carries and what the handler expects is
-// reported at the one call rather than taking the process down.
-func TestOnReportsAMismatchedArgumentRatherThanPanicking(t *testing.T) {
-	s := &source{}
-	s.Register("on_thing", true)
-
-	called := false
-	On(&s.Registry, "on_thing", func(_ context.Context, _ *source, _ string) { called = true })
-
-	s.Call(t.Context(), "on_thing", s, 42)
-	s.Call(t.Context(), "on_thing", s)
-	s.Call(t.Context(), "on_thing", s, "a", "b")
-
-	if called {
-		t.Error("the typed handler ran with an argument it did not declare")
-	}
-}

@@ -331,6 +331,13 @@ type Base struct {
 	// one at a time. Nil unless the service was built to run them that way.
 	sequential chan *functionCall
 
+	// Summary generations in flight. They run on the session's lifetime rather
+	// than the turn's, like the tool calls above: compressing the conversation
+	// must not be abandoned because the turn that crossed the threshold ended.
+	summaryCtx    context.Context
+	summaryCancel context.CancelFunc
+	summaryWG     sync.WaitGroup
+
 	// Notifications about the calls of a response, set by the application.
 	eventsMu   sync.RWMutex
 	onStarted  FunctionCallsHandler
@@ -442,6 +449,7 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 		return err
 	}
 	b.callsCtx, b.callsCancel = context.WithCancel(ctx)
+	b.summaryCtx, b.summaryCancel = context.WithCancel(ctx)
 	if !b.runInParallel {
 		b.sequential = make(chan *functionCall, sequentialQueueDepth)
 		b.callsWG.Go(b.runSequentially)
@@ -474,6 +482,10 @@ func (b *Base) Cleanup(ctx context.Context) error {
 		b.callsCancel()
 	}
 	b.callsWG.Wait()
+	if b.summaryCancel != nil {
+		b.summaryCancel()
+	}
+	b.summaryWG.Wait()
 	return b.Base.Cleanup(ctx)
 }
 
@@ -908,6 +920,9 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		if err := b.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
+		return nil
+	case *frames.LLMContextSummaryRequestFrame:
+		b.handleSummaryRequest(fr)
 		return nil
 	case *frames.LLMConfigureOutputFrame:
 		b.setSkipTTS(fr.SkipTTS)

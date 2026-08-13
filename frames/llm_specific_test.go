@@ -1,7 +1,6 @@
 package frames_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -65,47 +64,5 @@ func TestMessagesForCopies(t *testing.T) {
 
 	if convo.Messages()[0].Text != "hello" {
 		t.Error("the conversation changed under the caller, want it left as it was")
-	}
-}
-
-// TestEstimatedTokensCountsNativeMessages checks a message in a provider's own
-// format is not counted as nothing, which would let a conversation of them grow
-// past the point where it should have been compacted.
-func TestEstimatedTokensCountsNativeMessages(t *testing.T) {
-	convo := frames.NewLLMContext("")
-	empty := convo.EstimatedTokens()
-
-	convo.AddMessage(frames.NewLLMSpecificMessage("openai", "a message long enough to count"))
-	if convo.EstimatedTokens() <= empty {
-		t.Error("a provider's own message counted as nothing, want it counted")
-	}
-}
-
-// TestCompactDoesNotCutOnANativeMessage checks compaction never treats a
-// message it cannot read as a turn boundary, even when its role happens to read
-// as a user turn. Cutting there would drop a prefix on a point nothing verified
-// was a clean one.
-func TestCompactDoesNotCutOnANativeMessage(t *testing.T) {
-	convo := frames.NewLLMContext("")
-	convo.AddUserMessage("one")
-	convo.AddAssistantMessage("a")
-	// The only candidate boundary in range, and one this cannot read.
-	native := frames.NewLLMSpecificMessage("openai", "native")
-	native.Role = frames.RoleUser
-	convo.AddMessage(native)
-	convo.AddAssistantMessage("b")
-
-	compacted, err := convo.Compact(
-		t.Context(), 1,
-		func(context.Context, string, []frames.Message) (string, error) { return "summary", nil },
-	)
-	if err != nil {
-		t.Fatalf("Compact: %v", err)
-	}
-	if compacted {
-		t.Error("compaction cut on a message it cannot read, want it to find no boundary")
-	}
-	if got := convo.Messages(); len(got) != 4 {
-		t.Errorf("messages = %d, want all four kept", len(got))
 	}
 }
