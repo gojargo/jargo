@@ -507,9 +507,21 @@ func TestUrgentResponseHasSystemPriority(t *testing.T) {
 	msgBus := bus.NewAsyncQueueBus()
 	reg := newRegistry()
 
-	parent := newRecordingWorker("parent")
+	parent := newStubWorker("parent")
 	parent.Attach(ctx, reg, msgBus.Bus)
 	reg.Register(ctx, readyData("parent"))
+
+	var mu sync.Mutex
+	var received []bus.Message
+	parent.Add(workers.EventBusMessage, func(_ context.Context, _ any, args ...any) {
+		m, ok := args[0].(bus.Message)
+		if !ok {
+			return
+		}
+		mu.Lock()
+		received = append(received, m)
+		mu.Unlock()
+	})
 
 	// Queued before dispatch starts: the data messages first, then the urgent
 	// answer behind them.
@@ -529,12 +541,14 @@ func TestUrgentResponseHasSystemPriority(t *testing.T) {
 	defer msgBus.Stop()
 
 	eventually(t, "the messages are delivered", func() bool {
-		return len(parent.messages()) >= 4
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) >= 4
 	})
 
-	if received := parent.messages(); received[0] == nil {
-		t.Fatal("no message was delivered")
-	} else if _, ok := received[0].(*bus.JobResponseUrgentMessage); !ok {
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := received[0].(*bus.JobResponseUrgentMessage); !ok {
 		t.Errorf("first message = %T, want the urgent answer ahead of the queued data", received[0])
 	}
 }

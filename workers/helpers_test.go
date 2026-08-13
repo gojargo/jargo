@@ -269,37 +269,5 @@ func readyData(name string) registry.WorkerReadyData {
 	return registry.WorkerReadyData{WorkerName: name, Runner: runnerName}
 }
 
-// recordingWorker keeps the bus messages it is delivered, in the order they
-// arrive.
-//
-// Upstream observes the same order through the on_bus_message event. jargo runs
-// an asynchronous event's handlers on a goroutine apiece, so the order they
-// record in is not the order the messages arrived in; overriding the handler
-// itself observes delivery directly, which is what the ordering is about.
-type recordingWorker struct {
-	*workers.Base
-	mu  sync.Mutex
-	got []bus.Message
-}
-
-func newRecordingWorker(name string) *recordingWorker {
-	w := &recordingWorker{}
-	w.Base = workers.New(workers.Config{Name: name}, w)
-	return w
-}
-
-func (w *recordingWorker) OnBusMessage(ctx context.Context, m bus.Message) {
-	w.mu.Lock()
-	w.got = append(w.got, m)
-	w.mu.Unlock()
-	w.Base.OnBusMessage(ctx, m)
-}
-
-func (w *recordingWorker) messages() []bus.Message {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return append([]bus.Message(nil), w.got...)
-}
-
 // errBlockFailed is what a test block returns when it means to fail.
 var errBlockFailed = errors.New("something went wrong")

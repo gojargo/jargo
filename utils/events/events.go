@@ -12,9 +12,19 @@
 // An event is either synchronous or asynchronous, fixed when it is declared. A
 // synchronous event runs its handlers inline, in the order they were added, and
 // Call returns only once they have all finished; the object raising it is
-// therefore waiting on them. An asynchronous event runs each handler on its own
-// goroutine and Call returns immediately. Cleanup waits for the handlers still
-// running.
+// therefore waiting on them. An asynchronous event queues its handlers and Call
+// returns straight away, leaving the object free to carry on. Cleanup waits for
+// the handlers still queued or running.
+//
+// The queue behind an asynchronous event is ordered, and one handler runs at a
+// time. That matters: a handler is very often accumulating something, and it
+// would otherwise see two firings of the same event in either order, or see
+// them at once and have to lock against itself. So a handler observes the
+// events of one object in the order that object raised them, and never runs
+// beside another handler of the same object.
+//
+// It is stricter in one place: a handler that blocks holds up the handlers
+// queued behind it. A blocking handler is worth avoiding for that reason.
 //
 // A handler that panics is reported and does not bring down the object that
 // raised the event, nor stop the other handlers for it.
@@ -73,9 +83,27 @@ type Registry struct {
 	events map[string]*event
 	nextID HandlerID
 
-	// running counts the goroutines started for asynchronous handlers, so
-	// Cleanup can wait for them.
-	running sync.WaitGroup
+	// queue holds the asynchronous handler calls waiting to run, in the order
+	// they were raised, and dispatching reports whether a goroutine is working
+	// through them. The goroutine runs only while there is something queued.
+	queue       []call
+	dispatching bool
+	// inFlight counts the queued call being run, if any, so Cleanup can tell an
+	// empty queue from a finished one.
+	inFlight int
+	// idle is closed once the queue has drained, and exists only while
+	// something is waiting for that.
+	idle chan struct{}
+}
+
+// call is one handler waiting to be run, with everything the firing carried.
+type call struct {
+	//nolint:containedctx // the context of the firing, carried to the handler
+	ctx    context.Context
+	name   string
+	fn     Handler
+	source any
+	args   []any
 }
 
 // Register declares an event this object raises. sync fixes how its handlers
@@ -142,8 +170,12 @@ func (r *Registry) Remove(name string, id HandlerID) {
 // declared interest in it.
 //
 // For a synchronous event Call runs the handlers inline and returns once they
-// have all finished. For an asynchronous one it starts a goroutine per handler
-// and returns straight away; Cleanup waits for those.
+// have all finished. For an asynchronous one it queues them and returns straight
+// away; they run one at a time, in the order they were queued, and Cleanup waits
+// for them.
+//
+// Call never blocks on an asynchronous event, so a handler is free to raise
+// another event on the same object.
 func (r *Registry) Call(ctx context.Context, name string, source any, args ...any) {
 	r.mu.Lock()
 	e, ok := r.events[name]
@@ -155,32 +187,79 @@ func (r *Registry) Call(ctx context.Context, name string, source any, args ...an
 	// slice would otherwise be rewritten while it is being walked.
 	handlers := append([]registered(nil), e.handlers...)
 	isSync := e.sync
-	r.mu.Unlock()
 
-	for _, h := range handlers {
-		if isSync {
+	if isSync {
+		r.mu.Unlock()
+		for _, h := range handlers {
 			run(ctx, name, h.fn, source, args)
-			continue
 		}
-		r.running.Add(1)
-		go func(fn Handler) {
-			defer r.running.Done()
-			run(ctx, name, fn, source, args)
-		}(h.fn)
+		return
+	}
+
+	// Queued under the lock, which is what puts the handlers of two firings in
+	// the order the object raised them.
+	for _, h := range handlers {
+		r.queue = append(r.queue, call{ctx: ctx, name: name, fn: h.fn, source: source, args: args})
+	}
+	if !r.dispatching && len(r.queue) > 0 {
+		r.dispatching = true
+		go r.dispatch()
+	}
+	r.mu.Unlock()
+}
+
+// dispatch runs the queued handlers one at a time until the queue is empty, and
+// then returns. The next Call starts it again.
+func (r *Registry) dispatch() {
+	for {
+		r.mu.Lock()
+		if len(r.queue) == 0 {
+			r.dispatching = false
+			r.signalIdleLocked()
+			r.mu.Unlock()
+			return
+		}
+		next := r.queue[0]
+		r.queue = r.queue[1:]
+		r.inFlight++
+		r.mu.Unlock()
+
+		run(next.ctx, next.name, next.fn, next.source, next.args)
+
+		r.mu.Lock()
+		r.inFlight--
+		r.mu.Unlock()
 	}
 }
 
-// Cleanup waits for the handlers of asynchronous events that are still running.
-// Call it when the object raising the events is done with, so a handler is not
-// left running past the thing it was observing.
+// signalIdleLocked tells whoever is waiting that the queue has drained. The
+// caller holds r.mu.
+func (r *Registry) signalIdleLocked() {
+	if len(r.queue) == 0 && r.inFlight == 0 && r.idle != nil {
+		close(r.idle)
+		r.idle = nil
+	}
+}
+
+// Cleanup waits for the handlers of asynchronous events that are still queued or
+// running. Call it when the object raising the events is done with, so a handler
+// is not left running past the thing it was observing.
+//
+// Do not call it from a handler: it would be waiting for itself.
 func (r *Registry) Cleanup(ctx context.Context) {
-	done := make(chan struct{})
-	go func() {
-		r.running.Wait()
-		close(done)
-	}()
+	r.mu.Lock()
+	if len(r.queue) == 0 && r.inFlight == 0 {
+		r.mu.Unlock()
+		return
+	}
+	if r.idle == nil {
+		r.idle = make(chan struct{})
+	}
+	idle := r.idle
+	r.mu.Unlock()
+
 	select {
-	case <-done:
+	case <-idle:
 	case <-ctx.Done():
 	}
 }

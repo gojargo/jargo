@@ -113,8 +113,8 @@ func TestSynchronousEventIsAwaited(t *testing.T) {
 	}
 }
 
-// An asynchronous event runs each handler on its own goroutine, and Cleanup is
-// what waits for them.
+// An asynchronous event queues its handlers rather than running them inline,
+// and Cleanup is what waits for them.
 func TestAsynchronousEventIsAwaitedByCleanup(t *testing.T) {
 	s := &source{}
 	s.Register("on_thing", false)
@@ -186,4 +186,96 @@ func TestAHandlerMayChangeTheHandlersWhileTheEventFires(t *testing.T) {
 	})
 
 	s.Call(t.Context(), "on_thing", s)
+}
+
+// A handler is very often accumulating something, so it must see the firings of
+// one object in the order that object raised them.
+func TestAsynchronousFiringsReachAHandlerInOrder(t *testing.T) {
+	s := &source{}
+	s.Register("on_thing", false)
+
+	var mu sync.Mutex
+	var got []int
+	s.Add("on_thing", func(_ context.Context, _ any, args ...any) {
+		mu.Lock()
+		got = append(got, args[0].(int)) //nolint:forcetypeassert // the event carries what this test passed
+		mu.Unlock()
+	})
+
+	const firings = 50
+	for i := range firings {
+		s.Call(t.Context(), "on_thing", s, i)
+	}
+	s.Cleanup(t.Context())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != firings {
+		t.Fatalf("the handler saw %d of %d firings", len(got), firings)
+	}
+	for i, n := range got {
+		if n != i {
+			t.Fatalf("firing %d arrived at position %d, want them in the order they were raised: %v", n, i, got)
+		}
+	}
+}
+
+// The handlers of one object run one at a time, so a handler need not lock
+// against another handler of the same object.
+func TestAsynchronousHandlersDoNotRunAtOnce(t *testing.T) {
+	s := &source{}
+	s.Register("on_thing", false)
+
+	var mu sync.Mutex
+	running, maxRunning := 0, 0
+	for range 4 {
+		s.Add("on_thing", func(context.Context, any, ...any) {
+			mu.Lock()
+			running++
+			maxRunning = max(maxRunning, running)
+			mu.Unlock()
+
+			time.Sleep(5 * time.Millisecond)
+
+			mu.Lock()
+			running--
+			mu.Unlock()
+		})
+	}
+
+	for range 3 {
+		s.Call(t.Context(), "on_thing", s)
+	}
+	s.Cleanup(t.Context())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if maxRunning != 1 {
+		t.Errorf("%d handlers ran at once, want them one at a time", maxRunning)
+	}
+}
+
+// Firing an asynchronous event never waits for the handlers, so a handler is
+// free to raise another event on the object it is handling one for.
+func TestAHandlerMayRaiseAnotherEvent(t *testing.T) {
+	s := &source{}
+	s.Register("on_first", false)
+	s.Register("on_second", false)
+
+	second := make(chan struct{})
+	s.Add("on_first", func(ctx context.Context, _ any, _ ...any) {
+		s.Call(ctx, "on_second", s)
+	})
+	var once sync.Once
+	s.Add("on_second", func(context.Context, any, ...any) {
+		once.Do(func() { close(second) })
+	})
+
+	s.Call(t.Context(), "on_first", s)
+
+	select {
+	case <-second:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the event raised from a handler never fired")
+	}
 }
