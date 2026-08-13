@@ -200,7 +200,11 @@ func dialTuned(
 		}
 		c.tr = tr
 		c.tap = newTap()
+		// No RTVI: what is under test is the audio the transport writes, and an
+		// RTVI processor would put its own client messages on the same socket.
+		noRTVI := false
 		tp := pipeline.WorkerConfig{
+			EnableRTVI: &noRTVI,
 			Params: pipeline.Params{
 				AudioInSampleRate:  8000,
 				AudioOutSampleRate: 8000,

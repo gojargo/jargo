@@ -138,14 +138,13 @@ type BridgedWorker interface {
 	// up rather than when it is built, so the worker need only be attached by
 	// then.
 	Bus() *Bus
-	// WorkerName is the worker's name, carried as the source of what the edge
-	// sends.
-	WorkerName() string
+	// Name is the worker's name, carried as the source of what the edge sends.
+	Name() string
 	// Active reports whether the worker is active. An inactive worker takes no
 	// frames off the bus.
 	Active() bool
 	// QueueFrame hands a frame to the worker's own queue.
-	QueueFrame(ctx context.Context, f frames.Frame, dir processor.Direction)
+	QueueFrame(f frames.Frame, dir ...processor.Direction)
 }
 
 // EdgeConfig configures an EdgeProcessor.
@@ -211,7 +210,7 @@ func (p *EdgeProcessor) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 	}
 
 	m := &FrameMessage{Frame: f, Direction: dir}
-	m.From = p.cfg.Worker.WorkerName()
+	m.From = p.cfg.Worker.Name()
 	p.cfg.Worker.Bus().Send(ctx, m)
 	return nil
 }
@@ -222,7 +221,7 @@ func (p *EdgeProcessor) OnBusMessage(ctx context.Context, m Message) {
 	if !ok {
 		return
 	}
-	if fm.Source() == p.cfg.Worker.WorkerName() {
+	if fm.Source() == p.cfg.Worker.Name() {
 		return
 	}
 	// This edge captures one direction and injects the other.
@@ -232,7 +231,7 @@ func (p *EdgeProcessor) OnBusMessage(ctx context.Context, m Message) {
 	if !p.cfg.Worker.Active() {
 		return
 	}
-	if fm.Target() != "" && fm.Target() != p.cfg.Worker.WorkerName() {
+	if fm.Target() != "" && fm.Target() != p.cfg.Worker.Name() {
 		return
 	}
 	if len(p.cfg.Bridges) > 0 && !slices.Contains(p.cfg.Bridges, fm.Bridge) {
@@ -240,7 +239,7 @@ func (p *EdgeProcessor) OnBusMessage(ctx context.Context, m Message) {
 	}
 	// Through the worker's own queue rather than pushed from here, so what
 	// arrives from the bus is ordered with the frames the worker queues itself.
-	p.cfg.Worker.QueueFrame(ctx, fm.Frame, fm.Direction)
+	p.cfg.Worker.QueueFrame(fm.Frame, fm.Direction)
 }
 
 // excluded reports whether f is of the same concrete type as one of the

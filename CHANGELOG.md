@@ -14,6 +14,38 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`pipeline.Task` is now `pipeline.Worker`, and it is a worker.** A pipeline is
+  one participant in a session rather than the whole of it, so the thing driving
+  it is addressed by name, becomes ready when its pipeline is up, is activated
+  and deactivated over the bus, and can exchange long-running jobs with other
+  workers. `NewTask` is `NewWorker`, and its configuration splits: the values
+  that ride on the `StartFrame` and reach every processor are
+  `pipeline.Params`, and the rest is `pipeline.WorkerConfig`, which carries them
+  as its `Params` field. There is no alias; every call site changes.
+
+- **The worker's seven callbacks are events.** `OnPipelineStarted`,
+  `OnPipelineFinished`, `OnPipelineError`, `OnReachedDownstream`,
+  `OnReachedUpstream`, `OnIdleTimeout` and `OnHeartbeatTimeout` are gone from
+  the configuration. Attach handlers to `pipeline.EventPipelineStarted` and the
+  rest with `events.On(worker.Events(), …)`, which reads the value the event
+  carries. Several things can now watch one worker without knowing about each
+  other, and something built after the worker can still attach to it. Handlers
+  run off the frame path, in the order the worker raised them.
+
+- **RTVI is on by default.** A worker puts an `rtvi.Processor` at the head of its
+  pipeline and its observer alongside the others, so a client is told what the
+  session is doing without the pipeline being built for it. A pipeline that
+  already contains one keeps it. Set `EnableRTVI` false for a pipeline with no
+  client on the other end. Examples no longer wire it by hand.
+
+- **`Worker.Cancel` takes a context and a reason.** It cancels this worker's
+  pipeline; the session-wide cancel that asks every worker to stop is
+  `Base.Cancel`, which is what an idle pipeline uses to take the rest of the
+  session down with it.
+
+- **`flows.Watcher` watches through the event registry.** It takes `Events()
+  *events.Registry` in place of `OnReachedDownstream(fn)`.
+
 - **Watching stops when the pipeline does.** A task used to hand over everything
   still queued for an observer before its run returned. It now ends the observer
   goroutines instead, so the reports an observer is behind on when the pipeline
@@ -57,9 +89,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Service spans are raised only when the pipeline is traced.** They were
   raised whenever a `TracerProvider` was installed, so an application tracing
   its own server got a service span per turn with no conversation or turn to
-  hang from. `TaskParams.EnableTracing` now gates them.
+  hang from. `WorkerConfig.EnableTracing` now gates them.
 
 ### Added
+
+- **A pipeline can be put on the bus.** `WorkerConfig.Bridged` wraps the
+  pipeline in bus edges: what comes out of either end is copied across for the
+  other workers, and what they send arrives back in. Nil leaves the pipeline to
+  itself, an empty slice takes frames from every bridge, and naming bridges
+  takes them only from those.
+
+- **`workers.Runner` runs the workers of a session.** It owns the bus they talk
+  over, the registry they find each other through, and the goroutines they run
+  on. It ends once every root worker has finished, so a bot with one pipeline
+  ends when that pipeline does; a bot whose helpers wait on the bus forever ends
+  by being told to. It addresses root workers only, a child being the business
+  of the parent that added it.
+
+- **`workers.Base` is the base every worker is built on**: it connects to a bus,
+  registers itself so others can find it, accepts activation, manages the
+  children it adds, and exchanges long-running jobs. `HandleJob` declares the
+  kinds of work a worker does, and `jobcontext.RunJob` / `RunGroup` ask other
+  workers for one and collect what they return.
 
 - **An observer hears the pipeline start, and can be dropped.** An observer
   implementing `processor.PipelineStartedObserver` is told once the `StartFrame`
@@ -226,7 +277,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reach the end before it drains the queue the CancelFrame goes into, so the
   frame sat there and the run never ended. A CancelFrame that never came back
   was also waited on for good; the wait is now bounded by
-  `TaskParams.CancelTimeout`, twenty seconds by default. An EndFrame is still
+  `WorkerConfig.CancelTimeout`, twenty seconds by default. An EndFrame is still
   waited out in full, since a graceful shutdown is meant to flush what is in
   flight.
 
@@ -280,17 +331,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Task.AddObserver` registers one while the pipeline runs.
 
 - **Heartbeats tell a quiet pipeline from a stuck one.**
-  `TaskParams.EnableHeartbeats` sends a frame through at a fixed interval and
+  `Params.EnableHeartbeats` sends a frame through at a fixed interval and
   calls `OnHeartbeatTimeout` when none reaches the far end, repeating for as long
   as the silence lasts.
 
-- **An idle pipeline is canceled.** `TaskParams.IdleTimeout` (five minutes by
+- **An idle pipeline is canceled.** `WorkerConfig.IdleTimeout` (five minutes by
   default) watches for the conversation going quiet. `IdleTimeoutFrames` chooses
   what counts as activity, `OnIdleTimeout` hears about it, and
   `CancelOnIdleTimeout` set to false leaves the run alone.
 
 - **The task reports its lifecycle.** `OnPipelineStarted`, `OnPipelineFinished`
-  and `OnPipelineError` on `TaskParams`.
+  and `OnPipelineError`, now the worker's events.
 
 - **Frames reaching either end of the pipeline can be selected.**
   `ReachedDownstreamFilter` and `ReachedUpstreamFilter`, built with
@@ -300,7 +351,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   takes an optional direction, for answering something the pipeline sent rather
   than starting something new.
 
-- **A session can be stamped.** `TaskParams.StartMetadata` rides the StartFrame,
+- **A session can be stamped.** `Params.StartMetadata` rides the StartFrame,
   where every processor sees it.
 
 - **Turns are followed whether or not the session is traced.** See

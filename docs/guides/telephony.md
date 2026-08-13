@@ -50,9 +50,11 @@ tts := elevenlabs.NewTTS(elevenlabs.Config{
     SampleRate: phoneSampleRate,   // ask the provider for 8 kHz directly
 })
 
-task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
-    AudioInSampleRate:  phoneSampleRate,
-    AudioOutSampleRate: phoneSampleRate,
+task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
+	Params: pipeline.Params{
+	    AudioInSampleRate:  phoneSampleRate,
+	    AudioOutSampleRate: phoneSampleRate,
+	},
 })
 ```
 

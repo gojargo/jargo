@@ -265,5 +265,5 @@ func TestRedactor(t *testing.T) {
 ```
 
 Because `QueueFrame` is asynchronous, synchronize before asserting, with a channel the
-sink signals, or `pipeline.Task.Flush` if you are driving a whole pipeline. See
+sink signals, or `pipeline.Worker.Flush` if you are driving a whole pipeline. See
 `processor/*_test.go` for the patterns in use.

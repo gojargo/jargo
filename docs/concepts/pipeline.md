@@ -58,11 +58,13 @@ to flush.
 ## Task
 
 ```go
-task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
-    AudioInSampleRate:  16000,   // default
-    AudioOutSampleRate: 24000,   // default
-    EnableMetrics:      true,
-    EnableUsageMetrics: true,
+task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
+	Params: pipeline.Params{
+	    AudioInSampleRate:  16000,   // default
+	    AudioOutSampleRate: 24000,   // default
+	    EnableMetrics:      true,
+	    EnableUsageMetrics: true,
+	},
 })
 err := task.Run(ctx)
 ```
@@ -127,9 +129,9 @@ what guarantees every processor has seen the shutdown.
 task.QueueFrame(frames.NewTTSSpeakFrame("Hi, how can I help?"))  // inject
 task.QueueFrames([]frames.Frame{f1, f2})                          // in order
 
-task.StopWhenDone()   // EndFrame: stop once queued frames flush
-task.Cancel()         // CancelFrame: stop now
-task.HasFinished()    // has Run returned?
+task.StopWhenDone()        // EndFrame: stop once queued frames flush
+task.Cancel(ctx, "why")    // CancelFrame: stop now
+task.HasFinished()         // has Run returned?
 ```
 
 `Flush` is the one that is easy to miss and often exactly what you want:
@@ -146,16 +148,24 @@ an interruption, say) before injecting new work.
 ### Observing frames
 
 ```go
-pipeline.TaskParams{
-    OnReachedDownstream: func(f frames.Frame) { /* reached the sink */ },
-    OnReachedUpstream:   func(f frames.Frame) { /* reached the source */ },
+worker := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
+    ReachedDownstreamFilter: pipeline.AnyFrame,
     Observers: []pipeline.Observer{
         observers.NewTurnTracking(observers.TurnTrackingConfig{}),
     },
-}
+})
+
+events.On(worker.Events(), pipeline.EventFrameReachedDownstream,
+    func(ctx context.Context, f frames.Frame) { /* reached the sink */ })
+events.On(worker.Events(), pipeline.EventFrameReachedUpstream,
+    func(ctx context.Context, f frames.Frame) { /* reached the source */ })
 ```
 
-Both callbacks and observers see frames only at the pipeline **edges**, not
+A filter selects which frames are reported; nil reports none, which is the
+default, because a handler on every frame sits on the path of everything the
+pipeline does.
+
+Both the events and the observers see frames only at the pipeline **edges**, not
 between every pair of processors. Observers are notified after the callbacks. See
 [Observability](../guides/observability.md).
 

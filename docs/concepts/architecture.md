@@ -49,7 +49,7 @@ procs := []processor.Processor{
     rtvi.NewProcessor(), t.Input(), vadProc, stt, turnsProc,
     agg.User(), llm, tts, t.Output(), agg.Assistant(),
 }
-task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{})
+task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{})
 task.Run(ctx)
 ```
 

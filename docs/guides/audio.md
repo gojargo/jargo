@@ -32,9 +32,11 @@ params := transport.DefaultParams()
 params.AudioInSampleRate = opus.SampleRate    // 48 kHz over WebRTC
 params.AudioOutSampleRate = opus.SampleRate
 
-task := pipeline.NewTask(pipe, pipeline.TaskParams{
-    AudioInSampleRate:  opus.SampleRate,
-    AudioOutSampleRate: opus.SampleRate,
+task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
+	Params: pipeline.Params{
+	    AudioInSampleRate:  opus.SampleRate,
+	    AudioOutSampleRate: opus.SampleRate,
+	},
 })
 ```
 
@@ -44,7 +46,7 @@ and TTS output is commonly 24 kHz. Over WebRTC you generally want both at
 a double conversion.
 
 The `StartFrame` carries these rates down the pipeline, which is how every
-processor learns them. Set them on the `TaskParams`, not by mutating frames.
+processor learns them. Set them on the `pipeline.Params`, not by mutating frames.
 
 ## Codecs
 

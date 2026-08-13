@@ -29,7 +29,6 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/processor/rtvi"
 )
 
 func main() {
@@ -40,17 +39,15 @@ func main() {
 }
 
 // buildBot assembles the demo pipeline around the harness-provided transport
-// endpoints. The rtvi.Processor is what lets the harness drive the bot and
-// observe its events.
+// endpoints. The RTVI processor the worker adds is what lets the harness drive
+// the bot and observe its events.
 func buildBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("You are a friendly demo assistant."))
-	rtviProc := rtvi.NewProcessor()
+	// The worker adds the RTVI processor and its observer itself, which is what
+	// lets the harness drive the bot and watch what it does.
 	return pipeline.NewWorker(pipeline.New(
-		rtviProc, in, agg.User(), newDemoLLM(), out, agg.Assistant(),
-	), pipeline.WorkerConfig{
-		// The observer reports pipeline events; the processor carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
-	})
+		in, agg.User(), newDemoLLM(), out, agg.Assistant(),
+	), pipeline.WorkerConfig{})
 }
 
 // demoLLM stands in for an LLM service: it answers each user turn with a canned

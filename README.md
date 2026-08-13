@@ -85,9 +85,9 @@ tts := chat.NewTTS(chat.TTSConfig{APIKey: key})
 t := rtc.NewTransport(conn, transport.DefaultParams())
 agg := aggregators.New(frames.NewLLMContext("You are a helpful voice assistant."))
 
-task := pipeline.NewTask(pipeline.New(
+task := pipeline.NewWorker(pipeline.New(
 	t.Input(), stt, agg.User(), llm, tts, t.Output(), agg.Assistant(),
-), pipeline.TaskParams{})
+), pipeline.WorkerConfig{})
 task.Run(ctx)
 ```
 

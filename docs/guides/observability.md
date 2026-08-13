@@ -19,7 +19,7 @@ Observers watch frames at the pipeline edges without modifying them. They are th
 cheapest way to get conversation-level signal.
 
 ```go
-task := pipeline.NewTask(pipe, pipeline.TaskParams{
+task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
     Observers: []pipeline.Observer{
         observers.NewTurnTracking(observers.TurnTrackingConfig{
             OnTurnEnded: func(turn int, d time.Duration, interrupted bool) {
@@ -60,9 +60,9 @@ Unfiltered, it logs every audio frame: dozens per second per direction.
 
 ### Observers see only the edges
 
-Both `Observers` and the `OnReachedDownstream` / `OnReachedUpstream` callbacks fire
-at the pipeline **source and sink**, not between every pair of processors. To
-observe mid-chain, insert a processor.
+Both `Observers` and the `EventFrameReachedDownstream` /
+`EventFrameReachedUpstream` events fire at the pipeline **source and sink**, not
+between every pair of processors. To observe mid-chain, insert a processor.
 
 One consequence: a turn-taking signal is **broadcast** as two frames, one per
 direction. Observers count only the downstream half, using `BroadcastSiblingID` to
@@ -75,9 +75,11 @@ observer that reacts to `UserStartedSpeakingFrame`,
 Enable collection on the task, or nothing is measured:
 
 ```go
-pipeline.TaskParams{
-    EnableMetrics:      true,   // TTFB, processing time
-    EnableUsageMetrics: true,   // tokens, TTS characters, STT audio duration
+pipeline.WorkerConfig{
+	Params: pipeline.Params{
+	    EnableMetrics:      true,   // TTFB, processing time
+	    EnableUsageMetrics: true,   // tokens, TTS characters, STT audio duration
+	},
 }
 ```
 
@@ -111,7 +113,7 @@ Spans per conversation, per turn and per service call, over OpenTelemetry:
 shutdown, err := tracing.Init(ctx, tracing.Config{ /* … */ })
 defer shutdown(ctx)
 
-task := pipeline.NewTask(pipe, pipeline.TaskParams{
+task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 	EnableTracing:  true,
 	ConversationID: sessionID, // empty generates one
 	// Attributes on the conversation span, which is the root of the trace — where

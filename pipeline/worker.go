@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
@@ -151,6 +152,30 @@ type WorkerConfig struct {
 	// ones the worker sets itself. They are where the keys a trace backend reads
 	// from the root span belong: a session id, a user id, tags.
 	AdditionalSpanAttributes []attribute.KeyValue
+	// Bridged puts the pipeline on the bus: what comes out of either end is
+	// copied across, and what arrives from another worker is injected back in.
+	//
+	// Nil leaves the pipeline to itself. An empty but non-nil slice takes frames
+	// from every bridge, and naming bridges takes them only from those. A
+	// bridged worker is how one worker's pipeline feeds another's.
+	Bridged []string
+	// ExcludeFrames are frame types that never cross the bus, on top of the
+	// lifecycle frames, which never do. It only applies to a bridged worker.
+	ExcludeFrames []frames.Frame
+	// EnableRTVI puts an RTVI processor at the head of the pipeline, and its
+	// observer alongside the others, so a client is told what the session is
+	// doing without the pipeline having to be built for it; nil defaults to
+	// true.
+	//
+	// A pipeline that already contains one keeps its own, and the observer for
+	// it must be given in Observers. Set it false for a pipeline with no client
+	// on the other end.
+	EnableRTVI *bool
+	// RTVIProcessor is the processor to add when RTVI is enabled and the
+	// pipeline does not already contain one; nil builds a default one.
+	RTVIProcessor *rtvi.Processor
+	// RTVIObserverParams configures the observer added alongside it.
+	RTVIObserverParams *rtvi.ObserverParams
 }
 
 // The events a pipeline worker raises, on top of the ones every worker raises.
@@ -212,6 +237,9 @@ type Worker struct {
 	// observerProxy is the single observer the processors are given. It passes
 	// each report on to the real observers, off the frame path.
 	observerProxy *observerProxy
+	// rtvi is the processor a client talks to, this worker's own or the one the
+	// pipeline already carried; nil when the worker runs without RTVI.
+	rtvi *rtvi.Processor
 
 	// The filters select which frames reaching either end of the pipeline are
 	// reported, and start out as the ones WorkerConfig carries.
@@ -280,6 +308,34 @@ func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
 	}
 	t.Base = workers.New(workers.Config{Name: cfg.Name, Active: cfg.Active}, t)
 	t.registerEvents()
+
+	pipe = t.maybeAddRTVI(pipe, &cfg)
+	// Taken again: adding RTVI puts an observer among the caller's, and the
+	// copy above was made before that.
+	t.cfg = cfg
+
+	// A bridged pipeline is wrapped in the two edges before the worker's own
+	// source and sink go around it, so what the pipeline produces is teed onto
+	// the bus and what arrives from the bus enters the pipeline proper. The
+	// edges read the bus when they are set up rather than when they are built,
+	// so the worker need only be attached by the time it runs.
+	if cfg.Bridged != nil {
+		pipe = New(
+			bus.NewEdgeProcessor(bus.EdgeConfig{
+				Worker:        t,
+				Direction:     processor.Upstream,
+				Bridges:       cfg.Bridged,
+				ExcludeFrames: cfg.ExcludeFrames,
+			}),
+			pipe,
+			bus.NewEdgeProcessor(bus.EdgeConfig{
+				Worker:        t,
+				Direction:     processor.Downstream,
+				Bridges:       cfg.Bridged,
+				ExcludeFrames: cfg.ExcludeFrames,
+			}),
+		)
+	}
 	if t.clk == nil {
 		t.clk = clock.NewSystem()
 	}
@@ -1042,3 +1098,73 @@ var (
 	_ workers.Worker            = (*Worker)(nil)
 	_ workers.StoppableWhenDone = (*Worker)(nil)
 )
+
+// Bridged reports whether this worker's pipeline is on the bus, which is
+// announced when the worker becomes ready so the others know it can be fed.
+func (t *Worker) Bridged() bool { return t.cfg.Bridged != nil }
+
+// maybeAddRTVI puts an RTVI processor at the head of the pipeline, and its
+// observer alongside the others, unless the pipeline already carries one.
+//
+// A client talks to the session over RTVI, so a pipeline usually wants one and
+// gets it without having to be built for it. A pipeline that already contains
+// one keeps it: adding a second would put it in the frame path twice.
+func (t *Worker) maybeAddRTVI(pipe processor.Processor, cfg *WorkerConfig) processor.Processor {
+	existing := findRTVI(pipe)
+	hasObserver := false
+	for _, o := range cfg.Observers {
+		if _, ok := o.(*rtvi.Observer); ok {
+			hasObserver = true
+			break
+		}
+	}
+
+	switch {
+	case existing != nil && !hasObserver:
+		// The two go together: the processor sends to the client and the
+		// observer is what feeds it.
+		slog.Error("the pipeline has an RTVI processor but no RTVI observer was given; add both")
+		t.rtvi = existing
+		return pipe
+	case existing == nil && hasObserver:
+		slog.Error("an RTVI observer was given but the pipeline has no RTVI processor; add both")
+		return pipe
+	case existing != nil && hasObserver:
+		slog.Warn("the pipeline already has an RTVI processor and observer, keeping them; " +
+			"a worker adds both itself, so they need not be added by hand")
+		t.rtvi = existing
+		return pipe
+	case !boolOrTrue(cfg.EnableRTVI):
+		return pipe
+	}
+
+	t.rtvi = cfg.RTVIProcessor
+	if t.rtvi == nil {
+		t.rtvi = rtvi.NewProcessor()
+	}
+	observer := rtvi.NewObserver(t.rtvi)
+	if cfg.RTVIObserverParams != nil {
+		observer = rtvi.NewObserverWithParams(t.rtvi, *cfg.RTVIObserverParams)
+	}
+	cfg.Observers = append(append([]Observer(nil), cfg.Observers...), observer)
+
+	return New(t.rtvi, pipe)
+}
+
+// RTVI is the processor a client talks to, whether this worker added it or the
+// pipeline already carried one. It is nil when the worker runs without RTVI.
+func (t *Worker) RTVI() *rtvi.Processor { return t.rtvi }
+
+// findRTVI looks for an RTVI processor anywhere in a pipeline, including inside
+// a nested one.
+func findRTVI(p processor.Processor) *rtvi.Processor {
+	if r, ok := p.(*rtvi.Processor); ok {
+		return r
+	}
+	for _, child := range p.Processors() {
+		if r := findRTVI(child); r != nil {
+			return r
+		}
+	}
+	return nil
+}

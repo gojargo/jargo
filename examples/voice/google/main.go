@@ -26,7 +26,6 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/deepgram"
@@ -93,8 +92,7 @@ func runBot(conn *rtc.Connection) {
 	// the bot still works, falling back to STT endpointing and losing barge-in.
 	vadProc, turnsCfg := buildTurnStack()
 
-	rtviProc := rtvi.NewProcessor()
-	procs := []processor.Processor{rtviProc, t.Input()}
+	procs := []processor.Processor{t.Input()}
 	if vadProc != nil {
 		procs = append(procs, vadProc)
 	}
@@ -110,7 +108,6 @@ func runBot(conn *rtc.Connection) {
 
 	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 		Params: pipeline.Params{
 			AudioInSampleRate:  opus.SampleRate,
 			AudioOutSampleRate: opus.SampleRate,

@@ -19,7 +19,6 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
@@ -79,10 +78,10 @@ func runEcho(conn *rtc.Connection) {
 	params.AudioOutSampleRate = opus.SampleRate
 
 	t := rtc.NewTransport(conn, params)
-	// The RTVI processor handles the client handshake (client-ready -> bot-ready)
-	// and reports pipeline events to the client over the data channel.
-	rtviProc := rtvi.NewProcessor()
-	pipe := pipeline.New(rtviProc, t.Input(), newEcho(), t.Output())
+	// The worker adds an RTVI processor at the head of the pipeline, which
+	// handles the client handshake (client-ready to bot-ready) and reports what
+	// the pipeline does to the client over the data channel.
+	pipe := pipeline.New(t.Input(), newEcho(), t.Output())
 	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 		Params: pipeline.Params{
 			AudioInSampleRate:  opus.SampleRate,

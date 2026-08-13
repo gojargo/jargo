@@ -37,7 +37,6 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/anthropic"
@@ -186,8 +185,7 @@ func runBot(conn *rtc.Connection, v *viper.Viper) {
 	// turn-taking and losing barge-in.
 	vadProc, turnsCfg := buildTurnStack()
 
-	rtviProc := rtvi.NewProcessor()
-	procs := []processor.Processor{rtviProc, t.Input()}
+	procs := []processor.Processor{t.Input()}
 	if vadProc != nil {
 		procs = append(procs, vadProc)
 	}
@@ -214,7 +212,6 @@ func runBot(conn *rtc.Connection, v *viper.Viper) {
 
 	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 		// Trace the session: one span for the conversation, one per turn, and the
 		// service spans of each turn beneath it.
 		EnableTracing: true,

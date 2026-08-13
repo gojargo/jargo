@@ -89,7 +89,7 @@ agg := aggregators.New(convo, aggregators.WithTurnTaking())
 Order matters. This is the reference wiring:
 
 ```go
-task := pipeline.NewTask(pipeline.New(
+task := pipeline.NewWorker(pipeline.New(
     rtvi.NewProcessor(), // client events over the data channel
     t.Input(),          // audio in
     vadProc,            // is the user speaking?
@@ -100,11 +100,13 @@ task := pipeline.NewTask(pipeline.New(
     tts,                // tokens → audio
     t.Output(),         // audio out
     agg.Assistant(),    // record what was actually said
-), pipeline.TaskParams{
-    AudioInSampleRate:  opus.SampleRate,
-    AudioOutSampleRate: opus.SampleRate,
-    EnableMetrics:      true,
-    EnableUsageMetrics: true,
+), pipeline.WorkerConfig{
+	Params: pipeline.Params{
+	    AudioInSampleRate:  opus.SampleRate,
+	    AudioOutSampleRate: opus.SampleRate,
+	    EnableMetrics:      true,
+	    EnableUsageMetrics: true,
+	},
 })
 ```
 
