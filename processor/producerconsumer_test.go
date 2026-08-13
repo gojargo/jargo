@@ -9,24 +9,25 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // collectDownstream runs procs as a pipeline over feed and returns every frame
 // that reached the end of it.
 func collectDownstream(
-	t *testing.T, procs []processor.Processor, feed func(task *pipeline.Task),
+	t *testing.T, procs []processor.Processor, feed func(task *pipeline.Worker),
 ) []frames.Frame {
 	t.Helper()
 
 	var mu sync.Mutex
 	var got []frames.Frame
-	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 
 	runDone := make(chan error, 1)
@@ -70,7 +71,7 @@ func TestProducerPassesThroughAndConsumes(t *testing.T) {
 	prod := processor.NewProducerProcessor("Producer", isText)
 	cons := processor.NewConsumerProcessor("Consumer", prod)
 
-	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("Hello!"))
 		time.Sleep(100 * time.Millisecond)
 	})
@@ -86,7 +87,7 @@ func TestProducerWithoutPassthroughConsumesOnly(t *testing.T) {
 	prod := processor.NewProducerProcessor("Producer", isText, processor.WithoutPassthrough())
 	cons := processor.NewConsumerProcessor("Consumer", prod)
 
-	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("Hello!"))
 		time.Sleep(100 * time.Millisecond)
 	})
@@ -102,7 +103,7 @@ func TestProducerFeedsEveryConsumer(t *testing.T) {
 	one := processor.NewConsumerProcessor("ConsumerOne", prod)
 	two := processor.NewConsumerProcessor("ConsumerTwo", prod)
 
-	got := collectDownstream(t, []processor.Processor{prod, one, two}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{prod, one, two}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("Hello!"))
 		time.Sleep(150 * time.Millisecond)
 	})
@@ -118,7 +119,7 @@ func TestProducerLeavesUnpickedFramesAlone(t *testing.T) {
 	prod := processor.NewProducerProcessor("Producer", isText, processor.WithoutPassthrough())
 	cons := processor.NewConsumerProcessor("Consumer", prod)
 
-	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		time.Sleep(100 * time.Millisecond)
 	})
@@ -138,7 +139,7 @@ func TestProducerTransformsWhatItHandsOver(t *testing.T) {
 		processor.WithProducerTransformer(toAudio))
 	cons := processor.NewConsumerProcessor("Consumer", prod)
 
-	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("Hello!"))
 		time.Sleep(100 * time.Millisecond)
 	})
@@ -161,7 +162,7 @@ func TestConsumerTransformsWhatItPutsBack(t *testing.T) {
 	cons := processor.NewConsumerProcessor("Consumer", prod,
 		processor.WithConsumerTransformer(toAudio))
 
-	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("Hello!"))
 		time.Sleep(100 * time.Millisecond)
 	})
@@ -185,7 +186,7 @@ func TestIdleProcessorCallsBackWhenNothingComes(t *testing.T) {
 			}
 		})
 
-	collectDownstream(t, []processor.Processor{idle}, func(*pipeline.Task) {
+	collectDownstream(t, []processor.Processor{idle}, func(*pipeline.Worker) {
 		time.Sleep(200 * time.Millisecond)
 	})
 
@@ -208,7 +209,7 @@ func TestIdleProcessorIsRestartedByAFrame(t *testing.T) {
 			}
 		})
 
-	collectDownstream(t, []processor.Processor{idle}, func(task *pipeline.Task) {
+	collectDownstream(t, []processor.Processor{idle}, func(task *pipeline.Worker) {
 		for range 4 {
 			time.Sleep(50 * time.Millisecond)
 			task.QueueFrame(frames.NewTextFrame("hello"))
@@ -235,7 +236,7 @@ func TestIdleProcessorWatchesOnlyTheTypesItWasGiven(t *testing.T) {
 		},
 		processor.FrameIs[*frames.TranscriptionFrame]())
 
-	collectDownstream(t, []processor.Processor{idle}, func(task *pipeline.Task) {
+	collectDownstream(t, []processor.Processor{idle}, func(task *pipeline.Worker) {
 		time.Sleep(60 * time.Millisecond)
 		task.QueueFrame(frames.NewTextFrame("this should not restart it"))
 		time.Sleep(150 * time.Millisecond)
@@ -253,7 +254,7 @@ func TestIdleProcessorWatchesOnlyTheTypesItWasGiven(t *testing.T) {
 func TestTextTransformerRewritesText(t *testing.T) {
 	up := processor.NewStatelessTextTransformer("Upper", func(s string) string { return s + "!" })
 
-	got := collectDownstream(t, []processor.Processor{up}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{up}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("hello"))
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		time.Sleep(50 * time.Millisecond)
@@ -283,7 +284,7 @@ func TestConsumerCanPushUpstream(t *testing.T) {
 	cons := processor.NewConsumerProcessor("Consumer", prod,
 		processor.WithConsumerDirection(processor.Upstream))
 
-	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Task) {
+	got := collectDownstream(t, []processor.Processor{prod, cons}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("Hello!"))
 		time.Sleep(100 * time.Millisecond)
 	})

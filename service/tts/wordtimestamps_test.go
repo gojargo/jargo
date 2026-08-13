@@ -13,6 +13,7 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/utils/text"
 )
 
@@ -102,7 +103,7 @@ func runConversation(t *testing.T, convo *frames.LLMContext, syn tts.Synthesizer
 	base.SetTextFilters(currencyFilter{})
 	pair := aggregators.New(convo)
 
-	task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(base, pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -204,7 +205,7 @@ func TestNoTimestampsRecordsFullLLMText(t *testing.T) {
 	base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
 	pair := aggregators.New(convo)
 
-	task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(base, pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -242,21 +243,21 @@ func TestWordTimestampsCarryPresentationTimestamps(t *testing.T) {
 	}
 	var got []stamped
 	var firstAudio int64 = -1
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.TTSAudioRawFrame:
-				if firstAudio < 0 {
-					firstAudio = 0
-				}
-			case *frames.TTSTextFrame:
-				pts, ok := fr.Base().PTS()
-				got = append(got, stamped{text: fr.Text, pts: pts, ok: ok})
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.TTSAudioRawFrame:
+			if firstAudio < 0 {
+				firstAudio = 0
 			}
-		},
+		case *frames.TTSTextFrame:
+			pts, ok := fr.Base().PTS()
+			got = append(got, stamped{text: fr.Text, pts: pts, ok: ok})
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -319,7 +320,7 @@ func TestNoTimestampsRecordsTurnWhenAudioArrivesLater(t *testing.T) {
 	base := tts.New("AsyncTTS", &asyncSynth{rate: 24000})
 	pair := aggregators.New(convo)
 
-	task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(base, pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -369,7 +370,7 @@ func TestSpeakFrameHonoursAppendToContext(t *testing.T) {
 			base := tts.New("FixedTTS", tc.syn)
 			pair := aggregators.New(convo)
 
-			task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+			task := pipeline.NewWorker(pipeline.New(base, pair.Assistant()), pipeline.WorkerConfig{})
 			runDone := make(chan error, 1)
 			go func() { runDone <- task.Run(context.Background()) }()
 
@@ -413,7 +414,7 @@ func TestSpeakFrameEntersTheContextOnce(t *testing.T) {
 			base := tts.New("FixedTTS", tc.syn)
 			pair := aggregators.New(convo)
 
-			task := pipeline.NewTask(pipeline.New(base, pair.Assistant()), pipeline.TaskParams{})
+			task := pipeline.NewWorker(pipeline.New(base, pair.Assistant()), pipeline.WorkerConfig{})
 			runDone := make(chan error, 1)
 			go func() { runDone <- task.Run(context.Background()) }()
 
@@ -464,15 +465,15 @@ func TestSpeakFrameClosesTheAssistantTurnItOpened(t *testing.T) {
 				{text: "moment.", offset: 0.1, pcm: make([]byte, 4800)},
 			}}
 			base := tts.New("FixedTTS", synth)
-			task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+			task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 				ReachedDownstreamFilter: pipeline.AnyFrame,
-				OnReachedDownstream: func(f frames.Frame) {
-					if _, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
-						mu.Lock()
-						pushes++
-						mu.Unlock()
-					}
-				},
+			})
+			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+				if _, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
+					mu.Lock()
+					pushes++
+					mu.Unlock()
+				}
 			})
 			runDone := make(chan error, 1)
 			go func() { runDone <- task.Run(context.Background()) }()
@@ -523,21 +524,21 @@ func TestResponseEndFollowsTheWordsItEnds(t *testing.T) {
 		{text: "there.", offset: 0.1, pcm: make([]byte, 4800)},
 	}}
 	base := tts.New("TimedTTS", synth)
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.TTSTextFrame:
-				order = append(order, "word:"+fr.Text)
-			case *frames.LLMFullResponseEndFrame:
-				order = append(order, "end")
-				pts, _ := fr.PTS()
-				endPTS = append(endPTS, pts)
-				endIDs = append(endIDs, fr.ID())
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.TTSTextFrame:
+			order = append(order, "word:"+fr.Text)
+		case *frames.LLMFullResponseEndFrame:
+			order = append(order, "end")
+			pts, _ := fr.PTS()
+			endPTS = append(endPTS, pts)
+			endIDs = append(endIDs, fr.ID())
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -583,21 +584,21 @@ func TestPushAggregationTimedAfterTheLastWord(t *testing.T) {
 		{text: "world", offset: 0.2, pcm: make([]byte, 4800)},
 	}}
 	base := tts.New("TimedTTS", synth)
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.TTSTextFrame:
-				pts, _ := fr.PTS()
-				wordPTS = append(wordPTS, pts)
-			case *frames.LLMAssistantPushAggregationFrame:
-				pts, has := fr.PTS()
-				pushPTS = append(pushPTS, pts)
-				pushTimed = append(pushTimed, has)
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.TTSTextFrame:
+			pts, _ := fr.PTS()
+			wordPTS = append(wordPTS, pts)
+		case *frames.LLMAssistantPushAggregationFrame:
+			pts, has := fr.PTS()
+			pushPTS = append(pushPTS, pts)
+			pushTimed = append(pushTimed, has)
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -637,16 +638,16 @@ func TestPushAggregationUntimedWithoutWordTimestamps(t *testing.T) {
 	var timed []bool
 
 	base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
-				_, has := fr.PTS()
-				mu.Lock()
-				timed = append(timed, has)
-				mu.Unlock()
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
+			_, has := fr.PTS()
+			mu.Lock()
+			timed = append(timed, has)
+			mu.Unlock()
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -681,15 +682,15 @@ func TestStartedFrameCarriesAppendToContext(t *testing.T) {
 			var mu sync.Mutex
 			var got []bool
 			base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
-			task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+			task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 				ReachedDownstreamFilter: pipeline.AnyFrame,
-				OnReachedDownstream: func(f frames.Frame) {
-					if fr, ok := f.(*frames.TTSStartedFrame); ok {
-						mu.Lock()
-						got = append(got, fr.AppendToContext)
-						mu.Unlock()
-					}
-				},
+			})
+			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+				if fr, ok := f.(*frames.TTSStartedFrame); ok {
+					mu.Lock()
+					got = append(got, fr.AppendToContext)
+					mu.Unlock()
+				}
 			})
 			runDone := make(chan error, 1)
 			go func() { runDone <- task.Run(context.Background()) }()
@@ -735,18 +736,18 @@ func TestWordsCarryingTheirOwnSpacingAssembleWithNone(t *testing.T) {
 		{text: "AIアシスタントです。", offset: 0.1, pcm: chunk},
 	}}
 	base := tts.New("CJKTTS", synth)
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.TTSTextFrame); ok {
-				mu.Lock()
-				parts = append(parts, text.Part{
-					Text:                    fr.Original(),
-					IncludesInterPartSpaces: fr.IncludesInterFrameSpaces,
-				})
-				mu.Unlock()
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.TTSTextFrame); ok {
+			mu.Lock()
+			parts = append(parts, text.Part{
+				Text:                    fr.Original(),
+				IncludesInterPartSpaces: fr.IncludesInterFrameSpaces,
+			})
+			mu.Unlock()
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

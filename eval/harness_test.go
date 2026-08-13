@@ -112,12 +112,12 @@ func (f *fakeLLM) respond(ctx context.Context, text string) error {
 	return f.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
-func buildFakeBot(in, out processor.Processor) *pipeline.Task {
+func buildFakeBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test system"))
 	rtviProc := rtvi.NewProcessor()
-	return pipeline.NewTask(pipeline.New(
+	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, agg.User(), newFakeLLM(), out, agg.Assistant(),
-	), pipeline.TaskParams{
+	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 	})
@@ -125,13 +125,13 @@ func buildFakeBot(in, out processor.Processor) *pipeline.Task {
 
 // buildDTMFBot is the fake bot with a DTMF aggregator in front of it, so a
 // keypress turn produces the transcription a bot reacts to.
-func buildDTMFBot(in, out processor.Processor) *pipeline.Task {
+func buildDTMFBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test system"))
 	rtviProc := rtvi.NewProcessor()
 	keys := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: "DTMF: "})
-	return pipeline.NewTask(pipeline.New(
+	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, keys, agg.User(), newFakeLLM(), out, agg.Assistant(),
-	), pipeline.TaskParams{
+	), pipeline.WorkerConfig{
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 	})
 }

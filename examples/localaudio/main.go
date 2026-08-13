@@ -37,9 +37,11 @@ func main() {
 	defer t.Close()
 
 	pipe := pipeline.New(t.Input(), newEcho(), t.Output())
-	task := pipeline.NewTask(pipe, pipeline.TaskParams{
-		AudioInSampleRate:  sampleRate,
-		AudioOutSampleRate: sampleRate,
+	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			AudioInSampleRate:  sampleRate,
+			AudioOutSampleRate: sampleRate,
+		},
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

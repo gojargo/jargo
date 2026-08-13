@@ -148,9 +148,9 @@ func TestKeepaliveProtocolMessageIsNotBilled(t *testing.T) {
 }
 
 // runKeepaliveService runs svc until the returned stop is called.
-func runKeepaliveService(t *testing.T, svc *StreamService) (task *pipeline.Task, stop func()) {
+func runKeepaliveService(t *testing.T, svc *StreamService) (task *pipeline.Worker, stop func()) {
 	t.Helper()
-	task = pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task = pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return task, func() {

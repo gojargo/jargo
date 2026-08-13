@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/vadproc"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeVAD returns scripted states, one per AnalyzeAudio call.
@@ -41,21 +42,21 @@ func runVAD(t *testing.T, states []vad.State, nframes int) []string {
 	p := vadproc.New(vadproc.Config{VAD: newFakeVAD(states...)})
 
 	var mu sync.Mutex
-	var events []string
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	var seen []string
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch f.(type) {
-			case *frames.VADUserStartedSpeakingFrame:
-				events = append(events, "started")
-			case *frames.VADUserStoppedSpeakingFrame:
-				events = append(events, "stopped")
-			case *frames.UserSpeakingFrame:
-				events = append(events, "speaking")
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.VADUserStartedSpeakingFrame:
+			seen = append(seen, "started")
+		case *frames.VADUserStoppedSpeakingFrame:
+			seen = append(seen, "stopped")
+		case *frames.UserSpeakingFrame:
+			seen = append(seen, "speaking")
+		}
 	})
 
 	runDone := make(chan error, 1)
@@ -72,7 +73,7 @@ func runVAD(t *testing.T, states []vad.State, nframes int) []string {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	return events
+	return seen
 }
 
 func TestVADStartStop(t *testing.T) {
@@ -100,13 +101,13 @@ func TestVADAudioIdleForcesSpeechStop(t *testing.T) {
 	})
 
 	stopped := make(chan struct{}, 4)
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
-				stopped <- struct{}{}
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
+			stopped <- struct{}{}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -134,13 +135,13 @@ func TestVADAudioIdleStaysQuiet(t *testing.T) {
 	})
 
 	stopped := make(chan struct{}, 4)
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
-				stopped <- struct{}{}
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
+			stopped <- struct{}{}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -164,13 +165,13 @@ func TestVADReportsParamsOnStart(t *testing.T) {
 	p := vadproc.New(vadproc.Config{VAD: newFakeVAD(vad.StateQuiet)})
 
 	got := make(chan *frames.SpeechControlParamsFrame, 4)
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
-				got <- sc
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
+			got <- sc
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -199,13 +200,13 @@ func TestVADParamsUpdateTakesEffect(t *testing.T) {
 	p := vadproc.New(vadproc.Config{VAD: fake})
 
 	got := make(chan *frames.SpeechControlParamsFrame, 8)
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
-				got <- sc
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
+			got <- sc
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

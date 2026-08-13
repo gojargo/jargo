@@ -11,25 +11,26 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/utils/notify"
 )
 
 // collectGated runs procs as a pipeline over feed and returns every frame that
 // reached the end of it. feed is responsible for ending the run.
 func collectGated(
-	t *testing.T, procs []processor.Processor, feed func(task *pipeline.Task),
+	t *testing.T, procs []processor.Processor, feed func(task *pipeline.Worker),
 ) []frames.Frame {
 	t.Helper()
 
 	var mu sync.Mutex
 	var got []frames.Frame
-	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 
 	runDone := make(chan error, 1)
@@ -81,7 +82,7 @@ func TestGatedReleasesTheOpenerFirst(t *testing.T) {
 		Close: isCloser,
 	})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("one"))
 		task.QueueFrame(frames.NewTextFrame("two"))
 		task.QueueFrame(frames.NewTextFrame("open"))
@@ -103,14 +104,14 @@ func TestGatedStartsOpenAndCloses(t *testing.T) {
 		StartOpen: true,
 	})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("one"))
 		task.QueueFrame(frames.NewTextFrame("close"))
 		task.QueueFrame(frames.NewTextFrame("held"))
 		time.Sleep(50 * time.Millisecond)
 		// The gate is closed, so the frame that ends a run would be held with
 		// the rest. Canceling is a system frame and gets through.
-		task.Cancel()
+		task.Cancel(t.Context(), "")
 	})
 
 	// The frame that closes the gate is held with the rest rather than passing.
@@ -129,7 +130,7 @@ func TestGatedReleasesWhatACloseHeld(t *testing.T) {
 		StartOpen: true,
 	})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewTextFrame("close"))
 		task.QueueFrame(frames.NewTextFrame("held"))
 		task.QueueFrame(frames.NewTextFrame("open"))
@@ -151,11 +152,11 @@ func TestGatedNeverHoldsASystemFrame(t *testing.T) {
 		Close: isCloser,
 	})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewUserStartedSpeakingFrame())
 		time.Sleep(50 * time.Millisecond)
 		// The gate never opened, so the run has to be canceled.
-		task.Cancel()
+		task.Cancel(t.Context(), "")
 	})
 
 	found := false
@@ -174,7 +175,7 @@ func TestGatedContextWaitsForTheNotifier(t *testing.T) {
 	n := notify.NewEventNotifier()
 	g := aggregators.NewGatedContext("Gate", aggregators.GatedContextConfig{Notifier: n})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMContextFrame(frames.NewLLMContext("")))
 		time.Sleep(50 * time.Millisecond)
 		// Nothing should have gone through yet.
@@ -193,7 +194,7 @@ func TestGatedContextHoldsWhileTheNotifierIsQuiet(t *testing.T) {
 	n := notify.NewEventNotifier()
 	g := aggregators.NewGatedContext("Gate", aggregators.GatedContextConfig{Notifier: n})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMContextFrame(frames.NewLLMContext("")))
 		time.Sleep(100 * time.Millisecond)
 		task.StopWhenDone()
@@ -210,7 +211,7 @@ func TestGatedContextKeepsOnlyTheLatest(t *testing.T) {
 	n := notify.NewEventNotifier()
 	g := aggregators.NewGatedContext("Gate", aggregators.GatedContextConfig{Notifier: n})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMContextFrame(frames.NewLLMContext("")))
 		task.QueueFrame(frames.NewLLMContextFrame(frames.NewLLMContext("")))
 		task.QueueFrame(frames.NewLLMContextFrame(frames.NewLLMContext("")))
@@ -234,7 +235,7 @@ func TestGatedContextCanStartOpen(t *testing.T) {
 		StartOpen: true,
 	})
 
-	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Task) {
+	got := collectGated(t, []processor.Processor{g}, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMContextFrame(frames.NewLLMContext("")))
 		task.QueueFrame(frames.NewLLMContextFrame(frames.NewLLMContext("")))
 		time.Sleep(80 * time.Millisecond)

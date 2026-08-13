@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // collectSTTUsage runs svc under a task, feeds it a turn of audio, and returns
@@ -20,26 +21,28 @@ func collectSTTUsage(t *testing.T, svc processor.Processor, usageMetrics bool) [
 	var mu sync.Mutex
 	var got []frames.STTUsageMetricsData
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableUsageMetrics:      usageMetrics,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			switch fr := f.(type) {
-			case *frames.MetricsFrame:
-				mu.Lock()
-				for _, d := range fr.Data {
-					if u, ok := d.(frames.STTUsageMetricsData); ok {
-						got = append(got, u)
-					}
-				}
-				mu.Unlock()
-			case *frames.TranscriptionFrame:
-				select {
-				case done <- struct{}{}:
-				default:
+		Params: pipeline.Params{
+			EnableUsageMetrics: usageMetrics,
+		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		switch fr := f.(type) {
+		case *frames.MetricsFrame:
+			mu.Lock()
+			for _, d := range fr.Data {
+				if u, ok := d.(frames.STTUsageMetricsData); ok {
+					got = append(got, u)
 				}
 			}
-		},
+			mu.Unlock()
+		case *frames.TranscriptionFrame:
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
 	})
 
 	runDone := make(chan error, 1)

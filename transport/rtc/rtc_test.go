@@ -116,9 +116,11 @@ func TestWebRTCEchoLoopback(t *testing.T) {
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
 	tr := rtc.NewTransport(server, params)
-	task := pipeline.NewTask(pipeline.New(tr.Input(), newEcho(), tr.Output()), pipeline.TaskParams{
-		AudioInSampleRate:  opus.SampleRate,
-		AudioOutSampleRate: opus.SampleRate,
+	task := pipeline.NewWorker(pipeline.New(tr.Input(), newEcho(), tr.Output()), pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			AudioInSampleRate:  opus.SampleRate,
+			AudioOutSampleRate: opus.SampleRate,
+		},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,9 +241,14 @@ func TestRTVIHandshakeOverDataChannel(t *testing.T) {
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
 	tr := rtc.NewTransport(server, params)
-	task := pipeline.NewTask(
+	task := pipeline.NewWorker(
 		pipeline.New(tr.Input(), rtvi.NewProcessor(), newEcho(), tr.Output()),
-		pipeline.TaskParams{AudioInSampleRate: opus.SampleRate, AudioOutSampleRate: opus.SampleRate},
+		pipeline.WorkerConfig{
+			Params: pipeline.Params{
+				AudioInSampleRate:  opus.SampleRate,
+				AudioOutSampleRate: opus.SampleRate,
+			},
+		},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

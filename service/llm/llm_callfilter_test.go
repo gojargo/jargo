@@ -105,7 +105,7 @@ func runTurn(t *testing.T, svc *llm.Base, tools ...string) *watch {
 	convo.SetTools(declared)
 	convo.AddUserMessage("go on then")
 
-	task := pipeline.NewTask(pipeline.New(svc, newProbe(w.see)), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, newProbe(w.see)), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 	task.QueueFrame(frames.NewLLMContextFrame(convo))

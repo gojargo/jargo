@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // tagger replaces every downstream TextFrame with a new one whose text is
@@ -44,13 +45,13 @@ func runParallel(t *testing.T, pp *pipeline.ParallelPipeline, in []frames.Frame)
 
 	var mu sync.Mutex
 	var got []frames.Frame
-	task := pipeline.NewTask(pipeline.New(pp), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pp), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 
 	done := make(chan error, 1)
@@ -151,7 +152,7 @@ func TestParallelLifecycleEndToEnd(t *testing.T) {
 		t.Fatalf("NewParallel: %v", err)
 	}
 
-	task := pipeline.NewTask(pipeline.New(pp), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(pp), pipeline.WorkerConfig{})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	task.QueueFrame(frames.NewTextFrame("x"))
@@ -260,15 +261,15 @@ func TestParallelBranchGeneratedLifecycleFrameEscapes(t *testing.T) {
 	var mu sync.Mutex
 	sawEnd := make(chan struct{})
 	var once sync.Once
-	task := pipeline.NewTask(pipeline.New(pp), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pp), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			if _, ok := f.(*frames.EndFrame); ok {
-				once.Do(func() { close(sawEnd) })
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := f.(*frames.EndFrame); ok {
+			once.Do(func() { close(sawEnd) })
+		}
 	})
 
 	done := make(chan error, 1)
@@ -281,7 +282,7 @@ func TestParallelBranchGeneratedLifecycleFrameEscapes(t *testing.T) {
 		t.Error("branch-generated EndFrame never left the parallel pipeline")
 	}
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
@@ -394,19 +395,19 @@ func TestParallelHoldsSystemFramesWhileSynchronizing(t *testing.T) {
 
 	var mu sync.Mutex
 	var endReleased bool
-	task := pipeline.NewTask(
+	task := pipeline.NewWorker(
 		pipeline.New(newInterruptAfterEnd(150*time.Millisecond), pp),
-		pipeline.TaskParams{
+		pipeline.WorkerConfig{
 			ReachedDownstreamFilter: pipeline.AnyFrame,
-			OnReachedDownstream: func(f frames.Frame) {
-				if _, ok := f.(*frames.EndFrame); ok {
-					mu.Lock()
-					endReleased = true
-					mu.Unlock()
-				}
-			},
 		},
 	)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.EndFrame); ok {
+			mu.Lock()
+			endReleased = true
+			mu.Unlock()
+		}
+	})
 
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

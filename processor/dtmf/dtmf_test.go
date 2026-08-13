@@ -8,6 +8,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/dtmf"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestToneLengthAndSilenceForUnknown(t *testing.T) {
@@ -33,16 +34,16 @@ func TestToneLengthAndSilenceForUnknown(t *testing.T) {
 func TestAggregatorFlushesOnTerminator(t *testing.T) {
 	got := make(chan string, 1)
 	agg := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: "digits: "})
-	task := pipeline.NewTask(pipeline.New(agg), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(agg), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if tf, ok := f.(*frames.TranscriptionFrame); ok {
-				select {
-				case got <- tf.Text:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.TranscriptionFrame); ok {
+			select {
+			case got <- tf.Text:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

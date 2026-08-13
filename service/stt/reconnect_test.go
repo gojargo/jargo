@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // scriptedStream replays canned results, then ends the session the way the test
@@ -145,12 +146,14 @@ func (c *collector) wait(t *testing.T, what string, cond func() bool) {
 // runService runs svc in a pipeline until stop is called.
 func runService(t *testing.T, svc *stt.StreamService, c *collector) (stop func()) {
 	t.Helper()
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream:     c.downstream,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
-		OnReachedUpstream:       c.upstream,
 	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+		func(_ context.Context, f frames.Frame) { c.downstream(f) })
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream,
+		func(_ context.Context, f frames.Frame) { c.upstream(f) })
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return func() {

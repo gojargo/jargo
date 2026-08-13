@@ -156,7 +156,7 @@ func TestRunnerCancelReachesRootWorkersOnly(t *testing.T) {
 	root.AddWorkers(ctx, child)
 	runner.AddWorkers(ctx, child)
 
-	runner.Cancel(ctx, "")
+	runner.Cancel(t.Context(), "")
 
 	// Only what the runner itself addressed, as above.
 	msgs := await[*bus.CancelWorkerMessage](t, rec, 1)

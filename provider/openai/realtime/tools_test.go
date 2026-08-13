@@ -93,13 +93,13 @@ func (r *recordingRealtime) awaitSessionWithTools(t *testing.T, want string) str
 }
 
 // runService starts the realtime service in a pipeline against srv.
-func runService(t *testing.T, url string) (*pipeline.Task, chan error) {
+func runService(t *testing.T, url string) (*pipeline.Worker, chan error) {
 	t.Helper()
 	svc := realtime.New(realtime.Config{
 		APIKey:  "k",
 		BaseURL: "ws" + strings.TrimPrefix(url, "http"),
 	})
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return task, done

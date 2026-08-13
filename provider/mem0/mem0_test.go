@@ -61,7 +61,7 @@ func TestMemoryRetrievesAndStores(t *testing.T) {
 	convo.AddUserMessage("what do you remember about me?")
 	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1", SearchLimit: 5})
 
-	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(m), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 	task.QueueFrame(frames.NewLLMContextFrame(convo))
@@ -122,7 +122,7 @@ func TestMemoryNoResultsClearsRecall(t *testing.T) {
 	convo.AddUserMessage("hello")
 	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1"})
 
-	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(m), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 	task.QueueFrame(frames.NewLLMContextFrame(convo))
@@ -195,7 +195,7 @@ func TestMemorySearchesOncePerUserMessage(t *testing.T) {
 	convo.AddUserMessage("where did I put my keys?")
 	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1"})
 
-	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(m), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -228,7 +228,7 @@ func TestMemoryPrewarmsTheSearchPath(t *testing.T) {
 	defer srv.Close()
 
 	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1", Prewarm: true})
-	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(m), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -246,7 +246,7 @@ func TestMemoryPrewarmIsOptIn(t *testing.T) {
 	defer srv.Close()
 
 	m := mem0.NewMemory(mem0.Config{Host: srv.URL, UserID: "u1"})
-	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(m), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -274,7 +274,7 @@ func TestMemorySearchTimeoutReleasesTheTurn(t *testing.T) {
 	})
 
 	downstream := newFrameSink()
-	task := pipeline.NewTask(pipeline.New(m, downstream), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(m, downstream), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -354,7 +354,7 @@ func authHeaders(t *testing.T, cfg mem0.Config) http.Header {
 	convo.AddUserMessage("hello")
 	m := mem0.NewMemory(cfg)
 
-	task := pipeline.NewTask(pipeline.New(m), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(m), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 	task.QueueFrame(frames.NewLLMContextFrame(convo))

@@ -1,7 +1,7 @@
 // Package observers provides pipeline observers: components that watch the frames
 // flowing through a pipeline to derive turn, latency and startup metrics, or to
 // log the stream, without modifying it. Register them via
-// pipeline.TaskParams.Observers.
+// pipeline.WorkerConfig.Observers.
 //
 // The pipeline reports frames at its two ends, so these observers track the
 // turn-taking and bot-output frames that travel there (StartFrame, the

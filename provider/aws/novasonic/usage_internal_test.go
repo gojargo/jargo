@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // usageEnvelope parses one wire event the way the read loop does, so a test
@@ -30,27 +31,29 @@ func runUsage(t *testing.T, ev outputEvent) []frames.LLMTokenUsage {
 
 	got := make(chan frames.LLMTokenUsage, 4)
 	started := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(s), pipeline.TaskParams{
-		EnableUsageMetrics:      true,
+	task := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			switch fr := f.(type) {
-			case *frames.TextFrame:
-				select {
-				case started <- struct{}{}:
-				default:
-				}
-			case *frames.MetricsFrame:
-				for _, d := range fr.Data {
-					if u, ok := d.(frames.LLMUsageMetricsData); ok {
-						select {
-						case got <- u.Value:
-						default:
-						}
+		Params: pipeline.Params{
+			EnableUsageMetrics: true,
+		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		switch fr := f.(type) {
+		case *frames.TextFrame:
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+		case *frames.MetricsFrame:
+			for _, d := range fr.Data {
+				if u, ok := d.(frames.LLMUsageMetricsData); ok {
+					select {
+					case got <- u.Value:
+					default:
 					}
 				}
 			}
-		},
+		}
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

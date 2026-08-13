@@ -44,7 +44,7 @@ func TestRecordsAndMergesTracks(t *testing.T) {
 		},
 	})
 
-	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 

@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // errBoom is the non-fatal error a tagSvc raises to trigger failover.
@@ -46,24 +47,24 @@ func (s *tagSvc) ProcessFrame(ctx context.Context, f frames.Frame, dir processor
 
 // runCollector runs a task over proc, returning the task (to queue frames into),
 // a channel of every downstream TextFrame text, and a stop function.
-func runCollector(t *testing.T, proc processor.Processor) (*pipeline.Task, <-chan string, func()) {
+func runCollector(t *testing.T, proc processor.Processor) (*pipeline.Worker, <-chan string, func()) {
 	t.Helper()
 	out := make(chan string, 64)
-	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if tf, ok := f.(*frames.TextFrame); ok {
-				select {
-				case out <- tf.Text:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.TextFrame); ok {
+			select {
+			case out <- tf.Text:
+			default:
 			}
-		},
+		}
 	})
 	done := make(chan struct{})
 	go func() { _ = task.Run(context.Background()); close(done) }()
 	return task, out, func() {
-		task.Cancel()
+		task.Cancel(t.Context(), "")
 		<-done
 	}
 }
@@ -377,21 +378,21 @@ func (s *metaSvc) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 
 // collectMetadata runs a switcher and returns the service names whose metadata
 // escaped it.
-func collectMetadata(t *testing.T, sw *pipeline.ServiceSwitcher) (*pipeline.Task, func() []string, func()) {
+func collectMetadata(t *testing.T, sw *pipeline.ServiceSwitcher) (*pipeline.Worker, func() []string, func()) {
 	t.Helper()
 	var (
 		mu   sync.Mutex
 		seen []string
 	)
-	task := pipeline.NewTask(pipeline.New(sw), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(sw), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if mf, ok := f.(frames.ServiceMetadata); ok {
-				mu.Lock()
-				seen = append(seen, mf.Service())
-				mu.Unlock()
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if mf, ok := f.(frames.ServiceMetadata); ok {
+			mu.Lock()
+			seen = append(seen, mf.Service())
+			mu.Unlock()
+		}
 	})
 	done := make(chan struct{})
 	go func() { _ = task.Run(context.Background()); close(done) }()
@@ -401,7 +402,7 @@ func collectMetadata(t *testing.T, sw *pipeline.ServiceSwitcher) (*pipeline.Task
 			defer mu.Unlock()
 			return append([]string(nil), seen...)
 		}, func() {
-			task.Cancel()
+			task.Cancel(t.Context(), "")
 			<-done
 		}
 }

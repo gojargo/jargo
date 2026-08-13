@@ -82,9 +82,9 @@ func TestSendTextRunImmediatelyCommitsBeforeAppending(t *testing.T) {
 	proc := rtvi.NewProcessor()
 	llm := newOpenEndedLLM()
 
-	task := pipeline.NewTask(
+	task := pipeline.NewWorker(
 		pipeline.New(proc, agg.User(), llm, agg.Assistant()),
-		pipeline.TaskParams{},
+		pipeline.WorkerConfig{},
 	)
 	done := make(chan error, 1)
 	go func() { done <- task.Run(t.Context()) }()

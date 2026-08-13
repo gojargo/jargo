@@ -10,14 +10,15 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // runAssistant drives frames through an assistant aggregator over a real
 // pipeline and returns the conversation once the task has finished with them.
-func runAssistant(t *testing.T, convo *frames.LLMContext, queue func(task *pipeline.Task)) {
+func runAssistant(t *testing.T, convo *frames.LLMContext, queue func(task *pipeline.Worker)) {
 	t.Helper()
 	pair := aggregators.New(convo)
-	task := pipeline.NewTask(pipeline.New(pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -39,7 +40,7 @@ func runAssistant(t *testing.T, convo *frames.LLMContext, queue func(task *pipel
 func TestAssistantAggregatorRecordsWordsAsTheyAreSpoken(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 
-	runAssistant(t, convo, func(task *pipeline.Task) {
+	runAssistant(t, convo, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		for _, word := range []string{"Let", "me", "check", "that"} {
 			task.QueueFrame(frames.NewTTSTextFrame(word))
@@ -62,7 +63,7 @@ func TestAssistantAggregatorRecordsWordsAsTheyAreSpoken(t *testing.T) {
 func TestAssistantAggregatorRecordsTheWrittenForm(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 
-	runAssistant(t, convo, func(task *pipeline.Task) {
+	runAssistant(t, convo, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewTTSTextFrame("Room"))
 		spoken := frames.NewTTSTextFrame("twenty-three")
@@ -82,7 +83,7 @@ func TestAssistantAggregatorRecordsTheWrittenForm(t *testing.T) {
 func TestAssistantAggregatorIgnoresWordsNotBoundForTheContext(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 
-	runAssistant(t, convo, func(task *pipeline.Task) {
+	runAssistant(t, convo, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		for _, word := range []string{"not", "for", "the", "record"} {
 			f := frames.NewTTSTextFrame(word)
@@ -104,7 +105,7 @@ func TestAssistantAggregatorIgnoresWordsNotBoundForTheContext(t *testing.T) {
 func TestAssistantAggregatorKeepsOnlyTheWordsActuallySpoken(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 
-	runAssistant(t, convo, func(task *pipeline.Task) {
+	runAssistant(t, convo, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewTTSTextFrame("Let"))
 		task.QueueFrame(frames.NewTTSTextFrame("me"))
@@ -137,18 +138,18 @@ func TestUserAggregatorDropsInputWhileMuted(t *testing.T) {
 
 	var mu sync.Mutex
 	var muteStarted, muteStopped int
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch f.(type) {
-			case *frames.UserMuteStartedFrame:
-				muteStarted++
-			case *frames.UserMuteStoppedFrame:
-				muteStopped++
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.UserMuteStartedFrame:
+			muteStarted++
+		case *frames.UserMuteStoppedFrame:
+			muteStopped++
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -206,7 +207,7 @@ func TestAssistantAggregatorCommitsSpeechThatHasNoResponseAroundIt(t *testing.T)
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)
 
-	task := pipeline.NewTask(pipeline.New(pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 

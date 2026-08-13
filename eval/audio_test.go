@@ -103,31 +103,35 @@ func allZero(b []byte) bool {
 	return true
 }
 
-func buildAudioBot(in, out processor.Processor) *pipeline.Task {
+func buildAudioBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
-	return pipeline.NewTask(pipeline.New(
+	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), out, agg.Assistant(),
-	), pipeline.TaskParams{
-		AudioInSampleRate: audioRate,
+	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Params: pipeline.Params{
+			AudioInSampleRate: audioRate,
+		},
 	})
 }
 
 // buildSpeakingBot is the audio bot with a speech service in it, so the bot's
 // reply is synthesized and reported as spoken. Only then is there a tts_response
 // for a scenario to assert on.
-func buildSpeakingBot(in, out processor.Processor) *pipeline.Task {
+func buildSpeakingBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
-	return pipeline.NewTask(pipeline.New(
+	return pipeline.NewWorker(pipeline.New(
 		in, newFakeAudioSTT(), agg.User(), newFakeLLM(),
 		tts.New("fakeTTS", fakeSynth{}), rtviProc, out, agg.Assistant(),
-	), pipeline.TaskParams{
-		AudioInSampleRate: audioRate,
+	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Params: pipeline.Params{
+			AudioInSampleRate: audioRate,
+		},
 	})
 }
 
@@ -171,16 +175,18 @@ type unspeakable struct{}
 func (unspeakable) Filter(string) string { return "" }
 
 // buildSilentBot answers every turn and speaks none of it.
-func buildSilentBot(in, out processor.Processor) *pipeline.Task {
+func buildSilentBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
 	speech := tts.New("fakeTTS", fakeSynth{})
 	speech.SetTextFilters(unspeakable{})
-	return pipeline.NewTask(pipeline.New(
+	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), speech, out, agg.Assistant(),
-	), pipeline.TaskParams{
-		AudioInSampleRate: audioRate,
-		Observers:         []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+	), pipeline.WorkerConfig{
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Params: pipeline.Params{
+			AudioInSampleRate: audioRate,
+		},
 	})
 }
 

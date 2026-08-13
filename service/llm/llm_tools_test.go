@@ -15,6 +15,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeToolGen requests one tool call on its first turn, then answers with text.
@@ -93,7 +94,7 @@ func TestBaseRunsToolLoop(t *testing.T) {
 			}
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe, pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe, pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -182,16 +183,16 @@ func TestToolHandlerDoesNotBlockFrames(t *testing.T) {
 	convo.AddUserMessage("weather?")
 
 	spoken := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.TTSSpeakFrame); ok {
-				select {
-				case spoken <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TTSSpeakFrame); ok {
+			select {
+			case spoken <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -291,21 +292,21 @@ func TestToolContinuationSeesToolResult(t *testing.T) {
 	ends := 0
 	var mu sync.Mutex
 	pipe := pipeline.New(svc, newDelayResults(50*time.Millisecond), pair.Assistant())
-	task := pipeline.NewTask(pipe, pipeline.TaskParams{
+	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
-				mu.Lock()
-				ends++
-				if ends == 2 {
-					select {
-					case done <- struct{}{}:
-					default:
-					}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
+			mu.Lock()
+			ends++
+			if ends == 2 {
+				select {
+				case done <- struct{}{}:
+				default:
 				}
-				mu.Unlock()
 			}
-		},
+			mu.Unlock()
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -404,18 +405,18 @@ func TestInterruptionCancelsTheCall(t *testing.T) {
 
 	var mu sync.Mutex
 	var results, cancels int
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch f.(type) {
-			case *frames.FunctionCallResultFrame:
-				results++
-			case *frames.FunctionCallCancelFrame:
-				cancels++
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.FunctionCallResultFrame:
+			results++
+		case *frames.FunctionCallCancelFrame:
+			cancels++
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -467,16 +468,16 @@ func TestAsyncToolSurvivesInterruption(t *testing.T) {
 	}, llm.WithCancelOnInterruption(false))
 
 	result := make(chan string, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
-				select {
-				case result <- fr.Result:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+			select {
+			case result <- fr.Result:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -512,16 +513,16 @@ func TestMissingFunctionAnswersTheCall(t *testing.T) {
 	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
 
 	result := make(chan string, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
-				select {
-				case result <- fr.Result:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+			select {
+			case result <- fr.Result:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -591,7 +592,7 @@ func TestFunctionCallTimeout(t *testing.T) {
 	})
 	convo := toolConvo("get_weather")
 	pair := aggregators.New(convo)
-	task := pipeline.NewTask(pipeline.New(svc, probe, pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe, pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -641,7 +642,7 @@ func TestFunctionCallTimeoutPerFunction(t *testing.T) {
 			}
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -686,7 +687,7 @@ func TestCatchAllFunction(t *testing.T) {
 			}
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -756,7 +757,7 @@ func TestFunctionCallEvents(t *testing.T) {
 		return ctx.Err()
 	})
 
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -841,7 +842,7 @@ func TestSequentialFunctionCalls(t *testing.T) {
 		return nil
 	})
 
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -881,7 +882,7 @@ func TestUngroupedFunctionCalls(t *testing.T) {
 			}
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -919,7 +920,7 @@ func TestGroupedFunctionCallsShareAGroup(t *testing.T) {
 			}
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1077,7 +1078,7 @@ func TestCancelAsyncToolCallAbandonsTheCall(t *testing.T) {
 			cancels++
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1120,7 +1121,7 @@ func runToolTurn(t *testing.T, svc *llm.Base, tool string) {
 	t.Helper()
 	convo := toolConvo(tool)
 	pair := aggregators.New(convo)
-	task := pipeline.NewTask(pipeline.New(svc, pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1157,7 +1158,7 @@ func TestToolCarriedHandlerIsRegistered(t *testing.T) {
 			}
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1191,7 +1192,7 @@ func TestToolCarriedHandlerIsDroppedWhenWithdrawn(t *testing.T) {
 	convo.SetTools([]frames.Tool{weather})
 	convo.AddUserMessage("weather?")
 
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1238,7 +1239,7 @@ func TestRegisteredHandlerWinsOverToolCarried(t *testing.T) {
 			}
 		}
 	})
-	task := pipeline.NewTask(pipeline.New(svc, probe), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 

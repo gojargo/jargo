@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // runSpeechResults feeds the given results through a stream service and returns
@@ -21,20 +22,20 @@ func runSpeechResults(t *testing.T, results [][]stt.Result) []string {
 
 	var mu sync.Mutex
 	var seq []string
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch f.(type) {
-			case *frames.UserStartedSpeakingFrame:
-				seq = append(seq, "started")
-			case *frames.UserStoppedSpeakingFrame:
-				seq = append(seq, "stopped")
-			case *frames.InterruptionFrame:
-				seq = append(seq, "interrupted")
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.UserStartedSpeakingFrame:
+			seq = append(seq, "started")
+		case *frames.UserStoppedSpeakingFrame:
+			seq = append(seq, "stopped")
+		case *frames.InterruptionFrame:
+			seq = append(seq, "interrupted")
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -138,15 +139,15 @@ func TestSpeechBoundaryCanCarryText(t *testing.T) {
 
 	var mu sync.Mutex
 	var text string
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.TranscriptionFrame); ok {
-				mu.Lock()
-				text = fr.Text
-				mu.Unlock()
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.TranscriptionFrame); ok {
+			mu.Lock()
+			text = fr.Text
+			mu.Unlock()
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

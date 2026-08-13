@@ -8,6 +8,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // timingGen mirrors how a real service reports timing: it records time to first
@@ -32,25 +33,27 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 	// first and are not what this is measuring.
 	noInitial := false
 	mfCh := make(chan *frames.MetricsFrame, 4)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableMetrics:           true,
-		SendInitialEmptyMetrics: &noInitial,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mf, ok := f.(*frames.MetricsFrame)
-			if !ok {
+		Params: pipeline.Params{
+			EnableMetrics:           true,
+			SendInitialEmptyMetrics: &noInitial,
+		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mf, ok := f.(*frames.MetricsFrame)
+		if !ok {
+			return
+		}
+		for _, d := range mf.Data {
+			if _, ok := d.(frames.ProcessingMetricsData); ok {
+				select {
+				case mfCh <- mf:
+				default:
+				}
 				return
 			}
-			for _, d := range mf.Data {
-				if _, ok := d.(frames.ProcessingMetricsData); ok {
-					select {
-					case mfCh <- mf:
-					default:
-					}
-					return
-				}
-			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -87,22 +90,22 @@ func TestNoMetricsFrameWhenDisabled(t *testing.T) {
 
 	seen := make(chan struct{}, 1)
 	end := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			switch f.(type) {
-			case *frames.MetricsFrame:
-				select {
-				case seen <- struct{}{}:
-				default:
-				}
-			case *frames.LLMFullResponseEndFrame:
-				select {
-				case end <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		switch f.(type) {
+		case *frames.MetricsFrame:
+			select {
+			case seen <- struct{}{}:
+			default:
 			}
-		},
+		case *frames.LLMFullResponseEndFrame:
+			select {
+			case end <- struct{}{}:
+			default:
+			}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

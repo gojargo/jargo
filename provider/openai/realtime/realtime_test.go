@@ -14,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/openai/realtime"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -29,7 +30,7 @@ func TestConfigValidate(t *testing.T) {
 // messages, and streams a canned sequence of Realtime server events.
 func fakeRealtime(t *testing.T, audio []byte) *httptest.Server {
 	t.Helper()
-	events := []string{
+	serverEvents := []string{
 		`{"type":"response.created"}`,
 		`{"type":"response.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(audio) + `"}`,
 		`{"type":"response.audio_transcript.delta","delta":"hello"}`,
@@ -52,7 +53,7 @@ func fakeRealtime(t *testing.T, audio []byte) *httptest.Server {
 				}
 			}
 		}()
-		for _, e := range events {
+		for _, e := range serverEvents {
 			if err := c.Write(ctx, websocket.MessageText, []byte(e)); err != nil {
 				return
 			}
@@ -71,15 +72,17 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []frames.Frame
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		AudioInSampleRate:       24000,
-		AudioOutSampleRate:      24000,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
+		Params: pipeline.Params{
+			AudioInSampleRate:  24000,
+			AudioOutSampleRate: 24000,
 		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

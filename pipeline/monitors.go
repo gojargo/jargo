@@ -99,7 +99,7 @@ func (m *monitors) stop() {
 // are enabled. It runs when the StartFrame reaches the sink rather than when the
 // run begins: every processor has seen its StartFrame by then, so no heartbeat
 // is dropped for arriving before one.
-func (t *Task) startHeartbeats() {
+func (t *Worker) startHeartbeats() {
 	if !t.params.EnableHeartbeats {
 		return
 	}
@@ -116,7 +116,7 @@ func (t *Task) startHeartbeats() {
 }
 
 // heartbeatPushLoop sends a heartbeat into the pipeline every period.
-func (t *Task) heartbeatPushLoop(ctx context.Context) {
+func (t *Worker) heartbeatPushLoop(ctx context.Context) {
 	for {
 		// Straight into the pipeline, not through the task's queue. The run loop
 		// stops draining that queue the moment a pipeline-ending frame goes into
@@ -162,9 +162,9 @@ func (o *idleObserver) OnPushFrame(data processor.FramePushed) {
 
 // idleMonitorLoop watches for the pipeline going quiet for longer than the idle
 // timeout.
-func (t *Task) idleMonitorLoop(ctx context.Context) {
+func (t *Worker) idleMonitorLoop(ctx context.Context) {
 	for {
-		timer := time.NewTimer(t.params.IdleTimeout)
+		timer := time.NewTimer(t.cfg.IdleTimeout)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -172,7 +172,7 @@ func (t *Task) idleMonitorLoop(ctx context.Context) {
 		case <-t.idleSig:
 			timer.Stop()
 		case <-timer.C:
-			if !t.idleTimeoutReached() {
+			if !t.idleTimeoutReached(ctx) {
 				return
 			}
 		}
@@ -181,17 +181,15 @@ func (t *Task) idleMonitorLoop(ctx context.Context) {
 
 // idleTimeoutReached reports the pipeline going quiet and returns whether to
 // keep watching.
-func (t *Task) idleTimeoutReached() bool {
+func (t *Worker) idleTimeoutReached(ctx context.Context) bool {
 	// Already on the way out, so there is nothing left to notice.
 	if t.isCanceling() {
 		return false
 	}
 
-	slog.Warn("the pipeline has gone quiet", "timeout", t.params.IdleTimeout)
-	if t.params.OnIdleTimeout != nil {
-		t.params.OnIdleTimeout()
-	}
-	if !boolValue(t.params.CancelOnIdleTimeout, true) {
+	slog.Warn("the pipeline has gone quiet", "timeout", t.cfg.IdleTimeout)
+	t.Call(ctx, EventIdleTimeout, t)
+	if !boolOrTrue(t.cfg.CancelOnIdleTimeout) {
 		// The caller wants to hear about it and decide for itself, so keep
 		// watching and report the next stretch of quiet too.
 		return true
@@ -199,6 +197,14 @@ func (t *Task) idleTimeoutReached() bool {
 
 	slog.Warn("canceling the idle pipeline")
 	t.cancelWithReason("idle timeout")
+
+	// The runner is told too, so the other root workers of the session go with
+	// this one. A worker running beside others that should see itself out
+	// without taking them down opts out of it.
+	if boolOrTrue(t.cfg.CancelRunnerOnIdleTimeout) {
+		slog.Warn("canceling the runner with it")
+		t.Base.Cancel(ctx, "idle timeout")
+	}
 	return false
 }
 
@@ -208,7 +214,7 @@ func (t *Task) idleTimeoutReached() bool {
 // It keeps reporting for as long as the silence lasts, one report per interval,
 // rather than reporting once and going quiet: a pipeline that is still stuck a
 // minute later is still worth hearing about.
-func (t *Task) heartbeatMonitorLoop(ctx context.Context) {
+func (t *Worker) heartbeatMonitorLoop(ctx context.Context) {
 	for {
 		waitCtx, cancel := context.WithTimeout(ctx, t.params.HeartbeatMonitorTimeout)
 		f, ok := t.heartbeats.get(waitCtx)
@@ -225,8 +231,6 @@ func (t *Task) heartbeatMonitorLoop(ctx context.Context) {
 		}
 		slog.Warn("no heartbeat reached the end of the pipeline",
 			"timeout", t.params.HeartbeatMonitorTimeout)
-		if t.params.OnHeartbeatTimeout != nil {
-			t.params.OnHeartbeatTimeout()
-		}
+		t.Call(ctx, EventHeartbeatTimeout, t)
 	}
 }

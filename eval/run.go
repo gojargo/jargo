@@ -18,7 +18,7 @@ import (
 // endpoints. The pipeline must include an rtvi.Processor so the harness can
 // drive it (send-text) and observe its events. The builder is transport-
 // agnostic: the harness supplies a WebSocket transport's input and output.
-type Bot func(in, out processor.Processor) *pipeline.Task
+type Bot func(in, out processor.Processor) *pipeline.Worker
 
 // Options configures a scenario run.
 type Options struct {

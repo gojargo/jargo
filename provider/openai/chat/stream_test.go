@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // usageChunk is a streamed chunk carrying a snapshot of the token counts. The
@@ -68,26 +70,28 @@ func reportedUsage(t *testing.T, replies ...string) []frames.LLMTokenUsage {
 
 	var reported []frames.LLMTokenUsage
 	ends := make(chan struct{}, len(replies))
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableUsageMetrics:      true,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.MetricsFrame:
-				for _, d := range fr.Data {
-					if u, ok := d.(frames.LLMUsageMetricsData); ok {
-						reported = append(reported, u.Value)
-					}
-				}
-			case *frames.LLMFullResponseEndFrame:
-				select {
-				case ends <- struct{}{}:
-				default:
+		Params: pipeline.Params{
+			EnableUsageMetrics: true,
+		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.MetricsFrame:
+			for _, d := range fr.Data {
+				if u, ok := d.(frames.LLMUsageMetricsData); ok {
+					reported = append(reported, u.Value)
 				}
 			}
-		},
+		case *frames.LLMFullResponseEndFrame:
+			select {
+			case ends <- struct{}{}:
+			default:
+			}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(t.Context()) }()

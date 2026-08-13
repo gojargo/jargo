@@ -65,9 +65,9 @@ func (s *settingsSynth) lang() (string, bool) {
 	return s.store.Language.Value()
 }
 
-func runTTSService(t *testing.T, svc *tts.Base) (*pipeline.Task, func()) {
+func runTTSService(t *testing.T, svc *tts.Base) (*pipeline.Worker, func()) {
 	t.Helper()
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return task, func() {

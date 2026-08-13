@@ -328,6 +328,12 @@ func (w *Base) base() *Base { return w }
 // Name is what other workers address this one by, and identifies it on the bus.
 func (w *Base) Name() string { return w.name }
 
+// Events is the worker's event registry, which is where a typed handler is
+// attached with events.On:
+//
+//	events.On(worker.Events(), pipeline.EventPipelineFinished, handler)
+func (w *Base) Events() *events.Registry { return &w.Registry }
+
 // Bridged reports whether the worker is bridged onto the bus. A worker that
 // wraps its pipeline in bus edges overrides it.
 func (w *Base) Bridged() bool { return false }

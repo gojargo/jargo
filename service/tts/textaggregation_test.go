@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 	ttstext "github.com/gojargo/jargo/utils/text"
 )
 
@@ -18,7 +19,7 @@ func collectTextAggregation(
 	t *testing.T,
 	metricsEnabled bool,
 	aggregator ttstext.Aggregator,
-	feed func(task *pipeline.Task),
+	feed func(task *pipeline.Worker),
 ) []frames.TextAggregationMetricsData {
 	t.Helper()
 
@@ -35,23 +36,25 @@ func collectTextAggregation(
 	var mu sync.Mutex
 	var got []frames.TextAggregationMetricsData
 	off := false
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
-		EnableMetrics:           metricsEnabled,
-		SendInitialEmptyMetrics: &off,
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mf, ok := f.(*frames.MetricsFrame)
-			if !ok {
-				return
-			}
-			mu.Lock()
-			for _, d := range mf.Data {
-				if agg, ok := d.(frames.TextAggregationMetricsData); ok {
-					got = append(got, agg)
-				}
-			}
-			mu.Unlock()
+		Params: pipeline.Params{
+			EnableMetrics:           metricsEnabled,
+			SendInitialEmptyMetrics: &off,
 		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mf, ok := f.(*frames.MetricsFrame)
+		if !ok {
+			return
+		}
+		mu.Lock()
+		for _, d := range mf.Data {
+			if agg, ok := d.(frames.TextAggregationMetricsData); ok {
+				got = append(got, agg)
+			}
+		}
+		mu.Unlock()
 	})
 
 	runDone := make(chan error, 1)
@@ -71,7 +74,7 @@ func collectTextAggregation(
 }
 
 // speakOneSentence feeds a turn whose text completes a sentence.
-func speakOneSentence(task *pipeline.Task) {
+func speakOneSentence(task *pipeline.Worker) {
 	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 	task.QueueFrame(frames.NewLLMTextFrame("Hello "))
 	task.QueueFrame(frames.NewLLMTextFrame("world. "))
@@ -110,7 +113,7 @@ func TestTextAggregationMeasuredFromTheFirstToken(t *testing.T) {
 	// which is near zero.
 	const least = gap / 2
 
-	got := collectTextAggregation(t, true, nil, func(task *pipeline.Task) {
+	got := collectTextAggregation(t, true, nil, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("Hello "))
 		time.Sleep(gap)
@@ -152,7 +155,7 @@ func TestTextAggregationNotMeasuredWhenStreamingTokens(t *testing.T) {
 func TestTextAggregationReportedWhenNoSentenceCompletes(t *testing.T) {
 	// A response that never terminates a sentence still gets measured, when the
 	// end of the response flushes what is left.
-	got := collectTextAggregation(t, true, nil, func(task *pipeline.Task) {
+	got := collectTextAggregation(t, true, nil, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("no terminator here"))
 		task.QueueFrame(frames.NewLLMFullResponseEndFrame())

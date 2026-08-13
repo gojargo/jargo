@@ -7,11 +7,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/bus"
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/telemetry/tracing"
+	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/workers"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -37,10 +40,10 @@ const (
 	defaultIdleTimeout = 5 * time.Minute
 )
 
-// TaskParams configures a Task.
-type TaskParams struct {
-	// Clock is the pipeline clock; a system clock is used when nil.
-	Clock clock.Clock
+// Params is what the pipeline itself is told when it starts: the values that
+// ride on the StartFrame and reach every processor at setup. Anything about the
+// worker rather than the pipeline belongs in WorkerConfig.
+type Params struct {
 	// AudioInSampleRate is the StartFrame input sample rate; default 16000.
 	AudioInSampleRate int
 	// AudioOutSampleRate is the StartFrame output sample rate; default 24000.
@@ -64,14 +67,6 @@ type TaskParams struct {
 	// processors to expect metrics from before any have been measured; nil
 	// defaults to true. It only applies when EnableMetrics is set.
 	SendInitialEmptyMetrics *bool
-	// CancelTimeout bounds the wait for a CancelFrame to travel the pipeline;
-	// zero defaults to 20 seconds. Canceling is what a caller reaches for when
-	// something has already gone wrong, so it must not be the thing that hangs:
-	// a processor wedged somewhere would otherwise hold the shutdown open for
-	// good. Reaching the timeout gives up on the frame and finishes the run. An
-	// EndFrame is not bounded this way, since a graceful shutdown is expected to
-	// flush whatever is in flight however long that takes.
-	CancelTimeout time.Duration
 	// EnableHeartbeats sends a heartbeat through the pipeline at a fixed
 	// interval and reports when one stops coming out the far end, which is how a
 	// caller tells a pipeline that is quiet from one that is stuck.
@@ -83,10 +78,32 @@ type TaskParams struct {
 	// end of the pipeline before saying so; zero defaults to ten seconds. It only
 	// applies when EnableHeartbeats is set.
 	HeartbeatMonitorTimeout time.Duration
-	// OnHeartbeatTimeout, if set, is called when no heartbeat has reached the end
-	// of the pipeline within HeartbeatMonitorTimeout. It is called again every
-	// interval for as long as the silence lasts.
-	OnHeartbeatTimeout func()
+}
+
+// WorkerConfig configures a Worker: how it drives its pipeline, and how it
+// takes part in a session alongside the other workers.
+type WorkerConfig struct {
+	// Name is what other workers address this one by. Empty names it after its
+	// type, which suits a worker taking no part in worker-to-worker messaging.
+	Name string
+	// Active reports whether the worker starts active; nil defaults to true.
+	Active *bool
+	// Params is what the pipeline is told when it starts.
+	Params Params
+	// Clock is the pipeline clock; a system clock is used when nil.
+	Clock clock.Clock
+	// AppResources is whatever the application wants to share across a session,
+	// a database handle or an HTTP client say. It is passed by reference and
+	// never read by the framework; a processor reaches it through its setup.
+	AppResources any
+	// CancelTimeout bounds the wait for a CancelFrame to travel the pipeline;
+	// zero defaults to 20 seconds. Canceling is what a caller reaches for when
+	// something has already gone wrong, so it must not be the thing that hangs:
+	// a processor wedged somewhere would otherwise hold the shutdown open for
+	// good. Reaching the timeout gives up on the frame and finishes the run. An
+	// EndFrame is not bounded this way, since a graceful shutdown is expected to
+	// flush whatever is in flight however long that takes.
+	CancelTimeout time.Duration
 	// IdleTimeout is how long the pipeline may go without any of the frames
 	// IdleTimeoutFrames selects before it counts as idle; zero defaults to five
 	// minutes and a negative value turns idle detection off.
@@ -95,31 +112,16 @@ type TaskParams struct {
 	// busy; nil counts the assistant or the user speaking. The StartFrame always
 	// counts, so the first stretch is measured from the pipeline coming up.
 	IdleTimeoutFrames FrameFilter
-	// CancelOnIdleTimeout cancels the task once the pipeline has gone idle; nil
-	// defaults to true. Setting it false reports the idle pipeline and leaves it
-	// running, and goes on reporting each further stretch of quiet.
+	// CancelOnIdleTimeout cancels the worker once the pipeline has gone idle;
+	// nil defaults to true. Setting it false reports the idle pipeline and
+	// leaves it running, and goes on reporting each further stretch of quiet.
 	CancelOnIdleTimeout *bool
-	// OnIdleTimeout, if set, is called when the pipeline has gone idle, before
-	// it is canceled.
-	OnIdleTimeout func()
-	// OnPipelineStarted, if set, is called once the StartFrame has traveled the
-	// whole pipeline, meaning every processor is up and the pipeline is ready.
-	OnPipelineStarted func(*frames.StartFrame)
-	// OnPipelineFinished, if set, is called once the pipeline has reached a
-	// terminal state, with the frame that ended it: an EndFrame, a StopFrame or
-	// a CancelFrame. It is called for a CancelFrame even when the frame never
-	// arrived and the wait timed out, so a caller always hears the run end.
-	OnPipelineFinished func(frames.Frame)
-	// OnPipelineError, if set, is called for every error frame reaching the
-	// start of the pipeline, fatal or not. A fatal one also cancels the task,
-	// after the handler has run.
-	OnPipelineError func(*frames.ErrorFrame)
-	// OnReachedDownstream, if set, is called for the frames reaching the end of
-	// the pipeline that ReachedDownstreamFilter selects.
-	OnReachedDownstream func(frames.Frame)
-	// OnReachedUpstream, if set, is called for the frames reaching the start of
-	// the pipeline that ReachedUpstreamFilter selects.
-	OnReachedUpstream func(frames.Frame)
+	// CancelRunnerOnIdleTimeout also cancels the runner, and with it every other
+	// root worker, when the pipeline goes idle; nil defaults to true. It only
+	// applies when CancelOnIdleTimeout is set: opting out of canceling this
+	// worker opts out of canceling the rest. Set it false for a worker running
+	// beside others that should see itself out without taking them with it.
+	CancelRunnerOnIdleTimeout *bool
 	// ReachedDownstreamFilter selects which frames reaching the end of the
 	// pipeline are reported. Nil selects nothing, so a handler without a filter
 	// is never called; that is the default because a handler on every frame sits
@@ -129,12 +131,11 @@ type TaskParams struct {
 	// ReachedUpstreamFilter selects which frames reaching the start of the
 	// pipeline are reported. Nil selects nothing. See ReachedDownstreamFilter.
 	ReachedUpstreamFilter FrameFilter
-	// Observers watch every frame reaching either end of the pipeline. They are
-	// notified after the OnReached callbacks.
+	// Observers watch every frame reaching either end of the pipeline.
 	Observers []Observer
 	// EnableTurnTracking follows the conversation's turns; nil defaults to true.
-	// It applies whether or not the task traces, since where the turns fell is
-	// worth knowing either way; see Task.TurnTracking. Tracing hangs off it, so
+	// It applies whether or not the worker traces, since where the turns fell is
+	// worth knowing either way; see Worker.TurnTracking. Tracing hangs off it, so
 	// turning it off turns tracing off too: there would be nothing to hang the
 	// turn spans from.
 	EnableTurnTracking *bool
@@ -147,29 +148,61 @@ type TaskParams struct {
 	// ConversationID names the traced conversation; empty generates one.
 	ConversationID string
 	// AdditionalSpanAttributes are set on the conversation span, on top of the
-	// ones the task sets itself. They are where the keys a trace backend reads
-	// from the root span belong — a session id, a user id, tags.
+	// ones the worker sets itself. They are where the keys a trace backend reads
+	// from the root span belong: a session id, a user id, tags.
 	AdditionalSpanAttributes []attribute.KeyValue
 }
 
-// Task runs a pipeline for a single session. It drives the lifecycle: it sends
+// The events a pipeline worker raises, on top of the ones every worker raises.
+const (
+	// EventFrameReachedUpstream fires for a frame reaching the start of the
+	// pipeline that ReachedUpstreamFilter selects, carrying that frame.
+	EventFrameReachedUpstream = "on_frame_reached_upstream"
+	// EventFrameReachedDownstream fires for a frame reaching the end of the
+	// pipeline that ReachedDownstreamFilter selects, carrying that frame.
+	EventFrameReachedDownstream = "on_frame_reached_downstream"
+	// EventHeartbeatTimeout fires when no heartbeat has reached the end of the
+	// pipeline within the monitor timeout, and again every interval for as long
+	// as the silence lasts. It carries nothing.
+	EventHeartbeatTimeout = "on_heartbeat_timeout"
+	// EventIdleTimeout fires when the pipeline has gone idle, before it is
+	// canceled. It carries nothing.
+	EventIdleTimeout = "on_idle_timeout"
+	// EventPipelineStarted fires once the StartFrame has traveled the whole
+	// pipeline, meaning every processor is up, carrying that frame.
+	EventPipelineStarted = "on_pipeline_started"
+	// EventPipelineFinished fires once the pipeline has reached a terminal
+	// state, carrying the frame that ended it: an EndFrame, a StopFrame or a
+	// CancelFrame. It fires for a CancelFrame even when the frame never arrived
+	// and the wait timed out, so a caller always hears the run end.
+	EventPipelineFinished = "on_pipeline_finished"
+	// EventPipelineError fires for every error frame reaching the start of the
+	// pipeline, fatal or not, carrying that frame. A fatal one also cancels the
+	// worker, after the handlers have run.
+	EventPipelineError = "on_pipeline_error"
+)
+
+// Worker runs a pipeline for a single session. It drives the lifecycle: it sends
 // the StartFrame, waits for the pipeline to be ready, pushes queued frames, and
 // shuts the pipeline down once an EndFrame or CancelFrame has traveled all the
 // way through.
-type Task struct {
+type Worker struct {
+	*workers.Base
+
 	pipeline *Pipeline
 	source   processor.Processor
 	sink     processor.Processor
-	params   TaskParams
+	cfg      WorkerConfig
+	params   Params
 	clk      clock.Clock
 
 	pushQueue *frameQueue
 
-	// observers are the caller's, plus the ones the task registers itself to
+	// observers are the caller's, plus the ones the worker registers itself to
 	// track and trace turns.
 	observers []Observer
 	// tracing is the session's tracing state, handed to the processors at setup;
-	// nil when the task is not tracing.
+	// nil when the worker is not tracing.
 	tracing *tracing.TracingContext
 	// turnTrace writes the conversation and turn spans; nil when not tracing.
 	turnTrace *observers.TurnTrace
@@ -180,17 +213,13 @@ type Task struct {
 	// each report on to the real observers, off the frame path.
 	observerProxy *observerProxy
 
-	// reachedDownstream are the handlers registered after construction, called
-	// for the frames reaching the end of the pipeline alongside the one
-	// TaskParams carries. See OnReachedDownstream. The filters alongside them
-	// select which frames are reported, and start out as the ones TaskParams
-	// carries.
+	// The filters select which frames reaching either end of the pipeline are
+	// reported, and start out as the ones WorkerConfig carries.
 	reachedMu         sync.Mutex
-	reachedDownstream []func(frames.Frame)
 	reachedDownFilter FrameFilter
 	reachedUpFilter   FrameFilter
 
-	// monitors is the scope the task's background goroutines run in, heartbeats
+	// monitors is the scope the worker's background goroutines run in, heartbeats
 	// is the queue the sink hands each arriving heartbeat to for the monitor to
 	// time, and idleSig carries the activity the idle observer reports.
 	monitors   monitors
@@ -210,65 +239,68 @@ type Task struct {
 	runCtx context.Context
 }
 
-// NewTask wraps pipe in a Task. pipe is usually a *Pipeline but may be any
+// NewWorker wraps pipe in a Worker. pipe is usually a *Pipeline but may be any
 // processor.
-func NewTask(pipe processor.Processor, params TaskParams) *Task {
-	if params.AudioInSampleRate == 0 {
-		params.AudioInSampleRate = defaultAudioInSampleRate
+func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
+	if cfg.Params.AudioInSampleRate == 0 {
+		cfg.Params.AudioInSampleRate = defaultAudioInSampleRate
 	}
-	if params.AudioOutSampleRate == 0 {
-		params.AudioOutSampleRate = defaultAudioOutSampleRate
+	if cfg.Params.AudioOutSampleRate == 0 {
+		cfg.Params.AudioOutSampleRate = defaultAudioOutSampleRate
 	}
-	if params.CancelTimeout == 0 {
-		params.CancelTimeout = defaultCancelTimeout
+	if cfg.CancelTimeout == 0 {
+		cfg.CancelTimeout = defaultCancelTimeout
 	}
-	if params.HeartbeatPeriod == 0 {
-		params.HeartbeatPeriod = defaultHeartbeatPeriod
+	if cfg.Params.HeartbeatPeriod == 0 {
+		cfg.Params.HeartbeatPeriod = defaultHeartbeatPeriod
 	}
-	if params.HeartbeatMonitorTimeout == 0 {
-		params.HeartbeatMonitorTimeout = defaultHeartbeatMonitorTimeout
+	if cfg.Params.HeartbeatMonitorTimeout == 0 {
+		cfg.Params.HeartbeatMonitorTimeout = defaultHeartbeatMonitorTimeout
 	}
-	if params.IdleTimeout == 0 {
-		params.IdleTimeout = defaultIdleTimeout
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = defaultIdleTimeout
 	}
-	if params.IdleTimeoutFrames == nil {
-		params.IdleTimeoutFrames = FrameTypes(
+	if cfg.IdleTimeoutFrames == nil {
+		cfg.IdleTimeoutFrames = FrameTypes(
 			&frames.BotSpeakingFrame{},
 			&frames.UserSpeakingFrame{},
 		)
 	}
-	t := &Task{
-		params:            params,
-		clk:               params.Clock,
+	t := &Worker{
+		cfg:               cfg,
+		params:            cfg.Params,
+		clk:               cfg.Clock,
 		pushQueue:         newFrameQueue(),
 		heartbeats:        newFrameQueue(),
 		idleSig:           make(chan struct{}, 1),
 		startSig:          make(chan struct{}),
 		endSig:            make(chan struct{}),
-		reachedDownFilter: params.ReachedDownstreamFilter,
-		reachedUpFilter:   params.ReachedUpstreamFilter,
+		reachedDownFilter: cfg.ReachedDownstreamFilter,
+		reachedUpFilter:   cfg.ReachedUpstreamFilter,
 	}
+	t.Base = workers.New(workers.Config{Name: cfg.Name, Active: cfg.Active}, t)
+	t.registerEvents()
 	if t.clk == nil {
 		t.clk = clock.NewSystem()
 	}
 	t.buildObservers()
 	t.observerProxy = newObserverProxy(t.observers)
 	// The source observes upstream frames, the sink observes downstream frames.
-	// They bracket the user pipeline so the task can inject and observe frames.
-	t.source = processor.NewSource("Task::Source", t.sourcePush)
-	t.sink = processor.NewSink("Task::Sink", t.sinkPush)
+	// They bracket the user pipeline so the worker can inject and observe frames.
+	t.source = processor.NewSource("Worker::Source", t.sourcePush)
+	t.sink = processor.NewSink("Worker::Sink", t.sinkPush)
 	t.pipeline = build(t.source, t.sink, []processor.Processor{pipe})
 	return t
 }
 
 // buildObservers assembles the observers the pipeline runs with: the caller's,
-// and — when the task traces — the turn tracing, plus the turn tracking and
+// and, when the worker traces, the turn tracing plus the turn tracking and
 // latency measurement that feed it.
-func (t *Task) buildObservers() {
-	t.observers = append([]Observer(nil), t.params.Observers...)
-	if t.params.IdleTimeout > 0 {
+func (t *Worker) buildObservers() {
+	t.observers = append([]Observer(nil), t.cfg.Observers...)
+	if t.cfg.IdleTimeout > 0 {
 		t.observers = append(t.observers, &idleObserver{
-			match: t.params.IdleTimeoutFrames,
+			match: t.cfg.IdleTimeoutFrames,
 			sig:   t.idleSig,
 		})
 	}
@@ -277,16 +309,16 @@ func (t *Task) buildObservers() {
 	// where the turns fell in an untraced session too. Tracing is what hangs off
 	// it, not the other way round, so turning turn tracking off turns tracing off
 	// with it: there would be nothing to hang the turn spans from.
-	if !boolValue(t.params.EnableTurnTracking, true) {
+	if !boolOrTrue(t.cfg.EnableTurnTracking) {
 		return
 	}
 
-	if t.params.EnableTracing {
+	if t.cfg.EnableTracing {
 		t.tracing = tracing.NewTracingContext()
 		t.turnTrace = observers.NewTurnTrace(observers.TurnTraceConfig{
 			Tracing:        t.tracing,
-			ConversationID: t.params.ConversationID,
-			Attributes:     t.params.AdditionalSpanAttributes,
+			ConversationID: t.cfg.ConversationID,
+			Attributes:     t.cfg.AdditionalSpanAttributes,
 		})
 	}
 
@@ -313,7 +345,7 @@ func (t *Task) buildObservers() {
 // AddObserver registers an observer while the pipeline runs, for something built
 // after the task that wants to watch the frames going by. It watches from here
 // on; what already happened is not replayed.
-func (t *Task) AddObserver(o Observer) {
+func (t *Worker) AddObserver(o Observer) {
 	if o == nil {
 		return
 	}
@@ -323,7 +355,7 @@ func (t *Task) AddObserver(o Observer) {
 // RemoveObserver stops reporting to an observer registered earlier. It has
 // stopped by the time this returns, so whatever the observer holds may be
 // released. Removing one that was never registered does nothing.
-func (t *Task) RemoveObserver(o Observer) {
+func (t *Worker) RemoveObserver(o Observer) {
 	if o == nil {
 		return
 	}
@@ -332,23 +364,23 @@ func (t *Task) RemoveObserver(o Observer) {
 
 // TurnTracking is the observer following the conversation's turns. It is nil
 // only when turn tracking has been turned off.
-func (t *Task) TurnTracking() *observers.TurnTracking { return t.turnTracking }
+func (t *Worker) TurnTracking() *observers.TurnTracking { return t.turnTracking }
 
 // TurnTrace is the observer writing the conversation and turn spans. It is nil
 // unless the task traces.
-func (t *Task) TurnTrace() *observers.TurnTrace { return t.turnTrace }
+func (t *Worker) TurnTrace() *observers.TurnTrace { return t.turnTrace }
 
 // Tracing is the session's tracing state: the conversation span the trace hangs
 // from and the turn being spoken. It is nil unless the task traces, and is what
 // the processors are given at setup so their spans land under the right turn.
-func (t *Task) Tracing() *tracing.TracingContext { return t.tracing }
+func (t *Worker) Tracing() *tracing.TracingContext { return t.tracing }
 
 // QueueFrame queues a frame to be pushed through the pipeline. The direction is
 // optional and defaults to downstream, which enters at the start of the
 // pipeline; pass processor.Upstream to enter at the end instead, which is how a
 // caller replies to something the pipeline sent it. Only the first direction is
 // read.
-func (t *Task) QueueFrame(f frames.Frame, dir ...processor.Direction) {
+func (t *Worker) QueueFrame(f frames.Frame, dir ...processor.Direction) {
 	if len(dir) > 0 && dir[0] == processor.Upstream {
 		// Straight into the sink, the far end of the pipeline, rather than the
 		// queue the run loop drains from the near end.
@@ -359,7 +391,7 @@ func (t *Task) QueueFrame(f frames.Frame, dir ...processor.Direction) {
 }
 
 // QueueFrames queues several frames, in order. See QueueFrame for the direction.
-func (t *Task) QueueFrames(fs []frames.Frame, dir ...processor.Direction) {
+func (t *Worker) QueueFrames(fs []frames.Frame, dir ...processor.Direction) {
 	for _, f := range fs {
 		t.QueueFrame(f, dir...)
 	}
@@ -368,7 +400,7 @@ func (t *Task) QueueFrames(fs []frames.Frame, dir ...processor.Direction) {
 // runContext is the context the run is under, or a background context before it
 // has started. A frame entering the pipeline needs one, and the caller of
 // QueueFrame has none to give.
-func (t *Task) runContext() context.Context {
+func (t *Worker) runContext() context.Context {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.runCtx != nil {
@@ -377,26 +409,9 @@ func (t *Task) runContext() context.Context {
 	return context.Background()
 }
 
-// OnReachedDownstream registers a handler called for every frame that reaches
-// the end of the pipeline, in addition to the one TaskParams carries.
-//
-// It exists because the things that watch the end of the pipeline are usually
-// built after the task is: something that queues frames needs the task to queue
-// them on, so it cannot also have been passed to NewTask. Handlers are called in
-// the order they were registered, on the goroutine the frame arrived on, so a
-// handler that does real work should hand it off rather than block the sink.
-func (t *Task) OnReachedDownstream(fn func(frames.Frame)) {
-	if fn == nil {
-		return
-	}
-	t.reachedMu.Lock()
-	t.reachedDownstream = append(t.reachedDownstream, fn)
-	t.reachedMu.Unlock()
-}
-
 // SetReachedDownstreamFilter replaces the filter selecting which frames reaching
 // the end of the pipeline are reported.
-func (t *Task) SetReachedDownstreamFilter(f FrameFilter) {
+func (t *Worker) SetReachedDownstreamFilter(f FrameFilter) {
 	t.reachedMu.Lock()
 	t.reachedDownFilter = f
 	t.reachedMu.Unlock()
@@ -404,7 +419,7 @@ func (t *Task) SetReachedDownstreamFilter(f FrameFilter) {
 
 // SetReachedUpstreamFilter replaces the filter selecting which frames reaching
 // the start of the pipeline are reported.
-func (t *Task) SetReachedUpstreamFilter(f FrameFilter) {
+func (t *Worker) SetReachedUpstreamFilter(f FrameFilter) {
 	t.reachedMu.Lock()
 	t.reachedUpFilter = f
 	t.reachedMu.Unlock()
@@ -413,7 +428,7 @@ func (t *Task) SetReachedUpstreamFilter(f FrameFilter) {
 // AddReachedDownstreamFilter widens the downstream filter to select what f
 // selects as well, so two consumers of the same task can each ask for their own
 // frames without knowing about each other.
-func (t *Task) AddReachedDownstreamFilter(f FrameFilter) {
+func (t *Worker) AddReachedDownstreamFilter(f FrameFilter) {
 	t.reachedMu.Lock()
 	t.reachedDownFilter = Or(t.reachedDownFilter, f)
 	t.reachedMu.Unlock()
@@ -421,50 +436,104 @@ func (t *Task) AddReachedDownstreamFilter(f FrameFilter) {
 
 // AddReachedUpstreamFilter widens the upstream filter to select what f selects
 // as well. See AddReachedDownstreamFilter.
-func (t *Task) AddReachedUpstreamFilter(f FrameFilter) {
+func (t *Worker) AddReachedUpstreamFilter(f FrameFilter) {
 	t.reachedMu.Lock()
 	t.reachedUpFilter = Or(t.reachedUpFilter, f)
 	t.reachedMu.Unlock()
 }
 
-// notifyReachedDownstream reports a frame reaching the end of the pipeline to
-// the handlers, if the filter selects it. Handlers run in the order they were
-// registered, on the goroutine the frame arrived on.
-func (t *Task) notifyReachedDownstream(f frames.Frame) {
+// notifyReachedDownstream reports a frame reaching the end of the pipeline, if
+// the filter selects it.
+func (t *Worker) notifyReachedDownstream(ctx context.Context, f frames.Frame) {
 	t.reachedMu.Lock()
 	filter := t.reachedDownFilter
-	handlers := t.reachedDownstream
 	t.reachedMu.Unlock()
 
-	if !filter.selects(f) {
-		return
-	}
-	if t.params.OnReachedDownstream != nil {
-		t.params.OnReachedDownstream(f)
-	}
-	for _, h := range handlers {
-		h(f)
+	if filter.selects(f) {
+		t.Call(ctx, EventFrameReachedDownstream, t, f)
 	}
 }
 
 // notifyReachedUpstream reports a frame reaching the start of the pipeline, if
 // the filter selects it.
-func (t *Task) notifyReachedUpstream(f frames.Frame) {
+func (t *Worker) notifyReachedUpstream(ctx context.Context, f frames.Frame) {
 	t.reachedMu.Lock()
 	filter := t.reachedUpFilter
 	t.reachedMu.Unlock()
 
-	if !filter.selects(f) {
+	if filter.selects(f) {
+		t.Call(ctx, EventFrameReachedUpstream, t, f)
+	}
+}
+
+// registerEvents declares the events a pipeline worker raises on top of the
+// ones every worker raises, and ties the worker's own lifecycle to the
+// pipeline's: it becomes ready once the pipeline is up, and has finished once
+// the pipeline has, so whoever is waiting on the worker is told at the moment
+// that is true of it.
+func (t *Worker) registerEvents() {
+	t.Register(EventFrameReachedUpstream, false)
+	t.Register(EventFrameReachedDownstream, false)
+	t.Register(EventHeartbeatTimeout, false)
+	t.Register(EventIdleTimeout, false)
+	t.Register(EventPipelineStarted, false)
+	t.Register(EventPipelineFinished, false)
+	t.Register(EventPipelineError, false)
+
+	events.On(&t.Registry, EventPipelineStarted, func(ctx context.Context, _ *frames.StartFrame) {
+		t.Start(ctx)
+	})
+	events.On(&t.Registry, EventPipelineFinished, func(ctx context.Context, _ frames.Frame) {
+		t.Stop(ctx)
+	})
+}
+
+// OnBusMessage handles the messages a pipeline worker acts on itself, after the
+// handling every worker does.
+//
+// A request to speak becomes a frame in this worker's pipeline. A pipeline with
+// no speech in it simply lets the frame through.
+func (t *Worker) OnBusMessage(ctx context.Context, m bus.Message) {
+	t.Base.OnBusMessage(ctx, m)
+
+	// The base drops a message addressed elsewhere, but it returns before
+	// reaching here, so the same check has to be made again before anything is
+	// queued into this worker's pipeline.
+	if m.Target() != "" && m.Target() != t.Name() {
 		return
 	}
-	if t.params.OnReachedUpstream != nil {
-		t.params.OnReachedUpstream(f)
+
+	if speak, ok := m.(*bus.TTSSpeakMessage); ok {
+		f := frames.NewTTSSpeakFrame(speak.Text)
+		f.AppendToContext = speak.AppendToContext
+		t.QueueFrame(f)
 	}
+}
+
+// HandleWorkerEnd ends the pipeline once the children have ended.
+//
+// The end is driven through the pipeline as an EndFrame rather than stopping
+// the worker where it stands, so every processor is told in turn and the worker
+// is finished only once the frame has drained out the far end.
+func (t *Worker) HandleWorkerEnd(ctx context.Context, m *bus.EndWorkerMessage) {
+	slog.Debug("pipeline worker received end", "worker", t.Name())
+	t.PropagateEndToChildren(ctx, m.Reason)
+	end := frames.NewEndFrame()
+	end.Reason = m.Reason
+	t.QueueFrame(end)
+}
+
+// HandleWorkerCancel cancels the pipeline once the children have been told. See
+// HandleWorkerEnd.
+func (t *Worker) HandleWorkerCancel(ctx context.Context, m *bus.CancelWorkerMessage) {
+	slog.Debug("pipeline worker received cancel", "worker", t.Name())
+	t.PropagateCancelToChildren(ctx, m.Reason)
+	t.Cancel(ctx, m.Reason)
 }
 
 // StopWhenDone schedules the pipeline to stop once all queued frames have been
 // processed, by queueing an EndFrame.
-func (t *Task) StopWhenDone() { t.QueueFrame(frames.NewEndFrame()) }
+func (t *Worker) StopWhenDone() { t.QueueFrame(frames.NewEndFrame()) }
 
 // Flush waits for the pipeline to drain: it sends a PipelineFlushFrame probe and
 // blocks until the probe has traveled down to the sink and back up to the
@@ -484,7 +553,7 @@ func (t *Task) StopWhenDone() { t.QueueFrame(frames.NewEndFrame()) }
 // before this call may still be in that queue, and the probe will not wait for
 // it. That is what a caller wants of it, since what has to settle is the work
 // the pipeline is in the middle of.
-func (t *Task) Flush(ctx context.Context) error {
+func (t *Worker) Flush(ctx context.Context) error {
 	// Nothing goes into the pipeline before it is running. Injecting straight
 	// into it, rather than through the queue the task drains once it is up,
 	// means arriving during setup is possible, and a processor being set up on
@@ -510,12 +579,22 @@ func (t *Task) Flush(ctx context.Context) error {
 	}
 }
 
-// Cancel stops the pipeline immediately by queueing a CancelFrame. It does
-// nothing once the task has finished.
-func (t *Task) Cancel() { t.cancelWithReason("") }
+// Cancel stops this worker's pipeline immediately by queueing a CancelFrame. It
+// does nothing once the worker has finished.
+//
+// It replaces the plain worker's cancel, which asks every worker in the session
+// to stop: a pipeline worker stops by driving a frame through its own pipeline,
+// so that each processor is told in turn. Call Base.Cancel for the session-wide
+// one.
+func (t *Worker) Cancel(ctx context.Context, reason string) {
+	if t.HasFinished() {
+		return
+	}
+	t.cancelWithReason(reason)
+}
 
 // cancelWithReason queues a CancelFrame carrying reason, at most once.
-func (t *Task) cancelWithReason(reason string) {
+func (t *Worker) cancelWithReason(reason string) {
 	t.mu.Lock()
 	if t.canceling || t.finished {
 		t.mu.Unlock()
@@ -537,7 +616,7 @@ func (t *Task) cancelWithReason(reason string) {
 }
 
 // isCanceling reports whether a CancelFrame has already been queued.
-func (t *Task) isCanceling() bool {
+func (t *Worker) isCanceling() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.canceling
@@ -551,7 +630,7 @@ func (t *Task) isCanceling() bool {
 // is what any other cancellation does: the frame travels the whole pipeline, so
 // each processor stops in its turn and gets to close what it had open, and the
 // wait for it is bounded so a wedged one cannot hold the run open.
-func (t *Task) cancelOnContextEnd(ctx context.Context) frames.Frame {
+func (t *Worker) cancelOnContextEnd(ctx context.Context) frames.Frame {
 	t.mu.Lock()
 	if t.canceling {
 		// Something already canceled and the run loop was on its way out; there
@@ -574,7 +653,7 @@ func (t *Task) cancelOnContextEnd(ctx context.Context) frames.Frame {
 }
 
 // HasFinished reports whether the task has finished running.
-func (t *Task) HasFinished() bool {
+func (t *Worker) HasFinished() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.finished
@@ -583,7 +662,7 @@ func (t *Task) HasFinished() bool {
 // Run sets up the pipeline and drives it until an EndFrame or CancelFrame
 // completes its journey through the pipeline, or ctx is canceled. It then
 // cleans up the pipeline. Run blocks until the pipeline has finished.
-func (t *Task) Run(ctx context.Context) error {
+func (t *Worker) Run(ctx context.Context) error {
 	t.mu.Lock()
 	if t.finished {
 		t.mu.Unlock()
@@ -614,7 +693,7 @@ func (t *Task) Run(ctx context.Context) error {
 	// conversation can win the race and leave its span rooted in a trace of its
 	// own. Opening it here settles the order, and the observer then finds it
 	// already open.
-	t.turnTrace.StartConversation(t.params.ConversationID)
+	t.turnTrace.StartConversation(t.cfg.ConversationID)
 
 	// The processors are handed one observer, the proxy, which passes each
 	// report on to the real ones off the frame path.
@@ -623,7 +702,7 @@ func (t *Task) Run(ctx context.Context) error {
 		Clock:          t.clk,
 		Observers:      []processor.Observer{t.observerProxy},
 		Tracing:        t.tracing,
-		TracingEnabled: t.params.EnableTracing,
+		TracingEnabled: t.cfg.EnableTracing,
 		Running:        t,
 	}
 	if err := t.pipeline.Setup(pipeCtx, setup); err != nil {
@@ -653,6 +732,12 @@ func (t *Task) Run(ctx context.Context) error {
 		_ = t.pipeline.Cleanup(context.Background())
 	}
 
+	// The event handlers are waited for before the observers stop, so the
+	// handlers for what the pipeline raised on its way down have run by the
+	// time the run returns. A caller reading what a handler collected finds it
+	// there rather than racing it.
+	t.Registry.Cleanup(context.Background())
+
 	// The observers stop once the pipeline has, so the reports raised as it shut
 	// down are delivered rather than lost.
 	t.observerProxy.stop()
@@ -671,12 +756,12 @@ func (t *Task) Run(ctx context.Context) error {
 // queued frames until a pipeline-ending frame has traveled through. It returns
 // that frame, so the caller can tell a StopFrame from the ways of ending that
 // shut the processors down, and nil when the context ended the run instead.
-func (t *Task) runLoop(ctx context.Context) (frames.Frame, error) {
+func (t *Worker) runLoop(ctx context.Context) (frames.Frame, error) {
 	t.clk.Start()
 
 	// Watching starts before the StartFrame goes out, so a pipeline that never
 	// comes to life is noticed too.
-	if t.params.IdleTimeout > 0 {
+	if t.cfg.IdleTimeout > 0 {
 		t.monitors.spawn(t.idleMonitorLoop)
 	}
 
@@ -699,7 +784,7 @@ func (t *Task) runLoop(ctx context.Context) (frames.Frame, error) {
 		return nil, ctx.Err()
 	}
 
-	if t.params.EnableMetrics && boolValue(t.params.SendInitialEmptyMetrics, true) {
+	if t.params.EnableMetrics && boolOrTrue(t.params.SendInitialEmptyMetrics) {
 		if err := t.pipeline.QueueFrame(ctx, t.initialMetricsFrame(), processor.Downstream); err != nil {
 			return nil, err
 		}
@@ -726,7 +811,7 @@ func (t *Task) runLoop(ctx context.Context) (frames.Frame, error) {
 // when something is already wrong, so it has to complete even when a processor
 // is wedged and the frame never comes back. An EndFrame is waited out in full,
 // since a graceful shutdown is meant to flush what is in flight.
-func (t *Task) waitPipelineEnd(ctx context.Context, f frames.Frame) error {
+func (t *Worker) waitPipelineEnd(ctx context.Context, f frames.Frame) error {
 	if _, isCancel := f.(*frames.CancelFrame); !isCancel {
 		select {
 		case <-t.endSig:
@@ -738,19 +823,15 @@ func (t *Task) waitPipelineEnd(ctx context.Context, f frames.Frame) error {
 
 	// The sink does not report a CancelFrame as finished, so that this runs
 	// exactly once either way: here, on arrival or on timeout.
-	defer func() {
-		if t.params.OnPipelineFinished != nil {
-			t.params.OnPipelineFinished(f)
-		}
-	}()
+	defer t.Call(ctx, EventPipelineFinished, t, f)
 
-	timeout := time.NewTimer(t.params.CancelTimeout)
+	timeout := time.NewTimer(t.cfg.CancelTimeout)
 	defer timeout.Stop()
 	select {
 	case <-t.endSig:
 	case <-timeout.C:
 		slog.Warn("timed out waiting for the cancel frame to reach the end of the pipeline",
-			"timeout", t.params.CancelTimeout)
+			"timeout", t.cfg.CancelTimeout)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -760,7 +841,7 @@ func (t *Task) waitPipelineEnd(ctx context.Context, f frames.Frame) error {
 // initialMetricsFrame builds one MetricsFrame carrying a zeroed time to first
 // byte and processing time for every processor in the pipeline that reports
 // metrics, so a consumer knows the full set before any have been measured.
-func (t *Task) initialMetricsFrame() *frames.MetricsFrame {
+func (t *Worker) initialMetricsFrame() *frames.MetricsFrame {
 	var data []frames.MetricsData
 	for _, p := range t.pipeline.ProcessorsWithMetrics() {
 		base := frames.BaseMetricsData{Processor: p.Name()}
@@ -772,20 +853,21 @@ func (t *Task) initialMetricsFrame() *frames.MetricsFrame {
 	return frames.NewMetricsFrame(data...)
 }
 
-// boolValue returns *p, or def when p is nil.
-func boolValue(p *bool, def bool) bool {
+// boolOrTrue returns *p, or true when p is nil, which is the default every
+// optional flag in the configuration takes.
+func boolOrTrue(p *bool) bool {
 	if p == nil {
-		return def
+		return true
 	}
 	return *p
 }
 
 // sinkPush observes frames reaching the end of the pipeline and signals the
 // lifecycle events the run loop waits on.
-func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
+func (t *Worker) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
 	// Reported first, so a caller watching the end of the pipeline sees every
 	// frame that gets here, including the ones handled and consumed below.
-	t.notifyReachedDownstream(f)
+	t.notifyReachedDownstream(ctx, f)
 
 	// The flush probe reached the sink. Bounce the same instance back upstream so
 	// it returns to the source and the round trip covers both directions.
@@ -803,9 +885,7 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		if t.params.OnPipelineStarted != nil {
-			t.params.OnPipelineStarted(fr)
-		}
+		t.Call(ctx, EventPipelineStarted, t, fr)
 		t.observerProxy.pipelineStarted()
 		t.startHeartbeats()
 		t.startOnce.Do(func() { close(t.startSig) })
@@ -813,9 +893,7 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 		// Hand it to the monitor, which times how long it took to get here.
 		t.heartbeats.push(fr)
 	case *frames.EndFrame, *frames.StopFrame:
-		if t.params.OnPipelineFinished != nil {
-			t.params.OnPipelineFinished(f)
-		}
+		t.Call(ctx, EventPipelineFinished, t, f)
 		t.endOnce.Do(func() { close(t.endSig) })
 	case *frames.CancelFrame:
 		// The finished handler is not called here. A CancelFrame may never
@@ -828,10 +906,10 @@ func (t *Task) sinkPush(ctx context.Context, f frames.Frame, _ processor.Directi
 // sourcePush observes frames reaching the start of the pipeline and converts the
 // worker frames a processor pushed upstream into the corresponding pipeline-wide
 // frame. A fatal error cancels the pipeline.
-func (t *Task) sourcePush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
+func (t *Worker) sourcePush(ctx context.Context, f frames.Frame, _ processor.Direction) error {
 	// Reported first, so a caller watching the start of the pipeline sees every
 	// frame that gets here, including the ones handled and consumed below.
-	t.notifyReachedUpstream(f)
+	t.notifyReachedUpstream(ctx, f)
 
 	// The flush probe completed its round trip: everything queued ahead of it has
 	// been processed, so release whoever is waiting on it.
@@ -863,12 +941,10 @@ func (t *Task) sourcePush(ctx context.Context, f frames.Frame, _ processor.Direc
 		// Matched by interface, so a frame reporting an unrecoverable failure by
 		// type is caught alongside a plain error frame carrying the flag.
 		ef := fr.ErrorInfo()
-		if t.params.OnPipelineError != nil {
-			t.params.OnPipelineError(ef)
-		}
+		t.Call(ctx, EventPipelineError, t, ef)
 		if ef.Fatal {
 			slog.Error("fatal error reached the start of the pipeline, canceling", "err", ef.Error)
-			t.Cancel()
+			t.cancelWithReason("")
 		} else {
 			slog.Warn("error reached the start of the pipeline", "err", ef.Error)
 		}
@@ -959,3 +1035,10 @@ func (q *frameQueue) get(ctx context.Context) (frames.Frame, bool) {
 		}
 	}
 }
+
+// A pipeline worker is a worker, so a runner can drive it and it can be asked
+// to finish what it is doing.
+var (
+	_ workers.Worker            = (*Worker)(nil)
+	_ workers.StoppableWhenDone = (*Worker)(nil)
+)

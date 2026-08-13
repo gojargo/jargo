@@ -101,8 +101,10 @@ func TestOutputTimelineSurvivesAStall(t *testing.T) {
 	tr := rtc.NewTransport(server, params)
 
 	src := newBurstSource()
-	task := pipeline.NewTask(pipeline.New(src, tr.Output()), pipeline.TaskParams{
-		AudioOutSampleRate: opus.SampleRate,
+	task := pipeline.NewWorker(pipeline.New(src, tr.Output()), pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			AudioOutSampleRate: opus.SampleRate,
+		},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

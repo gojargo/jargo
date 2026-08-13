@@ -212,18 +212,20 @@ func runBot(conn *rtc.Connection, v *viper.Viper) {
 		agg.Assistant(),
 	)
 
-	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers:          []pipeline.Observer{rtvi.NewObserver(rtviProc)},
-		AudioInSampleRate:  opus.SampleRate,
-		AudioOutSampleRate: opus.SampleRate,
-		// Emit per-turn metrics (TTFB, processing, tokens, characters) in-band so
-		// the RTVI client sees live latency.
-		EnableMetrics:      true,
-		EnableUsageMetrics: true,
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 		// Trace the session: one span for the conversation, one per turn, and the
 		// service spans of each turn beneath it.
 		EnableTracing: true,
+		Params: pipeline.Params{
+			AudioInSampleRate:  opus.SampleRate,
+			AudioOutSampleRate: opus.SampleRate,
+			// Emit per-turn metrics (TTFB, processing, tokens, characters) in-band so
+			// the RTVI client sees live latency.
+			EnableMetrics:      true,
+			EnableUsageMetrics: true,
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the frames that mutate the shared LLM context. Each must do two
@@ -19,18 +20,18 @@ import (
 
 // runAggregator starts a task around the user aggregator and collects the frames
 // that reach the end of the pipeline.
-func runAggregator(t *testing.T, convo *frames.LLMContext) (*pipeline.Task, chan frames.Frame, chan error) {
+func runAggregator(t *testing.T, convo *frames.LLMContext) (*pipeline.Worker, chan frames.Frame, chan error) {
 	t.Helper()
 	pair := aggregators.New(convo)
 	seen := make(chan frames.Frame, 32)
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			select {
-			case seen <- f:
-			default:
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		select {
+		case seen <- f:
+		default:
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

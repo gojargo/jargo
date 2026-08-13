@@ -1,6 +1,7 @@
 package rtvi_test
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // observerHarness runs frames through an observer built with params and returns
@@ -30,18 +32,18 @@ func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.F
 		msgs []rtvi.Message
 	)
 	proc := rtvi.NewProcessor()
-	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
-				if msg, ok := m.Message.(rtvi.Message); ok {
-					mu.Lock()
-					msgs = append(msgs, msg)
-					mu.Unlock()
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
+			if msg, ok := m.Message.(rtvi.Message); ok {
+				mu.Lock()
+				msgs = append(msgs, msg)
+				mu.Unlock()
 			}
-		},
+		}
 	})
 
 	count := func() int {

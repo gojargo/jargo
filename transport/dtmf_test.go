@@ -12,9 +12,9 @@ import (
 )
 
 // startFakeOutput runs o in a task and returns the task plus a stop.
-func startFakeOutput(t *testing.T, o *fakeOutput) (*pipeline.Task, func()) {
+func startFakeOutput(t *testing.T, o *fakeOutput) (*pipeline.Worker, func()) {
 	t.Helper()
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 	return task, func() {
@@ -176,9 +176,9 @@ func TestUrgentDTMFGoesOutAtOnce(t *testing.T) {
 }
 
 // startFakeOutput2 runs a native-DTMF output in a task.
-func startFakeOutput2(t *testing.T, o *nativeDTMFOutput) (*pipeline.Task, func()) {
+func startFakeOutput2(t *testing.T, o *nativeDTMFOutput) (*pipeline.Worker, func()) {
 	t.Helper()
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 	return task, func() {

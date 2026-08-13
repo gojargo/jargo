@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // uploaded is the transcription request as the endpoint received it: the form
@@ -103,16 +104,16 @@ func TestSTTSegmentTranscribesBufferedSpeech(t *testing.T) {
 	svc := NewSTT(STTConfig{APIKey: "k", BaseURL: srv.URL, SampleRate: 16000})
 
 	transcripts := make(chan string, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.TranscriptionFrame); ok {
-				select {
-				case transcripts <- fr.Text:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.TranscriptionFrame); ok {
+			select {
+			case transcripts <- fr.Text:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

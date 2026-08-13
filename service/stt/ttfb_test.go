@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // ttfbWatcher collects the time-to-first-byte a service reports.
@@ -51,14 +52,18 @@ func (w *ttfbWatcher) reported() []time.Duration {
 
 // newMeasuredTask runs svc with metrics on and the zeroed opening frame off, so
 // the only measurements the watcher sees are the ones the service reported.
-func newMeasuredTask(svc processor.Processor, w *ttfbWatcher) *pipeline.Task {
+func newMeasuredTask(svc processor.Processor, w *ttfbWatcher) *pipeline.Worker {
 	no := false
-	return pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableMetrics:           true,
-		SendInitialEmptyMetrics: &no,
+	worker := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream:     w.observe,
+		Params: pipeline.Params{
+			EnableMetrics:           true,
+			SendInitialEmptyMetrics: &no,
+		},
 	})
+	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream,
+		func(_ context.Context, f frames.Frame) { w.observe(f) })
+	return worker
 }
 
 // The wait reported is measured from the moment the speech ended, which is the
@@ -154,12 +159,15 @@ func TestStreamServiceReportsTheWorkItDid(t *testing.T) {
 	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
 	w := newProcessingWatcher()
 	no := false
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableMetrics:           true,
-		SendInitialEmptyMetrics: &no,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream:     w.observe,
+		Params: pipeline.Params{
+			EnableMetrics:           true,
+			SendInitialEmptyMetrics: &no,
+		},
 	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+		func(_ context.Context, f frames.Frame) { w.observe(f) })
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -226,13 +234,16 @@ func TestStreamServiceReportsOnlyTheInitialTTFBWhenAsked(t *testing.T) {
 	svc := stt.NewStream("OnceOnlySTT", &repeatAnsweringConnector{stream: stream}, 16000)
 	w := newTTFBWatcher()
 	no := false
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableMetrics:           true,
-		SendInitialEmptyMetrics: &no,
-		ReportOnlyInitialTTFB:   true,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream:     w.observe,
+		Params: pipeline.Params{
+			EnableMetrics:           true,
+			SendInitialEmptyMetrics: &no,
+			ReportOnlyInitialTTFB:   true,
+		},
 	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+		func(_ context.Context, f frames.Frame) { w.observe(f) })
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

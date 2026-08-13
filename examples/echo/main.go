@@ -83,9 +83,11 @@ func runEcho(conn *rtc.Connection) {
 	// and reports pipeline events to the client over the data channel.
 	rtviProc := rtvi.NewProcessor()
 	pipe := pipeline.New(rtviProc, t.Input(), newEcho(), t.Output())
-	task := pipeline.NewTask(pipe, pipeline.TaskParams{
-		AudioInSampleRate:  opus.SampleRate,
-		AudioOutSampleRate: opus.SampleRate,
+	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			AudioInSampleRate:  opus.SampleRate,
+			AudioOutSampleRate: opus.SampleRate,
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

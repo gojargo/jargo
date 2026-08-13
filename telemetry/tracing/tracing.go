@@ -9,7 +9,7 @@
 //	shutdown, err := tracing.Init(ctx, tracing.Config{ServiceName: "voicebot"})
 //	defer shutdown(context.Background())
 //	...
-//	task := pipeline.NewTask(pipe, pipeline.TaskParams{
+//	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 //		EnableTracing:  true,
 //		ConversationID: sessionID,
 //	})

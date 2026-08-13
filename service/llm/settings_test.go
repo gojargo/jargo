@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // settingsGenerator holds settings the way a provider does and records what it
@@ -45,9 +46,9 @@ func (g *settingsGenerator) temperature() (float64, bool) {
 	return g.store.Temperature.Value()
 }
 
-func runLLM(t *testing.T, svc *llm.Base) (*pipeline.Task, func()) {
+func runLLM(t *testing.T, svc *llm.Base) (*pipeline.Worker, func()) {
 	t.Helper()
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return task, func() {
@@ -105,21 +106,31 @@ func TestLLMSettingsUpdateRelabelsTheModel(t *testing.T) {
 	svc.SetModel("old-model")
 
 	var reported []string
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableUsageMetrics:      true,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mf, ok := f.(*frames.MetricsFrame)
-			if !ok {
-				return
-			}
-			for _, d := range mf.Data {
-				if u, ok := d.(frames.LLMUsageMetricsData); ok {
-					reported = append(reported, u.MetricsModel())
-				}
-			}
+		Params: pipeline.Params{
+			EnableUsageMetrics: true,
 		},
 	})
+	var reportedMu sync.Mutex
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mf, ok := f.(*frames.MetricsFrame)
+		if !ok {
+			return
+		}
+		reportedMu.Lock()
+		defer reportedMu.Unlock()
+		for _, d := range mf.Data {
+			if u, ok := d.(frames.LLMUsageMetricsData); ok {
+				reported = append(reported, u.MetricsModel())
+			}
+		}
+	})
+	reportedCount := func() int {
+		reportedMu.Lock()
+		defer reportedMu.Unlock()
+		return len(reported)
+	}
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	defer func() {
@@ -136,13 +147,15 @@ func TestLLMSettingsUpdateRelabelsTheModel(t *testing.T) {
 		t.Fatalf("push token usage: %v", err)
 	}
 	deadline := time.After(3 * time.Second)
-	for len(reported) == 0 {
+	for reportedCount() == 0 {
 		select {
 		case <-time.After(5 * time.Millisecond):
 		case <-deadline:
 			t.Fatal("no usage metrics reported")
 		}
 	}
+	reportedMu.Lock()
+	defer reportedMu.Unlock()
 	if reported[0] != "new-model" {
 		t.Errorf("usage reported against %q, want new-model", reported[0])
 	}

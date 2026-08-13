@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-// Runner runs a single task to completion and shuts it down gracefully on an
+// Runner runs a single pipeline worker to completion and shuts it down gracefully on an
 // interrupt signal (SIGINT or SIGTERM).
 type Runner struct {
 	handleSignals bool
@@ -32,20 +32,20 @@ func NewRunner(opts ...RunnerOption) *Runner {
 	return r
 }
 
-// Run runs task until it finishes. When signal handling is enabled, the first
-// interrupt signal cancels the task (so the pipeline drains the CancelFrame and
-// shuts down); the task keeps running on the parent context so cleanup can
-// complete. If the parent context is canceled the task stops the same way.
-func (r *Runner) Run(parent context.Context, task *Task) error {
+// Run runs worker until it finishes. When signal handling is enabled, the first
+// interrupt signal cancels the worker (so the pipeline drains the CancelFrame and
+// shuts down); the worker keeps running on the parent context so cleanup can
+// complete. If the parent context is canceled the worker stops the same way.
+func (r *Runner) Run(parent context.Context, worker *Worker) error {
 	if !r.handleSignals {
-		return task.Run(parent)
+		return worker.Run(parent)
 	}
 
 	sigCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	runErr := make(chan error, 1)
-	go func() { runErr <- task.Run(parent) }()
+	go func() { runErr <- worker.Run(parent) }()
 
 	select {
 	case err := <-runErr:
@@ -53,7 +53,7 @@ func (r *Runner) Run(parent context.Context, task *Task) error {
 	case <-sigCtx.Done():
 		if parent.Err() == nil {
 			slog.Info("interrupt received, stopping pipeline")
-			task.Cancel()
+			worker.Cancel(parent, "interrupt signal")
 		}
 		return <-runErr
 	}

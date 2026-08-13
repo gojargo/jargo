@@ -22,7 +22,7 @@ func inProgress(id, name string, args json.RawMessage) *frames.FunctionCallInPro
 // drainAssistant runs an assistant aggregator over the given frames, then stops.
 func drainAssistant(t *testing.T, convo *frames.LLMContext, fs ...frames.Frame) {
 	t.Helper()
-	runAssistant(t, convo, func(task *pipeline.Task) {
+	runAssistant(t, convo, func(task *pipeline.Worker) {
 		for _, f := range fs {
 			task.QueueFrame(f)
 		}
@@ -96,7 +96,7 @@ func TestAssistantAggregatorResultStaysWithItsCall(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	calls := []frames.ToolCall{{ID: "c1", Name: "get_weather"}}
 
-	runAssistant(t, convo, func(task *pipeline.Task) {
+	runAssistant(t, convo, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewFunctionCallsStartedFrame(calls))
 		task.QueueFrame(inProgress("c1", "get_weather", nil))
@@ -169,7 +169,7 @@ func TestAssistantAggregatorInterruptionLeavesThePairBalanced(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	calls := []frames.ToolCall{{ID: "c1", Name: "get_weather"}}
 
-	runAssistant(t, convo, func(task *pipeline.Task) {
+	runAssistant(t, convo, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewFunctionCallsStartedFrame(calls))
 		task.QueueFrame(inProgress("c1", "get_weather", nil))

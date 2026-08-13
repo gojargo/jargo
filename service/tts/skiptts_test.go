@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 const skipSampleRate = 16000
@@ -44,14 +45,17 @@ func runResponse(t *testing.T, skipStamp *bool) (spoken []string, reached []fram
 	synth := &recordingSynth{}
 	var mu sync.Mutex
 	var got []frames.Frame
-	task := pipeline.NewTask(
+	task := pipeline.NewWorker(
 		pipeline.New(tts.New("SkipTTS", synth)),
-		pipeline.TaskParams{ReachedDownstreamFilter: pipeline.AnyFrame, OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
-		}},
+		pipeline.WorkerConfig{
+			ReachedDownstreamFilter: pipeline.AnyFrame,
+		},
 	)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
+	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(t.Context()) }()
 

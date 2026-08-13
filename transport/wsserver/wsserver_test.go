@@ -161,7 +161,7 @@ func (t *tap) frames() []frames.Frame {
 // call is one live WebSocket session bridged to a pipeline.
 type call struct {
 	client *websocket.Conn
-	task   *pipeline.Task
+	task   *pipeline.Worker
 	done   chan error
 	tr     *wsserver.Transport
 	tap    *tap
@@ -179,7 +179,9 @@ func dial(t *testing.T, ser wsserver.Serializer, params transport.Params) *call 
 
 // dialTuned is dial with a hook to adjust the task params, for tests that need
 // to observe upstream traffic.
-func dialTuned(t *testing.T, ser wsserver.Serializer, params transport.Params, tune func(*pipeline.TaskParams)) *call {
+func dialTuned(
+	t *testing.T, ser wsserver.Serializer, params transport.Params, tune func(*pipeline.WorkerConfig),
+) *call {
 	t.Helper()
 
 	c := &call{done: make(chan error, 1)}
@@ -198,11 +200,16 @@ func dialTuned(t *testing.T, ser wsserver.Serializer, params transport.Params, t
 		}
 		c.tr = tr
 		c.tap = newTap()
-		tp := pipeline.TaskParams{AudioInSampleRate: 8000, AudioOutSampleRate: 8000}
+		tp := pipeline.WorkerConfig{
+			Params: pipeline.Params{
+				AudioInSampleRate:  8000,
+				AudioOutSampleRate: 8000,
+			},
+		}
 		if tune != nil {
 			tune(&tp)
 		}
-		c.task = pipeline.NewTask(pipeline.New(tr.Input(), c.tap, tr.Output()), tp)
+		c.task = pipeline.NewWorker(pipeline.New(tr.Input(), c.tap, tr.Output()), tp)
 		close(ready)
 		c.done <- c.task.Run(ctx)
 	}))

@@ -21,6 +21,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 const (
@@ -134,13 +135,13 @@ func TestEndFrameWaitsForAudioStillInFlight(t *testing.T) {
 	var got []frames.Frame
 	synth := &trailingAsyncSynth{}
 	base := tts.New("EndTTS", synth)
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 
 	runDone := make(chan error, 1)
@@ -290,13 +291,13 @@ func runOrdering(t *testing.T, synth tts.Synthesizer) []frames.Frame {
 	var mu sync.Mutex
 	var got []frames.Frame
 	base := tts.New("OrderingTTS", synth)
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 
 	runDone := make(chan error, 1)
@@ -345,13 +346,13 @@ func runTurns(t *testing.T, synth tts.Synthesizer, send []frames.Frame) []frames
 	var mu sync.Mutex
 	var got []frames.Frame
 	base := tts.New("TurnsTTS", synth)
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 
 	runDone := make(chan error, 1)
@@ -453,20 +454,20 @@ func TestBoundaryFramesCarryTheirContext(t *testing.T) {
 	var announced string
 	var started, stopped []string
 	base := tts.New("ContextTTS", &inlineSynth{})
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.AggregatedTextFrame:
-				announced = fr.ContextID
-			case *frames.TTSStartedFrame:
-				started = append(started, fr.ContextID)
-			case *frames.TTSStoppedFrame:
-				stopped = append(stopped, fr.ContextID)
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.AggregatedTextFrame:
+			announced = fr.ContextID
+		case *frames.TTSStartedFrame:
+			started = append(started, fr.ContextID)
+		case *frames.TTSStoppedFrame:
+			stopped = append(stopped, fr.ContextID)
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

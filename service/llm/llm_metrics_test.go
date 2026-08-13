@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // metricsGen emits a short response and reports token usage when usage metrics
@@ -36,26 +37,28 @@ func TestBasePushesTokenUsageWhenEnabled(t *testing.T) {
 	var mu sync.Mutex
 	var got *frames.LLMTokenUsage
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(gen), pipeline.TaskParams{
-		EnableUsageMetrics:      true,
+	task := pipeline.NewWorker(pipeline.New(gen), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.MetricsFrame:
-				for _, d := range fr.Data {
-					if u, ok := d.(frames.LLMUsageMetricsData); ok {
-						got = &u.Value
-					}
-				}
-			case *frames.LLMFullResponseEndFrame:
-				select {
-				case done <- struct{}{}:
-				default:
+		Params: pipeline.Params{
+			EnableUsageMetrics: true,
+		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.MetricsFrame:
+			for _, d := range fr.Data {
+				if u, ok := d.(frames.LLMUsageMetricsData); ok {
+					got = &u.Value
 				}
 			}
-		},
+		case *frames.LLMFullResponseEndFrame:
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -89,21 +92,21 @@ func TestBaseSkipsTokenUsageWhenDisabled(t *testing.T) {
 	var mu sync.Mutex
 	sawMetrics := false
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(gen), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(gen), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch f.(type) {
-			case *frames.MetricsFrame:
-				sawMetrics = true
-			case *frames.LLMFullResponseEndFrame:
-				select {
-				case done <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.MetricsFrame:
+			sawMetrics = true
+		case *frames.LLMFullResponseEndFrame:
+			select {
+			case done <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

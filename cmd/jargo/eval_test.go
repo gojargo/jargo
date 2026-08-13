@@ -45,12 +45,12 @@ func (e *echoLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	return e.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
-func echoBot(in, out processor.Processor) *pipeline.Task {
+func echoBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
-	return pipeline.NewTask(pipeline.New(
+	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, agg.User(), newEchoLLM(), out, agg.Assistant(),
-	), pipeline.TaskParams{
+	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 	})

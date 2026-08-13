@@ -10,12 +10,13 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/voicemail"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // harness runs a voicemail processor in a pipeline and records the text that
 // reaches the far end.
 type harness struct {
-	task *pipeline.Task
+	task *pipeline.Worker
 	done chan error
 	stop sync.Once
 
@@ -27,15 +28,15 @@ func run(t *testing.T, cfg voicemail.Config) *harness {
 	t.Helper()
 	h := &harness{done: make(chan error, 1)}
 	p := voicemail.New(cfg)
-	h.task = pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	h.task = pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if tf, ok := f.(*frames.LLMTextFrame); ok {
-				h.mu.Lock()
-				h.text.WriteString(tf.Text)
-				h.mu.Unlock()
-			}
-		},
+	})
+	events.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.LLMTextFrame); ok {
+			h.mu.Lock()
+			h.text.WriteString(tf.Text)
+			h.mu.Unlock()
+		}
 	})
 	go func() { h.done <- h.task.Run(context.Background()) }()
 	t.Cleanup(func() { h.shutdown(t) })
@@ -235,16 +236,16 @@ func TestNilCallbacks(t *testing.T) {
 func TestNonTextFramesPassThrough(t *testing.T) {
 	got := make(chan struct{}, 1)
 	p := voicemail.New(voicemail.Config{})
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.TTSSpeakFrame); ok {
-				select {
-				case got <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TTSSpeakFrame); ok {
+			select {
+			case got <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
@@ -267,7 +268,7 @@ func TestCleanupStopsPendingTimer(t *testing.T) {
 		OnVoicemailDetected: vm.fire,
 		VoicemailDelay:      time.Second,
 	})
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 

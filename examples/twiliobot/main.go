@@ -141,9 +141,11 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 		agg.Assistant(),
 	)
 
-	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
-		AudioInSampleRate:  phoneSampleRate,
-		AudioOutSampleRate: phoneSampleRate,
+	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			AudioInSampleRate:  phoneSampleRate,
+			AudioOutSampleRate: phoneSampleRate,
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

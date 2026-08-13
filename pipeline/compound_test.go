@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // metered is a stand-in for a service: a processor that reports metrics.
@@ -143,16 +144,18 @@ func TestTaskSendsInitialEmptyMetrics(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []*frames.MetricsFrame
-	task := pipeline.NewTask(p, pipeline.TaskParams{
-		EnableMetrics:           true,
+	task := pipeline.NewWorker(p, pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if mf, ok := f.(*frames.MetricsFrame); ok {
-				mu.Lock()
-				got = append(got, mf)
-				mu.Unlock()
-			}
+		Params: pipeline.Params{
+			EnableMetrics: true,
 		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if mf, ok := f.(*frames.MetricsFrame); ok {
+			mu.Lock()
+			got = append(got, mf)
+			mu.Unlock()
+		}
 	})
 
 	runToEnd(t, task)
@@ -204,23 +207,25 @@ func TestTaskSendsInitialEmptyMetrics(t *testing.T) {
 
 func TestTaskSkipsInitialEmptyMetrics(t *testing.T) {
 	off := false
-	cases := map[string]pipeline.TaskParams{
+	cases := map[string]pipeline.WorkerConfig{
 		"metrics disabled":        {},
-		"initial metrics refused": {EnableMetrics: true, SendInitialEmptyMetrics: &off},
+		"initial metrics refused": {Params: pipeline.Params{EnableMetrics: true, SendInitialEmptyMetrics: &off}},
 	}
 
 	for name, params := range cases {
 		t.Run(name, func(t *testing.T) {
 			var mu sync.Mutex
 			var n int
-			params.OnReachedDownstream = func(f frames.Frame) {
-				if _, ok := f.(*frames.MetricsFrame); ok {
-					mu.Lock()
-					n++
-					mu.Unlock()
-				}
-			}
-			runToEnd(t, pipeline.NewTask(pipeline.New(newMetered("Svc")), params))
+			worker := pipeline.NewWorker(pipeline.New(newMetered("Svc")), params)
+			events.On(&worker.Registry, pipeline.EventFrameReachedDownstream,
+				func(_ context.Context, f frames.Frame) {
+					if _, ok := f.(*frames.MetricsFrame); ok {
+						mu.Lock()
+						n++
+						mu.Unlock()
+					}
+				})
+			runToEnd(t, worker)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -232,7 +237,7 @@ func TestTaskSkipsInitialEmptyMetrics(t *testing.T) {
 }
 
 // runToEnd runs a task until it stops.
-func runToEnd(t *testing.T, task *pipeline.Task) {
+func runToEnd(t *testing.T, task *pipeline.Worker) {
 	t.Helper()
 
 	done := make(chan error, 1)

@@ -73,9 +73,9 @@ func TestSendTextAudioResponse(t *testing.T) {
 	agg := aggregators.New(frames.NewLLMContext("system"))
 	proc := rtvi.NewProcessor()
 
-	task := pipeline.NewTask(pipeline.New(
+	task := pipeline.NewWorker(pipeline.New(
 		proc, agg.User(), llm.New("TestLLM", replyGen{}), tts.New("TestTTS", synth), agg.Assistant(),
-	), pipeline.TaskParams{})
+	), pipeline.WorkerConfig{})
 
 	done := make(chan error, 1)
 	go func() { done <- task.Run(t.Context()) }()

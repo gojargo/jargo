@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/langchain"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // errChain is the failure the fake chains report.
@@ -60,12 +61,14 @@ func runChain(t *testing.T, chain langchain.Chain, in ...frames.Frame) *recorder
 	t.Helper()
 	rec := &recorder{}
 	p := langchain.New(chain)
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream:     rec.down,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
-		OnReachedUpstream:       rec.up,
 	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+		func(_ context.Context, f frames.Frame) { rec.down(f) })
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream,
+		func(_ context.Context, f frames.Frame) { rec.up(f) })
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 
@@ -241,16 +244,16 @@ func TestChainErrorIsReported(t *testing.T) {
 func TestOtherFramesPassThrough(t *testing.T) {
 	seen := make(chan struct{}, 1)
 	p := langchain.New(echo)
-	task := pipeline.NewTask(pipeline.New(p), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.TTSSpeakFrame); ok {
-				select {
-				case seen <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TTSSpeakFrame); ok {
+			select {
+			case seen <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

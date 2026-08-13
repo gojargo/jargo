@@ -279,7 +279,7 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 	}})
 
 	agg := aggregators.New(convo)
-	task := pipeline.NewTask(pipeline.New(
+	task := pipeline.NewWorker(pipeline.New(
 		t.Input(),
 		stt,
 		agg.User(),
@@ -288,9 +288,11 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 		newHangUpAfterGoodbye(&collected),
 		t.Output(),
 		agg.Assistant(),
-	), pipeline.TaskParams{
-		AudioInSampleRate:  phoneSampleRate,
-		AudioOutSampleRate: phoneSampleRate,
+	), pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			AudioInSampleRate:  phoneSampleRate,
+			AudioOutSampleRate: phoneSampleRate,
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

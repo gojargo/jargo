@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/utils/events"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -84,23 +85,23 @@ func TestStreamServiceEmitsInterimAndFinal(t *testing.T) {
 	var seq []string
 	var finalized bool
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.InterimTranscriptionFrame:
-				seq = append(seq, "interim:"+fr.Text)
-			case *frames.TranscriptionFrame:
-				seq = append(seq, "final:"+fr.Text)
-				finalized = fr.Finalized
-				select {
-				case done <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.InterimTranscriptionFrame:
+			seq = append(seq, "interim:"+fr.Text)
+		case *frames.TranscriptionFrame:
+			seq = append(seq, "final:"+fr.Text)
+			finalized = fr.Finalized
+			select {
+			case done <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -141,17 +142,17 @@ func TestSegmentServiceTranscribesBufferedSpeech(t *testing.T) {
 
 	var captured string
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.TranscriptionFrame); ok {
-				captured = fr.Text
-				select {
-				case done <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.TranscriptionFrame); ok {
+			captured = fr.Text
+			select {
+			case done <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -197,26 +198,28 @@ func TestStreamServiceReportsAudioUsage(t *testing.T) {
 	done := make(chan struct{}, 1)
 	var usage []frames.STTUsageMetricsData
 	var usageMu sync.Mutex
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		EnableUsageMetrics:      true,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if mf, ok := f.(*frames.MetricsFrame); ok {
-				usageMu.Lock()
-				for _, d := range mf.Data {
-					if u, ok := d.(frames.STTUsageMetricsData); ok {
-						usage = append(usage, u)
-					}
-				}
-				usageMu.Unlock()
-			}
-			if _, ok := f.(*frames.TranscriptionFrame); ok {
-				select {
-				case done <- struct{}{}:
-				default:
-				}
-			}
+		Params: pipeline.Params{
+			EnableUsageMetrics: true,
 		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if mf, ok := f.(*frames.MetricsFrame); ok {
+			usageMu.Lock()
+			for _, d := range mf.Data {
+				if u, ok := d.(frames.STTUsageMetricsData); ok {
+					usage = append(usage, u)
+				}
+			}
+			usageMu.Unlock()
+		}
+		if _, ok := f.(*frames.TranscriptionFrame); ok {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -263,17 +266,17 @@ func TestStreamServiceSpansOneSegment(t *testing.T) {
 	svc := stt.NewStream("FakeSTT", conn, 16000)
 
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		EnableTracing:           true,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.TranscriptionFrame); ok {
-				select {
-				case done <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TranscriptionFrame); ok {
+			select {
+			case done <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -350,7 +353,7 @@ func TestStreamServiceFinalizesOnVADStop(t *testing.T) {
 	stream := &finalizingStream{finalized: make(chan struct{}, 1)}
 	svc := stt.NewStream("FinalizingSTT", &finalizingConnector{stream: stream}, 16000)
 
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -416,21 +419,21 @@ func TestStreamServiceMarksTheAnswerToAFinalizeFinal(t *testing.T) {
 	var mu sync.Mutex
 	var finalized bool
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			fr, ok := f.(*frames.TranscriptionFrame)
-			if !ok {
-				return
-			}
-			mu.Lock()
-			finalized = fr.Finalized
-			mu.Unlock()
-			select {
-			case done <- struct{}{}:
-			default:
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		fr, ok := f.(*frames.TranscriptionFrame)
+		if !ok {
+			return
+		}
+		mu.Lock()
+		finalized = fr.Finalized
+		mu.Unlock()
+		select {
+		case done <- struct{}{}:
+		default:
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -465,17 +468,17 @@ func TestSegmentServiceSpansOneSegment(t *testing.T) {
 	svc := stt.NewSegment("FakeSegmentSTT", tr, 16000)
 
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		EnableTracing:           true,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.TranscriptionFrame); ok {
-				select {
-				case done <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TranscriptionFrame); ok {
+			select {
+			case done <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

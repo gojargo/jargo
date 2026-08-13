@@ -12,6 +12,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // speak runs one synthesis against srv and returns the PCM the frames carried,
@@ -118,16 +119,16 @@ func TestTTSSpeaksThroughThePipeline(t *testing.T) {
 	svc := NewTTS(TTSConfig{APIKey: "k", BaseURL: srv.URL})
 
 	audio := make(chan []byte, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.TTSAudioRawFrame); ok {
-				select {
-				case audio <- fr.Audio:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.TTSAudioRawFrame); ok {
+			select {
+			case audio <- fr.Audio:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

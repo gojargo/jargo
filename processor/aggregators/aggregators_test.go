@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
@@ -17,16 +18,16 @@ func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
 	pair := aggregators.New(convo)
 
 	triggered := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMContextFrame); ok {
-				select {
-				case triggered <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMContextFrame); ok {
+			select {
+			case triggered <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -64,16 +65,16 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	}))
 
 	triggered := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMContextFrame); ok {
-				select {
-				case triggered <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMContextFrame); ok {
+			select {
+			case triggered <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -128,16 +129,16 @@ func TestUserAggregatorKeepsTheTranscriptThatEndsTheTurn(t *testing.T) {
 	}))
 
 	triggered := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMContextFrame); ok {
-				select {
-				case triggered <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMContextFrame); ok {
+			select {
+			case triggered <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -190,13 +191,13 @@ func TestUserAggregatorDoesNotAnswerATranscriptOutsideATurn(t *testing.T) {
 	}))
 
 	runs := make(chan struct{}, 4)
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMContextFrame); ok {
-				runs <- struct{}{}
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMContextFrame); ok {
+			runs <- struct{}{}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -243,7 +244,7 @@ func TestAssistantAggregatorCommitsPartialOnInterruption(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)
 
-	task := pipeline.NewTask(pipeline.New(pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -271,7 +272,7 @@ func TestAssistantAggregatorCollectsResponse(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)
 
-	task := pipeline.NewTask(pipeline.New(pair.Assistant()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -315,16 +316,16 @@ func TestUserAggregatorKeepsTheSpeechThatOpensTheTurn(t *testing.T) {
 	}))
 
 	triggered := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMContextFrame); ok {
-				select {
-				case triggered <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMContextFrame); ok {
+			select {
+			case triggered <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -389,16 +390,16 @@ func TestUserAggregatorRunsInferenceBeforeDeferredFinalization(t *testing.T) {
 	}))
 
 	triggered := make(chan struct{}, 4)
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMContextFrame); ok {
-				select {
-				case triggered <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMContextFrame); ok {
+			select {
+			case triggered <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -445,7 +446,7 @@ func TestUserAggregatorCommitsWhatIsHeldWhenTheSessionEnds(t *testing.T) {
 		StopTimeout: 3 * time.Second,
 	}))
 
-	task := pipeline.NewTask(pipeline.New(pair.User()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 

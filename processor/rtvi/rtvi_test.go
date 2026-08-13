@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestBotReadyJSON(t *testing.T) {
@@ -54,17 +55,17 @@ func TestUserTranscriptionJSON(t *testing.T) {
 func TestProcessorHandshakeAndTranscript(t *testing.T) {
 	out := make(chan rtvi.Message, 8)
 	proc := rtvi.NewProcessor()
-	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		// Events are reported by the observer; the processor only carries them.
 		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
-				if msg, ok := m.Message.(rtvi.Message); ok {
-					out <- msg
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
+			if msg, ok := m.Message.(rtvi.Message); ok {
+				out <- msg
 			}
-		},
+		}
 	})
 
 	runDone := make(chan error, 1)
@@ -107,17 +108,17 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	params := rtvi.ObserverParams{
 		FunctionCallReportLevel: map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportFull},
 	}
-	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		// Events are reported by the observer; the processor only carries them.
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
-				if msg, ok := m.Message.(rtvi.Message); ok {
-					out <- msg
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
+			if msg, ok := m.Message.(rtvi.Message); ok {
+				out <- msg
 			}
-		},
+		}
 	})
 
 	runDone := make(chan error, 1)
@@ -187,16 +188,16 @@ func TestProcessorSendTextInjectsUserTurn(t *testing.T) {
 	pair := aggregators.New(convo)
 
 	got := make(chan *frames.LLMContextFrame, 1)
-	task := pipeline.NewTask(pipeline.New(rtvi.NewProcessor(), pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(rtvi.NewProcessor(), pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if cf, ok := f.(*frames.LLMContextFrame); ok {
-				select {
-				case got <- cf:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if cf, ok := f.(*frames.LLMContextFrame); ok {
+			select {
+			case got <- cf:
+			default:
 			}
-		},
+		}
 	})
 
 	runDone := make(chan error, 1)
@@ -249,19 +250,19 @@ func TestTranscriptIsReportedThoughTheAggregatorConsumesIt(t *testing.T) {
 	proc := rtvi.NewProcessor()
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)
-	task := pipeline.NewTask(pipeline.New(proc, pair.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(proc, pair.User()), pipeline.WorkerConfig{
 		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
-				if msg, ok := fr.Message.(rtvi.Message); ok {
-					select {
-					case out <- msg:
-					default:
-					}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
+			if msg, ok := fr.Message.(rtvi.Message); ok {
+				select {
+				case out <- msg:
+				default:
 				}
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

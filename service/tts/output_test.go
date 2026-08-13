@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 const outSampleRate = 16000
@@ -33,16 +34,16 @@ func speakAndCollect(t *testing.T, svc *tts.Base) []frames.Frame {
 	stopped := make(chan struct{})
 	var once sync.Once
 
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			seen = append(seen, f)
-			mu.Unlock()
-			if _, ok := f.(*frames.TTSStoppedFrame); ok {
-				once.Do(func() { close(stopped) })
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		seen = append(seen, f)
+		mu.Unlock()
+		if _, ok := f.(*frames.TTSStoppedFrame); ok {
+			once.Do(func() { close(stopped) })
+		}
 	})
 
 	done := make(chan struct{})
@@ -54,7 +55,7 @@ func speakAndCollect(t *testing.T, svc *tts.Base) []frames.Frame {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the utterance never finished")
 	}
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-done
 
 	mu.Lock()

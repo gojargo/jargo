@@ -9,12 +9,13 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // pauseHarness runs a TTS base with pausing configured, and reports what reaches
 // the end of the pipeline.
 type pauseHarness struct {
-	task *pipeline.Task
+	task *pipeline.Worker
 	base *tts.Base
 
 	mu    sync.Mutex
@@ -32,23 +33,23 @@ func newPauseHarness(t *testing.T, opts tts.PauseOptions) *pauseHarness {
 	base.SetPauseFrameProcessing(opts)
 
 	h := &pauseHarness{base: base, runDone: make(chan error, 1)}
-	h.task = pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	h.task = pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if tf, ok := f.(*frames.AggregatedTextFrame); ok {
-				h.mu.Lock()
-				h.texts = append(h.texts, tf.Text)
-				h.mu.Unlock()
-			}
-		},
-		ReachedUpstreamFilter: pipeline.AnyFrame,
-		OnReachedUpstream: func(f frames.Frame) {
-			if ef, ok := f.(*frames.ErrorFrame); ok {
-				h.mu.Lock()
-				h.errs = append(h.errs, ef)
-				h.mu.Unlock()
-			}
-		},
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+	})
+	events.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.AggregatedTextFrame); ok {
+			h.mu.Lock()
+			h.texts = append(h.texts, tf.Text)
+			h.mu.Unlock()
+		}
+	})
+	events.On(&h.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if ef, ok := f.(*frames.ErrorFrame); ok {
+			h.mu.Lock()
+			h.errs = append(h.errs, ef)
+			h.mu.Unlock()
+		}
 	})
 
 	// Drain what the fake synthesizer reports so it never blocks.
@@ -59,7 +60,7 @@ func newPauseHarness(t *testing.T, opts tts.PauseOptions) *pauseHarness {
 
 	go func() { h.runDone <- h.task.Run(context.Background()) }()
 	t.Cleanup(func() {
-		h.task.Cancel()
+		h.task.Cancel(t.Context(), "")
 		select {
 		case <-h.runDone:
 		case <-time.After(3 * time.Second):

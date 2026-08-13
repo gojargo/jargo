@@ -42,12 +42,12 @@ func main() {
 // buildBot assembles the demo pipeline around the harness-provided transport
 // endpoints. The rtvi.Processor is what lets the harness drive the bot and
 // observe its events.
-func buildBot(in, out processor.Processor) *pipeline.Task {
+func buildBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("You are a friendly demo assistant."))
 	rtviProc := rtvi.NewProcessor()
-	return pipeline.NewTask(pipeline.New(
+	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, agg.User(), newDemoLLM(), out, agg.Assistant(),
-	), pipeline.TaskParams{
+	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
 	})

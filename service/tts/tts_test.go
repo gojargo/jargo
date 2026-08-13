@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -31,32 +32,32 @@ func (s *fakeSynth) RunTTS(_ context.Context, text, _ string, yield func(f frame
 
 // runTTS wires a fake synthesizer into a task and records the downstream frame
 // sequence and audio sample rates.
-func runTTS(t *testing.T, syn *fakeSynth, feed func(task *pipeline.Task)) []string {
+func runTTS(t *testing.T, syn *fakeSynth, feed func(task *pipeline.Worker)) []string {
 	t.Helper()
 	var mu sync.Mutex
 	var seq []string
 	stopped := make(chan struct{}, 4)
-	task := pipeline.NewTask(pipeline.New(tts.New("FakeTTS", syn)), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(tts.New("FakeTTS", syn)), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.TTSStartedFrame:
-				seq = append(seq, "started")
-			case *frames.TTSAudioRawFrame:
-				seq = append(seq, "audio")
-				if fr.SampleRate != syn.rate {
-					t.Errorf("audio sample rate = %d, want %d", fr.SampleRate, syn.rate)
-				}
-			case *frames.TTSStoppedFrame:
-				seq = append(seq, "stopped")
-				select {
-				case stopped <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.TTSStartedFrame:
+			seq = append(seq, "started")
+		case *frames.TTSAudioRawFrame:
+			seq = append(seq, "audio")
+			if fr.SampleRate != syn.rate {
+				t.Errorf("audio sample rate = %d, want %d", fr.SampleRate, syn.rate)
 			}
-		},
+		case *frames.TTSStoppedFrame:
+			seq = append(seq, "stopped")
+			select {
+			case stopped <- struct{}{}:
+			default:
+			}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -78,7 +79,7 @@ func runTTS(t *testing.T, syn *fakeSynth, feed func(task *pipeline.Task)) []stri
 
 func TestSynthesizesCompletedSentence(t *testing.T) {
 	syn := &fakeSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}, spoken: make(chan string, 1)}
-	seq := runTTS(t, syn, func(task *pipeline.Task) {
+	seq := runTTS(t, syn, func(task *pipeline.Worker) {
 		// Split across frames; synthesis fires once the sentence terminates.
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("Hello "))
@@ -122,17 +123,17 @@ func TestSynthesisReportsCharacterUsage(t *testing.T) {
 	svc := tts.New("FakeTTS", syn)
 
 	stopped := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		EnableTracing:           true,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.TTSStoppedFrame); ok {
-				select {
-				case stopped <- struct{}{}:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TTSStoppedFrame); ok {
+			select {
+			case stopped <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -181,7 +182,7 @@ func TestSynthesisReportsCharacterUsage(t *testing.T) {
 
 func TestFlushSynthesizesTrailingText(t *testing.T) {
 	syn := &fakeSynth{rate: 16000, chunk: []byte{9}, spoken: make(chan string, 1)}
-	seq := runTTS(t, syn, func(task *pipeline.Task) {
+	seq := runTTS(t, syn, func(task *pipeline.Worker) {
 		// No sentence terminator: only the end-of-response flush speaks it.
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewTextFrame("no period here"))
@@ -263,7 +264,7 @@ func TestStartStartsSynthesizer(t *testing.T) {
 		fakeSynth: &fakeSynth{rate: 24000, chunk: []byte{1}, spoken: make(chan string, 1)},
 		started:   make(chan struct{}, 1),
 	}
-	task := pipeline.NewTask(pipeline.New(tts.New("StartingTTS", syn)), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(tts.New("StartingTTS", syn)), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 

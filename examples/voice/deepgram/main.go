@@ -107,13 +107,15 @@ func runBot(conn *rtc.Connection) {
 	agg := aggregators.New(convo, aggOpts...)
 	procs = append(procs, agg.User(), llm, tts, t.Output(), agg.Assistant())
 
-	task := pipeline.NewTask(pipeline.New(procs...), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers:          []pipeline.Observer{rtvi.NewObserver(rtviProc)},
-		AudioInSampleRate:  opus.SampleRate,
-		AudioOutSampleRate: opus.SampleRate,
-		EnableMetrics:      true,
-		EnableUsageMetrics: true,
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Params: pipeline.Params{
+			AudioInSampleRate:  opus.SampleRate,
+			AudioOutSampleRate: opus.SampleRate,
+			EnableMetrics:      true,
+			EnableUsageMetrics: true,
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

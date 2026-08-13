@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // recorder captures the turn-decision frames the processor broadcasts.
@@ -51,20 +52,21 @@ func (r *recorder) expectNone(t *testing.T, d time.Duration) {
 	}
 }
 
-func runTurns(t *testing.T, cfg turns.Config) (*recorder, *pipeline.Task, chan error) {
+func runTurns(t *testing.T, cfg turns.Config) (*recorder, *pipeline.Worker, chan error) {
 	t.Helper()
 	rec := newRecorder()
 	agg := aggregators.New(frames.NewLLMContext("test"), aggregators.WithTurns(cfg))
-	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(agg.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream:     rec.onDown,
 	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+		func(_ context.Context, f frames.Frame) { rec.onDown(f) })
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return rec, task, done
 }
 
-func finish(t *testing.T, task *pipeline.Task, done chan error) {
+func finish(t *testing.T, task *pipeline.Worker, done chan error) {
 	t.Helper()
 	task.StopWhenDone()
 	select {
@@ -303,21 +305,21 @@ func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
 
 	var mu sync.Mutex
 	var pred *frames.TurnMetricsData
-	task := pipeline.NewTask(pipeline.New(agg.User()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(agg.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mf, ok := f.(*frames.MetricsFrame)
-			if !ok {
-				return
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mf, ok := f.(*frames.MetricsFrame)
+		if !ok {
+			return
+		}
+		for _, d := range mf.Data {
+			if turn, ok := d.(frames.TurnMetricsData); ok {
+				mu.Lock()
+				pred = &turn
+				mu.Unlock()
 			}
-			for _, d := range mf.Data {
-				if turn, ok := d.(frames.TurnMetricsData); ok {
-					mu.Lock()
-					pred = &turn
-					mu.Unlock()
-				}
-			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

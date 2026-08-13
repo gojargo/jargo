@@ -25,7 +25,7 @@ const acknowledged = `{"status": "acknowledged"}`
 // than this falls back to appending, which keeps the conversation whole.
 const summaryTimeout = 5 * time.Second
 
-// Enqueuer injects frames into the running pipeline; *pipeline.Task satisfies
+// Enqueuer injects frames into the running pipeline; *pipeline.Worker satisfies
 // it. Everything a flow does to the conversation it does by queueing a frame, so
 // the change is ordered against whatever else is in flight.
 type Enqueuer interface {
@@ -36,10 +36,10 @@ type Enqueuer interface {
 // Config configures a FlowManager. The references are the same instances wired
 // into the pipeline.
 type Config struct {
-	// Enqueuer queues the frames a flow produces; usually the *pipeline.Task.
+	// Enqueuer queues the frames a flow produces; usually the *pipeline.Worker.
 	Enqueuer Enqueuer
 	// Watcher reports frames reaching the end of the pipeline, which is how an
-	// action learns it has finished; usually the same *pipeline.Task. Leaving it
+	// action learns it has finished; usually the same *pipeline.Worker. Leaving it
 	// nil gives up the actions that wait on the pipeline.
 	Watcher Watcher
 	// Aggregators are the conversation aggregators the pipeline shares. The flow

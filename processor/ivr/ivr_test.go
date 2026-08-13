@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/ivr"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestNavigatesAndStripsTags(t *testing.T) {
@@ -23,24 +24,24 @@ func TestNavigatesAndStripsTags(t *testing.T) {
 		status = s
 		mu.Unlock()
 	}})
-	task := pipeline.NewTask(pipeline.New(proc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.OutputDTMFFrame:
-				dtmf = append(dtmf, fr.Buttons...)
-			case *frames.LLMTextFrame:
-				spoken += fr.Text
-			case *frames.LLMFullResponseEndFrame:
-				select {
-				case <-done:
-				default:
-					close(done)
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.OutputDTMFFrame:
+			dtmf = append(dtmf, fr.Buttons...)
+		case *frames.LLMTextFrame:
+			spoken += fr.Text
+		case *frames.LLMFullResponseEndFrame:
+			select {
+			case <-done:
+			default:
+				close(done)
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

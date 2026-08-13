@@ -15,6 +15,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeInput is an input transport whose StartReading emits a fixed number of
@@ -54,19 +55,19 @@ func TestBaseInputPushesAudioDownstream(t *testing.T) {
 
 	var got atomic.Int32
 	done := make(chan struct{})
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.InputAudioRawFrame); ok {
-				if got.Add(1) == 3 {
-					close(done)
-				}
-			}
-		},
 	}
 
 	in := newFakeInput(params, 3)
-	task := pipeline.NewTask(pipeline.New(in), taskParams)
+	task := pipeline.NewWorker(pipeline.New(in), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.InputAudioRawFrame); ok {
+			if got.Add(1) == 3 {
+				close(done)
+			}
+		}
+	})
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -92,18 +93,18 @@ func TestBaseInputRoutesUpstreamAudioThroughFilter(t *testing.T) {
 	params.AudioInFilter = filter
 
 	got := make(chan []byte, 4)
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(fr frames.Frame) {
-			if af, ok := fr.(*frames.InputAudioRawFrame); ok {
-				got <- af.Audio
-			}
-		},
 	}
 
 	// No frames of its own: the only audio is the one queued below.
 	in := newFakeInput(params, 0)
-	task := pipeline.NewTask(pipeline.New(in), taskParams)
+	task := pipeline.NewWorker(pipeline.New(in), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
+		if af, ok := fr.(*frames.InputAudioRawFrame); ok {
+			got <- af.Audio
+		}
+	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -132,7 +133,7 @@ func TestBaseInputStartAudioStreamingFrame(t *testing.T) {
 	params.AudioInSampleRate = 48000
 
 	in := newFakeInput(params, 0)
-	task := pipeline.NewTask(pipeline.New(in), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -163,7 +164,7 @@ func TestBaseInputStopFramePausesAudio(t *testing.T) {
 	params.AudioInFilter = filter
 
 	in := newFakeInput(params, 0)
-	task := pipeline.NewTask(pipeline.New(in), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -211,7 +212,7 @@ func TestBaseInputRoutesFilterSettings(t *testing.T) {
 	params.AudioInFilter = filter
 
 	in := newFakeInput(params, 0)
-	task := pipeline.NewTask(pipeline.New(in), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -305,29 +306,29 @@ func TestBaseInputAppliesFilter(t *testing.T) {
 
 	var got atomic.Int32
 	done := make(chan struct{})
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(fr frames.Frame) {
-			af, ok := fr.(*frames.InputAudioRawFrame)
-			if !ok {
-				return
-			}
-			// The fake input emits all-zero audio; the filter increments every
-			// byte, so every downstream sample must be 1.
-			for _, b := range af.Audio {
-				if b != 1 {
-					t.Errorf("downstream byte = %d, want 1 (filtered)", b)
-					break
-				}
-			}
-			if got.Add(1) == 3 {
-				close(done)
-			}
-		},
 	}
 
 	in := newFakeInput(params, 3)
-	task := pipeline.NewTask(pipeline.New(in), taskParams)
+	task := pipeline.NewWorker(pipeline.New(in), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
+		af, ok := fr.(*frames.InputAudioRawFrame)
+		if !ok {
+			return
+		}
+		// The fake input emits all-zero audio; the filter increments every
+		// byte, so every downstream sample must be 1.
+		for _, b := range af.Audio {
+			if b != 1 {
+				t.Errorf("downstream byte = %d, want 1 (filtered)", b)
+				break
+			}
+		}
+		if got.Add(1) == 3 {
+			close(done)
+		}
+	})
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -360,7 +361,7 @@ func TestBaseOutputChunksAudio(t *testing.T) {
 	params.AudioOutSampleRate = 48000 // chunk size = 480 samples/10ms * 2 * 2 = 1920 bytes
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -413,7 +414,7 @@ func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
 	params.AudioOutEndSilenceSecs = 0
 
 	o := newPacedOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -440,7 +441,7 @@ func TestBaseOutputFlushesTailOnTurnEnd(t *testing.T) {
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -483,23 +484,23 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 
 	var mu sync.Mutex
 	var down, up []frames.Frame
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			down = append(down, f)
-			mu.Unlock()
-		},
-		ReachedUpstreamFilter: pipeline.AnyFrame,
-		OnReachedUpstream: func(f frames.Frame) {
-			mu.Lock()
-			up = append(up, f)
-			mu.Unlock()
-		},
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	}
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	task := pipeline.NewWorker(pipeline.New(o), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		down = append(down, f)
+		mu.Unlock()
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		up = append(up, f)
+		mu.Unlock()
+	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -571,7 +572,7 @@ func TestBaseOutputSendsClosingSilence(t *testing.T) {
 	params.AudioOutEndSilenceSecs = 1
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -660,17 +661,17 @@ func TestBaseOutputKeepsUninterruptibleFramesThroughBargeIn(t *testing.T) {
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 
 	seen := make(chan struct{}, 4)
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*uninterruptibleMarkerFrame); ok {
-				seen <- struct{}{}
-			}
-		},
 	}
 
 	o := newBlockingOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	task := pipeline.NewWorker(pipeline.New(o), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*uninterruptibleMarkerFrame); ok {
+			seen <- struct{}{}
+		}
+	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -709,7 +710,7 @@ func TestBaseOutputKeepsUninterruptibleFramesThroughBargeIn(t *testing.T) {
 		t.Errorf("wrote %d chunks, want 1: audio queued before the barge-in was still sent", got)
 	}
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-runDone
 }
 
@@ -735,25 +736,25 @@ func TestBaseOutputOrdersSyncFramesWithAudio(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
 	seen := make(chan struct{}, 8)
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			switch f.(type) {
-			case *frames.TTSAudioRawFrame:
-				mu.Lock()
-				order = append(order, "audio")
-				mu.Unlock()
-			case *markerFrame:
-				mu.Lock()
-				order = append(order, "marker")
-				mu.Unlock()
-				seen <- struct{}{}
-			}
-		},
 	}
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	task := pipeline.NewWorker(pipeline.New(o), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		switch f.(type) {
+		case *frames.TTSAudioRawFrame:
+			mu.Lock()
+			order = append(order, "audio")
+			mu.Unlock()
+		case *markerFrame:
+			mu.Lock()
+			order = append(order, "marker")
+			mu.Unlock()
+			seen <- struct{}{}
+		}
+	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -835,17 +836,17 @@ func TestBaseOutputReportsReady(t *testing.T) {
 	params.AudioOutSampleRate = 48000
 
 	ready := make(chan struct{}, 4)
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
-		OnReachedUpstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.OutputTransportReadyFrame); ok {
-				ready <- struct{}{}
-			}
-		},
 	}
 
 	o := newReadyOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	task := pipeline.NewWorker(pipeline.New(o), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.OutputTransportReadyFrame); ok {
+			ready <- struct{}{}
+		}
+	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -921,7 +922,7 @@ func TestBaseOutputRoutesByDestination(t *testing.T) {
 	params.AudioOutDestinations = []string{"side"}
 
 	o := newMultiDestOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -961,7 +962,7 @@ func TestBaseOutputRoutesByDestination(t *testing.T) {
 		t.Errorf("named stream carried %#x, want 0x02: audio reached the wrong stream", seen["side"])
 	}
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-runDone
 }
 
@@ -987,7 +988,7 @@ func TestBaseOutputMixerFillsGaps(t *testing.T) {
 	params.AudioOutMixer = passthroughMixer{}
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1008,7 +1009,7 @@ func TestBaseOutputMixerFillsGaps(t *testing.T) {
 		}
 	}
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-runDone
 }
 
@@ -1078,7 +1079,7 @@ func TestBaseOutputMixerBargeInStillDropsQueuedBotAudio(t *testing.T) {
 	params.AudioOutMixer = passthroughMixer{}
 
 	o := newMixerBargeInOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1110,7 +1111,7 @@ func TestBaseOutputMixerBargeInStillDropsQueuedBotAudio(t *testing.T) {
 		t.Error("the mixer stopped playing across the barge-in: the loop was torn down with the turn")
 	}
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-runDone
 }
 
@@ -1143,7 +1144,7 @@ func TestBaseOutputShutdownIsNotHeldByAWriteInFlight(t *testing.T) {
 	params.AudioOutMixer = passthroughMixer{}
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1151,7 +1152,7 @@ func TestBaseOutputShutdownIsNotHeldByAWriteInFlight(t *testing.T) {
 	// recording buffer and the loop ends up blocked mid-write.
 	waitForFullWrites(t, o)
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	select {
 	case <-runDone:
 	case <-time.After(5 * time.Second):
@@ -1166,7 +1167,7 @@ func TestBaseOutputInterruptionDiscardsTail(t *testing.T) {
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1222,26 +1223,26 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 		seq []string
 	}
 	wordSeen := make(chan struct{}, 1)
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			defer mu.Unlock()
-			switch fr := f.(type) {
-			case *frames.OutputAudioRawFrame:
-				mu.seq = append(mu.seq, "audio")
-			case *frames.TTSTextFrame:
-				mu.seq = append(mu.seq, "word:"+fr.Text)
-				select {
-				case wordSeen <- struct{}{}:
-				default:
-				}
-			}
-		},
 	}
 
 	o := newFakeOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	task := pipeline.NewWorker(pipeline.New(o), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.OutputAudioRawFrame:
+			mu.seq = append(mu.seq, "audio")
+		case *frames.TTSTextFrame:
+			mu.seq = append(mu.seq, "word:"+fr.Text)
+			select {
+			case wordSeen <- struct{}{}:
+			default:
+			}
+		}
+	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1289,17 +1290,17 @@ func TestBaseOutputInterruptionDropsUnplayedWordFrames(t *testing.T) {
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 
 	lateSeen := make(chan string, 4)
-	taskParams := pipeline.TaskParams{
+	taskParams := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.TTSTextFrame); ok {
-				lateSeen <- fr.Text
-			}
-		},
 	}
 
 	o := newPacedOutput(params) // ~3ms per chunk write
-	task := pipeline.NewTask(pipeline.New(o), taskParams)
+	task := pipeline.NewWorker(pipeline.New(o), taskParams)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.TTSTextFrame); ok {
+			lateSeen <- fr.Text
+		}
+	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1349,7 +1350,7 @@ func (e *ender) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.
 // TestEndWorkerFrameEndsTask checks a processor can end the run gracefully by
 // pushing an EndWorkerFrame upstream — the Task turns it into an EndFrame.
 func TestEndWorkerFrameEndsTask(t *testing.T) {
-	task := pipeline.NewTask(pipeline.New(newEnder()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(newEnder()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1398,16 +1399,16 @@ func TestBaseOutputDoesNotEscalateSendFailures(t *testing.T) {
 
 	errs := make(chan string, 8)
 	o := newFailingMessageOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
-		OnReachedUpstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.ErrorFrame); ok {
-				select {
-				case errs <- fr.Error:
-				default:
-				}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.ErrorFrame); ok {
+			select {
+			case errs <- fr.Error:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -1477,7 +1478,7 @@ func TestBaseOutputBargeInIsNotReportedAsAFailure(t *testing.T) {
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 
 	o := newBlockingOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
@@ -1498,7 +1499,7 @@ func TestBaseOutputBargeInIsNotReportedAsAFailure(t *testing.T) {
 	}
 
 	close(o.release)
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-runDone
 }
 
@@ -1534,13 +1535,13 @@ func TestBaseOutputDoesNotForwardAudioTheTransportDeclined(t *testing.T) {
 
 	forwarded := make(chan struct{}, 4)
 	o := newDecliningOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.TTSAudioRawFrame); ok {
-				forwarded <- struct{}{}
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TTSAudioRawFrame); ok {
+			forwarded <- struct{}{}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -1560,7 +1561,7 @@ func TestBaseOutputDoesNotForwardAudioTheTransportDeclined(t *testing.T) {
 		t.Errorf("declining to send is not a failure, but it was reported as one: %v", got)
 	}
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-runDone
 }
 
@@ -1601,13 +1602,13 @@ func TestBaseOutputBargeInDropsAFrameItCutShort(t *testing.T) {
 
 	forwarded := make(chan struct{}, 4)
 	o := newBlockingSyncFrameOutput(params)
-	task := pipeline.NewTask(pipeline.New(o), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if _, ok := f.(*markerFrame); ok {
-				forwarded <- struct{}{}
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*markerFrame); ok {
+			forwarded <- struct{}{}
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -1631,6 +1632,6 @@ func TestBaseOutputBargeInDropsAFrameItCutShort(t *testing.T) {
 	default:
 	}
 
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 	<-runDone
 }

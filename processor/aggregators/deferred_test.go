@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for when a tool result runs the model again. A result arriving while the
@@ -17,7 +18,7 @@ import (
 
 // assistantUpstream runs an assistant aggregator and records the context frames
 // it pushes upstream, which is how it asks for generation to run.
-func assistantUpstream(t *testing.T, convo *frames.LLMContext) (*pipeline.Task, func() int, func()) {
+func assistantUpstream(t *testing.T, convo *frames.LLMContext) (*pipeline.Worker, func() int, func()) {
 	t.Helper()
 
 	var (
@@ -25,15 +26,15 @@ func assistantUpstream(t *testing.T, convo *frames.LLMContext) (*pipeline.Task, 
 		n  int
 	)
 	pair := aggregators.New(convo)
-	task := pipeline.NewTask(pipeline.New(pair.Assistant()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
-		OnReachedUpstream: func(f frames.Frame) {
-			if _, ok := f.(*frames.LLMContextFrame); ok {
-				mu.Lock()
-				n++
-				mu.Unlock()
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMContextFrame); ok {
+			mu.Lock()
+			n++
+			mu.Unlock()
+		}
 	})
 
 	runDone := make(chan error, 1)
@@ -174,17 +175,17 @@ func TestSpeakingFramesTravelOn(t *testing.T) {
 		seen []string
 	)
 	pair := aggregators.New(frames.NewLLMContext("system"))
-	task := pipeline.NewTask(pipeline.New(pair.Assistant()), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			switch f.(type) {
-			case *frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame,
-				*frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame:
-				mu.Lock()
-				seen = append(seen, f.Name())
-				mu.Unlock()
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		switch f.(type) {
+		case *frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame,
+			*frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame:
+			mu.Lock()
+			seen = append(seen, f.Name())
+			mu.Unlock()
+		}
 	})
 
 	runDone := make(chan error, 1)

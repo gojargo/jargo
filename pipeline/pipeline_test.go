@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // echo forwards every frame it receives downstream.
@@ -34,17 +35,17 @@ func TestTaskEchoEndToEnd(t *testing.T) {
 
 	var mu sync.Mutex
 	var texts []string
-	params := pipeline.TaskParams{
+	params := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if tf, ok := f.(*frames.TextFrame); ok {
-				mu.Lock()
-				texts = append(texts, tf.Text)
-				mu.Unlock()
-			}
-		},
 	}
-	task := pipeline.NewTask(pipe, params)
+	task := pipeline.NewWorker(pipe, params)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.TextFrame); ok {
+			mu.Lock()
+			texts = append(texts, tf.Text)
+			mu.Unlock()
+		}
+	})
 
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
@@ -73,13 +74,13 @@ func TestTaskEchoEndToEnd(t *testing.T) {
 }
 
 func TestTaskCancelStops(t *testing.T) {
-	task := pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{})
 
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 
 	task.QueueFrame(frames.NewTextFrame("hi"))
-	task.Cancel()
+	task.Cancel(t.Context(), "")
 
 	select {
 	case err := <-done:

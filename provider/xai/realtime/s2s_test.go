@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/xai/realtime"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeRealtime is a WebSocket server standing in for xAI's Realtime API. It
@@ -101,21 +102,23 @@ func (f *fakeRealtime) awaitMessage(t *testing.T, want string) map[string]any {
 
 // run starts the service in a pipeline, collecting the frames it pushes
 // downstream.
-func run(t *testing.T, cfg realtime.Config) (*pipeline.Task, chan error, func() []frames.Frame) {
+func run(t *testing.T, cfg realtime.Config) (*pipeline.Worker, chan error, func() []frames.Frame) {
 	t.Helper()
 	svc := realtime.New(cfg)
 
 	var mu sync.Mutex
 	var got []frames.Frame
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		AudioInSampleRate:       24000,
-		AudioOutSampleRate:      24000,
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			mu.Lock()
-			got = append(got, f)
-			mu.Unlock()
+		Params: pipeline.Params{
+			AudioInSampleRate:  24000,
+			AudioOutSampleRate: 24000,
 		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

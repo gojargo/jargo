@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // errConnection is what a provider reports when the exchange itself failed.
@@ -52,30 +53,30 @@ func TestACompletionTimeoutIsReportedAndAnnounced(t *testing.T) {
 	var errs []string
 	starts, ends := 0, 0
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		ReachedUpstreamFilter: pipeline.AnyFrame,
-		OnReachedUpstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.ErrorFrame); ok {
-				mu.Lock()
-				errs = append(errs, fr.Error)
-				mu.Unlock()
-			}
-		},
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
-			defer mu.Unlock()
-			switch f.(type) {
-			case *frames.LLMFullResponseStartFrame:
-				starts++
-			case *frames.LLMFullResponseEndFrame:
-				ends++
-				select {
-				case done <- struct{}{}:
-				default:
-				}
+			errs = append(errs, fr.Error)
+			mu.Unlock()
+		}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.LLMFullResponseStartFrame:
+			starts++
+		case *frames.LLMFullResponseEndFrame:
+			ends++
+			select {
+			case done <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
@@ -123,26 +124,26 @@ func TestAnOrdinaryFailureIsNotAnnouncedAsATimeout(t *testing.T) {
 
 	var errs []string
 	done := make(chan struct{}, 1)
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
-		ReachedUpstreamFilter: pipeline.AnyFrame,
-		OnReachedUpstream: func(f frames.Frame) {
-			if fr, ok := f.(*frames.ErrorFrame); ok {
-				mu.Lock()
-				errs = append(errs, fr.Error)
-				mu.Unlock()
-			}
-		},
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
-			defer mu.Unlock()
-			if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
-				select {
-				case done <- struct{}{}:
-				default:
-				}
+			errs = append(errs, fr.Error)
+			mu.Unlock()
+		}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
+			select {
+			case done <- struct{}{}:
+			default:
 			}
-		},
+		}
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

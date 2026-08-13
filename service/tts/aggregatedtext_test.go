@@ -9,13 +9,14 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 	ttstext "github.com/gojargo/jargo/utils/text"
 )
 
 // collectAggregated runs a TTS base over feed and returns every
 // AggregatedTextFrame that reached the pipeline.
 func collectAggregated(
-	t *testing.T, aggregator ttstext.Aggregator, feed func(task *pipeline.Task),
+	t *testing.T, aggregator ttstext.Aggregator, feed func(task *pipeline.Worker),
 ) []*frames.AggregatedTextFrame {
 	t.Helper()
 
@@ -31,15 +32,15 @@ func collectAggregated(
 
 	var mu sync.Mutex
 	var got []*frames.AggregatedTextFrame
-	task := pipeline.NewTask(pipeline.New(base), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
-		OnReachedDownstream: func(f frames.Frame) {
-			if af, ok := f.(*frames.AggregatedTextFrame); ok {
-				mu.Lock()
-				got = append(got, af)
-				mu.Unlock()
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if af, ok := f.(*frames.AggregatedTextFrame); ok {
+			mu.Lock()
+			got = append(got, af)
+			mu.Unlock()
+		}
 	})
 
 	runDone := make(chan error, 1)
@@ -72,7 +73,7 @@ func newTokenizer(t *testing.T) ttstext.SentenceTokenizer {
 // describing every token as a sentence.
 func TestAggregatedTextCarriesHowItWasGrouped(t *testing.T) {
 	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, newTokenizer(t))
-	got := collectAggregated(t, agg, func(task *pipeline.Task) {
+	got := collectAggregated(t, agg, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("Hello there."))
 		task.QueueFrame(frames.NewLLMFullResponseEndFrame())
@@ -98,7 +99,7 @@ func TestAggregatedTextCarriesTheTextItWasCutFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := collectAggregated(t, agg, func(task *pipeline.Task) {
+	got := collectAggregated(t, agg, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("Here is code <code>print here</code> done."))
 		task.QueueFrame(frames.NewLLMFullResponseEndFrame())

@@ -14,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // Failures the fakes below are told to return, so a test can assert on what the
@@ -27,26 +28,31 @@ var (
 // reports each one as having reached the end so the actions waiting on them do
 // not hang.
 type fakeEnq struct {
+	registry events.Registry
 	mu       sync.Mutex
 	queued   []frames.Frame
-	watchers []func(frames.Frame)
 	filter   pipeline.FrameFilter
+}
+
+func newFakeEnq() *fakeEnq {
+	e := &fakeEnq{}
+	// Declared synchronous, unlike the worker's, so a frame queued by a test is
+	// reported before the assertion that follows it. What is under test here is
+	// what the action manager does with the frame, not when it hears about it.
+	e.registry.Register(pipeline.EventFrameReachedDownstream, true)
+	return e
 }
 
 func (e *fakeEnq) QueueFrame(f frames.Frame, _ ...processor.Direction) {
 	e.mu.Lock()
 	e.queued = append(e.queued, f)
-	watchers := make([]func(frames.Frame), len(e.watchers))
-	copy(watchers, e.watchers)
 	filter := e.filter
 	e.mu.Unlock()
-	// Report the frame the way the task does, to the watchers that asked for it.
+	// Report the frame the way the worker does, to whoever asked for it.
 	if filter == nil || !filter(f) {
 		return
 	}
-	for _, w := range watchers {
-		w(f)
-	}
+	e.registry.Call(context.Background(), pipeline.EventFrameReachedDownstream, e, f)
 }
 
 func (e *fakeEnq) QueueFrames(fs []frames.Frame, _ ...processor.Direction) {
@@ -55,11 +61,7 @@ func (e *fakeEnq) QueueFrames(fs []frames.Frame, _ ...processor.Direction) {
 	}
 }
 
-func (e *fakeEnq) OnReachedDownstream(fn func(frames.Frame)) {
-	e.mu.Lock()
-	e.watchers = append(e.watchers, fn)
-	e.mu.Unlock()
-}
+func (e *fakeEnq) Events() *events.Registry { return &e.registry }
 
 func (e *fakeEnq) SetReachedDownstreamFilter(f pipeline.FrameFilter) {
 	e.mu.Lock()
@@ -148,7 +150,7 @@ func (f *fakeInferencer) RunInference(
 
 func newManager(t *testing.T, opts ...func(*Config)) (*FlowManager, *fakeEnq) {
 	t.Helper()
-	enq := &fakeEnq{}
+	enq := newFakeEnq()
 	cfg := Config{
 		Enqueuer:    enq,
 		Watcher:     enq,
@@ -1024,7 +1026,7 @@ func TestCurrentContextReadsTheConversation(t *testing.T) {
 	}
 
 	// Without aggregators there is no conversation to read.
-	bare, err := New(Config{Enqueuer: &fakeEnq{}})
+	bare, err := New(Config{Enqueuer: newFakeEnq()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

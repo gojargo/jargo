@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport/wsserver/rtviws"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 const (
@@ -81,20 +82,20 @@ func synthesize(ctx context.Context, ttsService *tts.Base, text string) ([]byte,
 		once sync.Once
 	)
 	done := make(chan struct{})
-	task := pipeline.NewTask(pipeline.New(ttsService), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(ttsService), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.FrameTypes(
 			&frames.TTSAudioRawFrame{},
 			&frames.TTSStoppedFrame{},
 		),
-		OnReachedDownstream: func(f frames.Frame) {
-			switch fr := f.(type) {
-			case *frames.TTSAudioRawFrame:
-				pcm = append(pcm, fr.Audio...)
-				rate = fr.SampleRate
-			case *frames.TTSStoppedFrame:
-				once.Do(func() { close(done) })
-			}
-		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		switch fr := f.(type) {
+		case *frames.TTSAudioRawFrame:
+			pcm = append(pcm, fr.Audio...)
+			rate = fr.SampleRate
+		case *frames.TTSStoppedFrame:
+			once.Do(func() { close(done) })
+		}
 	})
 
 	runErr := make(chan error, 1)
@@ -105,7 +106,7 @@ func synthesize(ctx context.Context, ttsService *tts.Base, text string) ([]byte,
 	select {
 	case <-done:
 	case <-ctx.Done():
-		task.Cancel()
+		task.Cancel(ctx, "")
 		<-runErr
 		return nil, 0, ctx.Err()
 	}

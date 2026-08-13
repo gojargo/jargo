@@ -55,7 +55,7 @@ func TestTaskTracesOneConversation(t *testing.T) {
 	defer otel.SetTracerProvider(prev)
 
 	svc := newSpanning()
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		EnableTracing:  true,
 		ConversationID: "sess-1",
 		AdditionalSpanAttributes: []attribute.KeyValue{
@@ -126,7 +126,7 @@ func TestTaskWithoutTracing(t *testing.T) {
 	defer otel.SetTracerProvider(prev)
 
 	svc := newSpanning()
-	task := pipeline.NewTask(pipeline.New(svc), pipeline.TaskParams{})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
 	if task.Tracing() != nil {
 		t.Fatal("an untraced task should carry no tracing context")
 	}

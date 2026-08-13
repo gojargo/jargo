@@ -11,6 +11,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the Runner, which drives one task to completion. With signal
@@ -20,19 +21,19 @@ import (
 
 // runnerTask builds a one-processor task that reports when the pipeline has
 // come up and which frame ended it.
-func runnerTask() (task *pipeline.Task, ready chan struct{}, ended func() frames.Frame) {
+func runnerTask() (task *pipeline.Worker, ready chan struct{}, ended func() frames.Frame) {
 	ready = make(chan struct{})
 
 	var mu sync.Mutex
 	var last frames.Frame
 
-	task = pipeline.NewTask(pipeline.New(newEcho()), pipeline.TaskParams{
-		OnPipelineStarted: func(*frames.StartFrame) { close(ready) },
-		OnPipelineFinished: func(f frames.Frame) {
-			mu.Lock()
-			last = f
-			mu.Unlock()
-		},
+	task = pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{})
+	events.On(&task.Registry, pipeline.EventPipelineStarted,
+		func(_ context.Context, _ *frames.StartFrame) { close(ready) })
+	events.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		last = f
+		mu.Unlock()
 	})
 
 	return task, ready, func() frames.Frame {
@@ -43,7 +44,7 @@ func runnerTask() (task *pipeline.Task, ready chan struct{}, ended func() frames
 }
 
 // runRunner runs task on runner and returns a channel carrying the run error.
-func runRunner(ctx context.Context, r *pipeline.Runner, task *pipeline.Task) chan error {
+func runRunner(ctx context.Context, r *pipeline.Runner, task *pipeline.Worker) chan error {
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx, task) }()
 	return done

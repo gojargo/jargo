@@ -31,7 +31,7 @@ const (
 type StoppableWhenDone interface {
 	Worker
 	// StopWhenDone stops the worker once it has finished what it is doing.
-	StopWhenDone(ctx context.Context)
+	StopWhenDone()
 }
 
 // RunnerConfig configures a Runner.
@@ -230,11 +230,11 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) error {
 
 // StopWhenDone asks every root worker that can to finish what it is doing and
 // then stop.
-func (r *Runner) StopWhenDone(ctx context.Context) {
+func (r *Runner) StopWhenDone() {
 	slog.Debug("runner scheduled to stop once its workers are done", "runner", r.name)
 	for _, entry := range r.rootEntries() {
 		if stoppable, ok := entry.worker.(StoppableWhenDone); ok {
-			stoppable.StopWhenDone(ctx)
+			stoppable.StopWhenDone()
 		}
 	}
 }
