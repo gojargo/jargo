@@ -84,16 +84,17 @@ func (r *runningJob) stop() {
 // A request naming no job, or one no handler was declared for, goes to
 // OnJobRequest instead.
 //
-// Declare handlers when building the worker. Declaring two for one name keeps
-// the first and reports the second, since the later one would otherwise never
-// run and nothing would say so.
+// Declare handlers when building the worker. Declaring two for one name panics:
+// the second would never run, and a worker whose handlers are not the ones its
+// author declared cannot do the work it was built for. It is a mistake in the
+// program rather than something that goes wrong at run time, so it is refused
+// where it is made.
 func (w *Base) HandleJob(name string, opts JobOptions, fn JobHandler) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, ok := w.handlers[name]; ok {
-		slog.Warn("job handler already declared, keeping the first",
-			"worker", w.name, "job", name)
-		return
+		//nolint:forbidigo // a mistake in the program, refused where it is made
+		panic(fmt.Sprintf("workers: worker %q declares two job handlers for %q", w.name, name))
 	}
 	w.handlers[name] = jobHandler{fn: fn, sequential: opts.Sequential}
 }
@@ -102,14 +103,14 @@ func (w *Base) HandleJob(name string, opts JobOptions, fn JobHandler) {
 // becoming ready. The worker is watched when this one starts, and fn runs
 // before the general OnWorkerReady hook.
 //
-// Declaring two handlers for one worker keeps the first and reports the second.
+// Declaring two handlers for one worker panics, for the reason HandleJob does.
 func (w *Base) HandleWorkerReady(name string, fn ReadyHandler) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, ok := w.readyHandlers[name]; ok {
-		slog.Warn("worker-ready handler already declared, keeping the first",
-			"worker", w.name, "watched", name)
-		return
+		//nolint:forbidigo // a mistake in the program, refused where it is made
+		panic(fmt.Sprintf("workers: worker %q declares two worker-ready handlers for %q",
+			w.name, name))
 	}
 	w.readyHandlers[name] = fn
 }

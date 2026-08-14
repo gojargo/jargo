@@ -12,7 +12,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **An LLM service generates summaries on its own inference.** The base handed
+  the processor its own address as self, so nothing could reach a service's
+  `RunInference` through it and every in-pipeline summarization request failed
+  with "the LLM service does not run inference" without the model being asked.
+  A generation that runs out of time is now also told apart from one that
+  failed: both are reported to the pipeline, but only a failure is carried on
+  the result.
+
 ### Changed
+
+- **Declaring two handlers for one name panics.** `Base.HandleJob` and
+  `Base.HandleWorkerReady` kept the first handler and warned about the second,
+  which left a worker running with handlers its author had not written. The
+  second would never run, so it is refused where it is declared instead.
 
 - **`pipeline.Task` is now `pipeline.Worker`, and it is a worker.** A pipeline is
   one participant in a session rather than the whole of it, so the thing driving

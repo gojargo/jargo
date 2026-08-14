@@ -1492,6 +1492,58 @@ func TestWorkerReadyHandlerRunsForTheWatchedWorker(t *testing.T) {
 	}
 }
 
+// A worker declaring two handlers for one name is a mistake in the program: the
+// second would never run, so it is refused where it is made rather than left to
+// surprise whoever asked for the job.
+func TestDeclaringTwoJobHandlersForOneNameIsRefused(t *testing.T) {
+	t.Parallel()
+
+	worker := newStubWorker("worker")
+	worker.HandleJob("work", workers.JobOptions{}, func(context.Context, *bus.JobRequestMessage) {})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("declaring a second handler for one job name was allowed")
+		}
+		if msg, ok := r.(string); !ok || !strings.Contains(msg, "work") {
+			t.Errorf("panicked with %v, want it to name the job that was declared twice", r)
+		}
+	}()
+
+	worker.HandleJob("work", workers.JobOptions{}, func(context.Context, *bus.JobRequestMessage) {})
+}
+
+func TestDeclaringTwoWorkerReadyHandlersForOneWorkerIsRefused(t *testing.T) {
+	t.Parallel()
+
+	worker := newStubWorker("worker")
+	worker.HandleWorkerReady("watched", func(context.Context, registry.WorkerReadyData) {})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("declaring a second handler for one watched worker was allowed")
+		}
+		if msg, ok := r.(string); !ok || !strings.Contains(msg, "watched") {
+			t.Errorf("panicked with %v, want it to name the worker that was watched twice", r)
+		}
+	}()
+
+	worker.HandleWorkerReady("watched", func(context.Context, registry.WorkerReadyData) {})
+}
+
+// Handlers for different names are declared side by side.
+func TestDeclaringHandlersForDifferentNamesIsAllowed(t *testing.T) {
+	t.Parallel()
+
+	worker := newStubWorker("worker")
+	worker.HandleJob("a", workers.JobOptions{}, func(context.Context, *bus.JobRequestMessage) {})
+	worker.HandleJob("b", workers.JobOptions{}, func(context.Context, *bus.JobRequestMessage) {})
+	worker.HandleWorkerReady("first", func(context.Context, registry.WorkerReadyData) {})
+	worker.HandleWorkerReady("second", func(context.Context, registry.WorkerReadyData) {})
+}
+
 // giveJob hands a worker a job request from "parent", as the bus would.
 func giveJob(env *testEnv, w workers.Worker, jobID string) {
 	giveJobNamed(env, w, jobID, "")
