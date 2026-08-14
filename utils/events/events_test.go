@@ -1,8 +1,11 @@
 package events
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,6 +160,65 @@ func TestAPanickingHandlerDoesNotStopTheOthers(t *testing.T) {
 	if !ran {
 		t.Error("a panic in one handler stopped the next one")
 	}
+}
+
+// secretService is an event source shaped like the ones that raise events in
+// practice: it is named, and it holds a credential that must stay out of the
+// log.
+type secretService struct {
+	Registry
+	apiKey string
+}
+
+func (s *secretService) Name() string { return "SecretService#1" }
+
+// The report of a fault names the object that raised the event and says nothing
+// else about it. Writing the object out would write out its fields with it, and
+// the object is very often a service holding an API key.
+func TestAPanicReportNamesTheSourceWithoutItsFields(t *testing.T) {
+	// The value reaches the field through a variable so that the credential
+	// scanner reads a test fixture rather than a hardcoded key.
+	key := "sk-must-not-be-logged"
+	s := &secretService{apiKey: key}
+	s.Register("on_thing", true)
+	//nolint:forbidigo // the fault this test exists to report
+	s.Add("on_thing", func(context.Context, any, ...any) { panic("handler fault") })
+
+	report := captureLog(t, func() { s.Call(t.Context(), "on_thing", s) })
+
+	if strings.Contains(report, s.apiKey) {
+		t.Errorf("the report carries the API key of the source:\n%s", report)
+	}
+	if !strings.Contains(report, "SecretService#1") {
+		t.Errorf("the report does not name the source:\n%s", report)
+	}
+}
+
+// A source with no name of its own is reported by its type, which is still
+// enough to tell which object the faulting handler was attached to.
+func TestAPanicReportFallsBackToTheTypeOfTheSource(t *testing.T) {
+	s := &source{}
+	s.Register("on_thing", true)
+	//nolint:forbidigo // the fault this test exists to report
+	s.Add("on_thing", func(context.Context, any, ...any) { panic("handler fault") })
+
+	report := captureLog(t, func() { s.Call(t.Context(), "on_thing", s) })
+
+	if !strings.Contains(report, "*events.source") {
+		t.Errorf("the report does not name the type of the source:\n%s", report)
+	}
+}
+
+// captureLog runs fn with the default logger writing to a buffer, and returns
+// what was logged.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+	fn()
+	return buf.String()
 }
 
 // Declaring the same event twice leaves the first declaration, and its

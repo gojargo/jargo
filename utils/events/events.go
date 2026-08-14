@@ -34,6 +34,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"runtime/debug"
 	"sync"
 )
@@ -307,10 +308,27 @@ func run(ctx context.Context, name string, fn Handler, source any, args []any) {
 		if v := recover(); v != nil {
 			slog.Error("uncaught panic in event handler",
 				"event", name,
-				"source", fmt.Sprint(source),
+				"source", sourceName(source),
 				"panic", v,
 				"stack", string(debug.Stack()))
 		}
 	}()
 	fn(ctx, source, args...)
+}
+
+// sourceName identifies the object that raised an event for a log line: its
+// name when it has one ("OpenAILLM#3"), and the name of its type otherwise.
+//
+// The object itself is never formatted. It is the thing that raised the event,
+// which is very often a service holding an API key, and writing out its fields
+// would put that key in the log.
+func sourceName(source any) string {
+	switch s := source.(type) {
+	case nil:
+		return "<nil>"
+	case interface{ Name() string }:
+		return s.Name()
+	default:
+		return reflect.TypeOf(source).String()
+	}
 }
