@@ -25,10 +25,6 @@ sudo apt-get install -y libopus-dev   # for -tags libopus
 
 - `go build ./...` — build everything with the pure-Go / purego defaults.
 - `go test ./...` — run tests. Add `-race` as CI does.
-- `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out`
-  — coverage. CI uploads the same profile to Codecov, which applies the
-  `ignore:` rules in `codecov.yml` (`examples/`, generated protobuf) — so the
-  raw local total reads roughly 13 points lower than the reported one.
 - `go build -tags libsoxr ./...` — opt into libsoxr resampling (SoX Resampler,
   highest quality; the default is the pure-Go `github.com/gojargo/go-resample`
   converter). Needs cgo.
@@ -50,8 +46,13 @@ CI failure can be reproduced locally. `make help` lists the targets; the ones
 worth knowing:
 
 - `make build-matrix`: compile all five cgo tag combinations, as CI does.
-- `make cover`: the coverage run and its total, the profile CI uploads. Break it
-  down with `make cover-func` or `make cover-html`.
+- `make cover`: the coverage run and its total, the profile CI uploads. It
+  measures across the whole module, because a package is often covered by the
+  tests of the one that drives it, and measuring package by package reads as
+  untested code that is not. Codecov applies the `ignore:` rules in
+  `codecov.yml` (`examples/`, generated protobuf), so the total it reports reads
+  roughly 9 points above the local one. Break it down with `make cover-func` or
+  `make cover-html`.
 - `make generate`: regenerate the Riva protobuf clients with pinned tool
   versions. CI runs `make generate-check` and fails if the tree is stale.
 - `make docs-check`: build the site and fail on unresolved documentation links.

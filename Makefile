@@ -49,6 +49,22 @@ HUGO_BASEURL ?=
 
 COVERPROFILE ?= coverage.out
 
+# Coverage is measured across the whole module rather than package by package,
+# because a package is often covered by the tests of the one that drives it: the
+# job context by the worker suite, the adapters by the services that use them.
+# Measured package by package that code reads as untested, which sends people
+# writing tests for behaviour that is already covered.
+#
+# The cost is that every test binary then instruments every package, so the raw
+# profile repeats each block once per binary and runs past 100MB. COVER_MERGE
+# folds the repeats back together, keeping the highest count each block was
+# reached with, which is the union of what the whole run covered.
+COVER_MERGE = awk '/^mode:/ { if (!m) { print; m = 1 } next } \
+	{ k = $$1 " " $$2 } \
+	!(k in c) { c[k] = $$3; o[++n] = k; next } \
+	$$3 > c[k] { c[k] = $$3 } \
+	END { for (i = 1; i <= n; i++) print o[i], c[o[i]] }'
+
 # Native runtimes loaded at run time through purego. NATIVE_DIR is a prefix
 # inside the repo so nothing here needs root; docker/runtime.Dockerfile installs
 # the same two libraries into /usr/local for the container image.
@@ -79,11 +95,13 @@ test: ## Run the tests with the race detector, as CI does
 
 .PHONY: cover
 cover: ## Run the tests and write the coverage profile CI uploads
-	$(GO) test -race -coverprofile=$(COVERPROFILE) ./...
+	$(GO) test -race -coverpkg=./... -coverprofile=$(COVERPROFILE).raw ./...
+	@$(COVER_MERGE) $(COVERPROFILE).raw > $(COVERPROFILE)
+	@rm -f $(COVERPROFILE).raw
 	@$(GO) tool cover -func=$(COVERPROFILE) | tail -1
 	@echo
 	@echo "Codecov applies the ignore: rules in codecov.yml (examples/, generated"
-	@echo "protobuf), so the reported total reads roughly 13 points above this one."
+	@echo "protobuf), so the reported total reads roughly 9 points above this one."
 	@echo "Break it down with 'make cover-func' or 'make cover-html'."
 
 .PHONY: require-coverprofile
