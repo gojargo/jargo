@@ -2,7 +2,7 @@ module github.com/gojargo/jargo
 
 go 1.26
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.61.0
