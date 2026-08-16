@@ -1,6 +1,10 @@
 // Mistral realtime speech-to-text over the Voxtral transcription WebSocket.
 // Audio streams up as base64 append messages; the server streams incremental
 // text deltas (surfaced as interims) and a final transcription for each segment.
+//
+// A segment closes when the client flushes the audio it has sent, which happens
+// as the VAD reports the speech ended. The session stays open across the flush,
+// so one connection carries every utterance of the call.
 
 package mistral
 
@@ -34,7 +38,7 @@ const (
 	// Client message types.
 	sttMsgSessionUpdate = "session.update"
 	sttMsgAudioAppend   = "input_audio.append"
-	sttMsgAudioEnd      = "input_audio.end"
+	sttMsgAudioFlush    = "input_audio.flush"
 
 	// Server event types.
 	sttEventTextDelta = "transcription.text.delta"
@@ -127,9 +131,12 @@ func (c *sttConnector) sessionUpdate(sampleRate int) []byte {
 }
 
 type sttStream struct {
-	conn        *wsutil.Conn
-	ctx         context.Context
-	writeMu     sync.Mutex
+	conn    *wsutil.Conn
+	ctx     context.Context
+	writeMu sync.Mutex
+	// textMu guards the transcript being built, which the read loop extends and
+	// the start of an utterance clears.
+	textMu      sync.Mutex
 	accumulated string
 	language    string
 }
@@ -143,6 +150,28 @@ func (s *sttStream) Send(audio []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.conn.Write(s.ctx, websocket.MessageText, b)
+}
+
+// Finalize flushes the audio sent so far, which closes the segment being
+// transcribed: the server answers with the done event carrying the transcript
+// for it and keeps the session open for the next utterance. Without it a segment
+// is only closed at the end of the stream, and the whole call comes back as one
+// transcript long after the turn it belonged to.
+func (s *sttStream) Finalize() error {
+	b, _ := json.Marshal(map[string]any{msgType: sttMsgAudioFlush}) //nolint:errchkjson // map of known-serializable values
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(s.ctx, websocket.MessageText, b)
+}
+
+// SpeechStarted drops the transcript built for the utterance before this one.
+// The done event clears it as each segment closes, and this covers the segment
+// that never closed: the deltas for it would otherwise be read as the opening
+// words of the utterance beginning now.
+func (s *sttStream) SpeechStarted() {
+	s.textMu.Lock()
+	defer s.textMu.Unlock()
+	s.accumulated = ""
 }
 
 // Recv reads the next transcription event. Text deltas accumulate and surface as
@@ -160,13 +189,18 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 		}
 		switch m.Type {
 		case sttEventTextDelta:
+			s.textMu.Lock()
 			s.accumulated += m.Text
-			if s.accumulated != "" {
-				return []stt.Result{{Text: s.accumulated, Final: false}}, nil
+			text := s.accumulated
+			s.textMu.Unlock()
+			if text != "" {
+				return []stt.Result{{Text: text, Final: false}}, nil
 			}
 		case sttEventDone:
 			text := m.Text
+			s.textMu.Lock()
 			s.accumulated = ""
+			s.textMu.Unlock()
 			if text != "" {
 				return []stt.Result{{Text: text, Final: true, EndOfTurn: true, Language: s.language}}, nil
 			}
@@ -178,12 +212,10 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 	}
 }
 
-// Close signals end of audio and closes the socket.
+// Close ends the session. Nothing is asked of the server on the way out: each
+// utterance was flushed as its speech ended, and a request made here would be
+// answered after the reader that would have carried the transcript has gone.
 func (s *sttStream) Close() error {
-	end, _ := json.Marshal(map[string]any{msgType: sttMsgAudioEnd}) //nolint:errchkjson // known-serializable values
-	s.writeMu.Lock()
-	_ = s.conn.Write(context.Background(), websocket.MessageText, end)
-	s.writeMu.Unlock()
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }
 

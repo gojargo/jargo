@@ -368,6 +368,49 @@ func TestStreamServiceFinalizesOnVADStop(t *testing.T) {
 	<-runDone
 }
 
+// startingStream records that it was told the speech started.
+type startingStream struct {
+	fakeStream
+	started chan struct{}
+}
+
+func (s *startingStream) SpeechStarted() {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+}
+
+// startingConnector opens the one stream the test watches.
+type startingConnector struct{ stream *startingStream }
+
+func (c *startingConnector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+// A provider that builds a transcript across results is told when an utterance
+// begins, so what it was holding for the one before it is dropped rather than
+// read as the opening words of this one.
+func TestStreamServiceTellsTheSessionSpeechStarted(t *testing.T) {
+	stream := &startingStream{started: make(chan struct{}, 1)}
+	svc := stt.NewStream("StartingSTT", &startingConnector{stream: stream}, 16000)
+
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	select {
+	case <-stream.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session was never told the speech started")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
 // answeringStream says nothing until it is told the speech ended, then answers
 // that finalize the way a provider that confirms its flushes does.
 type answeringStream struct {

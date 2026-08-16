@@ -144,6 +144,17 @@ type Finalizer interface {
 	Finalize() error
 }
 
+// SpeechStarter is an optional interface a Stream implements when the start of
+// an utterance is something the session itself has to know about. SpeechStarted
+// is called once the VAD reports the user began speaking. It is where a session
+// that builds a transcript across several results drops what it was holding: the
+// utterance before it is over whether or not the provider ever closed it, and
+// text left over from it would otherwise be read as the beginning of this one. A
+// Stream that keeps nothing between utterances does not implement it.
+type SpeechStarter interface {
+	SpeechStarted()
+}
+
 // SettingsHolder is an optional interface a provider implements when part of
 // what it was built with can change while the pipeline runs: the language it
 // transcribes, the model it uses. The value returned is the provider's own
@@ -406,6 +417,7 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		s.finalizeRequested = false
 		s.finalizePending = false
 		s.mu.Unlock()
+		s.speechStarted()
 		s.ttfb.speechStarted()
 		s.tracer.speechStarted(fr.SpeechStart())
 		// The service is at work on this utterance from here until it produces
@@ -748,6 +760,24 @@ func (s *StreamService) send(audio []byte) {
 		s.mu.Lock()
 		s.sendFailed = true
 		s.mu.Unlock()
+	}
+}
+
+// speechStarted tells the session a new utterance has begun, for a provider that
+// carries text from one result to the next and has to be told the utterance it
+// was building is over. It is a no-op for a provider that holds nothing between
+// utterances, and for a session that is being replaced: the one that takes over
+// starts empty anyway.
+func (s *StreamService) speechStarted() {
+	s.mu.Lock()
+	stream := s.stream
+	reopening := s.reopening
+	s.mu.Unlock()
+	if stream == nil || reopening {
+		return
+	}
+	if ss, ok := stream.(SpeechStarter); ok {
+		ss.SpeechStarted()
 	}
 }
 

@@ -14,6 +14,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Mistral STT transcribes a turn when it ends.** The realtime session closes
+  a segment only when the client flushes the audio it has sent, and nothing ever
+  flushed it, so a pipeline saw the sentence growing as interim transcriptions
+  and never received the transcription that closes the turn. The session is now
+  flushed as soon as the VAD reports the speech ended, and the transcript that
+  comes back closes that utterance with the session still open for the next one.
+  Closing the session no longer asks for a last transcript on the way out: the
+  socket went with the request, so the answer arrived after the reader that
+  would have carried it. A transcript the provider never closed is dropped when
+  the next utterance begins, rather than being read as its opening words.
+
 - **An LLM service generates summaries on its own inference.** The base handed
   the processor its own address as self, so nothing could reach a service's
   `RunInference` through it and every in-pipeline summarization request failed
@@ -113,6 +124,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   hang from. `WorkerConfig.EnableTracing` now gates them.
 
 ### Added
+
+- **A streaming STT session can be told an utterance began.** A `stt.Stream`
+  implementing `stt.SpeechStarter` has `SpeechStarted` called when the VAD
+  reports the user started speaking, which is where a session that builds a
+  transcript across several results drops what it was holding for the utterance
+  before. It is the counterpart of `stt.Finalizer`, which is told when the
+  speech ended. A session that keeps nothing between utterances implements
+  neither.
 
 - **A pipeline can be put on the bus.** `WorkerConfig.Bridged` wraps the
   pipeline in bus edges: what comes out of either end is copied across for the

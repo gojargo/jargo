@@ -321,9 +321,70 @@ func TestSTTRecvReportsAServerError(t *testing.T) {
 	}
 }
 
-// TestSTTCloseSignalsEndOfAudio checks the provider is told the audio has ended
-// before the socket goes, so it flushes rather than dropping what it held.
-func TestSTTCloseSignalsEndOfAudio(t *testing.T) {
+// TestSTTFinalizeFlushesTheSegment checks the session is asked to close the
+// segment when the speech ends, which is what makes the provider answer with the
+// transcript for the utterance instead of holding it until the call is over.
+func TestSTTFinalizeFlushesTheSegment(t *testing.T) {
+	endpoint, seen := sttServer(t, nil)
+
+	s, err := sttConn(endpoint).Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	seen.await(t) // the session update
+
+	fin, ok := s.(stt.Finalizer)
+	if !ok {
+		t.Fatal("the session cannot be told the speech ended")
+	}
+	if err := fin.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if m := seen.await(t); m[msgType] != sttMsgAudioFlush {
+		t.Errorf("message = %v, want the audio flushed", m)
+	}
+}
+
+// TestSTTSpeechStartedClearsTheAccumulator checks an utterance the provider
+// never closed is dropped when the next one begins, rather than being read as
+// its opening words.
+func TestSTTSpeechStartedClearsTheAccumulator(t *testing.T) {
+	endpoint, _ := sttServer(t, []map[string]any{
+		{msgType: sttEventTextDelta, "text": "abandoned"},
+		{msgType: sttEventTextDelta, "text": "hello"},
+	})
+
+	s, err := sttConn(endpoint).Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	if _, err := s.Recv(); err != nil { // the utterance the provider never closed
+		t.Fatalf("Recv: %v", err)
+	}
+
+	starter, ok := s.(stt.SpeechStarter)
+	if !ok {
+		t.Fatal("the session cannot be told the speech started")
+	}
+	starter.SpeechStarted()
+
+	next, err := s.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if next[0].Text != "hello" {
+		t.Errorf("text = %q, want the new utterance alone", next[0].Text)
+	}
+}
+
+// TestSTTCloseEndsTheSessionOnly checks nothing is asked of the server on the
+// way out: the transcripts were flushed as each utterance ended, and an answer
+// to a request made here would arrive after the reader has gone.
+func TestSTTCloseEndsTheSessionOnly(t *testing.T) {
 	endpoint, seen := sttServer(t, nil)
 
 	s, err := sttConn(endpoint).Connect(context.Background(), 16000)
@@ -335,8 +396,10 @@ func TestSTTCloseSignalsEndOfAudio(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if m := seen.await(t); m[msgType] != sttMsgAudioEnd {
-		t.Errorf("last message = %v, want the end of audio", m)
+	select {
+	case m := <-seen.got:
+		t.Errorf("Close sent %v, want the session closed and nothing more", m)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
