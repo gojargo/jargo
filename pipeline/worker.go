@@ -288,6 +288,17 @@ type Worker struct {
 	mu        sync.Mutex
 	finished  bool
 	canceling bool
+	// cancelReason is what the cancellation was asked for, kept so the frame
+	// carries it even when the run's context ends before the queue is drained.
+	cancelReason string
+	// cancelFrame is the CancelFrame already sent into the pipeline, so a run
+	// whose context ends while that frame is still traveling waits for it out
+	// rather than sending a second.
+	cancelFrame *frames.CancelFrame
+	// finishOnce reports the pipeline finished once. The cancel path can be
+	// reached twice, by the run loop waiting for the frame and by the
+	// context-end handling behind it, and a run finishes once.
+	finishOnce sync.Once
 	// unusable holds the ids of the processors the unusable policy has already
 	// been applied to. One that can no longer do its job goes on failing for as
 	// long as the pipeline uses it, so the policy answers the first error that
@@ -721,6 +732,17 @@ func (t *Worker) handleUnusableProcessor(ctx context.Context, p processor.Proces
 	}
 }
 
+// callPipelineFinished raises EventPipelineFinished for the frame that ended
+// the run, at most once.
+//
+// A run ends once, but the cancel path can be reached twice: the run loop waits
+// for the frame, and the handling of a run whose context ended waits behind it.
+// Upstream is spared this because the queue there is drained by a task of its
+// own that outlives the wait; here the run loop is the drain, so the two meet.
+func (t *Worker) callPipelineFinished(ctx context.Context, f frames.Frame) {
+	t.finishOnce.Do(func() { t.Call(ctx, EventPipelineFinished, t, f) })
+}
+
 // cancelWithReason queues a CancelFrame carrying reason, at most once.
 func (t *Worker) cancelWithReason(reason string) {
 	t.mu.Lock()
@@ -729,6 +751,7 @@ func (t *Worker) cancelWithReason(reason string) {
 		return
 	}
 	t.canceling = true
+	t.cancelReason = reason
 	t.mu.Unlock()
 
 	// Release the run loop if it is still waiting for the StartFrame to reach
@@ -760,20 +783,32 @@ func (t *Worker) isCanceling() bool {
 // wait for it is bounded so a wedged one cannot hold the run open.
 func (t *Worker) cancelOnContextEnd(ctx context.Context) frames.Frame {
 	t.mu.Lock()
-	if t.canceling {
-		// Something already canceled and the run loop was on its way out; there
-		// is nothing left to send.
-		t.mu.Unlock()
-		return nil
-	}
+	sent := t.cancelFrame
+	reason := t.cancelReason
 	t.canceling = true
 	t.mu.Unlock()
+
+	if sent != nil {
+		// The run loop already sent one and was still waiting for it when the
+		// context ended. Waiting it out here is what the run loop would have
+		// done, and a second frame would tell the pipeline something it has
+		// already been told.
+		_ = t.waitPipelineEnd(ctx, sent)
+		return sent
+	}
 
 	slog.Debug("the run's context ended, canceling the pipeline")
 
 	cancelFrame := frames.NewCancelFrame()
-	cancelFrame.Reason = "context canceled"
+	cancelFrame.Reason = reason
+	if cancelFrame.Reason == "" {
+		cancelFrame.Reason = "context canceled"
+	}
 	if err := t.pipeline.QueueFrame(ctx, cancelFrame, processor.Downstream); err != nil {
+		// The pipeline will not carry the frame, so nothing else is going to
+		// report the run over. Say so here rather than leave the caller waiting
+		// on an event that cannot come.
+		t.callPipelineFinished(ctx, cancelFrame)
 		return nil
 	}
 	_ = t.waitPipelineEnd(ctx, cancelFrame)
@@ -949,9 +984,17 @@ func (t *Worker) waitPipelineEnd(ctx context.Context, f frames.Frame) error {
 		}
 	}
 
+	// The caller has just put this frame into the pipeline, so a run whose
+	// context ends while it is still traveling knows not to send another.
+	if cf, ok := f.(*frames.CancelFrame); ok {
+		t.mu.Lock()
+		t.cancelFrame = cf
+		t.mu.Unlock()
+	}
+
 	// The sink does not report a CancelFrame as finished, so that this runs
 	// exactly once either way: here, on arrival or on timeout.
-	defer t.Call(ctx, EventPipelineFinished, t, f)
+	defer t.callPipelineFinished(ctx, f)
 
 	timeout := time.NewTimer(t.cfg.CancelTimeout)
 	defer timeout.Stop()
@@ -1021,7 +1064,7 @@ func (t *Worker) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direc
 		// Hand it to the monitor, which times how long it took to get here.
 		t.heartbeats.push(fr)
 	case *frames.EndFrame, *frames.StopFrame:
-		t.Call(ctx, EventPipelineFinished, t, f)
+		t.callPipelineFinished(ctx, f)
 		t.endOnce.Do(func() { close(t.endSig) })
 	case *frames.CancelFrame:
 		// The finished handler is not called here. A CancelFrame may never

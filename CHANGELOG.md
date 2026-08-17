@@ -70,6 +70,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   with nowhere to move the work is reported against the switcher, uncategorized,
   so the pipeline judges it by what it has left.
 
+- **A run whose context ends always reports the pipeline finished.** The run
+  loop is what drains the worker's queue, so a cancellation asked for as the run
+  was ending left its `CancelFrame` stranded there: the pipeline was never told
+  the run was over, and neither was anything watching the worker. That frame now
+  goes straight into the pipeline, carrying the reason the cancellation was asked
+  for, and a run that already sent one waits it out rather than sending a second.
+  `on_pipeline_finished` is raised once however the run ends.
+
 - **A websocket service stops redialing a provider that keeps refusing.** It
   reported a lost connection as a bare message and guessed locally at when to
   give up. It now reports an error frame, says when the failure will keep
