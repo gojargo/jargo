@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	errs "github.com/gojargo/jargo/utils/errors"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -19,10 +20,16 @@ var errBoom = errors.New("boom")
 // tagSvc replaces each downstream TextFrame with one prefixed by its tag, so
 // only the active branch of a switcher produces output. When a frame's text
 // equals failOn it raises a non-fatal error instead, to drive failover.
+//
+// recoverable chooses between an error the service can carry on from and one
+// that ends its usefulness; it ends it by default, which is the error worth
+// failing over from.
 type tagSvc struct {
 	*processor.Base
-	tag    string
-	failOn string
+	tag         string
+	failOn      string
+	recoverable bool
+	category    errs.Category
 }
 
 func newTagSvc(tag, failOn string) *tagSvc {
@@ -37,7 +44,14 @@ func (s *tagSvc) ProcessFrame(ctx context.Context, f frames.Frame, dir processor
 	}
 	if tf, ok := f.(*frames.TextFrame); ok && dir == processor.Downstream {
 		if s.failOn != "" && tf.Text == s.failOn {
-			s.PushError(ctx, "tag svc failed", errBoom, false)
+			var opts []processor.ErrorOption
+			if s.category != errs.Unset {
+				opts = append(opts, processor.WithErrorCategory(s.category))
+			}
+			if !s.recoverable {
+				opts = append(opts, processor.TreatAsPermanent())
+			}
+			s.PushError(ctx, "tag svc failed", errBoom, false, opts...)
 			return nil
 		}
 		return s.PushFrame(ctx, frames.NewTextFrame(s.tag+tf.Text), dir)

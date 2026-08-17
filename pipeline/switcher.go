@@ -9,6 +9,8 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	errs "github.com/gojargo/jargo/utils/errors"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // errNoServices is returned when a switcher is built without a service.
@@ -30,6 +32,8 @@ const inactiveUpdateRing = 64
 type SwitcherStrategy interface {
 	// Services are the services the strategy chooses between.
 	Services() []processor.Processor
+	// UsableServices are the services that can still be given work, in order.
+	UsableServices() []processor.Processor
 	// ActiveService is the service currently in use.
 	ActiveService() processor.Processor
 	// HandleFrame acts on a frame that steers the switcher, returning the
@@ -38,6 +42,11 @@ type SwitcherStrategy interface {
 	HandleFrame(f frames.Frame, dir processor.Direction) processor.Processor
 	// HandleError reacts to a non-fatal error from the active service,
 	// returning the service it switched to, or nil if it did not switch.
+	//
+	// It is called for every non-fatal error the active service reports,
+	// whether or not the service can carry on from it, so the strategy decides
+	// which errors are worth switching away from. ErrorFrame.Source.Usable()
+	// tells a service that is finished from one having a bad moment.
 	HandleError(ef *frames.ErrorFrame) processor.Processor
 	// OnServiceSwitched registers fn to be called whenever the active service
 	// changes.
@@ -63,6 +72,8 @@ type StrategyFunc func(services []processor.Processor) SwitcherStrategy
 // service reaches it whether or not it is in use, and one marked
 // ReachInactiveServices reaches every member, so whichever service becomes
 // active later is already configured.
+// A switcher is only as dead as its last service, so its own usability is a
+// reading of theirs rather than a state of its own.
 type ServiceSwitcher struct {
 	*ParallelPipeline
 	strategy SwitcherStrategy
@@ -71,6 +82,9 @@ type ServiceSwitcher struct {
 	// inactiveUpdates are the ids of the settings updates handed to services
 	// that were not active, so they can be consumed again on their way out.
 	inactiveUpdates []uint64
+	// announcedUsable is the last reading announced, kept because a service
+	// changing its own usability does not always change the switcher's.
+	announcedUsable bool
 }
 
 // NewServiceSwitcher builds a switcher over services, the first of which starts
@@ -125,7 +139,65 @@ func newServiceSwitcherAs(
 		return nil, err
 	}
 	s.ParallelPipeline = pp
+
+	// What the switcher reports is read from the services, so it hears about
+	// each of them changing and announces its own reading when that moves.
+	s.announcedUsable = s.Usable()
+	for _, svc := range services {
+		events.On(svc.Events(), processor.EventUsableChanged,
+			func(ctx context.Context, _ bool) { s.announceUsable(ctx) })
+	}
 	return s, nil
+}
+
+// Usable reports whether any of the switched services can still be given work.
+//
+// A switcher is only as dead as its last service: it can keep doing its job by
+// moving work to a different one, so it reports itself unusable only once none
+// of them can do theirs. This is a reading of the services rather than a state
+// of its own, so bringing a service back with SetUsable brings the switcher back
+// too, and calling that on the switcher itself does nothing. The switcher raises
+// EventUsableChanged for itself as the reading moves, so watching it is enough
+// to hear about the services it holds.
+func (s *ServiceSwitcher) Usable() bool {
+	for _, svc := range s.Services() {
+		if svc.Usable() {
+			return true
+		}
+	}
+	return false
+}
+
+// SetUsable ignores an attempt to set this switcher's usability directly.
+//
+// A switcher has no usability of its own to set: what it reports is a reading of
+// its services. Bring an individual service back with its own SetUsable, which
+// brings the switcher back with it.
+func (s *ServiceSwitcher) SetUsable(ctx context.Context, usable bool) {
+	// Not calling through to the base: it would set a flag this switcher never
+	// reads, and announce a change that did not happen.
+	slog.DebugContext(ctx, "ignoring set_usable; a switcher reports whether any of its services can be given work",
+		"switcher", s.Name(), "usable", usable)
+}
+
+// announceUsable raises EventUsableChanged when what this switcher reports has
+// moved.
+func (s *ServiceSwitcher) announceUsable(ctx context.Context) {
+	usable := s.Usable()
+	s.mu.Lock()
+	if usable == s.announcedUsable {
+		s.mu.Unlock()
+		return
+	}
+	s.announcedUsable = usable
+	s.mu.Unlock()
+
+	if usable {
+		slog.DebugContext(ctx, "switcher usable", "switcher", s.Name())
+	} else {
+		slog.DebugContext(ctx, "switcher no longer usable", "switcher", s.Name())
+	}
+	s.Events().Call(ctx, processor.EventUsableChanged, s, usable)
 }
 
 // Strategy is the strategy choosing between the switcher's services.
@@ -215,16 +287,80 @@ func (s *ServiceSwitcher) PushFrame(ctx context.Context, f frames.Frame, dir pro
 			return nil
 		}
 	case frames.ErrorReport:
-		// Let the strategy react to the active service failing, while the error
-		// still travels on so the application hears about it too.
-		ef := fr.ErrorInfo()
-		if !ef.Fatal && ef.Source != nil && ef.Source.Name() == s.ActiveService().Name() {
-			if switched := s.strategy.HandleError(ef); switched != nil {
-				s.requestMetadata(switched)
-			}
+		if handled := s.handleServiceError(ctx, fr.ErrorInfo()); handled {
+			return nil
 		}
 	}
 	return s.ParallelPipeline.Base.PushFrame(ctx, f, dir)
+}
+
+// handleServiceError answers for an error one of the switched services reported,
+// returning whether it has been dealt with here and goes no further.
+//
+// The rest of the pipeline deals with the switcher and not with what it holds,
+// so an error from a service the switcher is not using stops here outright: it
+// is not being given work, and nothing about it bears on whether the switcher
+// can do its job. Every error from the active service goes to the strategy,
+// which decides whether it warrants a switch; a successful switch absorbs it,
+// the switcher having gone on doing its job. An error that leaves the active
+// service unable to do its job with no switch to be made is reported against the
+// switcher, so the pipeline judges it by what the switcher has left rather than
+// by the one service that failed. Every other error travels upstream as usual.
+func (s *ServiceSwitcher) handleServiceError(ctx context.Context, ef *frames.ErrorFrame) bool {
+	if ef.Fatal {
+		return false
+	}
+	failed, ok := ef.Source.(processor.Processor)
+	if !ok {
+		return false
+	}
+	active := s.ActiveService()
+	if failed != active {
+		// Errors from anywhere else are just passing through, and travel on.
+		// Watch a service's own EventUsableChanged to hear about the ones held
+		// in reserve.
+		return s.isMember(failed)
+	}
+
+	if switched := s.strategy.HandleError(ef); switched != nil {
+		s.requestMetadata(switched)
+		return true
+	}
+	// No switch was made. If the service can no longer work, the switcher has
+	// nowhere left to send the work, so it reports the failure as its own.
+	if !failed.Usable() {
+		s.reportServiceFailure(ctx, failed, ef)
+		return true
+	}
+	return false
+}
+
+// isMember reports whether p is one of the services this switcher manages.
+func (s *ServiceSwitcher) isMember(p processor.Processor) bool {
+	for _, svc := range s.Services() {
+		if svc == p {
+			return true
+		}
+	}
+	return false
+}
+
+// reportServiceFailure reports a service failure the switcher could not switch
+// away from.
+//
+// It re-attributes the error to the switcher, which is the processor the rest of
+// the pipeline deals with. Whether losing this service matters depends on what
+// the switcher has left, not on the service that just failed, so Usable on the
+// reported error answers for the switcher as a whole.
+func (s *ServiceSwitcher) reportServiceFailure(
+	ctx context.Context, failed processor.Processor, ef *frames.ErrorFrame,
+) {
+	s.PushError(ctx,
+		fmt.Sprintf("%s can no longer do its job: %s", failed.Name(), ef.Error),
+		ef.Err, false,
+		// A permanent category would cost the switcher its own usability,
+		// writing it off along with the one service that failed.
+		processor.WithErrorCategory(errs.Unknown))
 }
 
 // updateInactiveServices hands a settings update to the member services the
@@ -324,6 +460,17 @@ func NewManualStrategy(services []processor.Processor) SwitcherStrategy {
 
 func (m *manualStrategy) Services() []processor.Processor { return m.services }
 
+// UsableServices are the services that can still be given work, in order.
+func (m *manualStrategy) UsableServices() []processor.Processor {
+	var usable []processor.Processor
+	for _, svc := range m.services {
+		if svc.Usable() {
+			usable = append(usable, svc)
+		}
+	}
+	return usable
+}
+
 func (m *manualStrategy) ActiveService() processor.Processor {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -350,7 +497,10 @@ func (m *manualStrategy) HandleError(*frames.ErrorFrame) processor.Processor { r
 
 // setActiveIfAvailable activates target if it is one of the strategy's services.
 // A target it does not manage is left alone, since the request was meant for
-// another switcher.
+// another switcher. A service that can no longer do its job is refused: making
+// it active would only route work to something that cannot handle it. Bring it
+// back with its own SetUsable first, once whatever stopped it working has been
+// dealt with.
 func (m *manualStrategy) setActiveIfAvailable(target frames.ServiceTarget) processor.Processor {
 	m.mu.Lock()
 	var found processor.Processor
@@ -362,6 +512,12 @@ func (m *manualStrategy) setActiveIfAvailable(target frames.ServiceTarget) proce
 	}
 	if found == nil {
 		m.mu.Unlock()
+		return nil
+	}
+	if !found.Usable() {
+		m.mu.Unlock()
+		slog.Warn("not switching to a service that can no longer do its job",
+			"service", found.Name())
 		return nil
 	}
 	m.active = found
@@ -387,14 +543,28 @@ func NewFailoverStrategy(services []processor.Processor) SwitcherStrategy {
 	return &failoverStrategy{manualStrategy: &manualStrategy{services: services, active: services[0]}}
 }
 
-// HandleError moves to the next service in the list.
+// HandleError moves to the next service that can still do its job.
+//
+// Only an error leaving the service unable to do its job is worth a failover;
+// anything it can carry on from is ignored, so a provider hiccup does not cost
+// one. When one does, it switches to the next service in the list that can still
+// do its own, wrapping around from the end. The failed service stays in the list
+// and can be switched back to once it has been brought back with SetUsable.
 func (f *failoverStrategy) HandleError(ef *frames.ErrorFrame) processor.Processor {
-	f.mu.Lock()
-	if len(f.services) <= 1 {
-		f.mu.Unlock()
-		slog.Error("no other service to switch to", "err", ef.Error)
+	failed, ok := ef.Source.(processor.Processor)
+	if !ok {
+		failed = f.ActiveService()
+	}
+	// The service is still working, so there is nothing to fail over from.
+	if failed.Usable() {
 		return nil
 	}
+
+	slog.Warn("service reported an error, switching", "service", failed.Name(), "err", ef.Error)
+
+	// Walk the list from the one after the active service, so failover follows
+	// the order the services were given in.
+	f.mu.Lock()
 	idx := 0
 	for i, svc := range f.services {
 		if svc == f.active {
@@ -402,9 +572,15 @@ func (f *failoverStrategy) HandleError(ef *frames.ErrorFrame) processor.Processo
 			break
 		}
 	}
-	next := f.services[(idx+1)%len(f.services)]
+	services := f.services
 	f.mu.Unlock()
 
-	slog.Warn("service reported an error, switching", "service", ef.Source.Name(), "err", ef.Error)
-	return f.setActiveIfAvailable(frames.ServiceTarget(next))
+	for offset := 1; offset < len(services); offset++ {
+		candidate := services[(idx+offset)%len(services)]
+		if candidate.Usable() {
+			return f.setActiveIfAvailable(frames.ServiceTarget(candidate))
+		}
+	}
+	slog.Error("no other service available to switch to", "err", ef.Error)
+	return nil
 }
