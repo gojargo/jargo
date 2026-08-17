@@ -14,6 +14,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The frames the protocol was missing.** Thirteen frame types now exist that
+  had no counterpart: the reasoning path (`LLMThoughtStartFrame`,
+  `LLMThoughtTextFrame`, `LLMThoughtEndFrame`), the assistant turn broadcast
+  (`LLMContextAssistantTurnFrame`, `LLMContextAssistantTimestampFrame`),
+  provider-detected speech as a proposal a turn strategy resolves
+  (`ProposedUserStartedSpeakingFrame`, `ProposedUserStoppedSpeakingFrame`),
+  `LLMMessagesTransformFrame`, `LLMEnablePromptCachingFrame`, `STTMuteFrame`,
+  `TranslationFrame`, `ClientConnectedFrame`, `BotConnectedFrame`,
+  `UserAudioRawFrame` and `InputTextRawFrame`.
+
+- **Rewriting the conversation from what it currently is.**
+  `LLMMessagesTransformFrame` carries a function of the messages, which is what
+  a wholesale replacement cannot express: redacting what a tool returned, or
+  dropping the turns about a topic the user asked to forget. Both aggregators
+  apply it and consume it, and `LLMContext.TransformMessages` is the same thing
+  on the context directly.
+
 - **A failure now says what kind it was.** `utils/errors` gives the shared
   vocabulary (authentication, authorization, invalid request, rate limit, quota,
   connectivity, server, application) and says which of them keep recurring.

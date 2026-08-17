@@ -239,7 +239,8 @@ func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir pr
 		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
 
 	case *frames.LLMMessagesAppendFrame, *frames.LLMMessagesUpdateFrame,
-		*frames.LLMSetToolsFrame, *frames.LLMSetToolChoiceFrame:
+		*frames.LLMMessagesTransformFrame, *frames.LLMSetToolsFrame,
+		*frames.LLMSetToolChoiceFrame:
 		return u.handleContextUpdate(ctx, f, dir)
 
 	default:
@@ -272,6 +273,12 @@ func (u *UserAggregator) handleContextUpdate(
 		// Wholesale replacement of the conversation (restoring a saved session,
 		// resetting the conversation).
 		u.context.SetMessages(fr.Messages)
+		runLLM = fr.RunLLM
+
+	case *frames.LLMMessagesTransformFrame:
+		// Rewriting the conversation from what it currently is, which is what a
+		// wholesale replacement cannot express.
+		u.context.TransformMessages(fr.Transform)
 		runLLM = fr.RunLLM
 
 	case *frames.LLMSetToolsFrame:
@@ -600,6 +607,8 @@ func (a *AssistantAggregator) handleContextUpdate(ctx context.Context, f frames.
 		return true, a.handleMessagesAppend(ctx, fr)
 	case *frames.LLMMessagesUpdateFrame:
 		return true, a.handleMessagesUpdate(ctx, fr)
+	case *frames.LLMMessagesTransformFrame:
+		return true, a.handleMessagesTransform(ctx, fr)
 	}
 	return false, nil
 }
@@ -626,6 +635,18 @@ func (a *AssistantAggregator) handleMessagesAppend(ctx context.Context, fr *fram
 // and runs the model on it when asked.
 func (a *AssistantAggregator) handleMessagesUpdate(ctx context.Context, fr *frames.LLMMessagesUpdateFrame) error {
 	a.context.SetMessages(fr.Messages)
+	if !fr.RunLLM {
+		return nil
+	}
+	return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
+}
+
+// handleMessagesTransform rewrites the conversation from this side of the
+// pipeline, and runs the model on it when asked.
+func (a *AssistantAggregator) handleMessagesTransform(
+	ctx context.Context, fr *frames.LLMMessagesTransformFrame,
+) error {
+	a.context.TransformMessages(fr.Transform)
 	if !fr.RunLLM {
 		return nil
 	}

@@ -254,3 +254,83 @@ var (
 	_ SystemFrame = (*BotStartedSpeakingFrame)(nil)
 	_ SystemFrame = (*BotStoppedSpeakingFrame)(nil)
 )
+
+// ProposedUserStartedSpeakingFrame proposes that the user's turn has started.
+//
+// It is emitted by a component with turn detection of its own, typically an STT
+// or realtime LLM service whose provider reports speech boundaries. It is a
+// proposal rather than a decision: an external turn-start strategy resolves it
+// into a UserStartedSpeakingFrame and broadcasts the interruption. It is a
+// system frame.
+type ProposedUserStartedSpeakingFrame struct {
+	BaseSystemFrame
+}
+
+// NewProposedUserStartedSpeakingFrame builds a ProposedUserStartedSpeakingFrame.
+func NewProposedUserStartedSpeakingFrame() *ProposedUserStartedSpeakingFrame {
+	return &ProposedUserStartedSpeakingFrame{
+		BaseSystemFrame: NewBaseSystemFrame("ProposedUserStartedSpeakingFrame"),
+	}
+}
+
+// ProposedUserStoppedSpeakingFrame proposes that the user's turn has ended. Like
+// its counterpart it is a proposal an external turn-stop strategy resolves into
+// a UserStoppedSpeakingFrame. It is a system frame.
+type ProposedUserStoppedSpeakingFrame struct {
+	BaseSystemFrame
+}
+
+// NewProposedUserStoppedSpeakingFrame builds a ProposedUserStoppedSpeakingFrame.
+func NewProposedUserStoppedSpeakingFrame() *ProposedUserStoppedSpeakingFrame {
+	return &ProposedUserStoppedSpeakingFrame{
+		BaseSystemFrame: NewBaseSystemFrame("ProposedUserStoppedSpeakingFrame"),
+	}
+}
+
+// STTMuteFrame mutes or unmutes the transcription service, so audio reaching it
+// is left untranscribed for as long as the mute stands. It is a system frame, so
+// it takes effect ahead of the audio queued behind it.
+type STTMuteFrame struct {
+	BaseSystemFrame
+	// Mute reports whether the service should be muted.
+	Mute bool
+}
+
+// NewSTTMuteFrame builds an STTMuteFrame.
+func NewSTTMuteFrame(mute bool) *STTMuteFrame {
+	return &STTMuteFrame{
+		BaseSystemFrame: NewBaseSystemFrame("STTMuteFrame"),
+		Mute:            mute,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *STTMuteFrame) String() string {
+	return fmt.Sprintf("%s(mute: %t)", f.Name(), f.Mute)
+}
+
+// ClientConnectedFrame reports that a client has connected to the transport. The
+// input transport pushes it downstream when a participant connects, and an
+// observer measuring how long the transport took to be ready reads it. It is a
+// system frame.
+type ClientConnectedFrame struct {
+	BaseSystemFrame
+}
+
+// NewClientConnectedFrame builds a ClientConnectedFrame.
+func NewClientConnectedFrame() *ClientConnectedFrame {
+	return &ClientConnectedFrame{BaseSystemFrame: NewBaseSystemFrame("ClientConnectedFrame")}
+}
+
+// BotConnectedFrame reports that the bot has connected to the transport service.
+// A transport that joins a room of its own pushes it downstream once the join
+// succeeds; a transport that is dialed rather than joining emits nothing. It is
+// a system frame.
+type BotConnectedFrame struct {
+	BaseSystemFrame
+}
+
+// NewBotConnectedFrame builds a BotConnectedFrame.
+func NewBotConnectedFrame() *BotConnectedFrame {
+	return &BotConnectedFrame{BaseSystemFrame: NewBaseSystemFrame("BotConnectedFrame")}
+}

@@ -354,6 +354,17 @@ func (c *LLMContext) SetMessages(messages []Message) {
 	c.mu.Unlock()
 }
 
+// TransformMessages replaces the conversation with what transform makes of it.
+// The function is given a copy, so a transform that keeps a reference to what it
+// was handed cannot edit the conversation behind its back; what it returns is
+// what the conversation becomes.
+func (c *LLMContext) TransformMessages(transform func([]Message) []Message) {
+	if transform == nil {
+		return
+	}
+	c.SetMessages(transform(c.Messages()))
+}
+
 // AddUserMessage appends a user message.
 func (c *LLMContext) AddUserMessage(text string) {
 	c.mu.Lock()
@@ -598,6 +609,35 @@ func (f *LLMMessagesUpdateFrame) String() string {
 	return fmt.Sprintf("%s(messages: %d)", f.Name(), len(f.Messages))
 }
 
+// LLMMessagesTransformFrame rewrites the conversation messages in the shared
+// context with a function of them, in contrast to LLMMessagesUpdateFrame which
+// replaces them with a list settled in advance. Use it when what the
+// conversation should become depends on what it currently is: redacting what a
+// tool returned, dropping the turns about a topic the user asked to forget. It
+// is a data frame, so the rewrite is ordered against the surrounding
+// conversation.
+type LLMMessagesTransformFrame struct {
+	BaseDataFrame
+	// Transform takes the context's current messages and returns what they
+	// should become.
+	Transform func([]Message) []Message
+	// RunLLM reports whether the LLM should run on the rewritten context.
+	RunLLM bool
+}
+
+// NewLLMMessagesTransformFrame builds an LLMMessagesTransformFrame.
+func NewLLMMessagesTransformFrame(transform func([]Message) []Message) *LLMMessagesTransformFrame {
+	return &LLMMessagesTransformFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMMessagesTransformFrame"),
+		Transform:     transform,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMMessagesTransformFrame) String() string {
+	return fmt.Sprintf("%s(run_llm: %t)", f.Name(), f.RunLLM)
+}
+
 // Compile-time interface checks.
 var (
 	_ DataFrame = (*LLMContextFrame)(nil)
@@ -606,3 +646,76 @@ var (
 	_ DataFrame = (*LLMSetToolChoiceFrame)(nil)
 	_ DataFrame = (*LLMMessagesUpdateFrame)(nil)
 )
+
+// LLMEnablePromptCachingFrame turns a provider's prompt caching on or off, so
+// the conversation's stable prefix is cached and read back on the next turn
+// rather than being charged for again. It is a data frame, so it is ordered
+// against the conversation it applies to.
+type LLMEnablePromptCachingFrame struct {
+	BaseDataFrame
+	// Enable reports whether prompt caching should be on.
+	Enable bool
+}
+
+// NewLLMEnablePromptCachingFrame builds an LLMEnablePromptCachingFrame.
+func NewLLMEnablePromptCachingFrame(enable bool) *LLMEnablePromptCachingFrame {
+	return &LLMEnablePromptCachingFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMEnablePromptCachingFrame"),
+		Enable:        enable,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMEnablePromptCachingFrame) String() string {
+	return fmt.Sprintf("%s(enable: %t)", f.Name(), f.Enable)
+}
+
+// LLMContextAssistantTurnFrame carries the aggregated text of a completed
+// assistant turn.
+//
+// The assistant aggregator broadcasts it as a turn ends, carrying the same text
+// it wrote to the conversation, so processors on either side can act on each
+// completed reply without an observer of their own. It is a data frame.
+type LLMContextAssistantTurnFrame struct {
+	BaseDataFrame
+	// Text is what the assistant said this turn.
+	Text string
+	// Timestamp is when the assistant's turn began, in ISO 8601.
+	Timestamp string
+}
+
+// NewLLMContextAssistantTurnFrame builds an LLMContextAssistantTurnFrame.
+func NewLLMContextAssistantTurnFrame(text, timestamp string) *LLMContextAssistantTurnFrame {
+	return &LLMContextAssistantTurnFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMContextAssistantTurnFrame"),
+		Text:          text,
+		Timestamp:     timestamp,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMContextAssistantTurnFrame) String() string {
+	return fmt.Sprintf("%s(text: [%s], timestamp: %s)", f.Name(), f.Text, f.Timestamp)
+}
+
+// LLMContextAssistantTimestampFrame carries when an assistant message was
+// written, for a consumer keeping its own record of the conversation alongside
+// the context. It is a data frame.
+type LLMContextAssistantTimestampFrame struct {
+	BaseDataFrame
+	// Timestamp is when the assistant message was created, in ISO 8601.
+	Timestamp string
+}
+
+// NewLLMContextAssistantTimestampFrame builds an LLMContextAssistantTimestampFrame.
+func NewLLMContextAssistantTimestampFrame(timestamp string) *LLMContextAssistantTimestampFrame {
+	return &LLMContextAssistantTimestampFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMContextAssistantTimestampFrame"),
+		Timestamp:     timestamp,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMContextAssistantTimestampFrame) String() string {
+	return fmt.Sprintf("%s(timestamp: %s)", f.Name(), f.Timestamp)
+}

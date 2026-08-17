@@ -3,6 +3,7 @@ package aggregators_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,142 @@ func TestMessagesUpdateFrameRunLLM(t *testing.T) {
 		_, ok := f.(*frames.LLMContextFrame)
 		return ok
 	}, "LLMContextFrame")
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// keepUserMessages is the transform upstream's tests use: it drops everything
+// the user did not say.
+func keepUserMessages(msgs []frames.Message) []frames.Message {
+	var kept []frames.Message
+	for _, m := range msgs {
+		if m.Role == frames.RoleUser {
+			kept = append(kept, m)
+		}
+	}
+	return kept
+}
+
+// TestMessagesTransformFrameRewritesTheConversation checks the transform is
+// applied to what the conversation currently holds, which is what a wholesale
+// replacement cannot express.
+func TestMessagesTransformFrameRewritesTheConversation(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	convo.SetMessages([]frames.Message{
+		{Role: frames.RoleUser, Text: "Hello"},
+		{Role: frames.RoleAssistant, Text: "Hi there!"},
+		{Role: frames.RoleUser, Text: "How are you?"},
+	})
+	task, seen, runDone := runAggregator(t, convo)
+
+	task.QueueFrame(frames.NewLLMMessagesTransformFrame(keepUserMessages))
+
+	// Nothing asked for a run, so the rewrite is all that should happen.
+	if sawFrame(seen, func(f frames.Frame) bool {
+		_, ok := f.(*frames.LLMContextFrame)
+		return ok
+	}) {
+		t.Error("the transform ran the model without being asked to")
+	}
+	msgs := convo.Messages()
+	if len(msgs) != 2 || msgs[0].Text != "Hello" || msgs[1].Text != "How are you?" {
+		t.Errorf("messages = %+v, want the user's two", msgs)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestMessagesTransformFrameRunLLM checks the transform can trigger a generation
+// on the rewritten conversation.
+func TestMessagesTransformFrameRunLLM(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	convo.SetMessages([]frames.Message{{Role: frames.RoleUser, Text: "Hello"}})
+	task, seen, runDone := runAggregator(t, convo)
+
+	transform := frames.NewLLMMessagesTransformFrame(func(msgs []frames.Message) []frames.Message {
+		out := make([]frames.Message, len(msgs))
+		for i, m := range msgs {
+			m.Text = strings.ToUpper(m.Text)
+			out[i] = m
+		}
+		return out
+	})
+	transform.RunLLM = true
+	task.QueueFrame(transform)
+
+	awaitFrame(t, seen, func(f frames.Frame) bool {
+		_, ok := f.(*frames.LLMContextFrame)
+		return ok
+	}, "LLMContextFrame")
+
+	if msgs := convo.Messages(); len(msgs) != 1 || msgs[0].Text != "HELLO" {
+		t.Errorf("messages = %+v, want the rewritten one", msgs)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestMessagesTransformFrameIsConsumed checks the frame does not travel on. Both
+// halves share one conversation, so a frame that reached either has been applied
+// and must not be applied again by the other.
+func TestMessagesTransformFrameIsConsumed(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	convo.SetMessages([]frames.Message{{Role: frames.RoleUser, Text: "Hello"}})
+	task, seen, runDone := runAggregator(t, convo)
+
+	task.QueueFrame(frames.NewLLMMessagesTransformFrame(keepUserMessages))
+
+	if sawFrame(seen, func(f frames.Frame) bool {
+		_, ok := f.(*frames.LLMMessagesTransformFrame)
+		return ok
+	}) {
+		t.Error("the transform frame traveled on after being applied")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestAssistantMessagesTransformFrame checks the assistant half applies the
+// rewrite too, and runs the model upstream when asked, which is the direction
+// the LLM service lies in from there.
+func TestAssistantMessagesTransformFrame(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	convo.SetMessages([]frames.Message{
+		{Role: frames.RoleUser, Text: "Hello"},
+		{Role: frames.RoleAssistant, Text: "Hi there!"},
+		{Role: frames.RoleUser, Text: "How are you?"},
+	})
+
+	pair := aggregators.New(convo)
+	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
+		ReachedUpstreamFilter: pipeline.AnyFrame,
+	})
+	seen := make(chan frames.Frame, 32)
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		select {
+		case seen <- f:
+		default:
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	transform := frames.NewLLMMessagesTransformFrame(keepUserMessages)
+	transform.RunLLM = true
+	task.QueueFrame(transform)
+
+	awaitFrame(t, seen, func(f frames.Frame) bool {
+		_, ok := f.(*frames.LLMContextFrame)
+		return ok
+	}, "LLMContextFrame")
+
+	if msgs := convo.Messages(); len(msgs) != 2 {
+		t.Errorf("messages = %+v, want the user's two", msgs)
+	}
 
 	task.StopWhenDone()
 	<-runDone

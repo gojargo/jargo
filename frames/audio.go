@@ -141,3 +141,30 @@ var (
 	_ DataFrame   = (*TTSAudioRawFrame)(nil)
 	_ DataFrame   = (*SpeechOutputAudioRawFrame)(nil)
 )
+
+// UserAudioRawFrame is a chunk of input audio attributed to the user who spoke
+// it, for a transport carrying several participants. Input audio that names
+// nobody is an InputAudioRawFrame.
+type UserAudioRawFrame struct {
+	InputAudioRawFrame
+	// UserID identifies the user this audio came from.
+	UserID string
+}
+
+// NewUserAudioRawFrame builds a UserAudioRawFrame from PCM audio.
+func NewUserAudioRawFrame(userID string, audio []byte, sampleRate, numChannels int) *UserAudioRawFrame {
+	return &UserAudioRawFrame{
+		InputAudioRawFrame: InputAudioRawFrame{
+			BaseSystemFrame: NewBaseSystemFrame("UserAudioRawFrame"),
+			AudioRawData:    newAudioRawData(audio, sampleRate, numChannels),
+		},
+		UserID: userID,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *UserAudioRawFrame) String() string {
+	return fmt.Sprintf("%s(pts: %s, user: %s, source: %s, size: %d, frames: %d, sample_rate: %d, channels: %d)",
+		f.Name(), formatPTS(f), f.UserID, f.TransportSource(),
+		len(f.Audio), f.NumFrames(), f.SampleRate, f.NumChannels)
+}

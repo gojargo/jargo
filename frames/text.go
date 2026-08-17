@@ -288,3 +288,59 @@ func (f *AggregatedTextProgressFrame) String() string {
 	return fmt.Sprintf("%s(pts: %s, spoken: [%s], remaining: [%s])",
 		f.Name(), formatPTS(f), f.AccumulatedText, f.RemainingText)
 }
+
+// TranslationFrame carries a translated transcription for a user, distinct from
+// the transcription it was translated from: a provider that transcribes and
+// translates reports both, and only the transcription is the user's own words.
+type TranslationFrame struct {
+	TextFrame
+	// UserID identifies the user who spoke.
+	UserID string
+	// Timestamp is when the translation occurred.
+	Timestamp string
+	// Language is the language translated into, as a BCP-47 tag; "" when unset.
+	Language string
+}
+
+// NewTranslationFrame builds a TranslationFrame.
+func NewTranslationFrame(text, userID, timestamp string) *TranslationFrame {
+	return &TranslationFrame{
+		TextFrame: TextFrame{
+			BaseDataFrame:   NewBaseDataFrame("TranslationFrame"),
+			Text:            text,
+			AppendToContext: true,
+		},
+		UserID:    userID,
+		Timestamp: timestamp,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *TranslationFrame) String() string {
+	return fmt.Sprintf("%s(user: %s, text: [%s], language: %s, timestamp: %s)",
+		f.Name(), f.UserID, f.Text, f.Language, f.Timestamp)
+}
+
+// InputTextRawFrame is text arriving from a transport as input, usually because
+// the user typed it or an application injected it, and meant for the LLM the
+// same way spoken input is. It is the text counterpart of InputAudioRawFrame,
+// and a system frame so it reaches the pipeline ahead of the queued conversation.
+type InputTextRawFrame struct {
+	BaseSystemFrame
+	// Text is the text that arrived.
+	Text string
+}
+
+// NewInputTextRawFrame builds an InputTextRawFrame.
+func NewInputTextRawFrame(text string) *InputTextRawFrame {
+	return &InputTextRawFrame{
+		BaseSystemFrame: NewBaseSystemFrame("InputTextRawFrame"),
+		Text:            text,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *InputTextRawFrame) String() string {
+	return fmt.Sprintf("%s(pts: %s, source: %s, text: [%s])",
+		f.Name(), formatPTS(f), f.TransportSource(), f.Text)
+}

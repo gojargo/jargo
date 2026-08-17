@@ -231,3 +231,75 @@ var (
 	_ ControlFrame    = (*TTSStartedFrame)(nil)
 	_ ControlFrame    = (*TTSStoppedFrame)(nil)
 )
+
+// LLMThoughtStartFrame marks the beginning of a thought from a reasoning model,
+// followed by one or more LLMThoughtTextFrames and a final LLMThoughtEndFrame.
+// It is a control frame.
+type LLMThoughtStartFrame struct {
+	BaseControlFrame
+	// AppendToContext reports whether the thought should be written to the
+	// conversation. A thought that is written goes in as a message of the
+	// provider's own, so LLM must name that provider when this is set.
+	AppendToContext bool
+	// LLM identifies the provider whose native message the thought is written
+	// as. It is only read when AppendToContext is set.
+	LLM string
+}
+
+// NewLLMThoughtStartFrame builds an LLMThoughtStartFrame.
+func NewLLMThoughtStartFrame() *LLMThoughtStartFrame {
+	return &LLMThoughtStartFrame{BaseControlFrame: NewBaseControlFrame("LLMThoughtStartFrame")}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMThoughtStartFrame) String() string {
+	return fmt.Sprintf("%s(append_to_context: %t, llm: %s)", f.Name(), f.AppendToContext, f.LLM)
+}
+
+// LLMThoughtTextFrame carries the text of a thought, or a chunk of one.
+//
+// Despite carrying text it is a data frame rather than a TextFrame, which is
+// what keeps it out of the ordinary text handling: a thought is the model
+// reasoning with itself and must not be spoken.
+type LLMThoughtTextFrame struct {
+	BaseDataFrame
+	// Text is the thought, or a chunk of it.
+	Text string
+	// IncludesInterFrameSpaces reports whether the spacing between chunks is
+	// already part of Text. A thought's chunks always carry their own spacing.
+	IncludesInterFrameSpaces bool
+}
+
+// NewLLMThoughtTextFrame builds an LLMThoughtTextFrame.
+func NewLLMThoughtTextFrame(text string) *LLMThoughtTextFrame {
+	return &LLMThoughtTextFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMThoughtTextFrame"),
+		Text:          text,
+		// The chunks a provider streams already include whatever spacing runs
+		// between them.
+		IncludesInterFrameSpaces: true,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMThoughtTextFrame) String() string {
+	return fmt.Sprintf("%s(thought text: %s)", f.Name(), f.Text)
+}
+
+// LLMThoughtEndFrame marks the end of a thought. It is a control frame.
+type LLMThoughtEndFrame struct {
+	BaseControlFrame
+	// Signature is what the provider signs the thought with, where it signs one.
+	// It is carried back unread, since only that provider can make sense of it.
+	Signature any
+}
+
+// NewLLMThoughtEndFrame builds an LLMThoughtEndFrame.
+func NewLLMThoughtEndFrame() *LLMThoughtEndFrame {
+	return &LLMThoughtEndFrame{BaseControlFrame: NewBaseControlFrame("LLMThoughtEndFrame")}
+}
+
+// String implements fmt.Stringer.
+func (f *LLMThoughtEndFrame) String() string {
+	return fmt.Sprintf("%s(signature: %v)", f.Name(), f.Signature)
+}

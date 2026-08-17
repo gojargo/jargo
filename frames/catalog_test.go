@@ -114,6 +114,36 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() },
 		},
 		{
+			label: "ProposedUserStartedSpeakingFrame", cat: system,
+			build: func() frames.Frame { return frames.NewProposedUserStartedSpeakingFrame() },
+		},
+		{
+			label: "ProposedUserStoppedSpeakingFrame", cat: system,
+			build: func() frames.Frame { return frames.NewProposedUserStoppedSpeakingFrame() },
+		},
+		{
+			label: "STTMuteFrame", cat: system, wantString: "mute: true",
+			build: func() frames.Frame { return frames.NewSTTMuteFrame(true) },
+		},
+		{
+			label: "ClientConnectedFrame", cat: system,
+			build: func() frames.Frame { return frames.NewClientConnectedFrame() },
+		},
+		{
+			label: "BotConnectedFrame", cat: system,
+			build: func() frames.Frame { return frames.NewBotConnectedFrame() },
+		},
+		{
+			label: "InputTextRawFrame", cat: system, wantString: "typed",
+			build: func() frames.Frame { return frames.NewInputTextRawFrame("typed") },
+		},
+		{
+			label: "UserAudioRawFrame", cat: system, wantString: "user: user-1",
+			build: func() frames.Frame {
+				return frames.NewUserAudioRawFrame("user-1", []byte{0, 0, 0, 0}, 16000, 1)
+			},
+		},
+		{
 			label: "BotStartedSpeakingFrame", cat: system,
 			build: func() frames.Frame { return frames.NewBotStartedSpeakingFrame() },
 		},
@@ -217,6 +247,10 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewTranscriptionFrame("hello", "user-1", "ts") },
 		},
 		{
+			label: "TranslationFrame", cat: data, wantString: "bonjour",
+			build: func() frames.Frame { return frames.NewTranslationFrame("bonjour", "user-1", "ts") },
+		},
+		{
 			label: "InterimTranscriptionFrame", cat: data, wantString: "hello",
 			build: func() frames.Frame { return frames.NewInterimTranscriptionFrame("hello", "user-1", "ts") },
 		},
@@ -265,6 +299,36 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame {
 				return frames.NewLLMMessagesUpdateFrame([]frames.Message{{Role: frames.RoleUser, Text: "hi"}})
 			},
+		},
+		{
+			label: "LLMMessagesTransformFrame", cat: data, wantString: "run_llm: false",
+			build: func() frames.Frame {
+				return frames.NewLLMMessagesTransformFrame(func(m []frames.Message) []frames.Message { return m })
+			},
+		},
+		{
+			label: "LLMEnablePromptCachingFrame", cat: data, wantString: "enable: true",
+			build: func() frames.Frame { return frames.NewLLMEnablePromptCachingFrame(true) },
+		},
+		{
+			label: "LLMContextAssistantTurnFrame", cat: data, wantString: "said it",
+			build: func() frames.Frame { return frames.NewLLMContextAssistantTurnFrame("said it", "ts") },
+		},
+		{
+			label: "LLMContextAssistantTimestampFrame", cat: data, wantString: "timestamp: ts",
+			build: func() frames.Frame { return frames.NewLLMContextAssistantTimestampFrame("ts") },
+		},
+		{
+			label: "LLMThoughtTextFrame", cat: data, wantString: "thinking",
+			build: func() frames.Frame { return frames.NewLLMThoughtTextFrame("thinking") },
+		},
+		{
+			label: "LLMThoughtStartFrame", cat: control, wantString: "append_to_context: false",
+			build: func() frames.Frame { return frames.NewLLMThoughtStartFrame() },
+		},
+		{
+			label: "LLMThoughtEndFrame", cat: control, wantString: "signature:",
+			build: func() frames.Frame { return frames.NewLLMThoughtEndFrame() },
 		},
 
 		// Control frames: in order like data frames, but carrying instructions.
