@@ -85,6 +85,9 @@ func toolCallOptions(t frames.Tool) []RegisterOption {
 	if t.TimeoutSecs != nil {
 		opts = append(opts, WithTimeout(time.Duration(*t.TimeoutSecs*float64(time.Second))))
 	}
+	if t.CancellableByLLM != nil {
+		opts = append(opts, WithCancellableByLLM(*t.CancellableByLLM))
+	}
 	return opts
 }
 
@@ -103,8 +106,7 @@ func (b *Base) dropUnadvertisedToolHandlers(advertised map[string]bool) {
 	b.handlersMu.Unlock()
 
 	if dropped {
-		// Dropping the last asynchronous tool takes the built-in cancellation tool
-		// with it.
-		b.syncAsyncToolCancellation()
+		// Dropping a cancellable tool takes its cancel tool with it.
+		b.syncCancelTools()
 	}
 }

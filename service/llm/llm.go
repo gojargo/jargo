@@ -166,6 +166,9 @@ type registryItem struct {
 	// timeout bounds one call to this function, overriding the service's own.
 	// Zero means the service's.
 	timeout time.Duration
+	// cancellableByLLM says whether the model may cancel this tool's calls while
+	// they run, which is what advertises a cancel tool named for it.
+	cancellableByLLM bool
 	// fromToolset marks a handler registered because an advertised tool carried
 	// it, so it is dropped again when the toolset stops advertising the tool. A
 	// handler registered by hand is never dropped.
@@ -311,15 +314,21 @@ type Base struct {
 	// warnNoAdapter reports once that cancellation was asked for on a service
 	// with no adapter to put the tool on.
 	warnNoAdapter sync.Once
-	// asyncToolCancellation offers the model a built-in tool for abandoning an
-	// asynchronous call, while any asynchronous tool is registered.
+	// asyncToolCancellation widens cancellation to every asynchronous tool
+	// rather than the ones that opted in. Deprecated; see
+	// WithAsyncToolCancellation.
 	asyncToolCancellation bool
 	// callFilter narrows the calls of a response to the ones that run. Nil, the
 	// default, runs every call the model requested.
 	callFilter FunctionCallFilter
-	// cancelToolActive tracks whether that tool is currently offered, so it is
-	// added and withdrawn exactly once. Guarded by handlersMu.
-	cancelToolActive bool
+	// cancelTools names the cancel tools currently registered, so each is added
+	// and withdrawn exactly once and a call of one is recognized as internal.
+	// Guarded by handlersMu.
+	cancelTools map[string]bool
+	// warnedCancelCollisions names the cancel tools already reported as
+	// colliding with a tool of the application's own, so the collision is
+	// reported once rather than on every inference. Guarded by handlersMu.
+	warnedCancelCollisions map[string]bool
 
 	// Tool calls in flight, keyed by tool call id. They run off the frame path,
 	// on a lifetime of their own, so that a handler taking its time does not hold
@@ -774,7 +783,7 @@ func universalMessages(convo *frames.LLMContext) string {
 // Registering under the empty name registers a catch-all: it takes every call no
 // named handler claims, which is how one handler serves a whole toolset.
 func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...RegisterOption) {
-	if name == CancelAsyncToolName {
+	if b.isCancelTool(name) {
 		slog.Error("refusing to register a reserved built-in tool name",
 			"service", b.Name(), "function", name)
 		return
@@ -783,6 +792,7 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 	for _, opt := range opts {
 		opt(&item)
 	}
+	b.resolveCancellableByLLM(&item)
 	b.handlersMu.Lock()
 	if b.handlers == nil {
 		b.handlers = make(map[string]registryItem)
@@ -790,9 +800,8 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 	b.handlers[name] = item
 	b.handlersMu.Unlock()
 
-	// Registering the first asynchronous tool is what brings the built-in
-	// cancellation tool in.
-	b.syncAsyncToolCancellation()
+	// Registering a cancellable tool is what brings its cancel tool in.
+	b.syncCancelTools()
 }
 
 // UnregisterFunction removes the handler registered for name, reporting whether
@@ -808,9 +817,8 @@ func (b *Base) UnregisterFunction(name string) bool {
 	delete(b.handlers, name)
 	b.handlersMu.Unlock()
 
-	// Withdrawing the last asynchronous tool takes the built-in cancellation
-	// tool away with it.
-	b.syncAsyncToolCancellation()
+	// Withdrawing a cancellable tool takes its cancel tool away with it.
+	b.syncCancelTools()
 	return ok
 }
 
@@ -1047,7 +1055,7 @@ func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
 	// tool carries, drop the ones for tools no longer advertised, and only then
 	// settle what this service adds on its own account.
 	b.SyncToolHandlers(ctx, convo)
-	b.applyAsyncToolCancellation()
+	b.syncCancelTools()
 	if len(convo.Tools()) > 0 {
 		if tg, ok := b.gen.(ToolGenerator); ok {
 			return b.runWithTools(ctx, convo, tg)
@@ -1148,7 +1156,7 @@ func (b *Base) startFunctionCalls(
 	// The built-in cancellation tool is how the model abandons an asynchronous
 	// call, an internal mechanism rather than a tool the application put up, so
 	// it is announced to neither the application nor the pipeline.
-	if visible := userVisibleCalls(calls); len(visible) > 0 {
+	if visible := b.userVisibleCalls(calls); len(visible) > 0 {
 		b.eventsMu.RLock()
 		started := b.onStarted
 		b.eventsMu.RUnlock()
@@ -1163,12 +1171,19 @@ func (b *Base) startFunctionCalls(
 	return nil
 }
 
-// userVisibleCalls drops the built-in cancellation tool from the calls, leaving
-// the ones the application put up. It returns the calls untouched when there is
+// isCancelTool reports whether name belongs to a built-in cancel tool.
+func (b *Base) isCancelTool(name string) bool {
+	b.handlersMu.RLock()
+	defer b.handlersMu.RUnlock()
+	return b.cancelTools[name]
+}
+
+// userVisibleCalls drops the built-in cancel tools from the calls, leaving the
+// ones the application put up. It returns the calls untouched when there is
 // nothing to drop, which is every response but the rare one that abandons an
 // asynchronous call.
-func userVisibleCalls(calls []frames.ToolCall) []frames.ToolCall {
-	internal := func(c frames.ToolCall) bool { return c.Name == CancelAsyncToolName }
+func (b *Base) userVisibleCalls(calls []frames.ToolCall) []frames.ToolCall {
+	internal := func(c frames.ToolCall) bool { return b.isCancelTool(c.Name) }
 	if !slices.ContainsFunc(calls, internal) {
 		return calls
 	}

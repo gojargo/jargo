@@ -221,7 +221,7 @@ func TestFunctionCallFilterDroppingEverythingAnnouncesNothing(t *testing.T) {
 // asynchronous call, not a tool the application put up. It still runs.
 func TestCancelAsyncToolIsNotAnnounced(t *testing.T) {
 	t.Run("alone", func(t *testing.T) {
-		gen := &filterGen{calls: []frames.ToolCall{call("c1", llm.CancelAsyncToolName)}}
+		gen := &filterGen{calls: []frames.ToolCall{call("c1", llm.CancelToolName("watch"))}}
 		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
 		svc.RegisterFunction("watch", func(ctx context.Context, p llm.FunctionCallParams) error {
 			return p.Result(ctx, "watching", nil)
@@ -237,7 +237,7 @@ func TestCancelAsyncToolIsNotAnnounced(t *testing.T) {
 		if len(w.notified) != 0 {
 			t.Errorf("OnFunctionCallsStarted saw %v, want nothing", w.notified)
 		}
-		if !slices.Contains(w.started, llm.CancelAsyncToolName) {
+		if !slices.Contains(w.started, llm.CancelToolName("watch")) {
 			t.Errorf("calls started = %v, want the cancellation to have run", w.started)
 		}
 		// Leaving the announcement out means the mute strategy sees a result for
@@ -249,7 +249,7 @@ func TestCancelAsyncToolIsNotAnnounced(t *testing.T) {
 
 	t.Run("alongside a tool of the application's", func(t *testing.T) {
 		gen := &filterGen{calls: []frames.ToolCall{
-			call("c1", llm.CancelAsyncToolName),
+			call("c1", llm.CancelToolName("watch")),
 			call("c2", "watch"),
 		}}
 		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
@@ -267,7 +267,7 @@ func TestCancelAsyncToolIsNotAnnounced(t *testing.T) {
 		if len(w.notified) != 1 || !slices.Equal(w.notified[0], []string{"watch"}) {
 			t.Errorf("OnFunctionCallsStarted saw %v, want only the application's tool", w.notified)
 		}
-		if !slices.Contains(w.started, llm.CancelAsyncToolName) {
+		if !slices.Contains(w.started, llm.CancelToolName("watch")) {
 			t.Errorf("calls started = %v, want the cancellation to have run as well", w.started)
 		}
 	})

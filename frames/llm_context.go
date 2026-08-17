@@ -57,6 +57,11 @@ type Tool struct {
 	// service-wide bound. Nil leaves the service-wide one. Like
 	// CancelOnInterruption it is only read for a tool that carries a Handler.
 	TimeoutSecs *float64
+	// CancellableByLLM says whether the model may cancel a running call of this
+	// tool, which advertises a cancel tool named for it. Nil leaves the service's
+	// default, which is not to. It is only meaningful on an asynchronous tool,
+	// and like the two above it is only read for a tool that carries a Handler.
+	CancellableByLLM *bool
 }
 
 // AdapterType names the wire format a custom tool is written in. Several

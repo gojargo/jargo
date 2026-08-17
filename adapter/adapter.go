@@ -272,6 +272,10 @@ func (e *customToolTypeError) Error() string {
 // SystemWithBuiltins appends the instructions of every built-in tool currently
 // offered to the system prompt, so the model is told how to use what it is being
 // sent. It returns system unchanged when there are none.
+//
+// A family of built-in tools that share one block of guidance contributes it
+// once, however many of them are offered: the same paragraph repeated is nothing
+// but tokens, and reads to a model as emphasis nobody meant.
 func (b *Base) SystemWithBuiltins(system string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -279,10 +283,14 @@ func (b *Base) SystemWithBuiltins(system string) string {
 	if system != "" {
 		parts = append(parts, system)
 	}
+	seen := make(map[string]bool, len(b.builtinOrder))
 	for _, name := range b.builtinOrder {
-		if text := b.builtins[name].Instructions; text != "" {
-			parts = append(parts, text)
+		text := b.builtins[name].Instructions
+		if text == "" || seen[text] {
+			continue
 		}
+		seen[text] = true
+		parts = append(parts, text)
 	}
 	return strings.Join(parts, "\n\n")
 }

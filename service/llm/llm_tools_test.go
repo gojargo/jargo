@@ -381,7 +381,7 @@ func (cancelOnInterruptionGen) GenerateWithTools(_ context.Context, _ *frames.LL
 // the same call every time would cascade for as long as anything re-runs it.
 type onceToolGen struct{ runs atomic.Int64 }
 
-func (onceToolGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
+func (*onceToolGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
 
 func (g *onceToolGen) GenerateWithTools(_ context.Context, _ *frames.LLMContext, sink llm.Sink) error {
 	if g.runs.Add(1) > 1 {
@@ -657,10 +657,10 @@ func TestFunctionCallTimeout(t *testing.T) {
 		t.Errorf("messages = %+v, want the call recorded as cancelled", convo.Messages())
 	}
 
-	// The cancellation asked for inference, so the model got a turn to say the
+	// The cancellation asked for inference, so the model gets a turn to say the
 	// call did not complete.
-	if got := gen.runs.Load(); got < 2 {
-		t.Errorf("the model ran %d times, want a second run answering the cancellation", got)
+	if !waitFor(3*time.Second, func() bool { return gen.runs.Load() >= 2 }) {
+		t.Errorf("the model ran %d times, want a second run answering the cancellation", gen.runs.Load())
 	}
 
 	// A handler that outlives its deadline cannot settle the call late.
@@ -1040,7 +1040,7 @@ func (g *asyncToolGen) GenerateWithTools(
 func TestAsyncToolCancellationOffersTheBuiltInTool(t *testing.T) {
 	hasCancel := func(tools []frames.Tool) bool {
 		for _, tool := range tools {
-			if tool.Name == llm.CancelAsyncToolName {
+			if tool.Name == llm.CancelToolName("watch") {
 				return true
 			}
 		}
