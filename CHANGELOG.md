@@ -110,6 +110,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `PushErrorFrame(ctx, frame, treatAsPermanent)`. `wsservice.ReportError` takes
   the error frame and that flag rather than a message.
 
+- **A built-in tool carries only its declaration.** `adapter.Builtin` has no
+  `Instructions`, and `adapter.Base.SystemWithBuiltins` is gone. Whatever the
+  model has to be told to use built-in tools is composed into the service's
+  system instruction, beside the turn-completion protocol, so guidance shared by
+  a family of them is stated once however many are offered.
+
 - **Declaring two handlers for one name panics.** `Base.HandleJob` and
   `Base.HandleWorkerReady` kept the first handler and warned about the second,
   which left a worker running with handlers its author had not written. The

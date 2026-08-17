@@ -35,9 +35,9 @@ const cancelledKey = "cancelled"
 func CancelToolName(functionName string) string { return CancelToolPrefix + functionName }
 
 // asyncToolCancellationInstructions tell the model which of its tools can be
-// stopped early and how to stop one. They are composed into the system prompt
-// only while a cancellable tool is registered, so a session with none never
-// carries them.
+// stopped early and how to stop one. They are composed into the system
+// instruction only while a cancellable tool is registered, so a session with
+// none never carries them.
 //
 //nolint:misspell // prompt text, sent to the model exactly as written
 const asyncToolCancellationInstructions = `ASYNC TOOL CANCELLATION:
@@ -159,6 +159,15 @@ func (b *Base) syncCancelTools() {
 	}
 	slog.Debug("cancel tools reconciled", "service", b.Name(), "added", added, "withdrawn", withdrawn)
 	b.applyCancelTools(active, withdrawn)
+	// The guidance comes and goes with the tools it describes.
+	b.composeSystemInstruction()
+}
+
+// cancelToolNames are the cancel tools currently registered, in order.
+func (b *Base) cancelToolNames() []string {
+	b.handlersMu.RLock()
+	defer b.handlersMu.RUnlock()
+	return slices.Sorted(maps.Keys(b.cancelTools))
 }
 
 // wantedCancelToolsLocked maps each cancel tool that should be offered to the
@@ -278,11 +287,8 @@ func (b *Base) applyCancelTools(active, withdrawn []string) {
 		adapt.RemoveBuiltin(name)
 	}
 	for _, name := range active {
-		// Every cancel tool carries the same guidance, which the adapter
-		// contributes to the prompt once however many of them are offered.
 		adapt.SetBuiltin(adapter.Builtin{
-			Tool:         buildCancelToolSchema(strings.TrimPrefix(name, CancelToolPrefix)),
-			Instructions: asyncToolCancellationInstructions,
+			Tool: buildCancelToolSchema(strings.TrimPrefix(name, CancelToolPrefix)),
 		})
 	}
 }

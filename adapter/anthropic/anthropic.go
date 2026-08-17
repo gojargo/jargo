@@ -54,7 +54,7 @@ func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
 	fromContext, msgs := a.ExtractInitialSystem(
-		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction,
+		convo.System(), opts.SystemInstruction,
 		convo.MessagesFor(a.IDForLLMSpecificMessages()),
 	)
 

@@ -75,6 +75,12 @@ func (b *Base) composeSystemInstruction() {
 	}
 	b.turnCompletion.mu.Unlock()
 
+	// Likewise the guidance on stopping work early: it comes and goes with the
+	// cancel tools it describes, so a session with none never carries it.
+	if len(b.cancelToolNames()) > 0 {
+		parts = append(parts, asyncToolCancellationInstructions)
+	}
+
 	b.systemMu.Lock()
 	composed := strings.Join(parts, "\n\n")
 	b.systemInstruction = composed

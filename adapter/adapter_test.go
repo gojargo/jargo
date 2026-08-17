@@ -96,37 +96,6 @@ func TestWithBuiltinsLeavesTheConversationAlone(t *testing.T) {
 	wantNames(t, tools, "watch")
 }
 
-// TestSystemWithBuiltins checks the instructions of an offered tool are appended
-// to the prompt, so the model is told how to use what it is being sent.
-func TestSystemWithBuiltins(t *testing.T) {
-	var b adapter.Base
-	if got := b.SystemWithBuiltins("be brief"); got != "be brief" {
-		t.Errorf("system = %q, want it unchanged with no built-in tools", got)
-	}
-
-	b.SetBuiltin(adapter.Builtin{
-		Tool:         frames.Tool{Name: "cancel"},
-		Instructions: "how to cancel",
-	})
-	if got := b.SystemWithBuiltins("be brief"); got != "be brief\n\nhow to cancel" {
-		t.Errorf("system = %q, want the instructions appended", got)
-	}
-	if got := b.SystemWithBuiltins(""); got != "how to cancel" {
-		t.Errorf("system = %q, want the instructions to stand alone", got)
-	}
-}
-
-// TestSystemWithBuiltinsSkipsToolsThatSayNothing checks a built-in tool needing
-// no explanation adds no blank run to the prompt.
-func TestSystemWithBuiltinsSkipsToolsThatSayNothing(t *testing.T) {
-	var b adapter.Base
-	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "cancel"}})
-
-	if got := b.SystemWithBuiltins("be brief"); got != "be brief" {
-		t.Errorf("system = %q, want it unchanged", got)
-	}
-}
-
 // TestConversionErrorCarriesItsCause checks the failure a conversion wrapped is
 // still reachable, so what actually went wrong can be read off it.
 func TestConversionErrorCarriesItsCause(t *testing.T) {

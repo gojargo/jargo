@@ -39,6 +39,15 @@ func advertised(g *advertisingGen) []string {
 
 func noop(context.Context, llm.FunctionCallParams) error { return nil }
 
+// newInstructedService builds a service whose base system prompt is set, which
+// is what the composed instruction is built on top of.
+func newInstructedService(t *testing.T, gen *advertisingGen, prompt string) *llm.Base {
+	t.Helper()
+	svc := llm.New("FakeLLM", gen)
+	svc.SetSystemInstruction(prompt)
+	return svc
+}
+
 func TestACancellableToolGetsItsOwnCancelTool(t *testing.T) {
 	gen := &advertisingGen{}
 	svc := llm.New("FakeLLM", gen)
@@ -159,30 +168,46 @@ func TestTheDeprecatedFlagNeedsAnAsyncTool(t *testing.T) {
 	}
 }
 
-func TestTheGuidanceIsCarriedOnce(t *testing.T) {
+func TestTheGuidanceIsComposedOnce(t *testing.T) {
 	// Several cancellable tools share one block of guidance; repeating it is
 	// nothing but tokens, and reads to a model as emphasis nobody meant.
-	gen := &advertisingGen{}
-	svc := llm.New("FakeLLM", gen)
+	svc := newInstructedService(t, &advertisingGen{}, "be brief")
 	svc.RegisterFunction("write_report", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
 	svc.RegisterFunction("fetch_archive", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
 
-	system := gen.adapter.SystemWithBuiltins("be brief")
+	system := svc.SystemInstruction()
 
 	if got := strings.Count(system, "ASYNC TOOL CANCELLATION"); got != 1 {
 		t.Errorf("the guidance appears %d times, want 1:\n%s", got, system)
 	}
+	if !strings.HasPrefix(system, "be brief") {
+		t.Errorf("system = %q, want the application's own prompt first", system)
+	}
 }
 
 func TestNoGuidanceWithoutACancellableTool(t *testing.T) {
-	gen := &advertisingGen{}
-	svc := llm.New("FakeLLM", gen)
+	svc := newInstructedService(t, &advertisingGen{}, "be brief")
 	svc.RegisterFunction("lookup", noop)
 
-	if system := gen.adapter.SystemWithBuiltins("be brief"); strings.Contains(system, "ASYNC TOOL CANCELLATION") {
+	if system := svc.SystemInstruction(); strings.Contains(system, "ASYNC TOOL CANCELLATION") {
 		t.Errorf("system = %q, want no cancellation guidance", system)
+	}
+}
+
+func TestTheGuidanceGoesWhenTheToolDoes(t *testing.T) {
+	svc := newInstructedService(t, &advertisingGen{}, "be brief")
+	svc.RegisterFunction("write_report", noop,
+		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	if !strings.Contains(svc.SystemInstruction(), "ASYNC TOOL CANCELLATION") {
+		t.Fatal("the guidance was never composed in")
+	}
+
+	svc.UnregisterFunction("write_report")
+
+	if system := svc.SystemInstruction(); strings.Contains(system, "ASYNC TOOL CANCELLATION") {
+		t.Errorf("system = %q, want the guidance taken back out", system)
 	}
 }
 

@@ -198,7 +198,7 @@ func (*Adapter) IDForLLMSpecificMessages() string { return "openai" }
 func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
-	system := a.SystemWithBuiltins(convo.System())
+	system := convo.System()
 	// Only the conflict is resolved here, not the prompt's position: OpenAI
 	// carries the conversation's prompt in the messages either way.
 	instruction := a.ResolveSystemInstruction(system, opts.SystemInstruction, false)

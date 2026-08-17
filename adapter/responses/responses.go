@@ -101,7 +101,7 @@ func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
 	instructions := a.ResolveSystemInstruction(
-		a.SystemWithBuiltins(convo.System()), opts.SystemInstruction, true,
+		convo.System(), opts.SystemInstruction, true,
 	)
 	input, err := ToInput(convo.MessagesFor(a.IDForLLMSpecificMessages()))
 	if err != nil {

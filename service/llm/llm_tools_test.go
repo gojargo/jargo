@@ -1007,8 +1007,11 @@ type asyncToolGen struct {
 	name    string
 	// tools records what the model was offered on the first inference.
 	tools []frames.Tool
-	// system records the prompt it was given on the first inference.
+	// system records the instruction the service composed, read the way a real
+	// provider reads it when it builds a request.
 	system string
+	// svc is the service this generator belongs to, set once it is built.
+	svc *llm.Base
 }
 
 // LLMAdapter implements llm.AdapterHolder.
@@ -1023,9 +1026,10 @@ func (g *asyncToolGen) GenerateWithTools(
 	turn := g.turn
 	g.turn++
 	if turn == 0 {
-		// What an adapter would send, which is where a built-in tool now lives.
+		// What an adapter would send, which is where a built-in tool now lives,
+		// and the instruction a provider passes beside the conversation.
 		g.tools = g.adapter.WithBuiltins(convo.ToolsSchema()).Standard
-		g.system = g.adapter.SystemWithBuiltins(convo.System())
+		g.system = g.svc.SystemInstruction()
 	}
 	g.mu.Unlock()
 	if turn == 0 {
@@ -1050,6 +1054,7 @@ func TestAsyncToolCancellationOffersTheBuiltInTool(t *testing.T) {
 	t.Run("offered alongside an async tool", func(t *testing.T) {
 		gen := &asyncToolGen{name: "watch"}
 		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
+		gen.svc = svc
 		svc.RegisterFunction("watch", func(ctx context.Context, p llm.FunctionCallParams) error {
 			return p.Result(ctx, "watching", nil)
 		}, llm.WithCancelOnInterruption(false))
@@ -1069,6 +1074,7 @@ func TestAsyncToolCancellationOffersTheBuiltInTool(t *testing.T) {
 	t.Run("not offered without an async tool", func(t *testing.T) {
 		gen := &asyncToolGen{name: "lookup"}
 		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
+		gen.svc = svc
 		// Registered the ordinary way, so it is canceled on interruption.
 		svc.RegisterFunction("lookup", func(ctx context.Context, p llm.FunctionCallParams) error {
 			return p.Result(ctx, "found", nil)
@@ -1089,6 +1095,7 @@ func TestAsyncToolCancellationOffersTheBuiltInTool(t *testing.T) {
 	t.Run("not offered unless asked for", func(t *testing.T) {
 		gen := &asyncToolGen{name: "watch"}
 		svc := llm.New("FakeToolLLM", gen)
+		gen.svc = svc
 		svc.RegisterFunction("watch", func(ctx context.Context, p llm.FunctionCallParams) error {
 			return p.Result(ctx, "watching", nil)
 		}, llm.WithCancelOnInterruption(false))

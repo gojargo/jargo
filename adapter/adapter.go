@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -165,22 +164,22 @@ type Base struct {
 	// as its registrations change while generations are converting.
 	mu sync.RWMutex
 	// builtins are the tools the service implements itself, sent on every
-	// request without the application having advertised them, each with the
-	// instructions that go with it. They are keyed by tool name.
+	// request without the application having advertised them. They are keyed by
+	// tool name.
 	builtins map[string]Builtin
 	// builtinOrder keeps the order they were added in, so a request carries them
 	// the same way twice running and a cached prompt prefix stays byte-identical.
 	builtinOrder []string
 }
 
-// Builtin is a tool the LLM service implements itself, and whatever the model
-// has to be told to use it.
+// Builtin is a tool the LLM service implements itself.
+//
+// Whatever the model has to be told to use one is composed into the service's
+// system instruction rather than carried here, so guidance shared by a family of
+// built-in tools is stated once however many of them are offered.
 type Builtin struct {
 	// Tool is the declaration advertised to the model.
 	Tool frames.Tool
-	// Instructions are appended to the system prompt while the tool is offered.
-	// Empty adds nothing.
-	Instructions string
 }
 
 // SetBuiltin adds a tool the service implements itself, replacing any already
@@ -267,32 +266,6 @@ type customToolTypeError struct {
 // Error implements error.
 func (e *customToolTypeError) Error() string {
 	return fmt.Sprintf("custom tool for %q holds %s, want %s", e.adapter, e.got, e.want)
-}
-
-// SystemWithBuiltins appends the instructions of every built-in tool currently
-// offered to the system prompt, so the model is told how to use what it is being
-// sent. It returns system unchanged when there are none.
-//
-// A family of built-in tools that share one block of guidance contributes it
-// once, however many of them are offered: the same paragraph repeated is nothing
-// but tokens, and reads to a model as emphasis nobody meant.
-func (b *Base) SystemWithBuiltins(system string) string {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	parts := make([]string, 0, len(b.builtinOrder)+1)
-	if system != "" {
-		parts = append(parts, system)
-	}
-	seen := make(map[string]bool, len(b.builtinOrder))
-	for _, name := range b.builtinOrder {
-		text := b.builtins[name].Instructions
-		if text == "" || seen[text] {
-			continue
-		}
-		seen[text] = true
-		parts = append(parts, text)
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 // ExtractInitialSystem reports the system prompt a provider should send beside
