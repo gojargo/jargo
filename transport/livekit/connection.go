@@ -62,6 +62,10 @@ type Connection struct {
 	dtmfMu      sync.Mutex
 	dtmfHandler func(frames.KeypadEntry)
 	pendingDTMF []frames.KeypadEntry
+
+	partMu      sync.Mutex
+	partHandler func(identity string)
+	pendingPart []string
 }
 
 // Connect joins the configured room, publishes an Opus audio track, and returns
@@ -98,6 +102,7 @@ func Connect(cfg Config) (*Connection, error) {
 			c.deliverDTMF(p.Digit)
 		}
 	}
+	cb.OnParticipantConnected = func(p *lksdk.RemoteParticipant) { c.deliverParticipant(p.Identity()) }
 	cb.OnDisconnected = func() { c.closeOnce.Do(func() { close(c.closed) }) }
 
 	room, err := lksdk.ConnectToRoom(cfg.URL, lksdk.ConnectInfo{
@@ -208,6 +213,39 @@ func (c *Connection) deliverDTMF(digit string) {
 	}
 	c.dtmfMu.Unlock()
 	h(entry)
+}
+
+// OnParticipantConnected registers the handler for a remote participant joining
+// the room. Participants that joined before a handler was set are reported
+// immediately, in order.
+//
+// Holding them matters here because the room is joined before the transport is
+// built: someone arriving in that window would otherwise go unreported. Someone
+// already in the room when the bot joined is a different case and is not
+// reported at all, since they did not join while the bot was there to see it.
+func (c *Connection) OnParticipantConnected(h func(identity string)) {
+	c.partMu.Lock()
+	c.partHandler = h
+	pending := c.pendingPart
+	c.pendingPart = nil
+	c.partMu.Unlock()
+	for _, identity := range pending {
+		h(identity)
+	}
+}
+
+// deliverParticipant hands one arrival to the handler, holding it when none is
+// registered yet.
+func (c *Connection) deliverParticipant(identity string) {
+	c.partMu.Lock()
+	h := c.partHandler
+	if h == nil {
+		c.pendingPart = append(c.pendingPart, identity)
+		c.partMu.Unlock()
+		return
+	}
+	c.partMu.Unlock()
+	h(identity)
 }
 
 // SendMessage publishes an application message to the room.

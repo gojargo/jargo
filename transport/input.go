@@ -91,6 +91,26 @@ func (bi *BaseInput) PushTransportMessage(ctx context.Context, raw []byte) {
 	})
 }
 
+// PushClientConnected reports that a remote participant has connected. A
+// concrete transport calls it where its own connection tells it one arrived; on
+// a transport a client dials into, that has already happened by the time the
+// pipeline runs, so it is reported as the transport starts reading.
+//
+// It goes downstream from the head of the pipeline, in order with the StartFrame
+// that opened the run, which is what lets an observer time how long the call
+// took to become answerable.
+func (bi *BaseInput) PushClientConnected(ctx context.Context) {
+	_ = bi.PushFrame(ctx, frames.NewClientConnectedFrame(), processor.Downstream)
+}
+
+// PushBotConnected reports that the bot itself has joined the session. Only a
+// transport where the bot joins something has this to report: a room on a media
+// server, where the bot is a participant like any other. On a transport a client
+// dials into directly there is nothing to join, and nothing is reported.
+func (bi *BaseInput) PushBotConnected(ctx context.Context) {
+	_ = bi.PushFrame(ctx, frames.NewBotConnectedFrame(), processor.Downstream)
+}
+
 // ProcessFrame handles the transport lifecycle and forwards frames.
 func (bi *BaseInput) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := bi.Base.ProcessFrame(ctx, f, dir); err != nil {

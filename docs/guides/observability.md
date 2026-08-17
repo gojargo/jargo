@@ -92,6 +92,35 @@ observers.NewStartupTiming(observers.StartupTimingConfig{
 Pass `Track` to narrow the report to the processors worth measuring; by default
 it covers everything but the pipeline plumbing.
 
+The other half of a cold start is the transport, reported separately:
+
+```go
+observers.NewStartupTiming(observers.StartupTimingConfig{
+    OnTransportTimingReport: func(r observers.TransportTimingReport) {
+        if r.BotConnected != nil {
+            slog.Info("bot joined", "after", *r.BotConnected)
+        }
+        slog.Info("client connected", "after", r.ClientConnected)
+    },
+})
+```
+
+It is built from two frames the transports push into the pipeline:
+
+| Frame | Pushed by | When |
+|---|---|---|
+| `ClientConnectedFrame` | `transport/rtc` (and WhatsApp, which builds on it) | The peer connection is established. |
+| | `transport/wsserver` (Twilio, Telnyx, Plivo, Exotel, RTVI) | The pipeline starts: the socket was accepted before it. |
+| | `transport/livekit` | A remote participant joins the room. |
+| `BotConnectedFrame` | `transport/livekit` | The pipeline starts: the room was joined before it. |
+
+`BotConnected` is nil on every transport but a room one, because there is nothing
+for the bot to join: the client dials it directly. On LiveKit, a participant who
+was *already* in the room when the bot joined is not reported, since they did not
+arrive while the bot was there to see it.
+
+`transport/localaudio` reports neither: the microphone is not a caller.
+
 ### Debugging the frame flow
 
 `NewDebugLog` renders the fields of every frame it is given. Unfiltered that is

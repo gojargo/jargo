@@ -182,6 +182,12 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		}
 	}
 
+	// The socket was accepted before the pipeline was built, so the client is
+	// already there. It is reported once the serializer can speak the provider's
+	// wire format and before the first inbound message is read, so the
+	// conversation starts with the connection already accounted for.
+	in.PushClientConnected(ctx)
+
 	readCtx, cancel := context.WithCancel(ctx)
 	in.mu.Lock()
 	in.readCancel = cancel

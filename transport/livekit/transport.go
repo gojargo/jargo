@@ -92,6 +92,19 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		}
 		_ = in.PushFrame(readCtx, frames.NewInputDTMFFrame(button), processor.Downstream)
 	})
+
+	// The bot is a participant in the room like any other, and it joined when
+	// the connection was made, which is before the pipeline was built. So the
+	// join is reported here rather than waited for: by the time a pipeline is
+	// running over this connection it has already happened.
+	in.PushBotConnected(readCtx)
+
+	in.conn.OnParticipantConnected(func(string) {
+		if readCtx.Err() != nil {
+			return
+		}
+		in.PushClientConnected(readCtx)
+	})
 	return nil
 }
 

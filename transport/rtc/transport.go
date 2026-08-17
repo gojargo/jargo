@@ -87,7 +87,25 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		}
 		in.PushTransportMessage(readCtx, raw)
 	})
+
+	in.readWG.Add(1)
+	go in.reportClientConnected(readCtx)
 	return nil
+}
+
+// reportClientConnected reports the client having connected, once the peer
+// connection is established.
+//
+// Signaling is an offer and answer exchanged before the pipeline runs, so the
+// connection is usually up already and the report is immediate. When it is not,
+// the wait is the part of the setup a caller spends looking at a silent line,
+// which is what makes it worth reporting rather than assuming.
+func (in *inputTransport) reportClientConnected(ctx context.Context) {
+	defer in.readWG.Done()
+	if err := in.conn.WaitConnected(ctx); err != nil {
+		return
+	}
+	in.PushClientConnected(ctx)
 }
 
 // StopReading stops the read goroutine.

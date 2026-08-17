@@ -22,6 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
@@ -670,5 +671,88 @@ func TestTeardownIsPromptWhenPeerVanished(t *testing.T) {
 
 	if elapsed := time.Since(start); elapsed > teardownBudget {
 		t.Errorf("teardown took %v, want under %v", elapsed, teardownBudget)
+	}
+}
+
+// TestClientConnectedIsReportedOnce checks the caller being on the line reaches
+// the pipeline as a frame. The socket is accepted before the pipeline is built,
+// so without this nothing tells a processor or an observer that a client is
+// there at all: on this transport the connection is a precondition of the run
+// rather than an event during it.
+func TestClientConnectedIsReportedOnce(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	defer c.shutdown(t)
+
+	c.ready(t)
+
+	var connected int
+	for _, f := range c.tap.frames() {
+		if _, ok := f.(*frames.ClientConnectedFrame); ok {
+			connected++
+		}
+	}
+	if connected != 1 {
+		t.Fatalf("ClientConnectedFrames = %d, want exactly one", connected)
+	}
+}
+
+// TestClientConnectedComesBeforeAnythingRead pins the ordering. The report is
+// what a measurement of how long the call took to become answerable is anchored
+// to, so it has to land before the traffic it is measuring against.
+func TestClientConnectedComesBeforeAnythingRead(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	defer c.shutdown(t)
+
+	c.ready(t)
+
+	connected, probe := -1, -1
+	for i, f := range c.tap.frames() {
+		switch fr := f.(type) {
+		case *frames.ClientConnectedFrame:
+			if connected < 0 {
+				connected = i
+			}
+		case *frames.TranscriptionFrame:
+			if probe < 0 && fr.Text == readyProbe {
+				probe = i
+			}
+		}
+	}
+	if connected < 0 {
+		t.Fatal("the client connection was never reported")
+	}
+	if probe < 0 {
+		t.Fatal("the probe message never reached the pipeline")
+	}
+	if connected > probe {
+		t.Errorf("the connection was reported at %d, after the first message read at %d", connected, probe)
+	}
+}
+
+// TestTheConnectionIsTimedByAnObserver is the end-to-end reason the frame
+// exists. An observer measuring how long a call took to become answerable has
+// nothing to measure unless the transport says the caller arrived, so this is
+// the wiring, not the observer, that the test is about.
+func TestTheConnectionIsTimedByAnObserver(t *testing.T) {
+	reports := make(chan observers.TransportTimingReport, 4)
+	o := observers.NewStartupTiming(observers.StartupTimingConfig{
+		OnTransportTimingReport: func(r observers.TransportTimingReport) { reports <- r },
+	})
+
+	c := dialTuned(t, &testSerializer{}, params(), func(cfg *pipeline.WorkerConfig) {
+		cfg.Observers = append(cfg.Observers, o)
+	})
+	defer c.shutdown(t)
+
+	select {
+	case r := <-reports:
+		if r.ClientConnected <= 0 {
+			t.Errorf("ClientConnected = %s, want the time it took to get there", r.ClientConnected)
+		}
+		if r.BotConnected != nil {
+			t.Errorf("BotConnected = %s, want none: there is no room for a bot to join", *r.BotConnected)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the transport timing was never reported")
 	}
 }

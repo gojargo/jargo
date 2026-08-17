@@ -14,6 +14,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The transports report their connections.** `ClientConnectedFrame` is pushed
+  by `transport/rtc` once the peer connection is established (which covers
+  WhatsApp, built on it), by `transport/wsserver` as the pipeline starts, since
+  the socket was accepted before it, and by `transport/livekit` whenever a
+  remote participant joins the room. `BotConnectedFrame` is pushed by
+  `transport/livekit` for the bot's own place in the room. Both were declared
+  but nothing emitted them, so a processor could not tell a caller who connected
+  and said nothing from no caller at all. `transport.BaseInput` gains
+  `PushClientConnected` and `PushBotConnected` for a transport outside the tree
+  to report the same.
+
 - **Four log observers.** `observers.NewDebugLog` renders every exported field
   of the frames going by, with filters that narrow it to a frame type and to one
   end of a handover, since an unfiltered pipeline pushes dozens of audio frames a
