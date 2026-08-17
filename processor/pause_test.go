@@ -224,3 +224,143 @@ func TestResumeFramePrecedesTheFramesItReleases(t *testing.T) {
 		}
 	}
 }
+
+// TestPauseUntilReadyHoldsFramesAndReleasesThem covers a processor that cannot
+// act until a condition holds: the frames wait and are delivered in order once
+// it does, rather than being dropped.
+func TestPauseUntilReadyHoldsFramesAndReleasesThem(t *testing.T) {
+	e := newEcho()
+	up, down := linkAndStart(t, e)
+	_ = up
+
+	ready := make(chan struct{})
+	e.PauseProcessingAllFramesUntil(func(ctx context.Context) {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+		}
+	}, 5*time.Second)
+
+	ctx := context.Background()
+	for _, text := range []string{"one", "two"} {
+		if err := e.QueueFrame(ctx, frames.NewTextFrame(text), processor.Downstream); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := drain(down); len(got) != 0 {
+		t.Fatalf("frames %v got through while the processor was holding them", got)
+	}
+
+	close(ready)
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case f := <-down.got:
+			if tf, ok := f.(*frames.TextFrame); ok {
+				got = append(got, tf.Text)
+			}
+		case <-deadline:
+			t.Fatalf("held frames = %v, want both released", got)
+		}
+	}
+	if got[0] != "one" || got[1] != "two" {
+		t.Errorf("held frames = %v, want them in the order they were queued", got)
+	}
+}
+
+// TestPauseUntilReadyGivesUp covers the timeout: a processor left holding
+// frames could not handle the ones that shut it down, so the hold is always
+// lifted.
+func TestPauseUntilReadyGivesUp(t *testing.T) {
+	e := newEcho()
+	_, down := linkAndStart(t, e)
+
+	// A condition that never holds.
+	e.PauseProcessingAllFramesUntil(func(ctx context.Context) { <-ctx.Done() }, 100*time.Millisecond)
+
+	if err := e.QueueFrame(context.Background(), frames.NewTextFrame("one"), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case f := <-down.got:
+			if tf, ok := f.(*frames.TextFrame); ok {
+				if tf.Text != "one" {
+					t.Errorf("got %q, want the held frame released when the wait gave up", tf.Text)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("the hold was never lifted")
+		}
+	}
+}
+
+// TestPauseUntilReadyIsLiftedAtCleanup covers the hold not outliving the
+// processor.
+func TestPauseUntilReadyIsLiftedAtCleanup(t *testing.T) {
+	e := newEcho()
+	_, _ = linkAndStart(t, e)
+
+	e.PauseProcessingAllFramesUntil(func(ctx context.Context) { <-ctx.Done() }, time.Hour)
+
+	done := make(chan error, 1)
+	go func() { done <- e.Cleanup(context.Background()) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup blocked on a hold that was never lifted")
+	}
+}
+
+// TestPauseUntilReadyHoldsBothQueues covers the data frames already routed to
+// the process queue being held too. The two queues pause independently, so
+// frames that have moved on keep draining unless both are held.
+func TestPauseUntilReadyHoldsBothQueues(t *testing.T) {
+	e := newEcho()
+	_, down := linkAndStart(t, e)
+
+	e.PauseProcessingAllFramesUntil(func(ctx context.Context) { <-ctx.Done() }, 5*time.Second)
+
+	ctx := context.Background()
+	// A system frame and a data frame: one is held on each queue.
+	if err := e.QueueFrame(ctx, frames.NewUserStartedSpeakingFrame(), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.QueueFrame(ctx, frames.NewTextFrame("held"), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := drain(down); len(got) != 0 {
+		t.Errorf("frames %v got through while both queues were held", got)
+	}
+}
+
+// TestPauseUntilReadyIsANoOpInDirectMode covers a processor that bypasses the
+// queues the hold acts on: there is nothing to hold, so the call says so.
+func TestPauseUntilReadyIsANoOpInDirectMode(t *testing.T) {
+	e := newEchoDirect()
+	_, down := linkAndStart(t, e)
+
+	e.PauseProcessingAllFramesUntil(func(ctx context.Context) { <-ctx.Done() }, 5*time.Second)
+
+	if err := e.QueueFrame(context.Background(), frames.NewTextFrame("through"), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case f := <-down.got:
+			if tf, ok := f.(*frames.TextFrame); ok && tf.Text == "through" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("a direct-mode processor held frames it has no queue for")
+		}
+	}
+}

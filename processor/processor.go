@@ -207,6 +207,11 @@ type Base struct {
 	// pendingResume is a resume this processor was asked for by a frame it is
 	// still handling. It is applied once that frame has gone on.
 	pendingResume bool
+	// pauseWatcher cancels the goroutine waiting on the readiness condition a
+	// PauseProcessingAllFramesUntil is holding frames for, and pauseWG waits for
+	// it to have finished.
+	pauseWatcher context.CancelFunc
+	pauseWG      sync.WaitGroup
 
 	startedMu sync.Mutex
 	started   bool
@@ -380,6 +385,9 @@ func (b *Base) Setup(ctx context.Context, s Setup) error {
 // waits for the event handlers still running, so a caller reading what a handler
 // collected does not race it.
 func (b *Base) Cleanup(ctx context.Context) error {
+	// A processor left holding frames could not handle the ones that shut it
+	// down, so the hold is lifted before anything else.
+	b.cancelPauseWatcher()
 	b.cancelProcessTask()
 	b.cancelInputTask()
 	b.events.Cleanup(ctx)

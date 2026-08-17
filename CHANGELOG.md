@@ -14,6 +14,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Three processors that had no counterpart.** `aggregators.Sentence` gathers
+  streamed text into whole sentences for a consumer that needs them coherent;
+  `aggregators.FullResponse` gathers a whole LLM reply and reports it through
+  `EventCompletion`, forwarding every frame untouched, for a transcript or a
+  moderation check; `aggregators.LLMText` turns the tokens a model streams into
+  aggregated text with a configurable aggregator, which is where the raw stream
+  is grouped, categorized or filtered before a synthesizer sees it.
+
+- **Holding frames until a processor is ready.**
+  `processor.Base.PauseProcessingAllFramesUntil` holds both queues until a
+  condition resolves, for a processor that cannot act on frames until it has a
+  connection. The frames wait in order and nothing is lost; the hold is always
+  lifted, on readiness, on timeout, or at cleanup, since a processor left
+  holding could not handle the frames that shut it down.
+
 - **The frames the protocol was missing.** Thirteen frame types now exist that
   had no counterpart: the reasoning path (`LLMThoughtStartFrame`,
   `LLMThoughtTextFrame`, `LLMThoughtEndFrame`), the assistant turn broadcast

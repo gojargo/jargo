@@ -21,6 +21,14 @@ func newEcho() *echo {
 	return e
 }
 
+// newEchoDirect builds an echo that runs in direct mode, which has no queues
+// for a hold to act on.
+func newEchoDirect() *echo {
+	e := &echo{}
+	e.Base = processor.New("Echo", e, processor.WithDirectMode())
+	return e
+}
+
 func (e *echo) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := e.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err

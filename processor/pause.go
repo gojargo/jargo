@@ -2,7 +2,9 @@ package processor
 
 import (
 	"context"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -168,4 +170,95 @@ func (b *Base) applyPendingResume() {
 	if pending {
 		b.ResumeProcessingFrames()
 	}
+}
+
+// DefaultPauseUntilReadyTimeout is how long a processor holds frames waiting for
+// a readiness condition before giving up and resuming. See
+// PauseProcessingAllFramesUntil.
+const DefaultPauseUntilReadyTimeout = 5 * time.Second
+
+// PauseProcessingAllFramesUntil holds the frames arriving at this processor
+// until ready returns.
+//
+// It is for a processor that cannot act on frames until some condition holds,
+// such as one opening a connection in the background. The frames wait in the
+// processor's queues and are handled in order once the condition resolves, so
+// nothing is lost.
+//
+// The frame being handled when this is called is unaffected: the pause takes
+// hold from the next frame on. A processor pausing while it handles its
+// StartFrame still passes that frame downstream, so starting the pipeline is not
+// delayed.
+//
+// Both queues are held, so a processor left paused could not handle the frames
+// that shut it down. The pause is therefore always lifted: when ready returns,
+// when timeout elapses, or at cleanup, whichever comes first. A timeout of zero
+// takes DefaultPauseUntilReadyTimeout.
+//
+// ready is called on a goroutine of its own and should return once the processor
+// can work, or when ctx ends.
+func (b *Base) PauseProcessingAllFramesUntil(ready func(ctx context.Context), timeout time.Duration) {
+	if b.directMode {
+		slog.Warn("cannot hold frames: this processor runs in direct mode", "processor", b.name)
+		return
+	}
+	if timeout <= 0 {
+		timeout = DefaultPauseUntilReadyTimeout
+	}
+
+	b.cancelPauseWatcher()
+	b.PauseProcessingSystemFrames()
+	b.PauseProcessingFrames()
+
+	ctx, cancel := context.WithCancel(b.baseCtx)
+	b.pauseMu.Lock()
+	b.pauseWatcher = cancel
+	b.pauseMu.Unlock()
+
+	b.pauseWG.Go(func() {
+		defer cancel()
+		b.watchUntilReady(ctx, ready, timeout)
+	})
+}
+
+// watchUntilReady waits for ready, the timeout or cancellation, then lifts the
+// pause whichever it was.
+func (b *Base) watchUntilReady(ctx context.Context, ready func(ctx context.Context), timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ready(ctx)
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		slog.Warn("still not ready, resuming frame processing anyway",
+			"processor", b.name, "timeout", timeout)
+	case <-ctx.Done():
+	}
+	b.resumeProcessingAllFrames()
+}
+
+// cancelPauseWatcher stops a watcher already running and lifts the pause it was
+// going to lift.
+func (b *Base) cancelPauseWatcher() {
+	b.pauseMu.Lock()
+	cancel := b.pauseWatcher
+	b.pauseWatcher = nil
+	b.pauseMu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	b.pauseWG.Wait()
+	b.resumeProcessingAllFrames()
+}
+
+// resumeProcessingAllFrames releases both queues.
+func (b *Base) resumeProcessingAllFrames() {
+	b.ResumeProcessingSystemFrames()
+	b.ResumeProcessingFrames()
 }
