@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
@@ -337,12 +338,7 @@ func (s *ServiceSwitcher) handleServiceError(ctx context.Context, ef *frames.Err
 
 // isMember reports whether p is one of the services this switcher manages.
 func (s *ServiceSwitcher) isMember(p processor.Processor) bool {
-	for _, svc := range s.Services() {
-		if svc == p {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.Services(), p)
 }
 
 // reportServiceFailure reports a service failure the switcher could not switch

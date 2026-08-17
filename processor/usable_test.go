@@ -14,6 +14,9 @@ import (
 	"github.com/gojargo/jargo/utils/events"
 )
 
+// errUnclassifiable is a failure nothing can attribute.
+var errUnclassifiable = errors.New("nope")
+
 // rejection is the error a provider raises when it refuses a request, standing
 // for the shapes an HTTP or websocket library raises.
 type rejection struct{ status int }
@@ -128,7 +131,7 @@ func TestServerErrorsLeaveTheServiceUsable(t *testing.T) {
 }
 
 func TestUnclassifiableErrorsLeaveTheServiceUsable(t *testing.T) {
-	p := newReporting(errors.New("nope"))
+	p := newReporting(errUnclassifiable)
 
 	got := reportOnce(t, p)
 
@@ -217,8 +220,13 @@ func TestTheVerdictIsInBeforeTheErrorTravels(t *testing.T) {
 	var mu sync.Mutex
 	var seen []bool
 	events.On(p.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+		src, ok := ef.Source.(processor.Processor)
+		if !ok {
+			t.Errorf("the error names %T, want the processor that reported it", ef.Source)
+			return
+		}
 		mu.Lock()
-		seen = append(seen, ef.Source.(processor.Processor).Usable())
+		seen = append(seen, src.Usable())
 		mu.Unlock()
 	})
 

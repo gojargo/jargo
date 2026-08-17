@@ -16,8 +16,11 @@ import (
 	"github.com/gojargo/jargo/utils/events"
 )
 
-// errKaboom is what a failing tool handler returns.
-var errKaboom = errors.New("kaboom")
+// The failures a tool handler returns in these tests.
+var (
+	errKaboom = errors.New("kaboom")
+	errSecret = errors.New("connection refused: token=sk-secret")
+)
 
 // callWatch collects what a tool call produced on its way through the pipeline.
 type callWatch struct {
@@ -157,7 +160,7 @@ func TestTheFailureIsKeptOutOfTheConversation(t *testing.T) {
 	// A failure reaches the user through the model, so what the model is told
 	// names the function and nothing else.
 	watch, _ := runFailingCall(t, func(context.Context, llm.FunctionCallParams) error {
-		return errors.New("connection refused: token=sk-secret")
+		return errSecret
 	})
 
 	watch.mu.Lock()
@@ -212,7 +215,7 @@ func TestARaisingHandlerDoesNotAlsoTimeOut(t *testing.T) {
 	watch.mu.Lock()
 	defer watch.mu.Unlock()
 	if len(watch.cancels) != 0 {
-		t.Errorf("the call was cancelled %d times as well as failing", len(watch.cancels))
+		t.Errorf("the call was canceled %d times as well as failing", len(watch.cancels))
 	}
 }
 
@@ -236,7 +239,7 @@ func TestASecondResultIsRejected(t *testing.T) {
 	}
 }
 
-func TestAnAsyncCallCancelledByItsDeadlineIsSettledInTheConversation(t *testing.T) {
+func TestAnAsyncCallCanceledByItsDeadlineIsSettledInTheConversation(t *testing.T) {
 	// A call the model does not wait on is settled the same channel its results
 	// would have arrived on, so the conversation is not left showing it running.
 	gen := &onceToolGen{}
@@ -276,6 +279,6 @@ func TestAnAsyncCallCancelledByItsDeadlineIsSettledInTheConversation(t *testing.
 	<-runDone
 
 	if !settled {
-		t.Errorf("messages = %+v, want the cancelled call settled", convo.Messages())
+		t.Errorf("messages = %+v, want the canceled call settled", convo.Messages())
 	}
 }

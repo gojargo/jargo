@@ -33,9 +33,9 @@ import (
 // frames.ToolResultInProgress, which lives beside the async-tool protocol
 // because summarization has to recognize it too.
 const (
-	// toolResultCancelled replaces the placeholder when the call is canceled.
+	// toolResultCanceled replaces the placeholder when the call is canceled.
 	// The spelling is the protocol's, not prose.
-	toolResultCancelled = "CANCELLED" //nolint:misspell // the literal written to the conversation
+	toolResultCanceled = "CANCELLED" //nolint:misspell // the literal written to the conversation
 	// toolResultCompleted stands in for a call that finished having produced no
 	// result of its own.
 	toolResultCompleted = "COMPLETED"
@@ -866,9 +866,9 @@ func (a *AssistantAggregator) handleFunctionCallCancel(
 	a.mu.Unlock()
 
 	if sync {
-		a.context.UpdateToolResult(fr.ToolCallID, toolResultCancelled)
+		a.context.UpdateToolResult(fr.ToolCallID, toolResultCanceled)
 	} else {
-		a.context.AddMessage(frames.NewAsyncToolCancelledMessage(fr.ToolCallID))
+		a.context.AddMessage(frames.NewAsyncToolCanceledMessage(fr.ToolCallID))
 	}
 
 	if !fr.RunLLM || speaking {

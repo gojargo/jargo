@@ -162,6 +162,15 @@ func ClassifyError(err error) Category {
 	return Unknown
 }
 
+// connectionErrnos are the bare syscall errors that mean the service could not
+// be reached, for a failure raised outside a net.OpError to be recognized by.
+//
+//nolint:gochecknoglobals // a fixed table
+var connectionErrnos = []error{
+	syscall.ECONNREFUSED, syscall.ECONNRESET,
+	syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.EPIPE,
+}
+
 // isConnectivity reports whether err is a failure to reach the service at all.
 //
 // net.Error covers the dial, name-resolution and timeout failures, since the net
@@ -174,7 +183,7 @@ func isConnectivity(err error) bool {
 	if errors.As(err, &netErr) {
 		return true
 	}
-	for _, errno := range []error{syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.EPIPE} {
+	for _, errno := range connectionErrnos {
 		if errors.Is(err, errno) {
 			return true
 		}

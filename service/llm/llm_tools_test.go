@@ -583,9 +583,9 @@ func (p *probe) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.
 	return p.PushFrame(ctx, f, dir)
 }
 
-// TestFunctionCallTimeout checks a call that overruns its bound is cancelled
-// rather than abandoned: the handler is cancelled so it can run its cleanup, the
-// conversation records the call as cancelled, and the cancellation asks for
+// TestFunctionCallTimeout checks a call that overruns its bound is canceled
+// rather than abandoned: the handler is canceled so it can run its cleanup, the
+// conversation records the call as canceled, and the cancellation asks for
 // inference so the model can say the call did not complete.
 func TestFunctionCallTimeout(t *testing.T) {
 	gen := &onceToolGen{}
@@ -606,13 +606,13 @@ func TestFunctionCallTimeout(t *testing.T) {
 		}
 	})
 
-	cancelled := make(chan *frames.FunctionCallCancelFrame, 4)
+	canceled := make(chan *frames.FunctionCallCancelFrame, 4)
 	results := make(chan *frames.FunctionCallResultFrame, 4)
 	probe := newProbe(func(f frames.Frame) {
 		switch fr := f.(type) {
 		case *frames.FunctionCallCancelFrame:
 			select {
-			case cancelled <- fr:
+			case canceled <- fr:
 			default:
 			}
 		case *frames.FunctionCallResultFrame:
@@ -631,7 +631,7 @@ func TestFunctionCallTimeout(t *testing.T) {
 	task.QueueFrame(frames.NewLLMContextFrame(convo))
 
 	select {
-	case fr := <-cancelled:
+	case fr := <-canceled:
 		// Nothing else follows up on a deadline, so it has to run the model.
 		if !fr.RunLLM {
 			t.Error("the deadline did not ask for inference, so the call is never answered")
@@ -645,16 +645,16 @@ func TestFunctionCallTimeout(t *testing.T) {
 	case <-rolledBack:
 	case <-time.After(3 * time.Second):
 		close(release)
-		t.Fatal("the handler was never cancelled, so it could not roll anything back")
+		t.Fatal("the handler was never canceled, so it could not roll anything back")
 	}
 
-	// The conversation records it as cancelled, not as still running: the user
-	// turn, the call, then the placeholder settled to CANCELLED.
+	// The conversation records it as canceled, not as still running: the user
+	// turn, the call, then the placeholder settled to the canceled marker.
 	if !waitForContext(convo, func(msgs []frames.Message) bool {
 		return len(msgs) >= 3 && len(msgs[2].ToolResults) == 1 &&
 			msgs[2].ToolResults[0].Content == "CANCELLED" //nolint:misspell // the literal written to the conversation
 	}) {
-		t.Errorf("messages = %+v, want the call recorded as cancelled", convo.Messages())
+		t.Errorf("messages = %+v, want the call recorded as canceled", convo.Messages())
 	}
 
 	// The cancellation asked for inference, so the model gets a turn to say the

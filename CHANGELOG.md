@@ -12,7 +12,70 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **A failure now says what kind it was.** `utils/errors` gives the shared
+  vocabulary (authentication, authorization, invalid request, rate limit, quota,
+  connectivity, server, application) and says which of them keep recurring.
+  `ErrorFrame` carries the category, settled on the way out from the error when
+  the reporter did not name one; a processor that knows the shape of its
+  provider's failures classifies them itself by implementing
+  `processor.ErrorClassifier`. `PushError` takes `WithErrorCategory` and
+  `TreatAsPermanent` for a failure the category does not convey.
+
+- **A processor reports whether it can still do its job.** `Usable` is false once
+  its work can no longer succeed, and a permanent category sets it as the error
+  is reported, so a handler reading the error sees the verdict that came with it.
+  `EventUsableChanged` announces the change. Transcription drops the audio it
+  cannot transcribe, releasing what a segmented service had buffered rather than
+  growing it for the rest of the session, and synthesis names the text it leaves
+  unspoken. A settings update that changed something gives the service another
+  chance. A worker applies `ProcessorUnusablePolicy` to the first error that says
+  a processor is finished: continue (the default), end, or cancel.
+
+- **A tool can say the model may cancel its calls.**
+  `llm.WithCancellableByLLM(true)` advertises the tool alongside its own
+  `cancel_<name>`, and a tool that did not opt in has no cancel tool at all. The
+  common case takes no arguments; a `tool_call_id` is only needed to choose
+  between several running calls of the same tool, and the refusal that asks for
+  one names the ids and the arguments each call was given. It is only meaningful
+  with `WithCancelOnInterruption(false)`, and pairing it with a synchronous tool
+  is reported and ignored.
+
 ### Fixed
+
+- **A tool call its handler could not finish is settled.** A handler that
+  returned an error left its call in progress, so the aggregator waited on a
+  result that could never arrive and the assistant turn never completed. The call
+  is now settled on the handler's behalf with a result naming the function, and
+  the failure is reported as the application's own rather than counting against
+  the service.
+
+- **A function call that overruns its deadline is cancelled rather than
+  abandoned.** It reported an empty result and left its handler running. The call
+  is now settled first, so a result racing in while the handler unwinds is
+  rejected, then the handler's context is cancelled so it can roll back what it
+  started, and the cancellation asks for inference so the model can say the call
+  did not complete. An interruption still does not ask, and neither does a
+  cancellation the model requested. A cancelled call is settled in the
+  conversation whether or not the model was waiting on it.
+
+- **Failover switches only from a service that can no longer work.** It switched
+  on every error the active service reported, so a single 500 walked the switcher
+  through its whole fallback chain and nothing stopped it making a permanently
+  broken service active. It now reads the verdict off the error, walks past
+  candidates that cannot work, and refuses a manual switch to one of those. An
+  error from a service held in reserve stops at the switcher; one it recovered
+  from by switching goes no further; one that leaves the active service finished
+  with nowhere to move the work is reported against the switcher, uncategorized,
+  so the pipeline judges it by what it has left.
+
+- **A websocket service stops redialing a provider that keeps refusing.** It
+  reported a lost connection as a bare message and guessed locally at when to
+  give up. It now reports an error frame, says when the failure will keep
+  recurring, and reads the verdict back: a rejected key ends the attempts as the
+  first one is reported, and a service already unable to work is not redialed at
+  all.
 
 - **Mistral STT transcribes a turn when it ends.** The realtime session closes
   a segment only when the client flushes the audio it has sent, and nothing ever
@@ -34,6 +97,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the result.
 
 ### Changed
+
+- **`llm.WithAsyncToolCancellation` is deprecated.** It offered one built-in tool
+  that could stop any pending call, so a model that wrongly decided a result was
+  unwanted could destroy work nobody asked it to abandon. Register the tools the
+  model may cancel with `WithCancellableByLLM(true)` instead; meanwhile the
+  option widens cancellation to every asynchronous tool, which is the unbounded
+  shape it replaces.
+
+- **`PushError` takes options, and error reporting goes through
+  `PushErrorFrame`.** A processor overriding the error path implements
+  `PushErrorFrame(ctx, frame, treatAsPermanent)`. `wsservice.ReportError` takes
+  the error frame and that flag rather than a message.
 
 - **Declaring two handlers for one name panics.** `Base.HandleJob` and
   `Base.HandleWorkerReady` kept the first handler and warned about the second,

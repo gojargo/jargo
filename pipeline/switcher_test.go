@@ -42,21 +42,28 @@ func (s *tagSvc) ProcessFrame(ctx context.Context, f frames.Frame, dir processor
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	if tf, ok := f.(*frames.TextFrame); ok && dir == processor.Downstream {
-		if s.failOn != "" && tf.Text == s.failOn {
-			var opts []processor.ErrorOption
-			if s.category != errs.Unset {
-				opts = append(opts, processor.WithErrorCategory(s.category))
-			}
-			if !s.recoverable {
-				opts = append(opts, processor.TreatAsPermanent())
-			}
-			s.PushError(ctx, "tag svc failed", errBoom, false, opts...)
-			return nil
-		}
-		return s.PushFrame(ctx, frames.NewTextFrame(s.tag+tf.Text), dir)
+	tf, ok := f.(*frames.TextFrame)
+	if !ok || dir != processor.Downstream {
+		return s.PushFrame(ctx, f, dir)
 	}
-	return s.PushFrame(ctx, f, dir)
+	if s.failOn != "" && tf.Text == s.failOn {
+		s.PushError(ctx, "tag svc failed", errBoom, false, s.errorOptions()...)
+		return nil
+	}
+	return s.PushFrame(ctx, frames.NewTextFrame(s.tag+tf.Text), dir)
+}
+
+// errorOptions describes the failure this service reports: the category it was
+// given, and whether the service can carry on from it.
+func (s *tagSvc) errorOptions() []processor.ErrorOption {
+	var opts []processor.ErrorOption
+	if s.category != errs.Unset {
+		opts = append(opts, processor.WithErrorCategory(s.category))
+	}
+	if !s.recoverable {
+		opts = append(opts, processor.TreatAsPermanent())
+	}
+	return opts
 }
 
 // runCollector runs a task over proc, returning the task (to queue frames into),

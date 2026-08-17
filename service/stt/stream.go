@@ -400,11 +400,7 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		}
 		return s.connect(ctx)
 	case *frames.InputAudioRawFrame:
-		// A service that can no longer work cannot transcribe anything, and one
-		// that connects on demand would attempt a handshake per chunk.
-		if s.Usable() {
-			s.send(fr.Audio)
-		}
+		s.sendAudio(fr.Audio)
 		return s.PushFrame(ctx, f, dir)
 	case *frames.STTUpdateSettingsFrame:
 		if !fr.TargetsService(s) {
@@ -630,6 +626,16 @@ func (s *StreamService) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stream != nil
+}
+
+// sendAudio hands a chunk to the provider, unless the service can no longer do
+// its job: one that cannot transcribe anything would drop the chunk anyway, and
+// one that connects on demand would attempt a handshake per chunk to do it.
+func (s *StreamService) sendAudio(audio []byte) {
+	if !s.Usable() {
+		return
+	}
+	s.send(audio)
 }
 
 // reportConnectionError puts a lost provider connection on the pipeline. It is

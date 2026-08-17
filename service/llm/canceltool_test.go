@@ -132,7 +132,7 @@ func TestCancellableByLLMIsIgnoredOnASynchronousTool(t *testing.T) {
 	svc.RegisterFunction("lookup", noop, llm.WithCancellableByLLM(true))
 
 	if got := advertised(gen); len(got) != 0 {
-		t.Errorf("advertised %v, want nothing: a synchronous call cannot be cancelled", got)
+		t.Errorf("advertised %v, want nothing: a synchronous call cannot be canceled", got)
 	}
 }
 
@@ -350,9 +350,18 @@ func TestAnAmbiguousCallAsksForAToolCallID(t *testing.T) {
 			t.Errorf("reason = %q, want it to name %s", reason, id)
 		}
 	}
+	running, ok := got["running"].([]any)
+	if !ok {
+		t.Fatalf("running = %v, want the ids to choose between", got["running"])
+	}
 	ids := map[string]bool{}
-	for _, entry := range got["running"].([]any) {
-		ids[entry.(map[string]any)["tool_call_id"].(string)] = true
+	for _, entry := range running {
+		call, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("running entry = %v, want a call", entry)
+		}
+		id, _ := call["tool_call_id"].(string)
+		ids[id] = true
 	}
 	if !ids["call-1"] || !ids["call-3"] {
 		t.Errorf("running = %v, want both ids", got["running"])

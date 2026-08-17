@@ -23,6 +23,13 @@ var errCallNotRunning = errors.New("no such function call is running")
 // CancelToolPrefix begins the name of every built-in cancel tool.
 const CancelToolPrefix = "cancel_"
 
+// cancelledKey names the field a cancel tool reports its outcome under: the id
+// of the call it stopped, or null when it stopped none. The spelling is the
+// protocol's, not prose.
+//
+//nolint:misspell // the key the model is told to expect
+const cancelledKey = "cancelled"
+
 // CancelToolName is the name of the tool that cancels calls of functionName: a
 // running write_report call is stopped by cancel_write_report.
 func CancelToolName(functionName string) string { return CancelToolPrefix + functionName }
@@ -42,7 +49,7 @@ Work that can be stopped early has its own cancel tool, named for it: a running 
 	`stopped and will finish on its own.
 
 When the user no longer wants a result you are still waiting on, call the corresponding ` +
-	`cancel tool. Only the call stops the work: saying you cancelled it, or that you will skip ` +
+	`cancel tool. Only the call stops the work: saying you canceled it, or that you will skip ` +
 	`it, leaves it running and its result will still arrive and contradict you. So when the same ` +
 	`turn also asks for something else, make the call and answer, rather than just answering.
 
@@ -72,12 +79,24 @@ func buildCancelToolSchema(functionName string) frames.Tool {
 			"properties": {
 				"tool_call_id": {
 					"type": "string",
-					"description": "Which %s call to stop. Needed only when several are running, and carried by the message in the conversation that reported each one running."
+					"description": %s
 				}
 			},
 			"required": []
-		}`, functionName)),
+		}`, cancelToolIDDescription(functionName))),
 	}
+}
+
+// cancelToolIDDescription describes the tool_call_id a cancel tool takes, as a
+// JSON string ready to sit in the schema.
+func cancelToolIDDescription(functionName string) string {
+	described, err := json.Marshal(fmt.Sprintf(
+		"Which %s call to stop. Needed only when several are running, and carried "+
+			"by the message in the conversation that reported each one running.", functionName))
+	if err != nil {
+		return `""`
+	}
+	return string(described)
 }
 
 // WithCancellableByLLM says whether the model may cancel this tool's calls while
@@ -129,6 +148,22 @@ func (b *Base) isCancellable(item registryItem) bool {
 // from what is actually cancellable. It runs wherever the registry changes.
 func (b *Base) syncCancelTools() {
 	b.handlersMu.Lock()
+	wanted := b.wantedCancelToolsLocked()
+	withdrawn := b.withdrawCancelToolsLocked(wanted)
+	added := b.addCancelToolsLocked(wanted)
+	active := slices.Sorted(maps.Keys(b.cancelTools))
+	b.handlersMu.Unlock()
+
+	if len(withdrawn) == 0 && len(added) == 0 {
+		return
+	}
+	slog.Debug("cancel tools reconciled", "service", b.Name(), "added", added, "withdrawn", withdrawn)
+	b.applyCancelTools(active, withdrawn)
+}
+
+// wantedCancelToolsLocked maps each cancel tool that should be offered to the
+// tool it cancels. Call it with handlersMu held.
+func (b *Base) wantedCancelToolsLocked() map[string]string {
 	wanted := make(map[string]string)
 	for name, item := range b.handlers {
 		if name == catchAllFunction || b.cancelTools[name] {
@@ -138,8 +173,13 @@ func (b *Base) syncCancelTools() {
 			wanted[CancelToolName(name)] = name
 		}
 	}
+	return wanted
+}
 
-	var withdrawn, added []string
+// withdrawCancelToolsLocked drops the cancel tools no longer wanted, returning
+// their names. Call it with handlersMu held.
+func (b *Base) withdrawCancelToolsLocked(wanted map[string]string) []string {
+	var withdrawn []string
 	for stale := range b.cancelTools {
 		if _, keep := wanted[stale]; keep {
 			continue
@@ -148,21 +188,19 @@ func (b *Base) syncCancelTools() {
 		delete(b.cancelTools, stale)
 		withdrawn = append(withdrawn, stale)
 	}
+	return withdrawn
+}
+
+// addCancelToolsLocked registers the cancel tools not yet offered, returning
+// their names. Call it with handlersMu held.
+func (b *Base) addCancelToolsLocked(wanted map[string]string) []string {
+	var added []string
 	for name, target := range wanted {
 		if b.cancelTools[name] {
 			continue
 		}
 		if _, claimed := b.handlers[name]; claimed {
-			// Once per name: this runs on every context frame, and the collision
-			// stands for as long as both tools are registered.
-			if !b.warnedCancelCollisions[name] {
-				if b.warnedCancelCollisions == nil {
-					b.warnedCancelCollisions = make(map[string]bool)
-				}
-				b.warnedCancelCollisions[name] = true
-				slog.Warn("a cancellable tool's cancel tool cannot be advertised: that name is already a tool of its own, so rename one of them or the model has no way to stop it",
-					"service", b.Name(), "function", target, "cancel_tool", name)
-			}
+			b.warnCancelCollisionLocked(name, target)
 			continue
 		}
 		if b.handlers == nil {
@@ -179,21 +217,25 @@ func (b *Base) syncCancelTools() {
 		b.cancelTools[name] = true
 		added = append(added, name)
 	}
-	active := slices.Sorted(maps.Keys(b.cancelTools))
-	b.handlersMu.Unlock()
-
-	if len(withdrawn) == 0 && len(added) == 0 {
-		return
-	}
-	slog.Debug("cancel tools reconciled", "service", b.Name(), "added", added, "withdrawn", withdrawn)
-	b.applyCancelTools(active, withdrawn)
+	return added
 }
 
-// cancelToolNames are the cancel tools currently registered, in order.
-func (b *Base) cancelToolNames() []string {
-	b.handlersMu.RLock()
-	defer b.handlersMu.RUnlock()
-	return slices.Sorted(maps.Keys(b.cancelTools))
+// warnCancelCollisionLocked reports, once per name, that a cancellable tool's
+// cancel tool cannot be advertised because the application registered a tool of
+// its own under that name. It is reported once because this runs on every
+// inference and the collision stands until one of them is renamed. Call it with
+// handlersMu held.
+func (b *Base) warnCancelCollisionLocked(name, target string) {
+	if b.warnedCancelCollisions[name] {
+		return
+	}
+	if b.warnedCancelCollisions == nil {
+		b.warnedCancelCollisions = make(map[string]bool)
+	}
+	b.warnedCancelCollisions[name] = true
+	slog.Warn("a cancellable tool's cancel tool cannot be advertised: that name is "+
+		"already a tool of its own, so rename one of them or the model has no way to stop it",
+		"service", b.Name(), "function", target, "cancel_tool", name)
 }
 
 // BuiltinToolHolder is implemented by an adapter the service can add the tools
@@ -263,8 +305,7 @@ func (b *Base) cancelToolHandler(ctx context.Context, params FunctionCallParams)
 	refuse := func(reason string, extra map[string]any) error {
 		slog.DebugContext(ctx, "declining to cancel", "service", b.Name(),
 			"function", target, "reason", reason)
-		//nolint:misspell // the key the model is told to expect
-		payload := map[string]any{"cancelled": nil, "reason": reason}
+		payload := map[string]any{cancelledKey: nil, "reason": reason}
 		maps.Copy(payload, extra)
 		return b.reportCancelResult(ctx, params, payload)
 	}
@@ -297,7 +338,7 @@ func (b *Base) cancelToolHandler(ctx context.Context, params FunctionCallParams)
 			choices = append(choices, fmt.Sprintf("%s (called with %s)", c.toolCallID, c.args))
 			running = append(running, map[string]any{
 				"tool_call_id": c.toolCallID,
-				"arguments":    json.RawMessage(c.args),
+				"arguments":    c.args,
 			})
 		}
 		return refuse(
@@ -311,9 +352,8 @@ func (b *Base) cancelToolHandler(ctx context.Context, params FunctionCallParams)
 	slog.DebugContext(ctx, "canceling function call at the model's request", "service", b.Name(),
 		"function", match.name, "tool_call_id", match.toolCallID)
 	b.cancelFunctionCallByID(ctx, match.toolCallID)
-	//nolint:misspell // the key the model is told to expect
 	return b.reportCancelResult(ctx, params, map[string]any{
-		"cancelled": match.toolCallID, "function_name": match.name,
+		cancelledKey: match.toolCallID, "function_name": match.name,
 	})
 }
 
@@ -384,7 +424,7 @@ func (b *Base) cancelFunctionCallByID(ctx context.Context, toolCallID string) bo
 	call.cancel()
 	// The result of the tool that asked for this cancellation runs inference
 	// already, so asking again here would answer twice.
-	b.broadcastFunctionCallCancelled(ctx, call, false)
+	b.broadcastFunctionCallCanceled(ctx, call, false)
 
 	b.eventsMu.RLock()
 	h := b.onCanceled

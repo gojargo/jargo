@@ -1352,7 +1352,7 @@ func (b *Base) timeoutFunctionCall(ctx context.Context, call *functionCall) {
 	b.callsMu.Unlock()
 
 	call.cancel()
-	b.broadcastFunctionCallCancelled(ctx, call, true)
+	b.broadcastFunctionCallCanceled(ctx, call, true)
 
 	b.eventsMu.RLock()
 	h := b.onCanceled
@@ -1360,10 +1360,10 @@ func (b *Base) timeoutFunctionCall(ctx context.Context, call *functionCall) {
 	b.notify(ctx, h, []frames.ToolCall{{ID: call.toolCallID, Name: call.name, Args: call.args}})
 }
 
-// broadcastFunctionCallCancelled settles a canceled call downstream, asking for
+// broadcastFunctionCallCanceled settles a canceled call downstream, asking for
 // inference when runLLM says the cancellation is the last thing that will happen
 // to the call.
-func (b *Base) broadcastFunctionCallCancelled(
+func (b *Base) broadcastFunctionCallCanceled(
 	ctx context.Context, call *functionCall, runLLM bool,
 ) {
 	_ = b.Broadcast(ctx, func() frames.Frame {
@@ -1436,8 +1436,8 @@ func (b *Base) cancelFunctionCalls(ctx context.Context) {
 		slog.DebugContext(ctx, "canceling function call", "service", b.Name(),
 			"function", call.name, "tool_call_id", call.toolCallID)
 		call.cancel()
-		// The user is talking, so a cancelled call must not answer over them.
-		b.broadcastFunctionCallCancelled(ctx, call, false)
+		// The user is talking, so a canceled call must not answer over them.
+		b.broadcastFunctionCallCanceled(ctx, call, false)
 		dropped = append(dropped, frames.ToolCall{ID: call.toolCallID, Name: call.name, Args: call.args})
 	}
 

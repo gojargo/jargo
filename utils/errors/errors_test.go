@@ -12,6 +12,12 @@ import (
 	errs "github.com/gojargo/jargo/utils/errors"
 )
 
+// The failures the tests classify.
+var (
+	errForbidden = errors.New("forbidden")
+	errPlain     = errors.New("nope")
+)
+
 // statusError is a provider error carrying a status, standing for the shapes an
 // HTTP or websocket library raises.
 type statusError struct {
@@ -70,7 +76,7 @@ func TestExtractsStatusCodeFromAWrappedError(t *testing.T) {
 
 func TestExtractsStatusCodeFromTheSharedError(t *testing.T) {
 	t.Parallel()
-	err := errs.NewHTTPStatusError(403, errors.New("forbidden"))
+	err := errs.NewHTTPStatusError(403, errForbidden)
 
 	status, ok := errs.ExtractHTTPStatusCode(err)
 
@@ -91,7 +97,7 @@ func TestAStatusOfZeroCarriesNothing(t *testing.T) {
 
 func TestErrorsWithoutAStatusCode(t *testing.T) {
 	t.Parallel()
-	err := errors.New("nope")
+	err := errPlain
 
 	if _, ok := errs.ExtractHTTPStatusCode(err); ok {
 		t.Error("a plain error reported a status")
