@@ -890,6 +890,7 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		return
 	}
 	slog.Info("updated settings", "service", b.Name(), "fields", changed.String())
+	b.SettingsUpdated(ctx)
 
 	if changed.Has("model") {
 		// The model labels the tokens this service reports and is what they are

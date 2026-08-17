@@ -32,6 +32,9 @@ type providerSettings struct {
 	// onModel is called with the model now in force when it changed, so the
 	// service can relabel what it reports.
 	onModel func(model string)
+	// onChanged is called whenever an update actually changed something, so the
+	// service can act on having been reconfigured.
+	onChanged func(ctx context.Context)
 }
 
 // hold runs fn with the settings held steady. Work that reads the provider's
@@ -87,6 +90,10 @@ func (p *providerSettings) apply(ctx context.Context, f *frames.STTUpdateSetting
 		return false, nil
 	}
 	slog.Info("updated settings", "service", p.name(), "fields", changed.String())
+
+	if p.onChanged != nil {
+		p.onChanged(ctx)
+	}
 
 	if changed.Has("model") && p.onModel != nil {
 		// The model labels the usage this service reports, and it is priced

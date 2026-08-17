@@ -336,7 +336,7 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	}
 	s.canReopen = true
 	s.Base = service.New(name, s)
-	s.set = &providerSettings{provider: conn, name: s.Name, onModel: s.setModel}
+	s.set = &providerSettings{provider: conn, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
 	s.ws = wsservice.New(s, wsservice.Config{})
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
 	s.work = newProcessingMeter(s.Base.Base, s.modelName)
@@ -400,7 +400,11 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		}
 		return s.connect(ctx)
 	case *frames.InputAudioRawFrame:
-		s.send(fr.Audio)
+		// A service that can no longer work cannot transcribe anything, and one
+		// that connects on demand would attempt a handshake per chunk.
+		if s.Usable() {
+			s.send(fr.Audio)
+		}
 		return s.PushFrame(ctx, f, dir)
 	case *frames.STTUpdateSettingsFrame:
 		if !fr.TargetsService(s) {

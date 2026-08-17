@@ -50,7 +50,7 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 		s.model = d.Metadata().Model
 	}
 	s.Base = service.New(name, s)
-	s.set = &providerSettings{provider: tr, name: s.Name, onModel: s.setModel}
+	s.set = &providerSettings{provider: tr, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
 	s.work = newProcessingMeter(s.Base.Base, s.modelName)
 	s.tracer = newSegmentTracer(s.Base.Base, func() tracing.STTAttributes {
@@ -222,6 +222,12 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 	s.speaking = false
 	s.mu.Unlock()
 	if len(audio) == 0 {
+		return
+	}
+	// A service that can no longer work cannot transcribe this segment. The
+	// buffered audio is released above rather than growing for the rest of the
+	// session.
+	if !s.Usable() {
 		return
 	}
 	s.wg.Go(func() {

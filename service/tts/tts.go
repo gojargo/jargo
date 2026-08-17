@@ -444,6 +444,7 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFr
 		return
 	}
 	slog.Info("updated settings", "service", b.Name(), "fields", changed.String())
+	b.SettingsUpdated(ctx)
 
 	if changed.Has("model") {
 		// The model labels the synthesis this service reports and is what the
@@ -928,7 +929,17 @@ func (b *Base) runTTS(
 		return nil
 	}
 	var err error
-	if wt, ok := b.syn.(WordTimestamps); ok {
+	usable := b.Usable()
+	if !usable {
+		// A service that can no longer work cannot synthesize anything, and one
+		// that connects on demand would attempt a handshake per request. The
+		// bookkeeping around this still runs, so the turn completes with no audio
+		// rather than stalling. The text that goes unspoken is named: silence
+		// from the bot is otherwise hard to trace back to the service that caused
+		// it.
+		slog.WarnContext(ctx, "service is no longer usable, not speaking",
+			"service", b.Name(), "text", filtered)
+	} else if wt, ok := b.syn.(WordTimestamps); ok {
 		word := func(words []uctx.WordTiming, opts WordTimingOptions) error {
 			b.AddWordTimestamps(contextID, words, opts)
 			return nil
@@ -942,8 +953,11 @@ func (b *Base) runTTS(
 		b.PushError(ctx, "tts synthesis failed", err, false)
 	}
 	// Whether the provider answered here decides who closes the context: one that
-	// yielded its audio is finished, one that did not is still delivering.
-	b.setYieldsSync(yielded)
+	// yielded its audio is finished, one that did not is still delivering. A
+	// service that can no longer work was never asked, so nothing is coming and
+	// the base closes the context itself rather than leaving the turn open on
+	// audio that will never arrive.
+	b.setYieldsSync(yielded || !usable)
 	if !b.wordPath() {
 		// With no word timings there is nothing to place the text against, so the
 		// whole unit goes in as one, carrying the text as written rather than what

@@ -50,6 +50,16 @@ func New(name string, self processor.Processor, opts ...processor.Option) *Base 
 	return &Base{Base: processor.New(name, self, opts...)}
 }
 
+// SettingsUpdated records that this service's settings have actually changed.
+//
+// New settings may be the ones that make the service work, so a service written
+// off for a rejected model or voice is given another chance rather than being
+// left unable to take work for the rest of the run. Call it from a settings
+// update that changed something, and not from one that changed nothing.
+func (b *Base) SettingsUpdated(ctx context.Context) {
+	b.SetUsable(ctx, true)
+}
+
 // BroadcastServiceMetadata sends this service's metadata both ways through the
 // pipeline, so processors on either side of it learn what it is. It does nothing
 // for a service that does not describe itself.
