@@ -81,6 +81,11 @@ func (e *HandshakeError) Error() string {
 // Unwrap returns the underlying dial failure.
 func (e *HandshakeError) Unwrap() error { return e.Err }
 
+// HTTPStatusCode implements the interface the shared error classification looks
+// for, so a refused handshake is classified by the status the server refused
+// with: rejected credentials from a server that is merely unwell.
+func (e *HandshakeError) HTTPStatusCode() int { return e.StatusCode }
+
 // Permanent reports whether the server refused the request itself, rather than
 // failing in a way that might not repeat. Retrying a refusal only spends the
 // time before the caller learns of it.

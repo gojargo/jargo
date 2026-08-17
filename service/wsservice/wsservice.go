@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/service/wsutil"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/utils/network"
 )
 
@@ -47,7 +47,12 @@ var ErrNotConnected = errors.New("wsservice: no websocket connected")
 // every failed reconnect attempt and once more when it stops retrying, so a
 // service typically pushes a non-fatal error frame: the call continues, and the
 // application decides what a lost provider connection means for it.
-type ReportError func(ctx context.Context, message string)
+//
+// treatAsPermanent says the failure will keep recurring, which is what the base
+// reports when it has stopped trying. A service passes it through to
+// PushErrorFrame, whose verdict the base then reads back to decide whether
+// reconnecting is worth attempting at all.
+type ReportError func(ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool)
 
 // Handler is the service-specific half of a WebSocket service. The service owns
 // the socket; these are the three things the base needs to drive it, plus the
@@ -68,6 +73,10 @@ type Handler interface {
 	// a redial, because a service that reports its dial failure by leaving no
 	// connection behind would otherwise look like it had succeeded.
 	Connected() bool
+	// Usable reports whether the service can still do its job. Every service
+	// embedding processor.Base has it. Reconnecting cannot fix whatever made a
+	// service unusable, so the base stops trying once this is false.
+	Usable() bool
 }
 
 // Config configures a Base. A zero field takes its default.
@@ -209,11 +218,12 @@ func (b *Base) maybeTryReconnect(ctx context.Context, message string, err error,
 		}
 		if result.GiveUp {
 			// Redialing keeps succeeding and the connection keeps dying, so
-			// waiting longer between attempts is not the answer.
+			// waiting longer between attempts is not the answer, and the service
+			// is finished until something about it changes.
 			giveUp := fmt.Sprintf("connection failed %d times immediately after connecting",
 				b.tracker.MaxConsecutiveFailures())
 			slog.Error(giveUp)
-			report(ctx, giveUp)
+			reportError(ctx, report, frames.NewErrorFrame(giveUp), nil, true)
 			return false
 		}
 	}
@@ -221,7 +231,10 @@ func (b *Base) maybeTryReconnect(ctx context.Context, message string, err error,
 	slog.Warn(message)
 
 	if !b.reconnectOnError {
-		report(ctx, message)
+		// reconnectOnError governs this loop alone: a service that turns it off
+		// reconnects on demand in SendWithRetry instead. Reporting the drop as
+		// terminal would close that path too.
+		reportError(ctx, report, frames.NewErrorFrame(message), err, false)
 		return false
 	}
 	return b.TryReconnect(ctx, report)
@@ -235,6 +248,12 @@ func (b *Base) TryReconnect(ctx context.Context, report ReportError) bool {
 		slog.Warn("websocket reconnect attempt aborted: already in progress")
 		return false
 	}
+	if !b.handler.Usable() {
+		// Reconnecting cannot fix whatever made the service unusable.
+		b.endReconnect()
+		slog.Error("not reconnecting: the service is no longer usable")
+		return false
+	}
 	defer b.endReconnect()
 
 	var lastErr error
@@ -244,18 +263,15 @@ func (b *Base) TryReconnect(ctx context.Context, report ReportError) bool {
 		case err != nil:
 			lastErr = err
 			slog.Error("websocket reconnection attempt failed", "attempt", attempt, "err", err)
-			if report != nil {
-				report(ctx, fmt.Sprintf("reconnection attempt %d failed: %v", attempt, err))
-			}
-			if wsutil.Permanent(err) {
-				// The server refused the request itself, a rejected key or a
-				// model the account cannot use. It will refuse the next one the
-				// same way, so retrying only delays the news.
-				message := fmt.Sprintf("giving up: %v", err)
-				slog.Error(message)
-				if report != nil {
-					report(ctx, message)
-				}
+			reportError(ctx, report,
+				frames.NewErrorFrame(fmt.Sprintf("reconnection attempt %d failed: %v", attempt, err)),
+				err, false)
+			if !b.handler.Usable() {
+				// The attempt was refused for a reason reporting it identified as
+				// terminal: a rejected key, or a model the account cannot use. The
+				// next attempt is refused the same way, so retrying only delays the
+				// news.
+				slog.Error("abandoning reconnection: the service is no longer usable")
 				return false
 			}
 		case ok:
@@ -272,10 +288,22 @@ func (b *Base) TryReconnect(ctx context.Context, report ReportError) bool {
 		message = fmt.Sprintf("%s: %v", message, lastErr)
 	}
 	slog.Error(message)
-	if report != nil {
-		report(ctx, message)
-	}
+	// Out of attempts, so the service is finished until something about it
+	// changes, whatever the last failure was.
+	reportError(ctx, report, frames.NewErrorFrame(message), lastErr, true)
 	return false
+}
+
+// reportError hands ef to report, if there is one, carrying the error behind it
+// so the category can be worked out from it.
+func reportError(
+	ctx context.Context, report ReportError, ef *frames.ErrorFrame, err error, treatAsPermanent bool,
+) {
+	if report == nil {
+		return
+	}
+	ef.Err = err
+	report(ctx, ef, treatAsPermanent)
 }
 
 // reconnectWebsocket closes what is left of the old connection and opens a new

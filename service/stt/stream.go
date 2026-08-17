@@ -635,13 +635,15 @@ func (s *StreamService) Connected() bool {
 // reportConnectionError puts a lost provider connection on the pipeline. It is
 // not fatal: the call continues, and the application decides what losing
 // transcription for part of it means.
-func (s *StreamService) reportConnectionError(ctx context.Context, message string) {
+func (s *StreamService) reportConnectionError(
+	ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool,
+) {
 	// Whatever was being measured ends here. The transcript it was waiting on is
 	// not coming on this connection, and holding the measurement open would
 	// carry it into the utterance after the one it belongs to.
 	s.ttfb.reportNow(ctx)
 	s.work.report(ctx)
-	s.PushError(ctx, message, nil, false)
+	s.PushErrorFrame(ctx, ef, treatAsPermanent)
 }
 
 // recordUsage reports the audio the connection was given. The measurement covers

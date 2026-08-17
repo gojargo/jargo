@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -57,6 +59,8 @@ type handler struct {
 	// live is what Connected reports. A redial that leaves nothing behind is
 	// how a service reports a dial it could not complete.
 	live func() bool
+	// usable is what Usable reports; nil means the service can still work.
+	usable func() bool
 
 	receiveCalls    int
 	connectCalls    int
@@ -104,22 +108,44 @@ func (h *handler) Connected() bool {
 	return fn()
 }
 
+func (h *handler) Usable() bool {
+	h.mu.Lock()
+	fn := h.usable
+	h.mu.Unlock()
+	if fn == nil {
+		return true
+	}
+	return fn()
+}
+
 func (h *handler) counts() (receive, connect, disconnect int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.receiveCalls, h.connectCalls, h.disconnectCalls
 }
 
-// recorder collects what the base reported to the pipeline.
+// recorder collects what the base reported to the pipeline. It reports through
+// a real processor, the way a service does, so the category is settled and the
+// usability verdict is in by the time the base reads it back.
 type recorder struct {
-	mu       sync.Mutex
-	messages []string
+	*processor.Base
+	mu        sync.Mutex
+	messages  []string
+	permanent []bool
 }
 
-func (r *recorder) report(_ context.Context, message string) {
+func newRecorder() *recorder {
+	r := &recorder{}
+	r.Base = processor.New("Recorder", r)
+	return r
+}
+
+func (r *recorder) report(ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.messages = append(r.messages, message)
+	r.messages = append(r.messages, ef.Error)
+	r.permanent = append(r.permanent, treatAsPermanent)
+	r.mu.Unlock()
+	r.PushErrorFrame(ctx, ef, treatAsPermanent)
 }
 
 func (r *recorder) all() []string {
@@ -158,7 +184,7 @@ func TestNormalClosureExitsCleanly(t *testing.T) {
 	h := &handler{receive: func(int) error {
 		return closeErr(websocket.StatusNormalClosure, "Normal closure")
 	}}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	b.ReceiveTaskHandler(t.Context(), rec.report)
@@ -175,7 +201,7 @@ func TestCloseWithErrorTriggersReconnect(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 	h.receive = func(call int) error {
 		if call == 1 {
@@ -200,7 +226,7 @@ func TestGracefulServerCloseTriggersReconnect(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 	h.receive = func(call int) error {
 		if call > 1 {
@@ -224,7 +250,7 @@ func TestGeneralErrorTriggersReconnect(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 	h.receive = func(call int) error {
 		if call == 1 {
@@ -256,7 +282,7 @@ func TestReconnectSucceedsOnLaterAttempt(t *testing.T) {
 		}
 		return nil
 	}}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	if !b.TryReconnect(t.Context(), rec.report) {
@@ -271,7 +297,7 @@ func TestReconnectExhaustedReportsTheFailure(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{connect: func(int) error { return errRefused }}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	if b.TryReconnect(t.Context(), rec.report) {
@@ -291,7 +317,7 @@ func TestReconnectExhaustedWhenRedialLeavesNoConnection(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{live: func() bool { return false }}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	if b.TryReconnect(t.Context(), rec.report) {
@@ -318,7 +344,7 @@ func TestQuickFailuresEndTheRetrying(t *testing.T) {
 		// The connection dies at once, so no time passes before it fails.
 		return closeErr(websocket.StatusPolicyViolation, "Invalid API key")
 	}}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, clk)
 
 	b.ReceiveTaskHandler(t.Context(), rec.report)
@@ -351,7 +377,7 @@ func TestStableConnectionResetsTheQuickFailureStreak(t *testing.T) {
 		}
 		return closeErr(websocket.StatusAbnormalClosure, "Abnormal closure")
 	}}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, clk)
 
 	b.ReceiveTaskHandler(t.Context(), rec.report)
@@ -373,7 +399,7 @@ func TestDeliberateDisconnectPreventsReconnection(t *testing.T) {
 	h := &handler{receive: func(int) error {
 		return closeErr(websocket.StatusAbnormalClosure, "Abnormal closure")
 	}}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 	b.Disconnect()
 
@@ -398,7 +424,7 @@ func TestEndedSessionPreventsReconnection(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	}}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	b.ReceiveTaskHandler(ctx, rec.report)
@@ -433,7 +459,7 @@ func TestReconnectRefusesToRunTwiceAtOnce(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 	// A reconnect entered from within a reconnect is the concurrent attempt the
 	// guard exists to refuse.
@@ -457,7 +483,7 @@ func TestSendWithRetryReconnectsAndSendsAgain(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	var sends int
@@ -483,7 +509,7 @@ func TestSendWithRetryReturnsTheFailureWhenReconnectingFails(t *testing.T) {
 	t.Parallel()
 
 	h := &handler{connect: func(int) error { return errRefused }}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	want := errPipe
@@ -509,7 +535,7 @@ func TestSendWithRetryTreatsNoConnectionAsAFailedSend(t *testing.T) {
 		live:    func() bool { return live },
 		connect: func(int) error { live = true; return nil },
 	}
-	rec := &recorder{}
+	rec := newRecorder()
 	b := newTestBase(t, h, newClock())
 
 	var sends int
@@ -529,13 +555,15 @@ func TestSendWithRetryTreatsNoConnectionAsAFailedSend(t *testing.T) {
 }
 
 // A handshake the server refused ends the retrying at once: it will refuse the
-// next dial the same way, so redialing only delays the news.
+// next dial the same way, so redialing only delays the news. Reporting the first
+// rejection is what costs the service its usability, and the base abandons the
+// remaining attempts on that verdict rather than on a rule of its own.
 func TestPermanentRefusalStopsRetrying(t *testing.T) {
 	t.Parallel()
 
 	refused := &wsutil.HandshakeError{StatusCode: 401, Err: errRefused}
-	h := &handler{connect: func(int) error { return refused }}
-	rec := &recorder{}
+	rec := newRecorder()
+	h := &handler{connect: func(int) error { return refused }, usable: rec.Usable}
 	b := newTestBase(t, h, newClock())
 
 	if b.TryReconnect(t.Context(), rec.report) {
@@ -544,8 +572,76 @@ func TestPermanentRefusalStopsRetrying(t *testing.T) {
 	if _, connects, _ := h.counts(); connects != 1 {
 		t.Errorf("redialed %d times, want 1: a refusal is not worth repeating", connects)
 	}
-	if last := rec.last(); !strings.Contains(last, "giving up") || !strings.Contains(last, "401") {
-		t.Errorf("final report %q does not say it gave up, or on what", last)
+	if rec.Usable() {
+		t.Error("rejected credentials should have cost the service its usability")
+	}
+	if last := rec.last(); !strings.Contains(last, "401") {
+		t.Errorf("final report %q does not say what the refusal was", last)
+	}
+}
+
+// A service that cannot do its job is not reconnected at all: redialing cannot
+// fix whatever stopped it working.
+func TestAnUnusableServiceDoesNotReconnect(t *testing.T) {
+	t.Parallel()
+
+	rec := newRecorder()
+	rec.SetUsable(t.Context(), false)
+	h := &handler{usable: rec.Usable}
+	b := newTestBase(t, h, newClock())
+
+	if b.TryReconnect(t.Context(), rec.report) {
+		t.Fatal("reconnect claimed success for a service that cannot work")
+	}
+	if _, connects, _ := h.counts(); connects != 0 {
+		t.Errorf("redialed %d times, want 0", connects)
+	}
+}
+
+// Only the error that gives up says the service can no longer be given work: a
+// failed attempt on its own is still worth retrying.
+func TestOnlyGivingUpReportsTheServiceAsSpent(t *testing.T) {
+	t.Parallel()
+
+	failed := &wsutil.HandshakeError{StatusCode: 503, Err: errRefused}
+	rec := newRecorder()
+	h := &handler{connect: func(int) error { return failed }, usable: rec.Usable}
+	b := newTestBase(t, h, newClock())
+	b.maxRetries = 2
+
+	b.TryReconnect(t.Context(), rec.report)
+
+	rec.mu.Lock()
+	got := append([]bool(nil), rec.permanent...)
+	rec.mu.Unlock()
+	want := []bool{false, false, true}
+	if len(got) != len(want) {
+		t.Fatalf("reported %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reported %v, want %v", got, want)
+		}
+	}
+	if rec.Usable() {
+		t.Error("a service out of attempts should not be given more work")
+	}
+}
+
+// A transient refusal uses every attempt: the server may not refuse the next one.
+func TestTransientFailuresUseEveryAttempt(t *testing.T) {
+	t.Parallel()
+
+	failed := &wsutil.HandshakeError{StatusCode: 503, Err: errRefused}
+	rec := newRecorder()
+	h := &handler{connect: func(int) error { return failed }, usable: rec.Usable}
+	b := newTestBase(t, h, newClock())
+	b.maxRetries = 2
+
+	b.TryReconnect(t.Context(), rec.report)
+
+	if _, connects, _ := h.counts(); connects != 2 {
+		t.Errorf("redialed %d times, want 2", connects)
 	}
 }
 
