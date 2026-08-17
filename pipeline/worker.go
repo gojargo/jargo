@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"sync"
@@ -123,6 +124,11 @@ type WorkerConfig struct {
 	// worker opts out of canceling the rest. Set it false for a worker running
 	// beside others that should see itself out without taking them with it.
 	CancelRunnerOnIdleTimeout *bool
+	// ProcessorUnusablePolicy says what to do when a processor reports an error
+	// that leaves it unable to do its job, a service whose API key was rejected
+	// being the case in point. The zero value continues, leaving the decision to
+	// the EventPipelineError handlers.
+	ProcessorUnusablePolicy ProcessorUnusablePolicy
 	// ReachedDownstreamFilter selects which frames reaching the end of the
 	// pipeline are reported. Nil selects nothing, so a handler without a filter
 	// is never called; that is the default because a handler on every frame sits
@@ -177,6 +183,26 @@ type WorkerConfig struct {
 	// RTVIObserverParams configures the observer added alongside it.
 	RTVIObserverParams *rtvi.ObserverParams
 }
+
+// ProcessorUnusablePolicy is what a pipeline worker does when a processor can no
+// longer do its job.
+//
+// An unusable processor keeps failing for as long as the pipeline keeps using
+// it, so the pipeline has to decide whether it is still worth running.
+type ProcessorUnusablePolicy string
+
+// The policies a worker can take on an unusable processor.
+const (
+	// UnusableContinue reports the error and keeps running. The application
+	// decides what to do, by failing over to another provider for instance. It
+	// is the zero value, and so the default.
+	UnusableContinue ProcessorUnusablePolicy = ""
+	// UnusableEnd ends the pipeline gracefully, letting queued frames drain
+	// first.
+	UnusableEnd ProcessorUnusablePolicy = "end"
+	// UnusableCancel cancels the pipeline immediately, abandoning queued frames.
+	UnusableCancel ProcessorUnusablePolicy = "cancel"
+)
 
 // The events a pipeline worker raises, on top of the ones every worker raises.
 const (
@@ -262,6 +288,11 @@ type Worker struct {
 	mu        sync.Mutex
 	finished  bool
 	canceling bool
+	// unusable holds the ids of the processors the unusable policy has already
+	// been applied to. One that can no longer do its job goes on failing for as
+	// long as the pipeline uses it, so the policy answers the first error that
+	// says so and not the ones behind it.
+	unusable map[uint64]bool
 	// runCtx is the context the run is under, kept so a frame queued from
 	// outside the pipeline has one to enter with.
 	runCtx context.Context
@@ -649,6 +680,47 @@ func (t *Worker) Cancel(ctx context.Context, reason string) {
 	t.cancelWithReason(reason)
 }
 
+// unusableSource returns the processor an error names when that processor can no
+// longer do its job, and nil otherwise. It is how the two kinds of error are
+// told apart: the verdict travels with the error rather than in a flag on it.
+func unusableSource(ef *frames.ErrorFrame) processor.Processor {
+	p, ok := ef.Source.(processor.Processor)
+	if !ok || p.Usable() {
+		return nil
+	}
+	return p
+}
+
+// handleUnusableProcessor applies the unusable-processor policy, once per
+// processor.
+//
+// A processor that can no longer do its job keeps failing for as long as the
+// pipeline keeps using it, so the policy is applied to the first error that says
+// so and not to the ones that follow.
+func (t *Worker) handleUnusableProcessor(ctx context.Context, p processor.Processor) {
+	t.mu.Lock()
+	if t.unusable == nil {
+		t.unusable = make(map[uint64]bool)
+	}
+	if t.unusable[p.ID()] {
+		t.mu.Unlock()
+		return
+	}
+	t.unusable[p.ID()] = true
+	t.mu.Unlock()
+
+	slog.ErrorContext(ctx, "processor can no longer do its job",
+		"worker", t.Name(), "processor", p.Name())
+
+	switch t.cfg.ProcessorUnusablePolicy {
+	case UnusableEnd:
+		t.StopWhenDone()
+	case UnusableCancel:
+		t.cancelWithReason(fmt.Sprintf("%s can no longer do its job", p.Name()))
+	case UnusableContinue:
+	}
+}
+
 // cancelWithReason queues a CancelFrame carrying reason, at most once.
 func (t *Worker) cancelWithReason(reason string) {
 	t.mu.Lock()
@@ -998,10 +1070,13 @@ func (t *Worker) sourcePush(ctx context.Context, f frames.Frame, _ processor.Dir
 		// type is caught alongside a plain error frame carrying the flag.
 		ef := fr.ErrorInfo()
 		t.Call(ctx, EventPipelineError, t, ef)
-		if ef.Fatal {
+		switch {
+		case ef.Fatal:
 			slog.Error("fatal error reached the start of the pipeline, canceling", "err", ef.Error)
 			t.cancelWithReason("")
-		} else {
+		case unusableSource(ef) != nil:
+			t.handleUnusableProcessor(ctx, unusableSource(ef))
+		default:
 			slog.Warn("error reached the start of the pipeline", "err", ef.Error)
 		}
 	}
