@@ -359,6 +359,14 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	return s
 }
 
+// STTService marks this processor as a speech-to-text service.
+//
+// It says what a type assertion cannot: that the processor transcribes speech
+// rather than merely handling transcripts. An observer outside this package
+// asserts for it to tell a transcript a transcriber produced from one that
+// arrived some other way.
+func (s *StreamService) STTService() {}
+
 // traceSettings renders the provider's settings for a transcription span. A
 // provider that keeps no settings of its own contributes none.
 func (s *StreamService) traceSettings() map[string]any { return s.set.traceSettings() }

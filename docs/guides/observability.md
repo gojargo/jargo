@@ -15,8 +15,8 @@ Three layers, each answering a different question:
 
 ## Observers
 
-Observers watch frames at the pipeline edges without modifying them. They are the
-cheapest way to get conversation-level signal.
+Observers watch frames without modifying them. They are the cheapest way to get
+conversation-level signal.
 
 ```go
 task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
@@ -38,37 +38,102 @@ task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 | Observer | Measures |
 |---|---|
 | `NewTurnTracking` | Turn count, duration, and whether each was interrupted. |
-| `NewUserBotLatency` | User stopped speaking → bot started. **The number users feel.** |
-| `NewStartupTiming` | Pipeline start → first bot audio. Cold-start latency. |
-| `NewLogger` | Every frame, for debugging frame flow. |
+| `NewUserBotLatency` | User stopped speaking → bot started. **The number users feel**, with a per-service breakdown of where it went. |
+| `NewStartupTiming` | What each processor cost to start, and how long the transport took to connect. |
+| `NewDebugLog` | Frames and their contents, for working out what a pipeline is doing. |
+| `NewLLMLog` | What a model was asked, what it generated, and the tools it called. |
+| `NewTranscriptionLog` | What a transcriber heard, interim results included. |
+| `NewMetricsLog` | Each measurement the pipeline reports, as it is reported. |
 
 `TurnTracking` has a `TurnEndTimeout` (default 2.5s) so a brief gap between bot
 utterances (an HTTP TTS boundary, a tool call) does not split one turn into two.
 
-`NewLogger` takes a `Filter`, which is what makes it usable on a real pipeline:
+### Where the response latency went
+
+`UserBotLatency` reports more than the headline figure. Alongside every latency it
+reports a `LatencyBreakdown`, and it reports separately on the first thing the bot
+says after a client connects, which is the greeting rather than a reply:
 
 ```go
-observers.NewLogger(observers.LoggerConfig{
-    Filter: func(f frames.Frame) bool {
-        _, isAudio := f.(*frames.OutputAudioRawFrame)
-        return !isAudio      // everything except the audio firehose
+observers.NewUserBotLatency(observers.LatencyConfig{
+    OnFirstBotSpeechLatency: func(d time.Duration) {
+        slog.Info("greeting latency", "d", d)
+    },
+    OnBreakdown: func(b observers.LatencyBreakdown) {
+        for _, line := range b.ChronologicalEvents() {
+            slog.Info("latency", "event", line)
+        }
     },
 })
 ```
 
-Unfiltered, it logs every audio frame: dozens per second per direction.
+The breakdown accounts for the user turn (the silence window, the transcriber
+finalizing, any end-of-turn analyzer), each service's time to first byte, the
+sentence aggregation before synthesis, and any tool calls the reply made. It is
+built from the `MetricsFrame`s the services emit, so it is empty of measurements
+unless `EnableMetrics` is set below.
 
-### Observers see only the edges
+### What startup cost
 
-Both `Observers` and the `EventFrameReachedDownstream` /
-`EventFrameReachedUpstream` events fire at the pipeline **source and sink**, not
-between every pair of processors. To observe mid-chain, insert a processor.
+A processor does its startup work while handling the `StartFrame`: connecting,
+authenticating, loading a model. `StartupTiming` times that per processor and
+reports once the pipeline is up.
 
-One consequence: a turn-taking signal is **broadcast** as two frames, one per
-direction. Observers count only the downstream half, using `BroadcastSiblingID` to
-recognize the pair. Otherwise every turn would be counted twice. If you write an
-observer that reacts to `UserStartedSpeakingFrame`,
+```go
+observers.NewStartupTiming(observers.StartupTimingConfig{
+    OnStartupTimingReport: func(r observers.StartupTimingReport) {
+        for _, t := range r.ProcessorTimings {
+            slog.Info("started", "processor", t.ProcessorName, "took", t.Duration)
+        }
+    },
+})
+```
+
+Pass `Track` to narrow the report to the processors worth measuring; by default
+it covers everything but the pipeline plumbing.
+
+### Debugging the frame flow
+
+`NewDebugLog` renders the fields of every frame it is given. Unfiltered that is
+dozens of audio frames a second per direction, so narrow it:
+
+```go
+observers.NewDebugLog(observers.DebugLogConfig{
+    Frames: []observers.DebugFrameFilter{
+        // Every LLM token, wherever it travels.
+        {Frame: &frames.LLMTextFrame{}},
+        // User speech, but only where it reaches a streaming transcriber.
+        {
+            Frame:    &frames.UserStartedSpeakingFrame{},
+            Match:    func(p processor.Processor) bool { _, ok := p.(*stt.StreamService); return ok },
+            Endpoint: observers.DestinationEndpoint,
+        },
+    },
+})
+```
+
+The three specialized loggers need no filter: each already reports one part of the
+conversation. `LLMLog` and `TranscriptionLog` report only what actually passed
+through a model or a transcriber, so the same frame types travelling elsewhere are
+left alone.
+
+### Observers see every handover
+
+An observer is reported to on every hand-off between two processors, not only at
+the ends of the pipeline, so it can tell where each frame came from. That is what
+lets it distinguish a frame that has been through the output transport, and so
+carries real playback timing, from the same frame earlier in the chain. The
+`EventFrameReachedDownstream` and `EventFrameReachedUpstream` events are the
+narrower thing: those fire only at the pipeline source and sink.
+
+One consequence of watching everything: a turn-taking signal is **broadcast** as
+two frames, one per direction. Observers count only the downstream half, using
+`BroadcastSiblingID` to recognize the pair. Otherwise every turn would be counted
+twice. If you write an observer that reacts to `UserStartedSpeakingFrame`,
 `UserStoppedSpeakingFrame` or `InterruptionFrame`, handle that pairing.
+
+Observers run off the frame path, each on a goroutine of its own, so a slow one
+falls behind rather than holding up the conversation.
 
 ## Metrics
 

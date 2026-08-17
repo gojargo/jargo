@@ -39,6 +39,18 @@ func (s *source) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction
 	return nil
 }
 
+// IsSource reports whether p is a pipeline source: the endpoint a pipeline
+// wraps the head of its chain in so frames can be fed in and taken out at the
+// edges.
+//
+// It is plumbing rather than a step of the pipeline's work, which is what an
+// observer measuring what each processor cost uses to leave it out of the
+// measurement.
+func IsSource(p Processor) bool {
+	_, ok := p.(*source)
+	return ok
+}
+
 // sink is the exit processor of a pipeline. It forwards upstream frames to the
 // previous processor and hands downstream frames to an external handler.
 type sink struct {

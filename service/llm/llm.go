@@ -417,6 +417,14 @@ func New(name string, gen Generator, opts ...Option) *Base {
 	return b
 }
 
+// LLMService marks this processor as a language-model service.
+//
+// It says what a type assertion cannot: that the processor is a model rather
+// than something that merely handles the same frames. An observer outside this
+// package asserts for it to tell a frame the model produced from the same kind
+// of frame reaching it from an aggregator or a conversation flow.
+func (b *Base) LLMService() {}
+
 // OnFunctionCallsStarted registers a callback run when the model requests tool
 // calls, with the calls of that response. It runs off the frame path, so what it
 // does cannot hold up the pipeline.

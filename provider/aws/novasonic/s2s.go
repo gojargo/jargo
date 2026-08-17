@@ -77,6 +77,11 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	}
 }
 
+// LLMService marks this processor as a language-model service, which a realtime
+// service is: it generates the reply. An observer asserts for it to tell what
+// the model produced from the same kind of frame reaching it from elsewhere.
+func (s *Service) LLMService() {}
+
 // Cleanup tears down the session and stops the read loop.
 func (s *Service) Cleanup(ctx context.Context) error {
 	s.disconnect()

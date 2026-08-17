@@ -47,7 +47,7 @@ type TurnTrace struct {
 
 // NewTurnTrace builds a TurnTrace observer.
 func NewTurnTrace(cfg TurnTraceConfig) *TurnTrace {
-	return &TurnTrace{cfg: cfg, dd: newDeduper()}
+	return &TurnTrace{cfg: cfg, dd: newDeduper(0)}
 }
 
 // OnPushFrame implements processor.Observer. The conversation span opens on the

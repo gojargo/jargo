@@ -14,6 +14,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Four log observers.** `observers.NewDebugLog` renders every exported field
+  of the frames going by, with filters that narrow it to a frame type and to one
+  end of a handover, since an unfiltered pipeline pushes dozens of audio frames a
+  second. `NewLLMLog`, `NewTranscriptionLog` and `NewMetricsLog` each report one
+  part of the conversation and need no filter: what a model was asked and
+  generated, what a transcriber heard, and each measurement as it is reported.
+  The first two report only what actually passed through a model or a
+  transcriber, so the same frame types travelling elsewhere are left alone.
+  `observers.NewLogger` is gone; `NewDebugLog` replaces it.
+
+- **The response latency now says where it went.** `observers.UserBotLatency`
+  reports a `LatencyBreakdown` alongside every latency it measures: the user turn
+  (the detector's silence window, the transcriber finalizing, any end-of-turn
+  analyzer), each service's time to first byte, the sentence aggregation before
+  synthesis, and the tool calls the reply made. `ChronologicalEvents` renders it
+  as a timeline. It also reports `OnFirstBotSpeechLatency`, how long after a
+  client connected the bot first spoke, which is the greeting rather than a
+  reply, and which is abandoned rather than reported when the user speaks first.
+  The latency itself is now measured from the moment the speech ended rather than
+  from the detector confirming it.
+
 - **Three processors that had no counterpart.** `aggregators.Sentence` gathers
   streamed text into whole sentences for a consumer that needs them coherent;
   `aggregators.FullResponse` gathers a whole LLM reply and reports it through
@@ -137,6 +158,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the result.
 
 ### Changed
+
+- **`observers.StartupTiming` measures what starting the pipeline cost.** It
+  timed the pipeline start to the first bot audio, which conflates the cold start
+  with the whole first turn. It now times each processor's own start, the gap
+  between it being handed the `StartFrame` and passing it on, which is where a
+  service connects, authenticates and loads its models, and reports the lot once
+  the pipeline is up. `OnTransportTimingReport` reports the other half: how long
+  the bot took to join the session, and how long until the first client did.
+  `StartupConfig` is now `StartupTimingConfig`.
+
+- **A turn is timed on the pipeline clock.** `observers.TurnTracking` measured
+  turns against the wall clock at the moment it was told about a frame. It now
+  measures between the frames themselves, so a turn ended by the turn-end timeout
+  is measured to the moment the bot fell silent rather than to the moment the
+  timer fired: the wait exists to tell a pause apart from an ending, and it is
+  not part of the turn.
 
 - **`llm.WithAsyncToolCancellation` is deprecated.** It offered one built-in tool
   that could stop any pending call, so a model that wrongly decided a result was

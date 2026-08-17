@@ -77,6 +77,10 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 // arrived in the meantime. Zero restores DefaultTTFBTimeout.
 func (s *SegmentService) SetTTFBTimeout(d time.Duration) { s.ttfb.setTimeout(d) }
 
+// STTService marks this processor as a speech-to-text service. See
+// StreamService.STTService.
+func (s *SegmentService) STTService() {}
+
 // modelName is the model in force, which labels what this service reports.
 func (s *SegmentService) modelName() string {
 	s.mu.Lock()

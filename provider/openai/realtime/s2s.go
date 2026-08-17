@@ -85,6 +85,11 @@ func New(cfg Config) *Service {
 	}, cfg)
 }
 
+// LLMService marks this processor as a language-model service, which a realtime
+// service is: it generates the reply. An observer asserts for it to tell what
+// the model produced from the same kind of frame reaching it from elsewhere.
+func (s *Service) LLMService() {}
+
 // NewWithConnector builds a Realtime service that dials through conn. It is the
 // base for deployments that do not use OpenAI's own endpoint or bearer auth;
 // name is the processor label.

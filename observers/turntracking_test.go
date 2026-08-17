@@ -1,9 +1,6 @@
 package observers_test
 
 import (
-	"bytes"
-	"log/slog"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -187,43 +184,68 @@ func TestTurnTrackingIgnoresShutdownWithNoOpenTurn(t *testing.T) {
 	}
 }
 
-// TestLoggerLogsFramesItIsGiven covers the debugging observer: it reports every
-// frame that reaches it, at the level it was configured with.
-func TestLoggerLogsFramesItIsGiven(t *testing.T) {
-	var buf bytes.Buffer
-	o := observers.NewLogger(observers.LoggerConfig{
-		Logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Level:  slog.LevelDebug,
-	})
+// TestTurnTrackingStartsWithThePipelineAndEndsOnABargeIn covers the two ends of
+// the common case: the first turn opens with the pipeline rather than waiting
+// for the user, and a user talking over the bot ends that turn as interrupted
+// and opens the next.
+func TestTurnTrackingStartsWithThePipelineAndEndsOnABargeIn(t *testing.T) {
+	r := newTurnRecorder()
+	o := observers.NewTurnTracking(r.config(turnEndTimeoutTest))
 
+	push(o, frames.NewStartFrame(), processor.Downstream)
+	push(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
 	push(o, frames.NewUserStartedSpeakingFrame(), processor.Downstream)
 
-	if got := buf.String(); !strings.Contains(got, "UserStartedSpeakingFrame") {
-		t.Errorf("logged %q, want it to name the frame", got)
+	started, ended := r.snapshot()
+	if len(started) != 2 || started[0] != 1 || started[1] != 2 {
+		t.Fatalf("started turns = %v, want [1 2]", started)
+	}
+	if len(ended) != 1 || ended[0].turn != 1 || !ended[0].interrupted {
+		t.Fatalf("ended = %+v, want turn 1 interrupted", ended)
 	}
 }
 
-// TestLoggerRespectsItsFilter covers the reason the filter exists: a pipeline
-// pushes far too many frames to log them all, so a caller narrows it to the ones
-// being investigated.
-func TestLoggerRespectsItsFilter(t *testing.T) {
-	var buf bytes.Buffer
-	o := observers.NewLogger(observers.LoggerConfig{
-		Logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Level:  slog.LevelDebug,
-		Filter: func(f frames.Frame) bool {
-			_, want := f.(*frames.BotStartedSpeakingFrame)
-			return want
-		},
+// TestTurnTrackingTimesTurnsOnThePipelineClock covers what a turn's duration
+// means: the span between the frames that opened and closed it, taken from the
+// pipeline clock rather than from when the observer happened to be told.
+func TestTurnTrackingTimesTurnsOnThePipelineClock(t *testing.T) {
+	var got time.Duration
+	o := observers.NewTurnTracking(observers.TurnTrackingConfig{
+		TurnEndTimeout: turnEndTimeoutTest,
+		OnTurnEnded:    func(_ int, d time.Duration, _ bool) { got = d },
 	})
 
-	push(o, frames.NewUserStartedSpeakingFrame(), processor.Downstream)
-	if buf.Len() != 0 {
-		t.Errorf("logged a frame the filter rejected: %q", buf.String())
-	}
+	pushAt(o, frames.NewStartFrame(), processor.Downstream, time.Second)
+	pushAt(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream, 2*time.Second)
+	pushAt(o, frames.NewUserStartedSpeakingFrame(), processor.Downstream, 4*time.Second)
 
-	push(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
-	if got := buf.String(); !strings.Contains(got, "BotStartedSpeakingFrame") {
-		t.Errorf("logged %q, want the frame the filter accepted", got)
+	if got != 3*time.Second {
+		t.Errorf("turn duration = %s, want 3s: the turn ran from 1s to 4s", got)
+	}
+}
+
+// TestTurnTrackingEndsATimedOutTurnWhenTheBotFellSilent covers the turn-end
+// timeout's effect on the duration. The wait exists to tell a pause between
+// utterances apart from the end of the reply; it is not part of the turn, so a
+// turn that ends on the timeout is measured to the moment the bot fell silent.
+func TestTurnTrackingEndsATimedOutTurnWhenTheBotFellSilent(t *testing.T) {
+	r := newTurnRecorder()
+	var got time.Duration
+	cfg := r.config(turnEndTimeoutTest)
+	ended := cfg.OnTurnEnded
+	cfg.OnTurnEnded = func(turn int, d time.Duration, interrupted bool) {
+		got = d
+		ended(turn, d, interrupted)
+	}
+	o := observers.NewTurnTracking(cfg)
+
+	pushAt(o, frames.NewStartFrame(), processor.Downstream, time.Second)
+	pushAt(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream, 2*time.Second)
+	pushAt(o, frames.NewBotStoppedSpeakingFrame(), processor.Upstream, 3*time.Second)
+
+	r.waitForEnd(t)
+
+	if got != 2*time.Second {
+		t.Errorf("turn duration = %s, want 2s: the wait for more speech is not part of the turn", got)
 	}
 }
