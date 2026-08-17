@@ -32,7 +32,11 @@ func linkAndStart(t *testing.T, p processor.Processor) (up, down *capture) {
 	if err := p.QueueFrame(ctx, frames.NewStartFrame(), processor.Downstream); err != nil {
 		t.Fatal(err)
 	}
-	drain(down)
+	// Wait for the StartFrame to reach the far side rather than draining
+	// whatever has arrived by now. It travels on the processor's own goroutine,
+	// so a drain here routinely runs before it lands, and the frame then
+	// surfaces in the middle of whichever test follows.
+	mustReceive[*frames.StartFrame](t, down.got, "StartFrame")
 	return up, down
 }
 
