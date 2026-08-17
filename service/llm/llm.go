@@ -31,6 +31,7 @@ import (
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
+	errs "github.com/gojargo/jargo/utils/errors"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -257,11 +258,12 @@ type functionCall struct {
 	groupID    string
 
 	cancel context.CancelFunc
-	// canceled stops the result callback from reporting after the call was
-	// canceled. A goroutine cannot be killed the way a task can, so a handler
-	// that ignores cancellation and reports anyway is silenced here: the
-	// conversation already records the call as canceled.
-	canceled bool
+	// settled reports that the call is over: it has reported a final result,
+	// timed out, or been canceled. It stops the result callback from reporting
+	// again. A goroutine cannot be killed the way a task can, so a handler that
+	// outlives its call and reports anyway is silenced here rather than
+	// broadcasting a result the conversation has already answered for.
+	settled bool
 	// stopTimeout disarms the bound on how long the call may take. Reporting
 	// anything at all disarms it: a tool that has spoken is not stuck.
 	stopTimeout func()
@@ -1253,7 +1255,7 @@ func (b *Base) runFunctionCall(call *functionCall) {
 	}
 
 	report := b.resultCallback(call)
-	stopTimeout := b.startCallTimeout(ctx, call, report)
+	stopTimeout := b.startCallTimeout(ctx, call)
 	defer stopTimeout()
 	b.callsMu.Lock()
 	call.stopTimeout = stopTimeout
@@ -1268,24 +1270,32 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		Result:       report,
 	}
 	if err := call.item.handler(ctx, params); err != nil {
-		// The conversation is told nothing. A handler that failed has no result to
-		// report, and inventing one would put words in the tool's mouth; the call
-		// stays in progress until it is canceled.
-		b.PushError(ctx, fmt.Sprintf("error executing function call [%s]: %v", call.name, err), err, false)
+		// The failure came from the application's own handler, so it says nothing
+		// about whether this service can go on doing its job.
+		b.PushError(ctx, fmt.Sprintf("error executing function call [%s]: %v", call.name, err), err, false,
+			processor.WithErrorCategory(errs.Application))
+		// A handler that failed will never report, so the call is settled on its
+		// behalf: the conversation is left waiting on a result that can never
+		// arrive otherwise. What it is told names the function and nothing else.
+		// The error itself reaches the user through the model, and it carries
+		// whatever the handler put in it.
+		_ = report(ctx, fmt.Sprintf(functionCallErrorTemplate, call.name), nil)
 	}
 }
 
+// functionCallErrorTemplate is returned to the model as the tool result when a
+// handler fails. It names the function as the thing that failed, and the failure
+// itself is deliberately left out.
+const functionCallErrorTemplate = "The function `%s` failed and returned no result."
+
 // startCallTimeout arms the bound on how long a call may take, returning the
-// function that disarms it. A call that overruns reports no result of its own,
-// which records it as completed and leaves generation to whatever comes next
-// rather than answering on the tool's behalf. The handler is not canceled: it
-// may still be doing something worth finishing, and the result callback ignores
-// it from here.
+// function that disarms it. A call that overruns is canceled: the call is
+// settled first, so a result racing in while the handler unwinds is rejected
+// rather than broadcast, and the handler's context is then canceled so a
+// cancel-aware handler can run its cleanup.
 //
 // It returns a no-op when no bound applies, so a call with none costs nothing.
-func (b *Base) startCallTimeout(
-	ctx context.Context, call *functionCall, report FunctionCallResultCallback,
-) func() {
+func (b *Base) startCallTimeout(ctx context.Context, call *functionCall) func() {
 	timeout := call.item.timeout
 	if timeout == 0 {
 		timeout = b.callTimeout
@@ -1296,9 +1306,56 @@ func (b *Base) startCallTimeout(
 	timer := time.AfterFunc(timeout, func() {
 		slog.WarnContext(ctx, "function call timed out", "service", b.Name(),
 			"function", call.name, "tool_call_id", call.toolCallID, "timeout", timeout)
-		_ = report(ctx, "", nil)
+		b.timeoutFunctionCall(ctx, call)
 	})
 	return func() { timer.Stop() }
+}
+
+// timeoutFunctionCall cancels a call that ran past its deadline.
+//
+// A deadline is the one cancellation nothing else follows up on, so it asks for
+// inference: without it the model never learns the call is over and the user is
+// left waiting on an answer that never comes. An interruption does not ask,
+// because the user is talking; a cancellation the model requested does not
+// either, because the result of the tool that requested it runs inference
+// already.
+func (b *Base) timeoutFunctionCall(ctx context.Context, call *functionCall) {
+	b.callsMu.Lock()
+	if call.settled {
+		// It reported while the deadline was being processed, so there is
+		// nothing left to settle.
+		b.callsMu.Unlock()
+		return
+	}
+	// Settled before canceling, so a handler that notices its context is done
+	// and reports while unwinding cannot reopen a call the pipeline has stopped
+	// tracking.
+	call.settled = true
+	if b.calls[call.toolCallID] == call {
+		delete(b.calls, call.toolCallID)
+	}
+	b.callsMu.Unlock()
+
+	call.cancel()
+	b.broadcastFunctionCallCancelled(ctx, call, true)
+
+	b.eventsMu.RLock()
+	h := b.onCanceled
+	b.eventsMu.RUnlock()
+	b.notify(ctx, h, []frames.ToolCall{{ID: call.toolCallID, Name: call.name, Args: call.args}})
+}
+
+// broadcastFunctionCallCancelled settles a canceled call downstream, asking for
+// inference when runLLM says the cancellation is the last thing that will happen
+// to the call.
+func (b *Base) broadcastFunctionCallCancelled(
+	ctx context.Context, call *functionCall, runLLM bool,
+) {
+	_ = b.Broadcast(ctx, func() frames.Frame {
+		f := frames.NewFunctionCallCancelFrame(call.toolCallID, call.name)
+		f.RunLLM = runLLM
+		return f
+	})
 }
 
 // resultCallback builds the callback the handler reports through. It is bound to
@@ -1306,20 +1363,26 @@ func (b *Base) startCallTimeout(
 // produced it however much has happened since.
 func (b *Base) resultCallback(call *functionCall) FunctionCallResultCallback {
 	return func(ctx context.Context, result string, props *frames.FunctionCallResultProperties) error {
-		b.callsMu.Lock()
-		canceled := call.canceled
-		b.callsMu.Unlock()
-		if canceled {
-			return nil
-		}
 		if !props.Final() && call.item.cancelOnInterruption {
 			slog.WarnContext(ctx, "intermediate result from a tool that is not asynchronous",
 				"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
 			return nil
 		}
+		// A handler can outlive its call and still hold this callback, so a late
+		// result is rejected here rather than broadcast for the aggregator to
+		// drop.
+		b.callsMu.Lock()
+		if call.settled {
+			b.callsMu.Unlock()
+			slog.WarnContext(ctx, "ignoring the result of a call that has already finished",
+				"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
+			return nil
+		}
+		if props.Final() {
+			call.settled = true
+		}
 		// A tool that has spoken is not stuck, so reporting anything at all,
 		// intermediate results included, disarms the bound on how long it may take.
-		b.callsMu.Lock()
 		stop := call.stopTimeout
 		b.callsMu.Unlock()
 		if stop != nil {
@@ -1344,7 +1407,10 @@ func (b *Base) cancelFunctionCalls(ctx context.Context) {
 		if !call.item.cancelOnInterruption {
 			continue
 		}
-		call.canceled = true
+		// Settled before canceling, so a handler that catches its cancellation
+		// and reports a result while unwinding cannot reopen a call the pipeline
+		// has stopped tracking.
+		call.settled = true
 		delete(b.calls, id)
 		canceled = append(canceled, call)
 	}
@@ -1355,9 +1421,8 @@ func (b *Base) cancelFunctionCalls(ctx context.Context) {
 		slog.DebugContext(ctx, "canceling function call", "service", b.Name(),
 			"function", call.name, "tool_call_id", call.toolCallID)
 		call.cancel()
-		_ = b.Broadcast(ctx, func() frames.Frame {
-			return frames.NewFunctionCallCancelFrame(call.toolCallID, call.name)
-		})
+		// The user is talking, so a cancelled call must not answer over them.
+		b.broadcastFunctionCallCancelled(ctx, call, false)
 		dropped = append(dropped, frames.ToolCall{ID: call.toolCallID, Name: call.name, Args: call.args})
 	}
 

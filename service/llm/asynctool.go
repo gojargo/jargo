@@ -236,7 +236,10 @@ func (b *Base) cancelFunctionCallByID(ctx context.Context, toolCallID string) bo
 	b.callsMu.Lock()
 	call, running := b.calls[toolCallID]
 	if running {
-		call.canceled = true
+		// Settled before canceling, so a handler that catches its cancellation
+		// and reports a result while unwinding cannot reopen a call the pipeline
+		// has stopped tracking.
+		call.settled = true
 		delete(b.calls, toolCallID)
 	}
 	b.callsMu.Unlock()
@@ -249,9 +252,9 @@ func (b *Base) cancelFunctionCallByID(ctx context.Context, toolCallID string) bo
 	slog.DebugContext(ctx, "canceling async function call by model request",
 		"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
 	call.cancel()
-	_ = b.Broadcast(ctx, func() frames.Frame {
-		return frames.NewFunctionCallCancelFrame(call.toolCallID, call.name)
-	})
+	// The result of the tool that asked for this cancellation runs inference
+	// already, so asking again here would answer twice.
+	b.broadcastFunctionCallCancelled(ctx, call, false)
 
 	b.eventsMu.RLock()
 	h := b.onCanceled

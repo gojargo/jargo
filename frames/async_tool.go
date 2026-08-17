@@ -65,7 +65,21 @@ const (
 	asyncToolFinalDescription = "This is the final result for the asynchronous task associated with " +
 		"this tool_call_id. The task has completed. No further results will arrive for " +
 		"this tool_call_id."
+
+	asyncToolCancelledDescription = "The asynchronous task associated with this tool_call_id was cancelled " +
+		"before it produced a result, either because it ran past its deadline or " +
+		"because cancellation was requested. No further results will arrive for " +
+		"this tool_call_id. If the user is still waiting on it, tell them it did " +
+		"not complete rather than leaving it unanswered."
 )
+
+// asyncToolCancelledResult is the result a cancelled call settles with. It names
+// the tool call as the thing that was cancelled: a bare "CANCELLED" says nothing
+// about whatever the tool looks up, and a model relaying it will tell the user
+// their flight, order or booking was cancelled.
+//
+//nolint:misspell // the literal written to the conversation
+const asyncToolCancelledResult = "CANCELLED: this tool call was cancelled before it returned a result"
 
 // AsyncToolMessage is the structured contents of an async-tool message.
 type AsyncToolMessage struct {
@@ -168,6 +182,23 @@ func NewAsyncToolFinalMessage(toolCallID, result string) Message {
 		Status:      AsyncToolStatusFinished,
 		Description: asyncToolFinalDescription,
 		Result:      result,
+		HasResult:   true,
+	}.message()
+}
+
+// NewAsyncToolCancelledMessage builds the message that settles an asynchronous
+// call cancelled before it returned a result, whether by its own deadline or at
+// the model's request. It settles the tool call the same way a final result
+// does, carrying a cancellation notice in place of one.
+//
+//nolint:misspell // the protocol's own spelling
+func NewAsyncToolCancelledMessage(toolCallID string) Message {
+	return AsyncToolMessage{
+		Kind:        AsyncToolFinal,
+		ToolCallID:  toolCallID,
+		Status:      AsyncToolStatusFinished,
+		Description: asyncToolCancelledDescription,
+		Result:      asyncToolCancelledResult,
 		HasResult:   true,
 	}.message()
 }

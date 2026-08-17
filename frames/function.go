@@ -148,6 +148,12 @@ type FunctionCallCancelFrame struct {
 	ToolCallID string
 	// ToolName is the tool's name.
 	ToolName string
+	// RunLLM asks for inference once the cancellation is settled in the
+	// conversation. Only a call canceled by its own deadline sets it: an
+	// interruption must not trigger inference, and a cancellation the model
+	// asked for already runs inference through the result of the tool that
+	// requested it.
+	RunLLM bool
 }
 
 // NewFunctionCallCancelFrame builds a FunctionCallCancelFrame.

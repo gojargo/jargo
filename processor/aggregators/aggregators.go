@@ -674,7 +674,7 @@ func (a *AssistantAggregator) handleFunctionCallFrame(ctx context.Context, f fra
 	case *frames.FunctionCallResultFrame:
 		return a.handleFunctionCallResult(ctx, fr)
 	case *frames.FunctionCallCancelFrame:
-		a.handleFunctionCallCancel(fr)
+		return a.handleFunctionCallCancel(ctx, fr)
 	}
 	return nil
 }
@@ -835,19 +835,52 @@ func (a *AssistantAggregator) recordIntermediateResult(
 	a.context.AddMessage(frames.NewAsyncToolIntermediateMessage(fr.ToolCallID, fr.Result))
 }
 
-// handleFunctionCallCancel marks a canceled call's placeholder result canceled,
-// so the tool-use block it answers stays answered. A call the model does not wait
-// on is left alone: it survives the interruption that canceled the others.
-func (a *AssistantAggregator) handleFunctionCallCancel(fr *frames.FunctionCallCancelFrame) {
+// handleFunctionCallCancel settles a canceled call in the conversation, so the
+// tool-use block it answers stays answered rather than being left in progress
+// for the rest of the session.
+//
+// An ordinary call's placeholder is marked canceled where it sits. A call the
+// model does not wait on is settled with an async-tool message instead, the same
+// channel its results would have arrived on.
+//
+// The frame says whether inference follows. Only a call canceled by its own
+// deadline asks for it, and only then is there nothing else to run it: an
+// interruption must not answer over the user, and a cancellation the model asked
+// for is answered by the result of the tool that asked.
+func (a *AssistantAggregator) handleFunctionCallCancel(
+	ctx context.Context, fr *frames.FunctionCallCancelFrame,
+) error {
 	a.mu.Lock()
 	started, running := a.inProgress[fr.ToolCallID]
-	if !running || started == nil || !started.CancelOnInterruption {
+	if !running {
 		a.mu.Unlock()
-		return
+		return nil
 	}
 	delete(a.inProgress, fr.ToolCallID)
+	sync := started == nil || started.CancelOnInterruption
+	groupID := ""
+	if started != nil {
+		groupID = started.GroupID
+	}
+	speaking := a.userSpeaking
 	a.mu.Unlock()
-	a.context.UpdateToolResult(fr.ToolCallID, toolResultCancelled)
+
+	if sync {
+		a.context.UpdateToolResult(fr.ToolCallID, toolResultCancelled)
+	} else {
+		a.context.AddMessage(frames.NewAsyncToolCancelledMessage(fr.ToolCallID))
+	}
+
+	if !fr.RunLLM || speaking {
+		return nil
+	}
+	// Hold off while siblings from the same response are still running:
+	// whichever of them settles last runs inference, with this cancellation
+	// already in the conversation.
+	if groupID != "" && a.groupStillRunning(groupID, fr.ToolCallID) {
+		return nil
+	}
+	return a.maybePushContextAfterFunctionResult(ctx)
 }
 
 // maybePushContextAfterFunctionResult re-runs generation on the updated context,

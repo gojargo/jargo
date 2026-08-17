@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -375,6 +376,20 @@ func (cancelOnInterruptionGen) GenerateWithTools(_ context.Context, _ *frames.LL
 	return sink.Tool(frames.ToolCall{ID: "call_1", Name: "get_weather", Args: json.RawMessage(`{}`)})
 }
 
+// onceToolGen requests the tool on its first run and answers in words after
+// that, the way a model does once it has the result. A generator that asks for
+// the same call every time would cascade for as long as anything re-runs it.
+type onceToolGen struct{ runs atomic.Int64 }
+
+func (onceToolGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
+
+func (g *onceToolGen) GenerateWithTools(_ context.Context, _ *frames.LLMContext, sink llm.Sink) error {
+	if g.runs.Add(1) > 1 {
+		return sink.Text("it did not finish")
+	}
+	return sink.Tool(frames.ToolCall{ID: "call_1", Name: "get_weather", Args: json.RawMessage(`{}`)})
+}
+
 // toolConvo builds a context advertising one tool, with a user turn to answer.
 func toolConvo(name string) *frames.LLMContext {
 	convo := frames.NewLLMContext("be brief")
@@ -568,24 +583,41 @@ func (p *probe) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.
 	return p.PushFrame(ctx, f, dir)
 }
 
-// TestFunctionCallTimeout checks a call that overruns its bound is given up on:
-// it reports no result of its own, which records it as completed rather than
-// answering on the tool's behalf, and generation is not re-run on it.
+// TestFunctionCallTimeout checks a call that overruns its bound is cancelled
+// rather than abandoned: the handler is cancelled so it can run its cleanup, the
+// conversation records the call as cancelled, and the cancellation asks for
+// inference so the model can say the call did not complete.
 func TestFunctionCallTimeout(t *testing.T) {
-	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{},
-		llm.WithFunctionCallTimeout(50*time.Millisecond))
+	gen := &onceToolGen{}
+	svc := llm.New("FakeToolLLM", gen, llm.WithFunctionCallTimeout(50*time.Millisecond))
 
 	release := make(chan struct{})
+	rolledBack := make(chan struct{}, 1)
 	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
-		<-release
-		return p.Result(ctx, "far too late", nil)
+		select {
+		case <-release:
+			return p.Result(ctx, "far too late", nil)
+		case <-ctx.Done():
+			select {
+			case rolledBack <- struct{}{}:
+			default:
+			}
+			return ctx.Err()
+		}
 	})
 
-	result := make(chan *frames.FunctionCallResultFrame, 4)
+	cancelled := make(chan *frames.FunctionCallCancelFrame, 4)
+	results := make(chan *frames.FunctionCallResultFrame, 4)
 	probe := newProbe(func(f frames.Frame) {
-		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
+		switch fr := f.(type) {
+		case *frames.FunctionCallCancelFrame:
 			select {
-			case result <- fr:
+			case cancelled <- fr:
+			default:
+			}
+		case *frames.FunctionCallResultFrame:
+			select {
+			case results <- fr:
 			default:
 			}
 		}
@@ -599,22 +631,43 @@ func TestFunctionCallTimeout(t *testing.T) {
 	task.QueueFrame(frames.NewLLMContextFrame(convo))
 
 	select {
-	case fr := <-result:
-		if fr.Result != "" {
-			t.Errorf("result = %q, want none: the call was given up on", fr.Result)
+	case fr := <-cancelled:
+		// Nothing else follows up on a deadline, so it has to run the model.
+		if !fr.RunLLM {
+			t.Error("the deadline did not ask for inference, so the call is never answered")
 		}
 	case <-time.After(3 * time.Second):
 		close(release)
 		t.Fatal("the overrunning call was never given up on")
 	}
 
-	// The conversation records it as completed, not as still running: the user
-	// turn, the call, then the placeholder settled to COMPLETED.
+	select {
+	case <-rolledBack:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("the handler was never cancelled, so it could not roll anything back")
+	}
+
+	// The conversation records it as cancelled, not as still running: the user
+	// turn, the call, then the placeholder settled to CANCELLED.
 	if !waitForContext(convo, func(msgs []frames.Message) bool {
-		return len(msgs) == 3 && len(msgs[2].ToolResults) == 1 &&
-			msgs[2].ToolResults[0].Content == "COMPLETED"
+		return len(msgs) >= 3 && len(msgs[2].ToolResults) == 1 &&
+			msgs[2].ToolResults[0].Content == "CANCELLED" //nolint:misspell // the literal written to the conversation
 	}) {
-		t.Errorf("messages = %+v, want the call recorded as completed", convo.Messages())
+		t.Errorf("messages = %+v, want the call recorded as cancelled", convo.Messages())
+	}
+
+	// The cancellation asked for inference, so the model got a turn to say the
+	// call did not complete.
+	if got := gen.runs.Load(); got < 2 {
+		t.Errorf("the model ran %d times, want a second run answering the cancellation", got)
+	}
+
+	// A handler that outlives its deadline cannot settle the call late.
+	select {
+	case fr := <-results:
+		t.Errorf("result %q reached the pipeline after the deadline settled the call", fr.Result)
+	default:
 	}
 
 	close(release)
