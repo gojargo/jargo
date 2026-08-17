@@ -17,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
+	"github.com/gojargo/jargo/utils/events"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -124,6 +125,18 @@ type Processor interface {
 	ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) error
 	// PushFrame sends a frame to the neighboring processor in dir.
 	PushFrame(ctx context.Context, f frames.Frame, dir Direction) error
+	// PushErrorFrame settles the error's category and this processor's
+	// usability, tells the error handlers, and pushes the frame upstream.
+	PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool)
+
+	// Usable reports whether this processor can still do its job. See
+	// [Base.Usable].
+	Usable() bool
+	// SetUsable sets whether this processor can be given work, raising
+	// EventUsableChanged when the value moves.
+	SetUsable(ctx context.Context, usable bool)
+	// Events returns the registry of events this processor raises.
+	Events() *events.Registry
 }
 
 //nolint:gochecknoglobals // process-wide id source
@@ -229,6 +242,14 @@ type Base struct {
 
 	curMu    sync.Mutex
 	curFrame frames.Frame
+
+	// events are the events this processor raises: EventUsableChanged and
+	// EventError. See usable.go.
+	events events.Registry
+	// usability tracks whether this processor can still do its job. Flipped by
+	// the errors it reports, so it is already up to date by the time an error
+	// travels.
+	usability usability
 }
 
 // New builds a Base named name. self is the embedding processor, used to
@@ -242,7 +263,14 @@ func New(name string, self Processor, opts ...Option) *Base {
 		// Armed before any StartFrame, so a measurement started early is not
 		// declined for a restriction nothing has asked for yet.
 		armTTFB: true,
+		// A processor can do its job until something says otherwise.
+		usability: usability{usable: true},
 	}
+	// The usability change runs on its own goroutine, since a handler may do
+	// anything; the error event is synchronous, so a handler has seen the error
+	// before the frame travels past it.
+	b.events.Register(EventUsableChanged, false)
+	b.events.Register(EventError, true)
 	b.typeName = name
 	b.name = fmt.Sprintf("%s#%d", name, b.id)
 	for _, opt := range opts {
@@ -348,10 +376,13 @@ func (b *Base) Setup(ctx context.Context, s Setup) error {
 	return nil
 }
 
-// Cleanup implements Processor. It stops the process and input goroutines.
+// Cleanup implements Processor. It stops the process and input goroutines and
+// waits for the event handlers still running, so a caller reading what a handler
+// collected does not race it.
 func (b *Base) Cleanup(ctx context.Context) error {
 	b.cancelProcessTask()
 	b.cancelInputTask()
+	b.events.Cleanup(ctx)
 	return nil
 }
 
@@ -603,16 +634,6 @@ func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTok
 		Value:           u,
 	})
 	return b.self.PushFrame(ctx, f, Downstream)
-}
-
-// PushError builds an ErrorFrame for msg and pushes it upstream.
-func (b *Base) PushError(ctx context.Context, msg string, err error, fatal bool) {
-	ef := frames.NewErrorFrame(msg)
-	ef.Fatal = fatal
-	ef.Err = err
-	ef.Source = b.self
-	slog.Error("processor error", "processor", b.name, "msg", msg, "err", err, "fatal", fatal)
-	_ = b.self.PushFrame(ctx, ef, Upstream)
 }
 
 func (b *Base) start() {

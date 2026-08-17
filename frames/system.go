@@ -1,6 +1,10 @@
 package frames
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/gojargo/jargo/utils/errors"
+)
 
 // The sample rates NewStartFrame applies when the application does not override
 // them: input is sized for speech recognition, output for synthesis quality.
@@ -75,6 +79,12 @@ type ErrorFrame struct {
 	Source ErrorSource
 	// Err is the underlying error, if any.
 	Err error
+	// Category is what kind of failure this was: rejected credentials, an
+	// unreachable provider, a malformed request and so on. The zero value means
+	// nobody has said yet, which invites the category to be worked out from Err;
+	// set it to errors.Unknown to report a failure whose cause cannot be
+	// attributed. It is always settled by the time the frame travels.
+	Category errors.Category
 }
 
 // ErrorInfo implements [ErrorReport].
@@ -95,9 +105,14 @@ func NewErrorFrame(message string) *ErrorFrame {
 	return &ErrorFrame{BaseSystemFrame: NewBaseSystemFrame("ErrorFrame"), Error: message}
 }
 
-// String implements fmt.Stringer.
+// String implements fmt.Stringer. An unset or unknown category is left out:
+// neither says anything about the failure that the message does not.
 func (f *ErrorFrame) String() string {
-	return fmt.Sprintf("%s(error: %s, fatal: %t)", f.Name(), f.Error, f.Fatal)
+	category := ""
+	if f.Category != errors.Unset && f.Category != errors.Unknown {
+		category = fmt.Sprintf(", category: %s", f.Category)
+	}
+	return fmt.Sprintf("%s(error: %s, fatal: %t%s)", f.Name(), f.Error, f.Fatal, category)
 }
 
 // FatalErrorFrame notifies upstream that an unrecoverable error occurred and the
