@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // NewSTT builds a Gladia streaming STT service. It works best behind a turn
@@ -151,7 +152,7 @@ func (c *connector) initSession(ctx context.Context, sampleRate int) (string, er
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+		return "", errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	var out struct {
 		URL string `json:"url"`

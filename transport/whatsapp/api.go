@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // Sentinel errors for the Graph API calls.
@@ -105,7 +107,7 @@ func (a *api) post(ctx context.Context, payload map[string]any) ([]byte, error) 
 	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, respBody)
+		return nil, errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, respBody))
 	}
 	return respBody, nil
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // This package cannot use internal/providertest: that package builds on this one
@@ -302,6 +303,38 @@ func TestGenerateStatusError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "slow down") {
 		t.Errorf("error = %v, want it to carry the response body", err)
+	}
+}
+
+// TestGenerateStatusErrorCategory checks a refusal carries its HTTP status, so a
+// failure the provider will keep giving is told from one it may not: a rejected
+// key is permanent where a 5xx is the provider having a bad moment.
+func TestGenerateStatusErrorCategory(t *testing.T) {
+	cases := []struct {
+		status int
+		want   errs.Category
+	}{
+		{http.StatusUnauthorized, errs.Authentication},
+		{http.StatusNotFound, errs.InvalidRequest},
+		{http.StatusTooManyRequests, errs.RateLimit},
+		{http.StatusServiceUnavailable, errs.Server},
+	}
+	for _, c := range cases {
+		t.Run(strconv.Itoa(c.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(c.status)
+			}))
+			defer srv.Close()
+
+			svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
+			err := svc.Generate(t.Context(), frames.NewLLMContext(""), func(string) error { return nil })
+			if got, ok := errs.ExtractHTTPStatusCode(err); !ok || got != c.status {
+				t.Fatalf("status = %d (%t), want %d", got, ok, c.status)
+			}
+			if got := errs.ClassifyError(err); got != c.want {
+				t.Errorf("category = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

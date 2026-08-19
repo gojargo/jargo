@@ -13,6 +13,7 @@ import (
 	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // RequestShaper customizes how a generateContent request is addressed and
@@ -134,7 +135,7 @@ func (s *Service) RunInference(
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+		return "", errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	var answer genChunk
 	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
@@ -228,7 +229,7 @@ func (s *Service) stream(req *http.Request, emit llm.Emit) error {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	return llm.ScanSSE(resp.Body, func(data string) error {
 		var chunk genChunk
@@ -310,7 +311,7 @@ func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	ts := &geminiToolStream{sink: sink}
 	return llm.ScanSSE(resp.Body, func(data string) error {

@@ -2,12 +2,15 @@ package anthropic
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // mustParams converts the conversation and fails the test if the conversion
@@ -230,5 +233,29 @@ func TestNewParamsWithoutCaching(t *testing.T) {
 	}
 	if !strings.Contains(params.System[0].Text, "the user has a cat") {
 		t.Fatal("recall missing from the system prompt")
+	}
+}
+
+// TestSDKRefusalsClassify checks a refusal from the SDK is classified by the
+// status it carries, without this provider classifying it itself: the SDK
+// reports the status on a field of its error, which the shared classification
+// reads.
+func TestSDKRefusalsClassify(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		want   errs.Category
+	}{
+		"rejected key":  {http.StatusUnauthorized, errs.Authentication},
+		"unknown model": {http.StatusNotFound, errs.InvalidRequest},
+		"rate limited":  {http.StatusTooManyRequests, errs.RateLimit},
+		"a bad moment":  {http.StatusServiceUnavailable, errs.Server},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := fmt.Errorf("generate: %w", &sdk.Error{StatusCode: c.status})
+			if got := errs.ClassifyError(err); got != c.want {
+				t.Errorf("category = %q, want %q", got, c.want)
+			}
+		})
 	}
 }

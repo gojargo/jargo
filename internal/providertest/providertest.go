@@ -13,11 +13,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // CompatLLMBuilder builds an OpenAI-compatible LLM service from a config, i.e.
@@ -75,6 +77,35 @@ func CompatLLM(t *testing.T, wantName, wantModel string, build CompatLLMBuilder)
 		req := captureRequest(t, build, chat.LLMConfig{APIKey: "k", Model: "override-model"}, "hi")
 		if req.body.Model != "override-model" {
 			t.Errorf("model = %q, want the override", req.body.Model)
+		}
+	})
+
+	t.Run("refusals carry their status", func(t *testing.T) {
+		// A refusal is only worth failing over from when it is one the provider
+		// will keep giving, which is a question about the status it refused
+		// with. A provider that reports the status only in the message leaves
+		// every refusal looking alike.
+		for status, want := range map[int]errs.Category{
+			http.StatusUnauthorized:       errs.Authentication,
+			http.StatusNotFound:           errs.InvalidRequest,
+			http.StatusTooManyRequests:    errs.RateLimit,
+			http.StatusServiceUnavailable: errs.Server,
+		} {
+			t.Run(strconv.Itoa(status), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(status)
+				}))
+				defer srv.Close()
+
+				svc := build(chat.LLMConfig{APIKey: "k", BaseURL: srv.URL})
+				err := svc.Generate(t.Context(), frames.NewLLMContext(""), func(string) error { return nil })
+				if got, ok := errs.ExtractHTTPStatusCode(err); !ok || got != status {
+					t.Fatalf("status = %d (%t), want %d", got, ok, status)
+				}
+				if got := errs.ClassifyError(err); got != want {
+					t.Errorf("category = %q, want %q", got, want)
+				}
+			})
 		}
 	})
 }

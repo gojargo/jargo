@@ -11,6 +11,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // NewTTS builds a Coqui XTTS TTS service.
@@ -89,7 +90,7 @@ func (s *synthesizer) lookupSpeaker(ctx context.Context) (speaker, error) {
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
-			return speaker{}, fmt.Errorf("%w %d", errStatus, resp.StatusCode)
+			return speaker{}, errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d", errStatus, resp.StatusCode))
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&s.speakers); err != nil {
 			return speaker{}, err

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"syscall"
 	"testing"
@@ -178,5 +179,72 @@ func TestPermanentCategories(t *testing.T) {
 		if c.IsPermanent() {
 			t.Errorf("%q should not be permanent", c)
 		}
+	}
+}
+
+// sdkError stands for the error a provider SDK reports a refusal through: the
+// status is on a field, not behind a method, so nothing can be asked for it.
+type sdkError struct {
+	StatusCode int
+	Response   *http.Response
+}
+
+func (e *sdkError) Error() string { return "sdk refused" }
+
+// respOnlyError carries its status solely on the response, as an SDK reporting
+// the refusal no further than the round trip does.
+type respOnlyError struct {
+	Response *http.Response
+}
+
+func (e *respOnlyError) Error() string { return "sdk refused" }
+
+// textStatusError reports its status as text, which names a refusal but is not
+// the code.
+type textStatusError struct {
+	Status string
+}
+
+func (e *textStatusError) Error() string { return "sdk refused" }
+
+func TestExtractsStatusCodeFromAnSDKErrorsFields(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		err  error
+		want int
+	}{
+		"on the error": {&sdkError{StatusCode: http.StatusUnauthorized}, http.StatusUnauthorized},
+		"on the response": {
+			&respOnlyError{Response: &http.Response{StatusCode: http.StatusTooManyRequests}},
+			http.StatusTooManyRequests,
+		},
+		"wrapped": {
+			fmt.Errorf("generate: %w", &sdkError{StatusCode: http.StatusServiceUnavailable}),
+			http.StatusServiceUnavailable,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := errs.ExtractHTTPStatusCode(c.err)
+			if !ok || got != c.want {
+				t.Fatalf("status = %d (%t), want %d", got, ok, c.want)
+			}
+		})
+	}
+}
+
+func TestAStatusReportedAsTextCarriesNothing(t *testing.T) {
+	t.Parallel()
+	if _, ok := errs.ExtractHTTPStatusCode(&textStatusError{Status: "503 Service Unavailable"}); ok {
+		t.Error("a status reported as text was read as the code")
+	}
+}
+
+func TestAnSDKErrorClassifiesLikeAnyOther(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("generate: %w", &sdkError{StatusCode: http.StatusUnauthorized})
+	if got := errs.ClassifyError(err); got != errs.Authentication {
+		t.Errorf("got %q, want %q", got, errs.Authentication)
 	}
 }

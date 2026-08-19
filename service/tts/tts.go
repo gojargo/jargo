@@ -30,6 +30,7 @@ import (
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	uctx "github.com/gojargo/jargo/utils/context"
+	errs "github.com/gojargo/jargo/utils/errors"
 	ttstext "github.com/gojargo/jargo/utils/text"
 	"github.com/google/uuid"
 )
@@ -1082,7 +1083,7 @@ func StreamResponse(client *http.Client, req *http.Request, emit func(pcm []byte
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	buf := make([]byte, readChunk)
 	for {

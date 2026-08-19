@@ -15,6 +15,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const defaultSTTModel = "gpt-4o-transcribe"
@@ -170,7 +171,7 @@ func (t *transcriber) Transcribe(ctx context.Context, audio []byte, sampleRate i
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg)
+		return "", errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	var out struct {
 		Text string `json:"text"`

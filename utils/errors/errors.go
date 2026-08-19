@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"reflect"
 	"syscall"
 )
 
@@ -135,10 +136,75 @@ func (e *HTTPStatusError) HTTPStatusCode() int { return e.Status }
 // ExtractHTTPStatusCode returns the HTTP status an error carries, walking the
 // wrapped chain for the first error that reports one. The second result is false
 // when nothing in the chain carries a status.
+//
+// An error implementing StatusCoder is asked. A provider SDK reports a refusal
+// through a type of its own instead, so the rest of the chain is read for the
+// status such a type puts on it: the field names below, on a response the error
+// carries and then on the error itself.
 func ExtractHTTPStatusCode(err error) (int, bool) {
 	var sc StatusCoder
 	if errors.As(err, &sc) {
 		if status := sc.HTTPStatusCode(); status != 0 {
+			return status, true
+		}
+	}
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if status, ok := statusFromFields(e); ok {
+			return status, true
+		}
+	}
+	return 0, false
+}
+
+// statusFieldNames are the fields a status is reported on, in the order they are
+// read.
+//
+//nolint:gochecknoglobals // a fixed table
+var statusFieldNames = []string{"StatusCode", "Status"}
+
+// statusFromFields reads the status off an error's own fields, preferring the
+// one on a response it carries to the one on the error itself.
+func statusFromFields(err error) (int, bool) {
+	v := structOf(reflect.ValueOf(err))
+	if !v.IsValid() {
+		return 0, false
+	}
+	if resp := v.FieldByName("Response"); resp.IsValid() {
+		if status, ok := statusField(structOf(resp)); ok {
+			return status, true
+		}
+	}
+	return statusField(v)
+}
+
+// structOf dereferences v down to the struct it points at, returning the zero
+// Value when it does not point at one.
+func structOf(v reflect.Value) reflect.Value {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return reflect.Value{}
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	return v
+}
+
+// statusField reads the first status field carrying a number. A status reported
+// as text is not one: net/http spells Response.Status "503 Service Unavailable",
+// which names the same refusal but is not the code.
+func statusField(v reflect.Value) (int, bool) {
+	if !v.IsValid() {
+		return 0, false
+	}
+	for _, name := range statusFieldNames {
+		f := v.FieldByName(name)
+		if !f.IsValid() || !f.CanInterface() || !f.CanInt() {
+			continue
+		}
+		if status := int(f.Int()); status != 0 {
 			return status, true
 		}
 	}
