@@ -108,6 +108,42 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The libsoxr resampler dropped audio.** `soxr_process` is not obliged to
+  consume a whole buffer in one call, and whatever it left behind was thrown
+  away, so audio went missing from the middle of every converted stream. It is
+  now fed until it has taken the lot, and the output buffer is sized against the
+  delay it is currently holding rather than a fixed margin. The gap between a
+  converted stream and its input is now exactly the filter length in flight, and
+  stays there however long the stream runs, where before it grew with it. The
+  pure-Go build was never affected.
+
+- **A stream resampler no longer bleeds one utterance into the next.** It
+  carries the tail of the audio it last saw so that a continuous stream converts
+  cleanly across chunk boundaries, but after a gap that tail is the end of the
+  previous utterance rather than what came before, which is heard as a click at
+  the start of the next one. A resampler idle for longer than
+  `resample.DefaultClearAfter` (200 ms) now starts the next chunk fresh.
+  `resample.Config.ClearAfter` tunes the window, and a negative value turns the
+  clearing off, which is what a telephony leg wants: its chunks arrive at
+  irregular intervals that are gaps in delivery, not gaps in the audio.
+  `Resampler.Clear` does it on demand.
+
+- **Resampling a complete buffer no longer clips its tail.** A `Resampler` is
+  built for a stream and holds its filter delay back for audio it expects to
+  follow, so a buffer that was complete on its own came back a millisecond or
+  two short. `resample.Resample` converts in a single pass and flushes the
+  delay. End-of-turn analysis was doing exactly this, on the end of the user's
+  utterance, which is the part the turn model reads most closely.
+
+- **DTMF tones were sounded 16 dB too hot and never paused.** Each of the two
+  frequencies is now sounded at a sixteenth of full scale rather than four
+  tenths, putting the pair's peak at the -18 dBFS the telephone network expects
+  instead of within 2 dB of the rail, where a compander shaves the peaks and the
+  distortion spreads energy onto the frequencies naming other keys. The tone
+  also now sounds for 300 ms of its 500 ms rather than all of it: a receiver
+  tells one keypress from the next by the gap between them, so a run of keys
+  with no gap read as fewer keys than were pressed.
+
 - **A tool call its handler could not finish is settled.** A handler that
   returned an error left its call in progress, so the aggregator waited on a
   result that could never arrive and the assistant turn never completed. The call
@@ -169,6 +205,46 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the result.
 
 ### Changed
+
+- **Resampling picks a quality, and defaults to the highest.** `resample`
+  exposes the five standard SoX recipes through `resample.Quality`, passed
+  straight to libsoxr and mapped onto the nearest converter in the pure-Go
+  build. The default is `QualityVHQ`, where it used to be fixed at HQ. Two paths
+  ask for less on purpose: end-of-turn analysis converts at HQ, since the
+  difference sits below the noise floor of the features the model reads, and the
+  RNNoise filter converts at QQ, since a denoiser reshapes the spectrum anyway.
+  Voice activity detection converts at HQ, because what a longer filter holds
+  back is delay before the detector hears the user start speaking.
+
+- **The background mixer plays named sounds.** `mixer.Loop` is now
+  `mixer.Background`, built from a set of sounds keyed by name with one of them
+  selected, rather than a single buffer. The `MixerUpdateSettingsFrame` settings
+  are now `sound` (a name), `volume` and `loop`, where they were `background`
+  (raw PCM), `volume` and `enabled`. A mixer starts active, since mixing is what
+  it was added to the pipeline for, and `StartDisabled` opts out; the default
+  volume is 0.4, where it was 0.3. `Start` drops a sound whose sample rate is
+  not the transport's rather than playing it at the wrong pitch, and the loop
+  restarts a whole chunk at a time rather than part-way through a sample.
+
+- **`audio` gained the conversions that were scattered or missing.**
+  `audio.PCMToWAV` wraps PCM in a WAV container and drops a partial trailing
+  frame, which the copy in `service/stt` did not: keeping it left the header and
+  the data chunk disagreeing about the length, and a stereo stream cut mid-frame
+  came back with its channels swapped. `audio.MixAudio` and
+  `audio.InterleaveStereo` move up from `processor/audiobuffer`, where they were
+  private. `audio.ULawToPCM`, `PCMToULaw`, `ALawToPCM` and `PCMToALaw` pair
+  G.711 companding with resampling in the one order that is correct, since
+  companded bytes are not samples and interpolating between them treats a
+  logarithmic scale as a linear one.
+
+- **`turn.Analyzer` reports whether a turn has started.** `SpeechTriggered`
+  tells a turn that is under way from one that has not begun, which is what
+  distinguishes a turn ended from outside from one that never opened.
+
+- **One DTMF generator, not two.** `processor/dtmf.Tone` was a second
+  synthesizer with its own frequency table and its own level, reached by nothing
+  but its own test. It is gone; `audio/dtmf.Tone` is the only one.
+  `processor/dtmf` keeps the aggregator.
 
 - **`observers.StartupTiming` measures what starting the pipeline cost.** It
   timed the pipeline start to the first bot audio, which conflates the cold start

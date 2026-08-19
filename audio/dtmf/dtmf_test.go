@@ -13,9 +13,20 @@ import (
 
 const sampleRate = 8000
 
+// The shape of one keypress: the tone sounds for this long, then the rest of
+// dtmf.ToneDuration is silence.
+const (
+	soundedMs = 300
+	totalMs   = 500
+)
+
+func sounded(pcm []byte, rate int) []byte { return pcm[:rate*soundedMs/1000*2] }
+func pause(pcm []byte, rate int) []byte   { return pcm[rate*soundedMs/1000*2:] }
+
 // goertzel reports how much energy the signal carries at freq. It is the
 // standard way a receiver detects one DTMF frequency, so measuring the tone the
-// way a receiver would is what says it is the right tone.
+// way a receiver would is what says it is the right tone. A pure sine of
+// amplitude A (as a fraction of full scale) reads about A/2.
 func goertzel(pcm []byte, freq float64, rate int) float64 {
 	n := len(pcm) / 2
 	k := 2 * math.Pi * freq / float64(rate)
@@ -27,6 +38,21 @@ func goertzel(pcm []byte, freq float64, rate int) float64 {
 		s2, s1 = s1, s0
 	}
 	return cmplx.Abs(complex(s1-s2*math.Cos(k), -s2*math.Sin(k))) / float64(n)
+}
+
+// peak returns the largest absolute sample in a buffer of S16LE PCM.
+func peak(pcm []byte) int {
+	most := 0
+	for i := 0; i+1 < len(pcm); i += 2 {
+		v := int(int16(binary.LittleEndian.Uint16(pcm[i:])))
+		if v < 0 {
+			v = -v
+		}
+		if v > most {
+			most = v
+		}
+	}
+	return most
 }
 
 // TestToneCarriesBothFrequencies checks each key sounds the two frequencies that
@@ -48,8 +74,9 @@ func TestToneCarriesBothFrequencies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Tone(%q): %v", button, err)
 		}
+		tone := sounded(pcm, sampleRate)
 		for _, freq := range want {
-			if got := goertzel(pcm, freq, sampleRate); got < 0.1 {
+			if got := goertzel(tone, freq, sampleRate); got < 0.02 {
 				t.Errorf("key %q carries %.0f Hz at %.4f, want it sounded", button, freq, got)
 			}
 		}
@@ -58,7 +85,7 @@ func TestToneCarriesBothFrequencies(t *testing.T) {
 			if absent == want[0] || absent == want[1] {
 				continue
 			}
-			if got := goertzel(pcm, absent, sampleRate); got > 0.02 {
+			if got := goertzel(tone, absent, sampleRate); got > 0.005 {
 				t.Errorf("key %q carries %.0f Hz at %.4f, want it silent", button, absent, got)
 			}
 		}
@@ -73,9 +100,49 @@ func TestToneLength(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Tone: %v", err)
 		}
-		wantSamples := rate / 2 // 500ms
+		wantSamples := rate * totalMs / 1000
 		if got := len(pcm) / 2; got != wantSamples {
 			t.Errorf("rate %d produced %d samples, want %d", rate, got, wantSamples)
+		}
+	}
+}
+
+// TestToneEndsWithAPause checks the keypress closes with silence. A receiver
+// tells one keypress from the next by the gap between them, so a tone that runs
+// the whole length leaves a sequence of keys sounding like one long key.
+func TestToneEndsWithAPause(t *testing.T) {
+	for _, rate := range []int{8000, 16000, 48000} {
+		pcm, err := dtmf.Tone(frames.KeypadSeven, rate)
+		if err != nil {
+			t.Fatalf("Tone: %v", err)
+		}
+		if got := peak(sounded(pcm, rate)); got == 0 {
+			t.Errorf("rate %d: the first %dms is silent, so nothing was sounded", rate, soundedMs)
+		}
+		if got := peak(pause(pcm, rate)); got != 0 {
+			t.Errorf("rate %d: the pause after the tone peaks at %d, want silence", rate, got)
+		}
+	}
+}
+
+// TestToneLevel pins the level a keypress is sounded at. A tone rides a call
+// alongside speech and the network expects it around -18 dBFS: sounding it near
+// full scale invites the compander on a PSTN leg to shave the peaks, and the
+// distortion that follows spreads energy onto the frequencies naming other keys.
+func TestToneLevel(t *testing.T) {
+	// Two tones of 1/16 full scale summed, so a peak of 1/8 of the range.
+	const want = math.MaxInt16 / 8
+	for _, button := range []frames.KeypadEntry{
+		frames.KeypadOne, frames.KeypadFive, frames.KeypadStar, frames.KeypadPound,
+	} {
+		pcm, err := dtmf.Tone(button, sampleRate)
+		if err != nil {
+			t.Fatalf("Tone(%q): %v", button, err)
+		}
+		// The two frequencies do not always crest together within the tone, so
+		// the peak can fall a little short of their sum, never past it.
+		if got := peak(pcm); got > want || got < want*99/100 {
+			t.Errorf("key %q peaks at %d, want about %d", button, got, want)
 		}
 	}
 }

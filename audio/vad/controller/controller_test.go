@@ -31,8 +31,10 @@ type mockAnalyzer struct {
 	// accept is the only rate the detector will take, standing in for one whose
 	// model runs at fixed rates. 0 takes whatever it is given.
 	accept int
-	// analyzed is how many bytes the last chunk held by the time it arrived, so
-	// a test can tell resampled audio from audio passed straight through.
+	// analyzed is how many bytes of audio have reached the detector in total, so
+	// a test can tell resampled audio from audio passed straight through. It is
+	// a total rather than the last chunk because a resampler holds a filter
+	// length back between calls, so only the total tracks the rate ratio.
 	analyzed int
 }
 
@@ -60,7 +62,7 @@ func (m *mockAnalyzer) SetSampleRate(rate int) error {
 func (m *mockAnalyzer) AnalyzeAudio(buffer []byte) vad.State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.analyzed = len(buffer)
+	m.analyzed += len(buffer)
 	return m.next
 }
 
@@ -370,17 +372,29 @@ func TestControllerResamplesToTheDetectorRate(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	// Three times the detector's rate in, so a third of the bytes out.
-	chunk := frames.NewInputAudioRawFrame(make([]byte, 4800), 48000, 1)
-	if err := c.ProcessFrame(context.Background(), chunk); err != nil {
-		t.Fatalf("process audio: %v", err)
+	// Three times the detector's rate in, so a third of the bytes out. Fed as a
+	// stream of chunks rather than one: a resampler holds a filter length of
+	// audio back for the audio it expects to follow, so the ratio only shows
+	// over a stream, which is what a detector is given anyway.
+	const (
+		chunkBytes = 4800 // 50ms at 48kHz
+		chunks     = 20
+	)
+	sent := 0
+	for range chunks {
+		chunk := frames.NewInputAudioRawFrame(make([]byte, chunkBytes), 48000, 1)
+		if err := c.ProcessFrame(context.Background(), chunk); err != nil {
+			t.Fatalf("process audio: %v", err)
+		}
+		sent += len(chunk.Audio)
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.analyzed == 0 || a.analyzed >= len(chunk.Audio) {
-		t.Errorf("the detector was handed %d bytes of a %d-byte chunk, want it converted down to its own rate",
-			a.analyzed, len(chunk.Audio))
+	want := sent / 3
+	if a.analyzed < want*9/10 || a.analyzed > want*11/10 {
+		t.Errorf("the detector was handed %d bytes of %d sent, want about %d: "+
+			"the audio should be converted down to its own rate", a.analyzed, sent, want)
 	}
 }
 

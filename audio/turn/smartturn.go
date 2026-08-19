@@ -58,6 +58,9 @@ func newSmartTurnBase(self predictor, params Params) *smartTurnBase {
 // SetSampleRate sets the input sample rate.
 func (b *smartTurnBase) SetSampleRate(sampleRate int) { b.sampleRate = sampleRate }
 
+// SpeechTriggered reports whether speech has been heard since the turn began.
+func (b *smartTurnBase) SpeechTriggered() bool { return b.speechTriggered }
+
 // UpdateVADStartSecs stores the VAD start delay used to widen the pre-speech
 // window.
 func (b *smartTurnBase) UpdateVADStartSecs(secs float64) { b.vadStartSecs = secs }
@@ -260,6 +263,13 @@ func lastNSamples(audio []float32, n int) []float32 {
 	return out
 }
 
+// modelResampleQuality is the conversion quality used to reach the model rate.
+// A shorter filter than the pipeline default is enough here: the difference
+// between the two sits well below the noise floor of the log-mel features the
+// model reads, so it cannot move a prediction, and this runs at the end of every
+// user turn.
+const modelResampleQuality = resample.QualityHQ
+
 // resampleToModelRate converts audio to the 16 kHz the model expects, through
 // the pipeline's own converter: a sinc polyphase filter, or libsoxr itself under
 // the libsoxr tag. It is used only when a non-16 kHz turn stream is configured;
@@ -271,6 +281,12 @@ func lastNSamples(audio []float32, n int) []float32 {
 // features of exactly that band, so the aliases would not be noise it could see
 // past: they would be the features.
 //
+// The turn's audio is complete by the time it gets here, so it converts in a
+// single pass rather than through a stream resampler. A stream resampler holds
+// its filter delay back for audio it expects to follow, and here nothing does:
+// it would clip the last millisecond or two off the end of the turn, which is
+// the part the model reads most closely.
+//
 // The audio reached the analyzer as 16-bit PCM and is converted back to it here,
 // which is what the converter takes and costs nothing that was not already spent
 // quantizing it in the first place.
@@ -279,18 +295,16 @@ func resampleToModelRate(audio []float32, inRate int) ([]float32, error) {
 		return audio, nil
 	}
 
-	r, err := resample.New(inRate, melSR, 1)
-	if err != nil {
-		return nil, fmt.Errorf("turn: resample %d Hz to %d Hz: %w", inRate, melSR, err)
-	}
-	defer r.Close()
-
 	pcm := make([]byte, len(audio)*2)
 	for i, s := range audio {
 		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(f32ToS16(s)))
 	}
 
-	out := r.Process(pcm)
+	out, err := resample.ResampleQuality(pcm, inRate, melSR, 1, modelResampleQuality)
+	if err != nil {
+		return nil, fmt.Errorf("turn: resample %d Hz to %d Hz: %w", inRate, melSR, err)
+	}
+
 	res := make([]float32, len(out)/2)
 	for i := range res {
 		res[i] = float32(int16(binary.LittleEndian.Uint16(out[i*2:]))) / 32768

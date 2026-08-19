@@ -1,3 +1,10 @@
+// Package dtmf aggregates the DTMF keypresses a caller makes into a string a
+// language model can read. Aggregator collects the keys and flushes them on a
+// terminator key or an idle timeout.
+//
+// Generating the tones for a key is a separate concern and lives in
+// audio/dtmf, which is what an output transport sounds when it has to carry a
+// keypress as audio.
 package dtmf
 
 import (

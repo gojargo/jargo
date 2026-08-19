@@ -59,6 +59,20 @@ processor learns them. Set them on the `pipeline.Params`, not by mutating frames
 The pure-Go defaults are what keep `CGO_ENABLED=0` working. Reach for the C
 backends only when you have measured that quality matters for your use case.
 
+Resampling comes in two shapes, and picking the wrong one costs you the end of
+the audio. A `resample.Resampler` is for a stream: it carries filter state
+across calls so chunks join cleanly, and it holds a filter length back at the
+end of every call because more audio is expected. `resample.Resample` is for a
+buffer that is complete on its own (a sound effect, a recorded utterance) and
+flushes that delay, so nothing is clipped off the end.
+
+A stream resampler that has sat idle longer than 200 ms starts the next chunk
+fresh, so the tail of one utterance is not filtered into the start of the next.
+Turn that off with a negative `resample.Config.ClearAfter` on a telephony leg,
+where irregular arrivals are gaps in delivery rather than gaps in the audio.
+`resample.Config.Quality` picks between the five standard SoX recipes; the
+default is the highest.
+
 ## Noise reduction
 
 RNNoise, loaded at run time through purego:
@@ -80,18 +94,34 @@ information the VAD uses. Measure before shipping it.
 
 ## Background audio
 
-An output mixer loops a background track under the bot's speech: hold music,
-ambience, or comfort noise so a silent line does not sound dead:
+An output mixer plays a background track under the bot's speech: hold music,
+ambience, or comfort noise so a silent line does not sound dead. It holds a set
+of sounds by name and plays the one selected:
 
 ```go
-params.AudioOutMixer = myMixer   // audio.Mixer
+params.AudioOutMixer = mixer.NewBackground(mixer.Config{
+    Sounds: map[string]mixer.Sound{
+        "hold":    {PCM: holdMusic, SampleRate: 24000},
+        "ambient": {PCM: roomTone, SampleRate: 24000},
+    },
+    Default: "hold",
+    Volume:  0.4,
+})
 ```
+
+Each sound is 16-bit mono PCM at the transport's output rate; one recorded at
+another rate is dropped when the mixer starts rather than played at the wrong
+pitch. The mixer is active from the start, and loops.
 
 Drive it at runtime with control frames:
 
 ```go
 task.QueueFrame(frames.NewMixerEnableFrame(true))
-task.QueueFrame(frames.NewMixerUpdateSettingsFrame(map[string]any{"volume": 0.2}))
+task.QueueFrame(frames.NewMixerUpdateSettingsFrame(map[string]any{
+    "sound":  "ambient", // switch track, from the start
+    "volume": 0.2,
+    "loop":   false, // play it once, then fall silent
+}))
 ```
 
 Both are **control** frames, so a mixer change is ordered against the audio around

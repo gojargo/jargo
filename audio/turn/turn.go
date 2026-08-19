@@ -61,6 +61,11 @@ type Analyzer interface {
 	// activity considers it speech. It returns Complete when a non-model
 	// condition (the silence safety net) ends the turn, otherwise Incomplete.
 	AppendAudio(buffer []byte, isSpeech bool) EndOfTurnState
+	// SpeechTriggered reports whether the analyzer has heard speech since the
+	// turn began, which is what tells a turn that is under way from one that has
+	// not started. It stays true across a turn the analyzer judged unfinished,
+	// and Clear puts it back to false.
+	SpeechTriggered() bool
 	// AnalyzeEndOfTurn runs the model over the buffered turn audio and returns
 	// the predicted state and the model's completion probability in [0,1].
 	AnalyzeEndOfTurn() (EndOfTurnState, float64, error)

@@ -11,26 +11,6 @@ import (
 	"github.com/gojargo/jargo/utils/events"
 )
 
-func TestToneLengthAndSilenceForUnknown(t *testing.T) {
-	pcm := dtmf.Tone(frames.KeypadFive, 100, 8000)
-	if len(pcm) != 8000*100/1000*2 {
-		t.Fatalf("tone length = %d bytes, want %d", len(pcm), 8000*100/1000*2)
-	}
-	nonzero := false
-	for _, b := range pcm {
-		if b != 0 {
-			nonzero = true
-			break
-		}
-	}
-	if !nonzero {
-		t.Fatal("tone is all silence")
-	}
-	if dtmf.Tone("nope", 100, 8000) != nil {
-		t.Fatal("unknown button should yield nil")
-	}
-}
-
 func TestAggregatorFlushesOnTerminator(t *testing.T) {
 	got := make(chan string, 1)
 	agg := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: "digits: "})

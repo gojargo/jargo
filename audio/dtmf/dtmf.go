@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -24,9 +25,17 @@ var ErrUnknownKey = errors.New("dtmf: not a keypad key")
 //nolint:gochecknoglobals // sentinel error
 var ErrSampleRate = errors.New("dtmf: unusable sample rate")
 
-// ToneDuration is how long one key's tone lasts. A keypress is a tone, not an
-// instant, and a receiver that samples too short a burst does not register it.
-const ToneDuration = 500 * 1e6 // nanoseconds, i.e. 500ms
+// ToneDuration is how long one keypress occupies the audio stream: the tone
+// itself and the pause that closes it. A keypress is a tone, not an instant, and
+// a receiver that samples too short a burst does not register it.
+const ToneDuration = 500 * time.Millisecond
+
+// toneOn is how much of ToneDuration actually sounds. The rest is silence, and
+// it is not padding: a receiver tells one keypress from the next by the gap
+// between them, so a run of keys sounded back to back with no gap reads as
+// fewer keys than were pressed. Sounding the tone for the whole of ToneDuration
+// is what produces that run.
+const toneOn = 300 * time.Millisecond
 
 // tonePair is the two frequencies sounded together for one key. A keypad is a
 // grid, and a key is named by the row tone and the column tone that cross at it,
@@ -55,13 +64,21 @@ var pairs = map[frames.KeypadEntry]tonePair{
 }
 
 // amplitude is how loud each of the two tones is, as a fraction of full scale.
-// The two are summed, so each takes half of what is available and the sum
-// reaches full scale at most rather than clipping.
-const amplitude = 0.4
+// The two are summed, so the pair peaks at twice this, around a eighth of full
+// scale.
+//
+// It is deliberately quiet. A keypress rides a call alongside speech, and the
+// level a receiver expects is the one the network has always carried, roughly
+// -18 dBFS at the peak. A tone sounded near full scale is not easier to detect:
+// it is loud enough to be shaved by the compander on a PSTN leg, and the
+// distortion that produces spreads energy onto the frequencies that name other
+// keys.
+const amplitude = 0.0625
 
 // Tone renders one key as 16-bit little-endian mono PCM at sampleRate, lasting
-// ToneDuration. A key that is not on a keypad is an error rather than silence,
-// since silence would be indistinguishable from a tone nobody heard.
+// ToneDuration: toneOn of the two frequencies sounded together, then silence for
+// the rest. A key that is not on a keypad is an error rather than silence, since
+// silence would be indistinguishable from a tone nobody heard.
 func Tone(button frames.KeypadEntry, sampleRate int) ([]byte, error) {
 	pair, ok := pairs[button]
 	if !ok {
@@ -71,9 +88,10 @@ func Tone(button frames.KeypadEntry, sampleRate int) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %d", ErrSampleRate, sampleRate)
 	}
 
-	samples := int(float64(sampleRate) * (ToneDuration / 1e9))
+	samples := int(float64(sampleRate) * ToneDuration.Seconds())
+	sounded := int(float64(sampleRate) * toneOn.Seconds())
 	pcm := make([]byte, samples*2)
-	for i := range samples {
+	for i := range sounded {
 		t := float64(i) / float64(sampleRate)
 		v := amplitude * (math.Sin(2*math.Pi*pair.low*t) + math.Sin(2*math.Pi*pair.high*t))
 		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(int16(v*math.MaxInt16))) //nolint:gosec // bounded by amplitude

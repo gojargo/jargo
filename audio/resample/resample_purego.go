@@ -9,10 +9,24 @@ import (
 	gore "github.com/gojargo/go-resample"
 )
 
-// converter is the go-resample algorithm used by the default build.
-// SincMediumQuality is transparent for virtually all real-world audio at
-// moderate CPU cost — the closest match to libsoxr's HQ preset.
-const converter = gore.SincMediumQuality
+// converterFor maps a Quality recipe onto the closest converter the pure-Go
+// library offers. The two libraries do not have the same five steps, so the ends
+// of the scale line up and the middle is approximate: VHQ and HQ are the two
+// widest sinc filters, QQ is the trivial interpolator, and the rest sit between.
+func converterFor(q Quality) gore.Converter {
+	switch q {
+	case QualityVHQ:
+		return gore.SincBestQuality
+	case QualityHQ:
+		return gore.SincMediumQuality
+	case QualityMQ, QualityLQ:
+		return gore.SincFastest
+	case QualityQQ:
+		return gore.Linear
+	default:
+		return gore.SincBestQuality
+	}
+}
 
 // Resampler converts a stream of interleaved S16LE PCM from one sample rate to
 // another using the pure-Go github.com/gojargo/go-resample converter (no cgo).
@@ -26,22 +40,29 @@ type Resampler struct {
 	ratio    float64
 	r        *gore.Resampler // nil when inRate == outRate (passthrough)
 
+	idle idleClock
+
 	inF  []float32 // reused S16LE->float32 decode scratch
 	outF []float32 // reused resampler output scratch
 }
 
-// New returns a Resampler from inRate to outRate for the given channel count.
-// When inRate equals outRate the Resampler passes audio through unchanged and
-// allocates no converter.
+// New returns a Resampler from inRate to outRate for the given channel count,
+// at the default quality and idle window. When inRate equals outRate the
+// Resampler passes audio through unchanged and allocates no converter.
 func New(inRate, outRate, channels int) (*Resampler, error) {
+	return NewWithConfig(inRate, outRate, channels, Config{})
+}
+
+// NewWithConfig returns a Resampler configured by cfg. See New.
+func NewWithConfig(inRate, outRate, channels int, cfg Config) (*Resampler, error) {
 	if channels < 1 {
 		channels = 1
 	}
-	r := &Resampler{inRate: inRate, outRate: outRate, channels: channels}
+	r := &Resampler{inRate: inRate, outRate: outRate, channels: channels, idle: newIdleClock(cfg)}
 	if inRate == outRate {
 		return r, nil
 	}
-	conv, err := gore.New(converter, channels)
+	conv, err := gore.New(converterFor(cfg.Quality), channels)
 	if err != nil {
 		return nil, fmt.Errorf("resample: new %d->%d ch=%d: %w", inRate, outRate, channels, err)
 	}
@@ -50,15 +71,31 @@ func New(inRate, outRate, channels int) (*Resampler, error) {
 	return r, nil
 }
 
+// Clear discards the filter history, so the next chunk is converted as the start
+// of a fresh signal rather than the continuation of the last one. The rate and
+// quality are unchanged.
+func (r *Resampler) Clear() {
+	if r.r != nil {
+		r.r.Reset()
+	}
+	r.idle.reset()
+}
+
 // Process resamples one buffer of interleaved S16LE PCM and returns the
 // resampled audio. When the input and output rates match it returns the input
 // unchanged; otherwise the returned slice is freshly allocated and owned by the
 // caller. Because the converter has filter delay, the first calls of a stream
-// emit slightly fewer frames than the rate ratio implies, which later calls
-// make up.
+// emit slightly fewer frames than the rate ratio implies, which later calls make
+// up. Use Resample instead for a buffer that is complete on its own.
+//
+// A gap longer than the configured idle window clears the filter history first,
+// so the tail of what came before is not mixed into what comes next.
 func (r *Resampler) Process(in []byte) []byte {
 	if r.r == nil {
 		return in
+	}
+	if r.idle.stale() {
+		r.r.Reset()
 	}
 	bytesPerFrame := r.channels * 2
 	inFrames := len(in) / bytesPerFrame
@@ -97,11 +134,36 @@ func (r *Resampler) Process(in []byte) []byte {
 		return nil
 	}
 
-	// Encode float32 -> interleaved S16LE with rounding and clamping.
-	n := d.OutputFramesGen * r.channels
-	out := make([]byte, n*2)
-	for i := range n {
-		binary.LittleEndian.PutUint16(out[i*2:], uint16(f32ToS16(outF[i])))
+	return encodeS16(outF[:d.OutputFramesGen*r.channels])
+}
+
+// resampleAll converts a complete buffer in one pass, flushing the converter's
+// filter delay so nothing is left behind. It backs Resample; see there.
+func resampleAll(pcm []byte, inRate, outRate, channels int, q Quality) ([]byte, error) {
+	bytesPerFrame := channels * 2
+	inFrames := len(pcm) / bytesPerFrame
+	if inFrames == 0 {
+		return nil, nil
+	}
+	inSamples := inFrames * channels
+
+	in := make([]float32, inSamples)
+	for i := range in {
+		in[i] = float32(int16(binary.LittleEndian.Uint16(pcm[i*2:]))) / 32768
+	}
+
+	out, err := gore.Simple(in, float64(outRate)/float64(inRate), channels, converterFor(q))
+	if err != nil {
+		return nil, fmt.Errorf("resample: %d->%d ch=%d: %w", inRate, outRate, channels, err)
+	}
+	return encodeS16(out), nil
+}
+
+// encodeS16 converts normalized float samples to interleaved S16LE.
+func encodeS16(samples []float32) []byte {
+	out := make([]byte, len(samples)*2)
+	for i, s := range samples {
+		binary.LittleEndian.PutUint16(out[i*2:], uint16(f32ToS16(s)))
 	}
 	return out
 }

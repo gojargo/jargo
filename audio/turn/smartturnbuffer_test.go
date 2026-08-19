@@ -145,12 +145,12 @@ func TestSmartTurnClearKillsTheStaleSilenceTimer(t *testing.T) {
 	for range 4 {
 		b.AppendAudio(pcmOf(16000, chunkSamples), true)
 	}
-	if !b.speechTriggered {
+	if !b.SpeechTriggered() {
 		t.Fatal("four chunks of speech did not open a turn")
 	}
 
 	b.Clear()
-	if b.speechTriggered {
+	if b.SpeechTriggered() {
 		t.Fatal("clearing left the turn open")
 	}
 

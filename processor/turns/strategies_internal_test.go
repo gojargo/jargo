@@ -1096,6 +1096,7 @@ func (a slowAnalyzer) AnalyzeEndOfTurn() (turn.EndOfTurnState, float64, error) {
 	time.Sleep(a.took)
 	return turn.Complete, 0.9, nil
 }
+func (slowAnalyzer) SpeechTriggered() bool      { return false }
 func (slowAnalyzer) Clear()                     {}
 func (slowAnalyzer) Close() error               { return nil }
 func (slowAnalyzer) UpdateVADStartSecs(float64) {}

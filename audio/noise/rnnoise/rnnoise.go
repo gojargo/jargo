@@ -18,6 +18,13 @@ import (
 // rnnoiseRate is the only sample rate RNNoise operates at.
 const rnnoiseRate = 48000
 
+// resampleQuality is the conversion quality on the way to and from 48 kHz. This
+// sits on the live input path and runs twice per chunk, so it takes the cheapest
+// converter rather than the pipeline default: what follows it is a denoiser
+// reshaping the spectrum anyway, which is not a place where a longer filter buys
+// anything worth the latency.
+const resampleQuality = resample.QualityQQ
+
 // LibPathEnv points at the librnnoise shared library when it is not on the
 // loader's default search path.
 const LibPathEnv = "JARGO_RNNOISE_LIB"
@@ -130,10 +137,11 @@ func (f *filter) Start(_ context.Context, sampleRate int) error {
 
 	if sampleRate != rnnoiseRate {
 		var err error
-		if f.up, err = resample.New(sampleRate, rnnoiseRate, 1); err != nil {
+		cfg := resample.Config{Quality: resampleQuality}
+		if f.up, err = resample.NewWithConfig(sampleRate, rnnoiseRate, 1, cfg); err != nil {
 			return err
 		}
-		if f.down, err = resample.New(rnnoiseRate, sampleRate, 1); err != nil {
+		if f.down, err = resample.NewWithConfig(rnnoiseRate, sampleRate, 1, cfg); err != nil {
 			return err
 		}
 	}

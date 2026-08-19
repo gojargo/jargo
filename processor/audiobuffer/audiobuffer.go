@@ -12,10 +12,10 @@ package audiobuffer
 
 import (
 	"context"
-	"encoding/binary"
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -381,9 +381,9 @@ func (p *Processor) snapshot() *recording {
 	bot := padTo(append([]byte(nil), p.botBuf...), target)
 	var merged []byte
 	if p.channels == 2 {
-		merged = interleaveStereo(user, bot)
+		merged = audio.InterleaveStereo(user, bot)
 	} else {
-		merged = mixAudio(user, bot)
+		merged = audio.MixAudio(user, bot)
 	}
 	return &recording{merged: merged, user: user, bot: bot, sampleRate: p.sampleRate, channels: p.channels}
 }
@@ -493,41 +493,4 @@ func padTo(buf []byte, target int) []byte {
 		buf = append(buf, make([]byte, target-len(buf))...)
 	}
 	return buf
-}
-
-// mixAudio sums two 16-bit PCM streams sample-by-sample, clipping to the 16-bit
-// range. The shorter stream is treated as zero-padded.
-func mixAudio(a, b []byte) []byte {
-	n := max(len(a), len(b))
-	n -= n % 2
-	out := make([]byte, n)
-	for i := 0; i+1 < n; i += 2 {
-		var s int32
-		if i+1 < len(a) {
-			s += int32(int16(binary.LittleEndian.Uint16(a[i:])))
-		}
-		if i+1 < len(b) {
-			s += int32(int16(binary.LittleEndian.Uint16(b[i:])))
-		}
-		if s > 32767 {
-			s = 32767
-		} else if s < -32768 {
-			s = -32768
-		}
-		binary.LittleEndian.PutUint16(out[i:], uint16(int16(s)))
-	}
-	return out
-}
-
-// interleaveStereo weaves two mono 16-bit streams into stereo (L, R, L, R …),
-// truncating to the shorter stream.
-func interleaveStereo(left, right []byte) []byte {
-	n := min(len(left), len(right))
-	n -= n % 2
-	out := make([]byte, n*2)
-	for i := 0; i+1 < n; i += 2 {
-		copy(out[i*2:], left[i:i+2])
-		copy(out[i*2+2:], right[i:i+2])
-	}
-	return out
 }
