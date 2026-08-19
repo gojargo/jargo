@@ -194,10 +194,11 @@ type Base struct {
 	// Input goroutine: handles system frames immediately and forwards data and
 	// control frames to the process queue. It is created when the StartFrame is
 	// queued, so nothing is drained before the processor has been started.
-	inputQueue   *queue
-	inputWG      sync.WaitGroup
-	inputMu      sync.Mutex
-	inputRunning bool
+	inputQueue *queue
+	inputWG    sync.WaitGroup
+	// startGate is opened by the StartFrame being queued, and is what the input
+	// goroutine waits on before it drains anything.
+	startGate *event
 
 	// Pause gates. Each loop checks its gate after taking a frame off its queue
 	// and before handling it, so a pause takes effect from the next frame on.
@@ -264,6 +265,8 @@ func New(name string, self Processor, opts ...Option) *Base {
 	b := &Base{
 		id:         nextID(),
 		inputQueue: newQueue(),
+		startGate:  newEvent(),
+		inputEvent: newEvent(),
 		procQueue:  newQueue(),
 		// Armed before any StartFrame, so a measurement started early is not
 		// declined for a restriction nothing has asked for yet.
@@ -379,6 +382,12 @@ func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.tracingEnabled = s.TracingEnabled
 	b.running = s.Running
 	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
+	if !b.directMode {
+		// The goroutine exists from here, but drains nothing until the StartFrame
+		// opens the gate below.
+		b.inputWG.Add(1)
+		go b.inputLoop()
+	}
 	return nil
 }
 
@@ -410,15 +419,6 @@ func (b *Base) cancelInputTask() {
 	if b.directMode {
 		return
 	}
-	b.inputMu.Lock()
-	running := b.inputRunning
-	b.inputRunning = false
-	b.inputMu.Unlock()
-	if !running {
-		// Never started, because the StartFrame never arrived. There is nothing
-		// to wait for.
-		return
-	}
 	done := make(chan struct{})
 	go func() {
 		b.inputWG.Wait()
@@ -447,31 +447,9 @@ func (b *Base) QueueFrame(ctx context.Context, f frames.Frame, dir Direction) er
 	// processor that has not started yet; those frames simply wait, and the
 	// StartFrame is taken off the queue ahead of them.
 	if isStartFrame(f) {
-		b.createInputTask()
+		b.startGate.Set()
 	}
 	return nil
-}
-
-// createInputTask starts the input goroutine, once. It is called when the
-// StartFrame is queued, which is what opens the processor's queues.
-func (b *Base) createInputTask() {
-	if b.directMode {
-		return
-	}
-	b.inputMu.Lock()
-	defer b.inputMu.Unlock()
-	if b.inputRunning {
-		return
-	}
-	b.inputRunning = true
-	// The gate belongs to the goroutine it holds, so it is created with it: a
-	// pause taken before the processor started holds the goroutine from its
-	// first frame, exactly as one taken later holds it from its next.
-	b.pauseMu.Lock()
-	b.inputEvent = newEvent()
-	b.pauseMu.Unlock()
-	b.inputWG.Add(1)
-	go b.inputLoop()
 }
 
 // inputLoop handles every frame queued to the processor. System frames are
@@ -479,6 +457,14 @@ func (b *Base) createInputTask() {
 // queue for in-order processing.
 func (b *Base) inputLoop() {
 	defer b.inputWG.Done()
+	// Nothing is drained until the StartFrame arrives, so a processor never acts
+	// on a frame before it has been started. Processors are set up concurrently,
+	// so one that connects during setup can push frames at a processor that has
+	// not started yet; those frames wait here, and the StartFrame is taken off
+	// the queue ahead of them.
+	if !b.startGate.Wait(b.baseCtx) {
+		return
+	}
 	for {
 		it, ok := b.inputQueue.get(b.baseCtx)
 		if !ok {

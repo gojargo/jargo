@@ -101,6 +101,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transport, an interruption decision or a recorder needs the detection too,
   keep using a `vadproc.Processor` after the input transport.
 
+- **The observers are given what is still queued for them when the pipeline
+  stops**, rather than being cut off where they stand. An observer runs behind
+  the frames, so at shutdown it is typically still working through the end of
+  the conversation, and the reports it had not reached were the ones saying how
+  that conversation ended. The wait is bounded, so an observer that cannot keep
+  up does not hold the shutdown open.
+
 ### Changed
 
 - **`AudioIdleTimeout` is now a `*time.Duration`** on `vadproc.Config` and

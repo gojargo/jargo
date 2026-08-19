@@ -67,13 +67,22 @@ func (q *queue) push(it item) {
 func (q *queue) get(ctx context.Context) (item, bool) {
 	for {
 		q.mu.Lock()
-		for _, tier := range []*[]item{&q.start, &q.system, &q.other} {
-			if len(*tier) > 0 {
-				it := (*tier)[0]
-				*tier = (*tier)[1:]
-				q.mu.Unlock()
-				return it, true
-			}
+		switch {
+		case len(q.start) > 0:
+			it := q.start[0]
+			q.start = q.start[1:]
+			q.mu.Unlock()
+			return it, true
+		case len(q.system) > 0:
+			it := q.system[0]
+			q.system = q.system[1:]
+			q.mu.Unlock()
+			return it, true
+		case len(q.other) > 0:
+			it := q.other[0]
+			q.other = q.other[1:]
+			q.mu.Unlock()
+			return it, true
 		}
 		q.mu.Unlock()
 

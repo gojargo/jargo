@@ -2,9 +2,16 @@ package pipeline
 
 import (
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/processor"
 )
+
+// observerDrainTimeout bounds how long the pipeline waits, once it has stopped,
+// for an observer to work through what is still queued for it. An observer that
+// has not finished by then is dropped where it stands rather than holding up the
+// shutdown for good.
+const observerDrainTimeout = 5 * time.Second
 
 // observerProxy stands in for the observers a task runs with. It is the one
 // observer handed to the processors; every frame reported to it is passed on to
@@ -34,9 +41,15 @@ type observerWorker struct {
 	queue    *reportQueue
 	quit     chan struct{}
 	done     chan struct{}
+	// finishing says no more reports are coming, so the worker delivers what is
+	// left and then stops. It is how a normal shutdown differs from dropping an
+	// observer mid-run, which stops it where it stands.
+	finishing chan struct{}
 	// stopping makes cancel idempotent, so an observer removed after the
 	// pipeline stopped is not canceled twice.
 	stopping sync.Once
+	// draining makes finish idempotent.
+	draining sync.Once
 }
 
 // pipelineStarted is what a worker queues to itself to report the pipeline
@@ -46,10 +59,11 @@ type pipelineStarted struct{}
 
 func newObserverWorker(o processor.Observer) *observerWorker {
 	return &observerWorker{
-		observer: o,
-		queue:    newReportQueue(),
-		quit:     make(chan struct{}),
-		done:     make(chan struct{}),
+		observer:  o,
+		queue:     newReportQueue(),
+		quit:      make(chan struct{}),
+		done:      make(chan struct{}),
+		finishing: make(chan struct{}),
 	}
 }
 
@@ -76,9 +90,16 @@ func (p *observerProxy) start() {
 	}
 }
 
-// stop ends the observer goroutines and waits for them to finish. A report still
-// waiting for an observer is not delivered: watching stops when the pipeline
-// does.
+// stop ends the observer goroutines and waits for them to finish.
+//
+// What is still queued is delivered first. An observer runs behind the frames,
+// so at the moment the pipeline stops it is typically still working through the
+// end of the conversation, and the reports it has not reached yet are the ones
+// that say how the conversation ended. Dropping them loses exactly the part a
+// stateful observer needs to close its books.
+//
+// The wait is bounded by observerDrainTimeout, so an observer that cannot keep
+// up does not hold the shutdown open for good.
 func (p *observerProxy) stop() {
 	p.mu.Lock()
 	if p.stopped || !p.started {
@@ -91,7 +112,7 @@ func (p *observerProxy) stop() {
 	p.mu.Unlock()
 
 	for _, w := range workers {
-		w.cancel()
+		w.finish()
 	}
 }
 
@@ -159,15 +180,28 @@ func (p *observerProxy) send(data any) {
 	}
 }
 
-// run delivers this observer's reports, in order, until the worker is canceled.
+// run delivers this observer's reports, in order, until the worker is canceled
+// or has delivered everything left to it.
 func (w *observerWorker) run() {
 	defer close(w.done)
 	for {
-		data, ok := w.queue.get(w.quit)
+		data, ok := w.queue.get(w.quit, w.finishing)
 		if !ok {
 			return
 		}
 		w.deliver(data)
+	}
+}
+
+// finish tells the worker that no more reports are coming and waits for it to
+// deliver what is left, giving up after observerDrainTimeout and stopping it
+// where it stands. It is safe to call more than once.
+func (w *observerWorker) finish() {
+	w.draining.Do(func() { close(w.finishing) })
+	select {
+	case <-w.done:
+	case <-time.After(observerDrainTimeout):
+		w.cancel()
 	}
 }
 
@@ -239,10 +273,13 @@ func (q *reportQueue) tryGet() (any, bool) {
 	return data, true
 }
 
-// get returns the next report, blocking until one is waiting or quit is closed.
-// It reports ok=false as soon as quit closes, whether or not reports are still
-// waiting: watching stops when the pipeline does.
-func (q *reportQueue) get(quit <-chan struct{}) (any, bool) {
+// get returns the next report, blocking until one is waiting, quit is closed, or
+// finishing is closed and nothing is left.
+//
+// quit stops the worker where it stands, whatever is still queued. finishing is
+// the orderly end: what is already queued is handed over first, and only an
+// empty queue ends the loop.
+func (q *reportQueue) get(quit, finishing <-chan struct{}) (any, bool) {
 	for {
 		select {
 		case <-quit:
@@ -252,9 +289,16 @@ func (q *reportQueue) get(quit <-chan struct{}) (any, bool) {
 		if data, ok := q.tryGet(); ok {
 			return data, true
 		}
+		// Nothing waiting, so an orderly end has nothing left to deliver.
+		select {
+		case <-finishing:
+			return nil, false
+		default:
+		}
 		select {
 		case <-quit:
 			return nil, false
+		case <-finishing:
 		case <-q.notify:
 		}
 	}
