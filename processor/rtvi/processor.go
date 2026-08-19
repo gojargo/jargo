@@ -449,8 +449,7 @@ func (p *Processor) handleDTMF(ctx context.Context, in Incoming) error {
 // without the guarantee, which is what the client asked for, rather than
 // nothing happening.
 func (p *Processor) interruptAndSettle(ctx context.Context) error {
-	err := p.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
-	if err != nil {
+	if err := p.BroadcastInterruption(ctx); err != nil {
 		return err
 	}
 	flushCtx, cancel := context.WithTimeout(ctx, flushTimeout)

@@ -104,19 +104,44 @@ func TestParseAsyncToolMessageRejectsOthers(t *testing.T) {
 	}
 }
 
-// TestAsyncToolDescriptionsExplainTheProtocol checks each stage says what it is,
-// since the model reads these with no other knowledge of the protocol.
-func TestAsyncToolDescriptionsExplainTheProtocol(t *testing.T) {
+// TestAsyncToolDescriptionsSayOnlyWhatToDo checks each stage tells the model what
+// to do and nothing about the protocol carrying it.
+//
+// Describing the message a result will arrive in is what makes a model try to
+// produce one, and a function call is the only structured channel it has, so it
+// calls the tool again with the protocol payload as the arguments. The payload's
+// own fields are read when the conversation is parsed, never by the model.
+func TestAsyncToolDescriptionsSayOnlyWhatToDo(t *testing.T) {
 	started, _ := frames.ParseAsyncToolMessage(frames.NewAsyncToolStartedMessage("c1"))
-	if !strings.Contains(started.Description, "status=finished") {
-		t.Errorf("started description should say how the last result is recognized: %q", started.Description)
+	if !strings.Contains(started.Description, "still running") {
+		t.Errorf("started description should say the task is still running: %q", started.Description)
 	}
+	if !strings.Contains(started.Description, "Do not call it") {
+		t.Errorf("started description should forbid calling the tool again: %q", started.Description)
+	}
+
 	intermediate, _ := frames.ParseAsyncToolMessage(frames.NewAsyncToolIntermediateMessage("c1", "r"))
 	if !strings.Contains(intermediate.Description, "still running") {
 		t.Errorf("intermediate description should say the task is still running: %q", intermediate.Description)
 	}
+	if !strings.Contains(intermediate.Description, "final answer") {
+		t.Errorf("intermediate description should say it is not the final answer: %q", intermediate.Description)
+	}
+
 	final, _ := frames.ParseAsyncToolMessage(frames.NewAsyncToolFinalMessage("c1", "r"))
 	if !strings.Contains(final.Description, "No further results") {
 		t.Errorf("final description should say nothing more is coming: %q", final.Description)
+	}
+	if !strings.Contains(final.Description, "convey this result to the user") {
+		t.Errorf("final description should require the result be told to the user: %q", final.Description)
+	}
+
+	// None of them names the shape of the message a result arrives in.
+	for _, d := range []string{started.Description, intermediate.Description, final.Description} {
+		for _, leak := range []string{"status=", "type=", "developer message", "tool_call_id) but"} {
+			if strings.Contains(d, leak) {
+				t.Errorf("description describes the protocol payload (%q): %q", leak, d)
+			}
+		}
 	}
 }

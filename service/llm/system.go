@@ -3,6 +3,8 @@ package llm
 import (
 	"log/slog"
 	"strings"
+
+	"github.com/gojargo/jargo/frames"
 )
 
 // The system instruction a service sends is composed rather than stored whole:
@@ -79,6 +81,15 @@ func (b *Base) composeSystemInstruction() {
 	// cancel tools it describes, so a session with none never carries it.
 	if len(b.cancelToolNames()) > 0 {
 		parts = append(parts, asyncToolCancellationInstructions)
+	}
+
+	// The standing policy on results that arrive after the reply. The message
+	// carrying each result says the same thing, but it lands in a conversation
+	// whose most recent turn is the user asking for something else, and a model
+	// weighing the two follows the nearer request. Stating it up front puts it in
+	// force before any result exists.
+	if b.hasAsyncTools() {
+		parts = append(parts, frames.AsyncToolInstructions)
 	}
 
 	b.systemMu.Lock()

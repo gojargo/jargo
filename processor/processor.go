@@ -192,9 +192,12 @@ type Base struct {
 	baseCancel context.CancelFunc
 
 	// Input goroutine: handles system frames immediately and forwards data and
-	// control frames to the process queue.
-	inputQueue *queue
-	inputWG    sync.WaitGroup
+	// control frames to the process queue. It is created when the StartFrame is
+	// queued, so nothing is drained before the processor has been started.
+	inputQueue   *queue
+	inputWG      sync.WaitGroup
+	inputMu      sync.Mutex
+	inputRunning bool
 
 	// Pause gates. Each loop checks its gate after taking a frame off its queue
 	// and before handling it, so a pause takes effect from the next frame on.
@@ -212,9 +215,6 @@ type Base struct {
 	// it to have finished.
 	pauseWatcher context.CancelFunc
 	pauseWG      sync.WaitGroup
-
-	startedMu sync.Mutex
-	started   bool
 
 	// Metrics flags captured from the StartFrame. They are written once on the
 	// input goroutine before the process goroutine is created in start(), which
@@ -276,6 +276,13 @@ func New(name string, self Processor, opts ...Option) *Base {
 	// before the frame travels past it.
 	b.events.Register(EventUsableChanged, false)
 	b.events.Register(EventError, true)
+	// The four frame events are synchronous, so "before" really is before: a
+	// handler runs while the frame is still where the event says it is, rather
+	// than at some later point once it has moved on.
+	b.events.Register(EventBeforeProcessFrame, true)
+	b.events.Register(EventAfterProcessFrame, true)
+	b.events.Register(EventBeforePushFrame, true)
+	b.events.Register(EventAfterPushFrame, true)
 	b.typeName = name
 	b.name = fmt.Sprintf("%s#%d", name, b.id)
 	for _, opt := range opts {
@@ -362,8 +369,9 @@ func (b *Base) StartSpan(
 	return tracing.Tracer().Start(b.tracing.Parent(ctx), name, opts...)
 }
 
-// Setup implements Processor. It stores shared components and starts the input
-// goroutine (unless the processor is in direct mode).
+// Setup implements Processor. It stores the shared components. The goroutines
+// are not started here: nothing is drained until the StartFrame arrives, so a
+// processor never acts on a frame before it has been started.
 func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.clock = s.Clock
 	b.observers = s.Observers
@@ -371,13 +379,6 @@ func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.tracingEnabled = s.TracingEnabled
 	b.running = s.Running
 	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
-	if !b.directMode {
-		b.pauseMu.Lock()
-		b.inputEvent = newEvent()
-		b.pauseMu.Unlock()
-		b.inputWG.Add(1)
-		go b.inputLoop()
-	}
 	return nil
 }
 
@@ -409,6 +410,15 @@ func (b *Base) cancelInputTask() {
 	if b.directMode {
 		return
 	}
+	b.inputMu.Lock()
+	running := b.inputRunning
+	b.inputRunning = false
+	b.inputMu.Unlock()
+	if !running {
+		// Never started, because the StartFrame never arrived. There is nothing
+		// to wait for.
+		return
+	}
 	done := make(chan struct{})
 	go func() {
 		b.inputWG.Wait()
@@ -430,7 +440,38 @@ func (b *Base) QueueFrame(ctx context.Context, f frames.Frame, dir Direction) er
 		return b.processFrame(ctx, item{frame: f, dir: dir})
 	}
 	b.inputQueue.push(item{frame: f, dir: dir})
+
+	// Nothing drains the queue until the StartFrame arrives, so a processor
+	// never acts on a frame before it has been started. Processors are set up
+	// concurrently, so one that connects during setup can push frames at a
+	// processor that has not started yet; those frames simply wait, and the
+	// StartFrame is taken off the queue ahead of them.
+	if isStartFrame(f) {
+		b.createInputTask()
+	}
 	return nil
+}
+
+// createInputTask starts the input goroutine, once. It is called when the
+// StartFrame is queued, which is what opens the processor's queues.
+func (b *Base) createInputTask() {
+	if b.directMode {
+		return
+	}
+	b.inputMu.Lock()
+	defer b.inputMu.Unlock()
+	if b.inputRunning {
+		return
+	}
+	b.inputRunning = true
+	// The gate belongs to the goroutine it holds, so it is created with it: a
+	// pause taken before the processor started holds the goroutine from its
+	// first frame, exactly as one taken later holds it from its next.
+	b.pauseMu.Lock()
+	b.inputEvent = newEvent()
+	b.pauseMu.Unlock()
+	b.inputWG.Add(1)
+	go b.inputLoop()
 }
 
 // inputLoop handles every frame queued to the processor. System frames are
@@ -480,10 +521,12 @@ func (b *Base) processFrame(ctx context.Context, it item) error {
 	// so what it released cannot overtake it. Deferred so a processor is released
 	// even when handling the frame failed.
 	defer b.applyPendingResume()
+	b.events.Call(ctx, EventBeforeProcessFrame, b.self, it.frame)
 	if err := b.self.ProcessFrame(ctx, it.frame, it.dir); err != nil {
 		b.PushError(ctx, fmt.Sprintf("error processing frame: %v", err), err, false)
 		return err
 	}
+	b.events.Call(ctx, EventAfterProcessFrame, b.self, it.frame)
 	return nil
 }
 
@@ -565,11 +608,21 @@ func (b *Base) UsageMetricsEnabled() bool { return b.usageMetricsEnabled }
 func (b *Base) Self() Processor { return b.self }
 
 // PushFrame implements Processor. It forwards a frame to the neighbor in dir.
-// Frames pushed before the processor has received its StartFrame are dropped.
+//
+// A frame pushed at a neighbor that has not started yet is not dropped: it waits
+// in that neighbor's queue until its StartFrame arrives, which is what lets a
+// processor that connects while the pipeline is being set up push what it
+// receives straight away.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir Direction) error {
-	if !b.checkStarted(f) {
-		return nil
-	}
+	b.events.Call(ctx, EventBeforePushFrame, b.self, f)
+	err := b.internalPushFrame(ctx, f, dir)
+	b.events.Call(ctx, EventAfterPushFrame, b.self, f)
+	return err
+}
+
+// internalPushFrame hands the frame to the neighbor in dir, telling the
+// observers about the handover first.
+func (b *Base) internalPushFrame(ctx context.Context, f frames.Frame, dir Direction) error {
 	switch dir {
 	case Downstream:
 		if b.next != nil {
@@ -621,6 +674,24 @@ func (b *Base) Broadcast(ctx context.Context, build func() frames.Frame) error {
 	return b.self.PushFrame(ctx, up, Upstream)
 }
 
+// BroadcastInterruption interrupts the pipeline from this processor: it drops
+// the work this processor had queued and sends an InterruptionFrame both ways,
+// so every processor on either side hears that the turn was cut off.
+//
+// Use it wherever something other than the user's voice interrupts the bot: a
+// client typing over it, a tool deciding the answer is stale, a supervisor
+// stopping the turn.
+//
+// It returns as soon as the frames are away, and this processor's own goroutine
+// is left running, so a caller can carry on and push what it interrupted for.
+// That is why the queue is emptied rather than the goroutine canceled: canceling
+// here would cancel the call asking for the interruption.
+func (b *Base) BroadcastInterruption(ctx context.Context) error {
+	slog.DebugContext(ctx, "broadcasting interruption", "processor", b.name)
+	b.resetProcessTask()
+	return b.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
+}
+
 // PushTokenUsage reports LLM token usage measured by a service that does not run
 // through the LLM base: a realtime (speech-to-speech) service that receives a
 // usage event from its provider. It records the aggregate token counts as
@@ -645,9 +716,6 @@ func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTok
 }
 
 func (b *Base) start() {
-	b.startedMu.Lock()
-	b.started = true
-	b.startedMu.Unlock()
 	b.createProcessTask()
 }
 
@@ -682,19 +750,34 @@ func (b *Base) createProcessTask() {
 	if b.procRunning {
 		return
 	}
-	b.procQueue.reset()
-	// A fresh process goroutine starts unpaused, with its own gate: a pause that
-	// was in effect for the goroutine being replaced must not hold the new one.
-	b.pauseMu.Lock()
-	b.blockFrames = false
-	b.processEvent = newEvent()
-	b.pauseMu.Unlock()
+	b.resetProcessTask()
 	ctx, cancel := context.WithCancel(b.baseCtx)
 	done := make(chan struct{})
 	b.procCancel = cancel
 	b.procDone = done
 	b.procRunning = true
 	go b.processLoop(ctx, done)
+}
+
+// resetProcessTask clears the in-order queue and starts the pause gate afresh,
+// without touching the goroutine itself.
+//
+// It is what an interruption does to a processor that is interrupting from
+// inside its own frame handling: canceling the goroutine there would cancel the
+// very call asking for the interruption, so the queued work is dropped and the
+// gate reopened while the goroutine carries on.
+//
+// A fresh gate matters because a pause that was in effect must not survive the
+// interruption that cleared everything behind it.
+func (b *Base) resetProcessTask() {
+	if b.directMode {
+		return
+	}
+	b.pauseMu.Lock()
+	b.blockFrames = false
+	b.processEvent = newEvent()
+	b.pauseMu.Unlock()
+	b.procQueue.reset()
 }
 
 // cancelProcessTask cancels the process goroutine and waits for it to exit,
@@ -719,16 +802,6 @@ func (b *Base) cancelProcessTask() {
 	case <-time.After(processCancelTimeout):
 		slog.Warn("timed out canceling process goroutine", "processor", b.name)
 	}
-}
-
-func (b *Base) checkStarted(f frames.Frame) bool {
-	b.startedMu.Lock()
-	started := b.started
-	b.startedMu.Unlock()
-	if !started {
-		slog.Error("frame pushed before StartFrame", "processor", b.name, "frame", f.Name())
-	}
-	return started
 }
 
 func (b *Base) isCanceling() bool {

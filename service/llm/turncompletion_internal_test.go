@@ -84,9 +84,10 @@ func gatedService(t *testing.T) (*Base, *capture, *capture) {
 			_ = p.Cleanup(context.Background())
 		}
 	})
-	// The processors refuse pushes until a StartFrame has reached them, so one
-	// is sent through the chain the way a running pipeline would.
-	if err := up.ProcessFrame(t.Context(), frames.NewStartFrame(), processor.Downstream); err != nil {
+	// A processor drains nothing until its StartFrame arrives, so one is queued
+	// at the head of the chain the way a running pipeline would, and travels
+	// from there to the rest.
+	if err := up.QueueFrame(t.Context(), frames.NewStartFrame(), processor.Downstream); err != nil {
 		t.Fatalf("StartFrame: %v", err)
 	}
 	if len(down.frames()) == 0 {

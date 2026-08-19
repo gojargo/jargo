@@ -256,7 +256,7 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		if text == "" {
 			return
 		}
-		tf := frames.NewTranscriptionFrame(text, "", time.Now().UTC().Format(time.RFC3339))
+		tf := frames.NewTranscriptionFrame(text, "", frames.NowTimestamp())
 		tf.Finalized = true
 		_ = s.PushFrame(ctx, tf, processor.Downstream)
 	})

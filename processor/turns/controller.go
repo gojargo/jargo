@@ -16,11 +16,13 @@ const defaultStopTimeout = 5 * time.Second
 // ControllerHooks are the callbacks the controller invokes upward (to the
 // UserTurnProcessor). They all run with the controller's mutex held.
 type ControllerHooks struct {
-	Started            func(ctx context.Context, params UserTurnStartedParams)
-	Stopped            func(ctx context.Context, params UserTurnStoppedParams)
-	InferenceTriggered func(ctx context.Context)
+	// Started, Stopped, InferenceTriggered and ResetAggregation each carry the
+	// strategy that made the decision, so what the hooks report can name it.
+	Started            func(ctx context.Context, s StartStrategy, params UserTurnStartedParams)
+	Stopped            func(ctx context.Context, s StopStrategy, params UserTurnStoppedParams)
+	InferenceTriggered func(ctx context.Context, s StopStrategy)
 	StopTimeout        func(ctx context.Context)
-	ResetAggregation   func(ctx context.Context)
+	ResetAggregation   func(ctx context.Context, s StartStrategy)
 	Push               func(ctx context.Context, f frames.Frame, dir processor.Direction)
 	Broadcast          func(ctx context.Context, build func() frames.Frame)
 }
@@ -62,10 +64,10 @@ func (c *UserTurnController) Setup(ctx context.Context) {
 	c.ctx = ctx
 	c.mu.Unlock()
 	for _, s := range c.strategies.Start {
-		s.attach(c.startEnv())
+		s.attach(s, c.startEnv())
 	}
 	for _, s := range c.strategies.Stop {
-		s.attach(c.stopEnv())
+		s.attach(s, c.stopEnv())
 	}
 }
 
@@ -134,11 +136,15 @@ func (c *UserTurnController) Process(f frames.Frame) {
 // startEnv builds the environment shared with start strategies.
 func (c *UserTurnController) startEnv() strategyEnv {
 	return strategyEnv{
-		mu:               &c.mu,
-		started:          c.onStartTriggered,
-		resetAggregation: func() { c.fire(c.hooks.ResetAggregation) },
-		push:             c.pushHook(),
-		broadcast:        c.broadcastHook(),
+		mu:      &c.mu,
+		started: c.onStartTriggered,
+		resetAggregation: func(s StartStrategy) {
+			if c.hooks.ResetAggregation != nil {
+				c.hooks.ResetAggregation(c.ctx, s)
+			}
+		},
+		push:      c.pushHook(),
+		broadcast: c.broadcastHook(),
 	}
 }
 
@@ -169,15 +175,9 @@ func (c *UserTurnController) broadcastHook() func(func() frames.Frame) {
 	}
 }
 
-func (c *UserTurnController) fire(fn func(context.Context)) {
-	if fn != nil {
-		fn(c.ctx)
-	}
-}
-
 // onStartTriggered opens a turn (guarded against double-start), resets all
 // strategies for the fresh turn, and notifies upward.
-func (c *UserTurnController) onStartTriggered(params UserTurnStartedParams) {
+func (c *UserTurnController) onStartTriggered(s StartStrategy, params UserTurnStartedParams) {
 	if c.userTurn {
 		return
 	}
@@ -185,24 +185,24 @@ func (c *UserTurnController) onStartTriggered(params UserTurnStartedParams) {
 	c.rearmWatchdog()
 	c.notifyTurnStarted()
 	if c.hooks.Started != nil {
-		c.hooks.Started(c.ctx, params)
+		c.hooks.Started(c.ctx, s, params)
 	}
 }
 
 // onInferenceTriggered fires only during an active turn.
-func (c *UserTurnController) onInferenceTriggered() {
+func (c *UserTurnController) onInferenceTriggered(s StopStrategy) {
 	if !c.userTurn {
 		return
 	}
 	c.rearmWatchdog()
 	if c.hooks.InferenceTriggered != nil {
-		c.hooks.InferenceTriggered(c.ctx)
+		c.hooks.InferenceTriggered(c.ctx, s)
 	}
 }
 
 // onStopTriggered closes a turn (guarded against double-stop), resets the stop
 // strategies, and notifies upward.
-func (c *UserTurnController) onStopTriggered(params UserTurnStoppedParams) {
+func (c *UserTurnController) onStopTriggered(s StopStrategy, params UserTurnStoppedParams) {
 	if !c.userTurn {
 		return
 	}
@@ -219,7 +219,7 @@ func (c *UserTurnController) onStopTriggered(params UserTurnStoppedParams) {
 	c.rearmWatchdog()
 	c.notifyTurnStopped()
 	if c.hooks.Stopped != nil {
-		c.hooks.Stopped(c.ctx, params)
+		c.hooks.Stopped(c.ctx, s, params)
 	}
 }
 
@@ -269,6 +269,8 @@ func (c *UserTurnController) onWatchdog() {
 		if c.hooks.StopTimeout != nil {
 			c.hooks.StopTimeout(c.ctx)
 		}
-		c.onStopTriggered(DefaultStoppedParams())
+		// No strategy decided this one: the turn is being closed because none
+		// did, so there is nothing to attribute it to.
+		c.onStopTriggered(nil, DefaultStoppedParams())
 	}
 }

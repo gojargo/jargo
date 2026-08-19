@@ -570,8 +570,8 @@ func TestRecordingControlFramesTravelOn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = next.Cleanup(context.Background()) })
 	// Started on its own, since it is linked after the recorder saw the pipeline
-	// start, and a processor only takes frames once it has.
-	if err := next.ProcessFrame(context.Background(), frames.NewStartFrame(), processor.Downstream); err != nil {
+	// start, and a processor drains nothing until its StartFrame arrives.
+	if err := next.QueueFrame(context.Background(), frames.NewStartFrame(), processor.Downstream); err != nil {
 		t.Fatalf("start the collector: %v", err)
 	}
 	p.Link(next)

@@ -170,6 +170,21 @@ func (b *Base) cancelToolNames() []string {
 	return slices.Sorted(maps.Keys(b.cancelTools))
 }
 
+// hasAsyncTools reports whether any registered tool outlives the reply that
+// asked for it, which is what makes the standing async-tool guidance worth
+// carrying. A cancel tool is registered as an ordinary synchronous one, so it
+// never counts on its own.
+func (b *Base) hasAsyncTools() bool {
+	b.handlersMu.RLock()
+	defer b.handlersMu.RUnlock()
+	for _, item := range b.handlers {
+		if !item.cancelOnInterruption {
+			return true
+		}
+	}
+	return false
+}
+
 // wantedCancelToolsLocked maps each cancel tool that should be offered to the
 // tool it cancels. Call it with handlersMu held.
 func (b *Base) wantedCancelToolsLocked() map[string]string {

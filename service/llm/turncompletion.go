@@ -23,15 +23,17 @@ import (
 // suppressed and a re-prompt is armed, so the user is given time to finish and
 // nudged if they do not.
 
-// The markers the model is instructed to begin each response with.
+// The markers the model is instructed to begin each response with. They are
+// defined with the frames that carry them, since the conversation aggregator
+// has to recognize them too.
 const (
 	// MarkerComplete means the user's turn was complete; answer normally.
-	MarkerComplete = "✓"
+	MarkerComplete = frames.UserTurnCompleteMarker
 	// MarkerIncompleteShort means the user was cut off and will likely continue
 	// within seconds.
-	MarkerIncompleteShort = "○"
+	MarkerIncompleteShort = frames.UserTurnIncompleteShortMarker
 	// MarkerIncompleteLong means the user needs longer to think.
-	MarkerIncompleteLong = "◐"
+	MarkerIncompleteLong = frames.UserTurnIncompleteLongMarker
 )
 
 // TurnMarker is the completion verdict found in the response being streamed.

@@ -632,9 +632,11 @@ type deferredStop struct {
 // turn; pair it with a finalizer such as ExternalCompletionStop.
 func Deferred(inner StopStrategy) StopStrategy { return &deferredStop{inner: inner} }
 
-func (d *deferredStop) attach(env strategyEnv) {
+func (d *deferredStop) attach(_ StopStrategy, env strategyEnv) {
 	env.stopped = nil // suppress finalization
-	d.inner.attach(env)
+	// The wrapped strategy is what decides, so it is what the decisions are
+	// attributed to, not this wrapper.
+	d.inner.attach(d.inner, env)
 }
 
 func (d *deferredStop) Process(f frames.Frame) ProcessFrameResult { return d.inner.Process(f) }

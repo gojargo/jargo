@@ -20,8 +20,12 @@ package aggregators
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/audio/vad/controller"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
@@ -41,6 +45,110 @@ const (
 	toolResultCompleted = "COMPLETED"
 )
 
+// The events the user half of a pair raises around each turn it collects.
+const (
+	// EventUserTurnStarted fires when the user's turn begins, carrying the
+	// turns.StartStrategy that decided it began.
+	//
+	//	events.On(agg.User().Events(), aggregators.EventUserTurnStarted,
+	//	    func(ctx context.Context, s turns.StartStrategy) { … })
+	EventUserTurnStarted = "on_user_turn_started"
+	// EventUserTurnStopped fires when the user's turn ends, carrying a
+	// UserTurnStopped describing what they said and which strategy decided the
+	// turn was over.
+	EventUserTurnStopped = "on_user_turn_stopped"
+	// EventUserTurnInferenceTriggered fires when a stop strategy decides there
+	// is enough to answer, which is usually but not always the moment the turn
+	// ends. It carries the turns.StopStrategy that decided.
+	EventUserTurnInferenceTriggered = "on_user_turn_inference_triggered"
+	// EventUserTurnStopTimeout fires when a turn was closed because no stop
+	// strategy decided it had ended. It carries no argument.
+	EventUserTurnStopTimeout = "on_user_turn_stop_timeout"
+	// EventUserTurnIdle fires when the user has said nothing for the configured
+	// idle timeout. It carries no argument.
+	EventUserTurnIdle = "on_user_turn_idle"
+	// EventUserTurnMessageAdded fires when the user's words are written to the
+	// conversation, carrying a UserTurnMessageAdded. A turn can write more than
+	// once, when an early inference answers part of it, so this fires per write
+	// where EventUserTurnStopped fires once per turn.
+	EventUserTurnMessageAdded = "on_user_turn_message_added"
+	// EventUserMuteStarted fires when the user becomes muted and their input
+	// stops reaching the bot. It carries no argument.
+	EventUserMuteStarted = "on_user_mute_started"
+	// EventUserMuteStopped fires when the user is unmuted. It carries no
+	// argument.
+	EventUserMuteStopped = "on_user_mute_stopped"
+)
+
+// UserTurnStopped describes a user turn that has just ended.
+type UserTurnStopped struct {
+	// Strategy is the stop strategy that decided the turn was over. It is nil
+	// when nothing decided: a turn closed because no strategy did, or one closed
+	// by the session ending.
+	Strategy turns.StopStrategy
+	// Content is everything the user said during the turn, including whatever an
+	// earlier inference already answered. It is empty for a turn that said
+	// nothing.
+	Content string
+	// Timestamp is when the turn began, as ISO 8601.
+	Timestamp string
+	// UserID identifies the speaker, and is empty when the transcription service
+	// does not say who spoke.
+	UserID string
+}
+
+// UserTurnMessageAdded describes a user message written to the conversation.
+type UserTurnMessageAdded struct {
+	// Content is the message that was written. It is the segment written now,
+	// not the whole turn: a turn answered early writes what it had, then writes
+	// the rest when it ends.
+	Content string
+	// Timestamp is when the turn began, as ISO 8601.
+	Timestamp string
+	// UserID identifies the speaker, and is empty when the transcription service
+	// does not say who spoke.
+	UserID string
+}
+
+// The events the assistant half of a pair raises around each turn it writes.
+const (
+	// EventAssistantTurnStarted fires when the bot's turn begins, which is the
+	// model starting to answer or, for an utterance spoken with no answer around
+	// it, that speech starting. It carries no argument.
+	//
+	//	events.On(agg.Assistant().Events(), aggregators.EventAssistantTurnStarted,
+	//	    func(ctx context.Context, _ any) { … })
+	EventAssistantTurnStarted = "on_assistant_turn_started"
+	// EventAssistantTurnStopped fires when the bot's turn ends, carrying an
+	// AssistantTurnStopped describing what it said.
+	//
+	//	events.On(agg.Assistant().Events(), aggregators.EventAssistantTurnStopped,
+	//	    func(ctx context.Context, t aggregators.AssistantTurnStopped) { … })
+	EventAssistantTurnStopped = "on_assistant_turn_stopped"
+	// EventAssistantThought fires when a reasoning model finishes a thought,
+	// carrying an AssistantThought with what it reasoned.
+	EventAssistantThought = "on_assistant_thought"
+)
+
+// AssistantThought is one completed piece of a reasoning model's thinking.
+type AssistantThought struct {
+	// Content is the thought, whole.
+	Content string
+	// Timestamp is when the thought began, as ISO 8601.
+	Timestamp string
+}
+
+// AssistantTurnStopped describes a bot turn that has just ended.
+type AssistantTurnStopped struct {
+	// Content is everything the bot said during the turn, as one message. It is
+	// empty for a turn that said nothing.
+	Content string
+	// Interrupted reports whether the turn was cut off rather than finishing.
+	Interrupted bool
+	// Timestamp is when the turn began, as ISO 8601.
+	Timestamp string
+}
+
 // Pair is a user and assistant aggregator sharing one conversation context.
 type Pair struct {
 	context   *frames.LLMContext
@@ -56,6 +164,25 @@ type options struct {
 	// summarize configures the automatic summarization thresholds, and is nil
 	// when only on-demand summarization is wanted.
 	summarize *frames.AutoSummarizationConfig
+	// mute suppresses user input while the bot is engaged. It is separate from
+	// the turn configuration because muting the user and deciding when their
+	// turn ended are different things, and a pipeline can want either alone.
+	mute []turns.MuteStrategy
+	// vad configures voice-activity detection run inside the user aggregator,
+	// and is nil when the pipeline detects speech somewhere else.
+	vad *VADConfig
+}
+
+// VADConfig configures the voice-activity detection a user aggregator runs.
+type VADConfig struct {
+	// Analyzer detects voice activity in the incoming audio. Required.
+	Analyzer vad.Analyzer
+	// AudioIdleTimeout is how long to wait, with the user speaking and no audio
+	// arriving at all, before taking the speech to have stopped. It covers the
+	// audio going away mid-utterance, a muted microphone being the usual case.
+	//
+	// Leave it nil for one second. A zero duration turns the watch off.
+	AudioIdleTimeout *time.Duration
 }
 
 // WithSummarization compresses the conversation automatically once it passes
@@ -73,6 +200,41 @@ type options struct {
 // than the one carrying the conversation.
 func WithSummarization(cfg frames.AutoSummarizationConfig) Option {
 	return func(o *options) { o.summarize = &cfg }
+}
+
+// WithMuteStrategies suppresses the user's input while the bot is engaged: while
+// it is speaking, or while a tool call it is waiting on runs. Input that arrives
+// muted is dropped rather than queued, so the bot is not answered by something
+// the user said while it was not listening.
+//
+// The strategies are consulted for every frame, so each keeps up with the
+// conversation, and any one of them asking for silence is enough. A change of
+// state is announced to the pipeline as a UserMuteStarted or UserMuteStopped
+// frame, and raised as an event.
+//
+// It is independent of WithTurns: muting the user and deciding when their turn
+// ended are different questions.
+func WithMuteStrategies(strategies ...turns.MuteStrategy) Option {
+	return func(o *options) { o.mute = strategies }
+}
+
+// WithVAD detects voice activity inside the user aggregator rather than in a
+// processor of its own.
+//
+// The frames it produces are queued back into the aggregator rather than pushed
+// at a neighbor, so the turn strategies running here see the speech their own
+// detector heard.
+//
+// Use it when the aggregator is the only thing that needs the detection. Where a
+// transport, an interruption decision or a recorder needs it too, put a
+// vadproc.Processor after the input transport instead and leave this unset: the
+// detection is then done once, where everything downstream of it can see it.
+// Running both means analyzing the same audio twice.
+//
+// Muted input never reaches the detector, so a muted microphone does not read as
+// speech.
+func WithVAD(cfg VADConfig) Option {
+	return func(o *options) { o.vad = &cfg }
 }
 
 // WithTurns drives the user turn from turn-taking strategies rather than from
@@ -94,9 +256,13 @@ func New(ctx *frames.LLMContext, opts ...Option) *Pair {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	mute := o.mute
+	if o.turns != nil && len(o.turns.MuteStrategies) > 0 {
+		mute = append(append([]turns.MuteStrategy(nil), mute...), o.turns.MuteStrategies...)
+	}
 	return &Pair{
 		context:   ctx,
-		user:      newUser(ctx, o.turns),
+		user:      newUser(ctx, o.turns, mute, o.vad),
 		assistant: newAssistant(ctx, o.summarize),
 	}
 }
@@ -126,37 +292,118 @@ type UserAggregator struct {
 
 	turn *turns.UserTurnController
 	idle *turns.UserIdleController
+	// vad detects voice activity for the strategies running here, and is nil
+	// when the pipeline detects speech somewhere else.
+	vad *controller.Controller
 
 	muteStrategies []turns.MuteStrategy
 	muteMu         sync.Mutex
 	muted          bool
 
-	mu          sync.Mutex
-	aggregation string
+	mu sync.Mutex
+	// aggregation is what the user has said so far this turn, in the order they
+	// said it. Each piece records whether it carries its own spacing, because a
+	// transcription service may deliver either kind and joining them all the
+	// same way either doubles the spaces or runs the words together.
+	aggregation []text.Part
+	// turnStartedAt is when the open turn began, as ISO 8601, and is what every
+	// report of the turn is stamped with.
+	turnStartedAt string
+	// wholeTurn is everything the turn has said across every write it has made.
+	// A turn answered early writes what it had and empties the aggregation, so
+	// without this the report of the turn ending would carry only the tail.
+	wholeTurn string
+	// userID is who the transcription service said was speaking, carried on what
+	// the turn reports.
+	userID string
 }
 
-func newUser(ctx *frames.LLMContext, cfg *turns.Config) *UserAggregator {
-	u := &UserAggregator{context: ctx, turnTaking: cfg != nil}
+func newUser(
+	ctx *frames.LLMContext, cfg *turns.Config, mute []turns.MuteStrategy, vadCfg *VADConfig,
+) *UserAggregator {
+	u := &UserAggregator{context: ctx, turnTaking: cfg != nil, muteStrategies: mute}
 	u.Base = processor.New("UserContextAggregator", u)
+	if vadCfg != nil {
+		u.vad = newVADController(u, *vadCfg)
+	}
+	// All asynchronous: a handler may do anything, and the turn must not wait on
+	// whatever is listening to it.
+	for _, name := range []string{
+		EventUserTurnStarted, EventUserTurnStopped, EventUserTurnInferenceTriggered,
+		EventUserTurnStopTimeout, EventUserTurnIdle, EventUserTurnMessageAdded,
+		EventUserMuteStarted, EventUserMuteStopped,
+	} {
+		u.Events().Register(name, false)
+	}
 	if cfg == nil {
 		return u
 	}
-	u.muteStrategies = cfg.MuteStrategies
 	u.turn = turns.NewUserTurnController(cfg.Strategies, cfg.StopTimeout)
-	u.idle = turns.NewUserIdleController(turns.IdleConfig{Timeout: cfg.IdleTimeout, Callback: cfg.OnIdle})
+	// The event fires alongside the configured callback, so something watching
+	// the aggregator hears about an idle conversation without having to be the
+	// one thing the pipeline was built with.
+	onIdle := func(ctx context.Context, c *turns.UserIdleController) error {
+		u.Events().Call(ctx, EventUserTurnIdle, u)
+		if cfg.OnIdle == nil {
+			return nil
+		}
+		return cfg.OnIdle(ctx, c)
+	}
+	u.idle = turns.NewUserIdleController(turns.IdleConfig{Timeout: cfg.IdleTimeout, Callback: onIdle})
 	u.turn.SetHooks(turns.ControllerHooks{
 		Started:            u.onTurnStarted,
 		Stopped:            u.onTurnStopped,
 		InferenceTriggered: u.onInferenceTriggered,
+		StopTimeout:        u.onStopTimeout,
 		ResetAggregation:   u.onResetAggregation,
 		Push: func(ctx context.Context, f frames.Frame, dir processor.Direction) {
-			_ = u.PushFrame(ctx, f, dir)
+			// Queued, not pushed: a frame a strategy emits has to travel through
+			// this processor like any other, so the aggregation and the rest of
+			// the strategies see it. Pushing it at a neighbor would send it past
+			// the very things it was emitted to reach.
+			_ = u.QueueFrame(ctx, f, dir)
 		},
-		Broadcast: func(ctx context.Context, build func() frames.Frame) {
-			_ = u.Broadcast(ctx, build)
-		},
+		Broadcast: u.queuedBroadcast,
 	})
 	return u
+}
+
+// newVADController builds the detector the aggregator runs, wired so everything
+// it produces is queued back into the aggregator rather than pushed at a
+// neighbor.
+//
+// Queueing is what makes the detection reach the strategies at all. A frame
+// pushed at a neighbor leaves this processor without ever being handled by it,
+// so the turn controller running here would never see the speech its own
+// detector heard. Queued, it arrives like any other frame and is handled in
+// turn. The copy going the other way is pushed, since there is nothing on this
+// side of the pipeline waiting for it.
+func newVADController(u *UserAggregator, cfg VADConfig) *controller.Controller {
+	return controller.New(cfg.Analyzer, controller.Handlers{
+		OnSpeechStarted: func(ctx context.Context) {
+			startSecs := u.vad.Params().StartSecs
+			// Taken once, outside the builder, so the frame sent each way reports
+			// the same moment.
+			ts := time.Now()
+			u.queuedBroadcast(ctx, func() frames.Frame {
+				return frames.NewVADUserStartedSpeakingFrame(startSecs, ts)
+			})
+		},
+		OnSpeechStopped: func(ctx context.Context) {
+			stopSecs := u.vad.Params().StopSecs
+			ts := time.Now()
+			u.queuedBroadcast(ctx, func() frames.Frame {
+				return frames.NewVADUserStoppedSpeakingFrame(stopSecs, ts)
+			})
+		},
+		OnSpeechActivity: func(ctx context.Context) {
+			u.queuedBroadcast(ctx, func() frames.Frame { return frames.NewUserSpeakingFrame() })
+		},
+		OnPushFrame: func(ctx context.Context, f frames.Frame, dir processor.Direction) {
+			_ = u.QueueFrame(ctx, f, dir)
+		},
+		OnBroadcastFrame: u.queuedBroadcast,
+	}, controller.Config{AudioIdleTimeout: cfg.AudioIdleTimeout})
 }
 
 // Setup wires the controllers.
@@ -173,6 +420,9 @@ func (u *UserAggregator) Setup(ctx context.Context, s processor.Setup) error {
 
 // Cleanup tears the controllers down.
 func (u *UserAggregator) Cleanup(ctx context.Context) error {
+	if u.vad != nil {
+		u.vad.Cleanup()
+	}
 	if u.turn != nil {
 		u.turn.Cleanup()
 		u.idle.Cleanup()
@@ -191,8 +441,16 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 	}
 	// A muted frame is dropped outright: the controllers must not see input the
 	// user is not allowed to give.
-	if u.turn != nil && u.suppressed(ctx, f) {
+	if u.suppressed(ctx, f) {
 		return nil
+	}
+	// Detection runs before the frame is handled, so the speaking frames it
+	// raises are queued behind this one and reach the strategies in order with
+	// it.
+	if u.vad != nil {
+		if err := u.vad.ProcessFrame(ctx, f); err != nil {
+			return err
+		}
 	}
 	err := u.handleFrame(ctx, f, dir)
 	if u.turn != nil {
@@ -212,21 +470,24 @@ func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir pr
 		if err := u.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		return u.maybeRun(ctx)
+		u.reportTurnStopped(ctx, nil, true)
+		return nil
 
 	case *frames.CancelFrame:
 		// Same, the other way round: a cancel tears the pipeline down at once, so
 		// what is held is committed before the frame that stops everything.
-		if err := u.maybeRun(ctx); err != nil {
-			return err
-		}
+		u.reportTurnStopped(ctx, nil, true)
 		return u.PushFrame(ctx, f, dir)
 
-	case *frames.InterimTranscriptionFrame:
+	case *frames.InterimTranscriptionFrame, *frames.TranslationFrame:
 		// Consumed here, like the final transcript below: partial speech is not
 		// aggregated either, and the turn strategies that read it run inside this
 		// processor. What is downstream is the model, which is given the
 		// conversation rather than the transcripts it was built from.
+		//
+		// A translation is consumed for the same reason and never aggregated:
+		// only the transcription is the user's own words, so a provider that
+		// reports both must not have the turn counted twice.
 		return nil
 
 	case *frames.TranscriptionFrame:
@@ -317,7 +578,23 @@ func (u *UserAggregator) appendMessages(msgs []frames.Message) {
 func (u *UserAggregator) handleTranscription(
 	ctx context.Context, fr *frames.TranscriptionFrame,
 ) error {
-	u.aggregate(fr.Text)
+	// Whitespace is not something the user said. A service that reports a final
+	// transcript of nothing but spaces would otherwise open a turn, commit it as
+	// a message and have the model answer it.
+	if strings.TrimSpace(fr.Text) == "" {
+		return nil
+	}
+	// A turn opened by a strategy is stamped when it opens. Without turn taking
+	// nothing opens one, so the first transcript of the turn stamps it, and every
+	// report of that turn has a moment to carry.
+	u.mu.Lock()
+	if u.turnStartedAt == "" {
+		u.turnStartedAt = frames.NowTimestamp()
+	}
+	u.userID = fr.UserID
+	u.mu.Unlock()
+
+	u.aggregate(text.Part{Text: fr.Text, IncludesInterPartSpaces: fr.IncludesInterFrameSpaces})
 
 	if u.turnTaking {
 		// A transcript only adds to the aggregation. What is aggregated is
@@ -329,7 +606,8 @@ func (u *UserAggregator) handleTranscription(
 	}
 	// Without turn taking, STT finalization marks the end of the user's turn.
 	if fr.Finalized {
-		return u.maybeRun(ctx)
+		_, err := u.maybeRun(ctx)
+		return err
 	}
 	return nil
 }
@@ -346,17 +624,11 @@ func (u *UserAggregator) handleTranscription(
 // utterance as several final transcripts, so this is speech arriving as
 // expected, not a fault. Taking the lock puts the transcript either side of the
 // pair rather than inside it.
-func (u *UserAggregator) aggregate(text string) {
-	if text == "" {
-		return
-	}
+func (u *UserAggregator) aggregate(part text.Part) {
 	fold := func() {
 		u.mu.Lock()
 		defer u.mu.Unlock()
-		if u.aggregation != "" {
-			u.aggregation += " "
-		}
-		u.aggregation += text
+		u.aggregation = append(u.aggregation, part)
 	}
 	if u.turn != nil {
 		u.turn.Locked(fold)
@@ -371,18 +643,22 @@ func (u *UserAggregator) aggregate(text string) {
 // With turn taking it is called only from the turn controller's hooks, which
 // are the sole authority on when the aggregation becomes a message. Without turn
 // taking a finalized transcript alone suffices.
-func (u *UserAggregator) maybeRun(ctx context.Context) error {
+func (u *UserAggregator) maybeRun(ctx context.Context) (string, error) {
 	u.mu.Lock()
-	if u.aggregation == "" {
-		u.mu.Unlock()
-		return nil
-	}
-	text := u.aggregation
-	u.aggregation = ""
+	parts := u.aggregation
+	u.aggregation = nil
+	startedAt, userID := u.turnStartedAt, u.userID
 	u.mu.Unlock()
 
-	u.context.AddUserMessage(text)
-	return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+	said := text.Concatenate(parts)
+	if said == "" {
+		return "", nil
+	}
+	u.context.AddUserMessage(said)
+	err := u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+	u.Events().Call(ctx, EventUserTurnMessageAdded, u,
+		UserTurnMessageAdded{Content: said, Timestamp: startedAt, UserID: userID})
+	return said, err
 }
 
 // AssistantAggregator collects the LLM's streamed text into a single assistant
@@ -407,10 +683,12 @@ type AssistantAggregator struct {
 	// two kinds space themselves differently, so each piece carries the answer
 	// and the join respects it.
 	aggregation []text.Part
-	// turnStarted reports whether an assistant turn is open. A turn opens on the
-	// model's response starting, or, for an utterance the service speaks with no
-	// response around it, on the start of that speech.
-	turnStarted bool
+	// turnStartedAt is when the open assistant turn began, and empty when no turn
+	// is open. A turn opens on the model's response starting, or, for an
+	// utterance the service speaks with no response around it, on the start of
+	// that speech. It doubles as the flag because a turn is reported with the
+	// moment it began, so the two can never disagree.
+	turnStartedAt string
 	// inProgress holds every tool call of the current turn that has not reported
 	// a final result yet, keyed by tool call id. The value is nil between the
 	// FunctionCallsStartedFrame that announced the call and the
@@ -424,6 +702,16 @@ type AssistantAggregator struct {
 	// pushOnBotStopped records a deferred re-run, so several results arriving
 	// while the bot speaks are answered by a single inference once it stops.
 	pushOnBotStopped bool
+
+	// thought is the reasoning being streamed now, and the moment it began. A
+	// thought is kept apart from the turn's own text: it is the model reasoning
+	// with itself, so it is never spoken and never joins what the bot said.
+	thought        []text.Part
+	thoughtStarted string
+	// thoughtToContext and thoughtLLM record whether the thought being streamed
+	// is written to the conversation, and as whose provider's native message.
+	thoughtToContext bool
+	thoughtLLM       string
 
 	// Lifetime of the context-updated callbacks, which run off the frame path.
 	// Cleanup cancels them and waits for them to return.
@@ -447,6 +735,11 @@ func newAssistant(ctx *frames.LLMContext, sc *frames.AutoSummarizationConfig) *A
 	a.summarizer = NewSummarizer(ctx, cfg, sc != nil)
 	a.summarizer.Add(EventRequestSummarization, a.onRequestSummarization)
 	a.Base = processor.New("AssistantContextAggregator", a)
+	// Both run on their own goroutine: a handler may do anything, and a turn
+	// beginning or ending must not be held up by whatever is listening for it.
+	a.Events().Register(EventAssistantTurnStarted, false)
+	a.Events().Register(EventAssistantTurnStopped, false)
+	a.Events().Register(EventAssistantThought, false)
 	return a
 }
 
@@ -492,11 +785,7 @@ func (a *AssistantAggregator) Setup(ctx context.Context, s processor.Setup) erro
 // Cleanup cancels the context-updated callbacks and the summarization in
 // flight, and waits for them to return.
 func (a *AssistantAggregator) Cleanup(ctx context.Context) error {
-	if a.taskCancel != nil {
-		a.taskCancel()
-	}
-	a.taskWG.Wait()
-	a.summarizer.Cleanup(ctx)
+	a.releaseWork(ctx)
 	return a.Base.Cleanup(ctx)
 }
 
@@ -520,15 +809,103 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
 	case *frames.LLMFullResponseStartFrame:
-		a.openTurn()
+		a.openTurn(ctx)
 	case *frames.TTSStartedFrame:
 		// Speech that will be recorded opens a turn of its own when none is open.
 		// It is how an utterance the service speaks, with no response around it to
 		// mark where the turn begins, still gets one, while deferring to a turn the
 		// model already started.
 		if fr.AppendToContext {
-			a.openTurn()
+			a.openTurn(ctx)
 		}
+	case *frames.TextFrame, *frames.LLMTextFrame, *frames.TTSTextFrame, *frames.AggregatedTextFrame:
+		a.routeText(f)
+	case *frames.LLMThoughtStartFrame:
+		a.startThought(fr)
+		return nil
+	case *frames.LLMThoughtTextFrame:
+		a.aggregateThought(fr)
+		return nil
+	case *frames.LLMThoughtEndFrame:
+		a.endThought(ctx, fr)
+		return nil
+	case *frames.LLMAssistantPushAggregationFrame, *frames.LLMFullResponseEndFrame,
+		*frames.EndFrame, *frames.CancelFrame, *frames.InterruptionFrame:
+		if err := a.closeTurn(ctx, f); err != nil {
+			return err
+		}
+	case *frames.LLMRunFrame:
+		// An explicit request to run the model, pushed down at this half rather
+		// than up at the user half: the LLM service's own re-prompt after an
+		// incomplete turn is the one that arrives here. The service sits
+		// upstream of this processor, so the run it asks for has to travel back
+		// the other way. The frame is consumed, since running the model is what
+		// it asked for and nothing beyond this processor acts on it.
+		return a.pushContextFrame(ctx)
+	case *frames.FunctionCallsStartedFrame, *frames.FunctionCallInProgressFrame,
+		*frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame:
+		// Consumed, not forwarded. This aggregator is where a tool call becomes
+		// conversation, and it is the last processor in the pipeline, so there is
+		// nothing beyond it to tell. Every other consumer is reached by the LLM
+		// service broadcasting each of these frames upstream as well as down: the
+		// idle watchdog and the mute strategies run inside the user aggregator, and
+		// an RTVI processor sits between the LLM and the output.
+		return a.handleFunctionCallFrame(ctx, f)
+	case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
+		*frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
+		return a.handleSpeakingState(ctx, f, dir)
+	}
+	if err := a.PushFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	// The summarizer watches the conversation from beside it, and sees each
+	// frame once it has gone on, so compressing never delays a turn.
+	a.summarizer.ProcessFrame(ctx, f)
+	return nil
+}
+
+// closeTurn ends the assistant turn, for each of the things that ends one.
+//
+// A response ending and an utterance ending are the turn finishing. An
+// interruption and a cancellation cut it off, so what the bot said is not what
+// it meant to say, and the turn is reported as interrupted. The session ending
+// closes the turn out where it stands rather than losing it with the processor.
+func (a *AssistantAggregator) closeTurn(ctx context.Context, f frames.Frame) error {
+	switch f.(type) {
+	case *frames.EndFrame, *frames.CancelFrame:
+		_, canceled := f.(*frames.CancelFrame)
+		err := a.commit(ctx, canceled)
+		// The session is over, so what was running beside the conversation stops
+		// here rather than waiting for teardown: a callback still running would
+		// otherwise act on a conversation nothing is left to carry.
+		a.releaseWork(ctx)
+		return err
+	case *frames.InterruptionFrame:
+		// Whatever the bot already said is kept. The tool calls still running are
+		// left alone: each already has a placeholder result in the context, so the
+		// turn is balanced as it stands, and the LLM service resolves them by
+		// canceling the calls it registered to cancel.
+		return a.commitInterrupted(ctx)
+	default:
+		return a.commit(ctx, false)
+	}
+}
+
+// releaseWork stops what the aggregator has running beside the conversation: the
+// context-updated callbacks a tool result started, and the summarizer. It is
+// idempotent, so the session ending and teardown can both run it.
+func (a *AssistantAggregator) releaseWork(ctx context.Context) {
+	if a.taskCancel != nil {
+		a.taskCancel()
+	}
+	a.taskWG.Wait()
+	a.summarizer.Cleanup(ctx)
+}
+
+// routeText folds one piece of the turn's text into the aggregation, taking each
+// kind of text frame for what it contributes to the conversation.
+func (a *AssistantAggregator) routeText(f frames.Frame) {
+	switch fr := f.(type) {
 	case *frames.LLMTextFrame:
 		// When a word-timestamp TTS drives the turn it excludes its text from the
 		// context (AppendToContext == false); the spoken words arrive as
@@ -541,42 +918,57 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 		// synthesizer, reaches the conversation as itself once the speech ahead of
 		// it has been said.
 		a.handleText(&fr.TextFrame, rawOrText(fr))
-	case *frames.LLMAssistantPushAggregationFrame:
-		// The end of an utterance that had no response around it to end.
-		a.commit()
-	case *frames.FunctionCallsStartedFrame, *frames.FunctionCallInProgressFrame,
-		*frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame:
-		// Consumed, not forwarded. This aggregator is where a tool call becomes
-		// conversation, and it is the last processor in the pipeline, so there is
-		// nothing beyond it to tell. Every other consumer is reached by the LLM
-		// service broadcasting each of these frames upstream as well as down: the
-		// idle watchdog and the mute strategies run inside the user aggregator, and
-		// an RTVI processor sits between the LLM and the output.
-		return a.handleFunctionCallFrame(ctx, f)
-	case *frames.LLMFullResponseEndFrame:
-		a.commit()
-	case *frames.EndFrame, *frames.CancelFrame:
-		// The session is over, so the turn is closed out where it stands rather
-		// than lost with the processor.
-		a.commit()
-	case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
-		*frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
-		return a.handleSpeakingState(ctx, f, dir)
-	case *frames.InterruptionFrame:
-		// The response was cut off; keep whatever the bot already said. The tool
-		// calls still running are left alone: each already has a placeholder
-		// result in the context, so the turn is balanced as it stands, and the
-		// LLM service resolves them by canceling the calls it registered to
-		// cancel.
-		a.commitInterrupted()
+	case *frames.TextFrame:
+		// Plain text put into the pipeline by something other than the model. It
+		// is part of the turn like anything else the bot says.
+		a.handleText(fr, fr.Text)
 	}
-	if err := a.PushFrame(ctx, f, dir); err != nil {
-		return err
+}
+
+// startThought begins a new thought, discarding anything a previous one left.
+func (a *AssistantAggregator) startThought(fr *frames.LLMThoughtStartFrame) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.thought = nil
+	a.thoughtToContext = fr.AppendToContext
+	a.thoughtLLM = fr.LLM
+	a.thoughtStarted = frames.NowTimestamp()
+}
+
+// aggregateThought folds one chunk of reasoning into the thought being streamed.
+func (a *AssistantAggregator) aggregateThought(fr *frames.LLMThoughtTextFrame) {
+	if fr.Text == "" {
+		return
 	}
-	// The summarizer watches the conversation from beside it, and sees each
-	// frame once it has gone on, so compressing never delays a turn.
-	a.summarizer.ProcessFrame(ctx, f)
-	return nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.thought = append(a.thought,
+		text.Part{Text: fr.Text, IncludesInterPartSpaces: fr.IncludesInterFrameSpaces})
+}
+
+// endThought closes the thought out: it is written to the conversation when the
+// provider asked for it back, and reported either way.
+//
+// A thought that is written goes in as that provider's own message, signature
+// and all, because only the provider it came from can make sense of it. Every
+// other provider skips a message that is not theirs.
+func (a *AssistantAggregator) endThought(ctx context.Context, fr *frames.LLMThoughtEndFrame) {
+	a.mu.Lock()
+	parts, startedAt := a.thought, a.thoughtStarted
+	toContext, llm := a.thoughtToContext, a.thoughtLLM
+	a.thought, a.thoughtStarted = nil, ""
+	a.mu.Unlock()
+
+	thought := text.Concatenate(parts)
+	if toContext {
+		a.context.AddMessage(frames.NewLLMSpecificMessage(llm, map[string]any{
+			"type":      "thought",
+			"text":      thought,
+			"signature": fr.Signature,
+		}))
+	}
+	a.Events().Call(ctx, EventAssistantThought, a,
+		AssistantThought{Content: thought, Timestamp: startedAt})
 }
 
 // handleMarker records a sideband marker the LLM service emitted.
@@ -609,6 +1001,16 @@ func (a *AssistantAggregator) handleContextUpdate(ctx context.Context, f frames.
 		return true, a.handleMessagesUpdate(ctx, fr)
 	case *frames.LLMMessagesTransformFrame:
 		return true, a.handleMessagesTransform(ctx, fr)
+	case *frames.LLMSetToolsFrame:
+		// Consumed here. The user half forwards this one so a continuously
+		// running service learns of the change, which is what brings it this far;
+		// the two halves share the conversation, so applying it again settles
+		// nothing new and it stops here.
+		a.context.SetTools(fr.Tools)
+		return true, nil
+	case *frames.LLMSetToolChoiceFrame:
+		a.context.SetToolChoice(fr.ToolChoice)
+		return true, nil
 	}
 	return false, nil
 }
@@ -749,10 +1151,15 @@ func (a *AssistantAggregator) handleFunctionCallResult(
 		return nil
 	}
 
-	groupID := ""
-	if started != nil {
-		groupID = started.GroupID
+	if started == nil {
+		// The call was announced but has not begun: there is no tool-use block in
+		// the conversation yet, so there is nothing for this result to answer.
+		slog.WarnContext(ctx, "tool result for a call that is not in progress",
+			"processor", a.Name(), "tool", fr.ToolName, "tool_call_id", fr.ToolCallID)
+		return nil
 	}
+
+	groupID := started.GroupID
 	props := fr.Properties
 	if props.Final() {
 		a.finishFunctionCall(fr, started)
@@ -823,9 +1230,6 @@ func (a *AssistantAggregator) groupStillRunning(groupID, exclude string) bool {
 func (a *AssistantAggregator) finishFunctionCall(
 	fr *frames.FunctionCallResultFrame, started *frames.FunctionCallInProgressFrame,
 ) {
-	// A result that arrives before the call's in-progress frame leaves nothing to
-	// read the registration off, so treat it as an ordinary call: that is the
-	// shape whose placeholder is waiting to be replaced.
 	async := started != nil && !started.CancelOnInterruption
 
 	a.mu.Lock()
@@ -1005,32 +1409,70 @@ func (a *AssistantAggregator) handleSpeakingState(
 	return a.pushDeferredContext(ctx)
 }
 
-// openTurn marks an assistant turn open. Opening one that is already open
-// changes nothing: the turn belongs to the response, not to each frame of it.
-func (a *AssistantAggregator) openTurn() {
+// openTurn marks an assistant turn open and reports that the bot has begun.
+// Opening one that is already open changes nothing: the turn belongs to the
+// response, not to each frame of it.
+func (a *AssistantAggregator) openTurn(ctx context.Context) {
 	a.mu.Lock()
-	a.turnStarted = true
+	if a.turnStartedAt != "" {
+		a.mu.Unlock()
+		return
+	}
+	a.turnStartedAt = frames.NowTimestamp()
 	a.mu.Unlock()
+	a.Events().Call(ctx, EventAssistantTurnStarted, a)
 }
 
 // commit closes the assistant turn out, writing what it said to the
-// conversation as one message. A turn that was never opened writes nothing, so
-// text arriving with no turn around it waits for one rather than landing on its
-// own.
-func (a *AssistantAggregator) commit() {
+// conversation as one message and reporting the turn. A turn that was never
+// opened writes nothing, so text arriving with no turn around it waits for one
+// rather than landing on its own.
+//
+// interrupted says whether the turn was cut off rather than finishing, which is
+// what tells a consumer that what the bot said is not what it meant to say.
+func (a *AssistantAggregator) commit(ctx context.Context, interrupted bool) error {
 	a.mu.Lock()
-	open := a.turnStarted
-	a.turnStarted = false
+	startedAt := a.turnStartedAt
+	a.turnStartedAt = ""
 	a.mu.Unlock()
-	if !open {
-		return
+	if startedAt == "" {
+		return nil
 	}
-	a.pushAggregation()
+
+	said, err := a.pushAggregation(ctx)
+	if err != nil {
+		return err
+	}
+	// What is reported is what the bot said, so the protocol markers that
+	// prefixed the reply come out. The conversation keeps them, since the model
+	// reads its own earlier verdicts back.
+	if said != "" {
+		said = frames.StripUserTurnMarkers(said)
+	}
+
+	a.Events().Call(ctx, EventAssistantTurnStopped, a, AssistantTurnStopped{
+		Content:     said,
+		Interrupted: interrupted,
+		Timestamp:   startedAt,
+	})
+
+	// A turn that said nothing is reported but not announced to the pipeline:
+	// there is no text for anything downstream to record.
+	if said == "" {
+		return nil
+	}
+	return a.Broadcast(ctx, func() frames.Frame {
+		return frames.NewLLMContextAssistantTurnFrame(said, startedAt)
+	})
 }
 
-// pushAggregation writes what the turn has said so far to the conversation and
-// empties the aggregation. Nothing is written when nothing was said.
-func (a *AssistantAggregator) pushAggregation() {
+// pushAggregation writes what the turn has said so far to the conversation,
+// empties the aggregation, and announces the conversation as it now stands. It
+// returns what was written, which is empty when nothing was said.
+//
+// The timestamp frame that follows marks when the message was written, for
+// anything building a transcript alongside the conversation.
+func (a *AssistantAggregator) pushAggregation(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	parts := a.aggregation
 	a.aggregation = nil
@@ -1041,9 +1483,15 @@ func (a *AssistantAggregator) pushAggregation() {
 
 	said := text.Concatenate(parts)
 	if said == "" {
-		return
+		return "", nil
 	}
 	a.context.AddAssistantMessage(said)
+
+	if err := a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Downstream); err != nil {
+		return said, err
+	}
+	return said, a.PushFrame(ctx,
+		frames.NewLLMContextAssistantTimestampFrame(frames.NowTimestamp()), processor.Downstream)
 }
 
 // commitInterrupted closes out a turn cut off by an interruption: whatever the
@@ -1057,52 +1505,85 @@ func (a *AssistantAggregator) pushAggregation() {
 // which marks that message canceled where it sits. Appending anything here
 // instead would put it after whatever a new user turn has meanwhile added,
 // separating a result from the call it answers for the rest of the session.
-func (a *AssistantAggregator) commitInterrupted() {
-	a.commit()
+func (a *AssistantAggregator) commitInterrupted(ctx context.Context) error {
+	err := a.commit(ctx, true)
 	a.mu.Lock()
 	a.aggregation = nil
 	a.pushOnBotStopped = false
 	a.mu.Unlock()
+	return err
 }
 
 // suppressed runs the mute strategies and reports whether this user-input frame
 // should be dropped. It emits UserMute frames on a change of state.
+//
+// Whether this frame is dropped is decided by the mute state as it stood before
+// the frame arrived, not by what the frame does to it. The frame that starts the
+// bot speaking is what mutes the user, and it is not itself user input; the
+// frame that unmutes them is likewise the bot falling silent. Deciding after the
+// strategies had run would shift the mute window by one frame at each end.
 func (u *UserAggregator) suppressed(ctx context.Context, f frames.Frame) bool {
 	switch f.(type) {
 	case *frames.StartFrame, *frames.EndFrame, *frames.CancelFrame:
-		// Lifecycle frames are never muted and must keep their ordering.
-		return false
-	}
-	if len(u.muteStrategies) == 0 {
+		// Lifecycle frames are never muted and must not move the mute state:
+		// deciding on the StartFrame would announce the user muted before the
+		// StartFrame had reached anything downstream.
 		return false
 	}
 	u.muteMu.Lock()
 	defer u.muteMu.Unlock()
 
-	should := false
+	drop := u.muted && isUserInput(f)
+	if drop {
+		slog.DebugContext(ctx, "frame suppressed, the user is muted",
+			"processor", u.Name(), "frame", f.Name())
+	}
+
+	muted := false
 	for _, m := range u.muteStrategies {
 		if m.ShouldMute(f) { // call all, so each updates its state
-			should = true
+			muted = true
 		}
 	}
-	if should != u.muted {
-		u.muted = should
-		if should {
+	if muted != u.muted {
+		u.muted = muted
+		if muted {
+			u.Events().Call(ctx, EventUserMuteStarted, u)
 			_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserMuteStartedFrame() })
 		} else {
+			u.Events().Call(ctx, EventUserMuteStopped, u)
 			_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserMuteStoppedFrame() })
 		}
 	}
-	if !u.muted {
-		return false
-	}
+	return drop
+}
+
+// isUserInput reports whether a frame carries something the user did, which is
+// what muting suppresses. Everything else passes whatever the mute state is.
+func isUserInput(f frames.Frame) bool {
 	switch f.(type) {
-	case *frames.InterruptionFrame, *frames.VADUserStartedSpeakingFrame, *frames.VADUserStoppedSpeakingFrame,
-		*frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame, *frames.InputAudioRawFrame,
+	case *frames.InterruptionFrame,
+		*frames.VADUserStartedSpeakingFrame, *frames.VADUserStoppedSpeakingFrame,
+		*frames.ProposedUserStartedSpeakingFrame, *frames.ProposedUserStoppedSpeakingFrame,
+		*frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
+		*frames.InputAudioRawFrame,
 		*frames.InterimTranscriptionFrame, *frames.TranscriptionFrame:
 		return true
 	}
 	return false
+}
+
+// queuedBroadcast sends a frame a strategy raised both ways: the downstream copy
+// is queued back into this processor rather than pushed, so it flows through the
+// aggregation and the strategies on its way out, while the upstream copy goes
+// straight to the neighbor.
+//
+// The two copies are unrelated frames rather than a paired broadcast. The
+// downstream one has not been sent anywhere yet: it still has to be handled
+// here, and whether it travels on at all is for that handling to decide.
+func (u *UserAggregator) queuedBroadcast(ctx context.Context, build func() frames.Frame) {
+	_ = u.QueueFrame(ctx, build(), processor.Downstream)
+	_ = u.PushFrame(ctx, build(), processor.Upstream)
 }
 
 // Push implements turns.Emitter.
@@ -1121,14 +1602,22 @@ func (u *UserAggregator) Push(ctx context.Context, f frames.Frame, dir processor
 // turn, leaving it to close having produced nothing. Speech that must not count
 // is dropped explicitly instead, by a strategy asking for it through
 // onResetAggregation.
-func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTurnStartedParams) {
+func (u *UserAggregator) onTurnStarted(
+	ctx context.Context, strategy turns.StartStrategy, params turns.UserTurnStartedParams,
+) {
+	u.mu.Lock()
+	u.turnStartedAt = frames.NowTimestamp()
+	u.wholeTurn = ""
+	u.mu.Unlock()
+
 	if params.EnableUserSpeakingFrames {
 		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserStartedSpeakingFrame() })
 	}
 	u.idle.Process(frames.NewUserStartedSpeakingFrame())
 	if params.EnableInterruptions {
-		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
+		_ = u.BroadcastInterruption(ctx)
 	}
+	u.Events().Call(ctx, EventUserTurnStarted, u, strategy)
 }
 
 // onInferenceTriggered commits what the user has said so far and runs the LLM on
@@ -1140,8 +1629,13 @@ func (u *UserAggregator) onTurnStarted(ctx context.Context, params turns.UserTur
 // enough to answer, and the answer begins while the judge is still deciding,
 // rather than after it. Anything the user adds before the turn actually ends is
 // committed by onTurnStopped, which runs the LLM again on it.
-func (u *UserAggregator) onInferenceTriggered(ctx context.Context) {
-	_ = u.maybeRun(ctx)
+func (u *UserAggregator) onInferenceTriggered(ctx context.Context, strategy turns.StopStrategy) {
+	// What is committed now is the segment since the last commit, so it is kept
+	// alongside the rest of the turn: the report of the turn ending carries
+	// everything the user said, not just the tail nobody answered yet.
+	segment, _ := u.maybeRun(ctx)
+	u.rememberSegment(segment)
+	u.Events().Call(ctx, EventUserTurnInferenceTriggered, u, strategy)
 }
 
 // onResetAggregation drops the speech aggregated so far, at a start strategy's
@@ -1149,10 +1643,30 @@ func (u *UserAggregator) onInferenceTriggered(ctx context.Context) {
 // anything said before a wake phrase, or an utterance too short to open one.
 // Since a turn beginning no longer clears the aggregation, this is the only way
 // such speech is kept out of the conversation.
-func (u *UserAggregator) onResetAggregation(context.Context) {
+func (u *UserAggregator) onResetAggregation(context.Context, turns.StartStrategy) {
 	u.mu.Lock()
-	u.aggregation = ""
+	u.aggregation = nil
 	u.mu.Unlock()
+}
+
+// onStopTimeout reports a turn closed because no stop strategy decided it had
+// ended.
+func (u *UserAggregator) onStopTimeout(ctx context.Context) {
+	u.Events().Call(ctx, EventUserTurnStopTimeout, u)
+}
+
+// rememberSegment folds a committed segment into what the whole turn has said.
+func (u *UserAggregator) rememberSegment(segment string) {
+	if segment == "" {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.wholeTurn == "" {
+		u.wholeTurn = segment
+		return
+	}
+	u.wholeTurn = strings.TrimSpace(u.wholeTurn + " " + segment)
 }
 
 // onTurnStopped broadcasts the turn-stop decision, feeds the idle controller a
@@ -1162,12 +1676,45 @@ func (u *UserAggregator) onResetAggregation(context.Context) {
 // point of driving the turn from inside the aggregator: the frame that ended
 // the turn has already been folded into the aggregation by the time this runs,
 // so the user's last words are part of the message the model is given.
-func (u *UserAggregator) onTurnStopped(ctx context.Context, params turns.UserTurnStoppedParams) {
+func (u *UserAggregator) onTurnStopped(
+	ctx context.Context, strategy turns.StopStrategy, params turns.UserTurnStoppedParams,
+) {
 	if params.EnableUserSpeakingFrames {
 		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() })
 	}
 	u.idle.Process(frames.NewUserStoppedSpeakingFrame())
-	_ = u.maybeRun(ctx)
+	u.reportTurnStopped(ctx, strategy, false)
+}
+
+// reportTurnStopped commits whatever the turn had left to say and reports the
+// turn as a whole.
+//
+// onSessionEnd reports only a turn that has something unreported left in it. The
+// session ending is not itself the end of a turn, so a turn already reported
+// must not be reported a second time on the way out.
+func (u *UserAggregator) reportTurnStopped(
+	ctx context.Context, strategy turns.StopStrategy, onSessionEnd bool,
+) {
+	segment, _ := u.maybeRun(ctx)
+	u.rememberSegment(segment)
+
+	u.mu.Lock()
+	content, startedAt, userID := u.wholeTurn, u.turnStartedAt, u.userID
+	u.wholeTurn = ""
+	u.mu.Unlock()
+
+	if onSessionEnd && content == "" {
+		return
+	}
+	u.mu.Lock()
+	u.turnStartedAt = ""
+	u.mu.Unlock()
+	u.Events().Call(ctx, EventUserTurnStopped, u, UserTurnStopped{
+		Strategy:  strategy,
+		Content:   content,
+		Timestamp: startedAt,
+		UserID:    userID,
+	})
 }
 
 var _ turns.Emitter = (*UserAggregator)(nil)

@@ -956,7 +956,7 @@ func (s *StreamService) emit(ctx context.Context, r Result) {
 		}
 		return
 	}
-	ts := time.Now().UTC().Format(time.RFC3339)
+	ts := frames.NowTimestamp()
 	if !r.Final {
 		f := frames.NewInterimTranscriptionFrame(r.Text, "", ts)
 		f.Language = r.Language

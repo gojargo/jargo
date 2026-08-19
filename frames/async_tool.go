@@ -46,32 +46,58 @@ const (
 // the call runs. It is replaced in place once the call reports.
 const ToolResultInProgress = "IN_PROGRESS"
 
-// The descriptions shipped on each stage are deliberately self-explanatory, so a
-// model reading the context can tell what is happening without out-of-band
-// knowledge of the protocol.
+// The descriptions shipped on each stage say only what the model has to act on.
+// None of them describes the shape of the message a result will arrive in: a
+// model told the shape of a message it should expect will try to produce one,
+// and a function call is the only structured channel it has, so it calls the
+// tool again with the protocol payload as the arguments. The payload's own
+// fields are read when the conversation is parsed, never by the model, so
+// describing them buys nothing either.
 const (
-	asyncToolStartedDescription = "An asynchronous task associated with this tool_call_id has started " +
-		"running. Expect results to arrive later as developer messages that look " +
-		"roughly like this one (with 'type=async_tool' and a matching tool_call_id) " +
-		"but with a 'result' field. Note that there *may* be more than one result " +
-		"(i.e., a stream of results), but there doesn't have to be (there may be " +
-		"only one). The last result will come in a message with 'status=finished'."
+	asyncToolStartedDescription = "This tool is still running. You will be given its result later. " +
+		"Do not call it again and do not invent a result in the meantime."
 
-	asyncToolIntermediateDescription = "This is an intermediate result for the asynchronous task associated with " +
-		"this tool_call_id. The task is still running. More intermediate results " +
-		"may follow, or the next result may be the final one with " +
-		"'status=finished'."
+	asyncToolIntermediateDescription = "This is a partial result and the task is still running. " +
+		"More may follow. Do not call this tool again and do not treat this as the final answer."
 
-	asyncToolFinalDescription = "This is the final result for the asynchronous task associated with " +
-		"this tool_call_id. The task has completed. No further results will arrive for " +
-		"this tool_call_id."
+	asyncToolFinalDescription = "This is the final result for the asynchronous task associated with this " +
+		"tool_call_id. The task has completed. No further results will arrive for " +
+		"this tool_call_id. You must convey this result to the user, even if the " +
+		"conversation has moved on. Never leave it unsaid. First finish responding " +
+		"to whatever the user is talking about now, then deliver the result at the " +
+		"end of your response. How you deliver it depends on its size: if the " +
+		"result is short, simply state it; if it is long or complex, name what has " +
+		"come back and offer the details. Convey it once; do not repeat it in " +
+		"later responses."
 
-	asyncToolCanceledDescription = "The asynchronous task associated with this tool_call_id was canceled " +
+	// The spelling below is the protocol's, not prose: it is text the model
+	// reads, and it has to read the same wherever the protocol is spoken.
+	//
+	//nolint:misspell // the literal written to the conversation
+	asyncToolCanceledDescription = "The asynchronous task associated with this tool_call_id was cancelled " +
 		"before it produced a result, either because it ran past its deadline or " +
 		"because cancellation was requested. No further results will arrive for " +
 		"this tool_call_id. If the user is still waiting on it, tell them it did " +
 		"not complete rather than leaving it unanswered."
 )
+
+// AsyncToolInstructions is the standing guidance composed into the system
+// instruction whenever a tool that outlives the reply is registered.
+//
+// The message carrying each result says the same thing, but it arrives buried in
+// a conversation whose most recent turn is the user asking for something else,
+// and a model weighing the two follows the nearer, louder request. This states
+// the policy before any result exists, so it is already in force when one
+// arrives.
+const AsyncToolInstructions = `ASYNC TOOLS:
+Some of your tools keep running after you have replied. Their results arrive later as ` +
+	`messages in the conversation, on whatever turn happens to be in progress by then.
+
+A result that has arrived is owed to the user, whatever the conversation has moved on to. ` +
+	`Answer what the user just said first, then add the result at the end of that same reply: ` +
+	`never before your answer, and never as a reply of its own. State a short result outright; ` +
+	`for a long one, say what came back and offer the details. Say it once, and do not repeat ` +
+	`it in later replies.`
 
 // asyncToolCanceledResult is the result a canceled call settles with. It names
 // the tool call as the thing that ended: a bare marker says nothing about

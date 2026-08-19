@@ -30,9 +30,10 @@ type Config struct {
 	// arriving at all, before taking the speech to have stopped. It covers the
 	// audio going away mid-utterance, a muted microphone being the usual case:
 	// the detector never sees the silence that would have ended the speech, so
-	// without this the user is left speaking for good. 0 uses one second, a
-	// negative value disables it.
-	AudioIdleTimeout time.Duration
+	// without this the user is left speaking for good.
+	//
+	// Leave it nil for one second. A zero duration turns the watch off.
+	AudioIdleTimeout *time.Duration
 }
 
 // Processor is the VAD pipeline processor.

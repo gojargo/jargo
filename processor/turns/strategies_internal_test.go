@@ -26,7 +26,9 @@ type spy struct {
 	mu sync.Mutex
 
 	started     []UserTurnStartedParams
+	startedBy   []StartStrategy
 	stopped     []UserTurnStoppedParams
+	stoppedBy   []StopStrategy
 	resets      int
 	inferences  int
 	pushed      []processor.Direction
@@ -38,11 +40,17 @@ func newSpy() *spy { return &spy{} }
 
 func (s *spy) env() strategyEnv {
 	return strategyEnv{
-		mu:                 &s.mu,
-		started:            func(p UserTurnStartedParams) { s.started = append(s.started, p) },
-		stopped:            func(p UserTurnStoppedParams) { s.stopped = append(s.stopped, p) },
-		resetAggregation:   func() { s.resets++ },
-		inferenceTriggered: func() { s.inferences++ },
+		mu: &s.mu,
+		started: func(str StartStrategy, p UserTurnStartedParams) {
+			s.started = append(s.started, p)
+			s.startedBy = append(s.startedBy, str)
+		},
+		stopped: func(str StopStrategy, p UserTurnStoppedParams) {
+			s.stopped = append(s.stopped, p)
+			s.stoppedBy = append(s.stoppedBy, str)
+		},
+		resetAggregation:   func(StartStrategy) { s.resets++ },
+		inferenceTriggered: func(StopStrategy) { s.inferences++ },
 		push: func(f frames.Frame, d processor.Direction) {
 			s.pushed = append(s.pushed, d)
 			s.pushedFrame = append(s.pushedFrame, f)
@@ -83,14 +91,14 @@ func (s *spy) stops() int {
 // attachStart wires a start strategy to a fresh spy.
 func attachStart(str StartStrategy) *spy {
 	s := newSpy()
-	str.attach(s.env())
+	str.attach(str, s.env())
 	return s
 }
 
 // attachStop wires a stop strategy to a fresh spy.
 func attachStop(str StopStrategy) *spy {
 	s := newSpy()
-	str.attach(s.env())
+	str.attach(str, s.env())
 	return s
 }
 
@@ -864,7 +872,7 @@ func TestLLMTurnCompletionStopConfiguresTheLLM(t *testing.T) {
 	}
 	spy := newSpy()
 	gate := NewLLMTurnCompletionStop(cfg)
-	gate.attach(spy.env())
+	gate.attach(gate, spy.env())
 
 	spy.sendStop(gate, frames.NewStartFrame())
 
@@ -950,14 +958,20 @@ func TestStrategyBaseNoOps(t *testing.T) {
 // TestStopStrategyBaseEmits covers the frame-emitting helpers a stop strategy
 // uses to reach the pipeline.
 func TestStopStrategyBaseEmits(t *testing.T) {
-	var b StopStrategyBase
+	b := &plainStop{}
 	b.EnableUserSpeakingFrames = true
 	spy := newSpy()
-	b.attach(spy.env())
+	b.attach(b, spy.env())
 
 	b.Push(frames.NewUserSpeakingFrame(), processor.Upstream)
 	b.Broadcast(func() frames.Frame { return frames.NewBotSpeakingFrame() })
 	b.TriggerStopped()
+
+	// The decision is attributed to the strategy that made it, which is what
+	// lets a listener tell one stop strategy's verdict from another's.
+	if len(spy.stoppedBy) != 1 || spy.stoppedBy[0] != StopStrategy(b) {
+		t.Errorf("stoppedBy = %v, want the strategy that triggered", spy.stoppedBy)
+	}
 
 	if len(spy.pushed) != 1 || spy.pushed[0] != processor.Upstream {
 		t.Errorf("pushed = %v, want one Upstream push", spy.pushed)
@@ -1160,3 +1174,9 @@ func TestTurnAnalyzerNoPublishedLatencyWaitsNothing(t *testing.T) {
 		t.Errorf("released after %v, want no wait at all", elapsed)
 	}
 }
+
+// plainStop is a stop strategy that does nothing but carry the base, for testing
+// what the base itself provides.
+type plainStop struct{ StopStrategyBase }
+
+func (p *plainStop) Process(frames.Frame) ProcessFrameResult { return Continue }

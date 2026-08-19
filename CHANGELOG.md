@@ -12,7 +12,102 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **Frames pushed at a processor that has not started yet are no longer lost.**
+  A processor drained its queues from setup, so a system frame arriving before
+  its `StartFrame` was handled ahead of it, and a data frame was dropped
+  outright when the in-order goroutine flushed its queue on creation. Processors
+  are set up concurrently, so one that connects during setup can push at a
+  neighbour that has not started, and that traffic went missing. Nothing is
+  drained until the `StartFrame` arrives, the queues now order the `StartFrame`
+  ahead of the other system frames, and `PushFrame` no longer drops a frame
+  bound for a processor that has yet to start.
+
+- **The incomplete-turn re-prompt runs the model again.** The LLM service pushes
+  a re-prompt and a run request downstream after suppressing an incomplete turn,
+  but the assistant aggregator ignored the run request, so the re-prompt was
+  written to the conversation and nothing answered it. It now runs the model on
+  the updated conversation.
+
+- **A tool result that arrives before its call has started is ignored.** There
+  is no tool-use block in the conversation for it to answer at that point;
+  writing one anyway left the turn unbalanced.
+
+- **A whitespace-only transcript no longer starts a turn.** A service reporting
+  one is reporting silence, and it was committed as a user message and answered.
+
+- **A `TranslationFrame` is consumed by the user aggregator** rather than
+  travelling on. Only the transcription is the user's own words, so a provider
+  that reports both no longer has the turn counted twice.
+
+- **The user's transcript is joined with the spacing it carries.** A space was
+  inserted between every segment regardless, doubling the spacing of a service
+  that already includes it.
+
+- **Muting is decided by the state before the frame arrived.** The frame that
+  starts the bot speaking is what mutes the user, and it was being evaluated
+  against the state it had just changed, shifting the mute window by one frame
+  at each end. The proposed-speaking frames are now suppressed along with the
+  rest of the user's input.
+
+- **The async-tool guidance no longer describes its own wire format.** Telling
+  the model the shape of the message a result will arrive in makes it try to
+  produce one, and a function call is the only structured channel it has, so it
+  calls the tool again with the protocol payload as the arguments.
+
 ### Added
+
+- **`processor.Base.BroadcastInterruption`** interrupts the pipeline from inside
+  a processor: it drops the work that processor had queued and sends an
+  `InterruptionFrame` both ways, leaving the caller running so it can push what
+  it interrupted for. The RTVI processor and the user aggregator use it instead
+  of hand-rolling the broadcast, so both now clear their own queues.
+
+- **Four frame events on every processor**: `EventBeforeProcessFrame`,
+  `EventAfterProcessFrame`, `EventBeforePushFrame` and `EventAfterPushFrame`.
+  They let something watch one processor without sitting in the pipeline or
+  observing all of it.
+
+- **The aggregators report the turns they assemble.** The user half raises
+  `EventUserTurnStarted`, `EventUserTurnStopped`, `EventUserTurnInferenceTriggered`,
+  `EventUserTurnStopTimeout`, `EventUserTurnIdle`, `EventUserTurnMessageAdded`,
+  `EventUserMuteStarted` and `EventUserMuteStopped`; the assistant half raises
+  `EventAssistantTurnStarted`, `EventAssistantTurnStopped` and
+  `EventAssistantThought`. The assistant half also announces a finished turn to
+  the pipeline as an `LLMContextAssistantTurnFrame`, and stamps each message it
+  writes with an `LLMContextAssistantTimestampFrame`. Both frames were declared
+  but never emitted. The turn-completion markers are stripped from what is
+  reported, while the conversation keeps them.
+
+- **`aggregators.WithMuteStrategies`** configures muting independently of
+  `WithTurns`. Muting the user and deciding when their turn ended are different
+  questions, and mute strategies previously only ran with turn taking enabled.
+
+- **The assistant aggregator records a reasoning model's thinking.** The thought
+  frames were defined and carried every field needed, but nothing handled them:
+  a thought is now reported, and written to the conversation as the provider's
+  own message when the provider asks for it back. It never joins what the bot
+  said.
+
+- **The standing async-tool policy is composed into the system instruction**
+  whenever a tool that outlives the reply is registered, so the rule is in force
+  before any late result exists.
+
+- **`aggregators.WithVAD`** runs voice-activity detection inside the user
+  aggregator, for a pipeline where nothing else needs it. The frames it raises
+  are queued back into the aggregator, so the turn strategies running there see
+  the speech their own detector heard. Muted input never reaches it. Where a
+  transport, an interruption decision or a recorder needs the detection too,
+  keep using a `vadproc.Processor` after the input transport.
+
+### Changed
+
+- **`AudioIdleTimeout` is now a `*time.Duration`** on `vadproc.Config` and
+  `audio/vad/controller.Config`. Nil takes the one-second default and a zero
+  duration turns the watch off; previously zero took the default and only a
+  negative value turned it off, so code that set it to zero to disable the watch
+  silently kept it running. Callers that left the field unset are unaffected.
 
 - **The transports report their connections.** `ClientConnectedFrame` is pushed
   by `transport/rtc` once the peer connection is established (which covers

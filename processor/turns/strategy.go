@@ -17,10 +17,14 @@ import (
 type strategyEnv struct {
 	mu *sync.Mutex
 
-	started            func(params UserTurnStartedParams)
-	resetAggregation   func()
-	inferenceTriggered func()
-	stopped            func(params UserTurnStoppedParams)
+	// Each decision callback carries the strategy that made it, so whatever the
+	// controller reports the decision to can say which strategy decided. A turn
+	// opened by a wake phrase and one opened by voice activity are the same
+	// event otherwise, and they are not the same thing.
+	started            func(s StartStrategy, params UserTurnStartedParams)
+	resetAggregation   func(s StartStrategy)
+	inferenceTriggered func(s StopStrategy)
+	stopped            func(s StopStrategy, params UserTurnStoppedParams)
 	push               func(f frames.Frame, dir processor.Direction)
 	broadcast          func(build func() frames.Frame)
 }
@@ -57,7 +61,7 @@ type StartStrategy interface {
 	TurnStopped()
 	// Cleanup releases resources (timers).
 	Cleanup()
-	attach(env strategyEnv)
+	attach(self StartStrategy, env strategyEnv)
 }
 
 // StartStrategyBase is embedded by every start strategy. It carries the
@@ -68,9 +72,14 @@ type StartStrategyBase struct {
 	// EnableUserSpeakingFrames broadcasts a UserStartedSpeakingFrame on turn start.
 	EnableUserSpeakingFrames bool
 	env                      strategyEnv
+	// self is the concrete strategy this base belongs to, so a decision the base
+	// signals is attributed to the strategy that made it rather than to the base.
+	self StartStrategy
 }
 
-func (b *StartStrategyBase) attach(env strategyEnv) { b.env = env }
+func (b *StartStrategyBase) attach(self StartStrategy, env strategyEnv) {
+	b.self, b.env = self, env
+}
 
 // TurnStarted is the default no-op.
 func (b *StartStrategyBase) TurnStarted() {}
@@ -84,7 +93,7 @@ func (b *StartStrategyBase) Cleanup() {}
 // TriggerStarted signals that the user's turn has begun.
 func (b *StartStrategyBase) TriggerStarted() {
 	if b.env.started != nil {
-		b.env.started(UserTurnStartedParams{
+		b.env.started(b.self, UserTurnStartedParams{
 			EnableInterruptions:      b.EnableInterruptions,
 			EnableUserSpeakingFrames: b.EnableUserSpeakingFrames,
 		})
@@ -95,7 +104,7 @@ func (b *StartStrategyBase) TriggerStarted() {
 // aggregation (e.g. pre-wake-phrase speech).
 func (b *StartStrategyBase) TriggerResetAggregation() {
 	if b.env.resetAggregation != nil {
-		b.env.resetAggregation()
+		b.env.resetAggregation(b.self)
 	}
 }
 
@@ -116,7 +125,7 @@ type StopStrategy interface {
 	TurnStopped()
 	// Cleanup releases resources (timers).
 	Cleanup()
-	attach(env strategyEnv)
+	attach(self StopStrategy, env strategyEnv)
 }
 
 // StopStrategyBase is embedded by every stop strategy.
@@ -124,9 +133,13 @@ type StopStrategyBase struct {
 	// EnableUserSpeakingFrames broadcasts a UserStoppedSpeakingFrame on turn stop.
 	EnableUserSpeakingFrames bool
 	env                      strategyEnv
+	// self is the concrete strategy this base belongs to. See StartStrategyBase.
+	self StopStrategy
 }
 
-func (b *StopStrategyBase) attach(env strategyEnv) { b.env = env }
+func (b *StopStrategyBase) attach(self StopStrategy, env strategyEnv) {
+	b.self, b.env = self, env
+}
 
 // TurnStarted is the default no-op.
 func (b *StopStrategyBase) TurnStarted() {}
@@ -148,14 +161,14 @@ func (b *StopStrategyBase) TriggerStopped() {
 // inference, without finalizing the turn.
 func (b *StopStrategyBase) TriggerInferenceTriggered() {
 	if b.env.inferenceTriggered != nil {
-		b.env.inferenceTriggered()
+		b.env.inferenceTriggered(b.self)
 	}
 }
 
 // TriggerFinalized signals that the turn is semantically final.
 func (b *StopStrategyBase) TriggerFinalized() {
 	if b.env.stopped != nil {
-		b.env.stopped(UserTurnStoppedParams{EnableUserSpeakingFrames: b.EnableUserSpeakingFrames})
+		b.env.stopped(b.self, UserTurnStoppedParams{EnableUserSpeakingFrames: b.EnableUserSpeakingFrames})
 	}
 }
 

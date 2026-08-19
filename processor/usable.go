@@ -22,6 +22,19 @@ const (
 	// frame travels. A handler reading Source.Usable() therefore sees the
 	// verdict that came with the error it is handling.
 	EventError = "on_error"
+	// EventBeforeProcessFrame fires with a frame this processor is about to
+	// handle, before it has been handled.
+	EventBeforeProcessFrame = "on_before_process_frame"
+	// EventAfterProcessFrame fires with a frame this processor has handled. It
+	// does not fire for a frame whose handling failed, which raises EventError
+	// instead.
+	EventAfterProcessFrame = "on_after_process_frame"
+	// EventBeforePushFrame fires with a frame this processor is about to send to
+	// a neighbor, before the neighbor has it.
+	EventBeforePushFrame = "on_before_push_frame"
+	// EventAfterPushFrame fires with a frame this processor has sent to a
+	// neighbor.
+	EventAfterPushFrame = "on_after_push_frame"
 )
 
 // usability is the part of a Base that tracks whether it can still work. It is

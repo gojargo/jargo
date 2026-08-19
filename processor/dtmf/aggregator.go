@@ -119,7 +119,7 @@ func (a *Aggregator) emit(ctx context.Context, text string) {
 	if text == "" {
 		return
 	}
-	tf := frames.NewTranscriptionFrame(a.cfg.Prefix+text, "", time.Now().UTC().Format(time.RFC3339))
+	tf := frames.NewTranscriptionFrame(a.cfg.Prefix+text, "", frames.NowTimestamp())
 	tf.Finalized = true
 	_ = a.PushFrame(ctx, tf, processor.Downstream)
 }

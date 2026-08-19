@@ -16,13 +16,21 @@ type item struct {
 
 // queue is an unbounded, concurrency-safe frame queue with a single consumer.
 //
-// It serves both internal queues of a processor. System frames take priority:
-// get returns any queued system frame before any data or control frame, so a
-// processor always handles system frames first. Producers never block, which
-// keeps neighboring processors from deadlocking when they push to each other.
+// It serves both internal queues of a processor. Frames come off it in three
+// tiers: the StartFrame first, then the other system frames, then data and
+// control frames. Frames of the same tier keep their arrival order.
+//
+// The StartFrame outranking everything is what lets a processor be handed
+// frames before it has started. Nothing drains the queue until the StartFrame
+// arrives, so whatever was pushed at the processor meanwhile waits, and the
+// StartFrame is still handled first when the queue finally opens.
+//
+// Producers never block, which keeps neighboring processors from deadlocking
+// when they push to each other.
 type queue struct {
 	mu     sync.Mutex
-	system []item // system frames, highest priority
+	start  []item // the StartFrame, ahead of everything
+	system []item // the other system frames
 	other  []item // data and control frames
 	notify chan struct{}
 }
@@ -31,13 +39,16 @@ func newQueue() *queue {
 	return &queue{notify: make(chan struct{}, 1)}
 }
 
-// push appends an item, classifying it by category so system frames are served
-// first. It never blocks.
+// push appends an item, classifying it by tier so it is served in the right
+// order. It never blocks.
 func (q *queue) push(it item) {
 	q.mu.Lock()
-	if _, ok := it.frame.(frames.SystemFrame); ok {
+	switch {
+	case isStartFrame(it.frame):
+		q.start = append(q.start, it)
+	case isSystemFrame(it.frame):
 		q.system = append(q.system, it)
-	} else {
+	default:
 		q.other = append(q.other, it)
 	}
 	q.mu.Unlock()
@@ -51,22 +62,18 @@ func (q *queue) push(it item) {
 }
 
 // get returns the next item, blocking until one is available or ctx is done. It
-// reports ok=false only when ctx is canceled. System frames are returned ahead
-// of all other frames.
+// reports ok=false only when ctx is canceled. The tiers are served in order:
+// the StartFrame, then the other system frames, then the rest.
 func (q *queue) get(ctx context.Context) (item, bool) {
 	for {
 		q.mu.Lock()
-		if len(q.system) > 0 {
-			it := q.system[0]
-			q.system = q.system[1:]
-			q.mu.Unlock()
-			return it, true
-		}
-		if len(q.other) > 0 {
-			it := q.other[0]
-			q.other = q.other[1:]
-			q.mu.Unlock()
-			return it, true
+		for _, tier := range []*[]item{&q.start, &q.system, &q.other} {
+			if len(*tier) > 0 {
+				it := (*tier)[0]
+				*tier = (*tier)[1:]
+				q.mu.Unlock()
+				return it, true
+			}
 		}
 		q.mu.Unlock()
 
@@ -106,4 +113,10 @@ func (q *queue) reset() {
 		}
 	}
 	q.other = kept
+}
+
+// isStartFrame reports whether f is the frame that starts a processor.
+func isStartFrame(f frames.Frame) bool {
+	_, ok := f.(*frames.StartFrame)
+	return ok
 }

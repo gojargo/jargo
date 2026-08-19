@@ -451,7 +451,7 @@ func TestControllerBroadcastsFrameThroughItsHost(t *testing.T) {
 func TestControllerEndsSpeechWhenAudioStops(t *testing.T) {
 	a := newMockAnalyzer()
 	r := newRecorder()
-	c := newTestController(t, a, r, controller.Config{AudioIdleTimeout: idleTimeoutTest})
+	c := newTestController(t, a, r, controller.Config{AudioIdleTimeout: new(idleTimeoutTest)})
 
 	a.setNextState(vad.StateSpeaking)
 	if err := c.ProcessFrame(context.Background(), audioChunk()); err != nil {
@@ -475,7 +475,7 @@ func TestControllerEndsSpeechWhenAudioStops(t *testing.T) {
 func TestControllerLeavesQuietAloneWhenAudioStops(t *testing.T) {
 	a := newMockAnalyzer()
 	r := newRecorder()
-	newTestController(t, a, r, controller.Config{AudioIdleTimeout: idleTimeoutTest})
+	newTestController(t, a, r, controller.Config{AudioIdleTimeout: new(idleTimeoutTest)})
 
 	// No audio at all, and nobody speaking: the watch has to stay quiet through
 	// several windows of it.

@@ -97,7 +97,7 @@ func TestVADAudioIdleForcesSpeechStop(t *testing.T) {
 	const idle = 150 * time.Millisecond
 	p := vadproc.New(vadproc.Config{
 		VAD:              newFakeVAD(vad.StateSpeaking),
-		AudioIdleTimeout: idle,
+		AudioIdleTimeout: new(idle),
 	})
 
 	stopped := make(chan struct{}, 4)
@@ -131,7 +131,7 @@ func TestVADAudioIdleStaysQuiet(t *testing.T) {
 	const idle = 100 * time.Millisecond
 	p := vadproc.New(vadproc.Config{
 		VAD:              newFakeVAD(vad.StateQuiet),
-		AudioIdleTimeout: idle,
+		AudioIdleTimeout: new(idle),
 	})
 
 	stopped := make(chan struct{}, 4)

@@ -63,9 +63,12 @@ type Config struct {
 	// arriving at all, before taking the speech to have stopped. It covers the
 	// audio going away mid-utterance, a muted microphone being the usual case:
 	// the detector never sees the silence that would have ended the speech, so
-	// without this the user is left speaking for good. 0 uses one second, a
-	// negative value disables it.
-	AudioIdleTimeout time.Duration
+	// without this the user is left speaking for good.
+	//
+	// Leave it nil for DefaultAudioIdleTimeout. A zero duration turns the watch
+	// off, so it is a pointer rather than a plain value: the two have to be told
+	// apart, and a struct field cannot say which of them it was left as.
+	AudioIdleTimeout *time.Duration
 }
 
 // Controller drives a detector over incoming audio and reports what it hears.
@@ -90,9 +93,9 @@ type Controller struct {
 
 // New builds a Controller around analyzer. The analyzer is required.
 func New(analyzer vad.Analyzer, handlers Handlers, cfg Config) *Controller {
-	idle := cfg.AudioIdleTimeout
-	if idle == 0 {
-		idle = DefaultAudioIdleTimeout
+	idle := DefaultAudioIdleTimeout
+	if cfg.AudioIdleTimeout != nil {
+		idle = *cfg.AudioIdleTimeout
 	}
 	return &Controller{analyzer: analyzer, handlers: handlers, idleTimeout: idle}
 }
