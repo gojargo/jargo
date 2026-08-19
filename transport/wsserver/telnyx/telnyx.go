@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gojargo/jargo/audio/g711"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
@@ -23,9 +22,7 @@ import (
 var _ wsserver.Serializer = (*Serializer)(nil)
 
 const (
-	// sampleRate is Telnyx Media Streaming's fixed rate: 8 kHz mono.
-	sampleRate = 8000
-	hangupURL  = "https://api.telnyx.com/v2/calls/%s/actions/hangup"
+	hangupURL = "https://api.telnyx.com/v2/calls/%s/actions/hangup"
 
 	// eventMedia is the Telnyx message event carrying base64 audio.
 	eventMedia = "media"
@@ -50,14 +47,20 @@ type Config struct {
 	SendEncoding string
 	// HTTPClient is used for the hang-up request; nil uses http.DefaultClient.
 	HTTPClient *http.Client
+	// Audio configures the conversion between Telnyx's 8 kHz companded wire
+	// audio and the rate the pipeline runs at. The zero value converts to and
+	// from whatever the StartFrame carries, so the pipeline is free to run at a
+	// rate its services are happier with than 8 kHz.
+	Audio wsserver.AudioConfig
 }
 
 // Serializer implements wsserver.Serializer for Telnyx. The stream ID, call
 // control ID and receive encoding are learned from the inbound "start" message.
 type Serializer struct {
-	cfg  Config
-	http *http.Client
-	send string
+	cfg   Config
+	http  *http.Client
+	codec *wsserver.Codec
+	send  string
 
 	mu       sync.Mutex
 	streamID string
@@ -76,11 +79,15 @@ func New(cfg Config) *Serializer {
 	if send == "" {
 		send = EncodingPCMU
 	}
-	return &Serializer{cfg: cfg, http: h, send: send, recv: send}
+	return &Serializer{cfg: cfg, http: h, send: send, recv: send, codec: wsserver.NewCodec(cfg.Audio)}
 }
 
-// Setup is a no-op: Telnyx audio is always 8 kHz.
-func (s *Serializer) Setup(*frames.StartFrame) error { return nil }
+// Setup learns the pipeline's sample rate, so the 8 kHz companded audio on the
+// wire can be converted to it and back.
+func (s *Serializer) Setup(f *frames.StartFrame) error { return s.codec.Setup(f) }
+
+// Close releases the resamplers.
+func (s *Serializer) Close() { s.codec.Close() }
 
 // Serialize converts an outbound frame to a Telnyx message.
 func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
@@ -88,7 +95,7 @@ func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
 	// Every kind of output audio is sent the same way, so match the family
 	// rather than each concrete frame.
 	case frames.OutputAudioFrame:
-		return s.media(fr.AudioData().Audio)
+		return s.media(fr.AudioData())
 	case *frames.InterruptionFrame:
 		return json.Marshal(event{Event: "clear"})
 	case *frames.EndFrame, *frames.CancelFrame:
@@ -114,7 +121,12 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 		s.mu.Lock()
 		enc := s.recv
 		s.mu.Unlock()
-		return frames.NewInputAudioRawFrame(decode(enc, payload), sampleRate, 1), nil
+		pcm := s.codec.Decode(payload, encodingOf(enc))
+		if len(pcm) == 0 {
+			// The conversion has nothing to emit yet; no audio, no frame.
+			return nil, nil //nolint:nilnil // no audio to carry
+		}
+		return frames.NewInputAudioRawFrame(pcm, s.codec.SampleRate(), 1), nil
 	case "start":
 		s.mu.Lock()
 		s.streamID = m.StreamID
@@ -134,9 +146,14 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 	}
 }
 
-func (s *Serializer) media(pcm []byte) ([]byte, error) {
+func (s *Serializer) media(a *frames.AudioRawData) ([]byte, error) {
+	companded := s.codec.Encode(a.Audio, a.SampleRate, encodingOf(s.send))
+	if len(companded) == 0 {
+		// The conversion has nothing to emit yet; no audio, no message.
+		return nil, nil //nolint:nilnil // no audio to send
+	}
 	out := mediaOut{Event: eventMedia}
-	out.Media.Payload = base64.StdEncoding.EncodeToString(encode(s.send, pcm))
+	out.Media.Payload = base64.StdEncoding.EncodeToString(companded)
 	return json.Marshal(out)
 }
 
@@ -173,20 +190,13 @@ func (s *Serializer) doHangup(callCtrl string) {
 	_ = resp.Body.Close()
 }
 
-// encode companded bytes from PCM per the given encoding, defaulting to μ-law.
-func encode(enc string, pcm []byte) []byte {
+// encodingOf maps a Telnyx media_format encoding name to the companding it
+// names, defaulting to μ-law for anything else.
+func encodingOf(enc string) wsserver.Encoding {
 	if enc == EncodingPCMA {
-		return g711.EncodeALaw(pcm)
+		return wsserver.EncodingALaw
 	}
-	return g711.EncodeULaw(pcm)
-}
-
-// decode PCM from companded bytes per the given encoding, defaulting to μ-law.
-func decode(enc string, companded []byte) []byte {
-	if enc == EncodingPCMA {
-		return g711.DecodeALaw(companded)
-	}
-	return g711.DecodeULaw(companded)
+	return wsserver.EncodingULaw
 }
 
 type event struct {

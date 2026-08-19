@@ -40,9 +40,11 @@ import (
 	"github.com/spf13/viper"
 )
 
-// phoneSampleRate is Twilio Media Streams' fixed μ-law rate. The whole pipeline
-// runs at 8 kHz so no extra resampling is needed.
-const phoneSampleRate = 8000
+// pipelineSampleRate is the rate the pipeline runs at. Twilio streams 8 kHz
+// μ-law and always will, but the serializer converts at each edge, so the
+// transcriber hears 16 kHz and the voice is asked for 16 kHz rather than both
+// working at telephone bandwidth.
+const pipelineSampleRate = 16000
 
 const systemPrompt = "You are a friendly voice assistant on a phone call. Keep " +
 	"your replies short, warm and conversational — one or two sentences."
@@ -98,8 +100,8 @@ func handleStream(w http.ResponseWriter, r *http.Request, v *viper.Viper) {
 	})
 
 	params := transport.DefaultParams()
-	params.AudioInSampleRate = phoneSampleRate
-	params.AudioOutSampleRate = phoneSampleRate
+	params.AudioInSampleRate = pipelineSampleRate
+	params.AudioOutSampleRate = pipelineSampleRate
 
 	t, err := wsserver.Accept(w, r, ser, params)
 	if err != nil {
@@ -115,7 +117,7 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 	llm := anthropic.NewLLM(anthropic.Config{APIKey: v.GetString("ANTHROPIC_API_KEY")})
 	tts := elevenlabs.NewTTS(elevenlabs.Config{
 		APIKey:     v.GetString("ELEVENLABS_API_KEY"),
-		SampleRate: phoneSampleRate,
+		SampleRate: pipelineSampleRate,
 	})
 
 	convo := frames.NewLLMContext(systemPrompt)
@@ -143,8 +145,8 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 
 	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		Params: pipeline.Params{
-			AudioInSampleRate:  phoneSampleRate,
-			AudioOutSampleRate: phoneSampleRate,
+			AudioInSampleRate:  pipelineSampleRate,
+			AudioOutSampleRate: pipelineSampleRate,
 		},
 	})
 

@@ -18,8 +18,8 @@ transport itself stays provider-agnostic:
 ser := twilio.New(twilio.Config{ /* … */ })
 
 params := transport.DefaultParams()
-params.AudioInSampleRate = 8000
-params.AudioOutSampleRate = 8000
+params.AudioInSampleRate = 16000
+params.AudioOutSampleRate = 16000
 
 t, err := wsserver.Accept(w, r, ser, params)
 ```
@@ -34,32 +34,52 @@ t, err := wsserver.Accept(w, r, ser, params)
 Each is `New(Config)` returning a `*Serializer`. One serializer serves **one
 session**: build it per call, not once at startup; it is not safe to share.
 
-## Run the pipeline at 8 kHz
+## Sample rates
 
-This is the part that bites people. Telephony audio is µ-law 8 kHz, and the rate
-has to be set in **three** places consistently:
+Telephony audio is µ-law 8 kHz on the wire, and always will be. The pipeline
+does not have to run at that rate: the serializer converts at each edge, so set
+the pipeline rate to whatever suits its services and let it follow.
 
 ```go
-const phoneSampleRate = 8000
+const pipelineSampleRate = 16000
 
-params.AudioInSampleRate = phoneSampleRate
-params.AudioOutSampleRate = phoneSampleRate
+params.AudioInSampleRate = pipelineSampleRate
+params.AudioOutSampleRate = pipelineSampleRate
 
 tts := elevenlabs.NewTTS(elevenlabs.Config{
     APIKey:     key,
-    SampleRate: phoneSampleRate,   // ask the provider for 8 kHz directly
+    SampleRate: pipelineSampleRate,
 })
 
 task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 	Params: pipeline.Params{
-	    AudioInSampleRate:  phoneSampleRate,
-	    AudioOutSampleRate: phoneSampleRate,
+	    AudioInSampleRate:  pipelineSampleRate,
+	    AudioOutSampleRate: pipelineSampleRate,
 	},
 })
 ```
 
-Asking the TTS provider for 8 kHz avoids synthesizing at 24 kHz and downsampling,
-which costs both quality and latency.
+Running the whole pipeline at 8 kHz works and saves two conversions, but it
+hands 8 kHz to the transcriber and asks the voice for 8 kHz back. Both are
+audibly worse than converting once on the way in and once on the way out, so
+16 kHz is the better default. Ask the TTS provider for the pipeline rate
+directly, so its audio is not synthesized at 24 kHz and downsampled twice.
+
+Two knobs on `wsserver.AudioConfig` cover the rest:
+
+```go
+ser := twilio.New(twilio.Config{
+    Audio: wsserver.AudioConfig{
+        SampleRate:          24000, // override the pipeline rate for this leg
+        ResamplerClearAfter: -1,    // never clear the resampler history
+    },
+})
+```
+
+A stream resampler that has sat idle starts the next chunk fresh, so the tail of
+one utterance is not filtered into the start of the next. Providers whose chunks
+arrive at irregular intervals want that off, since those gaps are gaps in
+delivery rather than gaps in the audio.
 
 ## The pipeline
 
@@ -117,7 +137,10 @@ conversation with a recording.
 ## Practical notes
 
 - **8 kHz µ-law hurts STT accuracy.** Expect a real drop versus wideband audio and
-  budget for it in prompts. Confirm important values back to the caller.
+  budget for it in prompts. Confirm important values back to the caller. Running
+  the pipeline at 16 kHz does not recover what the wire never carried: it only
+  stops the transcriber and the voice from working at telephone bandwidth on top
+  of that.
 - **Turn-taking matters more on the phone.** There is no video, no visual
   backchannel, and callers expect the rhythm of a phone conversation. Tune it.
 - **Recording is usually regulated.** Consent requirements vary by jurisdiction.

@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gojargo/jargo/audio/g711"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
@@ -22,11 +21,7 @@ import (
 // Serializer implements wsserver.Serializer.
 var _ wsserver.Serializer = (*Serializer)(nil)
 
-const (
-	// sampleRate is Plivo Audio Streaming's fixed rate: 8 kHz mono μ-law.
-	sampleRate = 8000
-	hangupURL  = "https://api.plivo.com/v1/Account/%s/Call/%s/"
-)
+const hangupURL = "https://api.plivo.com/v1/Account/%s/Call/%s/"
 
 // Config configures the Plivo serializer.
 type Config struct {
@@ -39,13 +34,19 @@ type Config struct {
 	AutoHangUp bool
 	// HTTPClient is used for the hang-up request; nil uses http.DefaultClient.
 	HTTPClient *http.Client
+	// Audio configures the conversion between Plivo's 8 kHz μ-law wire audio and
+	// the rate the pipeline runs at. The zero value converts to and from
+	// whatever the StartFrame carries, so the pipeline is free to run at a rate
+	// its services are happier with than 8 kHz.
+	Audio wsserver.AudioConfig
 }
 
 // Serializer implements wsserver.Serializer for Plivo. The stream and call IDs
 // are learned from the inbound "start" message.
 type Serializer struct {
-	cfg  Config
-	http *http.Client
+	cfg   Config
+	http  *http.Client
+	codec *wsserver.Codec
 
 	mu       sync.Mutex
 	streamID string
@@ -59,11 +60,15 @@ func New(cfg Config) *Serializer {
 	if h == nil {
 		h = http.DefaultClient
 	}
-	return &Serializer{cfg: cfg, http: h}
+	return &Serializer{cfg: cfg, http: h, codec: wsserver.NewCodec(cfg.Audio)}
 }
 
-// Setup is a no-op: Plivo audio is always 8 kHz.
-func (s *Serializer) Setup(*frames.StartFrame) error { return nil }
+// Setup learns the pipeline's sample rate, so the 8 kHz μ-law on the wire can be
+// converted to it and back.
+func (s *Serializer) Setup(f *frames.StartFrame) error { return s.codec.Setup(f) }
+
+// Close releases the resamplers.
+func (s *Serializer) Close() { s.codec.Close() }
 
 // Serialize converts an outbound frame to a Plivo message.
 func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
@@ -71,7 +76,7 @@ func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
 	// Every kind of output audio is sent the same way, so match the family
 	// rather than each concrete frame.
 	case frames.OutputAudioFrame:
-		return s.media(fr.AudioData().Audio)
+		return s.media(fr.AudioData())
 	case *frames.InterruptionFrame:
 		return s.clear()
 	case *frames.EndFrame, *frames.CancelFrame:
@@ -94,7 +99,12 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return frames.NewInputAudioRawFrame(g711.DecodeULaw(ulaw), sampleRate, 1), nil
+		pcm := s.codec.Decode(ulaw, wsserver.EncodingULaw)
+		if len(pcm) == 0 {
+			// The conversion has nothing to emit yet; no audio, no frame.
+			return nil, nil //nolint:nilnil // no audio to carry
+		}
+		return frames.NewInputAudioRawFrame(pcm, s.codec.SampleRate(), 1), nil
 	case "start":
 		s.mu.Lock()
 		s.streamID = m.Start.StreamID
@@ -111,17 +121,23 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 	}
 }
 
-func (s *Serializer) media(pcm []byte) ([]byte, error) {
+func (s *Serializer) media(a *frames.AudioRawData) ([]byte, error) {
 	s.mu.Lock()
 	id := s.streamID
 	s.mu.Unlock()
 	if id == "" {
 		return nil, nil //nolint:nilnil // stream not started yet; drop until "start" arrives
 	}
+	ulaw := s.codec.Encode(a.Audio, a.SampleRate, wsserver.EncodingULaw)
+	if len(ulaw) == 0 {
+		// The conversion has nothing to emit yet; no audio, no message.
+		return nil, nil //nolint:nilnil // no audio to send
+	}
 	out := playAudio{Event: "playAudio", StreamID: id}
 	out.Media.ContentType = "audio/x-mulaw"
-	out.Media.SampleRate = sampleRate
-	out.Media.Payload = base64.StdEncoding.EncodeToString(g711.EncodeULaw(pcm))
+	// The rate the payload is at, which is the wire's, not the pipeline's.
+	out.Media.SampleRate = s.codec.WireSampleRate()
+	out.Media.Payload = base64.StdEncoding.EncodeToString(ulaw)
 	return json.Marshal(out)
 }
 

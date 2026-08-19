@@ -18,26 +18,24 @@ import (
 // Serializer implements wsserver.Serializer.
 var _ wsserver.Serializer = (*Serializer)(nil)
 
-const (
-	// defaultSampleRate is Exotel's default stream rate. Exotel also supports 16 kHz;
-	// set Config.SampleRate to match and run the pipeline at the same rate.
-	defaultSampleRate = 8000
-
-	// eventMedia is the Exotel message event carrying base64 PCM audio.
-	eventMedia = "media"
-)
+// eventMedia is the Exotel message event carrying base64 PCM audio.
+const eventMedia = "media"
 
 // Config configures the Exotel serializer.
 type Config struct {
-	// SampleRate is the PCM rate of the Exotel stream in Hz; 0 defaults to 8000.
-	// The pipeline must run at this rate, since the serializer does not resample.
+	// SampleRate is the PCM rate of the Exotel stream in Hz; 0 defaults to
+	// 8000. Exotel also supports 16 kHz. It is the rate on the wire, not the
+	// rate the pipeline has to run at: the serializer converts between the two.
 	SampleRate int
+	// Audio configures that conversion. Its WireSampleRate is taken from
+	// SampleRate above, so leave it unset.
+	Audio wsserver.AudioConfig
 }
 
 // Serializer implements wsserver.Serializer for Exotel. The stream SID is
 // learned from the inbound "start" message.
 type Serializer struct {
-	rate int
+	codec *wsserver.Codec
 
 	mu        sync.Mutex
 	streamSID string
@@ -45,15 +43,18 @@ type Serializer struct {
 
 // New builds an Exotel serializer.
 func New(cfg Config) *Serializer {
-	rate := cfg.SampleRate
-	if rate == 0 {
-		rate = defaultSampleRate
-	}
-	return &Serializer{rate: rate}
+	audio := cfg.Audio
+	audio.WireSampleRate = cfg.SampleRate
+	return &Serializer{codec: wsserver.NewCodec(audio)}
 }
 
-// Setup is a no-op: the stream rate is fixed by Config.
-func (s *Serializer) Setup(*frames.StartFrame) error { return nil }
+// Setup learns the pipeline's sample rate, so the stream's PCM can be converted
+// to it and back. Exotel streams linear PCM rather than companded audio, so only
+// the rate changes.
+func (s *Serializer) Setup(f *frames.StartFrame) error { return s.codec.Setup(f) }
+
+// Close releases the resamplers.
+func (s *Serializer) Close() { s.codec.Close() }
 
 // Serialize converts an outbound frame to an Exotel message.
 func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
@@ -61,7 +62,7 @@ func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
 	// Every kind of output audio is sent the same way, so match the family
 	// rather than each concrete frame.
 	case frames.OutputAudioFrame:
-		return s.media(fr.AudioData().Audio)
+		return s.media(fr.AudioData())
 	case *frames.InterruptionFrame:
 		return s.clear()
 	default:
@@ -81,7 +82,12 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return frames.NewInputAudioRawFrame(pcm, s.rate, 1), nil
+		converted := s.codec.Decode(pcm, wsserver.EncodingLinear)
+		if len(converted) == 0 {
+			// The conversion has nothing to emit yet; no audio, no frame.
+			return nil, nil //nolint:nilnil // no audio to carry
+		}
+		return frames.NewInputAudioRawFrame(converted, s.codec.SampleRate(), 1), nil
 	case "start":
 		s.mu.Lock()
 		s.streamSID = m.Start.StreamSID
@@ -97,12 +103,17 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 	}
 }
 
-func (s *Serializer) media(pcm []byte) ([]byte, error) {
+func (s *Serializer) media(a *frames.AudioRawData) ([]byte, error) {
 	s.mu.Lock()
 	sid := s.streamSID
 	s.mu.Unlock()
 	if sid == "" {
 		return nil, nil //nolint:nilnil // stream not started yet; drop until "start" arrives
+	}
+	pcm := s.codec.Encode(a.Audio, a.SampleRate, wsserver.EncodingLinear)
+	if len(pcm) == 0 {
+		// The conversion has nothing to emit yet; no audio, no message.
+		return nil, nil //nolint:nilnil // no audio to send
 	}
 	out := mediaOut{Event: eventMedia, StreamSID: sid}
 	out.Media.Payload = base64.StdEncoding.EncodeToString(pcm)

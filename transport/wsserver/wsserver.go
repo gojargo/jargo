@@ -4,8 +4,14 @@
 // InputAudioRawFrames and outbound audio becomes provider media messages.
 //
 // The wire format is provider-specific, so it is supplied as a Serializer; the
-// transport itself is provider-agnostic. Telephony audio is μ-law 8 kHz, so run
-// the pipeline at 8 kHz (set the StartFrame and transport sample rates to 8000).
+// transport itself is provider-agnostic.
+//
+// Telephony audio is companded 8 kHz on the wire, but the pipeline does not have
+// to run at that rate. A Serializer built on Codec converts between the two at
+// each edge, so the pipeline can run at whatever rate suits its services: a
+// transcriber handed 8 kHz and a voice asked for 8 kHz are both worse than
+// converting once on the way in and once on the way out. Set the pipeline rate
+// as usual and the serializer follows it.
 package wsserver
 
 import (
@@ -38,6 +44,14 @@ type Serializer interface {
 	// Deserialize converts an inbound wire message to a frame, or (nil, nil) for
 	// messages that carry no frame (handshake, marks, stop).
 	Deserialize(data []byte) (frames.Frame, error)
+}
+
+// closableSerializer is a Serializer holding resources that have to be handed
+// back when the session ends, a native resampler being the case here. It is
+// optional, and separate from Serializer so that a serializer holding nothing
+// does not have to say so.
+type closableSerializer interface {
+	Close()
 }
 
 // Transport bridges a WebSocket session to a pipeline.
@@ -362,6 +376,13 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		out.paceMu.Unlock()
 	case *frames.EndFrame, *frames.CancelFrame:
 		out.sendControl(ctx, f)
+		// The last use of the serializer in either direction. The frame reached
+		// the input first, which stopped the read loop and waited for it, and
+		// the base has drained the outgoing audio above, so nothing is still
+		// converting by the time this releases what the serializer holds.
+		if c, ok := out.ser.(closableSerializer); ok {
+			c.Close()
+		}
 	}
 	return nil
 }

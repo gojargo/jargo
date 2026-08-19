@@ -206,6 +206,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A telephony pipeline no longer has to run at 8 kHz.** The wire rate and the
+  pipeline rate are not the same question: telephony is companded 8 kHz on the
+  wire and always will be, but pinning the whole pipeline to it hands 8 kHz to
+  the transcriber and asks the voice for 8 kHz back. The Twilio, Telnyx, Plivo
+  and Exotel serializers now convert between the two at each edge, tagging the
+  frames they produce with the pipeline's rate rather than the wire's, so a
+  pipeline runs at whatever rate its services are happier with. `wsserver.Codec`
+  is the shared conversion, and `wsserver.AudioConfig` on each serializer's
+  `Config` overrides the rate for one leg or turns off the resampler's idle
+  clearing, which a provider with irregular chunk arrivals wants. Nothing needs
+  changing to keep the old behaviour: a pipeline at 8 kHz converts through a
+  passthrough. `examples/twiliobot` now runs at 16 kHz to show the difference.
+
 - **Resampling picks a quality, and defaults to the highest.** `resample`
   exposes the five standard SoX recipes through `resample.Quality`, passed
   straight to libsoxr and mapped onto the nearest converter in the pure-Go
