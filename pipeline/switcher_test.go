@@ -61,7 +61,7 @@ func (s *tagSvc) errorOptions() []processor.ErrorOption {
 		opts = append(opts, processor.WithErrorCategory(s.category))
 	}
 	if !s.recoverable {
-		opts = append(opts, processor.TreatAsPermanent())
+		opts = append(opts, processor.ForceTreatAsPermanent())
 	}
 	return opts
 }

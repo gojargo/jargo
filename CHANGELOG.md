@@ -14,6 +14,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A processor that fails to set up is reported, and stops being given work.**
+  A pipeline set its processors up one at a time and returned on the first
+  failure, so the processors after it were never set up at all, nothing was
+  reported, and a switcher had no idea one of its services was finished.
+  Processors are now set up concurrently, each failure is pushed as its own
+  error frame, and the processor is left unusable: setting up is not attempted
+  again, so a switcher settles on the backup before the pipeline starts. The
+  pipeline also pays for its slowest processor rather than for all of them
+  added together.
+
+- **A pipeline that never comes up stops instead of hanging.** A processor that
+  blocked while connecting, or while handling the `StartFrame`, left the worker
+  waiting on it forever. `WorkerConfig` gains `SetupTimeout` and `StartTimeout`
+  (20 seconds each), and the worker raises `on_setup_timeout` or
+  `on_pipeline_timeout` and tears the pipeline down. `on_pipeline_timeout` also
+  fires when a `CancelFrame` does not drain within `CancelTimeout`, which was
+  previously only logged.
+
+- **Startup timing counts the time a processor spends connecting.** Observers
+  gain `OnProcessorSetup`, so the report now covers setup as well as start: a
+  processor that spent two seconds connecting was previously reported as
+  costing nothing. The total is the span from the pipeline starting to set up
+  rather than the sum of what each processor cost, since they are set up
+  concurrently, and transport timing no longer waits for the `StartFrame`, so a
+  client that connects during setup is measured.
+
+- **A processor's shared components are published atomically.** Frames can
+  reach a processor while it is still being set up, and the fields setting up
+  writes were read straight from the frame path.
+
 - **Typographic punctuation no longer collapses the rest of a spoken frame.**
   The word matcher folded case and accents but not typographic punctuation, so a
   synthesizer reporting `don't` for `don’t` (or the reverse) was rejected. The
@@ -143,6 +173,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   up does not hold the shutdown open.
 
 ### Changed
+
+- **`processor.TreatAsPermanent` is now `processor.ForceTreatAsPermanent`**, and
+  the `treatAsPermanent` argument of `PushErrorFrame` is `forceTreatAsPermanent`.
+  The name says that it forces the verdict rather than describing the error.
+
 
 - **`AudioIdleTimeout` is now a `*time.Duration`** on `vadproc.Config` and
   `audio/vad/controller.Config`. Nil takes the one-second default and a zero

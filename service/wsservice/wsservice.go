@@ -48,11 +48,11 @@ var ErrNotConnected = errors.New("wsservice: no websocket connected")
 // service typically pushes a non-fatal error frame: the call continues, and the
 // application decides what a lost provider connection means for it.
 //
-// treatAsPermanent says the failure will keep recurring, which is what the base
+// forceTreatAsPermanent says the failure will keep recurring, which is what the base
 // reports when it has stopped trying. A service passes it through to
 // PushErrorFrame, whose verdict the base then reads back to decide whether
 // reconnecting is worth attempting at all.
-type ReportError func(ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool)
+type ReportError func(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool)
 
 // Handler is the service-specific half of a WebSocket service. The service owns
 // the socket; these are the three things the base needs to drive it, plus the
@@ -297,13 +297,13 @@ func (b *Base) TryReconnect(ctx context.Context, report ReportError) bool {
 // reportError hands ef to report, if there is one, carrying the error behind it
 // so the category can be worked out from it.
 func reportError(
-	ctx context.Context, report ReportError, ef *frames.ErrorFrame, err error, treatAsPermanent bool,
+	ctx context.Context, report ReportError, ef *frames.ErrorFrame, err error, forceTreatAsPermanent bool,
 ) {
 	if report == nil {
 		return
 	}
 	ef.Err = err
-	report(ctx, ef, treatAsPermanent)
+	report(ctx, ef, forceTreatAsPermanent)
 }
 
 // reconnectWebsocket closes what is left of the old connection and opens a new

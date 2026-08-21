@@ -140,12 +140,12 @@ func newRecorder() *recorder {
 	return r
 }
 
-func (r *recorder) report(ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool) {
+func (r *recorder) report(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
 	r.mu.Lock()
 	r.messages = append(r.messages, ef.Error)
-	r.permanent = append(r.permanent, treatAsPermanent)
+	r.permanent = append(r.permanent, forceTreatAsPermanent)
 	r.mu.Unlock()
-	r.PushErrorFrame(ctx, ef, treatAsPermanent)
+	r.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
 }
 
 func (r *recorder) all() []string {

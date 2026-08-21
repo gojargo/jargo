@@ -650,14 +650,14 @@ func (s *StreamService) sendAudio(audio []byte) {
 // not fatal: the call continues, and the application decides what losing
 // transcription for part of it means.
 func (s *StreamService) reportConnectionError(
-	ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool,
+	ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool,
 ) {
 	// Whatever was being measured ends here. The transcript it was waiting on is
 	// not coming on this connection, and holding the measurement open would
 	// carry it into the utterance after the one it belongs to.
 	s.ttfb.reportNow(ctx)
 	s.work.report(ctx)
-	s.PushErrorFrame(ctx, ef, treatAsPermanent)
+	s.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
 }
 
 // recordUsage reports the audio the connection was given. The measurement covers
