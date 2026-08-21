@@ -14,6 +14,40 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Typographic punctuation no longer collapses the rest of a spoken frame.**
+  The word matcher folded case and accents but not typographic punctuation, so a
+  synthesizer reporting `don't` for `don’t` (or the reverse) was rejected. The
+  frame was force-completed on the spot and everything after that word became a
+  single frame word, so the conversation context recorded one run-on string
+  instead of the sentence. Curly and straight quotes, and en and em dashes, now
+  fold to their ASCII forms for matching only: the recorded text keeps whatever
+  the model wrote.
+
+- **A synthesis tag no longer leaks into the transcript when a word straddles a
+  frame.** A token running into the next frame was not split when a tag sat
+  before it, so `<break/> ABC` was emitted as the frame's word and the whole
+  token was handed to the next frame. Markup now gets a segment of its own, so
+  the frame keeps `ABC` and only `Next` travels on.
+
+- **A quantity of exactly one takes the singular unit.** `1km` was expanded to
+  "1 kilometers", and with number expansion on the pair read as "one
+  kilometers". Units carry both forms and a bare `1` picks the singular; a
+  decimal such as `1.0` stays plural, because it reads as "one point zero".
+
+- **Every written fractional digit is spoken.** Number expansion dropped
+  trailing zeros, so `1.0` read as "one" and `0.50` as "zero point five". They
+  now read as "one point zero" and "zero point five zero", which is also what
+  keeps a decimal agreeing with the plural unit beside it.
+
+- **Time to first byte is measured to the model's first output.** Six LLM
+  streams stopped it as soon as the HTTP response or the stream object was
+  open, which is a response header arriving, not the model answering; the
+  Responses WebSocket stopped it on the event that merely acknowledges the
+  request. Anthropic, Gemini, OpenAI chat and both Responses transports now stop
+  it on the first event carrying output, skipping a usage-only chunk, a
+  `message_start` and a `response.created`. A turn that only calls a tool still
+  reports a TTFB, and reasoning counts as output.
+
 - **Frames pushed at a processor that has not started yet are no longer lost.**
   A processor drained its queues from setup, so a system frame arriving before
   its `StartFrame` was handled ahead of it, and a data frame was dropped

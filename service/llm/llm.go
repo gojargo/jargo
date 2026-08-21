@@ -599,10 +599,18 @@ func (b *Base) StartTTFBMetrics() {
 	}
 }
 
-// StopTTFBMetrics records time to first byte. A service calls it as soon as the
-// provider's response stream is open, which is the moment the model starts
-// answering — a turn that only requests tools streams no text, and so would
-// otherwise report no TTFB at all. Only the first call in a generation counts.
+// StopTTFBMetrics records time to first byte. A service calls it on the first
+// output the model produces, rather than on an earlier event that merely
+// acknowledges the request: a response's opening event, or a leading chunk
+// carrying only usage metadata, is not the model answering. Stopping every
+// service on the same thing is what makes the number comparable between them.
+//
+// The first output need not be text. A turn that only requests tools streams
+// none, so the event announcing the call counts, and the turn reports a TTFB
+// rather than none at all.
+//
+// Only the first call in a generation counts, so a service may call it on every
+// chunk it reads.
 func (b *Base) StopTTFBMetrics() {
 	b.ttfbMu.Lock()
 	defer b.ttfbMu.Unlock()

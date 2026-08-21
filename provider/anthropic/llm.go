@@ -166,9 +166,11 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 	params.Tools = nil
 	s.StartTTFBMetrics()
 	stream := s.client.Messages.NewStreaming(ctx, params)
-	s.StopTTFBMetrics()
 	for stream.Next() {
 		event := stream.Current()
+		if carriesModelOutput(event) {
+			s.StopTTFBMetrics()
+		}
 		if report {
 			if err := acc.Accumulate(event); err != nil {
 				return err
@@ -195,6 +197,19 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 	return nil
 }
 
+// carriesModelOutput reports whether a stream event holds output the model
+// produced. The events that open the stream (message_start, ping) carry none,
+// so TTFB ends at the first content block. A thinking block counts: reasoning
+// is output, so it ends TTFB just as answer text would.
+func carriesModelOutput(event sdk.MessageStreamEventUnion) bool {
+	switch event.AsAny().(type) {
+	case sdk.ContentBlockStartEvent, sdk.ContentBlockDeltaEvent:
+		return true
+	default:
+		return false
+	}
+}
+
 // GenerateWithTools streams a response that may request tool calls. It emits
 // text deltas to the sink as they arrive and, once the turn completes, reports
 // each tool-use block the model produced. The conversation's tools are sent on
@@ -209,9 +224,11 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 	var acc sdk.Message
 	s.StartTTFBMetrics()
 	stream := s.client.Messages.NewStreaming(ctx, params)
-	s.StopTTFBMetrics()
 	for stream.Next() {
 		event := stream.Current()
+		if carriesModelOutput(event) {
+			s.StopTTFBMetrics()
+		}
 		if err := acc.Accumulate(event); err != nil {
 			return err
 		}

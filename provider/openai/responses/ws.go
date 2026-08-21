@@ -230,9 +230,9 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink) (*
 			if m.err != nil {
 				return state, m.err
 			}
-			// The socket carries no response headers, so the first event of the
-			// turn is the moment the model starts answering.
-			s.StopTTFBMetrics()
+			if carriesModelOutput(m.ev) {
+				s.StopTTFBMetrics()
+			}
 			if cerr := classifyStreamError(m.ev); cerr != nil {
 				return state, cerr
 			}

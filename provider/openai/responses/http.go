@@ -75,7 +75,6 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 
 	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
-	s.StopTTFBMetrics()
 	if err != nil {
 		return llm.AsCompletionTimeout(ctx, err)
 	}
@@ -90,6 +89,9 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 		ev, ok := decodeEvent([]byte(data))
 		if !ok {
 			return nil // skip a malformed event rather than ending the turn
+		}
+		if carriesModelOutput(ev) {
+			s.StopTTFBMetrics()
 		}
 		done, err := state.handle(ev)
 		if err != nil {

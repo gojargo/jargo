@@ -222,7 +222,6 @@ func (s *Service) newRequestTo(
 func (s *Service) stream(req *http.Request, emit llm.Emit) error {
 	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
-	s.StopTTFBMetrics()
 	if err != nil {
 		return llm.AsCompletionTimeout(req.Context(), err)
 	}
@@ -234,6 +233,12 @@ func (s *Service) stream(req *http.Request, emit llm.Emit) error {
 	return llm.ScanSSE(resp.Body, func(data string) error {
 		var chunk genChunk
 		if json.Unmarshal([]byte(data), &chunk) == nil {
+			if len(chunk.Candidates) == 0 {
+				return nil
+			}
+			// A leading chunk can carry usage metadata and no candidates, so
+			// TTFB ends at the first chunk that holds model output.
+			s.StopTTFBMetrics()
 			for _, c := range chunk.Candidates {
 				for _, p := range c.Content.Parts {
 					if err := emit(p.Text); err != nil {
@@ -304,7 +309,6 @@ func (t *geminiToolStream) consume(chunk genChunk) error {
 func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
 	s.StartTTFBMetrics()
 	resp, err := s.http.Do(req)
-	s.StopTTFBMetrics()
 	if err != nil {
 		return llm.AsCompletionTimeout(req.Context(), err)
 	}
@@ -317,6 +321,12 @@ func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
 	return llm.ScanSSE(resp.Body, func(data string) error {
 		var chunk genChunk
 		if json.Unmarshal([]byte(data), &chunk) == nil {
+			if len(chunk.Candidates) == 0 {
+				return nil
+			}
+			// A leading chunk can carry usage metadata and no candidates, so
+			// TTFB ends at the first chunk that holds model output.
+			s.StopTTFBMetrics()
 			return ts.consume(chunk)
 		}
 		return nil // Skip malformed chunks.

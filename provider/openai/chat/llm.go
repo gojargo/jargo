@@ -355,7 +355,6 @@ func (s *LLMService) generate(ctx context.Context, reqBody chatRequest, sink llm
 	}
 	s.StartTTFBMetrics()
 	resp, err := s.send(ctx, body)
-	s.StopTTFBMetrics()
 	if err != nil {
 		return err
 	}
@@ -387,8 +386,10 @@ func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink)
 			if chunk.Model != "" {
 				s.SetFullModelName(chunk.Model)
 			}
-			// The chunk carrying the counts has no choices of its own.
+			// The chunk carrying the counts has no choices of its own, so TTFB
+			// ends at the first chunk that holds model output.
 			if len(chunk.Choices) > 0 {
+				s.StopTTFBMetrics()
 				return c.add(chunk.Choices[0].Delta, sink)
 			}
 		}

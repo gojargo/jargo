@@ -169,6 +169,20 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 	return false, nil
 }
 
+// carriesModelOutput reports whether an event holds output the model produced.
+// The events that open a response (response.created) only acknowledge the
+// request, so TTFB ends at the first event that carries output: a chunk of
+// text, or the item announcing a function call for a turn that only calls tools
+// and so produces no text at all.
+func carriesModelOutput(ev event) bool {
+	switch ev.Type {
+	case evtTextDelta, evtItemAdded:
+		return true
+	default:
+		return false
+	}
+}
+
 // trackCall folds the events that describe a function call into the pending
 // call for its output index: the item that announces it, then its arguments.
 func (s *streamState) trackCall(ev event) {
