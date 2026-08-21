@@ -366,6 +366,9 @@ var numberRE = regexp.MustCompile(`\b(\d{1,3}(?:,\d{3})*|\d+)(?:\.(\d+))?\b`)
 // "2 0 2 6"); at or below the cutoff it is spelled as a quantity ("42" →
 // "forty-two"). A digitCutoff of zero or less disables the cutoff, so every
 // number is spelled as a quantity.
+//
+// Decimals are read as the whole part followed by their fractional digits, one
+// at a time, so every written digit is spoken ("1.0" → "one point zero").
 func ExpandNumbers(digitCutoff int) Transform {
 	return func(text string) string {
 		return replaceAllSubmatch(numberRE, text, func(g []string) string {
@@ -383,7 +386,14 @@ func ExpandNumbers(digitCutoff int) Transform {
 				return out
 			}
 			if frac != "" {
-				return floatToWords(wholeStr + "." + frac)
+				// Reading the fraction one digit at a time keeps trailing zeros
+				// audible, which also keeps a decimal agreeing with the plural
+				// unit ExpandUnits picks for it ("1.0 kilometers").
+				digits := make([]string, len(frac))
+				for i := range frac {
+					digits[i] = onesWords[frac[i]-'0']
+				}
+				return cardinal(whole) + " point " + strings.Join(digits, " ")
 			}
 			return cardinal(whole)
 		})
@@ -394,16 +404,43 @@ func ExpandNumbers(digitCutoff int) Transform {
 // Units
 //
 
+// unitForms is the singular and plural spoken form of one unit abbreviation.
+// They are the same word for a unit that does not inflect, "hertz" say.
+type unitForms struct{ singular, plural string }
+
 //nolint:gochecknoglobals // compiled once, immutable
 var (
-	unitMap = map[string]string{
-		"km": "kilometers", "m": "meters", "cm": "centimeters", "mm": "millimeters",
-		"mi": "miles", "ft": "feet", "in": "inches", "yd": "yards",
-		"kg": "kilograms", "g": "grams", "mg": "milligrams", "lb": "pounds", "oz": "ounces",
-		"l": "liters", "ml": "milliliters",
-		"mph": "miles per hour", "kph": "kilometers per hour", "kmh": "kilometers per hour",
-		"gb": "gigabytes", "mb": "megabytes", "kb": "kilobytes", "tb": "terabytes",
-		"hz": "hertz", "khz": "kilohertz", "mhz": "megahertz", "ghz": "gigahertz",
+	// unitMap maps a unit abbreviation to its singular and plural spoken forms.
+	unitMap = map[string]unitForms{
+		"km": {"kilometer", "kilometers"},
+		"m":  {"meter", "meters"},
+		"cm": {"centimeter", "centimeters"},
+		"mm": {"millimeter", "millimeters"},
+		"mi": {"mile", "miles"},
+		"ft": {"foot", "feet"},
+		"in": {"inch", "inches"},
+		"yd": {"yard", "yards"},
+		"kg": {"kilogram", "kilograms"},
+		"g":  {"gram", "grams"},
+		"mg": {"milligram", "milligrams"},
+		"lb": {"pound", "pounds"},
+		"oz": {"ounce", "ounces"},
+		"l":  {"liter", "liters"},
+		"ml": {"milliliter", "milliliters"},
+
+		"mph": {"mile per hour", "miles per hour"},
+		"kph": {"kilometer per hour", "kilometers per hour"},
+		"kmh": {"kilometer per hour", "kilometers per hour"},
+
+		"gb": {"gigabyte", "gigabytes"},
+		"mb": {"megabyte", "megabytes"},
+		"kb": {"kilobyte", "kilobytes"},
+		"tb": {"terabyte", "terabytes"},
+
+		"hz":  {"hertz", "hertz"},
+		"khz": {"kilohertz", "kilohertz"},
+		"mhz": {"megahertz", "megahertz"},
+		"ghz": {"gigahertz", "gigahertz"},
 	}
 	// Single-letter units that are also common English words: expand only when
 	// they immediately follow a digit with no space ("5m", not "1 m people").
@@ -434,10 +471,17 @@ func unitAlternation(ambiguous bool) string {
 }
 
 // ExpandUnits expands unit abbreviations after a number into their spoken form,
-// e.g. "5km" → "5 kilometers", "100kph" → "100 kilometers per hour".
+// e.g. "5km" → "5 kilometers", "100kph" → "100 kilometers per hour". A quantity
+// of exactly one takes the singular form, "1km" → "1 kilometer".
 func ExpandUnits(text string) string {
 	expand := func(g []string) string {
-		return g[1] + " " + unitMap[strings.ToLower(g[2])]
+		forms := unitMap[strings.ToLower(g[2])]
+		// Only a bare "1" takes the singular; a decimal such as "1.0" reads as
+		// plural in speech, and ExpandNumbers spells it out that way.
+		if g[1] == "1" {
+			return g[1] + " " + forms.singular
+		}
+		return g[1] + " " + forms.plural
 	}
 	text = replaceAllSubmatch(unitRE, text, expand)
 	return replaceAllSubmatch(ambiguousUnitRE, text, expand)

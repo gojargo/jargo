@@ -244,3 +244,94 @@ func TestVoiceFormatterOrderingPreventsCorruption(t *testing.T) {
 		t.Errorf("expected right-order to expand, got %q", ok)
 	}
 }
+
+// Ported from upstream. A quantity of exactly one takes the singular form of
+// the unit, so a bot does not say "one kilometers".
+func TestExpandUnitsSingular(t *testing.T) {
+	cases := map[string]string{
+		"Only 1km left":  "Only 1 kilometer left",
+		"Only 1mi left":  "Only 1 mile left",
+		"Only 1ft left":  "Only 1 foot left",
+		"Only 1in left":  "Only 1 inch left",
+		"Only 1lb left":  "Only 1 pound left",
+		"Only 1gb left":  "Only 1 gigabyte left",
+		"Only 1mph left": "Only 1 mile per hour left",
+		"1 km away":      "1 kilometer away",
+		// A decimal such as "1.0" reads as plural in speech, unlike a bare "1".
+		"1.0km away": "1.0 kilometers away",
+		// Plurals are untouched.
+		"5km away":       "5 kilometers away",
+		"0.5 mi away":    "0.5 miles away",
+		"21 lb of flour": "21 pounds of flour",
+		// Units whose singular and plural forms match expand identically.
+		"1hz tone":        "1 hertz tone",
+		"3 GHz processor": "3 gigahertz processor",
+	}
+	for in, want := range cases {
+		if got := ExpandUnits(in); got != want {
+			t.Errorf("ExpandUnits(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Ported from upstream. Every written digit is spoken, trailing zeros included,
+// so a decimal keeps agreeing with the plural unit ExpandUnits picked for it.
+func TestExpandNumbersSpeaksEveryFractionalDigit(t *testing.T) {
+	expand := ExpandNumbers(2025)
+	cases := map[string]string{
+		"1.0":    "one point zero",
+		"1.00":   "one point zero zero",
+		"2.0":    "two point zero",
+		"0.50":   "zero point five zero",
+		"1.10":   "one point one zero",
+		"10.0":   "ten point zero",
+		"3.5":    "three point five",
+		"1.05":   "one point zero five",
+		"1.25":   "one point two five",
+		"12.345": "twelve point three four five",
+		"5.0001": "five point zero zero zero one",
+	}
+	for in, want := range cases {
+		if got := expand(in); got != want {
+			t.Errorf("ExpandNumbers(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// The above-cutoff branch reads the whole part digit by digit and the
+	// fraction the same way, rather than dropping it.
+	if got := expand("3000.5 units"); got != "3 0 0 0 point 5 units" {
+		t.Errorf("ExpandNumbers(%q) = %q, want %q", "3000.5 units", got, "3 0 0 0 point 5 units")
+	}
+	if got := expand("2500.75"); got != "2 5 0 0 point 7 5" {
+		t.Errorf("ExpandNumbers(%q) = %q, want %q", "2500.75", got, "2 5 0 0 point 7 5")
+	}
+}
+
+// Ported from upstream. ExpandUnits keeps the plural for a decimal such as
+// "1.0" because it reads as "one point zero" in speech, and ExpandNumbers runs
+// after it. Both have to spell the decimal out the same way, or the composed
+// output is ungrammatical: "one kilometers".
+func TestUnitsAndNumbersComposition(t *testing.T) {
+	f, err := NewVoiceFormatter(FormatterOptions{
+		ExpandUnits:       true,
+		ExpandNumbers:     true,
+		NumberDigitCutoff: 2025,
+	})
+	if err != nil {
+		t.Fatalf("NewVoiceFormatter: %v", err)
+	}
+	cases := map[string]string{
+		"1.0km left":     "one point zero kilometers left",
+		"1.00km left":    "one point zero zero kilometers left",
+		"1.0kg of flour": "one point zero kilograms of flour",
+		"1.0 mi away":    "one point zero miles away",
+		"1km left":       "one kilometer left",
+		"2.0km left":     "two point zero kilometers left",
+		"1.5km left":     "one point five kilometers left",
+		"1.0hz tone":     "one point zero hertz tone",
+	}
+	for in, want := range cases {
+		if got := f.Filter(in); got != want {
+			t.Errorf("VoiceFormatter(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
