@@ -192,6 +192,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   turn analyzer and the VAD analyzer are told the input rate before any audio
   arrives.
 
+- **Services connect while they are being set up** rather than when the
+  `StartFrame` reaches them. A pipeline sets its processors up at once, so
+  several services now connect together instead of one after another as the
+  frame walks the pipeline, and a bot starts in roughly the time its slowest
+  connection takes. A service that cannot connect is reported and left unusable
+  before the pipeline starts, in time for a switcher to move off it; the TTS
+  base previously dialed in a detached goroutine, where a failure reached
+  nobody.
+
 
 - **`AudioIdleTimeout` is now a `*time.Duration`** on `vadproc.Config` and
   `audio/vad/controller.Config`. Nil takes the one-second default and a zero

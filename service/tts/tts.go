@@ -327,6 +327,25 @@ func (b *Base) SetTextFilters(filters ...ttstext.Filter) {
 	b.filters = filters
 }
 
+// Setup opens the synthesizer's connection, for a synthesizer that dials one.
+//
+// Dialing here rather than on the StartFrame is what keeps it off the frame
+// path: a pipeline sets its processors up at once, so several services connect
+// together instead of one after another as the frame reaches them, and a service
+// that cannot connect is reported and left unusable before the pipeline starts,
+// in time for a switcher to move off it.
+func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
+	if err := b.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	if st, ok := b.syn.(Starter); ok {
+		// The connection outlives this call, so it is not tied to a context that
+		// ends with it.
+		st.Start(context.WithoutCancel(ctx))
+	}
+	return nil
+}
+
 // ProcessFrame aggregates text into sentences and synthesizes them.
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -702,11 +721,6 @@ func (b *Base) handleStart(ctx context.Context, f frames.Frame, dir processor.Di
 		return err
 	}
 	b.startAudioContexts(ctx)
-	if st, ok := b.syn.(Starter); ok {
-		// Detached: the setup outlives this frame, and a turn canceled by an
-		// interruption must not abandon a connection half-dialed.
-		go st.Start(context.WithoutCancel(ctx))
-	}
 	return nil
 }
 

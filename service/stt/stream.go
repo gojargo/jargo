@@ -392,9 +392,10 @@ func (s *StreamService) modelName() string {
 	return s.model
 }
 
-// Setup resolves the rate the service transcribes at. A rate configured on the
-// service wins; otherwise it takes the pipeline's input rate, which it knows
-// from the moment it is set up rather than when the StartFrame arrives.
+// Setup resolves the rate the service transcribes at and opens the connection. A
+// rate configured on the service wins; otherwise it takes the pipeline's input
+// rate, which it knows from the moment it is set up rather than when the
+// StartFrame arrives.
 func (s *StreamService) Setup(ctx context.Context, st processor.Setup) error {
 	if err := s.Base.Setup(ctx, st); err != nil {
 		return err
@@ -403,7 +404,15 @@ func (s *StreamService) Setup(ctx context.Context, st processor.Setup) error {
 	if s.sampleRate == 0 {
 		s.sampleRate = st.AudioInSampleRate
 	}
-	return nil
+	// Dialing here rather than on the StartFrame is what keeps it off the frame
+	// path: a pipeline sets its processors up at once, so several services
+	// connect together instead of one after another as the frame reaches them,
+	// and a service that cannot connect is reported and left unusable before the
+	// pipeline starts, in time for a switcher to move off it.
+	//
+	// The connection outlives this call, so it is not tied to a context that
+	// ends with it.
+	return s.connect(context.WithoutCancel(ctx))
 }
 
 // ProcessFrame manages the connection lifecycle and streams audio.
@@ -413,10 +422,7 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 	}
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		if err := s.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		return s.connect(ctx)
+		return s.PushFrame(ctx, f, dir)
 	case *frames.InputAudioRawFrame:
 		s.sendAudio(fr.Audio)
 		return s.PushFrame(ctx, f, dir)
