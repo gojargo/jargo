@@ -76,6 +76,19 @@ func TestOutputTimelineSurvivesAStall(t *testing.T) {
 		}()
 	})
 
+	// The burst has to be sent over a live connection, so the test waits for the
+	// handshake before it starts the pipeline. Establishing it takes on the order
+	// of two seconds under the race detector, which is longer than the whole
+	// burst-stall-burst sequence: a test that started emitting straight away
+	// would tear the pipeline down before a single packet could leave.
+	connected := make(chan struct{})
+	var connectOnce sync.Once
+	client.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		if state == webrtc.PeerConnectionStateConnected {
+			connectOnce.Do(func() { close(connected) })
+		}
+	})
+
 	offer, err := client.CreateOffer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +105,12 @@ func TestOutputTimelineSurvivesAStall(t *testing.T) {
 	}
 	if err := client.SetRemoteDescription(answer); err != nil {
 		t.Fatal(err)
+	}
+
+	select {
+	case <-connected:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the peer connection never came up, so no audio could be measured")
 	}
 
 	params := transport.DefaultParams()
