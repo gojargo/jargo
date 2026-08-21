@@ -43,6 +43,22 @@ type TurnTracking struct {
 	count    int
 	start    time.Duration
 	timer    *time.Timer
+	// ended are the listeners added with OnTurnEnded, on top of the one the
+	// config carries. A processor that needs to know where a turn ended, the
+	// audio buffer recording per-turn audio say, subscribes here rather than
+	// taking the single config callback away from the application.
+	ended []func(turn int, duration time.Duration, interrupted bool)
+}
+
+// OnTurnEnded adds a listener called when a turn ends, alongside the one the
+// config carries and any added before it.
+func (o *TurnTracking) OnTurnEnded(fn func(turn int, duration time.Duration, interrupted bool)) {
+	if fn == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.ended = append(o.ended, fn)
 }
 
 // NewTurnTracking builds a TurnTracking observer.
@@ -123,8 +139,12 @@ func (o *TurnTracking) endTurn(at time.Duration, interrupted bool) {
 	}
 	d := at - o.start
 	o.active = false
+	turn := o.count
 	if o.cfg.OnTurnEnded != nil {
-		o.cfg.OnTurnEnded(o.count, d, interrupted)
+		o.cfg.OnTurnEnded(turn, d, interrupted)
+	}
+	for _, fn := range o.ended {
+		fn(turn, d, interrupted)
 	}
 }
 

@@ -172,6 +172,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that conversation ended. The wait is bounded, so an observer that cannot keep
   up does not hold the shutdown open.
 
+### Added
+
+- **Turn audio is reported once per turn.** `audiobuffer.Config` gains
+  `OnUserTurnAudio` and `OnBotTurnAudio`, which fire when the turn tracker ends
+  a turn and carry a `TurnAudioData`: everything that speaker said during the
+  turn, and the turn's number. The existing `OnUserTurnAudioData` and
+  `OnBotTurnAudioData` fire once per run of speech, so a turn holding several
+  runs produced several events and none of them said which turn it belonged to.
+  The number comes from the callback that defines the boundary, which is what
+  makes it reliable: a barge-in ends one turn and starts the next in the same
+  moment.
+
+
 ### Changed
 
 - **`processor.TreatAsPermanent` is now `processor.ForceTreatAsPermanent`**, and

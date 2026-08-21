@@ -55,6 +55,18 @@ type Running interface {
 	// goroutine that processes frames: the probe has to pass through this
 	// processor to complete its round trip.
 	Flush(ctx context.Context) error
+	// TurnTracker follows the conversation's turns, and is nil when the worker
+	// is not tracking them. A processor that has to know where a turn ended
+	// subscribes to it; the interface is narrow because the observer that
+	// implements it already depends on this package.
+	TurnTracker() TurnTracker
+}
+
+// TurnTracker reports where the conversation's turns end.
+type TurnTracker interface {
+	// OnTurnEnded adds a listener called when a turn ends, with the turn number,
+	// how long it lasted, and whether an interruption cut it short.
+	OnTurnEnded(fn func(turn int, duration time.Duration, interrupted bool))
 }
 
 // Setup carries the shared components a processor needs, propagated down the
@@ -627,6 +639,10 @@ func (b *Base) AudioInSampleRate() int { return b.setupState().audioInSampleRate
 // AudioOutSampleRate is the pipeline's output audio sample rate in Hz. See
 // AudioInSampleRate.
 func (b *Base) AudioOutSampleRate() int { return b.setupState().audioOutSampleRate }
+
+// Running is the pipeline this processor is part of, or nil for a processor
+// driven outside one.
+func (b *Base) Running() Running { return b.setupState().running }
 
 // BeginTTFB reports whether a time-to-first-byte measurement should be started,
 // and records that one was. A service calls it where it would start the clock,

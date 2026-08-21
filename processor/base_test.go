@@ -30,6 +30,10 @@ func (f *flusher) Flush(context.Context) error {
 	return nil
 }
 
+// TurnTracker reports no tracker: this stand-in is a pipeline only as far as
+// flushing goes.
+func (f *flusher) TurnTracker() processor.TurnTracker { return nil }
+
 func (f *flusher) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

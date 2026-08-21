@@ -12,6 +12,7 @@ package audiobuffer
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -52,18 +53,43 @@ type Config struct {
 	OnTrackAudioData func(user, bot []byte, sampleRate, numChannels int)
 
 	// EnableTurnAudio delivers each turn's audio on its own, as that turn ends,
-	// through OnUserTurnAudioData and OnBotTurnAudioData. It is off by default:
-	// the session tracks are what a recording wants, and a turn's audio is for
+	// through OnUserTurnAudio and OnBotTurnAudio. It is off by default: the
+	// session tracks are what a recording wants, and a turn's audio is for
 	// something that works turn by turn, scoring one utterance or handing it to a
 	// classifier. The session tracks cannot be cut into turns afterwards, since
 	// nothing in them marks where a turn began.
+	//
+	// It needs the worker to be tracking turns, which it does by default, since
+	// the turn tracker is what says where a turn ended.
 	EnableTurnAudio bool
-	// OnUserTurnAudioData receives the audio of one user turn, mono, once they
-	// stop speaking.
+	// OnUserTurnAudio receives everything the user said during one turn, mono,
+	// once that turn ends.
+	OnUserTurnAudio func(d TurnAudioData)
+	// OnBotTurnAudio receives everything the bot said during one turn, mono, once
+	// that turn ends.
+	OnBotTurnAudio func(d TurnAudioData)
+
+	// OnUserTurnAudioData receives one run of the user's speech, mono, each time
+	// they stop speaking. A turn can hold several runs, so it fires more than
+	// once per turn and says nothing about which turn the audio belongs to; use
+	// OnUserTurnAudio for that.
 	OnUserTurnAudioData func(audio []byte, sampleRate, numChannels int)
-	// OnBotTurnAudioData receives the audio of one bot turn, mono, once it stops
-	// speaking.
+	// OnBotTurnAudioData receives one run of the bot's speech, mono, each time it
+	// stops speaking. See OnUserTurnAudioData.
 	OnBotTurnAudioData func(audio []byte, sampleRate, numChannels int)
+}
+
+// TurnAudioData is one speaker's audio for one conversation turn.
+type TurnAudioData struct {
+	// TurnNumber is the turn this audio belongs to.
+	TurnNumber int
+	// Audio is everything the speaker said during the turn, as raw PCM, with the
+	// pauses between their runs of speech left out.
+	Audio []byte
+	// SampleRate is the rate of the audio, in Hz.
+	SampleRate int
+	// NumChannels is how many channels the audio has.
+	NumChannels int
 }
 
 // Processor records the pipeline's audio. It is placed downstream, typically
@@ -90,6 +116,13 @@ type Processor struct {
 	// apart from the session tracks so a turn can be handed over on its own.
 	userTurnBuf []byte
 	botTurnBuf  []byte
+	// userTurnAudio and botTurnAudio hold everything each speaker has said so far
+	// in the turn being spoken: a run of speech is folded in when the speaker
+	// stops, and the lot is reported when the turn ends.
+	userTurnAudio []byte
+	botTurnAudio  []byte
+	// turnTrackerAttached makes the subscription happen once.
+	turnTrackerAttached bool
 	// oneSecond is what a second of the recording weighs. The user's audio is
 	// buffered continuously and trimmed to this while they are not known to be
 	// speaking, because the report that they started comes after they did: the
@@ -188,6 +221,9 @@ func (p *Processor) onStart(_ *frames.StartFrame) {
 	p.mu.Lock()
 	p.bufSize = p.cfg.BufferSize
 	p.mu.Unlock()
+	if p.cfg.EnableTurnAudio {
+		p.attachTurnTracker()
+	}
 	if p.cfg.AutoStart {
 		p.startRecording()
 	}
@@ -296,10 +332,10 @@ func (p *Processor) recordTurn(f frames.Frame, kind audioKind, res []byte) *turn
 	switch f.(type) {
 	case *frames.UserStoppedSpeakingFrame:
 		ended = &turnRecording{user: true, audio: p.userTurnBuf, sampleRate: p.sampleRate}
-		p.userTurnBuf = nil
+		p.endUserRun()
 	case *frames.BotStoppedSpeakingFrame:
 		ended = &turnRecording{audio: p.botTurnBuf, sampleRate: p.sampleRate}
-		p.botTurnBuf = nil
+		p.endBotRun()
 	}
 
 	switch {
@@ -312,6 +348,67 @@ func (p *Processor) recordTurn(f frames.Frame, kind audioKind, res []byte) *turn
 		p.botTurnBuf = append(p.botTurnBuf, res...)
 	}
 	return ended
+}
+
+// endUserRun folds the user's finished run of speech into the current turn. It
+// runs with the lock held.
+func (p *Processor) endUserRun() {
+	p.userTurnAudio = append(p.userTurnAudio, p.userTurnBuf...)
+	p.userTurnBuf = nil
+}
+
+// endBotRun folds the bot's finished run of speech into the current turn. It
+// runs with the lock held.
+func (p *Processor) endBotRun() {
+	p.botTurnAudio = append(p.botTurnAudio, p.botTurnBuf...)
+	p.botTurnBuf = nil
+}
+
+// attachTurnTracker reports each turn's audio when the tracker ends a turn.
+//
+// The turn number comes from the same callback that defines the boundary, which
+// is what makes it reliable: a barge-in ends one turn and starts the next in the
+// same moment, so a number read when the audio arrives is the wrong one.
+func (p *Processor) attachTurnTracker() {
+	if p.turnTrackerAttached {
+		return
+	}
+	running := p.Running()
+	var tracker processor.TurnTracker
+	if running != nil {
+		tracker = running.TurnTracker()
+	}
+	if tracker == nil {
+		slog.Warn("turn audio is enabled but the worker is not tracking turns, "+
+			"so no turn audio will be reported", "processor", p.Name())
+		return
+	}
+	tracker.OnTurnEnded(func(turn int, _ time.Duration, _ bool) { p.emitTurnAudio(turn) })
+	p.turnTrackerAttached = true
+}
+
+// emitTurnAudio reports each speaker's audio for a turn that has just ended.
+func (p *Processor) emitTurnAudio(turn int) {
+	p.mu.Lock()
+	// A barge-in ends the turn before the bot stops, so the bot's last run is
+	// closed here. Closing the user's would pull the start of their interruption
+	// into the turn it interrupted.
+	p.endBotRun()
+	user, bot := p.userTurnAudio, p.botTurnAudio
+	rate := p.sampleRate
+	p.userTurnAudio, p.botTurnAudio = nil, nil
+	p.mu.Unlock()
+
+	if len(user) > 0 && p.cfg.OnUserTurnAudio != nil {
+		p.cfg.OnUserTurnAudio(TurnAudioData{
+			TurnNumber: turn, Audio: user, SampleRate: rate, NumChannels: 1,
+		})
+	}
+	if len(bot) > 0 && p.cfg.OnBotTurnAudio != nil {
+		p.cfg.OnBotTurnAudio(TurnAudioData{
+			TurnNumber: turn, Audio: bot, SampleRate: rate, NumChannels: 1,
+		})
+	}
 }
 
 // deliverTurn hands one turn's audio over, outside the lock. A turn that

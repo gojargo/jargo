@@ -497,6 +497,16 @@ func (t *Worker) RemoveObserver(o Observer) {
 // only when turn tracking has been turned off.
 func (t *Worker) TurnTracking() *observers.TurnTracking { return t.turnTracking }
 
+// TurnTracker follows the conversation's turns, for a processor that has to know
+// where a turn ended. It is nil when the worker is not tracking turns. It
+// implements processor.Running.
+func (t *Worker) TurnTracker() processor.TurnTracker {
+	if t.turnTracking == nil {
+		return nil
+	}
+	return t.turnTracking
+}
+
 // TurnTrace is the observer writing the conversation and turn spans. It is nil
 // unless the task traces.
 func (t *Worker) TurnTrace() *observers.TurnTrace { return t.turnTrace }
