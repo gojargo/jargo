@@ -930,11 +930,16 @@ func (t *Worker) Run(ctx context.Context) error {
 	t.observerProxy.setupStarted(time.Now())
 
 	setup := processor.Setup{
-		Clock:          t.clk,
-		Observers:      []processor.Observer{t.observerProxy},
-		Tracing:        t.tracing,
-		TracingEnabled: t.cfg.EnableTracing,
-		Running:        t,
+		AudioInSampleRate:     t.params.AudioInSampleRate,
+		AudioOutSampleRate:    t.params.AudioOutSampleRate,
+		Clock:                 t.clk,
+		EnableMetrics:         t.params.EnableMetrics,
+		EnableUsageMetrics:    t.params.EnableUsageMetrics,
+		Observers:             []processor.Observer{t.observerProxy},
+		ReportOnlyInitialTTFB: t.params.ReportOnlyInitialTTFB,
+		Tracing:               t.tracing,
+		TracingEnabled:        t.cfg.EnableTracing,
+		Running:               t,
 	}
 	setUp, err := t.setupWithinTimeout(pipeCtx, setup)
 	if err != nil {

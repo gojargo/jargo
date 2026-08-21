@@ -178,6 +178,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the `treatAsPermanent` argument of `PushErrorFrame` is `forceTreatAsPermanent`.
   The name says that it forces the verdict rather than describing the error.
 
+- **A processor reads the pipeline's configuration from its setup.** Sample
+  rates, the metrics flags and the report-only-initial-TTFB flag are on
+  `processor.Setup`, so a processor knows its configuration from the moment it
+  is set up rather than when the `StartFrame` reaches it. That is what lets a
+  service resolve its rate, and connect, while it is being set up, which the
+  pipeline now does for every processor at once. `StartFrame` still carries the
+  same values, so a processor that reads one gets the configured value rather
+  than the field's default.
+
+- **Serializers are set up with a `processor.Setup`** rather than a
+  `*frames.StartFrame`, and turn strategies gain a `Setup` of their own, so the
+  turn analyzer and the VAD analyzer are told the input rate before any audio
+  arrives.
+
 
 - **`AudioIdleTimeout` is now a `*time.Duration`** on `vadproc.Config` and
   `audio/vad/controller.Config`. Nil takes the one-second default and a zero

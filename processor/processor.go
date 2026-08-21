@@ -60,8 +60,19 @@ type Running interface {
 // Setup carries the shared components a processor needs, propagated down the
 // pipeline when it is set up.
 type Setup struct {
+	// AudioInSampleRate is the pipeline's input audio sample rate in Hz.
+	AudioInSampleRate int
+	// AudioOutSampleRate is the pipeline's output audio sample rate in Hz.
+	AudioOutSampleRate int
 	// Clock is the pipeline clock used for timing.
 	Clock clock.Clock
+	// EnableMetrics turns on performance metrics collection.
+	EnableMetrics bool
+	// EnableUsageMetrics turns on usage metrics collection.
+	EnableUsageMetrics bool
+	// ReportOnlyInitialTTFB asks for the first time-to-first-byte of the run and
+	// nothing after it.
+	ReportOnlyInitialTTFB bool
 	// Observers watch every frame handed between processors.
 	Observers []Observer
 	// Running is the pipeline this processor is part of. Nil for a processor
@@ -228,12 +239,6 @@ type Base struct {
 	// Metrics flags captured from the StartFrame. They are written once on the
 	// input goroutine before the process goroutine is created in start(), which
 	// establishes the happens-before for reads from ProcessFrame.
-	metricsEnabled      bool
-	usageMetricsEnabled bool
-	// reportOnlyInitialTTFB asks for the first time-to-first-byte of the run and
-	// no more, for a caller who wants the figure a call opened with rather than
-	// one per turn.
-	reportOnlyInitialTTFB bool
 
 	// ttfbMu guards armTTFB, which unlike the flags above is written on every
 	// measurement rather than once at the start.
@@ -384,11 +389,16 @@ func (b *Base) StartSpan(
 // setupState is the immutable set of shared components a processor is given
 // when it is set up.
 type setupState struct {
-	clock          clock.Clock
-	observers      []Observer
-	tracing        *tracing.TracingContext
-	tracingEnabled bool
-	running        Running
+	audioInSampleRate     int
+	audioOutSampleRate    int
+	clock                 clock.Clock
+	enableMetrics         bool
+	enableUsageMetrics    bool
+	observers             []Observer
+	reportOnlyInitialTTFB bool
+	tracing               *tracing.TracingContext
+	tracingEnabled        bool
+	running               Running
 }
 
 // setupState returns what setting up published, or an empty value before the
@@ -405,11 +415,16 @@ func (b *Base) setupState() setupState {
 // processor never acts on a frame before it has been started.
 func (b *Base) Setup(ctx context.Context, s Setup) error {
 	b.state.Store(&setupState{
-		clock:          s.Clock,
-		observers:      s.Observers,
-		tracing:        s.Tracing,
-		tracingEnabled: s.TracingEnabled,
-		running:        s.Running,
+		audioInSampleRate:     s.AudioInSampleRate,
+		audioOutSampleRate:    s.AudioOutSampleRate,
+		clock:                 s.Clock,
+		enableMetrics:         s.EnableMetrics,
+		enableUsageMetrics:    s.EnableUsageMetrics,
+		observers:             s.Observers,
+		reportOnlyInitialTTFB: s.ReportOnlyInitialTTFB,
+		tracing:               s.Tracing,
+		tracingEnabled:        s.TracingEnabled,
+		running:               s.Running,
 	})
 	baseCtx, baseCancel := context.WithCancel(ctx)
 	b.baseMu.Lock()
@@ -568,9 +583,6 @@ func (b *Base) processFrame(ctx context.Context, it item) error {
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) error {
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		b.metricsEnabled = fr.EnableMetrics
-		b.usageMetricsEnabled = fr.EnableUsageMetrics
-		b.reportOnlyInitialTTFB = fr.ReportOnlyInitialTTFB
 		b.ttfbMu.Lock()
 		b.armTTFB = true
 		b.ttfbMu.Unlock()
@@ -605,7 +617,16 @@ func (b *Base) HasQueuedFrame(match func(frames.Frame) bool) bool {
 
 // MetricsEnabled reports whether performance-metrics collection was enabled by
 // the StartFrame. It is valid once the processor has received its StartFrame.
-func (b *Base) MetricsEnabled() bool { return b.metricsEnabled }
+func (b *Base) MetricsEnabled() bool { return b.setupState().enableMetrics }
+
+// AudioInSampleRate is the pipeline's input audio sample rate in Hz, which a
+// service that was not given one of its own takes as its own. It is known from
+// the moment the processor is set up.
+func (b *Base) AudioInSampleRate() int { return b.setupState().audioInSampleRate }
+
+// AudioOutSampleRate is the pipeline's output audio sample rate in Hz. See
+// AudioInSampleRate.
+func (b *Base) AudioOutSampleRate() int { return b.setupState().audioOutSampleRate }
 
 // BeginTTFB reports whether a time-to-first-byte measurement should be started,
 // and records that one was. A service calls it where it would start the clock,
@@ -620,13 +641,13 @@ func (b *Base) BeginTTFB() bool {
 	if !b.armTTFB {
 		return false
 	}
-	b.armTTFB = !b.reportOnlyInitialTTFB
+	b.armTTFB = !b.setupState().reportOnlyInitialTTFB
 	return true
 }
 
 // UsageMetricsEnabled reports whether usage-metrics collection was enabled by
 // the StartFrame. It is valid once the processor has received its StartFrame.
-func (b *Base) UsageMetricsEnabled() bool { return b.usageMetricsEnabled }
+func (b *Base) UsageMetricsEnabled() bool { return b.setupState().enableUsageMetrics }
 
 // Self is the processor this base belongs to: the concrete value passed to New,
 // or the base itself when none was.

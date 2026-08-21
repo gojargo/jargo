@@ -337,9 +337,10 @@ func TestControllerFallsBackWhenTheDetectorRejectsTheRate(t *testing.T) {
 	c := controller.New(a, r.handlers(), controller.Config{})
 	t.Cleanup(c.Cleanup)
 
-	start := frames.NewStartFrame()
-	start.AudioInSampleRate = 44100
-	if err := c.ProcessFrame(context.Background(), start); err != nil {
+	if err := c.Setup(processor.Setup{AudioInSampleRate: 44100}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := c.ProcessFrame(context.Background(), frames.NewStartFrame()); err != nil {
 		t.Fatalf("start at a rate the detector refuses: %v", err)
 	}
 
@@ -366,9 +367,10 @@ func TestControllerResamplesToTheDetectorRate(t *testing.T) {
 	c := controller.New(a, r.handlers(), controller.Config{})
 	t.Cleanup(c.Cleanup)
 
-	start := frames.NewStartFrame()
-	start.AudioInSampleRate = 48000
-	if err := c.ProcessFrame(context.Background(), start); err != nil {
+	if err := c.Setup(processor.Setup{AudioInSampleRate: 48000}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := c.ProcessFrame(context.Background(), frames.NewStartFrame()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 

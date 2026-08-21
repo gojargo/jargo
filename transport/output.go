@@ -148,6 +148,17 @@ func (bo *BaseOutput) StartWriting(context.Context) error { return nil }
 // it to open the outgoing stream a destination names.
 func (bo *BaseOutput) RegisterAudioDestination(context.Context, string) error { return nil }
 
+// Setup resolves the rate the transport writes at. A rate configured on the
+// transport wins; otherwise it takes the pipeline's output rate, which it knows
+// from the moment it is set up rather than when the StartFrame arrives.
+func (bo *BaseOutput) Setup(ctx context.Context, s processor.Setup) error {
+	if err := bo.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	bo.sampleRate = pick(bo.params.AudioOutSampleRate, s.AudioOutSampleRate)
+	return nil
+}
+
 // ProcessFrame handles the transport lifecycle and routes frames to the sender
 // for the destination they name.
 func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
@@ -159,7 +170,7 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 		// Initialize before forwarding so the chunk size is set before any
 		// audio frame can be processed. Nothing downstream of the output
 		// transport needs the StartFrame ahead of this.
-		bo.startStreaming(ctx, fr)
+		bo.startStreaming(ctx)
 		if err := bo.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
@@ -294,8 +305,7 @@ func (bo *BaseOutput) mixerFor(destination string) audio.Mixer {
 	return nil
 }
 
-func (bo *BaseOutput) startStreaming(ctx context.Context, f *frames.StartFrame) {
-	bo.sampleRate = pick(bo.params.AudioOutSampleRate, f.AudioOutSampleRate)
+func (bo *BaseOutput) startStreaming(ctx context.Context) {
 	bo.channels = bo.params.AudioOutChannels
 	if bo.channels == 0 {
 		bo.channels = 1

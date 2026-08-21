@@ -112,6 +112,23 @@ func New(cfg Config) *Processor {
 	return p
 }
 
+// Setup resolves the rate the recording is kept at. A rate configured on the
+// processor wins; otherwise it takes the pipeline's output rate, which it knows
+// from the moment it is set up.
+func (p *Processor) Setup(ctx context.Context, s processor.Setup) error {
+	if err := p.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sampleRate = p.cfg.SampleRate
+	if p.sampleRate == 0 {
+		p.sampleRate = s.AudioOutSampleRate
+	}
+	p.oneSecond = p.sampleRate * 2
+	return nil
+}
+
 // ProcessFrame taps audio for recording and forwards every frame untouched.
 func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -167,14 +184,9 @@ func (p *Processor) Recording() bool {
 	return p.recording
 }
 
-func (p *Processor) onStart(f *frames.StartFrame) {
+func (p *Processor) onStart(_ *frames.StartFrame) {
 	p.mu.Lock()
-	p.sampleRate = p.cfg.SampleRate
-	if p.sampleRate == 0 {
-		p.sampleRate = f.AudioOutSampleRate
-	}
 	p.bufSize = p.cfg.BufferSize
-	p.oneSecond = p.sampleRate * 2
 	p.mu.Unlock()
 	if p.cfg.AutoStart {
 		p.startRecording()

@@ -411,8 +411,15 @@ func (u *UserAggregator) Setup(ctx context.Context, s processor.Setup) error {
 	if err := u.Base.Setup(ctx, s); err != nil {
 		return err
 	}
+	if u.vad != nil {
+		if err := u.vad.Setup(s); err != nil {
+			return err
+		}
+	}
 	if u.turn != nil {
-		u.turn.Setup(ctx)
+		if err := u.turn.Setup(ctx, s); err != nil {
+			return err
+		}
 		u.idle.Setup(ctx, u)
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/g711"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -21,10 +22,8 @@ func silence() []byte { return make([]byte, 160*2) }
 func ready(t *testing.T, cfg Config, rate int) *Serializer {
 	t.Helper()
 	s := New(cfg)
-	sf := frames.NewStartFrame()
-	sf.AudioInSampleRate = rate
-	sf.AudioOutSampleRate = rate
-	if err := s.Setup(sf); err != nil {
+	setup := processor.Setup{AudioInSampleRate: rate, AudioOutSampleRate: rate}
+	if err := s.Setup(setup); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 	t.Cleanup(s.Close)

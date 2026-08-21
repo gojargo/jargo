@@ -95,8 +95,6 @@ func NewTurnAnalyzerStop(cfg TurnAnalyzerConfig) *TurnAnalyzerStop {
 // Process feeds the analyzer and decides end-of-turn.
 func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
-	case *frames.StartFrame:
-		s.analyzer.SetSampleRate(fr.AudioInSampleRate)
 	case *frames.STTMetadataFrame:
 		s.sttTimeout = fr.TTFSP99Latency
 		s.stopSecsWarned = false
@@ -303,6 +301,13 @@ func (s *TurnAnalyzerStop) discardPendingEndOfTurn() {
 	s.timeoutExpired = false
 	s.vadStopped = false
 	s.cancel()
+}
+
+// Setup tells the analyzer the pipeline's input rate, which is known before any
+// audio arrives.
+func (s *TurnAnalyzerStop) Setup(st processor.Setup) error {
+	s.analyzer.SetSampleRate(st.AudioInSampleRate)
+	return nil
 }
 
 // Cleanup stops the timeout.
@@ -643,3 +648,5 @@ func (d *deferredStop) Process(f frames.Frame) ProcessFrameResult { return d.inn
 func (d *deferredStop) TurnStarted()                              { d.inner.TurnStarted() }
 func (d *deferredStop) TurnStopped()                              { d.inner.TurnStopped() }
 func (d *deferredStop) Cleanup()                                  { d.inner.Cleanup() }
+
+func (d *deferredStop) Setup(s processor.Setup) error { return d.inner.Setup(s) }

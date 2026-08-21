@@ -155,13 +155,13 @@ func (c *Controller) ReportParams(ctx context.Context) {
 	})
 }
 
-// start configures the detector for the pipeline's input rate and reports the
-// parameters it will run with.
-func (c *Controller) start(ctx context.Context, f *frames.StartFrame) error {
+// Setup configures the detector for the pipeline's input rate, which is known
+// from the moment the controller is set up.
+func (c *Controller) Setup(s processor.Setup) error {
 	// Prefer the input rate so no resampling is needed: Silero runs natively at
 	// 8 kHz as well as 16 kHz. Fall back to the default rate, and resample, only
 	// if the detector rejects the input rate.
-	rate := f.AudioInSampleRate
+	rate := s.AudioInSampleRate
 	if rate <= 0 {
 		rate = analyzerSampleRate
 	}
@@ -172,6 +172,14 @@ func (c *Controller) start(ctx context.Context, f *frames.StartFrame) error {
 		}
 	}
 	c.analyzerRate = rate
+	return nil
+}
+
+// start brings up the watch for the audio going missing and reports the
+// parameters the detector will run with. The watch runs from here rather than
+// from Setup because it looks for audio going missing mid-turn, and there is no
+// audio to miss until the pipeline starts.
+func (c *Controller) start(ctx context.Context, _ *frames.StartFrame) error {
 	c.startIdleWatch(ctx)
 	c.ReportParams(ctx)
 	return nil

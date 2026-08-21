@@ -19,6 +19,14 @@ const (
 // processor with the pipeline-wide configuration. It is a system frame.
 type StartFrame struct {
 	BaseSystemFrame
+
+	// The fields below carry the pipeline's configuration, which a processor now
+	// reads from its [processor.Setup] instead: it knows its configuration from
+	// the moment it is set up, rather than when this frame reaches it, which is
+	// what lets it connect while it is being set up. The worker still fills them
+	// in so a processor that reads one gets the configured value rather than the
+	// field's default.
+
 	// AudioInSampleRate is the input audio sample rate in Hz.
 	AudioInSampleRate int
 	// AudioOutSampleRate is the output audio sample rate in Hz.

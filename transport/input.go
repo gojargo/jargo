@@ -111,6 +111,17 @@ func (bi *BaseInput) PushBotConnected(ctx context.Context) {
 	_ = bi.PushFrame(ctx, frames.NewBotConnectedFrame(), processor.Downstream)
 }
 
+// Setup resolves the rate the transport reads at. A rate configured on the
+// transport wins; otherwise it takes the pipeline's input rate, which it knows
+// from the moment it is set up rather than when the StartFrame arrives.
+func (bi *BaseInput) Setup(ctx context.Context, s processor.Setup) error {
+	if err := bi.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	bi.sampleRate = pick(bi.params.AudioInSampleRate, s.AudioInSampleRate)
+	return nil
+}
+
 // ProcessFrame handles the transport lifecycle and forwards frames.
 func (bi *BaseInput) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := bi.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -123,7 +134,7 @@ func (bi *BaseInput) ProcessFrame(ctx context.Context, f frames.Frame, dir proce
 		if err := bi.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		return bi.startStreaming(ctx, fr)
+		return bi.startStreaming(ctx)
 	case *frames.CancelFrame:
 		bi.stopStreaming(ctx)
 		return bi.PushFrame(ctx, f, dir)
@@ -165,11 +176,9 @@ func (bi *BaseInput) Cleanup(ctx context.Context) error {
 	return bi.Base.Cleanup(ctx)
 }
 
-func (bi *BaseInput) startStreaming(ctx context.Context, f *frames.StartFrame) error {
+func (bi *BaseInput) startStreaming(ctx context.Context) error {
 	bi.lifeMu.Lock()
 	defer bi.lifeMu.Unlock()
-
-	bi.sampleRate = pick(bi.params.AudioInSampleRate, f.AudioInSampleRate)
 
 	// Start the input filter before the audio goroutine so audioLoop observes a
 	// stable filterActive. A filter that fails to start is skipped, not fatal.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 )
 
 func pcm() []byte {
@@ -26,10 +27,8 @@ const wireRate = 8000
 func ready(t *testing.T, cfg Config, rate int) *Serializer {
 	t.Helper()
 	s := New(cfg)
-	sf := frames.NewStartFrame()
-	sf.AudioInSampleRate = rate
-	sf.AudioOutSampleRate = rate
-	if err := s.Setup(sf); err != nil {
+	setup := processor.Setup{AudioInSampleRate: rate, AudioOutSampleRate: rate}
+	if err := s.Setup(setup); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 	t.Cleanup(s.Close)

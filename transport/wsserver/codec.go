@@ -6,7 +6,7 @@ import (
 
 	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/audio/resample"
-	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 )
 
 // DefaultWireSampleRate is the rate telephony providers stream at: 8 kHz mono,
@@ -76,17 +76,17 @@ func NewCodec(cfg AudioConfig) *Codec {
 	return &Codec{cfg: cfg}
 }
 
-// Setup takes the rates from the pipeline's StartFrame and builds the inbound
+// Setup takes the rates from the pipeline's configuration and builds the inbound
 // resampler. A serializer calls it from its own Setup.
-func (c *Codec) Setup(f *frames.StartFrame) error {
+func (c *Codec) Setup(s processor.Setup) error {
 	c.wireRate = c.cfg.WireSampleRate
 	if c.wireRate <= 0 {
 		c.wireRate = DefaultWireSampleRate
 	}
 
 	c.inRate = c.cfg.SampleRate
-	if c.inRate <= 0 && f != nil {
-		c.inRate = f.AudioInSampleRate
+	if c.inRate <= 0 {
+		c.inRate = s.AudioInSampleRate
 	}
 	if c.inRate <= 0 {
 		c.inRate = c.wireRate

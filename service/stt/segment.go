@@ -121,6 +121,20 @@ func (s *SegmentService) updateSettings(ctx context.Context, f *frames.STTUpdate
 	}
 }
 
+// Setup resolves the rate the service transcribes at. A rate configured on the
+// service wins; otherwise it takes the pipeline's input rate, which it knows
+// from the moment it is set up rather than when the StartFrame arrives.
+func (s *SegmentService) Setup(ctx context.Context, st processor.Setup) error {
+	if err := s.Base.Setup(ctx, st); err != nil {
+		return err
+	}
+	s.sampleRate = s.cfgRate
+	if s.sampleRate == 0 {
+		s.sampleRate = st.AudioInSampleRate
+	}
+	return nil
+}
+
 // ProcessFrame buffers speech audio and transcribes each completed segment.
 func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -128,10 +142,6 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 	}
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		s.sampleRate = s.cfgRate
-		if s.sampleRate == 0 {
-			s.sampleRate = fr.AudioInSampleRate
-		}
 		if err := s.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}

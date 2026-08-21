@@ -295,3 +295,97 @@ func TestStartFrameNeverReachesSink(t *testing.T) {
 		t.Errorf("the timeout was reported %d times, want once", len(timedOut)+1)
 	}
 }
+
+// configSpy records the configuration it was set up with, and the StartFrame it
+// was handed.
+type configSpy struct {
+	*processor.Base
+	mu    sync.Mutex
+	setup processor.Setup
+	start *frames.StartFrame
+}
+
+func newConfigSpy() *configSpy {
+	c := &configSpy{}
+	c.Base = processor.New("ConfigSpy", c)
+	return c
+}
+
+func (c *configSpy) Setup(ctx context.Context, s processor.Setup) error {
+	if err := c.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.setup = s
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *configSpy) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := c.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if sf, ok := f.(*frames.StartFrame); ok {
+		c.mu.Lock()
+		c.start = sf
+		c.mu.Unlock()
+	}
+	return c.PushFrame(ctx, f, dir)
+}
+
+func (c *configSpy) snapshot() (processor.Setup, *frames.StartFrame) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.setup, c.start
+}
+
+// Ported from upstream. A processor reads the pipeline's configuration from its
+// setup, so it knows it from the moment it is set up rather than when the
+// StartFrame reaches it. That is what lets it connect while it is being set up.
+func TestSetupCarriesThePipelineConfiguration(t *testing.T) {
+	spy := newConfigSpy()
+	noInitial := false
+	task := pipeline.NewWorker(pipeline.New(spy), pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			AudioInSampleRate:       8000,
+			AudioOutSampleRate:      48000,
+			EnableMetrics:           true,
+			EnableUsageMetrics:      true,
+			ReportOnlyInitialTTFB:   true,
+			SendInitialEmptyMetrics: &noInitial,
+		},
+	})
+
+	done := runTask(t, task)
+	task.QueueFrame(frames.NewEndFrame())
+	waitDoneWithin(t, done, 5*time.Second)
+
+	setup, start := spy.snapshot()
+	if setup.AudioInSampleRate != 8000 || setup.AudioOutSampleRate != 48000 {
+		t.Errorf("setup rates = %d/%d, want 8000/48000",
+			setup.AudioInSampleRate, setup.AudioOutSampleRate)
+	}
+	if !setup.EnableMetrics || !setup.EnableUsageMetrics || !setup.ReportOnlyInitialTTFB {
+		t.Errorf("setup flags = %+v, want all three set", setup)
+	}
+	if !spy.MetricsEnabled() || !spy.UsageMetricsEnabled() {
+		t.Error("the processor does not report metrics enabled, though its setup did")
+	}
+	if spy.AudioInSampleRate() != 8000 || spy.AudioOutSampleRate() != 48000 {
+		t.Errorf("the processor reports rates %d/%d, want 8000/48000",
+			spy.AudioInSampleRate(), spy.AudioOutSampleRate())
+	}
+
+	// The StartFrame still carries the same configuration, so a processor that
+	// reads a field off it gets the configured value rather than the default.
+	if start == nil {
+		t.Fatal("the processor never saw a StartFrame")
+	}
+	if start.AudioInSampleRate != 8000 || start.AudioOutSampleRate != 48000 {
+		t.Errorf("the StartFrame carries rates %d/%d, want 8000/48000",
+			start.AudioInSampleRate, start.AudioOutSampleRate)
+	}
+	if !start.EnableMetrics || !start.EnableUsageMetrics || !start.ReportOnlyInitialTTFB {
+		t.Errorf("the StartFrame carries %+v, want all three set", start)
+	}
+}

@@ -392,6 +392,20 @@ func (s *StreamService) modelName() string {
 	return s.model
 }
 
+// Setup resolves the rate the service transcribes at. A rate configured on the
+// service wins; otherwise it takes the pipeline's input rate, which it knows
+// from the moment it is set up rather than when the StartFrame arrives.
+func (s *StreamService) Setup(ctx context.Context, st processor.Setup) error {
+	if err := s.Base.Setup(ctx, st); err != nil {
+		return err
+	}
+	s.sampleRate = s.cfgRate
+	if s.sampleRate == 0 {
+		s.sampleRate = st.AudioInSampleRate
+	}
+	return nil
+}
+
 // ProcessFrame manages the connection lifecycle and streams audio.
 func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -401,10 +415,6 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 	case *frames.StartFrame:
 		if err := s.PushFrame(ctx, f, dir); err != nil {
 			return err
-		}
-		s.sampleRate = s.cfgRate
-		if s.sampleRate == 0 {
-			s.sampleRate = fr.AudioInSampleRate
 		}
 		return s.connect(ctx)
 	case *frames.InputAudioRawFrame:

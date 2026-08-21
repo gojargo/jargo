@@ -83,6 +83,15 @@ func New(cfg Config) *Processor {
 	return p
 }
 
+// Setup hands the controller its configuration, so the detector is told the
+// pipeline's input rate before any audio arrives.
+func (p *Processor) Setup(ctx context.Context, s processor.Setup) error {
+	if err := p.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	return p.controller.Setup(s)
+}
+
 // ProcessFrame forwards the frame and then lets the controller run over it.
 //
 // It forwards first so the StartFrame reaches everything downstream before the

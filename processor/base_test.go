@@ -169,24 +169,10 @@ func TestBaseSetupState(t *testing.T) {
 	}
 	span.End()
 
-	// The metrics flags come off the StartFrame.
-	if e.MetricsEnabled() || e.UsageMetricsEnabled() {
-		t.Error("the metrics flags are set before the StartFrame")
-	}
-	start := frames.NewStartFrame()
-	start.EnableMetrics = true
-	start.EnableUsageMetrics = true
-	if err := e.QueueFrame(ctx, start, processor.Downstream); err != nil {
+	if err := e.QueueFrame(ctx, frames.NewStartFrame(), processor.Downstream); err != nil {
 		t.Fatal(err)
 	}
 	mustReceive[*frames.StartFrame](t, c.got, "StartFrame")
-
-	if !e.MetricsEnabled() {
-		t.Error("MetricsEnabled() is false after a StartFrame that enabled metrics")
-	}
-	if !e.UsageMetricsEnabled() {
-		t.Error("UsageMetricsEnabled() is false after a StartFrame that enabled them")
-	}
 
 	// The flush is the task's to do, and a processor outside a task has nothing
 	// to drain.

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
@@ -57,7 +58,7 @@ func New() *Serializer { return &Serializer{} }
 
 // Setup is a no-op: the RTVI channel carries no audio, so there is nothing to
 // configure from the StartFrame.
-func (*Serializer) Setup(*frames.StartFrame) error { return nil }
+func (*Serializer) Setup(processor.Setup) error { return nil }
 
 // Serialize drops outbound frames. RTVI server messages reach the socket through
 // the transport's own OutputTransportMessageUrgentFrame path rather than the

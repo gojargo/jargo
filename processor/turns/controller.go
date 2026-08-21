@@ -38,6 +38,9 @@ type UserTurnController struct {
 
 	mu  sync.Mutex
 	ctx context.Context
+	// setup is the pipeline configuration the strategies were set up with, so
+	// a strategy added later is given the same one.
+	setup processor.Setup
 
 	userSpeaking   bool
 	userTurn       bool
@@ -59,16 +62,24 @@ func (c *UserTurnController) SetHooks(h ControllerHooks) { c.hooks = h }
 
 // Setup records the session context and binds each strategy to the shared
 // environment.
-func (c *UserTurnController) Setup(ctx context.Context) {
+func (c *UserTurnController) Setup(ctx context.Context, st processor.Setup) error {
 	c.mu.Lock()
 	c.ctx = ctx
+	c.setup = st
 	c.mu.Unlock()
 	for _, s := range c.strategies.Start {
 		s.attach(s, c.startEnv())
+		if err := s.Setup(st); err != nil {
+			return err
+		}
 	}
 	for _, s := range c.strategies.Stop {
 		s.attach(s, c.stopEnv())
+		if err := s.Setup(st); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // Cleanup stops the watchdog and cleans up the strategies.

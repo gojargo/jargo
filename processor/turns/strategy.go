@@ -59,6 +59,9 @@ type StartStrategy interface {
 	TurnStarted()
 	// TurnStopped clears per-turn state when a turn ends.
 	TurnStopped()
+	// Setup hands the strategy the pipeline's configuration, which it knows
+	// before any frame arrives.
+	Setup(s processor.Setup) error
 	// Cleanup releases resources (timers).
 	Cleanup()
 	attach(self StartStrategy, env strategyEnv)
@@ -86,6 +89,9 @@ func (b *StartStrategyBase) TurnStarted() {}
 
 // TurnStopped is the default no-op.
 func (b *StartStrategyBase) TurnStopped() {}
+
+// Setup is the default no-op.
+func (b *StartStrategyBase) Setup(processor.Setup) error { return nil }
 
 // Cleanup is the default no-op.
 func (b *StartStrategyBase) Cleanup() {}
@@ -123,6 +129,9 @@ type StopStrategy interface {
 	// TurnStopped clears per-turn state, including any buffered speech, when a
 	// turn ends.
 	TurnStopped()
+	// Setup hands the strategy the pipeline's configuration, which it knows
+	// before any frame arrives.
+	Setup(s processor.Setup) error
 	// Cleanup releases resources (timers).
 	Cleanup()
 	attach(self StopStrategy, env strategyEnv)
@@ -146,6 +155,9 @@ func (b *StopStrategyBase) TurnStarted() {}
 
 // TurnStopped is the default no-op.
 func (b *StopStrategyBase) TurnStopped() {}
+
+// Setup is the default no-op.
+func (b *StopStrategyBase) Setup(processor.Setup) error { return nil }
 
 // Cleanup is the default no-op.
 func (b *StopStrategyBase) Cleanup() {}

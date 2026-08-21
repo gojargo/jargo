@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 )
 
 // Tests for ending the Plivo call when the pipeline finishes. Hanging up is a
@@ -77,7 +78,7 @@ func awaitHangup(t *testing.T, got chan *http.Request) *http.Request {
 // Plivo audio is always 8 kHz, so there is no rate to reconcile.
 func TestSetupIsANoOp(t *testing.T) {
 	s := New(Config{})
-	if err := s.Setup(frames.NewStartFrame()); err != nil {
+	if err := s.Setup(processor.Setup{}); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 }

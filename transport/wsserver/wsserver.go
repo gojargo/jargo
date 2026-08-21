@@ -36,7 +36,7 @@ const readLimit = 1 << 20
 // across sessions.
 type Serializer interface {
 	// Setup captures pipeline configuration from the StartFrame.
-	Setup(f *frames.StartFrame) error
+	Setup(s processor.Setup) error
 	// Serialize converts an outbound frame to a wire message, or (nil, nil) for
 	// frames it does not send. Interruption, end and cancel frames are passed in
 	// so the serializer can emit a "clear" message or hang up the call.
@@ -150,7 +150,7 @@ type inputTransport struct {
 	readWG     sync.WaitGroup
 	mu         sync.Mutex
 	readCancel context.CancelFunc
-	start      *frames.StartFrame
+	setup      processor.Setup
 }
 
 func newInput(sess *Session, ser Serializer, params transport.Params) *inputTransport {
@@ -159,19 +159,18 @@ func newInput(sess *Session, ser Serializer, params transport.Params) *inputTran
 	return in
 }
 
-// ProcessFrame records the StartFrame for the serializer and defers to the base.
+// Setup records the pipeline's configuration for the serializer and defers to
+// the base.
 //
 // The serializer is set up in StartReading rather than here, because the base
 // pushes the StartFrame downstream before it calls StartReading. Configuring the
 // serializer first would mean a failure swallowed the StartFrame, leaving every
 // processor downstream uninitialized and the pipeline unable to finish.
-func (in *inputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if sf, ok := f.(*frames.StartFrame); ok {
-		in.mu.Lock()
-		in.start = sf
-		in.mu.Unlock()
-	}
-	return in.BaseInput.ProcessFrame(ctx, f, dir)
+func (in *inputTransport) Setup(ctx context.Context, s processor.Setup) error {
+	in.mu.Lock()
+	in.setup = s
+	in.mu.Unlock()
+	return in.BaseInput.Setup(ctx, s)
 }
 
 // StartReading configures the serializer and launches the socket read loop. It
@@ -185,15 +184,13 @@ func (in *inputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir 
 // neither hear nor answer.
 func (in *inputTransport) StartReading(ctx context.Context) error {
 	in.mu.Lock()
-	sf := in.start
+	setup := in.setup
 	in.mu.Unlock()
 
-	if sf != nil {
-		if err := in.ser.Setup(sf); err != nil {
-			in.PushError(ctx, "wsserver: serializer setup failed", err, true)
-			in.sess.abort()
-			return nil // reported as a fatal error frame; do not report it twice
-		}
+	if err := in.ser.Setup(setup); err != nil {
+		in.PushError(ctx, "wsserver: serializer setup failed", err, true)
+		in.sess.abort()
+		return nil // reported as a fatal error frame; do not report it twice
 	}
 
 	// The socket was accepted before the pipeline was built, so the client is

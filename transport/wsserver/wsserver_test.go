@@ -59,11 +59,11 @@ type testSerializer struct {
 	serialized []string
 }
 
-func (s *testSerializer) Setup(f *frames.StartFrame) error {
+func (s *testSerializer) Setup(st processor.Setup) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setupCalled = true
-	s.setupRate = f.AudioOutSampleRate
+	s.setupRate = st.AudioOutSampleRate
 	return s.setupErr
 }
 

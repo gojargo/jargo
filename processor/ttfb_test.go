@@ -9,29 +9,31 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// startBase hands base the StartFrame that carries the pipeline's reporting
-// settings.
-func startBase(t *testing.T, base *processor.Base, reportOnlyInitial bool) {
+// startBase hands base its StartFrame, which is what starts it.
+func startBase(t *testing.T, base *processor.Base) {
 	t.Helper()
-	start := frames.NewStartFrame()
-	start.EnableMetrics = true
-	start.ReportOnlyInitialTTFB = reportOnlyInitial
-	if err := base.ProcessFrame(context.Background(), start, processor.Downstream); err != nil {
+	if err := base.ProcessFrame(context.Background(), frames.NewStartFrame(), processor.Downstream); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 }
 
 // startedBase is a processor set up and started, which is the state a service
-// measures anything in.
+// measures anything in. The reporting settings reach it through its setup,
+// which is where a processor learns its configuration.
 func startedBase(t *testing.T, reportOnlyInitial bool) *processor.Base {
 	t.Helper()
 	ctx := context.Background()
 	e := newEcho()
-	if err := e.Setup(ctx, processor.Setup{Clock: clock.NewSystem()}); err != nil {
+	setup := processor.Setup{
+		Clock:                 clock.NewSystem(),
+		EnableMetrics:         true,
+		ReportOnlyInitialTTFB: reportOnlyInitial,
+	}
+	if err := e.Setup(ctx, setup); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	t.Cleanup(func() { _ = e.Cleanup(ctx) })
-	startBase(t, e.Base, reportOnlyInitial)
+	startBase(t, e.Base)
 	return e.Base
 }
 
@@ -77,7 +79,7 @@ func TestBeginTTFBReArmsOnAStart(t *testing.T) {
 	b := startedBase(t, true)
 	b.BeginTTFB()
 
-	startBase(t, b, true)
+	startBase(t, b)
 	if !b.BeginTTFB() {
 		t.Fatal("the first measurement of the new run was declined")
 	}
