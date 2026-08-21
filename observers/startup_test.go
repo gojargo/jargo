@@ -36,6 +36,34 @@ func (p *slowStart) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 	return p.PushFrame(ctx, f, dir)
 }
 
+// slowSetup takes a while to be set up, standing in for a service that connects
+// while it is set up rather than while it handles the StartFrame.
+type slowSetup struct {
+	*processor.Base
+	delay time.Duration
+}
+
+func newSlowSetup(delay time.Duration) *slowSetup {
+	p := &slowSetup{delay: delay}
+	p.Base = processor.New("SlowSetup", p)
+	return p
+}
+
+func (p *slowSetup) Setup(ctx context.Context, s processor.Setup) error {
+	if err := p.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	time.Sleep(p.delay)
+	return nil
+}
+
+func (p *slowSetup) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	return p.PushFrame(ctx, f, dir)
+}
+
 // fastStart passes everything straight on.
 type fastStart struct {
 	*processor.Base
@@ -269,10 +297,11 @@ func TestStartupTimingReportsOnlyTheFirstClient(t *testing.T) {
 	}
 }
 
-// TestStartupTimingIgnoresAClientBeforeTheStart covers a connection reported
-// before the pipeline started. There is nothing to measure it from, so it is
-// ignored rather than timed against a start that never happened.
-func TestStartupTimingIgnoresAClientBeforeTheStart(t *testing.T) {
+// Ported from upstream. A client that connects before the StartFrame is still
+// measured. A transport connects while it is being set up, so it can report a
+// connection before the StartFrame is pushed; timings run from the pipeline
+// starting to set up, so there is nothing to wait for.
+func TestStartupTimingMeasuresAClientBeforeTheStart(t *testing.T) {
 	r := newRecorder[observers.TransportTimingReport]()
 	o := observers.NewStartupTiming(observers.StartupTimingConfig{
 		OnTransportTimingReport: r.record,
@@ -281,11 +310,15 @@ func TestStartupTimingIgnoresAClientBeforeTheStart(t *testing.T) {
 	o.OnPushFrame(processor.FramePushed{
 		Frame:     frames.NewClientConnectedFrame(),
 		Direction: processor.Downstream,
-		Timestamp: time.Second,
+		Timestamp: 250 * time.Millisecond,
 	})
 
-	if got := r.snapshot(); len(got) != 0 {
-		t.Fatalf("transport reports = %+v, want none: the pipeline had not started", got)
+	got := r.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("transport reports = %+v, want one", got)
+	}
+	if got[0].ClientConnected != 250*time.Millisecond {
+		t.Errorf("ClientConnected = %v, want %v", got[0].ClientConnected, 250*time.Millisecond)
 	}
 }
 
@@ -336,5 +369,79 @@ func TestStartupTimingKeepsTheFirstBotConnection(t *testing.T) {
 	}
 	if got[0].BotConnected == nil {
 		t.Fatal("BotConnected is unset, want the time the bot took to join")
+	}
+}
+
+// Ported from upstream. A processor that connects while being set up is
+// measured for it. Services connect during setup rather than while handling the
+// StartFrame, so a report that only measured starting would show a fast startup
+// for a pipeline that spent its time connecting.
+func TestStartupTimingCountsWhatSetupCost(t *testing.T) {
+	r := newRecorder[observers.StartupTimingReport]()
+	o := observers.NewStartupTiming(observers.StartupTimingConfig{
+		OnStartupTimingReport: r.record,
+	})
+
+	runPipeline(t, o, []processor.Processor{newSlowSetup(100 * time.Millisecond)},
+		frames.NewTextFrame("hello"))
+	r.wait(t)
+
+	got := r.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("reports = %d, want 1", len(got))
+	}
+
+	var slow []observers.ProcessorStartupTiming
+	for _, timing := range got[0].ProcessorTimings {
+		if strings.HasPrefix(timing.ProcessorName, "SlowSetup#") {
+			slow = append(slow, timing)
+		}
+	}
+	if len(slow) != 1 {
+		t.Fatalf("timings naming the slow processor = %+v, want one", slow)
+	}
+	if slow[0].SetupDuration < 50*time.Millisecond {
+		t.Errorf("SetupDuration = %s, want at least 50ms", slow[0].SetupDuration)
+	}
+	// Setting up is what this processor cost, and starting added nothing.
+	if slow[0].Duration < slow[0].SetupDuration {
+		t.Errorf("Duration %s is less than the setup it contains, %s",
+			slow[0].Duration, slow[0].SetupDuration)
+	}
+}
+
+// Ported from upstream. Processors are set up concurrently, so their cost does
+// not add up. Summing what each cost would report three concurrent 100ms
+// connections as 300ms, so a pipeline would read as slower the more it
+// overlapped.
+func TestStartupTimingTotalIsTheSpanNotTheSum(t *testing.T) {
+	r := newRecorder[observers.StartupTimingReport]()
+	o := observers.NewStartupTiming(observers.StartupTimingConfig{
+		OnStartupTimingReport: r.record,
+	})
+
+	runPipeline(t, o, []processor.Processor{
+		newSlowSetup(100 * time.Millisecond),
+		newSlowSetup(100 * time.Millisecond),
+		newSlowSetup(100 * time.Millisecond),
+	}, frames.NewTextFrame("hello"))
+	r.wait(t)
+
+	got := r.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("reports = %d, want 1", len(got))
+	}
+	report := got[0]
+
+	var summed time.Duration
+	for _, timing := range report.ProcessorTimings {
+		summed += timing.Duration
+	}
+	if summed < 250*time.Millisecond {
+		t.Fatalf("the per-processor durations add up to %s, want each one measured", summed)
+	}
+	if report.TotalDuration >= summed {
+		t.Errorf("TotalDuration = %s, want less than the %s they add up to: the setups overlapped",
+			report.TotalDuration, summed)
 	}
 }

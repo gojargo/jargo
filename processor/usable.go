@@ -110,8 +110,8 @@ type ErrorOption func(*errorOptions)
 
 // errorOptions collects what the options set.
 type errorOptions struct {
-	category         errs.Category
-	treatAsPermanent bool
+	category              errs.Category
+	forceTreatAsPermanent bool
 }
 
 // WithErrorCategory reports why the error occurred, when the caller knows.
@@ -123,13 +123,13 @@ func WithErrorCategory(c errs.Category) ErrorOption {
 	return func(o *errorOptions) { o.category = c }
 }
 
-// TreatAsPermanent reports the error as one that will keep recurring, leaving
-// the processor unable to do any more work: having failed too many times to keep
-// trying, say. It is only needed for a failure the category does not already
-// convey, since a permanent category costs the processor its usability on its
-// own.
-func TreatAsPermanent() ErrorOption {
-	return func(o *errorOptions) { o.treatAsPermanent = true }
+// ForceTreatAsPermanent reports the error as one that will keep recurring,
+// leaving the processor unable to do any more work: having failed too many times
+// to keep trying, say. It is only needed for a failure the category does not
+// already convey, since a permanent category costs the processor its usability
+// on its own.
+func ForceTreatAsPermanent() ErrorOption {
+	return func(o *errorOptions) { o.forceTreatAsPermanent = true }
 }
 
 // PushError builds an ErrorFrame for msg and pushes it upstream.
@@ -143,16 +143,16 @@ func (b *Base) PushError(ctx context.Context, msg string, err error, fatal bool,
 	ef.Err = err
 	ef.Source = b.self
 	ef.Category = o.category
-	b.self.PushErrorFrame(ctx, ef, o.treatAsPermanent)
+	b.self.PushErrorFrame(ctx, ef, o.forceTreatAsPermanent)
 }
 
 // PushErrorFrame settles the error frame's category and the processor's
 // usability, tells the error handlers, and pushes the frame upstream.
 //
-// treatAsPermanent reports the error as one that will keep recurring. Leaving it
+// forceTreatAsPermanent reports the error as one that will keep recurring. Leaving it
 // false does not keep the processor usable: a permanent category costs it its
 // usability either way.
-func (b *Base) PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool) {
+func (b *Base) PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
 	if ef.Source == nil {
 		ef.Source = b.self
 	}
@@ -172,7 +172,7 @@ func (b *Base) PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, treatA
 
 	// Before anything sees the error, so that handlers reading
 	// ErrorFrame.Source.Usable() get the verdict that came with it.
-	if treatAsPermanent || ef.Category.IsPermanent() {
+	if forceTreatAsPermanent || ef.Category.IsPermanent() {
 		b.self.SetUsable(ctx, false)
 	}
 

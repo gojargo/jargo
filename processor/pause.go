@@ -210,7 +210,7 @@ func (b *Base) PauseProcessingAllFramesUntil(ready func(ctx context.Context), ti
 	b.PauseProcessingSystemFrames()
 	b.PauseProcessingFrames()
 
-	ctx, cancel := context.WithCancel(b.baseCtx)
+	ctx, cancel := context.WithCancel(b.baseContext())
 	b.pauseMu.Lock()
 	b.pauseWatcher = cancel
 	b.pauseMu.Unlock()

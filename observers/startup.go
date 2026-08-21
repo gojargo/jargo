@@ -15,19 +15,22 @@ type ProcessorStartupTiming struct {
 	// StartOffset is how long after the StartFrame entered the pipeline this
 	// processor began starting.
 	StartOffset time.Duration
-	// Duration is how long the processor held the StartFrame, which is what its
-	// own start cost: opening a socket, authenticating, loading a model.
+	// Duration is what the processor cost to get ready: its setup and its start
+	// together. It connects while it is set up, and starting is whatever is left
+	// to do once it has.
 	Duration time.Duration
+	// SetupDuration is how long the processor's setup took, which is the part of
+	// Duration spent connecting.
+	SetupDuration time.Duration
 }
 
 // StartupTimingReport is what every measured processor cost to start.
 type StartupTimingReport struct {
-	// StartTime is the wall-clock time at which the first processor began
-	// starting.
+	// StartTime is the wall-clock time at which the pipeline began setting up.
 	StartTime time.Time
-	// TotalDuration is the sum of the per-processor durations. Processors on
-	// separate branches of a parallel pipeline start at the same time, so it is
-	// a total of the work rather than of the wall clock.
+	// TotalDuration is the wall-clock time from the pipeline starting to set up
+	// until it had started. Processors are set up concurrently, so it is the
+	// span rather than the sum of what each of them cost.
 	TotalDuration time.Duration
 	// ProcessorTimings is what each processor cost, in the order the StartFrame
 	// left them.
@@ -37,14 +40,15 @@ type StartupTimingReport struct {
 // TransportTimingReport is how long the transport took to reach the points at
 // which a conversation can actually happen.
 type TransportTimingReport struct {
-	// StartTime is the wall-clock time at which the pipeline started.
+	// StartTime is the wall-clock time at which the pipeline began setting up.
 	StartTime time.Time
-	// BotConnected is how long after the pipeline started the bot itself joined
+	// BotConnected is how long after the pipeline began setting up the bot
+	// itself joined
 	// the session. It is nil on a transport that never reports the bot joining,
 	// which is every transport that is not an SFU.
 	BotConnected *time.Duration
-	// ClientConnected is how long after the pipeline started the first remote
-	// participant connected.
+	// ClientConnected is how long after the pipeline began setting up the first
+	// remote participant connected.
 	ClientConnected time.Duration
 }
 
@@ -95,6 +99,10 @@ type StartupTiming struct {
 	startFrame *startFrameInfo
 	arrivals   map[uint64]arrivalInfo
 	timings    []ProcessorStartupTiming
+	// setupStartedAt is when the pipeline began setting its processors up, and
+	// setupDurations is what each processor's setup cost.
+	setupStartedAt time.Time
+	setupDurations map[uint64]time.Duration
 	// startupReported and transportReported make each report happen once.
 	startupReported   bool
 	transportReported bool
@@ -105,7 +113,11 @@ type StartupTiming struct {
 
 // NewStartupTiming builds a StartupTiming observer.
 func NewStartupTiming(cfg StartupTimingConfig) *StartupTiming {
-	return &StartupTiming{cfg: cfg, arrivals: map[uint64]arrivalInfo{}}
+	return &StartupTiming{
+		cfg:            cfg,
+		arrivals:       map[uint64]arrivalInfo{},
+		setupDurations: map[uint64]time.Duration{},
+	}
 }
 
 // shouldTrack reports whether p is measured. The caller holds o.mu.
@@ -117,6 +129,27 @@ func (o *StartupTiming) shouldTrack(p processor.Processor) bool {
 	// would count the whole chain again under the pipeline's own name; a source
 	// is plumbing that starts nothing.
 	return !processor.IsSource(p) && len(p.Processors()) == 0
+}
+
+// OnPipelineSetupStarted implements processor.SetupStartedObserver. Processors
+// connect while they are being set up, so startup begins here rather than at the
+// StartFrame.
+func (o *StartupTiming) OnPipelineSetupStarted(at time.Time) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.setupStartedAt = at
+}
+
+// OnProcessorSetup implements processor.SetupObserver. It records what a
+// processor's setup cost, which is the part of getting ready it spends
+// connecting.
+func (o *StartupTiming) OnProcessorSetup(data processor.ProcessorSetUp) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.startupReported || !o.shouldTrack(data.Processor) {
+		return
+	}
+	o.setupDurations[data.Processor.ID()] = data.Duration()
 }
 
 // OnProcessFrame implements processor.ProcessObserver. It records the StartFrame
@@ -174,10 +207,14 @@ func (o *StartupTiming) OnPushFrame(data processor.FramePushed) {
 	}
 	delete(o.arrivals, data.Source.ID())
 
+	setupDuration := o.setupDurations[arrival.proc.ID()]
 	o.timings = append(o.timings, ProcessorStartupTiming{
 		ProcessorName: arrival.proc.Name(),
 		StartOffset:   arrival.arrival - o.startFrame.arrival,
-		Duration:      data.Timestamp - arrival.arrival,
+		// What the processor cost overall: it connects while being set up, and
+		// starting is whatever is left to do once it has.
+		Duration:      setupDuration + (data.Timestamp - arrival.arrival),
+		SetupDuration: setupDuration,
 	})
 }
 
@@ -195,27 +232,34 @@ func (o *StartupTiming) OnPipelineStarted() {
 
 // handleBotConnected records when the bot joined. The caller holds o.mu.
 func (o *StartupTiming) handleBotConnected(data processor.FramePushed) {
-	if o.botConnected != nil || o.startFrame == nil {
+	if o.botConnected != nil {
 		return
 	}
-	d := data.Timestamp - o.startFrame.arrival
+	// Elapsed pipeline-clock time, which runs from the pipeline starting to set
+	// up. A transport connects while it is set up, so this can be reached before
+	// the StartFrame is pushed and there is nothing to wait for.
+	d := data.Timestamp
 	o.botConnected = &d
 }
 
 // handleClientConnected reports the transport timing on the first client to
 // connect. The caller holds o.mu.
 func (o *StartupTiming) handleClientConnected(data processor.FramePushed) {
-	if o.transportReported || o.startFrame == nil {
+	if o.transportReported {
 		return
 	}
 	o.transportReported = true
 	if o.cfg.OnTransportTimingReport == nil {
 		return
 	}
+	clientConnected := data.Timestamp
 	o.cfg.OnTransportTimingReport(TransportTimingReport{
-		StartTime:       o.startFrame.wallClock,
+		// Both offsets are elapsed pipeline-clock time, which starts before this
+		// observer hears anything, so the wall clock they are offsets from comes
+		// from the same reading rather than from a second one of its own.
+		StartTime:       time.Now().Add(-clientConnected),
 		BotConnected:    o.botConnected,
-		ClientConnected: data.Timestamp - o.startFrame.arrival,
+		ClientConnected: clientConnected,
 	})
 }
 
@@ -226,14 +270,13 @@ func (o *StartupTiming) emitReport() {
 	}
 	o.startupReported = true
 
+	// Processors are set up concurrently, so what they cost does not add up to
+	// wall-clock time. Report the span instead.
 	var total time.Duration
-	for _, t := range o.timings {
-		total += t.Duration
+	if !o.setupStartedAt.IsZero() {
+		total = time.Since(o.setupStartedAt)
 	}
-	var startedAt time.Time
-	if o.startFrame != nil {
-		startedAt = o.startFrame.wallClock
-	}
+	startedAt := o.setupStartedAt
 	if o.cfg.OnStartupTimingReport == nil {
 		return
 	}

@@ -127,7 +127,7 @@ type Processor interface {
 	PushFrame(ctx context.Context, f frames.Frame, dir Direction) error
 	// PushErrorFrame settles the error's category and this processor's
 	// usability, tells the error handlers, and pushes the frame upstream.
-	PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, treatAsPermanent bool)
+	PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool)
 
 	// Usable reports whether this processor can still do its job. See
 	// [Base.Usable].
@@ -180,14 +180,22 @@ type Base struct {
 
 	next, prev Processor
 
-	directMode     bool
-	clock          clock.Clock
-	observers      []Observer
-	tracing        *tracing.TracingContext
-	tracingEnabled bool
-	running        Running
+	directMode bool
+	// state is what setting up publishes: the shared components every other
+	// method reads. It is held behind an atomic pointer because a processor is
+	// set up while the pipeline is already carrying frames. Processors are set
+	// up concurrently, so one that connects during setup can push at a
+	// neighbor that has not been set up yet, and that frame would otherwise
+	// read these fields while they were still being written. Setting up stores
+	// one immutable value; every reader loads it whole.
+	state atomic.Pointer[setupState]
 
 	// Lifetime context for the processor's goroutines, canceled on Cleanup.
+	// baseMu guards the pair below. Setting up writes them, and tearing down
+	// reads them, from different goroutines: a pipeline sets its processors up
+	// concurrently and gives up on one that never finishes, so its cleanup can
+	// run while that setup is still in flight.
+	baseMu     sync.RWMutex
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 
@@ -345,16 +353,16 @@ func (b *Base) Link(next Processor) {
 func (b *Base) setPrev(p Processor) { b.prev = p }
 
 // Clock returns the pipeline clock, available after Setup.
-func (b *Base) Clock() clock.Clock { return b.clock }
+func (b *Base) Clock() clock.Clock { return b.setupState().clock }
 
 // Tracing returns the session's tracing state, available after Setup. It is nil
 // when the pipeline is not traced, which its methods handle: parent a span with
 // Tracing().Parent(ctx) without checking.
-func (b *Base) Tracing() *tracing.TracingContext { return b.tracing }
+func (b *Base) Tracing() *tracing.TracingContext { return b.setupState().tracing }
 
 // TracingEnabled reports whether this pipeline is traced. A processor that
 // raises spans of its own opens them through StartSpan, which checks this.
-func (b *Base) TracingEnabled() bool { return b.tracingEnabled }
+func (b *Base) TracingEnabled() bool { return b.setupState().tracingEnabled }
 
 // StartSpan opens a span for work this processor is doing, parented to the turn
 // being spoken (or to the conversation between turns), and returns it with a
@@ -366,22 +374,47 @@ func (b *Base) TracingEnabled() bool { return b.tracingEnabled }
 func (b *Base) StartSpan(
 	ctx context.Context, name string, opts ...trace.SpanStartOption,
 ) (context.Context, trace.Span) {
-	if !b.tracingEnabled {
+	st := b.setupState()
+	if !st.tracingEnabled {
 		return ctx, noop.Span{}
 	}
-	return tracing.Tracer().Start(b.tracing.Parent(ctx), name, opts...)
+	return tracing.Tracer().Start(st.tracing.Parent(ctx), name, opts...)
+}
+
+// setupState is the immutable set of shared components a processor is given
+// when it is set up.
+type setupState struct {
+	clock          clock.Clock
+	observers      []Observer
+	tracing        *tracing.TracingContext
+	tracingEnabled bool
+	running        Running
+}
+
+// setupState returns what setting up published, or an empty value before the
+// processor has been set up.
+func (b *Base) setupState() setupState {
+	if s := b.state.Load(); s != nil {
+		return *s
+	}
+	return setupState{}
 }
 
 // Setup implements Processor. It stores the shared components. The goroutines
 // are not started here: nothing is drained until the StartFrame arrives, so a
 // processor never acts on a frame before it has been started.
 func (b *Base) Setup(ctx context.Context, s Setup) error {
-	b.clock = s.Clock
-	b.observers = s.Observers
-	b.tracing = s.Tracing
-	b.tracingEnabled = s.TracingEnabled
-	b.running = s.Running
-	b.baseCtx, b.baseCancel = context.WithCancel(ctx)
+	b.state.Store(&setupState{
+		clock:          s.Clock,
+		observers:      s.Observers,
+		tracing:        s.Tracing,
+		tracingEnabled: s.TracingEnabled,
+		running:        s.Running,
+	})
+	baseCtx, baseCancel := context.WithCancel(ctx)
+	b.baseMu.Lock()
+	b.baseCtx, b.baseCancel = baseCtx, baseCancel
+	b.baseMu.Unlock()
 	if !b.directMode {
 		// The goroutine exists from here, but drains nothing until the StartFrame
 		// opens the gate below.
@@ -413,8 +446,11 @@ func (b *Base) Cleanup(ctx context.Context) error {
 // leaves the loop inside the call, where cancellation cannot reach it. Waiting
 // for it without a bound would hang teardown for good.
 func (b *Base) cancelInputTask() {
-	if b.baseCancel != nil {
-		b.baseCancel()
+	b.baseMu.RLock()
+	cancel := b.baseCancel
+	b.baseMu.RUnlock()
+	if cancel != nil {
+		cancel()
 	}
 	if b.directMode {
 		return
@@ -457,28 +493,37 @@ func (b *Base) QueueFrame(ctx context.Context, f frames.Frame, dir Direction) er
 // queue for in-order processing.
 func (b *Base) inputLoop() {
 	defer b.inputWG.Done()
+	ctx := b.baseContext()
 	// Nothing is drained until the StartFrame arrives, so a processor never acts
 	// on a frame before it has been started. Processors are set up concurrently,
 	// so one that connects during setup can push frames at a processor that has
 	// not started yet; those frames wait here, and the StartFrame is taken off
 	// the queue ahead of them.
-	if !b.startGate.Wait(b.baseCtx) {
+	if !b.startGate.Wait(ctx) {
 		return
 	}
 	for {
-		it, ok := b.inputQueue.get(b.baseCtx)
+		it, ok := b.inputQueue.get(ctx)
 		if !ok {
 			return
 		}
-		if !b.waitWhilePaused(b.baseCtx, true) {
+		if !b.waitWhilePaused(ctx, true) {
 			return
 		}
 		if _, isSystem := it.frame.(frames.SystemFrame); isSystem {
-			_ = b.processFrame(b.baseCtx, it)
+			_ = b.processFrame(ctx, it)
 		} else {
 			b.procQueue.push(it)
 		}
 	}
+}
+
+// baseContext is the context the processor's own goroutines run under, which
+// tearing it down cancels. It is nil before the processor has been set up.
+func (b *Base) baseContext() context.Context {
+	b.baseMu.RLock()
+	defer b.baseMu.RUnlock()
+	return b.baseCtx
 }
 
 // processLoop handles data and control frames in order. It runs under ctx,
@@ -636,10 +681,11 @@ func (b *Base) internalPushFrame(ctx context.Context, f frames.Frame, dir Direct
 // It is a no-op for a processor driven outside a pipeline task, which has
 // nothing to drain.
 func (b *Base) FlushPipeline(ctx context.Context) error {
-	if b.running == nil {
+	running := b.setupState().running
+	if running == nil {
 		return nil
 	}
-	return b.running.Flush(ctx)
+	return running.Flush(ctx)
 }
 
 // Broadcast sends a frame both downstream and upstream, so an event that the
@@ -737,7 +783,7 @@ func (b *Base) createProcessTask() {
 		return
 	}
 	b.resetProcessTask()
-	ctx, cancel := context.WithCancel(b.baseCtx)
+	ctx, cancel := context.WithCancel(b.baseContext())
 	done := make(chan struct{})
 	b.procCancel = cancel
 	b.procDone = done

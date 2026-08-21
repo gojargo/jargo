@@ -55,7 +55,7 @@ func (r *reporting) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 		opts = append(opts, processor.WithErrorCategory(r.category))
 	}
 	if r.permanent {
-		opts = append(opts, processor.TreatAsPermanent())
+		opts = append(opts, processor.ForceTreatAsPermanent())
 	}
 	r.PushError(ctx, "service failed", r.err, false, opts...)
 	return nil
