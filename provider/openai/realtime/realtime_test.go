@@ -92,16 +92,29 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 	// Exercise the input path; the fake server discards it.
 	task.QueueFrame(frames.NewInputAudioRawFrame([]byte{0, 0}, 24000, 1))
 
-	// Wait until the canned events have propagated downstream.
-	deadline := time.Now().Add(3 * time.Second)
+	// Wait for the frame the canned sequence ends with rather than for a count of
+	// frames: the events do not map one-to-one onto what reaches the pipeline, so
+	// a count can be reached while the end of the response is still in flight.
+	// response.done is the last event the fake server sends, and the bot-stopped
+	// frame is what it produces.
+	deadline := time.Now().Add(5 * time.Second)
+	var arrived bool
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		n := len(got)
+		for _, f := range got {
+			if _, ok := f.(*frames.BotStoppedSpeakingFrame); ok {
+				arrived = true
+				break
+			}
+		}
 		mu.Unlock()
-		if n >= 6 {
+		if arrived {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if !arrived {
+		t.Error("the canned response never finished reaching the pipeline")
 	}
 
 	cancel()
