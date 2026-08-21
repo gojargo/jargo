@@ -57,6 +57,11 @@ type observerWorker struct {
 // rather than overtaking them.
 type pipelineStarted struct{}
 
+// setupStarted is what a worker queues to report that it has begun setting its
+// processors up. It carries the instant rather than leaving the observer to read
+// a clock, since it is delivered off the frame path and so a moment later.
+type setupStarted struct{ at time.Time }
+
 func newObserverWorker(o processor.Observer) *observerWorker {
 	return &observerWorker{
 		observer:  o,
@@ -160,8 +165,14 @@ func (p *observerProxy) remove(o processor.Observer) {
 // through the same queues as the frames, so an observer hears it in order.
 func (p *observerProxy) pipelineStarted() { p.send(pipelineStarted{}) }
 
+// setupStarted reports the pipeline having begun setting its processors up.
+func (p *observerProxy) setupStarted(at time.Time) { p.send(setupStarted{at: at}) }
+
 // OnPushFrame implements processor.Observer.
 func (p *observerProxy) OnPushFrame(data processor.FramePushed) { p.send(data) }
+
+// OnProcessorSetup implements processor.SetupObserver.
+func (p *observerProxy) OnProcessorSetup(data processor.ProcessorSetUp) { p.send(data) }
 
 // OnProcessFrame implements processor.ProcessObserver.
 func (p *observerProxy) OnProcessFrame(data processor.FrameProcessed) { p.send(data) }
@@ -220,6 +231,14 @@ func (w *observerWorker) deliver(data any) {
 	case processor.FrameProcessed:
 		if po, ok := w.observer.(processor.ProcessObserver); ok {
 			po.OnProcessFrame(d)
+		}
+	case processor.ProcessorSetUp:
+		if so, ok := w.observer.(processor.SetupObserver); ok {
+			so.OnProcessorSetup(d)
+		}
+	case setupStarted:
+		if so, ok := w.observer.(processor.SetupStartedObserver); ok {
+			so.OnPipelineSetupStarted(d.at)
 		}
 	case pipelineStarted:
 		if ps, ok := w.observer.(processor.PipelineStartedObserver); ok {

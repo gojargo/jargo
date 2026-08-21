@@ -18,6 +18,7 @@ import (
 // processor, so pipelines can nest.
 type Pipeline struct {
 	*processor.Base
+	setupTracker
 	source     processor.Processor
 	sink       processor.Processor
 	processors []processor.Processor
@@ -97,19 +98,13 @@ func (p *Pipeline) Setup(ctx context.Context, s processor.Setup) error {
 	if err := p.Base.Setup(ctx, s); err != nil {
 		return err
 	}
-	for _, proc := range p.processors {
-		if err := proc.Setup(ctx, s); err != nil {
-			return err
-		}
-	}
+	setupProcessors(ctx, &p.setupTracker, p.processors, s)
 	return nil
 }
 
 // Cleanup cleans up the pipeline and every processor in the chain.
 func (p *Pipeline) Cleanup(ctx context.Context) error {
 	_ = p.Base.Cleanup(ctx)
-	for _, proc := range p.processors {
-		_ = proc.Cleanup(ctx)
-	}
+	cleanupProcessors(ctx, &p.setupTracker, p.processors)
 	return nil
 }

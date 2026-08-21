@@ -74,6 +74,7 @@ type syncEndpoint struct {
 // choice.
 type SyncParallelPipeline struct {
 	*processor.Base
+	setupTracker
 	frameOrder FrameOrder
 	branches   []*Pipeline
 	sources    []syncEndpoint
@@ -289,22 +290,13 @@ func (p *SyncParallelPipeline) Setup(ctx context.Context, s processor.Setup) err
 	if err := p.Base.Setup(ctx, s); err != nil {
 		return err
 	}
-	return p.eachBranch(func(b *Pipeline) error { return b.Setup(ctx, s) })
+	setupProcessors(ctx, &p.setupTracker, branchProcessors(p.branches), s)
+	return nil
 }
 
 // Cleanup cleans up the sync parallel pipeline and every branch.
 func (p *SyncParallelPipeline) Cleanup(ctx context.Context) error {
 	_ = p.Base.Cleanup(ctx)
-	return p.eachBranch(func(b *Pipeline) error { return b.Cleanup(ctx) })
-}
-
-// eachBranch runs fn against every branch at once and returns the first error.
-func (p *SyncParallelPipeline) eachBranch(fn func(*Pipeline) error) error {
-	errs := make([]error, len(p.branches))
-	var wg sync.WaitGroup
-	for i, b := range p.branches {
-		wg.Go(func() { errs[i] = fn(b) })
-	}
-	wg.Wait()
-	return errors.Join(errs...)
+	cleanupProcessors(ctx, &p.setupTracker, branchProcessors(p.branches))
+	return nil
 }

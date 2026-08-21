@@ -42,6 +42,7 @@ var errNoBranches = errors.New("pipeline: parallel pipeline needs at least one b
 // is bounded only by the session's frame count.
 type ParallelPipeline struct {
 	*processor.Base
+	setupTracker
 	branches []*Pipeline
 
 	mu       sync.Mutex
@@ -258,21 +259,25 @@ func (p *ParallelPipeline) Setup(ctx context.Context, s processor.Setup) error {
 	if err := p.Base.Setup(ctx, s); err != nil {
 		return err
 	}
-	for _, b := range p.branches {
-		if err := b.Setup(ctx, s); err != nil {
-			return err
-		}
-	}
+	setupProcessors(ctx, &p.setupTracker, branchProcessors(p.branches), s)
 	return nil
 }
 
 // Cleanup cleans up the parallel pipeline and every branch.
 func (p *ParallelPipeline) Cleanup(ctx context.Context) error {
 	_ = p.Base.Cleanup(ctx)
-	for _, b := range p.branches {
-		_ = b.Cleanup(ctx)
-	}
+	cleanupProcessors(ctx, &p.setupTracker, branchProcessors(p.branches))
 	return nil
+}
+
+// branchProcessors views the branches as the processors they are, so a parallel
+// pipeline sets them up and cleans them up the way a linear one does its chain.
+func branchProcessors(branches []*Pipeline) []processor.Processor {
+	procs := make([]processor.Processor, len(branches))
+	for i, b := range branches {
+		procs[i] = b
+	}
+	return procs
 }
 
 // isLifecycle reports whether f is one of the frames whose propagation across
