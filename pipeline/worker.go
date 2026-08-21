@@ -28,6 +28,12 @@ const (
 
 // Timing defaults for the task's own lifecycle and monitoring.
 const (
+	// defaultSetupTimeout bounds how long the worker waits for every processor
+	// to finish being set up.
+	defaultSetupTimeout = 20 * time.Second
+	// defaultStartTimeout bounds how long the worker waits for the StartFrame to
+	// reach the end of the pipeline.
+	defaultStartTimeout = 20 * time.Second
 	// defaultCancelTimeout bounds how long the task waits for a CancelFrame to
 	// reach the end of the pipeline before giving up on it.
 	defaultCancelTimeout = 20 * time.Second
@@ -106,6 +112,19 @@ type WorkerConfig struct {
 	// EndFrame is not bounded this way, since a graceful shutdown is expected to
 	// flush whatever is in flight however long that takes.
 	CancelTimeout time.Duration
+	// SetupTimeout bounds the wait for every processor to finish being set up;
+	// zero defaults to 20 seconds. A processor connects while it is set up, so
+	// one that never connects would otherwise leave the run waiting on it with
+	// nothing to time it out. Reaching the timeout abandons setting up, raises
+	// EventSetupTimeout and tears down whatever came up, so Run returns rather
+	// than hanging.
+	SetupTimeout time.Duration
+	// StartTimeout bounds the wait for the StartFrame to reach the end of the
+	// pipeline; zero defaults to 20 seconds. A processor that blocks while
+	// handling it leaves the pipeline half-started, and nothing pushed in
+	// afterwards would be processed, so reaching the timeout raises
+	// EventPipelineTimeout and tears the pipeline down.
+	StartTimeout time.Duration
 	// IdleTimeout is how long the pipeline may go without any of the frames
 	// IdleTimeoutFrames selects before it counts as idle; zero defaults to five
 	// minutes and a negative value turns idle detection off.
@@ -227,6 +246,14 @@ const (
 	// CancelFrame. It fires for a CancelFrame even when the frame never arrived
 	// and the wait timed out, so a caller always hears the run end.
 	EventPipelineFinished = "on_pipeline_finished"
+	// EventPipelineTimeout fires when a frame the worker was waiting on never
+	// reached the end of the pipeline: the StartFrame within StartTimeout, or a
+	// CancelFrame within CancelTimeout. Handlers receive the worker and that
+	// frame. Nothing else tells an application its pipeline never came up.
+	EventPipelineTimeout = "on_pipeline_timeout"
+	// EventSetupTimeout fires when the processors did not all finish being set
+	// up within SetupTimeout. Handlers receive the worker.
+	EventSetupTimeout = "on_setup_timeout"
 	// EventPipelineError fires for every error frame reaching the start of the
 	// pipeline, fatal or not, carrying that frame. A fatal one also cancels the
 	// worker, after the handlers have run.
@@ -320,6 +347,12 @@ func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
 	}
 	if cfg.CancelTimeout == 0 {
 		cfg.CancelTimeout = defaultCancelTimeout
+	}
+	if cfg.SetupTimeout == 0 {
+		cfg.SetupTimeout = defaultSetupTimeout
+	}
+	if cfg.StartTimeout == 0 {
+		cfg.StartTimeout = defaultStartTimeout
 	}
 	if cfg.Params.HeartbeatPeriod == 0 {
 		cfg.Params.HeartbeatPeriod = defaultHeartbeatPeriod
@@ -577,6 +610,8 @@ func (t *Worker) registerEvents() {
 	t.Register(EventPipelineStarted, false)
 	t.Register(EventPipelineFinished, false)
 	t.Register(EventPipelineError, false)
+	t.Register(EventPipelineTimeout, false)
+	t.Register(EventSetupTimeout, false)
 
 	events.On(&t.Registry, EventPipelineStarted, func(ctx context.Context, _ *frames.StartFrame) {
 		t.Start(ctx)
@@ -815,6 +850,32 @@ func (t *Worker) cancelOnContextEnd(ctx context.Context) frames.Frame {
 	return cancelFrame
 }
 
+// setupWithinTimeout sets the pipeline up, bounded by SetupTimeout.
+//
+// A processor connects while it is set up, so one that never connects would
+// otherwise leave the run waiting on it with nothing to time it out. Reaching
+// the timeout gives up on the wait and leaves the blocked processor where it is,
+// to be released by the cleanup that follows: the context the processors were
+// handed is the one their own goroutines run on, so bounding it here would tear
+// down the very processors that did come up. It reports whether everything was
+// set up.
+func (t *Worker) setupWithinTimeout(ctx context.Context, setup processor.Setup) (bool, error) {
+	done := make(chan error, 1)
+	go func() { done <- t.pipeline.Setup(ctx, setup) }()
+
+	timeout := time.NewTimer(t.cfg.SetupTimeout)
+	defer timeout.Stop()
+	select {
+	case err := <-done:
+		return err == nil, err
+	case <-timeout.C:
+		slog.Error("timed out setting the pipeline up, stopping it "+
+			"(a processor blocked while connecting?)", "timeout", t.cfg.SetupTimeout)
+		t.Call(ctx, EventSetupTimeout, t)
+		return false, nil
+	}
+}
+
 // HasFinished reports whether the task has finished running.
 func (t *Worker) HasFinished() bool {
 	t.mu.Lock()
@@ -861,6 +922,13 @@ func (t *Worker) Run(ctx context.Context) error {
 	// The processors are handed one observer, the proxy, which passes each
 	// report on to the real ones off the frame path.
 	t.observerProxy.start()
+
+	// Processors connect while they are set up and push frames as they do, so
+	// the clock runs from here rather than from the StartFrame, which would
+	// leave those frames timestamped zero.
+	t.clk.Start()
+	t.observerProxy.setupStarted(time.Now())
+
 	setup := processor.Setup{
 		Clock:          t.clk,
 		Observers:      []processor.Observer{t.observerProxy},
@@ -868,8 +936,23 @@ func (t *Worker) Run(ctx context.Context) error {
 		TracingEnabled: t.cfg.EnableTracing,
 		Running:        t,
 	}
-	if err := t.pipeline.Setup(pipeCtx, setup); err != nil {
+	setUp, err := t.setupWithinTimeout(pipeCtx, setup)
+	if err != nil {
 		return err
+	}
+	if !setUp {
+		// Nothing was pushed into the pipeline, so there is nothing to drain:
+		// release whatever came up and give up. The teardown is the same as the
+		// one at the end of a run, minus the monitors and the frame path, which
+		// never started.
+		_ = t.pipeline.Cleanup(context.Background())
+		t.Registry.Cleanup(context.Background())
+		t.observerProxy.stop()
+		t.turnTrace.EndConversation()
+		t.mu.Lock()
+		t.finished = true
+		t.mu.Unlock()
+		return nil
 	}
 
 	monCtx := t.monitors.start(runCtx)
@@ -920,8 +1003,6 @@ func (t *Worker) Run(ctx context.Context) error {
 // that frame, so the caller can tell a StopFrame from the ways of ending that
 // shut the processors down, and nil when the context ended the run instead.
 func (t *Worker) runLoop(ctx context.Context) (frames.Frame, error) {
-	t.clk.Start()
-
 	// Watching starts before the StartFrame goes out, so a pipeline that never
 	// comes to life is noticed too.
 	if t.cfg.IdleTimeout > 0 {
@@ -941,8 +1022,17 @@ func (t *Worker) runLoop(ctx context.Context) (frames.Frame, error) {
 		return nil, err
 	}
 
+	startTimeout := time.NewTimer(t.cfg.StartTimeout)
+	defer startTimeout.Stop()
 	select {
 	case <-t.startSig:
+	case <-startTimeout.C:
+		// A pipeline that never started cannot process anything pushed into it,
+		// so the run gives up here and goes straight to tearing it down.
+		slog.Error("timed out waiting for the start frame to reach the end of the pipeline, "+
+			"stopping it (being blocked somewhere?)", "timeout", t.cfg.StartTimeout)
+		t.Call(ctx, EventPipelineTimeout, t, start)
+		return start, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -1003,6 +1093,7 @@ func (t *Worker) waitPipelineEnd(ctx context.Context, f frames.Frame) error {
 	case <-timeout.C:
 		slog.Warn("timed out waiting for the cancel frame to reach the end of the pipeline",
 			"timeout", t.cfg.CancelTimeout)
+		t.Call(ctx, EventPipelineTimeout, t, f)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

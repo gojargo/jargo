@@ -394,6 +394,11 @@ func TestCancelBeforeStartReachesSink(t *testing.T) {
 		CancelTimeout: 100 * time.Millisecond,
 	})
 
+	timedOut := make(chan frames.Frame, 4)
+	events.On(&task.Registry, pipeline.EventPipelineTimeout, func(_ context.Context, f frames.Frame) {
+		timedOut <- f
+	})
+
 	done := runTask(t, task)
 
 	<-blocker.reached
@@ -405,6 +410,17 @@ func TestCancelBeforeStartReachesSink(t *testing.T) {
 	waitDoneWithin(t, done, 10*time.Second)
 	if !task.HasFinished() {
 		t.Error("HasFinished() = false, want true")
+	}
+
+	// The blocked processor never lets the CancelFrame drain, so the worker
+	// gives up waiting for it and reports the timeout.
+	select {
+	case f := <-timedOut:
+		if _, ok := f.(*frames.CancelFrame); !ok {
+			t.Errorf("the timeout reported %T, want the CancelFrame", f)
+		}
+	default:
+		t.Error("the worker never reported that the cancel frame did not arrive")
 	}
 	close(blocker.release)
 }
