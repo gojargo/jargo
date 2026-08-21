@@ -86,7 +86,7 @@ func CharsAsWords(chars []string, starts []float64) ([]WordTiming, error) {
 	}
 	words := make([]WordTiming, 0, len(chars))
 	for i, ch := range chars {
-		if hasAlnum(ch) {
+		if containsAlnum(ch) {
 			words = append(words, WordTiming{Word: ch, Offset: starts[i]})
 		}
 	}

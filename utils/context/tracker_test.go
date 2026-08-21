@@ -453,8 +453,8 @@ func TestCJKCompletion(t *testing.T) {
 					raw++
 				}
 			}
-			if got := len([]rune(normalize(text))); got != raw {
-				t.Fatalf("normalize(%q) is %d characters, want %d", text, got, raw)
+			if got := len([]rune(alnumOnly(text))); got != raw {
+				t.Fatalf("alnumOnly(%q) is %d characters, want %d", text, got, raw)
 			}
 		}
 	})
@@ -1539,6 +1539,153 @@ func TestASymbolReportedAsAnother(t *testing.T) {
 		}
 		if !tr.AddWord(spokenWords[len(spokenWords)-1]) {
 			t.Fatal("the frame did not complete on its last word")
+		}
+	})
+}
+
+// Ported from upstream. A synthesizer may normalize the typographic punctuation
+// in the text it was sent, reporting "don't" for "don’t" or "2020-2021" for
+// "2020–2021", or add it where the text had the ASCII form. Folding it away is
+// what keeps the word matching: without it the word is rejected, the frame is
+// force-completed on the spot, and the rest of the sentence collapses into one
+// frame word.
+func TestTypographicPunctuationIsTolerated(t *testing.T) {
+	t.Run("a curly apostrophe in the text matches a straight one spoken", func(t *testing.T) {
+		const written = "you’re welcome"
+		tr := NewWordCompletionTracker(written, "", written)
+		if !tr.WordBelongsHere("you're") {
+			t.Fatal("the straight apostrophe was rejected")
+		}
+		tr.AddWord("you're")
+		// The frame word is the token the synthesizer reported; the recorded span
+		// keeps the original typography, which is what reaches the context.
+		if got, _ := tr.FrameWord(); got != "you're" {
+			t.Fatalf("the frame word = %q, want %q", got, "you're")
+		}
+		if got, _ := tr.RawText(); got != "you’re" {
+			t.Fatalf("the recorded span = %q, want %q", got, "you’re")
+		}
+		tr.AddWord("welcome")
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete on its last word")
+		}
+	})
+
+	t.Run("a straight apostrophe in the text matches a curly one spoken", func(t *testing.T) {
+		const written = "you're welcome"
+		tr := NewWordCompletionTracker(written, "", written)
+		if !tr.WordBelongsHere("you’re") {
+			t.Fatal("the curly apostrophe was rejected")
+		}
+		tr.AddWord("you’re")
+		if got, _ := tr.FrameWord(); got != "you’re" {
+			t.Fatalf("the frame word = %q, want %q", got, "you’re")
+		}
+		if got, _ := tr.RawText(); got != "you're" {
+			t.Fatalf("the recorded span = %q, want %q", got, "you're")
+		}
+		tr.AddWord("welcome")
+		if !tr.IsComplete() {
+			t.Fatal("the frame did not complete on its last word")
+		}
+	})
+
+	t.Run("a normalized apostrophe does not collapse the sentence", func(t *testing.T) {
+		const written = "I don’t think so"
+		tr := NewWordCompletionTracker(written, written, "")
+		for _, w := range []string{"I", "don't", "think"} {
+			if tr.AddWord(w) {
+				t.Fatalf("the frame completed early, on %q", w)
+			}
+		}
+		if !tr.AddWord("so") {
+			t.Fatal("the frame did not complete on its last word")
+		}
+		if got, _ := tr.FrameWord(); got != "so" {
+			t.Fatalf("the frame word = %q, want %q", got, "so")
+		}
+	})
+
+	t.Run("an en dash matches the hyphen reported for it", func(t *testing.T) {
+		const written = "the 2020–2021 report"
+		tr := NewWordCompletionTracker(written, written, "")
+		tr.AddWord("the")
+		if !tr.WordBelongsHere("2020-2021") {
+			t.Fatal("the hyphenated range was rejected")
+		}
+	})
+}
+
+// Ported from upstream. Markup occupies a segment of its own and no
+// word-timestamp event ever names one, so once everything speakable has been
+// spoken the frame takes what is left. Otherwise a tag ending a frame is missing
+// from the turn for good.
+func TestTextNoWordArrivesFor(t *testing.T) {
+	t.Run("a tag closing the frame is included", func(t *testing.T) {
+		const written = `Hello there <break time="1s"/>`
+		tr := NewWordCompletionTracker(written, written, written)
+		for _, w := range []string{"Hello", "there"} {
+			tr.AddWord(w)
+		}
+		if got := tr.AccumulatedUserFacingText(); got != written {
+			t.Fatalf("what has been said = %q, want %q", got, written)
+		}
+		if got := tr.RemainingUserFacingText(false); got != "" {
+			t.Fatalf("what is left = %q, want nothing", got)
+		}
+	})
+
+	t.Run("a tag between the last word and its period is included", func(t *testing.T) {
+		const written = `Hello there <break time="1s"/>.`
+		tr := NewWordCompletionTracker(written, written, written)
+		for _, w := range []string{"Hello", "there."} {
+			tr.AddWord(w)
+		}
+		if got := tr.AccumulatedUserFacingText(); got != written {
+			t.Fatalf("what has been said = %q, want %q", got, written)
+		}
+	})
+
+	t.Run("a tag mid frame is included", func(t *testing.T) {
+		const written = "Hello <break/> there"
+		tr := NewWordCompletionTracker(written, written, written)
+		for _, w := range []string{"Hello", "there"} {
+			tr.AddWord(w)
+		}
+		if got := tr.AccumulatedUserFacingText(); got != written {
+			t.Fatalf("what has been said = %q, want %q", got, written)
+		}
+	})
+
+	t.Run("a word still to come holds the cursor", func(t *testing.T) {
+		const written = `Hello <break time="1s"/> there`
+		tr := NewWordCompletionTracker(written, written, written)
+		if tr.AddWord("Hello") {
+			t.Fatal("the frame completed on its first word")
+		}
+		if got := tr.AccumulatedUserFacingText(); got == written {
+			t.Fatal("the frame took the rest of the text while a word was still to come")
+		}
+	})
+
+	// Taking the rest of the frame happens on completion, which is also when a
+	// straddling token is split, so the two must not interfere: the frame keeps
+	// its own part and the next frame still receives the remainder.
+	t.Run("a token running into the next frame still splits", func(t *testing.T) {
+		const written = "Say <break/> ABC"
+		tr := NewWordCompletionTracker(written, written, written)
+		tr.AddWord("Say")
+		if !tr.AddWord("ABCNext") {
+			t.Fatal("the frame did not complete on its last word")
+		}
+		if got, _ := tr.FrameWord(); got != "ABC" {
+			t.Fatalf("the frame word = %q, want %q", got, "ABC")
+		}
+		if got, _ := tr.OverflowWord(); got != "Next" {
+			t.Fatalf("the overflow = %q, want %q", got, "Next")
+		}
+		if got := tr.AccumulatedUserFacingText(); got != written {
+			t.Fatalf("what has been said = %q, want %q", got, written)
 		}
 	})
 }

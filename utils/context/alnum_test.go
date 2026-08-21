@@ -11,8 +11,8 @@ func TestNormalize(t *testing.T) {
 		"A P I":              "api",
 	}
 	for in, want := range cases {
-		if got := normalize(in); got != want {
-			t.Errorf("normalize(%q) = %q, want %q", in, got, want)
+		if got := alnumOnly(in); got != want {
+			t.Errorf("alnumOnly(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -49,7 +49,7 @@ func TestStripTrailingPunctuation(t *testing.T) {
 
 func TestFoldCaseAndAccentsPreservesLength(t *testing.T) {
 	in := "Café-Ω!"
-	got := foldCaseAndAccents(in)
+	got := foldForMatching(in)
 	if len([]rune(got)) != len([]rune(in)) {
 		t.Fatalf("folded %q -> %q changed rune length", in, got)
 	}

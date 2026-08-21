@@ -20,6 +20,7 @@
 package context
 
 import (
+	"strings"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
@@ -45,16 +46,26 @@ func stripTrailingPunctuation(text string) string {
 	return string(r[:i])
 }
 
-// stripLeadingPunctuation removes any leading run of Unicode punctuation and
-// whitespace from text.
-func stripLeadingPunctuation(text string) string {
-	r := []rune(text)
-	i := 0
-	for i < len(r) && (unicode.IsSpace(r[i]) || isPunct(r[i])) {
-		i++
-	}
-	return string(r[i:])
-}
+// typographyFold maps typographic punctuation variants to their ASCII
+// equivalents. Models write the typographic forms and a synthesizer may report
+// the ASCII ones in its word-timestamp events, or the reverse. Every entry maps
+// one rune to one rune, which is what lets foldForMatching keep its 1:1 rune
+// contract.
+//
+//nolint:gochecknoglobals // read-only replacement table
+var typographyFold = strings.NewReplacer(
+	"‘", "'", // U+2018 LEFT SINGLE QUOTATION MARK
+	"’", "'", // U+2019 RIGHT SINGLE QUOTATION MARK
+	"ʼ", "'", // U+02BC MODIFIER LETTER APOSTROPHE
+	"“", `"`, // U+201C LEFT DOUBLE QUOTATION MARK
+	"”", `"`, // U+201D RIGHT DOUBLE QUOTATION MARK
+	"–", "-", // U+2013 EN DASH
+	"—", "-", // U+2014 EM DASH
+)
+
+// foldTypography replaces typographic punctuation variants with their ASCII
+// equivalents, keeping the rune length of text unchanged.
+func foldTypography(text string) string { return typographyFold.Replace(text) }
 
 // foldAccentedChar lowercases r, reducing it to its base letter when it carries
 // a combining accent. NFD decomposition splits an accented character into a base
@@ -68,11 +79,23 @@ func foldAccentedChar(r rune) rune {
 	return unicode.ToLower(r)
 }
 
-// foldCaseAndAccents lowercases letters and strips accents, preserving every
-// other character 1:1 by rune. Unlike normalize it never removes or merges
-// characters, so a rune offset computed against the folded text applies
-// unchanged to the original.
-func foldCaseAndAccents(text string) string {
+// foldForMatching folds away surface variation between two spellings of the
+// same text, one rune for one rune.
+//
+// Unlike alnumOnly it never removes or merges characters: punctuation, spaces
+// and markup pass through unchanged and each output rune corresponds to the
+// same-index input rune, so a rune offset computed against the folded text
+// applies unchanged to the original. That is what lets it be dropped in front of
+// a position-based literal comparison.
+//
+// It folds case, accents and typographic punctuation ("’" to "'", "–" to "-"),
+// the variations a synthesizer may introduce between the text it was sent and
+// the words it reports back. It is deliberately narrow: each folded rune is
+// listed in typographyFold rather than applying a blanket Unicode compatibility
+// normalization, which would silently fold thousands of runes (CJK
+// compatibility ideographs, halfwidth katakana, math alphanumerics) that no
+// service is known to substitute.
+func foldForMatching(text string) string {
 	out := make([]rune, 0, len(text))
 	for _, r := range text {
 		if unicode.IsLetter(r) {
@@ -81,14 +104,14 @@ func foldCaseAndAccents(text string) string {
 			out = append(out, r)
 		}
 	}
-	return string(out)
+	return foldTypography(string(out))
 }
 
-// normalize strips XML/HTML-style tags then keeps only lowercase alphanumeric
+// alnumOnly strips XML/HTML-style tags then keeps only lowercase alphanumeric
 // characters, folding accents to their base letter. Non-Latin scripts pass
-// through one rune each, keeping the normalized rune length in step with the raw
+// through one rune each, keeping the reduced rune length in step with the raw
 // alnum counts used by advanceByAlnums.
-func normalize(text string) string {
+func alnumOnly(text string) string {
 	stripped := stripCompleteMarkup(text)
 	out := make([]rune, 0, len(stripped))
 	for _, r := range stripped {
@@ -103,6 +126,12 @@ func normalize(text string) string {
 	}
 	return string(out)
 }
+
+// hasAlnum reports whether text holds anything alphanumeric once markup is
+// stripped. It is the predicate form of alnumOnly, for the question the callers
+// actually ask: is there anything left to speak here? A tag's letters do not
+// count, so "<break/>" is empty by this measure.
+func hasAlnum(text string) bool { return alnumOnly(text) != "" }
 
 // advanceByAlnums returns the rune position in runes after advancing past n
 // alphanumeric characters from startPos. Tags (<...>) are skipped entirely and

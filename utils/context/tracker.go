@@ -56,72 +56,120 @@ func NewWordCompletionTracker(ttsText, userFacingText, llmText string) *WordComp
 	return t
 }
 
-// AddWord records a spoken word from a word-timestamp event and reports whether
-// the frame is now fully spoken. Before advancing, it checks whether the word
-// belongs to this frame; if not (the synthesizer dropped a word-timestamp
-// event), the slot is force-completed: the remaining unspoken TTS text is stored
-// as the frame word, all remaining original text is consumed, and the incoming
-// word is routed as overflow for the next slot.
+// AddWord records one word the synthesizer reported speaking, and reports
+// whether the frame is now fully spoken.
+//
+// Three things can happen, in this order. The frame is already finished, and the
+// word is ignored. The word does not match what is left to speak, so the
+// synthesizer must have dropped an event: the frame is force-completed and this
+// word is handed back as overflow. Otherwise the word advances the frame, and
+// afterwards the accessors describe it: this frame's share of the word, the
+// original text it stands for, and how much of the frame is now spoken.
 func (t *WordCompletionTracker) AddWord(word string) bool {
 	t.overflowWord, t.overflowSet = "", false
 	t.llmConsumed, t.llmSet = "", false
 	t.frameWord, t.frameSet = "", false
 
+	// Every raw rune consumed, not IsComplete: a frame ending in an emoji
+	// contributes no alphanumeric content, so it reads as complete before that
+	// emoji's own event arrives, and that event is still wanted.
 	if t.forceCompleted || t.segmentMap.RawPos() >= len(t.ttsRunes) {
+		slog.Warn("tracker: a word arrived for a frame that is already complete", "word", word)
 		return true
 	}
 
 	if !t.WordBelongsHere(word) {
-		t.frameWord, t.frameSet = string(t.ttsRunes[t.segmentMap.RawPos():]), true
-		t.userFacingPos = len(t.userFacingRunes)
-		if t.hasLLM {
-			t.llmConsumed, t.llmSet = string(t.llmRunes[t.llmPos:]), true
-			t.llmPos = len(t.llmRunes)
-			t.discardLLMSpanIfFrameWordMissing()
-		}
-		t.forceCompleted = true
-		t.overflowWord, t.overflowSet = word, true
-		return true
+		return t.forceComplete(word)
 	}
 
 	prevLLMPos := t.llmPos
 	t.segmentMap.AdvanceWord(word)
 
-	overflow := t.segmentMap.LastOverflow()
-	if overflow != "" {
-		wr := []rune(word)
-		or := []rune(overflow)
-		t.frameWord, t.frameSet = string(wr[:len(wr)-len(or)]), true
-		t.overflowWord, t.overflowSet = overflow, true
-	} else {
-		t.frameWord, t.frameSet = word, true
+	// Neither end of the token is necessarily this frame's: the head can repeat
+	// punctuation the previous word already carried, and the tail can run into
+	// the next frame. The map measures both; keep what is between. Without an
+	// original text there is no recorded span that could already have carried the
+	// mark, so it is new text on this frame.
+	wr := []rune(word)
+	head := 0
+	if t.hasLLM {
+		head = t.segmentMap.LastLeadingDuplicate()
 	}
+	overflow := t.segmentMap.LastOverflow()
+	tail := len(wr)
+	if overflow != "" {
+		tail = len(wr) - len([]rune(overflow))
+		t.overflowWord, t.overflowSet = overflow, true
+	}
+	if head > tail {
+		head = tail
+	}
+	t.frameWord, t.frameSet = string(wr[head:tail]), true
 
 	t.userFacingPos = t.segmentMap.UserFacingPos()
 	t.llmPos = t.segmentMap.LLMPos()
 
 	if t.hasLLM {
-		t.attributeLLMConsumed(word, prevLLMPos)
+		t.recordLLMSpan(word, prevLLMPos)
 	}
-	return t.IsComplete()
+
+	complete := t.IsComplete()
+	if complete {
+		// Everything speakable has been spoken, so anything still left is text no
+		// word will ever arrive for: a closing tag, or one sitting between the
+		// last word and its punctuation. It belongs to this frame, so take it
+		// rather than leave it out of the turn.
+		t.userFacingPos = len(t.userFacingRunes)
+	}
+	return complete
 }
 
-// attributeLLMConsumed sets llmConsumed to the original-text span the
-// just-advanced word maps to.
-func (t *WordCompletionTracker) attributeLLMConsumed(word string, prevLLMPos int) {
-	completed := t.segmentMap.hasLastCompleted()
-	completedTransformed := t.segmentMap.lastCompletedTransformed()
+// forceComplete ends this frame early because word does not belong to it.
+//
+// The synthesizer dropped one or more events, so the rest of this frame will
+// never be reported. Rather than stall, it emits the unspoken remainder as this
+// frame's word, so the conversation context still receives the full text, and
+// hands word back as overflow for the next frame to try.
+//
+// The segment map is deliberately left where it is, since nothing here was
+// actually spoken; forceCompleted answers for it from now on.
+func (t *WordCompletionTracker) forceComplete(word string) bool {
+	t.frameWord, t.frameSet = string(t.ttsRunes[t.segmentMap.RawPos():]), true
+	t.userFacingPos = len(t.userFacingRunes)
+	if t.hasLLM {
+		// The whole remainder is this frame's by definition, tags included.
+		t.llmConsumed, t.llmSet = string(t.llmRunes[t.llmPos:]), true
+		t.llmPos = len(t.llmRunes)
+	}
+	t.forceCompleted = true
+	t.overflowWord, t.overflowSet = word, true
+	return true
+}
 
+// recordLLMSpan records which part of the original text the word just added
+// stands for.
+//
+// Usually that is simply the span the map's cursor moved over. Two cases reach
+// further, and both leave llmPos ahead of the map's. When the word finished the
+// frame, take everything to the end: the map stops at the last spoken rune, so a
+// closing tag, which never arrives as its own event, is still outstanding and
+// belongs to this word. When the cursor did not move, because the map placed the
+// word without spending any budget (an emoji or symbol), take the word's own
+// length, skipping spaces the previous word owns.
+//
+// A word inside a transformed segment records nothing, and is checked before
+// that second case: the cursor is held there on purpose, so "did not move" would
+// be misread as "spent nothing" and would walk the cursor through text the
+// transform covers. Only the word completing the segment carries its original
+// span.
+func (t *WordCompletionTracker) recordLLMSpan(word string, prevLLMPos int) {
 	switch {
 	case t.IsComplete():
 		t.llmConsumed, t.llmSet = string(t.llmRunes[prevLLMPos:]), true
 		t.llmPos = len(t.llmRunes)
-		if !completedTransformed {
-			t.discardLLMSpanIfFrameWordMissing()
-		}
 	case t.segmentMap.InTransformedSegment():
 		t.llmConsumed, t.llmSet = "", false
-	case t.llmPos == prevLLMPos && !completed:
+	case t.llmPos == prevLLMPos && !t.segmentMap.hasLastCompleted():
 		start := t.llmPos
 		for start < len(t.llmRunes) && unicode.IsSpace(t.llmRunes[start]) {
 			start++
@@ -131,40 +179,7 @@ func (t *WordCompletionTracker) attributeLLMConsumed(word string, prevLLMPos int
 		t.llmPos = end
 	default:
 		t.llmConsumed, t.llmSet = string(t.llmRunes[prevLLMPos:t.llmPos]), true
-		if !completedTransformed {
-			t.discardLLMSpanIfFrameWordMissing()
-		}
 	}
-}
-
-// discardLLMSpanIfFrameWordMissing drops the attributed span when it does not
-// contain the current frame word, guarding against the TTS and original texts
-// drifting out of sync. The comparison is case- and connector-insensitive.
-func (t *WordCompletionTracker) discardLLMSpanIfFrameWordMissing() {
-	frameWord := stripTrailingPunctuation(t.frameWord)
-	if frameWord == "" {
-		return
-	}
-	foldedSpan := foldForComparison(t.llmConsumed)
-	if strings.Contains(foldedSpan, foldForComparison(frameWord)) {
-		return
-	}
-
-	// The word may lead with punctuation the word before it already took:
-	// advancing sweeps the punctuation trailing a word into that word's span, so
-	// a provider that reports it with the following word instead (", I" rather
-	// than "Yeah,") presents it a second time. Drop the duplicate from the frame
-	// word rather than the whole attribution, which would otherwise lose the
-	// written form of a word that was spoken perfectly well.
-	if trimmed := stripLeadingPunctuation(frameWord); trimmed != "" &&
-		strings.Contains(foldedSpan, foldForComparison(trimmed)) {
-		t.frameWord = stripLeadingPunctuation(t.frameWord)
-		return
-	}
-
-	slog.Warn("tracker: the span attributed to a word does not contain it, discarding",
-		"span", t.llmConsumed, "word", t.frameWord)
-	t.llmConsumed, t.llmSet = "", false
 }
 
 // WordBelongsHere reports whether word plausibly belongs to the remaining TTS
@@ -205,10 +220,14 @@ func (t *WordCompletionTracker) OverflowWord() (string, bool) {
 // original text was provided, or for an intermediate word of a transformed
 // segment.
 func (t *WordCompletionTracker) RawText() (string, bool) {
-	if !t.llmSet {
+	if !t.llmSet || t.llmConsumed == "" {
 		return "", false
 	}
-	return strings.TrimSpace(t.llmConsumed), true
+	trimmed := strings.TrimSpace(t.llmConsumed)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
 }
 
 // RemainingRawText returns the unspoken portion of the original text, trimmed.
@@ -288,31 +307,4 @@ func (t *WordCompletionTracker) Reset() {
 	t.frameWord, t.frameSet = "", false
 	t.forceCompleted = false
 	t.segmentMap.Reset()
-}
-
-// typographyFold maps common typographic punctuation variants to their ASCII
-// equivalents.
-//
-//nolint:gochecknoglobals // read-only replacement table
-var typographyFold = strings.NewReplacer(
-	"‘", "'", "’", "'", "ʼ", "'",
-	"“", `"`, "”", `"`,
-	"–", "-", "—", "-",
-)
-
-// foldForComparison folds text for lenient span-containment comparisons: it
-// applies typographic folding, lowercases, and collapses connector characters
-// (spaces and hyphens), so case- or connector-only differences are not mistaken
-// for a mismatch while other content is preserved.
-func foldForComparison(text string) string {
-	folded := strings.ToLower(typographyFold.Replace(text))
-	var b strings.Builder
-	b.Grow(len(folded))
-	for _, r := range folded {
-		if r == '-' || unicode.IsSpace(r) {
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }

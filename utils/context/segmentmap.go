@@ -1,80 +1,18 @@
 package context
 
 import (
-	"regexp"
 	"strings"
 	"unicode"
 )
 
-// markupRE matches a well-formed markup tag, used to strip markup from a
-// complete (non-truncated) text.
+// textSegment is a piece of the utterance, paired with what the synthesizer was
+// given in its place. The map is a list of these laid end to end over the whole
+// utterance. In most of them the two sides are identical; the interesting ones
+// are where a transform, a filter or a tag made them differ (see isTransformed).
 //
-//nolint:gochecknoglobals // compiled once, read-only
-var markupRE = regexp.MustCompile(`<[^>]+>`)
-
-// stripCompleteMarkup removes well-formed <...> tags from a complete text. A
-// lone '<' with no later '>' is left in place as real content.
-func stripCompleteMarkup(text string) string {
-	return markupRE.ReplaceAllString(text, "")
-}
-
-// iterCleanChars returns the (rune index, rune) pairs of text that lie outside
-// markup. Markup is anything between '<' and '>'; an unclosed '<' swallows the
-// rest of the string, matching how a streamed word-timestamp token can arrive
-// mid-tag.
-func iterCleanChars(runes []rune) []int {
-	out := make([]int, 0, len(runes))
-	inTag := false
-	for i, r := range runes {
-		switch {
-		case inTag:
-			if r == '>' {
-				inTag = false
-			}
-		case r == '<':
-			inTag = true
-		default:
-			out = append(out, i)
-		}
-	}
-	return out
-}
-
-// stripMarkup removes markup from a possibly-truncated word-timestamp fragment.
-// An unclosed '<' swallows the rest of text.
-func stripMarkup(text string) string {
-	runes := []rune(text)
-	idx := iterCleanChars(runes)
-	out := make([]rune, len(idx))
-	for i, j := range idx {
-		out[i] = runes[j]
-	}
-	return string(out)
-}
-
-// rawLenForCleanChars returns the raw rune offset into text just past its n-th
-// markup-stripped character. It converts a match measured in markup-stripped
-// space back to a raw offset. Returns the rune length of text when text has
-// fewer than n non-markup chars.
-func rawLenForCleanChars(text string, n int) int {
-	if n <= 0 {
-		return 0
-	}
-	runes := []rune(text)
-	seen := 0
-	for _, i := range iterCleanChars(runes) {
-		seen++
-		if seen == n {
-			return i + 1
-		}
-	}
-	return len(runes)
-}
-
-// textSegment is an immutable aligned chunk between original and TTS text.
-// original is a chunk of the user-facing text; tts is the corresponding chunk in
-// the transformed text sent to the synthesizer. originalStart/originalEnd are
-// rune offsets into the original text.
+// origStart and origEnd are rune offsets into the full original text. Cursors
+// jump straight to origEnd once a rewritten piece is finished, since no position
+// inside one means anything.
 type textSegment struct {
 	origRunes []rune
 	ttsRunes  []rune
@@ -85,68 +23,139 @@ type textSegment struct {
 func (s *textSegment) original() string { return string(s.origRunes) }
 func (s *textSegment) tts() string      { return string(s.ttsRunes) }
 
-// isTransformed reports whether the segment cannot be tracked by proportional
-// character advancement: its alphanumeric content differs, a replacement changed
-// the word count, or the TTS side carries markup.
+// isTransformed reports whether the two sides cannot be followed together, rune
+// by rune. A segment like this is all or nothing: the cursors into the other
+// texts wait at its start until every spoken word of it has arrived, then jump
+// straight to its end.
+//
+// Any one of these makes it true: the letters and digits differ, as in "$42.50"
+// against "forty two dollars"; the two sides have different numbers of words; or
+// the TTS side has tags in it, even when the words match, because the cursor
+// through the spoken text has tag runes to cross that the other texts do not.
+//
+// Only the shape of a tag matters, never its name.
 func (s *textSegment) isTransformed() bool {
 	ttsStr := s.tts()
 	if ttsStr != stripCompleteMarkup(ttsStr) {
 		return true
 	}
-	if normalize(s.original()) != normalize(ttsStr) {
+	if alnumOnly(s.original()) != alnumOnly(ttsStr) {
 		return true
 	}
 	return len(strings.Fields(s.original())) != len(strings.Fields(ttsStr))
 }
 
-func (s *textSegment) originalAlnumCount() int { return len([]rune(normalize(s.original()))) }
+// originalAlnumCount is how many letters and digits the original side of this
+// segment has. It is what the cursors into the original and LLM texts spend,
+// since those texts hold the original characters, not the spoken ones.
+func (s *textSegment) originalAlnumCount() int { return len([]rune(alnumOnly(s.original()))) }
 
+// hopKind is what happened when a word was offered to one segment. Trying one
+// word against one segment is called a hop. Two of these answers end the
+// attempt; the other two send the word on to the next segment.
 type hopKind int
 
 const (
-	hopPlaced    hopKind = iota // word fits within this segment; stop here
-	hopCrosses                  // word runs past this segment; drain it, carry remainder
-	hopExhausted                // no spoken content left here; drain it, keep the whole word
-	hopNoMatch                  // word doesn't belong here; nudge past leading punctuation, stop
+	// hopPlaced means the word fits here: move to the end of the match and stop.
+	hopPlaced hopKind = iota
+	// hopCrosses means this segment holds only the beginning of the word: finish
+	// the segment and take the rest of the word to the next one.
+	hopCrosses
+	// hopExhausted means there is nothing here that can be spoken, so no word
+	// will ever match, an empty side of the diff or a lone <break/>: finish the
+	// segment and try the whole word again on the next one.
+	hopExhausted
+	// hopNoMatch means the word does not belong here: step past punctuation at
+	// the start of the segment and stop, without moving the cursors into the
+	// other two texts.
+	hopNoMatch
 )
 
+// hop is the outcome of offering one word to one segment. It is produced by
+// classifyHop, collected by planHops and acted on by consumeWord.
 type hop struct {
-	kind      hopKind
-	segChars  int // raw runes consumed within this segment (PLACED / NO_MATCH nudge)
-	wordChars int // runes trimmed off the front of the word (CROSSES)
+	kind hopKind
+	// segChars is how many runes to move forward in this segment: the length of
+	// the match for hopPlaced, or a step past leading punctuation for hopNoMatch.
+	// The other two leave it at 0 because they finish the whole segment anyway.
+	segChars int
+	// wordChars is how many runes of the word this segment used up, and so how
+	// many to drop before offering the rest to the next segment. Only hopCrosses
+	// sets it; hopExhausted passes the word on whole.
+	wordChars int
 }
 
+// cand is one starting point a word may be matched against, paired with how far
+// into the segment's remaining text it starts.
 type cand struct {
 	text   string
 	offset int
 }
 
-// TextSegmentMap maps cursor positions across three parallel texts as spoken
-// words stream in: the transformed ttsText sent to the synthesizer, the
-// user-facing originalText, and the llmText the model produced (which may add
-// delimiters). It is built once by diffing ttsText against originalText into
-// aligned segments; a single raw cursor over ttsText drives derived cursors over
-// the original and LLM texts. Unchanged segments advance proportionally;
-// transformed segments are held atomic and jump to the end of their original
-// span once fully spoken.
+// TextSegmentMap answers "where are we?" in three versions of one utterance,
+// word by word.
+//
+// A synthesizer reports the words it speaks. Each report has to be turned into a
+// position, but into a position in three different strings, because the same
+// utterance exists in three forms at once:
+//
+//   - ttsText, what was actually spoken, tags and all:
+//     "Your balance is forty two dollars"
+//   - originalText, what a client displays: "Your balance is $42.50"
+//   - llmText, what the model wrote, so what the transcript should keep:
+//     "Your balance is <b>$42.50</b>". Defaults to originalText.
+//
+// For a frame nothing rewrote, all three are the same string and every position
+// is the same.
+//
+// The hard part is that a spoken word need not appear in the other two. The
+// synthesizer says "dollars"; nothing in "$42.50" matches it. So the map is
+// built once, by diffing ttsText against originalText into aligned segments,
+// each either survived unchanged or rewritten whole.
+//
+// llmText is never compared against the others, and does not need to be. It
+// holds the same letters and digits as originalText, in the same order, and
+// differs only in what is wrapped around them: tags, delimiters, punctuation. So
+// counting letters and digits is enough to keep it in step, and its cursor moves
+// by that count.
+//
+// From then on one real cursor moves: RawPos, how far into ttsText the
+// synthesizer has got. UserFacingPos and LLMPos follow it. Through an unchanged
+// segment they keep pace, word for word. Through a rewritten one they wait:
+// there is no honest position halfway through "$42.50" while "forty two dollars"
+// is being spoken, so they hold and then jump to the end of the span in one step
+// when the last of its words lands.
+//
+// Callers ask two things. WordBelongsCurrentSegment, does this token plausibly
+// continue what is left to speak, and AdvanceWord, which consumes it. Both
+// tolerate the ways synthesizers mangle tokens (added punctuation, changed case
+// or diacritics, a fragment of a half-open tag) without the caller knowing
+// anything about it; classifyHop holds that logic.
 type TextSegmentMap struct {
 	ttsRunes  []rune
 	origRunes []rune
 	llmRunes  []rune
 	segments  []textSegment
 
-	segIdx        int
-	segRawPos     int
-	userFacingPos int
-	llmPos        int
-	lastCompleted *textSegment
-	lastOverflow  string
+	segIdx               int
+	segRawPos            int
+	userFacingPos        int
+	llmPos               int
+	lastCompleted        *textSegment
+	lastOverflow         string
+	lastLeadingDuplicate int
 }
 
-// NewTextSegmentMap builds a segment map. ttsText is the post-transform text
-// sent to the synthesizer, originalText is the user-facing pre-transform text,
-// and llmText is the model-produced text (which may carry surrounding tags);
-// pass "" for llmText to default it to originalText.
+// NewTextSegmentMap lines the three texts up against each other. The comparison
+// happens once, here; everything after this only moves cursors.
+//
+// ttsText is what was sent to the synthesizer, and so what incoming words are
+// matched against; it may carry synthesis tags and rewritten values.
+// originalText is the same content as a client displays it, before any
+// rewriting, and is diffed against ttsText to build the segments. llmText is the
+// same content as the model wrote it, which may add delimiters the other two
+// never see; it rides its own cursor rather than being diffed. Pass "" for
+// llmText to default it to originalText.
 func NewTextSegmentMap(ttsText, originalText, llmText string) *TextSegmentMap {
 	if llmText == "" {
 		llmText = originalText
@@ -160,35 +169,16 @@ func NewTextSegmentMap(ttsText, originalText, llmText string) *TextSegmentMap {
 	return m
 }
 
-// tokenizeWS splits text on runs of whitespace, keeping the separators, matching
-// a capturing whitespace split so joining the tokens reconstructs text exactly.
-func tokenizeWS(text string) []string {
-	runes := []rune(text)
-	var tokens []string
-	start := 0
-	i := 0
-	for i < len(runes) {
-		if unicode.IsSpace(runes[i]) {
-			tokens = append(tokens, string(runes[start:i]))
-			j := i
-			for j < len(runes) && unicode.IsSpace(runes[j]) {
-				j++
-			}
-			tokens = append(tokens, string(runes[i:j]))
-			i = j
-			start = j
-		} else {
-			i++
-		}
-	}
-	tokens = append(tokens, string(runes[start:]))
-	return tokens
-}
-
-// buildSegments builds aligned segments from a word-level diff. Each diff opcode
-// (equal, replace, insert, delete) becomes a segment; segments whose normalized
-// alphanumeric content differs are treated as transformed/atomic during cursor
-// advancement.
+// buildSegments compares the two texts and cuts them into the segments the map
+// walks. The diff lines them up a word at a time and reports each piece as
+// equal, replaced, inserted or deleted, and every piece becomes one segment.
+// Whitespace is kept as words of its own so that the positions stay exact.
+//
+// One extra step: a piece that came out equal is cut around any tag inside it,
+// so a single tag does not turn the whole sentence into an all-or-nothing
+// segment. Only equal pieces can be split this way. Both sides hold the same
+// text there, so a single position cuts both; where the sides differ there is no
+// position that means the same thing on each.
 func buildSegments(ttsText, originalText string) []textSegment {
 	origTokens := tokenizeWS(originalText)
 	ttsTokens := tokenizeWS(ttsText)
@@ -198,17 +188,461 @@ func buildSegments(ttsText, originalText string) []textSegment {
 	for _, op := range getOpcodes(origTokens, ttsTokens) {
 		origChunk := strings.Join(origTokens[op.i1:op.i2], "")
 		ttsChunk := strings.Join(ttsTokens[op.j1:op.j2], "")
-		origRunes := []rune(origChunk)
-		origEnd := origPos + len(origRunes)
-		segments = append(segments, textSegment{
-			origRunes: origRunes,
-			ttsRunes:  []rune(ttsChunk),
-			origStart: origPos,
-			origEnd:   origEnd,
-		})
-		origPos = origEnd
+
+		type part struct{ orig, tts string }
+		var parts []part
+		if op.tag == "equal" {
+			for _, run := range splitMarkupRuns(origChunk) {
+				parts = append(parts, part{run, run})
+			}
+		} else {
+			parts = []part{{origChunk, ttsChunk}}
+		}
+
+		for _, p := range parts {
+			origRunes := []rune(p.orig)
+			origEnd := origPos + len(origRunes)
+			segments = append(segments, textSegment{
+				origRunes: origRunes,
+				ttsRunes:  []rune(p.tts),
+				origStart: origPos,
+				origEnd:   origEnd,
+			})
+			origPos = origEnd
+		}
 	}
 	return segments
+}
+
+// wordVariants returns word, then word with any punctuation at its end removed.
+// A synthesizer can add punctuation the text it was given never had, reading a
+// list item "my account" as a sentence and reporting "account.". Matching tries
+// the word as it arrived first, then the trimmed form.
+func wordVariants(word string) []string {
+	trimmed := stripTrailingPunctuation(word)
+	if trimmed == word {
+		return []string{word}
+	}
+	return []string{word, trimmed}
+}
+
+// literalHop compares remainingWord to each candidate, rune for rune.
+//
+// Two things can match. If a candidate starts with the word, the word fits here
+// (hopPlaced). If the word starts with a candidate, the candidate ran out first,
+// so the rest of the word belongs to the next segment (hopCrosses).
+//
+// foldedHop calls this too, on folded copies of the same strings. Folding never
+// changes a string's rune length, so a position found in a folded copy is the
+// same position in the original.
+//
+// When requireWordBoundary is set, the word must end where a word ends in the
+// candidate: either it used the candidate up, or the next rune is not a letter
+// or digit. That stops "account" from matching the start of "Accountant". Only
+// the folded pass asks for it, because folding away case makes that kind of
+// accidental match much easier to hit.
+func literalHop(candidates []cand, remainingWord string, requireWordBoundary bool) *hop {
+	for _, word := range wordVariants(remainingWord) {
+		if word == "" {
+			continue
+		}
+		wr := []rune(word)
+		for _, c := range candidates {
+			cr := []rune(c.text)
+			switch {
+			case strings.HasPrefix(c.text, word):
+				landsMidWord := requireWordBoundary && len(wr) < len(cr) && isAlnum(cr[len(wr)])
+				if !landsMidWord {
+					return &hop{kind: hopPlaced, segChars: c.offset + len(wr)}
+				}
+			case c.text != "" && strings.HasPrefix(word, c.text):
+				return &hop{kind: hopCrosses, wordChars: len(cr)}
+			}
+		}
+	}
+	return nil
+}
+
+// leadingNonAlnumLen counts the runes at the start of text that are not letters
+// or digits. For ", I can" it returns 2, the comma and the space.
+//
+// With stopAtMarkup, counting also stops at a '<', so the count never reaches
+// inside a tag. Without it, "<break/>hello" would count past the '<', and a
+// synthesizer that reports the tag's name "break" as a word would look like it
+// had spoken it.
+func leadingNonAlnumLen(text string, stopAtMarkup bool) int {
+	runes := []rune(text)
+	i := 0
+	for i < len(runes) && !isAlnum(runes[i]) {
+		if stopAtMarkup && runes[i] == '<' {
+			break
+		}
+		i++
+	}
+	return i
+}
+
+// matchCandidates returns the three starting points a word may be matched
+// against here. Synthesizers disagree about what they include in a word, so the
+// same text is offered from three places, each paired with how far in it starts:
+//
+//  1. The text as it is, for one that reports " world" with its own leading
+//     space.
+//  2. Past any spaces.
+//  3. Past everything that is not a letter or digit, for one that does not
+//     repeat punctuation it already spoke: when "I" arrives for "Yeah, I can",
+//     the ", " is still waiting here.
+//
+// Each start is further in than the last, so the closest match is tried first.
+// Identical starting points are dropped.
+func matchCandidates(segmentRemaining string) []cand {
+	runes := []rune(segmentRemaining)
+	leadWs := len(runes) - len(leftTrimSpace(runes))
+	leadNonAlnum := leadingNonAlnumLen(segmentRemaining, true)
+
+	candidates := make([]cand, 0, 3)
+	seen := make(map[int]struct{}, 3)
+	for _, offset := range [3]int{0, leadWs, leadNonAlnum} {
+		if _, dup := seen[offset]; dup {
+			continue
+		}
+		seen[offset] = struct{}{}
+		candidates = append(candidates, cand{string(runes[offset:]), offset})
+	}
+	return candidates
+}
+
+// foldedHop matches remainingWord again, ignoring differences in how it is
+// written. A synthesizer may report a word in lower case, without accents, or
+// with plain quotes: "SQL" as "sql", "café" as "cafe", "don’t" as "don't".
+// Folding both sides makes those the same.
+//
+// Folding swaps runes one for one and never adds or removes any, so the strings
+// keep their rune length and a position found here means the same position in
+// the original text.
+//
+// Because folding hides case, a short word could now match inside a longer one,
+// "account" inside "Accountant", so a match here is only accepted if it ends
+// where a word ends.
+func foldedHop(candidates []cand, remainingWord string) *hop {
+	folded := make([]cand, len(candidates))
+	for i, c := range candidates {
+		folded[i] = cand{foldForMatching(c.text), c.offset}
+	}
+	return literalHop(folded, foldForMatching(remainingWord), true)
+}
+
+// markupHop matches remainingWord again, with tags removed from both sides. A
+// synthesizer may report a word wrapped in tags the text it was given did not
+// have, or the other way round; removing tags from both sides lets the words
+// themselves be compared.
+//
+// The match is found in text that has no tags, so its position has to be
+// translated back to a position in the real text, tags included, by
+// rawLenForCleanChars.
+//
+// Only hopPlaced comes out of this. A word that runs past the end of the segment
+// is left to the two earlier passes.
+func markupHop(segmentRemaining, remainingWord string) *hop {
+	runes := []rune(segmentRemaining)
+	strippedRunes := leftTrimSpace(runes)
+	leadWs := len(runes) - len(strippedRunes)
+	stripped := string(strippedRunes)
+	haystack := stripMarkup(stripped)
+
+	for _, candidate := range wordVariants(stripMarkup(remainingWord)) {
+		if candidate != "" && strings.HasPrefix(haystack, candidate) {
+			rawLen := rawLenForCleanChars(stripped, len([]rune(candidate)))
+			return &hop{kind: hopPlaced, segChars: leadWs + rawLen}
+		}
+	}
+	return nil
+}
+
+// classifyHop decides what remainingWord does to the text left in this segment.
+// Everything here is plain string comparison: no tag names are understood, and
+// nothing is remembered between calls.
+//
+// Three ways of matching are tried, each more forgiving than the one before:
+// literalHop, then foldedHop, then markupHop. Any of them can report that the
+// word fits here (hopPlaced) or that it runs past the end of the segment
+// (hopCrosses).
+//
+// If none of them match, the answer depends on what is left in the segment.
+// hopExhausted when nothing here can be spoken, only a tag such as <break/>, or
+// trailing spaces and punctuation: the segment is finished so the word can try
+// the next one. That is checked last, so a word that really does match something
+// like a trailing emoji is found by the passes above first. hopNoMatch
+// otherwise: the word belongs somewhere else, so the cursor only steps past
+// punctuation at the start of the segment, never past anything that was actually
+// spoken.
+func classifyHop(segmentRemaining, remainingWord string) hop {
+	candidates := matchCandidates(segmentRemaining)
+
+	h := literalHop(candidates, remainingWord, false)
+	if h == nil {
+		h = foldedHop(candidates, remainingWord)
+	}
+	if h == nil {
+		h = markupHop(segmentRemaining, remainingWord)
+	}
+	if h != nil {
+		return *h
+	}
+
+	// Nothing left here that can be spoken: finish the segment so the word can
+	// try the next one.
+	if !hasAlnum(segmentRemaining) {
+		return hop{kind: hopExhausted}
+	}
+
+	// Foreign token: nudge past leading punctuation only, then stop. Unlike the
+	// skip candidates this does not stop at markup. It moves the raw cursor
+	// rather than deciding a match, so there is no tag name it could mistake for
+	// spoken content.
+	return hop{kind: hopNoMatch, segChars: leadingNonAlnumLen(segmentRemaining, false)}
+}
+
+// advanceCursorsTo moves every cursor to newPos within seg, and finishes seg if
+// it is reached. This is where the keep-pace-or-wait rule from the type comment
+// is applied, and the only place the cursors into the other two texts move.
+func (m *TextSegmentMap) advanceCursorsTo(seg *textSegment, newPos int) {
+	if seg.isTransformed() {
+		// Whatever is left is only a closing tag or the like, which no word event
+		// will ever name. Take it now so the segment can finish. Unchanged
+		// segments are not given this: a trailing emoji there is real output, and
+		// its own event is still coming.
+		if !hasAlnum(string(seg.ttsRunes[newPos:])) {
+			newPos = len(seg.ttsRunes)
+		}
+	} else {
+		m.keepDerivedCursorsInPace(seg, newPos)
+	}
+
+	m.segRawPos = newPos
+
+	if newPos >= len(seg.ttsRunes) {
+		if seg.isTransformed() {
+			m.commitTransformedSpan(seg)
+		}
+		m.finishSegment(seg)
+	}
+}
+
+// keepDerivedCursorsInPace moves the cursors into the other two texts by what
+// this step just spoke. The count of letters and digits consumed here is what
+// they move by.
+func (m *TextSegmentMap) keepDerivedCursorsInPace(seg *textSegment, newPos int) {
+	nAlnum := len([]rune(alnumOnly(string(seg.ttsRunes[m.segRawPos:newPos]))))
+	if nAlnum > 0 {
+		m.userFacingPos = advanceByAlnums(m.origRunes, m.userFacingPos, nAlnum)
+	} else {
+		// A token with no letters or digits to spend, punctuation set off by a
+		// space as French writes it ("va ?", "Attention :"). There is no budget
+		// to advance by, so step straight to where the raw cursor got to, and the
+		// mark leaves the remaining text now rather than a word later. Both sides
+		// are identical here, so that offset is exact.
+		m.userFacingPos = seg.origStart + rtrimLen(seg.ttsRunes[:newPos])
+	}
+	m.llmPos = advanceByAlnums(m.llmRunes, m.llmPos, nAlnum)
+}
+
+// commitTransformedSpan jumps the other two cursors to the end of seg, now that
+// it is done.
+func (m *TextSegmentMap) commitTransformedSpan(seg *textSegment) {
+	m.userFacingPos = seg.origEnd
+	// The original's count, not the TTS side's: llmText holds "$42.50" (4
+	// alnums), never the spoken "forty two dollars".
+	m.llmPos = advanceByAlnums(m.llmRunes, m.llmPos, seg.originalAlnumCount())
+}
+
+// finishSegment records seg as finished and moves on to the next segment.
+func (m *TextSegmentMap) finishSegment(seg *textSegment) {
+	m.lastCompleted = seg
+	m.segIdx++
+	m.segRawPos = 0
+}
+
+// planHops works out what word would do, without moving anything. This decides;
+// consumeWord acts. Keeping them apart is what stops them disagreeing, since
+// canConsumeWord asks the same question and must get the same answer.
+//
+// Most words are placed by the first segment tried, and the walk stops there. It
+// goes on when a segment cannot finish the job, because the word runs past it or
+// it has nothing speakable left, and whatever remains of the word is offered to
+// the next segment.
+//
+// It returns what each segment answered, in order, and whatever is left of the
+// word once the segments run out. Anything left over is the word running past
+// the end of this text.
+func (m *TextSegmentMap) planHops(word string) ([]hop, string) {
+	segIdx := m.segIdx
+	rawPos := m.segRawPos
+	remaining := word
+	var hops []hop
+
+	for remaining != "" && segIdx < len(m.segments) {
+		h := classifyHop(string(m.segments[segIdx].ttsRunes[rawPos:]), remaining)
+		hops = append(hops, h)
+
+		// hopPlaced and hopNoMatch both end the walk; the other two carry on.
+		if h.kind == hopPlaced || h.kind == hopNoMatch {
+			return hops, ""
+		}
+
+		remaining = runeSliceFrom(remaining, h.wordChars)
+		segIdx++
+		rawPos = 0
+	}
+
+	return hops, remaining
+}
+
+// consumeWord moves the cursors according to what planHops decided. Anything
+// left unplaced ran past the end of this text and is kept in lastOverflow, for
+// the caller to hand to the next frame.
+func (m *TextSegmentMap) consumeWord(word string) {
+	hops, overflow := m.planHops(word)
+
+	for _, h := range hops {
+		seg := &m.segments[m.segIdx]
+
+		switch h.kind {
+		case hopNoMatch:
+			// The word belongs somewhere else entirely (a synthesizer swapping a
+			// symbol, say). Nudge the raw cursor past any leading punctuation so
+			// the next word is not blocked by it, but leave the cursors that mean
+			// something alone: nothing was really spoken here.
+			m.segRawPos += h.segChars
+		case hopPlaced:
+			m.advanceCursorsTo(seg, m.segRawPos+h.segChars)
+		default:
+			// hopCrosses or hopExhausted: this segment is done either way, and the
+			// next hop was classified against the one after it.
+			m.advanceCursorsTo(seg, len(seg.ttsRunes))
+		}
+	}
+
+	if overflow != "" {
+		m.lastOverflow = overflow
+	}
+}
+
+// AdvanceWord takes one spoken word and moves every cursor to where it ends.
+//
+// Afterwards LastCompletedSegment, LastOverflow and LastLeadingDuplicate
+// describe what this particular word did; each is cleared at the start of the
+// next call.
+//
+// The word may be a plain word, a word carrying its own spacing or punctuation,
+// or a fragment of a half-open tag. Matching is textual, so the caller does not
+// have to know which.
+func (m *TextSegmentMap) AdvanceWord(word string) {
+	m.lastCompleted = nil
+	m.lastOverflow = ""
+	m.lastLeadingDuplicate = 0
+
+	if word != "" {
+		m.lastLeadingDuplicate = m.leadingDuplicateLen(word)
+		m.consumeWord(word)
+	}
+}
+
+// leadingDuplicateLen counts runes at the start of word that were already
+// spoken.
+//
+// In "Yeah, I can" the comma travels with "Yeah". If the synthesizer then
+// reports the next word as ", I" instead of "I", the comma would be recorded
+// twice, so this returns 2: the comma and its space.
+//
+// It returns 0 when that punctuation is new text instead (`"hello`), and when
+// the word is nothing but punctuation, which is a mark arriving on its own. It
+// must be called before the cursors move, while llmPos still sits at the end of
+// the previous word.
+func (m *TextSegmentMap) leadingDuplicateLen(word string) int {
+	runes := []rune(word)
+	i := 0
+	for i < len(runes) && (unicode.IsSpace(runes[i]) || isPunct(runes[i])) {
+		i++
+	}
+	if i >= len(runes) {
+		return 0
+	}
+	mark := []rune(strings.TrimSpace(string(runes[:i])))
+	if len(mark) == 0 {
+		return 0
+	}
+	start := m.llmPos - len(mark)
+	if start < 0 || string(m.llmRunes[start:m.llmPos]) != string(mark) {
+		return 0
+	}
+	return i
+}
+
+// WordBelongsCurrentSegment reports whether word could be the next thing spoken
+// here. It is AdvanceWord without the moving, so a caller can check first. A
+// false answer means the synthesizer skipped ahead, and the word should go to
+// the next frame instead.
+//
+// A word with no letters or digits gets a second chance from symbolWordBelongs,
+// since there is nothing in it to match on.
+func (m *TextSegmentMap) WordBelongsCurrentSegment(word string) bool {
+	if word == "" {
+		return true
+	}
+	if m.canConsumeWord(word) {
+		return true
+	}
+	if !hasAlnum(word) {
+		return m.symbolWordBelongs(word)
+	}
+	return false
+}
+
+// canConsumeWord asks whether this word would be placed, without placing it. It
+// is true if some segment would take the word, or if the word simply runs off
+// the end, and false if there are no segments left or a segment turns it down.
+func (m *TextSegmentMap) canConsumeWord(word string) bool {
+	if m.segIdx >= len(m.segments) {
+		return false
+	}
+	hops, _ := m.planHops(word)
+	return len(hops) == 0 || hops[len(hops)-1].kind != hopNoMatch
+}
+
+// symbolWordBelongs decides whether a word made only of punctuation or symbols
+// belongs here. There is nothing in such a word to match on, so it gets two
+// chances.
+//
+// First, look for the word itself in the text still to be spoken. The search
+// starts a little before the cursor, because punctuation is often taken along
+// with the word before it.
+//
+// Second, accept it as a stand-in. Some synthesizers report a different symbol
+// than the one they were given, ElevenLabs reports "->" as "-", so the first
+// check can never succeed. If words remain to be spoken and the next thing in
+// the text is itself a symbol, treat the word as that symbol.
+func (m *TextSegmentMap) symbolWordBelongs(word string) bool {
+	pos := m.RawPos()
+	searchStart := pos
+	for searchStart > 0 {
+		ch := m.ttsRunes[searchStart-1]
+		if isAlnum(ch) || unicode.IsSpace(ch) || ch == '>' {
+			break
+		}
+		searchStart--
+	}
+	if strings.Contains(string(m.ttsRunes[searchStart:]), word) {
+		return true
+	}
+	if m.segIdx >= len(m.segments) {
+		return false
+	}
+	p := pos
+	for p < len(m.ttsRunes) && unicode.IsSpace(m.ttsRunes[p]) {
+		p++
+	}
+	return p < len(m.ttsRunes) && !isAlnum(m.ttsRunes[p])
 }
 
 // leftTrimSpace returns runes with leading whitespace removed.
@@ -238,221 +672,16 @@ func runeSliceFrom(s string, k int) string {
 	return string(r[k:])
 }
 
-// literalHop tries a literal PLACED/CROSSES match of remainingWord against
-// candidates, first as-is and then with the word's own trailing punctuation
-// removed. When requireWordBoundary is set, a PLACED match is only accepted when
-// it ends at a word boundary in the candidate.
-func literalHop(candidates []cand, remainingWord string, requireWordBoundary bool) *hop {
-	trimmed := stripTrailingPunctuation(remainingWord)
-	words := []string{remainingWord}
-	if trimmed != remainingWord {
-		words = append(words, trimmed)
-	}
-	for _, word := range words {
-		if word == "" {
-			continue
-		}
-		wr := []rune(word)
-		for _, c := range candidates {
-			cr := []rune(c.text)
-			switch {
-			case strings.HasPrefix(c.text, word):
-				landsMidWord := requireWordBoundary && len(wr) < len(cr) && isAlnum(cr[len(wr)])
-				if !landsMidWord {
-					return &hop{kind: hopPlaced, segChars: c.offset + len(wr)}
-				}
-			case c.text != "" && strings.HasPrefix(word, c.text):
-				return &hop{kind: hopCrosses, wordChars: len(cr)}
-			}
-		}
-	}
-	return nil
-}
-
-// classifyHop decides where remainingWord goes against a segment's remaining raw
-// text. It tries a literal match, then a case/accent-folded match, then a
-// markup-stripped match; failing all three it drains an exhausted segment or
-// nudges past leading punctuation.
-func classifyHop(segmentRemaining, remainingWord string) hop {
-	sr := []rune(segmentRemaining)
-	strippedRunes := leftTrimSpace(sr)
-	leadWs := len(sr) - len(strippedRunes)
-	stripped := string(strippedRunes)
-
-	candidates := []cand{{segmentRemaining, 0}}
-	if leadWs > 0 {
-		candidates = append(candidates, cand{stripped, leadWs})
-	}
-	if h := literalHop(candidates, remainingWord, false); h != nil {
-		return *h
-	}
-
-	foldedWord := foldCaseAndAccents(remainingWord)
-	folded := make([]cand, len(candidates))
-	for i, c := range candidates {
-		folded[i] = cand{foldCaseAndAccents(c.text), c.offset}
-	}
-	if h := literalHop(folded, foldedWord, true); h != nil {
-		return *h
-	}
-
-	cleanWord := stripMarkup(remainingWord)
-	if cleanWord != "" && strings.HasPrefix(stripMarkup(stripped), cleanWord) {
-		rawLen := rawLenForCleanChars(stripped, len([]rune(cleanWord)))
-		return hop{kind: hopPlaced, segChars: leadWs + rawLen}
-	}
-
-	if normalize(segmentRemaining) == "" {
-		return hop{kind: hopExhausted}
-	}
-
-	nudge := 0
-	for nudge < len(sr) && !isAlnum(sr[nudge]) {
-		nudge++
-	}
-	return hop{kind: hopNoMatch, segChars: nudge}
-}
-
-// commitRawSpan advances the raw cursor to newPos within seg, moving the derived
-// cursors. Unchanged segments advance proportionally by alphanumeric count;
-// transformed segments hold the cursors until the segment fully completes, then
-// jump to the end of its original span.
-func (m *TextSegmentMap) commitRawSpan(seg *textSegment, newPos int) {
-	if seg.isTransformed() {
-		if normalize(string(seg.ttsRunes[newPos:])) == "" {
-			newPos = len(seg.ttsRunes)
-		}
-	} else {
-		nAlnum := len([]rune(normalize(string(seg.ttsRunes[m.segRawPos:newPos]))))
-		if nAlnum > 0 {
-			m.userFacingPos = advanceByAlnums(m.origRunes, m.userFacingPos, nAlnum)
-		} else {
-			m.userFacingPos = seg.origStart + rtrimLen(seg.ttsRunes[:newPos])
-		}
-		m.llmPos = advanceByAlnums(m.llmRunes, m.llmPos, nAlnum)
-	}
-
-	m.segRawPos = newPos
-
-	if newPos >= len(seg.ttsRunes) {
-		if seg.isTransformed() {
-			m.userFacingPos = seg.origEnd
-			m.llmPos = advanceByAlnums(m.llmRunes, m.llmPos, seg.originalAlnumCount())
-		}
-		m.lastCompleted = seg
-		m.segIdx++
-		m.segRawPos = 0
-	}
-}
-
-// advanceRaw matches word against the remaining raw TTS text, hopping across
-// segment boundaries as needed. A word running past the end of the TTS text is
-// stored as overflow.
-func (m *TextSegmentMap) advanceRaw(word string) {
-	remaining := word
-	for remaining != "" && m.segIdx < len(m.segments) {
-		seg := &m.segments[m.segIdx]
-		oldPos := m.segRawPos
-		h := classifyHop(string(seg.ttsRunes[oldPos:]), remaining)
-
-		switch h.kind {
-		case hopNoMatch:
-			m.segRawPos = oldPos + h.segChars
-			return
-		case hopPlaced:
-			m.commitRawSpan(seg, oldPos+h.segChars)
-			return
-		default: // hopCrosses, hopExhausted
-			m.commitRawSpan(seg, len(seg.ttsRunes))
-			remaining = runeSliceFrom(remaining, h.wordChars)
-		}
-	}
-	if remaining != "" {
-		m.lastOverflow = remaining
-	}
-}
-
-// AdvanceWord matches a raw word-timestamp token against the remaining TTS text
-// and advances the cursors.
-func (m *TextSegmentMap) AdvanceWord(word string) {
-	m.lastCompleted = nil
-	m.lastOverflow = ""
-	if word != "" {
-		m.advanceRaw(word)
-	}
-}
-
-// WordBelongsCurrentSegment reports whether word plausibly continues the
-// remaining TTS text. A false result signals that the synthesizer skipped a
-// word-timestamp event and the caller should force-complete this slot.
-func (m *TextSegmentMap) WordBelongsCurrentSegment(word string) bool {
-	if word == "" {
-		return true
-	}
-	if m.wordMatchesRemaining(word) {
-		return true
-	}
-	if normalize(word) == "" {
-		return m.symbolWordBelongs(word)
-	}
-	return false
-}
-
-// wordMatchesRemaining is a read-only replay of advanceRaw's segment walk.
-func (m *TextSegmentMap) wordMatchesRemaining(word string) bool {
-	if m.segIdx >= len(m.segments) {
-		return false
-	}
-	segIdx := m.segIdx
-	rawPos := m.segRawPos
-	remaining := word
-	for remaining != "" && segIdx < len(m.segments) {
-		h := classifyHop(string(m.segments[segIdx].ttsRunes[rawPos:]), remaining)
-		if h.kind == hopPlaced {
-			return true
-		}
-		if h.kind == hopNoMatch {
-			return false
-		}
-		remaining = runeSliceFrom(remaining, h.wordChars)
-		segIdx++
-		rawPos = 0
-	}
-	return true
-}
-
-// symbolWordBelongs reports whether a non-alphanumeric token (emoji,
-// punctuation, symbol) belongs at the current position.
-func (m *TextSegmentMap) symbolWordBelongs(word string) bool {
-	pos := m.RawPos()
-	searchStart := pos
-	for searchStart > 0 {
-		ch := m.ttsRunes[searchStart-1]
-		if isAlnum(ch) || unicode.IsSpace(ch) || ch == '>' {
-			break
-		}
-		searchStart--
-	}
-	if strings.Contains(string(m.ttsRunes[searchStart:]), word) {
-		return true
-	}
-	if m.segIdx >= len(m.segments) {
-		return false
-	}
-	p := pos
-	for p < len(m.ttsRunes) && unicode.IsSpace(m.ttsRunes[p]) {
-		p++
-	}
-	return p < len(m.ttsRunes) && !isAlnum(m.ttsRunes[p])
-}
-
-// UserFacingPos is the current rune offset into the original user-facing text.
+// UserFacingPos is how far into the user-facing text the spoken words have
+// reached, as a rune offset.
 func (m *TextSegmentMap) UserFacingPos() int { return m.userFacingPos }
 
-// LLMPos is the current rune offset into the LLM text.
+// LLMPos is how far into the LLM's text the spoken words have reached, as a rune
+// offset.
 func (m *TextSegmentMap) LLMPos() int { return m.llmPos }
 
-// RawPos is the current global rune offset into the TTS text.
+// RawPos is how far into the TTS text the synthesizer has spoken, counted from
+// its start as a rune offset.
 func (m *TextSegmentMap) RawPos() int {
 	pos := 0
 	for i := 0; i < m.segIdx && i < len(m.segments); i++ {
@@ -464,36 +693,62 @@ func (m *TextSegmentMap) RawPos() int {
 	return pos
 }
 
-// LastOverflow is the raw suffix of the last AdvanceWord that overflowed past
-// the end of the TTS text, or "" when the last word fit.
+// LastOverflow is the end of the last word passed to AdvanceWord, if it did not
+// fit. It is "" most of the time, and is set only when that word ran past the end
+// of the TTS text with no segment left to take the rest, which means the
+// leftover belongs to the next frame. It is always the tail of the word that was
+// passed in, so the part that did fit is the word minus this many trailing
+// runes.
 func (m *TextSegmentMap) LastOverflow() string { return m.lastOverflow }
 
-// IsComplete reports whether every segment's alphanumeric content has been
-// accounted for. A frame whose remaining content is entirely punctuation/markup
-// is already complete, except for whitespace-separated trailing punctuation that
-// still arrives as its own token.
+// LastLeadingDuplicate is how much of the last word's start was punctuation
+// already spoken, in runes.
+//
+// It is the opposite end of the word from LastOverflow: that one is about a tail
+// running past this text, this one about a head repeating punctuation the
+// previous word already took. Cut both off to get the part of the word that
+// belongs to this frame.
+func (m *TextSegmentMap) LastLeadingDuplicate() int { return m.lastLeadingDuplicate }
+
+// IsComplete reports whether every letter and digit in the text has been spoken.
+//
+// That is not the same as the cursor reaching the end. If all that is left is
+// punctuation or tags, the text counts as finished even though those runes have
+// not been walked over, because no word event is coming for them.
+//
+// There is one exception. Punctuation separated from its word by a space, as
+// French writes "Comment ça va ?", does arrive as its own word event, so the
+// text stays unfinished until it does. Punctuation stuck to the word itself, as
+// in "you?", was already taken with the word.
 func (m *TextSegmentMap) IsComplete() bool {
 	if m.segIdx >= len(m.segments) {
 		return true
 	}
 	seg := &m.segments[m.segIdx]
 	rem := string(seg.ttsRunes[m.segRawPos:])
-	if normalize(rem) != "" {
+	if hasAlnum(rem) {
 		return false
 	}
 	if pendingSeparatedPunctuation(rem) {
 		return false
 	}
 	for i := m.segIdx + 1; i < len(m.segments); i++ {
-		if normalize(m.segments[i].tts()) != "" {
+		if hasAlnum(m.segments[i].tts()) {
 			return false
 		}
 	}
 	return true
 }
 
-// pendingSeparatedPunctuation reports whether remaining is a whitespace-separated
-// trailing punctuation token, which the synthesizer emits as its own event.
+// pendingSeparatedPunctuation reports whether all that is left is punctuation
+// set off from its word by a space. Some languages write a space before a mark,
+// as in "va ?" or "Bonjour !", and a synthesizer reports that mark as a word of
+// its own, so the segment has to stay open until it arrives.
+//
+// Only real punctuation counts. A trailing emoji or arrow ("day! 😊", "→") never
+// arrives as its own word, so it must not keep the segment open, and tags are
+// removed first for the same reason. It is only called once no letters or digits
+// are left.
 func pendingSeparatedPunctuation(remaining string) bool {
 	sm := []rune(stripCompleteMarkup(remaining))
 	if len(sm) == 0 || !unicode.IsSpace(sm[0]) {
@@ -506,8 +761,8 @@ func pendingSeparatedPunctuation(remaining string) bool {
 	return isPunct([]rune(content)[0])
 }
 
-// InTransformedSegment reports whether the cursor is partway through a
-// transformed (atomic) segment.
+// InTransformedSegment reports whether the cursor is partway through a rewritten
+// segment.
 func (m *TextSegmentMap) InTransformedSegment() bool {
 	if m.segIdx >= len(m.segments) {
 		return false
@@ -516,8 +771,8 @@ func (m *TextSegmentMap) InTransformedSegment() bool {
 	return seg.isTransformed() && m.segRawPos > 0
 }
 
-// LastCompletedSegment returns the original text of the segment completed by the
-// last AdvanceWord call, and whether one completed.
+// LastCompletedSegment returns the original text of the segment finished by the
+// last AdvanceWord call, and whether one finished.
 func (m *TextSegmentMap) LastCompletedSegment() (original string, ok bool) {
 	if m.lastCompleted == nil {
 		return "", false
@@ -525,16 +780,10 @@ func (m *TextSegmentMap) LastCompletedSegment() (original string, ok bool) {
 	return m.lastCompleted.original(), true
 }
 
-// lastCompletedTransformed reports whether the last completed segment was a
-// transformed one.
-func (m *TextSegmentMap) lastCompletedTransformed() bool {
-	return m.lastCompleted != nil && m.lastCompleted.isTransformed()
-}
-
-// hasLastCompleted reports whether the last AdvanceWord completed a segment.
+// hasLastCompleted reports whether the last AdvanceWord finished a segment.
 func (m *TextSegmentMap) hasLastCompleted() bool { return m.lastCompleted != nil }
 
-// Reset returns the map to its initial cursor state.
+// Reset puts every cursor back to the start of the text.
 func (m *TextSegmentMap) Reset() {
 	m.segIdx = 0
 	m.segRawPos = 0
@@ -542,4 +791,5 @@ func (m *TextSegmentMap) Reset() {
 	m.llmPos = 0
 	m.lastCompleted = nil
 	m.lastOverflow = ""
+	m.lastLeadingDuplicate = 0
 }

@@ -23,7 +23,7 @@ type WordTiming struct {
 func MergePunctTokens(words []WordTiming) []WordTiming {
 	merged := make([]WordTiming, 0, len(words))
 	for _, wt := range words {
-		if hasAlnum(stripMarkup(wt.Word)) {
+		if containsAlnum(stripMarkup(wt.Word)) {
 			merged = append(merged, wt)
 			continue
 		}
@@ -38,8 +38,11 @@ func MergePunctTokens(words []WordTiming) []WordTiming {
 	return merged
 }
 
-// hasAlnum reports whether text contains at least one alphanumeric character.
-func hasAlnum(text string) bool {
+// containsAlnum reports whether text contains at least one alphanumeric rune.
+// It is the plain scan the word-timestamp merge wants, where the caller has
+// already decided how to strip markup; alnumOnly and hasAlnum are the pair that
+// strip it themselves.
+func containsAlnum(text string) bool {
 	for _, r := range text {
 		if isAlnum(r) {
 			return true
