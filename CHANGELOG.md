@@ -12,7 +12,86 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **A user turn processor.** `turns.NewUserTurnProcessor` decides the user's
+  turn in a processor of its own, so the decision can be made once and shared
+  by several aggregators, or placed at a particular point in the pipeline. The
+  aggregator keeps its own turn taking for the usual case, where the decision
+  belongs on the same frames as the aggregation.
+
+- **Tool-change announcements.** `aggregators.WithToolChangeMessages` appends a
+  developer message to the conversation whenever an `LLMSetToolsFrame` changes
+  the advertised toolset, naming what was added and what was removed. It helps
+  the model stay coherent across a mid-conversation change, and heads off
+  calling tools that have gone, avoiding tools that have come back, and
+  inventing output when no tool is available. Both halves take part and the
+  message is written exactly once.
+
+- **`transport.Params.AudioInStreamOnStart`,** with
+  `BaseInput.EnableAudioInStreamOnStart`, holds received audio back until
+  something asks for it. The RTVI processor now asks on `client-ready`, so a
+  client that has not finished connecting is kept off the pipeline.
+
+- **`transport.Params.AudioOutAutoSilence`** turns off the silence the outgoing
+  stream is filled with while nothing is queued, for a transport that would
+  rather wait for audio.
+
+- **The end-of-turn parameters are published.** A turn-analyzer stop strategy
+  broadcasts them on the `StartFrame` as a `SpeechControlParamsFrame`, so a
+  processor downstream can size its own behaviour to them and clients and
+  observers can mirror them. `turn.Analyzer` gains `Params`.
+
 ### Fixed
+
+- **A service's recommended turn strategies are applied.** A transcription
+  service that does its own server-side end-of-turn detection recommends
+  external turn strategies through its metadata frame. Nothing read the
+  recommendation, so the pipeline went on running its own detection alongside
+  the service's. The user aggregator now adopts it, unless the application
+  configured strategies itself, which always win; overruling a service that
+  asked for interruptions to stay off is warned about. The metadata frame
+  carries the strategies themselves rather than a name for them, so the
+  interruption setting travels with them.
+
+- **Proposed turn boundaries are resolved.** A service that detects speech
+  server-side now proposes the boundary rather than announcing it, and the
+  external turn strategies resolve the proposal: they emit the turn frames and
+  broadcast the interruption, which is what puts the barge-in decision back
+  with the pipeline. A proposal is consumed by whatever resolves it, so no
+  resolver further along decides the same turn twice. Deepgram Flux, Gladia and
+  Cartesia's turn endpoint gained a `ShouldInterrupt` setting, routed into the
+  strategies they recommend.
+
+- **A turn is always decided.** The user aggregator built no turn controller
+  unless one was configured, falling back to ending the turn on transcription
+  finalization. It now always runs the strategies, defaulting to voice activity
+  and transcription to start and a speech timeout to stop.
+
+- **A wake phrase matches through punctuation,** so a service reporting
+  "Hey, Jargo!" wakes a bot listening for "hey jargo". Single activation also
+  no longer sleeps on the turn it just opened: the keepalive window is what
+  puts the strategy back to sleep, so the turn the phrase opened can run.
+  `WakePhraseStartConfig` gained callbacks for the phrase being detected and
+  for the strategy going back to sleep.
+
+- **An externally driven turn ends on a late transcript.** The stop strategy
+  waited one debounce window for transcript text and gave up, leaving the turn
+  to the five-second watchdog. It now ends the turn as soon as the stop signal
+  arrives with text in hand, and keeps retrying while the turn is open, so a
+  transcript arriving after the signal still ends it.
+
+- **Filtered input audio keeps its frame.** An audio input filter had its output
+  copied onto a new frame, losing the source the transport named and the moment
+  it was captured. The audio is now replaced on the frame itself. The filter
+  also runs whether or not input passthrough is on: it is stateful, and feeding
+  it only the audio that happens to be forwarded left it working from a signal
+  with holes in it.
+
+- **The output transport forwards the `StartFrame` before it starts.** Opening
+  the outgoing media path can take a while, and everything downstream was
+  waiting behind it. The audio shape the senders are sized to is settled when
+  the transport is set up instead.
 
 - **A processor that fails to set up is reported, and stops being given work.**
   A pipeline set its processors up one at a time and returned on the first
