@@ -256,11 +256,18 @@ func TestUserReportsTheTurnItCollected(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Content != "hello there" {
 		t.Fatalf("messages written = %+v, want one saying 'hello there'", msgs)
 	}
-	// Without turn strategies the turn is never opened or closed by one, so the
-	// session ending is what reports it.
+	// The default strategies opened the turn on the transcript, and the session
+	// ended before any of them closed it, so the end of the session is what
+	// reports it and no strategy is named.
 	got := log.userTurns()
-	if len(got) != 0 {
-		t.Fatalf("user turns reported = %+v, want none: nothing opened a turn", got)
+	if len(got) != 1 {
+		t.Fatalf("user turns reported = %+v, want exactly one", got)
+	}
+	if got[0].Strategy != nil {
+		t.Errorf("turn reported strategy %v, want none: nothing decided it was over", got[0].Strategy)
+	}
+	if got[0].Content != "hello there" {
+		t.Errorf("turn content = %q, want %q", got[0].Content, "hello there")
 	}
 }
 

@@ -90,10 +90,14 @@ func TestTranscriptKeepsItsOwnSpacing(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	task, seen, runDone := runAggregator(t, convo)
 
+	// Spaced the way a transcription service delivers them: the first opens the
+	// turn, and the barge-in that goes with a turn opening drops whatever this
+	// processor had queued behind it.
 	for _, part := range []string{"Hello,", " world."} {
 		tf := frames.NewTranscriptionFrame(part, "u", "ts")
 		tf.IncludesInterFrameSpaces = true
 		task.QueueFrame(tf)
+		settle()
 	}
 	final := finalTranscript(" Goodbye.")
 	final.IncludesInterFrameSpaces = true
@@ -117,6 +121,7 @@ func TestTranscriptWithoutSpacingIsSpaced(t *testing.T) {
 
 	for _, part := range []string{"Hello", "world"} {
 		task.QueueFrame(frames.NewTranscriptionFrame(part, "u", "ts"))
+		settle()
 	}
 	task.QueueFrame(finalTranscript("again"))
 

@@ -32,9 +32,15 @@ func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
-	// An interim transcription must not trigger the LLM.
+	// An interim transcription opens the turn but does not trigger the LLM.
 	task.QueueFrame(frames.NewInterimTranscriptionFrame("hel", "u", "ts"))
-	// A finalized transcription ends the turn and triggers the LLM.
+	// Spaced the way a transcription service delivers them. The turn opening
+	// barges in on whatever the bot was saying, and a barge-in drops the work
+	// this processor had queued, so a transcript queued behind the one that
+	// opened the turn would go with it.
+	settle()
+	// The turn ends once the speech timeout elapses with the transcript in hand,
+	// which is what triggers the LLM.
 	tf := frames.NewTranscriptionFrame("hello there", "u", "ts")
 	tf.Finalized = true
 	task.QueueFrame(tf)

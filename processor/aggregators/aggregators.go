@@ -19,7 +19,9 @@ package aggregators
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -171,6 +173,9 @@ type options struct {
 	// vad configures voice-activity detection run inside the user aggregator,
 	// and is nil when the pipeline detects speech somewhere else.
 	vad *VADConfig
+	// toolChangeMessages announces a change of toolset to the model as a
+	// developer message.
+	toolChangeMessages bool
 }
 
 // VADConfig configures the voice-activity detection a user aggregator runs.
@@ -237,15 +242,41 @@ func WithVAD(cfg VADConfig) Option {
 	return func(o *options) { o.vad = &cfg }
 }
 
-// WithTurns drives the user turn from turn-taking strategies rather than from
-// STT finalization: the LLM runs when the strategies say the turn ended.
+// WithToolChangeMessages announces a change of toolset to the model.
+//
+// On each LLMSetToolsFrame the aggregators diff the new toolset against the one
+// the conversation currently advertises and append a developer message naming
+// what was added and what was removed. It helps the model stay coherent across a
+// mid-conversation toolset change, and heads off several flavors of tool-call
+// hallucination: calling tools that have been removed, avoiding tools that have
+// been added back, and inventing output (made-up answers, or tool-call-shaped
+// text that is not a tool call) when no tool is available.
+//
+// Only the standard tools are diffed; tools written in one provider's own format
+// are left out of it.
+//
+// Both halves of the pair take part, which is what makes it work whichever of
+// them handles a given frame first. They share the conversation, so whichever
+// one gets there first writes the announcement and the other one's diff is
+// empty by the time it looks, and the message is written exactly once.
+func WithToolChangeMessages() Option {
+	return func(o *options) { o.toolChangeMessages = true }
+}
+
+// WithTurns configures the turn taking the user aggregator drives.
+//
+// The aggregator always decides when the user's turn began and ended; this is
+// how the strategies it decides with, and the idle and mute settings around
+// them, are chosen. Without it the defaults stand.
 //
 // The strategies run inside the user aggregator, on the same frames and in the
 // same order as the aggregation. That is what makes the turn's own transcript
 // part of it: a turn ends because a transcript finalized, and were the decision
 // made in a processor of its own, the end-of-turn frame would be a system frame
 // racing ahead of the transcript that caused it and the user's last words would
-// be dropped from the message the model is given.
+// be dropped from the message the model is given. Where the decision has to be
+// shared instead, put a turns.UserTurnProcessor in the pipeline and give this
+// aggregator turns.ExternalStrategies so it adopts what that decides.
 func WithTurns(cfg turns.Config) Option {
 	return func(o *options) { o.turns = &cfg }
 }
@@ -260,11 +291,12 @@ func New(ctx *frames.LLMContext, opts ...Option) *Pair {
 	if o.turns != nil && len(o.turns.MuteStrategies) > 0 {
 		mute = append(append([]turns.MuteStrategy(nil), mute...), o.turns.MuteStrategies...)
 	}
-	return &Pair{
-		context:   ctx,
-		user:      newUser(ctx, o.turns, mute, o.vad),
-		assistant: newAssistant(ctx, o.summarize),
-	}
+	user := newUser(ctx, o.turns, mute, o.vad, o.toolChangeMessages)
+	assistant := newAssistant(ctx, o.summarize, o.toolChangeMessages)
+	// The assistant half needs to know which user half it belongs to, so a
+	// proposal that reaches it can be stopped when that half resolves it.
+	assistant.pairedUser = user
+	return &Pair{context: ctx, user: user, assistant: assistant}
 }
 
 // User returns the user-side aggregator.
@@ -287,8 +319,13 @@ func (p *Pair) Context() *frames.LLMContext { return p.context }
 // message.
 type UserAggregator struct {
 	*processor.Base
-	context    *frames.LLMContext
-	turnTaking bool
+	context *frames.LLMContext
+	// toolChangeMessages announces a change of toolset to the model.
+	toolChangeMessages bool
+	// pinnedStrategies records that the application configured the turn
+	// strategies itself, which is what makes them win over anything a service
+	// recommends.
+	pinnedStrategies bool
 
 	turn *turns.UserTurnController
 	idle *turns.UserIdleController
@@ -320,8 +357,20 @@ type UserAggregator struct {
 
 func newUser(
 	ctx *frames.LLMContext, cfg *turns.Config, mute []turns.MuteStrategy, vadCfg *VADConfig,
+	toolChangeMessages bool,
 ) *UserAggregator {
-	u := &UserAggregator{context: ctx, turnTaking: cfg != nil, muteStrategies: mute}
+	// The turn controllers always exist. Deciding when the user's turn began and
+	// ended is what this processor is for, and a pipeline that configures no
+	// strategies gets the default chains rather than no turn taking at all.
+	if cfg == nil {
+		cfg = &turns.Config{}
+	}
+	u := &UserAggregator{
+		context:            ctx,
+		toolChangeMessages: toolChangeMessages,
+		muteStrategies:     mute,
+		pinnedStrategies:   len(cfg.Strategies.Start) > 0 || len(cfg.Strategies.Stop) > 0,
+	}
 	u.Base = processor.New("UserContextAggregator", u)
 	if vadCfg != nil {
 		u.vad = newVADController(u, *vadCfg)
@@ -334,9 +383,6 @@ func newUser(
 		EventUserMuteStarted, EventUserMuteStopped,
 	} {
 		u.Events().Register(name, false)
-	}
-	if cfg == nil {
-		return u
 	}
 	u.turn = turns.NewUserTurnController(cfg.Strategies, cfg.StopTimeout)
 	// The event fires alongside the configured callback, so something watching
@@ -416,12 +462,10 @@ func (u *UserAggregator) Setup(ctx context.Context, s processor.Setup) error {
 			return err
 		}
 	}
-	if u.turn != nil {
-		if err := u.turn.Setup(ctx, s); err != nil {
-			return err
-		}
-		u.idle.Setup(ctx, u)
+	if err := u.turn.Setup(ctx, s); err != nil {
+		return err
 	}
+	u.idle.Setup(ctx, u)
 	return nil
 }
 
@@ -430,10 +474,8 @@ func (u *UserAggregator) Cleanup(ctx context.Context) error {
 	if u.vad != nil {
 		u.vad.Cleanup()
 	}
-	if u.turn != nil {
-		u.turn.Cleanup()
-		u.idle.Cleanup()
-	}
+	u.turn.Cleanup()
+	u.idle.Cleanup()
 	return u.Base.Cleanup(ctx)
 }
 
@@ -460,10 +502,8 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		}
 	}
 	err := u.handleFrame(ctx, f, dir)
-	if u.turn != nil {
-		u.turn.Process(f)
-		u.idle.Process(f)
-	}
+	u.turn.Process(f)
+	u.idle.Process(f)
 	return err
 }
 
@@ -498,7 +538,7 @@ func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir pr
 		return nil
 
 	case *frames.TranscriptionFrame:
-		return u.handleTranscription(ctx, fr)
+		return u.handleTranscription(fr)
 
 	case *frames.LLMRunFrame:
 		// Explicit trigger: run the LLM on the current context now (e.g. to make
@@ -511,9 +551,106 @@ func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir pr
 		*frames.LLMSetToolChoiceFrame:
 		return u.handleContextUpdate(ctx, f, dir)
 
+	case *frames.ProposedUserStartedSpeakingFrame:
+		// A proposal is resolved once. Forwarding one our own strategies resolve
+		// would let a resolver further down the pipeline decide the same turn a
+		// second time.
+		if u.resolvesProposedStarts() {
+			return nil
+		}
+		return u.PushFrame(ctx, f, dir)
+
+	case *frames.ProposedUserStoppedSpeakingFrame:
+		if u.resolvesProposedStops() {
+			return nil
+		}
+		return u.PushFrame(ctx, f, dir)
+
 	default:
+		if md, ok := f.(frames.ServiceMetadata); ok {
+			u.handleServiceMetadata(md)
+		}
 		return u.PushFrame(ctx, f, dir)
 	}
+}
+
+// resolvesProposedStarts reports whether the turn strategies running here take
+// proposed turn starts as theirs to decide.
+func (u *UserAggregator) resolvesProposedStarts() bool {
+	return u.turn.ResolvesProposedTurnStartFrames()
+}
+
+// resolvesProposedStops is the end-of-turn counterpart.
+func (u *UserAggregator) resolvesProposedStops() bool {
+	return u.turn.ResolvesProposedTurnStopFrames()
+}
+
+// handleServiceMetadata acts on a service describing itself as the pipeline
+// starts. Any service may recommend turn strategies, whatever kind of service it
+// is, so that is applied first, and the frame travels on either way.
+func (u *UserAggregator) handleServiceMetadata(md frames.ServiceMetadata) {
+	u.handleServiceUserTurnStrategies(md.Service(), md.RecommendedUserTurnStrategies())
+}
+
+// handleServiceUserTurnStrategies applies the turn strategies a service
+// recommends through its metadata.
+//
+// They are honored only when the application did not configure its own, which
+// always win. Updating is idempotent, so a later broadcast (a switcher making
+// another service the active one, say) can safely re-run it.
+func (u *UserAggregator) handleServiceUserTurnStrategies(service string, recommended any) {
+	if recommended == nil {
+		return
+	}
+	strategies, ok := recommended.(turns.UserTurnStrategies)
+	if !ok {
+		slog.Warn("the recommended user turn strategies are not turn strategies",
+			"processor", u.Name(), "service", service, "recommended", fmt.Sprintf("%T", recommended))
+		return
+	}
+	if u.pinnedStrategies {
+		slog.Debug("ignoring the user turn strategies a service recommends; "+
+			"the ones the application configured are used instead",
+			"processor", u.Name(), "service", service)
+		u.warnOnDiscardedInterruptionSetting(service, strategies)
+		return
+	}
+	slog.Debug("applying the user turn strategies a service recommends",
+		"processor", u.Name(), "service", service)
+	if err := u.turn.UpdateStrategies(strategies); err != nil {
+		slog.Error("could not apply the user turn strategies a service recommends",
+			"processor", u.Name(), "service", service, "err", err)
+	}
+}
+
+// warnOnDiscardedInterruptionSetting reports overruling a service in the one way
+// that silently turns interruptions back on.
+//
+// A service recommends turn strategies by putting them on its metadata frame,
+// and one built with interruptions off carries that setting there. Strategies
+// the application configured discard the recommendation whole, so the pipeline
+// would start interrupting with nothing to say why.
+//
+// Only the external container is checked. Strategies assembled by hand around a
+// bare external start strategy contradict the service the same way and go
+// unwarned, which is not expected to come up often enough to justify inspecting
+// the individual strategies.
+func (u *UserAggregator) warnOnDiscardedInterruptionSetting(
+	service string, recommended turns.UserTurnStrategies,
+) {
+	wanted, isExternal := recommended.ExternalInterruptions()
+	if !isExternal || wanted {
+		return
+	}
+	provided, ok := u.turn.Strategies().ExternalInterruptions()
+	if !ok || !provided {
+		return
+	}
+	slog.Warn("the service asked for interruptions to stay off, but the external turn "+
+		"strategies the application configured leave them on, so the bot will be "+
+		"interrupted when the user starts speaking; drop the configured strategies to "+
+		"use the service's recommendation, or configure them with interruptions off",
+		"processor", u.Name(), "service", service)
 }
 
 // handleContextUpdate applies a frame that mutates the shared LLM context.
@@ -550,6 +687,7 @@ func (u *UserAggregator) handleContextUpdate(
 		runLLM = fr.RunLLM
 
 	case *frames.LLMSetToolsFrame:
+		maybeAddToolChangeMessages(u.toolChangeMessages, u.context, fr.Tools)
 		u.context.SetTools(fr.Tools)
 		// The one frame that travels on, for a speech-to-speech service that
 		// cannot pick the change up on a next run because it never stops running.
@@ -582,18 +720,16 @@ func (u *UserAggregator) appendMessages(msgs []frames.Message) {
 // conversation, and a client is told about the transcript by the RTVI observer,
 // which watches it where the transcription service pushes it rather than
 // waiting for it to travel any further.
-func (u *UserAggregator) handleTranscription(
-	ctx context.Context, fr *frames.TranscriptionFrame,
-) error {
+func (u *UserAggregator) handleTranscription(fr *frames.TranscriptionFrame) error {
 	// Whitespace is not something the user said. A service that reports a final
 	// transcript of nothing but spaces would otherwise open a turn, commit it as
 	// a message and have the model answer it.
 	if strings.TrimSpace(fr.Text) == "" {
 		return nil
 	}
-	// A turn opened by a strategy is stamped when it opens. Without turn taking
-	// nothing opens one, so the first transcript of the turn stamps it, and every
-	// report of that turn has a moment to carry.
+	// A turn opened by a strategy is stamped when it opens. A transcript that
+	// arrives with no turn open stamps it here instead, so every report of the
+	// turn has a moment to carry.
 	u.mu.Lock()
 	if u.turnStartedAt == "" {
 		u.turnStartedAt = frames.NowTimestamp()
@@ -603,25 +739,17 @@ func (u *UserAggregator) handleTranscription(
 
 	u.aggregate(text.Part{Text: fr.Text, IncludesInterPartSpaces: fr.IncludesInterFrameSpaces})
 
-	if u.turnTaking {
-		// A transcript only adds to the aggregation. What is aggregated is
-		// committed when the turn controller says the turn is over, or when a stop
-		// strategy says there is enough to answer: a transcript on its own is not
-		// an end of turn, and one arriving after a turn closed is the beginning of
-		// the next one rather than a second answer to the one that just ended.
-		return nil
-	}
-	// Without turn taking, STT finalization marks the end of the user's turn.
-	if fr.Finalized {
-		_, err := u.maybeRun(ctx)
-		return err
-	}
+	// A transcript only adds to the aggregation. What is aggregated is committed
+	// when the turn controller says the turn is over, or when a stop strategy
+	// says there is enough to answer: a transcript on its own is not an end of
+	// turn, and one arriving after a turn closed is the beginning of the next one
+	// rather than a second answer to the one that just ended.
 	return nil
 }
 
 // aggregate folds a transcript into what the turn has said so far.
 //
-// With turn taking it runs under the turn controller's lock. Ending a turn
+// It runs under the turn controller's lock. Ending a turn
 // commits the aggregation twice: once when a stop strategy says there is enough
 // to answer, and again when it finalizes, so that anything the user added
 // between the two still reaches the model. Both run from the strategy's timer,
@@ -637,11 +765,7 @@ func (u *UserAggregator) aggregate(part text.Part) {
 		defer u.mu.Unlock()
 		u.aggregation = append(u.aggregation, part)
 	}
-	if u.turn != nil {
-		u.turn.Locked(fold)
-		return
-	}
-	fold()
+	u.turn.Locked(fold)
 }
 
 // maybeRun commits the aggregated user message and triggers the LLM on it.
@@ -678,6 +802,11 @@ func (u *UserAggregator) maybeRun(ctx context.Context) (string, error) {
 type AssistantAggregator struct {
 	*processor.Base
 	context *frames.LLMContext
+	// toolChangeMessages announces a change of toolset to the model.
+	toolChangeMessages bool
+	// pairedUser is the user half this one was built with, so a proposal this
+	// half sees can be stopped when the user half is the one resolving it.
+	pairedUser *UserAggregator
 	// summarizer compresses the conversation once it has grown long. It is
 	// always present, so an on-demand LLMSummarizeContextFrame is always
 	// honored; the automatic thresholds are what WithSummarization enables.
@@ -727,10 +856,13 @@ type AssistantAggregator struct {
 	taskWG     sync.WaitGroup
 }
 
-func newAssistant(ctx *frames.LLMContext, sc *frames.AutoSummarizationConfig) *AssistantAggregator {
+func newAssistant(
+	ctx *frames.LLMContext, sc *frames.AutoSummarizationConfig, toolChangeMessages bool,
+) *AssistantAggregator {
 	a := &AssistantAggregator{
-		context:    ctx,
-		inProgress: make(map[string]*frames.FunctionCallInProgressFrame),
+		context:            ctx,
+		toolChangeMessages: toolChangeMessages,
+		inProgress:         make(map[string]*frames.FunctionCallInProgressFrame),
 	}
 	// The summarizer exists whether or not the thresholds are enabled, so a
 	// pushed LLMSummarizeContextFrame is always acted on; sc is what decides
@@ -827,14 +959,8 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 		}
 	case *frames.TextFrame, *frames.LLMTextFrame, *frames.TTSTextFrame, *frames.AggregatedTextFrame:
 		a.routeText(f)
-	case *frames.LLMThoughtStartFrame:
-		a.startThought(fr)
-		return nil
-	case *frames.LLMThoughtTextFrame:
-		a.aggregateThought(fr)
-		return nil
-	case *frames.LLMThoughtEndFrame:
-		a.endThought(ctx, fr)
+	case *frames.LLMThoughtStartFrame, *frames.LLMThoughtTextFrame, *frames.LLMThoughtEndFrame:
+		a.routeThought(ctx, f)
 		return nil
 	case *frames.LLMAssistantPushAggregationFrame, *frames.LLMFullResponseEndFrame,
 		*frames.EndFrame, *frames.CancelFrame, *frames.InterruptionFrame:
@@ -861,6 +987,10 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 	case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
 		*frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
 		return a.handleSpeakingState(ctx, f, dir)
+	case *frames.ProposedUserStartedSpeakingFrame, *frames.ProposedUserStoppedSpeakingFrame:
+		if a.userHalfResolves(f) {
+			return nil
+		}
 	}
 	if err := a.PushFrame(ctx, f, dir); err != nil {
 		return err
@@ -869,6 +999,41 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 	// frame once it has gone on, so compressing never delays a turn.
 	a.summarizer.ProcessFrame(ctx, f)
 	return nil
+}
+
+// routeThought folds one piece of a reasoning model's thinking into the thought
+// being collected. The frames are consumed: a thought is reported as a whole
+// when it ends, and what the model reasoned is not what it said.
+func (a *AssistantAggregator) routeThought(ctx context.Context, f frames.Frame) {
+	switch fr := f.(type) {
+	case *frames.LLMThoughtStartFrame:
+		a.startThought(fr)
+	case *frames.LLMThoughtTextFrame:
+		a.aggregateThought(fr)
+	case *frames.LLMThoughtEndFrame:
+		a.endThought(ctx, fr)
+	}
+}
+
+// userHalfResolves reports whether the paired user half is the one resolving
+// this proposal.
+//
+// A broadcast sends a copy each way, so a proposal from a service sitting
+// between the two halves reaches the user half as the upstream copy while this
+// copy travels on. A proposal is resolved once, so it stops here when the user
+// half resolves it. No ordinary pipeline has a resolver downstream of this half,
+// so this guards the rule rather than fixing an escape that has been seen.
+func (a *AssistantAggregator) userHalfResolves(f frames.Frame) bool {
+	if a.pairedUser == nil {
+		return false
+	}
+	switch f.(type) {
+	case *frames.ProposedUserStartedSpeakingFrame:
+		return a.pairedUser.resolvesProposedStarts()
+	case *frames.ProposedUserStoppedSpeakingFrame:
+		return a.pairedUser.resolvesProposedStops()
+	}
+	return false
 }
 
 // closeTurn ends the assistant turn, for each of the things that ends one.
@@ -1013,6 +1178,7 @@ func (a *AssistantAggregator) handleContextUpdate(ctx context.Context, f frames.
 		// running service learns of the change, which is what brings it this far;
 		// the two halves share the conversation, so applying it again settles
 		// nothing new and it stops here.
+		maybeAddToolChangeMessages(a.toolChangeMessages, a.context, fr.Tools)
 		a.context.SetTools(fr.Tools)
 		return true, nil
 	case *frames.LLMSetToolChoiceFrame:
@@ -1342,6 +1508,80 @@ func (a *AssistantAggregator) maybePushContextAfterFunctionResult(ctx context.Co
 		return nil
 	}
 	return a.pushContextFrame(ctx)
+}
+
+// Developer-role messages written to the conversation when the toolset changes
+// under WithToolChangeMessages. The names are sorted, comma-separated and
+// wrapped in backticks.
+const (
+	toolActivationMessage = "The following function(s) have just been added and may now be called: " +
+		"%s. Any previously available functions remain available."
+	toolDeactivationMessage = "The following function(s) have just been removed and should not be called: " +
+		"%s. Any previously available functions remain available. " +
+		"The removed function(s) may become available again later, in which case " +
+		"you will be informed."
+)
+
+// maybeAddToolChangeMessages appends a developer message describing what the new
+// toolset adds and removes against the one the conversation currently
+// advertises.
+//
+// It does nothing unless the aggregator was built with WithToolChangeMessages,
+// and nothing when the diff is empty. Only the standard tools are diffed; tools
+// written in one provider's own format are ignored.
+//
+// Both halves call it on every LLMSetToolsFrame they handle. Whichever half
+// handles the frame first computes a real diff against the shared conversation
+// and writes the announcement; by the time the other one sees it, if it does at
+// all, the conversation already holds the new tools, so its diff is empty and no
+// second message is written. That holds whichever way the frame travels.
+func maybeAddToolChangeMessages(enabled bool, ctx *frames.LLMContext, newTools []frames.Tool) {
+	if !enabled {
+		return
+	}
+	names := func(tools []frames.Tool) map[string]struct{} {
+		out := make(map[string]struct{}, len(tools))
+		for _, t := range tools {
+			out[t.Name] = struct{}{}
+		}
+		return out
+	}
+	old, fresh := names(ctx.Tools()), names(newTools)
+	added, removed := missingFrom(fresh, old), missingFrom(old, fresh)
+	if len(added) == 0 && len(removed) == 0 {
+		return
+	}
+
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, fmt.Sprintf(toolActivationMessage, quoteNames(added)))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, fmt.Sprintf(toolDeactivationMessage, quoteNames(removed)))
+	}
+	ctx.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: strings.Join(parts, " ")})
+}
+
+// missingFrom returns the names in a that b does not have.
+func missingFrom(a, b map[string]struct{}) []string {
+	var out []string
+	for n := range a {
+		if _, ok := b[n]; !ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// quoteNames renders tool names the way the announcement lists them: sorted,
+// comma-separated and wrapped in backticks.
+func quoteNames(names []string) string {
+	sort.Strings(names)
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = "`" + n + "`"
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // isFunctionCallResult reports whether f is a tool result, for the queue check
