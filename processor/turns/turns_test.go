@@ -139,6 +139,7 @@ func (fakeTurn) AnalyzeEndOfTurn() (turn.EndOfTurnState, float64, error) {
 	return turn.Complete, 1, nil
 }
 func (fakeTurn) SpeechTriggered() bool      { return false }
+func (fakeTurn) Params() turn.Params        { return turn.DefaultParams() }
 func (fakeTurn) UpdateVADStartSecs(float64) {}
 func (fakeTurn) Clear()                     {}
 func (fakeTurn) Close() error               { return nil }

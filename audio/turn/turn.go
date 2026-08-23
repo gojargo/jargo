@@ -72,6 +72,10 @@ type Analyzer interface {
 	// UpdateVADStartSecs informs the analyzer of the VAD start delay so it can
 	// align its pre-speech buffering.
 	UpdateVADStartSecs(secs float64)
+	// Params are the analysis parameters in force. They are published to the
+	// pipeline when it starts, so a processor downstream can size its own
+	// behavior to them and clients and observers can mirror them.
+	Params() Params
 	// Clear resets the analyzer to its initial state.
 	Clear()
 	// Close releases any resources (for example a model session).

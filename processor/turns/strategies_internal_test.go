@@ -368,7 +368,7 @@ func TestWakePhraseStartAccumCap(t *testing.T) {
 func TestWakePhraseStartSingleActivation(t *testing.T) {
 	s := NewWakePhraseStart(WakePhraseStartConfig{
 		Phrases:          []string{"hey jargo"},
-		Timeout:          time.Minute,
+		Timeout:          500 * time.Millisecond,
 		SingleActivation: true,
 	})
 	spy := attachStart(s)
@@ -379,17 +379,102 @@ func TestWakePhraseStartSingleActivation(t *testing.T) {
 		t.Fatal("wake phrase should open the first turn")
 	}
 
-	// The controller calls TurnStarted once the turn opens; single-activation
-	// puts the session straight back to sleep.
+	// The controller calls TurnStarted once the turn opens. Single activation
+	// stays awake through it: the keepalive window opened when the phrase was
+	// detected is what puts the strategy back to sleep, and cutting it short
+	// here would block the very turn the phrase just opened.
 	spy.mu.Lock()
 	s.TurnStarted()
 	spy.mu.Unlock()
 
-	if got := spy.send(s, transcript("follow up question")); got != Stop {
-		t.Errorf("after single activation: Process = %v, want Stop (asleep again)", got)
+	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0.2, time.Now())); got != Continue {
+		t.Errorf("after the turn opened: Process(vad) = %v, want Continue (still awake)", got)
+	}
+	if got := spy.send(s, transcript("what is the weather")); got != Continue {
+		t.Errorf("after the turn opened: Process(transcript) = %v, want Continue (still awake)", got)
+	}
+}
+
+// TestWakePhraseStartSingleActivationKeepaliveSleeps checks the other half of
+// single activation: the keepalive window is not extended by activity, so the
+// strategy sleeps again and the phrase is required for the next turn.
+func TestWakePhraseStartSingleActivationKeepaliveSleeps(t *testing.T) {
+	s := NewWakePhraseStart(WakePhraseStartConfig{
+		Phrases:          []string{"hey jargo"},
+		Timeout:          20 * time.Millisecond,
+		SingleActivation: true,
+	})
+	spy := attachStart(s)
+	defer s.Cleanup()
+
+	spy.send(s, transcript("hey jargo"))
+	eventually(t, func() bool {
+		spy.mu.Lock()
+		defer spy.mu.Unlock()
+		return !s.awake
+	}, time.Second, "the keepalive window never closed")
+
+	if got := spy.send(s, transcript("what is the weather")); got != Stop {
+		t.Errorf("asleep again: Process = %v, want Stop", got)
 	}
 	if spy.starts() != 1 {
-		t.Errorf("single-activation must require the phrase again: starts = %d", spy.starts())
+		t.Errorf("the phrase must be required again: starts = %d", spy.starts())
+	}
+
+	if got := spy.send(s, transcript("hey jargo")); got != Stop {
+		t.Errorf("waking again: Process = %v, want Stop", got)
+	}
+	if spy.starts() != 2 {
+		t.Errorf("the phrase should wake it again: starts = %d", spy.starts())
+	}
+}
+
+// TestWakePhraseStartStripsPunctuation checks transcription output like
+// "Hey, Jargo!" still matches the phrase "hey jargo".
+func TestWakePhraseStartStripsPunctuation(t *testing.T) {
+	s := NewWakePhraseStart(WakePhraseStartConfig{Phrases: []string{"hey jargo"}, Timeout: time.Minute})
+	spy := attachStart(s)
+	defer s.Cleanup()
+
+	if got := spy.send(s, transcript("Hey, Jargo!")); got != Stop {
+		t.Errorf("Process = %v, want Stop", got)
+	}
+	if spy.starts() != 1 {
+		t.Errorf("a punctuated wake phrase should wake the strategy: starts = %d", spy.starts())
+	}
+}
+
+// TestWakePhraseStartEvents checks the two callbacks: one naming the phrase that
+// matched, one when the strategy goes back to sleep.
+func TestWakePhraseStartEvents(t *testing.T) {
+	var detected string
+	timedOut := make(chan struct{}, 1)
+	s := NewWakePhraseStart(WakePhraseStartConfig{
+		Phrases:              []string{"hey jargo", "ok jargo"},
+		Timeout:              20 * time.Millisecond,
+		OnWakePhraseDetected: func(phrase string) { detected = phrase },
+		OnWakePhraseTimeout: func() {
+			select {
+			case timedOut <- struct{}{}:
+			default:
+			}
+		},
+	})
+	spy := attachStart(s)
+	defer s.Cleanup()
+
+	spy.send(s, transcript("ok jargo"))
+	spy.mu.Lock()
+	got := detected
+	spy.mu.Unlock()
+	if got != "ok jargo" {
+		t.Errorf("detected phrase = %q, want %q", got, "ok jargo")
+	}
+
+	select {
+	case <-timedOut:
+	case <-time.After(time.Second):
+		t.Error("going back to sleep was never reported")
 	}
 }
 
@@ -436,19 +521,23 @@ func TestCompileWakePatterns(t *testing.T) {
 		{"flexible whitespace", []string{"hey jargo"}, "hey    jargo", true, 1},
 		{"word boundary", []string{"hey jargo"}, "theyjargo", false, 1},
 		{"regex metacharacters are literal", []string{"a.b"}, "axb", false, 1},
-		{"regex metacharacters match literally", []string{"a.b"}, "a.b", true, 1},
+		// Punctuation is stripped from the transcript before matching, so a
+		// phrase written with punctuation in it cannot match: the pattern still
+		// holds the punctuation the text no longer has.
+		{"a punctuated phrase cannot match", []string{"a.b"}, "a.b", false, 1},
+		{"punctuation in the transcript is stripped", []string{"hey jargo"}, "Hey, Jargo!", true, 1},
 		{"blank phrases are skipped", []string{"", "   "}, "anything", false, 0},
 		{"any phrase matches", []string{"hey jargo", "ok jargo"}, "ok jargo", true, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pats := compileWakePatterns(tt.phrases)
-			if len(pats) != tt.wantPats {
+			kept, pats := compileWakePatterns(tt.phrases)
+			if len(pats) != tt.wantPats || len(kept) != tt.wantPats {
 				t.Fatalf("compiled %d patterns, want %d", len(pats), tt.wantPats)
 			}
-			s := &WakePhraseStart{patterns: pats}
-			if got := s.matches(tt.text); got != tt.want {
-				t.Errorf("matches(%q) = %v, want %v", tt.text, got, tt.want)
+			s := &WakePhraseStart{phrases: kept, patterns: pats}
+			if got := s.checkWakePhrase(tt.text); got != tt.want {
+				t.Errorf("checkWakePhrase(%q) = %v, want %v", tt.text, got, tt.want)
 			}
 		})
 	}
@@ -459,15 +548,16 @@ func TestCompileWakePatterns(t *testing.T) {
 func TestCompileWakePatternsDoesNotMutateInput(t *testing.T) {
 	phrases := []string{"a.b c"}
 	compileWakePatterns(phrases)
+	_ = phrases
 	if phrases[0] != "a.b c" {
 		t.Errorf("caller's phrase was mutated to %q", phrases[0])
 	}
 }
 
-// TestExternalStart covers the relay case: another processor already decided the
-// turn, so no interruption or speaking frames are re-emitted.
+// TestExternalStart covers the adopt case: another processor already decided the
+// turn and announced it, so no interruption or speaking frames are re-emitted.
 func TestExternalStart(t *testing.T) {
-	s := NewExternalStart()
+	s := NewExternalStart(ExternalStartConfig{})
 	spy := attachStart(s)
 
 	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0, time.Now())); got != Continue {
@@ -488,21 +578,70 @@ func TestExternalStart(t *testing.T) {
 	}
 }
 
-// TestExternalStopDebounce checks the stop is held back for a late transcript
-// and then fires once one arrives.
-func TestExternalStopDebounce(t *testing.T) {
+// TestExternalStartResolvesAProposal covers the decide case: the service asked
+// for a decision rather than announcing one, so this strategy makes it and
+// emits the turn frame and the interruption itself.
+func TestExternalStartResolvesAProposal(t *testing.T) {
+	s := NewExternalStart(ExternalStartConfig{})
+	spy := attachStart(s)
+
+	if got := spy.send(s, frames.NewProposedUserStartedSpeakingFrame()); got != Stop {
+		t.Errorf("Process(proposal) = %v, want Stop", got)
+	}
+	if spy.starts() != 1 {
+		t.Fatalf("a proposal did not start the turn: starts = %d", spy.starts())
+	}
+	if p := spy.started[0]; !p.EnableInterruptions || !p.EnableUserSpeakingFrames {
+		t.Errorf("params = %+v, want both enabled (this strategy decided)", p)
+	}
+	if !s.ResolvesProposedTurnStartFrames() {
+		t.Error("a strategy that acts on a proposal must report that it resolves them")
+	}
+}
+
+// TestExternalStartConfiguredFlagsApplyToProposalsOnly checks the construction
+// setting shapes the decide path, while the adopt path always suppresses.
+func TestExternalStartConfiguredFlagsApplyToProposalsOnly(t *testing.T) {
+	off := false
+	s := NewExternalStart(ExternalStartConfig{EnableInterruptions: &off})
+	spy := attachStart(s)
+
+	spy.send(s, frames.NewProposedUserStartedSpeakingFrame())
+	if p := spy.started[0]; p.EnableInterruptions || !p.EnableUserSpeakingFrames {
+		t.Errorf("resolving gave %+v, want interruptions off and speaking frames on", p)
+	}
+
+	spy.send(s, frames.NewUserStartedSpeakingFrame())
+	if p := spy.started[1]; p.EnableInterruptions || p.EnableUserSpeakingFrames {
+		t.Errorf("adopting gave %+v, want both suppressed", p)
+	}
+}
+
+// TestExternalStop covers the adopt case over a whole turn: a stop with nothing
+// transcribed yet holds the turn open, and the stop after the transcript ends it
+// without re-emitting the frames the emitter already sent.
+func TestExternalStop(t *testing.T) {
 	s := NewExternalStop(ExternalStopConfig{Timeout: 20 * time.Millisecond})
 	spy := attachStop(s)
 	defer s.Cleanup()
 
+	spy.sendStop(s, frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	spy.sendStop(s, frames.NewUserStartedSpeakingFrame())
+	spy.sendStop(s, frames.NewUserStoppedSpeakingFrame())
+	if spy.stops() != 0 {
+		t.Fatal("a stop with nothing transcribed must not end the turn")
+	}
+
 	spy.sendStop(s, frames.NewUserStartedSpeakingFrame())
 	spy.sendStop(s, transcript("book me a table"))
-	spy.sendStop(s, frames.NewUserStoppedSpeakingFrame())
-
 	if spy.stops() != 0 {
-		t.Fatal("stop must be debounced, not immediate")
+		t.Fatal("a transcript on its own is not the end of a turn")
 	}
-	eventually(t, func() bool { return spy.stops() == 1 }, 2*time.Second, "debounced stop should fire")
+
+	spy.sendStop(s, frames.NewUserStoppedSpeakingFrame())
+	if spy.stops() != 1 {
+		t.Fatalf("the stop should end the turn at once: stops = %d", spy.stops())
+	}
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
@@ -510,7 +649,67 @@ func TestExternalStopDebounce(t *testing.T) {
 		t.Errorf("inference triggers = %d, want 1", spy.inferences)
 	}
 	if p := spy.stopped[0]; p.EnableUserSpeakingFrames {
-		t.Error("ExternalStop must not re-emit user speaking frames")
+		t.Error("adopting a turn stop must not re-emit user speaking frames")
+	}
+}
+
+// TestExternalStopResolvesAProposal covers the decide case: the service proposed
+// the end of the turn rather than announcing it, so this strategy decides and
+// emits the turn frame itself.
+func TestExternalStopResolvesAProposal(t *testing.T) {
+	s := NewExternalStop(ExternalStopConfig{Timeout: 20 * time.Millisecond})
+	spy := attachStop(s)
+	defer s.Cleanup()
+
+	spy.sendStop(s, frames.NewProposedUserStartedSpeakingFrame())
+	spy.sendStop(s, transcript("book me a table"))
+	spy.sendStop(s, frames.NewProposedUserStoppedSpeakingFrame())
+
+	if spy.stops() != 1 {
+		t.Fatalf("a proposed stop should end the turn: stops = %d", spy.stops())
+	}
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if p := spy.stopped[0]; !p.EnableUserSpeakingFrames {
+		t.Errorf("params = %+v, want speaking frames enabled (this strategy decided)", p)
+	}
+	if !s.ResolvesProposedTurnStopFrames() {
+		t.Error("a strategy that acts on a proposal must report that it resolves them")
+	}
+}
+
+// TestExternalStopLateTranscriptStillEndsTheTurn checks the retry: the stop
+// signal lands before any transcript does, so finalization has to come from the
+// strategy's own timer once the transcript arrives.
+func TestExternalStopLateTranscriptStillEndsTheTurn(t *testing.T) {
+	s := NewExternalStop(ExternalStopConfig{Timeout: 20 * time.Millisecond})
+	spy := attachStop(s)
+	defer s.Cleanup()
+
+	// The controller opens the turn on every stop strategy before any signal
+	// arrives; the retry only runs while a turn is open.
+	spy.mu.Lock()
+	s.TurnStarted()
+	spy.mu.Unlock()
+
+	spy.sendStop(s, frames.NewUserStartedSpeakingFrame())
+	spy.sendStop(s, frames.NewUserStoppedSpeakingFrame())
+	if spy.stops() != 0 {
+		t.Fatal("ended the turn with nothing transcribed")
+	}
+
+	// Well past the retry period, so the transcript cannot be caught by the
+	// timer the stop signal left running.
+	time.Sleep(120 * time.Millisecond)
+	spy.sendStop(s, transcript("book me a table"))
+
+	eventually(t, func() bool { return spy.stops() >= 1 }, 2*time.Second,
+		"a transcript arriving after the stop never ended the turn")
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if p := spy.stopped[0]; p.EnableUserSpeakingFrames {
+		t.Errorf("params = %+v, want the emission setting the adopt path carried", p)
 	}
 }
 
@@ -575,20 +774,61 @@ func TestExternalStopWaitsForTranscript(t *testing.T) {
 	})
 }
 
-// TestExternalStopUserResumed checks that speech resuming inside the debounce
-// window cancels the pending stop.
+// TestExternalStopUserResumed checks the retry stays quiet while the user is
+// speaking again: a stop that could not go through must not land later, over
+// speech that has since resumed.
 func TestExternalStopUserResumed(t *testing.T) {
-	s := NewExternalStop(ExternalStopConfig{Timeout: 30 * time.Millisecond})
+	s := NewExternalStop(ExternalStopConfig{Timeout: 20 * time.Millisecond})
 	spy := attachStop(s)
 	defer s.Cleanup()
 
+	spy.mu.Lock()
+	s.TurnStarted()
+	spy.mu.Unlock()
+
+	spy.sendStop(s, frames.NewUserStartedSpeakingFrame())
+	spy.sendStop(s, frames.NewUserStoppedSpeakingFrame()) // nothing transcribed yet
+	spy.sendStop(s, frames.NewUserStartedSpeakingFrame()) // and the user carries on
 	spy.sendStop(s, transcript("hold on"))
-	spy.sendStop(s, frames.NewUserStoppedSpeakingFrame())
-	spy.sendStop(s, frames.NewUserStartedSpeakingFrame()) // resumed before the timer
 
 	time.Sleep(150 * time.Millisecond)
 	if spy.stops() != 0 {
-		t.Error("resumed speech must cancel the pending stop")
+		t.Error("the turn must not end while the user is speaking again")
+	}
+}
+
+// TestExternalStopTimerQuietBetweenTurns checks the retry does not fire when no
+// turn is open. With the transcript wait off it would otherwise finalize on
+// every tick, forever.
+func TestExternalStopTimerQuietBetweenTurns(t *testing.T) {
+	s := NewExternalStop(ExternalStopConfig{
+		Timeout:           20 * time.Millisecond,
+		WaitForTranscript: new(false),
+	})
+	spy := attachStop(s)
+	defer s.Cleanup()
+
+	// No turn has been opened: several ticks should pass in silence.
+	time.Sleep(150 * time.Millisecond)
+	if spy.stops() != 0 {
+		t.Fatalf("the retry fired with no turn open: stops = %d", spy.stops())
+	}
+
+	spy.mu.Lock()
+	s.TurnStarted()
+	spy.mu.Unlock()
+	spy.sendStop(s, frames.NewProposedUserStoppedSpeakingFrame())
+	if spy.stops() != 1 {
+		t.Fatalf("once a turn is open the stop should end it: stops = %d", spy.stops())
+	}
+
+	// And it falls silent again after the turn ends.
+	spy.mu.Lock()
+	s.TurnStopped()
+	spy.mu.Unlock()
+	time.Sleep(150 * time.Millisecond)
+	if spy.stops() != 1 {
+		t.Errorf("the retry fired after the turn ended: stops = %d", spy.stops())
 	}
 }
 
@@ -753,7 +993,7 @@ func TestDefaultStrategyChains(t *testing.T) {
 	})
 
 	t.Run("fillDefaults only fills empty chains", func(t *testing.T) {
-		custom := NewExternalStart()
+		custom := NewExternalStart(ExternalStartConfig{})
 		s := UserTurnStrategies{Start: []StartStrategy{custom}}
 		s.fillDefaults()
 		if len(s.Start) != 1 || s.Start[0] != custom {
@@ -766,7 +1006,7 @@ func TestDefaultStrategyChains(t *testing.T) {
 }
 
 func TestExternalStrategies(t *testing.T) {
-	s := ExternalStrategies()
+	s := ExternalStrategies(ExternalStrategiesConfig{})
 	if len(s.Start) != 1 {
 		t.Fatalf("start len = %d, want 1", len(s.Start))
 	}
@@ -841,21 +1081,25 @@ func TestDeferredStopDelegates(t *testing.T) {
 
 	spy.sendStop(d, transcript("text"))
 	spy.mu.Lock()
-	if !inner.haveText {
+	if inner.text != "text" {
 		spy.mu.Unlock()
 		t.Fatal("Process should reach the inner strategy")
 	}
 	d.TurnStarted()
-	if inner.haveText {
+	if inner.text != "" {
 		spy.mu.Unlock()
 		t.Error("TurnStarted should reach the inner strategy")
 	}
 
-	inner.haveText = true
+	inner.text = "text"
 	d.TurnStopped()
-	if inner.haveText {
+	if inner.text != "" {
 		spy.mu.Unlock()
 		t.Error("TurnStopped should reach the inner strategy")
+	}
+	if d.ResolvesProposedTurnStopFrames() != inner.ResolvesProposedTurnStopFrames() {
+		spy.mu.Unlock()
+		t.Error("deferring changes when the turn ends, not who decides it")
 	}
 	spy.mu.Unlock()
 	d.Cleanup()
@@ -1111,6 +1355,7 @@ func (a slowAnalyzer) AnalyzeEndOfTurn() (turn.EndOfTurnState, float64, error) {
 	return turn.Complete, 0.9, nil
 }
 func (slowAnalyzer) SpeechTriggered() bool      { return false }
+func (slowAnalyzer) Params() turn.Params        { return turn.DefaultParams() }
 func (slowAnalyzer) Clear()                     {}
 func (slowAnalyzer) Close() error               { return nil }
 func (slowAnalyzer) UpdateVADStartSecs(float64) {}

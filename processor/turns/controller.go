@@ -2,6 +2,7 @@ package turns
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 // defaultStopTimeout is the watchdog that force-stops a turn stuck open with no
 // strategy firing.
 const defaultStopTimeout = 5 * time.Second
+
+// errNotSetUp is returned when strategies are applied to a controller that has
+// not been given the pipeline configuration yet.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNotSetUp = errors.New("turns: the controller was not set up")
 
 // ControllerHooks are the callbacks the controller invokes upward (to the
 // UserTurnProcessor). They all run with the controller's mutex held.
@@ -39,8 +46,10 @@ type UserTurnController struct {
 	mu  sync.Mutex
 	ctx context.Context
 	// setup is the pipeline configuration the strategies were set up with, so
-	// a strategy added later is given the same one.
-	setup processor.Setup
+	// a strategy added later is given the same one. setupDone records that it
+	// was actually handed over, since the zero Setup is a legitimate value.
+	setup     processor.Setup
+	setupDone bool
 
 	userSpeaking   bool
 	userTurn       bool
@@ -66,20 +75,9 @@ func (c *UserTurnController) Setup(ctx context.Context, st processor.Setup) erro
 	c.mu.Lock()
 	c.ctx = ctx
 	c.setup = st
+	c.setupDone = true
 	c.mu.Unlock()
-	for _, s := range c.strategies.Start {
-		s.attach(s, c.startEnv())
-		if err := s.Setup(st); err != nil {
-			return err
-		}
-	}
-	for _, s := range c.strategies.Stop {
-		s.attach(s, c.stopEnv())
-		if err := s.Setup(st); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.setupStrategies()
 }
 
 // Cleanup stops the watchdog and cleans up the strategies.
@@ -90,12 +88,97 @@ func (c *UserTurnController) Cleanup() {
 		c.watchdogCancel = nil
 	}
 	c.mu.Unlock()
+	c.cleanupStrategies()
+}
+
+// Strategies are the chains the controller is currently running.
+func (c *UserTurnController) Strategies() UserTurnStrategies {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.strategies
+}
+
+// UpdateStrategies replaces the current strategies with the given ones. The
+// chains that go are cleaned up and the ones that arrive are set up with the
+// same pipeline configuration the controller was given, so a caller swapping
+// them does not have to hand it over again.
+//
+// Empty chains fall back to the defaults, as they do at construction.
+func (c *UserTurnController) UpdateStrategies(strategies UserTurnStrategies) error {
+	c.cleanupStrategies()
+	strategies.fillDefaults()
+	c.mu.Lock()
+	c.strategies = strategies
+	c.mu.Unlock()
+	return c.setupStrategies()
+}
+
+// setupStrategies binds every strategy to the shared environment and hands it
+// the pipeline configuration.
+func (c *UserTurnController) setupStrategies() error {
+	c.mu.Lock()
+	strategies, st, done := c.strategies, c.setup, c.setupDone
+	c.mu.Unlock()
+	if !done {
+		return errNotSetUp
+	}
+	for _, s := range strategies.Start {
+		s.attach(s, c.startEnv())
+		if err := s.Setup(st); err != nil {
+			return err
+		}
+	}
+	for _, s := range strategies.Stop {
+		s.attach(s, c.stopEnv())
+		if err := s.Setup(st); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cleanupStrategies releases what every strategy holds.
+func (c *UserTurnController) cleanupStrategies() {
+	c.mu.Lock()
+	strategies := c.strategies
+	c.mu.Unlock()
+	for _, s := range strategies.Start {
+		s.Cleanup()
+	}
+	for _, s := range strategies.Stop {
+		s.Cleanup()
+	}
+}
+
+// ResolvesProposedTurnStartFrames reports whether any active start strategy
+// resolves proposed turn starts.
+//
+// A proposal is resolved once, so a caller holding this controller stops
+// forwarding a ProposedUserStartedSpeakingFrame when this is true: passing it
+// along would let a resolver further down the pipeline decide the same turn a
+// second time.
+func (c *UserTurnController) ResolvesProposedTurnStartFrames() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, s := range c.strategies.Start {
-		s.Cleanup()
+		if s.ResolvesProposedTurnStartFrames() {
+			return true
+		}
 	}
+	return false
+}
+
+// ResolvesProposedTurnStopFrames is the end-of-turn counterpart to
+// ResolvesProposedTurnStartFrames.
+func (c *UserTurnController) ResolvesProposedTurnStopFrames() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, s := range c.strategies.Stop {
-		s.Cleanup()
+		if s.ResolvesProposedTurnStopFrames() {
+			return true
+		}
 	}
+	return false
 }
 
 // Locked runs fn with the controller's lock held, so a caller can keep its own
@@ -122,10 +205,12 @@ func (c *UserTurnController) Process(f frames.Frame) {
 	defer c.mu.Unlock()
 
 	switch f.(type) {
-	case *frames.UserStartedSpeakingFrame, *frames.VADUserStartedSpeakingFrame:
+	case *frames.UserStartedSpeakingFrame, *frames.ProposedUserStartedSpeakingFrame,
+		*frames.VADUserStartedSpeakingFrame:
 		c.userSpeaking = true
 		c.rearmWatchdog()
-	case *frames.UserStoppedSpeakingFrame, *frames.VADUserStoppedSpeakingFrame:
+	case *frames.UserStoppedSpeakingFrame, *frames.ProposedUserStoppedSpeakingFrame,
+		*frames.VADUserStoppedSpeakingFrame:
 		c.userSpeaking = false
 		c.rearmWatchdog()
 	case *frames.TranscriptionFrame, *frames.InterimTranscriptionFrame:

@@ -47,6 +47,9 @@ type smartTurnBase struct {
 	vadStartSecs    float64
 }
 
+// Params are the analysis parameters this analyzer runs with.
+func (b *smartTurnBase) Params() Params { return b.params }
+
 func newSmartTurnBase(self predictor, params Params) *smartTurnBase {
 	return &smartTurnBase{
 		self:   self,

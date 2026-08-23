@@ -29,10 +29,29 @@ type strategyEnv struct {
 	broadcast          func(build func() frames.Frame)
 }
 
+// locked runs fn with the shared mutex held. A strategy the controller never
+// attached has no mutex to take, and nothing to signal through either, so fn
+// simply runs.
+func (e strategyEnv) locked(fn func()) {
+	if e.mu == nil {
+		fn()
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	fn()
+}
+
 // after schedules fn to run after d with the shared mutex held, returning a
 // cancel func. cancel must be called with the mutex held (from Process or
 // another timer callback); calling it after the timer has fired is a no-op.
+//
+// A strategy the controller never attached has nothing to signal, so nothing is
+// scheduled and the cancel is a no-op.
 func (e strategyEnv) after(d time.Duration, fn func()) (cancel func()) {
+	if e.mu == nil {
+		return func() {}
+	}
 	stopped := false
 	mu := e.mu
 	timer := time.AfterFunc(d, func() {
@@ -47,6 +66,15 @@ func (e strategyEnv) after(d time.Duration, fn func()) (cancel func()) {
 		stopped = true
 		timer.Stop()
 	}
+}
+
+// boolOr returns *p, or configured when p is nil. A nil override is what "leave
+// the strategy's own setting alone" is written as.
+func boolOr(p *bool, configured bool) bool {
+	if p == nil {
+		return configured
+	}
+	return *p
 }
 
 // StartStrategy decides when the user's turn begins. Concrete strategies embed
@@ -64,6 +92,9 @@ type StartStrategy interface {
 	Setup(s processor.Setup) error
 	// Cleanup releases resources (timers).
 	Cleanup()
+	// ResolvesProposedTurnStartFrames reports whether this strategy resolves
+	// proposals into turn starts.
+	ResolvesProposedTurnStartFrames() bool
 	attach(self StartStrategy, env strategyEnv)
 }
 
@@ -96,14 +127,44 @@ func (b *StartStrategyBase) Setup(processor.Setup) error { return nil }
 // Cleanup is the default no-op.
 func (b *StartStrategyBase) Cleanup() {}
 
-// TriggerStarted signals that the user's turn has begun.
+// ResolvesProposedTurnStartFrames reports whether this strategy resolves
+// proposals into turn starts.
+//
+// A ProposedUserStartedSpeakingFrame is a request for a decision, so a strategy
+// that acts on one consumes it: the frame stops traveling, and no resolver
+// further along decides the same turn a second time. Override to true in a
+// strategy that handles that frame.
+func (b *StartStrategyBase) ResolvesProposedTurnStartFrames() bool { return false }
+
+// StartedOverrides overrides, for one turn, the flags the strategy was built
+// with. A nil field keeps the configured value.
+type StartedOverrides struct {
+	// EnableInterruptions overrides whether an interruption is broadcast for
+	// this turn. Set it false when something else in the pipeline has already
+	// broadcast one.
+	EnableInterruptions *bool
+	// EnableUserSpeakingFrames overrides whether a UserStartedSpeakingFrame is
+	// emitted for this turn. Set it false when something else in the pipeline
+	// has already emitted it.
+	EnableUserSpeakingFrames *bool
+}
+
+// TriggerStarted signals that the user's turn has begun, with the flags the
+// strategy was built with.
 func (b *StartStrategyBase) TriggerStarted() {
-	if b.env.started != nil {
-		b.env.started(b.self, UserTurnStartedParams{
-			EnableInterruptions:      b.EnableInterruptions,
-			EnableUserSpeakingFrames: b.EnableUserSpeakingFrames,
-		})
+	b.TriggerStartedOverriding(StartedOverrides{})
+}
+
+// TriggerStartedOverriding signals that the user's turn has begun, overriding
+// the strategy's configured flags for this turn.
+func (b *StartStrategyBase) TriggerStartedOverriding(o StartedOverrides) {
+	if b.env.started == nil {
+		return
 	}
+	b.env.started(b.self, UserTurnStartedParams{
+		EnableInterruptions:      boolOr(o.EnableInterruptions, b.EnableInterruptions),
+		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, b.EnableUserSpeakingFrames),
+	})
 }
 
 // TriggerResetAggregation asks the user aggregator to drop the in-progress
@@ -134,6 +195,9 @@ type StopStrategy interface {
 	Setup(s processor.Setup) error
 	// Cleanup releases resources (timers).
 	Cleanup()
+	// ResolvesProposedTurnStopFrames reports whether this strategy resolves
+	// proposals into turn stops.
+	ResolvesProposedTurnStopFrames() bool
 	attach(self StopStrategy, env strategyEnv)
 }
 
@@ -162,11 +226,39 @@ func (b *StopStrategyBase) Setup(processor.Setup) error { return nil }
 // Cleanup is the default no-op.
 func (b *StopStrategyBase) Cleanup() {}
 
-// TriggerStopped fires inference-triggered then finalized — the usual "turn is
+// ResolvesProposedTurnStopFrames reports whether this strategy resolves
+// proposals into turn stops.
+//
+// A ProposedUserStoppedSpeakingFrame is a request for a decision, so a strategy
+// that acts on one consumes it: the frame stops traveling, and no resolver
+// further along decides the same turn a second time. Override to true in a
+// strategy that handles that frame, including one that holds the proposal for a
+// while before deciding.
+func (b *StopStrategyBase) ResolvesProposedTurnStopFrames() bool { return false }
+
+// StoppedOverrides overrides, for one turn, the flags the strategy was built
+// with. A nil field keeps the configured value.
+type StoppedOverrides struct {
+	// EnableUserSpeakingFrames overrides whether a UserStoppedSpeakingFrame is
+	// emitted for this turn. Set it false when something else in the pipeline
+	// has already emitted it.
+	EnableUserSpeakingFrames *bool
+}
+
+// TriggerStopped fires inference-triggered then finalized, the usual "turn is
 // over" signal.
+//
+// To leave finalization to another strategy, so this one fires only the
+// inference trigger, wrap it with Deferred rather than changing the call.
 func (b *StopStrategyBase) TriggerStopped() {
+	b.TriggerStoppedOverriding(StoppedOverrides{})
+}
+
+// TriggerStoppedOverriding fires inference-triggered then finalized, overriding
+// the strategy's configured flags for this turn.
+func (b *StopStrategyBase) TriggerStoppedOverriding(o StoppedOverrides) {
 	b.TriggerInferenceTriggered()
-	b.TriggerFinalized()
+	b.TriggerFinalizedOverriding(o)
 }
 
 // TriggerInferenceTriggered signals that there is enough evidence to start LLM
@@ -179,9 +271,18 @@ func (b *StopStrategyBase) TriggerInferenceTriggered() {
 
 // TriggerFinalized signals that the turn is semantically final.
 func (b *StopStrategyBase) TriggerFinalized() {
-	if b.env.stopped != nil {
-		b.env.stopped(b.self, UserTurnStoppedParams{EnableUserSpeakingFrames: b.EnableUserSpeakingFrames})
+	b.TriggerFinalizedOverriding(StoppedOverrides{})
+}
+
+// TriggerFinalizedOverriding signals that the turn is semantically final,
+// overriding the strategy's configured flags for this turn.
+func (b *StopStrategyBase) TriggerFinalizedOverriding(o StoppedOverrides) {
+	if b.env.stopped == nil {
+		return
 	}
+	b.env.stopped(b.self, UserTurnStoppedParams{
+		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, b.EnableUserSpeakingFrames),
+	})
 }
 
 // Push sends a frame to the neighbor in dir.

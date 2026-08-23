@@ -2,15 +2,18 @@ package turns
 
 import "time"
 
-// Config configures the turn taking a user aggregator drives.
+// Config configures turn taking, for the user aggregator that drives it or for
+// a UserTurnProcessor of its own.
 //
-// The strategies run inside the aggregator rather than in a processor of their
-// own, so a turn that ends on a finalized transcript ends with that transcript
-// already folded into the user's message.
+// Run inside the aggregator, the strategies see the same frames in the same
+// order as the aggregation, so a turn that ends on a finalized transcript ends
+// with that transcript already folded into the user's message. Run in a
+// processor of their own, the decision can instead be made once and shared by
+// several aggregators.
 type Config struct {
-	// Strategies are the start/stop strategy chains; the zero value uses the
-	// defaults (VAD + transcription start, Smart-Turn stop) — but the Smart-Turn
-	// default needs a turn.Analyzer, so most callers build Strategies explicitly.
+	// Strategies are the start/stop strategy chains; empty chains use the
+	// defaults, which are VAD and transcription to start and a speech timeout to
+	// stop. For end-of-turn from a model, build Stop with NewTurnAnalyzerStop.
 	Strategies UserTurnStrategies
 	// StopTimeout is the watchdog that force-stops a stuck turn; 0 uses 5s.
 	StopTimeout time.Duration

@@ -37,14 +37,6 @@ func warnStopWindow(warned *bool, stopWindow, sttTimeout time.Duration) {
 	}
 }
 
-// boolValue returns *p, or def when p is nil.
-func boolValue(p *bool, def bool) bool {
-	if p == nil {
-		return def
-	}
-	return *p
-}
-
 // TurnAnalyzerConfig configures a TurnAnalyzerStop strategy.
 type TurnAnalyzerConfig struct {
 	// Analyzer is the end-of-turn model (e.g. Smart Turn V3). Required.
@@ -86,7 +78,7 @@ type TurnAnalyzerStop struct {
 func NewTurnAnalyzerStop(cfg TurnAnalyzerConfig) *TurnAnalyzerStop {
 	s := &TurnAnalyzerStop{
 		analyzer:  cfg.Analyzer,
-		waitForTx: boolValue(cfg.WaitForTranscript, true),
+		waitForTx: boolOr(cfg.WaitForTranscript, true),
 	}
 	s.EnableUserSpeakingFrames = true
 	return s
@@ -95,6 +87,14 @@ func NewTurnAnalyzerStop(cfg TurnAnalyzerConfig) *TurnAnalyzerStop {
 // Process feeds the analyzer and decides end-of-turn.
 func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
+	case *frames.StartFrame:
+		// Publish the end-of-turn parameters the pipeline is running under, so a
+		// processor downstream can size its own behavior to them and clients and
+		// observers can mirror them.
+		s.Broadcast(func() frames.Frame {
+			params := s.analyzer.Params()
+			return frames.NewSpeechControlParamsFrame(nil, &params)
+		})
 	case *frames.STTMetadataFrame:
 		s.sttTimeout = fr.TTFSP99Latency
 		s.stopSecsWarned = false
@@ -354,7 +354,7 @@ func NewSpeechTimeoutStop(cfg SpeechTimeoutConfig) *SpeechTimeoutStop {
 	}
 	s := &SpeechTimeoutStop{
 		userSpeechTimeout: timeout,
-		waitForTx:         boolValue(cfg.WaitForTranscript, true),
+		waitForTx:         boolOr(cfg.WaitForTranscript, true),
 	}
 	s.EnableUserSpeakingFrames = true
 	return s
@@ -519,22 +519,45 @@ func (s *SpeechTimeoutStop) Cleanup() { s.cancelTimers() }
 
 // ExternalStopConfig configures an ExternalStop strategy.
 type ExternalStopConfig struct {
-	// Timeout debounces late transcripts after the external stop; 0 uses 500ms.
+	// Timeout is the short delay used internally to handle consecutive or
+	// slightly delayed transcriptions; 0 uses 500ms.
 	Timeout time.Duration
-	// WaitForTranscript holds the turn open until a transcript arrives; nil
-	// defaults to true.
+	// WaitForTranscript holds the turn open until transcript text arrives after
+	// the external stop signal; nil defaults to true. Set it false when local
+	// turn detection is the intended driver of the conversation, so transcripts
+	// are off the latency critical path.
 	WaitForTranscript *bool
 }
 
-// ExternalStop ends a turn when another processor emits a UserStoppedSpeakingFrame.
+// ExternalStop takes its cue for the end of a turn from another processor. It is
+// the counterpart to ExternalStart and takes the same two signals:
+//
+//   - A ProposedUserStoppedSpeakingFrame is a service proposing that the turn
+//     has ended. This strategy decides, and emits the UserStoppedSpeakingFrame
+//     itself. It may also hold the turn open past the proposal, which is what
+//     WaitForTranscript does.
+//   - A UserStoppedSpeakingFrame means the turn end was already decided and
+//     announced elsewhere. This strategy adopts that decision and emits nothing.
+//
+// To shift the timing further, embed it and override the finalization both paths
+// reach once they decide the turn is over.
 type ExternalStop struct {
 	StopStrategyBase
-	timeout      time.Duration
-	waitForTx    bool
+	timeout   time.Duration
+	waitForTx bool
+
+	text         string
 	userSpeaking bool
-	haveText     bool
 	seenInterim  bool
-	cancelTimer  func()
+	// announcedElsewhere records which of the two signals ended this turn, so
+	// finalization knows whether the turn frame still has to be emitted. It is
+	// read rather than passed along, because finalization can land from the
+	// transcript timer long after the signal that set it.
+	announcedElsewhere bool
+	// turnOpen keeps the timer quiet between turns. With the transcript wait off
+	// the timer path would otherwise fire on every tick forever.
+	turnOpen    bool
+	cancelTimer func()
 }
 
 // NewExternalStop builds an external stop strategy.
@@ -543,32 +566,71 @@ func NewExternalStop(cfg ExternalStopConfig) *ExternalStop {
 	if timeout == 0 {
 		timeout = 500 * time.Millisecond
 	}
-	s := &ExternalStop{timeout: timeout, waitForTx: boolValue(cfg.WaitForTranscript, true)}
-	s.EnableUserSpeakingFrames = false
+	s := &ExternalStop{timeout: timeout, waitForTx: boolOr(cfg.WaitForTranscript, true)}
+	s.EnableUserSpeakingFrames = true
 	return s
 }
 
-// Process relays an external stop, debounced for late transcripts.
+// ResolvesProposedTurnStopFrames reports that this strategy resolves proposals
+// into turn stops.
+func (s *ExternalStop) ResolvesProposedTurnStopFrames() bool { return true }
+
+// Setup starts the timer that retries finalization while a turn is open, so a
+// transcript arriving after the stop signal still ends the turn.
+func (s *ExternalStop) Setup(processor.Setup) error {
+	// Under the shared lock, because strategies can be swapped on a running
+	// pipeline and the timer this arms runs under it.
+	s.env.locked(s.armTick)
+	return nil
+}
+
+// Process records the external signals and the transcripts around them. It
+// always continues, so the rest of the stop chain is evaluated.
 func (s *ExternalStop) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
+	case *frames.ProposedUserStartedSpeakingFrame:
+		s.handleStartedSpeaking(false)
+	case *frames.ProposedUserStoppedSpeakingFrame:
+		s.handleStoppedSpeaking(false)
 	case *frames.UserStartedSpeakingFrame:
-		s.userSpeaking = true
+		s.handleStartedSpeaking(true)
 	case *frames.UserStoppedSpeakingFrame:
-		s.userSpeaking = false
-		s.cancelT()
-		s.cancelTimer = s.after(s.timeout, func() {
-			s.cancelTimer = nil
-			s.maybeTrigger()
-		})
+		s.handleStoppedSpeaking(true)
 	case *frames.InterimTranscriptionFrame:
 		s.seenInterim = true
 	case *frames.TranscriptionFrame:
-		if fr.Text != "" {
-			s.haveText = true
-		}
+		s.text += fr.Text
+		// A final result has landed, so the interim it supersedes is spent.
 		s.seenInterim = false
+		// Restart the aggregation timer.
+		s.armTick()
 	}
 	return Continue
+}
+
+func (s *ExternalStop) handleStartedSpeaking(announcedElsewhere bool) {
+	s.userSpeaking = true
+	s.announcedElsewhere = announcedElsewhere
+}
+
+func (s *ExternalStop) handleStoppedSpeaking(announcedElsewhere bool) {
+	s.userSpeaking = false
+	s.announcedElsewhere = announcedElsewhere
+	s.maybeTrigger()
+}
+
+// armTick restarts the retry timer. It fires repeatedly while a turn is open, so
+// finalization that could not go through when the stop signal arrived is retried
+// once the transcript lands.
+func (s *ExternalStop) armTick() {
+	s.cancelT()
+	s.cancelTimer = s.after(s.timeout, func() {
+		s.cancelTimer = nil
+		if s.turnOpen {
+			s.maybeTrigger()
+		}
+		s.armTick()
+	})
 }
 
 func (s *ExternalStop) maybeTrigger() {
@@ -576,12 +638,27 @@ func (s *ExternalStop) maybeTrigger() {
 		return
 	}
 	if !s.waitForTx {
-		s.TriggerStopped()
+		// Fire as soon as the external stop signal arrives: transcripts, if any,
+		// are off the latency critical path.
+		s.finalize()
 		return
 	}
-	if !s.seenInterim && s.haveText {
-		s.TriggerStopped()
+	if !s.seenInterim && s.text != "" {
+		s.finalize()
 	}
+}
+
+// finalize ends the turn, emitting the turn frame unless it was already
+// announced elsewhere.
+func (s *ExternalStop) finalize() {
+	if s.announcedElsewhere {
+		slog.Debug("turns: adopting a user turn stop decided elsewhere")
+		off := false
+		s.TriggerStoppedOverriding(StoppedOverrides{EnableUserSpeakingFrames: &off})
+		return
+	}
+	slog.Debug("turns: resolving a proposed user turn stop")
+	s.TriggerStopped()
 }
 
 func (s *ExternalStop) cancelT() {
@@ -591,19 +668,28 @@ func (s *ExternalStop) cancelT() {
 	}
 }
 
-// TurnStarted clears per-turn state.
-func (s *ExternalStop) TurnStarted() { s.reset() }
-
-// TurnStopped clears per-turn state.
-func (s *ExternalStop) TurnStopped() { s.reset() }
-
-func (s *ExternalStop) reset() {
-	s.cancelT()
-	s.haveText = false
-	s.seenInterim = false
+// TurnStarted readies the strategy to detect the end of the turn now starting.
+func (s *ExternalStop) TurnStarted() {
+	s.reset()
+	s.turnOpen = true
 }
 
-// Cleanup stops the debounce timer.
+// TurnStopped clears per-turn state once the turn has ended.
+func (s *ExternalStop) TurnStopped() {
+	s.reset()
+	s.turnOpen = false
+}
+
+// reset clears per-turn state. It runs at both turn boundaries.
+func (s *ExternalStop) reset() {
+	s.text = ""
+	s.userSpeaking = false
+	s.seenInterim = false
+	s.announcedElsewhere = false
+	s.armTick()
+}
+
+// Cleanup stops the retry timer.
 func (s *ExternalStop) Cleanup() { s.cancelT() }
 
 // ExternalCompletionStop finalizes a turn when an external judge emits a
@@ -642,6 +728,14 @@ func (d *deferredStop) attach(_ StopStrategy, env strategyEnv) {
 	// The wrapped strategy is what decides, so it is what the decisions are
 	// attributed to, not this wrapper.
 	d.inner.attach(d.inner, env)
+}
+
+// ResolvesProposedTurnStopFrames reports what the wrapped strategy does with
+// proposals. Frame processing is forwarded, so a proposal reaches the inner
+// strategy and is resolved there: deferring finalization changes when the turn
+// ends, not who decides it.
+func (d *deferredStop) ResolvesProposedTurnStopFrames() bool {
+	return d.inner.ResolvesProposedTurnStopFrames()
 }
 
 func (d *deferredStop) Process(f frames.Frame) ProcessFrameResult { return d.inner.Process(f) }
