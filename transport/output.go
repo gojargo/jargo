@@ -43,6 +43,10 @@ const (
 // one.
 const defaultDestination = ""
 
+// defaultOut10msChunks is how many 10 ms chunks of audio are written at a time
+// when the parameters name no number.
+const defaultOut10msChunks = 4
+
 // BaseOutput is the tail of a pipeline: it routes each outgoing frame to the
 // sender for the destination the frame names, and each sender buffers audio,
 // slices it into fixed-size chunks, and hands each chunk to the concrete
@@ -156,6 +160,20 @@ func (bo *BaseOutput) Setup(ctx context.Context, s processor.Setup) error {
 		return err
 	}
 	bo.sampleRate = pick(bo.params.AudioOutSampleRate, s.AudioOutSampleRate)
+
+	// The audio shape is settled here rather than when the pipeline starts,
+	// because it is known as soon as the transport is set up and every sender
+	// built later is sized to it.
+	bo.channels = bo.params.AudioOutChannels
+	if bo.channels == 0 {
+		bo.channels = 1
+	}
+	chunks := bo.params.AudioOut10msChunks
+	if chunks == 0 {
+		chunks = defaultOut10msChunks
+	}
+	bytesPer10ms := bo.sampleRate / 100 * bo.channels * 2
+	bo.chunkSize = bytesPer10ms * chunks
 	return nil
 }
 
@@ -167,16 +185,16 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 	}
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		// Initialize before forwarding so the chunk size is set before any
-		// audio frame can be processed. Nothing downstream of the output
-		// transport needs the StartFrame ahead of this.
-		bo.startStreaming(ctx)
+		// Forward the StartFrame before starting, so every processor is
+		// initialized before anything else is processed. Opening the outgoing
+		// media path can take a while, and nothing downstream should wait behind
+		// it. The audio shape the senders are sized to was settled in Setup.
 		if err := bo.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		// Report ready only once the StartFrame has gone downstream, so the
-		// pipeline is running by the time anything waiting on the transport is
-		// released.
+		bo.startStreaming(ctx)
+		// Report ready only once the senders exist, so nothing released by it
+		// can queue audio for a stream that cannot carry it yet.
 		return bo.PushFrame(ctx, frames.NewOutputTransportReadyFrame(), processor.Upstream)
 	case *frames.EndFrame:
 		bo.eachSender(func(s *mediaSender) { s.drainAudio(ctx) })
@@ -306,17 +324,6 @@ func (bo *BaseOutput) mixerFor(destination string) audio.Mixer {
 }
 
 func (bo *BaseOutput) startStreaming(ctx context.Context) {
-	bo.channels = bo.params.AudioOutChannels
-	if bo.channels == 0 {
-		bo.channels = 1
-	}
-	chunks := bo.params.AudioOut10msChunks
-	if chunks == 0 {
-		chunks = 2
-	}
-	bytesPer10ms := bo.sampleRate / 100 * bo.channels * 2
-	bo.chunkSize = bytesPer10ms * chunks
-
 	// Open the transport's own media path before anything can be queued for it.
 	// An output that cannot open one can never send, so the failure is fatal
 	// rather than something to stream into and drop.
