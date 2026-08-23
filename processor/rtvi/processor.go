@@ -341,6 +341,14 @@ func (p *Processor) handleMessage(ctx context.Context, in Incoming) error {
 	switch in.Type {
 	case TypeClientReady:
 		slog.Debug("RTVI client-ready", "id", in.ID)
+		// The client is ready, so ask the input transport to start streaming
+		// audio. A transport configured to hold it back until now (see
+		// transport.Params.AudioInStreamOnStart) opens its source here; one that
+		// was already streaming does nothing.
+		if err := p.PushFrame(ctx, frames.NewInputTransportStartAudioStreamingFrame(),
+			processor.Downstream); err != nil {
+			return err
+		}
 		return p.send(ctx, BotReady(in.ID))
 	case TypeSendText:
 		return p.handleSendText(ctx, in)

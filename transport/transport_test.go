@@ -1635,3 +1635,79 @@ func TestBaseOutputBargeInDropsAFrameItCutShort(t *testing.T) {
 	task.Cancel(t.Context(), "")
 	<-runDone
 }
+
+// TestBaseInputFilteredAudioKeepsItsFrame checks the frame that travels on is
+// the one the transport produced. The filter replaces the audio on it, so what
+// the frame carries about itself — the source it names, the moment it was
+// captured — is not lost with the samples.
+func TestBaseInputFilteredAudioKeepsItsFrame(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+	params.AudioInFilter = &fakeFilter{}
+
+	got := make(chan frames.Frame, 4)
+	in := newFakeInput(params, 0)
+	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
+		if af, ok := fr.(*frames.InputAudioRawFrame); ok {
+			got <- af
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	f := frames.NewInputAudioRawFrame([]byte{1, 2, 3, 4}, 48000, 1)
+	f.SetTransportSource("mic-1")
+	task.QueueFrame(f)
+
+	select {
+	case out := <-got:
+		if src := out.Base().TransportSource(); src != "mic-1" {
+			t.Errorf("TransportSource = %q, want %q: filtering lost what the frame said about itself", src, "mic-1")
+		}
+		af, ok := out.(*frames.InputAudioRawFrame)
+		if !ok {
+			t.Fatalf("got a %T, want an InputAudioRawFrame", out)
+		}
+		if !bytes.Equal(af.Audio, []byte{2, 3, 4, 5}) {
+			t.Errorf("audio = %v, want %v (the filter did not run)", af.Audio, []byte{2, 3, 4, 5})
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no audio reached downstream")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestBaseInputFiltersWithPassthroughOff checks the filter sees every frame
+// whatever passthrough is set to. It is stateful, so feeding it only the audio
+// that happens to be forwarded would leave it working from a signal with holes
+// in it.
+func TestBaseInputFiltersWithPassthroughOff(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+	params.AudioInPassthrough = false
+	filter := &fakeFilter{}
+	params.AudioInFilter = filter
+
+	in := newFakeInput(params, 0)
+	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewInputAudioRawFrame([]byte{1, 2, 3, 4}, 48000, 1))
+
+	deadline := time.Now().Add(3 * time.Second)
+	for filter.filtered.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if filter.filtered.Load() == 0 {
+		t.Error("the input filter never saw the audio: passthrough gated filtering")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}

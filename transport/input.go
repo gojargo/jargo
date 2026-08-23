@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/gojargo/jargo/audio"
@@ -60,6 +61,14 @@ func (bi *BaseInput) StopReading(context.Context) error { return nil }
 // StartAudioStreaming is the default no-op; a concrete transport overrides it to
 // begin streaming audio from its source.
 func (bi *BaseInput) StartAudioStreaming(context.Context) error { return nil }
+
+// EnableAudioInStreamOnStart sets whether the transport streams audio as soon as
+// it starts. A transport that reads Params.AudioInStreamsOnStart when it starts
+// can be told otherwise through this, up until then.
+func (bi *BaseInput) EnableAudioInStreamOnStart(enabled bool) {
+	slog.Debug("audio streaming on start", "processor", bi.Name(), "enabled", enabled)
+	bi.params.AudioInStreamOnStart = &enabled
+}
 
 // PushAudioFrame queues a received audio frame to be pushed downstream. The
 // driver calls it for each chunk of audio it reads from the transport.
@@ -259,8 +268,12 @@ func (bi *BaseInput) stopStreaming(ctx context.Context) {
 	}
 }
 
-// audioLoop drains received audio frames, optionally runs them through the input
-// filter, and pushes them downstream.
+// audioLoop drains received audio frames, runs them through the input filter,
+// and pushes them downstream when passthrough is set.
+//
+// The filter runs whatever passthrough is set to. It is stateful, so feeding it
+// only the audio that happens to be forwarded would leave it working from a
+// signal with holes in it.
 func (bi *BaseInput) audioLoop(ctx context.Context) {
 	defer bi.audioWG.Done()
 	for {
@@ -268,34 +281,35 @@ func (bi *BaseInput) audioLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case f := <-bi.audioIn:
+			if !bi.applyFilter(ctx, f) {
+				continue
+			}
 			if !bi.params.AudioInPassthrough {
 				continue
 			}
-			out := bi.applyFilter(ctx, f)
-			if out == nil {
-				continue
-			}
-			_ = bi.PushFrame(ctx, out, processor.Downstream)
+			_ = bi.PushFrame(ctx, f, processor.Downstream)
 		}
 	}
 }
 
-// applyFilter runs the input filter over f, returning the frame to push
-// downstream. It returns nil when the filter buffered the audio with nothing to
-// emit yet, and the original frame when no filter is active or filtering fails.
-func (bi *BaseInput) applyFilter(ctx context.Context, f *frames.InputAudioRawFrame) frames.Frame {
+// applyFilter runs the input filter over the frame's audio, in place, and
+// reports whether there is anything left to push. It returns false when the
+// filter buffered the audio with nothing to emit yet.
+//
+// The audio is replaced on the frame rather than copied onto a new one, so what
+// travels on is the frame the transport produced: the source it names and the
+// moment it carries belong to that frame and are not the filter's to drop.
+func (bi *BaseInput) applyFilter(ctx context.Context, f *frames.InputAudioRawFrame) bool {
 	if !bi.filterActive {
-		return f
+		return len(f.Audio) > 0
 	}
 	filtered, err := bi.filter.Filter(ctx, f.Audio)
 	if err != nil {
 		bi.PushError(ctx, "audio input filter failed", err, false)
-		return f
+		return len(f.Audio) > 0
 	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return frames.NewInputAudioRawFrame(filtered, f.SampleRate, f.NumChannels)
+	f.Audio = filtered
+	return len(filtered) > 0
 }
 
 func pick(a, b int) int {

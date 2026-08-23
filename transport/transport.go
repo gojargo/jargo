@@ -23,6 +23,12 @@ type Params struct {
 	AudioInSampleRate int
 	// AudioInChannels is the number of input channels.
 	AudioInChannels int
+	// AudioInStreamOnStart starts streaming audio as soon as the transport
+	// starts; nil enables it. Set it false to hold the audio back until
+	// something asks for it with an InputTransportStartAudioStreamingFrame,
+	// which is how a client that has not said it is ready yet is kept off the
+	// pipeline.
+	AudioInStreamOnStart *bool
 	// AudioInPassthrough pushes received audio frames downstream.
 	AudioInPassthrough bool
 	// AudioInFilter, when set, transforms received audio (for example noise
@@ -38,6 +44,11 @@ type Params struct {
 	// AudioOutBitrate is the output bitrate in bits per second; 0 uses the
 	// codec default.
 	AudioOutBitrate int
+	// AudioOutAutoSilence fills the outgoing stream with silence while nothing
+	// is queued for it, rather than letting it go quiet; nil enables it. A
+	// transport whose stream has to keep flowing leaves it on; one that would
+	// rather wait for audio turns it off.
+	AudioOutAutoSilence *bool
 	// AudioOutFEC enables Opus inband forward error correction on the outgoing
 	// stream, letting receivers rebuild dropped packets. Recommended whenever
 	// clients may be on lossy links.
@@ -47,7 +58,9 @@ type Params struct {
 	// FEC enabled but carrying no redundancy, so set it alongside.
 	AudioOutExpectedPacketLoss int
 	// AudioOut10msChunks is how many 10 ms chunks of audio are written at a
-	// time. With WebRTC Opus this is 2, so audio is written in 20 ms frames.
+	// time; 0 writes four, so audio is handed to the transport 40 ms at a time.
+	// A transport that frames the audio itself (Opus at 20 ms, say) re-splits
+	// what it is given, so this sizes the buffering rather than the framing.
 	AudioOut10msChunks int
 	// AudioOutMixer, when set, mixes auxiliary audio (for example background
 	// music) into the outgoing audio before it is sent. It serves the default
@@ -68,9 +81,12 @@ type Params struct {
 	AudioOutDestinations []string
 }
 
-// DefaultParams returns Params with audio input and output enabled and the
-// defaults a WebRTC transport uses: mono, input passthrough on, 20 ms output
-// chunks.
+// DefaultParams returns Params with audio input and output enabled and mono
+// audio each way.
+//
+// It asks for 20 ms output chunks rather than leaving the parameter at its own
+// default of 40 ms: it is the shape a WebRTC transport writes in, so the audio
+// is handed over already framed and the transport does not re-split it.
 func DefaultParams() Params {
 	return Params{
 		AudioInEnabled:         true,
@@ -81,6 +97,20 @@ func DefaultParams() Params {
 		AudioOut10msChunks:     2,
 		AudioOutEndSilenceSecs: 2,
 	}
+}
+
+// AudioInStreamsOnStart reports whether received audio reaches the pipeline as
+// soon as the transport starts, which it does unless the parameter says
+// otherwise.
+func (p Params) AudioInStreamsOnStart() bool {
+	return p.AudioInStreamOnStart == nil || *p.AudioInStreamOnStart
+}
+
+// AudioOutFillsSilence reports whether the outgoing stream is kept flowing with
+// silence while nothing is queued for it, which it is unless the parameter says
+// otherwise.
+func (p Params) AudioOutFillsSilence() bool {
+	return p.AudioOutAutoSilence == nil || *p.AudioOutAutoSilence
 }
 
 // Transport is a source and sink of media for a pipeline. Input and Output
@@ -106,6 +136,9 @@ type InputDriver interface {
 	// for a transport that does not start streaming as soon as it connects. It
 	// is driven by an InputTransportStartAudioStreamingFrame; the default does
 	// nothing.
+	//
+	// A transport with a source it can hold back reads Params.AudioInStreamOnStart
+	// when it starts, leaves the source closed when it is off, and opens it here.
 	StartAudioStreaming(ctx context.Context) error
 }
 

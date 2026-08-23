@@ -375,6 +375,7 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 	defer out.sendWG.Done()
 
 	quiet := make([]byte, frameBytes)
+	fillSilence := out.Params().AudioOutFillsSilence()
 	start := time.Now()
 	var sent int64
 	var gap gapTracker
@@ -405,15 +406,10 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 		default:
 		}
 
-		pcm := quiet
 		gap.sent = sent
-		select {
-		case frame := <-out.queue:
-			pcm = frame
-			out.queued.Add(-1)
-			gap.real()
-		default:
-			gap.quiet()
+		pcm, ok := out.nextChunk(ctx, quiet, fillSilence, &gap)
+		if !ok {
+			return
 		}
 
 		packet, err := out.enc.Encode(pcm)
@@ -424,6 +420,39 @@ func (out *outputTransport) sendLoop(ctx context.Context, frameBytes int) {
 			slog.Error("write audio", "processor", out.Name(), "err", err)
 		}
 		sent++
+	}
+}
+
+// nextChunk takes the next frame of audio to send: whatever is queued, or
+// silence when nothing is and the stream is to be kept flowing.
+//
+// With the filling turned off it waits for audio instead. The timestamps go on
+// advancing one frame per packet either way, so a receiver still schedules
+// playout from a clock that never diverged from the wall clock. It reports false
+// when the session ended while it waited.
+func (out *outputTransport) nextChunk(
+	ctx context.Context, quiet []byte, fillSilence bool, gap *gapTracker,
+) ([]byte, bool) {
+	select {
+	case frame := <-out.queue:
+		out.queued.Add(-1)
+		gap.real()
+		return frame, true
+	default:
+	}
+	if fillSilence {
+		gap.quiet()
+		return quiet, true
+	}
+	select {
+	case <-ctx.Done():
+		return nil, false
+	case <-out.conn.Done():
+		return nil, false
+	case frame := <-out.queue:
+		out.queued.Add(-1)
+		gap.real()
+		return frame, true
 	}
 }
 
