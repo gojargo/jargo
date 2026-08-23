@@ -12,8 +12,8 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -45,6 +45,12 @@ const (
 
 // TurnsSTTConfig configures the Cartesia turn-detecting STT service.
 type TurnsSTTConfig struct {
+	// ShouldInterrupt barges in when the server signals the start of a new turn;
+	// nil enables it. It is passed along to the user turn strategies this
+	// service recommends, which own the interruption; strategies the application
+	// configures itself override the recommendation and this setting with it.
+	ShouldInterrupt *bool
+
 	// APIKey is the Cartesia API key, sent as the X-API-Key header. Required.
 	APIKey string `validate:"required"`
 	// URL overrides the turn-detection WebSocket endpoint; empty uses the hosted
@@ -139,9 +145,11 @@ func (c *turnsConnector) UpdateSettings(_ context.Context, changed settings.Chan
 func (c *turnsConnector) Metadata() stt.Metadata {
 	noTTFS := false
 	return stt.Metadata{
-		RecommendedUserTurns: frames.UserTurnExternal,
-		SupportsTTFS:         &noTTFS,
-		Model:                c.live.Model.Or(c.cfg.Model),
+		UserTurnStrategies: turns.ExternalStrategies(turns.ExternalStrategiesConfig{
+			EnableInterruptions: c.cfg.ShouldInterrupt,
+		}),
+		SupportsTTFS: &noTTFS,
+		Model:        c.live.Model.Or(c.cfg.Model),
 	}
 }
 

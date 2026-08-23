@@ -618,51 +618,38 @@ func TestConstructorFields(t *testing.T) {
 // TestServiceMetadataInterface checks both metadata frames satisfy the interface
 // downstream processors assert on, rather than each carrying its own accessors.
 func TestServiceMetadataInterface(t *testing.T) {
+	// The strategies travel untyped, so the frame stays free of the package
+	// that defines them. Any value stands in for them here.
+	recommended := "external strategies"
+
 	stt := frames.NewSTTMetadataFrame(250 * time.Millisecond)
 	stt.ServiceName = "deepgram"
-	stt.UserTurns = frames.UserTurnExternal
+	stt.UserTurnStrategies = recommended
 
 	llm := frames.NewLLMServiceMetadataFrame("openai-realtime")
-	llm.UserTurns = frames.UserTurnUnspecified
 
 	tests := []struct {
 		name      string
 		meta      frames.ServiceMetadata
 		wantName  string
-		wantTurns frames.UserTurnRecommendation
+		wantTurns any
 	}{
-		{"STT", stt, "deepgram", frames.UserTurnExternal},
-		{"LLM", llm, "openai-realtime", frames.UserTurnUnspecified},
+		{"STT", stt, "deepgram", recommended},
+		{"LLM", llm, "openai-realtime", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.meta.Service(); got != tt.wantName {
 				t.Errorf("Service() = %q, want %q", got, tt.wantName)
 			}
-			if got := tt.meta.RecommendedUserTurns(); got != tt.wantTurns {
-				t.Errorf("RecommendedUserTurns() = %v, want %v", got, tt.wantTurns)
+			if got := tt.meta.RecommendedUserTurnStrategies(); got != tt.wantTurns {
+				t.Errorf("RecommendedUserTurnStrategies() = %v, want %v", got, tt.wantTurns)
 			}
 		})
 	}
 
 	if got := stt.TTFSP99Latency; got != 250*time.Millisecond {
 		t.Errorf("TTFSP99Latency = %v, want 250ms", got)
-	}
-}
-
-func TestUserTurnRecommendationString(t *testing.T) {
-	tests := []struct {
-		in   frames.UserTurnRecommendation
-		want string
-	}{
-		{frames.UserTurnExternal, "external"},
-		{frames.UserTurnUnspecified, "unspecified"},
-		{frames.UserTurnRecommendation(99), "unspecified"},
-	}
-	for _, tt := range tests {
-		if got := tt.in.String(); got != tt.want {
-			t.Errorf("String() = %q, want %q", got, tt.want)
-		}
 	}
 }
 

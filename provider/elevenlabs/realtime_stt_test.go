@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/processor/turns"
 )
 
 // TestRealtimeSTTConfigValidate pins the fields the provider requires and the
@@ -45,8 +45,12 @@ func TestNewRealtimeSTT(t *testing.T) {
 // boundaries itself, unlike the batch service next to it.
 func TestRealtimeSTTMetadata(t *testing.T) {
 	c := &realtimeSTTConnector{cfg: RealtimeSTTConfig{APIKey: "k", Model: defaultRealtimeSTTModel}}
-	if got := c.Metadata().RecommendedUserTurns; got != frames.UserTurnExternal {
-		t.Errorf("RecommendedUserTurns = %v, want UserTurnExternal", got)
+	got, ok := c.Metadata().UserTurnStrategies.(turns.UserTurnStrategies)
+	if !ok {
+		t.Fatalf("UserTurnStrategies = %T, want external turn strategies", c.Metadata().UserTurnStrategies)
+	}
+	if _, external := got.ExternalInterruptions(); !external {
+		t.Error("the recommended strategies are not the external ones")
 	}
 }
 

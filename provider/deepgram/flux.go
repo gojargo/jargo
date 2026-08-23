@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -60,6 +60,12 @@ const (
 // at their zero value fall back to the service defaults; optional tuning fields
 // modeled as pointers or slices are omitted from the request when unset.
 type FluxConfig struct {
+	// ShouldInterrupt barges in when Flux detects that the user is speaking;
+	// nil enables it. It is passed along to the user turn strategies this
+	// service recommends, which own the interruption; strategies the application
+	// configures itself override the recommendation and this setting with it.
+	ShouldInterrupt *bool
+
 	// APIKey is the Deepgram API key. Required.
 	APIKey string `validate:"required"`
 	// ListenURL overrides the transcription WebSocket endpoint; empty uses the
@@ -168,9 +174,11 @@ type fluxConnector struct {
 func (c *fluxConnector) Metadata() stt.Metadata {
 	noTTFS := false
 	return stt.Metadata{
-		RecommendedUserTurns: frames.UserTurnExternal,
-		SupportsTTFS:         &noTTFS,
-		Model:                c.cfg.Model,
+		UserTurnStrategies: turns.ExternalStrategies(turns.ExternalStrategiesConfig{
+			EnableInterruptions: c.cfg.ShouldInterrupt,
+		}),
+		SupportsTTFS: &noTTFS,
+		Model:        c.cfg.Model,
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/nvidia/internal/rivapb"
@@ -105,9 +104,8 @@ type segmentedTranscriber struct {
 // Metadata reports the Riva batch latency to downstream processors.
 func (t *segmentedTranscriber) Metadata() stt.Metadata {
 	return stt.Metadata{
-		RecommendedUserTurns: frames.UserTurnUnspecified,
-		TTFSP99:              cmp.Or(t.cfg.TTFSP99, stt.NvidiaTTFSP99),
-		Model:                t.cfg.Model,
+		TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.NvidiaTTFSP99),
+		Model:   t.cfg.Model,
 	}
 }
 

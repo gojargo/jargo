@@ -13,7 +13,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -60,7 +60,9 @@ type connector struct {
 func (c *connector) Metadata() stt.Metadata {
 	m := stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.GladiaTTFSP99), Model: c.cfg.Model}
 	if c.cfg.EnableVAD {
-		m.RecommendedUserTurns = frames.UserTurnExternal
+		m.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{
+			EnableInterruptions: c.cfg.InterruptOnSpeech,
+		})
 	}
 	return m
 }
@@ -76,10 +78,9 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 		return nil, err
 	}
 	return &stream{
-		conn:      conn,
-		ctx:       ctx,
-		vad:       c.cfg.EnableVAD,
-		interrupt: c.cfg.InterruptOnSpeech == nil || *c.cfg.InterruptOnSpeech,
+		conn: conn,
+		ctx:  ctx,
+		vad:  c.cfg.EnableVAD,
 	}, nil
 }
 
@@ -170,8 +171,6 @@ type stream struct {
 	// vad is whether Gladia's own detection drives the turn, which is what makes
 	// its speech boundaries something to act on.
 	vad bool
-	// interrupt is whether a boundary opening speech also barges in.
-	interrupt bool
 }
 
 // message is the subset of a Gladia transcript message we read.
@@ -230,7 +229,7 @@ func (s *stream) result(m message) (stt.Result, bool) {
 		if !s.vad {
 			return stt.Result{}, false
 		}
-		return stt.Result{Speech: stt.SpeechStarted, Interrupt: s.interrupt}, true
+		return stt.Result{Speech: stt.SpeechStarted}, true
 	case msgSpeechEnd:
 		if !s.vad {
 			return stt.Result{}, false

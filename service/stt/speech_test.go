@@ -29,10 +29,12 @@ func runSpeechResults(t *testing.T, results [][]stt.Result) []string {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.(type) {
-		case *frames.UserStartedSpeakingFrame:
+		case *frames.ProposedUserStartedSpeakingFrame:
 			seq = append(seq, "started")
-		case *frames.UserStoppedSpeakingFrame:
+		case *frames.ProposedUserStoppedSpeakingFrame:
 			seq = append(seq, "stopped")
+		case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame:
+			seq = append(seq, "announced")
 		case *frames.InterruptionFrame:
 			seq = append(seq, "interrupted")
 		}
@@ -56,8 +58,9 @@ func runSpeechResults(t *testing.T, results [][]stt.Result) []string {
 }
 
 // TestSpeechBoundariesGoOutInPairs covers a provider that runs its own detection
-// server-side. The pipeline is told the user started and then stopped, so
-// anything keyed off those frames sees a turn that opens and closes.
+// server-side. The pipeline is told the user started and then stopped, as a
+// proposal each way, so whatever resolves them sees a turn that opens and
+// closes.
 func TestSpeechBoundariesGoOutInPairs(t *testing.T) {
 	got := runSpeechResults(t, [][]stt.Result{
 		{{Speech: stt.SpeechStarted}},
@@ -71,18 +74,23 @@ func TestSpeechBoundariesGoOutInPairs(t *testing.T) {
 	}
 }
 
-// TestSpeechStartCanBargeIn covers the barge-in half. A provider that heard the
-// user start while the bot was talking asks for the interruption to go with it,
-// so the bot stops rather than talking over them.
-func TestSpeechStartCanBargeIn(t *testing.T) {
+// TestSpeechBoundariesAreProposedNotAnnounced covers who decides. The provider
+// heard where the speech begins and ends; whether that is where the turn begins
+// and ends, and whether the bot is barged in on, belongs to the turn strategies
+// this service recommends. So the service proposes and announces nothing.
+func TestSpeechBoundariesAreProposedNotAnnounced(t *testing.T) {
 	got := runSpeechResults(t, [][]stt.Result{
-		{{Speech: stt.SpeechStarted, Interrupt: true}},
+		{{Speech: stt.SpeechStarted}},
 		{{Speech: stt.SpeechStopped}},
 	})
 
-	want := []string{"started", "interrupted", "stopped"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("frames = %v, want %v", got, want)
+	for _, f := range got {
+		if f == "announced" {
+			t.Error("the service announced the turn itself instead of proposing it")
+		}
+		if f == "interrupted" {
+			t.Error("the service barged in itself instead of leaving it to the strategies")
+		}
 	}
 }
 

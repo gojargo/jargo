@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
+	"github.com/gojargo/jargo/processor/turns"
 )
 
 // TestTurnsSTTConfigValidate pins which fields the provider requires.
@@ -34,8 +34,12 @@ func TestTurnsSTTMetadata(t *testing.T) {
 	cfg := TurnsSTTConfig{APIKey: "k", Model: defaultTurnsModel}
 	c := newTurnsConnector(cfg)
 	meta := c.Metadata()
-	if meta.RecommendedUserTurns != frames.UserTurnExternal {
-		t.Errorf("RecommendedUserTurns = %v, want UserTurnExternal", meta.RecommendedUserTurns)
+	got, ok := meta.UserTurnStrategies.(turns.UserTurnStrategies)
+	if !ok {
+		t.Fatalf("UserTurnStrategies = %T, want external turn strategies", meta.UserTurnStrategies)
+	}
+	if _, external := got.ExternalInterruptions(); !external {
+		t.Error("the recommended strategies are not the external ones")
 	}
 	if meta.Model != defaultTurnsModel {
 		t.Errorf("Model = %q, want %q", meta.Model, defaultTurnsModel)

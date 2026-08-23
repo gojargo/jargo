@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/nvidia/internal/rivapb"
@@ -154,9 +153,8 @@ type sttConnector struct {
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
-		RecommendedUserTurns: frames.UserTurnUnspecified,
-		TTFSP99:              cmp.Or(c.cfg.TTFSP99, stt.NvidiaTTFSP99),
-		Model:                c.cfg.Model,
+		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.NvidiaTTFSP99),
+		Model:   c.cfg.Model,
 	}
 }
 

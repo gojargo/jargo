@@ -104,7 +104,10 @@ type Config struct {
 	// the pipeline.
 	EnableVAD bool
 	// InterruptOnSpeech barges in when Gladia reports the user starting to
-	// speak; nil enables it. It only applies with EnableVAD set.
+	// speak; nil enables it. It only applies with EnableVAD set. It is passed
+	// along to the user turn strategies this service recommends, which own the
+	// interruption; strategies the application configures itself override the
+	// recommendation and this setting with it.
 	InterruptOnSpeech *bool
 	// CustomMetadata attaches metadata to the session; nil omits it.
 	CustomMetadata map[string]any

@@ -5,30 +5,6 @@ import (
 	"time"
 )
 
-// UserTurnRecommendation is a turn-taking strategy a service recommends to the
-// user-turn aggregator through a metadata frame. The aggregator adopts the
-// recommendation only when the application did not configure its own turn
-// strategies, which always win.
-type UserTurnRecommendation int
-
-const (
-	// UserTurnUnspecified makes no recommendation; the configured or default
-	// strategies stay in place.
-	UserTurnUnspecified UserTurnRecommendation = iota
-	// UserTurnExternal recommends external turn strategies: the service performs
-	// its own server-side end-of-turn detection and emits the user speaking
-	// frames, so the pipeline relays them rather than running VAD-based turns.
-	UserTurnExternal
-)
-
-// String implements fmt.Stringer.
-func (r UserTurnRecommendation) String() string {
-	if r == UserTurnExternal {
-		return "external"
-	}
-	return "unspecified"
-}
-
 // ServiceMetadata is implemented by every metadata frame a service broadcasts at
 // pipeline start. Downstream processors assert this interface to read the common
 // fields; a concrete [STTMetadataFrame] or [LLMServiceMetadataFrame] carries
@@ -37,9 +13,9 @@ type ServiceMetadata interface {
 	SystemFrame
 	// Service is the name of the service that broadcast the metadata.
 	Service() string
-	// RecommendedUserTurns is the turn strategy the service recommends, or
-	// UserTurnUnspecified.
-	RecommendedUserTurns() UserTurnRecommendation
+	// RecommendedUserTurnStrategies are the user turn strategies the service
+	// recommends, or nil.
+	RecommendedUserTurnStrategies() any
 }
 
 // ServiceMetadataFrame is broadcast by a service at pipeline start to share its
@@ -50,9 +26,16 @@ type ServiceMetadataFrame struct {
 	BaseSystemFrame
 	// ServiceName names the broadcasting service.
 	ServiceName string
-	// UserTurns is the turn strategy the service recommends; the user aggregator
-	// adopts it unless the application configured its own.
-	UserTurns UserTurnRecommendation
+	// UserTurnStrategies are the user turn strategies the service recommends,
+	// for example the external ones a service that does its own server-side
+	// end-of-turn detection asks for. The user aggregator applies them unless
+	// the application configured its own, which always win. Nil leaves whatever
+	// is in place alone.
+	//
+	// It holds a turns.UserTurnStrategies. The type is not named here because
+	// the turn strategies are built on this package, so naming it would be a
+	// cycle.
+	UserTurnStrategies any
 }
 
 // NewServiceMetadataFrame builds a ServiceMetadataFrame for the named service.
@@ -66,12 +49,13 @@ func NewServiceMetadataFrame(service string) *ServiceMetadataFrame {
 // Service implements ServiceMetadata.
 func (f *ServiceMetadataFrame) Service() string { return f.ServiceName }
 
-// RecommendedUserTurns implements ServiceMetadata.
-func (f *ServiceMetadataFrame) RecommendedUserTurns() UserTurnRecommendation { return f.UserTurns }
+// RecommendedUserTurnStrategies implements ServiceMetadata.
+func (f *ServiceMetadataFrame) RecommendedUserTurnStrategies() any { return f.UserTurnStrategies }
 
 // String implements fmt.Stringer.
 func (f *ServiceMetadataFrame) String() string {
-	return fmt.Sprintf("%s(service: %s, turns: %s)", f.Name(), f.ServiceName, f.UserTurns)
+	return fmt.Sprintf("%s(service: %s, recommends turns: %t)",
+		f.Name(), f.ServiceName, f.UserTurnStrategies != nil)
 }
 
 // LLMServiceMetadataFrame is the metadata an LLM service broadcasts. It reports
@@ -96,7 +80,7 @@ func NewLLMServiceMetadataFrame(service string) *LLMServiceMetadataFrame {
 // STTMetadataFrame is the metadata an STT service broadcasts. Turn-stop
 // strategies use the p99 time-to-final-speech latency to size their safety-net
 // timeouts, and a service that does its own server-side endpointing recommends
-// external turn strategies through UserTurns.
+// external turn strategies through UserTurnStrategies.
 type STTMetadataFrame struct {
 	ServiceMetadataFrame
 	// TTFSP99Latency is the p99 latency from end of speech to a finalized

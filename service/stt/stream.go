@@ -50,10 +50,6 @@ type Result struct {
 	// the pipeline can defer to that instead. A result may carry a boundary and
 	// no text.
 	Speech SpeechState
-	// Interrupt asks for the bot to be interrupted along with a SpeechStarted
-	// boundary, which is what a barge-in on the provider's own detection means.
-	// It is ignored on any other boundary.
-	Interrupt bool
 	// FromFinalize reports that this result is the provider answering the
 	// finalize it was asked for. Only a provider that confirms a flush sets it,
 	// and only then is the transcript that follows the last one for the
@@ -194,10 +190,14 @@ type LanguageNamer interface {
 // Metadata describes an STT service to downstream processors. A Connector or
 // Transcriber implements Describer to provide it at pipeline start.
 type Metadata struct {
-	// RecommendedUserTurns is the turn strategy the service recommends; a service
-	// that does its own server-side end-of-turn detection returns
-	// frames.UserTurnExternal so the user aggregator can adopt external strategies.
-	RecommendedUserTurns frames.UserTurnRecommendation
+	// UserTurnStrategies are the user turn strategies the service recommends. A
+	// service that does its own server-side end-of-turn detection returns
+	// turns.ExternalStrategies here, so the user aggregator adopts them unless
+	// the application configured its own.
+	//
+	// It holds a turns.UserTurnStrategies, carried untyped for the same reason
+	// frames.ServiceMetadataFrame carries it untyped.
+	UserTurnStrategies any
 	// TTFSP99 is the time-to-final-segment P99 latency reported on the metadata
 	// frame (see frames.STTMetadataFrame). Left unset, the service is described
 	// with DefaultTTFSP99.
@@ -515,7 +515,7 @@ func (s *StreamService) ServiceMetadataFrame() frames.ServiceMetadata {
 	var m Metadata
 	if d, ok := s.conn.(Describer); ok {
 		m = d.Metadata()
-		mf.UserTurns = m.RecommendedUserTurns
+		mf.UserTurnStrategies = m.UserTurnStrategies
 	}
 	mf.TTFSP99Latency = m.ttfs(s.Name())
 	return mf
@@ -985,15 +985,22 @@ func (s *StreamService) emit(ctx context.Context, r Result) {
 	_ = s.PushFrame(ctx, f, processor.Downstream)
 }
 
-// emitSpeech broadcasts the speech boundary a provider reported. The frames go
-// out in pairs and only on a change: a provider repeating itself, or reporting a
-// stop for speech that never started here, must not leave the pipeline holding a
-// start that nothing closes.
+// emitSpeech broadcasts the speech boundary a provider reported, as a proposal
+// rather than as the turn itself.
+//
+// The provider heard where the speech begins and ends; whether that is where the
+// turn begins and ends is the pipeline's to decide, and so is whether the bot is
+// barged in on. The turn strategies this service recommends through its metadata
+// resolve the proposal, and they carry the interruption setting the service was
+// configured with.
+//
+// The frames go out in pairs and only on a change: a provider repeating itself,
+// or reporting a stop for speech that never started here, must not leave the
+// pipeline holding a start that nothing closes.
 //
 // They are broadcast rather than pushed downstream because a turn beginning
-// concerns both directions, and a barge-in on the provider's own detection has
-// to reach the output to stop the bot as well as the aggregator to open the
-// turn.
+// concerns both directions, and the barge-in that follows from it has to reach
+// the output to stop the bot as well as the aggregator to open the turn.
 func (s *StreamService) emitSpeech(ctx context.Context, r Result) {
 	switch r.Speech {
 	case SpeechStarted:
@@ -1004,10 +1011,7 @@ func (s *StreamService) emitSpeech(ctx context.Context, r Result) {
 		if already {
 			return
 		}
-		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewUserStartedSpeakingFrame() })
-		if r.Interrupt {
-			_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
-		}
+		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStartedSpeakingFrame() })
 	case SpeechStopped:
 		s.mu.Lock()
 		speaking := s.speaking
@@ -1016,7 +1020,7 @@ func (s *StreamService) emitSpeech(ctx context.Context, r Result) {
 		if !speaking {
 			return
 		}
-		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() })
+		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStoppedSpeakingFrame() })
 	case SpeechUnknown:
 		// The provider leaves speech detection to the pipeline.
 	}

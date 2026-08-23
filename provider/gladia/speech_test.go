@@ -3,7 +3,7 @@ package gladia
 import (
 	"testing"
 
-	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -12,41 +12,22 @@ import (
 func speechMessage(kind string) message { return message{Type: kind} }
 
 // TestSpeechBoundariesReachThePipeline covers Gladia's own detection driving the
-// turn. Its speech messages become the boundaries the pipeline acts on, and the
-// one that opens speech barges in, since the user starting to talk while the bot
-// is talking is a barge-in.
+// turn. Its speech messages become the boundaries the pipeline acts on.
+//
+// Whether the user starting to talk barges in on the bot is not decided here: it
+// is carried by the turn strategies this service recommends, which is what
+// TestMetadataDefersTheTurnWhenGladiaDetects covers.
 func TestSpeechBoundariesReachThePipeline(t *testing.T) {
-	s := &stream{vad: true, interrupt: true}
+	s := &stream{vad: true}
 
 	got, ok := s.result(speechMessage(msgSpeechStart))
 	if !ok || got.Speech != stt.SpeechStarted {
 		t.Fatalf("speech start mapped to %+v (kept %v), want a started boundary", got, ok)
-	}
-	if !got.Interrupt {
-		t.Error("the boundary that opens speech did not ask to barge in")
 	}
 
 	got, ok = s.result(speechMessage(msgSpeechEnd))
 	if !ok || got.Speech != stt.SpeechStopped {
 		t.Fatalf("speech end mapped to %+v (kept %v), want a stopped boundary", got, ok)
-	}
-	if got.Interrupt {
-		t.Error("the boundary that ends speech asked to barge in")
-	}
-}
-
-// TestSpeechBoundariesCanLeaveTheBotAlone covers a caller who wants Gladia's
-// turn detection without the barge-in, so the user speaking is reported without
-// the bot being cut off.
-func TestSpeechBoundariesCanLeaveTheBotAlone(t *testing.T) {
-	s := &stream{vad: true, interrupt: false}
-
-	got, ok := s.result(speechMessage(msgSpeechStart))
-	if !ok || got.Speech != stt.SpeechStarted {
-		t.Fatalf("speech start mapped to %+v (kept %v), want a started boundary", got, ok)
-	}
-	if got.Interrupt {
-		t.Error("the boundary asked to barge in with the barge-in turned off")
 	}
 }
 
@@ -54,7 +35,7 @@ func TestSpeechBoundariesCanLeaveTheBotAlone(t *testing.T) {
 // pipeline runs its own detection, so a boundary from here would compete with it
 // and open turns twice over.
 func TestSpeechBoundariesAreIgnoredWhenThePipelineDetects(t *testing.T) {
-	s := &stream{vad: false, interrupt: true}
+	s := &stream{vad: false}
 
 	for _, kind := range []string{msgSpeechStart, msgSpeechEnd} {
 		if got, ok := s.result(speechMessage(kind)); ok {
@@ -93,12 +74,31 @@ func TestTranscriptsAreUnaffectedByTheDetectionSetting(t *testing.T) {
 // than running its own detection alongside them.
 func TestMetadataDefersTheTurnWhenGladiaDetects(t *testing.T) {
 	on := &connector{cfg: withDefaults(Config{APIKey: "k", EnableVAD: true})}
-	if got := on.Metadata().RecommendedUserTurns; got != frames.UserTurnExternal {
-		t.Errorf("recommended turns = %v, want the external strategies", got)
+	got, ok := on.Metadata().UserTurnStrategies.(turns.UserTurnStrategies)
+	if !ok {
+		t.Fatalf("recommended turns = %T, want the external strategies", on.Metadata().UserTurnStrategies)
+	}
+	interrupts, external := got.ExternalInterruptions()
+	if !external {
+		t.Error("the recommended strategies are not the external ones")
+	}
+	if !interrupts {
+		t.Error("the recommendation should barge in by default")
+	}
+
+	// A caller who wants Gladia's turn detection without the barge-in carries
+	// that through to the strategies, which own the interruption.
+	quiet := &connector{cfg: withDefaults(Config{APIKey: "k", EnableVAD: true, InterruptOnSpeech: new(bool)})}
+	q, ok := quiet.Metadata().UserTurnStrategies.(turns.UserTurnStrategies)
+	if !ok {
+		t.Fatalf("recommended turns = %T, want the external strategies", quiet.Metadata().UserTurnStrategies)
+	}
+	if interrupts, _ := q.ExternalInterruptions(); interrupts {
+		t.Error("the recommendation barges in with the barge-in turned off")
 	}
 
 	off := &connector{cfg: withDefaults(Config{APIKey: "k"})}
-	if got := off.Metadata().RecommendedUserTurns; got == frames.UserTurnExternal {
+	if off.Metadata().UserTurnStrategies != nil {
 		t.Error("external strategies were recommended with the pipeline detecting")
 	}
 }

@@ -212,7 +212,7 @@ func (s *SegmentService) ServiceMetadataFrame() frames.ServiceMetadata {
 	var m Metadata
 	if d, ok := s.tr.(Describer); ok {
 		m = d.Metadata()
-		mf.UserTurns = m.RecommendedUserTurns
+		mf.UserTurnStrategies = m.UserTurnStrategies
 	}
 	mf.TTFSP99Latency = m.ttfs(s.Name())
 	return mf

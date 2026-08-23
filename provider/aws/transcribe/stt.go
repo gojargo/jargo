@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -53,8 +52,7 @@ type connector struct {
 // pipeline rather than recommending external turns.
 func (c *connector) Metadata() stt.Metadata {
 	return stt.Metadata{
-		RecommendedUserTurns: frames.UserTurnUnspecified,
-		TTFSP99:              cmp.Or(c.cfg.TTFSP99, stt.AWSTranscribeTTFSP99),
+		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.AWSTranscribeTTFSP99),
 	}
 }
 
