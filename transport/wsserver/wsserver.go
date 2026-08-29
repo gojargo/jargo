@@ -24,6 +24,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
 )
 
@@ -44,6 +45,19 @@ type Serializer interface {
 	// Deserialize converts an inbound wire message to a frame, or (nil, nil) for
 	// messages that carry no frame (handshake, marks, stop).
 	Deserialize(data []byte) (frames.Frame, error)
+}
+
+// RTVIMessageCarrier is an optional interface a Serializer implements when the
+// wire it writes to is the one RTVI messages travel on, which is what a browser
+// client connects over.
+//
+// It is off unless a serializer says otherwise, because the usual wire here is a
+// telephony provider's media stream: RTVI means nothing to a provider expecting
+// its own control messages, and a pipeline with an RTVI processor in it would
+// otherwise write the whole protocol onto the call.
+type RTVIMessageCarrier interface {
+	// CarriesRTVIMessages reports whether RTVI messages belong on this wire.
+	CarriesRTVIMessages() bool
 }
 
 // closableSerializer is a Serializer holding resources that have to be handed
@@ -341,6 +355,33 @@ func (out *outputTransport) writeAudioSleep(ctx context.Context) {
 // SendMessage sends an already-encoded application message.
 func (out *outputTransport) SendMessage(ctx context.Context, data []byte) error {
 	return out.sess.write(ctx, data)
+}
+
+// IgnoresMessage refuses an RTVI message unless the serializer says this wire
+// carries them. See RTVIMessageCarrier.
+func (out *outputTransport) IgnoresMessage(message any) bool {
+	if c, ok := out.ser.(RTVIMessageCarrier); ok && c.CarriesRTVIMessages() {
+		return false
+	}
+	return isRTVIMessage(message)
+}
+
+// isRTVIMessage reports whether the message is one of the RTVI protocol's,
+// which every one of them says of itself in its label.
+func isRTVIMessage(message any) bool {
+	switch m := message.(type) {
+	case rtvi.Message:
+		return m.Label == rtvi.MessageLabel
+	case *rtvi.Message:
+		return m != nil && m.Label == rtvi.MessageLabel
+	case map[string]any:
+		// Built by hand rather than by the rtvi package, which a caller speaking
+		// the protocol itself would produce.
+		label, _ := m["label"].(string)
+		return label == rtvi.MessageLabel
+	default:
+		return false
+	}
 }
 
 // ProcessFrame adds the control-frame handling the base output does not: an

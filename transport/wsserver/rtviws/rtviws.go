@@ -56,6 +56,10 @@ type Serializer struct{}
 // New builds an RTVI WebSocket serializer.
 func New() *Serializer { return &Serializer{} }
 
+// CarriesRTVIMessages reports that this wire is the one RTVI messages travel on,
+// so they are not filtered out of it the way they are off a telephony call.
+func (s *Serializer) CarriesRTVIMessages() bool { return true }
+
 // Setup is a no-op: the RTVI channel carries no audio, so there is nothing to
 // configure from the StartFrame.
 func (*Serializer) Setup(processor.Setup) error { return nil }

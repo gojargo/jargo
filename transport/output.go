@@ -95,6 +95,14 @@ func (bo *BaseOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool
 	return false, nil
 }
 
+// MessageFilter is an optional interface a concrete output implements when its
+// wire does not carry every application message the pipeline produces. An output
+// that does not implement it sends them all.
+type MessageFilter interface {
+	// IgnoresMessage reports whether this message is not to be sent.
+	IgnoresMessage(message any) bool
+}
+
 // SendMessage is the default no-op; a concrete transport overrides it.
 func (bo *BaseOutput) SendMessage(context.Context, []byte) error { return nil }
 
@@ -384,6 +392,13 @@ func (bo *BaseOutput) stopStreaming(ctx context.Context) {
 // pipeline feeds itself errors until it runs out of memory. A connection that
 // cannot carry a message cannot carry the complaint about it either.
 func (bo *BaseOutput) sendTransportMessage(ctx context.Context, message any) {
+	// A message the wire has no use for is dropped before it is encoded. A
+	// telephony provider's media stream is the case that matters: the RTVI
+	// protocol a browser client speaks means nothing there, and writing it onto
+	// the media socket at best confuses the provider.
+	if f, ok := bo.self.(MessageFilter); ok && f.IgnoresMessage(message) {
+		return
+	}
 	data, err := json.Marshal(message)
 	if err == nil {
 		err = bo.self.SendMessage(ctx, data)
