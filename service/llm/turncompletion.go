@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"strings"
@@ -76,13 +77,13 @@ const (
 // worded for the model. Their lines are long because the wording is theirs, not
 // prose written here, and reflowing them would change what the model is told.
 
-// DefaultIncompleteShortPrompt asks the model to nudge a user who paused
-// briefly.
+// incompleteShortPromptTemplate asks the model to nudge a user who paused
+// briefly. The markers are substituted in when it is rendered.
 //
 //nolint:lll // the protocol text is reproduced verbatim as the model is given it
-const DefaultIncompleteShortPrompt = `The user paused briefly. Generate a brief, natural prompt to encourage them to continue.
+const incompleteShortPromptTemplate = `The user paused briefly. Generate a brief, natural prompt to encourage them to continue.
 
-IMPORTANT: You MUST respond with ✓ followed by your message. Do NOT output ○ or ◐ - the user has already been given time to continue.
+IMPORTANT: You MUST respond with {{complete}} followed by your message. Do NOT output {{short}} or {{long}} - the user has already been given time to continue.
 
 Your response should:
 - Be contextually relevant to what was just discussed
@@ -90,17 +91,17 @@ Your response should:
 - Be very concise (1 sentence max)
 - Gently prompt them to continue
 
-Example format: ✓ Go ahead, I'm listening.
+Example format: {{complete}} Go ahead, I'm listening.
 
-Generate your ✓ response now.`
+Generate your {{complete}} response now.`
 
-// DefaultIncompleteLongPrompt asks the model to check in on a user who has been
-// quiet for a while.
+// incompleteLongPromptTemplate asks the model to check in on a user who has
+// been quiet for a while. The markers are substituted in when it is rendered.
 //
 //nolint:lll // the protocol text is reproduced verbatim as the model is given it
-const DefaultIncompleteLongPrompt = `The user has been quiet for a while. Generate a friendly check-in message.
+const incompleteLongPromptTemplate = `The user has been quiet for a while. Generate a friendly check-in message.
 
-IMPORTANT: You MUST respond with ✓ followed by your message. Do NOT output ○ or ◐ - the user has already been given plenty of time.
+IMPORTANT: You MUST respond with {{complete}} followed by your message. Do NOT output {{short}} or {{long}} - the user has already been given plenty of time.
 
 Your response should:
 - Acknowledge they might be thinking or busy
@@ -108,99 +109,140 @@ Your response should:
 - Be warm and understanding
 - Be brief (1 sentence)
 
-Example format: ✓ No rush! Let me know when you're ready to continue.
+Example format: {{complete}} No rush! Let me know when you're ready to continue.
 
-Generate your ✓ response now.`
+Generate your {{complete}} response now.`
 
-// UserTurnCompletionInstructions teaches the model the marker protocol. It is
-// composed onto the system instruction while turn-completion gating is on.
+// completionInstructionsTemplate teaches the model the marker protocol. It is
+// composed onto the system instruction while turn-completion gating is on, with
+// the markers substituted in when it is rendered.
 //
 //nolint:lll // the protocol text is reproduced verbatim
 //nolint:lll // the protocol text is reproduced verbatim as the model is given it
-const UserTurnCompletionInstructions = `
+const completionInstructionsTemplate = `
 CRITICAL INSTRUCTION - MANDATORY RESPONSE FORMAT:
 Every single response MUST begin with a turn completion indicator. This is not optional.
 
 TURN COMPLETION DECISION FRAMEWORK:
 Ask yourself: "Has the user provided enough information for me to give a meaningful, substantive response?"
 
-Mark as COMPLETE (✓) when:
+Mark as COMPLETE ({{complete}}) when:
 - The user has answered your question with actual content
 - The user has made a complete request or statement
 - The user has provided all necessary information for you to respond meaningfully
 - The conversation can naturally progress to your substantive response
 
-Mark as INCOMPLETE SHORT (○) when the user will likely continue soon:
+Mark as INCOMPLETE SHORT ({{short}}) when the user will likely continue soon:
 - The user was clearly cut off mid-sentence or mid-word
 - The user is in the middle of a thought that got interrupted
 - Brief technical interruption (they'll resume in a few seconds)
 
-Mark as INCOMPLETE LONG (◐) when the user needs more time:
+Mark as INCOMPLETE LONG ({{long}}) when the user needs more time:
 - The user explicitly asks for time: "let me think", "give me a minute", "hold on"
 - The user is clearly pondering or deliberating: "hmm", "well...", "that's a good question"
 - The user acknowledged but hasn't answered yet: "That's interesting..."
 - The response feels like a preamble before the actual answer
 
 RESPOND in one of these three formats:
-1. If COMPLETE: ` + "`✓`" + ` followed by a space and your full substantive response
-2. If INCOMPLETE SHORT: ONLY the character ` + "`○`" + ` (user will continue in a few seconds)
-3. If INCOMPLETE LONG: ONLY the character ` + "`◐`" + ` (user needs more time to think)
+1. If COMPLETE: ` + "`{{complete}}`" + ` followed by a space and your full substantive response
+2. If INCOMPLETE SHORT: ONLY the character ` + "`{{short}}`" + ` (user will continue in a few seconds)
+3. If INCOMPLETE LONG: ONLY the character ` + "`{{long}}`" + ` (user needs more time to think)
 
 KEY INSIGHT: Grammatically complete ≠ conversationally complete
-- "That's a really good question." is grammatically complete but conversationally incomplete (use ◐)
-- "I'd go to Japan because I love" is mid-sentence (use ○)
+- "That's a really good question." is grammatically complete but conversationally incomplete (use {{long}})
+- "I'd go to Japan because I love" is mid-sentence (use {{short}})
 
 EXAMPLES:
 
 You ask: "Where would you travel?"
 User: "I'd go to Japan because I love"
-→ ` + "`○`" + `
+→ ` + "`{{short}}`" + `
 (Cut off mid-sentence - they'll continue in seconds)
 
 You ask: "Where would you travel?"
 User: "That's a good question. Let me think..."
-→ ` + "`◐`" + `
+→ ` + "`{{long}}`" + `
 (User is deliberating - give them time)
 
 You ask: "Where would you travel?"
 User: "Hmm, hold on a second."
-→ ` + "`◐`" + `
+→ ` + "`{{long}}`" + `
 (User explicitly asked for time)
 
 You ask: "Where would you travel?"
 User: "I'd go to Japan because I love the culture."
-→ ` + "`✓ Japan is a wonderful choice! The blend of ancient traditions and modern innovation is truly unique. Have you been before?`" + `
+→ ` + "`{{complete}} Japan is a wonderful choice! The blend of ancient traditions and modern innovation is truly unique. Have you been before?`" + `
 (Complete answer - give full response)
 
 User: "I need help with"
-→ ` + "`○`" + `
+→ ` + "`{{short}}`" + `
 (Cut off mid-request - they'll finish soon)
 
 User: "Well, let me think about that for a moment."
-→ ` + "`◐`" + `
+→ ` + "`{{long}}`" + `
 (User needs time to think)
 
 User: "Can you help me book a flight to New York next week?"
-→ ` + "`✓ I'd be happy to help you with that! Let me gather some information...`" + `
+→ ` + "`{{complete}} I'd be happy to help you with that! Let me gather some information...`" + `
 (Complete request - provide full response)
 
 User: "Give me a minute to gather my thoughts."
-→ ` + "`◐`" + `
+→ ` + "`{{long}}`" + `
 (User explicitly asked for time)
 
 FORMAT REQUIREMENTS:
-- ALWAYS use single-character indicators: ` + "`✓`" + ` (complete), ` + "`○`" + ` (short wait), or ` + "`◐`" + ` (long wait)
-- For COMPLETE: ` + "`✓`" + ` followed by a space and your full response
-- For INCOMPLETE: ONLY the single character (` + "`○`" + ` or ` + "`◐`" + `) with absolutely nothing else
+- ALWAYS use single-character indicators: ` + "`{{complete}}`" + ` (complete), ` + "`{{short}}`" + ` (short wait), or ` + "`{{long}}`" + ` (long wait)
+- For COMPLETE: ` + "`{{complete}}`" + ` followed by a space and your full response
+- For INCOMPLETE: ONLY the single character (` + "`{{short}}`" + ` or ` + "`{{long}}`" + `) with absolutely nothing else
 - Your turn indicator must be the very first character in your response
 
-Remember: Focus on conversational completeness and how long the user might need. Was it a mid-sentence cutoff (○) or do they need time to think (◐)?`
+Remember: Focus on conversational completeness and how long the user might need. Was it a mid-sentence cutoff ({{short}}) or do they need time to think ({{long}})?`
+
+// renderMarkers substitutes the three markers into one of the protocol templates.
+//
+// The markers are configurable because the protocol is only a convention between
+// the application and its model: a model whose tokenizer splits one of the
+// defaults, or one already using a character for something else, needs a set of
+// its own, and every prompt has to agree on it.
+func renderMarkers(tmpl string, complete, short, long string) string {
+	return strings.NewReplacer(
+		"{{complete}}", complete,
+		"{{short}}", short,
+		"{{long}}", long,
+	).Replace(tmpl)
+}
+
+// The protocol as it is worded with the default markers. They are variables
+// rather than constants because they are rendered from the templates above.
+//
+//nolint:gochecknoglobals // rendered once, read only
+var (
+	// DefaultIncompleteShortPrompt nudges a user who paused briefly.
+	DefaultIncompleteShortPrompt = renderMarkers(incompleteShortPromptTemplate,
+		MarkerComplete, MarkerIncompleteShort, MarkerIncompleteLong)
+	// DefaultIncompleteLongPrompt checks in on a user who has been quiet.
+	DefaultIncompleteLongPrompt = renderMarkers(incompleteLongPromptTemplate,
+		MarkerComplete, MarkerIncompleteShort, MarkerIncompleteLong)
+	// UserTurnCompletionInstructions teaches the model the marker protocol.
+	UserTurnCompletionInstructions = renderMarkers(completionInstructionsTemplate,
+		MarkerComplete, MarkerIncompleteShort, MarkerIncompleteLong)
+)
 
 // UserTurnCompletionConfig configures turn-completion gating.
 type UserTurnCompletionConfig struct {
-	// Instructions overrides the marker protocol taught to the model. Empty uses
-	// UserTurnCompletionInstructions.
+	// Instructions overrides the marker protocol taught to the model. Empty
+	// renders the default protocol from the configured markers.
 	Instructions string
+	// CompleteMarker is what the model emits when the user's turn is complete.
+	// It is generated ahead of any speakable text, so prefer a character that is
+	// a single token in the model's tokenizer. Empty uses MarkerComplete.
+	CompleteMarker string
+	// IncompleteShortMarker marks a turn cut off mid-thought. Empty uses
+	// MarkerIncompleteShort.
+	IncompleteShortMarker string
+	// IncompleteLongMarker marks a user who needs more time. Empty uses
+	// MarkerIncompleteLong.
+	IncompleteLongMarker string
 	// IncompleteShortTimeout is how long to wait after the short marker before
 	// re-prompting. Zero uses 5s.
 	IncompleteShortTimeout time.Duration
@@ -215,13 +257,22 @@ type UserTurnCompletionConfig struct {
 	IncompleteLongPrompt string
 }
 
+// Markers are the complete, short and long markers in force, in that order:
+// the configured ones, and the defaults for whatever was left empty.
+func (c UserTurnCompletionConfig) Markers() (complete, short, long string) {
+	return cmp.Or(c.CompleteMarker, MarkerComplete),
+		cmp.Or(c.IncompleteShortMarker, MarkerIncompleteShort),
+		cmp.Or(c.IncompleteLongMarker, MarkerIncompleteLong)
+}
+
 // CompletionInstructions is the marker protocol to teach the model: the
-// configured one, or the default when none was given.
+// configured one, or the default rendered from the markers in force.
 func (c UserTurnCompletionConfig) CompletionInstructions() string {
 	if c.Instructions != "" {
 		return c.Instructions
 	}
-	return UserTurnCompletionInstructions
+	complete, short, long := c.Markers()
+	return renderMarkers(completionInstructionsTemplate, complete, short, long)
 }
 
 // ShortPrompt is the re-prompt for a short incomplete turn.
@@ -229,7 +280,8 @@ func (c UserTurnCompletionConfig) ShortPrompt() string {
 	if c.IncompleteShortPrompt != "" {
 		return c.IncompleteShortPrompt
 	}
-	return DefaultIncompleteShortPrompt
+	complete, short, long := c.Markers()
+	return renderMarkers(incompleteShortPromptTemplate, complete, short, long)
 }
 
 // LongPrompt is the re-prompt for a long incomplete turn.
@@ -237,7 +289,8 @@ func (c UserTurnCompletionConfig) LongPrompt() string {
 	if c.IncompleteLongPrompt != "" {
 		return c.IncompleteLongPrompt
 	}
-	return DefaultIncompleteLongPrompt
+	complete, short, long := c.Markers()
+	return renderMarkers(incompleteLongPromptTemplate, complete, short, long)
 }
 
 // timeout is the wait before re-prompting for the given kind of incomplete turn.
@@ -286,8 +339,19 @@ type turnCompletionState struct {
 	// completion the controller dropped as stale would otherwise silence the
 	// turn for good.
 	voiced bool
+	// userSpeaking reports whether the detector currently hears the user. A
+	// complete verdict arriving while it does is stale: the user resumed after
+	// the inference was triggered, so the turn is not over after all.
+	userSpeaking bool
 	// cancelTimeout stops the armed re-prompt, and is nil when none is armed.
 	cancelTimeout func()
+}
+
+// setUserSpeaking records whether the detector currently hears the user.
+func (b *Base) setUserSpeaking(v bool) {
+	b.turnCompletion.mu.Lock()
+	b.turnCompletion.userSpeaking = v
+	b.turnCompletion.mu.Unlock()
 }
 
 // FilterIncompleteUserTurns reports whether turn-completion gating is on.
@@ -350,8 +414,11 @@ func (b *Base) handleTurnCompletionProcessFrame(ctx context.Context, f frames.Fr
 		// again, so it is canceled; and one fresh spoken completion is allowed,
 		// because a completion the controller dropped as stale would otherwise
 		// silence the turn for good.
+		b.setUserSpeaking(true)
 		b.cancelIncompleteTimeout()
 		b.clearVoiced()
+	case *frames.VADUserStoppedSpeakingFrame:
+		b.setUserSpeaking(false)
 	}
 }
 
@@ -508,6 +575,28 @@ func (b *Base) pushLLMText(ctx context.Context, text string) error {
 	return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
 }
 
+// suppressStaleCompletion handles a complete verdict that arrives after the user
+// has resumed speaking. The inference was triggered when the turn looked over;
+// by the time it answers the turn is not over after all, so the response is
+// suppressed and the short timeout re-armed, exactly as if the model had
+// reported the turn incomplete. The next inference re-evaluates the fuller turn.
+//
+// The caller holds the lock and hands it over.
+func (b *Base) suppressStaleCompletion(ctx context.Context, complete, short string) error {
+	b.turnCompletion.marker = TurnMarkerIncomplete
+	b.turnCompletion.buffer = ""
+	b.turnCompletion.mu.Unlock()
+
+	slog.Debug("a complete turn was reported while the user is speaking, "+
+		"treating it as stale and suppressing the response", "marker", complete)
+
+	if err := b.PushFrame(ctx, frames.NewLLMMarkerFrame(short), processor.Downstream); err != nil {
+		return err
+	}
+	b.startIncompleteTimeout(IncompleteShort)
+	return nil
+}
+
 // pushTurnText emits one chunk of generated text through the gating. The
 // service calls it instead of pushing an LLMTextFrame, so a suppressed response
 // never becomes a frame.
@@ -539,23 +628,24 @@ func (b *Base) pushTurnText(ctx context.Context, text string) error {
 
 	b.turnCompletion.buffer += text
 	buffer := b.turnCompletion.buffer
+	completeMarker, shortMarker, longMarker := b.turnCompletion.config.Markers()
 
 	// The short marker is looked for first, matching the order the protocol
 	// presents them in.
 	incomplete, isIncomplete := IncompleteShort, true
 	switch {
-	case strings.Contains(buffer, MarkerIncompleteShort):
+	case strings.Contains(buffer, shortMarker):
 		incomplete = IncompleteShort
-	case strings.Contains(buffer, MarkerIncompleteLong):
+	case strings.Contains(buffer, longMarker):
 		incomplete = IncompleteLong
 	default:
 		isIncomplete = false
 	}
 
 	if isIncomplete {
-		marker := MarkerIncompleteShort
+		marker := shortMarker
 		if incomplete == IncompleteLong {
-			marker = MarkerIncompleteLong
+			marker = longMarker
 		}
 		b.turnCompletion.marker = TurnMarkerIncomplete
 		b.turnCompletion.buffer = ""
@@ -577,10 +667,14 @@ func (b *Base) pushTurnText(ctx context.Context, text string) error {
 		return nil
 	}
 
-	_, rest, found := strings.Cut(buffer, MarkerComplete)
+	_, rest, found := strings.Cut(buffer, completeMarker)
 	if !found {
 		b.turnCompletion.mu.Unlock()
 		return nil // still buffering, no marker yet
+	}
+
+	if b.turnCompletion.userSpeaking {
+		return b.suppressStaleCompletion(ctx, completeMarker, shortMarker)
 	}
 
 	// This user turn now has its one spoken completion. Any armed re-prompt was
@@ -600,7 +694,7 @@ func (b *Base) pushTurnText(ctx context.Context, text string) error {
 	// The marker goes to the conversation as a sideband signal the assistant
 	// aggregator prepends to the text it is aggregating, so the message it
 	// finally writes reads as the marker followed by the response.
-	mf := frames.NewLLMMarkerFrame(MarkerComplete)
+	mf := frames.NewLLMMarkerFrame(completeMarker)
 	mf.AppendToContextImmediately = false
 	if err := b.PushFrame(ctx, mf, processor.Downstream); err != nil {
 		return err

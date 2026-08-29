@@ -63,6 +63,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a 400, so every sentence after the first in a turn came back as an error
   instead of audio.
 
+- **The turn-completion markers changed, and can now be configured.** They are a
+  fill gradient tracking how much of the user's turn has arrived: `●` complete,
+  `◐` cut off mid-thought, `○` still thinking. Each is a single token in every
+  major tokenizer, which matters because the complete marker is generated ahead
+  of any speakable text. Note the short and long markers swapped characters, so a
+  system prompt written by hand against the old set needs updating.
+  `llm.UserTurnCompletionConfig` gained `CompleteMarker`,
+  `IncompleteShortMarker` and `IncompleteLongMarker`, and every prompt is
+  rendered from whichever set is in force. The assistant aggregator strips the
+  markers it has actually seen as well as the defaults, so a custom set is kept
+  out of the transcript too.
+
+- **A completion arriving while the user is speaking is stale.** The inference
+  was triggered when the turn looked over; by the time it answers the user has
+  resumed, so the turn is not over after all. It is now handled as a short
+  incomplete turn, suppressing the response and re-arming the short timeout, and
+  the next inference re-evaluates the fuller turn.
+
 - **An inactive worker is handed only what can wake or stop it.** `active` gated
   the frames a bridged worker received and nothing else, so a worker put out of
   the way still received job requests, job answers and UI events, and ran its

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -388,6 +389,10 @@ func TestResumedSpeechDoesNotPermanentlySilenceTheTurn(t *testing.T) {
 	}
 
 	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
+	// The resumed speech ends before the second inference answers. A completion
+	// arriving while the user is still speaking is stale and suppressed, which
+	// TestACompletionWhileTheUserSpeaksIsStale covers.
+	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	if err := svc.pushTurnText(t.Context(), MarkerComplete+" Second answer"); err != nil {
 		t.Fatalf("pushTurnText: %v", err)
@@ -742,4 +747,56 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestACompletionWhileTheUserSpeaksIsStale covers a complete verdict that
+// arrives after the user has resumed. The inference was triggered when the turn
+// looked over; by the time it answers the turn is not over after all, so the
+// response is suppressed and the short timeout re-armed, exactly as if the model
+// had reported the turn incomplete.
+//
+// Ported from upstream's stale-complete handling.
+func TestACompletionWhileTheUserSpeaksIsStale(t *testing.T) {
+	svc, _, down := gatedService(t)
+
+	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
+
+	if err := svc.pushTurnText(t.Context(), MarkerComplete+" Answer"); err != nil {
+		t.Fatalf("pushTurnText: %v", err)
+	}
+
+	if got := textsOf(down); len(got) != 0 {
+		t.Errorf("pushed text = %v, want none: the completion was stale", got)
+	}
+	if got := markersOf(down); len(got) != 1 || got[0].Marker != MarkerIncompleteShort {
+		t.Errorf("markers = %v, want the short incomplete one", got)
+	}
+}
+
+// TestConfiguredMarkersAreTheOnesRead covers a service told to use a marker set
+// of its own: it is those the response is parsed for, and those the prompts
+// teach.
+func TestConfiguredMarkersAreTheOnesRead(t *testing.T) {
+	svc, _, down := gatedService(t)
+	cfg := UserTurnCompletionConfig{
+		CompleteMarker:        "A",
+		IncompleteShortMarker: "B",
+		IncompleteLongMarker:  "C",
+	}
+	svc.SetUserTurnCompletionConfig(cfg)
+
+	if !strings.Contains(cfg.CompletionInstructions(), "A") ||
+		strings.Contains(cfg.CompletionInstructions(), MarkerComplete) {
+		t.Error("the instructions still teach the default markers")
+	}
+
+	if err := svc.pushTurnText(t.Context(), "A Answer"); err != nil {
+		t.Fatalf("pushTurnText: %v", err)
+	}
+	if got := textsOf(down); len(got) != 1 || got[0] != "Answer" {
+		t.Errorf("pushed text = %v, want the answer past the configured marker", got)
+	}
+	if got := markersOf(down); len(got) != 1 || got[0].Marker != "A" {
+		t.Errorf("markers = %v, want the configured complete marker", got)
+	}
 }
