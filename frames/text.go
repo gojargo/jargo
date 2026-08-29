@@ -216,6 +216,10 @@ const (
 	AggregationToken AggregationType = "token"
 	// AggregationWord aggregates text a word at a time.
 	AggregationWord AggregationType = "word"
+	// AnyAggregation is not a way of aggregating text but a wildcard standing for
+	// every one of them, for something registered against a type that should
+	// apply whatever the unit was grouped by.
+	AnyAggregation AggregationType = "*"
 )
 
 // AggregatedTextFrame is a run of TextFrames aggregated into one unit for

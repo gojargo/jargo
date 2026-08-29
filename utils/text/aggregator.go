@@ -63,6 +63,15 @@ func NewSimpleAggregator(aggregateBy frames.AggregationType, tokenizer SentenceT
 	return &SimpleAggregator{aggregationType: aggregateBy, tokenizer: tokenizer}
 }
 
+// NewTokenAggregator builds an aggregator that hands text on as it arrives,
+// grouping nothing. It takes no tokenizer because it never looks for a sentence
+// boundary: a service that streams tokens sends each one as the model wrote it,
+// trading the naturalness sentence-sized synthesis gives for the latency of not
+// waiting for one to finish.
+func NewTokenAggregator() *SimpleAggregator {
+	return &SimpleAggregator{aggregationType: frames.AggregationToken}
+}
+
 // Type implements Aggregator.
 func (a *SimpleAggregator) Type() frames.AggregationType { return a.aggregationType }
 

@@ -91,7 +91,8 @@ func (a *PatternPairAggregator) AddPattern(
 	typ frames.AggregationType, start, end string, action MatchAction,
 ) error {
 	switch typ {
-	case frames.AggregationSentence, frames.AggregationWord, frames.AggregationToken:
+	case frames.AggregationSentence, frames.AggregationWord, frames.AggregationToken,
+		frames.AnyAggregation:
 		return fmt.Errorf("%w: %q", ErrReservedAggregationType, typ)
 	}
 	a.patterns = append(a.patterns, &pattern{
