@@ -95,6 +95,17 @@ type TTSSpeakMessage struct {
 	AppendToContext bool
 }
 
+// FlushProgressMessage reports that a flush probe from another worker is still
+// making progress. A probe that crosses into another pipeline is answered there,
+// so the worker waiting on it cannot see whether anything is happening. The
+// pipeline holding the probe says so, and the wait stays alive for as long as it
+// keeps saying it.
+type FlushProgressMessage struct {
+	BaseDataMessage
+	// FlushID is the id of the probe being reported on.
+	FlushID uint64
+}
+
 // ActivateWorkerMessage asks a worker to become active.
 type ActivateWorkerMessage struct {
 	BaseDataMessage

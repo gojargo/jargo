@@ -55,6 +55,12 @@ type Running interface {
 	// goroutine that processes frames: the probe has to pass through this
 	// processor to complete its round trip.
 	Flush(ctx context.Context) error
+	// TrackFlushProbe reports that a flush probe from another worker has entered
+	// this pipeline, so that whoever is waiting on it, out of sight in the
+	// pipeline that started it, is told this one is still working. It is called
+	// by whatever brings the probe in, since only that knows it is really coming
+	// in: every worker on the bus sees it, but most have nowhere to put it.
+	TrackFlushProbe(f *frames.PipelineFlushFrame)
 	// TurnTracker follows the conversation's turns, and is nil when the worker
 	// is not tracking them. A processor that has to know where a turn ended
 	// subscribes to it; the interface is narrow because the observer that
@@ -706,16 +712,33 @@ func (b *Base) internalPushFrame(ctx context.Context, f frames.Frame, dir Direct
 	return nil
 }
 
+// TrackFlushProbe reports a flush probe from another worker entering the
+// pipeline this processor runs in, so the worker waiting on it hears that this
+// pipeline is working on it. It is a no-op for a processor driven outside a
+// pipeline worker, which answers no probes.
+func (b *Base) TrackFlushProbe(f *frames.PipelineFlushFrame) {
+	running := b.setupState().running
+	if running == nil {
+		return
+	}
+	running.TrackFlushProbe(f)
+}
+
 // FlushPipeline blocks until every frame queued ahead of the call has traveled
-// the whole pipeline. Use it to let the pipeline settle, after an interruption
-// say, before injecting new work.
+// the whole pipeline, along with anything a processor started by pushing
+// upstream. Use it to let the pipeline settle, after an interruption say, before
+// injecting new work.
+//
+// The wait is bounded by the flush itself, which gives up once the pipeline has
+// gone quiet without the probe coming back; a pipeline that keeps working keeps
+// the wait alive however long it takes.
 //
 // Never call it from the goroutine that processes frames: the probe it waits on
-// has to pass through this processor to complete its round trip, so a processor
+// has to pass through this processor to complete its trip, so a processor
 // blocking its own frame path would wait forever. A processor that needs this
 // runs it from a goroutine of its own.
 //
-// It is a no-op for a processor driven outside a pipeline task, which has
+// It is a no-op for a processor driven outside a pipeline worker, which has
 // nothing to drain.
 func (b *Base) FlushPipeline(ctx context.Context) error {
 	running := b.setupState().running

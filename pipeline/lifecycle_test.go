@@ -3,6 +3,7 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -268,6 +269,135 @@ func TestFlushProbeRoundTrip(t *testing.T) {
 	waitDone(t, done)
 }
 
+// TestFlushProbeMakesTheTripTwice checks the probe passes a processor in the
+// middle of the pipeline three times: down to the sink, back up to the source,
+// and down again. Only the second arrival at the sink settles it.
+func TestFlushProbeMakesTheTripTwice(t *testing.T) {
+	up := make(chan struct{})
+	var once sync.Once
+	spy := newFlushSpy()
+	task := pipeline.NewWorker(pipeline.New(spy), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.StartFrame); ok {
+			once.Do(func() { close(up) })
+		}
+	})
+	done := runTask(t, task)
+	started(t, up)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := task.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := spy.probes(); got != 3 {
+		t.Errorf("probe passes = %d, want 3 (down, up, down)", got)
+	}
+
+	task.StopWhenDone()
+	waitDone(t, done)
+}
+
+// TestFlushWaitsForWorkStartedAtTheTurnaround checks the probe waits for work
+// that was still on its way down when it turned around at the source.
+//
+// That is what the extra leg is for: an LLM run triggered by a function call
+// result is pushed up and its response only comes back down afterwards. A probe
+// that settled at the source would return while the response was still in
+// flight.
+func TestFlushWaitsForWorkStartedAtTheTurnaround(t *testing.T) {
+	up := make(chan struct{})
+	var once sync.Once
+
+	// Recorded by a processor at the end of the pipeline rather than by an
+	// event, so what the flush is asserted against is what has actually been
+	// through rather than what has been reported.
+	rec := newTextRecorder()
+	task := pipeline.NewWorker(pipeline.New(newTurnaround(), rec), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.StartFrame); ok {
+			once.Do(func() { close(up) })
+		}
+	})
+	done := runTask(t, task)
+	started(t, up)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := task.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if arrived := slices.Contains(rec.texts(), "late"); !arrived {
+		t.Error("the flush settled while work started at the turnaround was still on its way down")
+	}
+
+	task.StopWhenDone()
+	waitDone(t, done)
+}
+
+// textRecorder records the text frames that reach it, in order.
+type textRecorder struct {
+	*processor.Base
+	mu   sync.Mutex
+	seen []string
+}
+
+func newTextRecorder() *textRecorder {
+	p := &textRecorder{}
+	p.Base = processor.New("TextRecorder", p)
+	return p
+}
+
+func (p *textRecorder) ProcessFrame(
+	ctx context.Context, f frames.Frame, dir processor.Direction,
+) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if tf, ok := f.(*frames.TextFrame); ok {
+		p.mu.Lock()
+		p.seen = append(p.seen, tf.Text)
+		p.mu.Unlock()
+	}
+	return p.PushFrame(ctx, f, dir)
+}
+
+func (p *textRecorder) texts() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.seen...)
+}
+
+// turnaround starts work on its way down as the probe passes it going up, which
+// is when a processor answering something pushed upstream starts its own.
+type turnaround struct {
+	*processor.Base
+	once sync.Once
+}
+
+func newTurnaround() *turnaround {
+	p := &turnaround{}
+	p.Base = processor.New("Turnaround", p)
+	return p
+}
+
+func (p *turnaround) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.PipelineFlushFrame); ok && dir == processor.Upstream {
+		p.once.Do(func() {
+			_ = p.PushFrame(ctx, frames.NewTextFrame("late"), processor.Downstream)
+		})
+	}
+	return p.PushFrame(ctx, f, dir)
+}
+
 // flushSpy records the flush probes that reach it, so a test can tell whether a
 // probe entered the pipeline at all.
 type flushSpy struct {
@@ -300,26 +430,21 @@ func (p *flushSpy) probes() int {
 	return p.seen
 }
 
-// TestFlushAfterPipelineEndQueued checks a flush probe still reaches the
-// pipeline once a pipeline-ending frame has been queued ahead of it.
+// TestFlushWaitsForFramesAlreadyQueued checks the probe does not overtake the
+// frames waiting on the worker's own queue.
 //
-// The task stops draining the push queue as soon as one goes in, since it then
-// waits for that frame to travel through. A probe put through the queue behind
-// it would never enter the pipeline at all, and the caller would wait out its
-// whole timeout for a pipeline that was never asked anything. A tool handler
-// that ends the session leaves exactly that behind.
-//
-// It asserts the probe arrived rather than that the flush settled: once the end
-// frame is released the pipeline tears down, so whether the probe finishes its
-// round trip before that is a race by nature. Entering at all is the part the
-// caller was being denied.
-func TestFlushAfterPipelineEndQueued(t *testing.T) {
+// The probe goes on that queue like any other frame, so everything handed to
+// QueueFrame before the call is covered by the flush. Injected straight into the
+// pipeline it would jump the queue and report a drain that had not happened.
+func TestFlushWaitsForFramesAlreadyQueued(t *testing.T) {
 	up := make(chan struct{})
 	var once sync.Once
-	spy := newFlushSpy()
-	task := pipeline.NewWorker(pipeline.New(spy, newSlowEnd(300*time.Millisecond)), pipeline.WorkerConfig{
-		ReachedDownstreamFilter: pipeline.AnyFrame,
-	})
+
+	rec := newTextRecorder()
+	task := pipeline.NewWorker(
+		pipeline.New(newHoldText(150*time.Millisecond), rec), pipeline.WorkerConfig{
+			ReachedDownstreamFilter: pipeline.AnyFrame,
+		})
 	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			once.Do(func() { close(up) })
@@ -328,16 +453,46 @@ func TestFlushAfterPipelineEndQueued(t *testing.T) {
 	done := runTask(t, task)
 	started(t, up)
 
-	task.StopWhenDone()
+	task.QueueFrame(frames.NewTextFrame("one"))
+	task.QueueFrame(frames.NewTextFrame("two"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = task.Flush(ctx)
-
-	if spy.probes() == 0 {
-		t.Error("the flush probe never entered the pipeline behind the end frame")
+	if err := task.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
+
+	if got := rec.texts(); len(got) != 2 {
+		t.Errorf("frames through by the time the flush settled = %v, want both", got)
+	}
+
+	task.StopWhenDone()
 	waitDone(t, done)
+}
+
+// holdText delays each text frame, so a flush has something slow to wait for.
+type holdText struct {
+	*processor.Base
+	delay time.Duration
+}
+
+func newHoldText(d time.Duration) *holdText {
+	p := &holdText{delay: d}
+	p.Base = processor.New("HoldText", p)
+	return p
+}
+
+func (p *holdText) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.TextFrame); ok {
+		select {
+		case <-time.After(p.delay):
+		case <-ctx.Done():
+		}
+	}
+	return p.PushFrame(ctx, f, dir)
 }
 
 // TestFlushHonorsContext checks Flush gives up when its context is canceled

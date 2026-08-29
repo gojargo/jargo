@@ -2,10 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gojargo/jargo/bus"
@@ -187,6 +189,15 @@ type WorkerConfig struct {
 	// ExcludeFrames are frame types that never cross the bus, on top of the
 	// lifecycle frames, which never do. It only applies to a bridged worker.
 	ExcludeFrames []frames.Frame
+	// HandleFlushFrame reports whether this worker answers a flush probe,
+	// bouncing it at the sink and completing it there on its return. Nil
+	// defaults to whether the pipeline is unbridged, so a worker wired into
+	// someone else's topology leaves the probe to travel on and be completed by
+	// the pipeline that owns the transport.
+	//
+	// A bridged worker with no such peer never completes a flush, and every
+	// Flush call on it waits out its no-progress timeout.
+	HandleFlushFrame *bool
 	// EnableRTVI puts an RTVI processor at the head of the pipeline, and its
 	// observer alongside the others, so a client is told what the session is
 	// doing without the pipeline having to be built for it; nil defaults to
@@ -307,6 +318,22 @@ type Worker struct {
 	heartbeats *frameQueue
 	idleSig    chan struct{}
 
+	// Flushing the pipeline. See the flush section below.
+	handleFlush bool
+	// framesAtSink counts the frames that have reached the sink. A flush watches
+	// it to tell a pipeline that is still working from one that is stuck.
+	framesAtSink atomic.Uint64
+	flushMu      sync.Mutex
+	// foreignProbes are the probes from other workers this pipeline is
+	// answering, by flush id, held against the name to report progress back to.
+	foreignProbes map[uint64]string
+	// flushProgress counts the reports that have come back for this worker's own
+	// probes, by flush id.
+	flushProgress map[uint64]int
+	// flushProgressSent is when progress was last reported, so a busy pipeline
+	// says it is alive rather than saying so on every frame.
+	flushProgressSent time.Time
+
 	startOnce sync.Once
 	startSig  chan struct{}
 	endOnce   sync.Once
@@ -378,6 +405,9 @@ func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
 		idleSig:           make(chan struct{}, 1),
 		startSig:          make(chan struct{}),
 		endSig:            make(chan struct{}),
+		handleFlush:       boolOrDefault(cfg.HandleFlushFrame, cfg.Bridged == nil),
+		foreignProbes:     map[uint64]string{},
+		flushProgress:     map[uint64]int{},
 		reachedDownFilter: cfg.ReachedDownstreamFilter,
 		reachedUpFilter:   cfg.ReachedUpstreamFilter,
 	}
@@ -646,10 +676,19 @@ func (t *Worker) OnBusMessage(ctx context.Context, m bus.Message) {
 		return
 	}
 
-	if speak, ok := m.(*bus.TTSSpeakMessage); ok {
-		f := frames.NewTTSSpeakFrame(speak.Text)
-		f.AppendToContext = speak.AppendToContext
+	switch msg := m.(type) {
+	case *bus.TTSSpeakMessage:
+		f := frames.NewTTSSpeakFrame(msg.Text)
+		f.AppendToContext = msg.AppendToContext
 		t.QueueFrame(f)
+	case *bus.FlushProgressMessage:
+		// A probe of ours is being answered in another pipeline, whose work this
+		// worker's own sink cannot see. Counted so the wait stays alive.
+		t.flushMu.Lock()
+		if _, waiting := t.flushProgress[msg.FlushID]; waiting {
+			t.flushProgress[msg.FlushID]++
+		}
+		t.flushMu.Unlock()
 	}
 }
 
@@ -678,32 +717,40 @@ func (t *Worker) HandleWorkerCancel(ctx context.Context, m *bus.CancelWorkerMess
 // processed, by queueing an EndFrame.
 func (t *Worker) StopWhenDone() { t.QueueFrame(frames.NewEndFrame()) }
 
-// Flush waits for the pipeline to drain: it sends a PipelineFlushFrame probe and
-// blocks until the probe has traveled down to the sink and back up to the
-// source, meaning everything already in the pipeline ahead of it has been
-// processed. Use it to let the pipeline settle, after an interruption say,
-// before injecting new work. It returns ctx.Err() if ctx is done first.
+// FlushNoProgressTimeout is how long a flush waits with nothing happening before
+// it gives up. It bounds the quiet, not the flush: a pipeline that keeps working
+// keeps the wait alive however long it takes.
+const FlushNoProgressTimeout = 5 * time.Second
+
+// flushProgressPeriod is how often a pipeline answering someone else's flush
+// says it is still working. The report says the flush is alive, not how much is
+// left, so once a second is enough.
+const flushProgressPeriod = time.Second
+
+// ErrFlushNoProgress is returned by Flush when the pipeline went quiet without
+// the probe coming back.
+var ErrFlushNoProgress = errors.New("pipeline flush gave up with nothing happening")
+
+// Flush waits for the pipeline to drain: it queues a PipelineFlushFrame probe
+// and blocks until that probe has traveled down to the sink, back up to the
+// source, and down to the sink again. By then every frame queued ahead of it has
+// been processed, along with anything a processor started by pushing upstream.
+// Use it to let the pipeline settle, after an interruption say, before injecting
+// new work.
 //
-// The probe is injected straight into the pipeline rather than queued with
-// QueueFrame. The queue stops being drained the moment a pipeline-ending frame
-// goes into it, since the task then waits for that frame to travel through, so a
-// probe queued behind one would never enter the pipeline at all and the caller
-// would wait out its whole timeout. A tool handler that ends the session leaves
-// exactly that behind.
+// The probe goes on the worker's queue, behind whatever is already waiting
+// there, so a frame handed to QueueFrame just before this call is covered too.
 //
-// What it covers follows from that: the frames in the pipeline, not the ones
-// still waiting in the task's own queue. A frame handed to QueueFrame just
-// before this call may still be in that queue, and the probe will not wait for
-// it. That is what a caller wants of it, since what has to settle is the work
-// the pipeline is in the middle of.
+// It returns ctx.Err() if ctx is done first, and ErrFlushNoProgress if the
+// pipeline goes quiet for FlushNoProgressTimeout without the probe coming back.
+// Progress is a frame reaching this worker's sink, or a report from the pipeline
+// answering the probe once it has crossed into another worker. A pipeline still
+// working keeps the wait alive; one that is stuck, or that nobody will answer,
+// gives up after that much quiet.
 func (t *Worker) Flush(ctx context.Context) error {
-	// Nothing goes into the pipeline before it is running. Injecting straight
-	// into it, rather than through the queue the task drains once it is up,
-	// means arriving during setup is possible, and a processor being set up on
-	// the task's goroutine must not be read from this one. Waiting here also
-	// means the probe is never handed to a processor that has yet to see its
-	// StartFrame, which would drop it and leave the caller waiting out the whole
-	// timeout for nothing.
+	// Nothing goes into the pipeline before it is running, and a probe handed to
+	// a processor that has yet to see its StartFrame would be dropped, leaving
+	// the caller waiting for nothing.
 	select {
 	case <-t.startSig:
 	case <-ctx.Done():
@@ -711,14 +758,167 @@ func (t *Worker) Flush(ctx context.Context) error {
 	}
 
 	probe := frames.NewPipelineFlushFrame()
-	if err := t.pipeline.QueueFrame(ctx, probe, processor.Downstream); err != nil {
-		return err
+	probe.Origin = t.Name()
+
+	t.flushMu.Lock()
+	t.flushProgress[probe.ID()] = 0
+	t.flushMu.Unlock()
+	defer func() {
+		t.flushMu.Lock()
+		delete(t.flushProgress, probe.ID())
+		t.flushMu.Unlock()
+	}()
+
+	slog.DebugContext(ctx, "pushing flush probe downstream", "worker", t.Name())
+	t.QueueFrame(probe)
+
+	for {
+		atSink, reports := t.framesAtSink.Load(), t.flushReports(probe.ID())
+		timer := time.NewTimer(FlushNoProgressTimeout)
+		select {
+		case <-probe.Done:
+			timer.Stop()
+			return nil
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+			reported := t.flushReports(probe.ID()) != reports
+			if t.framesAtSink.Load() == atSink && !reported {
+				slog.WarnContext(ctx, "pipeline flush gave up with nothing happening",
+					"worker", t.Name(), "after", FlushNoProgressTimeout)
+				return ErrFlushNoProgress
+			}
+			if reported {
+				slog.DebugContext(ctx, "flush still in flight, whoever holds it is working",
+					"worker", t.Name())
+			}
+		}
 	}
-	select {
-	case <-probe.Done:
+}
+
+// flushReports is how many progress reports have come back for one of this
+// worker's own probes.
+func (t *Worker) flushReports(flushID uint64) int {
+	t.flushMu.Lock()
+	defer t.flushMu.Unlock()
+	return t.flushProgress[flushID]
+}
+
+// TrackFlushProbe records a probe from another worker that this pipeline is
+// answering, so progress is reported back to whoever is waiting on it.
+//
+// It is called by whatever brings the probe into this pipeline, since only that
+// knows it is really coming in: every worker on the bus sees the frame, but most
+// of them have nowhere to put it.
+func (t *Worker) TrackFlushProbe(f *frames.PipelineFlushFrame) {
+	if !t.handleFlush || f.Origin == "" || f.Origin == t.Name() {
+		return
+	}
+	t.flushMu.Lock()
+	t.foreignProbes[f.ID()] = f.Origin
+	t.flushMu.Unlock()
+}
+
+// advanceFlushProbe moves a probe along its trip, settling it once it is done.
+//
+// The probe travels down to the sink, back up to the source, then down again,
+// and only the second arrival at the sink settles it. The extra leg is what makes
+// the probe wait for work a processor starts by pushing upstream: an
+// LLMContextFrame pushed up after a function call result, say, whose response
+// only comes back down afterwards. A probe that stopped at the source would
+// return while that response was still being generated.
+func (t *Worker) advanceFlushProbe(
+	ctx context.Context, probe *frames.PipelineFlushFrame, atSink bool,
+) error {
+	switch {
+	case !atSink:
+		slog.DebugContext(ctx, "flush probe reached the source, sending it down again",
+			"worker", t.Name())
+		probe.Returning = true
+		return t.source.PushFrame(ctx, probe, processor.Downstream)
+	case !probe.Returning:
+		slog.DebugContext(ctx, "flush probe reached the sink, bouncing it upstream",
+			"worker", t.Name())
+		return t.sink.PushFrame(ctx, probe, processor.Upstream)
+	default:
+		slog.DebugContext(ctx, "flush probe reached the sink again, the pipeline has drained",
+			"worker", t.Name())
+		t.flushMu.Lock()
+		delete(t.foreignProbes, probe.ID())
+		t.flushMu.Unlock()
+		probe.CloseDone()
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	}
+}
+
+// reportFlushProgress tells whoever is waiting on a probe this pipeline holds
+// that it is still working. Their own sink sees nothing while this pipeline
+// drains, so without this they can only conclude the pipeline has gone quiet.
+func (t *Worker) reportFlushProgress(ctx context.Context) {
+	t.flushMu.Lock()
+	if len(t.foreignProbes) == 0 || time.Since(t.flushProgressSent) < flushProgressPeriod {
+		t.flushMu.Unlock()
+		return
+	}
+	t.flushProgressSent = time.Now()
+	// Over a copy: sending can suspend, and a probe arriving meanwhile would
+	// resize the map under the loop.
+	pending := make(map[uint64]string, len(t.foreignProbes))
+	maps.Copy(pending, t.foreignProbes)
+	t.flushMu.Unlock()
+
+	for flushID, origin := range pending {
+		m := &bus.FlushProgressMessage{FlushID: flushID}
+		m.From = t.Name()
+		m.To = origin
+		t.SendBusMessage(ctx, m)
+	}
+}
+
+// End asks for the session to end gracefully, draining this pipeline first, so
+// that whatever the worker has already pushed reaches the end of the pipeline
+// rather than being cut off wherever it happened to be.
+func (t *Worker) End(ctx context.Context, reason string) {
+	t.drainPipeline(ctx)
+	t.Base.End(ctx, reason)
+}
+
+// ActivateWorker activates another worker by name, draining this pipeline when
+// handing over.
+//
+// Deactivating this worker before its pipeline drains would let the target start
+// producing while this worker's output is still in flight, and both would arrive
+// interleaved. A worker that stays active is handing nothing over, so it does not
+// wait: the first activation of a session would otherwise wait on the very worker
+// it is about to wake. One that stays active and wants to drain anyway can call
+// Flush before this.
+func (t *Worker) ActivateWorker(ctx context.Context, workerName string, opts workers.ActivateOptions) {
+	if opts.DeactivateSelf {
+		t.drainPipeline(ctx)
+	}
+	t.Base.ActivateWorker(ctx, workerName, opts)
+}
+
+// drainPipeline waits for the frames in flight to be processed, when any can be.
+//
+// A pipeline that is not running has nobody left to bounce the probe back, so
+// waiting on one would only spend the flush's whole no-progress budget. The start
+// signal is what says there is a pipeline to drain: it is closed once the
+// StartFrame has been all the way through, which is the point from which a probe
+// can complete its trip.
+func (t *Worker) drainPipeline(ctx context.Context) {
+	select {
+	case <-t.startSig:
+	default:
+		return
+	}
+	if t.HasFinished() {
+		return
+	}
+	if err := t.Flush(ctx); err != nil {
+		slog.WarnContext(ctx, "proceeding without draining, whatever is in flight will be cut off",
+			"worker", t.Name(), "err", err)
 	}
 }
 
@@ -1130,6 +1330,15 @@ func (t *Worker) initialMetricsFrame() *frames.MetricsFrame {
 	return frames.NewMetricsFrame(data...)
 }
 
+// boolOrDefault returns *p, or def when p is nil, for an optional flag whose
+// default is worked out rather than fixed.
+func boolOrDefault(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
 // boolOrTrue returns *p, or true when p is nil, which is the default every
 // optional flag in the configuration takes.
 func boolOrTrue(p *bool) bool {
@@ -1146,10 +1355,21 @@ func (t *Worker) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direc
 	// frame that gets here, including the ones handled and consumed below.
 	t.notifyReachedDownstream(ctx, f)
 
-	// The flush probe reached the sink. Bounce the same instance back upstream so
-	// it returns to the source and the round trip covers both directions.
+	// Heartbeats do not count: they arrive whether or not the pipeline is doing
+	// anything, so counting them would make it always look busy.
+	if _, heartbeat := f.(*frames.HeartbeatFrame); !heartbeat {
+		t.framesAtSink.Add(1)
+		t.reportFlushProgress(ctx)
+	}
+
 	if probe, ok := f.(*frames.PipelineFlushFrame); ok {
-		return t.sink.PushFrame(ctx, probe, processor.Upstream)
+		if !t.handleFlush {
+			// Someone else's topology owns this probe. Forwarding it is the
+			// sink's default, and there is nothing beyond the sink, so it stops
+			// here having been teed onto the bus by the edge behind it.
+			return nil
+		}
+		return t.advanceFlushProbe(ctx, probe, true)
 	}
 
 	// A worker frame pushed downstream — the documented default, so frames queued
@@ -1188,11 +1408,11 @@ func (t *Worker) sourcePush(ctx context.Context, f frames.Frame, _ processor.Dir
 	// frame that gets here, including the ones handled and consumed below.
 	t.notifyReachedUpstream(ctx, f)
 
-	// The flush probe completed its round trip: everything queued ahead of it has
-	// been processed, so release whoever is waiting on it.
 	if probe, ok := f.(*frames.PipelineFlushFrame); ok {
-		probe.CloseDone()
-		return nil
+		if !t.handleFlush {
+			return nil
+		}
+		return t.advanceFlushProbe(ctx, probe, false)
 	}
 
 	switch fr := f.(type) {

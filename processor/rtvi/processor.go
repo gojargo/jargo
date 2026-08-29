@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -452,24 +451,21 @@ func (p *Processor) handleDTMF(ctx context.Context, in Incoming) error {
 // commit, and the model, seeing the new message ahead of what it was already
 // saying, carries on with the turn it was interrupted out of.
 //
-// The wait is bounded: a processor that swallows the probe would otherwise stop
-// the client being able to say anything at all. On timeout the turn goes ahead
-// without the guarantee, which is what the client asked for, rather than
-// nothing happening.
+// The wait is bounded by the flush itself, which gives up once the pipeline has
+// gone quiet without the probe coming back: a processor that swallows it would
+// otherwise stop the client being able to say anything at all. On giving up the
+// turn goes ahead without the guarantee, which is what the client asked for,
+// rather than nothing happening. A pipeline that is still working keeps the wait
+// alive however long it takes.
 func (p *Processor) interruptAndSettle(ctx context.Context) error {
 	if err := p.BroadcastInterruption(ctx); err != nil {
 		return err
 	}
-	flushCtx, cancel := context.WithTimeout(ctx, flushTimeout)
-	defer cancel()
-	if err := p.FlushPipeline(flushCtx); err != nil {
-		slog.Warn("RTVI pipeline flush did not settle", "within", flushTimeout, "err", err)
+	if err := p.FlushPipeline(ctx); err != nil {
+		slog.Warn("RTVI pipeline flush did not settle", "err", err)
 	}
 	return nil
 }
-
-// flushTimeout bounds the wait for the pipeline to settle after an interruption.
-const flushTimeout = 5 * time.Second
 
 // send pushes an RTVI message toward the output transport.
 func (p *Processor) send(ctx context.Context, msg Message) error {

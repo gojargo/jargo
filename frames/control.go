@@ -41,21 +41,35 @@ func NewStopFrame() *StopFrame {
 	return &StopFrame{BaseControlFrame: NewBaseControlFrame("StopFrame")}
 }
 
-// PipelineFlushFrame is a probe that reports when the pipeline has drained. It is
-// pushed downstream; the Task's sink bounces it back upstream, and when it
-// reaches the source the Task closes Done. Waiting on Done therefore means every
-// frame queued ahead of the probe has completed its round trip — useful to let
-// the pipeline settle after an interruption before injecting new work.
+// PipelineFlushFrame is a probe that reports when the pipeline has drained.
+//
+// It is pushed downstream; the worker's sink bounces it back upstream, the
+// source turns it around, and the worker closes Done when it reaches the sink a
+// second time. By then every frame queued ahead of it has been processed, along
+// with anything a processor started by pushing upstream. The extra leg is what
+// makes the probe wait for that second kind of work: an LLM run triggered by a
+// function call result, say, whose response only comes back down after the
+// turnaround. A probe that stopped at the source would return while that response
+// was still being generated, or still being synthesized.
+//
+// Waiting on Done therefore means the pipeline has settled, which is useful after
+// an interruption before injecting new work.
 //
 // It is uninterruptible so the probe survives an InterruptionFrame and still
-// completes its round trip; otherwise a waiter would block forever. Done is
-// carried on the frame so concurrent flushes stay isolated, each awaiting its
-// own probe.
+// completes its trip; otherwise a waiter would block forever. Done is carried on
+// the frame so concurrent flushes stay isolated, each awaiting its own probe.
 type PipelineFlushFrame struct {
 	BaseControlFrame
 	UninterruptibleMixin
-	// Done is closed by the Task once the probe has completed its round trip.
+	// Done is closed by the worker once the probe has completed its trip.
 	Done chan struct{}
+	// Returning reports that the probe is on its second pass downstream, after
+	// having been back up to the source.
+	Returning bool
+	// Origin names the worker that started the flush. A probe that crosses into
+	// another pipeline is answered there, out of sight of whoever is waiting, so
+	// the answering worker reports progress back to this name.
+	Origin string
 
 	closeOnce sync.Once
 }
@@ -69,8 +83,8 @@ func NewPipelineFlushFrame() *PipelineFlushFrame {
 	}
 }
 
-// CloseDone closes Done, releasing whoever is waiting on the probe. The Task
-// calls it when the probe completes its round trip. Unlike the rest of a frame's
+// CloseDone closes Done, releasing whoever is waiting on the probe. The worker
+// calls it when the probe completes its trip. Unlike the rest of a frame's
 // state this is safe to call from any goroutine, and more than once: the probe is
 // a deliberate handoff between the waiter and the pipeline.
 func (f *PipelineFlushFrame) CloseDone() {
