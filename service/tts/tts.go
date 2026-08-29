@@ -18,9 +18,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/gojargo/jargo/audio/onset"
 	"github.com/gojargo/jargo/frames"
@@ -168,6 +170,20 @@ type LanguageNamer interface {
 	ServiceLanguage(l language.Language) string
 }
 
+// TrailingSpaceRequirer is an optional interface a Synthesizer implements when
+// its provider reads trailing punctuation aloud, saying "dot" for the full stop
+// ending a sentence, unless the text it is given ends in a space. The Base
+// appends one before handing the text over.
+//
+// It applies to sentence-sized text only. When the aggregator streams tokens the
+// text's own whitespace is what separates the words, so a space appended to
+// every token would break them apart.
+type TrailingSpaceRequirer interface {
+	// RequiresTrailingSpace reports whether text sent for synthesis has to end
+	// in a space.
+	RequiresTrailingSpace() bool
+}
+
 // Closer is an optional interface a Synthesizer implements when it holds a
 // resource open across syntheses, such as a connection it reuses rather than
 // redialing per sentence. The Base closes it when the pipeline tears down. A
@@ -194,9 +210,23 @@ type Base struct {
 	syn     Synthesizer
 	meta    Metadata
 	filters []ttstext.Filter
+	// transforms reshape a unit for the provider after the filters have
+	// normalized it. See TextTransform.
+	transforms []TextTransformer
+	// skipTypes name the ways of grouping text whose units are not spoken. See
+	// SetSkipAggregatorTypes.
+	skipTypes []frames.AggregationType
+
+	// appendTrailingSpace says the provider needs the text it synthesizes to end
+	// in a space. See TrailingSpaceRequirer.
+	appendTrailingSpace bool
 
 	// aggregator groups streamed text into the units the provider is given.
 	aggregator ttstext.Aggregator
+	// tokenizer finds the sentence boundaries the aggregator and the sequencer
+	// both work from. Kept so a change of aggregator can rebuild the sequencer
+	// to match it.
+	tokenizer *ttstext.PunktTokenizer
 	// sequencer keeps the frames of a synthesis in the order the text was
 	// spoken, so the conversation records it that way.
 	sequencer *uctx.AggregatedFrameSequencer
@@ -272,6 +302,10 @@ type Base struct {
 	// textaggregation.go.
 	textAgg textAggregationMetrics
 
+	// tokens carries the whitespace bookkeeping a streamed token needs. See
+	// textaggregation.go.
+	tokens tokenSpacing
+
 	// metaMu guards meta, which the model labeling the metrics is read from
 	// and which a settings update can change while a turn is being measured.
 	metaMu sync.Mutex
@@ -291,11 +325,15 @@ func New(name string, syn Synthesizer) *Base {
 	if tok, err := ttstext.NewPunktEnglish(); err != nil {
 		b.aggregatorErr = err
 	} else {
+		b.tokenizer = tok
 		b.aggregator = ttstext.NewSimpleAggregator(frames.AggregationSentence, tok)
 		b.sequencer = uctx.NewAggregatedFrameSequencer(name, false, tok)
 	}
 	if d, ok := syn.(Describer); ok {
 		b.meta = d.Metadata()
+	}
+	if t, ok := syn.(TrailingSpaceRequirer); ok {
+		b.appendTrailingSpace = t.RequiresTrailingSpace()
 	}
 	b.Base = service.New(name, b)
 	if cs, ok := syn.(ContextSynthesizer); ok {
@@ -321,6 +359,100 @@ func (b *Base) Cleanup(ctx context.Context) error {
 func (b *Base) SetTextAggregator(a ttstext.Aggregator) {
 	b.aggregator = a
 	b.aggregatorErr = nil
+	if b.tokenizer == nil {
+		return
+	}
+	// The sequencer has to be told how the text reaching it was grouped. Given
+	// tokens it assembles them back into sentences and opens a slot only once a
+	// boundary is confirmed; given whole units it opens one per unit. Built here
+	// rather than read at push time because the mode is fixed for the run.
+	b.sequencer = uctx.NewAggregatedFrameSequencer(
+		b.Name(), a.Type() == frames.AggregationToken, b.tokenizer)
+}
+
+// TextTransform reshapes one unit of text on its way to the provider, and is
+// told how that unit was aggregated so it can treat a sentence differently from
+// a token or from the content of a matched pattern.
+//
+// It is for changes the provider needs and the conversation should not record:
+// inserting a tag that asks for a word to be spelled out or said in a particular
+// tone, or writing "@" as "at". The text that goes into the conversation is
+// taken before any of this runs, so what is recorded is what the model wrote
+// rather than what the provider had to be told.
+//
+// Returning an error abandons the unit: it produces no audio and the failure is
+// reported as an application error. Speaking the untransformed text instead is
+// not safe, because a transform may exist precisely to take something out.
+type TextTransform func(ctx context.Context, text string, aggregatedBy frames.AggregationType) (string, error)
+
+// TextTransformer pairs a transform with the aggregation type whose units it
+// applies to.
+type TextTransformer struct {
+	// AggregatedBy names the units this transform applies to. Use
+	// frames.AnyAggregation for every unit, whatever it was grouped by.
+	AggregatedBy frames.AggregationType
+	// Transform is the reshaping itself.
+	Transform TextTransform
+}
+
+// SetTextTransformers sets the transforms applied to each unit just before the
+// provider is given it, replacing any set before. They run in order, after the
+// text filters, each one seeing what the one before it produced.
+//
+// Replacing the list is also how a transform is withdrawn: Go function values
+// cannot be compared, so there is no removing one by naming it.
+func (b *Base) SetTextTransformers(ts ...TextTransformer) {
+	b.transforms = ts
+}
+
+// AddTextTransformer appends one transform to those already set, for a caller
+// registering them as it builds the service rather than all at once.
+func (b *Base) AddTextTransformer(t TextTransformer) {
+	b.transforms = append(b.transforms, t)
+}
+
+// transformText applies the transforms whose type matches how this unit was
+// aggregated. It reports false when one of them failed, which abandons the unit.
+func (b *Base) transformText(
+	ctx context.Context, text string, aggregatedBy frames.AggregationType,
+) (string, bool) {
+	for _, t := range b.transforms {
+		if t.Transform == nil {
+			continue
+		}
+		if t.AggregatedBy != aggregatedBy && t.AggregatedBy != frames.AnyAggregation {
+			continue
+		}
+		out, err := t.Transform(ctx, text, aggregatedBy)
+		if err != nil {
+			// The failure came from application code rather than the provider, so
+			// it is reported as such and the service stays usable. The unit is
+			// dropped rather than spoken as it stands: a transform may be there to
+			// remove something, and saying it anyway would defeat it.
+			b.PushError(ctx, fmt.Sprintf("transforming text for synthesis [%s]", text), err, false,
+				processor.WithErrorCategory(errs.Application))
+			return "", false
+		}
+		text = out
+	}
+	return text, true
+}
+
+// SetSkipAggregatorTypes names the ways of grouping text whose units are not to
+// be spoken. A unit grouped that way is passed downstream unsynthesized, in its
+// place among the units around it, so a consumer recording the conversation
+// still sees it and only the audio is missing.
+//
+// It is how a pattern-pair aggregator's own types are kept out of the speech: a
+// block of code cut out under a "code" type reads terribly aloud but still
+// belongs in the transcript.
+func (b *Base) SetSkipAggregatorTypes(types ...frames.AggregationType) {
+	b.skipTypes = types
+}
+
+// skipsSynthesis reports whether units grouped this way are passed on unspoken.
+func (b *Base) skipsSynthesis(t frames.AggregationType) bool {
+	return slices.Contains(b.skipTypes, t)
 }
 
 // SetTextFilters sets the text-normalization filters applied to each sentence
@@ -533,6 +665,9 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 	// call and nothing else, has no audio to wait for.
 	b.maybePauseFrameProcessing()
 	b.setProcessingText(false)
+	// The turn's context is done, so the whitespace opening the next one is its
+	// own to drop again.
+	b.setSentNonWhitespace(false)
 	// Taken before the turn is closed out, which is what forgets the id.
 	turnContext := b.turnContext
 	b.onTurnContextCompleted(ctx)
@@ -636,6 +771,7 @@ func (b *Base) onTurnContextCompleted(ctx context.Context) {
 // nobody is listening to.
 func (b *Base) handleInterruption(ctx context.Context) {
 	b.setProcessingText(false)
+	b.setSentNonWhitespace(false)
 	b.setBotSpeaking(false)
 	b.setLLMResponding(false)
 	if b.aggregator != nil {
@@ -693,6 +829,10 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, _ proc
 	// is saved and put back, so speaking this does not look like the end of one.
 	saved := b.turnContext
 	savedProcessing := b.isProcessingText()
+	// The utterance opens a context of its own, so its leading whitespace is its
+	// own to drop; whatever the interrupted turn had sent is put back after.
+	savedSentNonWhitespace := b.sentNonWhitespace()
+	b.setSentNonWhitespace(false)
 	b.turnContext = b.createContextID()
 	if c, ok := b.syn.(TurnContextCreator); ok {
 		c.OnTurnContextCreated(ctx, b.turnContext)
@@ -708,6 +848,7 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, _ proc
 	b.maybePauseFrameProcessing()
 	b.turnContext = saved
 	b.setProcessingText(savedProcessing)
+	b.setSentNonWhitespace(savedSentNonWhitespace)
 	return nil
 }
 
@@ -850,6 +991,68 @@ func (b *Base) maybeCloseAssistantTurn(ctx context.Context, contextID string) er
 	return b.Base.PushFrame(ctx, push, processor.Downstream)
 }
 
+// trimIncomingWhitespace takes the whitespace off the front of a unit and
+// reports whether what is left is worth speaking at all.
+//
+// What comes off depends on how the text was grouped. Streaming tokens, the
+// whitespace opening a context attaches to nothing and goes, but once a token
+// carrying something has been sent, whitespace is kept as written: it is what
+// holds the words apart, and it shapes the prosody between them. Aggregating
+// sentences, only leading newlines come off, and a unit that is nothing but
+// whitespace is not worth speaking.
+func (b *Base) trimIncomingWhitespace(text string, streaming bool) (string, bool) {
+	if streaming {
+		if !b.sentNonWhitespace() {
+			text = strings.TrimLeftFunc(text, unicode.IsSpace)
+		}
+		return text, text != ""
+	}
+	text = strings.TrimLeft(text, "\n")
+	return text, strings.TrimSpace(text) != ""
+}
+
+// keepsFilteredText reports whether what the filters left is still worth
+// speaking, and records that this context has now carried something. The same
+// question is asked again after the filters because a filter can strip a unit to
+// nothing of its own, and that has to be treated like text that arrived so.
+func (b *Base) keepsFilteredText(text string, streaming bool) bool {
+	if !streaming {
+		return strings.TrimSpace(text) != ""
+	}
+	if text == "" || (strings.TrimSpace(text) == "" && !b.sentNonWhitespace()) {
+		return false
+	}
+	b.setSentNonWhitespace(true)
+	return true
+}
+
+// aggregatedFrame announces one unit of text, before the audio describing it
+// opens. A consumer that wants the text ahead of hearing it reads this: an RTVI
+// client starts its segment from it, and the progress frames that follow refer
+// back to it. It carries the text as written, before the filters, and does not
+// itself go into the conversation, which is built from what was actually spoken.
+func (b *Base) aggregatedFrame(
+	agg ttstext.Aggregation, contextID string,
+) *frames.AggregatedTextFrame {
+	f := frames.NewAggregatedTextFrame(agg.Text, agg.Type)
+	// The written form this unit was cut from. It differs from the text only
+	// when the unit came from a matched pattern, where the text is the content
+	// and the delimiters around it are what the model actually wrote.
+	f.RawText = agg.Original()
+	f.ContextID = contextID
+	return f
+}
+
+// prepareText applies the last shaping the provider needs before it is given
+// the text: a trailing space, for a provider that would otherwise read the
+// punctuation ending a sentence aloud. See TrailingSpaceRequirer.
+func (b *Base) prepareText(text string) string {
+	if b.appendTrailingSpace && !b.isStreamingTokens() && !strings.HasSuffix(text, " ") {
+		return text + " "
+	}
+	return text
+}
+
 // pushTTSFrames synthesizes one piece of text on the turn's audio context,
 // opening the context if this is the turn's first sentence. original is the
 // pre-filter text; the configured filters produce the text sent to the provider.
@@ -866,7 +1069,29 @@ func (b *Base) pushTTSFrames(
 	ctx context.Context, agg ttstext.Aggregation, appendToContext, pushAssistantAggregation bool,
 ) error {
 	original := agg.Text
-	filtered := original
+	streaming := b.isStreamingTokens()
+
+	// The id is settled first, before anything can drop this unit, because
+	// reading it is also what keeps an open context from timing out while the
+	// turn is still being generated.
+	contextID := b.createContextID()
+
+	// A unit grouped a way that is not spoken goes straight on downstream, held
+	// by the sequencer until whatever was spoken before it has been said, so it
+	// lands in the order it was written rather than ahead of the audio it
+	// follows.
+	if b.skipsSynthesis(agg.Type) {
+		b.pushSequencerFrames(ctx, b.sequencer.RegisterSkipped(
+			b.aggregatedFrame(agg, contextID), contextID, b.destinationName()))
+		return nil
+	}
+
+	text, worthSpeaking := b.trimIncomingWhitespace(original, streaming)
+	if !worthSpeaking {
+		return nil
+	}
+
+	filtered := text
 	for _, f := range b.filters {
 		// A stateful filter is told the interruption is over just before it is
 		// asked for text again, which is the point it can resume from.
@@ -875,7 +1100,8 @@ func (b *Base) pushTTSFrames(
 		}
 		filtered = f.Filter(filtered)
 	}
-	if strings.TrimSpace(filtered) == "" {
+
+	if !b.keepsFilteredText(filtered, streaming) {
 		return nil
 	}
 	// Text is on its way to the provider, so there is audio to wait for at the
@@ -883,22 +1109,33 @@ func (b *Base) pushTTSFrames(
 	// nothing would otherwise leave the flag latched and, with pausing enabled,
 	// pause the service waiting for audio that never comes.
 	b.setProcessingText(true)
-	contextID := b.createContextID()
 
-	// Announce what is about to be spoken, before the audio describing it opens.
-	// A consumer that wants the text ahead of hearing it reads this: an RTVI
-	// client starts its segment from it, and the progress frames that follow
-	// refer back to it. It carries the text as written, before the filters, and
-	// does not itself go into the conversation, which is built from what was
-	// actually spoken.
-	aggregated := frames.NewAggregatedTextFrame(original, agg.Type)
-	// The written form this unit was cut from. It differs from the text only
-	// when the unit came from a matched pattern, where the text is the content
-	// and the delimiters around it are what the model actually wrote.
-	aggregated.RawText = agg.Original()
-	aggregated.ContextID = contextID
+	aggregated := b.aggregatedFrame(agg, contextID)
 	aggregated.WillBeSpoken = true
+	// It is going to be spoken, so it does not go into the conversation here: the
+	// text that lands there is what was actually said, which an interruption can
+	// cut short. A unit that is never spoken is the other case, and keeps the
+	// default, since nothing later will put it there.
 	aggregated.AppendToContext = false
+
+	opening := !b.AudioContextAvailable(contextID)
+	if opening {
+		// Serialized so it lands immediately before the start of the context it
+		// describes, rather than racing ahead of audio still draining from the
+		// turn before.
+		_ = b.queueSerial(ctx, aggregated, processor.Downstream)
+	} else {
+		b.AppendToAudioContext(contextID, aggregated)
+	}
+
+	// Announced, then reshaped for the provider. A transform that fails
+	// abandons the unit here, before any audio is opened for it, so the turn
+	// carries on with this much unspoken rather than waiting on audio that is
+	// never coming.
+	transformed, ok := b.transformText(ctx, filtered, agg.Type)
+	if !ok {
+		return nil
+	}
 
 	// Recorded before the context opens, so the drain loop has the answers in
 	// hand by the time the first frame of the context reaches it.
@@ -907,33 +1144,30 @@ func (b *Base) pushTTSFrames(
 		pushAssistantAggregation: pushAssistantAggregation,
 	})
 
-	if !b.AudioContextAvailable(contextID) {
-		// Serialized so it lands immediately before the start of the context it
-		// describes, rather than racing ahead of audio still draining from the
-		// turn before.
-		_ = b.queueSerial(ctx, aggregated, processor.Downstream)
+	if opening {
 		b.CreateAudioContext(contextID)
 		started := frames.NewTTSStartedFrame()
 		started.ContextID = contextID
 		b.AppendToAudioContext(contextID, started)
-	} else {
-		b.AppendToAudioContext(contextID, aggregated)
 	}
 	c := b.audioContextFor(contextID)
 	if c == nil {
 		return nil
 	}
-	c.addText(filtered)
+	// The last shaping before the provider sees the text. Everything measured
+	// against the synthesis counts it, because it is what was synthesized.
+	prepared := b.prepareText(transformed)
+	c.addText(prepared)
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
-		aggregated, contextID, filtered, appendToContext, b.wordPath(), false))
-	return b.runTTS(ctx, c, contextID, original, filtered, appendToContext)
+		aggregated, contextID, prepared, appendToContext, b.wordPath(), false))
+	return b.runTTS(ctx, c, contextID, original, prepared, appendToContext)
 }
 
 // runTTS asks the provider to speak one unit of text and routes what it yields
 // to the synthesis context. A provider whose audio arrives later on its own
 // receive loop yields nothing here and appends it itself.
 func (b *Base) runTTS(
-	ctx context.Context, c *audioContext, contextID, original, filtered string, appendToContext bool,
+	ctx context.Context, c *audioContext, contextID, original, prepared string, appendToContext bool,
 ) error {
 	// Every frame the provider yields is routed to its context, so audio and
 	// anything else it reports stay in the order it produced them.
@@ -955,15 +1189,15 @@ func (b *Base) runTTS(
 		// from the bot is otherwise hard to trace back to the service that caused
 		// it.
 		slog.WarnContext(ctx, "service is no longer usable, not speaking",
-			"service", b.Name(), "text", filtered)
+			"service", b.Name(), "text", prepared)
 	} else if wt, ok := b.syn.(WordTimestamps); ok {
 		word := func(words []uctx.WordTiming, opts WordTimingOptions) error {
 			b.AddWordTimestamps(contextID, words, opts)
 			return nil
 		}
-		err = wt.RunTTSTimed(ctx, filtered, contextID, yield, word)
+		err = wt.RunTTSTimed(ctx, prepared, contextID, yield, word)
 	} else {
-		err = b.syn.RunTTS(ctx, filtered, contextID, yield)
+		err = b.syn.RunTTS(ctx, prepared, contextID, yield)
 	}
 	if err != nil && ctx.Err() == nil {
 		c.span.RecordError(err)
