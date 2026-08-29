@@ -231,3 +231,39 @@ func (stubAnalyzer) UpdateVADStartSecs(float64) {}
 func (stubAnalyzer) Params() turn.Params        { return turn.DefaultParams() }
 func (stubAnalyzer) Clear()                     {}
 func (stubAnalyzer) Close() error               { return nil }
+
+// countingStop is a stop strategy that counts how many times it is cleaned up,
+// standing in for one holding a resource it hands back there.
+type countingStop struct {
+	turns.StopStrategyBase
+	cleanups int
+}
+
+func (s *countingStop) Process(frames.Frame) turns.ProcessFrameResult { return turns.Continue }
+
+func (s *countingStop) Cleanup() { s.cleanups++ }
+
+// TestSessionEndDoesNotCleanUpTwice covers the split between ending a session
+// and tearing the processor down.
+//
+// Ending stops the controllers' timers; releasing what they hold waits for
+// cleanup, the one call that happens exactly once. Doing both at the end of the
+// session leaves an ordinary run cleaning its strategies up twice, and a
+// strategy holding a shared resource hands it back once more than it took it.
+func TestSessionEndDoesNotCleanUpTwice(t *testing.T) {
+	stop := &countingStop{}
+	p := turns.NewUserTurnProcessor(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{turns.NewVADStart()},
+			Stop:  []turns.StopStrategy{stop},
+		},
+	})
+	task, _, runDone := runProcessor(t, p)
+
+	task.StopWhenDone()
+	<-runDone
+
+	if stop.cleanups != 1 {
+		t.Errorf("strategy cleanups = %d, want 1 over an ordinary session", stop.cleanups)
+	}
+}

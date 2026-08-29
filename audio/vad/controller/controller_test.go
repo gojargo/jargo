@@ -160,9 +160,7 @@ func newTestController(t *testing.T, a vad.Analyzer, r *recorder, cfg controller
 	t.Helper()
 	c := controller.New(a, r.handlers(), cfg)
 	t.Cleanup(c.Cleanup)
-	if err := c.ProcessFrame(context.Background(), frames.NewStartFrame()); err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	c.Start(context.Background())
 	return c
 }
 
@@ -340,10 +338,6 @@ func TestControllerFallsBackWhenTheDetectorRejectsTheRate(t *testing.T) {
 	if err := c.Setup(processor.Setup{AudioInSampleRate: 44100}); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	if err := c.ProcessFrame(context.Background(), frames.NewStartFrame()); err != nil {
-		t.Fatalf("start at a rate the detector refuses: %v", err)
-	}
-
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	want := []int{44100, 16000}
@@ -370,9 +364,7 @@ func TestControllerResamplesToTheDetectorRate(t *testing.T) {
 	if err := c.Setup(processor.Setup{AudioInSampleRate: 48000}); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	if err := c.ProcessFrame(context.Background(), frames.NewStartFrame()); err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	c.Start(context.Background())
 
 	// Three times the detector's rate in, so a third of the bytes out. Fed as a
 	// stream of chunks rather than one: a resampler holds a filter length of

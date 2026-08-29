@@ -20,7 +20,10 @@ type BaseInput struct {
 	self   InputDriver
 	filter audio.Filter
 
-	sampleRate   int
+	sampleRate int
+	// filterActive reports whether the input filter came up, and so whether the
+	// audio goroutine runs audio through it. It is written in Setup, before that
+	// goroutine exists, and in Cleanup, once it has finished.
 	filterActive bool
 
 	// lifeMu serializes the streaming lifecycle (start, pause, stop) so that the
@@ -128,6 +131,21 @@ func (bi *BaseInput) Setup(ctx context.Context, s processor.Setup) error {
 		return err
 	}
 	bi.sampleRate = pick(bi.params.AudioInSampleRate, s.AudioInSampleRate)
+
+	// The filter starts here and stops in Cleanup, the only two calls guaranteed
+	// to happen exactly once. Started from the StartFrame instead, a session that
+	// is stopped and started again would start it twice without an intervening
+	// stop, which a filter holding a shared resource pays for by taking that
+	// resource twice. A filter that fails to start is skipped, not fatal.
+	if bi.filter != nil {
+		if err := bi.filter.Start(ctx, bi.sampleRate); err != nil {
+			bi.PushError(ctx, "audio input filter failed to start", err, false)
+		} else {
+			bi.lifeMu.Lock()
+			bi.filterActive = true
+			bi.lifeMu.Unlock()
+		}
+	}
 	return nil
 }
 
@@ -179,26 +197,25 @@ func (bi *BaseInput) ProcessFrame(ctx context.Context, f frames.Frame, dir proce
 	}
 }
 
-// Cleanup stops the audio goroutine and the processor.
+// Cleanup stops the audio goroutine, the input filter and the processor.
 func (bi *BaseInput) Cleanup(ctx context.Context) error {
 	bi.stopStreaming(ctx)
+
+	// Paired with the start in Setup. The audio goroutine has finished by now,
+	// so no Filter call can race with this Stop.
+	bi.lifeMu.Lock()
+	active := bi.filterActive
+	bi.filterActive = false
+	bi.lifeMu.Unlock()
+	if active {
+		_ = bi.filter.Stop(ctx)
+	}
 	return bi.Base.Cleanup(ctx)
 }
 
 func (bi *BaseInput) startStreaming(ctx context.Context) error {
 	bi.lifeMu.Lock()
 	defer bi.lifeMu.Unlock()
-
-	// Start the input filter before the audio goroutine so audioLoop observes a
-	// stable filterActive. A filter that fails to start is skipped, not fatal.
-	if bi.filter != nil {
-		if err := bi.filter.Start(ctx, bi.sampleRate); err != nil {
-			bi.PushError(ctx, "audio input filter failed to start", err, false)
-			bi.filterActive = false
-		} else {
-			bi.filterActive = true
-		}
-	}
 
 	bi.mu.Lock()
 	bi.paused = false
@@ -257,14 +274,6 @@ func (bi *BaseInput) stopStreaming(ctx context.Context) {
 	if cancel != nil {
 		cancel()
 		bi.audioWG.Wait()
-
-		// Stop the filter here, inside the branch only the winning stop caller
-		// enters, and after the audio goroutine has finished: this stops it
-		// exactly once with no Filter call able to race with Stop.
-		if bi.filterActive {
-			_ = bi.filter.Stop(ctx)
-			bi.filterActive = false
-		}
 	}
 }
 
