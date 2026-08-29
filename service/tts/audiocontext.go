@@ -566,6 +566,14 @@ func (b *Base) audioContextFor(contextID string) *audioContext {
 	return b.audioContexts[contextID]
 }
 
+// hasOpenAudioContexts reports whether any context is still open, which is what
+// says audio may yet arrive for the turn.
+func (b *Base) hasOpenAudioContexts() bool {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	return len(b.audioContexts) > 0
+}
+
 // openAudioContexts lists the contexts still open, for an interruption.
 func (b *Base) openAudioContexts() []string {
 	b.audioCtxMu.Lock()
@@ -631,6 +639,9 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) {
 		return
 	}
 	shouldPushStop := false
+	// Whether any audio arrived for this context at all, which is what says the
+	// provider actually spoke rather than accepting the request in silence.
+	receivedAudio := false
 	for {
 		it, ok, timedOut := c.get(ctx, stopFrameTimeout)
 		if timedOut {
@@ -659,6 +670,7 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) {
 		case *frames.TTSAudioRawFrame:
 			// The first chunk of audio is what the context's words are timed
 			// from: it is the point the audio starts being heard.
+			receivedAudio = true
 			c.observe(fr.Audio)
 			waiting := c.startWordTimestamps(b.now(), b.lastWordPTS())
 			_ = b.PushFrame(ctx, it.frame, processor.Downstream)
@@ -680,6 +692,7 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) {
 	}
 	b.releaseResponseEnd(ctx, contextID)
 	b.finishAudioContext(ctx, c)
+	b.recordContextAudioOutcome(ctx, contextID, receivedAudio)
 }
 
 // releaseResponseEnd reports the end of the model's response now that the audio

@@ -44,6 +44,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A TTS turn that produces no audio is reported.** A provider can accept every
+  request and return no audio at all, an unknown voice id being the usual case,
+  without ever reporting an error, and nothing said so. Every audio context that
+  completes in silence is now reported as an error, so a turn that produced no
+  speech is something application code hears about as it happens. Enough of them
+  in a row means the service is not going to speak again, so it reports a
+  permanent error instead: it stops being given work, a switcher can fail over,
+  and the pipeline worker applies its unusable-processor policy.
+  `tts.Base.SetZeroAudioContextLimit` sets how many, defaulting to three; zero
+  reports silence without ever writing the service off. An interrupted context is
+  abandoned rather than completed, so it is not counted, and a service brought
+  back with `SetUsable(true)` starts the count over.
+
+- **The TTS pause watchdog is gone, and with it the pause it existed to break.**
+  Frame handling is now paused only while there is playback to wait for: the bot
+  speaking, or an audio context still open that may yet produce audio. A turn
+  with neither has nothing left to lift the pause, so none is taken, and a
+  context that completes in silence lifts one taken while it was still open.
+  `tts.PauseOptions.WatchdogTimeout` is deprecated and unused.
+
+- **`frames.ErrorSource` reports whether the processor can still do its job.**
+  Three places documented reading `ErrorFrame.Source.Usable()` to get the verdict
+  that came with an error, and the interface exposed only `Name()`, so none of
+  them compiled.
+
 - **A turn ends on the signal that ends it, not on a timer.** A service with its
   own end-of-turn detection pushes the final transcript and then proposes the
   stop. `ProposedUserStoppedSpeakingFrame` was a system frame, which outranks

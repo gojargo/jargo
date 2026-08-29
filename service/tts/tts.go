@@ -256,11 +256,17 @@ type Base struct {
 	// processingText records that text for this turn reached the provider, so
 	// there is audio worth waiting for.
 	processingText bool
-	// botSpeaking records that the audio is confirmed playing, which is what
-	// says the watchdog is not needed.
+	// botSpeaking records that the audio is confirmed playing, which is one of
+	// the two things that say a pause has something to wait for.
 	botSpeaking bool
-	// watchdogCancel stops the armed watchdog, nil when none is armed.
-	watchdogCancel context.CancelFunc
+
+	// Contexts that complete with no audio at all. See silentcontext.go.
+	silentMu sync.Mutex
+	// zeroAudioLimit is how many such contexts in a row write the service off;
+	// 0 reports them without ever doing so.
+	zeroAudioLimit int
+	// zeroAudioRun is how many have completed in a row.
+	zeroAudioRun int
 
 	// textAgg times how long grouping text into sentences takes. See
 	// textaggregation.go.
@@ -281,7 +287,7 @@ func (b *Base) model() string {
 // New builds a TTS Base named name driven by syn. The concrete service passes
 // itself as syn and embeds the returned Base.
 func New(name string, syn Synthesizer) *Base {
-	b := &Base{syn: syn}
+	b := &Base{syn: syn, zeroAudioLimit: defaultZeroAudioContextLimit}
 	if tok, err := ttstext.NewPunktEnglish(); err != nil {
 		b.aggregatorErr = err
 	} else {
@@ -301,7 +307,6 @@ func New(name string, syn Synthesizer) *Base {
 // Cleanup releases the Synthesizer's resources, when it holds any, and tears
 // down the processor.
 func (b *Base) Cleanup(ctx context.Context) error {
-	b.cancelPauseWatchdog()
 	b.stopAudioContexts()
 	if c, ok := b.syn.(Closer); ok {
 		_ = c.Close()
@@ -526,7 +531,7 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 	}
 	// Pause before the flag is cleared: a turn that sent no text, a function
 	// call and nothing else, has no audio to wait for.
-	b.maybePauseFrameProcessing(ctx)
+	b.maybePauseFrameProcessing()
 	b.setProcessingText(false)
 	// Taken before the turn is closed out, which is what forgets the id.
 	turnContext := b.turnContext
@@ -552,10 +557,7 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 // releases a service paused waiting for it.
 func (b *Base) handleBotSpeaking(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if _, started := f.(*frames.BotStartedSpeakingFrame); started {
-		// The audio for this turn is confirmed playing, so the watchdog is not
-		// needed: the stopped frame resumes once playback finishes.
 		b.setBotSpeaking(true)
-		b.cancelPauseWatchdog()
 		return b.queueSerial(ctx, f, dir)
 	}
 	b.setBotSpeaking(false)
@@ -703,7 +705,7 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, _ proc
 	}
 	b.onTurnContextCompleted(ctx)
 	// Text went to the provider, so pause for the audio it will produce.
-	b.maybePauseFrameProcessing(ctx)
+	b.maybePauseFrameProcessing()
 	b.turnContext = saved
 	b.setProcessingText(savedProcessing)
 	return nil
