@@ -30,6 +30,12 @@ func TestValidate(t *testing.T) {
 // returns a jargo MCP client connected to it over an in-memory transport.
 func testClient(t *testing.T, filter []string) *Client {
 	t.Helper()
+	return testClientWith(t, Config{ToolsFilter: filter})
+}
+
+// testClientWith is testClient with the rest of the configuration supplied.
+func testClientWith(t *testing.T, cfg Config) *Client {
+	t.Helper()
 	ctx := context.Background()
 	serverT, clientT := mcpsdk.NewInMemoryTransports()
 
@@ -48,7 +54,7 @@ func testClient(t *testing.T, filter []string) *Client {
 	})
 	go func() { _ = server.Run(ctx, serverT) }()
 
-	c, err := connect(ctx, clientT, filter)
+	c, err := connect(ctx, clientT, cfg)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
