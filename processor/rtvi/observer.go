@@ -3,6 +3,7 @@ package rtvi
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -63,11 +64,42 @@ const (
 )
 
 // ObserverParams configures what an Observer reports.
+//
+// The categories a client normally wants are on unless they are turned off, so
+// their fields are pointers: nil means on, and only an explicit false suppresses
+// them. The ones that would flood a client that has not asked for them are off
+// unless turned on, and are plain bools.
 type ObserverParams struct {
 	// FunctionCallReportLevel maps a function name to the level of detail its
 	// events carry. The "*" key sets the level for functions not listed; when it
 	// is absent too, ReportNone applies.
 	FunctionCallReportLevel map[string]FunctionCallReportLevel
+	// BotLLMEnabled reports what the model produced: the brackets around a
+	// response and the text inside it. Nil leaves it on.
+	BotLLMEnabled *bool
+	// BotTTSEnabled reports what the voice is doing: the brackets around a
+	// synthesis and the text as it is spoken. Nil leaves it on.
+	BotTTSEnabled *bool
+	// BotSpeakingEnabled reports when the bot's audio starts and stops playing,
+	// and when it was cut off. Nil leaves it on.
+	BotSpeakingEnabled *bool
+	// UserSpeakingEnabled reports the user's turn starting and ending. This is
+	// the turn as the pipeline settled it, which a strategy may gate or defer;
+	// VADUserSpeakingEnabled is the raw signal behind it. Nil leaves it on.
+	UserSpeakingEnabled *bool
+	// UserTranscriptionEnabled reports what the user said, both the interim
+	// guesses and the final transcript. Nil leaves it on.
+	UserTranscriptionEnabled *bool
+	// MetricsEnabled reports the timings and usage the pipeline measures. Nil
+	// leaves it on.
+	MetricsEnabled *bool
+	// IgnoredSources are processors whose frames the observer says nothing
+	// about. It keeps a secondary branch of the pipeline out of the client's
+	// view: an evaluation model answering alongside the real one has a whole
+	// conversation of its own, and none of it is for the client to see. Sources
+	// can be added and removed while the pipeline runs with AddIgnoredSource and
+	// RemoveIgnoredSource.
+	IgnoredSources []processor.Processor
 	// VADUserSpeakingEnabled reports the raw VAD speaking signal as well as the
 	// turn-level one. The two differ whenever a turn strategy gates or defers a
 	// turn, which is what makes the raw signal useful as a timing anchor. Off by
@@ -141,6 +173,16 @@ func (o *Observer) OnPushFrame(data processor.FramePushed) {
 	if o.alreadySeen(f.ID()) {
 		return
 	}
+	// A branch of the pipeline the client is not meant to see says nothing at
+	// all, whatever the frame is.
+	//
+	// Checked after the frame has been recorded, not before, because a frame is
+	// handed over more than once on its way out: a pipeline pushes what leaves
+	// it onward under its own name, so passing over the branch's handover
+	// without recording it would let the pipeline's report it a moment later.
+	if o.ignores(data.Source) {
+		return
+	}
 	if cfg, ok := f.(*ConfigureObserverFrame); ok {
 		o.applyConfig(cfg)
 		return
@@ -211,6 +253,46 @@ func (o *Observer) audioLevelMessageFor(f frames.Frame) (Message, bool, bool) {
 	}
 	*lastSent = now
 	return build(tracker.Volume()), true, true
+}
+
+// onUnlessOff reads a category that is reported unless it was explicitly turned
+// off, which is what a nil setting means.
+func onUnlessOff(p *bool) bool { return p == nil || *p }
+
+// enabled reports whether the category read by pick is exposed.
+func (o *Observer) enabled(pick func(ObserverParams) *bool) bool {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	return onUnlessOff(pick(o.params))
+}
+
+// AddIgnoredSource stops the observer reporting anything about frames pushed by
+// source. See ObserverParams.IgnoredSources.
+func (o *Observer) AddIgnoredSource(source processor.Processor) {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	if !slices.Contains(o.params.IgnoredSources, source) {
+		o.params.IgnoredSources = append(o.params.IgnoredSources, source)
+	}
+}
+
+// RemoveIgnoredSource undoes an AddIgnoredSource. Removing one that was never
+// ignored does nothing.
+func (o *Observer) RemoveIgnoredSource(source processor.Processor) {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	o.params.IgnoredSources = slices.DeleteFunc(o.params.IgnoredSources,
+		func(p processor.Processor) bool { return p == source })
+}
+
+// ignores reports whether frames from source are passed over in silence.
+func (o *Observer) ignores(source processor.Processor) bool {
+	if source == nil {
+		return false
+	}
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	return slices.Contains(o.params.IgnoredSources, source)
 }
 
 // vadUserSpeakingEnabled reports whether the raw VAD speaking signal is exposed.

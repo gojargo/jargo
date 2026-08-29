@@ -134,7 +134,7 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 // A frame usually maps to one message, but a tool-call batch reports each call
 // in it separately, so the result is a list.
 func (o *Observer) messagesFor(f frames.Frame) []Message {
-	if msg, ok := userMessageFor(f); ok {
+	if msg, ok := o.userMessageFor(f); ok {
 		return []Message{msg}
 	}
 	if msgs, ok := o.functionCallMessagesFor(f); ok {
@@ -149,7 +149,7 @@ func (o *Observer) messagesFor(f frames.Frame) []Message {
 		}
 		return nil
 	}
-	if msg, ok := botMessageFor(f); ok {
+	if msg, ok := o.botMessageFor(f); ok {
 		return []Message{msg}
 	}
 	return nil
@@ -213,54 +213,78 @@ func (o *Observer) callMessage(name string, build func(FunctionCallReportLevel) 
 	return []Message{build(level)}, true
 }
 
-// userMessageFor maps user- and system-originated frames.
-func userMessageFor(f frames.Frame) (Message, bool) {
+// userMessageFor maps user- and system-originated frames. The second result
+// reports whether the frame was one of them at all, so a category the observer
+// was told not to report stops the dispatch rather than falling through to
+// another mapping.
+func (o *Observer) userMessageFor(f frames.Frame) (Message, bool) {
 	switch fr := f.(type) {
 	case *frames.TranscriptionFrame:
-		return UserTranscription(fr.Text, fr.UserID, fr.Timestamp, true), true
+		return o.gated(UserTranscription(fr.Text, fr.UserID, fr.Timestamp, true), transcriptionOf)
 	case *frames.InterimTranscriptionFrame:
-		return UserTranscription(fr.Text, fr.UserID, fr.Timestamp, false), true
+		return o.gated(UserTranscription(fr.Text, fr.UserID, fr.Timestamp, false), transcriptionOf)
 	case *frames.UserStartedSpeakingFrame:
-		return event(TypeUserStartedSpeaking), true
+		return o.gated(event(TypeUserStartedSpeaking), userSpeakingOf)
 	case *frames.UserStoppedSpeakingFrame:
-		return event(TypeUserStoppedSpeaking), true
+		return o.gated(event(TypeUserStoppedSpeaking), userSpeakingOf)
 	case *frames.ErrorFrame:
+		// An error is not a category a client turns off: it is what explains a
+		// conversation that stopped working.
 		return Error(fr.Error, fr.Fatal), true
 	case *frames.MetricsFrame:
-		return metricsMessage(fr), true
+		return o.gated(metricsMessage(fr), metricsOf)
 	default:
 		return Message{}, false
 	}
 }
 
+// The categories a message can belong to, named so a gate reads as the thing it
+// controls rather than as a field lookup.
+func transcriptionOf(p ObserverParams) *bool { return p.UserTranscriptionEnabled }
+func userSpeakingOf(p ObserverParams) *bool  { return p.UserSpeakingEnabled }
+func metricsOf(p ObserverParams) *bool       { return p.MetricsEnabled }
+func botSpeakingOf(p ObserverParams) *bool   { return p.BotSpeakingEnabled }
+func botLLMOf(p ObserverParams) *bool        { return p.BotLLMEnabled }
+func botTTSOf(p ObserverParams) *bool        { return p.BotTTSEnabled }
+
+// gated reports msg unless its category was turned off, and reports either way
+// that the frame was recognized: a frame the observer is silent about is still
+// not one for another mapping to pick up.
+func (o *Observer) gated(msg Message, pick func(ObserverParams) *bool) (Message, bool) {
+	if !o.enabled(pick) {
+		return Message{}, false
+	}
+	return msg, true
+}
+
 // botMessageFor maps bot-originated frames (speaking, LLM, TTS, tool calls).
-func botMessageFor(f frames.Frame) (Message, bool) {
+func (o *Observer) botMessageFor(f frames.Frame) (Message, bool) {
 	switch fr := f.(type) {
 	case *frames.BotStartedSpeakingFrame:
-		return event(TypeBotStartedSpeaking), true
+		return o.gated(event(TypeBotStartedSpeaking), botSpeakingOf)
 	case *frames.BotStoppedSpeakingFrame:
-		return event(TypeBotStoppedSpeaking), true
+		return o.gated(event(TypeBotStoppedSpeaking), botSpeakingOf)
 	case *frames.InterruptionFrame:
 		// The bot's in-flight output was cut off, by a VAD barge-in or by a
 		// programmatic interrupt such as send-text with run_immediately. A client
 		// drops whatever the bot was mid-saying.
-		return event(TypeBotInterrupted), true
+		return o.gated(event(TypeBotInterrupted), botSpeakingOf)
 	case *frames.LLMFullResponseStartFrame:
-		return event(TypeBotLLMStarted), true
+		return o.gated(event(TypeBotLLMStarted), botLLMOf)
 	case *frames.LLMFullResponseEndFrame:
-		return event(TypeBotLLMStopped), true
+		return o.gated(event(TypeBotLLMStopped), botLLMOf)
 	case *frames.LLMTextFrame:
-		return BotLLMText(fr.Text), true
+		return o.gated(BotLLMText(fr.Text), botLLMOf)
 	case *frames.TTSStartedFrame:
-		return event(TypeBotTTSStarted), true
+		return o.gated(event(TypeBotTTSStarted), botTTSOf)
 	case *frames.TTSStoppedFrame:
-		return event(TypeBotTTSStopped), true
+		return o.gated(event(TypeBotTTSStopped), botTTSOf)
 	case *frames.TTSTextFrame:
 		// The text the TTS reports speaking, aligned to playback, which is what a
 		// client renders as the spoken caption. Not TTSSpeakFrame: that is text on
 		// its way into the service, and it never reaches a client as something
 		// spoken, because nothing guarantees the synthesizer accepted it.
-		return BotTTSText(fr.Text), true
+		return o.gated(BotTTSText(fr.Text), botTTSOf)
 	default:
 		return Message{}, false
 	}
