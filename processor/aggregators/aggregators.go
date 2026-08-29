@@ -21,6 +21,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -864,6 +866,10 @@ type AssistantAggregator struct {
 	summarizer *Summarizer
 
 	mu sync.Mutex
+	// seenMarkers are the turn-completion markers that have arrived on marker
+	// frames, so a service using a set other than the defaults still has them
+	// stripped from the transcript.
+	seenMarkers map[string]struct{}
 	// aggregation is what the turn has said so far, in the order it was said:
 	// the model's own text where that is what reaches the conversation, and the
 	// playback-aligned words a word-timestamp TTS reports where it is not. The
@@ -1202,6 +1208,16 @@ func (a *AssistantAggregator) endThought(ctx context.Context, fr *frames.LLMThou
 // still being aggregated, so it joins the aggregation and is written with the
 // text as one message.
 func (a *AssistantAggregator) handleMarker(ctx context.Context, fr *frames.LLMMarkerFrame) error {
+	// Recorded so a service configured with markers of its own still gets them
+	// stripped from the transcript: the defaults are known here, the rest is
+	// whatever has actually been seen.
+	a.mu.Lock()
+	if a.seenMarkers == nil {
+		a.seenMarkers = map[string]struct{}{}
+	}
+	a.seenMarkers[fr.Marker] = struct{}{}
+	a.mu.Unlock()
+
 	if fr.AppendToContextImmediately {
 		a.context.AddAssistantMessage(fr.Marker)
 		return a.PushFrame(ctx, frames.NewLLMContextFrame(a.context), processor.Upstream)
@@ -1210,6 +1226,14 @@ func (a *AssistantAggregator) handleMarker(ctx context.Context, fr *frames.LLMMa
 	a.aggregation = append(a.aggregation, text.Part{Text: fr.Marker, IncludesInterPartSpaces: false})
 	a.mu.Unlock()
 	return nil
+}
+
+// markersSeen is every marker that has arrived on a marker frame, so a set other
+// than the defaults is stripped from the transcript too.
+func (a *AssistantAggregator) markersSeen() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Collect(maps.Keys(a.seenMarkers))
 }
 
 // handleContextUpdate applies a conversation change arriving from this side of
@@ -1745,7 +1769,7 @@ func (a *AssistantAggregator) commit(ctx context.Context, interrupted bool) erro
 	// prefixed the reply come out. The conversation keeps them, since the model
 	// reads its own earlier verdicts back.
 	if said != "" {
-		said = frames.StripUserTurnMarkers(said)
+		said = frames.StripUserTurnMarkers(said, a.markersSeen()...)
 	}
 
 	a.Events().Call(ctx, EventAssistantTurnStopped, a, AssistantTurnStopped{

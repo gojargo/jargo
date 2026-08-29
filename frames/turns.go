@@ -194,9 +194,9 @@ func NewVADParamsUpdateFrame(params vad.Params) *VADParamsUpdateFrame {
 	}
 }
 
-// LLMMarkerFrame carries a turn-completion marker the LLM emitted (e.g. "✓"). It
-// is informational — downstream TTS ignores it — and lets observers see the
-// model's completeness verdict. It is a data frame.
+// LLMMarkerFrame carries a turn-completion marker the LLM emitted (for example
+// "●"). It is informational, since the TTS downstream ignores it, and lets
+// observers see the model's completeness verdict. It is a data frame.
 type LLMMarkerFrame struct {
 	BaseDataFrame
 	// Marker is the marker text.
