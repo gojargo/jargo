@@ -42,6 +42,53 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   processor downstream can size its own behaviour to them and clients and
   observers can mirror them. `turn.Analyzer` gains `Params`.
 
+- **Text can be reshaped for the provider that speaks it.**
+  `tts.Base.SetTextTransformers` and `AddTextTransformer` register transforms
+  that run on each unit just before synthesis, after the text filters, and only
+  for the aggregation type each was registered against (`frames.AnyAggregation`
+  for all of them). They are for changes the provider needs and the conversation
+  should not record: a tag asking for a word to be spelled out, an `@` written
+  as "at". A transform that fails leaves the unit unspoken and reports an
+  application error, because speaking the untransformed text would defeat one
+  that exists to take something out.
+
+- **A way of grouping text can go unspoken.**
+  `tts.Base.SetSkipAggregatorTypes` names aggregation types whose units are
+  passed downstream unsynthesized, in their place among the units around them.
+  It is how a pattern aggregator's own types are kept out of the speech: a block
+  of code reads terribly aloud but still belongs in the transcript.
+
+- **A provider that needs a trailing space gets one.** A synthesizer that
+  implements `tts.TrailingSpaceRequirer` has a space appended to sentence-sized
+  text, for a provider that would otherwise read the full stop ending a sentence
+  aloud, or run two sentences together. Deepgram Aura and Deepgram Flux TTS
+  declare it.
+
+- **RTVI messages can be turned off by category, and a branch silenced
+  entirely.** `rtvi.ObserverParams` gained `BotLLMEnabled`, `BotTTSEnabled`,
+  `BotSpeakingEnabled`, `UserSpeakingEnabled`, `UserTranscriptionEnabled` and
+  `MetricsEnabled`, each nil for on, and `IgnoredSources` with
+  `Observer.AddIgnoredSource` and `RemoveIgnoredSource`. Ignoring a source keeps
+  a secondary branch of the pipeline out of the client's view: an evaluation
+  model answering alongside the real one has a whole conversation of its own,
+  and none of it is the client's business. Errors are reported whatever is
+  turned off.
+
+- **MCP tools answer themselves, and their arguments and output can be bound.**
+  `mcp.Client.Tools` now attaches each tool's handler, so putting the listing on
+  an `LLMContext` is all it takes for the model's calls to be answered.
+  `mcp.Config` gained `ToolsArguments`, which fixes some of a tool's arguments
+  for this session (merged into every call, and taken out of the schema the
+  model is shown), and `ToolsOutputFilters`, which reshapes a tool's result
+  before the model reads it.
+
+- **The resources a tool works through are released at teardown.**
+  `llm.WithToolCleanup` and `frames.Tool.Cleanup` name a resource a handler
+  works through that outlives the calls it serves, and the LLM service releases
+  it when the pipeline tears down. Tools sharing one resource name the same
+  value and it is released once. An MCP server's connection is closed this way,
+  so a pipeline that used one does not leave it connected.
+
 ### Changed
 
 - **Provider defaults tracked upstream.** Cartesia's default TTS model is now
@@ -56,7 +103,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   converting them to user messages: it maps the role to its own developer
   instruction layer, which sits above user instructions.
 
+- **Deepgram Flux TTS streams the model's tokens** rather than grouping them
+  into sentences first, which is what Flux is for: synthesis starts on the first
+  token instead of waiting for the sentence to finish. Call `SetTextAggregator`
+  on the returned base to group them into sentences instead, which reads more
+  naturally at the cost of that wait.
+
+- **`tts.Base.SetTextAggregator` now rebuilds the frame sequencer** to match the
+  aggregator it is given, so a service told to stream tokens has its sentences
+  reassembled for the conversation. Setting a token aggregator previously left
+  the sequencer expecting whole units.
+
 ### Fixed
+
+- **Whitespace is gated by how the text was grouped.** Streaming tokens, the
+  whitespace opening a context is dropped, but once a token carrying something
+  has been sent the whitespace between words goes through as written: it is what
+  holds them apart, and dropping it ran words together. Aggregating sentences, a
+  leading newline comes off and a unit of nothing but whitespace is not spoken.
+  The same gate runs again after the text filters, since a filter can strip a
+  unit to nothing of its own.
+
+- **The RTVI protocol is kept off a telephony wire.** A pipeline with an RTVI
+  processor in it runs on a phone call like any other, and its client messages
+  were being written onto the provider's media socket. A `wsserver.Serializer`
+  now says whether its wire carries them, and only the RTVI serializer does.
+  `transport.MessageFilter` is the hook a transport implements to refuse a
+  message that does not belong on its wire.
 
 - **ElevenLabs `eleven_v3_conversational` no longer sends the context
   parameters.** ElevenLabs rejects `previous_text` for the Eleven v3 models with
