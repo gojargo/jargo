@@ -955,8 +955,27 @@ func (s *StreamService) sendKeepalive() error {
 	return nil
 }
 
+// emit turns one provider result into the frames it stands for: the speech
+// boundary it reports and the text it carries.
+//
+// The two are ordered around each other. A proposed start goes out ahead of the
+// text, because resolving it broadcasts an interruption and that has to preempt
+// what is already queued. A proposed stop goes out behind it, because the
+// strategy resolving it closes the turn on the transcript and needs that text in
+// hand; the proposal is a control frame, so it keeps the order it was sent in.
 func (s *StreamService) emit(ctx context.Context, r Result) {
-	s.emitSpeech(ctx, r)
+	if r.Speech == SpeechStarted {
+		s.emitSpeech(ctx, r)
+	}
+	s.emitTranscript(ctx, r)
+	if r.Speech == SpeechStopped {
+		s.emitSpeech(ctx, r)
+	}
+}
+
+// emitTranscript pushes the text a result carries, and settles the finalize it
+// answers.
+func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
 	// Taken before the text is, since a provider with nothing left to say still
 	// answers the finalize it was asked for, and that answer is what says the
 	// transcript already sent closed the utterance.

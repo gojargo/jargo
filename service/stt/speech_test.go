@@ -139,33 +139,71 @@ func TestATranscriptAloneReportsNoSpeech(t *testing.T) {
 
 // TestSpeechBoundaryCanCarryText covers a result that is both: the boundary is
 // reported and the transcript still reaches the pipeline.
+//
+// The two go out in a fixed order. A proposed start precedes the text, since
+// resolving it broadcasts an interruption that has to preempt what is queued. A
+// proposed stop follows it, since the strategy resolving it closes the turn on
+// that transcript and needs the text in hand.
 func TestSpeechBoundaryCanCarryText(t *testing.T) {
-	conn := &fakeConnector{stream: &fakeStream{results: [][]stt.Result{
-		{{Text: "hello", Final: true, EndOfTurn: true, Speech: stt.SpeechStopped}},
-	}}}
-	svc := stt.NewStream("FakeSTT", conn, 16000)
+	for _, tc := range []struct {
+		name   string
+		result stt.Result
+		want   []string
+	}{
+		{
+			name:   "a start proposal precedes the text it opens",
+			result: stt.Result{Text: "hel", Speech: stt.SpeechStarted},
+			want:   []string{"started", "hel"},
+		},
+		{
+			name:   "a stop proposal follows the text it closes",
+			result: stt.Result{Text: "hello", Final: true, EndOfTurn: true, Speech: stt.SpeechStopped},
+			want:   []string{"hello", "stopped"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A stop is only reported for speech that started, so the turn is
+			// opened first whenever the case under test does not open it.
+			results := [][]stt.Result{{tc.result}}
+			want := tc.want
+			if tc.result.Speech == stt.SpeechStopped {
+				results = [][]stt.Result{{{Speech: stt.SpeechStarted}}, {tc.result}}
+				want = append([]string{"started"}, want...)
+			}
 
-	var mu sync.Mutex
-	var text string
-	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
-		ReachedDownstreamFilter: pipeline.AnyFrame,
-	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
-		if fr, ok := f.(*frames.TranscriptionFrame); ok {
+			conn := &fakeConnector{stream: &fakeStream{results: results}}
+			svc := stt.NewStream("FakeSTT", conn, 16000)
+
+			var mu sync.Mutex
+			var seq []string
+			task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+				ReachedDownstreamFilter: pipeline.AnyFrame,
+			})
+			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch fr := f.(type) {
+				case *frames.ProposedUserStartedSpeakingFrame:
+					seq = append(seq, "started")
+				case *frames.ProposedUserStoppedSpeakingFrame:
+					seq = append(seq, "stopped")
+				case *frames.TranscriptionFrame:
+					seq = append(seq, fr.Text)
+				case *frames.InterimTranscriptionFrame:
+					seq = append(seq, fr.Text)
+				}
+			})
+			runDone := make(chan error, 1)
+			go func() { runDone <- task.Run(context.Background()) }()
+			time.Sleep(300 * time.Millisecond)
+			task.StopWhenDone()
+			<-runDone
+
 			mu.Lock()
-			text = fr.Text
-			mu.Unlock()
-		}
-	})
-	runDone := make(chan error, 1)
-	go func() { runDone <- task.Run(context.Background()) }()
-	time.Sleep(300 * time.Millisecond)
-	task.StopWhenDone()
-	<-runDone
-
-	mu.Lock()
-	defer mu.Unlock()
-	if text != "hello" {
-		t.Errorf("transcript = %q, want %q: the boundary swallowed the text", text, "hello")
+			defer mu.Unlock()
+			if !reflect.DeepEqual(seq, want) {
+				t.Errorf("frames = %v, want %v", seq, want)
+			}
+		})
 	}
 }

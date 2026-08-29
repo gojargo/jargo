@@ -315,3 +315,68 @@ func TestProposalsPassTheAssistantHalfWhenTheUserHalfIgnoresThem(t *testing.T) {
 		t.Errorf("proposals forwarded = %d, want 2 (nothing resolves them)", n)
 	}
 }
+
+// turnDetectingSTT stands in for a transcription service whose provider reports
+// the turn boundaries. It pushes the final transcript and then proposes the
+// stop, which is the order such a service sends them in.
+type turnDetectingSTT struct {
+	*processor.Base
+}
+
+func newTurnDetectingSTT() *turnDetectingSTT {
+	p := &turnDetectingSTT{}
+	p.Base = processor.New("TurnDetectingSTT", p)
+	return p
+}
+
+func (p *turnDetectingSTT) ProcessFrame(
+	ctx context.Context, f frames.Frame, dir processor.Direction,
+) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if err := p.PushFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.InterimTranscriptionFrame); !ok {
+		return nil
+	}
+	tx := frames.NewTranscriptionFrame("Hello!", "u", "ts")
+	if err := p.PushFrame(ctx, tx, processor.Downstream); err != nil {
+		return err
+	}
+	return p.Broadcast(ctx, func() frames.Frame {
+		return frames.NewProposedUserStoppedSpeakingFrame()
+	})
+}
+
+// A service that pushes the transcript before proposing the stop closes the turn
+// on the stop signal itself.
+//
+// Both timers are set far longer than the test runs, so nothing but the stop
+// signal can close the turn. That path needs the transcript to have arrived
+// first, which holds only while the proposal stays ordered behind it.
+func TestTurnClosesOnTheStopSignalWhenTheTranscriptPrecedesIt(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	interrupt := true
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: []turns.StartStrategy{
+				turns.NewExternalStart(turns.ExternalStartConfig{EnableInterruptions: &interrupt}),
+			},
+			Stop: []turns.StopStrategy{
+				turns.NewExternalStop(turns.ExternalStopConfig{Timeout: 30 * time.Second}),
+			},
+		},
+		StopTimeout: 30 * time.Second,
+	}))
+	task, seen, runDone := runPair(t, newTurnDetectingSTT(), pair.User())
+	defer func() { task.StopWhenDone(); <-runDone }()
+
+	task.QueueFrame(frames.NewProposedUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewInterimTranscriptionFrame("Hel", "u", "ts"))
+
+	if n := awaitMatching(seen, is[*frames.LLMContextFrame], 1); n != 1 {
+		t.Fatal("the turn never closed on the stop signal, so only the aggregation timer was left to close it")
+	}
+}

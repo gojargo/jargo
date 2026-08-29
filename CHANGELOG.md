@@ -44,6 +44,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A turn ends on the signal that ends it, not on a timer.** A service with its
+  own end-of-turn detection pushes the final transcript and then proposes the
+  stop. `ProposedUserStoppedSpeakingFrame` was a system frame, which outranks
+  queued data at every hop, so the proposal reached the stop strategy ahead of
+  the transcript it closes the turn on. The strategy had no text to close on and
+  the turn fell through to the aggregation timer, a flat delay on every turn. It
+  is now a control frame, so it keeps the order it was sent in. Its start
+  counterpart stays a system frame: resolving that one broadcasts an
+  interruption, which has to preempt what is queued rather than wait behind it.
+  The transcription base orders the two around the text for the same reason.
+
 - **A service's recommended turn strategies are applied.** A transcription
   service that does its own server-side end-of-turn detection recommends
   external turn strategies through its metadata frame. Nothing read the
