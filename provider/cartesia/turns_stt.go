@@ -201,6 +201,12 @@ func (s *turnsStream) Send(audio []byte) error {
 // Recv reads the next turn event. An update carries the running transcript as an
 // interim result; the turn's end finalizes it. An eager end is a prediction the
 // server may retract with a resume, so it is not treated as the turn ending.
+//
+// Ink-2 runs its own turn detection, so the boundaries it reports are carried on
+// the results as proposals for the pipeline's strategies to resolve. A turn that
+// captured only silence ends with no transcript, which the watchdog's injected
+// silence can force; the boundary is still reported, and only the empty text is
+// left out so nothing downstream aggregates an empty user message.
 func (s *turnsStream) Recv() ([]stt.Result, error) {
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -217,15 +223,20 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 				continue
 			}
 			return []stt.Result{{Text: m.Transcript, Final: false}}, nil
+		case turnsStart:
+			return []stt.Result{{Speech: stt.SpeechStarted}}, nil
 		case turnsEnd:
 			if m.Transcript == "" {
-				continue
+				return []stt.Result{{Speech: stt.SpeechStopped}}, nil
 			}
-			return []stt.Result{{Text: m.Transcript, Final: true, EndOfTurn: true}}, nil
+			return []stt.Result{{
+				Text: m.Transcript, Final: true, EndOfTurn: true, Speech: stt.SpeechStopped,
+			}}, nil
 		case turnsError:
 			return nil, fmt.Errorf("%w: %s", errSTTProtocol, m.Message)
-		case turnsConnected, turnsStart, turnsEagerEnd, turnsResume:
-			// Session and turn-boundary bookkeeping with no transcript to emit.
+		case turnsConnected, turnsEagerEnd, turnsResume:
+			// Session bookkeeping, and a prediction the server may retract, with
+			// no transcript to emit and no boundary to report.
 			continue
 		}
 	}

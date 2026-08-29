@@ -35,6 +35,11 @@ const (
 	sttEventCompleted = "conversation.item.input_audio_transcription.completed"
 	// sttEventFailed reports that an utterance could not be transcribed.
 	sttEventFailed = "conversation.item.input_audio_transcription.failed"
+	// sttEventSpeechStarted reports that the server's own detection heard the
+	// user begin speaking.
+	sttEventSpeechStarted = "input_audio_buffer.speech_started"
+	// sttEventSpeechStopped reports that it heard the user stop.
+	sttEventSpeechStopped = "input_audio_buffer.speech_stopped"
 	// sttEventError reports a session-level failure.
 	sttEventError = "error"
 )
@@ -199,6 +204,11 @@ func (s *sttStream) Send(audio []byte) error {
 
 // Recv reads the next transcript. A delta is the utterance so far; the completed
 // event finalizes it and ends the turn, since the server's own VAD delimited it.
+//
+// That VAD also reports where the speech begins and ends, and those boundaries
+// are carried on the results as proposals for the pipeline's turn strategies to
+// resolve. The server sends the stop ahead of the transcript it belongs to, so
+// the strategy resolving it waits for the text.
 func (s *sttStream) Recv() ([]stt.Result, error) {
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -222,6 +232,10 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 				continue
 			}
 			return []stt.Result{{Text: m.Transcript, Final: true, EndOfTurn: true, Language: s.lang}}, nil
+		case sttEventSpeechStarted:
+			return []stt.Result{{Speech: stt.SpeechStarted}}, nil
+		case sttEventSpeechStopped:
+			return []stt.Result{{Speech: stt.SpeechStopped}}, nil
 		case sttEventFailed, sttEventError:
 			s.partial = ""
 			return nil, fmt.Errorf("%w: %s", errServer, m.Error.Message)
