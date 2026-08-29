@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
+	ttstext "github.com/gojargo/jargo/utils/text"
 )
 
 const (
@@ -89,11 +90,19 @@ func (c FluxTTSConfig) withDefaults() FluxTTSConfig {
 	return c
 }
 
-// NewFluxTTS builds a Deepgram Flux streaming WebSocket TTS service. Each
-// aggregated sentence is synthesized as one Flux turn: the text is sent and
-// flushed, and the returned PCM is streamed downstream.
+// NewFluxTTS builds a Deepgram Flux streaming WebSocket TTS service. A turn is
+// synthesized as one Flux turn: the text is sent and flushed, and the returned
+// PCM is streamed downstream.
+//
+// The model's tokens are streamed straight through rather than grouped into
+// sentences first, which is what Flux is for: synthesis starts on the first
+// token instead of waiting for the sentence to finish. Call SetTextAggregator on
+// the returned Base to group them into sentences instead, which reads more
+// naturally at the cost of that wait.
 func NewFluxTTS(cfg FluxTTSConfig) *tts.Base {
-	return tts.New("DeepgramFluxTTS", &fluxSynth{cfg: cfg.withDefaults()})
+	b := tts.New("DeepgramFluxTTS", &fluxSynth{cfg: cfg.withDefaults()})
+	b.SetTextAggregator(ttstext.NewTokenAggregator())
+	return b
 }
 
 // fluxTTSQuery builds the synthesis query string.
@@ -143,6 +152,11 @@ type fluxSynth struct {
 
 // SampleRate reports the requested PCM output rate.
 func (s *fluxSynth) SampleRate() int { return s.cfg.SampleRate }
+
+// RequiresTrailingSpace reports that Flux neither inserts nor strips whitespace
+// between the units it is sent, so consecutive sentences would otherwise run
+// together into one word.
+func (s *fluxSynth) RequiresTrailingSpace() bool { return true }
 
 // Synthesize opens a synthesis session, sends text and a flush to render it as
 // one turn, and streams the returned PCM to emit until the turn completes.
