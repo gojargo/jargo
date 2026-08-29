@@ -173,6 +173,16 @@ type registryItem struct {
 	// it, so it is dropped again when the toolset stops advertising the tool. A
 	// handler registered by hand is never dropped.
 	fromToolset bool
+	// cleanup is the resource this tool works through, released at teardown. See
+	// ToolCleanup.
+	cleanup ToolCleanup
+}
+
+// WithToolCleanup names the resource this tool works through, so the service
+// releases it when the pipeline tears down. Tools sharing one resource name the
+// same value and it is released once. See ToolCleanup.
+func WithToolCleanup(c ToolCleanup) RegisterOption {
+	return func(i *registryItem) { i.cleanup = c }
 }
 
 // RegisterOption configures how a registered function's calls are run.
@@ -389,6 +399,10 @@ type Base struct {
 	// skipTTS is what the tokens of a response are stamped with, nil until
 	// something configures the output.
 	skipTTS *bool
+
+	// cleanups are the resources registered tools work through, released when
+	// the service is cleaned up. See toolcleanup.go.
+	cleanups toolCleanups
 }
 
 // New builds an LLM Base named name driven by gen. The concrete service passes
@@ -528,6 +542,9 @@ func (b *Base) Cleanup(ctx context.Context) error {
 		b.turnCancel()
 	}
 	b.turnWG.Wait()
+	// Released after the calls that were using them have been stopped and waited
+	// for, so nothing is mid-call against a connection being closed.
+	b.runToolCleanups(ctx)
 	return b.Base.Cleanup(ctx)
 }
 
@@ -809,6 +826,9 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 		opt(&item)
 	}
 	b.resolveCancellableByLLM(&item)
+	// Recorded on the service rather than on the item, so that unregistering the
+	// tool later does not release a resource something else may still be using.
+	b.recordToolCleanup(item.cleanup)
 	b.handlersMu.Lock()
 	if b.handlers == nil {
 		b.handlers = make(map[string]registryItem)
