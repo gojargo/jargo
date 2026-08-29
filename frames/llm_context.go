@@ -45,6 +45,16 @@ type Tool struct {
 	// service, which is built on this package. Set it to an llm.FunctionCallHandler;
 	// anything else is reported and ignored.
 	Handler any
+	// Cleanup names a resource this tool works through that outlives the calls it
+	// serves, a connection to a tool server being the case that matters. The LLM
+	// service releases it when the pipeline tears down, so registering the tool is
+	// all it takes to have the connection closed as well. Tools sharing one
+	// resource name the same value and it is released once.
+	//
+	// It is typed as any for the same reason Handler is: what a resource has to
+	// implement belongs to the LLM service, which is built on this package. Set
+	// it to an llm.ToolCleanup; anything else is reported and ignored.
+	Cleanup any
 	// CancelOnInterruption sets whether a call to this tool is canceled when the
 	// user interrupts. Nil leaves the service's default, which cancels. It is
 	// only read for a tool that carries its own Handler: a handler registered by

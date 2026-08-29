@@ -88,6 +88,14 @@ func toolCallOptions(t frames.Tool) []RegisterOption {
 	if t.CancellableByLLM != nil {
 		opts = append(opts, WithCancellableByLLM(*t.CancellableByLLM))
 	}
+	if t.Cleanup != nil {
+		if c, ok := t.Cleanup.(ToolCleanup); ok {
+			opts = append(opts, WithToolCleanup(c))
+		} else {
+			slog.Error("advertised tool names a resource of the wrong type",
+				"function", t.Name, "cleanup", t.Cleanup)
+		}
+	}
 	return opts
 }
 
