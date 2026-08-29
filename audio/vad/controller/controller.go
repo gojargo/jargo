@@ -87,6 +87,12 @@ type Controller struct {
 	speaking    bool
 	lastAudioAt time.Time
 
+	// watchMu serializes the idle watch's lifecycle, which Start, Stop and
+	// Cleanup all reach and which the frame goroutine and the teardown reach
+	// from different goroutines. Upstream is single-threaded and needs none of
+	// this; it is jargo's own. It is never taken by the watch itself, so holding
+	// it while waiting for the watch to finish cannot deadlock.
+	watchMu    sync.Mutex
 	idleCancel context.CancelFunc
 	idleWG     sync.WaitGroup
 }
@@ -232,7 +238,9 @@ func (c *Controller) startIdleWatch(ctx context.Context) {
 	if c.idleTimeout <= 0 {
 		return
 	}
-	c.stopIdleWatch()
+	c.watchMu.Lock()
+	defer c.watchMu.Unlock()
+	c.stopIdleWatchLocked()
 
 	c.mu.Lock()
 	c.lastAudioAt = time.Now()
@@ -247,12 +255,23 @@ func (c *Controller) startIdleWatch(ctx context.Context) {
 
 // stopIdleWatch tears the watch down.
 func (c *Controller) stopIdleWatch() {
+	c.watchMu.Lock()
+	defer c.watchMu.Unlock()
+	c.stopIdleWatchLocked()
+}
+
+// stopIdleWatchLocked tears the watch down and waits for it to finish. The
+// caller holds watchMu.
+//
+// It waits whether or not it was the one to cancel: a second stop returning
+// while the watch is still running would let the cleanup behind it release the
+// detector out from under it.
+func (c *Controller) stopIdleWatchLocked() {
 	cancel := c.idleCancel
 	c.idleCancel = nil
-	if cancel == nil {
-		return
+	if cancel != nil {
+		cancel()
 	}
-	cancel()
 	c.idleWG.Wait()
 }
 
