@@ -9,6 +9,7 @@ package transport
 
 import (
 	"context"
+	"time"
 
 	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/frames"
@@ -70,6 +71,12 @@ type Params struct {
 	// transport that sends several outgoing streams and wants different
 	// auxiliary audio (or none) on each. It takes precedence over AudioOutMixer.
 	AudioOutMixers map[string]audio.Mixer
+	// AudioOutWriteTimeout bounds a single write to the transport before the peer
+	// is taken to be gone. A peer that stops reading blocks the write on buffers
+	// that never drain, which no transport can report as an error, so how long
+	// the write takes is the only signal there is. Zero uses
+	// DefaultAudioOutWriteTimeout.
+	AudioOutWriteTimeout time.Duration
 	// AudioOutEndSilenceSecs is how many seconds of silence are sent after the
 	// last of the audio when the pipeline ends, so the closing words are not
 	// clipped by whatever closes on top of them. 0 sends none.
@@ -97,6 +104,19 @@ func DefaultParams() Params {
 		AudioOut10msChunks:     2,
 		AudioOutEndSilenceSecs: 2,
 	}
+}
+
+// DefaultAudioOutWriteTimeout bounds a single write to the transport before the
+// peer is taken to be gone.
+const DefaultAudioOutWriteTimeout = 10 * time.Second
+
+// AudioOutWrite is how long one write to the transport may take before the peer
+// is written off, which is the configured value or the default.
+func (p Params) AudioOutWrite() time.Duration {
+	if p.AudioOutWriteTimeout > 0 {
+		return p.AudioOutWriteTimeout
+	}
+	return DefaultAudioOutWriteTimeout
 }
 
 // AudioInStreamsOnStart reports whether received audio reaches the pipeline as

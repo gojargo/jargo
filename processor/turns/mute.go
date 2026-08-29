@@ -1,6 +1,10 @@
 package turns
 
-import "github.com/gojargo/jargo/frames"
+import (
+	"log/slog"
+
+	"github.com/gojargo/jargo/frames"
+)
 
 // MuteStrategy decides whether user input should be suppressed right now.
 // ShouldMute is called for every frame (so the strategy can track state) and
@@ -56,7 +60,11 @@ func (s *FirstSpeechUserMute) ShouldMute(f frames.Frame) bool {
 
 // MuteUntilFirstBotComplete mutes the user from the start of the session until
 // the bot finishes its first speech.
+//
+// The mute is also released when the bot's first speaking turn fails before
+// producing any audio, so that a failed opening leaves the user able to speak.
 type MuteUntilFirstBotComplete struct {
+	botStarted   bool
 	firstHandled bool
 }
 
@@ -65,12 +73,36 @@ func NewMuteUntilFirstBotComplete() *MuteUntilFirstBotComplete {
 	return &MuteUntilFirstBotComplete{}
 }
 
-// ShouldMute reports muted until the bot's first speech completes.
+// ShouldMute reports muted until the bot's first speech completes, or until that
+// first turn fails before it starts.
 func (s *MuteUntilFirstBotComplete) ShouldMute(f frames.Frame) bool {
-	if _, ok := f.(*frames.BotStoppedSpeakingFrame); ok {
+	switch fr := f.(type) {
+	case *frames.BotStartedSpeakingFrame:
+		s.botStarted = true
+	case *frames.BotStoppedSpeakingFrame:
 		s.firstHandled = true
+	case *frames.ErrorFrame:
+		s.handleError(fr)
 	}
 	return !s.firstHandled
+}
+
+// handleError releases the mute when the first speaking turn fails before any
+// audio. No audio means no stopped frame, and no later turn to wait for either,
+// since a muted user can never prompt one. Only errors before the bot starts
+// speaking count: after that the transport ends the turn on its own once the
+// audio dries up.
+func (s *MuteUntilFirstBotComplete) handleError(f *frames.ErrorFrame) {
+	if s.botStarted || s.firstHandled {
+		return
+	}
+	source := "the pipeline"
+	if f.Source != nil {
+		source = f.Source.Name()
+	}
+	slog.Warn("releasing the user mute without the bot having completed its first speech",
+		"after_an_error_from", source, "err", f.Error)
+	s.firstHandled = true
 }
 
 // FunctionCallUserMute mutes the user while any tool call is in flight.
