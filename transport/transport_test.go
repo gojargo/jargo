@@ -1711,3 +1711,99 @@ func TestBaseInputFiltersWithPassthroughOff(t *testing.T) {
 	task.StopWhenDone()
 	<-runDone
 }
+
+// wedgedOutput never returns from a write, which is what a peer that has stopped
+// reading looks like: the connection is up and nothing fails, so the only signal
+// available is that the write does not come back.
+type wedgedOutput struct {
+	*transport.BaseOutput
+	writes atomic.Int32
+	// delay is how long each write takes; zero never returns.
+	delay time.Duration
+}
+
+func newWedgedOutput(p transport.Params, delay time.Duration) *wedgedOutput {
+	o := &wedgedOutput{delay: delay}
+	o.BaseOutput = transport.NewBaseOutput("WedgedOutput", p, o)
+	return o
+}
+
+func (o *wedgedOutput) WriteAudio(ctx context.Context, _ frames.OutputAudioFrame) (bool, error) {
+	o.writes.Add(1)
+	if o.delay > 0 {
+		select {
+		case <-time.After(o.delay):
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// oneSecondOfAudio is 16 kHz 16-bit mono, which the sender splits into chunks.
+func oneSecondOfAudio() *frames.TTSAudioRawFrame {
+	return frames.NewTTSAudioRawFrame(make([]byte, 16000*2), 16000, 1)
+}
+
+// TestOutputWritesOffAPeerThatStoppedReading covers the bounded write. Paying the
+// timeout per queued chunk would hang the session by a slower route, so the peer
+// is written off once however much audio is queued behind it.
+//
+// Ported from upstream's test_peer_is_written_off_once.
+func TestOutputWritesOffAPeerThatStoppedReading(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 16000
+	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutWriteTimeout = 300 * time.Millisecond
+
+	o := newWedgedOutput(params, 0)
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(oneSecondOfAudio())
+	time.Sleep(time.Second)
+
+	if got := o.writes.Load(); got != 1 {
+		t.Errorf("writes = %d, want 1: the peer was written off per chunk", got)
+	}
+	if o.Usable() {
+		t.Error("the transport is still usable after a write that never returned")
+	}
+
+	task.Cancel(context.Background(), "")
+	<-runDone
+}
+
+// TestOutputDoesNotCutShortASlowWrite is the other half: long playout is
+// legitimately slow, and only a stalled write is written off.
+//
+// Ported from upstream's test_slow_write_within_the_bound_is_not_cut_short.
+func TestOutputDoesNotCutShortASlowWrite(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 16000
+	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutWriteTimeout = time.Second
+
+	o := newWedgedOutput(params, 10*time.Millisecond)
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(oneSecondOfAudio())
+	time.Sleep(time.Second)
+
+	// A second of audio is many chunks; a written-off peer would show one, so
+	// the exact count does not matter.
+	if got := o.writes.Load(); got < 10 {
+		t.Errorf("writes = %d, want a slow write left to carry on", got)
+	}
+	if !o.Usable() {
+		t.Error("a slow but progressing write cost the transport its usability")
+	}
+
+	task.Cancel(context.Background(), "")
+	<-runDone
+}

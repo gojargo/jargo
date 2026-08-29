@@ -63,6 +63,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a 400, so every sentence after the first in a turn came back as an error
   instead of audio.
 
+- **A write to the transport is bounded.** A peer that stops reading blocks the
+  write on socket buffers that never drain. Nothing about that is an error a
+  transport can report, so the write never returned: the audio loop parked, the
+  bot went silent, the queue grew without limit, and the frame ending the session
+  was stranded inside the transport. A write that exceeds
+  `transport.Params.AudioOutWriteTimeout` (10 seconds by default) now reports a
+  permanent connectivity error, which costs the transport its usability and
+  leaves the worker's unusable-processor policy to decide what happens to the
+  session. Later writes are skipped while it is unusable, so a peer is written
+  off once however much audio is still queued.
+
+- **A failed opening turn no longer leaves the user muted.**
+  `turns.MuteUntilFirstBotComplete` released the mute when the bot finished
+  speaking. A first turn that produced no audio never reported that, and no later
+  turn could, since a muted user cannot prompt one. An error arriving before the
+  bot starts speaking now releases the mute too; errors after that point are left
+  alone, since the transport ends the turn on its own once the audio dries up.
+
 - **A session's controllers are stopped once and released once.** The turn
   processor cleaned its controllers up from the end-of-session handler and again
   at teardown, so an ordinary session released its strategies twice and one

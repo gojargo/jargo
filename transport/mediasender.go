@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -575,23 +576,42 @@ func (s *mediaSender) sendEndSilence(ctx context.Context) {
 		make([]byte, s.sampleRate*sampleWidth*secs), s.sampleRate, 1)
 	silence.SetTransportDestination(s.destination)
 
-	writeCtx, cancel := context.WithTimeout(ctx, time.Duration(secs+1)*time.Second)
+	s.writeAudio(ctx, silence)
+}
+
+// writeAudio hands one chunk to the transport, bounded, and reports whether the
+// transport took it.
+//
+// A peer that stops reading blocks the write on socket buffers that never drain.
+// Nothing about that is an error the transport can report, so the only signal
+// available is that the write never returns, and by then the connection is no
+// longer usable. Left unbounded the audio loop parks: the bot goes silent, the
+// queue grows without limit, and the frame that ends the session is stranded
+// inside the transport, since it is forwarded only once the stop returns.
+//
+// Reporting the timeout costs the transport its usability, and a write is
+// skipped while it is unusable, so a peer is written off once however much audio
+// is still queued behind it rather than once per chunk.
+func (s *mediaSender) writeAudio(ctx context.Context, af frames.OutputAudioFrame) bool {
+	if !s.out.Usable() {
+		return false
+	}
+	timeout := s.out.params.AudioOutWrite()
+	writeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if _, err := s.out.self.WriteAudio(writeCtx, silence); err != nil {
-		// A stop landing while the closing silence is going out cuts it short.
-		// The turn is over either way, so there is nothing to report.
-		if canceled(ctx) {
-			return
-		}
-		slog.Warn("transport: write end-frame silence",
+	sent, err := s.out.self.WriteAudio(writeCtx, af)
+	if errors.Is(writeCtx.Err(), context.DeadlineExceeded) && !canceled(ctx) {
+		s.out.PushError(ctx, fmt.Sprintf(
+			"timed out after %s writing audio to the transport, the peer has stopped reading",
+			timeout), writeCtx.Err(), false, processor.ForceTreatAsPermanent())
+		return false
+	}
+	if err != nil && !canceled(ctx) {
+		slog.Error("write audio to transport",
 			"processor", s.out.Name(), "destination", s.destination, "err", err)
-		return
 	}
-	if errors.Is(writeCtx.Err(), context.DeadlineExceeded) {
-		slog.Warn("transport: timed out writing end-frame silence",
-			"processor", s.out.Name(), "destination", s.destination)
-	}
+	return sent && err == nil
 }
 
 // signalDrained releases a drainAudio waiter once the loop reaches its marker.
@@ -623,14 +643,10 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 
 		// The mixer has already been blended in by the loop that sourced this
 		// frame, so what the frame carries is what goes out, destination and all.
-		sent, err := s.out.self.WriteAudio(ctx, af)
-		if err != nil && !canceled(ctx) {
-			slog.Error("write audio to transport",
-				"processor", s.out.Name(), "destination", s.destination, "err", err)
-		}
+		//
 		// Audio the transport had nowhere to put is no more heard than audio a
 		// failed write dropped, so neither is forwarded.
-		pushDownstream = sent && err == nil
+		pushDownstream = s.writeAudio(ctx, af)
 	case *frames.OutputTransportMessageFrame:
 		// The ordered message: it waited behind the audio around it, so it
 		// reaches the client in step with what the client is hearing.

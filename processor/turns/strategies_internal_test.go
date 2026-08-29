@@ -878,6 +878,7 @@ func TestMuteStrategies(t *testing.T) {
 	botStart := func() frames.Frame { return frames.NewBotStartedSpeakingFrame() }
 	botStop := func() frames.Frame { return frames.NewBotStoppedSpeakingFrame() }
 	other := func() frames.Frame { return frames.NewUserSpeakingFrame() }
+	ttsError := func() frames.Frame { return frames.NewErrorFrame("TTS failed") }
 
 	type step struct {
 		frame frames.Frame
@@ -922,6 +923,33 @@ func TestMuteStrategies(t *testing.T) {
 				{botStop(), false},
 				{other(), false},
 				{botStart(), false},
+			},
+		},
+		{
+			// Ported from upstream's test_error_before_first_speech. A first
+			// turn that produces no audio never reports the bot falling silent,
+			// and no later turn can supply it either, since a muted user cannot
+			// prompt one.
+			name:  "MuteUntilFirstBotComplete releases on a first turn that failed",
+			build: func() MuteStrategy { return NewMuteUntilFirstBotComplete() },
+			steps: []step{
+				{other(), true},
+				{ttsError(), false},
+				{other(), false},
+			},
+		},
+		{
+			// Ported from upstream's test_error_while_bot_speaking. Once the bot
+			// is speaking the transport ends the turn on its own when the audio
+			// dries up, so an error there is not what releases the mute.
+			name:  "MuteUntilFirstBotComplete keeps the mute through an error mid-speech",
+			build: func() MuteStrategy { return NewMuteUntilFirstBotComplete() },
+			steps: []step{
+				{botStart(), true},
+				{ttsError(), true},
+				{other(), true},
+				{botStop(), false},
+				{other(), false},
 			},
 		},
 	}
