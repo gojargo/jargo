@@ -268,8 +268,12 @@ var (
 // It is emitted by a component with turn detection of its own, typically an STT
 // or realtime LLM service whose provider reports speech boundaries. It is a
 // proposal rather than a decision: an external turn-start strategy resolves it
-// into a UserStartedSpeakingFrame and broadcasts the interruption. It is a
-// system frame.
+// into a UserStartedSpeakingFrame and broadcasts the interruption.
+//
+// It is a system frame because resolving it broadcasts an interruption, which
+// has to preempt the frames already queued rather than wait behind them. Its
+// end-of-turn counterpart has the opposite requirement and is a control frame;
+// see [ProposedUserStoppedSpeakingFrame].
 type ProposedUserStartedSpeakingFrame struct {
 	BaseSystemFrame
 }
@@ -278,20 +282,6 @@ type ProposedUserStartedSpeakingFrame struct {
 func NewProposedUserStartedSpeakingFrame() *ProposedUserStartedSpeakingFrame {
 	return &ProposedUserStartedSpeakingFrame{
 		BaseSystemFrame: NewBaseSystemFrame("ProposedUserStartedSpeakingFrame"),
-	}
-}
-
-// ProposedUserStoppedSpeakingFrame proposes that the user's turn has ended. Like
-// its counterpart it is a proposal an external turn-stop strategy resolves into
-// a UserStoppedSpeakingFrame. It is a system frame.
-type ProposedUserStoppedSpeakingFrame struct {
-	BaseSystemFrame
-}
-
-// NewProposedUserStoppedSpeakingFrame builds a ProposedUserStoppedSpeakingFrame.
-func NewProposedUserStoppedSpeakingFrame() *ProposedUserStoppedSpeakingFrame {
-	return &ProposedUserStoppedSpeakingFrame{
-		BaseSystemFrame: NewBaseSystemFrame("ProposedUserStoppedSpeakingFrame"),
 	}
 }
 

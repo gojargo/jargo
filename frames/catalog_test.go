@@ -118,7 +118,7 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewProposedUserStartedSpeakingFrame() },
 		},
 		{
-			label: "ProposedUserStoppedSpeakingFrame", cat: system,
+			label: "ProposedUserStoppedSpeakingFrame", cat: control,
 			build: func() frames.Frame { return frames.NewProposedUserStoppedSpeakingFrame() },
 		},
 		{

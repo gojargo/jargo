@@ -77,6 +77,25 @@ func (f *PipelineFlushFrame) CloseDone() {
 	f.closeOnce.Do(func() { close(f.Done) })
 }
 
+// ProposedUserStoppedSpeakingFrame proposes that the user's turn has ended. Like
+// its counterpart it is a proposal an external turn-stop strategy resolves into
+// a UserStoppedSpeakingFrame.
+//
+// It is a control frame so that it stays ordered against the final
+// TranscriptionFrame. A service with turn detection of its own pushes that
+// transcript and then proposes the stop, and the strategy needs the text in hand
+// to close the turn on it.
+type ProposedUserStoppedSpeakingFrame struct {
+	BaseControlFrame
+}
+
+// NewProposedUserStoppedSpeakingFrame builds a ProposedUserStoppedSpeakingFrame.
+func NewProposedUserStoppedSpeakingFrame() *ProposedUserStoppedSpeakingFrame {
+	return &ProposedUserStoppedSpeakingFrame{
+		BaseControlFrame: NewBaseControlFrame("ProposedUserStoppedSpeakingFrame"),
+	}
+}
+
 // LLMFullResponseStartFrame marks the beginning of an LLM response, followed by
 // one or more TextFrames and a final LLMFullResponseEndFrame. It is a control
 // frame.
@@ -225,6 +244,7 @@ var (
 	_ Uninterruptible = (*StopFrame)(nil)
 	_ ControlFrame    = (*PipelineFlushFrame)(nil)
 	_ Uninterruptible = (*PipelineFlushFrame)(nil)
+	_ ControlFrame    = (*ProposedUserStoppedSpeakingFrame)(nil)
 	_ ControlFrame    = (*LLMFullResponseStartFrame)(nil)
 	_ ControlFrame    = (*LLMFullResponseEndFrame)(nil)
 	_ ControlFrame    = (*LLMAssistantPushAggregationFrame)(nil)
