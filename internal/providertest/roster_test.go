@@ -40,7 +40,10 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		// role is what a developer message is expected to be sent under.
 		role string
 	}{
-		{"cerebras", cerebras.NewLLM, chat.RoleUser},
+		// Cerebras maps the developer role to its own developer instruction
+		// layer, which sits above user instructions in the prompt hierarchy, so
+		// the message is sent as written.
+		{"cerebras", cerebras.NewLLM, chat.RoleDeveloper},
 		{"deepseek", deepseek.NewLLM, chat.RoleUser},
 		{"inception", inception.NewLLM, chat.RoleUser},
 		{"mistral", mistral.NewLLM, chat.RoleUser},

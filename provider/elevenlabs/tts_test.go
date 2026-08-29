@@ -234,12 +234,21 @@ func TestPreviousTextCarriesAcrossTheTurn(t *testing.T) {
 }
 
 // TestPreviousTextOmittedForUnsupportedModel is upstream's
-// test_http_payload_omits_previous_text_for_eleven_v3: the model rejects the
-// context parameters, so it is left off however much has been spoken.
+// test_http_payload_omits_previous_text_for_eleven_v3_models: the model rejects
+// the context parameters, so it is left off however much has been spoken.
 func TestPreviousTextOmittedForUnsupportedModel(t *testing.T) {
+	for _, model := range []string{"eleven_v3", "eleven_v3_conversational"} {
+		t.Run(model, func(t *testing.T) {
+			testPreviousTextOmitted(t, model)
+		})
+	}
+}
+
+func testPreviousTextOmitted(t *testing.T, model string) {
+	t.Helper()
 	srv, reqs := newTTSServer(t, []string{alignmentJSON(t, "Hello!", nil)})
 	cfg := ttsCfg(srv)
-	cfg.Model = "eleven_v3"
+	cfg.Model = model
 	s := &synthesizer{cfg: cfg, http: &http.Client{}}
 
 	speak(t, s, "Hello!")

@@ -19,7 +19,7 @@ const (
 	defaultURL = "wss://api.cartesia.ai/tts/websocket"
 	// defaultVersion pins the Cartesia API version; it is sent on every request.
 	defaultVersion = "2026-03-01"
-	defaultModel   = "sonic-3.5"
+	defaultModel   = "sonic-3.6"
 	// defaultVoiceID is a public Cartesia voice.
 	defaultVoiceID = "694f9389-aac1-45b6-b726-9d9369183238"
 	// defaultSampleRate is the PCM rate jargo requests from Cartesia.

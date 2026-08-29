@@ -41,7 +41,8 @@ var multilingualModels = map[string]struct{}{
 //
 //nolint:gochecknoglobals // read-only lookup table
 var contextUnsupportedModels = map[string]struct{}{
-	"eleven_v3": {},
+	"eleven_v3":                {},
+	"eleven_v3_conversational": {},
 }
 
 // VoiceSettings overrides a voice's default generation settings. Fields left nil
