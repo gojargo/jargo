@@ -1575,3 +1575,107 @@ func streamEnd(source, target, jobID string, data map[string]any) *bus.JobStream
 	m.To = target
 	return m
 }
+
+// gatedWorker records every bus message it is handed, so a test can tell what
+// the bus dropped from what it delivered.
+type gatedWorker struct {
+	*workers.Base
+	mu   sync.Mutex
+	seen []bus.Message
+}
+
+func newGatedWorker(name string, active bool) *gatedWorker {
+	w := &gatedWorker{}
+	w.Base = workers.New(workers.Config{Name: name, Active: &active}, w)
+	return w
+}
+
+func (w *gatedWorker) OnBusMessage(ctx context.Context, m bus.Message) {
+	w.mu.Lock()
+	w.seen = append(w.seen, m)
+	w.mu.Unlock()
+	w.Base.OnBusMessage(ctx, m)
+}
+
+func (w *gatedWorker) messages() []bus.Message {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]bus.Message(nil), w.seen...)
+}
+
+// TestInactiveWorkerIsHandedOnlyWhatCanChangeThat covers what the bus drops for
+// a worker that is asleep.
+//
+// Work addressed to it, and everything it would merely observe, never reaches
+// its message handling. Activation, deactivation, end and cancel always do, or
+// nothing could wake it and nothing could stop it.
+//
+// Ported from upstream's inactive worker gating tests.
+func TestInactiveWorkerIsHandedOnlyWhatCanChangeThat(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message func() bus.Message
+		want    bool
+	}{
+		{"a job request", func() bus.Message { return &bus.JobRequestMessage{JobID: "j1"} }, false},
+		{"a request to speak", func() bus.Message { return &bus.TTSSpeakMessage{Text: "hi"} }, false},
+		{"an activation", func() bus.Message { return &bus.ActivateWorkerMessage{} }, true},
+		{"a deactivation", func() bus.Message { return &bus.DeactivateWorkerMessage{} }, true},
+		{"an end", func() bus.Message { return &bus.EndWorkerMessage{} }, true},
+		{"a cancel", func() bus.Message { return &bus.CancelWorkerMessage{} }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newGatedWorker("gated", false)
+			if got := w.AcceptsBusMessage(tc.message()); got != tc.want {
+				t.Errorf("AcceptsBusMessage(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheGateOpensAndClosesWithTheWorker checks the two messages that move it
+// do so, so a worker woken over the bus starts taking work and one put back to
+// sleep stops.
+func TestTheGateOpensAndClosesWithTheWorker(t *testing.T) {
+	ctx := t.Context()
+	work := func() bus.Message { return &bus.JobRequestMessage{JobID: "j1"} }
+
+	w := newGatedWorker("gated", false)
+	// Started, because an activation only takes effect once the worker is
+	// running: one arriving before that is held and applied when it starts.
+	w.Start(ctx)
+	if w.AcceptsBusMessage(work()) {
+		t.Fatal("an inactive worker took work before it was woken")
+	}
+	w.OnBusMessage(ctx, &bus.ActivateWorkerMessage{})
+	if !w.Active() || !w.AcceptsBusMessage(work()) {
+		t.Error("the worker did not start taking work after being activated")
+	}
+
+	w.OnBusMessage(ctx, &bus.DeactivateWorkerMessage{})
+	if w.Active() || w.AcceptsBusMessage(work()) {
+		t.Error("the worker kept taking work after being deactivated")
+	}
+}
+
+// TestTheBusDropsWorkForAnInactiveWorker is the end-to-end half: the message is
+// dropped by the bus, so nothing the worker does with it runs.
+func TestTheBusDropsWorkForAnInactiveWorker(t *testing.T) {
+	ctx := t.Context()
+	b := bus.NewAsyncQueueBus()
+	b.Start(ctx)
+	t.Cleanup(b.Stop)
+
+	w := newGatedWorker("gated", false)
+	b.Subscribe(w)
+
+	m := &bus.JobRequestMessage{JobID: "j1"}
+	m.From = "other"
+	m.To = "gated"
+	b.Send(ctx, m)
+	time.Sleep(100 * time.Millisecond)
+
+	if got := w.messages(); len(got) != 0 {
+		t.Errorf("an inactive worker was handed %v, want nothing", got)
+	}
+}

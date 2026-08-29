@@ -352,7 +352,38 @@ func (w *Base) WorkerRegistry() *registry.WorkerRegistry {
 	return w.reg
 }
 
-// Active reports whether the worker is currently active.
+// alwaysDelivered are the messages an inactive worker still receives: the ones
+// that change whether it is active, and the ones that stop it. Gating these
+// would leave it with no way to be woken or shut down.
+func alwaysDelivered(m bus.Message) bool {
+	switch m.(type) {
+	case *bus.ActivateWorkerMessage, *bus.DeactivateWorkerMessage,
+		*bus.EndWorkerMessage, *bus.CancelWorkerMessage:
+		return true
+	}
+	return false
+}
+
+// AcceptsBusMessage takes bus messages only while the worker is active.
+//
+// An inactive worker is handed only activation, deactivation, end or cancel.
+// Work addressed to it, and everything it would merely observe, is dropped by
+// the bus rather than reaching OnBusMessage. Registry notifications are
+// unaffected, since a ready handler fires from the worker registry rather than
+// traveling over the bus.
+func (w *Base) AcceptsBusMessage(m bus.Message) bool {
+	return w.Active() || alwaysDelivered(m)
+}
+
+// Active reports whether the worker is accepting bus messages.
+//
+// An active worker takes everything addressed to it. An inactive one takes only
+// activation, deactivation, end or cancel, so no job request, frame or UI event
+// reaches it and none of its message handling runs.
+//
+// It matters mainly in a multi-worker setup, where a worker is put out of the
+// way while the others carry on. Registry watches sit outside it: a ready
+// handler fires whatever this reports, because it never travels over the bus.
 func (w *Base) Active() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

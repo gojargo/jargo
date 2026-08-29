@@ -63,6 +63,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a 400, so every sentence after the first in a turn came back as an error
   instead of audio.
 
+- **An inactive worker is handed only what can wake or stop it.** `active` gated
+  the frames a bridged worker received and nothing else, so a worker put out of
+  the way still received job requests, job answers and UI events, and ran its
+  handlers for them. The bus now asks each subscriber before every delivery: an
+  inactive worker takes only activation, deactivation, end and cancel, since
+  gating those would leave it with no way to be woken or shut down. A subscriber
+  attached to watch bus traffic is never gated, so it still sees what is
+  addressed to a worker that is asleep. Registry watches are unaffected: a ready
+  handler fires from the worker registry rather than travelling over the bus.
+
+- **The runner tells a worker to stop once.** `Runner.Cancel` sent the cancel
+  messages and the runner's exit path sent them again, so an ordinary shutdown
+  told each worker twice and replaced the caller's reason with a generic one.
+  Cancel now records why and signals the shutdown, and the messages go out from
+  the one exit path, carrying that reason. Both shutdown messages now reach every
+  worker that has not finished: one that never started has not finished either,
+  so it is still owed the message.
+
 - **A write to the transport is bounded.** A peer that stops reading blocks the
   write on socket buffers that never drain. Nothing about that is an error a
   transport can report, so the write never returned: the audio loop parked, the
