@@ -67,12 +67,17 @@ func (f *CancelFrame) String() string {
 	return fmt.Sprintf("%s(reason: %s)", f.Name(), f.Reason)
 }
 
-// ErrorSource identifies the component that raised an error — in practice the
+// ErrorSource identifies the component that raised an error, in practice the
 // frame processor that produced it. It is declared here, rather than imported
 // from the processor package, so the frames package keeps no dependency on it;
-// a frame processor satisfies this interface by exposing its name.
+// a frame processor satisfies this interface by exposing its name and whether it
+// can still do its job.
+//
+// Usable is settled before the frame travels, so a handler reading it sees the
+// verdict that came with the error it is handling rather than a later one.
 type ErrorSource interface {
 	Name() string
+	Usable() bool
 }
 
 // ErrorFrame notifies upstream that an error occurred downstream. A fatal error

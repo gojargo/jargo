@@ -57,7 +57,10 @@ func New(name string, self processor.Processor, opts ...processor.Option) *Base 
 // left unable to take work for the rest of the run. Call it from a settings
 // update that changed something, and not from one that changed nothing.
 func (b *Base) SettingsUpdated(ctx context.Context) {
-	b.SetUsable(ctx, true)
+	// Through Self, so a service that does more when it becomes usable again is
+	// the one that decides: an embedded method is not an override, and calling
+	// it here directly would skip whatever the concrete service does.
+	b.Self().SetUsable(ctx, true)
 }
 
 // BroadcastServiceMetadata sends this service's metadata both ways through the

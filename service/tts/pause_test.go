@@ -107,7 +107,7 @@ func (h *pauseHarness) waitForSpoken(t *testing.T, n int, within time.Duration) 
 }
 
 func TestPauseHoldsTheNextTurnUntilTheAudioFinishes(t *testing.T) {
-	h := newPauseHarness(t, tts.PauseOptions{Enabled: true, WatchdogTimeout: 5 * time.Second})
+	h := newPauseHarness(t, tts.PauseOptions{Enabled: true})
 
 	h.speakTurn("First one.")
 	if got := h.waitForSpoken(t, 1, 2*time.Second); len(got) != 1 {
@@ -146,7 +146,7 @@ func TestPauseDisabledByDefault(t *testing.T) {
 }
 
 func TestPauseSkippedWhenTheTurnSentNoText(t *testing.T) {
-	h := newPauseHarness(t, tts.PauseOptions{Enabled: true, WatchdogTimeout: 5 * time.Second})
+	h := newPauseHarness(t, tts.PauseOptions{Enabled: true})
 
 	// A turn that carries no text, a function call and nothing else, has no
 	// audio to wait for, so it must not pause the service.
@@ -160,37 +160,12 @@ func TestPauseSkippedWhenTheTurnSentNoText(t *testing.T) {
 	}
 }
 
-func TestPauseWatchdogForceResumes(t *testing.T) {
-	h := newPauseHarness(t, tts.PauseOptions{Enabled: true, WatchdogTimeout: 300 * time.Millisecond})
+// TestPauseWaitsWhileTheBotIsSpeaking covers the usual case for a streaming
+// provider: playback for this turn started while the model was still generating,
+// so the pause has the bot falling silent to wait for.
+func TestPauseWaitsWhileTheBotIsSpeaking(t *testing.T) {
+	h := newPauseHarness(t, tts.PauseOptions{Enabled: true})
 
-	h.speakTurn("First one.")
-	if got := h.waitForSpoken(t, 1, 2*time.Second); len(got) != 1 {
-		t.Fatalf("first turn was not spoken: %v", got)
-	}
-
-	// Nothing ever confirms the bot spoke, so the watchdog has to release the
-	// service rather than leave it paused for good.
-	h.speakTurn("Second one.")
-	got := h.waitForSpoken(t, 2, 3*time.Second)
-	if len(got) != 2 {
-		t.Fatalf("watchdog never force-resumed: %v", got)
-	}
-
-	errs := h.errors()
-	if len(errs) == 0 {
-		t.Fatal("watchdog force-resumed without reporting an error")
-	}
-	if errs[0].Fatal {
-		t.Error("watchdog error is fatal, want non-fatal")
-	}
-}
-
-func TestPauseWatchdogNotArmedWhileTheBotIsSpeaking(t *testing.T) {
-	h := newPauseHarness(t, tts.PauseOptions{Enabled: true, WatchdogTimeout: 300 * time.Millisecond})
-
-	// Playback for this turn is already confirmed, which is the usual case for a
-	// streaming provider, so the pause waits for BotStoppedSpeakingFrame and the
-	// watchdog must not fire behind it.
 	h.task.QueueFrame(frames.NewBotStartedSpeakingFrame())
 	h.speakTurn("First one.")
 	if got := h.waitForSpoken(t, 1, 2*time.Second); len(got) != 1 {
@@ -202,7 +177,7 @@ func TestPauseWatchdogNotArmedWhileTheBotIsSpeaking(t *testing.T) {
 		t.Fatalf("second turn ran while the bot was still speaking: %v", got)
 	}
 	if errs := h.errors(); len(errs) != 0 {
-		t.Errorf("watchdog fired while the bot was speaking: %v", errs[0].Error)
+		t.Errorf("the pause reported an error: %v", errs[0].Error)
 	}
 
 	h.task.QueueFrame(frames.NewBotStoppedSpeakingFrame())
@@ -212,7 +187,7 @@ func TestPauseWatchdogNotArmedWhileTheBotIsSpeaking(t *testing.T) {
 }
 
 func TestInterruptionReleasesAPausedService(t *testing.T) {
-	h := newPauseHarness(t, tts.PauseOptions{Enabled: true, WatchdogTimeout: 5 * time.Second})
+	h := newPauseHarness(t, tts.PauseOptions{Enabled: true})
 
 	h.speakTurn("First one.")
 	if got := h.waitForSpoken(t, 1, 2*time.Second); len(got) != 1 {
