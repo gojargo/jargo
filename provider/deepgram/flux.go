@@ -304,22 +304,37 @@ func (s *fluxStream) trackTurn(event string) {
 }
 
 // fluxResults maps a Flux message to zero or one transcription result.
+//
+// Flux runs its own turn detection, so the boundaries it reports are carried on
+// the results as proposals: the pipeline's strategies decide what to make of
+// them. StartOfTurn proposes the start and carries no text, since the few words
+// it may come with are a preview of a turn whose transcripts follow. EndOfTurn
+// proposes the stop, and carries the turn's final transcript unless the words
+// came back below the confidence floor, in which case the boundary is still
+// reported and only the text is dropped.
 func fluxResults(m fluxMessage, model string, minConf *float64) []stt.Result {
 	if m.Type != fluxMsgTurnInfo {
 		return nil
 	}
 	lang := primaryLanguage(m, model)
 	switch m.Event {
-	case fluxEventUpdate, fluxEventEagerEndOfTurn, fluxEventStartOfTurn:
+	case fluxEventStartOfTurn:
+		return []stt.Result{{Speech: stt.SpeechStarted}}
+	case fluxEventUpdate, fluxEventEagerEndOfTurn:
 		if m.Transcript == "" {
 			return nil
 		}
 		return []stt.Result{{Text: m.Transcript, Final: false, Language: lang}}
 	case fluxEventEndOfTurn:
 		if !confidenceOK(m.Words, minConf) {
-			return nil
+			slog.Warn("transcription confidence is below the configured floor, dropping the text",
+				"service", "DeepgramFluxSTT")
+			return []stt.Result{{Speech: stt.SpeechStopped}}
 		}
-		return []stt.Result{{Text: m.Transcript, Final: true, EndOfTurn: true, Language: lang}}
+		return []stt.Result{{
+			Text: m.Transcript, Final: true, EndOfTurn: true,
+			Language: lang, Speech: stt.SpeechStopped,
+		}}
 	case fluxEventTurnResumed:
 		return nil
 	default:

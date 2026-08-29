@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 // TestTurnsSTTConfigValidate pins which fields the provider requires.
@@ -113,14 +114,18 @@ func TestTurnsSTTRecv(t *testing.T) {
 	}
 	defer func() { _ = stream.Close() }()
 
+	// The turn boundaries the server detects are reported alongside the text, as
+	// proposals for the pipeline's turn strategies to resolve.
 	want := []struct {
 		text      string
 		final     bool
 		endOfTurn bool
+		speech    stt.SpeechState
 	}{
-		{"hello", false, false},
-		{"hello there friend", false, false},
-		{"hello there friend", true, true},
+		{"", false, false, stt.SpeechStarted},
+		{"hello", false, false, stt.SpeechUnknown},
+		{"hello there friend", false, false, stt.SpeechUnknown},
+		{"hello there friend", true, true, stt.SpeechStopped},
 	}
 	for i, w := range want {
 		res, rerr := stream.Recv()
@@ -130,8 +135,10 @@ func TestTurnsSTTRecv(t *testing.T) {
 		if len(res) != 1 {
 			t.Fatalf("Recv %d returned %d results, want 1", i, len(res))
 		}
-		if res[0].Text != w.text || res[0].Final != w.final || res[0].EndOfTurn != w.endOfTurn {
-			t.Errorf("result %d = %+v, want text %q final=%v endOfTurn=%v", i, res[0], w.text, w.final, w.endOfTurn)
+		if res[0].Text != w.text || res[0].Final != w.final || res[0].EndOfTurn != w.endOfTurn ||
+			res[0].Speech != w.speech {
+			t.Errorf("result %d = %+v, want text %q final=%v endOfTurn=%v speech=%v",
+				i, res[0], w.text, w.final, w.endOfTurn, w.speech)
 		}
 	}
 

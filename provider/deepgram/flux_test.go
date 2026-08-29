@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 func wsURL(httpURL string) string {
@@ -77,7 +78,7 @@ func TestFluxQueryLanguageHintsMultilingual(t *testing.T) {
 
 func TestFluxResults(t *testing.T) {
 	// Interim events carry a non-final result.
-	for _, event := range []string{fluxEventUpdate, fluxEventEagerEndOfTurn, fluxEventStartOfTurn} {
+	for _, event := range []string{fluxEventUpdate, fluxEventEagerEndOfTurn} {
 		m := fluxMessage{Type: fluxMsgTurnInfo, Event: event, Transcript: "hello there"}
 		res := fluxResults(m, defaultFluxModel, nil)
 		if len(res) != 1 || res[0].Final || res[0].Text != "hello there" {
@@ -89,16 +90,28 @@ func TestFluxResults(t *testing.T) {
 	}
 
 	// Empty-transcript interim events are dropped.
-	empty := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventStartOfTurn}
+	empty := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventUpdate}
 	if res := fluxResults(empty, defaultFluxModel, nil); len(res) != 0 {
-		t.Fatalf("empty StartOfTurn result = %+v", res)
+		t.Fatalf("empty Update result = %+v", res)
 	}
 
-	// EndOfTurn is finalized and marks end of turn; detected language is honored.
+	// StartOfTurn proposes the start of the turn and carries no text: the few
+	// words it may come with preview a turn whose transcripts follow.
+	start := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventStartOfTurn, Transcript: "hello"}
+	res := fluxResults(start, defaultFluxModel, nil)
+	if len(res) != 1 || res[0].Speech != stt.SpeechStarted || res[0].Text != "" {
+		t.Fatalf("StartOfTurn result = %+v", res)
+	}
+
+	// EndOfTurn is finalized, marks the end of the turn and proposes the stop;
+	// the detected language is honored.
 	m := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventEndOfTurn, Transcript: "bonjour", Languages: []string{"fr"}}
-	res := fluxResults(m, fluxMultilingualModel, nil)
+	res = fluxResults(m, fluxMultilingualModel, nil)
 	if len(res) != 1 || !res[0].Final || !res[0].EndOfTurn || res[0].Text != "bonjour" || res[0].Language != "fr" {
 		t.Fatalf("EndOfTurn result = %+v", res)
+	}
+	if res[0].Speech != stt.SpeechStopped {
+		t.Fatalf("EndOfTurn speech = %v, want SpeechStopped", res[0].Speech)
 	}
 
 	// TurnResumed and non-TurnInfo messages produce nothing.
@@ -120,20 +133,24 @@ func TestFluxConfidenceGate(t *testing.T) {
 		t.Fatalf("no-threshold result = %+v", res)
 	}
 
-	// Below threshold: dropped.
-	if res := fluxResults(m, defaultFluxModel, new(0.85)); len(res) != 0 {
-		t.Fatalf("below-threshold result should be dropped, got %+v", res)
+	// Below threshold: the text is dropped, and the turn boundary is still
+	// reported, since the turn ended whatever the words came back as.
+	if res := fluxResults(m, defaultFluxModel, new(0.85)); len(res) != 1 ||
+		res[0].Text != "" || res[0].Speech != stt.SpeechStopped {
+		t.Fatalf("below-threshold result = %+v, want the boundary with no text", res)
 	}
 
 	// Above threshold: accepted.
-	if res := fluxResults(m, defaultFluxModel, new(0.5)); len(res) != 1 {
+	if res := fluxResults(m, defaultFluxModel, new(0.5)); len(res) != 1 || res[0].Text != "ok" {
 		t.Fatalf("above-threshold result = %+v", res)
 	}
 
-	// Threshold set but no confidence data: dropped.
+	// Threshold set but no confidence data: the text is dropped, the boundary
+	// is not.
 	noWords := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventEndOfTurn, Transcript: "ok"}
-	if res := fluxResults(noWords, defaultFluxModel, new(0.5)); len(res) != 0 {
-		t.Fatalf("missing-confidence result should be dropped, got %+v", res)
+	if res := fluxResults(noWords, defaultFluxModel, new(0.5)); len(res) != 1 ||
+		res[0].Text != "" || res[0].Speech != stt.SpeechStopped {
+		t.Fatalf("missing-confidence result = %+v, want the boundary with no text", res)
 	}
 }
 

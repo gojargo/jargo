@@ -55,6 +55,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   interruption, which has to preempt what is queued rather than wait behind it.
   The transcription base orders the two around the text for the same reason.
 
+- **Deepgram Flux, Cartesia Ink-2 and OpenAI Realtime propose their turn
+  boundaries.** All three recommend external turn strategies, which decide the
+  turn from the boundaries the service reports. None of them reported any, so
+  the strategies they asked for were never given anything to resolve and no turn
+  ever started or ended. Flux reports the start of a turn and its end, Ink-2 its
+  `turn.start` and `turn.end`, and the Realtime session the speech boundaries its
+  server-side detector finds. A turn whose words came back below Flux's
+  confidence floor, or that Ink-2 ended with nothing said, still reports the
+  boundary: only the empty text is left out.
+
+- **ElevenLabs Realtime STT no longer recommends external turn strategies.** Its
+  commits delimit the transcript rather than the conversational turn, so
+  recommending them replaced the pipeline's own turn detection with strategies
+  nothing drove. The turn decision is left with the pipeline.
+
 - **A service's recommended turn strategies are applied.** A transcription
   service that does its own server-side end-of-turn detection recommends
   external turn strategies through its metadata frame. Nothing read the

@@ -13,7 +13,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
-	"github.com/gojargo/jargo/processor/turns"
 )
 
 // TestRealtimeSTTConfigValidate pins the fields the provider requires and the
@@ -41,16 +40,17 @@ func TestNewRealtimeSTT(t *testing.T) {
 	providertest.Service(t, "ElevenLabsRealtimeSTT", NewRealtimeSTT(RealtimeSTTConfig{APIKey: "k"}))
 }
 
-// TestRealtimeSTTMetadata checks the service reports that it detects utterance
-// boundaries itself, unlike the batch service next to it.
+// TestRealtimeSTTMetadata checks the service recommends no turn strategies. Its
+// commits delimit the transcript rather than the turn, so the turn decision is
+// left where it belongs, with the pipeline.
 func TestRealtimeSTTMetadata(t *testing.T) {
 	c := &realtimeSTTConnector{cfg: RealtimeSTTConfig{APIKey: "k", Model: defaultRealtimeSTTModel}}
-	got, ok := c.Metadata().UserTurnStrategies.(turns.UserTurnStrategies)
-	if !ok {
-		t.Fatalf("UserTurnStrategies = %T, want external turn strategies", c.Metadata().UserTurnStrategies)
+	md := c.Metadata()
+	if md.UserTurnStrategies != nil {
+		t.Errorf("UserTurnStrategies = %v, want none recommended", md.UserTurnStrategies)
 	}
-	if _, external := got.ExternalInterruptions(); !external {
-		t.Error("the recommended strategies are not the external ones")
+	if md.Model != defaultRealtimeSTTModel {
+		t.Errorf("Model = %q, want %q", md.Model, defaultRealtimeSTTModel)
 	}
 }
 

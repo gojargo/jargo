@@ -16,7 +16,6 @@ import (
 	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
-	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -85,8 +84,9 @@ func (c RealtimeSTTConfig) Validate() error { return validate.Struct(c) }
 
 // NewRealtimeSTT builds an ElevenLabs streaming STT service. Unlike NewSTT,
 // which transcribes one delimited utterance per request, this holds a
-// connection open and lets ElevenLabs detect the utterance boundaries, so the
-// pipeline does not need its own end-of-turn detection.
+// connection open and lets ElevenLabs commit each segment when its own detector
+// hears a pause. That commit delimits the transcript, not the turn: the pipeline
+// still decides where the turn ends.
 func NewRealtimeSTT(cfg RealtimeSTTConfig) *stt.StreamService {
 	if cfg.Host == "" {
 		cfg.Host = defaultRealtimeSTTHost
@@ -101,13 +101,14 @@ type realtimeSTTConnector struct {
 	cfg RealtimeSTTConfig
 }
 
-// Metadata tells downstream processors the service detects utterance boundaries
-// itself, so the user aggregator adopts external turn strategies.
+// Metadata reports the transcript latency and the model. It recommends no turn
+// strategies: ElevenLabs commits a segment when its own detector hears a pause,
+// which delimits the transcript rather than the conversational turn, so deciding
+// the turn stays with the pipeline.
 func (c *realtimeSTTConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
-		UserTurnStrategies: turns.ExternalStrategies(turns.ExternalStrategiesConfig{}),
-		TTFSP99:            cmp.Or(c.cfg.TTFSP99, stt.ElevenLabsRealtimeTTFSP99),
-		Model:              c.cfg.Model,
+		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.ElevenLabsRealtimeTTFSP99),
+		Model:   c.cfg.Model,
 	}
 }
 
