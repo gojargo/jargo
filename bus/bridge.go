@@ -127,6 +127,12 @@ func (p *BridgeProcessor) OnBusMessage(ctx context.Context, m Message) {
 	if fm.Target() != "" && fm.Target() != p.cfg.WorkerName {
 		return
 	}
+	// Past every filter, so this pipeline is the one taking the frame in. A flush
+	// probe crossing in is answered here, out of sight of the worker waiting on
+	// it, which is told so it does not read the quiet as the pipeline being stuck.
+	if probe, ok := fm.Frame.(*frames.PipelineFlushFrame); ok {
+		p.TrackFlushProbe(probe)
+	}
 	_ = p.PushFrame(ctx, fm.Frame, fm.Direction)
 }
 

@@ -30,6 +30,10 @@ func (f *flusher) Flush(context.Context) error {
 	return nil
 }
 
+// TrackFlushProbe records a probe from another worker. This stand-in answers
+// none, so there is nothing to report progress on.
+func (f *flusher) TrackFlushProbe(*frames.PipelineFlushFrame) {}
+
 // TurnTracker reports no tracker: this stand-in is a pipeline only as far as
 // flushing goes.
 func (f *flusher) TurnTracker() processor.TurnTracker { return nil }

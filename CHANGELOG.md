@@ -44,6 +44,39 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A pipeline flush waits for the whole trip, and for work pushed upstream.**
+  The probe settled when it reached the source, so `Flush` reported a pipeline
+  drained while work a processor had started by pushing upstream, an LLM run
+  triggered by a function call result and the speech that follows it, was still
+  on its way down. It now travels down to the sink, back up to the source, and
+  down again, settling only on the second arrival at the sink.
+
+  The probe also goes on the worker's own queue rather than straight into the
+  pipeline, so it no longer overtakes frames already waiting there and reports a
+  drain that has not happened.
+
+  The wait is no longer a flat timeout but a budget for quiet:
+  `pipeline.FlushNoProgressTimeout` (5 seconds) of nothing reaching the sink and
+  no report from a pipeline holding the probe. One that keeps working keeps the
+  wait alive however long it takes. `Flush` returns `pipeline.ErrFlushNoProgress`
+  when it gives up.
+
+- **A flush that crosses into another worker is reported on.** A probe answered
+  in another pipeline is out of sight of the worker waiting on it, which could
+  only read the quiet as a pipeline gone stuck. The pipeline holding it now says
+  it is still working, once a second, over a new `bus.FlushProgressMessage`.
+  `pipeline.WorkerConfig.HandleFlushFrame` says whether a worker answers a probe
+  at all, defaulting to whether its pipeline is unbridged, so a worker wired into
+  someone else's topology leaves the probe to the pipeline that owns the
+  transport.
+
+- **A worker drains its pipeline before ending or handing over.** `Worker.End`
+  and `Worker.ActivateWorker` with `DeactivateSelf` now wait for what the worker
+  has already pushed to reach the end of the pipeline. Without it a handover let
+  the target start producing while this worker's output was still in flight, and
+  both arrived interleaved. A worker that stays active hands nothing over and
+  does not wait.
+
 - **A TTS turn that produces no audio is reported.** A provider can accept every
   request and return no audio at all, an unknown voice id being the usual case,
   without ever reporting an error, and nothing said so. Every audio context that
