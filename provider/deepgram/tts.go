@@ -72,6 +72,10 @@ func (s *synthesizer) Metadata() tts.Metadata {
 // SampleRate reports the requested PCM output rate.
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
+// RequiresTrailingSpace reports that Aura reads the punctuation ending a
+// sentence aloud, saying "dot" for a full stop, unless the text ends in a space.
+func (s *synthesizer) RequiresTrailingSpace() bool { return true }
+
 // Synthesize requests speech for text and streams the raw PCM downstream.
 // container=none is required to receive headerless PCM rather than a WAV stream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
