@@ -48,9 +48,10 @@ type STTConfig struct {
 	// "pcm". For PCM the sample rate is appended to form the input format (for
 	// example "pcm_16000").
 	Encoding string
-	// Language hints the spoken language; the zero value lets the server decide.
-	// Verified codes are de, en, es, fr, and pt; other languages fall back to
-	// the base code.
+	// Language grounds the transcription in one language; the zero value uses
+	// English. Verified codes are de, en, es, fr, and pt; other languages fall
+	// back to the base code. Set it to AnyLanguage to have Gradium detect the
+	// language instead.
 	Language language.Language
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
@@ -67,6 +68,9 @@ type STTConfig struct {
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
 // NewSTT builds a Gradium streaming STT service.
+//
+// It transcribes English unless the configuration names another language. Set
+// Language to AnyLanguage to have Gradium detect it instead.
 func NewSTT(cfg STTConfig) *stt.StreamService {
 	if cfg.URL == "" {
 		cfg.URL = defaultSTTURL
@@ -76,6 +80,9 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	}
 	if cfg.Encoding == "" {
 		cfg.Encoding = encPCM
+	}
+	if cfg.Language == "" {
+		cfg.Language = language.English
 	}
 	return stt.NewStream("GradiumSTT", &sttConnector{cfg: cfg}, cfg.SampleRate)
 }
@@ -106,9 +113,20 @@ func (c *sttConnector) inputFormat(sampleRate int) string {
 	}
 }
 
+// AnyLanguage asks Gradium to detect the language rather than being grounded in
+// one. It is not one of the language constants because it names a mode rather
+// than a language, and it is passed through as it is written.
+const AnyLanguage language.Language = "any"
+
 // gradiumLanguage maps a Language to Gradium's language code. Gradium wants the
-// base code; the empty language yields "" so the caller omits the hint.
-func gradiumLanguage(l language.Language) string { return l.BaseCode() }
+// base code; the empty language yields "" so the caller omits the hint, and the
+// detect-the-language mode is passed through as it is.
+func gradiumLanguage(l language.Language) string {
+	if l == AnyLanguage {
+		return string(AnyLanguage)
+	}
+	return l.BaseCode()
+}
 
 // Connect dials the WebSocket, sends the setup handshake, and waits for the
 // server's ready acknowledgement.

@@ -90,17 +90,30 @@ func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *
 		s.topK = param.NewOpt(*cfg.TopK)
 	}
 	if cfg.Thinking != nil {
+		display := sdk.ThinkingConfigAdaptiveDisplay(cfg.Thinking.Display)
 		switch cfg.Thinking.Type {
 		case "disabled":
 			s.thinking = sdk.ThinkingConfigParamUnion{OfDisabled: &sdk.ThinkingConfigDisabledParam{}}
 			s.thinkingSet = true
 		case "adaptive":
-			s.thinking = sdk.ThinkingConfigParamUnion{OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{}}
+			s.thinking = sdk.ThinkingConfigParamUnion{
+				OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{Display: display},
+			}
 			s.thinkingSet = true
 		case "enabled":
-			s.thinking = sdk.ThinkingConfigParamOfEnabled(int64(cfg.Thinking.BudgetTokens))
+			enabled := sdk.ThinkingConfigParamOfEnabled(int64(cfg.Thinking.BudgetTokens))
+			enabled.OfEnabled.Display = sdk.ThinkingConfigEnabledDisplay(cfg.Thinking.Display)
+			s.thinking = enabled
 			s.thinkingSet = true
 		}
+	} else if sonnetThinksByDefault(s.model) {
+		// Sonnet 5 and later think adaptively whenever a request omits the
+		// parameter, which for real-time voice can add seconds before the first
+		// answer token. Only the Sonnet line, Anthropic's speed tier: Opus and
+		// Fable are left at the provider default, since choosing one of those is
+		// a decision to reason.
+		s.thinking = sdk.ThinkingConfigParamUnion{OfDisabled: &sdk.ThinkingConfigDisabledParam{}}
+		s.thinkingSet = true
 	}
 	s.Base = llm.New(name, s)
 	s.Base.SetModel(s.model)

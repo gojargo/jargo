@@ -42,7 +42,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   processor downstream can size its own behaviour to them and clients and
   observers can mirror them. `turn.Analyzer` gains `Params`.
 
+### Changed
+
+- **Provider defaults tracked upstream.** Cartesia's default TTS model is now
+  `sonic-3.6`. Gradium STT transcribes English by default rather than leaving the
+  server to decide, and `gradium.AnyLanguage` asks it to detect the language.
+  Anthropic turns thinking off by default on Sonnet 5 and later, which otherwise
+  decide per request whether to think and can spend seconds on it before the
+  first answer token; Opus and Fable are left at Anthropic's own default, and
+  configuring `Thinking` explicitly still wins. `anthropic.ThinkingConfig` gained
+  `Display`, which asks for readable thinking on the models that omit it by
+  default. Cerebras now sends developer-role messages as written rather than
+  converting them to user messages: it maps the role to its own developer
+  instruction layer, which sits above user instructions.
+
 ### Fixed
+
+- **ElevenLabs `eleven_v3_conversational` no longer sends the context
+  parameters.** ElevenLabs rejects `previous_text` for the Eleven v3 models with
+  a 400, so every sentence after the first in a turn came back as an error
+  instead of audio.
 
 - **A session's controllers are stopped once and released once.** The turn
   processor cleaned its controllers up from the end-of-session handler and again

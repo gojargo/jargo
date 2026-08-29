@@ -17,8 +17,8 @@ import (
 	uctx "github.com/gojargo/jargo/utils/context"
 )
 
-// GenerationConfig guides Cartesia generation; it applies to sonic-3 and
-// sonic-3.5 models. Fields left at their zero value are omitted.
+// GenerationConfig guides Cartesia generation; it applies to the sonic-3 series
+// of models. Fields left at their zero value are omitted.
 type GenerationConfig struct {
 	// Volume multiplies the generated speech volume (0.5 to 2.0).
 	Volume *float64 `json:"volume,omitempty"`
