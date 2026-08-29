@@ -44,6 +44,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A session's controllers are stopped once and released once.** The turn
+  processor cleaned its controllers up from the end-of-session handler and again
+  at teardown, so an ordinary session released its strategies twice and one
+  holding a shared resource handed it back once more than it took it. The two
+  jobs are now separate: the controllers gained a `Stop` that cancels their own
+  timers, which runs at the end of the session, while releasing what they hold
+  stays in `Cleanup`, the call that happens exactly once. Left running, those
+  timers report what ending looks like rather than anything real, since no audio
+  arrives and no turn finishes once the session is over. The user aggregator
+  stops its controllers on the same two frames and brings them up on the
+  `StartFrame`; `controller.Controller` gained `Start` and `Stop`, and the
+  detection it drives now runs after the frame has been handled and forwarded.
+
+- **The transport's input audio filter starts and stops once.** It started from
+  the `StartFrame` and stopped when the audio goroutine came down, so a session
+  stopped and started again started it twice with no stop in between. It now
+  starts in `Setup` and stops in `Cleanup`, the two calls guaranteed to happen
+  exactly once.
+
 - **A pipeline flush waits for the whole trip, and for work pushed upstream.**
   The probe settled when it reached the source, so `Flush` reported a pipeline
   drained while work a processor had started by pushing upstream, an LLM run

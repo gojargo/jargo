@@ -80,14 +80,23 @@ func (c *UserTurnController) Setup(ctx context.Context, st processor.Setup) erro
 	return c.setupStrategies()
 }
 
-// Cleanup stops the watchdog and cleans up the strategies.
-func (c *UserTurnController) Cleanup() {
+// Stop tears the turn watchdog down, leaving the strategies alone. Its owner
+// calls it at the end of the session: left running the watchdog reports what
+// ending looks like rather than a turn that really stalled, since no turn
+// finishes once the session is over. The strategies may be shared, so cleaning
+// them up waits for Cleanup.
+func (c *UserTurnController) Stop() {
 	c.mu.Lock()
 	if c.watchdogCancel != nil {
 		c.watchdogCancel()
 		c.watchdogCancel = nil
 	}
 	c.mu.Unlock()
+}
+
+// Cleanup stops the watchdog and cleans up the strategies.
+func (c *UserTurnController) Cleanup() {
+	c.Stop()
 	c.cleanupStrategies()
 }
 

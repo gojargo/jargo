@@ -65,12 +65,19 @@ func (c *UserIdleController) Setup(ctx context.Context, emit Emitter) {
 	c.mu.Unlock()
 }
 
-// Cleanup cancels any pending timer.
-func (c *UserIdleController) Cleanup() {
+// Stop cancels any pending timer. Its owner calls it at the end of the session,
+// so the timer cannot report an idleness that only means the session is over.
+//
+// It has no Start to pair with: the timer is created in response to speech
+// rather than at the start of the session, so there is nothing to bring up.
+func (c *UserIdleController) Stop() {
 	c.mu.Lock()
 	c.cancelTimer()
 	c.mu.Unlock()
 }
+
+// Cleanup cancels any pending timer.
+func (c *UserIdleController) Cleanup() { c.Stop() }
 
 // Push sends a frame to the neighbor in dir (for use from the callback).
 func (c *UserIdleController) Push(ctx context.Context, f frames.Frame, dir processor.Direction) error {

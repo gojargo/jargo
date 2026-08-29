@@ -103,13 +103,11 @@ func New(analyzer vad.Analyzer, handlers Handlers, cfg Config) *Controller {
 // Params returns the detection parameters in force.
 func (c *Controller) Params() vad.Params { return c.analyzer.Params() }
 
-// ProcessFrame drives the detector from one frame. It acts on the start of the
-// pipeline, on incoming audio, and on a request to change the parameters;
-// anything else it ignores.
+// ProcessFrame drives the detector from one frame. It acts on incoming audio and
+// on a request to change the parameters; anything else it ignores. Its owner
+// starts and stops it around the session with Start and Stop.
 func (c *Controller) ProcessFrame(ctx context.Context, f frames.Frame) error {
 	switch fr := f.(type) {
-	case *frames.StartFrame:
-		return c.start(ctx, fr)
 	case *frames.InputAudioRawFrame:
 		c.handleAudio(ctx, fr)
 	case *frames.VADParamsUpdateFrame:
@@ -119,9 +117,26 @@ func (c *Controller) ProcessFrame(ctx context.Context, f frames.Frame) error {
 	return nil
 }
 
+// Start announces the parameters the detector runs with and brings up the watch
+// for the audio going missing. Its owner calls it on the StartFrame. It pairs
+// with Stop.
+//
+// The watch runs from here rather than from Setup because it looks for audio
+// going missing mid-turn, and there is no audio to miss until the session starts.
+func (c *Controller) Start(ctx context.Context) {
+	c.ReportParams(ctx)
+	c.startIdleWatch(ctx)
+}
+
+// Stop tears the idle watch down, leaving the detector alone. Its owner calls it
+// at the end of the session: left running, the watch reports what ending looks
+// like rather than anything real, since no audio arrives once the session is
+// over. The detector may be shared, so releasing it waits for Cleanup.
+func (c *Controller) Stop() { c.stopIdleWatch() }
+
 // Cleanup stops the idle watch and releases the detector and resampler.
 func (c *Controller) Cleanup() {
-	c.stopIdleWatch()
+	c.Stop()
 	if c.analyzer != nil {
 		_ = c.analyzer.Close()
 	}
@@ -172,16 +187,6 @@ func (c *Controller) Setup(s processor.Setup) error {
 		}
 	}
 	c.analyzerRate = rate
-	return nil
-}
-
-// start brings up the watch for the audio going missing and reports the
-// parameters the detector will run with. The watch runs from here rather than
-// from Setup because it looks for audio going missing mid-turn, and there is no
-// audio to miss until the pipeline starts.
-func (c *Controller) start(ctx context.Context, _ *frames.StartFrame) error {
-	c.startIdleWatch(ctx)
-	c.ReportParams(ctx)
 	return nil
 }
 

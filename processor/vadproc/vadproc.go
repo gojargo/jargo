@@ -104,6 +104,15 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 	if err := p.PushFrame(ctx, f, dir); err != nil {
 		return err
 	}
+	switch f.(type) {
+	case *frames.StartFrame:
+		p.controller.Start(ctx)
+	case *frames.EndFrame, *frames.CancelFrame:
+		// The session is over, so the idle watch stops here rather than waiting
+		// for teardown: left running it would report the silence that only means
+		// the session ended. What the controller holds is released in Cleanup.
+		p.controller.Stop()
+	}
 	return p.controller.ProcessFrame(ctx, f)
 }
 

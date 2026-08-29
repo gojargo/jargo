@@ -469,7 +469,70 @@ func (u *UserAggregator) Setup(ctx context.Context, s processor.Setup) error {
 	return nil
 }
 
-// Cleanup tears the controllers down.
+// handleLifecycle brings the controllers up and takes them down around the
+// session, and reports whether the frame was one of the three that do so.
+//
+// The controllers' timers belong to the session: there is no audio to go missing
+// and no turn to stall until it starts, and once it is over they can only report
+// what ending looks like rather than anything real.
+func (u *UserAggregator) handleLifecycle(
+	ctx context.Context, f frames.Frame, dir processor.Direction,
+) (bool, error) {
+	switch f.(type) {
+	case *frames.StartFrame:
+		// Forwarded before the controllers come up, so the frame reaches
+		// everything downstream before any parameters they announce.
+		if err := u.PushFrame(ctx, f, dir); err != nil {
+			return true, err
+		}
+		u.startControllers(ctx)
+		return true, nil
+
+	case *frames.EndFrame:
+		// The session is over, so whatever the user said last is committed
+		// rather than lost with the processor. It happens after the frame has
+		// been forwarded, so the end of the pipeline is not held up behind it.
+		if err := u.PushFrame(ctx, f, dir); err != nil {
+			return true, err
+		}
+		u.reportTurnStopped(ctx, nil, true)
+		u.stopControllers()
+		return true, nil
+
+	case *frames.CancelFrame:
+		// Same, the other way round: a cancel tears the pipeline down at once, so
+		// what is held is committed before the frame that stops everything.
+		u.reportTurnStopped(ctx, nil, true)
+		u.stopControllers()
+		return true, u.PushFrame(ctx, f, dir)
+	}
+	return false, nil
+}
+
+// startControllers brings the controllers up for the session, which is where the
+// timers that watch it belong: there is no audio to go missing and no turn to
+// stall until the session has started.
+func (u *UserAggregator) startControllers(ctx context.Context) {
+	if u.vad != nil {
+		u.vad.Start(ctx)
+	}
+}
+
+// stopControllers stops the controllers' timers at the end of the session. Left
+// running they report what ending looks like rather than anything real: no audio
+// arrives, no turn finishes, the user is idle. What they hold, the detector and
+// the strategies, may be shared and is released in Cleanup instead.
+func (u *UserAggregator) stopControllers() {
+	if u.vad != nil {
+		u.vad.Stop()
+	}
+	u.turn.Stop()
+	u.idle.Stop()
+}
+
+// Cleanup releases what the controllers hold. It is the one call that happens
+// exactly once, which is why releasing a shared detector or strategy belongs
+// here rather than at the end of the session.
 func (u *UserAggregator) Cleanup(ctx context.Context) error {
 	if u.vad != nil {
 		u.vad.Cleanup()
@@ -493,15 +556,15 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 	if u.suppressed(ctx, f) {
 		return nil
 	}
-	// Detection runs before the frame is handled, so the speaking frames it
-	// raises are queued behind this one and reach the strategies in order with
-	// it.
+	err := u.handleFrame(ctx, f, dir)
+	// Detection runs after the frame has been handled and forwarded, so the
+	// speaking frames it raises are queued behind this one and reach the
+	// strategies in order with it.
 	if u.vad != nil {
-		if err := u.vad.ProcessFrame(ctx, f); err != nil {
-			return err
+		if verr := u.vad.ProcessFrame(ctx, f); verr != nil {
+			return verr
 		}
 	}
-	err := u.handleFrame(ctx, f, dir)
 	u.turn.Process(f)
 	u.idle.Process(f)
 	return err
@@ -509,23 +572,11 @@ func (u *UserAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 
 // handleFrame folds one frame into the aggregation and forwards it.
 func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if handled, err := u.handleLifecycle(ctx, f, dir); handled {
+		return err
+	}
+
 	switch fr := f.(type) {
-	case *frames.EndFrame:
-		// The session is over, so whatever the user said last is committed
-		// rather than lost with the processor. It happens after the frame has
-		// been forwarded, so the end of the pipeline is not held up behind it.
-		if err := u.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		u.reportTurnStopped(ctx, nil, true)
-		return nil
-
-	case *frames.CancelFrame:
-		// Same, the other way round: a cancel tears the pipeline down at once, so
-		// what is held is committed before the frame that stops everything.
-		u.reportTurnStopped(ctx, nil, true)
-		return u.PushFrame(ctx, f, dir)
-
 	case *frames.InterimTranscriptionFrame, *frames.TranslationFrame:
 		// Consumed here, like the final transcript below: partial speech is not
 		// aggregated either, and the turn strategies that read it run inside this

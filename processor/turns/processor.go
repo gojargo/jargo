@@ -103,7 +103,11 @@ func (p *UserTurnProcessor) Setup(ctx context.Context, s processor.Setup) error 
 	return p.turn.Setup(ctx, s)
 }
 
-// Cleanup releases what the controllers hold.
+// Cleanup releases what the controllers hold. It is the one call that happens
+// exactly once, which is why releasing a shared strategy belongs here rather
+// than at the end of the session: an ordinary session ends and is then torn
+// down, and a controller releasing what it took twice hands it back once more
+// than it took it.
 func (p *UserTurnProcessor) Cleanup(ctx context.Context) error {
 	p.turn.Cleanup()
 	p.idle.Cleanup()
@@ -144,14 +148,16 @@ func (p *UserTurnProcessor) forward(
 			return nil
 		}
 	case *frames.EndFrame, *frames.CancelFrame:
-		// The session is over, so the controllers stop here rather than waiting
-		// for teardown. The frame is forwarded first so nothing is held up
-		// behind them.
+		// The session is over, so the controllers' timers stop here rather than
+		// waiting for teardown: left running they report what ending looks like
+		// rather than anything real. What the controllers hold may be shared and
+		// is released in Cleanup instead, the one call that happens exactly once.
+		// The frame is forwarded first so nothing is held up behind them.
 		if err := p.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		p.turn.Cleanup()
-		p.idle.Cleanup()
+		p.turn.Stop()
+		p.idle.Stop()
 		return nil
 	}
 	return p.PushFrame(ctx, f, dir)
