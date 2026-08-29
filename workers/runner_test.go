@@ -145,6 +145,10 @@ func TestRunnerEndReachesRootWorkersOnly(t *testing.T) {
 	}
 }
 
+// TestRunnerCancelReachesRootWorkersOnly drives a running runner, because that
+// is where the cancel messages go out from: Cancel records why and signals the
+// shutdown, and the runner's one exit path tells each worker still going. Sending
+// from both would tell a worker twice on an ordinary shutdown.
 func TestRunnerCancelReachesRootWorkersOnly(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -156,7 +160,9 @@ func TestRunnerCancelReachesRootWorkersOnly(t *testing.T) {
 	root.AddWorkers(ctx, child)
 	runner.AddWorkers(ctx, child)
 
-	runner.Cancel(t.Context(), "")
+	done := runInBackground(t, ctx, runner)
+	runner.Cancel(ctx, "")
+	<-done
 
 	// Only what the runner itself addressed, as above.
 	msgs := await[*bus.CancelWorkerMessage](t, rec, 1)

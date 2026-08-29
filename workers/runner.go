@@ -82,6 +82,13 @@ func (e *workerEntry) running() bool {
 	}
 }
 
+// finished reports whether the worker has run and stopped. One that has not been
+// started has not finished either, so it is still owed the message that tells it
+// to wind down.
+func (e *workerEntry) finished() bool {
+	return e.done != nil && !e.running()
+}
+
 // Runner runs workers to completion. It owns the bus they talk over, the
 // registry they find each other through, and the goroutines they run on.
 //
@@ -114,6 +121,9 @@ type Runner struct {
 	knownRunners map[string]struct{}
 	started      bool
 	autoEnd      bool
+	// cancelReason is why the runner was canceled, carried on the messages the
+	// exit path sends out.
+	cancelReason string
 	// shuttingDown is closed when the runner is asked to stop, whichever way.
 	shuttingDown chan struct{}
 	shutdownOnce sync.Once
@@ -239,33 +249,62 @@ func (r *Runner) StopWhenDone() {
 	}
 }
 
-// End asks every running worker to stop gracefully. Calling it again does
-// nothing.
+// End asks every worker that has not finished to stop gracefully. Calling it
+// again does nothing.
 func (r *Runner) End(ctx context.Context, reason string) {
 	if !r.beginShutdown() {
 		return
 	}
 	slog.Debug("runner ending gracefully", "runner", r.name, "reason", reason)
-	for _, entry := range r.rootEntries() {
+	r.finishRunningWorkers(ctx, func(target string) bus.Message {
 		m := &bus.EndWorkerMessage{Reason: reason}
 		m.From = r.name
-		m.To = entry.worker.Name()
-		r.msgBus.Send(ctx, m)
-	}
+		m.To = target
+		return m
+	})
 }
 
-// Cancel stops every running worker at once. Calling it again does nothing.
-func (r *Runner) Cancel(ctx context.Context, reason string) {
+// Cancel stops every worker at once. It records why and signals the shutdown,
+// which the run answers by canceling each worker still going and waiting for
+// it. Calling it again does nothing.
+//
+// The messages go out from that one exit path rather than from here, so a worker
+// is told once rather than twice on an ordinary shutdown, and the caller's reason
+// travels with them.
+func (r *Runner) Cancel(_ context.Context, reason string) {
 	if !r.beginShutdown() {
 		return
 	}
 	slog.Debug("runner canceling", "runner", r.name, "reason", reason)
-	for _, entry := range r.rootEntries() {
-		m := &bus.CancelWorkerMessage{Reason: reason}
-		m.From = r.name
-		m.To = entry.worker.Name()
-		r.msgBus.Send(ctx, m)
+	r.mu.Lock()
+	r.cancelReason = reason
+	r.mu.Unlock()
+}
+
+// finishRunningWorkers asks each root worker that has not finished to wind down,
+// and reports the entries that were messaged.
+//
+// Both messages it is used with end a worker, gracefully or not. A worker whose
+// run has returned is skipped; one that has not started yet has not finished
+// either, so it is still told.
+//
+// Sending is all this does. The workers finish in their own time, which is what
+// the returned entries are for.
+func (r *Runner) finishRunningWorkers(
+	ctx context.Context, build func(target string) bus.Message,
+) []*workerEntry {
+	var messaged []*workerEntry
+	for _, entry := range r.allEntries() {
+		if entry.finished() {
+			continue
+		}
+		messaged = append(messaged, entry)
+		if entry.worker.base().Parent() != "" {
+			continue
+		}
+		r.msgBus.Send(ctx, build(entry.worker.Name()))
 	}
+	return messaged
 }
 
 // OnBusMessage handles the messages that are the runner's business rather than
@@ -394,29 +433,23 @@ func (r *Runner) maybeAutoEnd(finished *workerEntry) {
 // stopRemainingWorkers tells the root workers still going that the runner is
 // leaving, and waits for them all.
 func (r *Runner) stopRemainingWorkers(ctx context.Context) {
-	entries := r.allEntries()
-
-	var remaining []*workerEntry
-	for _, entry := range entries {
-		if entry.running() {
-			remaining = append(remaining, entry)
-		}
-	}
-	if len(remaining) == 0 {
-		return
+	r.mu.Lock()
+	reason := r.cancelReason
+	r.mu.Unlock()
+	if reason == "" {
+		reason = "runner exiting"
 	}
 
-	for _, entry := range entries {
-		if entry.worker.base().Parent() != "" {
+	for _, entry := range r.finishRunningWorkers(ctx, func(target string) bus.Message {
+		m := &bus.CancelWorkerMessage{Reason: reason}
+		m.From = r.name
+		m.To = target
+		return m
+	}) {
+		if entry.done == nil {
+			// Never started, so there is nothing to wait for.
 			continue
 		}
-		m := &bus.CancelWorkerMessage{Reason: "runner exiting"}
-		m.From = r.name
-		m.To = entry.worker.Name()
-		r.msgBus.Send(ctx, m)
-	}
-
-	for _, entry := range remaining {
 		select {
 		case <-entry.done:
 		case <-ctx.Done():

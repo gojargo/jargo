@@ -29,6 +29,22 @@ type Subscriber interface {
 	OnBusMessage(ctx context.Context, m Message)
 }
 
+// MessageFilter is implemented by a Subscriber that does not take every message.
+// The bus asks before every delivery, and a subscriber that does not implement
+// it takes everything.
+type MessageFilter interface {
+	// AcceptsBusMessage reports whether this subscriber should be handed this
+	// message. Returning false drops it for this subscriber alone; the others
+	// still receive it.
+	AcceptsBusMessage(m Message) bool
+}
+
+// accepts reports whether a subscriber takes a message.
+func accepts(s Subscriber, m Message) bool {
+	f, ok := s.(MessageFilter)
+	return !ok || f.AcceptsBusMessage(m)
+}
+
 // Publisher is what a concrete bus implements to carry a message on its
 // transport. Bus.Send calls it for everything that is not local-only.
 type Publisher interface {
@@ -210,6 +226,9 @@ func (b *Bus) route(ctx context.Context, sub *subscription) {
 		if !ok {
 			return
 		}
+		if !accepts(sub.subscriber, m) {
+			continue
+		}
 		if _, isSystem := m.(SystemMessage); isSystem {
 			deliver(ctx, sub.subscriber, m)
 			continue
@@ -224,6 +243,9 @@ func (b *Bus) dispatchData(ctx context.Context, sub *subscription) {
 		m, ok := sub.dataQueue.get(ctx.Done())
 		if !ok {
 			return
+		}
+		if !accepts(sub.subscriber, m) {
+			continue
 		}
 		deliver(ctx, sub.subscriber, m)
 	}
