@@ -58,7 +58,6 @@ import (
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/twilio"
 	"github.com/spf13/viper"
@@ -239,7 +238,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, v *viper.Viper) {
 		AutoHangUp: true,
 	})
 
-	params := transport.DefaultParams()
+	params := wsserver.DefaultParams()
 	params.AudioInSampleRate = phoneSampleRate
 	params.AudioOutSampleRate = phoneSampleRate
 

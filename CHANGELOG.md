@@ -14,6 +14,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The WebSocket server transport can be told which origins to admit.**
+  `wsserver.Params` now carries the media parameters and the ones only a server
+  serving its own socket has, `AllowedOrigins` being the first. Empty, the
+  default, allows every origin, which is what a phone provider needs: it is not a
+  browser and sends no `Origin` header. Naming origins admits only those, matched
+  whole and without regard to case, and turns away a request carrying no origin,
+  with `wsserver.ErrOriginNotAllowed` and no reply written. It is the guard
+  against a page on another site opening the socket in a visitor's browser and
+  holding a conversation as them. `utils/security.IsOriginAllowed` is the check
+  itself, for an endpoint doing its own upgrade.
+
+  `wsserver.Accept` now takes a `wsserver.Params`; `wsserver.DefaultParams()`
+  builds one.
+
 - **A user turn processor.** `turns.NewUserTurnProcessor` decides the user's
   turn in a processor of its own, so the decision can be made once and shared
   by several aggregators, or placed at a particular point in the pipeline. The
