@@ -9,11 +9,6 @@ weight: 1
 audio in over WebRTC, a streaming transcription → reasoning → speech pipeline with
 turn-taking and barge-in, and audio back out.
 
-> **Early work in progress.** The public API is unstable and changes in any
-> release. Pin an exact version and read the
-> [changelog](https://github.com/gojargo/jargo/blob/main/CHANGELOG.md) before
-> upgrading.
-
 ## Three ways in
 
 **I want it running.** → [Installation](getting-started/installation.md) →

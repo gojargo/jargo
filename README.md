@@ -21,11 +21,6 @@
 a streaming transcription → reasoning → speech pipeline with turn-taking and
 barge-in, and audio back out.
 
-> [!WARNING]
-> **Early work in progress. Not ready for production.** The public API is
-> unstable and changes in any release. Pin an exact version and read
-> [`CHANGELOG.md`](CHANGELOG.md) before upgrading.
-
 ## Why?
 
 [Pipecat](https://github.com/pipecat-ai/pipecat) is great, and jargo is a port of
