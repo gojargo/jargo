@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -36,8 +37,16 @@ const startMsg = `{"event":"start","start":{"streamSid":"stream-1","callSid":"ca
 // ready returns a serializer set up for a pipeline running at rate. Every
 // serializer is set up before it converts anything, so a test that skips it is
 // testing a state the transport never puts it in.
+//
+// A configuration naming no credentials has the hang-up turned off, since Setup
+// refuses one that is to hang up with nothing to authorize it. These tests are
+// about the wire format, not about ending the call.
 func ready(t *testing.T, cfg Config, rate int) *Serializer {
 	t.Helper()
+	if cfg.AutoHangUp == nil && cfg.AccountSID == "" {
+		off := false
+		cfg.AutoHangUp = &off
+	}
 	s := New(cfg)
 	setup := processor.Setup{AudioInSampleRate: rate, AudioOutSampleRate: rate}
 	if err := s.Setup(setup); err != nil {
@@ -302,6 +311,26 @@ func (r rewriteHost) RoundTrip(req *http.Request) (*http.Response, error) {
 	return r.base.RoundTrip(req)
 }
 
+// TestSetupRefusesAHangUpItCannotAuthorize checks a configuration that is to end
+// the call but names no credentials is refused when the pipeline starts, rather
+// than running a whole conversation and then quietly leaving the leg up.
+func TestSetupRefusesAHangUpItCannotAuthorize(t *testing.T) {
+	s := New(Config{})
+	if err := s.Setup(processor.Setup{}); !errors.Is(err, ErrHangUpCredentials) {
+		t.Fatalf("Setup with no credentials = %v, want ErrHangUpCredentials", err)
+	}
+}
+
+// TestSetupAsksForCredentialsOnlyWhenItWillUseThem checks a serializer that is
+// not to hang the call up is set up without them.
+func TestSetupAsksForCredentialsOnlyWhenItWillUseThem(t *testing.T) {
+	off := false
+	s := New(Config{AutoHangUp: &off})
+	if err := s.Setup(processor.Setup{}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+}
+
 // TestAutoHangUp checks the REST hang-up: it targets the call SID learned from
 // the start message, authorizes with the account credentials, and fires once.
 func TestAutoHangUp(t *testing.T) {
@@ -309,7 +338,6 @@ func TestAutoHangUp(t *testing.T) {
 	s := started(t, Config{
 		AccountSID: "AC123",
 		AuthToken:  "token",
-		AutoHangUp: true,
 		HTTPClient: redirectToServer(srv),
 	})
 
@@ -353,15 +381,16 @@ func TestAutoHangUp(t *testing.T) {
 // REST API. Each must be silent rather than an error, because the pipeline is
 // already shutting down.
 func TestAutoHangUpSkipped(t *testing.T) {
+	off := false
 	tests := []struct {
 		name     string
 		cfg      Config
 		sawStart bool // whether the start message (and so the call SID) arrived
 	}{
-		{"disabled", Config{AccountSID: "AC123", AuthToken: "token"}, true},
-		{"no account SID", Config{AuthToken: "token", AutoHangUp: true}, true},
-		{"no auth token", Config{AccountSID: "AC123", AutoHangUp: true}, true},
-		{"no call SID", Config{AccountSID: "AC123", AuthToken: "token", AutoHangUp: true}, false},
+		{"disabled", Config{AccountSID: "AC123", AuthToken: "token", AutoHangUp: &off}, true},
+		{"no account SID", Config{AuthToken: "token"}, true},
+		{"no auth token", Config{AccountSID: "AC123"}, true},
+		{"no call SID", Config{AccountSID: "AC123", AuthToken: "token"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

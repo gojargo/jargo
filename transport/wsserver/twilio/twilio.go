@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,13 +29,18 @@ const hangupURL = "https://api.twilio.com/2010-04-01/Accounts/%s/Calls/%s.json"
 
 // Config configures the Twilio serializer.
 type Config struct {
-	// AccountSID and AuthToken authorize the REST hang-up call. They are only
-	// needed when AutoHangUp is set.
+	// AccountSID and AuthToken authorize the REST hang-up call. They are
+	// required unless AutoHangUp is turned off.
 	AccountSID string
 	AuthToken  string
 	// AutoHangUp ends the Twilio call over the REST API when the pipeline sends
 	// an EndFrame or CancelFrame.
-	AutoHangUp bool
+	//
+	// Nil, the default, ends it. A pipeline that has finished leaves the caller
+	// listening to silence, and the leg billing, until something hangs up. Set
+	// it to false for a bot that is one step of a longer call the provider goes
+	// on to route elsewhere.
+	AutoHangUp *bool
 	// HTTPClient is used for the hang-up request; nil uses http.DefaultClient.
 	HTTPClient *http.Client
 	// Audio configures the conversion between Twilio's 8 kHz μ-law wire audio
@@ -42,6 +48,38 @@ type Config struct {
 	// whatever the StartFrame carries, so the pipeline is free to run at a rate
 	// its services are happier with than 8 kHz.
 	Audio wsserver.AudioConfig
+}
+
+// ErrHangUpCredentials reports a configuration that is to hang the call up but
+// has nothing to authorize it with.
+var ErrHangUpCredentials = errors.New("twilio: AutoHangUp is on but credentials are missing")
+
+// autoHangUp reports whether the call is ended when the pipeline finishes, which
+// it is unless the configuration says otherwise.
+func (c Config) autoHangUp() bool { return c.AutoHangUp == nil || *c.AutoHangUp }
+
+// Validate reports whether the configuration is usable. A serializer that is to
+// hang the call up needs the credentials to do it, so a missing one is refused
+// when the pipeline starts rather than discovered later as a call that never
+// ended.
+//
+// The call SID is not checked: it is learned from Twilio's own "start" message,
+// so there is nothing to check until the call is under way.
+func (c Config) Validate() error {
+	if !c.autoHangUp() {
+		return nil
+	}
+	var missing []string
+	if c.AccountSID == "" {
+		missing = append(missing, "AccountSID")
+	}
+	if c.AuthToken == "" {
+		missing = append(missing, "AuthToken")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s", ErrHangUpCredentials, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // Serializer implements wsserver.Serializer for Twilio. The stream and call SIDs
@@ -69,7 +107,12 @@ func New(cfg Config) *Serializer {
 
 // Setup learns the pipeline's sample rate, so the 8 kHz μ-law on the wire can be
 // converted to it and back.
-func (s *Serializer) Setup(st processor.Setup) error { return s.codec.Setup(st) }
+func (s *Serializer) Setup(st processor.Setup) error {
+	if err := s.cfg.Validate(); err != nil {
+		return err
+	}
+	return s.codec.Setup(st)
+}
 
 // Close releases the resamplers.
 func (s *Serializer) Close() { s.codec.Close() }
@@ -154,7 +197,7 @@ func (s *Serializer) clear() ([]byte, error) {
 }
 
 func (s *Serializer) hangup() {
-	if !s.cfg.AutoHangUp {
+	if !s.cfg.autoHangUp() {
 		return
 	}
 	s.mu.Lock()

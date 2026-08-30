@@ -95,7 +95,6 @@ func handleStream(w http.ResponseWriter, r *http.Request, v *viper.Viper) {
 	ser := twilio.New(twilio.Config{
 		AccountSID: v.GetString("TWILIO_ACCOUNT_SID"),
 		AuthToken:  v.GetString("TWILIO_AUTH_TOKEN"),
-		AutoHangUp: true,
 	})
 
 	params := wsserver.DefaultParams()

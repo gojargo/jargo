@@ -1,6 +1,7 @@
 package telnyx
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -75,10 +76,22 @@ func awaitHangup(t *testing.T, got chan *http.Request) *http.Request {
 	}
 }
 
-// TestSetupIsANoOp checks the serializer needs nothing from the StartFrame:
-// Telnyx audio is always 8 kHz, so there is no rate to reconcile.
-func TestSetupIsANoOp(t *testing.T) {
+// TestSetupRefusesAHangUpItCannotAuthorize checks a configuration that is to end
+// the call but names no credentials is refused when the pipeline starts, rather
+// than running a whole conversation and then quietly leaving the leg up.
+func TestSetupRefusesAHangUpItCannotAuthorize(t *testing.T) {
 	s := New(Config{})
+	if err := s.Setup(processor.Setup{}); !errors.Is(err, ErrHangUpCredentials) {
+		t.Fatalf("Setup with no credentials = %v, want ErrHangUpCredentials", err)
+	}
+}
+
+// TestSetupNeedsNothingElseFromTheStartFrame checks the serializer asks for the
+// credentials only when it is going to use them, and needs nothing else:
+// Telnyx audio is always 8 kHz, so there is no rate to reconcile.
+func TestSetupNeedsNothingElseFromTheStartFrame(t *testing.T) {
+	off := false
+	s := New(Config{AutoHangUp: &off})
 	if err := s.Setup(processor.Setup{}); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -88,7 +101,7 @@ func TestSetupIsANoOp(t *testing.T) {
 // from the start message and authorizes with the configured key.
 func TestAutoHangUp(t *testing.T) {
 	srv, got := hangupServer(t)
-	s := started(t, Config{APIKey: "key-1", AutoHangUp: true, HTTPClient: redirectToServer(srv)})
+	s := started(t, Config{APIKey: "key-1", HTTPClient: redirectToServer(srv)})
 
 	if _, err := s.Serialize(frames.NewEndFrame()); err != nil {
 		t.Fatalf("serialize end: %v", err)
@@ -110,7 +123,7 @@ func TestAutoHangUp(t *testing.T) {
 // abandoned must not be left open any more than one it ended cleanly.
 func TestAutoHangUpOnCancel(t *testing.T) {
 	srv, got := hangupServer(t)
-	s := started(t, Config{APIKey: "key-1", AutoHangUp: true, HTTPClient: redirectToServer(srv)})
+	s := started(t, Config{APIKey: "key-1", HTTPClient: redirectToServer(srv)})
 
 	if _, err := s.Serialize(frames.NewCancelFrame()); err != nil {
 		t.Fatalf("serialize cancel: %v", err)
@@ -122,7 +135,7 @@ func TestAutoHangUpOnCancel(t *testing.T) {
 // frames arrive, since an EndFrame and a CancelFrame can both pass through.
 func TestAutoHangUpFiresOnce(t *testing.T) {
 	srv, got := hangupServer(t)
-	s := started(t, Config{APIKey: "key-1", AutoHangUp: true, HTTPClient: redirectToServer(srv)})
+	s := started(t, Config{APIKey: "key-1", HTTPClient: redirectToServer(srv)})
 
 	for range 3 {
 		if _, err := s.Serialize(frames.NewEndFrame()); err != nil {
@@ -141,14 +154,15 @@ func TestAutoHangUpFiresOnce(t *testing.T) {
 // TestNoHangUpWhenNotConfigured checks the cases that must not reach the API:
 // the feature off, no key to authorize with, and no call to hang up.
 func TestNoHangUpWhenNotConfigured(t *testing.T) {
+	off := false
 	tests := []struct {
 		name    string
 		cfg     Config
 		started bool
 	}{
-		{name: "auto hang-up off", cfg: Config{APIKey: "key-1"}, started: true},
-		{name: "no API key", cfg: Config{AutoHangUp: true}, started: true},
-		{name: "no start message, so no call", cfg: Config{APIKey: "key-1", AutoHangUp: true}},
+		{name: "auto hang-up off", cfg: Config{APIKey: "key-1", AutoHangUp: &off}, started: true},
+		{name: "no API key", cfg: Config{}, started: true},
+		{name: "no start message, so no call", cfg: Config{APIKey: "key-1"}},
 	}
 
 	for _, tt := range tests {
@@ -185,7 +199,7 @@ func TestHangUpSurvivesAFailingAPI(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	s := started(t, Config{APIKey: "key-1", AutoHangUp: true, HTTPClient: redirectToServer(srv)})
+	s := started(t, Config{APIKey: "key-1", HTTPClient: redirectToServer(srv)})
 	if _, err := s.Serialize(frames.NewEndFrame()); err != nil {
 		t.Fatalf("serialize end: %v", err)
 	}
