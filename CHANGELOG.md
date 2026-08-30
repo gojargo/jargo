@@ -14,6 +14,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **RTVI answers the rest of what a client sends.** The processor handled
+  `client-ready`, `send-text` and `dtmf`, and silently dropped everything else.
+  It now also carries out:
+
+  - `client-message`, the channel for anything the protocol has no message for.
+    It arrives as an `rtvi.ClientMessageFrame` travelling downstream, and is
+    answered with an `rtvi.ServerResponseFrame` naming the request, or refused
+    with `rtvi.NewServerErrorResponseFrame`. `rtvi.EventClientMessage` announces
+    the same request to a listener outside the pipeline.
+  - `server-message`, for anything the bot tells the client unprompted: push an
+    `rtvi.ServerMessageFrame`, or call `SendServerMessage`.
+  - `disconnect-bot`, which ends the pipeline gracefully.
+  - `llm-function-call-result`, the result of a tool the client ran on the bot's
+    behalf, delivered to the conversation as an ordinary result frame.
+  - `raw-audio` and `raw-audio-batch`, for a client that does its own capture and
+    feeds the pipeline over the message channel rather than a media track.
+
+  A message of a type the bot does not know, and one carrying the RTVI label but
+  nothing readable, are now answered with `error-response` and `error`. A client
+  waiting on a reply is no longer left waiting for one that was never coming.
+
 - **The Twilio hang-up can be addressed to a regional edge, or elsewhere
   entirely.** `twilio.Config` gained `Region` and `Edge`, which give the host
   `api.{Edge}.{Region}.twilio.com`, and `BaseURL`, an API root used as it stands
