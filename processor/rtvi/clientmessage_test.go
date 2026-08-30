@@ -363,3 +363,76 @@ func waitMessageOfType(t *testing.T, ch <-chan rtvi.Message, msgType string) rtv
 		}
 	}
 }
+
+// TestSendHelpersAnswerFromOutsideThePipeline checks the direct-call API: a
+// listener on EventClientMessage sits outside the pipeline and has no frame to
+// push, so it answers through the processor itself. The wire result must be the
+// same as pushing a response frame.
+func TestSendHelpersAnswerFromOutsideThePipeline(t *testing.T) {
+	c := newClient(t)
+
+	answered := make(chan error, 1)
+	events.On(c.proc.Events(), rtvi.EventClientMessage,
+		func(ctx context.Context, f *rtvi.ClientMessageFrame) {
+			answered <- c.proc.SendServerResponse(ctx, f, map[string]any{"ok": true})
+		})
+
+	c.send(t, rtvi.Message{
+		Label: rtvi.MessageLabel, Type: rtvi.TypeClientMessage, ID: "req-20",
+		Data: rtvi.RawClientMessageData{T: "ping"},
+	})
+
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Fatalf("SendServerResponse: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the listener never ran")
+	}
+
+	msg := waitMessageOfType(t, c.out, rtvi.TypeServerResponse)
+	if msg.ID != "req-20" {
+		t.Errorf("server-response id = %q, want req-20", msg.ID)
+	}
+	if d, ok := msg.Data.(rtvi.RawServerResponseData); !ok || d.T != "ping" {
+		t.Errorf("server-response data = %+v, want the request's own type back", msg.Data)
+	}
+}
+
+// TestSendErrorResponseRefusesFromOutsideThePipeline checks the refusal has the
+// same direct-call route as the answer.
+func TestSendErrorResponseRefusesFromOutsideThePipeline(t *testing.T) {
+	c := newClient(t)
+
+	events.On(c.proc.Events(), rtvi.EventClientMessage,
+		func(ctx context.Context, f *rtvi.ClientMessageFrame) {
+			_ = c.proc.SendErrorResponse(ctx, f, "no")
+		})
+
+	c.send(t, rtvi.Message{
+		Label: rtvi.MessageLabel, Type: rtvi.TypeClientMessage, ID: "req-21",
+		Data: rtvi.RawClientMessageData{T: "ping"},
+	})
+
+	msg := waitMessageOfType(t, c.out, rtvi.TypeErrorResponse)
+	if msg.ID != "req-21" {
+		t.Errorf("error-response id = %q, want req-21", msg.ID)
+	}
+	if d, ok := msg.Data.(rtvi.ErrorResponseData); !ok || d.Error != "no" {
+		t.Errorf("error-response data = %+v, want the reason given", msg.Data)
+	}
+}
+
+// TestSendServerMessageFromOutsideThePipeline checks the unprompted message has
+// the same direct-call route.
+func TestSendServerMessageFromOutsideThePipeline(t *testing.T) {
+	c := newClient(t)
+
+	if err := c.proc.SendServerMessage(context.Background(), map[string]any{"stage": "ready"}); err != nil {
+		t.Fatalf("SendServerMessage: %v", err)
+	}
+	if msg := waitMessageOfType(t, c.out, rtvi.TypeServerMessage); msg.ID != "" {
+		t.Errorf("server-message id = %q, want none", msg.ID)
+	}
+}
