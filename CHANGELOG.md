@@ -182,16 +182,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   value and it is released once. An MCP server's connection is closed this way,
   so a pipeline that used one does not leave it connected.
 
-### Removed
-
-- **`CollapseRepeatedPunctuation` is gone,** along with the
-  `RepeatedPunctuation` options and the `DefaultFormatterOptions` entry that
-  turned it on. It shortened a run of the same punctuation mark, which nothing
-  upstream does, so a `VoiceFormatter` built from the defaults spoke differently
-  here than the same configuration does there. Register a custom replacement if
-  you want it back.
-
 ### Changed
+
+- **`text.VoiceFormatter` is a text transform, not a text filter.** It has a
+  `Transform` method in the shape `tts.Base.SetTextTransformers` takes, and no
+  longer implements `text.Filter`. What it does is for the provider alone (an
+  acronym spelled out, an amount written in words), and a transform is where
+  jargo keeps changes the conversation should not record. Register it against
+  `frames.AnyAggregation` to reshape every unit, or against one aggregation type
+  to reshape only those.
 
 - **The Kyutai services are one `provider/kyutai` package again.** Splitting the
   vendor into `moshi` and `pockettts` named the packages after the servers, and
@@ -228,6 +227,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   aggregator it is given, so a service told to stream tokens has its sentences
   reassembled for the conversation. Setting a token aggregator previously left
   the sequencer expecting whole units.
+
+### Removed
+
+- **`CollapseRepeatedPunctuation` is gone,** along with the
+  `RepeatedPunctuation` options and the `DefaultFormatterOptions` entry that
+  turned it on. It shortened a run of the same punctuation mark, which nothing
+  upstream does, so a `VoiceFormatter` built from the defaults spoke differently
+  here than the same configuration does there. Register a custom replacement if
+  you want it back.
 
 ### Fixed
 

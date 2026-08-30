@@ -1,6 +1,10 @@
 package text
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gojargo/jargo/frames"
+)
 
 func TestStripMarkdown(t *testing.T) {
 	cases := map[string]string{
@@ -145,7 +149,7 @@ func TestVoiceFormatter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVoiceFormatter: %v", err)
 	}
-	got := f.Filter("**Total:** $42.50 for the API, 50% done")
+	got := format(t, f, "**Total:** $42.50 for the API, 50% done")
 	want := "Total: forty-two dollars and fifty cents for the A P I, fifty percent done"
 	if got != want {
 		t.Errorf("VoiceFormatter.Filter = %q, want %q", got, want)
@@ -160,6 +164,17 @@ func TestVoiceFormatter(t *testing.T) {
 // NewVoiceFormatter (units before acronyms, email before phone and acronyms)
 // keeps each transform from corrupting another's result. These cases lock that
 // in; they fail if the pipeline is reordered.
+// format runs a formatter over text the way the TTS base does, on a unit of no
+// particular aggregation type.
+func format(t *testing.T, f *VoiceFormatter, text string) string {
+	t.Helper()
+	got, err := f.Transform(t.Context(), text, frames.AnyAggregation)
+	if err != nil {
+		t.Fatalf("Transform(%q): %v", text, err)
+	}
+	return got
+}
+
 func TestVoiceFormatterOrderingPreventsCorruption(t *testing.T) {
 	// Units expand before acronyms letter-space them, so "MB" becomes
 	// "megabytes" rather than the unreadable "M B" (which the unit transform
@@ -168,7 +183,7 @@ func TestVoiceFormatterOrderingPreventsCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVoiceFormatter: %v", err)
 	}
-	if got, want := f.Filter("Copy 100 MB to the SSD"), "Copy 100 megabytes to the S S D"; got != want {
+	if got, want := format(t, f, "Copy 100 MB to the SSD"), "Copy 100 megabytes to the S S D"; got != want {
 		t.Errorf("units-before-acronyms: Filter = %q, want %q", got, want)
 	}
 
@@ -176,7 +191,7 @@ func TestVoiceFormatterOrderingPreventsCorruption(t *testing.T) {
 	// the all-caps local part is letter-spaced only after "@" has been turned
 	// into "at". If acronyms ran first, letter-spacing "SALES" would split the
 	// address and the email pattern would match only a truncated remainder.
-	if got, want := f.Filter("Email SALES@example.com please"),
+	if got, want := format(t, f, "Email SALES@example.com please"),
 		"Email S A L E S at example dot com please"; got != want {
 		t.Errorf("email-before-acronyms: Filter = %q, want %q", got, want)
 	}
@@ -191,7 +206,7 @@ func TestVoiceFormatterOrderingPreventsCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVoiceFormatter: %v", err)
 	}
-	if got, want := fn.Filter("The API returns 42"), "The A P I returns forty-two"; got != want {
+	if got, want := format(t, fn, "The API returns 42"), "The A P I returns forty-two"; got != want {
 		t.Errorf("acronym-split with numbers: Filter = %q, want %q", got, want)
 	}
 
@@ -291,7 +306,7 @@ func TestUnitsAndNumbersComposition(t *testing.T) {
 		"1.0hz tone":     "one point zero hertz tone",
 	}
 	for in, want := range cases {
-		if got := f.Filter(in); got != want {
+		if got := format(t, f, in); got != want {
 			t.Errorf("VoiceFormatter(%q) = %q, want %q", in, got, want)
 		}
 	}
