@@ -100,6 +100,19 @@ func Permanent(err error) bool {
 	return errors.As(err, &he) && he.Permanent()
 }
 
+// Adopt wraps a connection that was accepted rather than dialed, so a server
+// side gets the same bounded close a dialed one has. It applies readLimit when
+// that is positive.
+//
+// The caller owns the connection either way: Accept hands it over, and this only
+// takes over how it is closed.
+func Adopt(conn *websocket.Conn, readLimit int64) *Conn {
+	if readLimit > 0 {
+		conn.SetReadLimit(readLimit)
+	}
+	return &Conn{Conn: conn, closeTimeout: DefaultCloseTimeout}
+}
+
 // Dial opens a WebSocket to url with the given headers, closes the handshake
 // response body, and applies readLimit when it is positive. The caller owns the
 // returned connection and must Close it. A handshake the server refused comes
