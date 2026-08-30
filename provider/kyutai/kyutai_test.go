@@ -1,4 +1,4 @@
-package moshi
+package kyutai
 
 import (
 	"testing"

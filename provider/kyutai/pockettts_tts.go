@@ -1,4 +1,4 @@
-package pockettts
+package kyutai
 
 import (
 	"bufio"
@@ -18,33 +18,33 @@ import (
 	errs "github.com/gojargo/jargo/utils/errors"
 )
 
-// NewTTS builds a Pocket TTS service against a local pocket-tts server.
-func NewTTS(cfg Config) *tts.Base {
+// NewPocketTTS builds a Pocket TTS service against a local pocket-tts server.
+func NewPocketTTS(cfg PocketTTSConfig) *tts.Base {
 	if cfg.SampleRate == 0 {
-		cfg.SampleRate = defaultSampleRate
+		cfg.SampleRate = pocketSampleRate
 	}
 	cfg.BaseURL = strings.TrimSuffix(cfg.BaseURL, "/")
-	return tts.New("PocketTTS", &synthesizer{cfg: cfg, http: &http.Client{}})
+	return tts.New("PocketTTS", &pocketSynthesizer{cfg: cfg, http: &http.Client{}})
 }
 
-type synthesizer struct {
-	cfg  Config
+type pocketSynthesizer struct {
+	cfg  PocketTTSConfig
 	http *http.Client
 }
 
 // SampleRate reports the rate the service expects the server to generate at.
-func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
+func (s *pocketSynthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // RunTTS asks the server for one sentence and streams the audio downstream as it
 // is generated. The response is a WAV whose header goes out before the samples
 // exist, so the header is consumed and everything after it is pushed on as it
 // arrives rather than collected first.
-func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
+func (s *pocketSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
 	body, contentType, err := s.requestBody(text)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+ttsPath, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+pocketTTSPath, body)
 	if err != nil {
 		return err
 	}
@@ -65,16 +65,16 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 		return err
 	}
 	if rate != s.cfg.SampleRate {
-		slog.Warn("pockettts server generated at a different rate than configured",
+		slog.Warn("pocket-tts server generated at a different rate than configured",
 			"server", rate, "configured", s.cfg.SampleRate)
 	}
-	return stream(pcm, tts.PCMYielder(yield, rate))
+	return streamWAV(pcm, tts.PCMYielder(yield, rate))
 }
 
 // requestBody builds the multipart form the server expects: the text to speak,
 // and the voice when one is configured. Leaving the voice out is what asks the
 // server for the default voice of the language it was started with.
-func (s *synthesizer) requestBody(text string) (io.Reader, string, error) {
+func (s *pocketSynthesizer) requestBody(text string) (io.Reader, string, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	if err := w.WriteField("text", text); err != nil {
@@ -92,7 +92,7 @@ func (s *synthesizer) requestBody(text string) (io.Reader, string, error) {
 }
 
 // stream pushes the PCM downstream in chunks until the audio ends.
-func stream(r io.Reader, emit func(pcm []byte) error) error {
+func streamWAV(r io.Reader, emit func(pcm []byte) error) error {
 	buf := make([]byte, readChunk)
 	for {
 		n, err := r.Read(buf)

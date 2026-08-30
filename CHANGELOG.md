@@ -91,6 +91,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The Kyutai services are one `provider/kyutai` package again.** Splitting the
+  vendor into `moshi` and `pockettts` named the packages after the servers, and
+  moshi-server is not a Kyutai product: it is the binary that serves the Delayed
+  Streams Modeling STT and TTS models, and it is named after Moshi, a different
+  model altogether that jargo does not provide. So the package is the vendor, the
+  way `deepgram` holds both its own line and Flux. `moshi.NewSTT`, `moshi.NewTTS`
+  and `moshi.Config`/`moshi.TTSConfig` become `kyutai.NewSTT`, `kyutai.NewTTS`
+  and `kyutai.Config`/`kyutai.TTSConfig`; `pockettts.NewTTS` and
+  `pockettts.Config`, which would have collided, take the product prefix as
+  `kyutai.NewPocketTTS` and `kyutai.PocketTTSConfig`. Nothing about the services
+  themselves changed, the processor names `KyutaiSTT`, `KyutaiTTS` and
+  `PocketTTS` included, so metrics and logs read as before.
+
 - **Provider defaults tracked upstream.** Cartesia's default TTS model is now
   `sonic-3.6`. Gradium STT transcribes English by default rather than leaving the
   server to decide, and `gradium.AnyLanguage` asks it to detect the language.

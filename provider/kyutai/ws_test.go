@@ -1,4 +1,4 @@
-package moshi
+package kyutai
 
 import (
 	"context"
@@ -94,7 +94,7 @@ func (s *wsSession) await(t *testing.T) map[string]any {
 func TestSynthesizeStreamsWordsThenFlushes(t *testing.T) {
 	endpoint, seen := moshiServer(t, nil, false)
 	s := &synthesizer{cfg: TTSConfig{
-		URL: endpoint, APIKey: defaultToken, Voice: "cc0/alice", SampleRate: moshiSampleRate,
+		URL: endpoint, APIKey: defaultToken, Voice: "cc0/alice", SampleRate: defaultSampleRate,
 	}}
 
 	go func() {
@@ -132,7 +132,7 @@ func TestSynthesizeEmitsAudioAndEndsOnClose(t *testing.T) {
 		{msgTypeKey: "Audio", "pcm": []float32{0, 0.5, -0.5}},
 	}, true)
 	s := &synthesizer{cfg: TTSConfig{
-		URL: endpoint, APIKey: defaultToken, Voice: "cc0/alice", SampleRate: moshiSampleRate,
+		URL: endpoint, APIKey: defaultToken, Voice: "cc0/alice", SampleRate: defaultSampleRate,
 	}}
 
 	var pcm []byte
@@ -174,7 +174,7 @@ func TestSTTSendsFixedSizeFrames(t *testing.T) {
 	endpoint, seen := moshiServer(t, nil, false)
 	c := &connector{cfg: Config{URL: endpoint, APIKey: defaultToken}}
 
-	st, err := c.Connect(context.Background(), moshiSampleRate)
+	st, err := c.Connect(context.Background(), defaultSampleRate)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestSTTRecvReadsWordsAndPauses(t *testing.T) {
 	}, false)
 	c := &connector{cfg: Config{URL: endpoint, APIKey: defaultToken}}
 
-	st, err := c.Connect(context.Background(), moshiSampleRate)
+	st, err := c.Connect(context.Background(), defaultSampleRate)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
