@@ -14,6 +14,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`jargo eval run` takes directories.** A directory argument stands for the
+  scenarios directly in it, in name order, taking both the `.yaml` and `.yml`
+  suffixes a manifest resolves. A directory holding no scenario is refused rather
+  than quietly contributing nothing, since a run that plays nothing reads like a
+  run that passed.
+
+  A scenario that will not load now fails on its own instead of ending the run:
+  it is reported as `FAIL <name> (failed to load: …)` and counted, and the rest
+  are still played.
+
 - **`wsserver.Params.SessionTimeout` bounds how long one session may run.** When
   it elapses with the socket still open, `wsserver.EventSessionTimeout` fires on
   the transport. Nothing is closed by it: a call that has gone on too long

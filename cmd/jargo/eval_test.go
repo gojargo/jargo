@@ -151,3 +151,102 @@ func TestEvalRunRequiresBotURL(t *testing.T) {
 		t.Fatal("expected an error when --bot-url is missing")
 	}
 }
+
+// TestEvalRunExpandsADirectory checks a folder of scenarios can be played by
+// naming the folder, in name order, taking both YAML suffixes and leaving
+// everything else alone.
+func TestEvalRunExpandsADirectory(t *testing.T) {
+	srv := httptest.NewServer(eval.Handler(echoBot))
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	dir := t.TempDir()
+	scenario := func(name string) string {
+		return "name: " + name + "\nturns:\n  - user: \"ping\"\n    expect:\n" +
+			"      - event: llm_response\n        text_contains: \"echo: ping\"\n"
+	}
+	for file, name := range map[string]string{
+		"zeta.yaml":  "zeta",
+		"alpha.yaml": "alpha",
+		"beta.yml":   "beta",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(scenario(name)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a scenario"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"eval", "run", dir, "--bot-url", wsURL})
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("eval run failed: %v\noutput:\n%s", err, out.String())
+	}
+	got := out.String()
+	alpha, beta, zeta := strings.Index(got, "PASS alpha"), strings.Index(got, "PASS beta"), strings.Index(got, "PASS zeta")
+	if alpha < 0 || beta < 0 || zeta < 0 {
+		t.Fatalf("want all three scenarios played, got:\n%s", got)
+	}
+	if alpha >= beta || beta >= zeta {
+		t.Errorf("scenarios played out of name order:\n%s", got)
+	}
+}
+
+// TestEvalRunRejectsADirectoryWithNoScenarios checks a folder holding nothing to
+// play is refused: a run that plays nothing reads like a run that passed.
+func TestEvalRunRejectsADirectoryWithNoScenarios(t *testing.T) {
+	var out strings.Builder
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"eval", "run", t.TempDir(), "--bot-url", "ws://example.test"})
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "no .yaml or .yml scenario files found") {
+		t.Fatalf("err = %v, want a complaint that the directory holds no scenarios", err)
+	}
+}
+
+// TestEvalRunRecordsAScenarioThatWillNotLoad checks a broken scenario fails on
+// its own rather than ending the run: the others are still worth playing, and it
+// shows in the tally like any other failure.
+func TestEvalRunRecordsAScenarioThatWillNotLoad(t *testing.T) {
+	srv := httptest.NewServer(eval.Handler(echoBot))
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	dir := t.TempDir()
+	broken := filepath.Join(dir, "broken.yaml")
+	if err := os.WriteFile(broken, []byte("name: [unclosed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(dir, "working.yaml")
+	body := "name: working\nturns:\n  - user: \"ping\"\n    expect:\n" +
+		"      - event: llm_response\n        text_contains: \"echo: ping\"\n"
+	if err := os.WriteFile(good, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"eval", "run", dir, "--bot-url", wsURL})
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "1 of 2") {
+		t.Fatalf("err = %v, want one of the two scenarios counted as failed", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "FAIL broken") {
+		t.Errorf("want the broken scenario reported by name, got:\n%s", got)
+	}
+	if !strings.Contains(got, "PASS working") {
+		t.Errorf("want the working scenario still played, got:\n%s", got)
+	}
+}

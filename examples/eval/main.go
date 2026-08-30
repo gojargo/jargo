@@ -7,6 +7,10 @@
 //	go run ./examples/eval    # serves ws://localhost:8080
 //	go run ./cmd/jargo eval run examples/eval/scenarios/greeting.yaml --bot-url ws://localhost:8080
 //
+// Name the folder to play every scenario in it:
+//
+//	go run ./cmd/jargo eval run examples/eval/scenarios --bot-url ws://localhost:8080
+//
 // Or run the same scenario in-process:
 //
 //	go test ./examples/eval
