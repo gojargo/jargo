@@ -14,6 +14,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **RTVI negotiates the protocol version with the client.** The processor
+  advertised `2.0.0` and never read what the client declared. It now speaks
+  `2.1.0`, reads the version out of `client-ready`, and answers a client of the
+  previous generation (`1.x`) with that client's own version rather than this
+  one, so it stays on the paths it understands. A version from neither
+  generation, an unreadable one and a missing one each draw an `error-response`
+  saying so, and the session goes ahead regardless: the client is better placed
+  than the bot to decide whether to carry on. `Processor.ClientVersion` reports
+  what was declared.
+
+  `bot-ready` now carries an `about`, describing the library and its version, so
+  a client can report what it is talking to. `rtvi.BotReady` takes the version
+  and that description.
+
 - **RTVI answers the rest of what a client sends.** The processor handled
   `client-ready`, `send-text` and `dtmf`, and silently dropped everything else.
   It now also carries out:

@@ -14,7 +14,7 @@ import (
 )
 
 func TestBotReadyJSON(t *testing.T) {
-	raw, err := json.Marshal(rtvi.BotReady("req-1"))
+	raw, err := json.Marshal(rtvi.BotReady("req-1", rtvi.ProtocolVersion, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +26,12 @@ func TestBotReadyJSON(t *testing.T) {
 		t.Fatalf("unexpected envelope: %s", raw)
 	}
 	data, _ := got["data"].(map[string]any)
-	if data["version"] != "2.0.0" {
-		t.Fatalf("version = %v, want 2.0.0: %s", data["version"], raw)
+	if data["version"] != rtvi.ProtocolVersion {
+		t.Fatalf("version = %v, want %s: %s", data["version"], rtvi.ProtocolVersion, raw)
+	}
+	about, _ := data["about"].(map[string]any)
+	if about["library"] != rtvi.LibraryName {
+		t.Fatalf("about.library = %v, want %s: %s", about["library"], rtvi.LibraryName, raw)
 	}
 }
 
