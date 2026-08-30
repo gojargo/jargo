@@ -14,6 +14,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A worker built around a language model.** `workers/llmworker.New` runs a
+  model as a worker on the bus, and `NewContext` adds a conversation of its own
+  with the aggregator pair already wired around it.
+
+  What it handles is the ordering a tool call creates. A handler runs while the
+  model is still waiting for its result, so anything it queues would land ahead
+  of that result and put the turn out of order. What a handler queues is
+  therefore held and released once the last call in flight is done, in the order
+  it was queued and behind the result; ending the session and handing over to
+  another worker wait for the same moment, so a tool that closes the call is not
+  cut off mid-call. `DeferToolFrames` turns the holding off.
+
+  A handler is recognized by the context it was given, so anything it passes that
+  context to is part of the call, and what another worker queues is not. Tools are
+  declared as `frames.Tool` values and registered with the call options they
+  carry; one with no handler is advertised without being registered.
+
 - **A worker can address a worker in another process.** `workers/proxy` carries
   bus messages over a WebSocket: `proxy.NewClient` dials, `proxy.NewServer` takes
   an accepted connection, and each sits on its own bus as an ordinary worker.
