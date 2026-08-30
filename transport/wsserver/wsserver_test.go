@@ -26,6 +26,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // errSerialize is the failure the test serializer reports on demand.
@@ -835,5 +836,64 @@ func TestAcceptRefusesAMissingOrigin(t *testing.T) {
 func TestAcceptAdmitsAListedOrigin(t *testing.T) {
 	if err := acceptWithOrigin(t, []string{"https://app.example"}, "HTTPS://App.Example"); err != nil {
 		t.Errorf("Accept from a listed origin: %v", err)
+	}
+}
+
+// TestSessionTimeoutFires checks a session that runs past its allowance is
+// reported. Nothing is closed by it: what to do about a call that has gone on
+// too long is the endpoint's call, and it usually wants to say something first.
+func TestSessionTimeoutFires(t *testing.T) {
+	p := params()
+	p.SessionTimeout = 50 * time.Millisecond
+	c := dial(t, &testSerializer{}, p)
+	defer c.shutdown(t)
+
+	fired := make(chan struct{}, 1)
+	events.On(c.tr.Events(), wsserver.EventSessionTimeout,
+		func(context.Context, struct{}) { fired <- struct{}{} })
+
+	c.ready(t)
+	select {
+	case <-fired:
+	case <-time.After(3 * time.Second):
+		t.Error("the session ran past its allowance and nothing was reported")
+	}
+}
+
+// TestSessionTimeoutDoesNotFireEarly checks a session inside its allowance is
+// left alone, so the event means what it says.
+func TestSessionTimeoutDoesNotFireEarly(t *testing.T) {
+	p := params()
+	p.SessionTimeout = 5 * time.Second
+	c := dial(t, &testSerializer{}, p)
+	defer c.shutdown(t)
+
+	fired := make(chan struct{}, 1)
+	events.On(c.tr.Events(), wsserver.EventSessionTimeout,
+		func(context.Context, struct{}) { fired <- struct{}{} })
+
+	c.ready(t)
+	select {
+	case <-fired:
+		t.Error("a session well inside its allowance was reported as over it")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestNoSessionTimeoutByDefault checks a session with no allowance set runs as
+// long as it likes.
+func TestNoSessionTimeoutByDefault(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	defer c.shutdown(t)
+
+	fired := make(chan struct{}, 1)
+	events.On(c.tr.Events(), wsserver.EventSessionTimeout,
+		func(context.Context, struct{}) { fired <- struct{}{} })
+
+	c.ready(t)
+	select {
+	case <-fired:
+		t.Error("a session with no allowance set was reported as over one")
+	case <-time.After(300 * time.Millisecond):
 	}
 }

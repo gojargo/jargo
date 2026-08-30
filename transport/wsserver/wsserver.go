@@ -28,6 +28,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/utils/security"
 )
 
@@ -71,6 +72,13 @@ type closableSerializer interface {
 	Close()
 }
 
+// EventSessionTimeout fires when a session has run for Params.SessionTimeout
+// without ending. It carries nothing: the session it concerns is this one.
+//
+//	events.On(tr.Events(), wsserver.EventSessionTimeout,
+//	    func(ctx context.Context, _ struct{}) { … })
+const EventSessionTimeout = "on_session_timeout"
+
 // Transport bridges a WebSocket session to a pipeline.
 type Transport struct {
 	in   *inputTransport
@@ -94,6 +102,15 @@ type Params struct {
 	// other site can open this socket in a visitor's browser and hold a
 	// conversation as them.
 	AllowedOrigins []string
+
+	// SessionTimeout bounds how long one session may run. When it elapses with
+	// the socket still open, EventSessionTimeout fires; zero, the default,
+	// leaves a session to run as long as it likes.
+	//
+	// Nothing is closed by it. What to do about a session that has gone on too
+	// long is the endpoint's call, and it usually wants to say something before
+	// ending the pipeline rather than cutting the caller off mid-sentence.
+	SessionTimeout time.Duration
 }
 
 // DefaultParams returns the transport defaults with no origin restriction.
@@ -128,7 +145,7 @@ func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params Param
 	sess := &Session{conn: c, done: make(chan struct{})}
 	return &Transport{
 		sess: sess,
-		in:   newInput(sess, ser, params.Params),
+		in:   newInput(sess, ser, params),
 		out:  newOutput(sess, ser, params.Params),
 	}, nil
 }
@@ -142,6 +159,10 @@ func (t *Transport) Output() processor.Processor { return t.out }
 // Done is closed when the call ends (the client closes the socket or the
 // pipeline stops reading). Cancel the pipeline context on it.
 func (t *Transport) Done() <-chan struct{} { return t.sess.done }
+
+// Events is the registry of events this transport raises. See
+// EventSessionTimeout.
+func (t *Transport) Events() *events.Registry { return t.in.Events() }
 
 // Session owns one WebSocket connection and serializes writes, which
 // coder/websocket requires.
@@ -200,6 +221,8 @@ type inputTransport struct {
 	*transport.BaseInput
 	sess *Session
 	ser  Serializer
+	// sessionTimeout bounds how long the session may run before the event fires.
+	sessionTimeout time.Duration
 
 	readWG     sync.WaitGroup
 	mu         sync.Mutex
@@ -207,10 +230,32 @@ type inputTransport struct {
 	setup      processor.Setup
 }
 
-func newInput(sess *Session, ser Serializer, params transport.Params) *inputTransport {
-	in := &inputTransport{sess: sess, ser: ser}
-	in.BaseInput = transport.NewBaseInput("WSInput", params, in)
+func newInput(sess *Session, ser Serializer, params Params) *inputTransport {
+	in := &inputTransport{sess: sess, ser: ser, sessionTimeout: params.SessionTimeout}
+	in.BaseInput = transport.NewBaseInput("WSInput", params.Params, in)
+	in.Events().Register(EventSessionTimeout, false)
 	return in
+}
+
+// watchSessionLength raises EventSessionTimeout once the session has run for as
+// long as it is allowed to, and does nothing for one that ends first. It is
+// started with the read loop, so the clock runs from the point the session
+// begins carrying conversation rather than from the socket being accepted.
+func (in *inputTransport) watchSessionLength(ctx context.Context) {
+	defer in.readWG.Done()
+	timer := time.NewTimer(in.sessionTimeout)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		select {
+		case <-in.sess.done:
+			// The session ended as the timer fired; there is nothing to report.
+		default:
+			in.Events().Call(ctx, EventSessionTimeout, in, struct{}{})
+		}
+	case <-in.sess.done:
+	case <-ctx.Done():
+	}
 }
 
 // Setup records the pipeline's configuration for the serializer and defers to
@@ -259,6 +304,10 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	in.mu.Unlock()
 	in.readWG.Add(1)
 	go in.readLoop(readCtx)
+	if in.sessionTimeout > 0 {
+		in.readWG.Add(1)
+		go in.watchSessionLength(readCtx)
+	}
 	return nil
 }
 
