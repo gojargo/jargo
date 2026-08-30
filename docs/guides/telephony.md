@@ -66,6 +66,22 @@ ser := twilio.New(twilio.Config{
 })
 ```
 
+### Session length
+
+`Params.SessionTimeout` bounds how long one session may run. When it elapses with
+the socket still open, `wsserver.EventSessionTimeout` fires. Nothing is closed by
+it: a call that has gone on too long usually wants to be told so before the
+pipeline ends, rather than being cut off mid-sentence.
+
+```go
+params.SessionTimeout = 10 * time.Minute
+t, _ := wsserver.Accept(w, r, ser, params)
+events.On(t.Events(), wsserver.EventSessionTimeout, func(ctx context.Context, _ struct{}) {
+    task.QueueFrame(frames.NewTTSSpeakFrame("We are out of time. Goodbye."))
+    task.StopWhenDone()
+})
+```
+
 ### Origins
 
 `Params.AllowedOrigins` names the origins a browser may open the socket from.

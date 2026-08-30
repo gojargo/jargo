@@ -14,6 +14,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`wsserver.Params.SessionTimeout` bounds how long one session may run.** When
+  it elapses with the socket still open, `wsserver.EventSessionTimeout` fires on
+  the transport. Nothing is closed by it: a call that has gone on too long
+  usually wants to be told so before the pipeline ends, rather than being cut off
+  mid-sentence. Zero, the default, leaves a session to run as long as it likes.
+
 - **`tts.EventTTSRequest` announces each unit on its way to the synthesizer.**
   It fires just before the provider is asked, carrying a `tts.TTSRequest` with
   the synthesis context id and the text exactly as it will be sent, filters,
