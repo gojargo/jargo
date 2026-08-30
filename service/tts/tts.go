@@ -336,6 +336,7 @@ func New(name string, syn Synthesizer) *Base {
 		b.appendTrailingSpace = t.RequiresTrailingSpace()
 	}
 	b.Base = service.New(name, b)
+	b.Events().Register(EventTTSRequest, false)
 	if cs, ok := syn.(ContextSynthesizer); ok {
 		cs.SetAudioContextHost(b)
 	}
@@ -368,6 +369,23 @@ func (b *Base) SetTextAggregator(a ttstext.Aggregator) {
 	// rather than read at push time because the mode is fixed for the run.
 	b.sequencer = uctx.NewAggregatedFrameSequencer(
 		b.Name(), a.Type() == frames.AggregationToken, b.tokenizer)
+}
+
+// EventTTSRequest fires just before each unit of text is handed to the
+// synthesizer, carrying a TTSRequest.
+//
+//	events.On(svc.Events(), tts.EventTTSRequest,
+//	    func(ctx context.Context, r tts.TTSRequest) { … })
+const EventTTSRequest = "on_tts_request"
+
+// TTSRequest is one unit of text on its way to the synthesizer.
+type TTSRequest struct {
+	// ContextID identifies the synthesis context the text belongs to, which is
+	// how the audio it produces is grouped.
+	ContextID string
+	// Text is what the synthesizer is given, after the filters, the transforms
+	// and whatever final shaping the provider needs.
+	Text string
 }
 
 // TextTransform reshapes one unit of text on its way to the provider, and is
@@ -1157,6 +1175,11 @@ func (b *Base) pushTTSFrames(
 	// The last shaping before the provider sees the text. Everything measured
 	// against the synthesis counts it, because it is what was synthesized.
 	prepared := b.prepareText(transformed)
+	// Announced before the provider is asked, with the text exactly as it will
+	// be sent. It is the last point at which what the bot is about to say can be
+	// seen in the form the synthesizer receives it, filters and transforms
+	// included, which is what a caller logging or auditing speech wants.
+	b.Events().Call(ctx, EventTTSRequest, b, TTSRequest{ContextID: contextID, Text: prepared})
 	c.addText(prepared)
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
 		aggregated, contextID, prepared, appendToContext, b.wordPath(), false))
