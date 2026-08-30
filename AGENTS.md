@@ -71,8 +71,9 @@ worth knowing:
   Prefer structs over functional options. Env/flags/Viper belong in the app
   (see `examples/`), not the library.
 - **Commits** follow Conventional Commits (`feat:`, `fix:`, `ci:`, `docs:`, …).
-- Record notable changes in [`CHANGELOG.md`](CHANGELOG.md). The project is in
-  `0.0.x`: the public API is unstable and may change in any release.
+- Record notable changes in [`CHANGELOG.md`](CHANGELOG.md). The project is
+  pre-1.0: the public API may still change in any minor release, and a change
+  that breaks it says so in its entry and carries a `!` in its commit type.
 
 ## Layout
 
