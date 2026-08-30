@@ -54,6 +54,18 @@ off := false
 ser := twilio.New(twilio.Config{AutoHangUp: &off})
 ```
 
+Twilio calls carried on a regional edge are ended there, not at the global host.
+Name both halves, which is what Twilio's `api.{edge}.{region}.twilio.com` host
+format needs, or give `BaseURL` outright for a Twilio-compatible or self-hosted
+backend:
+
+```go
+ser := twilio.New(twilio.Config{
+    AccountSID: "...", AuthToken: "...",
+    Region: "au1", Edge: "sydney",
+})
+```
+
 ### Origins
 
 `Params.AllowedOrigins` names the origins a browser may open the socket from.

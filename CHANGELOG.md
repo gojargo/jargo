@@ -14,6 +14,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The Twilio hang-up can be addressed to a regional edge, or elsewhere
+  entirely.** `twilio.Config` gained `Region` and `Edge`, which give the host
+  `api.{Edge}.{Region}.twilio.com`, and `BaseURL`, an API root used as it stands
+  for a Twilio-compatible or self-hosted backend. The hang-up was previously sent
+  to Twilio's global host whatever the call, so a call carried on a regional edge
+  was asked about at a host that does not have it. Twilio's host format needs
+  both halves, so naming one without the other is refused at `Setup`.
+
 - **A telephony call is hung up when the pipeline ends, unless told not to.**
   `AutoHangUp` on the Twilio, Telnyx and Plivo serializers is now a `*bool` whose
   nil default ends the call: a pipeline that has finished otherwise leaves the
