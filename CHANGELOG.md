@@ -14,6 +14,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`tts.EventTTSRequest` announces each unit on its way to the synthesizer.**
+  It fires just before the provider is asked, carrying a `tts.TTSRequest` with
+  the synthesis context id and the text exactly as it will be sent, filters,
+  transforms and any final shaping included. It is the last point at which what
+  the bot is about to say can be seen in the form the synthesizer receives it,
+  which is what a caller logging or auditing speech wants. A unit passed
+  downstream unsynthesized draws no announcement: nothing was requested.
+
 - **RTVI negotiates the protocol version with the client.** The processor
   advertised `2.0.0` and never read what the client declared. It now speaks
   `2.1.0`, reads the version out of `client-ready`, and answers a client of the
