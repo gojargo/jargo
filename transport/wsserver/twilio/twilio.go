@@ -25,7 +25,12 @@ import (
 // Serializer implements wsserver.Serializer.
 var _ wsserver.Serializer = (*Serializer)(nil)
 
-const hangupURL = "https://api.twilio.com/2010-04-01/Accounts/%s/Calls/%s.json"
+// defaultAPIRoot is Twilio's API host when no region, edge or explicit root is
+// named. callResourceURL hangs the path off whichever root applies.
+const defaultAPIRoot = "https://api.twilio.com"
+
+// callResourcePath is the REST path of one Call resource, under the API root.
+const callResourcePath = "/2010-04-01/Accounts/%s/Calls/%s.json"
 
 // Config configures the Twilio serializer.
 type Config struct {
@@ -41,6 +46,20 @@ type Config struct {
 	// it to false for a bot that is one step of a longer call the provider goes
 	// on to route elsewhere.
 	AutoHangUp *bool
+	// Region and Edge name the Twilio region and edge the hang-up is sent to,
+	// giving the host api.{Edge}.{Region}.twilio.com. A call carried on a
+	// regional edge is ended there, not at the global host.
+	//
+	// Twilio's host format needs both, so naming one without the other is
+	// refused. Neither is needed when BaseURL is set, which replaces the host
+	// outright.
+	Region string
+	Edge   string
+	// BaseURL is the API root the hang-up is sent to, scheme and host, used
+	// verbatim: "https://api.example.test". It is for a Twilio-compatible or
+	// self-hosted backend, and it takes the place of Region and Edge rather than
+	// combining with them.
+	BaseURL string
 	// HTTPClient is used for the hang-up request; nil uses http.DefaultClient.
 	HTTPClient *http.Client
 	// Audio configures the conversion between Twilio's 8 kHz μ-law wire audio
@@ -53,6 +72,10 @@ type Config struct {
 // ErrHangUpCredentials reports a configuration that is to hang the call up but
 // has nothing to authorize it with.
 var ErrHangUpCredentials = errors.New("twilio: AutoHangUp is on but credentials are missing")
+
+// ErrRegionEdgePair reports a configuration naming one half of Twilio's
+// region-and-edge host and not the other.
+var ErrRegionEdgePair = errors.New("twilio: Region and Edge are set together or not at all")
 
 // autoHangUp reports whether the call is ended when the pipeline finishes, which
 // it is unless the configuration says otherwise.
@@ -79,7 +102,37 @@ func (c Config) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("%w: %s", ErrHangUpCredentials, strings.Join(missing, ", "))
 	}
+	// The host is built from both halves, so one on its own would silently
+	// address a host that does not exist. A BaseURL replaces the host outright,
+	// which is why the pairing does not apply there.
+	if c.BaseURL == "" && (c.Region == "") != (c.Edge == "") {
+		return fmt.Errorf("%w: Region=%q Edge=%q", ErrRegionEdgePair, c.Region, c.Edge)
+	}
 	return nil
+}
+
+// callResourceURL is the REST URL of the call resource to hang up.
+//
+// BaseURL, when set, is the API root as given. Otherwise the root is Twilio's
+// own host, with the edge and region worked into it when they are named.
+func (c Config) callResourceURL(callSID string) string {
+	root := defaultAPIRoot
+	switch {
+	case c.BaseURL != "":
+		root = strings.TrimRight(c.BaseURL, "/")
+	case c.Region != "" || c.Edge != "":
+		var host strings.Builder
+		host.WriteString("https://api.")
+		if c.Edge != "" {
+			host.WriteString(c.Edge + ".")
+		}
+		if c.Region != "" {
+			host.WriteString(c.Region + ".")
+		}
+		host.WriteString("twilio.com")
+		root = host.String()
+	}
+	return root + fmt.Sprintf(callResourcePath, c.AccountSID, callSID)
 }
 
 // Serializer implements wsserver.Serializer for Twilio. The stream and call SIDs
@@ -214,7 +267,7 @@ func (s *Serializer) hangup() {
 }
 
 func (s *Serializer) doHangup(callSID string) {
-	endpoint := fmt.Sprintf(hangupURL, s.cfg.AccountSID, callSID)
+	endpoint := s.cfg.callResourceURL(callSID)
 	body := strings.NewReader(url.Values{"Status": {"completed"}}.Encode())
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, body)
 	if err != nil {
