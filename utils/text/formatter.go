@@ -6,13 +6,6 @@ package text
 type FormatterOptions struct {
 	// StripMarkdown removes Markdown formatting symbols.
 	StripMarkdown bool
-	// CollapseRepeatedPunctuation shortens a run of the same punctuation mark
-	// ("Vraiment ????") down to a single one, which synthesizers would otherwise
-	// perform as shouting.
-	CollapseRepeatedPunctuation bool
-	// RepeatedPunctuation configures CollapseRepeatedPunctuation when it is
-	// enabled. The zero value collapses runs of "!" and "?" down to one.
-	RepeatedPunctuation RepeatedPunctuationOptions
 	// EmailToSpeech spells email addresses ("a@b.com" → "a at b dot com").
 	EmailToSpeech bool
 	// ExpandPhoneNumbers spaces out phone-number digits.
@@ -41,9 +34,7 @@ type FormatterOptions struct {
 // ExpandNumbers (which can mangle numbers better left as digits).
 func DefaultFormatterOptions() FormatterOptions {
 	return FormatterOptions{
-		StripMarkdown:               true,
-		CollapseRepeatedPunctuation: true,
-
+		StripMarkdown:      true,
 		EmailToSpeech:      true,
 		ExpandPhoneNumbers: true,
 		NormalizeDates:     true,
@@ -62,20 +53,14 @@ type VoiceFormatter struct {
 }
 
 // NewVoiceFormatter builds a VoiceFormatter from opts. The transforms run in a
-// deliberate order — structural cleanup, then language expansions, then user
-// replacements — chosen so earlier steps do not hide patterns later ones match
-// (email before phone and acronyms; units before acronyms). It returns an error
+// deliberate order (structural cleanup, then language expansions, then user
+// replacements) chosen so earlier steps do not hide patterns later ones match:
+// email before phone and acronyms, units before acronyms. It returns an error
 // only if a CustomReplacements pattern fails to compile.
 func NewVoiceFormatter(opts FormatterOptions) (*VoiceFormatter, error) {
 	var ts []Transform
 	if opts.StripMarkdown {
 		ts = append(ts, StripMarkdown)
-	}
-	// Punctuation runs collapse right after the Markdown symbols come off, while
-	// the text is still being cleaned up structurally, so every expansion below
-	// sees sentences terminated the ordinary way.
-	if opts.CollapseRepeatedPunctuation {
-		ts = append(ts, CollapseRepeatedPunctuation(opts.RepeatedPunctuation))
 	}
 	// Email must run before phone (its digit-only domains match the phone
 	// pattern) and before acronyms (all-caps local parts would be letter-spaced).

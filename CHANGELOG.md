@@ -182,6 +182,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   value and it is released once. An MCP server's connection is closed this way,
   so a pipeline that used one does not leave it connected.
 
+### Removed
+
+- **`CollapseRepeatedPunctuation` is gone,** along with the
+  `RepeatedPunctuation` options and the `DefaultFormatterOptions` entry that
+  turned it on. It shortened a run of the same punctuation mark, which nothing
+  upstream does, so a `VoiceFormatter` built from the defaults spoke differently
+  here than the same configuration does there. Register a custom replacement if
+  you want it back.
+
 ### Changed
 
 - **The Kyutai services are one `provider/kyutai` package again.** Splitting the
