@@ -45,7 +45,7 @@ jobs:
           # tighten to "1" once the baseline is clean.
           exit-code: "0"
       - name: Upload results to the Security tab
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: trivy.sarif
 
@@ -60,7 +60,7 @@ jobs:
       # (action pinning, overbroad permissions, curl|bash, risky triggers). It
       # uploads its SARIF to the Security tab itself (upload-sarif defaults true).
       - name: Plumber pipeline scan
-        uses: getplumber/plumber@e81ed4965fd92e0d2b63e95d399ed0419f5de2fa # v0.4.36
+        uses: getplumber/plumber@bede38d25e270af86c2cec5dadc75e0925eb319c # v0.4.44
         with:
           # Gate below the action's default of 100 so CI stays green while the
           # findings still surface in the Security tab. Raise it as the pipelines
@@ -97,11 +97,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: go
-      - uses: github/codeql-action/autobuild@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
-      - uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+      - uses: github/codeql-action/autobuild@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           category: "/language:go"
 
@@ -124,7 +124,7 @@ jobs:
           args: --sarif-file-output=snyk.sarif ./...
       - name: Upload results to the Security tab
         if: ${{ hashFiles('snyk.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: snyk.sarif
 
@@ -138,6 +138,6 @@ jobs:
       # regex-based gitleaks scan with live verification. It fails the build on a
       # verified (or plausible "unknown") secret.
       - name: TruffleHog secret scan
-        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
+        uses: trufflesecurity/trufflehog@20652fbbdefffcdaa493a5bf57ab2ac6b1db715b # v3.97.1
         with:
           extra_args: --results=verified,unknown
