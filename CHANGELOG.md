@@ -5,12 +5,13 @@ All notable changes to jargo are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Development status.** While jargo is in early development the version stays
-> in the `0.0.x` range: the public API is unstable and may change in any
-> release, with no backwards-compatibility guarantees. `0.1.0` will mark the
-> first release intended for wider use.
+> **Development status.** `0.1.0` is the first release intended for wider use.
+> The project is still pre-1.0: under Semantic Versioning that means the public
+> API may still change in any minor release, and breaking changes are called out
+> in the entry that makes them. `1.0.0` will be the first release that promises
+> backwards compatibility.
 
-## [Unreleased]
+## [0.1.0] - 2026-08-30
 
 ### Added
 
@@ -3164,7 +3165,8 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/gojargo/jargo/compare/v0.0.5...v0.1.0
 [0.0.4]: https://github.com/gojargo/jargo/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/gojargo/jargo/compare/v0.0.2...v0.0.3
 [0.0.1]: https://github.com/gojargo/jargo/releases/tag/v0.0.1
