@@ -1,4 +1,4 @@
-package moshi
+package kyutai
 
 import (
 	"context"
@@ -25,7 +25,7 @@ const (
 // TTSConfig configures the Kyutai TTS service.
 type TTSConfig struct {
 	// APIKey is moshi-server's shared token (sent as the kyutai-api-key header);
-	// empty uses moshi's default "public_token".
+	// empty uses the server's default "public_token".
 	APIKey string
 	// URL overrides the moshi-server TTS WebSocket endpoint; empty uses localhost.
 	URL string
@@ -33,7 +33,7 @@ type TTSConfig struct {
 	// commercially licensed voice: the Expresso and EARS voices in that repo are
 	// CC-BY-NC (non-commercial); use a CC0 or CC-BY voice in a commercial product.
 	Voice string `validate:"required"`
-	// SampleRate is the emitted PCM rate; 0 uses moshi's 24 kHz. The output
+	// SampleRate is the emitted PCM rate; 0 uses the server's 24 kHz. The output
 	// transport resamples it to its own rate.
 	SampleRate int
 	// Language is informational; the model itself is fixed (e.g. en_fr).
@@ -52,7 +52,7 @@ func NewTTS(cfg TTSConfig) *tts.Base {
 		cfg.APIKey = defaultToken
 	}
 	if cfg.SampleRate == 0 {
-		cfg.SampleRate = moshiSampleRate
+		cfg.SampleRate = defaultSampleRate
 	}
 	return tts.New("KyutaiTTS", &synthesizer{cfg: cfg})
 }
@@ -65,7 +65,7 @@ type synthesizer struct {
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // Synthesize opens a TTS session, streams the sentence word-by-word, then emits
-// the returned PCM audio chunks until moshi closes the stream.
+// the returned PCM audio chunks until the server closes the stream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
 	q := url.Values{}
@@ -106,7 +106,7 @@ func (s *synthesizer) send(ctx context.Context, conn *wsutil.Conn, text string) 
 }
 
 // receive reads Audio messages, converts the float32 PCM to S16LE, and emits it.
-// A normal-closure from moshi marks the end of synthesis.
+// A normal-closure from the server marks the end of synthesis.
 func (s *synthesizer) receive(ctx context.Context, conn *wsutil.Conn, emit func(pcm []byte) error) error {
 	for {
 		_, data, err := conn.Read(ctx)

@@ -1,20 +1,4 @@
-// Package pockettts is a text-to-speech provider for a local Pocket TTS server
-// (Kyutai's pocket-tts, started with `pocket-tts serve`). Pocket TTS is a small
-// CPU-only model: the server holds the weights in memory and streams the audio
-// back as it is generated, so the first samples arrive well before the sentence
-// is finished.
-//
-// The server chooses its language when it starts (`pocket-tts serve --language
-// french_24l`), and the weights are per language, so the language is not part of
-// a request and cannot be changed while the server runs. Run one server per
-// language a bot speaks. The voice is per request: a built-in name, or a URL of
-// a recording to clone.
-//
-// Kyutai's other self-hosted models, the Delayed Streams Modeling speech-to-text
-// and text-to-speech served by moshi-server, are in
-// [github.com/gojargo/jargo/provider/kyutai/moshi]. They are a separate server
-// speaking a separate protocol.
-package pockettts
+package kyutai
 
 import (
 	"errors"
@@ -22,30 +6,40 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 )
 
+// Pocket TTS is Kyutai's small CPU-only model, served by `pocket-tts serve`.
+// The server holds the weights in memory and streams the audio back as it is
+// generated, so the first samples arrive well before the sentence is finished.
+//
+// It chooses its language at startup (`pocket-tts serve --language french_24l`)
+// and the weights are per language, so the language is not part of a request and
+// cannot be changed while the server runs. Run one server per language a bot
+// speaks. The voice is per request: a built-in name, or a URL of a recording to
+// clone.
+
 // Sentinel errors for the synthesis request.
 //
 //nolint:gochecknoglobals // sentinel errors
 var (
-	errStatus = errors.New("pockettts: unexpected status")
-	errBadWAV = errors.New("pockettts: response is not a WAV stream")
+	errStatus = errors.New("kyutai: pocket-tts: unexpected status")
+	errBadWAV = errors.New("kyutai: pocket-tts: response is not a WAV stream")
 )
 
 const (
-	// defaultSampleRate is the rate every model pocket-tts ships runs at. The
+	// pocketSampleRate is the rate every model pocket-tts ships runs at. The
 	// rate the server actually used is on the WAV header of each response, and
 	// the audio is labeled with that; this is what the service declares before
 	// the first response arrives.
-	defaultSampleRate = 24000
-	// ttsPath is the synthesis endpoint of the server.
-	ttsPath = "/tts"
+	pocketSampleRate = 24000
+	// pocketTTSPath is the synthesis endpoint of the server.
+	pocketTTSPath = "/tts"
 	// readChunk is how much of the audio stream is read at a time. It is small
 	// enough that the first samples are pushed downstream promptly rather than
 	// waiting for a buffer to fill.
 	readChunk = 4096
 )
 
-// Config configures a Pocket TTS provider.
-type Config struct {
+// PocketTTSConfig configures a Pocket TTS provider.
+type PocketTTSConfig struct {
 	// BaseURL is the base of the local Pocket TTS server, e.g.
 	// http://localhost:8000. Required.
 	BaseURL string `validate:"required,url"`
@@ -64,4 +58,4 @@ type Config struct {
 }
 
 // Validate reports whether the configuration is usable.
-func (c Config) Validate() error { return validate.Struct(c) }
+func (c PocketTTSConfig) Validate() error { return validate.Struct(c) }

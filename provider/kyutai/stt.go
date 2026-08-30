@@ -1,4 +1,4 @@
-package moshi
+package kyutai
 
 import (
 	"cmp"
@@ -17,7 +17,7 @@ import (
 const (
 	// defaultSTTURL is the moshi-server streaming ASR endpoint on localhost.
 	defaultSTTURL = "ws://127.0.0.1:8080/api/asr-streaming"
-	// sttFrameSamples is the number of 24 kHz samples per Audio message moshi
+	// sttFrameSamples is the number of 24 kHz samples per Audio message the server
 	// expects (80 ms).
 	sttFrameSamples = 1920
 	// pausePredictionHead selects which look-ahead window of the semantic-VAD
@@ -46,14 +46,14 @@ type connector struct {
 
 // Metadata reports the transcript latency the turn strategies size their
 // wait by.
-// Moshi runs wherever it is hosted, so it carries no measurement of its own:
+// The server runs wherever it is hosted, so it carries no measurement of its own:
 // measure yours and set TTFSP99.
 func (c *connector) Metadata() stt.Metadata {
 	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.DefaultTTFSP99)}
 }
 
 // Connect dials the moshi-server ASR WebSocket and prepares a resampler from the
-// pipeline's input rate to moshi's 24 kHz.
+// pipeline's input rate to the server's 24 kHz.
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	header := http.Header{}
 	header.Set("kyutai-api-key", c.cfg.APIKey)
@@ -62,7 +62,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	if err != nil {
 		return nil, err
 	}
-	rs, err := resample.New(sampleRate, moshiSampleRate, 1)
+	rs, err := resample.New(sampleRate, defaultSampleRate, 1)
 	if err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "resampler")
 		return nil, err
@@ -87,7 +87,7 @@ type stream struct {
 }
 
 // Send resamples the S16LE PCM to 24 kHz, converts it to float32, and forwards
-// it to moshi in 1920-sample Audio messages.
+// it to the server in 1920-sample Audio messages.
 func (s *stream) Send(audio []byte) error {
 	s.pending = int16BytesToFloat32(s.pending, s.rs.Process(audio))
 	n := 0
@@ -111,7 +111,7 @@ func (s *stream) sendAudio(pcm []float32) error {
 	return s.conn.Write(s.ctx, websocket.MessageBinary, b)
 }
 
-// Recv reads moshi result messages, returning cumulative interim transcripts as
+// Recv reads the server's result messages, returning cumulative interim transcripts as
 // words arrive and one finalized end-of-turn transcript when the semantic VAD
 // predicts a pause.
 func (s *stream) Recv() ([]stt.Result, error) {
@@ -130,7 +130,7 @@ func (s *stream) Recv() ([]stt.Result, error) {
 	}
 }
 
-// handle folds one moshi STT message into the running utterance and reports the
+// handle folds one STT message into the running utterance and reports the
 // result to emit, if any. A "Word" extends the utterance and yields a cumulative
 // interim; a "Step" whose pause prediction crosses the threshold ends the turn
 // and yields the finalized utterance.

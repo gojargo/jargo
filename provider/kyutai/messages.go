@@ -1,15 +1,15 @@
-package moshi
+package kyutai
 
 import "encoding/binary"
 
-// audioMsg decodes a moshi {"type":"Audio","pcm":[...]} message: TTS returns it
+// audioMsg decodes a server {"type":"Audio","pcm":[...]} message: TTS returns it
 // carrying 24 kHz float32 synthesized PCM.
 type audioMsg struct {
 	Type string    `msgpack:"type"`
 	PCM  []float32 `msgpack:"pcm"`
 }
 
-// sttMsg decodes the subset of moshi's STT result messages we act on. A "Word"
+// sttMsg decodes the subset of the server's STT result messages we act on. A "Word"
 // message carries a transcribed word in Text; a "Step" message carries the
 // semantic-VAD pause predictions in Prs (one float per look-ahead window).
 type sttMsg struct {

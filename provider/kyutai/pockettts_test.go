@@ -1,4 +1,4 @@
-package pockettts
+package kyutai
 
 import (
 	"bytes"
@@ -90,7 +90,7 @@ func serveAudio(t *testing.T, rate int, chunks [][]byte, sent chan<- struct{}) (
 }
 
 // collect runs one synthesis and returns the audio frames it produced.
-func collect(t *testing.T, s *synthesizer) []*frames.TTSAudioRawFrame {
+func collect(t *testing.T, s *pocketSynthesizer) []*frames.TTSAudioRawFrame {
 	t.Helper()
 	var out []*frames.TTSAudioRawFrame
 	err := s.RunTTS(context.Background(), "hello there", "", func(f frames.Frame) error {
@@ -106,13 +106,13 @@ func collect(t *testing.T, s *synthesizer) []*frames.TTSAudioRawFrame {
 }
 
 func TestValidate(t *testing.T) {
-	if err := (Config{BaseURL: "http://localhost:8000"}).Validate(); err != nil {
+	if err := (PocketTTSConfig{BaseURL: "http://localhost:8000"}).Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
-	if err := (Config{}).Validate(); err == nil {
+	if err := (PocketTTSConfig{}).Validate(); err == nil {
 		t.Error("config without a base URL should be rejected")
 	}
-	if err := (Config{BaseURL: "not a url"}).Validate(); err == nil {
+	if err := (PocketTTSConfig{BaseURL: "not a url"}).Validate(); err == nil {
 		t.Error("config with a malformed base URL should be rejected")
 	}
 }
@@ -123,15 +123,15 @@ func TestRunTTSSendsTheForm(t *testing.T) {
 	pcm := bytes.Repeat([]byte{1, 2}, 64)
 	srv, got := serveAudio(t, 24000, [][]byte{pcm}, nil)
 
-	s := &synthesizer{cfg: Config{BaseURL: srv.URL, Voice: "alba", SampleRate: 24000}, http: srv.Client()}
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, Voice: "alba", SampleRate: 24000}, http: srv.Client()}
 	collect(t, s)
 
 	req := got.get()
 	if !req.seen {
 		t.Fatal("the server was never asked for anything")
 	}
-	if req.path != ttsPath {
-		t.Errorf("path = %q, want %q", req.path, ttsPath)
+	if req.path != pocketTTSPath {
+		t.Errorf("path = %q, want %q", req.path, pocketTTSPath)
 	}
 	if req.text != "hello there" {
 		t.Errorf("text = %q, want the sentence to speak", req.text)
@@ -146,7 +146,7 @@ func TestRunTTSSendsTheForm(t *testing.T) {
 func TestRunTTSOmitsAnUnsetVoice(t *testing.T) {
 	srv, got := serveAudio(t, 24000, [][]byte{bytes.Repeat([]byte{0}, 32)}, nil)
 
-	s := &synthesizer{cfg: Config{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
 	collect(t, s)
 
 	if voice := got.get().voice; voice != "" {
@@ -159,7 +159,7 @@ func TestRunTTSStripsTheHeader(t *testing.T) {
 	pcm := bytes.Repeat([]byte{7, 8}, 100)
 	srv, _ := serveAudio(t, 24000, [][]byte{pcm}, nil)
 
-	s := &synthesizer{cfg: Config{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
 
 	var audio []byte
 	for _, f := range collect(t, s) {
@@ -178,7 +178,7 @@ func TestRunTTSLabelsTheServerRate(t *testing.T) {
 	const serverRate = 16000
 	srv, _ := serveAudio(t, serverRate, [][]byte{bytes.Repeat([]byte{1, 0}, 40)}, nil)
 
-	s := &synthesizer{cfg: Config{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
 
 	got := collect(t, s)
 	if len(got) == 0 {
@@ -202,7 +202,7 @@ func TestRunTTSStreamsAsItArrives(t *testing.T) {
 	chunks := [][]byte{bytes.Repeat([]byte{1, 1}, 64), bytes.Repeat([]byte{2, 2}, 64)}
 	srv, _ := serveAudio(t, 24000, chunks, sent)
 
-	s := &synthesizer{cfg: Config{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
 
 	first := make(chan struct{}, 1)
 	done := make(chan error, 1)
@@ -240,7 +240,7 @@ func TestRunTTSReportsARefusal(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := &synthesizer{cfg: Config{BaseURL: srv.URL, Voice: "nope", SampleRate: 24000}, http: srv.Client()}
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, Voice: "nope", SampleRate: 24000}, http: srv.Client()}
 	err := s.RunTTS(context.Background(), "hello", "", func(frames.Frame) error { return nil })
 	if err == nil {
 		t.Fatal("a refused request reported no error")
@@ -258,7 +258,7 @@ func TestRunTTSRejectsANonWAVResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := &synthesizer{cfg: Config{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
 	err := s.RunTTS(context.Background(), "hello", "", func(frames.Frame) error { return nil })
 	if err == nil {
 		t.Fatal("a response that is not audio reported no error")
@@ -314,24 +314,24 @@ func TestPCMStreamRejectsATruncatedHeader(t *testing.T) {
 	}
 }
 
-// NewTTS fills in the rate and tolerates a base URL with a trailing slash, which
+// NewPocketTTS fills in the rate and tolerates a base URL with a trailing slash, which
 // would otherwise address the endpoint through a double slash.
 func TestNewTTSDefaults(t *testing.T) {
-	if svc := NewTTS(Config{BaseURL: "http://localhost:8000/"}); svc == nil {
-		t.Fatal("NewTTS returned nothing")
+	if svc := NewPocketTTS(PocketTTSConfig{BaseURL: "http://localhost:8000/"}); svc == nil {
+		t.Fatal("NewPocketTTS returned nothing")
 	}
 
-	// The service holds the synthesizer, so the defaults are checked on one
+	// The service holds the pocketSynthesizer, so the defaults are checked on one
 	// built the same way.
-	cfg := Config{BaseURL: "http://localhost:8000/"}
+	cfg := PocketTTSConfig{BaseURL: "http://localhost:8000/"}
 	if cfg.SampleRate == 0 {
-		cfg.SampleRate = defaultSampleRate
+		cfg.SampleRate = pocketSampleRate
 	}
 	cfg.BaseURL = strings.TrimSuffix(cfg.BaseURL, "/")
-	s := &synthesizer{cfg: cfg}
+	s := &pocketSynthesizer{cfg: cfg}
 
-	if got := s.SampleRate(); got != defaultSampleRate {
-		t.Errorf("sample rate = %d, want %d", got, defaultSampleRate)
+	if got := s.SampleRate(); got != pocketSampleRate {
+		t.Errorf("sample rate = %d, want %d", got, pocketSampleRate)
 	}
 	if s.cfg.BaseURL != "http://localhost:8000" {
 		t.Errorf("base URL = %q, want the trailing slash gone", s.cfg.BaseURL)
