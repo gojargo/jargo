@@ -17,7 +17,7 @@ transport itself stays provider-agnostic:
 ```go
 ser := twilio.New(twilio.Config{ /* … */ })
 
-params := transport.DefaultParams()
+params := wsserver.DefaultParams()
 params.AudioInSampleRate = 16000
 params.AudioOutSampleRate = 16000
 
@@ -33,6 +33,30 @@ t, err := wsserver.Accept(w, r, ser, params)
 
 Each is `New(Config)` returning a `*Serializer`. One serializer serves **one
 session**: build it per call, not once at startup; it is not safe to share.
+
+### Origins
+
+`Params.AllowedOrigins` names the origins a browser may open the socket from.
+Empty, the default, allows every origin, which is what a phone provider needs: it
+is not a browser and sends no `Origin` header at all.
+
+Set it whenever the endpoint is one a browser connects to (the `rtviws`
+serializer, say). Without it, a page on any other site can open the socket in a
+visitor's browser and hold a conversation as them. `Accept` refuses a request
+whose origin is not listed, and one carrying no origin at all, with
+`wsserver.ErrOriginNotAllowed` and no reply written, leaving the endpoint to
+choose what to tell it:
+
+```go
+params := wsserver.DefaultParams()
+params.AllowedOrigins = []string{"https://app.example"}
+
+t, err := wsserver.Accept(w, r, ser, params)
+if errors.Is(err, wsserver.ErrOriginNotAllowed) {
+    http.Error(w, "forbidden", http.StatusForbidden)
+    return
+}
+```
 
 ## Sample rates
 

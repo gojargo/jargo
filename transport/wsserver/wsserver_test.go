@@ -25,7 +25,6 @@ import (
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -173,7 +172,7 @@ type call struct {
 
 // dial serves the transport over httptest, dials it, and runs a pipeline whose
 // head is the transport input and tail is its output.
-func dial(t *testing.T, ser wsserver.Serializer, params transport.Params) *call {
+func dial(t *testing.T, ser wsserver.Serializer, params wsserver.Params) *call {
 	t.Helper()
 	return dialTuned(t, ser, params, nil)
 }
@@ -181,7 +180,7 @@ func dial(t *testing.T, ser wsserver.Serializer, params transport.Params) *call 
 // dialTuned is dial with a hook to adjust the task params, for tests that need
 // to observe upstream traffic.
 func dialTuned(
-	t *testing.T, ser wsserver.Serializer, params transport.Params, tune func(*pipeline.WorkerConfig),
+	t *testing.T, ser wsserver.Serializer, params wsserver.Params, tune func(*pipeline.WorkerConfig),
 ) *call {
 	t.Helper()
 
@@ -324,8 +323,8 @@ func (c *call) shutdown(t *testing.T) {
 }
 
 // params returns telephony-shaped transport params: 8 kHz mono, both directions.
-func params() transport.Params {
-	p := transport.DefaultParams()
+func params() wsserver.Params {
+	p := wsserver.DefaultParams()
 	p.AudioInSampleRate = 8000
 	p.AudioOutSampleRate = 8000
 	p.AudioOut10msChunks = 1
@@ -754,5 +753,87 @@ func TestTheConnectionIsTimedByAnObserver(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the transport timing was never reported")
+	}
+}
+
+// acceptWithOrigin runs Accept behind a test server, sending origin as the
+// request's Origin header (omitted when empty), and reports what Accept
+// returned. The upgrade is not completed: what is under test is whether the
+// request got that far.
+func acceptWithOrigin(t *testing.T, allowed []string, origin string) error {
+	t.Helper()
+
+	errCh := make(chan error, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := params()
+		p.AllowedOrigins = allowed
+		_, err := wsserver.Accept(w, r, &testSerializer{}, p)
+		errCh <- err
+	}))
+	defer srv.Close()
+
+	var hdr http.Header
+	if origin != "" {
+		hdr = http.Header{"Origin": []string{origin}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"),
+		&websocket.DialOptions{HTTPHeader: hdr})
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		// Nothing on the far side is reading, since the handler returns as soon
+		// as it has reported what Accept did, so there is no one to answer a
+		// closing handshake. Drop the connection instead of waiting one out.
+		defer func() { _ = conn.CloseNow() }()
+	}
+
+	select {
+	case got := <-errCh:
+		return got
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not run")
+		return nil
+	}
+}
+
+// TestAcceptAllowsAnyOriginByDefault checks the empty origin list lets every
+// client in. A telephony provider is not a browser and sends no Origin at all,
+// so a default that turned those away would refuse every call.
+func TestAcceptAllowsAnyOriginByDefault(t *testing.T) {
+	for _, origin := range []string{"", "https://anywhere.example"} {
+		if err := acceptWithOrigin(t, nil, origin); err != nil {
+			t.Errorf("Accept with no origin list and origin %q: %v", origin, err)
+		}
+	}
+}
+
+// TestAcceptRefusesAnUnlistedOrigin checks the guard against another site
+// opening this socket in a visitor's browser: the browser sends that site's
+// origin, and a named list is what turns it away.
+func TestAcceptRefusesAnUnlistedOrigin(t *testing.T) {
+	err := acceptWithOrigin(t, []string{"https://app.example"}, "https://evil.example")
+	if !errors.Is(err, wsserver.ErrOriginNotAllowed) {
+		t.Errorf("Accept from an unlisted origin = %v, want ErrOriginNotAllowed", err)
+	}
+}
+
+// TestAcceptRefusesAMissingOrigin checks a request that names no origin is
+// turned away once a list is set, rather than slipping through the check by
+// carrying nothing to check.
+func TestAcceptRefusesAMissingOrigin(t *testing.T) {
+	err := acceptWithOrigin(t, []string{"https://app.example"}, "")
+	if !errors.Is(err, wsserver.ErrOriginNotAllowed) {
+		t.Errorf("Accept with no origin header = %v, want ErrOriginNotAllowed", err)
+	}
+}
+
+// TestAcceptAdmitsAListedOrigin checks the list admits what it names, whatever
+// case the browser sent it in.
+func TestAcceptAdmitsAListedOrigin(t *testing.T) {
+	if err := acceptWithOrigin(t, []string{"https://app.example"}, "HTTPS://App.Example"); err != nil {
+		t.Errorf("Accept from a listed origin: %v", err)
 	}
 }

@@ -16,6 +16,8 @@ package wsserver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -26,6 +28,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/utils/security"
 )
 
 // readLimit bounds a single inbound WebSocket message. Telephony media messages
@@ -75,11 +78,48 @@ type Transport struct {
 	sess *Session
 }
 
+// Params configures a WebSocket server transport: the media parameters every
+// transport takes, plus the ones only a server serving its own socket has.
+type Params struct {
+	transport.Params
+
+	// AllowedOrigins are the origins a browser client may open the socket from.
+	//
+	// Empty, the default, allows every origin, which is what a telephony
+	// provider needs: it is not a browser and sends no Origin header at all.
+	// Naming origins allows only those, matched whole and without regard to
+	// case, and turns away a request whose origin is missing.
+	//
+	// Set it for an endpoint a browser connects to. Without it, a page on any
+	// other site can open this socket in a visitor's browser and hold a
+	// conversation as them.
+	AllowedOrigins []string
+}
+
+// DefaultParams returns the transport defaults with no origin restriction.
+func DefaultParams() Params {
+	return Params{Params: transport.DefaultParams()}
+}
+
+// ErrOriginNotAllowed is returned by Accept when the request's Origin header is
+// missing from, or absent against, the origins Params.AllowedOrigins names.
+var ErrOriginNotAllowed = errors.New("wsserver: origin not allowed")
+
 // Accept upgrades an HTTP request to a WebSocket and builds a Transport that
 // uses ser for the wire format. Call it from an http.HandlerFunc; the returned
 // Transport's Input and Output go at the head and tail of the pipeline, and
 // Done reports when the call ends.
-func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params transport.Params) (*Transport, error) {
+//
+// A request whose origin params.AllowedOrigins does not name is refused before
+// the upgrade, with ErrOriginNotAllowed and no reply written. The caller
+// answers it, so that an endpoint can choose what to tell a rejected client.
+func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params Params) (*Transport, error) {
+	if !security.IsOriginAllowed(r.Header.Get("Origin"), params.AllowedOrigins) {
+		return nil, fmt.Errorf("%w: %q", ErrOriginNotAllowed, r.Header.Get("Origin"))
+	}
+	// The origins are checked above rather than handed to the library, whose own
+	// rule is a different one: it compares the origin's host against the request
+	// host, which turns away a client legitimately served from elsewhere.
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 	if err != nil {
 		return nil, err
@@ -88,8 +128,8 @@ func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params trans
 	sess := &Session{conn: c, done: make(chan struct{})}
 	return &Transport{
 		sess: sess,
-		in:   newInput(sess, ser, params),
-		out:  newOutput(sess, ser, params),
+		in:   newInput(sess, ser, params.Params),
+		out:  newOutput(sess, ser, params.Params),
 	}, nil
 }
 

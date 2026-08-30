@@ -10,7 +10,6 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -92,7 +91,7 @@ func Host(ctx context.Context, scenario *Scenario, buildBot Bot, opts Options) (
 // something only this serializer allows.
 func Handler(buildBot Bot) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tr, err := wsserver.Accept(w, r, newSerializer(), transport.DefaultParams())
+		tr, err := wsserver.Accept(w, r, newSerializer(), wsserver.DefaultParams())
 		if err != nil {
 			return
 		}
