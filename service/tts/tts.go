@@ -474,8 +474,12 @@ func (b *Base) skipsSynthesis(t frames.AggregationType) bool {
 }
 
 // SetTextFilters sets the text-normalization filters applied to each sentence
-// just before synthesis — for example a text.VoiceFormatter that strips
-// Markdown and spells out numbers, currency and dates. Filters run in order.
+// just before synthesis, a text.MarkdownFilter that strips Markdown structure
+// being the case. Filters run in order.
+//
+// A filter changes the text itself. To reshape a unit for the provider alone,
+// leaving the conversation's record of it untouched, register a transform with
+// SetTextTransformers instead: a text.VoiceFormatter goes there.
 // Call this before the pipeline starts; the filter set is not safe to change
 // while it is running.
 func (b *Base) SetTextFilters(filters ...ttstext.Filter) {

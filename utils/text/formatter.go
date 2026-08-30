@@ -1,5 +1,11 @@
 package text
 
+import (
+	"context"
+
+	"github.com/gojargo/jargo/frames"
+)
+
 // FormatterOptions configures which transforms a VoiceFormatter applies. The
 // zero value enables nothing; use DefaultFormatterOptions for the recommended
 // set and toggle individual fields from there.
@@ -46,8 +52,15 @@ func DefaultFormatterOptions() FormatterOptions {
 	}
 }
 
-// VoiceFormatter applies an ordered pipeline of text transforms, implementing
-// Filter. Build one with NewVoiceFormatter.
+// VoiceFormatter applies an ordered pipeline of text transforms. Build one with
+// NewVoiceFormatter and register it with the TTS base's SetTextTransformers,
+// against frames.AnyAggregation to reshape every unit or against one aggregation
+// type to reshape only those.
+//
+// It belongs among the transforms rather than the text filters because what it
+// does is for the provider alone: an acronym letter-spaced so it is spelled out,
+// an amount written in words. The conversation should record what the model
+// wrote, not the shape the synthesizer needed it in.
 type VoiceFormatter struct {
 	transforms []Transform
 }
@@ -100,10 +113,15 @@ func NewVoiceFormatter(opts FormatterOptions) (*VoiceFormatter, error) {
 	return &VoiceFormatter{transforms: ts}, nil
 }
 
-// Filter applies every configured transform to text in order.
-func (f *VoiceFormatter) Filter(text string) string {
+// Transform applies every configured transform to text, in order. Its shape is
+// the one the TTS base's text transformers take, so a VoiceFormatter can be
+// registered as one directly. It never fails: every transform it holds is a
+// plain rewrite of the text.
+func (f *VoiceFormatter) Transform(
+	_ context.Context, text string, _ frames.AggregationType,
+) (string, error) {
 	for _, t := range f.transforms {
 		text = t(text)
 	}
-	return text
+	return text, nil
 }
