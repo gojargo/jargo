@@ -22,7 +22,15 @@ const (
 const (
 	TypeClientReady          = "client-ready"
 	TypeSendText             = "send-text"
+	TypeDisconnectBot        = "disconnect-bot"
+	TypeClientMessage        = "client-message"
+	TypeFunctionCallResult   = "llm-function-call-result"
+	TypeRawAudio             = "raw-audio"
+	TypeRawAudioBatch        = "raw-audio-batch"
 	TypeBotReady             = "bot-ready"
+	TypeServerMessage        = "server-message"
+	TypeServerResponse       = "server-response"
+	TypeErrorResponse        = "error-response"
 	TypeError                = "error"
 	TypeUserTranscription    = "user-transcription"
 	TypeBotTranscription     = "bot-transcription"
@@ -119,6 +127,116 @@ type BotReadyData struct {
 // BotReady builds a bot-ready message in reply to the client-ready with id.
 func BotReady(id string) Message {
 	return newMessage(TypeBotReady, id, BotReadyData{Version: ProtocolVersion})
+}
+
+// RawClientMessageData is the payload of a client-message: the client's own
+// message type and whatever it carries, both opaque to the protocol. It is how
+// a client asks the bot something the protocol has no message for.
+type RawClientMessageData struct {
+	T string          `json:"t"`
+	D json.RawMessage `json:"d,omitempty"`
+}
+
+// ParseRawClientMessageData decodes the data payload of a client-message.
+func ParseRawClientMessageData(raw json.RawMessage) (RawClientMessageData, error) {
+	var d RawClientMessageData
+	err := json.Unmarshal(raw, &d)
+	return d, err
+}
+
+// RawServerResponseData is the payload of a server-response: the type of the
+// client message being answered, so the client can pair the answer with what it
+// asked, and the answer itself.
+type RawServerResponseData struct {
+	T string `json:"t"`
+	D any    `json:"d,omitempty"`
+}
+
+// ServerResponse builds the answer to the client message with id, which asked
+// something of type msgType.
+func ServerResponse(id, msgType string, data any) Message {
+	return newMessage(TypeServerResponse, id, RawServerResponseData{T: msgType, D: data})
+}
+
+// ServerMessage builds an unprompted message to the client, carrying whatever
+// the bot wants to tell it that the protocol has no message for.
+func ServerMessage(data any) Message {
+	return newMessage(TypeServerMessage, "", data)
+}
+
+// ErrorResponseData is the payload of an error-response.
+type ErrorResponseData struct {
+	Error string `json:"error"`
+}
+
+// ErrorResponse builds the refusal of the client message with id. It is what a
+// client gets back instead of a server-response when its request could not be
+// carried out, so a request never simply goes unanswered.
+func ErrorResponse(id, err string) Message {
+	return newMessage(TypeErrorResponse, id, ErrorResponseData{Error: err})
+}
+
+// FunctionCallResultData is the payload of an llm-function-call-result: a tool
+// call the client ran on the bot's behalf, and what it produced.
+type FunctionCallResultData struct {
+	FunctionName string          `json:"function_name"`
+	ToolCallID   string          `json:"tool_call_id"`
+	Arguments    json.RawMessage `json:"arguments"`
+	Result       json.RawMessage `json:"result"`
+}
+
+// ParseFunctionCallResultData decodes the data payload of an
+// llm-function-call-result message.
+func ParseFunctionCallResultData(raw json.RawMessage) (FunctionCallResultData, error) {
+	var d FunctionCallResultData
+	err := json.Unmarshal(raw, &d)
+	return d, err
+}
+
+// ResultText is the result as the conversation records it. A result sent as a
+// JSON string is the string itself; anything else is its JSON text, which is
+// what a model reading the tool result expects to see.
+func (d FunctionCallResultData) ResultText() string {
+	var str string
+	if err := json.Unmarshal(d.Result, &str); err == nil {
+		return str
+	}
+	return string(d.Result)
+}
+
+// RawAudioData is the payload of a raw-audio or raw-audio-batch message: audio
+// the client captured itself, base64-encoded 16-bit PCM, one chunk or a batch of
+// them. It is how a client that does its own capture feeds the pipeline over the
+// message channel rather than a media track.
+type RawAudioData struct {
+	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
+	Base64Audio string `json:"base64Audio,omitempty"`
+	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
+	Base64AudioBatch []string `json:"base64AudioBatch,omitempty"`
+	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
+	SampleRate int `json:"sampleRate"`
+	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
+	NumChannels int `json:"numChannels"`
+}
+
+// Chunks are the encoded audio chunks the message carries, in order. A batch is
+// taken whole when there is one; otherwise the single chunk stands alone.
+func (d RawAudioData) Chunks() []string {
+	if len(d.Base64AudioBatch) > 0 {
+		return d.Base64AudioBatch
+	}
+	if d.Base64Audio == "" {
+		return nil
+	}
+	return []string{d.Base64Audio}
+}
+
+// ParseRawAudioData decodes the data payload of a raw-audio or raw-audio-batch
+// message.
+func ParseRawAudioData(raw json.RawMessage) (RawAudioData, error) {
+	var d RawAudioData
+	err := json.Unmarshal(raw, &d)
+	return d, err
 }
 
 // ErrorData is the payload of an error message.

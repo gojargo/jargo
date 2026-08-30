@@ -2,6 +2,7 @@ package rtvi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"sync"
@@ -57,8 +58,15 @@ const messageBuffer = 32
 func NewProcessor() *Processor {
 	p := &Processor{}
 	p.Base = processor.New("RTVI", p)
+	p.Events().Register(EventClientMessage, false)
 	return p
 }
+
+// EventClientMessage fires when the client sends a message of its own, one the
+// protocol has no message for. Its argument is the *ClientMessageFrame, which
+// also travels downstream; answer it with a ServerResponseFrame or through
+// SendServerResponse.
+const EventClientMessage = "on_client_message"
 
 // Setup records the context an out-of-band send runs under, and starts the
 // goroutine that carries out client messages.
@@ -152,7 +160,32 @@ func (o *Observer) messagesFor(f frames.Frame) []Message {
 	if msg, ok := o.botMessageFor(f); ok {
 		return []Message{msg}
 	}
+	if msg, ok := serverMessageFor(f); ok {
+		return []Message{msg}
+	}
 	return nil
+}
+
+// serverMessageFor maps the frames a bot pushes to say something of its own: an
+// unprompted message, and the answer to a message the client sent. Unlike
+// everything else here they are not derived from what the pipeline did but
+// written by the bot outright, which is why they carry their data as it stands.
+func serverMessageFor(f frames.Frame) (Message, bool) {
+	switch fr := f.(type) {
+	case *ServerMessageFrame:
+		return ServerMessage(fr.Data), true
+	case *ServerResponseFrame:
+		if fr.ClientMsg == nil {
+			slog.Warn("RTVI server response names no client message, dropping it")
+			return Message{}, false
+		}
+		if fr.Error != "" {
+			return ErrorResponse(fr.ClientMsg.MsgID, fr.Error), true
+		}
+		return ServerResponse(fr.ClientMsg.MsgID, fr.ClientMsg.Type, fr.Data), true
+	default:
+		return Message{}, false
+	}
 }
 
 // vadMessageFor maps the raw VAD speaking frames, which are reported only when
@@ -342,14 +375,18 @@ func metricsMessage(f *frames.MetricsFrame) Message {
 // acting on the message does not, because it may have to wait for the pipeline
 // to settle.
 func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransportMessageFrame) error {
-	in, err := ParseIncoming(f.Message)
-	if err != nil {
-		slog.Warn("invalid RTVI message", "err", err)
-		return nil
-	}
-	if in.Label != MessageLabel {
+	if !isRTVIMessage(f.Message) {
 		// Not an RTVI message (e.g. transport signaling); ignore.
 		return nil
+	}
+	in, err := ParseIncoming(f.Message)
+	if err != nil {
+		// The label says this was meant for us, so the client is told its
+		// message was unreadable rather than left waiting on a reply. The id is
+		// part of what could not be read, so this is the general error rather
+		// than a response to a particular request.
+		slog.Warn("invalid RTVI message", "err", err)
+		return p.send(ctx, Error("invalid RTVI transport message: "+err.Error(), false))
 	}
 	select {
 	case p.messages <- in:
@@ -377,10 +414,110 @@ func (p *Processor) handleMessage(ctx context.Context, in Incoming) error {
 		return p.handleSendText(ctx, in)
 	case TypeDTMF:
 		return p.handleDTMF(ctx, in)
+	case TypeDisconnectBot:
+		// The client is done. Ending the worker is what stops the pipeline
+		// gracefully, letting what is in flight finish rather than cutting it.
+		return p.PushFrame(ctx, frames.NewEndWorkerFrame(), processor.Downstream)
+	case TypeClientMessage:
+		return p.handleClientMessage(ctx, in)
+	case TypeFunctionCallResult:
+		return p.handleFunctionCallResult(ctx, in)
+	case TypeRawAudio, TypeRawAudioBatch:
+		return p.handleRawAudio(ctx, in)
 	default:
 		slog.Debug("unhandled RTVI message", "type", in.Type)
-		return nil
+		return p.send(ctx, ErrorResponse(in.ID, "unsupported type "+in.Type))
 	}
+}
+
+// isRTVIMessage reports whether raw carries the RTVI label, and so was meant
+// for this processor. Anything else belongs to the transport or another
+// protocol sharing the channel, and is not ours to answer or complain about.
+func isRTVIMessage(raw []byte) bool {
+	var envelope struct {
+		Label string `json:"label"`
+	}
+	return json.Unmarshal(raw, &envelope) == nil && envelope.Label == MessageLabel
+}
+
+// handleClientMessage passes a client's own message into the pipeline and
+// announces it.
+//
+// The protocol has no message for whatever the client is asking, so the bot
+// answers it: the frame travels downstream to whatever processor knows the
+// answer, which pushes a ServerResponseFrame back naming this request. A
+// listener attached to EventClientMessage sees the same request, for an answer
+// that comes from outside the pipeline.
+func (p *Processor) handleClientMessage(ctx context.Context, in Incoming) error {
+	d, err := ParseRawClientMessageData(in.Data)
+	if err != nil {
+		slog.Warn("invalid RTVI client-message", "err", err)
+		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+	}
+	f := NewClientMessageFrame(in.ID, d.T, d.D)
+	if err := p.PushFrame(ctx, f, processor.Downstream); err != nil {
+		return err
+	}
+	p.Events().Call(ctx, EventClientMessage, p, f)
+	return nil
+}
+
+// handleFunctionCallResult delivers the result of a tool the client ran on the
+// bot's behalf.
+//
+// A tool call the bot cannot run itself is reported to the client, which runs it
+// and sends the result back here. The result frame goes downstream to the
+// assistant aggregator, which fills in the placeholder the call left in the
+// conversation, exactly as a result produced in-process does.
+func (p *Processor) handleFunctionCallResult(ctx context.Context, in Incoming) error {
+	d, err := ParseFunctionCallResultData(in.Data)
+	if err != nil {
+		slog.Warn("invalid RTVI llm-function-call-result", "err", err)
+		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+	}
+	f := frames.NewFunctionCallResultFrame(d.ToolCallID, d.FunctionName, d.Arguments, d.ResultText())
+	return p.PushFrame(ctx, f, processor.Downstream)
+}
+
+// handleRawAudio feeds the pipeline audio the client captured itself.
+//
+// This processor sits at the top of the pipeline, so the frames go downstream to
+// the input transport, which runs them through its own processing: a client
+// doing its own capture is heard exactly as one streaming a media track is.
+func (p *Processor) handleRawAudio(ctx context.Context, in Incoming) error {
+	d, err := ParseRawAudioData(in.Data)
+	if err != nil {
+		slog.Warn("invalid RTVI raw-audio", "err", err)
+		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+	}
+	for _, chunk := range d.Chunks() {
+		pcm, err := base64.StdEncoding.DecodeString(chunk)
+		if err != nil {
+			slog.Warn("invalid RTVI raw-audio chunk", "err", err)
+			return p.send(ctx, ErrorResponse(in.ID, "invalid audio: "+err.Error()))
+		}
+		f := frames.NewInputAudioRawFrame(pcm, d.SampleRate, d.NumChannels)
+		if err := p.PushFrame(ctx, f, processor.Downstream); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SendServerMessage sends an unprompted message to the client, for a caller
+// holding the processor rather than pushing a ServerMessageFrame.
+func (p *Processor) SendServerMessage(ctx context.Context, data any) error {
+	return p.send(ctx, ServerMessage(data))
+}
+
+// SendServerResponse answers a client message.
+func (p *Processor) SendServerResponse(ctx context.Context, msg *ClientMessageFrame, data any) error {
+	return p.send(ctx, ServerResponse(msg.MsgID, msg.Type, data))
+}
+
+// SendErrorResponse refuses a client message, giving reason.
+func (p *Processor) SendErrorResponse(ctx context.Context, msg *ClientMessageFrame, reason string) error {
+	return p.send(ctx, ErrorResponse(msg.MsgID, reason))
 }
 
 // handleSendText injects a text user turn. The processor sits at the top of the

@@ -72,10 +72,37 @@ speaks protocol version `2.0.0`.
 | `dtmf` | Client presses keypad keys. |
 | `metrics` | TTFB, processing time, token usage. |
 | `send-text` | Client sends text instead of speech. |
+| `raw-audio` / `raw-audio-batch` | Client sends audio it captured itself. |
+| `disconnect-bot` | Client hangs up; the pipeline ends gracefully. |
+| `llm-function-call-result` | Result of a tool the client ran for the bot. |
+| `client-message` → `server-response` | Anything else the client asks, and the answer. |
+| `server-message` | Anything else the bot tells the client, unprompted. |
+| `error-response` | A request could not be carried out. |
 | `error` | Something failed. |
 
 The constants live in `processor/rtvi` (`rtvi.TypeUserTranscription` and so on),
 so you do not hand-write the strings.
+
+### Messages of your own
+
+`client-message` carries whatever the protocol has no message for. It arrives as
+a `rtvi.ClientMessageFrame` travelling downstream, so a processor anywhere in the
+pipeline can answer it by pushing a `rtvi.ServerResponseFrame` naming the request:
+
+```go
+if msg, ok := f.(*rtvi.ClientMessageFrame); ok && msg.Type == "set-theme" {
+    return p.PushFrame(ctx, rtvi.NewServerResponseFrame(msg, map[string]any{"ok": true}), processor.Upstream)
+}
+```
+
+`rtvi.NewServerErrorResponseFrame(msg, reason)` refuses it instead, and the client
+gets an `error-response`. Either way the request is answered, so a client waiting
+on a reply is never left waiting.
+
+Outside the pipeline, attach to the processor's `rtvi.EventClientMessage` and
+answer with `SendServerResponse` or `SendErrorResponse`. To tell the client
+something nothing asked for, push a `rtvi.ServerMessageFrame` or call
+`SendServerMessage`.
 
 ### How much a tool call reports
 
