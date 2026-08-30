@@ -14,6 +14,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The bus can serialize what it carries.** `bus.MessageSerializer` is the
+  interface a bus that leaves the process uses at each edge, and
+  `bus.NewJSONSerializer` is the JSON implementation: a value JSON already
+  describes is written as it stands, and anything else is tagged
+  `{"__type__":…,"__data__":…}` so the far end knows what to build. Raw bytes
+  cross base64-encoded, and raw JSON crosses as the JSON it already holds.
+
+  `bus.TypeRegistry` is what resolves those names, and `bus.Types` is the
+  process-wide one every built-in bus message and frame registers in. It stands
+  in for reading a type out of a module path at run time, which Go cannot do:
+  a type that may cross a bus names itself in advance, and one that never
+  registered is refused on arrival rather than silently arriving as something
+  else. Register your own with `bus.Types.Register`.
+
+  `bus.TypeAdapter` handles the types the serializer cannot take apart itself.
+  Two are registered by default: a conversation, whose state is private and
+  which is rebuilt through its own methods, and its toolset, including the tools
+  written in one provider's own format. A tool's handler and the resource it
+  works through are deliberately not carried: they are running code, so a tool
+  arriving over a bus is advertise-only.
+
 - **`jargo eval run` takes directories.** A directory argument stands for the
   scenarios directly in it, in name order, taking both the `.yaml` and `.yml`
   suffixes a manifest resolves. A directory holding no scenario is refused rather
