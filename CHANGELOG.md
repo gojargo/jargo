@@ -14,6 +14,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A worker can address a worker in another process.** `workers/proxy` carries
+  bus messages over a WebSocket: `proxy.NewClient` dials, `proxy.NewServer` takes
+  an accepted connection, and each sits on its own bus as an ordinary worker.
+  Neither of the workers they join knows the other is remote.
+
+  What crosses is deliberately narrow. A message addressed to the worker on the
+  far side crosses and nothing else does, so a bus carrying a conversation's
+  whole traffic does not put all of it on the wire. Types named in
+  `ForwardMessages` cross whoever they are addressed to, which is how frames
+  reach a bridged worker in another process; outbound, only the ones the local
+  worker sent, so a frame is never echoed back where it came from. A local
+  message never crosses: it carries an object the far side could not act on.
+
+  The server tells the client when its local worker becomes ready, so the client
+  side learns that the name it is addressing exists.
+
+  `wsutil.Adopt` wraps a connection that was accepted rather than dialed, so a
+  server side gets the same bounded close a dialed one has.
+
 - **The bus can serialize what it carries.** `bus.MessageSerializer` is the
   interface a bus that leaves the process uses at each edge, and
   `bus.NewJSONSerializer` is the JSON implementation: a value JSON already
