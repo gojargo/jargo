@@ -3,10 +3,6 @@ title: jargo
 layout: hextra-home
 ---
 
-{{< hextra/hero-badge link="https://github.com/gojargo/jargo/releases" >}}
-  <span>Early work in progress</span>
-{{< /hextra/hero-badge >}}
-
 <div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
   Voice agents in Go
