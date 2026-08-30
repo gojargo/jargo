@@ -20,8 +20,16 @@ func silence() []byte { return make([]byte, 160*2) }
 // ready returns a serializer set up for a pipeline running at rate. Every
 // serializer is set up before it converts anything, so a test that skips it is
 // testing a state the transport never puts it in.
+//
+// A configuration naming no credentials has the hang-up turned off, since Setup
+// refuses one that is to hang up with nothing to authorize it. These tests are
+// about the wire format, not about ending the call.
 func ready(t *testing.T, cfg Config, rate int) *Serializer {
 	t.Helper()
+	if cfg.AutoHangUp == nil && cfg.AuthID == "" {
+		off := false
+		cfg.AutoHangUp = &off
+	}
 	s := New(cfg)
 	setup := processor.Setup{AudioInSampleRate: rate, AudioOutSampleRate: rate}
 	if err := s.Setup(setup); err != nil {

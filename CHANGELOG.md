@@ -14,6 +14,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A telephony call is hung up when the pipeline ends, unless told not to.**
+  `AutoHangUp` on the Twilio, Telnyx and Plivo serializers is now a `*bool` whose
+  nil default ends the call: a pipeline that has finished otherwise leaves the
+  caller listening to silence, and the leg billing, until something else hangs
+  up. Set it to `false` for a bot that is one step of a longer call the provider
+  goes on to route elsewhere.
+
+  Each `Config` gained a `Validate` method, run at `Setup`: a serializer that is
+  to hang up with no credentials to authorize it now fails when the pipeline
+  starts, rather than being discovered later as a call that never ended. Supply
+  the credentials or turn the hang-up off.
+
 - **The WebSocket server transport can be told which origins to admit.**
   `wsserver.Params` now carries the media parameters and the ones only a server
   serving its own socket has, `AllowedOrigins` being the first. Empty, the

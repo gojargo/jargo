@@ -34,6 +34,26 @@ t, err := wsserver.Accept(w, r, ser, params)
 Each is `New(Config)` returning a `*Serializer`. One serializer serves **one
 session**: build it per call, not once at startup; it is not safe to share.
 
+### Ending the call
+
+The Twilio, Telnyx and Plivo serializers hang the call up over the provider's
+REST API when the pipeline sends an `EndFrame` or `CancelFrame`. That is the
+default: a pipeline that has finished otherwise leaves the caller listening to
+silence, and the leg billing, until something else hangs up.
+
+Supply the credentials the REST call needs (`AccountSID`/`AuthToken` for Twilio,
+`APIKey` for Telnyx, `AuthID`/`AuthToken` for Plivo). A serializer that is to
+hang up with nothing to authorize it is refused at `Setup`, so the pipeline fails
+to start rather than running a whole conversation and then leaving the leg up.
+
+Set `AutoHangUp` to `false` for a bot that is one step of a longer call the
+provider goes on to route elsewhere:
+
+```go
+off := false
+ser := twilio.New(twilio.Config{AutoHangUp: &off})
+```
+
 ### Origins
 
 `Params.AllowedOrigins` names the origins a browser may open the socket from.

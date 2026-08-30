@@ -1,6 +1,7 @@
 package plivo
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -74,10 +75,22 @@ func awaitHangup(t *testing.T, got chan *http.Request) *http.Request {
 	}
 }
 
-// TestSetupIsANoOp checks the serializer needs nothing from the StartFrame:
-// Plivo audio is always 8 kHz, so there is no rate to reconcile.
-func TestSetupIsANoOp(t *testing.T) {
+// TestSetupRefusesAHangUpItCannotAuthorize checks a configuration that is to end
+// the call but names no credentials is refused when the pipeline starts, rather
+// than running a whole conversation and then quietly leaving the leg up.
+func TestSetupRefusesAHangUpItCannotAuthorize(t *testing.T) {
 	s := New(Config{})
+	if err := s.Setup(processor.Setup{}); !errors.Is(err, ErrHangUpCredentials) {
+		t.Fatalf("Setup with no credentials = %v, want ErrHangUpCredentials", err)
+	}
+}
+
+// TestSetupNeedsNothingElseFromTheStartFrame checks the serializer asks for the
+// credentials only when it is going to use them, and needs nothing else:
+// Plivo audio is always 8 kHz, so there is no rate to reconcile.
+func TestSetupNeedsNothingElseFromTheStartFrame(t *testing.T) {
+	off := false
+	s := New(Config{AutoHangUp: &off})
 	if err := s.Setup(processor.Setup{}); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -111,7 +124,7 @@ func TestAutoHangUp(t *testing.T) {
 
 // creds is the configuration a hang-up needs, pointed at the test server.
 func creds(c *http.Client) Config {
-	return Config{AuthID: "auth-1", AuthToken: "token-1", AutoHangUp: true, HTTPClient: c}
+	return Config{AuthID: "auth-1", AuthToken: "token-1", HTTPClient: c}
 }
 
 // TestAutoHangUpOnCancel checks a canceled run hangs up too. A call the bot
@@ -149,15 +162,16 @@ func TestAutoHangUpFiresOnce(t *testing.T) {
 // TestNoHangUpWhenNotConfigured checks the cases that must not reach the API:
 // the feature off, no key to authorize with, and no call to hang up.
 func TestNoHangUpWhenNotConfigured(t *testing.T) {
+	off := false
 	tests := []struct {
 		name    string
 		cfg     Config
 		started bool
 	}{
-		{name: "auto hang-up off", cfg: Config{AuthID: "auth-1", AuthToken: "token-1"}, started: true},
-		{name: "no auth id", cfg: Config{AuthToken: "token-1", AutoHangUp: true}, started: true},
-		{name: "no auth token", cfg: Config{AuthID: "auth-1", AutoHangUp: true}, started: true},
-		{name: "no start message, so no call", cfg: Config{AuthID: "auth-1", AuthToken: "token-1", AutoHangUp: true}},
+		{name: "auto hang-up off", cfg: Config{AuthID: "auth-1", AuthToken: "token-1", AutoHangUp: &off}, started: true},
+		{name: "no auth id", cfg: Config{AuthToken: "token-1"}, started: true},
+		{name: "no auth token", cfg: Config{AuthID: "auth-1"}, started: true},
+		{name: "no start message, so no call", cfg: Config{AuthID: "auth-1", AuthToken: "token-1"}},
 	}
 
 	for _, tt := range tests {
