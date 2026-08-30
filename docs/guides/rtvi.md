@@ -53,7 +53,14 @@ speech it describes.
 ## The messages
 
 Every message is `{"label":"rtvi-ai","type":…,"id":…,"data":…}`. The processor
-speaks protocol version `2.0.0`.
+speaks protocol version `2.1.0`.
+
+The `client-ready` handshake settles which version the session speaks. A client
+of this generation is answered with `2.1.0`; one of the previous generation
+(`1.x`) is answered with its own version, so it stays on the paths it
+understands. Any other version gets an `error-response` saying so, and the
+session goes ahead anyway: the client is better placed than the bot to decide
+whether to carry on. `Processor.ClientVersion` reports what the client declared.
 
 | Type | Meaning |
 |---|---|

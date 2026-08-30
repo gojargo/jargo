@@ -35,6 +35,9 @@ type Processor struct {
 	// updates it.
 	mu      sync.Mutex
 	baseCtx context.Context //nolint:containedctx // outlives the frame that set it
+	// clientVersion is the protocol version the client declared in its
+	// client-ready, read by anything whose wire shape depends on it.
+	clientVersion [3]int
 	// llmSkipTTS is the output configuration the LLM service is running under,
 	// so a turn that changes it for itself can put back what it found. It starts
 	// false, which is what an LLM service nothing has configured does.
@@ -400,16 +403,7 @@ func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransport
 func (p *Processor) handleMessage(ctx context.Context, in Incoming) error {
 	switch in.Type {
 	case TypeClientReady:
-		slog.Debug("RTVI client-ready", "id", in.ID)
-		// The client is ready, so ask the input transport to start streaming
-		// audio. A transport configured to hold it back until now (see
-		// transport.Params.AudioInStreamOnStart) opens its source here; one that
-		// was already streaming does nothing.
-		if err := p.PushFrame(ctx, frames.NewInputTransportStartAudioStreamingFrame(),
-			processor.Downstream); err != nil {
-			return err
-		}
-		return p.send(ctx, BotReady(in.ID))
+		return p.handleClientReady(ctx, in)
 	case TypeSendText:
 		return p.handleSendText(ctx, in)
 	case TypeDTMF:
@@ -518,6 +512,87 @@ func (p *Processor) SendServerResponse(ctx context.Context, msg *ClientMessageFr
 // SendErrorResponse refuses a client message, giving reason.
 func (p *Processor) SendErrorResponse(ctx context.Context, msg *ClientMessageFrame, reason string) error {
 	return p.send(ctx, ErrorResponse(msg.MsgID, reason))
+}
+
+// handleClientReady completes the handshake.
+//
+// The version the client declares settles what the session speaks. A client of
+// this protocol generation is answered with this implementation's version; one
+// of the older generation is answered with its own, so it stays on the paths it
+// understands rather than being pushed onto ones it has no code for. Any other
+// version is told it is incompatible, and the session goes ahead anyway: the
+// client is better placed to decide whether to carry on than the bot is to hang
+// up on it.
+//
+// Whatever the version says, the client is ready, so the input transport is
+// asked to start streaming audio. A transport configured to hold it back until
+// now (see transport.Params.AudioInStreamOnStart) opens its source here; one
+// that was already streaming does nothing.
+func (p *Processor) handleClientReady(ctx context.Context, in Incoming) error {
+	d, err := ParseClientReadyData(in.Data)
+	if err != nil {
+		slog.Warn("invalid RTVI client-ready data, treating the version as unknown", "err", err)
+		d = ClientReadyData{}
+	}
+	slog.Debug("RTVI client-ready", "id", in.ID, "version", d.Version, "client", d.About.Library)
+
+	version, complaint := p.negotiate(d.Version)
+	p.mu.Lock()
+	p.clientVersion = version
+	p.mu.Unlock()
+
+	if err := p.PushFrame(ctx, frames.NewInputTransportStartAudioStreamingFrame(),
+		processor.Downstream); err != nil {
+		return err
+	}
+	if complaint != "" {
+		slog.Warn("RTVI client version", "err", complaint)
+		if err := p.send(ctx, ErrorResponse(in.ID, complaint)); err != nil {
+			return err
+		}
+	}
+	return p.send(ctx, BotReady(in.ID, p.botReadyVersion(version), nil))
+}
+
+// negotiate reads the version a client declared, returning it parsed and the
+// complaint to send back, which is empty when there is nothing to complain
+// about. An unreadable or absent version leaves the parsed version at zero,
+// which is no generation at all and so takes the bot-ready's own version.
+func (p *Processor) negotiate(declared string) ([3]int, string) {
+	const mayNotWork = " Compatibility issues may occur."
+	if declared == "" {
+		return [3]int{}, "client version unknown." + mayNotWork
+	}
+	version, ok := parseProtocolVersion(declared)
+	if !ok {
+		return [3]int{}, "invalid client version format (" + declared + ")." + mayNotWork
+	}
+	switch version[0] {
+	case protocolMajor(), LegacySupportedMajor:
+		return version, ""
+	default:
+		return version, "RTVI version " + declared + " is not compatible with server protocol " +
+			ProtocolVersion + "." + mayNotWork
+	}
+}
+
+// botReadyVersion is the version the bot-ready declares. A client of the older
+// generation is told its own version back: this implementation would otherwise
+// advertise a generation whose paths the client does not have, and the two would
+// disagree about what the wire carries.
+func (p *Processor) botReadyVersion(client [3]int) string {
+	if client[0] == LegacySupportedMajor {
+		return formatProtocolVersion(client)
+	}
+	return ProtocolVersion
+}
+
+// ClientVersion is the protocol version the client declared, as major, minor and
+// patch. It is all zeros until a client-ready arrives.
+func (p *Processor) ClientVersion() [3]int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.clientVersion
 }
 
 // handleSendText injects a text user turn. The processor sits at the top of the

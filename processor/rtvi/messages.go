@@ -15,7 +15,14 @@ const (
 	// MessageLabel tags every RTVI message.
 	MessageLabel = "rtvi-ai"
 	// ProtocolVersion is the RTVI protocol version this implementation speaks.
-	ProtocolVersion = "2.0.0"
+	ProtocolVersion = "2.1.0"
+	// LegacySupportedMajor is the older protocol generation still served. A
+	// client of that generation is deprecated but answered rather than turned
+	// away, and is told its own version back in the bot-ready rather than this
+	// one, so it stays on the paths it understands.
+	LegacySupportedMajor = 1
+	// LibraryName is what this implementation calls itself in the bot-ready.
+	LibraryName = "jargo"
 )
 
 // Message types exchanged over the data channel.
@@ -119,14 +126,47 @@ func ParseSendTextData(raw json.RawMessage) (SendTextData, error) {
 	return d, err
 }
 
-// BotReadyData is the payload of a bot-ready message.
-type BotReadyData struct {
-	Version string `json:"version"`
+// AboutClientData describes the client an RTVI session is with: which client
+// library it uses, on what platform, and whatever else it cares to say. It is
+// what a client sends with its client-ready, and the same shape a bot-ready
+// sends back about itself.
+type AboutClientData struct {
+	Library         string `json:"library"`
+	LibraryVersion  string `json:"library_version,omitempty"`
+	Platform        string `json:"platform,omitempty"`
+	PlatformVersion string `json:"platform_version,omitempty"`
+	PlatformDetails any    `json:"platform_details,omitempty"`
 }
 
-// BotReady builds a bot-ready message in reply to the client-ready with id.
-func BotReady(id string) Message {
-	return newMessage(TypeBotReady, id, BotReadyData{Version: ProtocolVersion})
+// ClientReadyData is the payload of a client-ready message: the protocol version
+// the client speaks, and what it is.
+type ClientReadyData struct {
+	Version string          `json:"version"`
+	About   AboutClientData `json:"about,omitzero"`
+}
+
+// ParseClientReadyData decodes the data payload of a client-ready message.
+func ParseClientReadyData(raw json.RawMessage) (ClientReadyData, error) {
+	var d ClientReadyData
+	err := json.Unmarshal(raw, &d)
+	return d, err
+}
+
+// BotReadyData is the payload of a bot-ready message: the protocol version the
+// session settled on, and what the bot is.
+type BotReadyData struct {
+	Version string           `json:"version"`
+	About   *AboutClientData `json:"about,omitempty"`
+}
+
+// BotReady builds a bot-ready message in reply to the client-ready with id,
+// declaring version and describing the bot with about. A nil about describes
+// this library.
+func BotReady(id, version string, about *AboutClientData) Message {
+	if about == nil {
+		about = &AboutClientData{Library: LibraryName, LibraryVersion: LibraryVersion()}
+	}
+	return newMessage(TypeBotReady, id, BotReadyData{Version: version, About: about})
 }
 
 // RawClientMessageData is the payload of a client-message: the client's own
