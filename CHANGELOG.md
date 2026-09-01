@@ -11,6 +11,46 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > in the entry that makes them. `1.0.0` will be the first release that promises
 > backwards compatibility.
 
+## [Unreleased]
+
+### Added
+
+- **Tool calling on every speech-to-speech service.** OpenAI Realtime, xAI
+  Realtime, Gemini Live and AWS Nova Sonic advertised a toolset and never ran
+  anything the model called. They now register the handlers their tools carry,
+  run a call when the model makes one, and hand the result back over each
+  session's own protocol. Gemini Live and Nova Sonic take tools only when a
+  session opens, so a conversation bringing tools to a session opened without
+  them reopens it.
+- **`processor.FrameLogger` and `processor.AsyncGeneratorProcessor`.** The
+  first logs each frame and its direction, skipping the ones that arrive many
+  times a second; the second passes frames through and serializes each for a
+  reader outside the pipeline.
+
+### Changed
+
+- **`llm.Base` gained `RunFunctionCalls` and `WithContinuousGeneration`.** A
+  service that generates on its own, rather than being run by a conversation
+  arriving, now says so and runs the calls its own protocol reports.
+- **`SyncToolHandlers` takes a toolset** rather than the conversation carrying
+  one, so a service told about new tools on their own can sync from them.
+  **Breaking** for anything implementing `pipeline.LLMMember`.
+- **Idle detection counts provider turn frames.** A pipeline whose turns come
+  from the provider pushes no `UserSpeakingFrame`, so a talking user looked idle
+  and was cancelled. Transcriptions and `UserStartedSpeakingFrame` now count too.
+
+### Fixed
+
+- **Deepgram Flux settings.** The five fields a live connection accepts are sent
+  in a Configure message, the two it reads only from the connection URL reopen
+  the session, and the confidence floor applies at once. A fatal error reports
+  the code and description Flux sends, and a connection the endpoint never
+  confirms fails instead of hanging.
+- **`UnregisterFunction` sticks** while the tool stays advertised, instead of
+  being undone by the next inference.
+- **Smallest AI picks the default voice its chosen model serves**, rather than
+  one name for both models.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added

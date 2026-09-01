@@ -12,7 +12,11 @@
 //
 // The model's server VAD drives turn-taking: on detected user speech the service
 // emits an InterruptionFrame (barge-in) so the output transport drops buffered
-// bot audio. Tool calling is not yet wired up.
+// bot audio.
+//
+// Tools reach the model from the conversation, and the ones carrying a handler
+// are run when it calls them: the result goes back to the session and the model
+// is asked to speak the answer.
 package realtime
 
 import (
