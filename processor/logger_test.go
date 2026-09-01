@@ -1,0 +1,85 @@
+package processor_test
+
+import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
+)
+
+// Upstream has no tests for this processor; these are jargo's own.
+
+// captureLogs points the default logger at a buffer for the duration of a test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
+// A logger says what went by and which way, and passes the frame on unchanged.
+func TestFrameLoggerLogsAndPassesOn(t *testing.T) {
+	logs := captureLogs(t)
+	p := processor.NewFrameLogger("Logger", processor.WithLoggedPrefix("mine"))
+	_, down := linkAndStart(t, p)
+
+	if err := p.QueueFrame(context.Background(), frames.NewTextFrame("hello"), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+	mustReceive[*frames.TextFrame](t, down.got, "TextFrame")
+
+	if got := logs.String(); !strings.Contains(got, "mine: TextFrame") {
+		t.Errorf("logs = %q, want the prefix and the frame name", got)
+	}
+	if got := logs.String(); !strings.Contains(got, "> mine") {
+		t.Errorf("logs = %q, want the direction the frame traveled", got)
+	}
+}
+
+// The high-frequency frames are skipped by default: audio arrives many times a
+// second and would bury everything else.
+func TestFrameLoggerSkipsTheNoisyFramesByDefault(t *testing.T) {
+	logs := captureLogs(t)
+	p := processor.NewFrameLogger("Logger")
+	_, down := linkAndStart(t, p)
+
+	ctx := context.Background()
+	if err := p.QueueFrame(ctx, frames.NewBotSpeakingFrame(), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.QueueFrame(ctx, frames.NewTextFrame("hello"), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+	mustReceive[*frames.BotSpeakingFrame](t, down.got, "BotSpeakingFrame")
+	mustReceive[*frames.TextFrame](t, down.got, "TextFrame")
+
+	got := logs.String()
+	if strings.Contains(got, "BotSpeakingFrame") {
+		t.Errorf("logs = %q, want the speaking frame skipped", got)
+	}
+	if !strings.Contains(got, "TextFrame") {
+		t.Errorf("logs = %q, want the text frame logged", got)
+	}
+}
+
+// A caller who wants the whole stream, audio included, can have it.
+func TestFrameLoggerCanLogEverything(t *testing.T) {
+	logs := captureLogs(t)
+	p := processor.NewFrameLogger("Logger", processor.WithIgnoredFrames(nil))
+	_, down := linkAndStart(t, p)
+
+	if err := p.QueueFrame(context.Background(), frames.NewBotSpeakingFrame(), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+	mustReceive[*frames.BotSpeakingFrame](t, down.got, "BotSpeakingFrame")
+
+	if got := logs.String(); !strings.Contains(got, "BotSpeakingFrame") {
+		t.Errorf("logs = %q, want the speaking frame logged", got)
+	}
+}
