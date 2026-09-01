@@ -12,14 +12,20 @@ import (
 	"sync/atomic"
 
 	"github.com/coder/websocket"
+	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
+	"github.com/google/uuid"
 )
 
 // Service is the Gemini Live speech-to-speech processor.
 type Service struct {
-	*processor.Base
+	// adapter renders the tools and their results the way the Live API takes
+	// them, which is the same way the Gemini API does.
+	adapter geminiadapter.Adapter
+	*llm.Base
 	cfg Config
 
 	mu        sync.Mutex
@@ -31,6 +37,24 @@ type Service struct {
 	ready     atomic.Bool
 	speaking  bool
 	connector Connector
+
+	// convo is the conversation this session is part of, as the pipeline last
+	// reported it. The model generates continuously and so never re-reads it,
+	// but a tool call is answered into it and its results are read back out of
+	// it here. Guarded by mu.
+	convo *frames.LLMContext
+	// tools are the tools the session was opened with. The Live API takes them
+	// in the setup message and nowhere else, so a conversation bringing tools
+	// to a session that has none is applied by opening another. Guarded by mu.
+	tools frames.ToolsSchema
+	// toolNames maps a call id to the function it called. A result has to name
+	// the function as well as the call, and by the time it comes back only the
+	// id is at hand. Guarded by mu.
+	toolNames map[string]string
+	// sentResults names the tool calls whose result has already gone to the
+	// model, so a conversation reported again does not send one twice. Guarded
+	// by mu.
+	sentResults map[string]bool
 }
 
 // Connector customizes how the Live session is addressed and authorized, so a
@@ -78,9 +102,26 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	if cfg.Voice == "" {
 		cfg.Voice = defaultVoice
 	}
-	s := &Service{cfg: cfg, connector: conn}
-	s.Base = processor.New(name, s)
+	s := &Service{
+		cfg:         cfg,
+		connector:   conn,
+		toolNames:   map[string]string{},
+		sentResults: map[string]bool{},
+	}
+	// A model service, so it keeps the tool registry and the machinery that runs
+	// what the model calls. It generates continuously rather than being run by a
+	// conversation arriving, which is what the option says.
+	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
+	s.SetModel(cfg.Model)
 	return s
+}
+
+// Generate is never called: this service generates continuously from the audio
+// it is sent, and says so with llm.WithContinuousGeneration, so the base never
+// asks it to answer a conversation. It exists because the base identifies the
+// service it belongs to by the generator it was built with.
+func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error {
+	return errNotGenerator
 }
 
 // ProcessFrame opens the session on StartFrame, forwards input audio to the
@@ -101,6 +142,13 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 			return nil // the model consumes the audio; it does not flow on
 		}
 		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMContextFrame:
+		// The conversation the session is part of: the toolset it advertises, and
+		// the tool results it has gained since it was last reported.
+		if fr.Context != nil {
+			s.handleContext(ctx, fr.Context)
+		}
+		return s.PushFrame(ctx, f, dir)
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
 		return s.PushFrame(ctx, f, dir)
@@ -108,11 +156,6 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		return s.PushFrame(ctx, f, dir)
 	}
 }
-
-// LLMService marks this processor as a language-model service, which a realtime
-// service is: it generates the reply. An observer asserts for it to tell what
-// the model produced from the same kind of frame reaching it from elsewhere.
-func (s *Service) LLMService() {}
 
 // Cleanup tears down the session and stops the read loop.
 func (s *Service) Cleanup(ctx context.Context) error {
@@ -171,7 +214,184 @@ func (s *Service) setup() map[string]any {
 			"parts": []any{map[string]any{"text": s.cfg.Instructions}},
 		}
 	}
+	s.mu.Lock()
+	schema := s.tools
+	s.mu.Unlock()
+	if tools := s.adapter.ToProviderToolsFormat(schema); len(tools) > 0 {
+		setup["tools"] = tools
+	}
 	return map[string]any{"setup": setup}
+}
+
+// handleContext takes the conversation the pipeline reported.
+//
+// The model generates continuously and never re-reads it, so a conversation
+// arriving means two things and only two: the toolset it advertises, and the
+// results of the tool calls the model asked for.
+//
+// The toolset is only settled once. The Live API takes it in the setup message
+// and offers no way to change it afterwards, so a conversation bringing tools to
+// a session opened without them is applied by opening another session with them.
+func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
+	s.mu.Lock()
+	first := s.convo == nil
+	s.convo = convo
+	had := len(s.tools.Standard) > 0 || len(s.tools.Custom) > 0
+	s.mu.Unlock()
+
+	schema := convo.ToolsSchema()
+	if first && !had && (len(schema.Standard) > 0 || len(schema.Custom) > 0) {
+		s.mu.Lock()
+		s.tools = schema
+		s.mu.Unlock()
+		s.reconnectWithTools(ctx)
+	}
+
+	// The results already in the first conversation were produced before this
+	// session existed, so they are recorded as known rather than sent: the model
+	// never asked for them and has nothing to do with them.
+	s.processCompletedCalls(ctx, convo, !first)
+}
+
+// reconnectWithTools opens the session again so its setup carries the tools. The
+// conversation so far is the model's own, and it is lost with the session: the
+// Live API keeps it server-side and jargo has no way to replay it.
+func (s *Service) reconnectWithTools(ctx context.Context) {
+	slog.InfoContext(ctx, "reopening the live session to declare its tools",
+		"service", s.Name())
+	s.disconnect()
+	if err := s.connect(ctx); err != nil {
+		s.PushError(ctx, "gemini live reconnect failed", err, true)
+	}
+}
+
+// processCompletedCalls finds the tool results the model has not been given yet
+// and, when send is set, hands each to the session.
+//
+// The results are read out of the conversation rather than taken from the
+// handler directly, because that is where a call's result lands however it was
+// produced: a handler that answered at once, one that answered later, or one the
+// application answered for.
+//
+// Nothing prompts a reply afterwards: the Live API answers a tool response on
+// its own, unlike the sessions that have to be asked.
+func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
+	for _, m := range convo.Messages() {
+		for _, r := range m.ToolResults {
+			if s.resultSeen(r.ID) {
+				continue
+			}
+			// A call still running has a placeholder standing in for its result.
+			// It is not an answer, so it is neither sent nor recorded: the real
+			// one has still to come.
+			if r.Content == frames.ToolResultInProgress {
+				continue
+			}
+			if async, ok := frames.ParseAsyncToolMessage(m); ok && !s.asyncResultSendable(ctx, async) {
+				s.recordResult(r.ID)
+				continue
+			}
+			s.recordResult(r.ID)
+			if send {
+				s.sendToolResult(ctx, r.ID, r.Content)
+			}
+		}
+	}
+}
+
+// asyncResultSendable reports whether an asynchronous tool's message carries a
+// result this session can take. Only the final one does: the session has no way
+// to receive a result in parts, and the marker that opens the call says nothing
+// the model does not already know, having made the call itself.
+func (s *Service) asyncResultSendable(ctx context.Context, m frames.AsyncToolMessage) bool {
+	switch m.Kind {
+	case frames.AsyncToolFinal:
+		return true
+	case frames.AsyncToolIntermediate:
+		msg := "gemini live takes no streamed result from an asynchronous tool"
+		slog.ErrorContext(ctx, msg, "function", m.ToolCallID)
+		s.PushError(ctx, msg, nil, false)
+		return false
+	default:
+		return false
+	}
+}
+
+// resultSeen reports whether the model has already been given this call's
+// result.
+func (s *Service) resultSeen(toolCallID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sentResults[toolCallID]
+}
+
+// recordResult marks a call's result as settled, so a conversation reported
+// again does not send it twice.
+func (s *Service) recordResult(toolCallID string) {
+	s.mu.Lock()
+	s.sentResults[toolCallID] = true
+	s.mu.Unlock()
+}
+
+// sendToolResult hands one call's result to the session. The response names the
+// function as well as the call, so the name the call went out under is looked
+// back up here.
+func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string) {
+	s.mu.Lock()
+	name := s.toolNames[toolCallID]
+	s.mu.Unlock()
+
+	slog.DebugContext(ctx, "sending a tool result to the live session",
+		"service", s.Name(), "tool_call_id", toolCallID, "function", name)
+	if err := s.send(map[string]any{
+		"toolResponse": map[string]any{
+			"functionResponses": []any{map[string]any{
+				"id":       toolCallID,
+				"name":     name,
+				"response": geminiadapter.FunctionResponseDict(result),
+			}},
+		},
+	}); err != nil {
+		slog.ErrorContext(ctx, "sending a tool result failed", "service", s.Name(), "err", err)
+	}
+}
+
+// runToolCalls runs the calls the model asked for in one message.
+func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
+	if tc == nil || len(tc.FunctionCalls) == 0 {
+		return
+	}
+	s.mu.Lock()
+	convo := s.convo
+	s.mu.Unlock()
+	if convo == nil {
+		// A call's result is written into the conversation and read back out of
+		// it, so without one there is nowhere for the answer to go.
+		slog.ErrorContext(ctx, "the model called a tool before any conversation reached the service",
+			"service", s.Name())
+		return
+	}
+
+	calls := make([]frames.ToolCall, 0, len(tc.FunctionCalls))
+	for _, fc := range tc.FunctionCalls {
+		id := fc.ID
+		if id == "" {
+			// Vertex AI sends no id of its own, so one is made here. It only has
+			// to tell this turn's calls apart and pair each with its result.
+			id = uuid.NewString()
+		}
+		args := fc.Args
+		if len(args) == 0 {
+			args = json.RawMessage("{}")
+		}
+		s.mu.Lock()
+		s.toolNames[id] = fc.Name
+		s.mu.Unlock()
+		calls = append(calls, frames.ToolCall{ID: id, Name: fc.Name, Args: args})
+	}
+	if err := s.RunFunctionCalls(ctx, convo, calls); err != nil {
+		slog.ErrorContext(ctx, "running a tool call failed", "service", s.Name(), "err", err)
+	}
 }
 
 // sendAudio streams a chunk of input PCM to the model once the session is ready.
@@ -230,6 +450,21 @@ type serverMessage struct {
 	SetupComplete *json.RawMessage `json:"setupComplete"` //nolint:tagliatelle // Gemini wire field
 	ServerContent *serverContent   `json:"serverContent"` //nolint:tagliatelle // Gemini wire field
 	UsageMetadata *usageMetadata   `json:"usageMetadata"` //nolint:tagliatelle // Gemini wire field
+	ToolCall      *toolCall        `json:"toolCall"`      //nolint:tagliatelle // Gemini wire field
+}
+
+// toolCall is the model asking for one or more functions to be called. They
+// arrive together, as one turn's worth.
+type toolCall struct {
+	FunctionCalls []functionCall `json:"functionCalls"` //nolint:tagliatelle // Gemini wire field
+}
+
+// functionCall is one call: the function, the arguments the model wrote, and the
+// id pairing it with its result. Vertex AI sends no id.
+type functionCall struct {
+	ID   string          `json:"id"`
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
 }
 
 // usageMetadata is the per-turn token accounting the Live API sends alongside a
@@ -349,9 +584,12 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 		// covering that turn is opened here and the usage recorded against it.
 		spanCtx, end := s.traceResponse(ctx, msg)
 		if s.UsageMetricsEnabled() {
-			_ = s.PushTokenUsage(spanCtx, s.cfg.Model, msg.UsageMetadata.tokenUsage())
+			_ = s.PushTokenUsage(spanCtx, msg.UsageMetadata.tokenUsage())
 		}
 		end()
+	}
+	if msg.ToolCall != nil {
+		s.runToolCalls(ctx, msg.ToolCall)
 	}
 	sc := msg.ServerContent
 	if sc == nil {
