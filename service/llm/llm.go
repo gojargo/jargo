@@ -236,6 +236,20 @@ func WithUngroupedFunctionCalls() Option {
 	return func(b *Base) { b.groupCalls = false }
 }
 
+// WithContinuousGeneration says the service generates continuously and drives
+// its own responses, rather than answering one conversation at a time when a
+// context frame arrives. A speech-to-speech service sets it: the model is
+// already generating from the audio it is being sent, so a conversation
+// reaching the service is not a prompt to run but news that the conversation
+// changed, which such a service acts on itself.
+//
+// The base still does for it everything it does for any model service: the tool
+// registry, the calls in flight, and the interruption that cancels them. Only
+// the generating is left to the service.
+func WithContinuousGeneration() Option {
+	return func(b *Base) { b.continuousGeneration = true }
+}
+
 // FunctionCallsHandler is notified about the tool calls of one response.
 type FunctionCallsHandler func(ctx context.Context, calls []frames.ToolCall)
 
@@ -337,6 +351,9 @@ type Base struct {
 	// callFilter narrows the calls of a response to the ones that run. Nil, the
 	// default, runs every call the model requested.
 	callFilter FunctionCallFilter
+	// continuousGeneration says the service generates on its own rather than
+	// being run by a conversation arriving. See WithContinuousGeneration.
+	continuousGeneration bool
 	// cancelTools names the cancel tools currently registered, so each is added
 	// and withdrawn exactly once and a call of one is recognized as internal.
 	// Guarded by handlersMu.
@@ -1020,6 +1037,14 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	}
 	switch fr := f.(type) {
 	case *frames.LLMContextFrame:
+		if b.continuousGeneration {
+			// The service is already generating, so a conversation arriving is
+			// not a prompt to run. It still settles what the model may call, and
+			// what the service does with it beyond that is the service's own.
+			b.SyncToolHandlers(ctx, fr.Context.Tools())
+			b.syncCancelTools()
+			return nil
+		}
 		return b.run(ctx, fr.Context)
 	case *frames.InterruptionFrame:
 		b.cancelFunctionCalls(ctx)
@@ -1109,7 +1134,7 @@ func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
 	// the one place tool changes take effect: pick up the handler any advertised
 	// tool carries, drop the ones for tools no longer advertised, and only then
 	// settle what this service adds on its own account.
-	b.SyncToolHandlers(ctx, convo)
+	b.SyncToolHandlers(ctx, convo.Tools())
 	b.syncCancelTools()
 	if len(convo.Tools()) > 0 {
 		if tg, ok := b.gen.(ToolGenerator); ok {
@@ -1187,7 +1212,7 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	if err := tg.GenerateWithTools(ctx, convo, s); err != nil && ctx.Err() == nil {
 		b.reportGenerationFailure(ctx, err)
 	} else if ctx.Err() == nil {
-		if err := b.startFunctionCalls(ctx, convo, calls); err != nil {
+		if err := b.RunFunctionCalls(ctx, convo, calls); err != nil {
 			return err
 		}
 	}
@@ -1196,10 +1221,16 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
-// startFunctionCalls narrows the calls a response requested to the ones that
-// run, announces them, and sets them going. A response left with no call to run
-// is a response that requested none: nothing is announced.
-func (b *Base) startFunctionCalls(
+// RunFunctionCalls runs the tool calls a response requested: it narrows them to
+// the ones that run, announces them, and sets them going without waiting.
+//
+// The base calls it for the models it runs itself. A service generating
+// continuously calls it directly, since its calls arrive on its own protocol
+// rather than out of a generation the base drove.
+//
+// convo is the conversation the calls belong to, which is what the results are
+// written back into.
+func (b *Base) RunFunctionCalls(
 	ctx context.Context, convo *frames.LLMContext, calls []frames.ToolCall,
 ) error {
 	if b.callFilter != nil {

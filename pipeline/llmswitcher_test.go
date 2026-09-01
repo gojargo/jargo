@@ -50,10 +50,10 @@ func (l *fakeLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	return l.PushFrame(ctx, f, dir)
 }
 
-func (l *fakeLLM) SyncToolHandlers(_ context.Context, convo *frames.LLMContext) {
+func (l *fakeLLM) SyncToolHandlers(_ context.Context, tools []frames.Tool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, t := range convo.Tools() {
+	for _, t := range tools {
 		l.synced = append(l.synced, t.Name)
 	}
 }

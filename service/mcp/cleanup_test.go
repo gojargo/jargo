@@ -39,7 +39,7 @@ func TestCleanupClosesTheRegisteredServer(t *testing.T) {
 	svc := newLLM("LLM")
 	convo := frames.NewLLMContext("")
 	convo.SetTools(tools)
-	svc.SyncToolHandlers(context.Background(), convo)
+	svc.SyncToolHandlers(context.Background(), convo.Tools())
 
 	if !alive(t, c) {
 		t.Fatal("the session was closed before anything asked for it to be")
@@ -64,7 +64,7 @@ func TestCleanupTwiceReleasesOnce(t *testing.T) {
 	svc := newLLM("LLM")
 	convo := frames.NewLLMContext("")
 	convo.SetTools(tools)
-	svc.SyncToolHandlers(context.Background(), convo)
+	svc.SyncToolHandlers(context.Background(), convo.Tools())
 
 	for range 2 {
 		if err := svc.Cleanup(context.Background()); err != nil {
@@ -88,8 +88,8 @@ func TestTwoServicesSharingAServerCloseItOnce(t *testing.T) {
 	convo := frames.NewLLMContext("")
 	convo.SetTools(tools)
 	first, second := newLLM("First"), newLLM("Second")
-	first.SyncToolHandlers(context.Background(), convo)
-	second.SyncToolHandlers(context.Background(), convo)
+	first.SyncToolHandlers(context.Background(), convo.Tools())
+	second.SyncToolHandlers(context.Background(), convo.Tools())
 
 	if err := first.Cleanup(context.Background()); err != nil {
 		t.Fatalf("Cleanup: %v", err)
@@ -117,7 +117,7 @@ func TestOneServerIsReleasedOncePerService(t *testing.T) {
 	svc := newLLM("LLM")
 	convo := frames.NewLLMContext("")
 	convo.SetTools(tools)
-	svc.SyncToolHandlers(context.Background(), convo)
+	svc.SyncToolHandlers(context.Background(), convo.Tools())
 
 	if got := svc.ToolCleanupCount(); got != 1 {
 		t.Errorf("recorded %d resources for one server, want 1", got)
