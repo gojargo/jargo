@@ -244,6 +244,12 @@ func setOptSlice(o *settings.Opt[[]string], v []string) {
 	}
 }
 
+func setOptFloat(o *settings.Opt[float64], v *float64) {
+	if v != nil {
+		*o = settings.Set(*v)
+	}
+}
+
 // query builds the live-transcription query string for the given sample rate.
 func (cfg *Config) query(sampleRate int, live *Settings) url.Values {
 	q := url.Values{}

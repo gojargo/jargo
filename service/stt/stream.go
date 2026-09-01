@@ -24,6 +24,7 @@ import (
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // errNoSession is returned when a Connector reports neither a session nor an
@@ -89,6 +90,18 @@ type Stream interface {
 // Connector opens a streaming STT session for the given input sample rate.
 type Connector interface {
 	Connect(ctx context.Context, sampleRate int) (Stream, error)
+}
+
+// ErrorClassifier is an optional interface a Connector implements when the
+// provider signals failures through its own protocol rather than an HTTP status,
+// so the shared classification has nothing to read. Returning the zero category
+// leaves the shared classification to decide.
+//
+// The service holds it, since the service is the processor whose usability an
+// error decides. It mirrors the classification hook the original puts on the
+// service class for the same reason.
+type ErrorClassifier interface {
+	ClassifyError(err error) errs.Category
 }
 
 const (
@@ -504,6 +517,18 @@ func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir proce
 		s.work.report(ctx)
 	}
 	return err
+}
+
+// ClassifyError asks the provider what one of its own failures means, so a
+// failure signaled in the provider's protocol rather than an HTTP status still
+// costs the service its usability when that is what it means. A provider that
+// says nothing leaves the shared classification to decide.
+func (s *StreamService) ClassifyError(err error) errs.Category {
+	classifier, ok := s.conn.(ErrorClassifier)
+	if !ok {
+		return errs.Unset
+	}
+	return classifier.ClassifyError(err)
 }
 
 // ServiceMetadataFrame implements service.MetadataDescriber, describing this

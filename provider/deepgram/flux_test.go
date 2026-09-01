@@ -35,7 +35,7 @@ func TestFluxQuery(t *testing.T) {
 		Tag:               []string{"prod"},
 		LanguageHints:     []language.Language{language.French},
 	}
-	q := fluxQuery(cfg, 16000)
+	q := fluxQuery(cfg, newFluxSettings(cfg), 16000)
 
 	if got := q.Get("model"); got != defaultFluxModel {
 		t.Fatalf("model = %q", got)
@@ -69,7 +69,7 @@ func TestFluxQueryLanguageHintsMultilingual(t *testing.T) {
 		Model:         fluxMultilingualModel,
 		LanguageHints: []language.Language{language.EnglishGB, language.French},
 	}
-	q := fluxQuery(cfg, 24000)
+	q := fluxQuery(cfg, newFluxSettings(cfg), 24000)
 	got := q["language_hint"]
 	if len(got) != 2 || got[0] != "en" || got[1] != "fr" {
 		t.Fatalf("language_hint = %v (want base codes en, fr)", got)
@@ -162,12 +162,13 @@ func TestFluxConnectAndRecv(t *testing.T) {
 		}
 		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
 		ctx := r.Context()
+		// Flux confirms the session as soon as it opens; Connect waits for this
+		// before any audio is sent.
+		connected, _ := json.Marshal(map[string]any{"type": fluxMsgConnected})
+		_ = c.Write(ctx, websocket.MessageText, connected)
 		if _, _, err := c.Read(ctx); err != nil { // consume the binary audio
 			return
 		}
-		// A control message with no text should be skipped by Recv.
-		connected, _ := json.Marshal(map[string]any{"type": fluxMsgConnected})
-		_ = c.Write(ctx, websocket.MessageText, connected)
 		interim, _ := json.Marshal(map[string]any{"type": fluxMsgTurnInfo, "event": fluxEventUpdate, "transcript": "hel"})
 		_ = c.Write(ctx, websocket.MessageText, interim)
 		final, _ := json.Marshal(map[string]any{
@@ -180,7 +181,7 @@ func TestFluxConnectAndRecv(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	conn := &fluxConnector{cfg: FluxConfig{APIKey: "k", ListenURL: wsURL(srv.URL), Model: defaultFluxModel}}
+	conn := newFluxConnector(FluxConfig{APIKey: "k", ListenURL: wsURL(srv.URL), Model: defaultFluxModel})
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := conn.Connect(ctx, 16000)
 	if err != nil {
