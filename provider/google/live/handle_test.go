@@ -40,7 +40,8 @@ func (c *capture) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 }
 
 // names returns the recorded frame names, minus the lifecycle frames every
-// processor sees, so a test can assert on what the service itself emitted.
+// processor sees and the metadata every service describes itself with, so a test
+// can assert on what the service itself emitted.
 func (c *capture) names() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -48,6 +49,8 @@ func (c *capture) names() []string {
 	for _, f := range c.got {
 		switch f.(type) {
 		case *frames.StartFrame, *frames.EndFrame, *frames.CancelFrame:
+			continue
+		case *frames.LLMServiceMetadataFrame:
 			continue
 		}
 		// Names carry a per-instance suffix ("#7"); the type is what matters.
