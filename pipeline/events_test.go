@@ -916,3 +916,58 @@ func TestUpstreamReachedFiltersSelectWhatIsReported(t *testing.T) {
 		})
 	}
 }
+
+// TestProviderTurnFramesKeepThePipelineAlive checks the frames a provider-driven
+// pipeline reports count as activity. Such a pipeline detects turns server-side
+// and so pushes no UserSpeakingFrame at all: without the turn and transcription
+// frames counting, a user who keeps talking would have the pipeline canceled out
+// from under them.
+func TestProviderTurnFramesKeepThePipelineAlive(t *testing.T) {
+	const (
+		idleTimeout    = 200 * time.Millisecond
+		activityPeriod = 50 * time.Millisecond
+	)
+	var (
+		mu      sync.Mutex
+		reports int
+	)
+	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
+		IdleTimeout:         idleTimeout,
+		CancelOnIdleTimeout: new(bool), // report the quiet, leave the run alone
+	})
+	events.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
+		mu.Lock()
+		reports++
+		mu.Unlock()
+	})
+
+	done := runTask(t, task)
+
+	// One user turn, driven entirely by the provider's own turn detection, that
+	// outlasts the idle timeout.
+	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	for range 8 {
+		time.Sleep(activityPeriod)
+		task.QueueFrame(frames.NewInterimTranscriptionFrame("Hello jargo!", "cat", ""))
+	}
+	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+
+	mu.Lock()
+	duringTurn := reports
+	mu.Unlock()
+	if duringTurn != 0 {
+		t.Errorf("OnIdleTimeout called %d times, want 0 while the user was speaking", duringTurn)
+	}
+
+	// The timeout still fires once the user goes quiet.
+	time.Sleep(idleTimeout * 3)
+	mu.Lock()
+	afterTurn := reports
+	mu.Unlock()
+	if afterTurn == 0 {
+		t.Error("OnIdleTimeout was never called once the user went quiet")
+	}
+
+	task.StopWhenDone()
+	waitDone(t, done)
+}
