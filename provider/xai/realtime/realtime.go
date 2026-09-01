@@ -44,6 +44,12 @@ const (
 //nolint:gochecknoglobals // sentinel error
 var errNotConnected = errors.New("xairealtime: not connected")
 
+// errNotGenerator is returned by the generation entry point this service does
+// not use: it generates continuously rather than answering a conversation.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNotGenerator = errors.New("xairealtime: the model generates continuously")
+
 // errServer wraps an error event reported by the Realtime API.
 //
 //nolint:gochecknoglobals // sentinel error
