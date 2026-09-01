@@ -15,12 +15,24 @@ import (
 var errProtocol = errors.New("smallest: protocol error")
 
 const (
-	defaultURL        = "wss://api.smallest.ai/waves/v1/tts/live"
-	defaultModel      = "lightning_v3.1_pro"
-	defaultVoice      = "meher"
+	defaultURL      = "wss://api.smallest.ai/waves/v1/tts/live"
+	modelLightning  = "lightning_v3.1"
+	modelLightningP = "lightning_v3.1_pro"
+	defaultModel    = modelLightningP
+	// defaultLanguage and defaultSampleRate are the same for every model.
 	defaultLanguage   = "en"
 	defaultSampleRate = 24000
 )
+
+// modelDefaultVoices is the voice each model speaks with when the caller names
+// none. The two models have different voice catalogs, so one default for both
+// would name a voice the other does not serve.
+//
+//nolint:gochecknoglobals // a fixed table
+var modelDefaultVoices = map[string]string{
+	modelLightning:  "sophia",
+	modelLightningP: "meher",
+}
 
 // Config configures the Smallest AI TTS service.
 type Config struct {
