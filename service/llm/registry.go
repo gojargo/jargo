@@ -31,19 +31,37 @@ func (b *Base) SyncToolHandlers(ctx context.Context, convo *frames.LLMContext) {
 		b.registerToolHandler(ctx, t)
 	}
 	b.dropUnadvertisedToolHandlers(advertised)
+	b.forgetUnadvertisedRemovals(advertised)
+}
+
+// forgetUnadvertisedRemovals stops holding a removal against a tool the toolset
+// no longer advertises. The removal is only there to keep the toolset from
+// undoing it, so once the tool is gone there is nothing left to undo, and
+// advertising it again registers its handler afresh.
+func (b *Base) forgetUnadvertisedRemovals(advertised map[string]bool) {
+	b.handlersMu.Lock()
+	defer b.handlersMu.Unlock()
+	for name := range b.unregisteredByHand {
+		if !advertised[name] {
+			delete(b.unregisteredByHand, name)
+		}
+	}
 }
 
 // registerToolHandler registers the handler a tool carries, unless the name is
-// already claimed. Registering by hand always wins: it is the more deliberate
-// act, and silently replacing it would make which handler runs depend on the
-// order two unrelated calls happened in.
+// already claimed or its handler was removed by hand. Registering by hand always
+// wins: it is the more deliberate act, and silently replacing it would make
+// which handler runs depend on the order two unrelated calls happened in. So
+// does unregistering by hand, or the removal would be undone here on the very
+// next inference and the call would go on being answered.
 func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 	b.handlersMu.Lock()
-	if _, claimed := b.handlers[t.Name]; claimed {
-		b.handlersMu.Unlock()
+	_, claimed := b.handlers[t.Name]
+	removed := b.unregisteredByHand[t.Name]
+	b.handlersMu.Unlock()
+	if claimed || removed {
 		return
 	}
-	b.handlersMu.Unlock()
 
 	h, ok := t.Handler.(FunctionCallHandler)
 	if !ok {
