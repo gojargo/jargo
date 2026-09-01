@@ -47,6 +47,10 @@ func (c *capture) names() []string {
 		switch f.(type) {
 		case *frames.StartFrame, *frames.EndFrame, *frames.CancelFrame:
 			continue
+		case *frames.LLMServiceMetadataFrame:
+			// Every service describes itself once it starts; the tests assert on
+			// what this one made of the model's messages.
+			continue
 		}
 		// Names carry a per-instance suffix ("#7"); the type is what matters.
 		name, _, _ := strings.Cut(f.Name(), "#")
