@@ -11,6 +11,8 @@
 package novasonic
 
 import (
+	"errors"
+
 	"github.com/gojargo/jargo/internal/validate"
 )
 
@@ -23,7 +25,15 @@ const (
 	keyPromptName  = "promptName"
 	keyContentName = "contentName"
 	keyMediaType   = "mediaType"
+	keyContent     = "content"
+	mediaTypeText  = "text/plain"
 )
+
+// errNotGenerator is returned by the generation entry point this service does
+// not use: it generates continuously rather than answering a conversation.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNotGenerator = errors.New("novasonic: the model generates continuously")
 
 // Config configures the Nova Sonic service.
 type Config struct {

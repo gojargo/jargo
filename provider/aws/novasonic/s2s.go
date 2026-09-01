@@ -16,12 +16,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/google/uuid"
 )
 
 // Service is the Nova Sonic speech-to-speech processor.
 type Service struct {
-	*processor.Base
+	*llm.Base
 	cfg Config
 
 	mu      sync.Mutex
@@ -36,6 +37,20 @@ type Service struct {
 	audioContent         string
 	speaking             bool
 	assistantSpeculative bool
+
+	// convo is the conversation this session is part of, as the pipeline last
+	// reported it. The model generates continuously and so never re-reads it,
+	// but a tool call is answered into it and its results are read back out of
+	// it here. Guarded by mu.
+	convo *frames.LLMContext
+	// tools are the tools the session was opened with. Nova Sonic takes them in
+	// the prompt start and nowhere else, so a conversation bringing tools to a
+	// session that has none is applied by opening another. Guarded by mu.
+	tools []frames.Tool
+	// sentResults names the tool calls whose result has already gone to the
+	// model, so a conversation reported again does not send one twice. Guarded
+	// by mu.
+	sentResults map[string]bool
 }
 
 // New builds a Nova Sonic service.
@@ -46,9 +61,21 @@ func New(cfg Config) *Service {
 	if cfg.Voice == "" {
 		cfg.Voice = defaultVoice
 	}
-	s := &Service{cfg: cfg}
-	s.Base = processor.New("NovaSonic", s)
+	s := &Service{cfg: cfg, sentResults: map[string]bool{}}
+	// A model service, so it keeps the tool registry and the machinery that runs
+	// what the model calls. It generates continuously rather than being run by a
+	// conversation arriving, which is what the option says.
+	s.Base = llm.New("NovaSonic", s, llm.WithContinuousGeneration())
+	s.SetModel(cfg.Model)
 	return s
+}
+
+// Generate is never called: this service generates continuously from the audio
+// it is sent, and says so with llm.WithContinuousGeneration, so the base never
+// asks it to answer a conversation. It exists because the base identifies the
+// service it belongs to by the generator it was built with.
+func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error {
+	return errNotGenerator
 }
 
 // ProcessFrame opens the session on StartFrame, forwards input audio to the
@@ -69,6 +96,13 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 			return nil // the model consumes the audio; it does not flow on
 		}
 		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMContextFrame:
+		// The conversation the session is part of: the toolset it advertises, and
+		// the tool results it has gained since it was last reported.
+		if fr.Context != nil {
+			s.handleContext(ctx, fr.Context)
+		}
+		return s.PushFrame(ctx, f, dir)
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
 		return s.PushFrame(ctx, f, dir)
@@ -76,11 +110,6 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		return s.PushFrame(ctx, f, dir)
 	}
 }
-
-// LLMService marks this processor as a language-model service, which a realtime
-// service is: it generates the reply. An observer asserts for it to tell what
-// the model produced from the same kind of frame reaching it from elsewhere.
-func (s *Service) LLMService() {}
 
 // Cleanup tears down the session and stops the read loop.
 func (s *Service) Cleanup(ctx context.Context) error {
@@ -176,11 +205,216 @@ func (s *Service) sessionStart() map[string]any {
 }
 
 func (s *Service) promptStart() map[string]any {
-	return event("promptStart", map[string]any{
+	body := map[string]any{
 		keyPromptName:              s.promptName,
-		"textOutputConfiguration":  map[string]any{keyMediaType: "text/plain"},
+		"textOutputConfiguration":  map[string]any{keyMediaType: mediaTypeText},
 		"audioOutputConfiguration": audioConfig(outputSampleRate, s.cfg.Voice),
-	})
+	}
+	s.mu.Lock()
+	tools := s.tools
+	s.mu.Unlock()
+	if specs := toolSpecs(tools); len(specs) > 0 {
+		body["toolUseOutputConfiguration"] = map[string]any{keyMediaType: "application/json"}
+		body["toolConfiguration"] = map[string]any{"tools": specs}
+	}
+	return event("promptStart", body)
+}
+
+// toolSpecs renders the tools the way Nova Sonic declares them: each carries its
+// JSON Schema as a string rather than as an object.
+func toolSpecs(tools []frames.Tool) []map[string]any {
+	specs := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		spec := map[string]any{"name": t.Name}
+		if t.Description != "" {
+			spec["description"] = t.Description
+		}
+		schema := t.Parameters
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		spec["inputSchema"] = map[string]any{"json": string(schema)}
+		specs = append(specs, map[string]any{"toolSpec": spec})
+	}
+	return specs
+}
+
+// handleContext takes the conversation the pipeline reported.
+//
+// The model generates continuously and never re-reads it, so a conversation
+// arriving means two things and only two: the toolset it advertises, and the
+// results of the tool calls the model asked for.
+//
+// The toolset is only settled once. Nova Sonic takes it in the prompt start and
+// offers no way to change it afterwards, so a conversation bringing tools to a
+// session opened without them is applied by opening another session with them.
+func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
+	s.mu.Lock()
+	first := s.convo == nil
+	s.convo = convo
+	had := len(s.tools) > 0
+	s.mu.Unlock()
+
+	tools := convo.Tools()
+	if first && !had && len(tools) > 0 {
+		s.mu.Lock()
+		s.tools = tools
+		s.mu.Unlock()
+		s.reopenWithTools(ctx)
+	}
+
+	// The results already in the first conversation were produced before this
+	// session existed, so they are recorded as known rather than sent: the model
+	// never asked for them and has nothing to do with them.
+	s.processCompletedCalls(ctx, convo, !first)
+}
+
+// reopenWithTools opens the session again so its prompt start declares the
+// tools. What the model has heard so far is lost with the session, which at this
+// point is nothing: the conversation has only just reached the service.
+func (s *Service) reopenWithTools(ctx context.Context) {
+	slog.InfoContext(ctx, "reopening the session to declare its tools", "service", s.Name())
+	s.disconnect()
+	if err := s.connect(ctx); err != nil {
+		s.PushError(ctx, "nova sonic reconnect failed", err, true)
+	}
+}
+
+// processCompletedCalls finds the tool results the model has not been given yet
+// and, when send is set, hands each to the session.
+//
+// The results are read out of the conversation rather than taken from the
+// handler directly, because that is where a call's result lands however it was
+// produced: a handler that answered at once, one that answered later, or one the
+// application answered for.
+func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
+	for _, m := range convo.Messages() {
+		for _, r := range m.ToolResults {
+			if s.resultSeen(r.ID) {
+				continue
+			}
+			// A call still running has a placeholder standing in for its result.
+			// It is not an answer, so it is neither sent nor recorded: the real
+			// one has still to come.
+			if r.Content == frames.ToolResultInProgress {
+				continue
+			}
+			if async, ok := frames.ParseAsyncToolMessage(m); ok && !s.asyncResultSendable(ctx, async) {
+				s.recordResult(r.ID)
+				continue
+			}
+			s.recordResult(r.ID)
+			if send {
+				s.sendToolResult(ctx, r.ID, r.Content)
+			}
+		}
+	}
+}
+
+// asyncResultSendable reports whether an asynchronous tool's message carries a
+// result this session can take. Only the final one does: the session has no way
+// to receive a result in parts, and the marker that opens the call says nothing
+// the model does not already know, having made the call itself.
+func (s *Service) asyncResultSendable(ctx context.Context, m frames.AsyncToolMessage) bool {
+	switch m.Kind {
+	case frames.AsyncToolFinal:
+		return true
+	case frames.AsyncToolIntermediate:
+		msg := "nova sonic takes no streamed result from an asynchronous tool"
+		slog.ErrorContext(ctx, msg, "function", m.ToolCallID)
+		s.PushError(ctx, msg, nil, false)
+		return false
+	default:
+		return false
+	}
+}
+
+// resultSeen reports whether the model has already been given this call's
+// result.
+func (s *Service) resultSeen(toolCallID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sentResults[toolCallID]
+}
+
+// recordResult marks a call's result as settled, so a conversation reported
+// again does not send it twice.
+func (s *Service) recordResult(toolCallID string) {
+	s.mu.Lock()
+	s.sentResults[toolCallID] = true
+	s.mu.Unlock()
+}
+
+// sendToolResult hands one call's result to the session. Nova Sonic takes it as
+// a content block of its own rather than as a single message: the block is
+// opened naming the call it answers, the result is sent, and the block is
+// closed.
+func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string) {
+	s.mu.Lock()
+	prompt := s.promptName
+	s.mu.Unlock()
+	if prompt == "" {
+		return
+	}
+
+	content := uuid.NewString()
+	slog.DebugContext(ctx, "sending a tool result to the session",
+		"service", s.Name(), "tool_call_id", toolCallID)
+
+	for _, ev := range toolResultEvents(prompt, content, toolCallID, result) {
+		if err := s.send(ev); err != nil {
+			slog.ErrorContext(ctx, "sending a tool result failed", "service", s.Name(), "err", err)
+			return
+		}
+	}
+}
+
+// toolResultEvents is the block a tool result is sent as: it is opened naming
+// the call it answers, the result is sent, and it is closed. Nova Sonic takes a
+// result this way rather than as a single message.
+func toolResultEvents(prompt, content, toolCallID, result string) []map[string]any {
+	return []map[string]any{
+		contentStart(prompt, content, "TOOL", "TOOL", false, map[string]any{
+			"toolResultInputConfiguration": map[string]any{
+				"toolUseId":              toolCallID,
+				"type":                   "TEXT",
+				"textInputConfiguration": map[string]any{keyMediaType: mediaTypeText},
+			},
+		}),
+		event("toolResult", map[string]any{
+			keyPromptName:  prompt,
+			keyContentName: content,
+			keyContent:     result,
+		}),
+		contentEnd(prompt, content),
+	}
+}
+
+// runToolCall runs the call the model asked for.
+func (s *Service) runToolCall(ctx context.Context, use *toolUse) {
+	if use == nil || use.ToolUseID == "" {
+		return
+	}
+	s.mu.Lock()
+	convo := s.convo
+	s.mu.Unlock()
+	if convo == nil {
+		// A call's result is written into the conversation and read back out of
+		// it, so without one there is nowhere for the answer to go.
+		slog.ErrorContext(ctx, "the model called a tool before any conversation reached the service",
+			"service", s.Name(), "function", use.ToolName)
+		return
+	}
+
+	args := json.RawMessage(use.Content)
+	if len(args) == 0 {
+		args = json.RawMessage("{}")
+	}
+	call := frames.ToolCall{ID: use.ToolUseID, Name: use.ToolName, Args: args}
+	if err := s.RunFunctionCalls(ctx, convo, []frames.ToolCall{call}); err != nil {
+		slog.ErrorContext(ctx, "running a tool call failed", "service", s.Name(),
+			"function", use.ToolName, "err", err)
+	}
 }
 
 // sendAudio streams a chunk of input PCM as an audioInput event.
@@ -194,7 +428,7 @@ func (s *Service) sendAudio(pcm []byte) {
 	_ = s.send(event("audioInput", map[string]any{
 		keyPromptName:  prompt,
 		keyContentName: content,
-		"content":      base64.StdEncoding.EncodeToString(pcm),
+		keyContent:     base64.StdEncoding.EncodeToString(pcm),
 	}))
 }
 
@@ -300,6 +534,8 @@ func (s *Service) handle(ev outputEvent) {
 		if ev.ContentEnd.Type == "AUDIO" {
 			s.setSpeaking(ctx, false)
 		}
+	case ev.ToolUse != nil:
+		s.runToolCall(ctx, ev.ToolUse)
 	case ev.UsageEvent != nil:
 		s.handleUsage(ctx, ev.UsageEvent.Details.Delta)
 	}
@@ -316,7 +552,7 @@ func (s *Service) handleUsage(ctx context.Context, delta usageDelta) {
 	if prompt == 0 && completion == 0 {
 		return
 	}
-	_ = s.PushTokenUsage(ctx, s.cfg.Model, frames.LLMTokenUsage{
+	_ = s.PushTokenUsage(ctx, frames.LLMTokenUsage{
 		PromptTokens:      prompt,
 		CompletionTokens:  completion,
 		TotalTokens:       prompt + completion,
@@ -425,7 +661,7 @@ func contentStart(prompt, content, typ, role string, interactive bool, extra map
 		"interactive":  interactive,
 	}
 	if typ == "TEXT" {
-		body["textInputConfiguration"] = map[string]any{keyMediaType: "text/plain"}
+		body["textInputConfiguration"] = map[string]any{keyMediaType: mediaTypeText}
 	}
 	maps.Copy(body, extra)
 	return event("contentStart", body)
@@ -435,7 +671,7 @@ func textInput(prompt, content, text string) map[string]any {
 	return event("textInput", map[string]any{
 		keyPromptName:  prompt,
 		keyContentName: content,
-		"content":      text,
+		keyContent:     text,
 	})
 }
 
@@ -472,6 +708,7 @@ type outputEvent struct {
 		Type       string `json:"type"`
 		StopReason string `json:"stopReason"` //nolint:tagliatelle // Nova Sonic wire field
 	} `json:"contentEnd"` //nolint:tagliatelle // Nova Sonic wire field
+	ToolUse    *toolUse `json:"toolUse"` //nolint:tagliatelle // Nova Sonic wire field
 	UsageEvent *struct {
 		Details struct {
 			// Delta is what this event adds; Details also carries a running
@@ -479,6 +716,14 @@ type outputEvent struct {
 			Delta usageDelta `json:"delta"`
 		} `json:"details"`
 	} `json:"usageEvent"` //nolint:tagliatelle // Nova Sonic wire field
+}
+
+// toolUse is the model asking for a function to be called. The arguments arrive
+// as the JSON text the model wrote, not as a decoded object.
+type toolUse struct {
+	ToolName  string `json:"toolName"`  //nolint:tagliatelle // Nova Sonic wire field
+	ToolUseID string `json:"toolUseId"` //nolint:tagliatelle // Nova Sonic wire field
+	Content   string `json:"content"`
 }
 
 // usageDelta is the token accounting one usage event adds, split by direction
