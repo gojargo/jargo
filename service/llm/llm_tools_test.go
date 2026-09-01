@@ -1336,3 +1336,121 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 	}
 	return cond()
 }
+
+// weatherTool is a tool carrying its own handler, for the removal tests below.
+func weatherTool() frames.Tool {
+	return frames.Tool{
+		Name: "get_weather", Description: "weather", Parameters: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "sunny", nil)
+		},
+	}
+}
+
+// TestUnregisteringAStillAdvertisedHandlerSticks checks a handler removed by
+// hand stays removed even while its tool goes on being advertised. Registering
+// from the toolset runs on every inference, so without this the removal would be
+// undone by the very next one and calls would keep being answered by the handler
+// the application took away.
+func TestUnregisteringAStillAdvertisedHandlerSticks(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	convo := frames.NewLLMContext("be brief")
+	convo.SetTools([]frames.Tool{weatherTool()})
+	convo.AddUserMessage("weather?")
+
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return svc.HasFunction("get_weather") }) {
+		t.Fatal("advertising the tool should have registered the handler it carries")
+	}
+
+	svc.UnregisterFunction("get_weather")
+
+	// The tool is still advertised, and the next inference must not bring the
+	// handler back: a call should fall through to the missing-function answer.
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if waitFor(time.Second, func() bool { return svc.HasFunction("get_weather") }) {
+		t.Error("the next inference brought back a handler the application removed")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestRegisteringAgainOverridesTheRemoval checks registering by hand after
+// removing by hand is the application changing its mind, so the handler survives
+// the next inference rather than being held out by the earlier removal.
+func TestRegisteringAgainOverridesTheRemoval(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	convo := frames.NewLLMContext("be brief")
+	convo.SetTools([]frames.Tool{weatherTool()})
+	convo.AddUserMessage("weather?")
+
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return svc.HasFunction("get_weather") }) {
+		t.Fatal("advertising the tool should have registered the handler it carries")
+	}
+
+	svc.UnregisterFunction("get_weather")
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		return p.Result(ctx, "registered by hand", nil)
+	})
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return svc.HasFunction("get_weather") }) {
+		t.Error("registering again did not survive the next inference")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
+// TestWithdrawingTheToolLetsItRegisterAgain checks the removal only holds while
+// the tool stays advertised. It is there to stop the toolset undoing the
+// removal, so once the tool is gone there is nothing left to undo and
+// advertising it again registers its handler afresh.
+func TestWithdrawingTheToolLetsItRegisterAgain(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	convo := frames.NewLLMContext("be brief")
+	convo.SetTools([]frames.Tool{weatherTool()})
+	convo.AddUserMessage("weather?")
+
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	if !waitFor(3*time.Second, func() bool { return svc.HasFunction("get_weather") }) {
+		t.Fatal("advertising the tool should have registered the handler it carries")
+	}
+	svc.UnregisterFunction("get_weather")
+
+	// Each step gets a conversation of its own, so mutating one does not change
+	// the toolset of a frame still queued behind it.
+	withdrawn := frames.NewLLMContext("be brief")
+	withdrawn.AddUserMessage("never mind")
+	readvertised := frames.NewLLMContext("be brief")
+	readvertised.SetTools([]frames.Tool{weatherTool()})
+	readvertised.AddUserMessage("weather?")
+
+	// Withdrawn from the toolset, then advertised again: the second registers it
+	// afresh, because the removal stopped being held once the tool went away.
+	task.QueueFrame(frames.NewLLMContextFrame(withdrawn))
+	task.QueueFrame(frames.NewLLMContextFrame(readvertised))
+	if !waitFor(3*time.Second, func() bool { return svc.HasFunction("get_weather") }) {
+		t.Error("advertising the tool again did not register the handler it carries")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}

@@ -316,6 +316,12 @@ type Base struct {
 
 	handlersMu sync.RWMutex
 	handlers   map[string]registryItem
+	// unregisteredByHand names the handlers a caller removed while their tool
+	// was still advertised, so registering from the toolset does not bring one
+	// back on the next inference and undo the removal. A name is forgotten again
+	// when it is registered by hand or stops being advertised, so re-advertising
+	// a tool later registers its handler afresh. Guarded by handlersMu.
+	unregisteredByHand map[string]bool
 
 	// How the tool calls of one response are run, fixed at construction.
 	callTimeout   time.Duration
@@ -834,6 +840,9 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 		b.handlers = make(map[string]registryItem)
 	}
 	b.handlers[name] = item
+	// Registering by hand is the caller changing their mind about a handler they
+	// removed, so the removal stops being held against the toolset.
+	delete(b.unregisteredByHand, name)
 	b.handlersMu.Unlock()
 
 	// Registering a cancellable tool is what brings its cancel tool in.
@@ -847,10 +856,20 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 // properly, push an [frames.LLMSetToolsFrame] with the tool left out: that stops
 // advertising it as well, rather than leaving the model free to call something
 // that answers only that it is unavailable.
+//
+// The removal holds even while the tool is still advertised carrying a handler:
+// without that, registering from the toolset would bring the handler back on the
+// very next inference and calls would keep being answered by the handler the
+// caller took away. It stops holding once the tool leaves the toolset, so
+// advertising it again registers its handler afresh.
 func (b *Base) UnregisterFunction(name string) bool {
 	b.handlersMu.Lock()
 	_, ok := b.handlers[name]
 	delete(b.handlers, name)
+	if b.unregisteredByHand == nil {
+		b.unregisteredByHand = make(map[string]bool)
+	}
+	b.unregisteredByHand[name] = true
 	b.handlersMu.Unlock()
 
 	// Withdrawing a cancellable tool takes its cancel tool away with it.
