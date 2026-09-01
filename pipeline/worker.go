@@ -132,8 +132,10 @@ type WorkerConfig struct {
 	// minutes and a negative value turns idle detection off.
 	IdleTimeout time.Duration
 	// IdleTimeoutFrames selects the frames that count as the pipeline being
-	// busy; nil counts the assistant or the user speaking. The StartFrame always
-	// counts, so the first stretch is measured from the pipeline coming up.
+	// busy; nil pairs the VAD-only UserSpeakingFrame with the turn and
+	// transcription frames a provider-driven pipeline reports instead. The
+	// StartFrame always counts, so the first stretch is measured from the
+	// pipeline coming up.
 	IdleTimeoutFrames FrameFilter
 	// CancelOnIdleTimeout cancels the worker once the pipeline has gone idle;
 	// nil defaults to true. Setting it false reports the idle pipeline and
@@ -393,7 +395,10 @@ func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
 	if cfg.IdleTimeoutFrames == nil {
 		cfg.IdleTimeoutFrames = FrameTypes(
 			&frames.BotSpeakingFrame{},
+			&frames.InterimTranscriptionFrame{},
+			&frames.TranscriptionFrame{},
 			&frames.UserSpeakingFrame{},
+			&frames.UserStartedSpeakingFrame{},
 		)
 	}
 	t := &Worker{
