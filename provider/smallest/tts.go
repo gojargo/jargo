@@ -15,6 +15,14 @@ import (
 
 // NewTTS builds a Smallest AI TTS service.
 func NewTTS(cfg Config) *tts.Base {
+	return tts.New("SmallestTTS", &synthesizer{cfg: withDefaults(cfg)})
+}
+
+// withDefaults fills in what the caller left unset. The voice is resolved from
+// the model rather than fixed, since the two models serve different voice
+// catalogs and one default for both would name a voice the other does not
+// serve. A model with no default of its own leaves the voice to Smallest.
+func withDefaults(cfg Config) Config {
 	if cfg.URL == "" {
 		cfg.URL = defaultURL
 	}
@@ -22,7 +30,7 @@ func NewTTS(cfg Config) *tts.Base {
 		cfg.Model = defaultModel
 	}
 	if cfg.Voice == "" {
-		cfg.Voice = defaultVoice
+		cfg.Voice = modelDefaultVoices[cfg.Model]
 	}
 	if cfg.Language == "" {
 		cfg.Language = defaultLanguage
@@ -30,7 +38,7 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
 	}
-	return tts.New("SmallestTTS", &synthesizer{cfg: cfg})
+	return cfg
 }
 
 type synthesizer struct {
