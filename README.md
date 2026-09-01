@@ -41,12 +41,11 @@ Runtime, the remote services), so giving up Python costs little here. See the
 
 ## Features
 
-- **WebRTC**, pure Go ([Pion](https://github.com/pion)): audio in and out of the browser.
-- **Opus**, pure Go encode + decode via [pion/opus](https://github.com/pion/opus); C libopus optional with `-tags libopus`.
-- **Resampling**, pure Go via [go-resample](https://github.com/gojargo/go-resample); libsoxr optional with `-tags libsoxr`.
+- **Transports**: WebRTC ([Pion](https://github.com/pion)), WebSockets, LiveKit and local audio.
+- **Audio**, pure Go: Opus encode and decode via [pion/opus](https://github.com/pion/opus), resampling via [go-resample](https://github.com/gojargo/go-resample). C libopus and libsoxr are optional, behind `-tags libopus` and `-tags libsoxr`.
 - **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
 - **Speech-to-speech**: single-model voice agents (OpenAI Realtime, Gemini Live, AWS Nova Sonic).
-- **Turn-taking & barge-in**: Silero VAD + Smart Turn v3, local ONNX.
+- **Turn-taking & barge-in**: [Silero VAD](https://huggingface.co/onnx-community/silero-vad) + [Smart Turn v3](https://huggingface.co/pipecat-ai/smart-turn-v3), local ONNX. Both models are embedded in the binary.
 - **Telephony** (optional): inbound/outbound phone calls over Twilio Media Streams.
 - **User-idle watchdog**: re-engage or hang up when the caller goes silent.
 - **RTVI** data channel: works with existing RTVI clients.
@@ -131,18 +130,23 @@ the engine. [Writing a processor](docs/extending/custom-processor.md) covers
 extending it. The API reference is the
 [Go reference](https://pkg.go.dev/github.com/gojargo/jargo).
 
-## Dependencies
+## What you need to install
 
-The default build is **cgo-free**: `CGO_ENABLED=0 go build ./...` works with no C
-toolchain. Two native runtimes are still used, but bound through
-[purego](https://github.com/ebitengine/purego) and loaded at run time, so they need
-their shared library present at runtime and nothing at build time:
+Nothing, to build: the default build is **cgo-free**, so `CGO_ENABLED=0 go build
+./...` works with no C toolchain and no system packages.
 
-- **ONNX Runtime**: VAD + end-of-turn detection (`JARGO_ONNXRUNTIME_LIB`).
-- **RNNoise**: optional input noise reduction (`JARGO_RNNOISE_LIB`).
+To run a voice bot you need one shared library, and only for turn-taking:
 
-Opus and resampling are pure Go by default; the C libopus (`-tags libopus`) and
-libsoxr (`-tags libsoxr`) are the only cgo in the tree, and both are optional. The
+| What | When you need it | How to get it |
+| --- | --- | --- |
+| **ONNX Runtime** | VAD and end-of-turn detection. Without it the bot still runs, on STT endpointing, and loses barge-in. | `make deps-onnx`, or a [release](https://github.com/microsoft/onnxruntime/releases) |
+| **RNNoise** | Optional input noise reduction. | `make deps-rnnoise` |
+| **libopus, libsoxr** | Only for the optional `-tags libopus` / `-tags libsoxr` builds. | `make deps` (`libopus-dev libsoxr-dev pkg-config`) |
+
+Both libraries are loaded at run time through
+[purego](https://github.com/ebitengine/purego), so they are never needed at build
+time. Point jargo at them with `JARGO_ONNXRUNTIME_LIB` and `JARGO_RNNOISE_LIB`, or
+leave them on the loader's default search path. The
 [base images](docs/deploy/docker.md) bundle all of them.
 
 ## License & attribution
