@@ -17,9 +17,11 @@ import (
 // It runs on every inference, since the conversation carries its current toolset
 // each time. Only handlers registered from a toolset are ever dropped: one
 // registered by hand is the application's to remove.
-func (b *Base) SyncToolHandlers(ctx context.Context, convo *frames.LLMContext) {
-	tools := convo.Tools()
-
+//
+// It takes the toolset rather than the conversation carrying it, because a
+// service generating continuously is told about a new toolset on its own and
+// has no conversation to read it from.
+func (b *Base) SyncToolHandlers(ctx context.Context, tools []frames.Tool) {
 	advertised := make(map[string]bool, len(tools))
 	for _, t := range tools {
 		if t.Handler == nil {

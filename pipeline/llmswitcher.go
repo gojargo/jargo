@@ -15,7 +15,7 @@ type LLMMember interface {
 	processor.Processor
 	// SyncToolHandlers brings the service's tool registry into line with the
 	// toolset a conversation advertises.
-	SyncToolHandlers(ctx context.Context, convo *frames.LLMContext)
+	SyncToolHandlers(ctx context.Context, tools []frames.Tool)
 	// RegisterFunction records a handler for a tool the model may call.
 	RegisterFunction(name string, h llm.FunctionCallHandler, opts ...llm.RegisterOption)
 }
@@ -103,7 +103,7 @@ func (s *LLMSwitcher) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 	}
 	if cf, ok := f.(*frames.LLMContextFrame); ok && cf.Context != nil {
 		for _, l := range s.llms {
-			l.SyncToolHandlers(ctx, cf.Context)
+			l.SyncToolHandlers(ctx, cf.Context.Tools())
 		}
 	}
 	return nil

@@ -24,7 +24,7 @@ import (
 type Service struct {
 	// adapter converts the conversation into what a session takes from it.
 	adapter realtimeadapter.Adapter
-	*processor.Base
+	*llm.Base
 	cfg Config
 
 	mu      sync.Mutex
@@ -40,6 +40,19 @@ type Service struct {
 	// session.update. They are guarded by mu.
 	tools      frames.ToolsSchema
 	toolChoice frames.ToolChoice
+
+	// convo is the conversation this session is part of, as the pipeline last
+	// reported it. The model generates continuously and so never re-reads it,
+	// but a tool call is answered into it and its results are read back out of
+	// it here. Guarded by mu.
+	convo *frames.LLMContext
+	// pendingCalls are the tool calls the model has announced but not finished
+	// naming the arguments for, by call id. Guarded by mu.
+	pendingCalls map[string]string
+	// sentResults names the tool calls whose result has already gone to the
+	// model, so a conversation reported again does not send one twice. Guarded
+	// by mu.
+	sentResults map[string]bool
 
 	connector Connector
 }
@@ -85,11 +98,6 @@ func New(cfg Config) *Service {
 	}, cfg)
 }
 
-// LLMService marks this processor as a language-model service, which a realtime
-// service is: it generates the reply. An observer asserts for it to tell what
-// the model produced from the same kind of frame reaching it from elsewhere.
-func (s *Service) LLMService() {}
-
 // NewWithConnector builds a Realtime service that dials through conn. It is the
 // base for deployments that do not use OpenAI's own endpoint or bearer auth;
 // name is the processor label.
@@ -103,9 +111,26 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	if cfg.TranscriptionModel == "" {
 		cfg.TranscriptionModel = defaultTranscriptionModel
 	}
-	s := &Service{cfg: cfg, connector: conn}
-	s.Base = processor.New(name, s)
+	s := &Service{
+		cfg:          cfg,
+		connector:    conn,
+		pendingCalls: map[string]string{},
+		sentResults:  map[string]bool{},
+	}
+	// A model service, so it keeps the tool registry and the machinery that runs
+	// what the model calls. It generates continuously rather than being run by a
+	// conversation arriving, which is what the option says.
+	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
+	s.SetModel(cfg.Model)
 	return s
+}
+
+// Generate is never called: this service generates continuously from the audio
+// it is sent, and says so with llm.WithContinuousGeneration, so the base never
+// asks it to answer a conversation. It exists because the base identifies the
+// service it belongs to by the generator it was built with.
+func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error {
+	return errNotGenerator
 }
 
 // ProcessFrame opens the session on StartFrame, forwards input audio up to the
@@ -127,15 +152,20 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		}
 		return s.PushFrame(ctx, f, dir)
 	case *frames.LLMContextFrame:
-		// Seed the function-calling configuration from the shared context.
+		// The conversation the session is part of: the toolset it advertises, and
+		// the tool results it has gained since it was last reported.
 		if fr.Context != nil {
-			s.syncTools(fr.Context.ToolsSchema(), fr.Context.ToolChoice())
+			s.handleContext(ctx, fr.Context)
 		}
 		return s.PushFrame(ctx, f, dir)
 	case *frames.LLMSetToolsFrame:
 		// The toolset changed mid-conversation. A text LLM would pick this up on
 		// its next run; this model is generating continuously, so tell it now.
+		// The handlers the new tools carry are registered here for the same
+		// reason: the base does that when a conversation arrives, and this
+		// service does not get one per turn.
 		s.syncTools(frames.ToolsSchema{Standard: fr.Tools}, s.currentToolChoice())
+		s.SyncToolHandlers(ctx, fr.Tools)
 		return s.PushFrame(ctx, f, dir)
 	case *frames.LLMSetToolChoiceFrame:
 		s.syncTools(s.currentTools(), fr.ToolChoice)
@@ -238,6 +268,124 @@ func (s *Service) currentToolChoice() frames.ToolChoice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.toolChoice
+}
+
+// handleContext takes the conversation the pipeline reported.
+//
+// The model generates continuously and never re-reads it, so a conversation
+// arriving means two things and only two: the toolset it advertises may have
+// changed, and it may have gained the result of a tool call the model asked for.
+// Both are pushed to the session here.
+func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
+	s.mu.Lock()
+	first := s.convo == nil
+	s.convo = convo
+	s.mu.Unlock()
+
+	s.syncTools(convo.ToolsSchema(), convo.ToolChoice())
+
+	// The results already in the first conversation were produced before this
+	// session existed, so they are recorded as known rather than sent: the model
+	// never asked for them and has nothing to do with them.
+	s.processCompletedCalls(ctx, convo, !first)
+}
+
+// processCompletedCalls finds the tool results the model has not been given yet
+// and, when send is set, hands each to the session and asks for a reply.
+//
+// The results are read out of the conversation rather than taken from the
+// handler directly, because that is where a call's result lands however it was
+// produced: a handler that answered at once, one that answered later, or one the
+// application answered for.
+func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
+	sent := false
+	for _, m := range convo.Messages() {
+		for _, r := range m.ToolResults {
+			if s.resultSeen(r.ID) {
+				continue
+			}
+			// A call still running has a placeholder standing in for its result.
+			// It is not an answer, so it is neither sent nor recorded: the real
+			// one has still to come.
+			if r.Content == frames.ToolResultInProgress {
+				continue
+			}
+			if async, ok := frames.ParseAsyncToolMessage(m); ok && !s.asyncResultSendable(ctx, async) {
+				s.recordResult(r.ID)
+				continue
+			}
+			s.recordResult(r.ID)
+			if send {
+				s.sendToolResult(ctx, r.ID, r.Content)
+				sent = true
+			}
+		}
+	}
+	if sent {
+		// The model has been told what its calls returned, so it can speak the
+		// answer. It is generating from audio otherwise, and nothing else would
+		// prompt it.
+		s.createResponse(ctx)
+	}
+}
+
+// asyncResultSendable reports whether an asynchronous tool's message carries a
+// result this session can take. Only the final one does: the session has no way
+// to receive a result in parts, and the marker that opens the call says nothing
+// the model does not already know, having made the call itself.
+func (s *Service) asyncResultSendable(ctx context.Context, m frames.AsyncToolMessage) bool {
+	switch m.Kind {
+	case frames.AsyncToolFinal:
+		return true
+	case frames.AsyncToolIntermediate:
+		msg := "openai realtime takes no streamed result from an asynchronous tool"
+		slog.ErrorContext(ctx, msg, "function", m.ToolCallID)
+		s.PushError(ctx, msg, nil, false)
+		return false
+	default:
+		return false
+	}
+}
+
+// resultSeen reports whether the model has already been given this call's
+// result.
+func (s *Service) resultSeen(toolCallID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sentResults[toolCallID]
+}
+
+// recordResult marks a call's result as settled, so a conversation reported
+// again does not send it twice.
+func (s *Service) recordResult(toolCallID string) {
+	s.mu.Lock()
+	s.sentResults[toolCallID] = true
+	s.mu.Unlock()
+}
+
+// sendToolResult hands one call's result to the session.
+func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string) {
+	slog.DebugContext(ctx, "sending a tool result to the realtime session",
+		"service", s.Name(), "tool_call_id", toolCallID)
+	if err := s.send(map[string]any{
+		keyType: "conversation.item.create",
+		"item": map[string]any{
+			keyType:   "function_call_output",
+			"call_id": toolCallID,
+			"output":  result,
+		},
+	}); err != nil {
+		slog.ErrorContext(ctx, "sending a tool result failed", "service", s.Name(), "err", err)
+	}
+}
+
+// createResponse asks the model to speak. The session generates from audio on
+// its own, so this is for the turns nothing spoken prompted: the reply to a tool
+// result.
+func (s *Service) createResponse(ctx context.Context) {
+	if err := s.send(map[string]any{keyType: "response.create"}); err != nil {
+		slog.ErrorContext(ctx, "asking for a response failed", "service", s.Name(), "err", err)
+	}
 }
 
 // syncTools records the function-calling configuration and, when it differs from
@@ -346,9 +494,25 @@ type serverEvent struct {
 	Delta      string          `json:"delta"`
 	Transcript string          `json:"transcript"`
 	Response   *responseObject `json:"response"`
-	Error      struct {
+	// CallID and Arguments carry a tool call the model finished naming. The
+	// arguments arrive as the JSON text the model wrote, not as a decoded
+	// object.
+	CallID    string `json:"call_id"` //nolint:tagliatelle // OpenAI wire field
+	Arguments string `json:"arguments"`
+	// Item is the conversation item an item event is about. A tool call is
+	// announced as one of these before its arguments are finished.
+	Item  *conversationItem `json:"item"`
+	Error struct {
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// conversationItem is the subset of a conversation item we read: enough to
+// recognize a tool call and name it.
+type conversationItem struct {
+	Type   string `json:"type"`
+	Name   string `json:"name"`
+	CallID string `json:"call_id"` //nolint:tagliatelle // OpenAI wire field
 }
 
 // responseObject is the completed-response payload on a response.done event: the
@@ -466,8 +630,65 @@ func (s *Service) handleEvent(ctx context.Context, ev serverEvent) {
 		if ev.Transcript != "" {
 			_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(ev.Transcript, "", ""), processor.Downstream)
 		}
+	case "conversation.item.added":
+		s.trackToolCall(ev.Item)
+	case "response.function_call_arguments.done":
+		s.runToolCall(ctx, ev)
 	case "error":
 		s.PushError(ctx, "openai realtime error: "+ev.Error.Message, fmt.Errorf("%w: %s", errServer, ev.Error.Message), false)
+	}
+}
+
+// trackToolCall records a tool call the model has announced. The call is named
+// here and its arguments finish arriving later, so the name has to be kept until
+// they do.
+func (s *Service) trackToolCall(item *conversationItem) {
+	if item == nil || item.Type != "function_call" || item.CallID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, tracked := s.pendingCalls[item.CallID]; tracked {
+		slog.Warn("the realtime session announced a tool call it had already announced",
+			"service", s.Name(), "tool_call_id", item.CallID)
+		return
+	}
+	s.pendingCalls[item.CallID] = item.Name
+}
+
+// runToolCall runs a call whose arguments the model has finished writing.
+//
+// It runs on the arguments rather than waiting for the response to complete,
+// because a response that only calls a tool may never report itself done.
+func (s *Service) runToolCall(ctx context.Context, ev serverEvent) {
+	s.mu.Lock()
+	name, tracked := s.pendingCalls[ev.CallID]
+	// Taken out first, so a repeated event cannot run the same call twice.
+	delete(s.pendingCalls, ev.CallID)
+	convo := s.convo
+	s.mu.Unlock()
+
+	if !tracked {
+		slog.WarnContext(ctx, "the realtime session finished a tool call it never announced",
+			"service", s.Name(), "tool_call_id", ev.CallID)
+		return
+	}
+	if convo == nil {
+		// A call's result is written into the conversation and read back out of
+		// it, so without one there is nowhere for the answer to go.
+		slog.ErrorContext(ctx, "the model called a tool before any conversation reached the service",
+			"service", s.Name(), "function", name)
+		return
+	}
+
+	args := json.RawMessage(ev.Arguments)
+	if len(args) == 0 {
+		args = json.RawMessage("{}")
+	}
+	call := frames.ToolCall{ID: ev.CallID, Name: name, Args: args}
+	if err := s.RunFunctionCalls(ctx, convo, []frames.ToolCall{call}); err != nil {
+		slog.ErrorContext(ctx, "running a tool call failed", "service", s.Name(),
+			"function", name, "err", err)
 	}
 }
 
@@ -480,7 +701,7 @@ func (s *Service) reportUsage(ctx context.Context, ev serverEvent) {
 	if ev.Response == nil || ev.Response.Usage == nil || !s.UsageMetricsEnabled() {
 		return
 	}
-	_ = s.PushTokenUsage(spanCtx, s.cfg.Model, ev.Response.Usage.tokenUsage())
+	_ = s.PushTokenUsage(spanCtx, ev.Response.Usage.tokenUsage())
 }
 
 // CanGenerateMetrics reports that this service times the conversation and reports
