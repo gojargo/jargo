@@ -9,14 +9,17 @@ package wsserver_test
 // Serializer. Nothing is mocked below the socket.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -190,6 +193,11 @@ type dialOpts struct {
 	// noOutput leaves the transport output out of the pipeline, for the test
 	// that checks the input alone still ends the session.
 	noOutput bool
+	// onTransport runs as soon as the transport exists and before the pipeline
+	// does, which is where an endpoint registers its event handlers: the client
+	// is already on the line by the time the pipeline starts, so a handler
+	// registered after it has already missed the connection.
+	onTransport func(*wsserver.Transport)
 }
 
 // dial serves the transport over httptest, dials it, and runs a pipeline whose
@@ -229,6 +237,9 @@ func dialWith(
 			return
 		}
 		c.tr = tr
+		if opts.onTransport != nil {
+			opts.onTransport(tr)
+		}
 		c.tap = newTap()
 		// No RTVI: what is under test is the audio the transport writes, and an
 		// RTVI processor would put its own client messages on the same socket.
@@ -1099,5 +1110,127 @@ func TestAMessageIsTextByDefault(t *testing.T) {
 
 	if typ, _ := c.readTyped(t); typ != websocket.MessageText {
 		t.Errorf("message type = %v, want %v", typ, websocket.MessageText)
+	}
+}
+
+// TestTheClientConnectingIsReported checks the endpoint hears that the caller is
+// on the line. The socket is accepted before the pipeline is built, so an
+// endpoint that waits for this is waiting for the session to be able to carry
+// conversation rather than for the connection.
+func TestTheClientConnectingIsReported(t *testing.T) {
+	connected := make(chan struct{}, 2)
+	c := dialWith(t, &testSerializer{}, params(), dialOpts{
+		onTransport: func(tr *wsserver.Transport) {
+			events.On(tr.Events(), wsserver.EventClientConnected,
+				func(context.Context, struct{}) { connected <- struct{}{} })
+		},
+	})
+	defer c.shutdown(t)
+
+	c.ready(t)
+	select {
+	case <-connected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the client connecting was never reported")
+	}
+	if len(connected) != 0 {
+		t.Error("the client connecting was reported more than once")
+	}
+}
+
+// TestTheClientHangingUpIsReported checks the endpoint hears the caller leave.
+// It is what tells a bot the conversation is over when the other side ends it,
+// which on a call is the usual way one ends.
+func TestTheClientHangingUpIsReported(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	defer c.shutdown(t)
+
+	gone := make(chan struct{}, 1)
+	events.On(c.tr.Events(), wsserver.EventClientDisconnected,
+		func(context.Context, struct{}) { gone <- struct{}{} })
+
+	c.ready(t)
+	_ = c.client.CloseNow()
+
+	select {
+	case <-gone:
+	case <-time.After(3 * time.Second):
+		t.Error("the client hung up and nothing was reported")
+	}
+}
+
+// TestEndingTheSessionIsNotAHangUp checks the event means what it says. A
+// pipeline that ends its own session has not been hung up on, and an endpoint
+// that treated the two alike would report every ordinary shutdown as one.
+func TestEndingTheSessionIsNotAHangUp(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+
+	var hangups atomic.Int32
+	events.On(c.tr.Events(), wsserver.EventClientDisconnected,
+		func(context.Context, struct{}) { hangups.Add(1) })
+
+	c.ready(t)
+	c.shutdown(t)
+
+	if got := hangups.Load(); got != 0 {
+		t.Errorf("hang-ups reported = %d, want none: this side ended the session", got)
+	}
+}
+
+// syncBuffer collects log output written from the transport's own goroutines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// capturedLogs swaps the default logger for one writing into a buffer and
+// returns a reader for what was logged, restoring the logger when the test ends.
+func capturedLogs(t *testing.T) func() string {
+	t.Helper()
+	w := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return w.String
+}
+
+// TestAudioAfterTheClientLeavesIsNotAnError checks a caller who hangs up
+// mid-sentence is not reported as a fault. The bot goes on producing audio for
+// as long as it takes the pipeline to notice, and every chunk of it would
+// otherwise be logged as a failed write to a socket nobody expected to still be
+// open.
+func TestAudioAfterTheClientLeavesIsNotAnError(t *testing.T) {
+	logs := capturedLogs(t)
+	c := dial(t, &testSerializer{}, params())
+	defer c.shutdown(t)
+
+	c.ready(t)
+	_ = c.client.CloseNow()
+	select {
+	case <-c.tr.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("the client hung up and the session did not end")
+	}
+
+	// A whole second of speech the bot had already started on.
+	for range 100 {
+		c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, 160), 8000, 1))
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if got := logs(); strings.Contains(got, "write audio to transport") {
+		t.Errorf("writing after the client left was logged as an error:\n%s", got)
 	}
 }

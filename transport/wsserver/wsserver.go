@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -61,12 +63,25 @@ type closableSerializer interface {
 	Close()
 }
 
-// EventSessionTimeout fires when a session has run for Params.SessionTimeout
-// without ending. It carries nothing: the session it concerns is this one.
+// The events a WebSocket transport raises. Each carries nothing, because the
+// session it concerns is this one:
 //
-//	events.On(tr.Events(), wsserver.EventSessionTimeout,
+//	events.On(tr.Events(), wsserver.EventClientDisconnected,
 //	    func(ctx context.Context, _ struct{}) { … })
-const EventSessionTimeout = "on_session_timeout"
+const (
+	// EventClientConnected fires once the client is on the line and the
+	// session can carry conversation. Register for it before running the
+	// pipeline: the socket was accepted before the pipeline was built, so the
+	// client is already there and this fires as the pipeline starts.
+	EventClientConnected = "on_client_connected"
+	// EventClientDisconnected fires when the client hangs up. It does not fire
+	// for a session this side ended, which is a shutdown already under way
+	// rather than news about the client.
+	EventClientDisconnected = "on_client_disconnected"
+	// EventSessionTimeout fires when a session has run for
+	// Params.SessionTimeout without ending.
+	EventSessionTimeout = "on_session_timeout"
+)
 
 // Transport bridges a WebSocket session to a pipeline.
 type Transport struct {
@@ -155,7 +170,7 @@ func (t *Transport) Output() processor.Processor { return t.out }
 func (t *Transport) Done() <-chan struct{} { return t.sess.done }
 
 // Events is the registry of events this transport raises. See
-// EventSessionTimeout.
+// EventClientConnected, EventClientDisconnected and EventSessionTimeout.
 func (t *Transport) Events() *events.Registry { return t.in.Events() }
 
 // Session owns one WebSocket connection and serializes writes, which
@@ -242,6 +257,35 @@ func (s *Session) endRead() {
 	}
 }
 
+// closed reports that the call is over, whether the peer hung up or this side
+// finished with the session. Nothing more can be written to it.
+func (s *Session) closed() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// gone reports an error from a write that failed because the client is no
+// longer there. It is the ordinary race on a disconnect, not a fault: the peer
+// can go at any point, including between the check that it is still there and
+// the write itself.
+func gone(err error) bool {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+		return true
+	}
+	var closeErr websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return true
+	}
+	// A failed network write on a live session means the connection under it
+	// has gone, which is a reset or a broken pipe.
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
+}
+
 // signalDone reports the call as over to whoever waits on Done. It is
 // idempotent, and separate from Close because the peer hanging up ends the call
 // before the connection is closed: the pipeline is still draining, and waiting
@@ -308,6 +352,8 @@ type inputTransport struct {
 func newInput(sess *Session, ser Serializer, params Params) *inputTransport {
 	in := &inputTransport{sess: sess, ser: ser, sessionTimeout: params.SessionTimeout}
 	in.BaseInput = transport.NewBaseInput("WSInput", params.Params, in)
+	in.Events().Register(EventClientConnected, false)
+	in.Events().Register(EventClientDisconnected, false)
 	in.Events().Register(EventSessionTimeout, false)
 	return in
 }
@@ -376,6 +422,7 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	// wire format and before the first inbound message is read, so the
 	// conversation starts with the connection already accounted for.
 	in.PushClientConnected(ctx)
+	in.Events().Call(ctx, EventClientConnected, in, struct{}{})
 
 	// The read deliberately outlives the context the base hands over. That one
 	// is canceled the moment the pipeline stops streaming, and canceling a read
@@ -423,7 +470,7 @@ func (in *inputTransport) stopped() bool {
 
 func (in *inputTransport) readLoop(ctx context.Context) {
 	defer in.readWG.Done()
-	defer in.reportPeerGone()
+	defer in.reportPeerGone(ctx)
 	for {
 		data, err := in.sess.read(ctx)
 		if err != nil {
@@ -460,10 +507,12 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 // read that ends because this side stopped it is a shutdown already under way,
 // and reporting that would have the endpoint cancel the pipeline in the middle
 // of its own drain, taking the goodbye with it.
-func (in *inputTransport) reportPeerGone() {
-	if !in.stopped() {
-		in.sess.signalDone()
+func (in *inputTransport) reportPeerGone(ctx context.Context) {
+	if in.stopped() {
+		return
 	}
+	in.sess.signalDone()
+	in.Events().Call(ctx, EventClientDisconnected, in, struct{}{})
 }
 
 // outputTransport serializes outbound audio and control frames and writes them
@@ -506,6 +555,11 @@ func newOutput(sess *Session, ser Serializer, params transport.Params) *outputTr
 
 // WriteAudio serializes a PCM chunk to a provider media message and sends it.
 func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
+	if out.sess.closed() {
+		// The client is gone. The audio is not heard, but nothing failed, so it
+		// is reported as unsent rather than as an error the pipeline reports on.
+		return false, nil
+	}
 	msg, err := out.ser.Serialize(f)
 	if err != nil {
 		return false, err
@@ -515,6 +569,10 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 		return false, nil
 	}
 	if err := out.sess.write(ctx, msg); err != nil {
+		if gone(err) {
+			slog.Debug("wsserver: the client went away while audio was being sent", "err", err)
+			return false, nil
+		}
 		return false, err
 	}
 	out.writeAudioSleep(ctx)
@@ -561,6 +619,9 @@ func (out *outputTransport) writeAudioSleep(ctx context.Context) {
 // produces. The serializer decides both whether the message belongs on this wire
 // and how it is encoded, which is the same path an audio frame takes.
 func (out *outputTransport) SendMessage(ctx context.Context, f frames.OutputTransportMessage) error {
+	if out.sess.closed() {
+		return nil
+	}
 	msg, err := out.ser.Serialize(f)
 	if err != nil {
 		return err
@@ -569,7 +630,10 @@ func (out *outputTransport) SendMessage(ctx context.Context, f frames.OutputTran
 		// The serializer had nothing to send for this frame.
 		return nil
 	}
-	return out.sess.write(ctx, msg)
+	if err := out.sess.write(ctx, msg); err != nil && !gone(err) {
+		return err
+	}
+	return nil
 }
 
 // Setup takes the output's hold on the connection, so that it is not closed
@@ -637,6 +701,9 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 // sendControl serializes a control frame to the provider's own message, if the
 // serializer has one for it, and sends it.
 func (out *outputTransport) sendControl(ctx context.Context, f frames.Frame) {
+	if out.sess.closed() {
+		return
+	}
 	msg, err := out.ser.Serialize(f)
 	if err == nil && !msg.Empty() {
 		_ = out.sess.write(ctx, msg)
