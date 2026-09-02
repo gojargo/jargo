@@ -115,6 +115,7 @@ func NewLLM(cfg Config) *Service {
 	s := &Service{cfg: cfg, http: &http.Client{}}
 	s.Base = llm.New("OpenAIResponsesLLM", s)
 	s.Base.SetModel(cfg.Model)
+	warnIfReasoningUnsupported("OpenAIResponsesLLM", cfg)
 	return s
 }
 
