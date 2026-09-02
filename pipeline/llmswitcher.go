@@ -34,6 +34,15 @@ type LLMSwitcher struct {
 	llms []LLMMember
 }
 
+// LLMService marks the switcher as a language-model service.
+//
+// It is what the rest of the pipeline talks to in place of one, and frames from
+// the active service leave through the switcher's own PushFrame, so without this
+// nothing arriving from an LLM looks like it came from an LLM. The observer that
+// logs what a model was given and what it produced was silent for every pipeline
+// built on a switcher, which is every pipeline with a failover chain.
+func (s *LLMSwitcher) LLMService() {}
+
 // NewLLMSwitcher builds a switcher over llms, the first of which starts active,
 // choosing between them with the strategy newStrategy builds. A nil newStrategy
 // switches only when asked.
