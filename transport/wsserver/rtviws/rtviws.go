@@ -3,8 +3,7 @@
 // Inbound RTVI messages are handed to the pipeline's RTVI processor; a client's
 // microphone audio arrives as raw-audio messages and enters the pipeline as
 // InputAudioRawFrames (VAD, turn detection and STT then see it as a live mic).
-// Outbound RTVI server messages reach the socket through the transport's own
-// message path (an OutputTransportMessageUrgentFrame).
+// Outbound RTVI server messages are encoded here as their raw JSON.
 //
 // Bot audio is not yet streamed back over the socket, so a client on this
 // transport hears events and text, not synthesized speech. Pair it with a
@@ -51,23 +50,35 @@ var _ wsserver.Serializer = (*Serializer)(nil)
 
 // Serializer bridges RTVI JSON messages and pipeline frames over a WebSocket.
 // It holds no per-session state, so a single value may serve any session.
-type Serializer struct{}
+type Serializer struct {
+	wsserver.BaseSerializer
+}
 
 // New builds an RTVI WebSocket serializer.
-func New() *Serializer { return &Serializer{} }
-
-// CarriesRTVIMessages reports that this wire is the one RTVI messages travel on,
-// so they are not filtered out of it the way they are off a telephony call.
-func (s *Serializer) CarriesRTVIMessages() bool { return true }
+func New() *Serializer {
+	// RTVI messages are the whole point of this wire, so they are not filtered
+	// out of it the way they are off a telephony call.
+	return &Serializer{BaseSerializer: wsserver.BaseSerializer{KeepRTVIMessages: true}}
+}
 
 // Setup is a no-op: the RTVI channel carries no audio, so there is nothing to
 // configure from the StartFrame.
 func (*Serializer) Setup(processor.Setup) error { return nil }
 
-// Serialize drops outbound frames. RTVI server messages reach the socket through
-// the transport's own OutputTransportMessageUrgentFrame path rather than the
-// serializer, and bot audio is not streamed over this channel.
-func (*Serializer) Serialize(frames.Frame) ([]byte, error) { return nil, nil }
+// Serialize turns an outbound RTVI server message into its JSON. Every other
+// frame is dropped, bot audio included: it is not streamed over this channel.
+func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
+	m, ok := f.(frames.OutputTransportMessage)
+	if !ok || s.ShouldIgnoreFrame(f) {
+		return wsserver.Message{}, nil
+	}
+	msg := m.TransportMessage()
+	if !wsserver.IsRTVIMessage(msg) {
+		// Not an RTVI message; this wire carries nothing else.
+		return wsserver.Message{}, nil
+	}
+	return wsserver.TextMessage(json.Marshal(msg))
+}
 
 // Deserialize turns an inbound RTVI message into a frame: raw-audio becomes an
 // InputAudioRawFrame (played into the pipeline as mic audio), and every other

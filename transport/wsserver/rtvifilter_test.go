@@ -16,7 +16,11 @@ import (
 // on, the way a browser client's is.
 type rtviSerializer struct{ testSerializer }
 
-func (s *rtviSerializer) CarriesRTVIMessages() bool { return true }
+func newRTVISerializer() *rtviSerializer {
+	s := &rtviSerializer{}
+	s.KeepRTVIMessages = true
+	return s
+}
 
 // readRaw reads one message from the socket, reporting whether anything arrived
 // before the wait ran out.
@@ -73,7 +77,7 @@ func TestRTVIMessagesAreKeptOffATelephonyWire(t *testing.T) {
 // The wire a browser client connects over is the one the protocol is for, so a
 // serializer that says so has its messages passed through.
 func TestRTVIMessagesReachAWireThatCarriesThem(t *testing.T) {
-	c := dial(t, &rtviSerializer{}, wsserver.Params{Params: transport.Params{AudioOutEnabled: true}})
+	c := dial(t, newRTVISerializer(), wsserver.Params{Params: transport.Params{AudioOutEnabled: true}})
 	defer c.shutdown(t)
 
 	c.task.QueueFrame(frames.NewOutputTransportMessageUrgentFrame(botReady()))

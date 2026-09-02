@@ -64,7 +64,7 @@ func TestDeserializeStartLearnsEncoding(t *testing.T) {
 
 func TestSerializeAudioDefaultPCMU(t *testing.T) {
 	s := ready(t, Config{}, wireRate)
-	msg, err := s.Serialize(frames.NewTTSAudioRawFrame(silence(), wireRate, 1))
+	msg, err := serialized(s.Serialize(frames.NewTTSAudioRawFrame(silence(), wireRate, 1)))
 	if err != nil {
 		t.Fatalf("serialize audio: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSerializeSendEncodingPCMA(t *testing.T) {
 	// A non-silent sample so μ-law and A-law encodings differ.
 	pcm := make([]byte, 4)
 	pcm[0], pcm[1] = 0x00, 0x40 // 0x4000
-	msg, _ := s.Serialize(frames.NewTTSAudioRawFrame(pcm, wireRate, 1))
+	msg, _ := serialized(s.Serialize(frames.NewTTSAudioRawFrame(pcm, wireRate, 1)))
 	var out mediaOut
 	if err := json.Unmarshal(msg, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -102,7 +102,7 @@ func TestSerializeSendEncodingPCMA(t *testing.T) {
 
 func TestSerializeInterruptionClear(t *testing.T) {
 	s := ready(t, Config{}, wireRate)
-	msg, err := s.Serialize(frames.NewInterruptionFrame())
+	msg, err := serialized(s.Serialize(frames.NewInterruptionFrame()))
 	if err != nil {
 		t.Fatalf("serialize interruption: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestConvertsBetweenWireAndPipelineRates(t *testing.T) {
 
 			sent := 0
 			for range chunks {
-				msg, err := s.Serialize(frames.NewTTSAudioRawFrame(make([]byte, samples*2), pipelineRate, 1))
+				msg, err := serialized(s.Serialize(frames.NewTTSAudioRawFrame(make([]byte, samples*2), pipelineRate, 1)))
 				if err != nil {
 					t.Fatalf("serialize: %v", err)
 				}
@@ -203,3 +203,7 @@ func TestConvertsBetweenWireAndPipelineRates(t *testing.T) {
 		})
 	}
 }
+
+// serialized unwraps a serializer result to the bytes it produced. These tests
+// are about the wire format, not about how the message carrying it is framed.
+func serialized(m wsserver.Message, err error) ([]byte, error) { return m.Data, err }

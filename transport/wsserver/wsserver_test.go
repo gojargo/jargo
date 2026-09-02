@@ -44,6 +44,8 @@ type message struct {
 // testSerializer is a minimal Serializer that records what it was asked to do
 // and can be made to fail.
 type testSerializer struct {
+	wsserver.BaseSerializer
+
 	mu sync.Mutex
 
 	setupCalled  bool
@@ -67,7 +69,7 @@ func (s *testSerializer) Setup(st processor.Setup) error {
 	return s.setupErr
 }
 
-func (s *testSerializer) Serialize(f frames.Frame) ([]byte, error) {
+func (s *testSerializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 	s.mu.Lock()
 	serErr, drop := s.serializeErr, s.dropAudio
 	s.mu.Unlock()
@@ -76,10 +78,11 @@ func (s *testSerializer) Serialize(f frames.Frame) ([]byte, error) {
 	switch fr := f.(type) {
 	case frames.OutputAudioFrame:
 		if drop {
-			return nil, nil //nolint:nilnil // provider not ready for audio yet
+			// The provider is not ready for audio yet.
+			return wsserver.Message{}, nil
 		}
 		if serErr != nil {
-			return nil, serErr
+			return wsserver.Message{}, serErr
 		}
 		m = message{Kind: "audio", Payload: string(fr.AudioData().Audio)}
 	case *frames.InterruptionFrame:
@@ -88,13 +91,21 @@ func (s *testSerializer) Serialize(f frames.Frame) ([]byte, error) {
 		m = message{Kind: "end"}
 	case *frames.CancelFrame:
 		m = message{Kind: "cancel"}
+	case frames.OutputTransportMessage:
+		// The message path a provider serializer takes: drop what this wire does
+		// not carry, and send the rest as the provider's own JSON.
+		if s.ShouldIgnoreFrame(f) {
+			return wsserver.Message{}, nil
+		}
+		return wsserver.TextMessage(json.Marshal(fr.TransportMessage()))
 	default:
-		return nil, nil //nolint:nilnil // frame not sent on this transport
+		// Frame not sent on this transport.
+		return wsserver.Message{}, nil
 	}
 	s.mu.Lock()
 	s.serialized = append(s.serialized, m.Kind)
 	s.mu.Unlock()
-	return json.Marshal(m)
+	return wsserver.TextMessage(json.Marshal(m))
 }
 
 // sent reports whether a message of the given kind was produced.
@@ -171,17 +182,35 @@ type call struct {
 	stop sync.Once
 }
 
+// dialOpts are the ways the tests vary what dial builds.
+type dialOpts struct {
+	// tune adjusts the task params, for a test that needs to observe upstream
+	// traffic.
+	tune func(*pipeline.WorkerConfig)
+	// noOutput leaves the transport output out of the pipeline, for the test
+	// that checks the input alone still ends the session.
+	noOutput bool
+}
+
 // dial serves the transport over httptest, dials it, and runs a pipeline whose
 // head is the transport input and tail is its output.
 func dial(t *testing.T, ser wsserver.Serializer, params wsserver.Params) *call {
 	t.Helper()
-	return dialTuned(t, ser, params, nil)
+	return dialWith(t, ser, params, dialOpts{})
 }
 
 // dialTuned is dial with a hook to adjust the task params, for tests that need
 // to observe upstream traffic.
 func dialTuned(
 	t *testing.T, ser wsserver.Serializer, params wsserver.Params, tune func(*pipeline.WorkerConfig),
+) *call {
+	t.Helper()
+	return dialWith(t, ser, params, dialOpts{tune: tune})
+}
+
+// dialWith is dial with every knob exposed.
+func dialWith(
+	t *testing.T, ser wsserver.Serializer, params wsserver.Params, opts dialOpts,
 ) *call {
 	t.Helper()
 
@@ -211,10 +240,14 @@ func dialTuned(
 				AudioOutSampleRate: 8000,
 			},
 		}
-		if tune != nil {
-			tune(&tp)
+		if opts.tune != nil {
+			opts.tune(&tp)
 		}
-		c.task = pipeline.NewWorker(pipeline.New(tr.Input(), c.tap, tr.Output()), tp)
+		procs := []processor.Processor{tr.Input(), c.tap, tr.Output()}
+		if opts.noOutput {
+			procs = procs[:2]
+		}
+		c.task = pipeline.NewWorker(pipeline.New(procs...), tp)
 		close(ready)
 		c.done <- c.task.Run(ctx)
 	}))
@@ -895,5 +928,176 @@ func TestNoSessionTimeoutByDefault(t *testing.T) {
 	case <-fired:
 		t.Error("a session with no allowance set was reported as over one")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// goodbye returns 0.2 s of recognizable audio at 8 kHz mono, the size a closing
+// line arrives in. The bytes are printable so the test serializer can carry them
+// in a JSON string.
+func goodbye() string { return strings.Repeat("abcd", 800) }
+
+// readAudioUntilClosed collects the payload of every audio message the client
+// receives, returning what it got once the socket closes.
+func (c *call) readAudioUntilClosed(t *testing.T) string {
+	t.Helper()
+	var got strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for {
+		_, data, err := c.client.Read(ctx)
+		if err != nil {
+			return got.String()
+		}
+		var m message
+		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if m.Kind == "audio" {
+			got.WriteString(m.Payload)
+		}
+	}
+}
+
+// TestAudioQueuedBeforeTheEndFrameIsSent is the goodbye a call ends on: audio
+// queued ahead of the EndFrame, which is the shape a closing line spoken by the
+// TTS has by the time it reaches the transport.
+//
+// The EndFrame reaches the input before the output, so a transport that closed
+// the socket as soon as the input was done would cut the goodbye off with none
+// of it written. Both sides hold the connection instead, and the output's hold
+// outlives the input's.
+func TestAudioQueuedBeforeTheEndFrameIsSent(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	c.ready(t)
+
+	received := make(chan string, 1)
+	go func() { received <- c.readAudioUntilClosed(t) }()
+
+	c.task.QueueFrames([]frames.Frame{
+		frames.NewOutputAudioRawFrame([]byte(goodbye()), 8000, 1),
+		frames.NewEndFrame(),
+	})
+
+	select {
+	case got := <-received:
+		// The output pads the end of the call with silence, so the goodbye is
+		// asserted to have arrived whole and first rather than alone.
+		if !strings.HasPrefix(got, goodbye()) {
+			t.Errorf("the client received %d bytes of audio, want the %d-byte goodbye whole and first",
+				len(got), len(goodbye()))
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the socket was never closed")
+	}
+	c.shutdown(t)
+}
+
+// TestCancelingOnDoneDoesNotCutTheGoodbye is the same contract seen from the
+// endpoint. Every endpoint cancels its pipeline context when Done closes, so a
+// Done that fired the moment the input stopped reading would cancel the pipeline
+// in the middle of its own drain and lose the goodbye that way instead.
+func TestCancelingOnDoneDoesNotCutTheGoodbye(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	c.ready(t)
+
+	go func() {
+		<-c.tr.Done()
+		c.cancel()
+	}()
+
+	received := make(chan string, 1)
+	go func() { received <- c.readAudioUntilClosed(t) }()
+
+	c.task.QueueFrames([]frames.Frame{
+		frames.NewOutputAudioRawFrame([]byte(goodbye()), 8000, 1),
+		frames.NewEndFrame(),
+	})
+
+	select {
+	case got := <-received:
+		if !strings.HasPrefix(got, goodbye()) {
+			t.Errorf("the client received %d bytes of audio, want the %d-byte goodbye whole and first",
+				len(got), len(goodbye()))
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the socket was never closed")
+	}
+	c.shutdown(t)
+}
+
+// TestTheInputAloneEndsTheSession checks a pipeline built without the transport
+// output still closes the socket. The input is then the only side holding the
+// connection, so its own stop has to be what closes it: a transport that waited
+// on an output that was never in the pipeline would hold the socket open for a
+// side that is never going to let go.
+func TestTheInputAloneEndsTheSession(t *testing.T) {
+	c := dialWith(t, &testSerializer{}, params(), dialOpts{noOutput: true})
+	c.ready(t)
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		c.readAudioUntilClosed(t)
+	}()
+
+	c.task.QueueFrames([]frames.Frame{frames.NewEndFrame()})
+
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the socket was never closed")
+	}
+	c.shutdown(t)
+}
+
+// binarySerializer is a test serializer whose wire is a binary format, the way
+// one carrying protobuf is. It sends audio as its raw bytes and nothing else.
+type binarySerializer struct{ testSerializer }
+
+func (s *binarySerializer) Serialize(f frames.Frame) (wsserver.Message, error) {
+	af, ok := f.(frames.OutputAudioFrame)
+	if !ok {
+		return wsserver.Message{}, nil
+	}
+	return wsserver.BinaryMessage(af.AudioData().Audio, nil)
+}
+
+// readTyped reads one message and reports how the peer framed it.
+func (c *call) readTyped(t *testing.T) (websocket.MessageType, []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	typ, data, err := c.client.Read(ctx)
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	return typ, data
+}
+
+// TestABinaryMessageIsFramedAsBinary checks the serializer decides the framing.
+// A wire whose format is binary cannot be read at all if its messages arrive in
+// text frames, and a client is entitled to reject them.
+func TestABinaryMessageIsFramedAsBinary(t *testing.T) {
+	c := dial(t, &binarySerializer{}, params())
+	defer c.shutdown(t)
+
+	// One 10 ms chunk at 8 kHz mono 16-bit is 160 bytes.
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, 160), 8000, 1))
+
+	if typ, _ := c.readTyped(t); typ != websocket.MessageBinary {
+		t.Errorf("message type = %v, want %v", typ, websocket.MessageBinary)
+	}
+}
+
+// TestAMessageIsTextByDefault is the other half: a serializer that says nothing
+// about framing gets text, which is what every provider streaming JSON expects.
+func TestAMessageIsTextByDefault(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	defer c.shutdown(t)
+
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, 160), 8000, 1))
+
+	if typ, _ := c.readTyped(t); typ != websocket.MessageText {
+		t.Errorf("message type = %v, want %v", typ, websocket.MessageText)
 	}
 }

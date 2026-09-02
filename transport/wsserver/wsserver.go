@@ -26,7 +26,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/utils/security"
@@ -42,26 +41,16 @@ const readLimit = 1 << 20
 type Serializer interface {
 	// Setup captures pipeline configuration from the StartFrame.
 	Setup(s processor.Setup) error
-	// Serialize converts an outbound frame to a wire message, or (nil, nil) for
-	// frames it does not send. Interruption, end and cancel frames are passed in
-	// so the serializer can emit a "clear" message or hang up the call.
-	Serialize(f frames.Frame) ([]byte, error)
+	// Serialize converts an outbound frame to a wire message, or an empty
+	// Message for frames it does not send. Interruption, end and cancel frames
+	// are passed in so the serializer can emit a "clear" message or hang up the
+	// call, and so are application messages, which the serializer encodes for
+	// its own wire after asking BaseSerializer.ShouldIgnoreFrame whether they
+	// belong on it.
+	Serialize(f frames.Frame) (Message, error)
 	// Deserialize converts an inbound wire message to a frame, or (nil, nil) for
 	// messages that carry no frame (handshake, marks, stop).
 	Deserialize(data []byte) (frames.Frame, error)
-}
-
-// RTVIMessageCarrier is an optional interface a Serializer implements when the
-// wire it writes to is the one RTVI messages travel on, which is what a browser
-// client connects over.
-//
-// It is off unless a serializer says otherwise, because the usual wire here is a
-// telephony provider's media stream: RTVI means nothing to a provider expecting
-// its own control messages, and a pipeline with an RTVI processor in it would
-// otherwise write the whole protocol onto the call.
-type RTVIMessageCarrier interface {
-	// CarriesRTVIMessages reports whether RTVI messages belong on this wire.
-	CarriesRTVIMessages() bool
 }
 
 // closableSerializer is a Serializer holding resources that have to be handed
@@ -156,8 +145,13 @@ func (t *Transport) Input() processor.Processor { return t.in }
 // Output returns the output processor.
 func (t *Transport) Output() processor.Processor { return t.out }
 
-// Done is closed when the call ends (the client closes the socket or the
-// pipeline stops reading). Cancel the pipeline context on it.
+// Done is closed when the call ends: the client hung up, or the pipeline
+// finished with the session and the connection was closed. Cancel the pipeline
+// context on it.
+//
+// A shutdown the pipeline started itself reports only once the output has sent
+// the last of its audio, so canceling on this cannot cut off a goodbye spoken
+// on the way out.
 func (t *Transport) Done() <-chan struct{} { return t.sess.done }
 
 // Events is the registry of events this transport raises. See
@@ -166,11 +160,28 @@ func (t *Transport) Events() *events.Registry { return t.in.Events() }
 
 // Session owns one WebSocket connection and serializes writes, which
 // coder/websocket requires.
+//
+// Both sides of the transport write to the same connection, and an EndFrame
+// reaches the input before the output. Closing it as soon as the input was done
+// would cut off whatever the output has still to send, which on a call that ends
+// politely is the goodbye itself. So each side takes a hold while the pipeline
+// is set up and gives it back when it stops, and the connection closes once
+// neither side holds it.
 type Session struct {
 	conn      *websocket.Conn
 	writeMu   sync.Mutex
 	closeOnce sync.Once
+	doneOnce  sync.Once
 	done      chan struct{}
+
+	mu sync.Mutex
+	// holds counts the sides of the transport still using the connection.
+	holds int
+	// stopRead ends the read loop, registered by the input once it starts
+	// reading. The read is ended here, as the connection closes, rather than
+	// when the input stops: canceling a read closes the connection underneath,
+	// and the output may still have audio to send.
+	stopRead func()
 }
 
 func (s *Session) read(ctx context.Context) ([]byte, error) {
@@ -178,22 +189,79 @@ func (s *Session) read(ctx context.Context) ([]byte, error) {
 	return data, err
 }
 
-func (s *Session) write(ctx context.Context, msg []byte) error {
+func (s *Session) write(ctx context.Context, m Message) error {
+	typ := websocket.MessageText
+	if m.Binary {
+		typ = websocket.MessageBinary
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.conn.Write(ctx, websocket.MessageText, msg)
+	return s.conn.Write(ctx, typ, m.Data)
 }
 
-// Close closes the socket and signals Done. It is idempotent.
+// hold registers one side of the transport as a user of the connection. Both
+// sides take theirs while the pipeline is being set up, before any frame flows,
+// so neither can find the connection already closed by the time it starts.
+func (s *Session) hold() {
+	s.mu.Lock()
+	s.holds++
+	s.mu.Unlock()
+}
+
+// release gives back one hold and closes the connection once none remain.
+// Whichever side finishes last is the one that closes, which is what lets the
+// output send the last of its audio after the input has stopped reading. A
+// pipeline built without the output in it leaves the input holding it alone, and
+// its release closes the connection as before.
+func (s *Session) release() {
+	s.mu.Lock()
+	s.holds--
+	last := s.holds <= 0
+	s.mu.Unlock()
+	if last {
+		s.Close()
+	}
+}
+
+// setStopRead registers how the read loop is ended, which only the input knows.
+func (s *Session) setStopRead(stop func()) {
+	s.mu.Lock()
+	s.stopRead = stop
+	s.mu.Unlock()
+}
+
+// endRead ends the read loop and waits for it, so nothing is still reading the
+// connection by the time it is closed. It does nothing for a session that never
+// started reading.
+func (s *Session) endRead() {
+	s.mu.Lock()
+	stop := s.stopRead
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+// signalDone reports the call as over to whoever waits on Done. It is
+// idempotent, and separate from Close because the peer hanging up ends the call
+// before the connection is closed: the pipeline is still draining, and waiting
+// for the close would mean waiting on the very shutdown this report is meant to
+// start.
+func (s *Session) signalDone() {
+	s.doneOnce.Do(func() { close(s.done) })
+}
+
+// Close ends the read loop, closes the socket and signals Done. It is
+// idempotent.
 //
-// It is safe on the read path, where it is deferred by readLoop: a read that
-// fails or is canceled has already closed the connection underneath, so Close
-// finds it closed and returns at once. Called on a live connection it instead
-// performs the close handshake and waits up to five seconds for the peer to
-// reply, which must never happen on a frame-processing goroutine — see abort.
+// Ending the read is what actually takes the connection down: canceling a read
+// closes it underneath, so the close handshake that follows finds it closed and
+// returns at once rather than waiting five seconds for a peer that may be gone.
+// That is what keeps teardown prompt on a frame-processing goroutine.
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
-		close(s.done)
+		s.endRead()
+		s.signalDone()
 		_ = s.conn.Close(websocket.StatusNormalClosure, "")
 	})
 }
@@ -203,7 +271,8 @@ func (s *Session) Close() {
 // and the caller is a frame-processing goroutine that must not block.
 func (s *Session) abort() {
 	s.closeOnce.Do(func() {
-		close(s.done)
+		s.endRead()
+		s.signalDone()
 		_ = s.conn.CloseNow()
 	})
 }
@@ -224,10 +293,16 @@ type inputTransport struct {
 	// sessionTimeout bounds how long the session may run before the event fires.
 	sessionTimeout time.Duration
 
-	readWG     sync.WaitGroup
-	mu         sync.Mutex
-	readCancel context.CancelFunc
-	setup      processor.Setup
+	readWG sync.WaitGroup
+	mu     sync.Mutex
+	setup  processor.Setup
+	// stopping records that the pipeline has stopped, so a message that arrives
+	// after it is not delivered and the read loop ending is not mistaken for the
+	// peer hanging up.
+	stopping bool
+
+	holdOnce    sync.Once
+	releaseOnce sync.Once
 }
 
 func newInput(sess *Session, ser Serializer, params Params) *inputTransport {
@@ -266,6 +341,10 @@ func (in *inputTransport) watchSessionLength(ctx context.Context) {
 // serializer first would mean a failure swallowed the StartFrame, leaving every
 // processor downstream uninitialized and the pipeline unable to finish.
 func (in *inputTransport) Setup(ctx context.Context, s processor.Setup) error {
+	// Taken here rather than when the read loop starts, so the output cannot
+	// find the connection closed before its own StartFrame has reached it.
+	in.holdOnce.Do(in.sess.hold)
+
 	in.mu.Lock()
 	in.setup = s
 	in.mu.Unlock()
@@ -298,10 +377,17 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	// conversation starts with the connection already accounted for.
 	in.PushClientConnected(ctx)
 
-	readCtx, cancel := context.WithCancel(ctx)
-	in.mu.Lock()
-	in.readCancel = cancel
-	in.mu.Unlock()
+	// The read deliberately outlives the context the base hands over. That one
+	// is canceled the moment the pipeline stops streaming, and canceling a read
+	// closes the connection underneath, which would cut off audio the output has
+	// still to send: on a call that ends politely, the goodbye. The read is ended
+	// by the session instead, when the connection is closed.
+	readCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	in.sess.setStopRead(func() {
+		cancel()
+		in.readWG.Wait()
+	})
+
 	in.readWG.Add(1)
 	go in.readLoop(readCtx)
 	if in.sessionTimeout > 0 {
@@ -311,25 +397,42 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	return nil
 }
 
-// StopReading stops the read loop.
+// StopReading stops delivering inbound frames and gives back the input's hold on
+// the connection.
+//
+// It neither ends the read nor waits for it. The output may still have audio to
+// send, and ending the read would close the connection out from under it, so
+// that is left to whichever side releases its hold last. On a pipeline built
+// without the output in it that is this call, and the connection closes here as
+// it always did.
 func (in *inputTransport) StopReading(context.Context) error {
 	in.mu.Lock()
-	cancel := in.readCancel
+	in.stopping = true
 	in.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	in.readWG.Wait()
+	in.releaseOnce.Do(in.sess.release)
 	return nil
+}
+
+// stopped reports that the pipeline has stopped and the read loop is no longer
+// to deliver what it reads.
+func (in *inputTransport) stopped() bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.stopping
 }
 
 func (in *inputTransport) readLoop(ctx context.Context) {
 	defer in.readWG.Done()
-	defer in.sess.Close()
+	defer in.reportPeerGone()
 	for {
 		data, err := in.sess.read(ctx)
 		if err != nil {
 			return // socket closed or context canceled
+		}
+		if in.stopped() {
+			// The pipeline has stopped and is draining what it already has.
+			// Whatever arrives now belongs to a call that is already over.
+			return
 		}
 		f, err := in.ser.Deserialize(data)
 		if err != nil {
@@ -353,6 +456,16 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 	}
 }
 
+// reportPeerGone ends the call when the read stopped because the peer did. A
+// read that ends because this side stopped it is a shutdown already under way,
+// and reporting that would have the endpoint cancel the pipeline in the middle
+// of its own drain, taking the goodbye with it.
+func (in *inputTransport) reportPeerGone() {
+	if !in.stopped() {
+		in.sess.signalDone()
+	}
+}
+
 // outputTransport serializes outbound audio and control frames and writes them
 // to the socket.
 type outputTransport struct {
@@ -371,6 +484,9 @@ type outputTransport struct {
 	// nextSend is when the next chunk is due. The zero time means send now and
 	// start the clock from there.
 	nextSend time.Time
+
+	holdOnce    sync.Once
+	releaseOnce sync.Once
 }
 
 // chunkDuration is how long one chunk of 16-bit PCM takes to play.
@@ -394,7 +510,7 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 	if err != nil {
 		return false, err
 	}
-	if msg == nil {
+	if msg.Empty() {
 		// The serializer had nothing to send for this frame.
 		return false, nil
 	}
@@ -441,36 +557,36 @@ func (out *outputTransport) writeAudioSleep(ctx context.Context) {
 	out.paceMu.Unlock()
 }
 
-// SendMessage sends an already-encoded application message.
-func (out *outputTransport) SendMessage(ctx context.Context, data []byte) error {
-	return out.sess.write(ctx, data)
+// SendMessage hands the message frame to the serializer and writes what it
+// produces. The serializer decides both whether the message belongs on this wire
+// and how it is encoded, which is the same path an audio frame takes.
+func (out *outputTransport) SendMessage(ctx context.Context, f frames.OutputTransportMessage) error {
+	msg, err := out.ser.Serialize(f)
+	if err != nil {
+		return err
+	}
+	if msg.Empty() {
+		// The serializer had nothing to send for this frame.
+		return nil
+	}
+	return out.sess.write(ctx, msg)
 }
 
-// IgnoresMessage refuses an RTVI message unless the serializer says this wire
-// carries them. See RTVIMessageCarrier.
-func (out *outputTransport) IgnoresMessage(message any) bool {
-	if c, ok := out.ser.(RTVIMessageCarrier); ok && c.CarriesRTVIMessages() {
-		return false
-	}
-	return isRTVIMessage(message)
+// Setup takes the output's hold on the connection, so that it is not closed
+// under the output while there is still audio to send. See Session.
+func (out *outputTransport) Setup(ctx context.Context, s processor.Setup) error {
+	out.holdOnce.Do(out.sess.hold)
+	return out.BaseOutput.Setup(ctx, s)
 }
 
-// isRTVIMessage reports whether the message is one of the RTVI protocol's,
-// which every one of them says of itself in its label.
-func isRTVIMessage(message any) bool {
-	switch m := message.(type) {
-	case rtvi.Message:
-		return m.Label == rtvi.MessageLabel
-	case *rtvi.Message:
-		return m != nil && m.Label == rtvi.MessageLabel
-	case map[string]any:
-		// Built by hand rather than by the rtvi package, which a caller speaking
-		// the protocol itself would produce.
-		label, _ := m["label"].(string)
-		return label == rtvi.MessageLabel
-	default:
-		return false
-	}
+// Cleanup gives back the output's hold for a teardown that never delivered an
+// end or cancel frame. It is the backstop: the ordinary path releases as that
+// frame arrives, so the connection closes once the last of the audio is out
+// rather than waiting for the pipeline to be torn down.
+func (out *outputTransport) Cleanup(ctx context.Context) error {
+	err := out.BaseOutput.Cleanup(ctx)
+	out.releaseOnce.Do(out.sess.release)
+	return err
 }
 
 // ProcessFrame adds the control-frame handling the base output does not: an
@@ -510,6 +626,10 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		if c, ok := out.ser.(closableSerializer); ok {
 			c.Close()
 		}
+		// The base drained the outgoing audio before this ran, so everything the
+		// call had to say has been written. Give the hold back, which closes the
+		// connection once the input has given up its own.
+		out.releaseOnce.Do(out.sess.release)
 	}
 	return nil
 }
@@ -518,7 +638,7 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 // serializer has one for it, and sends it.
 func (out *outputTransport) sendControl(ctx context.Context, f frames.Frame) {
 	msg, err := out.ser.Serialize(f)
-	if err == nil && msg != nil {
+	if err == nil && !msg.Empty() {
 		_ = out.sess.write(ctx, msg)
 	}
 }

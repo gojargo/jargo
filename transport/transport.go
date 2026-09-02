@@ -185,9 +185,12 @@ type OutputDriver interface {
 	// downstream as though it had been. An error is a genuine failure, which
 	// the base logs; audio that errored counts as unsent either way.
 	WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (sent bool, err error)
-	// SendMessage sends an application message to the client (for example over
-	// a data channel).
-	SendMessage(ctx context.Context, data []byte) error
+	// SendMessage sends the frame's application message to the client (for
+	// example over a data channel). The transport encodes the payload, because
+	// only it knows what its wire carries: one whose format is supplied as a
+	// serializer hands the frame over and lets the serializer decide, and one
+	// that speaks JSON to its client encodes it here.
+	SendMessage(ctx context.Context, f frames.OutputTransportMessage) error
 	// SupportsNativeDTMF reports whether the transport signals a keypress over
 	// its own protocol. A transport that does overrides this and
 	// WriteDTMFNative; one that does not has its keys sounded as audio, which

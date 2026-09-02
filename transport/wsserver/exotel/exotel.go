@@ -36,6 +36,8 @@ type Config struct {
 // Serializer implements wsserver.Serializer for Exotel. The stream SID is
 // learned from the inbound "start" message.
 type Serializer struct {
+	wsserver.BaseSerializer
+
 	codec *wsserver.Codec
 
 	mu        sync.Mutex
@@ -58,7 +60,7 @@ func (s *Serializer) Setup(st processor.Setup) error { return s.codec.Setup(st) 
 func (s *Serializer) Close() { s.codec.Close() }
 
 // Serialize converts an outbound frame to an Exotel message.
-func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
+func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 	switch fr := f.(type) {
 	// Every kind of output audio is sent the same way, so match the family
 	// rather than each concrete frame.
@@ -66,8 +68,16 @@ func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
 		return s.media(fr.AudioData())
 	case *frames.InterruptionFrame:
 		return s.clear()
+	case frames.OutputTransportMessage:
+		// An application message the pipeline addressed to the client. RTVI is
+		// dropped here: it is the protocol a browser client speaks, and a
+		// provider expecting its own control messages has no use for it.
+		if s.ShouldIgnoreFrame(f) {
+			return wsserver.Message{}, nil
+		}
+		return wsserver.TextMessage(json.Marshal(fr.TransportMessage()))
 	default:
-		return nil, nil //nolint:nilnil // frame not sent to Exotel
+		return wsserver.Message{}, nil
 	}
 }
 
@@ -104,31 +114,31 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 	}
 }
 
-func (s *Serializer) media(a *frames.AudioRawData) ([]byte, error) {
+func (s *Serializer) media(a *frames.AudioRawData) (wsserver.Message, error) {
 	s.mu.Lock()
 	sid := s.streamSID
 	s.mu.Unlock()
 	if sid == "" {
-		return nil, nil //nolint:nilnil // stream not started yet; drop until "start" arrives
+		return wsserver.Message{}, nil
 	}
 	pcm := s.codec.Encode(a.Audio, a.SampleRate, wsserver.EncodingLinear)
 	if len(pcm) == 0 {
 		// The conversion has nothing to emit yet; no audio, no message.
-		return nil, nil //nolint:nilnil // no audio to send
+		return wsserver.Message{}, nil
 	}
 	out := mediaOut{Event: eventMedia, StreamSID: sid}
 	out.Media.Payload = base64.StdEncoding.EncodeToString(pcm)
-	return json.Marshal(out)
+	return wsserver.TextMessage(json.Marshal(out))
 }
 
-func (s *Serializer) clear() ([]byte, error) {
+func (s *Serializer) clear() (wsserver.Message, error) {
 	s.mu.Lock()
 	sid := s.streamSID
 	s.mu.Unlock()
 	if sid == "" {
-		return nil, nil //nolint:nilnil // stream not started yet; nothing to clear
+		return wsserver.Message{}, nil
 	}
-	return json.Marshal(clearOut{Event: "clear", StreamSID: sid})
+	return wsserver.TextMessage(json.Marshal(clearOut{Event: "clear", StreamSID: sid}))
 }
 
 // The JSON field names below are Exotel's wire protocol (camelCase for the

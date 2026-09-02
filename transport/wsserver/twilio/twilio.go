@@ -139,6 +139,8 @@ func (c Config) callResourceURL(callSID string) string {
 // are learned from the inbound "start" message, so no pre-handshake read is
 // needed.
 type Serializer struct {
+	wsserver.BaseSerializer
+
 	cfg   Config
 	http  *http.Client
 	codec *wsserver.Codec
@@ -171,7 +173,7 @@ func (s *Serializer) Setup(st processor.Setup) error {
 func (s *Serializer) Close() { s.codec.Close() }
 
 // Serialize converts an outbound frame to a Twilio message.
-func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
+func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 	switch fr := f.(type) {
 	// Every kind of output audio is sent the same way, so match the family
 	// rather than each concrete frame.
@@ -181,9 +183,17 @@ func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
 		return s.clear()
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.hangup()
-		return nil, nil //nolint:nilnil // hang-up is a side effect; no wire message
+		return wsserver.Message{}, nil
+	case frames.OutputTransportMessage:
+		// An application message the pipeline addressed to the client. RTVI is
+		// dropped here: it is the protocol a browser client speaks, and a
+		// provider expecting its own control messages has no use for it.
+		if s.ShouldIgnoreFrame(f) {
+			return wsserver.Message{}, nil
+		}
+		return wsserver.TextMessage(json.Marshal(fr.TransportMessage()))
 	default:
-		return nil, nil //nolint:nilnil // frame not sent to Twilio
+		return wsserver.Message{}, nil
 	}
 }
 
@@ -221,32 +231,32 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 	}
 }
 
-func (s *Serializer) media(a *frames.AudioRawData) ([]byte, error) {
+func (s *Serializer) media(a *frames.AudioRawData) (wsserver.Message, error) {
 	s.mu.Lock()
 	sid := s.streamSID
 	s.mu.Unlock()
 	if sid == "" {
-		return nil, nil //nolint:nilnil // stream not started yet; drop until "start" arrives
+		return wsserver.Message{}, nil
 	}
 	ulaw := s.codec.Encode(a.Audio, a.SampleRate, wsserver.EncodingULaw)
 	if len(ulaw) == 0 {
 		// The conversion has nothing to emit yet; no audio, no message.
-		return nil, nil //nolint:nilnil // no audio to send
+		return wsserver.Message{}, nil
 	}
 	payload := base64.StdEncoding.EncodeToString(ulaw)
 	out := mediaOut{Event: "media", StreamSID: sid}
 	out.Media.Payload = payload
-	return json.Marshal(out)
+	return wsserver.TextMessage(json.Marshal(out))
 }
 
-func (s *Serializer) clear() ([]byte, error) {
+func (s *Serializer) clear() (wsserver.Message, error) {
 	s.mu.Lock()
 	sid := s.streamSID
 	s.mu.Unlock()
 	if sid == "" {
-		return nil, nil //nolint:nilnil // stream not started yet; nothing to clear
+		return wsserver.Message{}, nil
 	}
-	return json.Marshal(clearOut{Event: "clear", StreamSID: sid})
+	return wsserver.TextMessage(json.Marshal(clearOut{Event: "clear", StreamSID: sid}))
 }
 
 func (s *Serializer) hangup() {

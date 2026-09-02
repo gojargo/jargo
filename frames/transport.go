@@ -57,8 +57,8 @@ func NewInputTransportStartAudioStreamingFrame() *InputTransportStartAudioStream
 }
 
 // OutputTransportMessageFrame carries an application message to send to the
-// client over the transport — for example an RTVI message onto a WebRTC data
-// channel. Message is serialized by the output transport. It is a data frame, so
+// client over the transport, an RTVI message onto a WebRTC data channel say.
+// Message is encoded by the output transport. It is a data frame, so
 // it is delivered in order with the surrounding audio: use it for a message that
 // must land in step with what the bot is saying. For a message that must go out
 // immediately, ahead of any queued audio, use OutputTransportMessageUrgentFrame.
@@ -104,9 +104,30 @@ func (f *OutputTransportMessageUrgentFrame) String() string {
 	return fmt.Sprintf("%s(message: %v)", f.Name(), f.Message)
 }
 
+// OutputTransportMessage is implemented by every frame carrying an application
+// message bound for an output transport, ordered or urgent. A transport takes
+// one rather than a bare payload, so a wire whose format is supplied as a
+// serializer can hand the frame over and let the serializer decide both whether
+// the message belongs on that wire and how it is encoded. Assert this interface
+// rather than a concrete type, so a message keeps being sent whichever kind
+// carried it.
+type OutputTransportMessage interface {
+	Frame
+	// TransportMessage is the message payload to send.
+	TransportMessage() any
+}
+
+// TransportMessage returns the message payload to send.
+func (f *OutputTransportMessageFrame) TransportMessage() any { return f.Message }
+
+// TransportMessage returns the message payload to send.
+func (f *OutputTransportMessageUrgentFrame) TransportMessage() any { return f.Message }
+
 // Compile-time interface checks.
 var (
-	_ SystemFrame = (*InputTransportMessageFrame)(nil)
-	_ DataFrame   = (*OutputTransportMessageFrame)(nil)
-	_ SystemFrame = (*OutputTransportMessageUrgentFrame)(nil)
+	_ SystemFrame            = (*InputTransportMessageFrame)(nil)
+	_ DataFrame              = (*OutputTransportMessageFrame)(nil)
+	_ SystemFrame            = (*OutputTransportMessageUrgentFrame)(nil)
+	_ OutputTransportMessage = (*OutputTransportMessageFrame)(nil)
+	_ OutputTransportMessage = (*OutputTransportMessageUrgentFrame)(nil)
 )

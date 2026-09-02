@@ -8,6 +8,8 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/transport/wsserver"
 )
 
 func pcm() []byte {
@@ -61,7 +63,7 @@ func TestSerializeAudioAfterStart(t *testing.T) {
 	if _, err := s.Deserialize([]byte(start)); err != nil {
 		t.Fatalf("deserialize start: %v", err)
 	}
-	msg, err := s.Serialize(frames.NewTTSAudioRawFrame(pcm(), wireRate, 1))
+	msg, err := serialized(s.Serialize(frames.NewTTSAudioRawFrame(pcm(), wireRate, 1)))
 	if err != nil {
 		t.Fatalf("serialize audio: %v", err)
 	}
@@ -84,7 +86,7 @@ func TestSerializeAudioAfterStart(t *testing.T) {
 
 func TestSerializeAudioDroppedBeforeStart(t *testing.T) {
 	s := ready(t, Config{}, wireRate)
-	msg, err := s.Serialize(frames.NewTTSAudioRawFrame(pcm(), wireRate, 1))
+	msg, err := serialized(s.Serialize(frames.NewTTSAudioRawFrame(pcm(), wireRate, 1)))
 	if err != nil {
 		t.Fatalf("serialize audio: %v", err)
 	}
@@ -98,7 +100,7 @@ func TestSerializeInterruption(t *testing.T) {
 	if _, err := s.Deserialize([]byte(`{"event":"start","start":{"stream_sid":"stream-1"}}`)); err != nil {
 		t.Fatalf("deserialize start: %v", err)
 	}
-	msg, err := s.Serialize(frames.NewInterruptionFrame())
+	msg, err := serialized(s.Serialize(frames.NewInterruptionFrame()))
 	if err != nil {
 		t.Fatalf("serialize interruption: %v", err)
 	}
@@ -147,7 +149,7 @@ func TestConvertsBetweenWireAndPipelineRates(t *testing.T) {
 
 	sent := 0
 	for range chunks {
-		msg, err := s.Serialize(frames.NewTTSAudioRawFrame(make([]byte, samples*2), pipelineRate, 1))
+		msg, err := serialized(s.Serialize(frames.NewTTSAudioRawFrame(make([]byte, samples*2), pipelineRate, 1)))
 		if err != nil {
 			t.Fatalf("serialize: %v", err)
 		}
@@ -191,3 +193,34 @@ func TestConvertsBetweenWireAndPipelineRates(t *testing.T) {
 		t.Errorf("inbound produced %d samples, want about %d", got, want)
 	}
 }
+
+// TestSerializeApplicationMessage covers the message path: a message the
+// pipeline addresses to the client is sent as the provider's own JSON, and an
+// RTVI message is not. RTVI is the protocol a browser client speaks, and Exotel
+// expects its own control messages on this socket.
+func TestSerializeApplicationMessage(t *testing.T) {
+	s := ready(t, Config{}, wireRate)
+
+	out, err := serialized(s.Serialize(frames.NewOutputTransportMessageUrgentFrame(
+		map[string]any{"event": "provider-control"})))
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("Serialize produced %q: %v", out, err)
+	}
+	if got["event"] != "provider-control" {
+		t.Errorf("Serialize = %q, want the provider's own message", out)
+	}
+
+	rtviMsg := rtvi.Message{Label: rtvi.MessageLabel, Type: rtvi.TypeBotReady}
+	out, err = serialized(s.Serialize(frames.NewOutputTransportMessageUrgentFrame(rtviMsg)))
+	if err != nil || out != nil {
+		t.Errorf("Serialize(RTVI message) = %q, %v; want nil, nil", out, err)
+	}
+}
+
+// serialized unwraps a serializer result to the bytes it produced. These tests
+// are about the wire format, not about how the message carrying it is framed.
+func serialized(m wsserver.Message, err error) ([]byte, error) { return m.Data, err }
