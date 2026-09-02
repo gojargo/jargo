@@ -50,6 +50,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Idle detection counts provider turn frames.** A pipeline whose turns come
   from the provider pushes no `UserSpeakingFrame`, so a talking user looked idle
   and was cancelled. Transcriptions and `UserStartedSpeakingFrame` now count too.
+- **The pure-Go Opus encoder tracks upstream `github.com/pion/opus` again.** The
+  module carried a `replace` onto a fork for as long as the SILK encoder has
+  existed: upstream packed the two SILK `PredCoef_Q12` halves at the analysis
+  order while the quantizer read them back at the prediction order, so the
+  quantizer read padding as the second half, and rate control saturated at
+  roughly four times whatever bitrate was asked for with the output clipped at
+  full scale. That is fixed upstream, so the `replace` is gone and the
+  dependency is a plain require again, now also carrying the SILK PLC, output
+  transactionality and VAD-gated pitch work that landed alongside it. Measured
+  through jargo's own encode/decode path, upstream matches the fork it replaces.
 
 ### Fixed
 
