@@ -47,8 +47,7 @@ default search path.
 
 Without the ONNX Runtime the voice bot **still runs**: it falls back to STT
 endpointing for turn-taking and loses barge-in. Everything else in the list below
-is optional. See [Installation](installation.md) for RNNoise and the `libsoxr` /
-`libopus` build tags.
+is optional. See [Installation](installation.md) for RNNoise.
 
 ### Echo bot, no keys
 

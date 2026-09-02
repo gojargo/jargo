@@ -1,7 +1,6 @@
 // Throwaway: exercise jargo's audio/opus Encoder end-to-end, the way the
 // transport does, feeding 20 ms frames of 48 kHz mono S16LE PCM and decoding
-// the packets back. The default build runs the pure-Go SILK encoder; build
-// with `-tags libopus` for the C library instead. It resamples a clip to
+// the packets back, through the pure-Go SILK encoder. It resamples a clip to
 // 48 kHz with the pure-Go resampler, encodes/decodes frame by frame, and
 // writes jargo_in.wav / jargo_out.wav plus a bitrate/SNR summary.
 //

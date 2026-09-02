@@ -50,14 +50,14 @@ processor learns them. Set them on the `pipeline.Params`, not by mutating frames
 
 ## Codecs
 
-| Package | Default | Optional |
-|---|---|---|
-| `audio/opus` | Pure-Go decode + SILK encode | C libopus with `-tags libopus` (better speech quality) |
-| `audio/resample` | Pure-Go [go-resample](https://github.com/gojargo/go-resample) | libsoxr with `-tags libsoxr` (highest quality) |
-| `audio/g711` | µ-law / A-law for telephony | n/a |
+| Package | Implementation |
+|---|---|
+| `audio/opus` | Pure-Go decode + SILK encode |
+| `audio/resample` | Pure-Go [go-resample](https://github.com/gojargo/go-resample) |
+| `audio/g711` | µ-law / A-law for telephony |
 
-The pure-Go defaults are what keep `CGO_ENABLED=0` working. Reach for the C
-backends only when you have measured that quality matters for your use case.
+All three are pure Go, which is what keeps `CGO_ENABLED=0` working. There is no
+build tag that swaps in a C backend.
 
 Resampling comes in two shapes, and picking the wrong one costs you the end of
 the audio. A `resample.Resampler` is for a stream: it carries filter state

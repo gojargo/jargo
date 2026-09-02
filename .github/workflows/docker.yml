@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - image: jargo-build # build base: Go toolchain + cgo dev deps
+          - image: jargo-build # build base: the pinned Go toolchain
             file: docker/build.Dockerfile
           - image: jargo # runtime base: distroless + native runtime libs
             file: docker/runtime.Dockerfile

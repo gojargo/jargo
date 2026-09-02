@@ -4,8 +4,7 @@
 #
 # A distroless image carrying the native shared libraries a compiled bot loads
 # at run time: the ONNX Runtime (VAD + turn detection) and RNNoise (the optional
-# denoiser), both dlopen'd via purego, plus libsoxr and libopus for the
-# -tags libsoxr / -tags libopus cgo builds. It sits on distroless/cc (glibc +
+# denoiser), both dlopen'd via purego. It sits on distroless/cc (glibc +
 # libstdc++, which the C++ ONNX Runtime needs) with CA certificates. There is no
 # shell and no package manager, so the attack surface is small, and the default
 # user is non-root.
@@ -22,7 +21,7 @@ ARG ORT_VERSION=1.26.0
 ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl wget libsoxr0 libopus0 \
+        ca-certificates curl wget \
         git build-essential autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
@@ -45,13 +44,9 @@ RUN set -eux; \
 # ---- distroless runtime ----
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:b0ae8e989418b458e0f25489bc3be523718938a2b70864cc0f6a00af1ddbd985
 
-# The linked libs go in the default multiarch search path so the dynamic linker
-# resolves them — distroless has no ldconfig. libsoxr pulls in libgomp (OpenMP),
-# which distroless/cc does not ship, so copy it too. (amd64 only for now; an
-# arm64 build would copy from /usr/lib/aarch64-linux-gnu instead.)
-COPY --from=libs /usr/lib/x86_64-linux-gnu/libsoxr.so.0* /usr/lib/x86_64-linux-gnu/
-COPY --from=libs /usr/lib/x86_64-linux-gnu/libgomp.so.1* /usr/lib/x86_64-linux-gnu/
-COPY --from=libs /usr/lib/x86_64-linux-gnu/libopus.so.0* /usr/lib/x86_64-linux-gnu/
+# Both libraries below are loaded by the explicit paths in the env vars, so they
+# need no ldconfig (distroless has none). The ONNX Runtime needs only libstdc++
+# and libgcc_s, which distroless/cc already ships.
 
 # The ONNX Runtime is loaded at run time by the explicit path in this env var.
 COPY --from=libs /usr/local/lib/libonnxruntime.so /usr/local/lib/libonnxruntime.so

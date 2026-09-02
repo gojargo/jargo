@@ -200,10 +200,8 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 	if out.enc == nil {
 		p := out.Params()
 		enc, err := opus.NewEncoder(opus.EncoderConfig{
-			Channels:           ch,
-			Bitrate:            p.AudioOutBitrate,
-			InbandFEC:          p.AudioOutFEC,
-			ExpectedPacketLoss: p.AudioOutExpectedPacketLoss,
+			Channels: ch,
+			Bitrate:  p.AudioOutBitrate,
 		})
 		if err != nil {
 			return false, err

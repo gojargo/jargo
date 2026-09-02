@@ -5,16 +5,15 @@ weight: 1
 
 # Deploy with Docker
 
-The default build is cgo-free, but a bot still uses native libraries at run
-time: the ONNX Runtime and RNNoise are loaded through purego, and the optional
-`-tags libsoxr` / `-tags libopus` builds link C libraries. Rather than a single
-image, two **base images** take the native-dependency pain out of containerising
-a bot:
+The build is cgo-free, but a bot still uses native libraries at run time: the
+ONNX Runtime and RNNoise are loaded through purego. Rather than a single image,
+two **base images** take the native-dependency pain out of containerising a
+bot:
 
 | Image | Purpose |
 | --- | --- |
-| `gojargo/jargo-build` | **Build base**: the Go toolchain plus the cgo dev libraries for the optional `-tags libsoxr` / `-tags libopus` builds (libsoxr, libopus, pkg-config). Compile your bot here. |
-| `gojargo/jargo` | **Runtime base**: a [distroless](https://github.com/GoogleContainerTools/distroless) image (no shell, no package manager, non-root) carrying the native runtime libraries: the ONNX Runtime and RNNoise (loaded via purego), plus libsoxr, libgomp and libopus for the `-tags` builds. Ship your bot here. |
+| `gojargo/jargo-build` | **Build base**: the Go toolchain at the version jargo is tested with, cgo off. Compile your bot here. |
+| `gojargo/jargo` | **Runtime base**: a [distroless](https://github.com/GoogleContainerTools/distroless) image (no shell, no package manager, non-root) carrying the native runtime libraries the bot loads via purego: the ONNX Runtime and RNNoise. Ship your bot here. |
 
 Both live on [Docker Hub](https://hub.docker.com/u/gojargo). amd64 only for now.
 
@@ -29,8 +28,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# -tags libopus links the C Opus encoder (optional; default is pure-Go SILK).
-RUN go build -tags libopus -ldflags="-s -w" -o /out/bot ./path/to/your/bot
+RUN go build -ldflags="-s -w" -o /out/bot ./path/to/your/bot
 
 FROM gojargo/jargo
 COPY --from=build /out/bot /usr/local/bin/bot
@@ -61,7 +59,7 @@ FROM gojargo/jargo-build AS build
 WORKDIR /src
 COPY . .
 ARG EXAMPLE=voicebot
-RUN go build -tags libopus -ldflags="-s -w" -o /out/bot ./examples/${EXAMPLE}
+RUN go build -ldflags="-s -w" -o /out/bot ./examples/${EXAMPLE}
 
 FROM gojargo/jargo
 COPY --from=build /out/bot /usr/local/bin/bot

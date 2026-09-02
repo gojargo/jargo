@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -27,7 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -54,14 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Both cgo tags are compiled, so both sets of dev headers are needed.
-      - run: sudo apt-get update && sudo apt-get install -y libsoxr-dev libopus-dev
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # Every supported combination: cgo-free, cgo without tags, libsoxr,
-      # libopus, and both together. A tag that stops compiling is caught here
-      # rather than by whoever next opts into it.
+      # The tree has no cgo, so this guards the cgo-free promise: a stray C
+      # dependency would break CGO_ENABLED=0 and is caught here.
       - run: make build-matrix
 
   # The *.pb.go clients are checked in, so nothing else would notice a .proto
