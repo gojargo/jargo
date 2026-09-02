@@ -22,7 +22,7 @@ require (
 	github.com/livekit/server-sdk-go/v2 v2.18.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/neurosnap/sentences v1.1.2
-	github.com/pion/opus v0.1.1-0.20260706164138-4d863e517a7a
+	github.com/pion/opus v0.1.1-0.20260831205537-1e54f79ccbe1
 	github.com/pion/webrtc/v4 v4.2.18
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -158,5 +158,3 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
 )
-
-replace github.com/pion/opus => github.com/gojargo/opus v0.1.1-0.20260710133549-77e753c0dd49

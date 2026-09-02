@@ -1,11 +1,11 @@
 // Throwaway: exercise jargo's audio/opus Encoder end-to-end, the way the
-// transport does — feeding 20 ms frames of 48 kHz mono S16LE PCM and decoding
-// the packets back. Build with `-tags silk` to run the pure-Go SILK encoder
-// (our pion/opus branch), or without tags for the CELT default. It resamples a
-// clip to 48 kHz with the pure-Go resampler, encodes/decodes frame by frame,
-// and writes jargo_in.wav / jargo_out.wav plus a bitrate/SNR summary.
+// transport does, feeding 20 ms frames of 48 kHz mono S16LE PCM and decoding
+// the packets back. The default build runs the pure-Go SILK encoder; build
+// with `-tags libopus` for the C library instead. It resamples a clip to
+// 48 kHz with the pure-Go resampler, encodes/decodes frame by frame, and
+// writes jargo_in.wav / jargo_out.wav plus a bitrate/SNR summary.
 //
-//	go run -tags silk ./examples/silktest [input.wav]   # needs go.work -> our branch
+//	go run ./examples/silktest [input.wav]
 package main
 
 import (
