@@ -6,9 +6,8 @@ import "time"
 // The zero value is the highest quality, which is what a pipeline gets unless it
 // asks for something cheaper.
 //
-// The names are the five standard SoX Resampler recipes. Both builds understand
-// all five: the libsoxr build passes them straight through, and the pure-Go
-// build maps them onto the converters its library offers (see converterFor).
+// The names are the five standard SoX Resampler recipes, mapped onto the
+// converters the pure-Go library offers (see converterFor).
 type Quality int
 
 const (

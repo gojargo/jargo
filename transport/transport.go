@@ -50,14 +50,6 @@ type Params struct {
 	// transport whose stream has to keep flowing leaves it on; one that would
 	// rather wait for audio turns it off.
 	AudioOutAutoSilence *bool
-	// AudioOutFEC enables Opus inband forward error correction on the outgoing
-	// stream, letting receivers rebuild dropped packets. Recommended whenever
-	// clients may be on lossy links.
-	AudioOutFEC bool
-	// AudioOutExpectedPacketLoss is the loss percentage (0-100) the encoder
-	// sizes its FEC redundancy for. Ignored unless AudioOutFEC is set; 0 leaves
-	// FEC enabled but carrying no redundancy, so set it alongside.
-	AudioOutExpectedPacketLoss int
 	// AudioOut10msChunks is how many 10 ms chunks of audio are written at a
 	// time; 0 writes four, so audio is handed to the transport 40 ms at a time.
 	// A transport that frames the audio itself (Opus at 20 ms, say) re-splits

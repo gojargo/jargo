@@ -41,7 +41,7 @@ Runtime, the remote services), so giving up Python costs little here. See the
 ## Features
 
 - **Transports**: WebRTC ([Pion](https://github.com/pion)), WebSockets, LiveKit and local audio.
-- **Audio**, pure Go: Opus encode and decode via [pion/opus](https://github.com/pion/opus), resampling via [go-resample](https://github.com/gojargo/go-resample). C libopus and libsoxr are optional, behind `-tags libopus` and `-tags libsoxr`.
+- **Audio**, pure Go: Opus encode and decode via [pion/opus](https://github.com/pion/opus), resampling via [go-resample](https://github.com/gojargo/go-resample). No cgo, and no build tag that adds any.
 - **Streaming voice pipeline**: STT → LLM → TTS, with prompt caching.
 - **Speech-to-speech**: single-model voice agents (OpenAI Realtime, Gemini Live, AWS Nova Sonic).
 - **Turn-taking & barge-in**: [Silero VAD](https://huggingface.co/onnx-community/silero-vad) + [Smart Turn v3](https://huggingface.co/pipecat-ai/smart-turn-v3), local ONNX. Both models are embedded in the binary.
@@ -140,7 +140,6 @@ To run a voice bot you need one shared library, and only for turn-taking:
 | --- | --- | --- |
 | **ONNX Runtime** | VAD and end-of-turn detection. Without it the bot still runs, on STT endpointing, and loses barge-in. | `make deps-onnx`, or a [release](https://github.com/microsoft/onnxruntime/releases) |
 | **RNNoise** | Optional input noise reduction. | `make deps-rnnoise` |
-| **libopus, libsoxr** | Only for the optional `-tags libopus` / `-tags libsoxr` builds. | `make deps` (`libopus-dev libsoxr-dev pkg-config`) |
 
 Both libraries are loaded at run time through
 [purego](https://github.com/ebitengine/purego), so they are never needed at build

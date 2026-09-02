@@ -1,5 +1,3 @@
-//go:build !libopus
-
 package opus
 
 import (
@@ -22,10 +20,9 @@ const silkInternalRate = 16000
 const silkFrame = silkInternalRate / 1000 * 20 // 320
 
 // Encoder encodes 48 kHz S16LE PCM into Opus packets using the pure-Go pion SILK
-// encoder. This is the default build — SILK is tuned for speech and needs no
-// cgo. The 48 kHz input is downmixed to mono and resampled to 16 kHz with the
-// pure-Go resampler, then encoded as wideband SILK. Build with `-tags libopus`
-// for the C library instead; both expose the same NewEncoder/Encode API.
+// encoder. SILK is tuned for speech and needs no cgo. The 48 kHz input is
+// downmixed to mono and resampled to 16 kHz with the pure-Go resampler, then
+// encoded as wideband SILK.
 type Encoder struct {
 	enc      *pion.Encoder
 	down     *resample.Resampler
@@ -35,7 +32,6 @@ type Encoder struct {
 }
 
 // NewEncoder builds a SILK Encoder for 48 kHz audio from cfg.
-// EncoderConfig.InbandFEC is ignored: this encoder emits no FEC redundancy.
 func NewEncoder(cfg EncoderConfig) (*Encoder, error) {
 	bitrate := cfg.Bitrate
 	if bitrate <= 0 {

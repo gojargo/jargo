@@ -31,9 +31,10 @@ func TestIdentityWhenRatesMatch(t *testing.T) {
 }
 
 // streamFrames runs `buffers` equal-sized buffers through r and returns the
-// total output frames. Streaming a long signal makes libsoxr's fixed filter
-// delay negligible relative to the total, so the output-to-input frame ratio
-// converges to outRate/inRate even though any single call is off by the delay.
+// total output frames. Streaming a long signal makes the converter's fixed
+// filter delay negligible relative to the total, so the output-to-input frame
+// ratio converges to outRate/inRate even though any single call is off by the
+// delay.
 func streamFrames(r *resample.Resampler, freq float64, inRate, framesPerBuffer, buffers int) int {
 	total := 0
 	for range buffers {
@@ -44,7 +45,7 @@ func streamFrames(r *resample.Resampler, freq float64, inRate, framesPerBuffer, 
 }
 
 // assertRatio checks got is within 2% of inFrames*outRate/inRate, tolerating
-// libsoxr's filter delay.
+// the converter's filter delay.
 func assertRatio(t *testing.T, got, inFrames, inRate, outRate int) {
 	t.Helper()
 	want := float64(inFrames) * float64(outRate) / float64(inRate)
@@ -60,7 +61,7 @@ func TestUpsample24kTo48k(t *testing.T) {
 	}
 	defer r.Close()
 	// 500 * 480 = 240000 input frames @ 24k -> ~480000 frames @ 48k. The stream
-	// is long enough that soxr's fixed filter delay is well under the tolerance.
+	// is long enough that the fixed filter delay is well under the tolerance.
 	got := streamFrames(r, 440, 24000, 480, 500)
 	assertRatio(t, got, 240000, 24000, 48000)
 }
@@ -239,8 +240,8 @@ func streamFramesBytes(r *resample.Resampler, buf []byte, n int) []byte {
 // it grows with the length of the stream, audio is being dropped rather than
 // merely delayed.
 //
-// The libsoxr backend does not promise to consume a whole buffer in one call,
-// and once did lose whatever it left behind.
+// A converter is not obliged to consume a whole buffer in one call, and a
+// backend that silently drops whatever it leaves behind fails here.
 func TestStreamingLosesNoAudio(t *testing.T) {
 	const (
 		inRate          = 48000

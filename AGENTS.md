@@ -11,25 +11,14 @@ the module root; runnable bots live in `examples/`.
 
 ## Build, test, lint
 
-The default build is **cgo-free**: `CGO_ENABLED=0 go build ./...` works. The
-resampler and Opus encoder are pure Go, and the native runtimes (ONNX Runtime
-for VAD/turn, RNNoise for denoising) are bound through `ebitengine/purego` —
-loaded at run time from their shared libraries, with no C toolchain at build
-time. The only cgo in the tree is the optional, higher-quality libsoxr and
-libopus backends, compiled in only when you build with their tag:
+The build is **cgo-free**, with no build tag that changes that. The resampler
+and the Opus encoder are pure Go, and the native runtimes (ONNX Runtime for
+VAD/turn, RNNoise for denoising) are bound through `ebitengine/purego`, loaded
+at run time from their shared libraries with no C toolchain at build time.
 
-```sh
-sudo apt-get install -y libsoxr-dev   # for -tags libsoxr
-sudo apt-get install -y libopus-dev   # for -tags libopus
-```
-
-- `go build ./...` — build everything with the pure-Go / purego defaults.
+- `go build ./...` — build everything. `CGO_ENABLED=0 go build ./...` is the
+  same build; nothing in the tree links C.
 - `go test ./...` — run tests. Add `-race` as CI does.
-- `go build -tags libsoxr ./...` — opt into libsoxr resampling (SoX Resampler,
-  highest quality; the default is the pure-Go `github.com/gojargo/go-resample`
-  converter). Needs cgo.
-- `go build -tags libopus ./...` — opt into the C Opus encoder (better speech;
-  the default is the pure-Go SILK encoder). Needs cgo.
 - The **ONNX Runtime** and **RNNoise** shared libraries are located at run time.
   Point at non-standard installs with `JARGO_ONNXRUNTIME_LIB` and
   `JARGO_RNNOISE_LIB`.
@@ -45,7 +34,7 @@ Everything above is a one-liner and stays here. Anything longer lives in the
 CI failure can be reproduced locally. `make help` lists the targets; the ones
 worth knowing:
 
-- `make build-matrix`: compile all five cgo tag combinations, as CI does.
+- `make build-matrix`: compile with cgo off and on, as CI does.
 - `make cover`: the coverage run and its total, the profile CI uploads. It
   measures across the whole module, because a package is often covered by the
   tests of the one that drives it, and measuring package by package reads as

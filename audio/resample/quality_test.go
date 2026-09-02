@@ -9,9 +9,9 @@ import (
 )
 
 // minSINAD is the transparency floor in dB: a resampled pure tone must stay this
-// far above its own distortion + noise. Both backends clear it with margin
-// (pure-Go ~91 dB, libsoxr ~86 dB); the guard catches a regression that would
-// add the audible harmonics/aliasing heard as a "metallic" voice.
+// far above its own distortion + noise. The converter clears it with margin
+// (~91 dB); the guard catches a regression that would add the audible
+// harmonics/aliasing heard as a "metallic" voice.
 const minSINAD = 60.0
 
 // encodeS16 encodes float samples in [-1,1) to interleaved S16LE bytes (mono).
@@ -65,8 +65,7 @@ func sinad(x []float64, f, fs float64) float64 {
 // TestTransparency upsamples a pure 1 kHz tone 24k->48k (the TTS->WebRTC path)
 // both in one call and as small streaming chunks, and asserts each stays above
 // the transparency floor. Streaming must match one-shot: a per-chunk boundary
-// discontinuity would drop the SINAD and sound metallic. Runs against whichever
-// backend is built (default pure-Go, or libsoxr with -tags libsoxr).
+// discontinuity would drop the SINAD and sound metallic.
 func TestTransparency(t *testing.T) {
 	const (
 		inRate, outRate = 24000, 48000
