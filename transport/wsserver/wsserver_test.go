@@ -1234,3 +1234,124 @@ func TestAudioAfterTheClientLeavesIsNotAnError(t *testing.T) {
 		t.Errorf("writing after the client left was logged as an error:\n%s", got)
 	}
 }
+
+// capturingSerializer records the audio it was handed, so a test can check what
+// the transport gives a serializer rather than what reaches the wire.
+type capturingSerializer struct {
+	testSerializer
+	mu    sync.Mutex
+	audio [][]byte
+}
+
+func (s *capturingSerializer) Serialize(f frames.Frame) (wsserver.Message, error) {
+	af, ok := f.(frames.OutputAudioFrame)
+	if !ok {
+		return wsserver.Message{}, nil
+	}
+	s.mu.Lock()
+	s.audio = append(s.audio, bytes.Clone(af.AudioData().Audio))
+	s.mu.Unlock()
+	return wsserver.BinaryMessage([]byte{0}, nil)
+}
+
+// first blocks until the serializer has been handed a chunk, and returns it.
+func (s *capturingSerializer) first(t *testing.T) []byte {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		got := s.audio
+		s.mu.Unlock()
+		if len(got) > 0 {
+			return got[0]
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("the serializer was never handed any audio")
+	return nil
+}
+
+// TestAudioGetsAWAVHeaderWhenAsked covers the parameter a client that plays
+// whole blobs needs: each chunk arrives as a container it can decode on its own
+// rather than as a stream it has to be told the shape of.
+func TestAudioGetsAWAVHeaderWhenAsked(t *testing.T) {
+	p := params()
+	p.AddWAVHeader = true
+	ser := &capturingSerializer{}
+	c := dial(t, ser, p)
+	defer c.shutdown(t)
+
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, 160), 8000, 1))
+
+	got := ser.first(t)
+	if !bytes.HasPrefix(got, []byte("RIFF")) {
+		t.Errorf("the serializer was handed %d bytes starting %q, want a WAV container",
+			len(got), got[:min(4, len(got))])
+	}
+	if len(got) <= 160 {
+		t.Errorf("the chunk is %d bytes, want the 160 bytes of audio and a header", len(got))
+	}
+}
+
+// TestAudioHasNoWAVHeaderByDefault is the other half. A telephony provider
+// streaming a call expects the samples it asked for and nothing around them.
+func TestAudioHasNoWAVHeaderByDefault(t *testing.T) {
+	ser := &capturingSerializer{}
+	c := dial(t, ser, params())
+	defer c.shutdown(t)
+
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, 160), 8000, 1))
+
+	if got := ser.first(t); len(got) != 160 {
+		t.Errorf("the serializer was handed %d bytes, want the 160 it was given", len(got))
+	}
+}
+
+// TestBinaryAudioIsFramedAtAFixedSize covers the endpoint that requires strict
+// framing: it is entitled to reject a short frame, so what does not fill a
+// packet waits for the audio that completes it.
+func TestBinaryAudioIsFramedAtAFixedSize(t *testing.T) {
+	p := params()
+	p.FixedAudioPacketSize = 64
+	c := dial(t, &binarySerializer{}, p)
+	defer c.shutdown(t)
+
+	// One 160-byte chunk is two whole packets, with 32 bytes left over.
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, 160), 8000, 1))
+
+	for i := range 2 {
+		typ, data := c.readTyped(t)
+		if typ != websocket.MessageBinary {
+			t.Fatalf("packet %d type = %v, want %v", i, typ, websocket.MessageBinary)
+		}
+		if len(data) != 64 {
+			t.Errorf("packet %d is %d bytes, want 64", i, len(data))
+		}
+	}
+}
+
+// TestAPartialPacketIsDroppedOnABargeIn checks the tail of a cut-off turn is not
+// spliced onto the front of the next one, which is what a client would hear if
+// the bytes waiting for a packet to complete survived the interruption.
+func TestAPartialPacketIsDroppedOnABargeIn(t *testing.T) {
+	p := params()
+	p.FixedAudioPacketSize = 64
+	c := dial(t, &binarySerializer{}, p)
+	defer c.shutdown(t)
+
+	// 160 bytes leaves 32 of them waiting for a packet to complete.
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0xAA}, 160), 8000, 1))
+	for range 2 {
+		c.readTyped(t)
+	}
+
+	c.task.QueueFrame(frames.NewInterruptionFrame())
+	time.Sleep(100 * time.Millisecond)
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0xBB}, 160), 8000, 1))
+
+	_, data := c.readTyped(t)
+	if bytes.Contains(data, []byte{0xAA}) {
+		t.Errorf("the first packet after the barge-in carries %d bytes of the cut-off turn",
+			bytes.Count(data, []byte{0xAA}))
+	}
+}

@@ -1,6 +1,7 @@
 package security_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/gojargo/jargo/utils/security"
@@ -37,6 +38,36 @@ func TestIsOriginAllowed(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := security.IsOriginAllowed(c.origin, c.allowed); got != c.want {
 				t.Errorf("IsOriginAllowed(%q, %v) = %v, want %v", c.origin, c.allowed, got, c.want)
+			}
+		})
+	}
+}
+
+// TestDefaultAllowedOrigins covers the deployment-wide policy: the variable is
+// where an operator sets the origins once, and an unset one has to keep meaning
+// "no restriction" so a telephony endpoint is not broken by a default.
+func TestDefaultAllowedOrigins(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want []string
+	}{
+		{"unset allows every origin", "", nil},
+		{"one origin", "https://app.example", []string{"https://app.example"}},
+		{
+			"several, with the spacing an operator writes",
+			"https://a.example, https://b.example",
+			[]string{"https://a.example", "https://b.example"},
+		},
+		{"a trailing comma is not an origin", "https://a.example,", []string{"https://a.example"}},
+		{"blanks alone allow every origin", " , ", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv(security.AllowedOriginsEnv, c.env)
+			got := security.DefaultAllowedOrigins()
+			if !slices.Equal(got, c.want) {
+				t.Errorf("DefaultAllowedOrigins() = %q, want %q", got, c.want)
 			}
 		})
 	}

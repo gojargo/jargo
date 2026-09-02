@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
@@ -97,8 +98,12 @@ type Params struct {
 
 	// AllowedOrigins are the origins a browser client may open the socket from.
 	//
-	// Empty, the default, allows every origin, which is what a telephony
-	// provider needs: it is not a browser and sends no Origin header at all.
+	// DefaultParams fills it from security.AllowedOriginsEnv, so a deployment
+	// can set the policy once for every endpoint it serves.
+	//
+	// Empty, which is what an unset variable leaves, allows every origin, and is
+	// what a telephony provider needs: it is not a browser and sends no Origin
+	// header at all.
 	// Naming origins allows only those, matched whole and without regard to
 	// case, and turns away a request whose origin is missing.
 	//
@@ -106,6 +111,22 @@ type Params struct {
 	// other site can open this socket in a visitor's browser and hold a
 	// conversation as them.
 	AllowedOrigins []string
+
+	// AddWAVHeader wraps every outgoing chunk of audio in a WAV container
+	// before the serializer encodes it, for a client that plays whole blobs
+	// rather than a raw PCM stream. Off by default, which is what a provider
+	// streaming a call expects.
+	AddWAVHeader bool
+
+	// FixedAudioPacketSize frames outgoing binary payloads at exactly this many
+	// bytes, holding back whatever does not fill a packet until the next one
+	// completes it. Zero, the default, sends each payload as the serializer
+	// produced it.
+	//
+	// Set it for a media endpoint that requires strict framing: 640 bytes is
+	// 20 ms of 16 kHz mono 16-bit PCM. It applies only to binary payloads, since
+	// a wire whose messages are text frames them itself.
+	FixedAudioPacketSize int
 
 	// SessionTimeout bounds how long one session may run. When it elapses with
 	// the socket still open, EventSessionTimeout fires; zero, the default,
@@ -117,9 +138,13 @@ type Params struct {
 	SessionTimeout time.Duration
 }
 
-// DefaultParams returns the transport defaults with no origin restriction.
+// DefaultParams returns the transport defaults, with the origins
+// security.AllowedOriginsEnv names and no restriction when it is unset.
 func DefaultParams() Params {
-	return Params{Params: transport.DefaultParams()}
+	return Params{
+		Params:         transport.DefaultParams(),
+		AllowedOrigins: security.DefaultAllowedOrigins(),
+	}
 }
 
 // ErrOriginNotAllowed is returned by Accept when the request's Origin header is
@@ -150,7 +175,7 @@ func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params Param
 	return &Transport{
 		sess: sess,
 		in:   newInput(sess, ser, params),
-		out:  newOutput(sess, ser, params.Params),
+		out:  newOutput(sess, ser, params),
 	}, nil
 }
 
@@ -519,8 +544,14 @@ func (in *inputTransport) reportPeerGone(ctx context.Context) {
 // to the socket.
 type outputTransport struct {
 	*transport.BaseOutput
-	sess *Session
-	ser  Serializer
+	sess   *Session
+	ser    Serializer
+	params Params
+
+	// packetMu guards the buffer that holds back audio which does not fill a
+	// whole packet. See Params.FixedAudioPacketSize.
+	packetMu     sync.Mutex
+	packetBuffer []byte
 
 	// WriteAudio is called as soon as audio is produced, by the TTS say, and
 	// this is only a network connection, so audio would otherwise go out far
@@ -547,9 +578,9 @@ func chunkDuration(chunkSize, sampleRate, numChannels int) time.Duration {
 	return time.Duration(chunkSize) * time.Second / time.Duration(bytesPerSec)
 }
 
-func newOutput(sess *Session, ser Serializer, params transport.Params) *outputTransport {
-	out := &outputTransport{sess: sess, ser: ser}
-	out.BaseOutput = transport.NewBaseOutput("WSOutput", params, out)
+func newOutput(sess *Session, ser Serializer, params Params) *outputTransport {
+	out := &outputTransport{sess: sess, ser: ser, params: params}
+	out.BaseOutput = transport.NewBaseOutput("WSOutput", params.Params, out)
 	return out
 }
 
@@ -560,6 +591,12 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 		// is reported as unsent rather than as an error the pipeline reports on.
 		return false, nil
 	}
+	if out.params.AddWAVHeader {
+		a := f.AudioData()
+		f = frames.NewOutputAudioRawFrame(
+			audio.PCMToWAV(a.Audio, a.SampleRate, a.NumChannels), a.SampleRate, a.NumChannels)
+	}
+
 	msg, err := out.ser.Serialize(f)
 	if err != nil {
 		return false, err
@@ -568,7 +605,7 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 		// The serializer had nothing to send for this frame.
 		return false, nil
 	}
-	if err := out.sess.write(ctx, msg); err != nil {
+	if err := out.write(ctx, msg); err != nil {
 		if gone(err) {
 			slog.Debug("wsserver: the client went away while audio was being sent", "err", err)
 			return false, nil
@@ -577,6 +614,43 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 	}
 	out.writeAudioSleep(ctx)
 	return true, nil
+}
+
+// write sends one wire message, framing binary payloads at a fixed size when the
+// endpoint asked for that. Whatever does not fill a packet is held back until
+// the next payload completes it, so the endpoint never sees a short frame.
+func (out *outputTransport) write(ctx context.Context, msg Message) error {
+	size := out.params.FixedAudioPacketSize
+	if size <= 0 || !msg.Binary {
+		return out.sess.write(ctx, msg)
+	}
+
+	out.packetMu.Lock()
+	out.packetBuffer = append(out.packetBuffer, msg.Data...)
+	var packets [][]byte
+	for len(out.packetBuffer) >= size {
+		p := make([]byte, size)
+		copy(p, out.packetBuffer[:size])
+		packets = append(packets, p)
+		out.packetBuffer = out.packetBuffer[size:]
+	}
+	out.packetMu.Unlock()
+
+	for _, p := range packets {
+		if err := out.sess.write(ctx, Message{Data: p, Binary: true}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropBufferedPacket throws away audio that has not filled a whole packet. A
+// barge-in cuts what the bot was saying, and holding the tail of it would splice
+// it onto the front of whatever is said next.
+func (out *outputTransport) dropBufferedPacket() {
+	out.packetMu.Lock()
+	out.packetBuffer = nil
+	out.packetMu.Unlock()
 }
 
 // writeAudioSleep blocks until the next chunk is due, so audio leaves at the
@@ -630,7 +704,7 @@ func (out *outputTransport) SendMessage(ctx context.Context, f frames.OutputTran
 		// The serializer had nothing to send for this frame.
 		return nil
 	}
-	if err := out.sess.write(ctx, msg); err != nil && !gone(err) {
+	if err := out.write(ctx, msg); err != nil && !gone(err) {
 		return err
 	}
 	return nil
@@ -675,6 +749,7 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 	}
 	switch f.(type) {
 	case *frames.InterruptionFrame:
+		out.dropBufferedPacket()
 		out.sendControl(ctx, f)
 		// Restart the playout clock on a barge-in so the next turn's audio goes
 		// out at once rather than waiting on the cut-off turn's schedule.
@@ -706,6 +781,6 @@ func (out *outputTransport) sendControl(ctx context.Context, f frames.Frame) {
 	}
 	msg, err := out.ser.Serialize(f)
 	if err == nil && !msg.Empty() {
-		_ = out.sess.write(ctx, msg)
+		_ = out.write(ctx, msg)
 	}
 }
