@@ -650,7 +650,7 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 	case *frames.OutputTransportMessageFrame:
 		// The ordered message: it waited behind the audio around it, so it
 		// reaches the client in step with what the client is hearing.
-		s.out.sendTransportMessage(ctx, af.Message)
+		s.out.sendTransportMessage(ctx, af)
 	case *frames.TTSStoppedFrame:
 		s.ttsStopped(ctx)
 	case *frames.OutputDTMFFrame:

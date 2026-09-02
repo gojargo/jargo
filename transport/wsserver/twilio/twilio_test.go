@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/audio/g711"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -197,7 +198,7 @@ func TestSerializeAudio(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := started(t, Config{})
-			msg, err := s.Serialize(tt.frame)
+			msg, err := serialized(s.Serialize(tt.frame))
 			if err != nil {
 				t.Fatalf("serialize: %v", err)
 			}
@@ -233,7 +234,7 @@ func TestSerializeBeforeStart(t *testing.T) {
 		{"interruption", frames.NewInterruptionFrame()},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, err := ready(t, Config{}, wireRate).Serialize(tt.frame)
+			msg, err := serialized(ready(t, Config{}, wireRate).Serialize(tt.frame))
 			if err != nil {
 				t.Fatalf("serialize: %v", err)
 			}
@@ -246,7 +247,7 @@ func TestSerializeBeforeStart(t *testing.T) {
 
 func TestSerializeInterruption(t *testing.T) {
 	s := started(t, Config{})
-	msg, err := s.Serialize(frames.NewInterruptionFrame())
+	msg, err := serialized(s.Serialize(frames.NewInterruptionFrame()))
 	if err != nil {
 		t.Fatalf("serialize interruption: %v", err)
 	}
@@ -263,7 +264,7 @@ func TestSerializeInterruption(t *testing.T) {
 // silently skipped rather than erroring the connection.
 func TestSerializeUnhandledFrame(t *testing.T) {
 	s := started(t, Config{})
-	msg, err := s.Serialize(frames.NewUserSpeakingFrame())
+	msg, err := serialized(s.Serialize(frames.NewUserSpeakingFrame()))
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
@@ -475,7 +476,7 @@ func TestConvertsBetweenWireAndPipelineRates(t *testing.T) {
 	const pipelineSamples = 320 // 20ms at 16kHz
 	sent := 0
 	for range chunks {
-		msg, err := up.Serialize(frames.NewTTSAudioRawFrame(make([]byte, pipelineSamples*2), pipelineRate, 1))
+		msg, err := serialized(up.Serialize(frames.NewTTSAudioRawFrame(make([]byte, pipelineSamples*2), pipelineRate, 1)))
 		if err != nil {
 			t.Fatalf("serialize: %v", err)
 		}
@@ -517,7 +518,7 @@ func TestAudioRoundTripsThroughThePipelineRate(t *testing.T) {
 		binary.LittleEndian.PutUint16(in[i*2:], uint16(v))
 	}
 
-	msg, err := s.Serialize(frames.NewTTSAudioRawFrame(in, pipelineRate, 1))
+	msg, err := serialized(s.Serialize(frames.NewTTSAudioRawFrame(in, pipelineRate, 1)))
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
@@ -542,3 +543,38 @@ func TestAudioRoundTripsThroughThePipelineRate(t *testing.T) {
 		t.Errorf("round trip returned %d samples of %d sent", got, samples)
 	}
 }
+
+// TestSerializeApplicationMessage covers the message path: a message the
+// pipeline addresses to the client is sent as the provider's own JSON, and an
+// RTVI message is not. RTVI is the protocol a browser client speaks, and Twilio
+// expects its own control messages on this socket.
+func TestSerializeApplicationMessage(t *testing.T) {
+	off := false
+	s := New(Config{AutoHangUp: &off})
+	if err := s.Setup(processor.Setup{AudioInSampleRate: 8000, AudioOutSampleRate: 8000}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	out, err := serialized(s.Serialize(frames.NewOutputTransportMessageUrgentFrame(
+		map[string]any{"event": "provider-control"})))
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("Serialize produced %q: %v", out, err)
+	}
+	if got["event"] != "provider-control" {
+		t.Errorf("Serialize = %q, want the provider's own message", out)
+	}
+
+	rtviMsg := rtvi.Message{Label: rtvi.MessageLabel, Type: rtvi.TypeBotReady}
+	out, err = serialized(s.Serialize(frames.NewOutputTransportMessageUrgentFrame(rtviMsg)))
+	if err != nil || out != nil {
+		t.Errorf("Serialize(RTVI message) = %q, %v; want nil, nil", out, err)
+	}
+}
+
+// serialized unwraps a serializer result to the bytes it produced. These tests
+// are about the wire format, not about how the message carrying it is framed.
+func serialized(m wsserver.Message, err error) ([]byte, error) { return m.Data, err }

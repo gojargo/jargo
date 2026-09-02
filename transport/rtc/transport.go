@@ -2,6 +2,7 @@ package rtc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -271,9 +272,24 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 	return nil
 }
 
-// SendMessage sends an application message over the data channel.
-func (out *outputTransport) SendMessage(_ context.Context, data []byte) error {
+// SendMessage sends an application message over the data channel. The payload is
+// encoded here rather than by the base, because what a wire carries is the
+// transport's own business: this one speaks JSON to a browser client, so a
+// message that is already text goes as it is and anything else is marshaled.
+func (out *outputTransport) SendMessage(_ context.Context, f frames.OutputTransportMessage) error {
+	data, err := encodeMessage(f.TransportMessage())
+	if err != nil {
+		return err
+	}
 	return out.conn.SendMessage(data)
+}
+
+// encodeMessage encodes an application message for the data channel.
+func encodeMessage(message any) ([]byte, error) {
+	if text, ok := message.(string); ok {
+		return []byte(text), nil
+	}
+	return json.Marshal(message)
 }
 
 // startSending brings up the sender goroutine. It runs for the whole session, so

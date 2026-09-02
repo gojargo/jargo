@@ -132,19 +132,22 @@ func (s *Serializer) Setup(st processor.Setup) error {
 func (s *Serializer) Close() { s.codec.Close() }
 
 // Serialize converts an outbound frame to a Telnyx message.
-func (s *Serializer) Serialize(f frames.Frame) ([]byte, error) {
+func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 	switch fr := f.(type) {
 	// Every kind of output audio is sent the same way, so match the family
 	// rather than each concrete frame.
 	case frames.OutputAudioFrame:
 		return s.media(fr.AudioData())
 	case *frames.InterruptionFrame:
-		return json.Marshal(event{Event: "clear"})
+		return wsserver.TextMessage(json.Marshal(event{Event: "clear"}))
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.hangup()
-		return nil, nil //nolint:nilnil // hang-up is a side effect; no wire message
+		return wsserver.Message{}, nil
 	default:
-		return nil, nil //nolint:nilnil // frame not sent to Telnyx
+		// Application messages are among the frames not sent: unlike the other
+		// providers, this wire carries no pass-through JSON, so a message the
+		// pipeline addresses to the client has nowhere to go on a Telnyx call.
+		return wsserver.Message{}, nil
 	}
 }
 
@@ -188,15 +191,15 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 	}
 }
 
-func (s *Serializer) media(a *frames.AudioRawData) ([]byte, error) {
+func (s *Serializer) media(a *frames.AudioRawData) (wsserver.Message, error) {
 	companded := s.codec.Encode(a.Audio, a.SampleRate, encodingOf(s.send))
 	if len(companded) == 0 {
 		// The conversion has nothing to emit yet; no audio, no message.
-		return nil, nil //nolint:nilnil // no audio to send
+		return wsserver.Message{}, nil
 	}
 	out := mediaOut{Event: eventMedia}
 	out.Media.Payload = base64.StdEncoding.EncodeToString(companded)
-	return json.Marshal(out)
+	return wsserver.TextMessage(json.Marshal(out))
 }
 
 func (s *Serializer) hangup() {

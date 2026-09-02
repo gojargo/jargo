@@ -7,6 +7,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/rtviws"
 )
 
@@ -95,9 +96,54 @@ func TestSerializeDropsFrames(t *testing.T) {
 		frames.NewInterruptionFrame(),
 		frames.NewEndFrame(),
 	} {
-		out, err := s.Serialize(f)
+		out, err := serialized(s.Serialize(f))
 		if err != nil || out != nil {
 			t.Fatalf("Serialize(%T) = %v, %v; want nil, nil", f, out, err)
 		}
 	}
 }
+
+// TestSerializeRTVIServerMessageToJSON is the outbound half of the wire: an RTVI
+// server message the bot produced has to reach the client as its own JSON, since
+// that is the only thing this wire carries.
+func TestSerializeRTVIServerMessageToJSON(t *testing.T) {
+	s := rtviws.New()
+	msg := rtvi.Message{Label: rtvi.MessageLabel, Type: rtvi.TypeBotReady}
+
+	for _, f := range []frames.Frame{
+		frames.NewOutputTransportMessageFrame(msg),
+		frames.NewOutputTransportMessageUrgentFrame(msg),
+	} {
+		out, err := serialized(s.Serialize(f))
+		if err != nil {
+			t.Fatalf("Serialize(%T): %v", f, err)
+		}
+		var got struct {
+			Label string `json:"label"`
+			Type  string `json:"type"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatalf("Serialize(%T) produced %q: %v", f, out, err)
+		}
+		if got.Label != rtvi.MessageLabel || got.Type != rtvi.TypeBotReady {
+			t.Errorf("Serialize(%T) = %q, want the bot-ready message", f, out)
+		}
+	}
+}
+
+// TestSerializeDropsNonRTVIMessage checks a message that is not the protocol's
+// is not written. Nothing else is defined on this wire, so a client would have
+// no way to read it.
+func TestSerializeDropsNonRTVIMessage(t *testing.T) {
+	s := rtviws.New()
+	f := frames.NewOutputTransportMessageUrgentFrame(map[string]any{"label": "other", "type": "x"})
+
+	out, err := serialized(s.Serialize(f))
+	if err != nil || out != nil {
+		t.Fatalf("Serialize(non-RTVI message) = %q, %v; want nil, nil", out, err)
+	}
+}
+
+// serialized unwraps a serializer result to the bytes it produced. These tests
+// are about the wire format, not about how the message carrying it is framed.
+func serialized(m wsserver.Message, err error) ([]byte, error) { return m.Data, err }

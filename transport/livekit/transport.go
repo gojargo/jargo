@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"sync"
@@ -168,9 +169,24 @@ func newOutput(conn *Connection, params transport.Params) *outputTransport {
 	return out
 }
 
-// SendMessage publishes an application message to the room.
-func (out *outputTransport) SendMessage(_ context.Context, data []byte) error {
+// SendMessage publishes an application message to the room. The payload is
+// encoded here rather than by the base, because what a wire carries is the
+// transport's own business: a message that is already text is published as it
+// is, and anything else is marshaled to JSON.
+func (out *outputTransport) SendMessage(_ context.Context, f frames.OutputTransportMessage) error {
+	data, err := encodeMessage(f.TransportMessage())
+	if err != nil {
+		return err
+	}
 	return out.conn.SendMessage(data)
+}
+
+// encodeMessage encodes an application message for the room.
+func encodeMessage(message any) ([]byte, error) {
+	if text, ok := message.(string); ok {
+		return []byte(text), nil
+	}
+	return json.Marshal(message)
 }
 
 // WriteAudio encodes PCM into 20 ms Opus frames and sends them, paced to

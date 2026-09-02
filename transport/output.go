@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -95,16 +94,10 @@ func (bo *BaseOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool
 	return false, nil
 }
 
-// MessageFilter is an optional interface a concrete output implements when its
-// wire does not carry every application message the pipeline produces. An output
-// that does not implement it sends them all.
-type MessageFilter interface {
-	// IgnoresMessage reports whether this message is not to be sent.
-	IgnoresMessage(message any) bool
-}
-
 // SendMessage is the default no-op; a concrete transport overrides it.
-func (bo *BaseOutput) SendMessage(context.Context, []byte) error { return nil }
+func (bo *BaseOutput) SendMessage(context.Context, frames.OutputTransportMessage) error {
+	return nil
+}
 
 // SupportsNativeDTMF reports whether the transport signals a keypress itself.
 // The default is false, so the keys are sounded as audio instead. A transport
@@ -233,7 +226,7 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 	case *frames.OutputTransportMessageUrgentFrame:
 		// Urgent, so it goes out at once, ahead of whatever is queued, and is
 		// not forwarded on.
-		bo.sendTransportMessage(ctx, fr.Message)
+		bo.sendTransportMessage(ctx, fr)
 		return nil
 	case frames.SystemFrame:
 		// A system frame outranks the queue and is forwarded as it arrives.
@@ -381,29 +374,24 @@ func (bo *BaseOutput) stopStreaming(ctx context.Context) {
 	bo.eachSender(func(s *mediaSender) { s.stop(ctx) })
 }
 
-// sendTransportMessage serializes a transport message payload to JSON and hands
-// it to the concrete transport. It serves both message frames: the ordered one,
-// which reaches here in step with the surrounding audio, and the urgent one,
-// which is a system frame and so arrives ahead of anything queued.
+// sendTransportMessage hands a message frame to the concrete transport, which
+// encodes it. It serves both message frames: the ordered one, which reaches here
+// in step with the surrounding audio, and the urgent one, which is a system
+// frame and so arrives ahead of anything queued.
+//
+// The frame travels rather than an encoded payload, so a transport whose wire
+// format is supplied as a serializer can hand the frame to it. That is also
+// where a message the wire does not carry is dropped: the RTVI protocol a
+// browser client speaks means nothing on a telephony provider's media stream,
+// and only the serializer knows which of the two it is writing to.
 //
 // A failure is logged, not returned. A returned error becomes an ErrorFrame, and
 // anything that reports errors to the client turns that into another message to
 // send: if the connection is what failed, sending the report fails too and the
 // pipeline feeds itself errors until it runs out of memory. A connection that
 // cannot carry a message cannot carry the complaint about it either.
-func (bo *BaseOutput) sendTransportMessage(ctx context.Context, message any) {
-	// A message the wire has no use for is dropped before it is encoded. A
-	// telephony provider's media stream is the case that matters: the RTVI
-	// protocol a browser client speaks means nothing there, and writing it onto
-	// the media socket at best confuses the provider.
-	if f, ok := bo.self.(MessageFilter); ok && f.IgnoresMessage(message) {
-		return
-	}
-	data, err := json.Marshal(message)
-	if err == nil {
-		err = bo.self.SendMessage(ctx, data)
-	}
-	if err != nil && !canceled(ctx) {
+func (bo *BaseOutput) sendTransportMessage(ctx context.Context, f frames.OutputTransportMessage) {
+	if err := bo.self.SendMessage(ctx, f); err != nil && !canceled(ctx) {
 		slog.Error("send transport message", "processor", bo.Name(), "err", err)
 	}
 }

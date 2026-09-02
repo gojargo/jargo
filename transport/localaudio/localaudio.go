@@ -273,7 +273,9 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 }
 
 // SendMessage is a no-op: the local transport has no client data channel.
-func (out *outputTransport) SendMessage(context.Context, []byte) error { return nil }
+func (out *outputTransport) SendMessage(context.Context, frames.OutputTransportMessage) error {
+	return nil
+}
 
 // fill supplies the next samples to PulseAudio, draining the queued PCM and
 // padding any shortfall with silence so the stream keeps flowing.

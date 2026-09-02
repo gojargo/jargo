@@ -1381,7 +1381,7 @@ func newFailingMessageOutput(params transport.Params) *failingMessageOutput {
 	return o
 }
 
-func (o *failingMessageOutput) SendMessage(context.Context, []byte) error {
+func (o *failingMessageOutput) SendMessage(context.Context, frames.OutputTransportMessage) error {
 	return errClosedForTest
 }
 
