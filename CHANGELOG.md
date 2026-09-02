@@ -158,6 +158,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **`SyncToolHandlers` takes a toolset** rather than the conversation carrying
   one, so a service told about new tools on their own can sync from them.
   **Breaking** for anything implementing `pipeline.LLMMember`.
+- **The LLM logger sees a switched service.** Frames from the active service
+  leave through the switcher's own `PushFrame`, and the switcher did not carry
+  the marker interface the logger recognizes a model service by, so
+  `observers.NewLLMLog` reported nothing at all for any pipeline with a failover
+  chain. `LLMSwitcher` now carries it.
 - **Idle detection counts provider turn frames.** A pipeline whose turns come
   from the provider pushes no `UserSpeakingFrame`, so a talking user looked idle
   and was cancelled. Transcriptions and `UserStartedSpeakingFrame` now count too.
