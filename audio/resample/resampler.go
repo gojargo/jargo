@@ -1,5 +1,3 @@
-//go:build !libsoxr
-
 package resample
 
 import (
@@ -9,10 +7,11 @@ import (
 	gore "github.com/gojargo/go-resample"
 )
 
-// converterFor maps a Quality recipe onto the closest converter the pure-Go
-// library offers. The two libraries do not have the same five steps, so the ends
-// of the scale line up and the middle is approximate: VHQ and HQ are the two
-// widest sinc filters, QQ is the trivial interpolator, and the rest sit between.
+// converterFor maps a Quality recipe onto the closest converter the underlying
+// library offers. The recipes are the five SoX Resampler names and the library
+// does not have the same five steps, so the ends of the scale line up and the
+// middle is approximate: VHQ and HQ are the two widest sinc filters, QQ is the
+// trivial interpolator, and the rest sit between.
 func converterFor(q Quality) gore.Converter {
 	switch q {
 	case QualityVHQ:
@@ -30,9 +29,9 @@ func converterFor(q Quality) gore.Converter {
 
 // Resampler converts a stream of interleaved S16LE PCM from one sample rate to
 // another using the pure-Go github.com/gojargo/go-resample converter (no cgo).
-// This is the default build; `-tags libsoxr` swaps in libsoxr (see
-// resample_soxr.go). Create one per audio stream with New; it is not safe for
-// concurrent use. Close is a no-op kept for API parity with the libsoxr build.
+// Create one per audio stream with New; it is not safe for concurrent use.
+// Close releases it; the pure-Go converter holds no native resource, so it is a
+// no-op, but callers should still call it so the contract stays honest.
 type Resampler struct {
 	inRate   int
 	outRate  int
@@ -189,8 +188,8 @@ func f32ToS16(f float32) int16 {
 }
 
 // Close releases converter resources. The pure-Go converter holds none, so this
-// is a no-op; it is safe to call more than once and exists for API parity with
-// the libsoxr build.
+// is a no-op and is safe to call more than once. Callers should still call it,
+// so the stream lifecycle stays explicit at every call site.
 func (r *Resampler) Close() {
 	r.r = nil
 }

@@ -50,6 +50,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Idle detection counts provider turn frames.** A pipeline whose turns come
   from the provider pushes no `UserSpeakingFrame`, so a talking user looked idle
   and was cancelled. Transcriptions and `UserStartedSpeakingFrame` now count too.
+- **The `libopus` and `libsoxr` cgo backends are gone.** Both were opt-in C
+  alternatives to the pure-Go Opus encoder and resampler, from when the pure-Go
+  SILK encoder was new. The pure-Go path is the one that gets used and measured,
+  so the tree keeps it alone: the two build tags, their linked libraries and
+  their dev headers no longer exist. `CGO_ENABLED=0 go build ./...` is now the
+  only build, and nothing in the tree links C. **Breaking** for anyone building
+  with `-tags libopus` or `-tags libsoxr`, who should drop the tag.
+- **`transport.Params.AudioOutFEC` and `AudioOutExpectedPacketLoss` are gone**,
+  along with `opus.EncoderConfig.InbandFEC` and `ExpectedPacketLoss`. Only the
+  libopus encoder ever honored them, so with it removed they were knobs that
+  could not do anything, on an option whose whole promise is resilience on lossy
+  links. The pure-Go SILK encoder emits no FEC redundancy. **Breaking** for
+  anyone setting either field, which was already having no effect on the default
+  build.
 - **The pure-Go Opus encoder tracks upstream `github.com/pion/opus` again.** The
   module carried a `replace` onto a fork for as long as the SILK encoder has
   existed: upstream packed the two SILK `PredCoef_Q12` halves at the analysis

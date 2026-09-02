@@ -16,15 +16,9 @@
 //     end. Running a complete buffer through a Resampler instead loses a
 //     millisecond or two of its tail.
 //
-// Two builds are selected by the `libsoxr` build tag, both exposing the same
-// API:
-//
-//   - Default (pure Go, see resample_purego.go): a no-cgo converter from
-//     github.com/gojargo/go-resample. It cross-compiles and links into static
-//     binaries with no native dependency.
-//   - `-tags libsoxr` (see resample_soxr.go): links libsoxr (the SoX Resampler)
-//     via cgo for its high-quality polyphase conversion. Requires libsoxr at
-//     build and run time (libsoxr-dev to build, libsoxr0 to run).
+// The conversion is pure Go (see resampler.go), a no-cgo converter from
+// github.com/gojargo/go-resample. It cross-compiles and links into static
+// binaries with no native dependency.
 package resample
 
 // Resample converts a complete buffer of interleaved S16LE PCM from inRate to

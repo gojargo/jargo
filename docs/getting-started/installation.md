@@ -69,31 +69,21 @@ if filter, err := rnnoise.New(); err == nil {
 `rnnoise.New` returns an error when the library is missing, which is the
 idiomatic way to make denoising optional. See `examples/voice/openai`.
 
-## Optional cgo build tags
+## No cgo
 
-Two higher-quality C backends are available. Both are **opt-in** and both need a C
-toolchain; the pure-Go defaults are used otherwise.
-
-| Tag | Replaces | Install |
-|---|---|---|
-| `libsoxr` | Pure-Go resampler with the SoX Resampler (highest quality) | `sudo apt-get install -y libsoxr-dev` |
-| `libopus` | Pure-Go SILK encoder with the C Opus encoder (better speech) | `sudo apt-get install -y libopus-dev` |
-
-```sh
-go build -tags libsoxr ./...
-go build -tags libsoxr,libopus ./...
-```
-
-These are the only cgo in the tree.
+There is no C toolchain in the picture at all. The Opus codec and the resampler
+are pure Go, and the two native runtimes below are loaded at run time rather
+than linked, so `CGO_ENABLED=0 go build ./...` is the ordinary build and no
+build tag changes that.
 
 ## Docker
 
 The published base images bundle all of the above, so you do not have to think
 about any of it:
 
-- **`gojargo/jargo-build`**: build stage, with the toolchain and C headers.
-- **`gojargo/jargo`**: distroless runtime, carrying the ONNX Runtime, RNNoise,
-  libsoxr, libgomp and libopus.
+- **`gojargo/jargo-build`**: build stage, with the pinned Go toolchain.
+- **`gojargo/jargo`**: distroless runtime, carrying the ONNX Runtime and
+  RNNoise.
 
 See **[Deploy with Docker](../deploy/docker.md)** for a copyable Dockerfile.
 

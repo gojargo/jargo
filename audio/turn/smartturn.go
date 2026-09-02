@@ -274,8 +274,8 @@ func lastNSamples(audio []float32, n int) []float32 {
 const modelResampleQuality = resample.QualityHQ
 
 // resampleToModelRate converts audio to the 16 kHz the model expects, through
-// the pipeline's own converter: a sinc polyphase filter, or libsoxr itself under
-// the libsoxr tag. It is used only when a non-16 kHz turn stream is configured;
+// the pipeline's own converter, a sinc polyphase filter. It is used only when a
+// non-16 kHz turn stream is configured;
 // the turntaking processor normally feeds 16 kHz directly.
 //
 // The filter is the point. Rate conversion without one folds everything above

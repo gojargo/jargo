@@ -8,17 +8,17 @@ before:
   hooks:
     - go mod tidy
 
-# The examples link libsoxr (and load libonnxruntime at run time), so they need
-# cgo and cannot be cross-compiled on the stock runner. Releases build a single
-# linux/amd64 binary; the recommended way to run the example bots is the
-# container image, which bundles libsoxr and the ONNX runtime. Multi-arch builds
-# would need a cgo cross-toolchain (zig cc / cross images) with libsoxr per arch.
+# The examples link no C library, so they build with cgo off. They are not
+# static: purego reaches dlopen through libc, and libonnxruntime is loaded at
+# run time, so the recommended way to run them is the container image, which
+# carries both. Releases build a single linux/amd64 binary; now that nothing
+# needs cgo, adding other platforms is a matter of listing them here.
 builds:
   - id: echo
     main: ./examples/echo
     binary: jargo-echo
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
     goos: [linux]
     goarch: [amd64]
     ldflags:
@@ -27,7 +27,7 @@ builds:
     main: ./examples/voicebot
     binary: jargo-voicebot
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
     goos: [linux]
     goarch: [amd64]
     ldflags:

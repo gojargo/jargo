@@ -124,17 +124,11 @@ cover-html: require-coverprofile ## Open the coverage profile in a browser
 ##@ Build
 
 .PHONY: build-matrix
-build-matrix: ## Compile every supported cgo tag combination
+build-matrix: ## Compile with cgo off and on
 	@echo "==> cgo-free (the default build)"
 	CGO_ENABLED=0 $(GO) build ./...
-	@echo "==> cgo, no tags"
+	@echo "==> cgo enabled"
 	CGO_ENABLED=1 $(GO) build ./...
-	@echo "==> -tags libsoxr"
-	CGO_ENABLED=1 $(GO) build -tags libsoxr ./...
-	@echo "==> -tags libopus"
-	CGO_ENABLED=1 $(GO) build -tags libopus ./...
-	@echo "==> -tags 'libsoxr libopus'"
-	CGO_ENABLED=1 $(GO) build -tags "libsoxr libopus" ./...
 
 ##@ Generate
 
@@ -197,21 +191,15 @@ docs-check: require-hugo ## Fail on any unresolved link in the documentation
 
 ##@ Native dependencies
 
-# These three follow docker/build.Dockerfile and docker/runtime.Dockerfile,
-# which are Debian and Linux only, so the host install is too. On another system
-# install the same four libraries by hand: libsoxr, libopus, the ONNX Runtime
-# and RNNoise.
+# These follow docker/runtime.Dockerfile, which is Debian and Linux only, so the
+# host install is too. On another system install the same two libraries by hand:
+# the ONNX Runtime and RNNoise.
 .PHONY: require-linux
 require-linux:
 	@[[ "$$(uname -s)" == "Linux" ]] || { \
 		echo "this target is Linux only, see the comment above it in the Makefile" >&2; \
 		exit 1; \
 	}
-
-.PHONY: deps
-deps: require-linux ## Install the cgo headers the libsoxr and libopus tags link against
-	sudo apt-get update
-	sudo apt-get install -y libsoxr-dev libopus-dev pkg-config
 
 .PHONY: deps-onnx
 deps-onnx: require-linux ## Fetch the ONNX Runtime for VAD and turn detection
