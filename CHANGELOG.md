@@ -22,6 +22,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   session's own protocol. Gemini Live and Nova Sonic take tools only when a
   session opens, so a conversation bringing tools to a session opened without
   them reopens it.
+- **Reasoning controls on the OpenAI Responses services.** `responses.Config`
+  gained `Reasoning`, an effort and an optional summary, sent as the request's
+  `reasoning` field. Only the o-series and the mainline gpt series from gpt-5
+  onward reason; the service warns at construction when it is configured on a
+  model that cannot, which the API refuses rather than ignores. The encrypted
+  reasoning is not yet carried from one turn to the next.
 - **`processor.FrameLogger` and `processor.AsyncGeneratorProcessor`.** The
   first logs each frame and its direction, skipping the ones that arrive many
   times a second; the second passes frames through and serializes each for a
@@ -29,6 +35,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The OpenAI Responses services no longer reason by default.** A
+  reasoning-capable model left unconfigured now asks for effort `"none"` rather
+  than taking the API's default, which is thinking time somebody on a voice call
+  spends listening to silence. The o-series is reasoning-first and refuses to be
+  told not to, so it is left alone, as is every model that does not reason. Set
+  `Reasoning` to ask for more.
 - **`llm.Base` gained `RunFunctionCalls` and `WithContinuousGeneration`.** A
   service that generates on its own, rather than being run by a conversation
   arriving, now says so and runs the calls its own protocol reports.

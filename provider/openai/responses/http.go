@@ -34,6 +34,7 @@ func NewHTTPLLM(cfg Config) *HTTPService {
 	s := &HTTPService{cfg: cfg, http: &http.Client{}}
 	s.Base = llm.New("OpenAIResponsesHTTPLLM", s)
 	s.Base.SetModel(cfg.Model)
+	warnIfReasoningUnsupported("OpenAIResponsesHTTPLLM", cfg)
 	return s
 }
 
