@@ -145,14 +145,18 @@ tools-proto: ## Install buf and the protoc plugins at their pinned versions
 	$(GO) install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
 
 .PHONY: generate
-generate: tools-proto ## Regenerate the Riva protobuf clients from the .proto files
+generate: tools-proto ## Regenerate the protobuf code from the .proto files
 	$(GO) generate ./...
+
+# Every directory holding checked-in generated protobuf code.
+GENERATED_PROTO_DIRS := provider/nvidia/internal/rivapb \
+	transport/wsserver/protobuf/internal/framepb
 
 .PHONY: generate-check
 generate-check: generate ## Fail if the checked-in generated code is stale
-	@if ! git diff --quiet -- provider/nvidia/internal/rivapb; then \
+	@if ! git diff --quiet -- $(GENERATED_PROTO_DIRS); then \
 		echo "generated protobuf is out of date, commit the result of: make generate" >&2; \
-		git --no-pager diff --stat -- provider/nvidia/internal/rivapb >&2; \
+		git --no-pager diff --stat -- $(GENERATED_PROTO_DIRS) >&2; \
 		exit 1; \
 	fi
 
