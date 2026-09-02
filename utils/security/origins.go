@@ -2,7 +2,29 @@
 // outside is allowed in.
 package security
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
+
+// AllowedOriginsEnv is the environment variable naming the origins a browser
+// client may open a socket from, as a comma-separated list. It is the default
+// for every endpoint that takes an origin list, so a deployment can set the
+// policy once instead of threading it through each one.
+const AllowedOriginsEnv = "JARGO_ALLOWED_ORIGINS"
+
+// DefaultAllowedOrigins returns the origins AllowedOriginsEnv names, or none
+// when it is unset or empty, which allows every origin. Blank entries are
+// dropped, so a trailing comma does not turn into an origin nothing matches.
+func DefaultAllowedOrigins() []string {
+	var out []string
+	for o := range strings.SplitSeq(os.Getenv(AllowedOriginsEnv), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out = append(out, o)
+		}
+	}
+	return out
+}
 
 // IsOriginAllowed reports whether origin, the value of a request's Origin
 // header, is permitted by allowed.
