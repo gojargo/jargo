@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
@@ -15,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
 	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // GenerationConfig guides Cartesia generation; it applies to the sonic-3 series
@@ -30,6 +33,31 @@ type GenerationConfig struct {
 
 // NewTTS builds a Cartesia TTS service.
 func NewTTS(cfg Config) *tts.Base {
+	cfg = ttsDefaults(cfg)
+
+	s := &synthesizer{cfg: cfg}
+	var b *tts.Base
+	if cfg.WordTimestamps {
+		// Only the timestamp-aware type implements tts.WordTimestamps, so the base
+		// takes the word-aligned path solely when the caller opts in.
+		b = tts.New("CartesiaTTS", &timedSynthesizer{synthesizer: s})
+	} else {
+		b = tts.New("CartesiaTTS", s)
+	}
+	// Always hold off on a sentence boundary inside a spell tag. The tag is full
+	// of periods that end no sentence, and splitting it would hand Cartesia half
+	// a tag. The preferred way to use Cartesia's markup is to have a text
+	// transform insert it for the synthesizer alone; this keeps markup that
+	// reaches the service by any other route intact.
+	if tok := b.TextTokenizer(); tok != nil {
+		b.SetTextAggregator(text.NewSkipTagsAggregator(cfg.TextAggregation, tok,
+			[]text.StartEndTags{{Start: "<spell>", End: "</spell>"}}))
+	}
+	return b
+}
+
+// ttsDefaults fills in what the caller left unset.
+func ttsDefaults(cfg Config) Config {
 	if cfg.URL == "" {
 		cfg.URL = defaultURL
 	}
@@ -51,13 +79,19 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.Container == "" {
 		cfg.Container = defaultContainer
 	}
-	s := &synthesizer{cfg: cfg}
-	if cfg.WordTimestamps {
-		// Only the timestamp-aware type implements tts.WordTimestamps, so the base
-		// takes the word-aligned path solely when the caller opts in.
-		return tts.New("CartesiaTTS", &timedSynthesizer{synthesizer: s})
+	if cfg.TextAggregation == "" {
+		cfg.TextAggregation = frames.AggregationSentence
 	}
-	return tts.New("CartesiaTTS", s)
+	// Cartesia warns against the middle ground of client-side sentence
+	// aggregation plus the server's default 3000ms buffer. With no value chosen,
+	// send 0 when sentences are aggregated here and leave it unset when tokens
+	// are streamed, so the server's managed buffering applies to the one shape it
+	// suits.
+	if cfg.MaxBufferDelayMs == nil && cfg.TextAggregation != frames.AggregationToken {
+		zero := 0
+		cfg.MaxBufferDelayMs = &zero
+	}
+	return cfg
 }
 
 type synthesizer struct {
@@ -91,19 +125,67 @@ func (s *synthesizer) spacelessLanguage() bool {
 	}
 }
 
-// cartesiaLanguage maps a Language to Cartesia's language code: Cartesia wants
-// the base code, returned only for languages it supports; otherwise "" (Cartesia
-// defaults to English).
+// cartesiaLanguages are the languages this provider has been verified against,
+// each under the code Cartesia takes for it.
+//
+//nolint:gochecknoglobals // lookup table, read-only
+var cartesiaLanguages = map[language.Language]string{
+	language.Arabic:     "ar",
+	language.Bulgarian:  "bg",
+	language.Bengali:    "bn",
+	language.Czech:      "cs",
+	language.Danish:     "da",
+	language.German:     "de",
+	language.English:    "en",
+	language.Greek:      "el",
+	language.Spanish:    "es",
+	language.Finnish:    "fi",
+	language.French:     "fr",
+	language.Gujarati:   "gu",
+	language.Hebrew:     "he",
+	language.Hindi:      "hi",
+	language.Croatian:   "hr",
+	language.Hungarian:  "hu",
+	language.Indonesian: "id",
+	language.Italian:    "it",
+	language.Japanese:   "ja",
+	language.Georgian:   "ka",
+	language.Kannada:    "kn",
+	language.Korean:     "ko",
+	language.Malayalam:  "ml",
+	language.Marathi:    "mr",
+	language.Malay:      "ms",
+	language.Dutch:      "nl",
+	language.Norwegian:  "no",
+	language.Odia:       "or",
+	language.Punjabi:    "pa",
+	language.Polish:     "pl",
+	language.Portuguese: "pt",
+	language.Romanian:   "ro",
+	language.Russian:    "ru",
+	language.Slovak:     "sk",
+	language.Swedish:    "sv",
+	language.Tamil:      "ta",
+	language.Telugu:     "te",
+	language.Thai:       "th",
+	language.Tagalog:    "tl",
+	language.Turkish:    "tr",
+	language.Ukrainian:  "uk",
+	language.Urdu:       "ur",
+	language.Vietnamese: "vi",
+	language.Chinese:    "zh",
+}
+
+// cartesiaLanguage maps a Language to Cartesia's language code. Cartesia takes
+// the base code, so a language this provider was not verified against is still
+// sent, under its own base code and with a warning, rather than dropped. The
+// zero value is the one that sends nothing, which leaves Cartesia on its own
+// default.
 func cartesiaLanguage(l language.Language) string {
-	switch base := l.BaseCode(); base {
-	case "cs", "da", "de", "el", "en", "es", "fi", "fr", "gu", "he", "hi",
-		"hr", "hu", "id", "it", "ja", "ka", "kn", "ko", "ml", "mr", "ms",
-		"nl", "no", "pa", "pl", "pt", "ro", "ru", "sk", "sv", "ta", "te",
-		"th", "tl", "tr", "uk", "vi", "zh":
-		return base
-	default:
+	if l == "" {
 		return ""
 	}
+	return language.Resolve(l, cartesiaLanguages, true)
 }
 
 // wsMessage is the subset of a Cartesia WebSocket message we read.
@@ -180,6 +262,9 @@ func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text strin
 		"context_id": "jargo",
 		"continue":   false,
 	}
+	if s.cfg.MaxBufferDelayMs != nil {
+		msg["max_buffer_delay_ms"] = *s.cfg.MaxBufferDelayMs
+	}
 	if timestamps {
 		msg["add_timestamps"] = true
 		msg["use_normalized_timestamps"] = false
@@ -249,10 +334,46 @@ var cartesiaTagPattern = regexp.MustCompile(`(?i)</?(?:spell|emotion|break|volum
 // stripCartesiaTags removes that markup from one reported token, collapsing the
 // whitespace it leaves behind. A token that was nothing but markup comes back
 // empty and is dropped by the caller.
+//
+// A tag standing between two alphanumeric characters becomes a space, since it
+// is the only thing separating two words ("to<spell>1234"). Anywhere else it
+// comes out entirely: a space there would join nothing, and it would split a
+// word from its own punctuation ("<spell>1234</spell>." has to stay "1234.",
+// not "1234 .", or the token no longer matches the text that was sent for
+// synthesis).
 func stripCartesiaTags(text string) string {
-	text = cartesiaTagPattern.ReplaceAllString(text, " ")
-	return strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+	var b strings.Builder
+	prev := 0
+	for _, m := range cartesiaTagPattern.FindAllStringIndex(text, -1) {
+		b.WriteString(text[prev:m[0]])
+		if alnumBefore(text, m[0]) && alnumAt(text, m[1]) {
+			b.WriteByte(' ')
+		}
+		prev = m[1]
+	}
+	b.WriteString(text[prev:])
+	return strings.TrimSpace(strings.Join(strings.Fields(b.String()), " "))
 }
+
+// alnumBefore reports whether the character ending at i is a letter or a digit.
+func alnumBefore(text string, i int) bool {
+	if i <= 0 {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(text[:i])
+	return isAlnum(r)
+}
+
+// alnumAt reports whether the character starting at i is a letter or a digit.
+func alnumAt(text string, i int) bool {
+	if i >= len(text) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text[i:])
+	return isAlnum(r)
+}
+
+func isAlnum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 
 // emitWordTimings normalizes one batch of reported timings and forwards it.
 //
