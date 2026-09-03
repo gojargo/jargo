@@ -4,17 +4,12 @@
 package cartesia
 
 import (
-	"errors"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 )
-
-// errProtocol is returned when Cartesia reports an error message.
-//
-//nolint:gochecknoglobals // sentinel error
-var errProtocol = errors.New("cartesia: protocol error")
 
 const (
 	defaultURL = "wss://api.cartesia.ai/tts/websocket"
@@ -27,6 +22,18 @@ const (
 	defaultContainer  = "raw"
 	// readLimit bounds a single WebSocket message; audio chunks arrive base64.
 	readLimit = 1 << 20
+	// The message types Cartesia sends on the synthesis socket.
+	msgChunk      = "chunk"
+	msgTimestamps = "timestamps"
+	msgDone       = "done"
+	msgError      = "error"
+	msgFlushDone  = "flush_done"
+
+	// cancelWriteTimeout bounds the write that tells Cartesia to stop generating
+	// into a context the user interrupted. It runs off the session context, which
+	// an interruption may already have canceled.
+	cancelWriteTimeout = 2 * time.Second
+
 	// fieldTranscript is what Cartesia calls the text in both directions: the
 	// text to speak on a synthesis request, and the text heard on a transcript.
 	fieldTranscript = "transcript"
