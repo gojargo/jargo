@@ -28,6 +28,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   onward reason; the service warns at construction when it is configured on a
   model that cannot, which the API refuses rather than ignores. The encrypted
   reasoning is not yet carried from one turn to the next.
+- **Cartesia markup helpers.** `cartesia.Spell`, `EmotionTag`, `PauseTag`,
+  `VolumeTag` and `SpeedTag` build the markup Cartesia reads inside the text it
+  is given, alongside the `Emotion` set it recognizes. The service holds off on a
+  sentence boundary inside a spell tag, so one reaching it whole is synthesized
+  whole.
 - **Speech-to-speech mode in the user aggregator.** A realtime LLM service now
   says so when it describes itself at start (OpenAI Realtime, xAI Realtime,
   Gemini Live and Nova Sonic all do), and the aggregator changes two things when
@@ -54,6 +59,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`cartesia.Config.VoiceID` is required!** It defaulted to a public Cartesia
+  voice, which had jargo choosing what the bot sounds like. Cartesia has no
+  default voice, so the caller names one; `examples/voice/cartesia` shows the
+  shape, reading `CARTESIA_VOICE_ID` with a fallback of its own.
 - **Turn-taking defaults to the Smart Turn v3 model.** An empty stop chain built
   a speech timeout, which ends a turn on silence alone and so ends it on any
   pause long enough. It now builds `TurnAnalyzerStop` over Smart Turn v3, which

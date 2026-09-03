@@ -21,8 +21,6 @@ const (
 	// defaultVersion pins the Cartesia API version; it is sent on every request.
 	defaultVersion = "2026-03-01"
 	defaultModel   = "sonic-3.6"
-	// defaultVoiceID is a public Cartesia voice.
-	defaultVoiceID = "694f9389-aac1-45b6-b726-9d9369183238"
 	// defaultSampleRate is the PCM rate jargo requests from Cartesia.
 	defaultSampleRate = 24000
 	defaultEncoding   = "pcm_s16le"
@@ -41,8 +39,9 @@ type Config struct {
 	Version string
 	// Model is the Cartesia model id; empty uses a default.
 	Model string
-	// VoiceID is the voice id; empty uses a default public voice.
-	VoiceID string
+	// VoiceID is the voice to speak in. Required: Cartesia has no default, and
+	// picking one here would be jargo choosing what the bot sounds like.
+	VoiceID string `validate:"required"`
 	// Language for synthesis; the zero value leaves it unset (Cartesia defaults
 	// to English). Mapped to Cartesia's base code.
 	Language language.Language
