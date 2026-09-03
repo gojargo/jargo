@@ -1040,3 +1040,80 @@ func TestTurnAudio(t *testing.T) {
 		}
 	})
 }
+
+// Starting and stopping a recording treat the turn buffers differently, the way
+// upstream's clear_turn_audio flag says: stop_recording passes False and
+// start_recording clears them.
+func TestStartAndStopTreatTheTurnBuffersDifferently(t *testing.T) {
+	// turnConfig captures the per-turn handovers, which are what the turn
+	// buffers feed.
+	turnConfig := func(c *turnCapture) Config {
+		cfg := c.config()
+		cfg.OnUserTurnAudio = func(d TurnAudioData) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.user = append(c.user, d.Audio)
+		}
+		cfg.OnBotTurnAudio = func(d TurnAudioData) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.bot = append(c.bot, d.Audio)
+		}
+		// The per-run callbacks would mix into the same slices, so leave them off.
+		cfg.OnUserTurnAudioData = nil
+		cfg.OnBotTurnAudioData = nil
+		return cfg
+	}
+
+	t.Run("stopping keeps what the open turn had gathered", func(t *testing.T) {
+		// The turn tracker ends a turn on its own schedule, so a turn can end
+		// after the recording has been stopped. What it had gathered is still
+		// its audio, and clearing the turn buffers on stop would lose it.
+		turns := &turnCapture{}
+		p := newProc(t, turnConfig(turns), &capture{}, true)
+
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{1, 2, 3, 4})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+		// The bot is cut off mid-run, so its audio is still in the run buffer
+		// that ending the turn folds in.
+		send(t, p, frames.NewBotStartedSpeakingFrame())
+		botAudio(t, p, []byte{5, 6, 7, 8})
+
+		p.StopRecording()
+		p.emitTurnAudio(1)
+
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		if len(turns.user) != 1 || !bytes.Equal(turns.user[0], []byte{1, 2, 3, 4}) {
+			t.Errorf("user turns = %x, want the audio gathered before the stop", turns.user)
+		}
+		if len(turns.bot) != 1 || !bytes.Equal(turns.bot[0], []byte{5, 6, 7, 8}) {
+			t.Errorf("bot turns = %x, want the run the stop cut off", turns.bot)
+		}
+	})
+
+	t.Run("starting clears what was gathered before it", func(t *testing.T) {
+		// A turn half-heard before this recording began belongs to nothing it
+		// is going to report.
+		turns := &turnCapture{}
+		p := newProc(t, turnConfig(turns), &capture{}, true)
+
+		send(t, p, frames.NewUserStartedSpeakingFrame())
+		userAudio(t, p, []byte{1, 2, 3, 4})
+		send(t, p, frames.NewUserStoppedSpeakingFrame())
+		send(t, p, frames.NewBotStartedSpeakingFrame())
+		botAudio(t, p, []byte{5, 6, 7, 8})
+
+		p.StopRecording()
+		p.StartRecording()
+		p.emitTurnAudio(1)
+
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		if len(turns.user) != 0 || len(turns.bot) != 0 {
+			t.Errorf("turns reported user=%x bot=%x, want nothing: the new recording "+
+				"starts with empty turn buffers", turns.user, turns.bot)
+		}
+	})
+}

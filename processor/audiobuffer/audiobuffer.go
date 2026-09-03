@@ -236,7 +236,7 @@ func (p *Processor) startRecording() {
 		return
 	}
 	p.recording = true
-	p.reset(nil)
+	p.resetRecording(true)
 	p.mu.Unlock()
 	if p.cfg.OnRecordingStarted != nil {
 		p.cfg.OnRecordingStarted()
@@ -250,7 +250,9 @@ func (p *Processor) stopRecording() {
 		return
 	}
 	snap := p.snapshot()
-	p.reset(nil)
+	// The turn buffers are kept: a turn still open when the recording stops is
+	// reported whole once it ends.
+	p.resetRecording(false)
 	p.recording = false
 	p.mu.Unlock()
 
@@ -497,26 +499,44 @@ func (p *Processor) snapshot() *recording {
 	return &recording{merged: merged, user: user, bot: bot, sampleRate: p.sampleRate, channels: p.channels}
 }
 
-// reset clears all recording state, the turn buffers included. The optional now
-// sets the last-write timestamps; nil leaves them unset so the first audio
-// injects no silence.
-func (p *Processor) reset(now *time.Time) {
-	p.userBuf = nil
-	p.botBuf = nil
-	p.userTurnBuf = nil
-	p.botTurnBuf = nil
-	p.lastUser = now
-	p.lastBot = now
+// resetRecording clears the session tracks and forgets when each was last
+// written, so the first audio of the next recording injects no silence in front
+// of itself. clearTurnAudio says whether the turn buffers go with them.
+//
+// Starting a recording clears them: a turn half-heard before the recording
+// began belongs to nothing this recording will report. Stopping one keeps them,
+// so a turn still open when the recording stops is reported whole once it ends
+// rather than losing whatever had been gathered by then.
+//
+// It must be called with the lock held.
+func (p *Processor) resetRecording(clearTurnAudio bool) {
+	p.resetPrimary()
+	if clearTurnAudio {
+		p.resetTurnAudio()
+	}
+	p.lastUser = nil
+	p.lastBot = nil
 }
 
-// resetPrimary clears the buffers after a flush and re-bases the timestamps to
-// now, so the next audio measures its gap from the flush point.
+// resetPrimary clears the session tracks after a flush and re-bases the
+// timestamps to now, so the next audio measures its gap from the flush point. It
+// must be called with the lock held.
 func (p *Processor) resetPrimary() {
 	now := time.Now()
 	p.userBuf = nil
 	p.botBuf = nil
 	p.lastUser = new(now)
 	p.lastBot = new(now)
+}
+
+// resetTurnAudio clears both the run of speech in progress and everything each
+// speaker has said so far in the current turn. It must be called with the lock
+// held.
+func (p *Processor) resetTurnAudio() {
+	p.userTurnBuf = nil
+	p.botTurnBuf = nil
+	p.userTurnAudio = nil
+	p.botTurnAudio = nil
 }
 
 // fillSilenceGap pads buf with silence for any wall-clock gap since it was last
