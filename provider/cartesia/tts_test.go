@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
 )
 
 // timedSynthesizer must satisfy tts.WordTimestamps so the base takes the
@@ -36,16 +35,9 @@ func TestEmitWordTimingsStripsMarkupAndKeepsTokens(t *testing.T) {
 		offset float64
 	}
 	var got []wt
-	var asked tts.WordTimingOptions
-	err := emitWordTimings(in, false, func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
-		asked = opts
-		for _, w := range words {
-			got = append(got, wt{w.Word, w.Offset})
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("emitWordTimings: %v", err)
+	batch, asked := normalizeWordTimings(in, false)
+	for _, w := range batch {
+		got = append(got, wt{w.Word, w.Offset})
 	}
 	if asked.IncludesInterFrameSpaces {
 		t.Error("a language written with spaces was reported as carrying its own")
@@ -70,16 +62,7 @@ func TestEmitWordTimingsJoinsASpacelessMessage(t *testing.T) {
 		Words: []string{"こ", "ん", "に", "ち", "は", "。"},
 		Start: []float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
 	}
-	var got []uctx.WordTiming
-	var asked tts.WordTimingOptions
-	err := emitWordTimings(in, true, func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
-		asked = opts
-		got = append(got, words...)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("emitWordTimings: %v", err)
-	}
+	got, asked := normalizeWordTimings(in, true)
 	if len(got) != 1 {
 		t.Fatalf("got %d tokens, want the message joined into one", len(got))
 	}
@@ -97,26 +80,13 @@ func TestEmitWordTimingsJoinsASpacelessMessage(t *testing.T) {
 // A message that was nothing but markup reports nothing.
 func TestEmitWordTimingsDropsAMessageOfOnlyMarkup(t *testing.T) {
 	in := &wsWordTimings{Words: []string{"<break/>", " "}, Start: []float64{0.0, 0.1}}
-	called := false
-	err := emitWordTimings(in, false, func([]uctx.WordTiming, tts.WordTimingOptions) error {
-		called = true
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("emitWordTimings: %v", err)
-	}
-	if called {
-		t.Fatal("a message holding no words was reported")
+	if got, _ := normalizeWordTimings(in, false); len(got) != 0 {
+		t.Fatalf("a message holding no words reported %v", got)
 	}
 }
 
 func TestEmitWordTimingsNilIsNoop(t *testing.T) {
-	called := false
-	emit := func([]uctx.WordTiming, tts.WordTimingOptions) error { called = true; return nil }
-	if err := emitWordTimings(nil, false, emit); err != nil {
-		t.Fatalf("emitWordTimings(nil): %v", err)
-	}
-	if called {
-		t.Fatal("word callback invoked for nil timings")
+	if got, _ := normalizeWordTimings(nil, false); len(got) != 0 {
+		t.Fatalf("nil timings reported %v", got)
 	}
 }

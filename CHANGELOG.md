@@ -63,6 +63,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Cartesia synthesis holds one connection open for the session.** It dialed a
+  new WebSocket for every sentence, paying a TLS handshake in front of each one
+  and losing the ability to stream a turn as a single utterance. It now opens the
+  connection when the pipeline starts and gives each turn a context of its own on
+  it: the sentences of a turn are sent on that context and flushed once the last
+  has gone, so the turn streams continuously, and audio the server had already
+  generated for a turn the user cut off is dropped by its context id rather than
+  spoken over the next one. An interruption tells Cartesia to stop generating
+  into the context. The reader dials again when Cartesia drops a connection idle
+  for five minutes, so the socket stays warm.
 - **`cartesia.Config.VoiceID` is required!** It defaulted to a public Cartesia
   voice, which had jargo choosing what the bot sounds like. Cartesia has no
   default voice, so the caller names one; `examples/voice/cartesia` shows the
