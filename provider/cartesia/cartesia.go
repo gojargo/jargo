@@ -6,6 +6,7 @@ package cartesia
 import (
 	"errors"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 )
@@ -57,6 +58,19 @@ type Config struct {
 	GenerationConfig *GenerationConfig
 	// PronunciationDictID applies a custom pronunciation dictionary; empty omits it.
 	PronunciationDictID string
+	// TextAggregation is how streamed text is grouped before synthesis:
+	// frames.AggregationSentence (the zero value) waits for a sentence boundary,
+	// frames.AggregationToken passes each token through as it arrives, which
+	// lowers latency at the cost of a less tested streaming path. It also decides
+	// the default for MaxBufferDelayMs.
+	TextAggregation frames.AggregationType
+	// MaxBufferDelayMs is the server-side buffering window before generation
+	// starts. 0 disables server buffering (the client is buffering instead); any
+	// value in (0, 5000] enables managed buffering. Left nil it is derived from
+	// TextAggregation: 0 for sentences, which avoids stacking client and server
+	// buffering, and unset for tokens, which leaves Cartesia on its own 3000ms
+	// default.
+	MaxBufferDelayMs *int
 	// WordTimestamps requests per-word timestamps and drives the word-aligned
 	// text path: the TTS base emits a TTSTextFrame for each spoken word as its
 	// audio plays, mapped back to its original written form, so the assistant

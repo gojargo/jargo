@@ -1,6 +1,7 @@
 package cartesia
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -8,11 +9,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
 )
@@ -378,9 +381,10 @@ func TestSpacelessLanguage(t *testing.T) {
 	}
 }
 
-// TestCartesiaLanguage pins the synthesis codes: Cartesia takes the base code,
-// and a language it does not speak maps to nothing so Cartesia falls back to
-// English.
+// TestCartesiaLanguage pins the synthesis codes. Cartesia takes the base code,
+// and a language this provider was not verified against is still sent under its
+// own base code rather than dropped. Only the zero value sends nothing, which
+// leaves Cartesia on its own default.
 func TestCartesiaLanguage(t *testing.T) {
 	cases := map[language.Language]string{
 		language.English:      "en",
@@ -393,9 +397,16 @@ func TestCartesiaLanguage(t *testing.T) {
 		language.Japanese:     "ja",
 		language.Korean:       "ko",
 		language.Chinese:      "zh",
-		// Not spoken, so nothing is sent.
-		language.Language("cy"): "",
-		language.Language(""):   "",
+		// The five the verified map gained alongside the rest.
+		language.Arabic:    "ar",
+		language.Bulgarian: "bg",
+		language.Bengali:   "bn",
+		language.Odia:      "or",
+		language.Urdu:      "ur",
+		// Unverified, so its own base code goes out with a warning.
+		language.Language("cy"): "cy",
+		// Unset, so nothing is sent.
+		language.Language(""): "",
 	}
 	for in, want := range cases {
 		if got := cartesiaLanguage(in); got != want {
@@ -413,10 +424,89 @@ func TestStripCartesiaTags(t *testing.T) {
 		"<break time=\"1s\"/>":     "",
 		"plain":                    "plain",
 		"a <volume>  b":            "a b",
+		// A tag between two words is the only thing separating them, so it
+		// becomes a space.
+		"to<spell>1234</spell>": "to 1234",
+		// A tag between a word and its own punctuation must not separate them,
+		// or the token no longer matches the text sent for synthesis.
+		"<spell>1234</spell>.":   "1234.",
+		"<spell>A.B.C.</spell>,": "A.B.C.,",
 	}
 	for in, want := range cases {
 		if got := stripCartesiaTags(in); got != want {
 			t.Errorf("stripCartesiaTags(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestMaxBufferDelayDefault checks the server-side buffering window follows the
+// aggregation the client does. Cartesia warns against stacking client-side
+// sentence aggregation on top of its own 3000ms buffer, so aggregating
+// sentences here disables the server's buffering, streaming tokens leaves it
+// alone, and a value the caller chose is kept either way.
+func TestMaxBufferDelayDefault(t *testing.T) {
+	sentences := ttsDefaults(Config{APIKey: "k"})
+	if sentences.MaxBufferDelayMs == nil || *sentences.MaxBufferDelayMs != 0 {
+		t.Errorf("aggregating sentences: max_buffer_delay_ms = %v, want 0", sentences.MaxBufferDelayMs)
+	}
+
+	tokens := ttsDefaults(Config{APIKey: "k", TextAggregation: frames.AggregationToken})
+	if tokens.MaxBufferDelayMs != nil {
+		t.Errorf("streaming tokens: max_buffer_delay_ms = %v, want it unset", *tokens.MaxBufferDelayMs)
+	}
+
+	chosen := 250
+	kept := ttsDefaults(Config{APIKey: "k", MaxBufferDelayMs: &chosen})
+	if kept.MaxBufferDelayMs == nil || *kept.MaxBufferDelayMs != chosen {
+		t.Errorf("max_buffer_delay_ms = %v, want the configured %d", kept.MaxBufferDelayMs, chosen)
+	}
+}
+
+// TestRunTTSSendsMaxBufferDelay checks the buffering window reaches Cartesia
+// when it is set, and is left off the request when it is not.
+func TestRunTTSSendsMaxBufferDelay(t *testing.T) {
+	endpoint, seen := ttsServer(t, []map[string]any{{"type": "done"}})
+	cfg := ttsConfig(endpoint)
+	zero := 0
+	cfg.MaxBufferDelayMs = &zero
+	collect(t, &synthesizer{cfg: cfg}, "hi")
+	if got := seen(); got.request["max_buffer_delay_ms"] != float64(0) {
+		t.Errorf("max_buffer_delay_ms = %v, want 0", got.request["max_buffer_delay_ms"])
+	}
+
+	endpoint, seen = ttsServer(t, []map[string]any{{"type": "done"}})
+	collect(t, &synthesizer{cfg: ttsConfig(endpoint)}, "hi")
+	if _, present := seen().request["max_buffer_delay_ms"]; present {
+		t.Error("max_buffer_delay_ms was sent with no window configured")
+	}
+}
+
+// TestSpellTagReachesTheServiceWhole checks the service holds off on a sentence
+// boundary inside a spell tag. The periods in one end no sentence, and splitting
+// it would hand Cartesia half a tag.
+func TestSpellTagReachesTheServiceWhole(t *testing.T) {
+	endpoint, seen := ttsServer(t, []map[string]any{chunk([]byte{1, 2}), {"type": "done"}})
+	base := NewTTS(ttsConfig(endpoint))
+
+	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
+	task.QueueFrame(frames.NewLLMTextFrame("Dial <spell>A.B.C.</spell> now. Then wait."))
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the task did not finish")
+	}
+
+	got := seen()
+	if got == nil {
+		t.Fatal("the endpoint saw no synthesis request")
+	}
+	transcript, _ := got.request["transcript"].(string)
+	if !strings.Contains(transcript, "<spell>A.B.C.</spell>") {
+		t.Errorf("transcript = %q, want the spell tag whole inside it", transcript)
 	}
 }

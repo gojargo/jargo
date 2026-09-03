@@ -353,6 +353,13 @@ func (b *Base) Cleanup(ctx context.Context) error {
 	return b.Base.Cleanup(ctx)
 }
 
+// TextTokenizer is the sentence tokenizer the Base found its boundaries with,
+// so a provider building an aggregator of its own works from the same one
+// rather than loading a second copy of the model. It is nil when the tokenizer
+// could not be built, which is the failure SetTextAggregator cannot recover
+// from either.
+func (b *Base) TextTokenizer() *ttstext.PunktTokenizer { return b.tokenizer }
+
 // SetTextAggregator sets how streamed text is grouped into the units handed to
 // the provider, replacing the default (English sentences). Pass an aggregator
 // built over the language the bot speaks, or one that aggregates by token to

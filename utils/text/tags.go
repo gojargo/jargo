@@ -26,14 +26,14 @@ func ParseStartEndTags(
 ) (*StartEndTags, int) {
 	// Already inside a tag, so the only thing worth looking for is the end of it.
 	if current != nil {
-		if strings.Contains(text[index:], current.End) {
+		if strings.Contains(from(text, index), current.End) {
 			return nil, len(text)
 		}
 		return current, index
 	}
 
 	for _, tag := range tags {
-		rest := text[index:]
+		rest := from(text, index)
 		starts := strings.Count(rest, tag.Start)
 		ends := strings.Count(rest, tag.End)
 		switch {
@@ -55,6 +55,22 @@ func ParseStartEndTags(
 	}
 
 	return nil, index
+}
+
+// from is text from index on, and nothing when the offset is past its end.
+//
+// The buffer being scanned grows a character at a time, but it also shrinks:
+// the aggregator takes a finished sentence off the front of it and leaves the
+// offset settled so far where it was. An offset beyond what is left simply has
+// nothing to scan, and the buffer regrowing past it puts the two back in step.
+func from(text string, index int) string {
+	if index >= len(text) {
+		return ""
+	}
+	if index < 0 {
+		return text
+	}
+	return text[index:]
 }
 
 // LongestTrailingPartialMatch returns the length of the longest suffix of text

@@ -270,3 +270,28 @@ func TestSkipTagsTokenSeesASecondTag(t *testing.T) {
 		t.Fatalf("aggregations = %q, want %q", texts(got), want)
 	}
 }
+
+// TestSkipTagsSurvivesASentenceLeavingTheBuffer checks aggregating carries on
+// after a sentence is taken off the front of the buffer.
+//
+// The tag scan settles an offset into the buffer, and emitting a sentence
+// shortens the buffer under it. The offset then points past the end of what is
+// left, which simply leaves nothing to scan until the buffer grows back.
+func TestSkipTagsSurvivesASentenceLeavingTheBuffer(t *testing.T) {
+	a := newSkipTags(t, frames.AggregationSentence, spellTag())
+
+	var got []string
+	for _, piece := range []string{
+		"Dial <spell>A.B.C.", "</spell> now. ", "Then wait for the tone. ", "Done.",
+	} {
+		got = append(got, texts(a.Aggregate(piece))...)
+	}
+	if rest, ok := a.Flush(); ok {
+		got = append(got, rest.Text)
+	}
+
+	want := []string{"Dial <spell>A.B.C.</spell> now.", "Then wait for the tone.", "Done."}
+	if !slices.Equal(got, want) {
+		t.Errorf("aggregated = %q, want %q", got, want)
+	}
+}
