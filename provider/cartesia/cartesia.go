@@ -27,6 +27,9 @@ const (
 	defaultContainer  = "raw"
 	// readLimit bounds a single WebSocket message; audio chunks arrive base64.
 	readLimit = 1 << 20
+	// fieldTranscript is what Cartesia calls the text in both directions: the
+	// text to speak on a synthesis request, and the text heard on a transcript.
+	fieldTranscript = "transcript"
 )
 
 // Config configures the Cartesia TTS service.

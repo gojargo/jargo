@@ -248,9 +248,9 @@ func (s *synthesizer) dial(ctx context.Context) (*wsutil.Conn, error) {
 
 func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text string, timestamps bool) error {
 	msg := map[string]any{
-		"model_id":   s.cfg.Model,
-		"transcript": text,
-		"voice":      map[string]any{"mode": "id", "id": s.cfg.VoiceID},
+		"model_id":      s.cfg.Model,
+		fieldTranscript: text,
+		"voice":         map[string]any{"mode": "id", "id": s.cfg.VoiceID},
 		"output_format": map[string]any{
 			"container":   s.cfg.Container,
 			"encoding":    s.cfg.Encoding,

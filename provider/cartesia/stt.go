@@ -291,7 +291,7 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			continue
 		}
 		switch m.Type {
-		case "transcript":
+		case fieldTranscript:
 			if m.Text == "" {
 				continue
 			}

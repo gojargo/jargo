@@ -28,6 +28,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   onward reason; the service warns at construction when it is configured on a
   model that cannot, which the API refuses rather than ignores. The encrypted
   reasoning is not yet carried from one turn to the next.
+- **`cartesia.NewHTTPTTS`, synthesis over Cartesia's HTTP API.** It answers a
+  whole synthesis in one response rather than streaming one, with no session to
+  hold open. Prefer `NewTTS` on a call, where the first audio matters; this is
+  for the cases where a plain request is easier to operate.
 - **Cartesia markup helpers.** `cartesia.Spell`, `EmotionTag`, `PauseTag`,
   `VolumeTag` and `SpeedTag` build the markup Cartesia reads inside the text it
   is given, alongside the `Emotion` set it recognizes. The service holds off on a
