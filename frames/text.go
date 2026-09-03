@@ -59,26 +59,23 @@ func NewLLMTextFrame(text string) *LLMTextFrame {
 // context records what was written rather than what was pronounced. A TTS
 // service that reports word timings emits one per spoken word as its audio
 // plays; because they flow in step with playback, an interruption leaves only
-// the frames already emitted — the words actually spoken — in the context.
+// the frames already emitted, the words actually spoken, in the context.
+//
+// It is an aggregated frame: AggregatedBy says what unit the text is, a whole
+// sentence for a service that reports no timings and a single word for one that
+// does, which is how a consumer tells a caption to render from a word to
+// highlight within it.
 type TTSTextFrame struct {
-	TextFrame
-	// RawText is the original written form of this span; "" means use Text.
-	RawText string
-	// ContextID identifies the TTS context that produced this text; "" when unset.
-	ContextID string
+	AggregatedTextFrame
 }
 
-// NewTTSTextFrame builds a TTSTextFrame for the spoken token text, appending it
-// to the LLM context by default. Word tokens do not carry their own inter-frame
-// spacing, so a consumer joins them with a separator.
-func NewTTSTextFrame(text string) *TTSTextFrame {
-	return &TTSTextFrame{
-		TextFrame: TextFrame{
-			BaseDataFrame:   NewBaseDataFrame("TTSTextFrame"),
-			Text:            text,
-			AppendToContext: true,
-		},
-	}
+// NewTTSTextFrame builds a TTSTextFrame for the spoken text, aggregated by by
+// and appended to the LLM context by default. Word tokens do not carry their
+// own inter-frame spacing, so a consumer joins them with a separator.
+func NewTTSTextFrame(text string, by AggregationType) *TTSTextFrame {
+	f := &TTSTextFrame{AggregatedTextFrame: *NewAggregatedTextFrame(text, by)}
+	f.BaseDataFrame = NewBaseDataFrame("TTSTextFrame")
+	return f
 }
 
 // Original returns the text to record in the context: RawText when set,
@@ -241,10 +238,12 @@ type AggregatedTextFrame struct {
 
 // NewAggregatedTextFrame builds an AggregatedTextFrame aggregated by by.
 func NewAggregatedTextFrame(text string, by AggregationType) *AggregatedTextFrame {
-	return &AggregatedTextFrame{
+	f := &AggregatedTextFrame{
 		TextFrame:    *NewTextFrame(text),
 		AggregatedBy: by,
 	}
+	f.BaseDataFrame = NewBaseDataFrame("AggregatedTextFrame")
+	return f
 }
 
 // String implements fmt.Stringer.

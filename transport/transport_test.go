@@ -1249,7 +1249,7 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920), 48000, 1))
 	// The word carries the moment it is spoken, which is what holds it back
 	// until the audio around it has gone out.
-	word := frames.NewTTSTextFrame("hello")
+	word := frames.NewTTSTextFrame("hello", frames.AggregationSentence)
 	word.SetPTS(int64(20 * time.Millisecond))
 	task.QueueFrame(word)
 	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920), 48000, 1))
@@ -1307,7 +1307,7 @@ func TestBaseOutputInterruptionDropsUnplayedWordFrames(t *testing.T) {
 	// A long run of audio with a word frame queued behind it: the word's audio is
 	// nowhere near played when the interruption arrives.
 	task.QueueFrame(frames.NewOutputAudioRawFrame(make([]byte, 1920*40), 48000, 1))
-	unspoken := frames.NewTTSTextFrame("unspoken")
+	unspoken := frames.NewTTSTextFrame("unspoken", frames.AggregationSentence)
 	unspoken.SetPTS(int64(700 * time.Millisecond)) // far beyond the interruption
 	task.QueueFrame(unspoken)
 	time.Sleep(10 * time.Millisecond) // a couple of chunks play

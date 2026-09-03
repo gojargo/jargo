@@ -45,7 +45,7 @@ func conversation() []frames.Frame {
 		frames.NewLLMTextFrame("Hi there."),
 		frames.NewLLMFullResponseEndFrame(),
 		frames.NewTTSStartedFrame(),
-		frames.NewTTSTextFrame("Hi there."),
+		frames.NewTTSTextFrame("Hi there.", frames.AggregationSentence),
 		frames.NewTTSStoppedFrame(),
 		frames.NewBotStartedSpeakingFrame(),
 		frames.NewBotStoppedSpeakingFrame(),

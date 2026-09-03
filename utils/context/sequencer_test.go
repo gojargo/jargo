@@ -1091,3 +1091,52 @@ func TestCJKSpacingReachesTheFrames(t *testing.T) {
 		}
 	})
 }
+
+// Every spoken frame says what unit it stands for, which is what lets a
+// consumer tell a caption to render from a word to highlight within it.
+func TestSpokenFramesSayHowTheyWereAggregated(t *testing.T) {
+	t.Run("a word frame is aggregated by word", func(t *testing.T) {
+		seq := seqWithSpoken(t, "hello", "ctx1", true)
+		out := seq.ProcessWord("hello", 100, "ctx1", false)
+		word, ok := out[0].(*frames.TTSTextFrame)
+		if !ok {
+			t.Fatalf("first frame is %T, want the word", out[0])
+		}
+		if word.AggregatedBy != frames.AggregationWord {
+			t.Errorf("aggregated by %q, want %q", word.AggregatedBy, frames.AggregationWord)
+		}
+	})
+
+	t.Run("without timings the whole unit is one sentence frame", func(t *testing.T) {
+		// No tracker means no word timings are coming, so the sentence promoted
+		// from its tokens is spoken in one go and stands for itself rather than
+		// for a word within it.
+		seq := newSeq(t, true)
+		send := func(tok string) []frames.Frame {
+			f := frames.NewAggregatedTextFrame(tok, frames.AggregationToken)
+			return seq.RegisterSpoken(f, "c1", tok, true, false, false)
+		}
+		send("Hello ")
+		send("world.")
+		out := send(" Next")
+
+		var spoken *frames.TTSTextFrame
+		for _, f := range out {
+			if w, ok := f.(*frames.TTSTextFrame); ok {
+				spoken = w
+			}
+		}
+		if spoken == nil {
+			t.Fatalf("got %v, want a spoken frame for the whole unit", texts(out))
+		}
+		if spoken.AggregatedBy != frames.AggregationSentence {
+			t.Errorf("aggregated by %q, want %q", spoken.AggregatedBy, frames.AggregationSentence)
+		}
+		if !spoken.WillBeSpoken {
+			t.Error("the frame does not say it will be spoken")
+		}
+		if spoken.ContextID != "c1" {
+			t.Errorf("context id = %q, want %q", spoken.ContextID, "c1")
+		}
+	})
+}

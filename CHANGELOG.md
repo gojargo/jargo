@@ -63,6 +63,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`TTSTextFrame` is an aggregated frame.** It now embeds
+  `AggregatedTextFrame`, so a chunk of spoken text carries how it was
+  aggregated, which synthesis context produced it and whether it will be
+  spoken, alongside the text and its raw form. A service that reports word
+  timings emits word-aggregated frames and one that does not emits a single
+  sentence-aggregated frame per unit, which is what lets a consumer tell a
+  caption to render from a word to highlight within it. `AggregatedTextFrame`
+  also reports its own name rather than `TextFrame`. **Breaking:**
+  `frames.NewTTSTextFrame` takes the aggregation type.
 - **`text.Aggregator` tells an interruption from a reset.** The interface gained
   `HandleInterruption`, called when the turn an aggregator was reading was cut
   off, alongside the `Reset` that clears the buffer deliberately. The three
