@@ -36,7 +36,7 @@ type GenerationConfig struct {
 func NewTTS(cfg Config) *tts.Base {
 	cfg = ttsDefaults(cfg)
 
-	s := &synthesizer{cfg: cfg}
+	s := newSynthesizer(cfg)
 	var b *tts.Base
 	if cfg.WordTimestamps {
 		// Only the timestamp-aware type implements tts.WordTimestamps, so the base
@@ -102,7 +102,10 @@ func ttsDefaults(cfg Config) Config {
 // sentences of one turn stream continuously: each is sent on the same context
 // with continue set, and the turn is flushed once its last sentence has gone.
 type synthesizer struct {
-	cfg  Config
+	cfg Config
+	// live is what a caller may change while the pipeline runs. It is seeded
+	// from cfg, and is what every request is built from.
+	live *TTSSettings
 	host tts.AudioContextHost
 
 	// writeMu serializes writes; the connection permits one writer at a time.
@@ -119,6 +122,12 @@ type synthesizer struct {
 	reading bool
 }
 
+// newSynthesizer builds the synthesizer with its settings seeded, which is the
+// only way it should be built: the settings store is not optional.
+func newSynthesizer(cfg Config) *synthesizer {
+	return &synthesizer{cfg: cfg, live: newTTSSettings(cfg)}
+}
+
 // timedSynthesizer adds word-timestamp streaming on top of synthesizer. It
 // implements tts.WordTimestamps.
 type timedSynthesizer struct {
@@ -131,7 +140,7 @@ func (s *synthesizer) SetAudioContextHost(h tts.AudioContextHost) { s.host = h }
 
 // Metadata reports the Cartesia model and voice synthesis is billed against.
 func (s *synthesizer) Metadata() tts.Metadata {
-	return tts.Metadata{Model: s.cfg.Model, VoiceID: s.cfg.VoiceID}
+	return tts.Metadata{Model: s.live.Model.Or(s.cfg.Model), VoiceID: s.live.Voice.Or(s.cfg.VoiceID)}
 }
 
 // SampleRate reports the requested PCM output rate.
@@ -142,7 +151,7 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 // their characters separately but grouped into one message, which is what makes
 // the message rather than the character the unit worth reporting.
 func (s *synthesizer) spacelessLanguage() bool {
-	switch s.cfg.Language.BaseCode() {
+	switch s.live.Language.Or(cartesiaLanguage(s.cfg.Language)) {
 	case "zh", "ja":
 		return true
 	default:
@@ -413,8 +422,8 @@ func (s *synthesizer) request(text, contextID string, more bool) map[string]any 
 		fieldTranscript: text,
 		"continue":      more,
 		"context_id":    contextID,
-		"model_id":      s.cfg.Model,
-		"voice":         map[string]any{"mode": "id", "id": s.cfg.VoiceID},
+		"model_id":      s.live.Model.Or(s.cfg.Model),
+		"voice":         map[string]any{"mode": "id", "id": s.live.Voice.Or(s.cfg.VoiceID)},
 		"output_format": map[string]any{
 			"container":   s.cfg.Container,
 			"encoding":    s.cfg.Encoding,
@@ -430,14 +439,14 @@ func (s *synthesizer) request(text, contextID string, more bool) map[string]any 
 	if s.cfg.MaxBufferDelayMs != nil {
 		msg["max_buffer_delay_ms"] = *s.cfg.MaxBufferDelayMs
 	}
-	if lang := cartesiaLanguage(s.cfg.Language); lang != "" {
+	if lang := s.live.Language.Or(cartesiaLanguage(s.cfg.Language)); lang != "" {
 		msg["language"] = lang
 	}
-	if s.cfg.GenerationConfig != nil {
-		msg["generation_config"] = s.cfg.GenerationConfig
+	if gen := s.live.GenerationConfig.Or(s.cfg.GenerationConfig); gen != nil {
+		msg["generation_config"] = gen
 	}
-	if s.cfg.PronunciationDictID != "" {
-		msg["pronunciation_dict_id"] = s.cfg.PronunciationDictID
+	if dict := s.live.PronunciationDictID.Or(s.cfg.PronunciationDictID); dict != "" {
+		msg["pronunciation_dict_id"] = dict
 	}
 	return msg
 }

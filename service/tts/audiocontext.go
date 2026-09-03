@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -40,6 +41,9 @@ type AudioContextHost interface {
 	RemoveAudioContext(contextID string)
 	// AudioContextAvailable reports whether the context is still open.
 	AudioContextAvailable(contextID string) bool
+	// RotateTurnContext closes the turn's context out and opens a fresh one for
+	// the sentences still to come. See Base.RotateTurnContext.
+	RotateTurnContext(ctx context.Context)
 }
 
 // ContextSynthesizer is an optional interface a Synthesizer implements when its
@@ -478,6 +482,36 @@ func (b *Base) RemoveAudioContext(contextID string) {
 // AudioContextAvailable reports whether the context is still open.
 func (b *Base) AudioContextAvailable(contextID string) bool {
 	return b.audioContextFor(contextID) != nil
+}
+
+// RotateTurnContext closes the turn's context out and opens a fresh one for the
+// sentences still to come.
+//
+// It is for a provider whose settings are fixed for the length of a context: a
+// voice or a model changed mid-turn takes effect only on a new one, so the turn
+// is split in two and the rest of it is spoken in the new voice.
+//
+// The sentence the old context was still holding is finalized first, so its
+// already-heard prefix is still reported. Without that a change landing
+// mid-sentence would abandon it before it was promoted, and that prefix would
+// go missing from the transcript.
+// It runs on the frame goroutine, which is where the turn's context is owned and
+// where a settings update is handled.
+func (b *Base) RotateTurnContext(ctx context.Context) {
+	current := b.turnContext
+	if current == "" {
+		// Nothing is being spoken, so the next turn opens its own context with
+		// the new settings already in force.
+		return
+	}
+
+	b.pushSequencerFrames(ctx, b.sequencer.Finalize(current))
+	if b.AudioContextAvailable(current) {
+		if f, ok := b.syn.(AudioFlusher); ok {
+			f.FlushAudio(ctx, current)
+		}
+	}
+	b.turnContext = uuid.NewString()
 }
 
 // refreshAudioContext resets a context's idle timeout without emitting

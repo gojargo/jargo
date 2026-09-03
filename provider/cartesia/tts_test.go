@@ -9,13 +9,13 @@ import (
 // timedSynthesizer must satisfy tts.WordTimestamps so the base takes the
 // word-aligned path when a caller opts in.
 func TestTimedSynthesizerImplementsWordTimestamps(t *testing.T) {
-	var _ tts.WordTimestamps = &timedSynthesizer{synthesizer: &synthesizer{}}
+	var _ tts.WordTimestamps = &timedSynthesizer{synthesizer: newSynthesizer(Config{})}
 }
 
 // A plain Cartesia service must not implement the word-timestamp interface, so
 // existing callers keep the unchanged behavior.
 func TestPlainConfigDoesNotOptIn(t *testing.T) {
-	var s tts.Synthesizer = &synthesizer{cfg: Config{}}
+	var s tts.Synthesizer = newSynthesizer(Config{})
 	if _, ok := s.(tts.WordTimestamps); ok {
 		t.Fatal("plain synthesizer must not implement tts.WordTimestamps")
 	}

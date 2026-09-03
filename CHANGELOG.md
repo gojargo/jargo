@@ -63,6 +63,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Cartesia synthesis takes settings while the pipeline runs.** The voice, the
+  model, the language, the generation controls and the pronunciation dictionary
+  can all change mid-call. Cartesia fixes the first three for the length of a
+  context, so a change to any of them closes the turn's context out and opens a
+  new one: the rest of the turn is spoken with the new settings, and the
+  sentences already sent finish as they were rather than being cut off. The
+  others go out on the next request.
 - **Cartesia synthesis holds one connection open for the session.** It dialed a
   new WebSocket for every sentence, paying a TLS handshake in front of each one
   and losing the ability to stream a turn as a single utterance. It now opens the
