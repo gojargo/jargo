@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 // sttSession is what the fake STT endpoint saw: the query it was dialed with,
@@ -242,5 +243,57 @@ func TestSTTStreamCloseSaysDone(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("the endpoint was never told the audio was done")
+	}
+}
+
+// TestSTTStreamFinalizes checks the service asks Cartesia to flush the
+// transcript when the speech ends, rather than waiting on Cartesia's own
+// endpointing. The stream implements stt.Finalizer, which is what has the base
+// call it as the VAD reports the user stopped.
+func TestSTTStreamFinalizes(t *testing.T) {
+	endpoint, got := sttServer(t, nil)
+	c := newSTTConnector(sttConfigFor(endpoint))
+
+	stream, err := c.Connect(t.Context(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	f, ok := stream.(stt.Finalizer)
+	if !ok {
+		t.Fatal("the stream does not implement stt.Finalizer, so the base never flushes it")
+	}
+	if err := f.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	select {
+	case msg := <-got.text:
+		if msg != "finalize" {
+			t.Errorf("flush message = %q, want finalize", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the endpoint was never asked to flush")
+	}
+}
+
+// TestSTTKeepalive checks an idle session is held open. Cartesia closes a
+// connection that has carried nothing for three minutes, and silence submitted
+// inside that window resets its timer.
+func TestSTTKeepalive(t *testing.T) {
+	c := newSTTConnector(sttConfigFor("wss://example.invalid"))
+	k, ok := any(c).(stt.Keepaliver)
+	if !ok {
+		t.Fatal("the connector does not implement stt.Keepaliver, so an idle session is dropped")
+	}
+	opts := k.Keepalive()
+	if opts.Timeout != sttKeepaliveTimeout || opts.Interval != sttKeepaliveInterval {
+		t.Errorf("keepalive = %+v, want timeout %s every %s",
+			opts, sttKeepaliveTimeout, sttKeepaliveInterval)
+	}
+	if opts.Timeout >= 3*time.Minute {
+		t.Errorf("keepalive timeout %s does not fit inside Cartesia's three-minute idle window",
+			opts.Timeout)
 	}
 }

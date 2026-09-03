@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
@@ -22,6 +23,9 @@ import (
 const (
 	defaultTurnsURL   = "wss://api.cartesia.ai/stt/turns/websocket"
 	defaultTurnsModel = "ink-2"
+	// turnsDrainWindow is how long the server is given to flush the turns it was
+	// still holding once it has been told the session is closing.
+	turnsDrainWindow = 2 * time.Second
 )
 
 // Cartesia turn-detection message types.
@@ -41,6 +45,10 @@ const (
 	turnsResume = "turn.resume"
 	// turnsError reports a server-side failure.
 	turnsError = "error"
+
+	// turnsClose asks the server to finish the session, so it flushes whatever
+	// turn it was still holding before the socket goes.
+	turnsClose = "close"
 )
 
 // TurnsSTTConfig configures the Cartesia turn-detecting STT service.
@@ -66,6 +74,28 @@ type TurnsSTTConfig struct {
 	// binds them to a connection, so changing them while the pipeline runs
 	// reopens the session.
 	Keyterm []string
+	// WatchdogMinTimeout is the shortest gap in the audio the server is left to
+	// sit through mid-turn before silence is submitted. The server decides the
+	// end of a turn from the audio it is fed, so a turn it has opened never ends
+	// while the audio is stopped. 0 uses 500ms.
+	WatchdogMinTimeout time.Duration
+
+	// OnTurnStart is called when the server reports the start of a turn, with
+	// the transcript it carries (usually empty). It runs on the read goroutine,
+	// so it must not block.
+	OnTurnStart func(transcript string)
+	// OnTurnUpdate is called with the turn's transcript so far. Transcripts are
+	// cumulative, so each one supersedes the last. Same rules as OnTurnStart.
+	OnTurnUpdate func(transcript string)
+	// OnTurnEagerEnd is called when the server predicts the turn has ended,
+	// which OnTurnResume may retract. Same rules as OnTurnStart.
+	OnTurnEagerEnd func(transcript string)
+	// OnTurnResume is called when the user carried on speaking after an eager
+	// end, retracting it. Same rules as OnTurnStart.
+	OnTurnResume func()
+	// OnTurnEnd is called with the final transcript for a completed turn. Same
+	// rules as OnTurnStart.
+	OnTurnEnd func(transcript string)
 }
 
 // Validate reports whether the configuration is usable.
@@ -153,6 +183,13 @@ func (c *turnsConnector) Metadata() stt.Metadata {
 	}
 }
 
+// TurnWatchdog keeps a turn from stalling. The server decides where a turn ends
+// from the audio it is fed, so a turn it has opened never ends while the audio
+// is stopped; silence stands in for the audio that stopped.
+func (c *turnsConnector) TurnWatchdog() stt.TurnWatchdogOptions {
+	return stt.TurnWatchdogOptions{MinTimeout: c.cfg.WatchdogMinTimeout}
+}
+
 // Connect opens a turn-detection session and waits for the server to
 // acknowledge it.
 func (c *turnsConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
@@ -174,13 +211,43 @@ func (c *turnsConnector) Connect(ctx context.Context, sampleRate int) (stt.Strea
 	if err != nil {
 		return nil, err
 	}
-	return &turnsStream{conn: conn, ctx: ctx}, nil
+	s := &turnsStream{conn: conn, ctx: ctx, cfg: c.cfg}
+	if err := s.awaitConnected(); err != nil {
+		_ = conn.Close(websocket.StatusInternalError, "no session acknowledgement")
+		return nil, err
+	}
+	return s, nil
 }
 
 type turnsStream struct {
 	conn    *wsutil.Conn
 	ctx     context.Context
+	cfg     TurnsSTTConfig
 	writeMu sync.Mutex
+}
+
+// awaitConnected reads until the server acknowledges the session, so audio is
+// not sent to one it has not opened yet. Nothing else is sent before the
+// acknowledgement, so nothing is consumed by waiting for it.
+func (s *turnsStream) awaitConnected() error {
+	for {
+		_, data, err := s.conn.Read(s.ctx)
+		if err != nil {
+			return err
+		}
+		var m turnsMessage
+		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		switch m.Type {
+		case turnsConnected:
+			slog.Debug("connected to the Cartesia turn-detection endpoint",
+				"request_id", m.RequestID)
+			return nil
+		case turnsError:
+			return fmt.Errorf("%w: %s", errSTTProtocol, m.Message)
+		}
+	}
 }
 
 // turnsMessage is the subset of a Cartesia turn message we read.
@@ -189,6 +256,7 @@ type turnsMessage struct {
 	// Transcript is the turn's text so far. It is cumulative, not a delta.
 	Transcript string `json:"transcript"`
 	Message    string `json:"message"`
+	RequestID  string `json:"request_id"`
 }
 
 // Send writes a chunk of PCM as a binary frame.
@@ -219,31 +287,71 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 		}
 		switch m.Type {
 		case turnsUpdate:
+			call(s.cfg.OnTurnUpdate, m.Transcript)
 			if m.Transcript == "" {
 				continue
 			}
 			return []stt.Result{{Text: m.Transcript, Final: false}}, nil
 		case turnsStart:
+			call(s.cfg.OnTurnStart, m.Transcript)
 			return []stt.Result{{Speech: stt.SpeechStarted}}, nil
 		case turnsEnd:
+			call(s.cfg.OnTurnEnd, m.Transcript)
 			if m.Transcript == "" {
 				return []stt.Result{{Speech: stt.SpeechStopped}}, nil
 			}
 			return []stt.Result{{
 				Text: m.Transcript, Final: true, EndOfTurn: true, Speech: stt.SpeechStopped,
 			}}, nil
+		case turnsEagerEnd:
+			// A prediction the server may retract, so it opens no boundary here.
+			// It is reported for an application that wants to act on it early.
+			call(s.cfg.OnTurnEagerEnd, m.Transcript)
+			continue
+		case turnsResume:
+			// The eager end above, retracted.
+			if s.cfg.OnTurnResume != nil {
+				s.cfg.OnTurnResume()
+			}
+			continue
 		case turnsError:
 			return nil, fmt.Errorf("%w: %s", errSTTProtocol, m.Message)
-		case turnsConnected, turnsEagerEnd, turnsResume:
-			// Session bookkeeping, and a prediction the server may retract, with
-			// no transcript to emit and no boundary to report.
+		case turnsConnected:
+			// Session bookkeeping, with no transcript to emit and no boundary to
+			// report. Already consumed at connect time, so this is a repeat.
 			continue
 		}
 	}
 }
 
+// Drain tells the server the session is finishing, so it flushes the turn it was
+// still holding rather than losing it with the socket. The window is what the
+// results already on their way are given to arrive.
+func (s *turnsStream) Drain() (time.Duration, error) {
+	b, err := json.Marshal(map[string]any{"type": turnsClose})
+	if err != nil {
+		return 0, err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	// Its own context: the session's is canceled as the pipeline stops, and the
+	// request is what the drain is waiting on.
+	if err := s.conn.Write(context.Background(), websocket.MessageText, b); err != nil {
+		return 0, err
+	}
+	return turnsDrainWindow, nil
+}
+
 // Close tears the session down. Cartesia ends a turn session by closing the
-// socket; there is no finalize command.
+// socket; there is no finalize command, and what it was still holding was asked
+// for by Drain.
 func (s *turnsStream) Close() error {
 	return s.conn.Close(websocket.StatusNormalClosure, "")
+}
+
+// call runs an optional turn listener.
+func call(fn func(string), transcript string) {
+	if fn != nil {
+		fn(transcript)
+	}
 }

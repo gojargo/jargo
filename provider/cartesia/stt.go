@@ -41,6 +41,12 @@ const (
 	maxKeytermChars = 1200
 	// Only the ink-2 model family honors keyterms.
 	keytermModelPrefix = "ink-2"
+
+	// Cartesia closes a connection that has been idle for three minutes. The
+	// timeout resets on every message sent, so silence is submitted well inside
+	// the window rather than at the edge of it.
+	sttKeepaliveTimeout  = 120 * time.Second
+	sttKeepaliveInterval = 30 * time.Second
 )
 
 // STTConfig configures the Cartesia streaming STT service.
@@ -125,6 +131,13 @@ func newSTTSettings(cfg STTConfig) *STTSettings {
 		s.Keyterm = settings.Set(cfg.Keyterm)
 	}
 	return s
+}
+
+// Keepalive holds an idle session open. Cartesia closes a connection that has
+// carried nothing for three minutes, and the timeout resets on every message
+// sent, so silence well inside that window is enough.
+func (c *sttConnector) Keepalive() stt.KeepaliveOptions {
+	return stt.KeepaliveOptions{Timeout: sttKeepaliveTimeout, Interval: sttKeepaliveInterval}
 }
 
 // Metadata reports Cartesia's time-to-final-segment latency to downstream
@@ -253,6 +266,15 @@ func (s *sttStream) Send(audio []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.conn.Write(s.ctx, websocket.MessageBinary, audio)
+}
+
+// Finalize tells Cartesia the speech has ended, so it flushes the transcript for
+// what it has rather than waiting on its own endpointing. The session carries on
+// afterwards for the next utterance.
+func (s *sttStream) Finalize() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(s.ctx, websocket.MessageText, []byte("finalize"))
 }
 
 // Recv reads the next transcript message, surfacing interim and final results.
