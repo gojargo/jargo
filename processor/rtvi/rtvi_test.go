@@ -142,7 +142,7 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 		t.Fatalf("expected bot-tts-started, got %+v", got)
 	}
 	// The text the TTS reports speaking, not the text on its way into it.
-	task.QueueFrame(frames.NewTTSTextFrame("sunny"))
+	task.QueueFrame(frames.NewTTSTextFrame("sunny", frames.AggregationSentence))
 	got := waitMessage(t, out)
 	if got.Type != rtvi.TypeBotTTSText {
 		t.Fatalf("expected bot-tts-text, got %+v", got)

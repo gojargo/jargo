@@ -236,7 +236,7 @@ func catalog() []catalogEntry {
 		},
 		{
 			label: "TTSTextFrame", cat: data, wantString: "hello",
-			build: func() frames.Frame { return frames.NewTTSTextFrame("hello") },
+			build: func() frames.Frame { return frames.NewTTSTextFrame("hello", frames.AggregationSentence) },
 		},
 		{
 			label: "TTSSpeakFrame", cat: data, wantString: "hello",
@@ -656,7 +656,7 @@ func TestServiceMetadataInterface(t *testing.T) {
 // TestTTSTextFrameOriginal checks which text is recorded in the LLM context: the
 // raw text when the TTS rewrote it, otherwise the spoken text.
 func TestTTSTextFrameOriginal(t *testing.T) {
-	f := frames.NewTTSTextFrame("one hundred")
+	f := frames.NewTTSTextFrame("one hundred", frames.AggregationSentence)
 	if got := f.Original(); got != "one hundred" {
 		t.Errorf("Original() = %q, want the spoken text when RawText is unset", got)
 	}

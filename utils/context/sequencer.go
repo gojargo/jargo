@@ -412,8 +412,12 @@ func (s *AggregatedFrameSequencer) promote(
 	out := []frames.Frame{frame}
 
 	if !buildTracker {
-		wordFrame := frames.NewTTSTextFrame(agg.userFacing)
+		// No timings are coming, so the whole unit is spoken at once: the frame
+		// stands for the sentence rather than a word within it.
+		wordFrame := frames.NewTTSTextFrame(agg.userFacing, frames.AggregationSentence)
 		wordFrame.RawText = agg.llm
+		wordFrame.ContextID = contextID
+		wordFrame.WillBeSpoken = true
 		wordFrame.AppendToContext = appendToContext
 		out = append(out, wordFrame)
 		out = append(out, s.completeSpokenSlotLocked()...)
@@ -497,7 +501,7 @@ func (s *AggregatedFrameSequencer) buildProgressFrame(
 func (s *AggregatedFrameSequencer) buildWordFrame(
 	text string, pts int64, contextID, rawText string, suppress, includesInterFrame bool,
 ) *frames.TTSTextFrame {
-	f := frames.NewTTSTextFrame(text)
+	f := frames.NewTTSTextFrame(text, frames.AggregationWord)
 	f.SetPTS(pts)
 	f.ContextID = contextID
 	f.RawText = rawText

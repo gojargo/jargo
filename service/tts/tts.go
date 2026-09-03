@@ -1194,14 +1194,15 @@ func (b *Base) pushTTSFrames(
 	c.addText(prepared)
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
 		aggregated, contextID, prepared, appendToContext, b.wordPath(), false))
-	return b.runTTS(ctx, c, contextID, original, prepared, appendToContext)
+	return b.runTTS(ctx, c, contextID, original, prepared, agg.Type, appendToContext)
 }
 
 // runTTS asks the provider to speak one unit of text and routes what it yields
 // to the synthesis context. A provider whose audio arrives later on its own
 // receive loop yields nothing here and appends it itself.
 func (b *Base) runTTS(
-	ctx context.Context, c *audioContext, contextID, original, prepared string, appendToContext bool,
+	ctx context.Context, c *audioContext, contextID, original, prepared string,
+	by frames.AggregationType, appendToContext bool,
 ) error {
 	// Every frame the provider yields is routed to its context, so audio and
 	// anything else it reports stay in the order it produced them.
@@ -1254,8 +1255,9 @@ func (b *Base) runTTS(
 		// depend on the provider having answered inline. One that delivers its
 		// audio later on its own receive loop yields nothing here, and gating on
 		// that left every one of its turns out of the context entirely.
-		text := frames.NewTTSTextFrame(original)
+		text := frames.NewTTSTextFrame(original, by)
 		text.ContextID = contextID
+		text.WillBeSpoken = true
 		text.AppendToContext = appendToContext
 		b.AppendToAudioContext(contextID, text)
 		b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot())
