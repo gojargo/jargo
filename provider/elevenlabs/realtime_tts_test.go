@@ -682,3 +682,11 @@ func TestRealtimeCharAlignmentStripLeadingSpaces(t *testing.T) {
 		t.Errorf("chars = %q, want a later message's spacing kept", strings.Join(later.Chars, ""))
 	}
 }
+
+// RotateTurnContext is not exercised here: these providers keep no settings
+// that are fixed for the length of a context.
+func (h *fakeHost) RotateTurnContext(context.Context) {}
+
+// RotateTurnContext is not exercised here: these providers keep no settings
+// that are fixed for the length of a context.
+func (h *offsetHost) RotateTurnContext(context.Context) {}

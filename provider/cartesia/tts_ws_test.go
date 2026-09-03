@@ -131,12 +131,13 @@ func chunk(pcm []byte) map[string]any {
 
 // ttsHost stands in for the tts.Base a provider appends its audio to.
 type ttsHost struct {
-	mu     sync.Mutex
-	audio  []byte
-	words  []uctx.WordTiming
-	opts   tts.WordTimingOptions
-	frames []string
-	closed bool
+	mu        sync.Mutex
+	audio     []byte
+	words     []uctx.WordTiming
+	opts      tts.WordTimingOptions
+	frames    []string
+	closed    bool
+	rotations int
 }
 
 func (h *ttsHost) AppendToAudioContext(_ string, f frames.Frame) {
@@ -266,7 +267,7 @@ func TestNewServices(t *testing.T) {
 // TestSynthesizerMetadata checks the service reports the model and voice the
 // synthesis is billed against.
 func TestSynthesizerMetadata(t *testing.T) {
-	s := &synthesizer{cfg: Config{Model: "sonic-3.5", VoiceID: "voice-1", SampleRate: 24000}}
+	s := newSynthesizer(Config{Model: "sonic-3.5", VoiceID: "voice-1", SampleRate: 24000})
 	meta := s.Metadata()
 	if meta.Model != "sonic-3.5" || meta.VoiceID != "voice-1" {
 		t.Errorf("Metadata() = %+v, want the configured model and voice", meta)
@@ -283,7 +284,7 @@ func TestRunTTSRequestShape(t *testing.T) {
 	want := []byte{0x11, 0x22, 0x33, 0x44}
 	endpoint, seen := ttsServer(t, []map[string]any{chunk(want), {"type": "done"}})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := speak(t, s, "hello there")
 
 	pcm, _, order, _ := host.snapshot()
@@ -347,7 +348,7 @@ func TestRunTTSRequestShape(t *testing.T) {
 func TestRunTTSOptionalFields(t *testing.T) {
 	endpoint, seen := ttsServer(t, []map[string]any{{"type": "done"}})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	speak(t, s, "hi")
 	got := seen.first()
 	for _, f := range []string{"language", "generation_config", "pronunciation_dict_id"} {
@@ -362,7 +363,7 @@ func TestRunTTSOptionalFields(t *testing.T) {
 	cfg.Language = language.French
 	cfg.GenerationConfig = &GenerationConfig{Speed: &speed, Emotion: "excited"}
 	cfg.PronunciationDictID = "dict-1"
-	speak(t, &synthesizer{cfg: cfg}, "hi")
+	speak(t, newSynthesizer(cfg), "hi")
 
 	got = seen.first()
 	if got["language"] != "fr" {
@@ -391,7 +392,7 @@ func TestRunTTSJoinsChunks(t *testing.T) {
 		{"type": "done"},
 	})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := speak(t, s, "hi")
 	if pcm, _, _, _ := host.snapshot(); string(pcm) != string([]byte{1, 2, 3, 4}) {
 		t.Errorf("PCM = % x, want the chunks up to done", pcm)
@@ -404,7 +405,7 @@ func TestRunTTSJoinsChunks(t *testing.T) {
 func TestRunTTSSharesOneConnection(t *testing.T) {
 	endpoint, seen := ttsServer(t, []map[string]any{chunk([]byte{1, 2})})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
 	t.Cleanup(func() { _ = s.Close() })
@@ -430,7 +431,7 @@ func TestRunTTSSharesOneConnection(t *testing.T) {
 func TestFlushAudioClosesTheTurn(t *testing.T) {
 	endpoint, seen := ttsServer(t, []map[string]any{chunk([]byte{1, 2})})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
 	t.Cleanup(func() { _ = s.Close() })
@@ -459,7 +460,7 @@ func TestFlushAudioClosesTheTurn(t *testing.T) {
 func TestInterruptionCancelsTheContext(t *testing.T) {
 	endpoint, seen := ttsServer(t, []map[string]any{chunk([]byte{1, 2})})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
 	t.Cleanup(func() { _ = s.Close() })
@@ -483,7 +484,7 @@ func TestInterruptionCancelsTheContext(t *testing.T) {
 func TestAudioForAClosedContextIsDropped(t *testing.T) {
 	endpoint, _ := ttsServer(t, []map[string]any{chunk([]byte{1, 2}), {"type": "done"}})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	host.RemoveAudioContext("c1") // the context is gone before any audio lands
 	s.SetAudioContextHost(host)
@@ -503,7 +504,7 @@ func TestAudioForAClosedContextIsDropped(t *testing.T) {
 func TestRunTTSServerError(t *testing.T) {
 	endpoint, _ := ttsServer(t, []map[string]any{{"type": "error", "message": "voice not found"}})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := speak(t, s, "hi")
 	if _, _, order, _ := host.snapshot(); len(order) == 0 || order[len(order)-1] != "stopped" {
 		t.Errorf("frames = %v, want the context closed out", order)
@@ -518,7 +519,7 @@ func TestRunTTSDialError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := &synthesizer{cfg: ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http"))}
+	s := newSynthesizer(ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http")))
 	s.SetAudioContextHost(&ttsHost{})
 	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err == nil {
 		t.Fatal("RunTTS on a refused session = nil, want an error")
@@ -541,7 +542,7 @@ func TestRunTTSTimedRequestsTimestamps(t *testing.T) {
 
 	cfg := ttsConfig(endpoint)
 	cfg.WordTimestamps = true
-	s := &timedSynthesizer{synthesizer: &synthesizer{cfg: cfg}}
+	s := &timedSynthesizer{synthesizer: newSynthesizer(cfg)}
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
 	t.Cleanup(func() { _ = s.Close() })
@@ -585,7 +586,7 @@ func TestRunTTSTimedIgnoresTimestampsOnThePlainPath(t *testing.T) {
 		{"type": "done"},
 	})
 
-	s := &synthesizer{cfg: ttsConfig(endpoint)}
+	s := newSynthesizer(ttsConfig(endpoint))
 	host := speak(t, s, "Hello")
 	if _, words, _, _ := host.snapshot(); len(words) != 0 {
 		t.Errorf("the plain path reported %v, want no word timings", words)
@@ -598,14 +599,14 @@ func TestRunTTSTimedIgnoresTimestampsOnThePlainPath(t *testing.T) {
 func TestSpacelessLanguage(t *testing.T) {
 	spaceless := []language.Language{language.Chinese, language.ChineseTW, language.Japanese}
 	for _, l := range spaceless {
-		s := &synthesizer{cfg: Config{Language: l}}
+		s := newSynthesizer(Config{Language: l})
 		if !s.spacelessLanguage() {
 			t.Errorf("spacelessLanguage(%q) = false, want true", l)
 		}
 	}
 	spaced := []language.Language{language.English, language.Korean, language.French, language.Language("")}
 	for _, l := range spaced {
-		s := &synthesizer{cfg: Config{Language: l}}
+		s := newSynthesizer(Config{Language: l})
 		if s.spacelessLanguage() {
 			t.Errorf("spacelessLanguage(%q) = true, want false", l)
 		}
@@ -700,13 +701,13 @@ func TestRunTTSSendsMaxBufferDelay(t *testing.T) {
 	cfg := ttsConfig(endpoint)
 	zero := 0
 	cfg.MaxBufferDelayMs = &zero
-	speak(t, &synthesizer{cfg: cfg}, "hi")
+	speak(t, newSynthesizer(cfg), "hi")
 	if got := seen.first(); got["max_buffer_delay_ms"] != float64(0) {
 		t.Errorf("max_buffer_delay_ms = %v, want 0", got["max_buffer_delay_ms"])
 	}
 
 	endpoint, seen = ttsServer(t, []map[string]any{{"type": "done"}})
-	speak(t, &synthesizer{cfg: ttsConfig(endpoint)}, "hi")
+	speak(t, newSynthesizer(ttsConfig(endpoint)), "hi")
 	if _, present := seen.first()["max_buffer_delay_ms"]; present {
 		t.Error("max_buffer_delay_ms was sent with no window configured")
 	}
@@ -740,4 +741,19 @@ func TestSpellTagReachesTheServiceWhole(t *testing.T) {
 	if !strings.Contains(transcript, "<spell>A.B.C.</spell>") {
 		t.Errorf("transcript = %q, want the spell tag whole inside it", transcript)
 	}
+}
+
+// rotations counts the turn-context rotations the provider asked for, which is
+// how a change to a setting Cartesia fixes per context takes effect.
+func (h *ttsHost) RotateTurnContext(context.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rotations++
+}
+
+// rotated is how many times the turn's context has been rotated.
+func (h *ttsHost) rotated() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rotations
 }
