@@ -1,6 +1,10 @@
 package turns
 
-import "github.com/gojargo/jargo/audio/turn"
+import (
+	"fmt"
+
+	"github.com/gojargo/jargo/audio/turn"
+)
 
 // UserTurnStrategies holds the start and stop strategy chains a controller runs.
 // Per frame, start strategies run in order until one returns Stop; then stop
@@ -85,4 +89,38 @@ func ExternalStrategies(cfg ExternalStrategiesConfig) UserTurnStrategies {
 		Stop:     []StopStrategy{NewExternalStop(ExternalStopConfig{})},
 		external: &enabled,
 	}
+}
+
+// ApplyRealtimeServiceMode strips the transcript dependence from these chains,
+// for a pipeline whose conversation is driven by a speech-to-speech service.
+//
+// Two things go. The transcription start strategy, because a transcript must not
+// open a turn when the service is the one listening to the audio. And the
+// transcript wait on every stop strategy that has one, so a turn ends as soon as
+// the VAD or the end-of-turn model says the speech is over rather than waiting
+// on a transcript that is beside the point.
+//
+// It reports what it changed, so a caller can say so: strategies the application
+// configured itself are worth a warning, since the mutation is not what it
+// asked for.
+func (s *UserTurnStrategies) ApplyRealtimeServiceMode() (dropped, flipped []string) {
+	kept := make([]StartStrategy, 0, len(s.Start))
+	for _, st := range s.Start {
+		if _, ok := st.(*TranscriptionStart); ok {
+			dropped = append(dropped, fmt.Sprintf("%T", st))
+			continue
+		}
+		kept = append(kept, st)
+	}
+	s.Start = kept
+
+	for _, st := range s.Stop {
+		w, ok := st.(TranscriptWaiter)
+		if !ok || !w.WaitForTranscript() {
+			continue
+		}
+		w.SetWaitForTranscript(false)
+		flipped = append(flipped, fmt.Sprintf("%T", st))
+	}
+	return dropped, flipped
 }

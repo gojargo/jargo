@@ -201,6 +201,21 @@ type StopStrategy interface {
 	attach(self StopStrategy, env strategyEnv)
 }
 
+// TranscriptWaiter is an optional interface a stop strategy implements when it
+// can be told whether to hold a turn open until a transcript arrives.
+//
+// A pipeline driven by a speech-to-speech service takes transcripts off the
+// critical path: the service is answering the audio, so waiting on a transcript
+// only delays the turn. The user aggregator flips this on the strategies that
+// expose it when such a service announces itself.
+type TranscriptWaiter interface {
+	StopStrategy
+	// WaitForTranscript reports whether the turn is held open for a transcript.
+	WaitForTranscript() bool
+	// SetWaitForTranscript changes it for the turns that follow.
+	SetWaitForTranscript(wait bool)
+}
+
 // StopStrategyBase is embedded by every stop strategy.
 type StopStrategyBase struct {
 	// EnableUserSpeakingFrames broadcasts a UserStoppedSpeakingFrame on turn stop.

@@ -88,6 +88,12 @@ func NewTurnAnalyzerStop(cfg TurnAnalyzerConfig) *TurnAnalyzerStop {
 	return s
 }
 
+// WaitForTranscript reports whether the turn is held open for a transcript.
+func (s *TurnAnalyzerStop) WaitForTranscript() bool { return s.waitForTx }
+
+// SetWaitForTranscript changes it for the turns that follow.
+func (s *TurnAnalyzerStop) SetWaitForTranscript(wait bool) { s.waitForTx = wait }
+
 // Process feeds the analyzer and decides end-of-turn.
 func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 	if s.analyzer == nil {
@@ -375,6 +381,12 @@ func NewSpeechTimeoutStop(cfg SpeechTimeoutConfig) *SpeechTimeoutStop {
 	return s
 }
 
+// WaitForTranscript reports whether the turn is held open for a transcript.
+func (s *SpeechTimeoutStop) WaitForTranscript() bool { return s.waitForTx }
+
+// SetWaitForTranscript changes it for the turns that follow.
+func (s *SpeechTimeoutStop) SetWaitForTranscript(wait bool) { s.waitForTx = wait }
+
 // Process runs the silence timers and decides end-of-turn.
 func (s *SpeechTimeoutStop) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
@@ -589,6 +601,12 @@ func NewExternalStop(cfg ExternalStopConfig) *ExternalStop {
 // ResolvesProposedTurnStopFrames reports that this strategy resolves proposals
 // into turn stops.
 func (s *ExternalStop) ResolvesProposedTurnStopFrames() bool { return true }
+
+// WaitForTranscript reports whether the turn is held open for a transcript.
+func (s *ExternalStop) WaitForTranscript() bool { return s.waitForTx }
+
+// SetWaitForTranscript changes it for the turns that follow.
+func (s *ExternalStop) SetWaitForTranscript(wait bool) { s.waitForTx = wait }
 
 // Setup starts the timer that retries finalization while a turn is open, so a
 // transcript arriving after the stop signal still ends the turn.
