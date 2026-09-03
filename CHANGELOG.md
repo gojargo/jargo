@@ -28,6 +28,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   onward reason; the service warns at construction when it is configured on a
   model that cannot, which the API refuses rather than ignores. The encrypted
   reasoning is not yet carried from one turn to the next.
+- **`turn.NewHTTPSmartTurn`, an end-of-turn analyzer that asks a remote
+  service.** It buffers and segments the turn's audio the way the local analyzer
+  does and posts that segment as a NumPy array for scoring, for a deployment
+  that runs the model somewhere other than in the bot. A request is given the
+  silence window to answer in; one that outruns it, like any other failure,
+  leaves the turn to the stop-seconds safety net rather than cutting the user
+  off.
 - **`processor.FrameLogger` and `processor.AsyncGeneratorProcessor`.** The
   first logs each frame and its direction, skipping the ones that arrive many
   times a second; the second passes frames through and serializes each for a

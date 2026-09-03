@@ -106,7 +106,10 @@ pipeline.
 
 The start/stop chains are pluggable (`turns.StartStrategy` / `turns.StopStrategy`):
 VAD, transcription, min-words and wake-phrase starts; Smart-Turn, speech-timeout
-and external stops, plus a `deferred` wrapper. `turns.FilterIncompleteUserTurnStrategies`
+and external stops, plus a `deferred` wrapper. Smart Turn runs locally by default
+(`turn.NewSmartTurnV3`); `turn.NewHTTPSmartTurn` asks a remote service for the
+same verdict instead, for a deployment that scores turns somewhere other than in
+the bot. `turns.FilterIncompleteUserTurnStrategies`
 together with a `turns.CompletionFilter` placed after the LLM add the optional
 ✓/○/◐ LLM turn-completion gate, where the model itself judges whether the user's
 turn is semantically complete (prepend `turns.CompletionInstructions` to the
