@@ -78,7 +78,12 @@ func runBot(conn *rtc.Connection) {
 	// --- the provider stack: the only part that differs between examples ---
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate})
 	llm := anthropic.NewLLM(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
-	tts := cartesia.NewTTS(cartesia.Config{APIKey: os.Getenv("CARTESIA_API_KEY")})
+	tts := cartesia.NewTTS(cartesia.Config{
+		APIKey: os.Getenv("CARTESIA_API_KEY"),
+		// Cartesia has no default voice, so the example picks one. Set
+		// CARTESIA_VOICE_ID to hear a different one.
+		VoiceID: envOr("CARTESIA_VOICE_ID", "694f9389-aac1-45b6-b726-9d9369183238"),
+	})
 	// ----------------------------------------------------------------------
 
 	params := transport.DefaultParams()
@@ -169,4 +174,12 @@ func withCORS(h http.HandlerFunc) http.HandlerFunc {
 		}
 		h(w, r)
 	}
+}
+
+// envOr is the environment variable, or fallback when it is unset.
+func envOr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return fallback
 }

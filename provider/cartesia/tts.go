@@ -67,9 +67,6 @@ func ttsDefaults(cfg Config) Config {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	if cfg.VoiceID == "" {
-		cfg.VoiceID = defaultVoiceID
-	}
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
 	}

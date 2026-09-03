@@ -90,6 +90,10 @@ func chunk(pcm []byte) map[string]any {
 	return map[string]any{"type": "chunk", "data": base64.StdEncoding.EncodeToString(pcm)}
 }
 
+// testVoiceID is the voice these tests synthesize with. Cartesia has no default
+// one, so every configuration names it.
+const testVoiceID = "694f9389-aac1-45b6-b726-9d9369183238"
+
 // ttsConfig is a config pointed at endpoint with every default filled in the way
 // NewTTS fills them, so the request under test is the real one.
 func ttsConfig(endpoint string) Config {
@@ -98,7 +102,7 @@ func ttsConfig(endpoint string) Config {
 		URL:        endpoint,
 		Version:    defaultVersion,
 		Model:      defaultModel,
-		VoiceID:    defaultVoiceID,
+		VoiceID:    testVoiceID,
 		SampleRate: defaultSampleRate,
 		Encoding:   defaultEncoding,
 		Container:  defaultContainer,
@@ -130,8 +134,9 @@ func collect(t *testing.T, s *synthesizer, text string) []byte {
 // TestConfigValidate pins which fields the TTS and STT configs require.
 func TestConfigValidate(t *testing.T) {
 	providertest.Configs(t, []providertest.ConfigCase{
-		{Name: "missing TTS API key", Cfg: Config{}, Valid: false},
-		{Name: "TTS API key only", Cfg: Config{APIKey: "k"}, Valid: true},
+		{Name: "missing TTS API key", Cfg: Config{VoiceID: testVoiceID}, Valid: false},
+		{Name: "missing TTS voice", Cfg: Config{APIKey: "k"}, Valid: false},
+		{Name: "TTS key and voice", Cfg: Config{APIKey: "k", VoiceID: testVoiceID}, Valid: true},
 		{Name: "missing STT API key", Cfg: STTConfig{}, Valid: false},
 		{Name: "STT API key only", Cfg: STTConfig{APIKey: "k"}, Valid: true},
 	})
@@ -140,8 +145,9 @@ func TestConfigValidate(t *testing.T) {
 // TestNewServices checks each constructor returns a service under the label that
 // identifies it in logs, metrics and traces.
 func TestNewServices(t *testing.T) {
-	providertest.Service(t, "CartesiaTTS", NewTTS(Config{APIKey: "k"}))
-	providertest.Service(t, "CartesiaTTS", NewTTS(Config{APIKey: "k", WordTimestamps: true}))
+	providertest.Service(t, "CartesiaTTS", NewTTS(Config{APIKey: "k", VoiceID: testVoiceID}))
+	providertest.Service(t, "CartesiaTTS",
+		NewTTS(Config{APIKey: "k", VoiceID: testVoiceID, WordTimestamps: true}))
 	providertest.Service(t, "CartesiaSTT", NewSTT(STTConfig{APIKey: "k"}))
 }
 
@@ -190,8 +196,8 @@ func TestRunTTSRequestShape(t *testing.T) {
 	}
 
 	voice, _ := got.request["voice"].(map[string]any)
-	if voice["mode"] != "id" || voice["id"] != defaultVoiceID {
-		t.Errorf("voice = %v, want the id-mode default voice", voice)
+	if voice["mode"] != "id" || voice["id"] != testVoiceID {
+		t.Errorf("voice = %v, want the configured voice in id mode", voice)
 	}
 	format, _ := got.request["output_format"].(map[string]any)
 	if format["container"] != defaultContainer || format["encoding"] != defaultEncoding {
@@ -445,18 +451,18 @@ func TestStripCartesiaTags(t *testing.T) {
 // sentences here disables the server's buffering, streaming tokens leaves it
 // alone, and a value the caller chose is kept either way.
 func TestMaxBufferDelayDefault(t *testing.T) {
-	sentences := ttsDefaults(Config{APIKey: "k"})
+	sentences := ttsDefaults(Config{APIKey: "k", VoiceID: testVoiceID})
 	if sentences.MaxBufferDelayMs == nil || *sentences.MaxBufferDelayMs != 0 {
 		t.Errorf("aggregating sentences: max_buffer_delay_ms = %v, want 0", sentences.MaxBufferDelayMs)
 	}
 
-	tokens := ttsDefaults(Config{APIKey: "k", TextAggregation: frames.AggregationToken})
+	tokens := ttsDefaults(Config{APIKey: "k", VoiceID: testVoiceID, TextAggregation: frames.AggregationToken})
 	if tokens.MaxBufferDelayMs != nil {
 		t.Errorf("streaming tokens: max_buffer_delay_ms = %v, want it unset", *tokens.MaxBufferDelayMs)
 	}
 
 	chosen := 250
-	kept := ttsDefaults(Config{APIKey: "k", MaxBufferDelayMs: &chosen})
+	kept := ttsDefaults(Config{APIKey: "k", VoiceID: testVoiceID, MaxBufferDelayMs: &chosen})
 	if kept.MaxBufferDelayMs == nil || *kept.MaxBufferDelayMs != chosen {
 		t.Errorf("max_buffer_delay_ms = %v, want the configured %d", kept.MaxBufferDelayMs, chosen)
 	}
