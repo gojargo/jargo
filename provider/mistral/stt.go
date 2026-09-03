@@ -22,6 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -82,17 +83,48 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = sttDefaultModel
 	}
-	return stt.NewStream("MistralSTT", &sttConnector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("MistralSTT", newSTTConnector(cfg), cfg.SampleRate)
 }
 
 type sttConnector struct {
 	cfg STTConfig
+	// live is what may change while the pipeline runs. Mistral takes the model
+	// when the session opens, so a change reaches it only by opening another.
+	live *STTSettings
+}
+
+// STTSettings is the part of the configuration that can change while the
+// pipeline runs. Everything in it is fixed for the session it opened under, so a
+// change to any of it opens a new one.
+type STTSettings struct {
+	settings.STT
+}
+
+// newSTTConnector builds the connector with its settings seeded, which is the
+// only way it should be built: the settings store is not optional.
+func newSTTConnector(cfg STTConfig) *sttConnector {
+	live := &STTSettings{}
+	live.Model = settings.Set(cfg.Model)
+	return &sttConnector{cfg: cfg, live: live}
+}
+
+// Settings is the configuration a caller may change while the pipeline runs.
+func (c *sttConnector) Settings() any { return c.live }
+
+// UpdateSettings asks for the session to be reopened whenever anything changed.
+// Mistral takes the transcription configuration when the session opens, so a
+// change reaches it only by opening another.
+func (c *sttConnector) UpdateSettings(context.Context, settings.Changed) (bool, error) {
+	return true, nil
 }
 
 // Metadata reports the model in use and the transcript latency the turn
 // strategies size their wait by.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.MistralTTFSP99), Model: c.cfg.Model}
+	return stt.Metadata{
+		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.MistralTTFSP99),
+		Model:   c.live.Model.Or(c.cfg.Model),
+	}
 }
 
 // Connect dials the realtime WebSocket and sends the session configuration. The
@@ -101,7 +133,7 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
-	endpoint := c.cfg.URL + "?model=" + url.QueryEscape(c.cfg.Model)
+	endpoint := c.cfg.URL + "?model=" + url.QueryEscape(c.live.Model.Or(c.cfg.Model))
 	conn, err := wsutil.Dial(ctx, endpoint, header, sttReadLimit)
 	if err != nil {
 		return nil, err
