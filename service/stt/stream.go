@@ -144,6 +144,51 @@ type KeepaliveSender interface {
 	SendKeepalive(silence []byte) error
 }
 
+const (
+	// DefaultTurnWatchdogMinTimeout is the shortest gap in the audio a provider
+	// is left to sit through before silence is submitted, when a provider asks
+	// for a watchdog without saying how long to wait.
+	DefaultTurnWatchdogMinTimeout = 500 * time.Millisecond
+	// DefaultTurnWatchdogInterval is how often the gap is measured.
+	DefaultTurnWatchdogInterval = 100 * time.Millisecond
+)
+
+// TurnWatchdogOptions says how a provider wants a stalled turn nudged along.
+type TurnWatchdogOptions struct {
+	// MinTimeout is the shortest gap in the audio the provider is left to sit
+	// through. The gap actually waited for is the larger of this and twice the
+	// last chunk's duration, so a pipeline sending long chunks is not nudged
+	// between two of them. Zero takes DefaultTurnWatchdogMinTimeout.
+	MinTimeout time.Duration
+	// Interval is how often the gap is measured. Zero takes
+	// DefaultTurnWatchdogInterval.
+	Interval time.Duration
+}
+
+// TurnWatchdoger is an optional interface a Connector implements when the
+// provider decides the end of a turn from the audio it is fed, and so reports
+// nothing at all if the audio stops arriving mid-turn. The turn then hangs open
+// until something else closes it.
+//
+// Silence is submitted to close the gap, but only while a turn is open: a
+// provider that has not reported one has nothing stalled, and outside a turn an
+// idle session is the keepalive's business. Implementing this asks for the
+// watchdog; a Connector that does not gets none, which is right for a provider
+// whose turn boundary does not depend on the audio continuing to flow.
+type TurnWatchdoger interface {
+	TurnWatchdog() TurnWatchdogOptions
+}
+
+// Drainer is an optional interface a Stream implements when the provider is told
+// the session is ending and answers with results it was still holding. Drain
+// sends that request and returns how long the results already on their way
+// should be waited for; the session is then torn down whether or not they
+// arrived. A Stream that does not implement it is closed at once, which is right
+// for a provider with nothing left to say by then.
+type Drainer interface {
+	Drain() (window time.Duration, err error)
+}
+
 // Finalizer is an optional interface a Stream implements when the provider has
 // to be told the speech has ended before it flushes the transcript for it.
 // Finalize is called once the VAD reports the user stopped, and the session
@@ -305,6 +350,17 @@ type StreamService struct {
 
 	// keepalive is what the provider asked for; a zero Timeout means none.
 	keepalive KeepaliveOptions
+	// watchdog is what the provider asked for to keep a turn from stalling, and
+	// watchdogWanted whether it asked at all.
+	watchdog       TurnWatchdogOptions
+	watchdogWanted bool
+	// watchdogCancel stops the watchdog goroutine, nil when none is running.
+	watchdogCancel context.CancelFunc
+	watchdogWG     sync.WaitGroup
+	// lastChunk is how long the last chunk of audio submitted plays for. The
+	// watchdog waits out at least two of them, so a pipeline sending long chunks
+	// is not nudged in the gap between two ordinary ones.
+	lastChunk time.Duration
 	// lastAudio is when audio last went to the provider, which is what says
 	// whether the session has gone idle.
 	lastAudio time.Time
@@ -345,6 +401,16 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 		s.keepalive = k.Keepalive()
 		if s.keepalive.Interval <= 0 {
 			s.keepalive.Interval = DefaultKeepaliveInterval
+		}
+	}
+	if w, ok := conn.(TurnWatchdoger); ok {
+		s.watchdogWanted = true
+		s.watchdog = w.TurnWatchdog()
+		if s.watchdog.MinTimeout <= 0 {
+			s.watchdog.MinTimeout = DefaultTurnWatchdogMinTimeout
+		}
+		if s.watchdog.Interval <= 0 {
+			s.watchdog.Interval = DefaultTurnWatchdogInterval
 		}
 	}
 	s.canReopen = true
@@ -585,10 +651,48 @@ func (s *StreamService) disconnect(ctx context.Context) {
 	if cancel == nil {
 		return
 	}
+	// Asked for while the read loop is still alive, since what the provider
+	// answers with reaches the pipeline through it. Canceling first would tear
+	// the reader down before the answer arrived.
+	s.drainSession()
 	cancel()
 	s.wg.Wait()
 	_ = s.DisconnectWebsocket(ctx)
 	s.recordUsage(ctx, connectedAt, audioBytes)
+}
+
+// drainSession tells a provider that answers the end of a session that it is
+// ending, and gives the read loop the window the provider asked for to deliver
+// what comes back. It returns as soon as the loop ends on its own, which is what
+// the provider closing the socket looks like from here.
+func (s *StreamService) drainSession() {
+	s.mu.Lock()
+	stream := s.stream
+	s.mu.Unlock()
+	d, ok := stream.(Drainer)
+	if !ok {
+		return
+	}
+	window, err := d.Drain()
+	if err != nil {
+		slog.Debug("asking the transcription session to finish failed",
+			"service", s.Name(), "err", err)
+		return
+	}
+	if window <= 0 {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(window):
+		slog.Debug("the transcription session did not finish within its drain window",
+			"service", s.Name(), "window", window)
+	}
 }
 
 // ConnectWebsocket opens a transcription session. The read loop calls it for
@@ -620,6 +724,7 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 	// alike: the goroutine gives up on a failed send, so the one belonging to
 	// the session that just dropped is likely gone.
 	s.startKeepalive(ctx)
+	s.startTurnWatchdog(ctx)
 	return nil
 }
 
@@ -631,6 +736,7 @@ func (s *StreamService) DisconnectWebsocket(context.Context) error {
 	// Stopped before the session goes, so nothing tries to send on a session
 	// that is being closed underneath it.
 	s.stopKeepalive()
+	s.stopTurnWatchdog()
 	s.mu.Lock()
 	stream := s.stream
 	cancel := s.sessionCancel
@@ -805,6 +911,7 @@ func (s *StreamService) send(audio []byte) {
 	// what says the call is not idle, and a session that opens a moment later
 	// has no catching up to do.
 	s.lastAudio = time.Now()
+	s.lastChunk = pcmDuration(int64(len(audio)), s.sampleRate)
 	if stream != nil {
 		s.audioBytes += int64(len(audio))
 	}
@@ -977,6 +1084,95 @@ func (s *StreamService) sendKeepalive() error {
 	s.mu.Lock()
 	s.audioBytes += int64(len(silence))
 	s.mu.Unlock()
+	return nil
+}
+
+// startTurnWatchdog replaces the running watchdog, if any, with one for the
+// session just opened. It does nothing when the provider asked for none.
+func (s *StreamService) startTurnWatchdog(ctx context.Context) {
+	if !s.watchdogWanted {
+		return
+	}
+	s.stopTurnWatchdog()
+	wdCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.watchdogCancel = cancel
+	s.mu.Unlock()
+	s.watchdogWG.Go(func() { s.turnWatchdogLoop(wdCtx) })
+}
+
+// stopTurnWatchdog ends the running watchdog and waits for it to finish.
+func (s *StreamService) stopTurnWatchdog() {
+	s.mu.Lock()
+	cancel := s.watchdogCancel
+	s.watchdogCancel = nil
+	s.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	s.watchdogWG.Wait()
+}
+
+// turnWatchdogLoop submits silence when the audio stops arriving in the middle
+// of a turn the provider reported. Such a provider decides the end of a turn
+// from the audio it is fed, so a gap leaves the turn open with nothing coming;
+// the silence stands in for the audio that stopped and lets the provider reach
+// its own conclusion.
+//
+// Nothing is submitted outside a turn: an idle session with no turn open has
+// nothing stalled, and holding one open is the keepalive's business.
+func (s *StreamService) turnWatchdogLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.watchdog.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if !s.Connected() {
+			continue
+		}
+		s.mu.Lock()
+		speaking := s.speaking
+		last := s.lastAudio
+		threshold := max(2*s.lastChunk, s.watchdog.MinTimeout)
+		s.mu.Unlock()
+		if !speaking || last.IsZero() {
+			continue
+		}
+		gap := time.Since(last)
+		if gap <= threshold {
+			continue
+		}
+		slog.Warn("no audio for a turn the provider is still listening to, "+
+			"submitting silence so the turn can end", "service", s.Name(), "gap", gap)
+		// As long as the gap itself, so the provider hears the pause that
+		// actually happened rather than a fixed stretch of it.
+		if err := s.sendSilence(gap); err != nil {
+			slog.Warn("submitting silence to the transcription session failed",
+				"service", s.Name(), "err", err)
+			return
+		}
+	}
+}
+
+// sendSilence submits d of 16-bit mono silence on the current session, through
+// the same path the call's own audio takes so it is billed for the same way.
+func (s *StreamService) sendSilence(d time.Duration) error {
+	s.mu.Lock()
+	rate := s.sampleRate
+	stream := s.stream
+	s.mu.Unlock()
+	if stream == nil {
+		return errNoSession
+	}
+	samples := int(d.Seconds() * float64(rate))
+	if samples <= 0 {
+		return nil
+	}
+	s.send(make([]byte, samples*2))
 	return nil
 }
 
