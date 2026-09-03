@@ -34,10 +34,19 @@ type Aggregator interface {
 	// expect before any text has been aggregated: grouping by token, say, means
 	// no unit ever completes a sentence.
 	Type() frames.AggregationType
+	// Text reports what is buffered but not yet complete.
+	Text() Aggregation
 	// Aggregate folds text into the buffer and returns every unit it completed.
 	Aggregate(text string) []Aggregation
 	// Flush returns whatever is left in the buffer, for the end of a response.
 	Flush() (Aggregation, bool)
+	// HandleInterruption is called when the turn this aggregator was reading was
+	// cut off. It is separate from Reset so an aggregator can treat the two
+	// differently: what is half-aggregated when the user barges in was still
+	// going to be spoken, where a reset is a deliberate clearing of the buffer.
+	// The aggregators here discard the buffer either way; one that wants to keep
+	// what it had gathered says so by implementing this differently.
+	HandleInterruption()
 	// Reset clears the buffer.
 	Reset()
 }
@@ -129,6 +138,18 @@ func (a *SimpleAggregator) Flush() (Aggregation, bool) {
 	rest := a.text
 	a.Reset()
 	return Aggregation{Text: strings.Trim(rest, " "), Type: frames.AggregationSentence}, true
+}
+
+// HandleInterruption implements Aggregator. What was half-gathered belongs to
+// the turn that was cut off, so it is discarded.
+//
+// The buffer is cleared here rather than by calling Reset, so that a type
+// embedding this one overriding Reset does not change what an interruption
+// does: a Go method called on the embedded value dispatches to the embedded
+// value, and the two are kept apart deliberately.
+func (a *SimpleAggregator) HandleInterruption() {
+	a.text = ""
+	a.needsLookahead = false
 }
 
 // Reset implements Aggregator.

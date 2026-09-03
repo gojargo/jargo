@@ -63,6 +63,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`text.Aggregator` tells an interruption from a reset.** The interface gained
+  `HandleInterruption`, called when the turn an aggregator was reading was cut
+  off, alongside the `Reset` that clears the buffer deliberately. The three
+  aggregators shipped here discard the buffer either way, so nothing about a
+  pipeline built from them changes; what is new is that a custom aggregator can
+  now treat the two differently, which it had no way to express before, since the
+  interruption reached it as a plain reset. `text.Aggregator` also declares the
+  `Text` accessor its implementations already had. **Breaking:** an aggregator
+  outside this module has to add `HandleInterruption`.
 - **Cartesia synthesis takes settings while the pipeline runs.** The voice, the
   model, the language, the generation controls and the pronunciation dictionary
   can all change mid-call. Cartesia fixes the first three for the length of a

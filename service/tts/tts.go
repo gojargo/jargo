@@ -804,7 +804,7 @@ func (b *Base) handleInterruption(ctx context.Context) {
 	b.setBotSpeaking(false)
 	b.setLLMResponding(false)
 	if b.aggregator != nil {
-		b.aggregator.Reset()
+		b.aggregator.HandleInterruption()
 	}
 	for _, f := range b.filters {
 		if i, ok := f.(ttstext.InterruptibleFilter); ok {

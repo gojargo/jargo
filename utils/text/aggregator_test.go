@@ -117,3 +117,27 @@ func TestSimpleAggregatorReportsItsState(t *testing.T) {
 		t.Errorf("Buffer() = %q after a reset, want nothing", a.Buffer())
 	}
 }
+
+// An interruption discards what was half-gathered, the pending lookahead
+// included: a mark waiting to be confirmed belongs to the turn that was cut off,
+// so the next turn must not be confirmed by the character that follows it.
+func TestSimpleAggregatorHandleInterruptionDropsWhatWasGathered(t *testing.T) {
+	a := newAggregator(t, frames.AggregationSentence)
+
+	if got := a.Aggregate("Hello world."); len(got) != 0 {
+		t.Fatalf("a trailing period should wait for lookahead, got %+v", got)
+	}
+	a.HandleInterruption()
+	if a.Buffer() != "" {
+		t.Errorf("Buffer() = %q after an interruption, want nothing", a.Buffer())
+	}
+
+	// The lookahead the period was waiting for is gone with it, so this text
+	// completes nothing until it ends a sentence of its own.
+	if got := a.Aggregate("Next"); len(got) != 0 {
+		t.Fatalf("a pending lookahead survived the interruption, got %+v", got)
+	}
+	if got := a.Buffer(); got != "Next" {
+		t.Errorf("Buffer() = %q, want the new turn's text alone", got)
+	}
+}

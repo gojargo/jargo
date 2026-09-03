@@ -370,6 +370,13 @@ func (a *PatternPairAggregator) trimTrailingPartialStart(text string) string {
 	return text[:len(text)-trim]
 }
 
+// HandleInterruption implements Aggregator. The registered patterns and their
+// handlers survive an interruption, for the same reason they survive a reset.
+func (a *PatternPairAggregator) HandleInterruption() {
+	a.SimpleAggregator.HandleInterruption()
+	a.lastProcessed = 0
+}
+
 // Reset implements Aggregator. The registered patterns and their handlers
 // survive it: they describe the text this aggregator reads, not the response it
 // is partway through.

@@ -118,6 +118,14 @@ func (a *SkipTagsAggregator) clearTags() {
 	a.currentTagIndex = 0
 }
 
+// HandleInterruption implements Aggregator. It clears the buffer and the tag
+// the scan was inside, so the turn after the interruption starts outside any
+// tag.
+func (a *SkipTagsAggregator) HandleInterruption() {
+	a.SimpleAggregator.HandleInterruption()
+	a.clearTags()
+}
+
 // Reset implements Aggregator. It clears the buffer and the tag the scan was
 // inside, so the next response starts outside any tag.
 func (a *SkipTagsAggregator) Reset() {

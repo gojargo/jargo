@@ -1,10 +1,12 @@
 package aggregators_test
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // collectAggregated drains the aggregated-text frames after a short grace
@@ -118,4 +120,82 @@ func TestLLMTextCarriesTheSkipTTSDecision(t *testing.T) {
 
 	task.StopWhenDone()
 	<-runDone
+}
+
+// clearingSpy records which of the aggregator's two clearing hooks it was
+// given, so a test can tell an interruption from a reset.
+type clearingSpy struct {
+	*text.SimpleAggregator
+
+	mu            sync.Mutex
+	interruptions int
+	resets        int
+}
+
+func newClearingSpy(t *testing.T) *clearingSpy {
+	t.Helper()
+	tok, err := text.NewPunktEnglish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &clearingSpy{SimpleAggregator: text.NewSimpleAggregator(frames.AggregationSentence, tok)}
+}
+
+func (a *clearingSpy) HandleInterruption() {
+	a.mu.Lock()
+	a.interruptions++
+	a.mu.Unlock()
+	a.SimpleAggregator.HandleInterruption()
+}
+
+func (a *clearingSpy) Reset() {
+	a.mu.Lock()
+	a.resets++
+	a.mu.Unlock()
+	a.SimpleAggregator.Reset()
+}
+
+func (a *clearingSpy) counts() (interruptions, resets int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.interruptions, a.resets
+}
+
+// An interruption reaches the aggregator as an interruption, not as a reset.
+// The two are separate hooks so an aggregator can treat them differently, and
+// an aggregator that does would never hear about the barge-in otherwise.
+func TestLLMTextTellsTheAggregatorItWasInterrupted(t *testing.T) {
+	spy := newClearingSpy(t)
+	task, seen, runDone := runProcessor(t, aggregators.NewLLMTextWith("LLMText", spy))
+
+	task.QueueFrame(frames.NewLLMTextFrame("half a "))
+	awaitNothing(seen)
+	task.QueueFrame(frames.NewInterruptionFrame())
+
+	task.StopWhenDone()
+	<-runDone
+
+	interruptions, resets := spy.counts()
+	if interruptions != 1 {
+		t.Errorf("aggregator was interrupted %d times, want 1", interruptions)
+	}
+	if resets != 0 {
+		t.Errorf("aggregator was reset %d times, want 0: an interruption is not a reset", resets)
+	}
+}
+
+// Reset, in contrast, is what the processor's own Reset hands on.
+func TestLLMTextResetIsNotAnInterruption(t *testing.T) {
+	spy := newClearingSpy(t)
+	p := aggregators.NewLLMTextWith("LLMText", spy)
+
+	p.Reset()
+
+	interruptions, resets := spy.counts()
+	if resets != 1 {
+		t.Errorf("aggregator was reset %d times, want 1", resets)
+	}
+	if interruptions != 0 {
+		t.Errorf("aggregator was interrupted %d times, want 0", interruptions)
+	}
 }
