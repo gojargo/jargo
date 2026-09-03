@@ -241,8 +241,14 @@ func TestSTTRecvFinalizesOnDone(t *testing.T) {
 	if final[0].Text != "bonjour tout le monde" {
 		t.Errorf("text = %q, want what the done event carried", final[0].Text)
 	}
-	if !final[0].Final || !final[0].EndOfTurn {
-		t.Errorf("result = %+v, want it final and ending the turn", final[0])
+	if !final[0].Final {
+		t.Errorf("result = %+v, want it final", final[0])
+	}
+	// The done event closes the segment the flush asked about; it says nothing
+	// about whether the user has finished speaking, which is what the flag means
+	// to the turn strategies.
+	if final[0].EndOfTurn {
+		t.Errorf("result = %+v, want it not marked as ending the turn", final[0])
 	}
 	if final[0].Language != "fr" {
 		t.Errorf("language = %q, want the one reported for the audio", final[0].Language)
