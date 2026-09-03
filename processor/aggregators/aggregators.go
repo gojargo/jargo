@@ -33,6 +33,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/utils/text"
 )
 
@@ -178,6 +179,9 @@ type options struct {
 	// toolChangeMessages announces a change of toolset to the model as a
 	// developer message.
 	toolChangeMessages bool
+	// realtime forces the speech-to-speech mode on or off; nil decides it from
+	// what the services say about themselves.
+	realtime *bool
 }
 
 // VADConfig configures the voice-activity detection a user aggregator runs.
@@ -265,6 +269,24 @@ func WithToolChangeMessages() Option {
 	return func(o *options) { o.toolChangeMessages = true }
 }
 
+// WithRealtimeServiceMode forces on or off the mode a pipeline driven by a
+// speech-to-speech service runs in.
+//
+// It is normally decided from the pipeline itself: a realtime LLM service says
+// so when it describes itself at start, and the mode turns on then. Pass this to
+// overrule that, on for a service that does not announce itself and off to keep
+// the cascaded behavior with one that does.
+//
+// The mode changes two things. The turn strategies lose their transcript
+// dependence, since the service is answering the audio and a transcript only
+// delays the turn. And the user's message is written to the conversation when
+// the assistant starts responding rather than when the turn ends, because a
+// realtime service delivers the user's transcript late, sometimes only after it
+// has begun answering.
+func WithRealtimeServiceMode(on bool) Option {
+	return func(o *options) { o.realtime = &on }
+}
+
 // WithTurns configures the turn taking the user aggregator drives.
 //
 // The aggregator always decides when the user's turn began and ended; this is
@@ -293,8 +315,8 @@ func New(ctx *frames.LLMContext, opts ...Option) *Pair {
 	if o.turns != nil && len(o.turns.MuteStrategies) > 0 {
 		mute = append(append([]turns.MuteStrategy(nil), mute...), o.turns.MuteStrategies...)
 	}
-	user := newUser(ctx, o.turns, mute, o.vad, o.toolChangeMessages)
-	assistant := newAssistant(ctx, o.summarize, o.toolChangeMessages)
+	user := newUser(ctx, o.turns, mute, o.vad, o.toolChangeMessages, o.realtime)
+	assistant := newAssistant(ctx, o.summarize, o.toolChangeMessages, o.realtime)
 	// The assistant half needs to know which user half it belongs to, so a
 	// proposal that reaches it can be stopped when that half resolves it.
 	assistant.pairedUser = user
@@ -355,11 +377,27 @@ type UserAggregator struct {
 	// userID is who the transcription service said was speaking, carried on what
 	// the turn reports.
 	userID string
+	// realtime is whether the pipeline is driven by a speech-to-speech service,
+	// nil until something says so. See WithRealtimeServiceMode.
+	realtime *bool
+	// realtimeHandled records that a realtime service has already announced
+	// itself, so the mode turns on and is logged exactly once.
+	realtimeHandled bool
+	// ttfsP99 is the transcript latency the last transcription service published,
+	// which is how long a late transcript is waited for before the user's message
+	// is written in realtime mode.
+	ttfsP99 time.Duration
+	// handoffCancel stops the deferred write armed when the assistant began
+	// answering, and is nil when none is armed.
+	handoffCancel func()
+	// sessionCtx is the session the processor was set up with, so the deferred
+	// write has a context to push its frames on.
+	sessionCtx context.Context //nolint:containedctx // the session, held for a timer
 }
 
 func newUser(
 	ctx *frames.LLMContext, cfg *turns.Config, mute []turns.MuteStrategy, vadCfg *VADConfig,
-	toolChangeMessages bool,
+	toolChangeMessages bool, realtime *bool,
 ) *UserAggregator {
 	// The turn controllers always exist. Deciding when the user's turn began and
 	// ended is what this processor is for, and a pipeline that configures no
@@ -372,8 +410,15 @@ func newUser(
 		toolChangeMessages: toolChangeMessages,
 		muteStrategies:     mute,
 		pinnedStrategies:   len(cfg.Strategies.Start) > 0 || len(cfg.Strategies.Stop) > 0,
+		realtime:           realtime,
 	}
 	u.Base = processor.New("UserContextAggregator", u)
+	// Only when the mode was asked for outright. Left to be decided from the
+	// services, the mutation waits for the one that announces itself, which is
+	// also where it is applied on top of any strategies a service recommends.
+	if realtime != nil && *realtime {
+		u.mutateForRealtime(&cfg.Strategies)
+	}
 	if vadCfg != nil {
 		u.vad = newVADController(u, *vadCfg)
 	}
@@ -459,6 +504,9 @@ func (u *UserAggregator) Setup(ctx context.Context, s processor.Setup) error {
 	if err := u.Base.Setup(ctx, s); err != nil {
 		return err
 	}
+	u.mu.Lock()
+	u.sessionCtx = ctx
+	u.mu.Unlock()
 	if u.vad != nil {
 		if err := u.vad.Setup(s); err != nil {
 			return err
@@ -497,18 +545,32 @@ func (u *UserAggregator) handleLifecycle(
 		if err := u.PushFrame(ctx, f, dir); err != nil {
 			return true, err
 		}
-		u.reportTurnStopped(ctx, nil, true)
+		u.commitOnSessionEnd(ctx)
 		u.stopControllers()
 		return true, nil
 
 	case *frames.CancelFrame:
 		// Same, the other way round: a cancel tears the pipeline down at once, so
 		// what is held is committed before the frame that stops everything.
-		u.reportTurnStopped(ctx, nil, true)
+		u.commitOnSessionEnd(ctx)
 		u.stopControllers()
 		return true, u.PushFrame(ctx, f, dir)
 	}
 	return false, nil
+}
+
+// commitOnSessionEnd writes whatever the user said last rather than losing it
+// with the processor.
+//
+// In speech-to-speech mode the turn was already reported when it ended, and only
+// the writing was left pending, so the pending write is taken now and the turn
+// is not reported a second time.
+func (u *UserAggregator) commitOnSessionEnd(ctx context.Context) {
+	if u.realtimeMode() {
+		u.realtimeHandoffNow(ctx)
+		return
+	}
+	u.reportTurnStopped(ctx, nil, true)
 }
 
 // startControllers brings the controllers up for the session, which is where the
@@ -530,6 +592,9 @@ func (u *UserAggregator) stopControllers() {
 	}
 	u.turn.Stop()
 	u.idle.Stop()
+	u.mu.Lock()
+	u.cancelHandoff()
+	u.mu.Unlock()
 }
 
 // Cleanup releases what the controllers hold. It is the one call that happens
@@ -643,6 +708,89 @@ func (u *UserAggregator) resolvesProposedStops() bool {
 // is, so that is applied first, and the frame travels on either way.
 func (u *UserAggregator) handleServiceMetadata(md frames.ServiceMetadata) {
 	u.handleServiceUserTurnStrategies(md.Service(), md.RecommendedUserTurnStrategies())
+
+	switch fr := md.(type) {
+	case *frames.LLMServiceMetadataFrame:
+		u.handleLLMServiceMetadata(fr)
+	case *frames.STTMetadataFrame:
+		// How long a late transcript is waited for before the user's message is
+		// written in realtime mode. A realtime service publishes it for the
+		// transcription it runs inside itself.
+		u.mu.Lock()
+		u.ttfsP99 = fr.TTFSP99Latency
+		u.mu.Unlock()
+	}
+}
+
+// handleLLMServiceMetadata turns the speech-to-speech mode on for a service that
+// says it is one, and strips the transcript dependence from the strategies in
+// force.
+//
+// The mode is decided once, but the strategies are mutated on every broadcast: a
+// switcher making another service the active one re-applies the recommendation,
+// and the mutation has to be re-applied on top of it. Updating the strategies is
+// idempotent, so re-applying costs nothing.
+func (u *UserAggregator) handleLLMServiceMetadata(fr *frames.LLMServiceMetadataFrame) {
+	if !fr.Realtime {
+		return
+	}
+
+	u.mu.Lock()
+	if !u.realtimeHandled {
+		u.realtimeHandled = true
+		if u.realtime == nil {
+			on := true
+			u.realtime = &on
+			slog.Debug("a realtime service announced itself, so the pipeline runs in "+
+				"speech-to-speech mode", "processor", u.Name(), "service", fr.Service())
+		}
+	}
+	on := u.realtime != nil && *u.realtime
+	u.mu.Unlock()
+
+	// Turned off deliberately, which is the application's call to make.
+	if !on {
+		return
+	}
+
+	strategies := u.turn.Strategies()
+	if !u.mutateForRealtime(&strategies) {
+		return
+	}
+	if err := u.turn.UpdateStrategies(strategies); err != nil {
+		slog.Error("could not apply the speech-to-speech turn strategies",
+			"processor", u.Name(), "err", err)
+	}
+}
+
+// mutateForRealtime strips the transcript dependence from the chains and reports
+// whether anything changed. Strategies the application configured itself are
+// worth saying out loud, since the change is not what it asked for.
+func (u *UserAggregator) mutateForRealtime(s *turns.UserTurnStrategies) bool {
+	dropped, flipped := s.ApplyRealtimeServiceMode()
+	if len(dropped) == 0 && len(flipped) == 0 {
+		return false
+	}
+	msg := "speech-to-speech mode: the turn strategies no longer wait on transcripts"
+	args := []any{
+		"processor", u.Name(),
+		"dropped", strings.Join(dropped, ", "),
+		"no_longer_waiting", strings.Join(flipped, ", "),
+	}
+	if u.pinnedStrategies {
+		slog.Warn(msg, args...)
+	} else {
+		slog.Debug(msg, args...)
+	}
+	return true
+}
+
+// realtimeMode reports whether the pipeline is driven by a speech-to-speech
+// service.
+func (u *UserAggregator) realtimeMode() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.realtime != nil && *u.realtime
 }
 
 // handleServiceUserTurnStrategies applies the turn strategies a service
@@ -858,8 +1006,13 @@ type AssistantAggregator struct {
 	// toolChangeMessages announces a change of toolset to the model.
 	toolChangeMessages bool
 	// pairedUser is the user half this one was built with, so a proposal this
-	// half sees can be stopped when the user half is the one resolving it.
+	// half sees can be stopped when the user half is the one resolving it, and
+	// so the user's message can be written as this half starts answering.
 	pairedUser *UserAggregator
+	// realtime is whether the pipeline is driven by a speech-to-speech service,
+	// nil until something says so. The user half owns the strategies; this half
+	// needs the flag only to know when to hand the user's message over.
+	realtime *bool
 	// summarizer compresses the conversation once it has grown long. It is
 	// always present, so an on-demand LLMSummarizeContextFrame is always
 	// honored; the automatic thresholds are what WithSummarization enables.
@@ -915,11 +1068,13 @@ type AssistantAggregator struct {
 
 func newAssistant(
 	ctx *frames.LLMContext, sc *frames.AutoSummarizationConfig, toolChangeMessages bool,
+	realtime *bool,
 ) *AssistantAggregator {
 	a := &AssistantAggregator{
 		context:            ctx,
 		toolChangeMessages: toolChangeMessages,
 		inProgress:         make(map[string]*frames.FunctionCallInProgressFrame),
+		realtime:           realtime,
 	}
 	// The summarizer exists whether or not the thresholds are enabled, so a
 	// pushed LLMSummarizeContextFrame is always acted on; sc is what decides
@@ -1004,7 +1159,13 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 // ProcessFrame is the sideband handling that runs ahead of it.
 func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
+	case *frames.LLMServiceMetadataFrame:
+		a.noteRealtimeService(fr)
 	case *frames.LLMFullResponseStartFrame:
+		// A realtime service delivers the user's transcript late, sometimes only
+		// once it has begun answering, so the answer starting is what stands in
+		// for the end of the user's turn where the conversation is written.
+		a.armUserMessageHandoff()
 		a.openTurn(ctx)
 	case *frames.TTSStartedFrame:
 		// Speech that will be recorded opens a turn of its own when none is open.
@@ -1021,6 +1182,7 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 		return nil
 	case *frames.LLMAssistantPushAggregationFrame, *frames.LLMFullResponseEndFrame,
 		*frames.EndFrame, *frames.CancelFrame, *frames.InterruptionFrame:
+		a.writeUserMessageBeforeClosing(ctx, f)
 		if err := a.closeTurn(ctx, f); err != nil {
 			return err
 		}
@@ -1952,6 +2114,13 @@ func (u *UserAggregator) onTurnStarted(
 // rather than after it. Anything the user adds before the turn actually ends is
 // committed by onTurnStopped, which runs the LLM again on it.
 func (u *UserAggregator) onInferenceTriggered(ctx context.Context, strategy turns.StopStrategy) {
+	if u.realtimeMode() {
+		// Nothing is committed here. The service is generating from the audio
+		// rather than from the conversation, and the user's transcript arrives
+		// late; the assistant starting to answer is what writes it.
+		u.Events().Call(ctx, EventUserTurnInferenceTriggered, u, strategy)
+		return
+	}
 	// What is committed now is the segment since the last commit, so it is kept
 	// alongside the rest of the turn: the report of the turn ending carries
 	// everything the user said, not just the tail nobody answered yet.
@@ -2005,6 +2174,22 @@ func (u *UserAggregator) onTurnStopped(
 		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserStoppedSpeakingFrame() })
 	}
 	u.idle.Process(frames.NewUserStoppedSpeakingFrame())
+
+	if u.realtimeMode() {
+		// The turn ending is not what finalizes the user's message here: the
+		// assistant starting to answer is, and the message is written then. The
+		// turn is still reported, with nothing to carry; a listener that wants
+		// the text takes EventUserTurnMessageAdded instead.
+		u.mu.Lock()
+		startedAt, userID := u.turnStartedAt, u.userID
+		u.mu.Unlock()
+		u.Events().Call(ctx, EventUserTurnStopped, u, UserTurnStopped{
+			Strategy:  strategy,
+			Timestamp: startedAt,
+			UserID:    userID,
+		})
+		return
+	}
 	u.reportTurnStopped(ctx, strategy, false)
 }
 
@@ -2040,3 +2225,119 @@ func (u *UserAggregator) reportTurnStopped(
 }
 
 var _ turns.Emitter = (*UserAggregator)(nil)
+
+// noteRealtimeService records that the service describing itself is a realtime
+// one. The broadcast reaches both halves; this one needs the flag only for the
+// handoff, since the user half owns the strategies.
+func (a *AssistantAggregator) noteRealtimeService(fr *frames.LLMServiceMetadataFrame) {
+	if !fr.Realtime {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.realtime == nil {
+		on := true
+		a.realtime = &on
+	}
+}
+
+// armUserMessageHandoff has the user half start writing its message, which in
+// speech-to-speech mode happens as the answer starts rather than at the end of
+// the user's turn.
+func (a *AssistantAggregator) armUserMessageHandoff() {
+	if !a.realtimeMode() || a.pairedUser == nil {
+		return
+	}
+	a.pairedUser.realtimeHandoff()
+}
+
+// writeUserMessageBeforeClosing writes the user's message once the answer is
+// complete, before this half writes the answer itself.
+//
+// By then even a slow transcript has landed, so it goes in whether or not the
+// wait armed when the answer started has elapsed. Writing it first is what keeps
+// the conversation in the order it happened.
+func (a *AssistantAggregator) writeUserMessageBeforeClosing(ctx context.Context, f frames.Frame) {
+	if _, ok := f.(*frames.LLMFullResponseEndFrame); !ok {
+		return
+	}
+	if !a.realtimeMode() || a.pairedUser == nil {
+		return
+	}
+	a.pairedUser.realtimeHandoffNow(ctx)
+}
+
+// realtimeMode reports whether the pipeline is driven by a speech-to-speech
+// service.
+func (a *AssistantAggregator) realtimeMode() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.realtime != nil && *a.realtime
+}
+
+// realtimeHandoff arms the write of the user's message, which in
+// speech-to-speech mode happens as the assistant starts answering rather than
+// when the turn ends.
+//
+// It is deferred by the transcript latency the transcription service published,
+// because a realtime service delivers the user's transcript in pieces and
+// sometimes only after it has begun answering. The answer completing writes it
+// regardless, so nothing is lost if the wait was too short.
+func (u *UserAggregator) realtimeHandoff() {
+	u.mu.Lock()
+	wait := u.ttfsP99
+	if wait <= 0 {
+		wait = stt.DefaultTTFSP99
+	}
+	u.cancelHandoff()
+	ctx := u.sessionCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stopped := false
+	timer := time.AfterFunc(wait, func() {
+		u.mu.Lock()
+		if stopped {
+			u.mu.Unlock()
+			return
+		}
+		u.handoffCancel = nil
+		u.mu.Unlock()
+		u.writeUserMessage(ctx)
+	})
+	u.handoffCancel = func() {
+		stopped = true
+		timer.Stop()
+	}
+	u.mu.Unlock()
+}
+
+// realtimeHandoffNow writes the user's message without waiting any longer.
+func (u *UserAggregator) realtimeHandoffNow(ctx context.Context) {
+	u.mu.Lock()
+	u.cancelHandoff()
+	u.mu.Unlock()
+	u.writeUserMessage(ctx)
+}
+
+// writeUserMessage commits whatever the user has said, and forgets when the turn
+// began so the next one is stamped for itself.
+func (u *UserAggregator) writeUserMessage(ctx context.Context) {
+	segment, _ := u.maybeRun(ctx)
+	if segment == "" {
+		return
+	}
+	u.rememberSegment(segment)
+	u.mu.Lock()
+	u.wholeTurn = ""
+	u.turnStartedAt = ""
+	u.mu.Unlock()
+}
+
+// cancelHandoff stops a pending write. The caller holds u.mu.
+func (u *UserAggregator) cancelHandoff() {
+	if u.handoffCancel != nil {
+		u.handoffCancel()
+		u.handoffCancel = nil
+	}
+}

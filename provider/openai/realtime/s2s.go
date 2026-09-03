@@ -713,3 +713,14 @@ func (s *Service) CanGenerateMetrics() bool { return true }
 // add the tools it implements itself to what every request advertises. It
 // implements llm.AdapterHolder.
 func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+
+// ServiceMetadataFrame describes this service to the pipeline as a realtime one.
+// The user aggregator reads that and stops holding turns open for transcripts,
+// which this service is not answering from, and writes the user's message when
+// the answer starts rather than when the turn ends, because the transcript for
+// what the user said arrives late.
+func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
+	f := frames.NewLLMServiceMetadataFrame(s.Name())
+	f.Realtime = true
+	return f
+}

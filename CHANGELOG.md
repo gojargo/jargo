@@ -28,6 +28,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   onward reason; the service warns at construction when it is configured on a
   model that cannot, which the API refuses rather than ignores. The encrypted
   reasoning is not yet carried from one turn to the next.
+- **Speech-to-speech mode in the user aggregator.** A realtime LLM service now
+  says so when it describes itself at start (OpenAI Realtime, xAI Realtime,
+  Gemini Live and Nova Sonic all do), and the aggregator changes two things when
+  one does. The turn strategies lose their transcript dependence: a transcript no
+  longer opens a turn, and no stop strategy holds one open waiting for one, since
+  the service is answering the audio and the transcript only delays the turn. And
+  the user's message is written to the conversation when the assistant starts
+  answering rather than when the turn ends, because such a service delivers the
+  transcript late, sometimes only once it has begun answering; the write waits
+  one published transcript-latency window, and the answer completing takes it
+  regardless. `aggregators.WithRealtimeServiceMode` forces the mode on for a
+  service that does not announce itself, or off to keep the cascaded behavior.
 - **`turn.NewHTTPSmartTurn`, an end-of-turn analyzer that asks a remote
   service.** It buffers and segments the turn's audio the way the local analyzer
   does and posts that segment as a NumPy array for scoring, for a deployment
