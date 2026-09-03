@@ -175,8 +175,12 @@ func (s *sttStream) SpeechStarted() {
 }
 
 // Recv reads the next transcription event. Text deltas accumulate and surface as
-// interim results; a done event flushes the segment as a final result with
-// EndOfTurn set. Language events update the language reported on the next final.
+// interim results; a done event closes the segment as a final result. Language
+// events update the language reported on the next final.
+//
+// A final is not marked as the end of the turn. The done event closes the
+// segment the flush asked about, but it says nothing about whether the user has
+// finished speaking, and the turn strategies read that flag as exactly that.
 func (s *sttStream) Recv() ([]stt.Result, error) {
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -202,7 +206,7 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			s.accumulated = ""
 			s.textMu.Unlock()
 			if text != "" {
-				return []stt.Result{{Text: text, Final: true, EndOfTurn: true, Language: s.language}}, nil
+				return []stt.Result{{Text: text, Final: true, Language: s.language}}, nil
 			}
 		case sttEventLanguage:
 			s.language = m.AudioLanguage
