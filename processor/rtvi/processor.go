@@ -160,8 +160,14 @@ func (o *Observer) messagesFor(f frames.Frame) []Message {
 		}
 		return nil
 	}
+	if msgs, ok := o.botSpeakingMessages(f); ok {
+		return msgs
+	}
 	if msg, ok := o.botMessageFor(f); ok {
 		return []Message{msg}
+	}
+	if msgs, ok := o.outputMessages(f); ok {
+		return msgs
 	}
 	if msg, ok := serverMessageFor(f); ok {
 		return []Message{msg}
@@ -282,6 +288,7 @@ func metricsOf(p ObserverParams) *bool       { return p.MetricsEnabled }
 func botSpeakingOf(p ObserverParams) *bool   { return p.BotSpeakingEnabled }
 func botLLMOf(p ObserverParams) *bool        { return p.BotLLMEnabled }
 func botTTSOf(p ObserverParams) *bool        { return p.BotTTSEnabled }
+func botOutputOf(p ObserverParams) *bool     { return p.BotOutputEnabled }
 
 // gated reports msg unless its category was turned off, and reports either way
 // that the frame was recognized: a frame the observer is silent about is still
@@ -293,13 +300,10 @@ func (o *Observer) gated(msg Message, pick func(ObserverParams) *bool) (Message,
 	return msg, true
 }
 
-// botMessageFor maps bot-originated frames (speaking, LLM, TTS, tool calls).
+// botMessageFor maps bot-originated frames (the model's output, the
+// synthesizer's brackets, tool calls).
 func (o *Observer) botMessageFor(f frames.Frame) (Message, bool) {
 	switch fr := f.(type) {
-	case *frames.BotStartedSpeakingFrame:
-		return o.gated(event(TypeBotStartedSpeaking), botSpeakingOf)
-	case *frames.BotStoppedSpeakingFrame:
-		return o.gated(event(TypeBotStoppedSpeaking), botSpeakingOf)
 	case *frames.InterruptionFrame:
 		// The bot's in-flight output was cut off, by a VAD barge-in or by a
 		// programmatic interrupt such as send-text with run_immediately. A client
@@ -315,15 +319,149 @@ func (o *Observer) botMessageFor(f frames.Frame) (Message, bool) {
 		return o.gated(event(TypeBotTTSStarted), botTTSOf)
 	case *frames.TTSStoppedFrame:
 		return o.gated(event(TypeBotTTSStopped), botTTSOf)
-	case *frames.TTSTextFrame:
-		// The text the TTS reports speaking, aligned to playback, which is what a
-		// client renders as the spoken caption. Not TTSSpeakFrame: that is text on
-		// its way into the service, and it never reaches a client as something
-		// spoken, because nothing guarantees the synthesizer accepted it.
-		return o.gated(BotTTSText(fr.Text), botTTSOf)
 	default:
 		return Message{}, false
 	}
+}
+
+// segment is one unit of the bot's output on its way to the client, and whether
+// it is text the synthesizer has spoken or text it is about to.
+type segment struct {
+	frame *frames.AggregatedTextFrame
+	// spoken reports that this is text the synthesizer has said, rather than a
+	// unit announced before synthesis. The two describe the same segment at
+	// opposite ends of its playback.
+	spoken bool
+}
+
+// botSpeakingMessages maps the bot's audio starting and stopping.
+//
+// Starting also releases the segments held while the bot was silent, so a
+// client is told what the bot is saying as it becomes audible rather than
+// before. The speaking state is tracked whether or not the speaking events
+// themselves are reported: a client that has turned them off still wants the
+// output, and holding the segments for an event nobody asked for would keep
+// them for good.
+func (o *Observer) botSpeakingMessages(f frames.Frame) ([]Message, bool) {
+	switch f.(type) {
+	case *frames.BotStartedSpeakingFrame:
+		held := o.startedSpeaking()
+		var msgs []Message
+		if msg, ok := o.gated(event(TypeBotStartedSpeaking), botSpeakingOf); ok {
+			msgs = append(msgs, msg)
+		}
+		for _, seg := range held {
+			msgs = append(msgs, o.segmentMessages(seg)...)
+		}
+		return msgs, true
+	case *frames.BotStoppedSpeakingFrame:
+		o.stoppedSpeaking()
+		if msg, ok := o.gated(event(TypeBotStoppedSpeaking), botSpeakingOf); ok {
+			return []Message{msg}, true
+		}
+		return nil, true
+	default:
+		return nil, false
+	}
+}
+
+// outputMessages maps the frames carrying what the bot is saying: a segment of
+// its output, and how far through one it has spoken.
+func (o *Observer) outputMessages(f frames.Frame) ([]Message, bool) {
+	switch fr := f.(type) {
+	case *frames.TTSTextFrame:
+		return o.reportSegment(segment{frame: &fr.AggregatedTextFrame, spoken: true}), true
+	case *frames.AggregatedTextFrame:
+		return o.reportSegment(segment{frame: fr}), true
+	case *frames.AggregatedTextProgressFrame:
+		return o.progressMessages(fr), true
+	default:
+		return nil, false
+	}
+}
+
+// reportSegment reports a segment now, or holds it until the bot is audible.
+func (o *Observer) reportSegment(seg segment) []Message {
+	if o.holdUnlessSpeaking(seg) {
+		return nil
+	}
+	return o.segmentMessages(seg)
+}
+
+// segmentMessages builds the messages for one segment of the bot's output: what
+// it says, and separately the caption for text the synthesizer has spoken.
+func (o *Observer) segmentMessages(seg segment) []Message {
+	agg := seg.frame
+	if o.skipsAggregation(agg.AggregatedBy) {
+		return nil
+	}
+
+	// A word or a token is not a segment of its own to a current client: the
+	// segment is the sentence it belongs to, and the words within it are
+	// reported as progress through that. An older client has no progress
+	// reports, so it is told about each one as output in its own right.
+	suppressed := !o.isLegacyClient() && (agg.AggregatedBy == frames.AggregationWord ||
+		agg.AggregatedBy == frames.AggregationToken)
+
+	var msgs []Message
+	if o.enabled(botOutputOf) && !suppressed {
+		id, spoken, willBeSpoken := agg.ID(), seg.spoken, agg.WillBeSpoken
+		d := BotOutputData{
+			Text:         agg.Text,
+			AggregatedBy: agg.AggregatedBy,
+			SegmentID:    &id,
+			Spoken:       &spoken,
+			WillBeSpoken: &willBeSpoken,
+		}
+		switch {
+		case !willBeSpoken:
+			// Nothing is going to speak it, so it has no playback to be
+			// anywhere in.
+		case seg.spoken:
+			// Spoken text arrives once synthesis is done, so the segment is
+			// finished by the time the client hears about it.
+			d.SpokenStatus = SpokenCompleted
+			d.SpokenProgress = &SpokenProgressData{AccumulatedText: agg.Text}
+		default:
+			// The segment is announced before synthesis starts, so none of it
+			// has been spoken yet.
+			d.SpokenStatus = SpokenNew
+			d.SpokenProgress = &SpokenProgressData{RemainingText: agg.Text}
+		}
+		msgs = append(msgs, BotOutput(d))
+	}
+	// The caption is a channel of its own and is not suppressed with the
+	// segment: a client rendering spoken text word by word still wants each one.
+	if seg.spoken && o.enabled(botTTSOf) {
+		msgs = append(msgs, BotTTSText(agg.Text))
+	}
+	return msgs
+}
+
+// progressMessages reports how far through a segment the bot has spoken.
+//
+// An older client is told nothing: it has no notion of progress within a
+// segment, and hears about each word as output of its own instead.
+func (o *Observer) progressMessages(fr *frames.AggregatedTextProgressFrame) []Message {
+	if o.isLegacyClient() || !o.enabled(botOutputOf) {
+		return nil
+	}
+	id, willBeSpoken := fr.SegmentID, true
+	status := SpokenInProgress
+	if fr.RemainingText == "" {
+		status = SpokenCompleted
+	}
+	return []Message{BotOutput(BotOutputData{
+		Text:         fr.Text,
+		AggregatedBy: fr.AggregatedBy,
+		SegmentID:    &id,
+		WillBeSpoken: &willBeSpoken,
+		SpokenStatus: status,
+		SpokenProgress: &SpokenProgressData{
+			AccumulatedText: fr.AccumulatedText,
+			RemainingText:   fr.RemainingText,
+		},
+	})}
 }
 
 // metricsMessage converts a MetricsFrame into an RTVI metrics message, grouping

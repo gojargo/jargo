@@ -36,7 +36,13 @@ func sent(msgs []rtvi.Message, msgType string) bool {
 
 // conversation is one small exchange touching every category a client can turn
 // off, so one feed can be run against several configurations.
+//
+// The bot starts speaking before the text it speaks, because that is the order
+// the pipeline produces: the audio starting is what raises the frame, and the
+// spoken text is released in step with the audio behind it.
 func conversation() []frames.Frame {
+	spoken := frames.NewTTSTextFrame("Hi there.", frames.AggregationSentence)
+	spoken.WillBeSpoken = true
 	return []frames.Frame{
 		frames.NewUserStartedSpeakingFrame(),
 		frames.NewTranscriptionFrame("hello", "user-1", "2026-08-29T00:00:00Z"),
@@ -45,9 +51,9 @@ func conversation() []frames.Frame {
 		frames.NewLLMTextFrame("Hi there."),
 		frames.NewLLMFullResponseEndFrame(),
 		frames.NewTTSStartedFrame(),
-		frames.NewTTSTextFrame("Hi there.", frames.AggregationSentence),
-		frames.NewTTSStoppedFrame(),
 		frames.NewBotStartedSpeakingFrame(),
+		spoken,
+		frames.NewTTSStoppedFrame(),
 		frames.NewBotStoppedSpeakingFrame(),
 	}
 }

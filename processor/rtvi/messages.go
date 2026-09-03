@@ -9,7 +9,11 @@
 // data channel.
 package rtvi
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/gojargo/jargo/frames"
+)
 
 const (
 	// MessageLabel tags every RTVI message.
@@ -40,6 +44,7 @@ const (
 	TypeErrorResponse        = "error-response"
 	TypeError                = "error"
 	TypeUserTranscription    = "user-transcription"
+	TypeBotOutput            = "bot-output"
 	TypeBotTranscription     = "bot-transcription"
 	TypeBotTTSText           = "bot-tts-text"
 	TypeBotLLMText           = "bot-llm-text"
@@ -294,6 +299,62 @@ func Error(msg string, fatal bool) Message {
 // bot-llm-text).
 type TextData struct {
 	Text string `json:"text"`
+}
+
+// SpokenStatus is where a segment of the bot's output has got to in playback.
+// It is empty for a segment that is not going to be spoken at all, which has no
+// playback to be anywhere in.
+type SpokenStatus string
+
+// The playback states a spoken segment passes through.
+const (
+	// SpokenNew is a segment that is about to be spoken and has not started.
+	SpokenNew SpokenStatus = "new"
+	// SpokenInProgress is a segment partway through being spoken.
+	SpokenInProgress SpokenStatus = "in-progress"
+	// SpokenCompleted is a segment whose last word has been spoken.
+	SpokenCompleted SpokenStatus = "completed"
+)
+
+// SpokenProgressData is how far through a segment the bot has spoken, split at
+// the word being said now. A client renders the whole segment and highlights the
+// accumulated part.
+type SpokenProgressData struct {
+	// AccumulatedText is what has been spoken so far, the current word included.
+	AccumulatedText string `json:"accumulated_text"`
+	// RemainingText is what has not been spoken yet.
+	RemainingText string `json:"remaining_text"`
+}
+
+// BotOutputData is the payload of a bot-output message: one segment of what the
+// bot is saying, with what is known about how it is being said.
+//
+// The optional fields belong to different protocol generations, and each is
+// omitted rather than sent empty so a client sees only the ones its generation
+// understands. Spoken is the older generation's account of whether the text has
+// been spoken; the rest describe the segment's playback to a current client.
+type BotOutputData struct {
+	// Text is the segment as the client should render it.
+	Text string `json:"text"`
+	// AggregatedBy is the unit the text stands for: a sentence, a word, or a
+	// name a pattern aggregator gave it.
+	AggregatedBy frames.AggregationType `json:"aggregated_by"`
+	// SegmentID identifies the segment, so progress reports can be matched to
+	// the text they are about.
+	SegmentID *uint64 `json:"segment_id,omitempty"`
+	// Spoken reports whether the text has been spoken. Older clients only.
+	Spoken *bool `json:"spoken,omitempty"`
+	// WillBeSpoken reports whether the synthesizer is going to speak the text.
+	WillBeSpoken *bool `json:"will_be_spoken,omitempty"`
+	// SpokenStatus is where the segment has got to in playback.
+	SpokenStatus SpokenStatus `json:"spoken_status,omitempty"`
+	// SpokenProgress splits the segment at the word being spoken now.
+	SpokenProgress *SpokenProgressData `json:"spoken_progress,omitempty"`
+}
+
+// BotOutput builds a bot-output message.
+func BotOutput(d BotOutputData) Message {
+	return newMessage(TypeBotOutput, "", d)
 }
 
 // BotTranscription builds a bot-transcription message.

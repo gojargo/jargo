@@ -78,6 +78,15 @@ func NewBaseOutput(name string, params Params, self OutputDriver) *BaseOutput {
 	return bo
 }
 
+// PlaysOutput marks this processor as a transport's output end.
+//
+// A frame pushed from here has been through the playback clock, so it carries
+// the timing of what the caller actually hears; the same frame on its way in has
+// not. Something reporting what the bot is saying keys on that difference, and
+// the marker is how it recognizes the output end without depending on which
+// transport it is.
+func (bo *BaseOutput) PlaysOutput() {}
+
 // SampleRate is the output sample rate in Hz, set when the transport starts.
 func (bo *BaseOutput) SampleRate() int { return bo.sampleRate }
 
