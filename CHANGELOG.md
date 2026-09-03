@@ -120,6 +120,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The audio buffer's turn buffers survive a recording being stopped, and not
+  one being started.** It had the two the wrong way round: stopping a recording
+  dropped the run of speech in progress, so a turn the tracker closed after the
+  stop lost the audio the stop had cut off, and starting one kept what had been
+  gathered before it, so the first turn of a new recording could open with audio
+  from the last one.
 - **Deepgram Flux settings.** The five fields a live connection accepts are sent
   in a Configure message, the two it reads only from the connection URL reopen
   the session, and the confidence floor applies at once. A fatal error reports
