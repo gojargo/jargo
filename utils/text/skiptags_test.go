@@ -295,3 +295,24 @@ func TestSkipTagsSurvivesASentenceLeavingTheBuffer(t *testing.T) {
 		t.Errorf("aggregated = %q, want %q", got, want)
 	}
 }
+
+// An interruption discards the buffer and the tag the scan was inside, so the
+// turn after it starts outside any tag rather than still swallowing text into
+// one the interrupted turn never closed.
+func TestSkipTagsHandleInterruptionForgetsAnOpenTag(t *testing.T) {
+	a := newSkipTags(t, frames.AggregationSentence, spellTag())
+
+	if got := a.Aggregate("Say <spell>A B C"); len(got) != 0 {
+		t.Fatalf("an open tag should hold its text, got %+v", got)
+	}
+	a.HandleInterruption()
+	if got := a.Text().Text; got != "" {
+		t.Fatalf("buffer after an interruption = %q, want empty", got)
+	}
+
+	// Still inside the tag, this sentence would have been held back.
+	got := a.Aggregate("A whole sentence. X")
+	if want := []string{"A whole sentence."}; !equalStrings(texts(got), want) {
+		t.Fatalf("aggregated %v, want %v: the open tag outlived the interruption", texts(got), want)
+	}
+}

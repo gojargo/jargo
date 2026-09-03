@@ -562,3 +562,28 @@ func TestPatternPairTokenReassemblesAKeptDelimiter(t *testing.T) {
 		t.Fatalf("aggregations = %q, want %q", texts(got), want)
 	}
 }
+
+// An interruption discards the buffer and the scan offset. The registered
+// patterns survive it, as they survive a reset: they describe the text this
+// aggregator reads, not the response it was partway through.
+func TestPatternPairHandleInterruptionKeepsThePatterns(t *testing.T) {
+	a, testH, _ := newPatternPair(t, frames.AggregationSentence)
+
+	if got := a.Aggregate("Hello <test>pattern content"); len(got) != 0 {
+		t.Fatalf("an open run should hold its text, got %+v", got)
+	}
+	a.HandleInterruption()
+	if got := a.Text().Text; got != "" {
+		t.Fatalf("buffer after an interruption = %q, want empty", got)
+	}
+	if len(testH.calls) != 0 {
+		t.Fatalf("handler called for a run the interruption cut off: %+v", testH.calls)
+	}
+
+	// The pattern is still registered, so a complete run after the interruption
+	// is matched and handed to the same handler.
+	a.Aggregate("<test>after</test> Done. X")
+	if got := testH.only(t); got.Text != "after" {
+		t.Fatalf("handler saw %q, want the pattern to have survived as %q", got.Text, "after")
+	}
+}

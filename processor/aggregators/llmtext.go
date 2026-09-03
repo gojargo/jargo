@@ -59,9 +59,11 @@ func (p *LLMText) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 
 	switch fr := f.(type) {
 	case *frames.InterruptionFrame:
-		// What was gathered belongs to the turn that was cut off.
+		// What was gathered belongs to the turn that was cut off. The aggregator
+		// is told it was interrupted rather than reset, because the two are not
+		// the same thing to an aggregator that treats them differently.
 		if p.aggregator != nil {
-			p.aggregator.Reset()
+			p.aggregator.HandleInterruption()
 		}
 		return p.PushFrame(ctx, f, dir)
 	case *frames.LLMTextFrame:
