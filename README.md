@@ -11,7 +11,6 @@
 ![Go version](https://img.shields.io/github/go-mod/go-version/gojargo/jargo)
 [![Release](https://img.shields.io/github/v/release/gojargo/jargo?sort=semver)](https://github.com/gojargo/jargo/releases)
 [![License: BSD-2-Clause](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
-[![Status: early WIP](https://img.shields.io/badge/status-early%20WIP-orange)](CHANGELOG.md)
 
 </div>
 
