@@ -1,5 +1,7 @@
 package turns
 
+import "github.com/gojargo/jargo/audio/turn"
+
 // UserTurnStrategies holds the start and stop strategy chains a controller runs.
 // Per frame, start strategies run in order until one returns Stop; then stop
 // strategies run the same way (they usually return Continue and signal via their
@@ -25,9 +27,8 @@ func (s UserTurnStrategies) ExternalInterruptions() (enabled, isExternal bool) {
 	return *s.external, true
 }
 
-// fillDefaults populates empty chains with the model-free defaults: VAD +
-// transcription to start, a speech-timeout to stop. For Smart-Turn end-of-turn,
-// build Stop explicitly with NewTurnAnalyzerStop.
+// fillDefaults populates empty chains with the defaults: VAD and transcription
+// to start, the Smart Turn v3 model to stop.
 func (s *UserTurnStrategies) fillDefaults() {
 	if len(s.Start) == 0 {
 		s.Start = DefaultStartStrategies()
@@ -43,11 +44,20 @@ func DefaultStartStrategies() []StartStrategy {
 	return []StartStrategy{NewVADStart(), NewTranscriptionStart(TranscriptionStartConfig{})}
 }
 
-// DefaultStopStrategies returns the default, model-free stop chain: a
-// speech-timeout after VAD stop. For Smart-Turn, pass a chain built with
-// NewTurnAnalyzerStop instead.
+// DefaultStopStrategies returns the default stop chain: end-of-turn decided by
+// the Smart Turn v3 model, so a pause it rates as unfinished does not end the
+// turn.
+//
+// The model runs on the ONNX runtime, which is located at run time rather than
+// linked in, so a pipeline that cannot find it fails to start with the reason
+// (see the onnxrt package for where it looks). For turn-taking without a model,
+// build the chain explicitly with NewSpeechTimeoutStop.
 func DefaultStopStrategies() []StopStrategy {
-	return []StopStrategy{NewSpeechTimeoutStop(SpeechTimeoutConfig{})}
+	analyzer, err := turn.NewSmartTurnV3()
+	if err != nil {
+		return []StopStrategy{&TurnAnalyzerStop{analyzerErr: err}}
+	}
+	return []StopStrategy{NewTurnAnalyzerStop(TurnAnalyzerConfig{Analyzer: analyzer})}
 }
 
 // ExternalStrategiesConfig configures ExternalStrategies.

@@ -15,7 +15,13 @@ import (
 
 func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
 	convo := frames.NewLLMContext("system")
-	pair := aggregators.New(convo)
+	// The model-free stop chain: what is under test is when the LLM runs, not
+	// the end-of-turn model the defaults run.
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Stop: []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{})},
+		},
+	}))
 
 	triggered := make(chan struct{}, 1)
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{

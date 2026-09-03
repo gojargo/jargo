@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -23,7 +24,13 @@ import (
 // that reach the end of the pipeline.
 func runAggregator(t *testing.T, convo *frames.LLMContext) (*pipeline.Worker, chan frames.Frame, chan error) {
 	t.Helper()
-	pair := aggregators.New(convo)
+	// The model-free stop chain, since what these tests need is a turn that
+	// ends rather than the end-of-turn model the defaults run.
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Stop: []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{})},
+		},
+	}))
 	seen := make(chan frames.Frame, 32)
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,

@@ -50,10 +50,40 @@ func await(seen chan frames.Frame, match func(frames.Frame) bool) bool {
 	}
 }
 
-// The default strategies open the turn on the VAD and close it once the speech
-// timeout has elapsed with a transcript in hand.
-func TestUserTurnProcessorDefaultStrategies(t *testing.T) {
+// TestUserTurnProcessorDefaultChain checks what a processor with no strategies
+// configured runs: the VAD and a transcript to open a turn, and the Smart Turn
+// model to close it.
+func TestUserTurnProcessorDefaultChain(t *testing.T) {
 	p := turns.NewUserTurnProcessor(turns.Config{})
+	s := p.Controller().Strategies()
+
+	if len(s.Start) != 2 {
+		t.Fatalf("start chain = %d strategies, want 2", len(s.Start))
+	}
+	if _, ok := s.Start[0].(*turns.VADStart); !ok {
+		t.Errorf("first start strategy = %T, want the VAD one", s.Start[0])
+	}
+	if _, ok := s.Start[1].(*turns.TranscriptionStart); !ok {
+		t.Errorf("second start strategy = %T, want the transcription one", s.Start[1])
+	}
+	if len(s.Stop) != 1 {
+		t.Fatalf("stop chain = %d strategies, want 1", len(s.Stop))
+	}
+	if _, ok := s.Stop[0].(*turns.TurnAnalyzerStop); !ok {
+		t.Errorf("stop strategy = %T, want the turn-analyzer one", s.Stop[0])
+	}
+}
+
+// The speech-timeout chain opens the turn on the VAD and closes it once the
+// timeout has elapsed with a transcript in hand. It is the model-free chain, so
+// it runs wherever the tests do.
+func TestUserTurnProcessorSpeechTimeoutStrategies(t *testing.T) {
+	p := turns.NewUserTurnProcessor(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Start: turns.DefaultStartStrategies(),
+			Stop:  []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{})},
+		},
+	})
 
 	started := make(chan turns.StartStrategy, 1)
 	stopped := make(chan turns.StopStrategy, 1)

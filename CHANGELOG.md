@@ -35,6 +35,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Turn-taking defaults to the Smart Turn v3 model.** An empty stop chain built
+  a speech timeout, which ends a turn on silence alone and so ends it on any
+  pause long enough. It now builds `TurnAnalyzerStop` over Smart Turn v3, which
+  is what the documentation already described. The model runs on the ONNX
+  runtime, located at run time rather than linked in, so a pipeline that leaves
+  the chain empty and cannot find the runtime now fails to start with the reason
+  (`make deps-onnx` installs it and prints the `JARGO_ONNXRUNTIME_LIB` to
+  export). For turn-taking without a model, build the chain explicitly with
+  `turns.NewSpeechTimeoutStop`.
 - **The OpenAI Responses services no longer reason by default.** A
   reasoning-capable model left unconfigured now asks for effort `"none"` rather
   than taking the API's default, which is thinking time somebody on a voice call
