@@ -327,3 +327,37 @@ func TestTurnTraceNilObserver(t *testing.T) {
 }
 
 var _ processor.Observer = (*observers.TurnTrace)(nil)
+
+// TestTurnTraceKeepsEveryTurnContext checks the span context of a turn is
+// available after the turn has ended, so a service finishing work that belongs
+// to an earlier turn can still parent its span to that turn.
+func TestTurnTraceKeepsEveryTurnContext(t *testing.T) {
+	tc := tracing.NewTracingContext()
+	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc})
+
+	if o.CurrentTurnContext().IsValid() {
+		t.Error("a turn context was reported with no turn open")
+	}
+	if o.TurnContext(1).IsValid() {
+		t.Error("a turn context was reported for a turn that was never traced")
+	}
+
+	o.TurnStarted(1)
+	first := o.CurrentTurnContext()
+	o.TurnEnded(1, time.Second, false)
+	o.TurnStarted(2)
+	second := o.CurrentTurnContext()
+
+	if got := o.TurnContext(1); got.SpanID() != first.SpanID() {
+		t.Errorf("turn 1 span = %v, want the one it was traced under (%v)",
+			got.SpanID(), first.SpanID())
+	}
+	if got := o.TurnContext(2); got.SpanID() != second.SpanID() {
+		t.Errorf("turn 2 span = %v, want the one it is being traced under (%v)",
+			got.SpanID(), second.SpanID())
+	}
+	if first.SpanID() == second.SpanID() {
+		t.Error("both turns share a span, so they are not separate turns")
+	}
+	o.EndConversation()
+}

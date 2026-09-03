@@ -54,8 +54,12 @@ const analyzerMetricsProcessor = "TurnAnalyzer"
 // Smart-Turn stop strategy.
 type TurnAnalyzerStop struct {
 	StopStrategyBase
-	analyzer  turn.Analyzer
-	waitForTx bool
+	analyzer turn.Analyzer
+	// analyzerErr is why there is no analyzer, for a chain built by
+	// DefaultStopStrategies where the model could not be loaded. It is reported
+	// from Setup, which is the first call that can report anything.
+	analyzerErr error
+	waitForTx   bool
 	// sttTimeout is the transcript wait, the p99 the STT publishes at start. Zero
 	// until it does, and zero for a service the wait means nothing for.
 	sttTimeout time.Duration
@@ -86,6 +90,11 @@ func NewTurnAnalyzerStop(cfg TurnAnalyzerConfig) *TurnAnalyzerStop {
 
 // Process feeds the analyzer and decides end-of-turn.
 func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
+	if s.analyzer == nil {
+		// There is no model, and Setup has already reported why. Nothing here
+		// can decide a turn, so every frame passes to the rest of the chain.
+		return Continue
+	}
 	switch fr := f.(type) {
 	case *frames.StartFrame:
 		// Publish the end-of-turn parameters the pipeline is running under, so a
@@ -278,7 +287,9 @@ func (s *TurnAnalyzerStop) TurnStarted() { s.resetState() }
 // TurnStopped resets the bookkeeping and clears the analyzer's buffered speech.
 func (s *TurnAnalyzerStop) TurnStopped() {
 	s.resetState()
-	s.analyzer.Clear()
+	if s.analyzer != nil {
+		s.analyzer.Clear()
+	}
 }
 
 // resetState clears turn-scoped state. It runs at both turn boundaries.
@@ -304,8 +315,12 @@ func (s *TurnAnalyzerStop) discardPendingEndOfTurn() {
 }
 
 // Setup tells the analyzer the pipeline's input rate, which is known before any
-// audio arrives.
+// audio arrives. A chain whose analyzer could not be built fails here, which is
+// the first point that can say so.
 func (s *TurnAnalyzerStop) Setup(st processor.Setup) error {
+	if s.analyzerErr != nil {
+		return s.analyzerErr
+	}
 	s.analyzer.SetSampleRate(st.AudioInSampleRate)
 	return nil
 }

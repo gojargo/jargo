@@ -43,11 +43,15 @@ type TurnTrace struct {
 	conversationID string
 	turn           trace.Span
 	turnNumber     int
+	// spans is the span context of every turn traced so far, so a service that
+	// finishes work belonging to an earlier turn can still parent its span to
+	// the turn it belongs to rather than to whichever one is open now.
+	spans map[int]trace.SpanContext
 }
 
 // NewTurnTrace builds a TurnTrace observer.
 func NewTurnTrace(cfg TurnTraceConfig) *TurnTrace {
-	return &TurnTrace{cfg: cfg, dd: newDeduper(0)}
+	return &TurnTrace{cfg: cfg, dd: newDeduper(0), spans: map[int]trace.SpanContext{}}
 }
 
 // OnPushFrame implements processor.Observer. The conversation span opens on the
@@ -148,7 +152,28 @@ func (o *TurnTrace) TurnStarted(turn int) {
 		span.SetAttributes(attribute.String("conversation.id", o.conversationID))
 	}
 	o.turn, o.turnNumber = span, turn
+	o.spans[turn] = span.SpanContext()
 	o.cfg.Tracing.SetTurnContext(span.SpanContext())
+}
+
+// CurrentTurnContext is the span context of the turn being traced, for a caller
+// creating a span beneath it. The zero value means no turn is open.
+func (o *TurnTrace) CurrentTurnContext() trace.SpanContext {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.turn == nil {
+		return trace.SpanContext{}
+	}
+	return o.turn.SpanContext()
+}
+
+// TurnContext is the span context of the given turn, for a caller creating a
+// span beneath a turn that may already have ended. The zero value means the turn
+// was never traced.
+func (o *TurnTrace) TurnContext(turn int) trace.SpanContext {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.spans[turn]
 }
 
 // TurnEnded closes the span for a turn, recording how long it ran and whether it

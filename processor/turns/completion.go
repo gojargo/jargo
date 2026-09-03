@@ -51,7 +51,7 @@ func (s *LLMTurnCompletionStop) configureLLM() {
 	delta.UserTurnCompletionConfig = settings.Set[any](s.config)
 	update := frames.NewLLMUpdateSettingsFrame(&delta)
 	update.ReachInactiveServices = true
-	s.env.push(update, processor.Downstream)
+	s.Push(update, processor.Downstream)
 }
 
 // FilterIncompleteUserTurnStrategies builds a stop chain gated on the LLM's own

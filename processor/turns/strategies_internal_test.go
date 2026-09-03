@@ -16,6 +16,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/onnxrt"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
@@ -1015,8 +1016,22 @@ func TestDefaultStrategyChains(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("len = %d, want 1", len(got))
 		}
-		if _, ok := got[0].(*SpeechTimeoutStop); !ok {
-			t.Errorf("first = %T, want *SpeechTimeoutStop", got[0])
+		// The end of a turn is the model's call by default, so a pause it rates
+		// as unfinished does not end the turn.
+		stop, ok := got[0].(*TurnAnalyzerStop)
+		if !ok {
+			t.Fatalf("first = %T, want *TurnAnalyzerStop", got[0])
+		}
+		if !onnxrt.Available() {
+			// With no runtime to load the model with, the chain carries the
+			// reason and reports it from Setup rather than pretending to decide.
+			if err := stop.Setup(processor.Setup{}); err == nil {
+				t.Error("Setup succeeded with no ONNX runtime to load the model with")
+			}
+			return
+		}
+		if stop.analyzer == nil {
+			t.Error("the default stop strategy has no analyzer")
 		}
 	})
 

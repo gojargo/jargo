@@ -57,7 +57,12 @@ Turn-taking is a small subsystem split across two processors:
   (re-engage a silent user) and optional mute strategies.
 
 The default strategies are VAD-or-transcription to start and Smart Turn v3 to
-stop, so a pause Smart Turn rates incomplete does not end the turn.
+stop, so a pause Smart Turn rates incomplete does not end the turn. Leaving the
+chains empty builds that default, which loads the model: a pipeline that cannot
+find the ONNX runtime fails to start with the reason (see
+[`make deps-onnx`](../../Makefile)). For turn-taking without a model, build the
+stop chain explicitly with `turns.NewSpeechTimeoutStop`, which ends the turn on
+silence timers alone.
 
 ```go
 vd, _ := vad.NewSilero()
