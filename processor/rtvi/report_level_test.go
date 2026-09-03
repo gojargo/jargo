@@ -32,7 +32,10 @@ func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.F
 		msgs []rtvi.Message
 	)
 	proc := rtvi.NewProcessor()
-	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
+	// The pipeline ends in a stand-in for the transport's output end, because
+	// the frames carrying the bot's output are reported from there rather than
+	// from the service that produced them.
+	task := pipeline.NewWorker(pipeline.New(proc, newPlayback()), pipeline.WorkerConfig{
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
@@ -56,6 +59,13 @@ func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.F
 	go func() { done <- task.Run(t.Context()) }()
 	for _, f := range queue {
 		task.QueueFrame(f)
+		// Queued one at a time rather than all at once, because the events that
+		// bracket playback are system frames and would otherwise overtake the
+		// data frames they bracket: the bot would be reported as having stopped
+		// speaking before the text it spoke had traveled the pipeline. A real
+		// pipeline raises them as the audio starts and finishes, with the spoken
+		// text released in between.
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// Settle: stop once nothing new has arrived for a while, so a test

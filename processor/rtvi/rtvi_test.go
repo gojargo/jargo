@@ -112,7 +112,10 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	params := rtvi.ObserverParams{
 		FunctionCallReportLevel: map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportFull},
 	}
-	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
+	// The pipeline ends in a stand-in for the transport's output end, because
+	// the spoken text is reported from there rather than from the service that
+	// produced it.
+	task := pipeline.NewWorker(pipeline.New(proc, newPlayback()), pipeline.WorkerConfig{
 		// Events are reported by the observer; the processor only carries them.
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
@@ -141,8 +144,19 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	if got := waitMessage(t, out); got.Type != rtvi.TypeBotTTSStarted {
 		t.Fatalf("expected bot-tts-started, got %+v", got)
 	}
-	// The text the TTS reports speaking, not the text on its way into it.
+	// Spoken text is held until the bot is audible, so the audio has to start
+	// before the caption can be reported.
+	task.QueueFrame(frames.NewBotStartedSpeakingFrame())
+	if got := waitMessage(t, out); got.Type != rtvi.TypeBotStartedSpeaking {
+		t.Fatalf("expected bot-started-speaking, got %+v", got)
+	}
+
+	// The text the TTS reports speaking, not the text on its way into it. It is
+	// one segment of the bot's output and, separately, the caption for it.
 	task.QueueFrame(frames.NewTTSTextFrame("sunny", frames.AggregationSentence))
+	if got := waitMessage(t, out); got.Type != rtvi.TypeBotOutput {
+		t.Fatalf("expected bot-output, got %+v", got)
+	}
 	got := waitMessage(t, out)
 	if got.Type != rtvi.TypeBotTTSText {
 		t.Fatalf("expected bot-tts-text, got %+v", got)

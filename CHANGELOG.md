@@ -15,6 +15,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **RTVI reports what the bot is saying, segment by segment.** The `bot-output`
+  message was missing entirely: a client had the model's raw text and the
+  spoken captions, and nothing tying them together. Each unit of the bot's
+  output is now reported with how it was aggregated, an id, whether the
+  synthesizer is going to speak it, and where it has got to in playback, with
+  the accumulated and remaining text split at the word being said. A unit is
+  reported from the transport that plays it rather than from the service that
+  produced it, so its timing is that of what the caller hears, and one produced
+  before the bot is audible is held until its audio starts. A client of the
+  older protocol generation, which has no notion of progress within a segment,
+  is told about each word as output in its own right instead.
+  `ObserverParams.BotOutputEnabled` turns the category off and
+  `SkipAggregatorTypes` keeps chosen aggregation types from the client
+  altogether, captions included.
 - **Tool calling on every speech-to-speech service.** OpenAI Realtime, xAI
   Realtime, Gemini Live and AWS Nova Sonic advertised a toolset and never ran
   anything the model called. They now register the handlers their tools carry,

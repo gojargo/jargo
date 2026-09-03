@@ -30,6 +30,17 @@ type Observer struct {
 	seen  map[uint64]struct{}
 	order []uint64
 
+	// outputMu guards the bot's output state below. A segment is reported when
+	// the bot starts speaking, which is a different frame from the one carrying
+	// the text, so the two can arrive from different goroutines.
+	outputMu sync.Mutex
+	// botSpeaking is whether the bot's audio is currently playing. A segment
+	// arriving before it starts is held rather than reported, because a client
+	// told about text the caller cannot yet hear would run ahead of the audio.
+	botSpeaking bool
+	// queuedSegments are the segments waiting for the bot to start speaking.
+	queuedSegments []segment
+
 	// paramsMu guards params, which a ConfigureObserverFrame rewrites while the
 	// pipeline is running.
 	paramsMu sync.Mutex
@@ -74,6 +85,10 @@ type ObserverParams struct {
 	// events carry. The "*" key sets the level for functions not listed; when it
 	// is absent too, ReportNone applies.
 	FunctionCallReportLevel map[string]FunctionCallReportLevel
+	// BotOutputEnabled reports what the bot is saying, segment by segment, and
+	// how far through each one it has spoken. It is what a client renders as the
+	// bot's side of the conversation. Nil leaves it on.
+	BotOutputEnabled *bool
 	// BotLLMEnabled reports what the model produced: the brackets around a
 	// response and the text inside it. Nil leaves it on.
 	BotLLMEnabled *bool
@@ -93,6 +108,13 @@ type ObserverParams struct {
 	// MetricsEnabled reports the timings and usage the pipeline measures. Nil
 	// leaves it on.
 	MetricsEnabled *bool
+	// SkipAggregatorTypes are the aggregation types not reported as bot output
+	// or spoken text. It keeps a unit the bot produces but should not show from
+	// the client's view, a pattern-matched block carrying something private
+	// being the case for it. A client can still be told about it through the
+	// model's own text, so turn BotLLMEnabled off alongside this when that is
+	// what the list is for.
+	SkipAggregatorTypes []frames.AggregationType
 	// IgnoredSources are processors whose frames the observer says nothing
 	// about. It keeps a secondary branch of the pipeline out of the client's
 	// view: an evaluation model answering alongside the real one has a whole
@@ -170,7 +192,12 @@ func (o *Observer) OnPushFrame(data processor.FramePushed) {
 	if _, broadcast := f.Base().BroadcastSiblingID(); broadcast && dir != processor.Downstream {
 		return
 	}
-	if o.alreadySeen(f.ID()) {
+	// A segment of the bot's output is reported from the transport that plays
+	// it rather than from the service that produced it, because only the copy
+	// coming out of playback carries the timing of what the caller is hearing.
+	// The earlier handovers are passed over without being recorded, so the frame
+	// is still recognized as new when it comes back out.
+	if !o.claimFrame(f.ID(), awaitsPlayback(f) && !playsOutput(data.Source)) {
 		return
 	}
 	// A branch of the pipeline the client is not meant to see says nothing at
@@ -316,13 +343,20 @@ func (o *Observer) reportLevelFor(name string) FunctionCallReportLevel {
 	return ReportNone
 }
 
-// alreadySeen reports whether the frame has been reported, recording it when it
-// has not.
-func (o *Observer) alreadySeen(id uint64) bool {
+// claimFrame reports whether this handover of the frame is the observer's to
+// act on, recording the frame when it is.
+//
+// A frame already reported is refused. So is one still waiting for playback,
+// and that one is left unrecorded, so the handover that comes out of playback
+// is recognized as its first.
+func (o *Observer) claimFrame(id uint64, waiting bool) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if _, ok := o.seen[id]; ok {
-		return true
+		return false
+	}
+	if waiting {
+		return false
 	}
 	o.seen[id] = struct{}{}
 	o.order = append(o.order, id)
@@ -330,7 +364,75 @@ func (o *Observer) alreadySeen(id uint64) bool {
 		delete(o.seen, o.order[0])
 		o.order = o.order[1:]
 	}
-	return false
+	return true
+}
+
+// awaitsPlayback reports whether a frame is one the observer reports only once
+// it has been through the output transport. These carry the bot's spoken output,
+// and the copy the transport pushes is the one timed to what the caller hears.
+func awaitsPlayback(f frames.Frame) bool {
+	switch f.(type) {
+	case *frames.TTSTextFrame, *frames.AggregatedTextFrame, *frames.AggregatedTextProgressFrame:
+		return true
+	default:
+		return false
+	}
+}
+
+// playsOutput reports whether source is a transport's output end, which is the
+// point a frame has been through playback.
+func playsOutput(source processor.Processor) bool {
+	_, ok := source.(interface{ PlaysOutput() })
+	return ok
+}
+
+// isLegacyClient reports whether the connected client speaks the older protocol
+// generation. It knows nothing of segment progress, so it is told about each
+// word as output of its own instead.
+func (o *Observer) isLegacyClient() bool {
+	if o.sink == nil {
+		return false
+	}
+	return o.sink.ClientVersion()[0] == LegacySupportedMajor
+}
+
+// skipsAggregation reports whether units aggregated this way are kept from the
+// client. See ObserverParams.SkipAggregatorTypes.
+func (o *Observer) skipsAggregation(by frames.AggregationType) bool {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	return slices.Contains(o.params.SkipAggregatorTypes, by)
+}
+
+// startedSpeaking records that the bot's audio is playing and returns the
+// segments held while it was silent, for reporting now that they are audible.
+func (o *Observer) startedSpeaking() []segment {
+	o.outputMu.Lock()
+	defer o.outputMu.Unlock()
+	held := o.queuedSegments
+	o.queuedSegments = nil
+	o.botSpeaking = true
+	return held
+}
+
+// stoppedSpeaking records that the bot's audio has finished.
+func (o *Observer) stoppedSpeaking() {
+	o.outputMu.Lock()
+	defer o.outputMu.Unlock()
+	o.botSpeaking = false
+}
+
+// holdUnlessSpeaking holds a segment back when the bot is not yet audible,
+// reporting whether it was held. A client told about text before the audio
+// carrying it would run ahead of what the caller hears.
+func (o *Observer) holdUnlessSpeaking(seg segment) bool {
+	o.outputMu.Lock()
+	defer o.outputMu.Unlock()
+	if o.botSpeaking {
+		return false
+	}
+	o.queuedSegments = append(o.queuedSegments, seg)
+	return true
 }
 
 // Send hands an RTVI message to the client. It is safe to call from any
