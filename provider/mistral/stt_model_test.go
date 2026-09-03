@@ -10,13 +10,13 @@ import (
 // transcribing with. The service labels its metrics and spans with it, and the
 // usage is priced against it, so an empty one puts the cost against nothing.
 func TestSTTMetadataReportsTheModel(t *testing.T) {
-	c := &sttConnector{cfg: STTConfig{Model: "voxtral-custom"}}
+	c := newSTTConnector(STTConfig{Model: "voxtral-custom"})
 	if got := c.Metadata().Model; got != "voxtral-custom" {
 		t.Errorf("Model = %q, want the configured model", got)
 	}
 
 	// And the default a caller who names none is given.
-	def := &sttConnector{cfg: STTConfig{Model: sttDefaultModel}}
+	def := newSTTConnector(STTConfig{Model: sttDefaultModel})
 	if got := def.Metadata().Model; got != sttDefaultModel {
 		t.Errorf("Model = %q, want the default %q", got, sttDefaultModel)
 	}

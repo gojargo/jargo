@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -104,7 +105,7 @@ func sttConn(endpoint string, opts ...func(*STTConfig)) *sttConnector {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &sttConnector{cfg: cfg}
+	return newSTTConnector(cfg)
 }
 
 func TestSTTConnectSendsTheSessionUpdate(t *testing.T) {
@@ -420,11 +421,63 @@ func TestSTTConnectReportsAnUnreachableEndpoint(t *testing.T) {
 // TestSTTMetadataReportsTheMeasuredLatency checks the latency the turn
 // strategies size their wait by, and that it can be overridden.
 func TestSTTMetadataReportsTheMeasuredLatency(t *testing.T) {
-	if got := (&sttConnector{}).Metadata().TTFSP99; got != stt.MistralTTFSP99 {
+	if got := newSTTConnector(STTConfig{}).Metadata().TTFSP99; got != stt.MistralTTFSP99 {
 		t.Errorf("TTFSP99 = %v, want the measured figure", got)
 	}
-	c := &sttConnector{cfg: STTConfig{TTFSP99: 400 * time.Millisecond}}
+	c := newSTTConnector(STTConfig{TTFSP99: 400 * time.Millisecond})
 	if got := c.Metadata().TTFSP99; got != 400*time.Millisecond {
 		t.Errorf("TTFSP99 = %v, want the override", got)
+	}
+}
+
+// TestSTTSettingsReopenTheSession checks a settings change asks for a new
+// session. Mistral takes the transcription configuration when the session opens,
+// so a change reaches it no other way.
+func TestSTTSettingsReopenTheSession(t *testing.T) {
+	c := newSTTConnector(STTConfig{Model: sttDefaultModel})
+
+	holder, ok := any(c).(stt.SettingsHolder)
+	if !ok {
+		t.Fatal("the connector holds no settings, so nothing about it can change mid-call")
+	}
+	live, ok := holder.Settings().(*STTSettings)
+	if !ok {
+		t.Fatalf("Settings() = %T, want the provider's own store", holder.Settings())
+	}
+	if got := live.Model.Or(""); got != sttDefaultModel {
+		t.Errorf("the store opens on model %q, want %q", got, sttDefaultModel)
+	}
+
+	updater, ok := any(c).(stt.SettingsUpdater)
+	if !ok {
+		t.Fatal("the connector does not act on a settings change")
+	}
+	reopen, err := updater.UpdateSettings(t.Context(), settings.Changed{"model": nil})
+	if err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if !reopen {
+		t.Error("a changed model did not ask for a new session, so it never reaches Mistral")
+	}
+}
+
+// TestSTTConnectsWithTheUpdatedModel checks the session opens on the model the
+// store holds rather than the one the service was built with.
+func TestSTTConnectsWithTheUpdatedModel(t *testing.T) {
+	endpoint, got := sttServer(t, nil)
+	c := newSTTConnector(STTConfig{URL: endpoint, Model: sttDefaultModel})
+	c.live.Model = settings.Set("voxtral-other")
+
+	stream, err := c.Connect(t.Context(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	if q := got.query.Get("model"); q != "voxtral-other" {
+		t.Errorf("model = %q, want the updated one", q)
+	}
+	if m := c.Metadata().Model; m != "voxtral-other" {
+		t.Errorf("Metadata model = %q, want the updated one", m)
 	}
 }
