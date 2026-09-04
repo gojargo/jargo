@@ -1712,6 +1712,45 @@ func TestBaseInputFiltersWithPassthroughOff(t *testing.T) {
 	<-runDone
 }
 
+// TestBaseInputDoesNotWriteIntoAPushedFrame covers who owns audio that arrived
+// by being pushed. The filter writes its output back into the frame it is given,
+// and a frame that has been pushed has been handed to the observers too, which
+// read it on their own goroutines. So the filtering path takes a copy, and the
+// frame the caller pushed is left as it was.
+func TestBaseInputDoesNotWriteIntoAPushedFrame(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInSampleRate = 48000
+	params.AudioInPassthrough = false
+	filter := &fakeFilter{}
+	params.AudioInFilter = filter
+
+	in := newFakeInput(params, 0)
+	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	audio := []byte{1, 2, 3, 4}
+	f := frames.NewInputAudioRawFrame(audio, 48000, 1)
+	task.QueueFrame(f)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for filter.filtered.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if filter.filtered.Load() == 0 {
+		t.Fatal("the input filter never saw the audio")
+	}
+
+	task.StopWhenDone()
+	<-runDone
+
+	// The fake filter adds one to every byte, so the frame would carry 2,3,4,5
+	// if the filtering path had written into it.
+	if got := f.Audio; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Errorf("the pushed frame's audio = %v, want it left at 1,2,3,4", got)
+	}
+}
+
 // wedgedOutput never returns from a write, which is what a peer that has stopped
 // reading looks like: the connection is up and nothing fails, so the only signal
 // available is that the write does not come back.
