@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/audio/loudness"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // Observer reports pipeline events to an RTVI client. It watches every frame
@@ -45,6 +46,17 @@ type Observer struct {
 	// pipeline is running.
 	paramsMu sync.Mutex
 	params   ObserverParams
+
+	// transcriptMu guards the bot transcription below, which is assembled from
+	// the model's text as it streams.
+	transcriptMu sync.Mutex
+	// botTranscription is the model's text gathered since the last sentence
+	// went out. It feeds the superseded bot-transcription messages.
+	botTranscription string
+	// tokenizer finds the sentence boundaries that release a bot transcription.
+	// It is nil when none could be loaded, which silences those messages and
+	// nothing else.
+	tokenizer text.SentenceTokenizer
 
 	// levelMu guards the volume tracking below. Audio for the two sides arrives
 	// from different processors, so on different goroutines.
@@ -105,6 +117,14 @@ type ObserverParams struct {
 	// UserTranscriptionEnabled reports what the user said, both the interim
 	// guesses and the final transcript. Nil leaves it on.
 	UserTranscriptionEnabled *bool
+	// UserLLMEnabled reports the user's message as the model is about to read
+	// it, which is what was actually put to the model rather than what the
+	// transcription service heard. Nil leaves it on.
+	UserLLMEnabled *bool
+	// UserMuteEnabled reports the user's input being suppressed and released
+	// again, so a client can show that it is not being listened to. Nil leaves
+	// it on.
+	UserMuteEnabled *bool
 	// MetricsEnabled reports the timings and usage the pipeline measures. Nil
 	// leaves it on.
 	MetricsEnabled *bool
@@ -177,10 +197,19 @@ func NewObserver(sink *Processor) *Observer {
 // NewObserverWithParams builds an observer that sends through sink and reports
 // what params allows.
 func NewObserverWithParams(sink *Processor, params ObserverParams) *Observer {
+	tok, err := text.NewPunktEnglish()
+	if err != nil {
+		// Only the superseded bot-transcription messages need it, so the rest of
+		// what the observer reports carries on without one.
+		slog.Warn("no sentence tokenizer, bot transcriptions will not be reported",
+			"error", err)
+		tok = nil
+	}
 	return &Observer{
-		sink:   sink,
-		seen:   make(map[uint64]struct{}, seenCap),
-		params: params,
+		sink:      sink,
+		seen:      make(map[uint64]struct{}, seenCap),
+		params:    params,
+		tokenizer: tok,
 	}
 }
 

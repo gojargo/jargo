@@ -163,6 +163,9 @@ func (o *Observer) messagesFor(f frames.Frame) []Message {
 	if msgs, ok := o.botSpeakingMessages(f); ok {
 		return msgs
 	}
+	if msgs, ok := o.llmTextMessages(f); ok {
+		return msgs
+	}
 	if msg, ok := o.botMessageFor(f); ok {
 		return []Message{msg}
 	}
@@ -269,6 +272,19 @@ func (o *Observer) userMessageFor(f frames.Frame) (Message, bool) {
 		return o.gated(event(TypeUserStartedSpeaking), userSpeakingOf)
 	case *frames.UserStoppedSpeakingFrame:
 		return o.gated(event(TypeUserStoppedSpeaking), userSpeakingOf)
+	case *frames.UserMuteStartedFrame:
+		return o.gated(event(TypeUserMuteStarted), userMuteOf)
+	case *frames.UserMuteStoppedFrame:
+		return o.gated(event(TypeUserMuteStopped), userMuteOf)
+	case *frames.LLMContextFrame:
+		// What the user said as the model is about to read it, which is not
+		// always what the transcription service heard: the turn may have been
+		// assembled from several transcripts, or written by the client outright.
+		text, ok := lastUserText(fr.Context)
+		if !ok {
+			return Message{}, false
+		}
+		return o.gated(UserLLMText(text), userLLMOf)
 	case *frames.ErrorFrame:
 		// An error is not a category a client turns off: it is what explains a
 		// conversation that stopped working.
@@ -289,6 +305,8 @@ func botSpeakingOf(p ObserverParams) *bool   { return p.BotSpeakingEnabled }
 func botLLMOf(p ObserverParams) *bool        { return p.BotLLMEnabled }
 func botTTSOf(p ObserverParams) *bool        { return p.BotTTSEnabled }
 func botOutputOf(p ObserverParams) *bool     { return p.BotOutputEnabled }
+func userLLMOf(p ObserverParams) *bool       { return p.UserLLMEnabled }
+func userMuteOf(p ObserverParams) *bool      { return p.UserMuteEnabled }
 
 // gated reports msg unless its category was turned off, and reports either way
 // that the frame was recognized: a frame the observer is silent about is still
@@ -303,7 +321,7 @@ func (o *Observer) gated(msg Message, pick func(ObserverParams) *bool) (Message,
 // botMessageFor maps bot-originated frames (the model's output, the
 // synthesizer's brackets, tool calls).
 func (o *Observer) botMessageFor(f frames.Frame) (Message, bool) {
-	switch fr := f.(type) {
+	switch f.(type) {
 	case *frames.InterruptionFrame:
 		// The bot's in-flight output was cut off, by a VAD barge-in or by a
 		// programmatic interrupt such as send-text with run_immediately. A client
@@ -313,8 +331,6 @@ func (o *Observer) botMessageFor(f frames.Frame) (Message, bool) {
 		return o.gated(event(TypeBotLLMStarted), botLLMOf)
 	case *frames.LLMFullResponseEndFrame:
 		return o.gated(event(TypeBotLLMStopped), botLLMOf)
-	case *frames.LLMTextFrame:
-		return o.gated(BotLLMText(fr.Text), botLLMOf)
 	case *frames.TTSStartedFrame:
 		return o.gated(event(TypeBotTTSStarted), botTTSOf)
 	case *frames.TTSStoppedFrame:
@@ -322,6 +338,63 @@ func (o *Observer) botMessageFor(f frames.Frame) (Message, bool) {
 	default:
 		return Message{}, false
 	}
+}
+
+// lastUserText is the text of the conversation's last message when the user
+// wrote it, which is the message this context frame is putting to the model.
+// Anything else means the model is not being asked to answer the user just now.
+func lastUserText(convo *frames.LLMContext) (string, bool) {
+	if convo == nil {
+		return "", false
+	}
+	msgs := convo.Messages()
+	if len(msgs) == 0 {
+		return "", false
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != frames.RoleUser || last.Text == "" {
+		return "", false
+	}
+	return last.Text, true
+}
+
+// llmTextMessages maps the text the model streams: each token as it arrives,
+// and the sentences assembled from them.
+//
+// The sentences are the superseded bot-transcription messages, which say the
+// same thing as the tokens a sentence at a time. They are gathered here rather
+// than anywhere else in the pipeline because nothing else sees the model's raw
+// output on its way past.
+func (o *Observer) llmTextMessages(f frames.Frame) ([]Message, bool) {
+	fr, ok := f.(*frames.LLMTextFrame)
+	if !ok {
+		return nil, false
+	}
+	if !o.enabled(botLLMOf) {
+		return nil, true
+	}
+	msgs := []Message{BotLLMText(fr.Text)}
+	if sentence, done := o.gatherTranscription(fr.Text); done {
+		msgs = append(msgs, BotTranscription(sentence))
+	}
+	return msgs, true
+}
+
+// gatherTranscription folds one token into the bot transcription and reports the
+// text when it has completed a sentence, starting the next one afresh.
+func (o *Observer) gatherTranscription(token string) (string, bool) {
+	o.transcriptMu.Lock()
+	defer o.transcriptMu.Unlock()
+	if o.tokenizer == nil {
+		return "", false
+	}
+	o.botTranscription += token
+	if o.botTranscription == "" || o.tokenizer.MatchEndOfSentence(o.botTranscription) == 0 {
+		return "", false
+	}
+	sentence := o.botTranscription
+	o.botTranscription = ""
+	return sentence, true
 }
 
 // segment is one unit of the bot's output on its way to the client, and whether
