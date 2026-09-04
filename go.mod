@@ -18,7 +18,7 @@ require (
 	github.com/gojargo/go-resample v1.0.1
 	github.com/google/uuid v1.6.0
 	github.com/jfreymuth/pulse v0.1.3
-	github.com/livekit/protocol v1.50.4
+	github.com/livekit/protocol v1.51.0
 	github.com/livekit/server-sdk-go/v2 v2.18.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/neurosnap/sentences v1.1.2
@@ -102,6 +102,7 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
+	github.com/petermattis/goid v0.0.0-20260725062400-500c67a39b75 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.8 // indirect
 	github.com/pion/ice/v4 v4.4.2 // indirect
