@@ -1,8 +1,8 @@
 module github.com/gojargo/jargo
 
-go 1.26
+go 1.27
 
-toolchain go1.26.6
+toolchain go1.27.1
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.62.0

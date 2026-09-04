@@ -9,7 +9,7 @@ weight: 1
 go get github.com/gojargo/jargo
 ```
 
-jargo needs Go 1.26 or newer.
+jargo needs Go 1.27 or newer.
 
 ## The default build needs no C toolchain
 
