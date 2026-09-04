@@ -19,7 +19,7 @@
 #   COPY --from=build /out/bot /usr/local/bin/bot
 #   ENTRYPOINT ["/usr/local/bin/bot"]
 
-FROM golang:1.26-bookworm@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b
+FROM golang:1.27-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
 
 # jargo builds without cgo: the native runtimes it uses (the ONNX Runtime and
 # RNNoise) are bound with purego and loaded at run time, not linked. The binary
