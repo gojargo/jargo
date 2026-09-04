@@ -19,6 +19,12 @@ import (
 // was given; it returns an empty slice when it has nothing to emit yet.
 // ProcessFrame applies a runtime control frame, so the filter can be retuned or
 // switched off without being torn down.
+//
+// The pcm a filter is handed is read-only. The chunk it came in belongs to a
+// frame, and a frame that has been pushed is being read elsewhere, so a filter
+// that wrote into it would be writing under that reader. Return the filtered
+// audio in a slice of the filter's own, or return the one it was given
+// unchanged.
 type Filter interface {
 	Start(ctx context.Context, sampleRate int) error
 	Stop(ctx context.Context) error

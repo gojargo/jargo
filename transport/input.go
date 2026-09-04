@@ -169,7 +169,14 @@ func (bi *BaseInput) ProcessFrame(ctx context.Context, f frames.Frame, dir proce
 		// Audio pushed in from upstream (by the RTVI processor, say) goes down
 		// the same filtering path as audio read from the transport itself,
 		// rather than being forwarded on as a plain frame.
-		bi.PushAudioFrame(ctx, fr)
+		//
+		// It travels as a copy. The filter writes its output back into the
+		// frame it is given, and this frame arrived by being pushed, so an
+		// observer was handed it and reads it on its own goroutine: the write
+		// and that read are the same field. Audio the transport read itself
+		// has never been pushed when it reaches the filter, so it needs none
+		// of this.
+		bi.PushAudioFrame(ctx, unshared(fr))
 		return nil
 	case *frames.EndFrame:
 		// Push EndFrame before stopping, because stopping waits for the audio
@@ -319,6 +326,17 @@ func (bi *BaseInput) applyFilter(ctx context.Context, f *frames.InputAudioRawFra
 	}
 	f.Audio = filtered
 	return len(filtered) > 0
+}
+
+// unshared returns a frame the filtering path may write into, for one that
+// something else is already holding.
+//
+// It keeps the frame's identity, so what travels on is still the frame that was
+// pushed in rather than a new one appearing mid-pipeline, and it shares the
+// audio rather than duplicating it, which a filter only ever reads.
+func unshared(f *frames.InputAudioRawFrame) *frames.InputAudioRawFrame {
+	cp := *f
+	return &cp
 }
 
 func pick(a, b int) int {
