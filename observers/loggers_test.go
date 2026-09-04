@@ -410,3 +410,37 @@ func TestLogObserversDefaultToTheProcessLogger(t *testing.T) {
 		handover(o, newFakeLLM(), newFakeSTT(), frames.NewTextFrame("hi"), processor.Downstream)
 	}
 }
+
+// keyedSTT stands in for a service holding the credentials it was built with,
+// which is what every real service holds.
+type keyedSTT struct {
+	*processor.Base
+	apiKey string
+}
+
+func newKeyedSTT(apiKey string) *keyedSTT {
+	s := &keyedSTT{apiKey: apiKey}
+	s.Base = processor.New("KeyedSTT", s)
+	return s
+}
+
+// TestDebugLogNamesAServiceRatherThanFormattingIt covers the frames that carry a
+// service rather than data: a switch, a settings update aimed at one service, a
+// summarizer given its own model. Rendering the service writes out the
+// configuration it was built with, and that holds an API key.
+func TestDebugLogNamesAServiceRatherThanFormattingIt(t *testing.T) {
+	var buf bytes.Buffer
+	o := observers.NewDebugLog(observers.DebugLogConfig{Logger: debugLog(&buf)})
+
+	svc := newKeyedSTT("sk-not-in-the-log")
+	handover(o, newPlain("Src"), newPlain("Dst"),
+		frames.NewManuallySwitchServiceFrame(svc), processor.Downstream)
+
+	got := buf.String()
+	if strings.Contains(got, "sk-not-in-the-log") {
+		t.Errorf("logged %q, want the service's API key left out", got)
+	}
+	if !strings.Contains(got, "Service: "+svc.Name()) {
+		t.Errorf("logged %q, want the service named", got)
+	}
+}
