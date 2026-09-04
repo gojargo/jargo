@@ -406,3 +406,43 @@ func TestRefusedWhenNoRunningCallHasThatID(t *testing.T) {
 		t.Errorf("reason = %q, want it to say the id matched nothing", reason)
 	}
 }
+
+// TestTheCancelToolSchemaHoldsAnAwkwardName covers the schema being encoded
+// rather than written out with the name pasted into it: a name carrying a quote
+// belongs inside the description, not in the shape of the schema around it.
+func TestTheCancelToolSchemaHoldsAnAwkwardName(t *testing.T) {
+	awkward := `write"report`
+
+	gen := &advertisingGen{}
+	svc := llm.New("FakeLLM", gen)
+	svc.RegisterFunction(awkward, noop,
+		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+
+	var schema struct {
+		Type       string         `json:"type"`
+		Properties map[string]any `json:"properties"`
+		Required   []string       `json:"required"`
+	}
+	var found bool
+	for _, tool := range gen.adapter.WithBuiltins(frames.ToolsSchema{}).Standard {
+		if tool.Name != llm.CancelToolName(awkward) {
+			continue
+		}
+		found = true
+		if err := json.Unmarshal(tool.Parameters, &schema); err != nil {
+			t.Fatalf("the schema did not parse: %v", err)
+		}
+	}
+	if !found {
+		t.Fatal("no cancel tool was advertised for the function")
+	}
+	if schema.Type != "object" {
+		t.Errorf("type = %q, want an object", schema.Type)
+	}
+	if _, ok := schema.Properties["tool_call_id"]; !ok {
+		t.Errorf("properties = %v, want a tool_call_id among them, and nothing else added", schema.Properties)
+	}
+	if len(schema.Properties) != 1 {
+		t.Errorf("properties = %v, want only the tool_call_id", schema.Properties)
+	}
+}
