@@ -312,18 +312,18 @@ func TestMetricsLogReportsEveryKindOfMeasurement(t *testing.T) {
 	cached := int64(12)
 	handover(o, newPlain("Src"), newPlain("Dst"), frames.NewMetricsFrame(
 		frames.TTFBMetricsData{
-			BaseMetricsData: frames.BaseMetricsData{Processor: "LLM#0", Model: "gpt-4o"},
-			Value:           250 * time.Millisecond,
+			Processor: "LLM#0", Model: "gpt-4o",
+			Value: 250 * time.Millisecond,
 		},
 		frames.LLMUsageMetricsData{
-			BaseMetricsData: frames.BaseMetricsData{Processor: "LLM#0"},
+			Processor: "LLM#0",
 			Value: frames.LLMTokenUsage{
 				PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120, CacheReadTokens: &cached,
 			},
 		},
 		frames.TTSUsageMetricsData{
-			BaseMetricsData: frames.BaseMetricsData{Processor: "TTS#0"},
-			Value:           42,
+			Processor: "TTS#0",
+			Value:     42,
 		},
 	), processor.Downstream)
 
@@ -343,8 +343,8 @@ func TestMetricsLogOmitsCountsTheServiceNeverReported(t *testing.T) {
 
 	handover(o, newPlain("Src"), newPlain("Dst"), frames.NewMetricsFrame(
 		frames.LLMUsageMetricsData{
-			BaseMetricsData: frames.BaseMetricsData{Processor: "LLM#0"},
-			Value:           frames.LLMTokenUsage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
+			Processor: "LLM#0",
+			Value:     frames.LLMTokenUsage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
 		},
 	), processor.Downstream)
 
@@ -363,10 +363,10 @@ func TestMetricsLogNarrowsToTheKindsAskedFor(t *testing.T) {
 	})
 
 	handover(o, newPlain("Src"), newPlain("Dst"), frames.NewMetricsFrame(
-		frames.TTFBMetricsData{BaseMetricsData: frames.BaseMetricsData{Processor: "LLM#0"}, Value: time.Second},
+		frames.TTFBMetricsData{Processor: "LLM#0", Value: time.Second},
 		frames.LLMUsageMetricsData{
-			BaseMetricsData: frames.BaseMetricsData{Processor: "LLM#0"},
-			Value:           frames.LLMTokenUsage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
+			Processor: "LLM#0",
+			Value:     frames.LLMTokenUsage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
 		},
 	), processor.Downstream)
 
@@ -386,8 +386,8 @@ func TestMetricsLogReportsAFrameOnce(t *testing.T) {
 	o := observers.NewMetricsLog(observers.MetricsLogConfig{Logger: debugLog(&buf)})
 
 	f := frames.NewMetricsFrame(frames.TTFBMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: "LLM#0"},
-		Value:           250 * time.Millisecond,
+		Processor: "LLM#0",
+		Value:     250 * time.Millisecond,
 	})
 	src, mid, dst := newPlain("Src"), newPlain("Mid"), newPlain("Dst")
 	handover(o, src, mid, f, processor.Downstream)

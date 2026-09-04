@@ -531,7 +531,7 @@ func TestUrgentResponseHasSystemPriority(t *testing.T) {
 		msgBus.Send(ctx, data)
 	}
 	urgent := &bus.JobResponseUrgentMessage{
-		JobResult: bus.JobResult{JobID: "t1", Status: jobcontext.JobCompleted},
+		JobID: "t1", Status: jobcontext.JobCompleted,
 	}
 	urgent.From = "worker"
 	urgent.To = "parent"

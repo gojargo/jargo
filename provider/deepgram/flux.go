@@ -410,8 +410,7 @@ func (c *fluxConnector) ClassifyError(err error) errs.Category {
 	if errors.Is(err, errFluxNotConfirmed) {
 		return errs.InvalidRequest
 	}
-	var fatal *fluxFatalError
-	if errors.As(err, &fatal) {
+	if fatal, ok := errors.AsType[*fluxFatalError](err); ok {
 		return fluxPermanentErrorCodes[fatal.code]
 	}
 	return errs.Unset

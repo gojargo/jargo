@@ -57,8 +57,7 @@ func TestNativeMessageRejectsAnotherType(t *testing.T) {
 	if err == nil {
 		t.Fatal("NativeMessage succeeded, want a conversion error")
 	}
-	var convErr *adapter.ConversionError
-	if !errors.As(err, &convErr) {
+	if _, ok := errors.AsType[*adapter.ConversionError](err); !ok {
 		t.Fatalf("err = %v, want an adapter.ConversionError", err)
 	}
 }

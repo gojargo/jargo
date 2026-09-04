@@ -43,12 +43,10 @@ type LLMTextFrame struct {
 // NewLLMTextFrame builds an LLMTextFrame.
 func NewLLMTextFrame(text string) *LLMTextFrame {
 	return &LLMTextFrame{
-		TextFrame: TextFrame{
-			BaseDataFrame:            NewBaseDataFrame("LLMTextFrame"),
-			Text:                     text,
-			AppendToContext:          true,
-			IncludesInterFrameSpaces: true,
-		},
+		BaseDataFrame:            NewBaseDataFrame("LLMTextFrame"),
+		Text:                     text,
+		AppendToContext:          true,
+		IncludesInterFrameSpaces: true,
 	}
 }
 
@@ -142,13 +140,11 @@ type TranscriptionFrame struct {
 // NewTranscriptionFrame builds a TranscriptionFrame.
 func NewTranscriptionFrame(text, userID, timestamp string) *TranscriptionFrame {
 	return &TranscriptionFrame{
-		TextFrame: TextFrame{
-			BaseDataFrame:   NewBaseDataFrame("TranscriptionFrame"),
-			Text:            text,
-			AppendToContext: true,
-		},
-		UserID:    userID,
-		Timestamp: timestamp,
+		BaseDataFrame:   NewBaseDataFrame("TranscriptionFrame"),
+		Text:            text,
+		AppendToContext: true,
+		UserID:          userID,
+		Timestamp:       timestamp,
 	}
 }
 
@@ -176,13 +172,11 @@ type InterimTranscriptionFrame struct {
 // NewInterimTranscriptionFrame builds an InterimTranscriptionFrame.
 func NewInterimTranscriptionFrame(text, userID, timestamp string) *InterimTranscriptionFrame {
 	return &InterimTranscriptionFrame{
-		TextFrame: TextFrame{
-			BaseDataFrame:   NewBaseDataFrame("InterimTranscriptionFrame"),
-			Text:            text,
-			AppendToContext: true,
-		},
-		UserID:    userID,
-		Timestamp: timestamp,
+		BaseDataFrame:   NewBaseDataFrame("InterimTranscriptionFrame"),
+		Text:            text,
+		AppendToContext: true,
+		UserID:          userID,
+		Timestamp:       timestamp,
 	}
 }
 
@@ -308,13 +302,11 @@ type TranslationFrame struct {
 // NewTranslationFrame builds a TranslationFrame.
 func NewTranslationFrame(text, userID, timestamp string) *TranslationFrame {
 	return &TranslationFrame{
-		TextFrame: TextFrame{
-			BaseDataFrame:   NewBaseDataFrame("TranslationFrame"),
-			Text:            text,
-			AppendToContext: true,
-		},
-		UserID:    userID,
-		Timestamp: timestamp,
+		BaseDataFrame:   NewBaseDataFrame("TranslationFrame"),
+		Text:            text,
+		AppendToContext: true,
+		UserID:          userID,
+		Timestamp:       timestamp,
 	}
 }
 

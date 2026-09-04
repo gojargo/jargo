@@ -219,8 +219,8 @@ func catalog() []catalogEntry {
 			label: "MetricsFrame", cat: system, wantString: "processor: tts-1",
 			build: func() frames.Frame {
 				return frames.NewMetricsFrame(frames.TTSUsageMetricsData{
-					BaseMetricsData: frames.BaseMetricsData{Processor: "tts-1"},
-					Value:           42,
+					Processor: "tts-1",
+					Value:     42,
 				})
 			},
 		},

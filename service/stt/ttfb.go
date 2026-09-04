@@ -153,8 +153,8 @@ func (t *ttfbTracker) report(ctx context.Context, end time.Time) {
 		return
 	}
 	data := frames.TTFBMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: t.svc.Name(), Model: model},
-		Value:           ttfb,
+		Processor: t.svc.Name(), Model: model,
+		Value: ttfb,
 	}
 	_ = t.svc.PushFrame(ctx, frames.NewMetricsFrame(data), processor.Downstream)
 }

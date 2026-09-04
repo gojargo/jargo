@@ -239,9 +239,9 @@ func (s *TurnAnalyzerStop) reportPrediction(complete bool, prob float64, err err
 		return
 	}
 	turn := frames.TurnMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: analyzerMetricsProcessor},
-		Complete:        complete,
-		Probability:     prob,
+		Processor:   analyzerMetricsProcessor,
+		Complete:    complete,
+		Probability: prob,
 	}
 	if len(start) > 0 {
 		turn.E2EProcessing = time.Since(start[0])

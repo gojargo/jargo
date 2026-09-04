@@ -20,8 +20,8 @@ func pushUsageMetrics(ctx context.Context, p *processor.Base, model string, audi
 		return
 	}
 	f := frames.NewMetricsFrame(frames.STTUsageMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: p.Name(), Model: model},
-		Value:           frames.STTUsage{AudioSeconds: audio.Seconds()},
+		Processor: p.Name(), Model: model,
+		Value: frames.STTUsage{AudioSeconds: audio.Seconds()},
 	})
 	_ = p.PushFrame(ctx, f, processor.Downstream)
 }

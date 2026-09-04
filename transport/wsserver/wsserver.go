@@ -301,8 +301,7 @@ func gone(err error) bool {
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 		return true
 	}
-	var closeErr websocket.CloseError
-	if errors.As(err, &closeErr) {
+	if _, ok := errors.AsType[websocket.CloseError](err); ok {
 		return true
 	}
 	// A failed network write on a live session means the connection under it

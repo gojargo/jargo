@@ -139,7 +139,7 @@ func TestLLMSettingsUpdateRelabelsTheModel(t *testing.T) {
 	}()
 
 	task.QueueFrame(frames.NewLLMUpdateSettingsFrame(&settings.LLM{
-		Base: settings.Base{Model: settings.Set("new-model")},
+		Model: settings.Set("new-model"),
 	}))
 	waitForUpdates(t, gen, 1)
 

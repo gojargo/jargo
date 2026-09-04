@@ -32,7 +32,6 @@ import (
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/provider/azure/openai"
 	"github.com/gojargo/jargo/provider/azure/speech"
-	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
@@ -81,7 +80,7 @@ func runBot(conn *rtc.Connection) {
 	stt := openai.NewSTT(openai.STTConfig{
 		Endpoint:   os.Getenv("AZURE_OPENAI_ENDPOINT"),
 		Deployment: os.Getenv("AZURE_STT_DEPLOYMENT"),
-		STTConfig:  chat.STTConfig{APIKey: os.Getenv("AZURE_OPENAI_API_KEY"), SampleRate: opus.SampleRate},
+		APIKey:     os.Getenv("AZURE_OPENAI_API_KEY"), SampleRate: opus.SampleRate,
 	})
 	llm := anthropic.NewLLM(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
 	tts := speech.NewTTS(speech.TTSConfig{

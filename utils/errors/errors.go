@@ -142,8 +142,7 @@ func (e *HTTPStatusError) HTTPStatusCode() int { return e.Status }
 // status such a type puts on it: the field names below, on a response the error
 // carries and then on the error itself.
 func ExtractHTTPStatusCode(err error) (int, bool) {
-	var sc StatusCoder
-	if errors.As(err, &sc) {
+	if sc, ok := errors.AsType[StatusCoder](err); ok {
 		if status := sc.HTTPStatusCode(); status != 0 {
 			return status, true
 		}
@@ -245,8 +244,7 @@ var connectionErrnos = []error{
 // A cancellation is deliberately not matched: it says nothing about whether the
 // service was reachable.
 func isConnectivity(err error) bool {
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
 	for _, errno := range connectionErrnos {

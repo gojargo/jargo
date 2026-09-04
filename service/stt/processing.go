@@ -66,8 +66,8 @@ func (m *processingMeter) reportElapsed(ctx context.Context, elapsed time.Durati
 		return
 	}
 	data := frames.ProcessingMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: m.svc.Name(), Model: model},
-		Value:           elapsed,
+		Processor: m.svc.Name(), Model: model,
+		Value: elapsed,
 	}
 	_ = m.svc.PushFrame(ctx, frames.NewMetricsFrame(data), processor.Downstream)
 }

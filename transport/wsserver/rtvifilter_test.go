@@ -8,7 +8,6 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -56,7 +55,7 @@ func isRTVI(t *testing.T, data []byte) bool {
 // pipeline that has an RTVI processor in it still runs one on a phone call, so
 // the transport is what keeps the protocol off the wire.
 func TestRTVIMessagesAreKeptOffATelephonyWire(t *testing.T) {
-	c := dial(t, &testSerializer{}, wsserver.Params{Params: transport.Params{AudioOutEnabled: true}})
+	c := dial(t, &testSerializer{}, wsserver.Params{AudioOutEnabled: true})
 	defer c.shutdown(t)
 
 	c.task.QueueFrame(frames.NewOutputTransportMessageUrgentFrame(botReady()))
@@ -77,7 +76,7 @@ func TestRTVIMessagesAreKeptOffATelephonyWire(t *testing.T) {
 // The wire a browser client connects over is the one the protocol is for, so a
 // serializer that says so has its messages passed through.
 func TestRTVIMessagesReachAWireThatCarriesThem(t *testing.T) {
-	c := dial(t, newRTVISerializer(), wsserver.Params{Params: transport.Params{AudioOutEnabled: true}})
+	c := dial(t, newRTVISerializer(), wsserver.Params{AudioOutEnabled: true})
 	defer c.shutdown(t)
 
 	c.task.QueueFrame(frames.NewOutputTransportMessageUrgentFrame(botReady()))
@@ -99,7 +98,7 @@ func TestRTVIMessagesReachAWireThatCarriesThem(t *testing.T) {
 // telephony wire like any other, which is how a provider's own control messages
 // are sent.
 func TestNonRTVIMessagesStillReachATelephonyWire(t *testing.T) {
-	c := dial(t, &testSerializer{}, wsserver.Params{Params: transport.Params{AudioOutEnabled: true}})
+	c := dial(t, &testSerializer{}, wsserver.Params{AudioOutEnabled: true})
 	defer c.shutdown(t)
 
 	c.task.QueueFrame(frames.NewOutputTransportMessageUrgentFrame(

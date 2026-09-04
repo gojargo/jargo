@@ -94,8 +94,8 @@ func (b *Base) stopTextAggregationMetrics(ctx context.Context) {
 	value := time.Since(start)
 	slog.Debug("text aggregation time", "service", b.Name(), "took", value)
 	f := frames.NewMetricsFrame(frames.TextAggregationMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: b.Name(), Model: b.meta.Model},
-		Value:           value,
+		Processor: b.Name(), Model: b.meta.Model,
+		Value: value,
 	})
 	_ = b.PushFrame(ctx, f, processor.Downstream)
 }

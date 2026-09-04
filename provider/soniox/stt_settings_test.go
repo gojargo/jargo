@@ -39,7 +39,7 @@ func TestSTTSettingsChangeReachesTheHandshake(t *testing.T) {
 	}
 
 	if _, err := settings.Apply(c.live, &Settings{
-		STT:                      settings.STT{Base: settings.Base{Model: settings.Set("stt-rt-preview-v2")}},
+		Model:                    settings.Set("stt-rt-preview-v2"),
 		LanguageHints:            settings.Set([]string{"fr"}),
 		EnableSpeakerDiarization: settings.Set(true),
 		EndpointSensitivity:      settings.Set(0.6),

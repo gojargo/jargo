@@ -31,7 +31,7 @@ func TestSettingsChangeReachesTheQuery(t *testing.T) {
 	}
 
 	changed, err := settings.Apply(live, &Settings{
-		STT:     settings.STT{Base: settings.Base{Model: settings.Set("nova-2")}},
+		Model:   settings.Set("nova-2"),
 		Diarize: settings.Set(true),
 	})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestMetadataFollowsTheSettings(t *testing.T) {
 	}
 
 	if _, err := settings.Apply(c.live, &Settings{
-		STT: settings.STT{Base: settings.Base{Model: settings.Set("nova-2")}},
+		Model: settings.Set("nova-2"),
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}

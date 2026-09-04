@@ -129,8 +129,7 @@ func loadConfig() (*viper.Viper, error) {
 	v.SetConfigName("voicebot")
 	v.AddConfigPath(".")
 	if err := v.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if !errors.As(err, &notFound) {
+		if _, ok := errors.AsType[viper.ConfigFileNotFoundError](err); !ok {
 			return nil, err
 		}
 	}

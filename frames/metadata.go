@@ -70,10 +70,8 @@ type LLMServiceMetadataFrame struct {
 // NewLLMServiceMetadataFrame builds an LLMServiceMetadataFrame for the named service.
 func NewLLMServiceMetadataFrame(service string) *LLMServiceMetadataFrame {
 	return &LLMServiceMetadataFrame{
-		ServiceMetadataFrame: ServiceMetadataFrame{
-			BaseSystemFrame: NewBaseSystemFrame("LLMServiceMetadataFrame"),
-			ServiceName:     service,
-		},
+		BaseSystemFrame: NewBaseSystemFrame("LLMServiceMetadataFrame"),
+		ServiceName:     service,
 	}
 }
 
@@ -93,10 +91,8 @@ type STTMetadataFrame struct {
 // frame to describe the service further.
 func NewSTTMetadataFrame(ttfsP99 time.Duration) *STTMetadataFrame {
 	return &STTMetadataFrame{
-		ServiceMetadataFrame: ServiceMetadataFrame{
-			BaseSystemFrame: NewBaseSystemFrame("STTMetadataFrame"),
-		},
-		TTFSP99Latency: ttfsP99,
+		BaseSystemFrame: NewBaseSystemFrame("STTMetadataFrame"),
+		TTFSP99Latency:  ttfsP99,
 	}
 }
 
