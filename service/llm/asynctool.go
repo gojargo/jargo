@@ -74,29 +74,36 @@ func buildCancelToolSchema(functionName string) frames.Tool {
 				"the pending result stale. Call it with no arguments to stop the one running "+
 				"call; only when several %[1]s calls are running does it need a tool_call_id "+
 				"to say which.", functionName),
-		Parameters: json.RawMessage(fmt.Sprintf(`{
-			"type": "object",
-			"properties": {
-				"tool_call_id": {
-					"type": "string",
-					"description": %s
-				}
-			},
-			"required": []
-		}`, cancelToolIDDescription(functionName))),
+		Parameters: cancelToolParameters(functionName),
 	}
 }
 
-// cancelToolIDDescription describes the tool_call_id a cancel tool takes, as a
-// JSON string ready to sit in the schema.
-func cancelToolIDDescription(functionName string) string {
-	described, err := json.Marshal(fmt.Sprintf(
+// cancelToolParameters is the schema for the one argument a cancel tool takes.
+//
+// It is encoded rather than written out as text with the name substituted in,
+// so a function name carrying a quote cannot break out of the string it sits in
+// and reshape the schema around it.
+func cancelToolParameters(functionName string) json.RawMessage {
+	described := fmt.Sprintf(
 		"Which %s call to stop. Needed only when several are running, and carried "+
-			"by the message in the conversation that reported each one running.", functionName))
+			"by the message in the conversation that reported each one running.", functionName)
+	schema, err := json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"tool_call_id": map[string]any{
+				"type":        "string",
+				"description": described,
+			},
+		},
+		"required": []string{},
+	})
 	if err != nil {
-		return `""`
+		// Strings and maps of them always encode. Fall back to the same shape
+		// without the description rather than to nothing, so the tool still
+		// takes the argument.
+		return json.RawMessage(`{"type":"object","properties":{"tool_call_id":{"type":"string"}},"required":[]}`)
 	}
-	return string(described)
+	return schema
 }
 
 // WithCancellableByLLM says whether the model may cancel this tool's calls while
