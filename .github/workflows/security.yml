@@ -60,7 +60,7 @@ jobs:
       # (action pinning, overbroad permissions, curl|bash, risky triggers). It
       # uploads its SARIF to the Security tab itself (upload-sarif defaults true).
       - name: Plumber pipeline scan
-        uses: getplumber/plumber@4106f1120ba8db839bce0f213cf7b3ad3927cc5f # v0.4.50
+        uses: getplumber/plumber@e815e0bff47f9170e8e0a056df0a851124634ae2 # v0.4.51
         with:
           # Gate below the action's default of 100 so CI stays green while the
           # findings still surface in the Security tab. Raise it as the pipelines
@@ -134,6 +134,6 @@ jobs:
       # regex-based gitleaks scan with live verification. It fails the build on a
       # verified (or plausible "unknown") secret.
       - name: TruffleHog secret scan
-        uses: trufflesecurity/trufflehog@20652fbbdefffcdaa493a5bf57ab2ac6b1db715b # v3.97.1
+        uses: trufflesecurity/trufflehog@cc1fe982afc515d2991365ce8d4d0dd07170fcad # v3.97.2
         with:
           extra_args: --results=verified,unknown
