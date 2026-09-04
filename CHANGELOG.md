@@ -29,6 +29,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `ObserverParams.BotOutputEnabled` turns the category off and
   `SkipAggregatorTypes` keeps chosen aggregation types from the client
   altogether, captions included.
+- **RTVI reports the user's message, the user being muted, and the bot's
+  transcription.** Three message types were missing. `user-llm-text` carries
+  what the user said as the model is about to read it, which is not always what
+  the transcription service heard: the turn may have been assembled from several
+  transcripts, or written by the client outright. `user-mute-started` and
+  `user-mute-stopped` say when the user's input is being suppressed, so a client
+  can show that it is not being listened to. And `bot-transcription` assembles
+  the model's tokens into sentences, saying the same thing as `bot-llm-text` a
+  sentence at a time; jargo had the message defined and never sent it.
+  `ObserverParams.UserLLMEnabled` and `UserMuteEnabled` turn the first two off,
+  and the bot transcription is silenced with `BotLLMEnabled` alongside the
+  tokens it is built from.
 - **Tool calling on every speech-to-speech service.** OpenAI Realtime, xAI
   Realtime, Gemini Live and AWS Nova Sonic advertised a toolset and never ran
   anything the model called. They now register the handlers their tools carry,

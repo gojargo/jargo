@@ -48,6 +48,9 @@ const (
 	TypeBotTranscription     = "bot-transcription"
 	TypeBotTTSText           = "bot-tts-text"
 	TypeBotLLMText           = "bot-llm-text"
+	TypeUserLLMText          = "user-llm-text"
+	TypeUserMuteStarted      = "user-mute-started"
+	TypeUserMuteStopped      = "user-mute-stopped"
 	TypeUserStartedSpeaking  = "user-started-speaking"
 	TypeUserStoppedSpeaking  = "user-stopped-speaking"
 	TypeVADUserStarted       = "vad-user-started-speaking"
@@ -370,6 +373,12 @@ func BotTTSText(text string) Message {
 // BotLLMText builds a bot-llm-text message.
 func BotLLMText(text string) Message {
 	return newMessage(TypeBotLLMText, "", TextData{Text: text})
+}
+
+// UserLLMText builds a user-llm-text message: what the user said as the model
+// is about to read it.
+func UserLLMText(text string) Message {
+	return newMessage(TypeUserLLMText, "", TextData{Text: text})
 }
 
 // LLMFunctionCallData is the payload of a llm-function-call-in-progress message.
