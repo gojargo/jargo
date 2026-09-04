@@ -83,3 +83,42 @@ func TestFrameLoggerCanLogEverything(t *testing.T) {
 		t.Errorf("logs = %q, want the speaking frame logged", got)
 	}
 }
+
+// keyedService stands in for a service holding the credentials it was built
+// with. The key is an exported field, which is what a structured handler walks
+// into when it is handed the frame itself.
+type keyedService struct{ APIKey string }
+
+func newKeyedService(apiKey string) *keyedService { return &keyedService{APIKey: apiKey} }
+
+func (s *keyedService) Name() string { return "KeyedSTT" }
+
+// TestFrameLoggerDoesNotWalkIntoAFrame covers the frames that carry a service
+// rather than data: the log line is what the frame says about itself, which
+// names the service it points at. Handing the frame to the logger instead would
+// let a structured handler render its fields, and with them the API key the
+// service was built with.
+func TestFrameLoggerDoesNotWalkIntoAFrame(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	p := processor.NewFrameLogger("Logger")
+	_, down := linkAndStart(t, p)
+
+	svc := newKeyedService("sk-not-in-the-log")
+	f := frames.NewManuallySwitchServiceFrame(svc)
+	if err := p.QueueFrame(context.Background(), f, processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+	mustReceive[*frames.ManuallySwitchServiceFrame](t, down.got, "ManuallySwitchServiceFrame")
+
+	got := buf.String()
+	if strings.Contains(got, "sk-not-in-the-log") {
+		t.Errorf("logs = %q, want the service's API key left out", got)
+	}
+	if !strings.Contains(got, svc.Name()) {
+		t.Errorf("logs = %q, want the service named", got)
+	}
+}
