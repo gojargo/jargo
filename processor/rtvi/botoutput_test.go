@@ -500,3 +500,25 @@ func TestBotOutputTransformCanBeAddedAndRemoved(t *testing.T) {
 	// Removing one that was never registered does nothing.
 	obs.RemoveBotOutputTransformer(id)
 }
+
+// The bot's speaking state is tracked whether or not the speaking events are
+// themselves reported. A client that has turned those off still wants the
+// output, and holding the segments for an event nobody asked for would keep
+// them for good.
+//
+// Upstream gates the whole handler on the speaking category, which loses the
+// output entirely in this configuration. That is not ported.
+func TestBotOutputSurvivesTheSpeakingCategoryBeingOff(t *testing.T) {
+	params := rtvi.DefaultObserverParams()
+	params.BotSpeakingEnabled = off()
+
+	msgs := outputHarness(t, params, "",
+		speaking(), spokenText("Hello there.", frames.AggregationSentence))
+
+	if sent(msgs, rtvi.TypeBotStartedSpeaking) {
+		t.Errorf("the speaking event was reported with the category off, got %v", types(msgs))
+	}
+	if got := outputs(msgs); len(got) != 1 || got[0].Text != "Hello there." {
+		t.Errorf("bot-output = %+v, want the segment released even so", got)
+	}
+}
