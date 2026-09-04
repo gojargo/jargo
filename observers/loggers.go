@@ -202,7 +202,25 @@ func formatValue(v reflect.Value) (string, bool) {
 	default:
 		// Everything else renders as itself.
 	}
+	if named, ok := selfNaming(v); ok {
+		return named, true
+	}
 	return fmt.Sprintf("%v", v.Interface()), true
+}
+
+// selfNaming renders a value that identifies itself by name, which is what a
+// frame carries when it names a service: the switcher frames, a settings update
+// aimed at one service, a summarizer given its own model.
+//
+// The value is never formatted. Its fields are the machinery it runs on rather
+// than anything a log reader wants, and a service holds the configuration it was
+// built with, so writing them out would put its API key in the log.
+func selfNaming(v reflect.Value) (string, bool) {
+	named, ok := v.Interface().(interface{ Name() string })
+	if !ok {
+		return "", false
+	}
+	return named.Name(), true
 }
 
 // composite reports whether a type is one whose values are too big to render
