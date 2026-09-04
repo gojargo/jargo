@@ -47,6 +47,12 @@ type Observer struct {
 	paramsMu sync.Mutex
 	params   ObserverParams
 
+	// transformMu guards the rewrites below, which can be registered and
+	// removed while the pipeline runs.
+	transformMu sync.Mutex
+	transforms  []registeredTransform
+	nextTransID TransformID
+
 	// transcriptMu guards the bot transcription below, which is assembled from
 	// the model's text as it streams.
 	transcriptMu sync.Mutex
@@ -66,6 +72,48 @@ type Observer struct {
 	lastUserSent time.Time
 	lastBotSent  time.Time
 }
+
+// BotOutputText is one segment of the bot's output as the client will see it.
+//
+// Accumulated and Remaining split Text at the word being spoken now, and are
+// set only when the segment is being reported as progress through playback,
+// which Progress says. A rewrite for a progress report is given all three, so
+// it can keep the split consistent with the text it produces rather than
+// rewriting each part on its own and hoping they still line up.
+type BotOutputText struct {
+	// Text is the whole segment.
+	Text string
+	// AggregatedBy is the unit the text stands for.
+	AggregatedBy frames.AggregationType
+	// Accumulated is what has been spoken so far, the current word included.
+	Accumulated string
+	// Remaining is what has not been spoken yet.
+	Remaining string
+	// Progress reports whether this is a report of progress through a segment
+	// rather than the segment itself.
+	Progress bool
+}
+
+// BotOutputTransform rewrites one segment of the bot's output on its way to the
+// client, for a bot whose text needs shaping before anyone reads it: expanding
+// an abbreviation, translating, redacting.
+//
+// It returns the segment rewritten. On a progress report, an Accumulated or
+// Remaining left empty keeps the value the rewrite was given, so a transform
+// that only rewrites the whole text does not have to split it again.
+type BotOutputTransform func(seg BotOutputText) BotOutputText
+
+// BotOutputTransformer is one rewrite and the aggregation type it applies to.
+type BotOutputTransformer struct {
+	// AggregatedBy is the aggregation type this rewrite applies to.
+	// frames.AnyAggregation applies it to every type.
+	AggregatedBy frames.AggregationType
+	// Transform rewrites the segment.
+	Transform BotOutputTransform
+}
+
+// TransformID identifies a registered rewrite, for removing it again.
+type TransformID uint64
 
 // FunctionCallReportLevel is how much of a tool call is exposed in the RTVI
 // function-call events. A call's name and its arguments can carry information a
@@ -128,6 +176,12 @@ type ObserverParams struct {
 	// MetricsEnabled reports the timings and usage the pipeline measures. Nil
 	// leaves it on.
 	MetricsEnabled *bool
+	// BotOutputTransforms rewrite the bot's output on its way to the client,
+	// each registered against the aggregation type it applies to. They run in
+	// the order given, each seeing what the last produced. More can be added and
+	// removed while the pipeline runs with AddBotOutputTransformer and
+	// RemoveBotOutputTransformer.
+	BotOutputTransforms []BotOutputTransformer
 	// SkipAggregatorTypes are the aggregation types not reported as bot output
 	// or spoken text. It keeps a unit the bot produces but should not show from
 	// the client's view, a pattern-matched block carrying something private
@@ -205,12 +259,70 @@ func NewObserverWithParams(sink *Processor, params ObserverParams) *Observer {
 			"error", err)
 		tok = nil
 	}
-	return &Observer{
+	o := &Observer{
 		sink:      sink,
 		seen:      make(map[uint64]struct{}, seenCap),
 		params:    params,
 		tokenizer: tok,
 	}
+	for _, t := range params.BotOutputTransforms {
+		o.AddBotOutputTransformer(t)
+	}
+	return o
+}
+
+// registeredTransform is one rewrite with the id that removes it again.
+type registeredTransform struct {
+	id TransformID
+	BotOutputTransformer
+}
+
+// AddBotOutputTransformer registers a rewrite applied to the bot's output
+// before it reaches the client, and returns the id that removes it again. It
+// runs after any already registered.
+func (o *Observer) AddBotOutputTransformer(t BotOutputTransformer) TransformID {
+	o.transformMu.Lock()
+	defer o.transformMu.Unlock()
+	o.nextTransID++
+	o.transforms = append(o.transforms, registeredTransform{id: o.nextTransID, BotOutputTransformer: t})
+	return o.nextTransID
+}
+
+// RemoveBotOutputTransformer undoes an AddBotOutputTransformer. Removing one
+// that is not registered does nothing.
+func (o *Observer) RemoveBotOutputTransformer(id TransformID) {
+	o.transformMu.Lock()
+	defer o.transformMu.Unlock()
+	o.transforms = slices.DeleteFunc(o.transforms,
+		func(t registeredTransform) bool { return t.id == id })
+}
+
+// transform applies every rewrite registered for the segment's aggregation type,
+// in the order they were registered, each seeing what the last produced.
+func (o *Observer) transform(seg BotOutputText) BotOutputText {
+	o.transformMu.Lock()
+	registered := slices.Clone(o.transforms)
+	o.transformMu.Unlock()
+
+	for _, t := range registered {
+		if t.AggregatedBy != seg.AggregatedBy && t.AggregatedBy != frames.AnyAggregation {
+			continue
+		}
+		out := t.Transform(seg)
+		// A rewrite that only reshaped the whole text leaves the split alone
+		// rather than having to work it out again.
+		if seg.Progress {
+			if out.Accumulated == "" {
+				out.Accumulated = seg.Accumulated
+			}
+			if out.Remaining == "" {
+				out.Remaining = seg.Remaining
+			}
+		}
+		out.AggregatedBy, out.Progress = seg.AggregatedBy, seg.Progress
+		seg = out
+	}
+	return seg
 }
 
 // OnPushFrame implements processor.Observer.
