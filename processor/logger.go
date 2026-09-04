@@ -70,7 +70,11 @@ func (l *FrameLogger) ProcessFrame(ctx context.Context, f frames.Frame, dir Dire
 		if dir == Upstream {
 			arrow = "<"
 		}
-		slog.DebugContext(ctx, arrow+" "+l.prefix+": "+f.Name(), "frame", f, "direction", dir)
+		// The frame renders itself. Handing the value to the logger instead
+		// would let a structured handler walk its fields, and a frame that
+		// names a service (a switch, a settings update) carries the service
+		// itself, whose configuration holds an API key.
+		slog.DebugContext(ctx, arrow+" "+l.prefix+": "+f.String(), "direction", dir)
 	}
 	return l.PushFrame(ctx, f, dir)
 }
