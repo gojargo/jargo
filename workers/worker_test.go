@@ -1561,7 +1561,7 @@ func answer(
 	source, target, jobID string, status jobcontext.JobStatus, response map[string]any,
 ) *bus.JobResponseMessage {
 	m := &bus.JobResponseMessage{
-		JobResult: bus.JobResult{JobID: jobID, Status: status, Response: response},
+		JobID: jobID, Status: status, Response: response,
 	}
 	m.From = source
 	m.To = target

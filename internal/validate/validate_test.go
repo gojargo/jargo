@@ -93,8 +93,7 @@ func TestStructRejectsANonStruct(t *testing.T) {
 	if err == nil {
 		t.Fatal("a non-struct was accepted")
 	}
-	var invalid *validator.InvalidValidationError
-	if !errors.As(err, &invalid) {
+	if _, ok := errors.AsType[*validator.InvalidValidationError](err); !ok {
 		t.Errorf("got %T, want an InvalidValidationError: %v", err, err)
 	}
 }

@@ -801,8 +801,8 @@ func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTok
 	tracing.SetTokenUsage(ctx, u)
 	metrics.RecordTokens(ctx, b.name, model, u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: b.name, Model: model},
-		Value:           u,
+		Processor: b.name, Model: model,
+		Value: u,
 	})
 	return b.self.PushFrame(ctx, f, Downstream)
 }

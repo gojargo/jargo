@@ -110,10 +110,8 @@ type TTSAudioRawFrame struct {
 // NewTTSAudioRawFrame builds a TTSAudioRawFrame from PCM audio.
 func NewTTSAudioRawFrame(audio []byte, sampleRate, numChannels int) *TTSAudioRawFrame {
 	return &TTSAudioRawFrame{
-		OutputAudioRawFrame: OutputAudioRawFrame{
-			BaseDataFrame: NewBaseDataFrame("TTSAudioRawFrame"),
-			AudioRawData:  newAudioRawData(audio, sampleRate, numChannels),
-		},
+		BaseDataFrame: NewBaseDataFrame("TTSAudioRawFrame"),
+		AudioRawData:  newAudioRawData(audio, sampleRate, numChannels),
 	}
 }
 
@@ -127,10 +125,8 @@ type SpeechOutputAudioRawFrame struct {
 // NewSpeechOutputAudioRawFrame builds a SpeechOutputAudioRawFrame from PCM audio.
 func NewSpeechOutputAudioRawFrame(audio []byte, sampleRate, numChannels int) *SpeechOutputAudioRawFrame {
 	return &SpeechOutputAudioRawFrame{
-		OutputAudioRawFrame: OutputAudioRawFrame{
-			BaseDataFrame: NewBaseDataFrame("SpeechOutputAudioRawFrame"),
-			AudioRawData:  newAudioRawData(audio, sampleRate, numChannels),
-		},
+		BaseDataFrame: NewBaseDataFrame("SpeechOutputAudioRawFrame"),
+		AudioRawData:  newAudioRawData(audio, sampleRate, numChannels),
 	}
 }
 
@@ -154,11 +150,9 @@ type UserAudioRawFrame struct {
 // NewUserAudioRawFrame builds a UserAudioRawFrame from PCM audio.
 func NewUserAudioRawFrame(userID string, audio []byte, sampleRate, numChannels int) *UserAudioRawFrame {
 	return &UserAudioRawFrame{
-		InputAudioRawFrame: InputAudioRawFrame{
-			BaseSystemFrame: NewBaseSystemFrame("UserAudioRawFrame"),
-			AudioRawData:    newAudioRawData(audio, sampleRate, numChannels),
-		},
-		UserID: userID,
+		BaseSystemFrame: NewBaseSystemFrame("UserAudioRawFrame"),
+		AudioRawData:    newAudioRawData(audio, sampleRate, numChannels),
+		UserID:          userID,
 	}
 }
 

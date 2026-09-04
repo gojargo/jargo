@@ -103,7 +103,7 @@ func (o *Opt[T]) SetAny(v any) error {
 	default:
 		return fmt.Errorf("%w: cannot use %T as %s", ErrType, v, want)
 	}
-	val, ok := rv.Interface().(T)
+	val, ok := reflect.TypeAssert[T](rv)
 	if !ok {
 		return fmt.Errorf("%w: cannot use %T as %s", ErrType, v, want)
 	}
@@ -277,7 +277,7 @@ func Get(v any, name string) (any, bool) {
 		if fieldName != name || found {
 			return
 		}
-		o, _ := field.Interface().(option)
+		o, _ := reflect.TypeAssert[option](field)
 		if o.IsGiven() {
 			value = o.AsAny()
 		}
@@ -304,7 +304,7 @@ func SetNamed(v any, name string, value any) error {
 	}
 	results := target.Addr().MethodByName("SetAny").
 		Call([]reflect.Value{reflect.ValueOf(&value).Elem()})
-	if err, _ := results[0].Interface().(error); err != nil {
+	if err, _ := reflect.TypeAssert[error](results[0]); err != nil {
 		return fmt.Errorf("settings: field %q: %w", name, err)
 	}
 	return nil
@@ -335,12 +335,12 @@ func Apply(store, delta any) (Changed, error) {
 
 	changed := Changed{}
 	eachField(dv, func(name string, deltaField reflect.Value, index []int) {
-		d, _ := deltaField.Interface().(option)
+		d, _ := reflect.TypeAssert[option](deltaField)
 		if !d.IsGiven() {
 			return
 		}
 		storeField := sv.FieldByIndex(index)
-		s, _ := storeField.Interface().(option)
+		s, _ := reflect.TypeAssert[option](storeField)
 		if reflect.DeepEqual(s.AsAny(), d.AsAny()) {
 			return
 		}
@@ -390,7 +390,7 @@ func Given(delta any) (map[string]any, error) {
 	}
 	given := map[string]any{}
 	eachField(dv, func(name string, field reflect.Value, _ []int) {
-		o, _ := field.Interface().(option)
+		o, _ := reflect.TypeAssert[option](field)
 		if o.IsGiven() {
 			given[name] = o.AsAny()
 		}
@@ -443,7 +443,7 @@ func FromMap(delta any, values map[string]any) error {
 		}
 		results := dv.FieldByIndex(index).Addr().MethodByName("SetAny").
 			Call([]reflect.Value{reflect.ValueOf(&value).Elem()})
-		if err, _ := results[0].Interface().(error); err != nil {
+		if err, _ := reflect.TypeAssert[error](results[0]); err != nil {
 			return fmt.Errorf("settings: field %q: %w", name, err)
 		}
 	}

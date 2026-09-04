@@ -4,8 +4,6 @@ import (
 	"context"
 	"net/http"
 	"testing"
-
-	"github.com/gojargo/jargo/provider/openai/chat"
 )
 
 func TestShaperEndpointAndAuth(t *testing.T) {
@@ -31,7 +29,7 @@ func TestConfigValidate(t *testing.T) {
 	valid := Config{
 		Endpoint:   "https://r.openai.azure.com",
 		Deployment: "gpt4o",
-		LLMConfig:  chat.LLMConfig{APIKey: "k"},
+		APIKey:     "k",
 	}
 	if err := valid.Validate(); err != nil {
 		t.Errorf("Validate() valid: %v", err)
@@ -48,7 +46,7 @@ func TestNewLLM(t *testing.T) {
 	svc := NewLLM(Config{
 		Endpoint:   "https://r.openai.azure.com",
 		Deployment: "gpt4o",
-		LLMConfig:  chat.LLMConfig{APIKey: "k"},
+		APIKey:     "k",
 	})
 	if svc == nil {
 		t.Fatal("NewLLM returned nil")

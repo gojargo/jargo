@@ -617,8 +617,8 @@ func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error
 	tracing.SetTokenUsage(ctx, u)
 	metrics.RecordTokens(ctx, b.Name(), b.modelName(), u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: b.Name(), Model: b.modelName()},
-		Value:           u,
+		Processor: b.Name(), Model: b.modelName(),
+		Value: u,
 	})
 	return b.PushFrame(ctx, f, processor.Downstream)
 }

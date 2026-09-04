@@ -50,8 +50,8 @@ func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 			LeadingSilence:  100 * time.Millisecond,
 		},
 		frames.STTUsageMetricsData{
-			BaseMetricsData: frames.BaseMetricsData{Processor: "DeepgramSTT#3"},
-			Value:           frames.STTUsage{AudioSeconds: 2.5},
+			Processor: "DeepgramSTT#3",
+			Value:     frames.STTUsage{AudioSeconds: 2.5},
 		},
 	))
 

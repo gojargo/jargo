@@ -109,7 +109,7 @@ func TestApplyMergesExtra(t *testing.T) {
 	current := &settings.TTS{Voice: settings.Set("alice")}
 	current.Extra = map[string]any{"speed": 1.0, "stability": 0.5}
 	changed, err := settings.Apply(current, &settings.TTS{
-		Base: settings.Base{Extra: map[string]any{"speed": 1.2}},
+		Extra: map[string]any{"speed": 1.2},
 	})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -133,7 +133,7 @@ func TestApplyReportsNothingForAnUnchangedExtra(t *testing.T) {
 	current := &settings.TTS{Voice: settings.Set("alice")}
 	current.Extra = map[string]any{"speed": 1.0}
 	changed, err := settings.Apply(current, &settings.TTS{
-		Base: settings.Base{Extra: map[string]any{"speed": 1.0}},
+		Extra: map[string]any{"speed": 1.0},
 	})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -147,9 +147,9 @@ func TestApplyReportsNothingForAnUnchangedExtra(t *testing.T) {
 func TestApplyChangesTheModel(t *testing.T) {
 	t.Parallel()
 
-	current := &settings.STT{Base: settings.Base{Model: settings.Set("old-model")}}
+	current := &settings.STT{Model: settings.Set("old-model")}
 	changed, err := settings.Apply(current, &settings.STT{
-		Base: settings.Base{Model: settings.Set("new-model")},
+		Model: settings.Set("new-model"),
 	})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -338,7 +338,7 @@ func TestGivenListsWhatTheDeltaCarries(t *testing.T) {
 	t.Parallel()
 
 	delta := &settings.LLM{
-		Base:        settings.Base{Model: settings.Set("a-model"), Extra: map[string]any{"custom": true}},
+		Model: settings.Set("a-model"), Extra: map[string]any{"custom": true},
 		Temperature: settings.Set(0.5),
 	}
 

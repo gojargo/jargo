@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -216,7 +217,7 @@ func formatValue(v reflect.Value) (string, bool) {
 // than anything a log reader wants, and a service holds the configuration it was
 // built with, so writing them out would put its API key in the log.
 func selfNaming(v reflect.Value) (string, bool) {
-	named, ok := v.Interface().(interface{ Name() string })
+	named, ok := reflect.TypeAssert[interface{ Name() string }](v)
 	if !ok {
 		return "", false
 	}
@@ -421,7 +422,7 @@ func (o *MetricsLog) logMetric(d frames.MetricsData, at float64) {
 	if m := d.MetricsModel(); m != "" {
 		base = append(base, "model", m)
 	}
-	with := func(rest ...any) []any { return append(append(base[:len(base):len(base)], rest...), "at", at) }
+	with := func(rest ...any) []any { return append(append(slices.Clip(base), rest...), "at", at) }
 
 	switch m := d.(type) {
 	case frames.TTFBMetricsData:

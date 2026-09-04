@@ -42,7 +42,7 @@ type Serializer struct {
 func New() *Serializer {
 	// This wire is the delivery channel for RTVI messages, so they are not
 	// filtered off it the way they are off a telephony call.
-	return &Serializer{BaseSerializer: wsserver.BaseSerializer{KeepRTVIMessages: true}}
+	return &Serializer{KeepRTVIMessages: true}
 }
 
 // Setup is a no-op: the encoding carries the sample rate of every chunk, so

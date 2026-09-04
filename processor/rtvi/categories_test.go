@@ -158,8 +158,8 @@ func TestBotSpeakingCategoryCanBeTurnedOff(t *testing.T) {
 // Metrics are reported by default and can be turned off on their own.
 func TestMetricsCategoryCanBeTurnedOff(t *testing.T) {
 	metrics := frames.NewMetricsFrame(frames.TTFBMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: "TTS"},
-		Value:           time.Second,
+		Processor: "TTS",
+		Value:     time.Second,
 	})
 	if msgs := observerHarness(t, rtvi.DefaultObserverParams(), metrics); !sent(msgs, rtvi.TypeMetrics) {
 		t.Fatalf("metrics are not reported by default, got %v", types(msgs))
@@ -168,8 +168,8 @@ func TestMetricsCategoryCanBeTurnedOff(t *testing.T) {
 	params := rtvi.DefaultObserverParams()
 	params.MetricsEnabled = off()
 	metrics2 := frames.NewMetricsFrame(frames.TTFBMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: "TTS"},
-		Value:           time.Second,
+		Processor: "TTS",
+		Value:     time.Second,
 	})
 	if msgs := observerHarness(t, params, metrics2); sent(msgs, rtvi.TypeMetrics) {
 		t.Errorf("metrics were reported with the category off, got %v", types(msgs))

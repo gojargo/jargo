@@ -59,8 +59,8 @@ func TestMetricsFrameCarriesSeveralKinds(t *testing.T) {
 
 func TestMetricsFrameStringNamesASingleProcessor(t *testing.T) {
 	f := frames.NewMetricsFrame(frames.ProcessingMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: "AnthropicLLM#1"},
-		Value:           time.Second,
+		Processor: "AnthropicLLM#1",
+		Value:     time.Second,
 	})
 	if got := f.String(); !strings.Contains(got, "AnthropicLLM#1") {
 		t.Errorf("String() = %q, want the processor named", got)
@@ -72,10 +72,10 @@ func TestMetricsFrameStringNamesASingleProcessor(t *testing.T) {
 // on in front of it.
 func TestTTFAReportsItsBreakdown(t *testing.T) {
 	d := frames.TTFAMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: "tts-1"},
-		TTFA:            300 * time.Millisecond,
-		TTFB:            200 * time.Millisecond,
-		LeadingSilence:  100 * time.Millisecond,
+		Processor:      "tts-1",
+		TTFA:           300 * time.Millisecond,
+		TTFB:           200 * time.Millisecond,
+		LeadingSilence: 100 * time.Millisecond,
 	}
 	if d.TTFB+d.LeadingSilence != d.TTFA {
 		t.Errorf("TTFB %v + leading silence %v should equal TTFA %v", d.TTFB, d.LeadingSilence, d.TTFA)

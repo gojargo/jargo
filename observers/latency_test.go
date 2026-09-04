@@ -54,8 +54,8 @@ func metrics(data ...frames.MetricsData) *frames.MetricsFrame {
 // ttfb is one time-to-first-byte measurement from the named processor.
 func ttfb(processorName string, d time.Duration) frames.TTFBMetricsData {
 	return frames.TTFBMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: processorName},
-		Value:           d,
+		Processor: processorName,
+		Value:     d,
 	}
 }
 
@@ -113,8 +113,8 @@ func TestUserBotLatencyBreaksTheDelayDown(t *testing.T) {
 	o := observers.NewUserBotLatency(r.config())
 
 	textAgg := frames.TextAggregationMetricsData{
-		BaseMetricsData: frames.BaseMetricsData{Processor: "TTS#0"},
-		Value:           30 * time.Millisecond,
+		Processor: "TTS#0",
+		Value:     30 * time.Millisecond,
 	}
 
 	push(o, vadStopped(), processor.Downstream)
@@ -177,8 +177,8 @@ func TestUserBotLatencyKeepsTheFirstTextAggregation(t *testing.T) {
 
 	agg := func(d time.Duration) frames.TextAggregationMetricsData {
 		return frames.TextAggregationMetricsData{
-			BaseMetricsData: frames.BaseMetricsData{Processor: "TTS#0"},
-			Value:           d,
+			Processor: "TTS#0",
+			Value:     d,
 		}
 	}
 

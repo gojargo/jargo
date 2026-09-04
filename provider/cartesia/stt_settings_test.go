@@ -38,10 +38,8 @@ func TestSTTSettingsChangeReachesTheEndpoint(t *testing.T) {
 	}
 
 	if _, err := settings.Apply(c.live, &STTSettings{
-		STT: settings.STT{
-			Base:     settings.Base{Model: settings.Set("ink-whisper-2")},
-			Language: settings.Set("fr"),
-		},
+		Model:    settings.Set("ink-whisper-2"),
+		Language: settings.Set("fr"),
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -79,7 +77,7 @@ func TestSTTMetadataFollowsTheSettings(t *testing.T) {
 	cfg := sttConfig()
 	c := newSTTConnector(cfg)
 	if _, err := settings.Apply(c.live, &STTSettings{
-		STT: settings.STT{Base: settings.Base{Model: settings.Set("ink-whisper-2")}},
+		Model: settings.Set("ink-whisper-2"),
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}

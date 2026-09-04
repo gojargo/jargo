@@ -67,7 +67,7 @@ func (c *settingsProvider) Settings() any { return &c.store }
 // triggers: what follows is labeled with the model now in force, or its cost
 // lands against the one it is no longer using.
 func TestModelFollowsASettingsChange(t *testing.T) {
-	c := &settingsProvider{describingConnector: describingConnector{meta: Metadata{Model: "old-model"}}}
+	c := &settingsProvider{meta: Metadata{Model: "old-model"}}
 	if err := settings.SetNamed(&c.store, "model", "old-model"); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestModelFollowsASettingsChange(t *testing.T) {
 // TestModelIsLeftAloneWhenSomethingElseChanges checks a change to another
 // setting does not disturb the label.
 func TestModelIsLeftAloneWhenSomethingElseChanges(t *testing.T) {
-	c := &settingsProvider{describingConnector: describingConnector{meta: Metadata{Model: "kept"}}}
+	c := &settingsProvider{meta: Metadata{Model: "kept"}}
 	s := NewStream("TestSTT", c, 0)
 
 	delta := &STTSettings{}

@@ -139,11 +139,9 @@ type FatalErrorFrame struct {
 // NewFatalErrorFrame builds a FatalErrorFrame describing message.
 func NewFatalErrorFrame(message string) *FatalErrorFrame {
 	return &FatalErrorFrame{
-		ErrorFrame: ErrorFrame{
-			BaseSystemFrame: NewBaseSystemFrame("FatalErrorFrame"),
-			Error:           message,
-			Fatal:           true,
-		},
+		BaseSystemFrame: NewBaseSystemFrame("FatalErrorFrame"),
+		Error:           message,
+		Fatal:           true,
 	}
 }
 

@@ -130,8 +130,7 @@ func ToMessages(msgs []frames.Message) ([]sdk.MessageParam, error) {
 	for _, m := range msgs {
 		converted, send, err := toMessage(m)
 		if err != nil {
-			var convErr *adapter.ConversionError
-			if errors.As(err, &convErr) {
+			if _, ok := errors.AsType[*adapter.ConversionError](err); ok {
 				return nil, err
 			}
 			return nil, &adapter.ConversionError{Cause: err}

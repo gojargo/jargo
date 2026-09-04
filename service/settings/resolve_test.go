@@ -144,7 +144,7 @@ func TestNewDelta(t *testing.T) {
 // currently holds without knowing the shape of its own settings type.
 func TestGet(t *testing.T) {
 	store := &settings.TTS{
-		Base:     settings.Base{Model: settings.Set("sonic")},
+		Model:    settings.Set("sonic"),
 		Voice:    settings.Set("nova"),
 		Language: settings.Cleared[string](),
 	}
@@ -221,7 +221,7 @@ func TestSetNamed(t *testing.T) {
 func TestChangedExcept(t *testing.T) {
 	store := &settings.LLM{}
 	delta := &settings.LLM{
-		Base:        settings.Base{Model: settings.Set("gpt-4")},
+		Model:       settings.Set("gpt-4"),
 		Temperature: settings.Set(0.4),
 		TopP:        settings.Set(0.9),
 	}
