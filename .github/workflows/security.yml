@@ -77,7 +77,7 @@ jobs:
         with:
           go-version-file: go.mod
       # Reports only vulnerabilities jargo's code actually reaches, so this gates
-      # the build. Stdlib advisories are cleared by the latest 1.26.x toolchain
+      # the build. Stdlib advisories are cleared by the latest 1.27.x toolchain
       # that setup-go resolves from go.mod. The govulncheck version is pinned in
       # the Makefile, which installs it and runs the scan.
       - run: make vuln
