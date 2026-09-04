@@ -29,6 +29,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `ObserverParams.BotOutputEnabled` turns the category off and
   `SkipAggregatorTypes` keeps chosen aggregation types from the client
   altogether, captions included.
+- **RTVI rewrites the bot's output on its way to the client.**
+  `ObserverParams.BotOutputTransforms`, and `AddBotOutputTransformer` /
+  `RemoveBotOutputTransformer` while the pipeline runs, register a rewrite
+  against an aggregation type (`frames.AnyAggregation` for all of them) for a
+  bot whose text needs shaping before anyone reads it: expanding an
+  abbreviation, translating, redacting. A segment and the caption for it are
+  rewritten as one, so they say the same thing, and a progress report is handed
+  to the rewrite whole so the accumulated and remaining split stays consistent
+  with the text it produces.
 - **RTVI reports the user's message, the user being muted, and the bot's
   transcription.** Three message types were missing. `user-llm-text` carries
   what the user said as the model is about to read it, which is not always what

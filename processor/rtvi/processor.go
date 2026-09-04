@@ -476,11 +476,14 @@ func (o *Observer) segmentMessages(seg segment) []Message {
 	suppressed := !o.isLegacyClient() && (agg.AggregatedBy == frames.AggregationWord ||
 		agg.AggregatedBy == frames.AggregationToken)
 
+	// Rewritten once, so the segment and the caption for it say the same thing.
+	text := o.transform(BotOutputText{Text: agg.Text, AggregatedBy: agg.AggregatedBy}).Text
+
 	var msgs []Message
 	if o.enabled(botOutputOf) && !suppressed {
 		id, spoken, willBeSpoken := agg.ID(), seg.spoken, agg.WillBeSpoken
 		d := BotOutputData{
-			Text:         agg.Text,
+			Text:         text,
 			AggregatedBy: agg.AggregatedBy,
 			SegmentID:    &id,
 			Spoken:       &spoken,
@@ -494,19 +497,19 @@ func (o *Observer) segmentMessages(seg segment) []Message {
 			// Spoken text arrives once synthesis is done, so the segment is
 			// finished by the time the client hears about it.
 			d.SpokenStatus = SpokenCompleted
-			d.SpokenProgress = &SpokenProgressData{AccumulatedText: agg.Text}
+			d.SpokenProgress = &SpokenProgressData{AccumulatedText: text}
 		default:
 			// The segment is announced before synthesis starts, so none of it
 			// has been spoken yet.
 			d.SpokenStatus = SpokenNew
-			d.SpokenProgress = &SpokenProgressData{RemainingText: agg.Text}
+			d.SpokenProgress = &SpokenProgressData{RemainingText: text}
 		}
 		msgs = append(msgs, BotOutput(d))
 	}
 	// The caption is a channel of its own and is not suppressed with the
 	// segment: a client rendering spoken text word by word still wants each one.
 	if seg.spoken && o.enabled(botTTSOf) {
-		msgs = append(msgs, BotTTSText(agg.Text))
+		msgs = append(msgs, BotTTSText(text))
 	}
 	return msgs
 }
@@ -519,20 +522,29 @@ func (o *Observer) progressMessages(fr *frames.AggregatedTextProgressFrame) []Me
 	if o.isLegacyClient() || !o.enabled(botOutputOf) {
 		return nil
 	}
+	// Rewritten as one, so the split stays consistent with the text it splits.
+	seg := o.transform(BotOutputText{
+		Text:         fr.Text,
+		AggregatedBy: fr.AggregatedBy,
+		Accumulated:  fr.AccumulatedText,
+		Remaining:    fr.RemainingText,
+		Progress:     true,
+	})
+
 	id, willBeSpoken := fr.SegmentID, true
 	status := SpokenInProgress
-	if fr.RemainingText == "" {
+	if seg.Remaining == "" {
 		status = SpokenCompleted
 	}
 	return []Message{BotOutput(BotOutputData{
-		Text:         fr.Text,
+		Text:         seg.Text,
 		AggregatedBy: fr.AggregatedBy,
 		SegmentID:    &id,
 		WillBeSpoken: &willBeSpoken,
 		SpokenStatus: status,
 		SpokenProgress: &SpokenProgressData{
-			AccumulatedText: fr.AccumulatedText,
-			RemainingText:   fr.RemainingText,
+			AccumulatedText: seg.Accumulated,
+			RemainingText:   seg.Remaining,
 		},
 	})}
 }

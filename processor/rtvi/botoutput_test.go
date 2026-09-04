@@ -3,6 +3,7 @@ package rtvi_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,4 +379,124 @@ func TestBotOutputReportsASegmentOnce(t *testing.T) {
 	if captions != 1 {
 		t.Errorf("got %d captions, want exactly one", captions)
 	}
+}
+
+// A rewrite reshapes the bot's output before the client reads it, and the
+// segment and the caption for it say the same thing.
+func TestBotOutputTransformRewritesTheSegmentAndItsCaption(t *testing.T) {
+	params := rtvi.DefaultObserverParams()
+	params.BotOutputTransforms = []rtvi.BotOutputTransformer{{
+		AggregatedBy: frames.AnyAggregation,
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
+			seg.Text = strings.ToUpper(seg.Text)
+			return seg
+		},
+	}}
+
+	msgs := outputHarness(t, params, "",
+		speaking(), spokenText("hello there.", frames.AggregationSentence))
+
+	got := outputs(msgs)
+	if len(got) != 1 || got[0].Text != "HELLO THERE." {
+		t.Fatalf("bot-output = %+v, want the rewritten text", got)
+	}
+	if got[0].SpokenProgress == nil || got[0].SpokenProgress.AccumulatedText != "HELLO THERE." {
+		t.Errorf("progress = %+v, want the rewritten text", got[0].SpokenProgress)
+	}
+	if captions := textsOf(msgs, rtvi.TypeBotTTSText); len(captions) != 1 ||
+		captions[0] != "HELLO THERE." {
+		t.Errorf("captions = %v, want the rewritten text", captions)
+	}
+}
+
+// A rewrite applies only to the aggregation type it was registered for.
+func TestBotOutputTransformAppliesToItsAggregationType(t *testing.T) {
+	params := rtvi.DefaultObserverParams()
+	params.BotOutputTransforms = []rtvi.BotOutputTransformer{{
+		AggregatedBy: "code",
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
+			seg.Text = "[redacted]"
+			return seg
+		},
+	}}
+
+	msgs := outputHarness(t, params, "",
+		speaking(),
+		spokenText("secret", "code"),
+		spokenText("Done.", frames.AggregationSentence),
+	)
+
+	got := outputs(msgs)
+	if len(got) != 2 {
+		t.Fatalf("got %d bot-output messages, want two: %+v", len(got), got)
+	}
+	if got[0].Text != "[redacted]" {
+		t.Errorf("the code segment = %q, want it rewritten", got[0].Text)
+	}
+	if got[1].Text != "Done." {
+		t.Errorf("the sentence = %q, want it left alone", got[1].Text)
+	}
+}
+
+// A progress report is rewritten as one, so a transform can keep the split
+// consistent with the text it produces. Leaving a part empty keeps what the
+// rewrite was given.
+func TestBotOutputTransformSeesTheWholeProgressReport(t *testing.T) {
+	var seen []rtvi.BotOutputText
+	params := rtvi.DefaultObserverParams()
+	params.BotOutputTransforms = []rtvi.BotOutputTransformer{{
+		AggregatedBy: frames.AnyAggregation,
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
+			seen = append(seen, seg)
+			if !seg.Progress {
+				return seg
+			}
+			return rtvi.BotOutputText{
+				Text:        "HELLO THERE.",
+				Accumulated: "HELLO",
+				Remaining:   " THERE.",
+			}
+		},
+	}}
+
+	seg := segment("Hello there.", frames.AggregationSentence)
+	msgs := outputHarness(t, params, "",
+		speaking(),
+		seg,
+		frames.NewAggregatedTextProgressFrame(seg.ID(), "", "Hello there.",
+			frames.AggregationSentence, "Hello", " there."),
+	)
+
+	got := outputs(msgs)
+	if len(got) != 2 {
+		t.Fatalf("got %d bot-output messages, want the segment and its report: %+v", len(got), got)
+	}
+	progress := got[1]
+	if progress.SpokenProgress == nil || progress.SpokenProgress.AccumulatedText != "HELLO" ||
+		progress.SpokenProgress.RemainingText != " THERE." {
+		t.Errorf("progress = %+v, want the rewritten split", progress.SpokenProgress)
+	}
+	// The rewrite is told which of the two it is looking at.
+	if len(seen) != 2 || seen[0].Progress || !seen[1].Progress {
+		t.Fatalf("the rewrite saw %+v, want the segment then its report", seen)
+	}
+	if seen[1].Accumulated != "Hello" || seen[1].Remaining != " there." {
+		t.Errorf("the report reached the rewrite as %+v, want the original split", seen[1])
+	}
+}
+
+// A rewrite registered while the pipeline runs applies from then on, and stops
+// applying once it is removed.
+func TestBotOutputTransformCanBeAddedAndRemoved(t *testing.T) {
+	obs := rtvi.NewObserver(nil)
+	id := obs.AddBotOutputTransformer(rtvi.BotOutputTransformer{
+		AggregatedBy: frames.AnyAggregation,
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
+			seg.Text = strings.ToUpper(seg.Text)
+			return seg
+		},
+	})
+	obs.RemoveBotOutputTransformer(id)
+	// Removing one that was never registered does nothing.
+	obs.RemoveBotOutputTransformer(id)
 }
