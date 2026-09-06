@@ -246,10 +246,12 @@ func TestStreamsEvents(t *testing.T) {
 	waitFor(t, func() bool { return hasFrame[*frames.BotStartedSpeakingFrame](collected()) })
 	task.QueueFrame(frames.NewInputAudioRawFrame([]byte{7, 7}, 24000, 1))
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && len(collected()) < 7 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait for the frame the scripted turn ends with rather than for a count of
+	// frames: the events do not map one to one onto what reaches the pipeline,
+	// so a count is reached while the end of the response is still in flight.
+	// response.done is the last event the server sends, and the bot-stopped
+	// frame is what it produces.
+	waitFor(t, func() bool { return hasFrame[*frames.BotStoppedSpeakingFrame](collected()) })
 
 	var (
 		gotAudio                   []byte
