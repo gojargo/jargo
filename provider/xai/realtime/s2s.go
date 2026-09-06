@@ -9,11 +9,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -35,6 +38,21 @@ type Service struct {
 	// arriving earlier is folded into the initial session update instead.
 	established bool
 
+	// sessionReady reports whether the server has acknowledged the session
+	// configuration. The sample rate the session runs at is settled at that
+	// point, so audio sent earlier would be read at the wrong rate.
+	sessionReady bool
+	// loggedAudioDrop records that audio arriving before the session was ready
+	// has been reported once, so a talking caller does not fill the log.
+	loggedAudioDrop bool
+	// pendingResponse records that a response was asked for before the session
+	// was ready, to be asked for again once it is.
+	pendingResponse bool
+	// audioResp is the assistant audio item currently being played, which an
+	// interruption truncates on the server so the conversation the model keeps
+	// holds what the caller actually heard. Nil when nothing is playing.
+	audioResp *audioResponse
+
 	// tools is the function-calling configuration currently advertised to the
 	// session. The model generates continuously, so it does not re-read the
 	// context between turns: every change must be pushed to it with a
@@ -53,6 +71,16 @@ type Service struct {
 	// model, so a conversation reported again does not send one twice. Guarded
 	// by mu.
 	sentResults map[string]bool
+}
+
+// audioResponse tracks the assistant audio item the session is playing: which
+// item it is, when it started, and how much audio has arrived. An interruption
+// reads it to say how much of the item the caller heard.
+type audioResponse struct {
+	itemID       string
+	contentIndex int
+	started      time.Time
+	total        int
 }
 
 // New builds an xAI Realtime service.
@@ -89,7 +117,21 @@ func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error 
 
 // ProcessFrame opens the session on StartFrame, forwards input audio up to the
 // model, and tears the session down when the pipeline ends.
+//
+// Every frame but the input audio is forwarded by the LLM base, which handles it
+// first, so the work done here is the session's side of it and nothing is pushed
+// a second time. The exception is the conversation, which the base holds back
+// from a service that generates continuously.
 func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if audio, ok := f.(*frames.InputAudioRawFrame); ok && dir == processor.Downstream {
+		// The model consumes the audio, so it does not travel on. Only the
+		// processor bookkeeping runs: the LLM base would forward it.
+		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		s.sendAudio(ctx, audio.Audio)
+		return nil
+	}
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -98,13 +140,16 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.connect(ctx); err != nil {
 			s.PushError(ctx, "xai realtime connect failed", err, true)
 		}
-		return s.PushFrame(ctx, f, dir)
-	case *frames.InputAudioRawFrame:
-		if dir == processor.Downstream {
-			s.sendAudio(fr.Audio)
-			return nil // The model consumes the audio; it does not flow on.
-		}
-		return s.PushFrame(ctx, f, dir)
+		return nil
+	case *frames.InterruptionFrame:
+		s.handleInterruption(ctx)
+		return nil
+	case *frames.UserStoppedSpeakingFrame:
+		// Under manual turn detection the pipeline decides where the turn ends,
+		// so the input buffer is committed and a response asked for here. With
+		// server VAD on the session does both for itself.
+		s.handleUserStoppedSpeaking(ctx)
+		return nil
 	case *frames.LLMContextFrame:
 		// The conversation the session is part of: the toolset it advertises, and
 		// the tool results it has gained since it was last reported.
@@ -120,14 +165,14 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		// service does not get one per turn.
 		s.syncTools(fr.Tools)
 		s.SyncToolHandlers(ctx, fr.Tools)
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	default:
-		// A tool-choice change is not forwarded: the session has no equivalent
-		// control, so the model always decides for itself.
-		return s.PushFrame(ctx, f, dir)
+		// A tool-choice change reaches no session control: the model always
+		// decides for itself whether to call something.
+		return nil
 	}
 }
 
@@ -174,14 +219,58 @@ type audioAppendMsg struct {
 	Audio string `json:"audio"`
 }
 
-// audioFormat renders the session's PCM format. xAI nests the format under an
-// input/output audio object rather than naming each direction's format at the
-// top level.
+// audioFormat renders the session's audio configuration. xAI nests the format
+// under an input/output audio object rather than naming each direction's format
+// at the top level, and the transcript of the user's audio is configured
+// alongside the input format.
 func (s *Service) audioFormat() map[string]any {
-	format := map[string]any{
-		"format": map[string]any{keyType: pcmFormat, "rate": s.cfg.sampleRate()},
+	format := func() map[string]any {
+		return map[string]any{keyType: pcmFormat, "rate": s.cfg.sampleRate()}
 	}
-	return map[string]any{"input": format, "output": format}
+	input := map[string]any{"format": format()}
+	if t := s.cfg.Transcription; t != nil {
+		transcription := map[string]any{}
+		if t.Model != "" {
+			transcription["model"] = t.Model
+		}
+		if t.LanguageHint != "" {
+			transcription["language_hint"] = t.LanguageHint
+		}
+		if len(t.Keyterms) > 0 {
+			transcription["keyterms"] = t.Keyterms
+		}
+		if len(transcription) > 0 {
+			input["transcription"] = transcription
+		}
+	}
+	return map[string]any{"input": input, "output": map[string]any{"format": format()}}
+}
+
+// turnDetection renders the session's turn-detection configuration: xAI's
+// server-side VAD with whatever tuning the config carries, or nothing at all
+// when the pipeline detects the turns itself.
+func (s *Service) turnDetection() any {
+	if !s.cfg.serverVAD() {
+		return nil
+	}
+	td := map[string]any{keyType: "server_vad"}
+	v := s.cfg.VAD
+	if v == nil {
+		return td
+	}
+	if v.Threshold != 0 {
+		td["threshold"] = v.Threshold
+	}
+	if v.SilenceMS != 0 {
+		td["silence_duration_ms"] = v.SilenceMS
+	}
+	if v.PrefixPaddingMS != 0 {
+		td["prefix_padding_ms"] = v.PrefixPaddingMS
+	}
+	if v.IdleTimeoutMS != 0 {
+		td["idle_timeout_ms"] = v.IdleTimeoutMS
+	}
+	return td
 }
 
 // sessionUpdate is the session configuration message. The model is not part of
@@ -194,10 +283,15 @@ func (s *Service) sessionUpdate() sessionUpdateMsg {
 	if s.cfg.Instructions != "" {
 		session["instructions"] = s.cfg.Instructions
 	}
-	if s.cfg.serverVAD() {
-		session["turn_detection"] = map[string]any{keyType: "server_vad"}
-	} else {
-		session["turn_detection"] = nil
+	session["turn_detection"] = s.turnDetection()
+	if s.cfg.Reasoning != "" {
+		session["reasoning"] = map[string]any{"effort": s.cfg.Reasoning}
+	}
+	if s.cfg.Resumption {
+		session["resumption"] = map[string]any{"enabled": true}
+	}
+	if len(s.cfg.Replace) > 0 {
+		session["replace"] = s.cfg.Replace
 	}
 	if tools := s.toolSpecs(s.currentTools()); tools != nil {
 		session["tools"] = tools
@@ -355,10 +449,128 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 // createResponse asks the model to speak. The session generates from audio on
 // its own, so this is for the turns nothing spoken prompted: the reply to a tool
 // result.
+//
+// A request made before the server has acknowledged the session is held until it
+// has, because the session it would run against is not settled yet.
 func (s *Service) createResponse(ctx context.Context) {
+	s.mu.Lock()
+	ready := s.sessionReady
+	if !ready {
+		s.pendingResponse = true
+	}
+	s.mu.Unlock()
+	if !ready {
+		return
+	}
 	if err := s.send(map[string]any{keyType: "response.create"}); err != nil {
 		slog.ErrorContext(ctx, "asking for a response failed", "service", s.Name(), "err", err)
 	}
+}
+
+// handleInterruption stops the model on the wire when the pipeline reports an
+// interruption.
+//
+// The response is always canceled, so the model stops speaking promptly. The
+// input buffer is only cleared under manual turn detection, which owns what goes
+// into it: with server VAD on the buffer holds the speech that interrupted, and
+// clearing it would throw the user's words away.
+func (s *Service) handleInterruption(ctx context.Context) {
+	if !s.cfg.serverVAD() {
+		if err := s.send(map[string]any{keyType: "input_audio_buffer.clear"}); err != nil {
+			slog.DebugContext(ctx, "clearing the input buffer failed", "service", s.Name(), "err", err)
+		}
+	}
+	if err := s.send(map[string]any{keyType: "response.cancel"}); err != nil {
+		slog.DebugContext(ctx, "canceling the response failed", "service", s.Name(), "err", err)
+	}
+	s.truncateAudioResponse(ctx)
+}
+
+// handleUserStoppedSpeaking closes a turn the pipeline detected itself. With
+// server VAD on the session commits and answers on its own, so this does
+// nothing.
+func (s *Service) handleUserStoppedSpeaking(ctx context.Context) {
+	if s.cfg.serverVAD() {
+		return
+	}
+	if err := s.send(map[string]any{keyType: "input_audio_buffer.commit"}); err != nil {
+		slog.ErrorContext(ctx, "committing the input buffer failed", "service", s.Name(), "err", err)
+		return
+	}
+	s.createResponse(ctx)
+}
+
+// trackAudio records the assistant audio item being played, so an interruption
+// can say how much of it the caller heard. The first chunk opens the item and
+// starts its clock; the rest only add to its size.
+func (s *Service) trackAudio(ev serverEvent, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audioResp == nil {
+		s.audioResp = &audioResponse{
+			itemID:       ev.ItemID,
+			contentIndex: ev.ContentIndex,
+			started:      time.Now(),
+		}
+	}
+	s.audioResp.total += n
+}
+
+// truncateAudioResponse cuts the item being played back to what the caller
+// actually heard, so the conversation the model keeps matches it. Without this
+// the model believes it said a whole answer the user cut off after a word.
+//
+// The cut is the shorter of the time since playback started and the audio that
+// arrived, since either can be the smaller: a response can arrive faster than it
+// plays, and playback can outlast a response that stopped arriving.
+func (s *Service) truncateAudioResponse(ctx context.Context) {
+	s.mu.Lock()
+	resp := s.audioResp
+	s.audioResp = nil
+	s.mu.Unlock()
+	if resp == nil {
+		return
+	}
+	// 16-bit mono PCM, so two bytes to the sample.
+	audioMS := int64(resp.total) * 1000 / int64(2*s.cfg.sampleRate())
+	elapsedMS := time.Since(resp.started).Milliseconds()
+	endMS := max(0, min(elapsedMS, audioMS))
+	slog.DebugContext(ctx, "truncating the interrupted response", "service", s.Name(),
+		"item_id", resp.itemID, "audio_ms", audioMS, "elapsed_ms", elapsedMS, "end_ms", endMS)
+	if err := s.send(map[string]any{
+		keyType:         "conversation.item.truncate",
+		"item_id":       resp.itemID,
+		"content_index": resp.contentIndex,
+		"audio_end_ms":  endMS,
+	}); err != nil {
+		// Non-fatal: the response has been canceled either way, and only the
+		// model's own record of the turn is left overstated.
+		slog.WarnContext(ctx, "truncating the interrupted response failed",
+			"service", s.Name(), "err", err)
+	}
+}
+
+// ForceMessage speaks text verbatim, without the model writing it. The session
+// plays it and reports the response itself, so nothing else has to be asked for.
+func (s *Service) ForceMessage(ctx context.Context, text string) error {
+	slog.DebugContext(ctx, "speaking a forced message", "service", s.Name())
+	return s.send(map[string]any{
+		keyType: "conversation.item.create",
+		"item": map[string]any{
+			keyType: "force_message",
+			"role":  "assistant",
+			"content": []map[string]any{
+				{keyType: "text", "text": text},
+			},
+		},
+	})
+}
+
+// DeleteConversationItem removes an item from the conversation the session
+// keeps, by the id the session gave it.
+func (s *Service) DeleteConversationItem(ctx context.Context, itemID string) error {
+	slog.DebugContext(ctx, "deleting a conversation item", "service", s.Name(), "item_id", itemID)
+	return s.send(map[string]any{keyType: "conversation.item.delete", "item_id": itemID})
 }
 
 // handleToolEvent takes the events that make up a tool call, reporting whether
@@ -484,8 +696,26 @@ func sameTools(a, b []frames.Tool) bool {
 }
 
 // sendAudio appends a chunk of input PCM to the model's input buffer.
-func (s *Service) sendAudio(pcm []byte) {
+//
+// Audio arriving before the server has acknowledged the session is dropped: the
+// rate the session reads it at is only settled then. The drop is reported once
+// per session, since a caller already talking produces a chunk every few
+// milliseconds.
+func (s *Service) sendAudio(ctx context.Context, pcm []byte) {
 	if len(pcm) == 0 {
+		return
+	}
+	s.mu.Lock()
+	ready, logged := s.sessionReady, s.loggedAudioDrop
+	if !ready {
+		s.loggedAudioDrop = true
+	}
+	s.mu.Unlock()
+	if !ready {
+		if !logged {
+			slog.DebugContext(ctx, "dropping user audio: the realtime session is not ready yet",
+				"service", s.Name())
+		}
 		return
 	}
 	_ = s.send(audioAppendMsg{
@@ -518,6 +748,10 @@ func (s *Service) disconnect() {
 	conn, cancel := s.conn, s.cancel
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
 	s.established = false
+	s.sessionReady = false
+	s.loggedAudioDrop = false
+	s.pendingResponse = false
+	s.audioResp = nil
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -546,8 +780,13 @@ type serverEvent struct {
 	Arguments string `json:"arguments"`
 	// Item is the conversation item an item event is about. A tool call is
 	// announced as one of these before its arguments are finished.
-	Item  *conversationItem `json:"item"`
-	Error struct {
+	Item *conversationItem `json:"item"`
+	// ItemID and ContentIndex name the piece of the conversation an event is
+	// about, which an interruption needs to truncate the audio being played.
+	ItemID       string `json:"item_id"` //nolint:tagliatelle // xAI wire field
+	ContentIndex int    `json:"content_index"`
+	Error        struct {
+		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
 }
@@ -598,43 +837,167 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 		if json.Unmarshal(data, &ev) != nil {
 			continue
 		}
-		s.handleEvent(connCtx, ev)
+		if stop := s.handleEvent(connCtx, ev); stop {
+			return
+		}
 	}
 }
 
-// handleEvent maps a server event onto downstream pipeline frames.
-func (s *Service) handleEvent(ctx context.Context, ev serverEvent) {
-	if s.handleToolEvent(ctx, ev) {
-		return
+// handleEvent maps a server event onto pipeline frames, reporting whether the
+// session has failed in a way that ends the read loop.
+func (s *Service) handleEvent(ctx context.Context, ev serverEvent) bool {
+	switch {
+	case s.handleToolEvent(ctx, ev):
+		return false
+	case s.handleSessionEvent(ctx, ev):
+		return false
+	case s.handleResponseEvent(ctx, ev):
+		return false
+	case s.handleTranscriptEvent(ctx, ev):
+		return false
+	case ev.Type == "error":
+		return s.handleServerError(ctx, ev)
 	}
+	return false
+}
+
+// handleSessionEvent takes the events about the session itself: it opening,
+// being configured, and what it hears of the user. It reports whether it took
+// the event.
+func (s *Service) handleSessionEvent(ctx context.Context, ev serverEvent) bool {
 	switch ev.Type {
 	case "conversation.created":
 		s.configureSession(ctx)
+	case "session.updated":
+		s.sessionUpdated(ctx)
 	case "input_audio_buffer.speech_started":
-		// Server VAD detected user speech: barge in so buffered bot audio drops.
-		_ = s.PushFrame(ctx, frames.NewUserStartedSpeakingFrame(), processor.Downstream)
-		_ = s.PushFrame(ctx, frames.NewInterruptionFrame(), processor.Downstream)
+		s.speechStarted(ctx)
 	case "input_audio_buffer.speech_stopped":
-		_ = s.PushFrame(ctx, frames.NewUserStoppedSpeakingFrame(), processor.Downstream)
+		s.speechStopped(ctx)
+	default:
+		return false
+	}
+	return true
+}
+
+// handleResponseEvent takes the events that make up the model's answer: its
+// audio, the transcript of that audio, the same answer in text from a session
+// answering in that modality, and the end of the response. It reports whether it
+// took the event.
+func (s *Service) handleResponseEvent(ctx context.Context, ev serverEvent) bool {
+	switch ev.Type {
 	case "response.created":
 		_ = s.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Downstream)
 	case "response.output_audio.delta":
 		if pcm, err := base64.StdEncoding.DecodeString(ev.Delta); err == nil && len(pcm) > 0 {
+			s.trackAudio(ev, len(pcm))
 			_ = s.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, s.cfg.sampleRate(), 1), processor.Downstream)
 		}
-	case "response.output_audio_transcript.delta":
+	case "response.output_audio_transcript.delta", "response.output_text.delta", "response.text.delta":
 		if ev.Delta != "" {
 			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(ev.Delta), processor.Downstream)
 		}
 	case "response.done":
 		s.finishResponse(ctx, ev)
-	case "conversation.item.input_audio_transcription.completed":
-		if ev.Transcript != "" {
-			_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(ev.Transcript, "", ""), processor.Downstream)
-		}
-	case "error":
-		s.PushError(ctx, "xai realtime error: "+ev.Error.Message, fmt.Errorf("%w: %s", errServer, ev.Error.Message), false)
+	default:
+		return false
 	}
+	return true
+}
+
+// handleTranscriptEvent takes what the session heard the user say, reporting
+// whether it took the event.
+//
+// A transcript travels upstream, where the user aggregator is: it is the user's
+// message, and everything downstream of this service is the reply to it. The
+// updated event carries the turn so far and the completed one the whole of it.
+func (s *Service) handleTranscriptEvent(ctx context.Context, ev serverEvent) bool {
+	text := strings.TrimSpace(ev.Transcript)
+	switch ev.Type {
+	case "conversation.item.input_audio_transcription.updated":
+		if text != "" {
+			_ = s.PushFrame(ctx, frames.NewInterimTranscriptionFrame(text, "", ""), processor.Upstream)
+		}
+	case "conversation.item.input_audio_transcription.completed":
+		if text != "" {
+			_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(text, "", ""), processor.Upstream)
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+// handleServerError reports an error event, saying whether it ends the session.
+//
+// A canceled response that had already finished, and a truncation of an item
+// that is no longer playing, are races the interruption path runs into by
+// design: they say the model had already stopped, which is what was wanted. They
+// are logged and the session carries on. Anything else is reported and ends the
+// read loop, since the session cannot be relied on afterwards.
+func (s *Service) handleServerError(ctx context.Context, ev serverEvent) bool {
+	if benignSessionError(ev) {
+		slog.DebugContext(ctx, "the realtime session reported a benign error",
+			"service", s.Name(), "code", ev.Error.Code, "message", ev.Error.Message)
+		return false
+	}
+	s.PushError(ctx, "xai realtime error: "+ev.Error.Message,
+		fmt.Errorf("%w: %s", errServer, ev.Error.Message), false)
+	return true
+}
+
+// benignSessionError reports whether an error event is one of the races the
+// interruption path expects. xAI's codes for these differ from the ones the
+// Realtime protocol documents elsewhere, so the message is matched as well.
+func benignSessionError(ev serverEvent) bool {
+	switch ev.Error.Code {
+	case "response_cancel_not_active", "conversation_already_has_active_response":
+		return true
+	}
+	msg := strings.ToLower(ev.Error.Message)
+	return strings.Contains(msg, "no active response") ||
+		strings.Contains(msg, "already has an active response") ||
+		strings.Contains(msg, "truncat")
+}
+
+// sessionUpdated records that the server has taken the session configuration,
+// which is the point from which it reads audio at the configured rate. A
+// response asked for while it was still settling is asked for now.
+func (s *Service) sessionUpdated(ctx context.Context) {
+	s.mu.Lock()
+	s.sessionReady = true
+	pending := s.pendingResponse
+	s.pendingResponse = false
+	s.mu.Unlock()
+	if pending {
+		s.createResponse(ctx)
+	}
+}
+
+// speechStarted takes the session's report that the user has begun speaking.
+//
+// The boundary is proposed rather than announced: the external turn strategies
+// the service recommends decide the turn from it and broadcast the interruption,
+// which comes back here and stops the model on the wire. Under manual turn
+// detection the pipeline owns the boundary and the session's opinion is ignored.
+func (s *Service) speechStarted(ctx context.Context) {
+	if !s.cfg.serverVAD() {
+		return
+	}
+	// The model has stopped speaking as far as the caller is concerned, so its
+	// record of the turn is cut back to what was heard before the interruption
+	// the strategies are about to broadcast arrives.
+	s.truncateAudioResponse(ctx)
+	_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStartedSpeakingFrame() })
+}
+
+// speechStopped takes the session's report that the user has stopped speaking,
+// proposing the end of the turn for the strategies to resolve.
+func (s *Service) speechStopped(ctx context.Context) {
+	if !s.cfg.serverVAD() {
+		return
+	}
+	_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStoppedSpeakingFrame() })
 }
 
 // configureSession sends the session configuration once the server has opened
@@ -654,6 +1017,11 @@ func (s *Service) configureSession(ctx context.Context) {
 // produce.
 func (s *Service) finishResponse(ctx context.Context, ev serverEvent) {
 	s.reportUsage(ctx, ev)
+	// The response is over, so there is no longer an item an interruption would
+	// cut back.
+	s.mu.Lock()
+	s.audioResp = nil
+	s.mu.Unlock()
 	_ = s.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Downstream)
 	if ev.Response != nil && ev.Response.Status == "failed" {
 		s.PushError(ctx, "xai realtime response failed", errServer, false)
@@ -687,8 +1055,15 @@ func (s *Service) CanGenerateMetrics() bool { return true }
 // which this service is not answering from, and writes the user's message when
 // the answer starts rather than when the turn ends, because the transcript for
 // what the user said arrives late.
+//
+// A session detecting the turns recommends the external strategies that resolve
+// the boundaries it proposes. Without them a proposal reaches nothing and no
+// turn is ever opened or closed.
 func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
 	f := frames.NewLLMServiceMetadataFrame(s.Name())
 	f.Realtime = true
+	if s.cfg.serverVAD() {
+		f.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
+	}
 	return f
 }

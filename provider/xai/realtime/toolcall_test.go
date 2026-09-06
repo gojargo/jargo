@@ -71,6 +71,14 @@ func newToolSessionServer(t *testing.T) *toolSessionServer {
 			f.mu.Lock()
 			f.received = append(f.received, msg)
 			f.mu.Unlock()
+			if msg["type"] == "session.update" {
+				// xAI acknowledges the configuration, which is what tells the
+				// service the session is ready to be spoken to.
+				ack, _ := json.Marshal(map[string]any{"type": "session.updated"})
+				if c.Write(ctx, websocket.MessageText, ack) != nil {
+					return
+				}
+			}
 		}
 	}))
 	t.Cleanup(f.Close)

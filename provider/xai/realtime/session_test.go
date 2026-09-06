@@ -223,3 +223,97 @@ func TestResponseDoneUsageParsing(t *testing.T) {
 		}
 	})
 }
+
+// TestSessionUpdateExtendedFields checks the session fields beyond the basics
+// reach the wire in the shapes xAI reads them in: how much the model reasons,
+// whether the server caches the conversation for a resumed session, the
+// pronunciations to substitute, the transcript of the user's audio, and the
+// tuning of the server-side VAD.
+func TestSessionUpdateExtendedFields(t *testing.T) {
+	s := New(Config{
+		APIKey:     "k",
+		Reasoning:  "none",
+		Resumption: true,
+		Replace:    map[string]string{"Acme Mobile": "Acme Mobull"},
+		Transcription: &Transcription{
+			Model:        "grok-transcribe",
+			LanguageHint: "en",
+			Keyterms:     []string{"jargo"},
+		},
+		VAD: &VADParams{
+			Threshold:       0.85,
+			SilenceMS:       700,
+			PrefixPaddingMS: 300,
+			IdleTimeoutMS:   5000,
+		},
+	})
+	session := s.sessionUpdate().Session
+
+	reasoning, ok := session["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "none" {
+		t.Errorf("reasoning = %v, want the configured effort", session["reasoning"])
+	}
+	resumption, ok := session["resumption"].(map[string]any)
+	if !ok || resumption["enabled"] != true {
+		t.Errorf("resumption = %v, want it enabled", session["resumption"])
+	}
+	replace, ok := session["replace"].(map[string]string)
+	if !ok || replace["Acme Mobile"] != "Acme Mobull" {
+		t.Errorf("replace = %v, want the configured substitution", session["replace"])
+	}
+
+	turn, ok := session["turn_detection"].(map[string]any)
+	if !ok {
+		t.Fatalf("turn_detection = %v, want an object", session["turn_detection"])
+	}
+	for field, want := range map[string]any{
+		"threshold":           0.85,
+		"silence_duration_ms": 700,
+		"prefix_padding_ms":   300,
+		"idle_timeout_ms":     5000,
+	} {
+		if turn[field] != want {
+			t.Errorf("turn_detection.%s = %v, want %v", field, turn[field], want)
+		}
+	}
+
+	audio, _ := session["audio"].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	transcription, ok := input["transcription"].(map[string]any)
+	if !ok {
+		t.Fatalf("audio.input.transcription = %v, want an object", input["transcription"])
+	}
+	if transcription["model"] != "grok-transcribe" {
+		t.Errorf("transcription.model = %v, want the configured model", transcription["model"])
+	}
+	if transcription["language_hint"] != "en" {
+		t.Errorf("transcription.language_hint = %v, want the configured hint", transcription["language_hint"])
+	}
+	// The transcript is configured on the input alone: the model speaks the
+	// output, so there is nothing there to transcribe.
+	output, _ := audio["output"].(map[string]any)
+	if _, ok := output["transcription"]; ok {
+		t.Error("the output audio carries a transcription configuration")
+	}
+}
+
+// TestDefaultModelAndVoice checks the defaults are the ones xAI documents as its
+// own: an alias that tracks their current voice model, and their default voice.
+func TestDefaultModelAndVoice(t *testing.T) {
+	s := New(Config{APIKey: "k"})
+	if s.cfg.Model != "grok-voice-latest" {
+		t.Errorf("default model = %q, want grok-voice-latest", s.cfg.Model)
+	}
+	if got := s.sessionUpdate().Session["voice"]; got != "eve" {
+		t.Errorf("default voice = %v, want eve", got)
+	}
+}
+
+// TestCustomVoiceIsAccepted checks a voice is a plain id, so a custom one from
+// xAI's Custom Voices API travels as readily as a built-in name.
+func TestCustomVoiceIsAccepted(t *testing.T) {
+	s := New(Config{APIKey: "k", Voice: "my-custom-voice-1"})
+	if got := s.sessionUpdate().Session["voice"]; got != "my-custom-voice-1" {
+		t.Errorf("voice = %v, want the custom id", got)
+	}
+}

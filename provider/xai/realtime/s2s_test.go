@@ -100,26 +100,57 @@ func (f *fakeRealtime) awaitMessage(t *testing.T, want string) map[string]any {
 	return nil
 }
 
-// run starts the service in a pipeline, collecting the frames it pushes
-// downstream.
+// runService starts a built service in a pipeline, for a test that needs the
+// service itself rather than only the frames it produces.
+func runService(t *testing.T, svc *realtime.Service) (*pipeline.Worker, chan error) {
+	t.Helper()
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		Params: pipeline.Params{AudioInSampleRate: 24000, AudioOutSampleRate: 24000},
+	})
+	done := make(chan error, 1)
+	go func() { done <- task.Run(context.Background()) }()
+	return task, done
+}
+
+// run starts the service in a pipeline, collecting the frames it pushes in
+// either direction. A transcript of what the user said travels upstream, where
+// the user aggregator sits, so both ends are watched.
 func run(t *testing.T, cfg realtime.Config) (*pipeline.Worker, chan error, func() []frames.Frame) {
+	t.Helper()
+	return runCollecting(t, cfg, true)
+}
+
+// runCollecting starts the service in a pipeline, collecting what reaches the
+// end of it and, when upstream is set, what reaches the start. A broadcast
+// builds one frame per direction, so a test counting frames watches one end.
+func runCollecting(t *testing.T, cfg realtime.Config, upstream bool) (
+	*pipeline.Worker, chan error, func() []frames.Frame,
+) {
 	t.Helper()
 	svc := realtime.New(cfg)
 
 	var mu sync.Mutex
 	var got []frames.Frame
-	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+	wcfg := pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params: pipeline.Params{
 			AudioInSampleRate:  24000,
 			AudioOutSampleRate: 24000,
 		},
-	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	}
+	if upstream {
+		wcfg.ReachedUpstreamFilter = pipeline.AnyFrame
+	}
+	task := pipeline.NewWorker(pipeline.New(svc), wcfg)
+	record := func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
-	})
+	}
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, record)
+	if upstream {
+		events.On(&task.Registry, pipeline.EventFrameReachedUpstream, record)
+	}
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 
@@ -195,9 +226,12 @@ func TestStreamsEvents(t *testing.T) {
 	audio := []byte{1, 2, 3, 4, 5, 6}
 	srv := newFakeRealtime(t, []string{
 		`{"type":"conversation.created"}`,
+		`{"type":"session.updated"}`,
 		`{"type":"response.created"}`,
-		`{"type":"response.output_audio.delta","delta":"` + base64.StdEncoding.EncodeToString(audio) + `"}`,
+		`{"type":"response.output_audio.delta","item_id":"item-1","content_index":0,"delta":"` +
+			base64.StdEncoding.EncodeToString(audio) + `"}`,
 		`{"type":"response.output_audio_transcript.delta","delta":"hello"}`,
+		`{"type":"conversation.item.input_audio_transcription.updated","transcript":"hi"}`,
 		`{"type":"input_audio_buffer.speech_started"}`,
 		`{"type":"input_audio_buffer.speech_stopped"}`,
 		`{"type":"conversation.item.input_audio_transcription.completed","transcript":"hi there"}`,
@@ -206,7 +240,10 @@ func TestStreamsEvents(t *testing.T) {
 
 	task, done, collected := run(t, realtime.Config{APIKey: "k", BaseURL: srv.wsURL()})
 
-	// Exercise the input path; the fake server records it.
+	// Exercise the input path once the session has been acknowledged: audio sent
+	// before that is dropped, since the rate it would be read at is not settled.
+	srv.awaitMessage(t, "session.update")
+	waitFor(t, func() bool { return hasFrame[*frames.BotStartedSpeakingFrame](collected()) })
 	task.QueueFrame(frames.NewInputAudioRawFrame([]byte{7, 7}, 24000, 1))
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -215,12 +252,13 @@ func TestStreamsEvents(t *testing.T) {
 	}
 
 	var (
-		gotAudio                []byte
-		botText, userTranscript string
-		interrupted, userStart  bool
-		userStop, botStart      bool
-		botStop                 bool
-		audioRate               int
+		gotAudio                   []byte
+		botText, userTranscript    string
+		interimTranscript          string
+		proposedStart, botStart    bool
+		proposedStop, botStop      bool
+		announcedTurn, interrupted bool
+		audioRate                  int
 	)
 	for _, f := range collected() {
 		switch fr := f.(type) {
@@ -229,14 +267,18 @@ func TestStreamsEvents(t *testing.T) {
 			audioRate = fr.SampleRate
 		case *frames.LLMTextFrame:
 			botText = fr.Text
+		case *frames.InterimTranscriptionFrame:
+			interimTranscript = fr.Text
 		case *frames.TranscriptionFrame:
 			userTranscript = fr.Text
 		case *frames.InterruptionFrame:
 			interrupted = true
-		case *frames.UserStartedSpeakingFrame:
-			userStart = true
-		case *frames.UserStoppedSpeakingFrame:
-			userStop = true
+		case *frames.ProposedUserStartedSpeakingFrame:
+			proposedStart = true
+		case *frames.ProposedUserStoppedSpeakingFrame:
+			proposedStop = true
+		case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame:
+			announcedTurn = true
 		case *frames.BotStartedSpeakingFrame:
 			botStart = true
 		case *frames.BotStoppedSpeakingFrame:
@@ -256,11 +298,22 @@ func TestStreamsEvents(t *testing.T) {
 	if userTranscript != "hi there" {
 		t.Errorf("user transcript = %q, want %q", userTranscript, "hi there")
 	}
-	if !interrupted || !userStart {
-		t.Error("speech_started did not produce barge-in (interruption + user-started)")
+	if interimTranscript != "hi" {
+		t.Errorf("interim user transcript = %q, want %q", interimTranscript, "hi")
 	}
-	if !userStop {
-		t.Error("speech_stopped did not produce user-stopped-speaking")
+	if !proposedStart {
+		t.Error("speech_started did not propose the start of the user's turn")
+	}
+	if !proposedStop {
+		t.Error("speech_stopped did not propose the end of the user's turn")
+	}
+	// The strategies the service recommends decide the turn and the barge-in;
+	// the session only proposes where the boundary falls.
+	if announcedTurn {
+		t.Error("the service announced a user turn itself, rather than proposing one")
+	}
+	if interrupted {
+		t.Error("the service broadcast an interruption itself, rather than proposing a turn")
 	}
 	if !botStart || !botStop {
 		t.Error("response lifecycle did not produce bot started/stopped speaking")
@@ -348,6 +401,29 @@ func sessionAdvertises(msgs []map[string]any, want string) bool {
 			if spec, ok := tool.(map[string]any); ok && spec["name"] == want {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// waitFor blocks until cond holds or the test times out.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the condition never held")
+}
+
+// hasFrame reports whether the collected frames hold one of type T.
+func hasFrame[T frames.Frame](fs []frames.Frame) bool {
+	for _, f := range fs {
+		if _, ok := f.(T); ok {
+			return true
 		}
 	}
 	return false
