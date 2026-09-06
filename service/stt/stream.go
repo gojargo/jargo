@@ -309,7 +309,6 @@ type StreamService struct {
 	model   string
 	ws      *wsservice.Base
 	ttfb    *ttfbTracker
-	work    *processingMeter
 	tracer  *segmentTracer
 
 	sampleRate int
@@ -418,7 +417,6 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s.set = &providerSettings{provider: conn, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
 	s.ws = wsservice.New(s, wsservice.Config{})
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
-	s.work = newProcessingMeter(s.Base.Base, s.modelName)
 	s.tracer = newSegmentTracer(s.Base.Base, func() tracing.STTAttributes {
 		return tracing.STTAttributes{
 			Service:  s.TypeName(),
@@ -523,9 +521,6 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		s.speechStarted()
 		s.ttfb.speechStarted()
 		s.tracer.speechStarted(fr.SpeechStart())
-		// The service is at work on this utterance from here until it produces
-		// the transcript for it.
-		s.work.begin()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.VADUserStoppedSpeakingFrame:
 		s.ttfb.speechEnded(ctx, fr)
@@ -578,9 +573,6 @@ func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir proce
 	err := s.Base.PushFrame(ctx, f, dir)
 	if isTranscript {
 		s.tracer.record(tf)
-		// Reported after the transcript rather than before it: the work the
-		// measurement covers is not done until the transcript is out.
-		s.work.report(ctx)
 	}
 	return err
 }
@@ -803,7 +795,6 @@ func (s *StreamService) reportConnectionError(
 	// not coming on this connection, and holding the measurement open would
 	// carry it into the utterance after the one it belongs to.
 	s.ttfb.reportNow(ctx)
-	s.work.report(ctx)
 	s.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
 }
 

@@ -150,11 +150,12 @@ func (w *processingWatcher) observe(f frames.Frame) {
 	}
 }
 
-// The work a service did on an utterance is reported alongside the wait it cost.
-// The two answer different questions: a streaming service is at work for the
-// length of the utterance, where the wait it leaves behind is only what follows
-// the speech.
-func TestStreamServiceReportsTheWorkItDid(t *testing.T) {
+// A streaming service reports no processing time. It is fed audio continuously
+// and performs no discrete piece of work to measure, so the only number it could
+// report is the length of the utterance, which says nothing about the service
+// and is the wait it already reports as its time to first byte under another
+// name.
+func TestStreamServiceReportsNoProcessingTime(t *testing.T) {
 	stream := &answeringStream{told: make(chan struct{}, 1)}
 	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
 	w := newProcessingWatcher()
@@ -176,19 +177,16 @@ func TestStreamServiceReportsTheWorkItDid(t *testing.T) {
 	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	select {
 	case <-w.got:
-	case <-time.After(3 * time.Second):
-		t.Fatal("no processing time was reported for the utterance")
+		t.Fatal("a streaming service reported a processing time")
+	case <-time.After(500 * time.Millisecond):
 	}
 	task.StopWhenDone()
 	<-runDone
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.seen) != 1 {
-		t.Fatalf("reported %d measurements, want 1: %v", len(w.seen), w.seen)
-	}
-	if w.seen[0] <= 0 {
-		t.Fatalf("processing time = %v, want the stretch the service was at work", w.seen[0])
+	if len(w.seen) != 0 {
+		t.Fatalf("reported %d measurements, want none: %v", len(w.seen), w.seen)
 	}
 }
 
