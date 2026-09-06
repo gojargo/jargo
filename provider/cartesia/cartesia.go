@@ -47,6 +47,9 @@ type Config struct {
 	URL string
 	// Version sets the Cartesia-Version header; empty uses a pinned default.
 	Version string
+	// Headers are sent on the WebSocket handshake, on top of the ones the
+	// service sets, for a deployment that authorizes or routes its own way.
+	Headers map[string]string
 	// Model is the Cartesia model id; empty uses a default.
 	Model string
 	// VoiceID is the voice to speak in. Required: Cartesia has no default, and

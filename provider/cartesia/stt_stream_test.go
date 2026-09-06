@@ -297,3 +297,30 @@ func TestSTTKeepalive(t *testing.T) {
 			opts.Timeout)
 	}
 }
+
+// TestSTTExtraHeadersReachTheHandshake checks a deployment can put its own
+// headers on the connection, which is how a proxy in front of Cartesia
+// authorizes or routes the session. They are applied last, so one of them can
+// also replace what the service sets.
+func TestSTTExtraHeadersReachTheHandshake(t *testing.T) {
+	endpoint, got := sttServer(t, nil)
+	cfg := sttConfigFor(endpoint)
+	cfg.Headers = map[string]string{
+		"X-Tenant":  "acme",
+		"X-API-Key": "proxy-key",
+	}
+	c := newSTTConnector(cfg)
+
+	stream, err := c.Connect(t.Context(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	if h := got.header.Get("X-Tenant"); h != "acme" {
+		t.Errorf("X-Tenant = %q, want the configured header", h)
+	}
+	if h := got.header.Get("X-API-Key"); h != "proxy-key" {
+		t.Errorf("X-API-Key = %q, want the configured header to win", h)
+	}
+}

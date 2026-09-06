@@ -196,6 +196,11 @@ func (s *synthesizer) connect(ctx context.Context) error {
 	header := http.Header{}
 	header.Set("X-API-Key", s.cfg.APIKey)
 	header.Set("Cartesia-Version", s.cfg.Version)
+	// Applied last, so a deployment can route or authorize the handshake its own
+	// way, overriding what the service sets.
+	for k, v := range s.cfg.Headers {
+		header.Set(k, v)
+	}
 	conn, err := wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
 	if err != nil {
 		return err

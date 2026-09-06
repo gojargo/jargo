@@ -57,6 +57,9 @@ type STTConfig struct {
 	URL string
 	// Version sets the Cartesia-Version header; empty uses a pinned default.
 	Version string
+	// Headers are sent on the WebSocket handshake, on top of the ones the
+	// service sets, for a deployment that authorizes or routes its own way.
+	Headers map[string]string
 	// Model is the transcription model; empty uses a default.
 	Model string
 	// Encoding is the audio encoding; empty uses "pcm_s16le".
@@ -176,6 +179,11 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 	header := http.Header{}
 	header.Set("X-API-Key", c.cfg.APIKey)
 	header.Set("Cartesia-Version", c.cfg.Version)
+	// Applied last, so a deployment can route or authorize the handshake its own
+	// way, overriding what the service sets.
+	for k, v := range c.cfg.Headers {
+		header.Set(k, v)
+	}
 
 	conn, err := wsutil.Dial(ctx, c.endpoint(sampleRate), header, wsutil.DefaultReadLimit)
 	if err != nil {
