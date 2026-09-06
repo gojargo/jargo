@@ -91,14 +91,29 @@ func gatedService(t *testing.T) (*Base, *capture, *capture) {
 	if err := up.QueueFrame(t.Context(), frames.NewStartFrame(), processor.Downstream); err != nil {
 		t.Fatalf("StartFrame: %v", err)
 	}
-	if len(down.frames()) == 0 {
-		t.Fatal("the StartFrame never reached the end of the chain")
-	}
+	// A queued frame is delivered by the processor's own loop, so it is waited
+	// for rather than assumed to have arrived by the time the queue call
+	// returns.
+	waitUntil(t, "the StartFrame never reached the end of the chain",
+		func() bool { return len(down.frames()) > 0 })
 	down.reset()
 	up.reset()
 
 	svc.SetFilterIncompleteUserTurns(true)
 	return svc, up, down
+}
+
+// waitUntil blocks until cond holds, failing with msg if it never does.
+func waitUntil(t *testing.T, msg string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal(msg)
 }
 
 // generatorFunc adapts a function to Generator.
