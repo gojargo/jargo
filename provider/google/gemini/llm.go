@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/gojargo/jargo/adapter"
 	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
@@ -74,6 +78,7 @@ func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *Service {
 	s := &Service{cfg: cfg, http: &http.Client{}, shaper: shaper}
 	s.Base = llm.New(name, s)
 	s.Base.SetModel(cfg.Model)
+	s.warnIfThinkingBudgetIgnored()
 	return s
 }
 
@@ -92,6 +97,9 @@ type genChunk struct {
 		Content struct {
 			Parts []genPart `json:"parts"`
 		} `json:"content"`
+		// FinishReason says why the model stopped. Anything but a normal stop
+		// leaves the turn short of what it would otherwise have said.
+		FinishReason string `json:"finishReason"` //nolint:tagliatelle // Gemini REST uses camelCase keys
 	} `json:"candidates"`
 }
 
@@ -163,8 +171,100 @@ func (s *Service) genConfig() map[string]any {
 	if s.cfg.TopK != nil {
 		g["topK"] = *s.cfg.TopK
 	}
+	if s.cfg.Seed != nil {
+		g["seed"] = *s.cfg.Seed
+	}
+	if t := thinkingParams(s.cfg.Thinking); t != nil {
+		g[keyThinkingConfig] = t
+	}
 	maps.Copy(g, s.cfg.Extra)
+	// Applied last, so a thinking configuration set explicitly, or through
+	// Extra, wins over the low-latency default.
+	s.applyThinkingDefault(g)
 	return g
+}
+
+// thinkingParams renders a thinking configuration, or nil when there is none to
+// send.
+func thinkingParams(t *ThinkingConfig) map[string]any {
+	if t == nil {
+		return nil
+	}
+	params := map[string]any{}
+	if t.Level != "" {
+		params["thinkingLevel"] = t.Level
+	}
+	if t.Budget != nil {
+		params["thinkingBudget"] = *t.Budget
+	}
+	if t.IncludeThoughts {
+		params["includeThoughts"] = true
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+// applyThinkingDefault turns thinking off on the flash models, unless the
+// configuration says otherwise.
+//
+// A flash model is the one a voice pipeline reaches for, and thinking costs it
+// the latency it was chosen for: the model emits nothing at all while it
+// thinks. The control differs by generation, so the default does too: the 2.5
+// series takes a budget of zero, and the 3 series takes the lowest thinking
+// level the model accepts. An image model is left alone, having no such control.
+func (s *Service) applyThinkingDefault(g map[string]any) {
+	model := s.cfg.Model
+	if _, set := g[keyThinkingConfig]; set || strings.Contains(model, "image") {
+		return
+	}
+	switch {
+	case strings.HasPrefix(model, "gemini-2.5-flash"):
+		g[keyThinkingConfig] = map[string]any{"thinkingBudget": 0}
+	case strings.HasPrefix(model, "gemini-3") && strings.Contains(model, "flash"):
+		g[keyThinkingConfig] = map[string]any{"thinkingLevel": lowestThinkingLevel(model)}
+	}
+}
+
+// lowestThinkingLevel is the least a model will think. A model not named here
+// accepts "minimal", the fastest setting.
+func lowestThinkingLevel(model string) string {
+	for prefix, lowest := range lowestThinkingLevels {
+		if strings.HasPrefix(model, prefix) {
+			return lowest
+		}
+	}
+	return "minimal"
+}
+
+// warnIfThinkingBudgetIgnored reports a budget set on a model that reads a level
+// instead. Whether such a model honors the budget, ignores it, or refuses the
+// request varies by model and by backend, and a refusal names no field, so this
+// warning is the only signal there is.
+func (s *Service) warnIfThinkingBudgetIgnored() {
+	if s.cfg.Thinking == nil || s.cfg.Thinking.Budget == nil {
+		return
+	}
+	if !strings.HasPrefix(s.cfg.Model, "gemini-3") {
+		return
+	}
+	slog.Warn("a thinking budget was set on a model that reads a thinking level",
+		"service", s.Name(), "model", s.cfg.Model)
+}
+
+// handleFinishReason logs why the model stopped, when it stopped for a notable
+// reason: the answer was withheld for safety or recitation, a tool call was
+// refused, or the output ran into the token limit. Whatever text did arrive is
+// still passed on, so without this the turn simply ends short with nothing said
+// about why.
+func (s *Service) handleFinishReason(reason string) {
+	switch reason {
+	case "", "STOP", "FINISH_REASON_UNSPECIFIED":
+		return
+	}
+	slog.Warn("the model stopped before it had finished answering",
+		"service", s.Name(), "model", s.cfg.Model, "reason", reason)
 }
 
 // requestBody builds the generateContent body, optionally advertising tools.
@@ -220,35 +320,149 @@ func (s *Service) newRequestTo(
 }
 
 func (s *Service) stream(req *http.Request, emit llm.Emit) error {
-	s.StartTTFBMetrics()
-	resp, err := s.http.Do(req)
+	return s.streamChunks(req, func(chunk genChunk) error {
+		for _, c := range chunk.Candidates {
+			for _, p := range c.Content.Parts {
+				if err := emit(p.Text); err != nil {
+					return err
+				}
+			}
+			s.handleFinishReason(c.FinishReason)
+		}
+		return nil
+	})
+}
+
+// streamChunks issues req and hands each chunk of the streamed answer to onChunk,
+// bounding how long the model may go quiet for.
+//
+// A request the API accepts and then never answers is the case this exists for:
+// nothing closes such a stream, so without a bound the turn stays open and the
+// caller waits on a bot that will never speak. With RetryOnTimeout set, a first
+// chunk that does not arrive in time re-issues the request once instead, which
+// is safe only up to that point: a chunk that has been handed on is already
+// downstream, so re-issuing after one would say everything twice.
+func (s *Service) streamChunks(req *http.Request, onChunk func(genChunk) error) error {
+	if s.cfg.RetryOnTimeout {
+		retried, err := s.streamAttempt(req, s.cfg.retryTimeout(), onChunk)
+		if err == nil || !retried {
+			return err
+		}
+		slog.DebugContext(req.Context(), "re-issuing a generation that never began",
+			"service", s.Name(), "model", s.cfg.Model)
+	}
+	_, err := s.streamAttempt(req, s.cfg.streamIdleTimeout(), onChunk)
+	return err
+}
+
+// streamAttempt runs one attempt, reporting whether it timed out before the
+// model had said anything, which is the only point a request can be re-issued
+// from. Every chunk after the first is bounded by the idle timeout.
+func (s *Service) streamAttempt(
+	req *http.Request, firstChunk time.Duration, onChunk func(genChunk) error,
+) (retriable bool, err error) {
+	// The request is rebuilt per attempt: its body has been read by the time an
+	// attempt ends, and a re-issue needs one to send.
+	attempt, err := cloneRequest(req)
 	if err != nil {
-		return llm.AsCompletionTimeout(req.Context(), err)
+		return false, err
+	}
+
+	// The watchdog cancels the request when the model goes quiet for too long,
+	// which is what unblocks the read. The flag tells that cancellation apart
+	// from the pipeline canceling the turn.
+	ctx, cancel := context.WithCancel(attempt.Context())
+	defer cancel()
+	var timedOut atomic.Bool
+	idle := s.cfg.streamIdleTimeout()
+	var watchdog *time.Timer
+	arm := func(d time.Duration) {
+		if d <= 0 {
+			return
+		}
+		if watchdog == nil {
+			watchdog = time.AfterFunc(d, func() { timedOut.Store(true); cancel() })
+			return
+		}
+		watchdog.Reset(d)
+	}
+	defer func() {
+		if watchdog != nil {
+			watchdog.Stop()
+		}
+	}()
+
+	s.StartTTFBMetrics()
+	arm(firstChunk)
+	resp, err := s.http.Do(attempt.WithContext(ctx))
+	if err != nil {
+		return timedOut.Load(), s.streamError(attempt.Context(), &timedOut, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return false, errs.NewHTTPStatusError(resp.StatusCode,
+			fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
-	return llm.ScanSSE(resp.Body, func(data string) error {
-		var chunk genChunk
-		if json.Unmarshal([]byte(data), &chunk) == nil {
-			if len(chunk.Candidates) == 0 {
-				return nil
-			}
-			// A leading chunk can carry usage metadata and no candidates, so
-			// TTFB ends at the first chunk that holds model output.
-			s.StopTTFBMetrics()
-			for _, c := range chunk.Candidates {
-				for _, p := range c.Content.Parts {
-					if err := emit(p.Text); err != nil {
-						return err
-					}
-				}
-			}
+
+	// began records that the model has said something, which is the point past
+	// which the request can no longer be re-issued.
+	var began bool
+	err = llm.ScanSSE(resp.Body, func(data string) error {
+		// Any chunk at all is the model still producing, so the bound is on the
+		// gap between chunks rather than on the response as a whole.
+		arm(idle)
+		began = true
+		chunk, ok := parseChunk(data)
+		if !ok || len(chunk.Candidates) == 0 {
+			return nil
 		}
-		return nil // Skip malformed chunks.
+		// A leading chunk can carry usage metadata and no candidates, so TTFB
+		// ends at the first chunk that holds model output.
+		s.StopTTFBMetrics()
+		return onChunk(chunk)
 	})
+	if err != nil {
+		return timedOut.Load() && !began, s.streamError(attempt.Context(), &timedOut, err)
+	}
+	return false, nil
+}
+
+// parseChunk reads one streamed chunk, reporting whether it could be read at
+// all. One that could not is skipped rather than fatal: the rest of the answer
+// is still worth having.
+func parseChunk(data string) (genChunk, bool) {
+	var chunk genChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return genChunk{}, false
+	}
+	return chunk, true
+}
+
+// streamError names the failure that ended a stream. A read the watchdog cut
+// short is reported as a completion timeout, which is what tells the base to
+// report it as one and notify anything watching for it.
+func (s *Service) streamError(ctx context.Context, timedOut *atomic.Bool, err error) error {
+	if timedOut.Load() {
+		return fmt.Errorf("%w: the model stopped producing for %s",
+			llm.ErrCompletionTimeout, s.cfg.streamIdleTimeout())
+	}
+	return llm.AsCompletionTimeout(ctx, err)
+}
+
+// cloneRequest copies a request along with its body, so an attempt that consumed
+// one can be made again.
+func cloneRequest(req *http.Request) (*http.Request, error) {
+	if req.GetBody == nil {
+		return req, nil
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, err
+	}
+	clone := req.Clone(req.Context())
+	clone.Body = body
+	return clone, nil
 }
 
 // GenerateWithTools streams a tool-capable completion. It emits text deltas to
@@ -307,29 +521,15 @@ func (t *geminiToolStream) consume(chunk genChunk) error {
 
 // streamTools streams a tool-capable completion, forwarding text and tool calls.
 func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
-	s.StartTTFBMetrics()
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return llm.AsCompletionTimeout(req.Context(), err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
-	}
 	ts := &geminiToolStream{sink: sink}
-	return llm.ScanSSE(resp.Body, func(data string) error {
-		var chunk genChunk
-		if json.Unmarshal([]byte(data), &chunk) == nil {
-			if len(chunk.Candidates) == 0 {
-				return nil
-			}
-			// A leading chunk can carry usage metadata and no candidates, so
-			// TTFB ends at the first chunk that holds model output.
-			s.StopTTFBMetrics()
-			return ts.consume(chunk)
+	return s.streamChunks(req, func(chunk genChunk) error {
+		if err := ts.consume(chunk); err != nil {
+			return err
 		}
-		return nil // Skip malformed chunks.
+		for _, c := range chunk.Candidates {
+			s.handleFinishReason(c.FinishReason)
+		}
+		return nil
 	})
 }
 

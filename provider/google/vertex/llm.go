@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gojargo/jargo/provider/google/gemini"
 )
@@ -32,6 +33,20 @@ type LLMConfig struct {
 	// SafetySettings are the content-safety filters, one per harm category.
 	// Empty sends none, leaving every category at the API's default.
 	SafetySettings []gemini.SafetySetting `validate:"omitempty,dive"`
+	// Thinking controls the model's internal reasoning; nil applies the
+	// low-latency default for the model. See gemini.Config.
+	Thinking *gemini.ThinkingConfig `validate:"omitempty"`
+	// Seed makes sampling repeatable; nil omits it.
+	Seed *int
+	// StreamIdleTimeout bounds the gap between two chunks of a streamed
+	// response; nil uses 20 seconds and a zero value waits indefinitely.
+	StreamIdleTimeout *time.Duration
+	// RetryOnTimeout re-issues a request once when its first chunk does not
+	// arrive within RetryTimeout.
+	RetryOnTimeout bool
+	// RetryTimeout is how long the first chunk is waited for before the request
+	// is re-issued; 0 uses 5 seconds.
+	RetryTimeout time.Duration `validate:"omitempty,min=0"`
 	// Extra sets arbitrary additional generationConfig fields not modeled above,
 	// applied to every request.
 	Extra map[string]any
@@ -51,13 +66,18 @@ func NewLLM(cfg LLMConfig) *gemini.Service {
 		location:  location(cfg.Location),
 	}
 	return gemini.NewShapedLLM("GoogleVertexLLM", shaper, gemini.Config{
-		Model:          cfg.Model,
-		MaxTokens:      cfg.MaxTokens,
-		Temperature:    cfg.Temperature,
-		TopP:           cfg.TopP,
-		TopK:           cfg.TopK,
-		SafetySettings: cfg.SafetySettings,
-		Extra:          cfg.Extra,
+		Model:             cfg.Model,
+		MaxTokens:         cfg.MaxTokens,
+		Temperature:       cfg.Temperature,
+		TopP:              cfg.TopP,
+		TopK:              cfg.TopK,
+		SafetySettings:    cfg.SafetySettings,
+		Thinking:          cfg.Thinking,
+		Seed:              cfg.Seed,
+		StreamIdleTimeout: cfg.StreamIdleTimeout,
+		RetryOnTimeout:    cfg.RetryOnTimeout,
+		RetryTimeout:      cfg.RetryTimeout,
+		Extra:             cfg.Extra,
 	})
 }
 

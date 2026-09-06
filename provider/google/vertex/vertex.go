@@ -36,9 +36,9 @@ const Scope = "https://www.googleapis.com/auth/cloud-platform"
 
 const (
 	// defaultLocation is the region used when none is configured.
-	defaultLocation = "us-east4"
+	defaultLocation = "global"
 	// defaultLLMModel is the cascaded model used when none is configured.
-	defaultLLMModel = "gemini-2.5-flash"
+	defaultLLMModel = "gemini-3.6-flash"
 	// defaultLiveModel is the Live model used when none is configured.
 	defaultLiveModel = "gemini-live-2.5-flash-native-audio"
 )
