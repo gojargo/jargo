@@ -27,7 +27,7 @@ import (
 
 const (
 	defaultBaseURL            = "wss://api.openai.com/v1/realtime"
-	defaultModel              = "gpt-realtime"
+	defaultModel              = "gpt-realtime-2.1"
 	defaultVoice              = "alloy"
 	defaultTranscriptionModel = "whisper-1"
 	// sampleRate is the fixed rate of the Realtime API's pcm16 audio format.

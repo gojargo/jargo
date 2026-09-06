@@ -74,16 +74,21 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 	var got []frames.Frame
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
+		// A transcript of what the user said travels upstream, where the user
+		// aggregator sits, so both ends of the pipeline are watched.
+		ReachedUpstreamFilter: pipeline.AnyFrame,
 		Params: pipeline.Params{
 			AudioInSampleRate:  24000,
 			AudioOutSampleRate: 24000,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	record := func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
-	})
+	}
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, record)
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, record)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -124,11 +129,12 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 	defer mu.Unlock()
 
 	var (
-		gotAudio                []byte
-		botText, userTranscript string
-		interrupted, botStarted bool
-		botStopped, userStarted bool
-		userStopped             bool
+		gotAudio                  []byte
+		botText, userTranscript   string
+		interrupted, botStarted   bool
+		botStopped, announcedTurn bool
+		proposedStart             bool
+		proposedStop              bool
 	)
 	for _, f := range got {
 		switch fr := f.(type) {
@@ -143,10 +149,12 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 			userTranscript = fr.Text
 		case *frames.InterruptionFrame:
 			interrupted = true
-		case *frames.UserStartedSpeakingFrame:
-			userStarted = true
-		case *frames.UserStoppedSpeakingFrame:
-			userStopped = true
+		case *frames.ProposedUserStartedSpeakingFrame:
+			proposedStart = true
+		case *frames.ProposedUserStoppedSpeakingFrame:
+			proposedStop = true
+		case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame:
+			announcedTurn = true
 		case *frames.BotStartedSpeakingFrame:
 			botStarted = true
 		case *frames.BotStoppedSpeakingFrame:
@@ -163,15 +171,22 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 	if userTranscript != "hi there" {
 		t.Errorf("user transcript = %q, want %q", userTranscript, "hi there")
 	}
-	if !interrupted || !userStarted {
-		t.Error("speech_started did not produce barge-in (interruption + user-started)")
+	if !proposedStart {
+		t.Error("speech_started did not propose the start of the user's turn")
 	}
-	// The stop matters as much as the start. This service reports real speech
-	// boundaries, so the two go out as a pair; a start with no stop would leave
-	// everything keyed off these frames believing the user never finished.
-	if !userStopped {
-		t.Error("speech_stopped did not produce user-stopped-speaking: " +
-			"the user-started frame it pairs with would never be closed")
+	// The stop matters as much as the start. The strategies close the turn on
+	// this proposal; a start with no stop would leave everything keyed off the
+	// turn believing the user never finished.
+	if !proposedStop {
+		t.Error("speech_stopped did not propose the end of the user's turn")
+	}
+	// The strategies the service recommends decide the turn and the barge-in;
+	// the session only proposes where the boundary falls.
+	if announcedTurn {
+		t.Error("the service announced a user turn itself, rather than proposing one")
+	}
+	if interrupted {
+		t.Error("the service broadcast an interruption itself, rather than proposing a turn")
 	}
 	if !botStarted || !botStopped {
 		t.Error("response lifecycle did not produce bot started/stopped speaking")

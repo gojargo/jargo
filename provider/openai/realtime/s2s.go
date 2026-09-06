@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	realtimeadapter "github.com/gojargo/jargo/adapter/realtime"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -54,7 +56,23 @@ type Service struct {
 	// by mu.
 	sentResults map[string]bool
 
+	// audioResp is the assistant audio item currently being played, which an
+	// interruption truncates on the server so the conversation the model keeps
+	// holds what the caller actually heard. Nil when nothing is playing.
+	// Guarded by mu.
+	audioResp *audioResponse
+
 	connector Connector
+}
+
+// audioResponse tracks the assistant audio item the session is playing: which
+// item it is, when it started, and how much audio has arrived. An interruption
+// reads it to say how much of the item the caller heard.
+type audioResponse struct {
+	itemID       string
+	contentIndex int
+	started      time.Time
+	total        int
 }
 
 // Connector customizes how the session is addressed and authorized, so a
@@ -135,7 +153,18 @@ func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error 
 
 // ProcessFrame opens the session on StartFrame, forwards input audio up to the
 // model, and tears the session down when the pipeline ends.
+//
+//nolint:cyclop // one case per frame the session answers
 func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if audio, ok := f.(*frames.InputAudioRawFrame); ok && dir == processor.Downstream {
+		// The model consumes the audio, so it does not travel on. Only the
+		// processor bookkeeping runs: the LLM base would forward it.
+		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		s.sendAudio(audio.Audio)
+		return nil
+	}
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -144,13 +173,12 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.connect(ctx); err != nil {
 			s.PushError(ctx, "openai realtime connect failed", err, true)
 		}
-		return s.PushFrame(ctx, f, dir)
-	case *frames.InputAudioRawFrame:
-		if dir == processor.Downstream {
-			s.sendAudio(fr.Audio)
-			return nil // The model consumes the audio; it does not flow on.
-		}
-		return s.PushFrame(ctx, f, dir)
+		return nil
+	case *frames.InterruptionFrame:
+		// The session's own VAD cancels the response it heard the user speak
+		// over, so only its record of that response is put right here.
+		s.truncateAudioResponse(ctx)
+		return nil
 	case *frames.LLMContextFrame:
 		// The conversation the session is part of: the toolset it advertises, and
 		// the tool results it has gained since it was last reported.
@@ -166,15 +194,15 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		// service does not get one per turn.
 		s.syncTools(frames.ToolsSchema{Standard: fr.Tools}, s.currentToolChoice())
 		s.SyncToolHandlers(ctx, fr.Tools)
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	case *frames.LLMSetToolChoiceFrame:
 		s.syncTools(s.currentTools(), fr.ToolChoice)
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	default:
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	}
 }
 
@@ -476,6 +504,7 @@ func (s *Service) disconnect() {
 	s.mu.Lock()
 	conn, cancel := s.conn, s.cancel
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
+	s.audioResp = nil
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -494,6 +523,10 @@ type serverEvent struct {
 	Delta      string          `json:"delta"`
 	Transcript string          `json:"transcript"`
 	Response   *responseObject `json:"response"`
+	// ItemID and ContentIndex name the piece of the conversation an event is
+	// about, which an interruption needs to truncate the audio being played.
+	ItemID       string `json:"item_id"` //nolint:tagliatelle // OpenAI wire field
+	ContentIndex int    `json:"content_index"`
 	// CallID and Arguments carry a tool call the model finished naming. The
 	// arguments arrive as the JSON text the model wrote, not as a decoded
 	// object.
@@ -503,6 +536,7 @@ type serverEvent struct {
 	// announced as one of these before its arguments are finished.
 	Item  *conversationItem `json:"item"`
 	Error struct {
+		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
 }
@@ -600,42 +634,173 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 		if json.Unmarshal(data, &ev) != nil {
 			continue
 		}
-		s.handleEvent(connCtx, ev)
+		if stop := s.handleEvent(connCtx, ev); stop {
+			return
+		}
 	}
 }
 
-// handleEvent maps a server event onto downstream pipeline frames.
-func (s *Service) handleEvent(ctx context.Context, ev serverEvent) {
+// handleEvent maps a server event onto pipeline frames, reporting whether the
+// session has failed in a way that ends the read loop.
+func (s *Service) handleEvent(ctx context.Context, ev serverEvent) bool {
+	switch {
+	case s.handleTurnEvent(ctx, ev):
+		return false
+	case s.handleResponseEvent(ctx, ev):
+		return false
+	case s.handleTranscriptEvent(ctx, ev):
+		return false
+	case ev.Type == "conversation.item.added":
+		s.trackToolCall(ev.Item)
+	case ev.Type == "response.function_call_arguments.done":
+		s.runToolCall(ctx, ev)
+	case ev.Type == "error":
+		return s.handleServerError(ctx, ev)
+	}
+	return false
+}
+
+// handleTurnEvent takes the boundaries the session's own VAD reports, saying
+// whether it took the event.
+//
+// A boundary is proposed rather than announced: the external turn strategies the
+// service recommends decide the turn from it and broadcast the interruption,
+// which comes back here as the frame that truncates what the model believes it
+// said.
+func (s *Service) handleTurnEvent(ctx context.Context, ev serverEvent) bool {
 	switch ev.Type {
 	case "input_audio_buffer.speech_started":
-		// Server VAD detected user speech: barge in so buffered bot audio drops.
-		_ = s.PushFrame(ctx, frames.NewUserStartedSpeakingFrame(), processor.Downstream)
-		_ = s.PushFrame(ctx, frames.NewInterruptionFrame(), processor.Downstream)
+		// The model has stopped speaking as far as the caller is concerned, so
+		// its record of the turn is cut back to what was heard.
+		s.truncateAudioResponse(ctx)
+		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStartedSpeakingFrame() })
 	case "input_audio_buffer.speech_stopped":
-		_ = s.PushFrame(ctx, frames.NewUserStoppedSpeakingFrame(), processor.Downstream)
+		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStoppedSpeakingFrame() })
+	default:
+		return false
+	}
+	return true
+}
+
+// handleResponseEvent takes the events that make up the model's answer: its
+// audio, the transcript of that audio, the same answer in text from a session
+// answering in that modality, and the end of the response. It reports whether it
+// took the event.
+func (s *Service) handleResponseEvent(ctx context.Context, ev serverEvent) bool {
+	switch ev.Type {
 	case "response.created":
 		_ = s.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Downstream)
-	case "response.audio.delta":
+	case "response.audio.delta", "response.output_audio.delta":
 		if pcm, err := base64.StdEncoding.DecodeString(ev.Delta); err == nil && len(pcm) > 0 {
+			s.trackAudio(ev, len(pcm))
 			_ = s.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, sampleRate, 1), processor.Downstream)
 		}
-	case "response.audio_transcript.delta":
+	case "response.audio_transcript.delta", "response.output_audio_transcript.delta",
+		"response.text.delta", "response.output_text.delta":
 		if ev.Delta != "" {
 			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(ev.Delta), processor.Downstream)
 		}
 	case "response.done":
 		s.reportUsage(ctx, ev)
+		// The response is over, so there is no longer an item an interruption
+		// would cut back.
+		s.mu.Lock()
+		s.audioResp = nil
+		s.mu.Unlock()
 		_ = s.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Downstream)
+	default:
+		return false
+	}
+	return true
+}
+
+// handleTranscriptEvent takes what the session heard the user say, reporting
+// whether it took the event.
+//
+// A transcript travels upstream, where the user aggregator is: it is the user's
+// message, and everything downstream of this service is the reply to it.
+func (s *Service) handleTranscriptEvent(ctx context.Context, ev serverEvent) bool {
+	switch ev.Type {
+	case "conversation.item.input_audio_transcription.delta":
+		if ev.Delta != "" {
+			_ = s.PushFrame(ctx, frames.NewInterimTranscriptionFrame(ev.Delta, "", ""), processor.Upstream)
+		}
 	case "conversation.item.input_audio_transcription.completed":
 		if ev.Transcript != "" {
-			_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(ev.Transcript, "", ""), processor.Downstream)
+			_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(ev.Transcript, "", ""), processor.Upstream)
 		}
-	case "conversation.item.added":
-		s.trackToolCall(ev.Item)
-	case "response.function_call_arguments.done":
-		s.runToolCall(ctx, ev)
-	case "error":
-		s.PushError(ctx, "openai realtime error: "+ev.Error.Message, fmt.Errorf("%w: %s", errServer, ev.Error.Message), false)
+	default:
+		return false
+	}
+	return true
+}
+
+// handleServerError reports an error event, saying whether it ends the session.
+//
+// Canceling a response the session had already finished is a race the
+// interruption path runs into by design: it says the model had stopped, which is
+// what was wanted. So is asking for a response while one is running. Both are
+// logged and the session carries on; anything else is reported and ends the read
+// loop, since the session cannot be relied on afterwards.
+func (s *Service) handleServerError(ctx context.Context, ev serverEvent) bool {
+	switch ev.Error.Code {
+	case "response_cancel_not_active", "conversation_already_has_active_response":
+		slog.DebugContext(ctx, "the realtime session reported a benign error",
+			"service", s.Name(), "code", ev.Error.Code, "message", ev.Error.Message)
+		return false
+	}
+	s.PushError(ctx, "openai realtime error: "+ev.Error.Message,
+		fmt.Errorf("%w: %s", errServer, ev.Error.Message), false)
+	return true
+}
+
+// trackAudio records the assistant audio item being played, so an interruption
+// can say how much of it the caller heard. The first chunk opens the item and
+// starts its clock; the rest only add to its size.
+func (s *Service) trackAudio(ev serverEvent, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audioResp == nil {
+		s.audioResp = &audioResponse{
+			itemID:       ev.ItemID,
+			contentIndex: ev.ContentIndex,
+			started:      time.Now(),
+		}
+	}
+	s.audioResp.total += n
+}
+
+// truncateAudioResponse cuts the item being played back to what the caller
+// actually heard, so the conversation the model keeps matches it. Without this
+// the model believes it said a whole answer the user cut off after a word.
+//
+// The cut is the shorter of the time since playback started and the audio that
+// arrived, since either can be the smaller: a response can arrive faster than it
+// plays, and playback can outlast a response that stopped arriving.
+func (s *Service) truncateAudioResponse(ctx context.Context) {
+	s.mu.Lock()
+	resp := s.audioResp
+	s.audioResp = nil
+	s.mu.Unlock()
+	if resp == nil {
+		return
+	}
+	// 16-bit mono PCM, so two bytes to the sample.
+	audioMS := int64(resp.total) * 1000 / int64(2*sampleRate)
+	elapsedMS := time.Since(resp.started).Milliseconds()
+	endMS := max(0, min(elapsedMS, audioMS))
+	slog.DebugContext(ctx, "truncating the interrupted response", "service", s.Name(),
+		"item_id", resp.itemID, "audio_ms", audioMS, "elapsed_ms", elapsedMS, "end_ms", endMS)
+	if err := s.send(map[string]any{
+		keyType:         "conversation.item.truncate",
+		"item_id":       resp.itemID,
+		"content_index": resp.contentIndex,
+		"audio_end_ms":  endMS,
+	}); err != nil {
+		// Non-fatal: the session has moved on either way, and only the model's
+		// own record of the turn is left overstated.
+		slog.WarnContext(ctx, "truncating the interrupted response failed",
+			"service", s.Name(), "err", err)
 	}
 }
 
@@ -722,5 +887,9 @@ func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
 	f := frames.NewLLMServiceMetadataFrame(s.Name())
 	f.Realtime = true
+	// The session detects the turns and proposes each boundary; the strategies
+	// resolve a proposal into the turn frames and the interruption. Without them
+	// a proposal reaches nothing and no turn is ever opened or closed.
+	f.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
 	return f
 }
