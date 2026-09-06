@@ -141,12 +141,12 @@ func (s *Serializer) clear() (wsserver.Message, error) {
 	return wsserver.TextMessage(json.Marshal(clearOut{Event: "clear", StreamSID: sid}))
 }
 
-// The JSON field names below are Exotel's wire protocol (camelCase for the
-// outbound streamSid), so the snake_case house style does not apply.
+// The JSON field names below are Exotel's wire protocol, which spells the stream
+// identifier the same way in both directions.
 
 type mediaOut struct {
 	Event     string `json:"event"`
-	StreamSID string `json:"streamSid"` //nolint:tagliatelle // Exotel wire field
+	StreamSID string `json:"stream_sid"`
 	Media     struct {
 		Payload string `json:"payload"`
 	} `json:"media"`
@@ -154,7 +154,7 @@ type mediaOut struct {
 
 type clearOut struct {
 	Event     string `json:"event"`
-	StreamSID string `json:"streamSid"` //nolint:tagliatelle // Exotel wire field
+	StreamSID string `json:"stream_sid"`
 }
 
 type inbound struct {

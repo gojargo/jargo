@@ -224,3 +224,36 @@ func TestSerializeApplicationMessage(t *testing.T) {
 // serialized unwraps a serializer result to the bytes it produced. These tests
 // are about the wire format, not about how the message carrying it is framed.
 func serialized(m wsserver.Message, err error) ([]byte, error) { return m.Data, err }
+
+// TestOutboundNamesTheStreamAsExotelDoes pins the wire key of the stream
+// identifier on the messages the bot sends. Exotel spells it stream_sid in both
+// directions, and asserting through the Go struct would pass whatever the tag
+// said, so the raw JSON is what is read here.
+func TestOutboundNamesTheStreamAsExotelDoes(t *testing.T) {
+	s := ready(t, Config{}, wireRate)
+	if _, err := s.Deserialize([]byte(`{"event":"start","start":{"stream_sid":"stream-1"}}`)); err != nil {
+		t.Fatalf("deserialize start: %v", err)
+	}
+
+	audio, err := serialized(s.Serialize(frames.NewOutputAudioRawFrame(make([]byte, 320), wireRate, 1)))
+	if err != nil {
+		t.Fatalf("serialize audio: %v", err)
+	}
+	cleared, err := serialized(s.Serialize(frames.NewInterruptionFrame()))
+	if err != nil {
+		t.Fatalf("serialize interruption: %v", err)
+	}
+
+	for name, msg := range map[string][]byte{"media": audio, "clear": cleared} {
+		var raw map[string]any
+		if err := json.Unmarshal(msg, &raw); err != nil {
+			t.Fatalf("unmarshal %s: %v", name, err)
+		}
+		if raw["stream_sid"] != "stream-1" {
+			t.Errorf("%s stream_sid = %v, want the identifier the stream opened with", name, raw["stream_sid"])
+		}
+		if _, ok := raw["streamSid"]; ok {
+			t.Errorf("%s carries streamSid, which Exotel does not read", name)
+		}
+	}
+}
