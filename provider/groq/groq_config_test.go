@@ -33,5 +33,5 @@ func TestNewServices(t *testing.T) {
 // TestNewLLM checks the Groq OpenAI-compatible LLM shim wires the right
 // service name and default model into the shared client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "GroqLLM", "llama-3.3-70b-versatile", groq.NewLLM)
+	providertest.CompatLLM(t, "GroqLLM", "openai/gpt-oss-120b", groq.NewLLM)
 }

@@ -18,9 +18,9 @@ import (
 
 const (
 	defaultTTSURL   = "wss://tts-rt.soniox.com/tts-websocket"
-	defaultTTSModel = "tts-rt-v1"
+	defaultTTSModel = "tts-rt-v2"
 	// defaultVoice is one of Soniox's stock voices.
-	defaultVoice = "Adrian"
+	defaultVoice = "Bryce"
 	// defaultTTSSampleRate is the PCM rate requested from Soniox.
 	defaultTTSSampleRate = 24000
 	// ttsAudioFormat is raw 16-bit little-endian mono PCM, the format the

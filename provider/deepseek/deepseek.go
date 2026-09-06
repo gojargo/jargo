@@ -3,5 +3,5 @@ package deepseek
 
 const (
 	baseURL      = "https://api.deepseek.com/v1"
-	defaultModel = "deepseek-chat"
+	defaultModel = "deepseek-v4-flash"
 )

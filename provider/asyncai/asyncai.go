@@ -10,7 +10,7 @@ import (
 const (
 	defaultURL        = "wss://api.async.com/text_to_speech/websocket/ws"
 	defaultVersion    = "v1"
-	defaultModel      = "async_flash_v1.0"
+	defaultModel      = "async_flash_v1.5"
 	defaultLanguage   = "en"
 	defaultEncoding   = "pcm_s16le"
 	defaultContainer  = "raw"

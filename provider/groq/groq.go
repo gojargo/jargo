@@ -6,7 +6,7 @@ import "errors"
 
 const (
 	baseURL         = "https://api.groq.com/openai/v1"
-	defaultLLMModel = "llama-3.3-70b-versatile"
+	defaultLLMModel = "openai/gpt-oss-120b"
 	defaultSTTModel = "whisper-large-v3-turbo"
 )
 

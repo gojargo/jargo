@@ -12,7 +12,7 @@ import (
 
 const (
 	defaultBaseURL    = "https://api.minimax.io"
-	defaultModel      = "speech-02-turbo"
+	defaultModel      = "speech-2.8-turbo"
 	defaultVoice      = "Calm_Woman"
 	defaultSampleRate = 24000
 	// sseMaxLine bounds a single SSE line; a hex-encoded audio chunk can be large.
