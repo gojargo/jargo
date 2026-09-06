@@ -17,7 +17,7 @@
 
 # ---- collect the native runtime libraries from Debian + the ONNX release ----
 FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS libs
-ARG ORT_VERSION=1.26.0
+ARG ORT_VERSION=1.29.0
 ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

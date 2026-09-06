@@ -68,7 +68,12 @@ COVER_MERGE = awk '/^mode:/ { if (!m) { print; m = 1 } next } \
 # Native runtimes loaded at run time through purego. NATIVE_DIR is a prefix
 # inside the repo so nothing here needs root; docker/runtime.Dockerfile installs
 # the same two libraries into /usr/local for the container image.
-ORT_VERSION ?= 1.26.0
+#
+# The version has to satisfy the ORT_API_VERSION the cgo binding is built
+# against (yalue/onnxruntime_go, currently 29): an older runtime refuses the
+# API and every VAD and end-of-turn test skips itself rather than failing, so
+# the models go untested while the download still happens.
+ORT_VERSION ?= 1.29.0
 ORT_ARCH ?= $(if $(filter aarch64 arm64,$(shell uname -m)),aarch64,x64)
 NATIVE_DIR ?= $(CURDIR)/.native
 

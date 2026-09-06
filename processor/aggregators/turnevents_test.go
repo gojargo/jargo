@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -226,7 +227,14 @@ func TestAssistantStampsTheMessageItWrote(t *testing.T) {
 // everything they said, and that the write to the conversation is reported too.
 func TestUserReportsTheTurnItCollected(t *testing.T) {
 	convo := frames.NewLLMContext("system")
-	pair := aggregators.New(convo)
+	// A model-free stop chain, so what closes the turn is not left to whether
+	// the end-of-turn model loads: this covers a turn nothing closed, reported
+	// because the session ended, and the defaults would close it themselves.
+	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Stop: []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{})},
+		},
+	}))
 	log := &turnLog{}
 	events.On(pair.User().Events(), aggregators.EventUserTurnStopped,
 		func(_ context.Context, tr aggregators.UserTurnStopped) {
