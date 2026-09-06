@@ -89,7 +89,8 @@ func TestSTTConfigValidate(t *testing.T) {
 	providertest.Configs(t, []providertest.ConfigCase{
 		{Name: "missing API key", Cfg: STTConfig{}, Valid: false},
 		{Name: "API key only", Cfg: STTConfig{APIKey: "k"}, Valid: true},
-		{Name: "known model", Cfg: STTConfig{APIKey: "k", Model: "saarika:v2.5"}, Valid: true},
+		{Name: "known model", Cfg: STTConfig{APIKey: "k", Model: "saaras:v3"}, Valid: true},
+		{Name: "sunset model", Cfg: STTConfig{APIKey: "k", Model: "saaras:v2.5"}, Valid: false},
 		{Name: "unknown model", Cfg: STTConfig{APIKey: "k", Model: "saaras:v9"}, Valid: false},
 		{Name: "known mode", Cfg: STTConfig{APIKey: "k", Mode: "translit"}, Valid: true},
 		{Name: "unknown mode", Cfg: STTConfig{APIKey: "k", Mode: "shout"}, Valid: false},
@@ -102,20 +103,16 @@ func TestNewSTT(t *testing.T) {
 	providertest.Service(t, "SarvamSTT", NewSTT(STTConfig{APIKey: "k"}))
 	// A model outside the table falls back to the default's capabilities rather
 	// than to a zero one that would silently drop every parameter.
-	providertest.Service(t, "SarvamSTT", NewSTT(STTConfig{APIKey: "k", Model: "saarika:v2.5"}))
+	providertest.Service(t, "SarvamSTT", NewSTT(STTConfig{APIKey: "k", Model: "saaras:v9"}))
 }
 
-// TestSTTEndpointFollowsTheModel checks the translating model is dialed at the
-// translate endpoint and the transcribing ones at the transcribe endpoint. They
-// are different services, not a parameter.
-func TestSTTEndpointFollowsTheModel(t *testing.T) {
-	for model, want := range map[string]string{
-		"saaras:v2.5":  translateURL,
-		"saaras:v3":    transcribeURL,
-		"saarika:v2.5": transcribeURL,
-	} {
-		if got := connectorFor(STTConfig{APIKey: "k", Model: model}).endpoint(); got != want {
-			t.Errorf("model %q dials %q, want %q", model, got, want)
+// TestSTTEndpointIsTheTranscriptionOne checks every supported model is dialed at
+// the transcription endpoint. The translation endpoint served only the model
+// Sarvam has sunset; translation is now a mode of the transcribing models.
+func TestSTTEndpointIsTheTranscriptionOne(t *testing.T) {
+	for _, model := range []string{"saaras:v3", "saaras:v4"} {
+		if got := connectorFor(STTConfig{APIKey: "k", Model: model}).endpoint(); got != transcribeURL {
+			t.Errorf("model %q dials %q, want the transcription endpoint", model, got)
 		}
 	}
 }
@@ -175,49 +172,36 @@ func TestSTTQueryVADSignals(t *testing.T) {
 	}
 }
 
-// TestSTTQueryModelCapabilities checks a parameter is sent only to a model that
-// understands it. The fine-grained VAD controls, the mode and the prompt are
-// each supported by a different subset.
+// TestSTTQueryModelCapabilities checks the parameters both supported models
+// understand reach the connection: the fine-grained VAD controls, the mode and
+// the language.
 func TestSTTQueryModelCapabilities(t *testing.T) {
 	threshold := 0.6
 	frames := 3
 	cfg := STTConfig{
 		APIKey:                  "k",
-		Prompt:                  "a product demo",
 		PositiveSpeechThreshold: &threshold,
 		MinSpeechFrames:         &frames,
 	}
 
-	// saaras:v3 takes the VAD controls and a mode, but no prompt.
-	v3 := connectorFor(withModel(cfg, "saaras:v3")).query(16000)
-	if v3.Get("positive_speech_threshold") != "0.6" {
-		t.Errorf("positive_speech_threshold = %q, want 0.6", v3.Get("positive_speech_threshold"))
-	}
-	if v3.Get("min_speech_frames") != "3" {
-		t.Errorf("min_speech_frames = %q, want 3", v3.Get("min_speech_frames"))
-	}
-	if v3.Has("prompt") {
-		t.Errorf("prompt = %q, want it left off a model that does not take one", v3.Get("prompt"))
-	}
-
-	// saaras:v2.5 takes a prompt and neither the VAD controls nor a mode.
-	v25 := connectorFor(withModel(cfg, "saaras:v2.5")).query(16000)
-	if v25.Get("prompt") != "a product demo" {
-		t.Errorf("prompt = %q, want the configured prompt", v25.Get("prompt"))
-	}
-	for _, k := range []string{"positive_speech_threshold", "min_speech_frames", "mode", "language_code"} {
-		if v25.Has(k) {
-			t.Errorf("%s was sent to a model that does not take one: %q", k, v25.Get(k))
+	for _, model := range []string{"saaras:v3", "saaras:v4"} {
+		q := connectorFor(withModel(cfg, model)).query(16000)
+		if q.Get("positive_speech_threshold") != "0.6" {
+			t.Errorf("%s positive_speech_threshold = %q, want 0.6", model, q.Get("positive_speech_threshold"))
 		}
-	}
-
-	// saarika:v2.5 takes a language but no mode.
-	saarika := connectorFor(withModel(cfg, "saarika:v2.5")).query(16000)
-	if saarika.Get("language_code") != "unknown" {
-		t.Errorf("language_code = %q, want the model's own default", saarika.Get("language_code"))
-	}
-	if saarika.Has("mode") {
-		t.Errorf("mode = %q, want it left off a model without mode support", saarika.Get("mode"))
+		if q.Get("min_speech_frames") != "3" {
+			t.Errorf("%s min_speech_frames = %q, want 3", model, q.Get("min_speech_frames"))
+		}
+		if q.Get("language_code") != "unknown" {
+			t.Errorf("%s language_code = %q, want the model's own default", model, q.Get("language_code"))
+		}
+		if q.Get("mode") != "transcribe" {
+			t.Errorf("%s mode = %q, want the model's own default", model, q.Get("mode"))
+		}
+		// The prompt was only ever honored by the model Sarvam has sunset.
+		if q.Has("prompt") {
+			t.Errorf("%s sent a prompt: %q", model, q.Get("prompt"))
+		}
 	}
 }
 

@@ -29,8 +29,7 @@ var errSTTServer = errors.New("sarvam: stt server error")
 
 const (
 	transcribeURL   = "wss://api.sarvam.ai/speech-to-text/ws"
-	translateURL    = "wss://api.sarvam.ai/speech-to-text-translate/ws"
-	defaultSTTModel = "saaras:v3"
+	defaultSTTModel = "saaras:v4"
 	// defaultInputCodec labels the input audio; matches the Sarvam encoding hint.
 	defaultInputCodec = "wav"
 	// readLimitSTT bounds a single inbound WebSocket message.
@@ -40,30 +39,27 @@ const (
 // sttModelConfig captures the per-model capabilities that gate which parameters
 // are sent and which endpoint is used.
 type sttModelConfig struct {
-	supportsPrompt       bool
-	supportsMode         bool
-	supportsLanguage     bool
-	supportsVADParams    bool
-	defaultLanguage      string
-	defaultMode          string
-	useTranslateEndpoint bool
+	supportsMode      bool
+	supportsLanguage  bool
+	supportsVADParams bool
+	defaultLanguage   string
+	defaultMode       string
 }
 
-// sttModelConfigs describes each supported model. saarika transcribes with an
-// explicit language, saaras:v2.5 auto-detects and translates, and saaras:v3
-// adds mode selection and fine-grained VAD control.
+// sttModelConfigs describes each supported model. Both auto-detect the language,
+// select an operation mode, and take the fine-grained VAD controls; v4 adds
+// Global English to the languages v3 covers.
 //
 //nolint:gochecknoglobals // static model capability table
 var sttModelConfigs = map[string]sttModelConfig{
-	"saarika:v2.5": {
-		supportsLanguage: true,
-		defaultLanguage:  "unknown",
-	},
-	"saaras:v2.5": {
-		supportsPrompt:       true,
-		useTranslateEndpoint: true,
-	},
 	"saaras:v3": {
+		supportsMode:      true,
+		supportsLanguage:  true,
+		supportsVADParams: true,
+		defaultLanguage:   "unknown",
+		defaultMode:       "transcribe",
+	},
+	"saaras:v4": {
 		supportsMode:      true,
 		supportsLanguage:  true,
 		supportsVADParams: true,
@@ -78,10 +74,10 @@ var sttModelConfigs = map[string]sttModelConfig{
 type STTConfig struct {
 	// APIKey is the Sarvam API subscription key. Required.
 	APIKey string `validate:"required"`
-	// Model is the transcription model; empty uses "saaras:v3".
-	Model string `validate:"omitempty,oneof=saarika:v2.5 saaras:v2.5 saaras:v3"`
-	// Mode selects the saaras:v3 operation mode; empty uses the model default
-	// ("transcribe"). Ignored by models without mode support.
+	// Model is the transcription model; empty uses "saaras:v4".
+	Model string `validate:"omitempty,oneof=saaras:v3 saaras:v4"`
+	// Mode selects the operation mode; empty uses the model default
+	// ("transcribe"). Translation is a mode rather than an endpoint of its own.
 	Mode string `validate:"omitempty,oneof=transcribe translate verbatim translit codemix"`
 	// Language for transcription; the zero value uses the model default. Only
 	// applies to models with language support.
@@ -90,15 +86,12 @@ type STTConfig struct {
 	SampleRate int
 	// InputAudioCodec is the input audio codec hint; empty uses "wav".
 	InputAudioCodec string
-	// Prompt guides transcription style/context; empty omits it. Only saaras:v2.5.
-	Prompt string
 	// VADSignals emits VAD signals in the response; nil omits it.
 	VADSignals *bool
 	// HighVADSensitivity raises VAD sensitivity; nil omits it.
 	HighVADSensitivity *bool
 
-	// The fine-grained VAD controls below apply only to saaras:v3 and are omitted
-	// when nil.
+	// The fine-grained VAD controls below are omitted when nil.
 
 	// PositiveSpeechThreshold is the probability above which a frame is speech.
 	PositiveSpeechThreshold *float64
@@ -189,13 +182,10 @@ func (c *connector) Metadata() stt.Metadata {
 	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SarvamTTFSP99), Model: c.cfg.Model}
 }
 
-// endpoint returns the WebSocket URL for the configured model.
-func (c *connector) endpoint() string {
-	if c.mc.useTranslateEndpoint {
-		return translateURL
-	}
-	return transcribeURL
-}
+// endpoint returns the WebSocket URL for the configured model. Every supported
+// model transcribes on the one endpoint; translation is a mode it takes rather
+// than an endpoint of its own.
+func (c *connector) endpoint() string { return transcribeURL }
 
 // languageString resolves the language code sent at connect time.
 func (c *connector) languageString() string {
@@ -240,9 +230,6 @@ func (c *connector) query(sampleRate int) url.Values {
 	}
 	if mode := c.mode(); c.mc.supportsMode && mode != "" {
 		q.Set("mode", mode)
-	}
-	if c.mc.supportsPrompt && c.cfg.Prompt != "" {
-		q.Set("prompt", c.cfg.Prompt)
 	}
 	return q
 }
