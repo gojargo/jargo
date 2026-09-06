@@ -81,6 +81,15 @@ func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error 
 // ProcessFrame opens the session on StartFrame, forwards input audio to the
 // model, and tears the session down when the pipeline ends.
 func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if audio, ok := f.(*frames.InputAudioRawFrame); ok && dir == processor.Downstream {
+		// The model consumes the audio, so it does not travel on. Only the
+		// processor bookkeeping runs: the LLM base would forward it.
+		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		s.sendAudio(audio.Audio)
+		return nil
+	}
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -89,25 +98,21 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.connect(ctx); err != nil {
 			s.PushError(ctx, "nova sonic connect failed", err, true)
 		}
-		return s.PushFrame(ctx, f, dir)
-	case *frames.InputAudioRawFrame:
-		if dir == processor.Downstream {
-			s.sendAudio(fr.Audio)
-			return nil // the model consumes the audio; it does not flow on
-		}
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	case *frames.LLMContextFrame:
 		// The conversation the session is part of: the toolset it advertises, and
-		// the tool results it has gained since it was last reported.
+		// the tool results it has gained since it was last reported. The base
+		// holds a conversation back from a service generating continuously, so
+		// this is where it travels on.
 		if fr.Context != nil {
 			s.handleContext(ctx, fr.Context)
 		}
 		return s.PushFrame(ctx, f, dir)
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	default:
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	}
 }
 
@@ -579,12 +584,17 @@ func (s *Service) handleText(ctx context.Context, role, content string) {
 		// believing the user is still speaking. A pipeline that needs turn
 		// boundaries runs its own detection alongside this service.
 		s.setSpeaking(ctx, false)
-		_ = s.PushFrame(ctx, frames.NewInterruptionFrame(), processor.Downstream)
+		// Broadcast, not pushed on: the aggregators on either side of this
+		// service both act on an interruption, and the one keeping the user's
+		// turn sits upstream of it.
+		_ = s.BroadcastInterruption(ctx)
 		return
 	}
 	switch role {
 	case "USER":
-		_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(content, "", ""), processor.Downstream)
+		// The user's words go upstream, where the user aggregator is: everything
+		// downstream of this service is the reply to them.
+		_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(content, "", ""), processor.Upstream)
 	case "ASSISTANT":
 		if !s.assistantSpeculative {
 			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(content), processor.Downstream)
