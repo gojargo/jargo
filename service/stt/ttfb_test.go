@@ -271,10 +271,13 @@ func TestStreamServiceMeasuresToTheLastTranscriptWhenNoneCloses(t *testing.T) {
 		deadline = 150 * time.Millisecond
 	)
 
-	conn := &fakeConnector{stream: &fakeStream{results: [][]stt.Result{
-		{{Text: "hello world", Final: true}},
-	}}}
-	svc := stt.NewStream("OpenEndedSTT", conn, 16000)
+	// The transcript answers the finalize the end of speech triggers, so it
+	// cannot arrive before the measurement it belongs to has started. A stream
+	// holding its transcript ready would race the frame that opens the
+	// measurement, and a transcript that lands first belongs to an earlier
+	// utterance rather than this one.
+	stream := &answeringStream{told: make(chan struct{}, 1)}
+	svc := stt.NewStream("OpenEndedSTT", &answeringConnector{stream: stream}, 16000)
 	svc.SetTTFBTimeout(deadline)
 	w := newTTFBWatcher()
 	task := newMeasuredTask(svc, w)
@@ -377,5 +380,68 @@ func TestStreamServiceSkipsAVADThatDidNotSayHowLongItWaited(t *testing.T) {
 
 	if seen := w.reported(); len(seen) != 0 {
 		t.Fatalf("reported %v, want nothing", seen)
+	}
+}
+
+// A transcript that arrived before the speech being measured ended belongs to an
+// earlier segment, one the service finalized on its own endpointing. Measuring
+// to it would report the service as having answered before it was asked, so
+// nothing is reported for that utterance at all.
+func TestStreamServiceRefusesATranscriptThatPredatesTheSpeech(t *testing.T) {
+	const (
+		// Short enough that a transcript delivered before the frame is sent
+		// lands before the end of speech the frame reports.
+		silence  = 10 * time.Millisecond
+		deadline = 100 * time.Millisecond
+	)
+
+	// The stream holds its transcript ready, so it arrives as soon as the
+	// session opens, well before the end of speech reported below.
+	conn := &fakeConnector{stream: &fakeStream{results: [][]stt.Result{
+		{{Text: "an earlier segment", Final: true}},
+	}}}
+	svc := stt.NewStream("EndpointingSTT", conn, 16000)
+	svc.SetTTFBTimeout(deadline)
+	w := newTTFBWatcher()
+	task := newMeasuredTask(svc, w)
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// Wait for the stale transcript, then report speech ending after it.
+	waitForTranscript(t, task)
+	time.Sleep(50 * time.Millisecond)
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(silence.Seconds(), time.Now()))
+
+	select {
+	case <-w.got:
+		t.Fatal("a wait was reported against a transcript that predates the speech")
+	case <-time.After(deadline + 200*time.Millisecond):
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	if seen := w.reported(); len(seen) != 0 {
+		t.Fatalf("reported %d measurements, want none: %v", len(seen), seen)
+	}
+}
+
+// waitForTranscript blocks until a transcript has reached the end of the
+// pipeline, so a test can order what it does next against it.
+func waitForTranscript(t *testing.T, task *pipeline.Worker) {
+	t.Helper()
+	seen := make(chan struct{}, 1)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.TranscriptionFrame); ok {
+			select {
+			case seen <- struct{}{}:
+			default:
+			}
+		}
+	})
+	select {
+	case <-seen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no transcript arrived")
 	}
 }

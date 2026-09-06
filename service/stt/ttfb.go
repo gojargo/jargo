@@ -125,6 +125,14 @@ func (t *ttfbTracker) reportNow(ctx context.Context) {
 	t.report(ctx, time.Now())
 }
 
+// abandon drops the measurement without reporting it, for an utterance that
+// produced no transcript to measure to.
+func (t *ttfbTracker) abandon() {
+	t.mu.Lock()
+	t.start = time.Time{}
+	t.mu.Unlock()
+}
+
 // close ends the deadline for good, for a service being torn down.
 func (t *ttfbTracker) close() { t.stopDeadline() }
 
@@ -139,6 +147,15 @@ func (t *ttfbTracker) report(ctx context.Context, end time.Time) {
 		// Nothing was being measured: the transcript arrived without the VAD
 		// having reported the speech ending, so there is no end of speech to
 		// measure it against.
+		return
+	}
+	if end.Before(start) {
+		// The transcript being measured to arrived before the speech it is
+		// measured from ended, so it belongs to an earlier segment the service
+		// finalized on its own endpointing. There is no interval to report:
+		// measuring it would say the service answered before it was asked.
+		slog.WarnContext(ctx, "stt ttfb not reported: the transcript predates the end of speech",
+			"service", t.svc.Name(), "short_by", start.Sub(end))
 		return
 	}
 	ttfb := end.Sub(start)
@@ -200,6 +217,10 @@ func (t *ttfbTracker) waitForTranscript(ctx context.Context, timeout time.Durati
 	last := t.lastTranscript
 	t.mu.Unlock()
 	if last.IsZero() {
+		// Nothing arrived to measure to. The measurement is closed rather than
+		// left open, so the transcript of the next utterance is not measured
+		// against the end of this one.
+		t.abandon()
 		return
 	}
 	t.report(ctx, last)
