@@ -94,8 +94,14 @@ func (b *Base) composeSystemInstruction() {
 
 	b.systemMu.Lock()
 	composed := strings.Join(parts, "\n\n")
+	changed := composed != b.systemInstruction
 	b.systemInstruction = composed
 	b.systemMu.Unlock()
 
-	slog.Debug("composed system instruction", "service", b.Name(), "chars", len(composed))
+	// The instruction is recomposed whenever anything that feeds it is touched,
+	// which is far more often than it actually changes. Logging every pass buries
+	// the times it moved, which are the ones worth reading.
+	if changed {
+		slog.Debug("composed system instruction", "service", b.Name(), "chars", len(composed))
+	}
 }
