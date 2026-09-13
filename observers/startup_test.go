@@ -445,3 +445,119 @@ func TestStartupTimingTotalIsTheSpanNotTheSum(t *testing.T) {
 			report.TotalDuration, summed)
 	}
 }
+
+// TestStartupPhasesAddUpToTheTotal covers the two phases being the whole of
+// startup: getting every processor ready, then the StartFrame traveling the
+// pipeline, back to back.
+func TestStartupPhasesAddUpToTheTotal(t *testing.T) {
+	r := newRecorder[observers.StartupTimingReport]()
+	o := observers.NewStartupTiming(observers.StartupTimingConfig{
+		OnStartupTimingReport: r.record,
+	})
+
+	runPipeline(t, o, []processor.Processor{
+		newSlowSetup(60 * time.Millisecond),
+		newSlowStart(60 * time.Millisecond),
+	}, frames.NewTextFrame("hello"))
+	r.wait(t)
+
+	got := r.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("reports = %d, want 1", len(got))
+	}
+	report := got[0]
+
+	if sum := report.SetupPhase + report.StartPhase; sum != report.TotalDuration {
+		t.Errorf("the phases add up to %s, want the total of %s", sum, report.TotalDuration)
+	}
+	if report.SetupPhase <= 0 || report.StartPhase <= 0 {
+		t.Errorf("phases = %s setup / %s start, want both measured",
+			report.SetupPhase, report.StartPhase)
+	}
+}
+
+// TestSlowSetupLandsInTheSetupPhase covers the boundary between the phases: a
+// processor that is slow to connect is charged to getting ready, not to the
+// StartFrame's journey.
+func TestSlowSetupLandsInTheSetupPhase(t *testing.T) {
+	r := newRecorder[observers.StartupTimingReport]()
+	o := observers.NewStartupTiming(observers.StartupTimingConfig{
+		OnStartupTimingReport: r.record,
+	})
+
+	runPipeline(t, o, []processor.Processor{newSlowSetup(150 * time.Millisecond)},
+		frames.NewTextFrame("hello"))
+	r.wait(t)
+
+	got := r.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("reports = %d, want 1", len(got))
+	}
+	report := got[0]
+
+	if report.SetupPhase < 100*time.Millisecond {
+		t.Errorf("SetupPhase = %s, want at least 100ms: the connection is setup", report.SetupPhase)
+	}
+	if report.StartPhase > report.SetupPhase {
+		t.Errorf("StartPhase = %s, want less than the %s setup took",
+			report.StartPhase, report.SetupPhase)
+	}
+}
+
+// TestSlowStartLandsInTheStartPhase covers the other side: a processor slow on
+// the StartFrame is charged to the frame's journey rather than to setup.
+func TestSlowStartLandsInTheStartPhase(t *testing.T) {
+	r := newRecorder[observers.StartupTimingReport]()
+	o := observers.NewStartupTiming(observers.StartupTimingConfig{
+		OnStartupTimingReport: r.record,
+	})
+
+	runPipeline(t, o, []processor.Processor{newSlowStart(150 * time.Millisecond)},
+		frames.NewTextFrame("hello"))
+	r.wait(t)
+
+	got := r.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("reports = %d, want 1", len(got))
+	}
+	report := got[0]
+
+	if report.StartPhase < 100*time.Millisecond {
+		t.Errorf("StartPhase = %s, want at least 100ms: the wait is on the StartFrame", report.StartPhase)
+	}
+}
+
+// TestProcessorTimingSplitsSetupFromStart covers the per-processor halves
+// accounting for the whole of what that processor cost.
+func TestProcessorTimingSplitsSetupFromStart(t *testing.T) {
+	r := newRecorder[observers.StartupTimingReport]()
+	o := observers.NewStartupTiming(observers.StartupTimingConfig{
+		OnStartupTimingReport: r.record,
+	})
+
+	runPipeline(t, o, []processor.Processor{newSlowStart(80 * time.Millisecond)},
+		frames.NewTextFrame("hello"))
+	r.wait(t)
+
+	got := r.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("reports = %d, want 1", len(got))
+	}
+
+	var slow []observers.ProcessorStartupTiming
+	for _, timing := range got[0].ProcessorTimings {
+		if strings.HasPrefix(timing.ProcessorName, "SlowStart#") {
+			slow = append(slow, timing)
+		}
+	}
+	if len(slow) != 1 {
+		t.Fatalf("timings naming the slow processor = %+v, want one", slow)
+	}
+	timing := slow[0]
+	if timing.StartDuration < 50*time.Millisecond {
+		t.Errorf("StartDuration = %s, want at least 50ms", timing.StartDuration)
+	}
+	if sum := timing.SetupDuration + timing.StartDuration; sum != timing.Duration {
+		t.Errorf("the halves add up to %s, want the %s the processor cost", sum, timing.Duration)
+	}
+}

@@ -22,6 +22,10 @@ type ProcessorStartupTiming struct {
 	// SetupDuration is how long the processor's setup took, which is the part of
 	// Duration spent connecting.
 	SetupDuration time.Duration
+	// StartDuration is how long the processor spent on the StartFrame, which is
+	// the rest of Duration: whatever getting ready still needed once the
+	// processor had connected.
+	StartDuration time.Duration
 }
 
 // StartupTimingReport is what every measured processor cost to start.
@@ -30,8 +34,16 @@ type StartupTimingReport struct {
 	StartTime time.Time
 	// TotalDuration is the wall-clock time from the pipeline starting to set up
 	// until it had started. Processors are set up concurrently, so it is the
-	// span rather than the sum of what each of them cost.
+	// span rather than the sum of what each of them cost. It is SetupPhase and
+	// StartPhase back to back.
 	TotalDuration time.Duration
+	// SetupPhase is how long getting every processor ready took. Setting up runs
+	// concurrently, so the longest single piece of work decides this rather than
+	// their sum.
+	SetupPhase time.Duration
+	// StartPhase is how long the StartFrame took to travel the pipeline. It
+	// reaches processors one after another, so what each spends on it adds up.
+	StartPhase time.Duration
 	// ProcessorTimings is what each processor cost, in the order the StartFrame
 	// left them.
 	ProcessorTimings []ProcessorStartupTiming
@@ -208,13 +220,15 @@ func (o *StartupTiming) OnPushFrame(data processor.FramePushed) {
 	delete(o.arrivals, data.Source.ID())
 
 	setupDuration := o.setupDurations[arrival.proc.ID()]
+	startDuration := data.Timestamp - arrival.arrival
 	o.timings = append(o.timings, ProcessorStartupTiming{
 		ProcessorName: arrival.proc.Name(),
 		StartOffset:   arrival.arrival - o.startFrame.arrival,
 		// What the processor cost overall: it connects while being set up, and
 		// starting is whatever is left to do once it has.
-		Duration:      setupDuration + (data.Timestamp - arrival.arrival),
+		Duration:      setupDuration + startDuration,
 		SetupDuration: setupDuration,
+		StartDuration: startDuration,
 	})
 }
 
@@ -280,9 +294,20 @@ func (o *StartupTiming) emitReport() {
 	if o.cfg.OnStartupTimingReport == nil {
 		return
 	}
+
+	// Setting up ends where the StartFrame begins: the frame is not dispatched
+	// until every processor is ready, so the moment it entered the pipeline is
+	// the boundary between the two phases.
+	var setupPhase time.Duration
+	if !startedAt.IsZero() && o.startFrame != nil {
+		setupPhase = min(max(o.startFrame.wallClock.Sub(startedAt), 0), total)
+	}
+
 	o.cfg.OnStartupTimingReport(StartupTimingReport{
 		StartTime:        startedAt,
 		TotalDuration:    total,
+		SetupPhase:       setupPhase,
+		StartPhase:       total - setupPhase,
 		ProcessorTimings: append([]ProcessorStartupTiming(nil), o.timings...),
 	})
 }
