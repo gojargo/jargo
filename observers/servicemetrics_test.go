@@ -286,3 +286,26 @@ func TestOneFrameCanCarrySeveralMetrics(t *testing.T) {
 		t.Errorf("usage records = %d, want 1", len(got))
 	}
 }
+
+// TestTimeToFirstAnswerTokenKeepsTheThinking covers the measurement that says
+// how much of the delay was the model thinking rather than responding.
+func TestTimeToFirstAnswerTokenKeepsTheThinking(t *testing.T) {
+	r := newMetricsRecorder()
+	o := newServiceMetrics(r)
+
+	push(o, frames.NewMetricsFrame(frames.TTFATMetricsData{
+		Processor:    "llm",
+		TTFAT:        900 * time.Millisecond,
+		TTFB:         200 * time.Millisecond,
+		ThinkingTime: 700 * time.Millisecond,
+	}), processor.Downstream)
+
+	rec := r.onlyLatency(t)
+	if rec.Kind != observers.LatencyTTFAT {
+		t.Fatalf("kind = %s, want ttfat", rec.Kind)
+	}
+	if rec.Duration != 900*time.Millisecond || rec.TTFB != 200*time.Millisecond ||
+		rec.ThinkingTime != 700*time.Millisecond {
+		t.Errorf("record = %+v, want the measurement and both of its parts", rec)
+	}
+}

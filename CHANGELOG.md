@@ -15,6 +15,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Time to first answer token separates thinking from answering.** A model
+  that reasons before it replies streams something well before the first token
+  the caller sees, so time to first byte stopped describing how quickly it
+  answered. `frames.TTFATMetricsData` measures from the same request start to
+  that first answer token, and carries the time to first byte it builds on and
+  the thinking time between them, so the split reads from one record.
+  `observers.ServiceMetrics` reports it as the `ttfat` kind. A turn answering
+  with a tool call ends the measurement at the call; a speech-to-speech service
+  reports none, having no answer token to measure to.
+
 - **The websocket reconnect backoff is configurable.**
   `wsservice.Config.ReconnectBackoffMinWait` and `ReconnectBackoffMaxWait` set
   the window between redials, which defaulted to four and ten seconds and could

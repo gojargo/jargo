@@ -97,6 +97,7 @@ type STTUsage struct {
 
 // MetricsData is one measurement carried by a MetricsFrame. The concrete types
 // are the kinds a processor can report: TTFBMetricsData, TTFAMetricsData,
+// TTFATMetricsData,
 // ProcessingMetricsData, LLMUsageMetricsData, STTUsageMetricsData,
 // TTSUsageMetricsData, TextAggregationMetricsData and TurnMetricsData. A
 // consumer switches on the type to read the value.
@@ -150,6 +151,37 @@ type TTFAMetricsData struct {
 	// LeadingSilence is the silence before the first audible sample: TTFA minus
 	// TTFB.
 	LeadingSilence time.Duration
+}
+
+// TTFATMetricsData is time to first answer token: how long a model took to
+// produce the first token of the answer the caller sees, which is time to first
+// byte plus anything the model streamed before it started answering.
+//
+// It is reported with its breakdown so a consumer can see how much of the
+// perceived delay was the model thinking rather than responding, without having
+// to match it up with the TTFBMetricsData reported separately. TTFB here is that
+// same measurement, not another one, so do not add the two together.
+//
+// A turn that answers with a tool call rather than text ends the measurement at
+// the call. Answering from a tool result takes a second inference, so such a
+// turn reports twice: once for the call, once for the answer built from its
+// result. Each figure covers one inference, and a consumer wanting one per user
+// turn keeps the first, which is the one that says how quickly the model began
+// responding at all.
+//
+// It is reported only by services that answer in text. A speech-to-speech
+// service answers in audio, which has no answer token to measure to.
+type TTFATMetricsData struct {
+	BaseMetricsData
+	// TTFAT is the time to the first answer token: TTFB plus ThinkingTime.
+	TTFAT time.Duration
+	// TTFB is the time to first byte that TTFAT builds on.
+	TTFB time.Duration
+	// ThinkingTime is the time between the model's first output and its first
+	// answer token: TTFAT minus TTFB. Reasoning is the usual reason a model
+	// streams something before it starts answering, though a model that reasons
+	// none still spends a little time here.
+	ThinkingTime time.Duration
 }
 
 // ProcessingMetricsData is the wall-clock time an operation took.

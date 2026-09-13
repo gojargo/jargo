@@ -14,8 +14,9 @@ type ServiceLatencyKind string
 
 // The waits a service reports.
 const (
-	LatencyTTFB ServiceLatencyKind = "ttfb"
-	LatencyTTFA ServiceLatencyKind = "ttfa"
+	LatencyTTFB  ServiceLatencyKind = "ttfb"
+	LatencyTTFA  ServiceLatencyKind = "ttfa"
+	LatencyTTFAT ServiceLatencyKind = "ttfat"
 )
 
 // ServiceUsageKind is which kind of service consumed something.
@@ -47,6 +48,9 @@ type ServiceLatencyRecord struct {
 	// LeadingSilence is the silence at the head of the first audio, on the time
 	// to first audible sample.
 	LeadingSilence time.Duration
+	// ThinkingTime is the time between a model's first output and its first
+	// answer token, on the time to first answer token.
+	ThinkingTime time.Duration
 }
 
 // ServiceUsageRecord is what one service consumed doing a piece of work.
@@ -194,6 +198,11 @@ func latencyRecord(m frames.MetricsData, at time.Time) (ServiceLatencyRecord, bo
 		r.Duration = m.TTFA
 		r.TTFB = m.TTFB
 		r.LeadingSilence = m.LeadingSilence
+	case frames.TTFATMetricsData:
+		r.Kind = LatencyTTFAT
+		r.Duration = m.TTFAT
+		r.TTFB = m.TTFB
+		r.ThinkingTime = m.ThinkingTime
 	case frames.TTFBMetricsData:
 		r.Kind = LatencyTTFB
 		r.Duration = m.Value

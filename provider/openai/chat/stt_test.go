@@ -137,7 +137,9 @@ func TestSTTSegmentTranscribesBufferedSpeech(t *testing.T) {
 	if got.fields["model"] != defaultSTTModel {
 		t.Errorf("model = %q, want the OpenAI default %q", got.fields["model"], defaultSTTModel)
 	}
-	if !bytes.HasSuffix(got.file, pcm) {
+	// The speech is no longer the tail of the upload: a segment is padded with
+	// trailing silence so the model hears the end of it.
+	if !bytes.Contains(got.file, pcm) {
 		t.Error("the uploaded WAV does not carry the buffered speech")
 	}
 }

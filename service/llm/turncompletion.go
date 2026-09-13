@@ -569,6 +569,9 @@ func (b *Base) turnReset(ctx context.Context) {
 // pushLLMText emits one chunk of generated text, through the turn-completion
 // gating when it is on and straight out when it is not.
 func (b *Base) pushLLMText(ctx context.Context, text string) error {
+	// Measured before turn-completion filtering, which can hold text back or drop
+	// it entirely. Neither says anything about how fast the model answered.
+	b.StopTTFATMetrics()
 	if b.FilterIncompleteUserTurns() {
 		return b.pushTurnText(ctx, text)
 	}
