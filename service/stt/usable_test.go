@@ -96,6 +96,9 @@ func TestAudioIsDroppedOnceTheServiceIsUnusable(t *testing.T) {
 func TestSegmentIsDroppedOnceTheServiceIsUnusable(t *testing.T) {
 	tr := &fakeTranscriber{text: "never asked", got: make(chan []byte, 1)}
 	svc := stt.NewSegment("CountingSegmentSTT", tr, 16000)
+	// The exact bytes are what this test is about, so the segment is sent as it
+	// was cut rather than padded.
+	svc.SetTrailingSilence(0)
 	svc.SetUsable(context.Background(), false)
 
 	stopped := make(chan struct{}, 1)
@@ -138,6 +141,9 @@ func TestABufferedSegmentIsReleasedRatherThanKept(t *testing.T) {
 	// will never be asked about.
 	tr := &fakeTranscriber{text: "spoken", got: make(chan []byte, 2)}
 	svc := stt.NewSegment("CountingSegmentSTT", tr, 16000)
+	// The exact bytes are what this test is about, so the segment is sent as it
+	// was cut rather than padded.
+	svc.SetTrailingSilence(0)
 	ctx := context.Background()
 	svc.SetUsable(ctx, false)
 

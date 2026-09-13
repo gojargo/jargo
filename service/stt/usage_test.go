@@ -68,6 +68,9 @@ func collectSTTUsage(t *testing.T, svc processor.Processor, usageMetrics bool) [
 func TestSegmentServiceReportsUsageInBand(t *testing.T) {
 	tr := &fakeTranscriber{text: "buffered words", got: make(chan []byte, 1)}
 	svc := stt.NewSegment("FakeSTT", tr, 16000)
+	// The exact bytes are what this test is about, so the segment is sent as it
+	// was cut rather than padded.
+	svc.SetTrailingSilence(0)
 	go func() {
 		for range tr.got {
 		}
@@ -89,6 +92,9 @@ func TestSegmentServiceReportsUsageInBand(t *testing.T) {
 func TestSegmentServiceReportsNoUsageWhenDisabled(t *testing.T) {
 	tr := &fakeTranscriber{text: "buffered words", got: make(chan []byte, 1)}
 	svc := stt.NewSegment("FakeSTT", tr, 16000)
+	// The exact bytes are what this test is about, so the segment is sent as it
+	// was cut rather than padded.
+	svc.SetTrailingSilence(0)
 	go func() {
 		for range tr.got {
 		}
@@ -96,5 +102,25 @@ func TestSegmentServiceReportsNoUsageWhenDisabled(t *testing.T) {
 
 	if got := collectSTTUsage(t, svc, false); len(got) != 0 {
 		t.Errorf("got %d STT usage reports with usage metrics off, want none", len(got))
+	}
+}
+
+// TestSegmentUsageIncludesTheTrailingSilence covers the padding being part of
+// what the provider is submitted, and so part of what usage is measured on.
+func TestSegmentUsageIncludesTheTrailingSilence(t *testing.T) {
+	tr := &fakeTranscriber{text: "buffered words", got: make(chan []byte, 1)}
+	svc := stt.NewSegment("FakeSTT", tr, 16000)
+	go func() {
+		for range tr.got {
+		}
+	}()
+
+	got := collectSTTUsage(t, svc, true)
+	if len(got) != 1 {
+		t.Fatalf("got %d STT usage reports, want 1", len(got))
+	}
+	// One second of speech, plus the half second of padding sent with it.
+	if want := 1.5; got[0].Value.AudioSeconds != want {
+		t.Errorf("audio seconds = %v, want %v", got[0].Value.AudioSeconds, want)
 	}
 }

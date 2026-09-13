@@ -18,10 +18,18 @@ type Transcriber interface {
 	Transcribe(ctx context.Context, audio []byte, sampleRate int) (string, error)
 }
 
+// DefaultTrailingSilence is how much silence is appended to each segment before
+// it is transcribed. A segment ends right where the detector stopped, and models
+// tend to drop or garble the final word when the audio ends that abruptly.
+const DefaultTrailingSilence = 500 * time.Millisecond
+
 // SegmentService buffers a user's audio between UserStartedSpeakingFrame and
 // UserStoppedSpeakingFrame, then transcribes the whole segment with a
 // Transcriber. It requires a turn detector upstream (turntaking.Detector) to
 // delimit segments; without those frames it never transcribes.
+//
+// A segment ends right where the detector stopped, so each one is padded with
+// trailing silence before transcription and the model hears the end of speech.
 type SegmentService struct {
 	*service.Base
 	tr      Transcriber
@@ -36,16 +44,20 @@ type SegmentService struct {
 	set *providerSettings
 
 	sampleRate int
-	mu         sync.Mutex
-	buf        []byte
-	speaking   bool
-	wg         sync.WaitGroup
+	// trailingSilence is how much silence is appended to a segment before it is
+	// transcribed. It is settable so a caller can turn the padding off.
+	trailingSilence time.Duration
+
+	mu       sync.Mutex
+	buf      []byte
+	speaking bool
+	wg       sync.WaitGroup
 }
 
 // NewSegment builds a segmented STT service named name driven by tr. A non-zero
 // sampleRate overrides the transport's input rate.
 func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
-	s := &SegmentService{tr: tr, cfgRate: sampleRate}
+	s := &SegmentService{tr: tr, cfgRate: sampleRate, trailingSilence: DefaultTrailingSilence}
 	if d, ok := tr.(Describer); ok {
 		s.model = d.Metadata().Model
 	}
@@ -70,6 +82,21 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 		s.tracer.abandon(end)
 	}
 	return s
+}
+
+// SetTrailingSilence sets how much silence is appended to each segment before it
+// is transcribed, so the model hears the end of speech and can finish the last
+// word. Set it to zero to send the segment exactly as it was cut.
+//
+// The padding is part of what the provider receives, so it is part of what usage
+// is measured on.
+func (s *SegmentService) SetTrailingSilence(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	s.trailingSilence = d
 }
 
 // SetTTFBTimeout sets how long the service waits after the speech ends for the
@@ -232,12 +259,14 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 	s.mu.Lock()
 	audio := s.buf
 	rate := s.sampleRate
+	padding := s.trailingSilence
 	s.buf = nil
 	s.speaking = false
 	s.mu.Unlock()
 	if len(audio) == 0 {
 		return
 	}
+	audio = append(audio, silence(padding, rate)...)
 	// A service that can no longer work cannot transcribe this segment. The
 	// buffered audio is released above rather than growing for the rest of the
 	// session.
@@ -270,6 +299,21 @@ func (s *SegmentService) transcribe(ctx context.Context) {
 		tf.Finalized = true
 		_ = s.PushFrame(ctx, tf, processor.Downstream)
 	})
+}
+
+// silence is d of 16-bit mono silence at rate, as the samples a segment is
+// padded with. A rate that is not known yet pads nothing: the length would be
+// meaningless, and the transcriber is about to be handed audio it can measure
+// for itself.
+func silence(d time.Duration, rate int) []byte {
+	if d <= 0 || rate <= 0 {
+		return nil
+	}
+	samples := int(float64(rate) * d.Seconds())
+	if samples <= 0 {
+		return nil
+	}
+	return make([]byte, samples*2)
 }
 
 // CanGenerateMetrics reports that this service times transcription and reports

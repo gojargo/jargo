@@ -139,6 +139,9 @@ func (tr *fakeTranscriber) Transcribe(_ context.Context, audio []byte, _ int) (s
 func TestSegmentServiceTranscribesBufferedSpeech(t *testing.T) {
 	tr := &fakeTranscriber{text: "buffered words", got: make(chan []byte, 1)}
 	svc := stt.NewSegment("FakeSegmentSTT", tr, 16000)
+	// The exact bytes are what this test is about, so the segment is sent as it
+	// was cut rather than padded.
+	svc.SetTrailingSilence(0)
 
 	var captured string
 	done := make(chan struct{}, 1)
@@ -509,6 +512,9 @@ func TestSegmentServiceSpansOneSegment(t *testing.T) {
 
 	tr := &fakeTranscriber{text: "buffered words", got: make(chan []byte, 1)}
 	svc := stt.NewSegment("FakeSegmentSTT", tr, 16000)
+	// The exact bytes are what this test is about, so the segment is sent as it
+	// was cut rather than padded.
+	svc.SetTrailingSilence(0)
 
 	done := make(chan struct{}, 1)
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
@@ -573,5 +579,63 @@ func TestSegmentServiceSpansOneSegment(t *testing.T) {
 	}
 	if got := span.StartTime(); got.After(speechStart.Add(10 * time.Millisecond)) {
 		t.Errorf("span starts at %v, want it anchored at the speech start %v", got, speechStart)
+	}
+}
+
+// segmentAudio drives one segment through svc and returns what the transcriber
+// was handed.
+func segmentAudio(t *testing.T, svc *stt.SegmentService, tr *fakeTranscriber, pcm []byte) []byte {
+	t.Helper()
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	defer func() {
+		task.StopWhenDone()
+		<-runDone
+	}()
+
+	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewInputAudioRawFrame(pcm, 16000, 1))
+	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+
+	select {
+	case got := <-tr.got:
+		return got
+	case <-time.After(3 * time.Second):
+		t.Fatal("segment service did not call the transcriber")
+		return nil
+	}
+}
+
+// TestSegmentIsPaddedWithTrailingSilence covers the padding a segment gets by
+// default. A segment ends right where the detector stopped, and a model tends to
+// drop or garble the final word when the audio ends that abruptly.
+func TestSegmentIsPaddedWithTrailingSilence(t *testing.T) {
+	tr := &fakeTranscriber{text: "padded", got: make(chan []byte, 1)}
+	svc := stt.NewSegment("FakeSegmentSTT", tr, 16000)
+
+	pcm := []byte{1, 2, 3, 4}
+	got := segmentAudio(t, svc, tr, pcm)
+
+	// 0.5s of 16-bit mono silence at 16kHz.
+	want := append(append([]byte(nil), pcm...), make([]byte, 16000/2*2)...)
+	if !bytes.Equal(got, want) {
+		t.Errorf("transcriber got %d bytes, want %d: the segment is padded", len(got), len(want))
+	}
+}
+
+// TestTrailingSilenceIsConfigurable covers the padding being the caller's to
+// choose, for a model that wants the segment exactly as it was cut.
+func TestTrailingSilenceIsConfigurable(t *testing.T) {
+	tr := &fakeTranscriber{text: "padded", got: make(chan []byte, 1)}
+	svc := stt.NewSegment("FakeSegmentSTT", tr, 16000)
+	svc.SetTrailingSilence(100 * time.Millisecond)
+
+	pcm := []byte{1, 2, 3, 4}
+	got := segmentAudio(t, svc, tr, pcm)
+
+	want := append(append([]byte(nil), pcm...), make([]byte, 1600*2)...)
+	if !bytes.Equal(got, want) {
+		t.Errorf("transcriber got %d bytes, want %d", len(got), len(want))
 	}
 }

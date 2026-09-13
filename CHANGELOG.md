@@ -15,6 +15,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A segmented transcription is padded before it is sent.** A segment ends
+  right where the detector stopped speaking, and models tend to drop or garble
+  the final word when audio ends that abruptly, so half a second of silence is
+  appended to each one. `SegmentService.SetTrailingSilence` changes it, or turns
+  it off for a model that wants the segment exactly as it was cut. The padding
+  is submitted to the provider, so it counts toward the audio usage reported.
+
 - **Word tracking recovers from a synthesizer that drops an event.** A word
   arriving for text a few words further into the frame is now recognized as a
   recovery rather than rejected: its event arriving means the ones before it
