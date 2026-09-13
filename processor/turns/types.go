@@ -45,6 +45,20 @@ type UserTurnStoppedParams struct {
 	// EnableUserSpeakingFrames broadcasts a UserStoppedSpeakingFrame on turn
 	// stop.
 	EnableUserSpeakingFrames bool
+	// ConfirmsSpeculation reports that this turn end confirms a speculative
+	// reply that was already generated. The reply is waiting on the turn frame
+	// this emits, so running the model again would answer the same turn twice.
+	ConfirmsSpeculation bool
+}
+
+// UserTurnSpeculation is a speculative inference a stop strategy has in flight.
+//
+// It is produced from an eager end of turn: the turn is not over yet, so the
+// inference runs against a provisional conversation and its reply is held back
+// until the turn is confirmed.
+type UserTurnSpeculation struct {
+	// Text is the user turn text the inference was run against.
+	Text string
 }
 
 // DefaultStoppedParams is the params a typical stop strategy uses.

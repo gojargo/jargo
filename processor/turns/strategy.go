@@ -21,12 +21,15 @@ type strategyEnv struct {
 	// controller reports the decision to can say which strategy decided. A turn
 	// opened by a wake phrase and one opened by voice activity are the same
 	// event otherwise, and they are not the same thing.
-	started            func(s StartStrategy, params UserTurnStartedParams)
-	resetAggregation   func(s StartStrategy)
-	inferenceTriggered func(s StopStrategy)
-	stopped            func(s StopStrategy, params UserTurnStoppedParams)
-	push               func(f frames.Frame, dir processor.Direction)
-	broadcast          func(build func() frames.Frame)
+	started          func(s StartStrategy, params UserTurnStartedParams)
+	resetAggregation func(s StartStrategy)
+	// inferenceTriggered carries the speculation the inference answers, or nil
+	// on an ordinary one against a turn that has ended.
+	inferenceTriggered  func(s StopStrategy, speculation *UserTurnSpeculation)
+	speculationCanceled func(s StopStrategy)
+	stopped             func(s StopStrategy, params UserTurnStoppedParams)
+	push                func(f frames.Frame, dir processor.Direction)
+	broadcast           func(build func() frames.Frame)
 }
 
 // locked runs fn with the shared mutex held. A strategy the controller never
@@ -258,6 +261,9 @@ type StoppedOverrides struct {
 	// emitted for this turn. Set it false when something else in the pipeline
 	// has already emitted it.
 	EnableUserSpeakingFrames *bool
+	// ConfirmsSpeculation reports that this turn end confirms a speculative
+	// reply that has already been generated, so the model must not run again.
+	ConfirmsSpeculation bool
 }
 
 // TriggerStopped fires inference-triggered then finalized, the usual "turn is
@@ -280,7 +286,25 @@ func (b *StopStrategyBase) TriggerStoppedOverriding(o StoppedOverrides) {
 // inference, without finalizing the turn.
 func (b *StopStrategyBase) TriggerInferenceTriggered() {
 	if b.env.inferenceTriggered != nil {
-		b.env.inferenceTriggered(b.self)
+		b.env.inferenceTriggered(b.self, nil)
+	}
+}
+
+// TriggerInferenceTriggeredSpeculating signals that there is enough evidence to
+// start inference on a turn that has not ended, so the reply it produces is held
+// until the turn is confirmed.
+func (b *StopStrategyBase) TriggerInferenceTriggeredSpeculating(s UserTurnSpeculation) {
+	if b.env.inferenceTriggered != nil {
+		b.env.inferenceTriggered(b.self, &s)
+	}
+}
+
+// TriggerSpeculationCanceled withdraws a speculative reply, whatever voided it:
+// the service withdrawing its prediction, a committed transcript that does not
+// match, or a turn that never resolved the speculation at all.
+func (b *StopStrategyBase) TriggerSpeculationCanceled() {
+	if b.env.speculationCanceled != nil {
+		b.env.speculationCanceled(b.self)
 	}
 }
 
@@ -297,6 +321,7 @@ func (b *StopStrategyBase) TriggerFinalizedOverriding(o StoppedOverrides) {
 	}
 	b.env.stopped(b.self, UserTurnStoppedParams{
 		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, b.EnableUserSpeakingFrames),
+		ConfirmsSpeculation:      o.ConfirmsSpeculation,
 	})
 }
 

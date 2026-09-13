@@ -444,11 +444,12 @@ func newUser(
 	}
 	u.idle = turns.NewUserIdleController(turns.IdleConfig{Timeout: cfg.IdleTimeout, Callback: onIdle})
 	u.turn.SetHooks(turns.ControllerHooks{
-		Started:            u.onTurnStarted,
-		Stopped:            u.onTurnStopped,
-		InferenceTriggered: u.onInferenceTriggered,
-		StopTimeout:        u.onStopTimeout,
-		ResetAggregation:   u.onResetAggregation,
+		Started:             u.onTurnStarted,
+		Stopped:             u.onTurnStopped,
+		InferenceTriggered:  u.onInferenceTriggered,
+		SpeculationCanceled: u.onSpeculationCanceled,
+		StopTimeout:         u.onStopTimeout,
+		ResetAggregation:    u.onResetAggregation,
 		Push: func(ctx context.Context, f frames.Frame, dir processor.Direction) {
 			// Queued, not pushed: a frame a strategy emits has to travel through
 			// this processor like any other, so the aggregation and the rest of
@@ -570,7 +571,7 @@ func (u *UserAggregator) commitOnSessionEnd(ctx context.Context) {
 		u.realtimeHandoffNow(ctx)
 		return
 	}
-	u.reportTurnStopped(ctx, nil, true)
+	u.reportTurnStopped(ctx, nil, true, false)
 }
 
 // startControllers brings the controllers up for the session, which is where the
@@ -976,6 +977,16 @@ func (u *UserAggregator) aggregate(part text.Part) {
 // are the sole authority on when the aggregation becomes a message. Without turn
 // taking a finalized transcript alone suffices.
 func (u *UserAggregator) maybeRun(ctx context.Context) (string, error) {
+	return u.commitTurn(ctx, true)
+}
+
+// commitTurn writes what the user said to the conversation and, when runLLM is
+// set, asks the model to answer it.
+//
+// A turn confirming a speculation writes the message and does not ask: the reply
+// was generated already, from the eager transcript, and is waiting on the turn
+// frame this turn end emits.
+func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool) (string, error) {
 	u.mu.Lock()
 	parts := u.aggregation
 	u.aggregation = nil
@@ -987,7 +998,10 @@ func (u *UserAggregator) maybeRun(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	u.context.AddUserMessage(said)
-	err := u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+	var err error
+	if runLLM {
+		err = u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+	}
 	u.Events().Call(ctx, EventUserTurnMessageAdded, u,
 		UserTurnMessageAdded{Content: said, Timestamp: startedAt, UserID: userID})
 	return said, err
@@ -2113,7 +2127,17 @@ func (u *UserAggregator) onTurnStarted(
 // enough to answer, and the answer begins while the judge is still deciding,
 // rather than after it. Anything the user adds before the turn actually ends is
 // committed by onTurnStopped, which runs the LLM again on it.
-func (u *UserAggregator) onInferenceTriggered(ctx context.Context, strategy turns.StopStrategy) {
+func (u *UserAggregator) onInferenceTriggered(
+	ctx context.Context, strategy turns.StopStrategy, speculation *turns.UserTurnSpeculation,
+) {
+	if speculation != nil && !u.realtimeMode() {
+		// The turn is still open, so nothing is committed: the inference runs
+		// against a provisional conversation and the aggregation keeps
+		// accumulating for whenever the turn does end.
+		u.runSpeculativeInference(ctx, *speculation)
+		u.Events().Call(ctx, EventUserTurnInferenceTriggered, u, strategy)
+		return
+	}
 	if u.realtimeMode() {
 		// Nothing is committed here. The service is generating from the audio
 		// rather than from the conversation, and the user's transcript arrives
@@ -2127,6 +2151,36 @@ func (u *UserAggregator) onInferenceTriggered(ctx context.Context, strategy turn
 	segment, _ := u.maybeRun(ctx)
 	u.rememberSegment(segment)
 	u.Events().Call(ctx, EventUserTurnInferenceTriggered, u, strategy)
+}
+
+// runSpeculativeInference runs an inference for a turn that has not ended.
+//
+// The turn is still open, so the conversation must not record it. The inference
+// runs against a provisional copy carrying the speculated turn text: nothing
+// here touches the real conversation, and the aggregation keeps accumulating for
+// whenever the turn does end. The reply is held downstream until the turn is
+// confirmed, and discarded if it is not.
+func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.UserTurnSpeculation) {
+	provisional := frames.NewLLMContext(u.context.System())
+	provisional.SetMessages(append(u.context.Messages(), frames.Message{
+		Role: frames.RoleUser,
+		Text: s.Text,
+	}))
+	provisional.SetTools(u.context.Tools())
+	provisional.SetToolChoice(u.context.ToolChoice())
+
+	f := frames.NewLLMContextFrame(provisional)
+	f.Speculation = true
+	_ = u.PushFrame(ctx, f, processor.Downstream)
+}
+
+// onSpeculationCanceled withdraws a speculative reply.
+//
+// It is broadcast rather than queued, so it reaches the gate holding that reply
+// ahead of the turn end that may follow it. Queued, it would arrive after, and
+// the gate would have released the reply this withdraws.
+func (u *UserAggregator) onSpeculationCanceled(ctx context.Context) {
+	_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewEagerEndOfTurnCancelFrame() })
 }
 
 // onResetAggregation drops the speech aggregated so far, at a start strategy's
@@ -2190,7 +2244,9 @@ func (u *UserAggregator) onTurnStopped(
 		})
 		return
 	}
-	u.reportTurnStopped(ctx, strategy, false)
+	// A turn end confirming a speculation has its reply already: running the
+	// model again would answer the same turn twice.
+	u.reportTurnStopped(ctx, strategy, false, params.ConfirmsSpeculation)
 }
 
 // reportTurnStopped commits whatever the turn had left to say and reports the
@@ -2200,9 +2256,12 @@ func (u *UserAggregator) onTurnStopped(
 // session ending is not itself the end of a turn, so a turn already reported
 // must not be reported a second time on the way out.
 func (u *UserAggregator) reportTurnStopped(
-	ctx context.Context, strategy turns.StopStrategy, onSessionEnd bool,
+	ctx context.Context, strategy turns.StopStrategy, onSessionEnd, confirmsSpeculation bool,
 ) {
-	segment, _ := u.maybeRun(ctx)
+	// The message is written to the conversation either way: the committed
+	// transcript is what the conversation records, never the speculated one. Only
+	// the inference is skipped, the speculative reply having already answered it.
+	segment, _ := u.commitTurn(ctx, !confirmsSpeculation)
 	u.rememberSegment(segment)
 
 	u.mu.Lock()

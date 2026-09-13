@@ -2,6 +2,7 @@ package turns
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/gojargo/jargo/audio/turn"
 )
@@ -87,6 +88,37 @@ func ExternalStrategies(cfg ExternalStrategiesConfig) UserTurnStrategies {
 	return UserTurnStrategies{
 		Start:    []StartStrategy{NewExternalStart(ExternalStartConfig{EnableInterruptions: &enabled})},
 		Stop:     []StopStrategy{NewExternalStop(ExternalStopConfig{})},
+		external: &enabled,
+	}
+}
+
+// EagerStrategiesConfig configures the strategies an eager service recommends.
+type EagerStrategiesConfig struct {
+	ExternalStrategiesConfig
+	// MatchPolicy decides whether the committed transcript is close enough to
+	// the eager one to keep the speculative reply. Nil uses NormalizedMatch.
+	MatchPolicy EagerMatchPolicy
+	// SpeculationTimeout bounds how long a prediction may go unresolved; zero
+	// uses five seconds.
+	SpeculationTimeout time.Duration
+}
+
+// EagerStrategies returns the strategies for a service that predicts the end of
+// a turn before committing to it.
+//
+// They are the external strategies, the service owning turn detection either
+// way, with the stop half wrapped so a predicted end of turn is answered while
+// the turn is still open. Use them only with a service configured to report such
+// a prediction: without one, nothing ever speculates and these behave as the
+// external strategies do.
+func EagerStrategies(cfg EagerStrategiesConfig) UserTurnStrategies {
+	enabled := boolOr(cfg.EnableInterruptions, true)
+	return UserTurnStrategies{
+		Start: []StartStrategy{NewExternalStart(ExternalStartConfig{EnableInterruptions: &enabled})},
+		Stop: []StopStrategy{NewEagerStop(EagerStopConfig{
+			MatchPolicy:        cfg.MatchPolicy,
+			SpeculationTimeout: cfg.SpeculationTimeout,
+		})},
 		external: &enabled,
 	}
 }

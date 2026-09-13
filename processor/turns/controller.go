@@ -25,13 +25,18 @@ var errNotSetUp = errors.New("turns: the controller was not set up")
 type ControllerHooks struct {
 	// Started, Stopped, InferenceTriggered and ResetAggregation each carry the
 	// strategy that made the decision, so what the hooks report can name it.
-	Started            func(ctx context.Context, s StartStrategy, params UserTurnStartedParams)
-	Stopped            func(ctx context.Context, s StopStrategy, params UserTurnStoppedParams)
-	InferenceTriggered func(ctx context.Context, s StopStrategy)
-	StopTimeout        func(ctx context.Context)
-	ResetAggregation   func(ctx context.Context, s StartStrategy)
-	Push               func(ctx context.Context, f frames.Frame, dir processor.Direction)
-	Broadcast          func(ctx context.Context, build func() frames.Frame)
+	Started func(ctx context.Context, s StartStrategy, params UserTurnStartedParams)
+	Stopped func(ctx context.Context, s StopStrategy, params UserTurnStoppedParams)
+	// InferenceTriggered carries the speculation the inference answers, or nil
+	// on an ordinary one.
+	InferenceTriggered func(ctx context.Context, s StopStrategy, speculation *UserTurnSpeculation)
+	// SpeculationCanceled withdraws a speculative reply that is no longer the
+	// right answer.
+	SpeculationCanceled func(ctx context.Context)
+	StopTimeout         func(ctx context.Context)
+	ResetAggregation    func(ctx context.Context, s StartStrategy)
+	Push                func(ctx context.Context, f frames.Frame, dir processor.Direction)
+	Broadcast           func(ctx context.Context, build func() frames.Frame)
 }
 
 // UserTurnController runs the start and stop strategy chains and owns the
@@ -256,11 +261,12 @@ func (c *UserTurnController) startEnv() strategyEnv {
 // stopEnv builds the environment shared with stop strategies.
 func (c *UserTurnController) stopEnv() strategyEnv {
 	return strategyEnv{
-		mu:                 &c.mu,
-		inferenceTriggered: c.onInferenceTriggered,
-		stopped:            c.onStopTriggered,
-		push:               c.pushHook(),
-		broadcast:          c.broadcastHook(),
+		mu:                  &c.mu,
+		inferenceTriggered:  c.onInferenceTriggered,
+		speculationCanceled: c.onSpeculationCanceled,
+		stopped:             c.onStopTriggered,
+		push:                c.pushHook(),
+		broadcast:           c.broadcastHook(),
 	}
 }
 
@@ -295,13 +301,23 @@ func (c *UserTurnController) onStartTriggered(s StartStrategy, params UserTurnSt
 }
 
 // onInferenceTriggered fires only during an active turn.
-func (c *UserTurnController) onInferenceTriggered(s StopStrategy) {
+func (c *UserTurnController) onInferenceTriggered(s StopStrategy, speculation *UserTurnSpeculation) {
 	if !c.userTurn {
 		return
 	}
 	c.rearmWatchdog()
 	if c.hooks.InferenceTriggered != nil {
-		c.hooks.InferenceTriggered(c.ctx, s)
+		c.hooks.InferenceTriggered(c.ctx, s, speculation)
+	}
+}
+
+// onSpeculationCanceled withdraws a speculative reply. Unlike the other
+// decisions it is not gated on a turn being open: a speculation outlives the
+// turn that started it when the turn ends without resolving it, and withdrawing
+// it then is the whole point.
+func (c *UserTurnController) onSpeculationCanceled(StopStrategy) {
+	if c.hooks.SpeculationCanceled != nil {
+		c.hooks.SpeculationCanceled(c.ctx)
 	}
 }
 

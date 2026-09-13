@@ -51,7 +51,7 @@ func (s *spy) env() strategyEnv {
 			s.stoppedBy = append(s.stoppedBy, str)
 		},
 		resetAggregation:   func(StartStrategy) { s.resets++ },
-		inferenceTriggered: func(StopStrategy) { s.inferences++ },
+		inferenceTriggered: func(StopStrategy, *UserTurnSpeculation) { s.inferences++ },
 		push: func(f frames.Frame, d processor.Direction) {
 			s.pushed = append(s.pushed, d)
 			s.pushedFrame = append(s.pushedFrame, f)

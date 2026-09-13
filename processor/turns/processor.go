@@ -76,10 +76,11 @@ func NewUserTurnProcessor(cfg Config) *UserTurnProcessor {
 	}
 	p.idle = NewUserIdleController(IdleConfig{Timeout: cfg.IdleTimeout, Callback: onIdle})
 	p.turn.SetHooks(ControllerHooks{
-		Started:            p.onTurnStarted,
-		Stopped:            p.onTurnStopped,
-		InferenceTriggered: p.onInferenceTriggered,
-		StopTimeout:        p.onStopTimeout,
+		Started:             p.onTurnStarted,
+		Stopped:             p.onTurnStopped,
+		InferenceTriggered:  p.onInferenceTriggered,
+		SpeculationCanceled: p.onSpeculationCanceled,
+		StopTimeout:         p.onStopTimeout,
 		Push: func(ctx context.Context, f frames.Frame, dir processor.Direction) {
 			_ = p.PushFrame(ctx, f, dir)
 		},
@@ -200,10 +201,22 @@ func (p *UserTurnProcessor) onTurnStopped(
 }
 
 // onInferenceTriggered reports that there is enough to answer on.
-func (p *UserTurnProcessor) onInferenceTriggered(ctx context.Context, strategy StopStrategy) {
+func (p *UserTurnProcessor) onInferenceTriggered(
+	ctx context.Context, strategy StopStrategy, speculation *UserTurnSpeculation,
+) {
 	slog.Debug("user turn inference triggered",
-		"processor", p.Name(), "strategy", strategyName(strategy))
+		"processor", p.Name(), "strategy", strategyName(strategy),
+		"speculative", speculation != nil)
 	p.Events().Call(ctx, EventUserTurnInferenceTriggered, p, strategy)
+}
+
+// onSpeculationCanceled withdraws a speculative reply, so the gate holding it
+// discards it. It is broadcast rather than pushed, so it reaches that gate ahead
+// of the turn end that may follow: arriving after, it would find the reply
+// already released.
+func (p *UserTurnProcessor) onSpeculationCanceled(ctx context.Context) {
+	slog.Debug("withdrawing the speculative reply", "processor", p.Name())
+	_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewEagerEndOfTurnCancelFrame() })
 }
 
 // onStopTimeout reports a turn closed because no strategy closed it.
