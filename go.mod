@@ -20,6 +20,7 @@ require (
 	github.com/jfreymuth/pulse v0.1.3
 	github.com/livekit/protocol v1.50.4
 	github.com/livekit/server-sdk-go/v2 v2.18.1
+	github.com/microsoft/onnxruntime/go v0.0.0-20260910060941-f2c39fe2f838
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/neurosnap/sentences v1.1.2
 	github.com/pion/opus v0.1.1-0.20260831205537-1e54f79ccbe1
@@ -28,7 +29,6 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
-	github.com/yalue/onnxruntime_go v1.36.0
 	github.com/yuin/goldmark v1.8.6
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.46.0

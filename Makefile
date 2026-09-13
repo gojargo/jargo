@@ -69,11 +69,10 @@ COVER_MERGE = awk '/^mode:/ { if (!m) { print; m = 1 } next } \
 # inside the repo so nothing here needs root; docker/runtime.Dockerfile installs
 # the same two libraries into /usr/local for the container image.
 #
-# The version has to satisfy the ORT_API_VERSION the cgo binding is built
-# against (yalue/onnxruntime_go, currently 29): an older runtime refuses the
-# API and every VAD and end-of-turn test skips itself rather than failing, so
-# the models go untested while the download still happens.
-ORT_VERSION ?= 1.29.0
+# The cgo binding negotiates its API version with whatever runtime it finds, so
+# this is not a floor the build has to clear. It tracks the release the binding
+# itself ships in, which keeps the two halves of the same project in step.
+ORT_VERSION ?= 1.30.0
 ORT_ARCH ?= $(if $(filter aarch64 arm64,$(shell uname -m)),aarch64,x64)
 NATIVE_DIR ?= $(CURDIR)/.native
 

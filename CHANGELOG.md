@@ -15,6 +15,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The cgo ONNX backend uses the runtime's own Go binding.** It bound the C++
+  runtime through a third-party package; it now uses
+  `github.com/microsoft/onnxruntime/go`, which ships in the runtime's own
+  repository. That drops the last third-party dependency on jargo's only native
+  boundary, and the binding hands the model a pinned Go slice rather than
+  copying every input. The pure-Go backend is untouched, and the two produce the
+  same results: both reference tests pass under each.
+
+  The runtime pin moves to 1.30.0. It is no longer a floor the build has to
+  clear: the old binding demanded a fixed API version, so an older runtime made
+  every VAD and end-of-turn test skip itself, while this one negotiates with
+  whatever runtime it finds.
+
 - **Time to first answer token separates thinking from answering.** A model
   that reasons before it replies streams something well before the first token
   the caller sees, so time to first byte stopped describing how quickly it

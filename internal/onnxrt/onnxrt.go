@@ -5,7 +5,8 @@
 //
 // The binding has two interchangeable backends, selected at build time:
 //
-//   - cgo build (the default): the C++ ONNX Runtime via yalue/onnxruntime_go.
+//   - cgo build (the default): the C++ ONNX Runtime via its own Go binding,
+//     github.com/microsoft/onnxruntime/go.
 //   - CGO_ENABLED=0 build: the same runtime via ebitengine/purego, calling the
 //     ONNX Runtime C API with no cgo. See backend_purego.go.
 //
@@ -182,6 +183,6 @@ func Available() bool {
 	return Init() == nil
 }
 
-// Backend reports which binding was compiled in: "cgo (yalue)" for the default
-// build, or "purego" for a CGO_ENABLED=0 build.
+// Backend reports which binding was compiled in: "cgo (onnxruntime)" for the
+// default build, or "purego" for a CGO_ENABLED=0 build.
 func Backend() string { return backendName }

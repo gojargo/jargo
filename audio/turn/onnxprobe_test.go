@@ -37,7 +37,7 @@ func newProbeSession(tb testing.TB) *onnxrt.Session {
 	return s
 }
 
-// BenchmarkSmartTurnInference times one Run on the active backend (cgo/yalue or
+// BenchmarkSmartTurnInference times one Run on the active backend (cgo or
 // purego). Compare across builds with:
 //
 //	CGO_ENABLED=1 go test ./audio/turn -run x -bench SmartTurnInference

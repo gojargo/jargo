@@ -242,7 +242,7 @@ func TestTensorConstructors(t *testing.T) {
 // is what a bug report needs to be actionable.
 func TestBackendName(t *testing.T) {
 	switch got := Backend(); got {
-	case "cgo (yalue)", "purego":
+	case "cgo (onnxruntime)", "purego":
 	default:
 		t.Errorf("Backend() = %q, want one of the two known bindings", got)
 	}
