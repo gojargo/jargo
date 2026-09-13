@@ -1380,7 +1380,7 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		// arrive otherwise. What it is told names the function and nothing else.
 		// The error itself reaches the user through the model, and it carries
 		// whatever the handler put in it.
-		_ = report(ctx, fmt.Sprintf(functionCallErrorTemplate, call.name), nil)
+		_ = b.settleCall(ctx, call, fmt.Sprintf(functionCallErrorTemplate, call.name), err.Error(), nil)
 	}
 }
 
@@ -1464,37 +1464,49 @@ func (b *Base) broadcastFunctionCallCanceled(
 // produced it however much has happened since.
 func (b *Base) resultCallback(call *functionCall) FunctionCallResultCallback {
 	return func(ctx context.Context, result string, props *frames.FunctionCallResultProperties) error {
-		if !props.Final() && call.item.cancelOnInterruption {
-			slog.WarnContext(ctx, "intermediate result from a tool that is not asynchronous",
-				"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
-			return nil
-		}
-		// A handler can outlive its call and still hold this callback, so a late
-		// result is rejected here rather than broadcast for the aggregator to
-		// drop.
-		b.callsMu.Lock()
-		if call.settled {
-			b.callsMu.Unlock()
-			slog.WarnContext(ctx, "ignoring the result of a call that has already finished",
-				"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
-			return nil
-		}
-		if props.Final() {
-			call.settled = true
-		}
-		// A tool that has spoken is not stuck, so reporting anything at all,
-		// intermediate results included, disarms the bound on how long it may take.
-		stop := call.stopTimeout
-		b.callsMu.Unlock()
-		if stop != nil {
-			stop()
-		}
-		return b.Broadcast(ctx, func() frames.Frame {
-			f := frames.NewFunctionCallResultFrame(call.toolCallID, call.name, call.args, result)
-			f.Properties = props
-			return f
-		})
+		return b.settleCall(ctx, call, result, "", props)
 	}
+}
+
+// settleCall reports a result against a call. failure is what went wrong on a
+// call whose handler failed, and "" on one that returned: it travels on the
+// frame beside the result so a failed call is legible as one, where the result
+// itself only ever names the function.
+func (b *Base) settleCall(
+	ctx context.Context, call *functionCall, result, failure string,
+	props *frames.FunctionCallResultProperties,
+) error {
+	if !props.Final() && call.item.cancelOnInterruption {
+		slog.WarnContext(ctx, "intermediate result from a tool that is not asynchronous",
+			"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
+		return nil
+	}
+	// A handler can outlive its call and still hold this callback, so a late
+	// result is rejected here rather than broadcast for the aggregator to
+	// drop.
+	b.callsMu.Lock()
+	if call.settled {
+		b.callsMu.Unlock()
+		slog.WarnContext(ctx, "ignoring the result of a call that has already finished",
+			"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
+		return nil
+	}
+	if props.Final() {
+		call.settled = true
+	}
+	// A tool that has spoken is not stuck, so reporting anything at all,
+	// intermediate results included, disarms the bound on how long it may take.
+	stop := call.stopTimeout
+	b.callsMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	return b.Broadcast(ctx, func() frames.Frame {
+		f := frames.NewFunctionCallResultFrame(call.toolCallID, call.name, call.args, result)
+		f.Properties = props
+		f.Error = failure
+		return f
+	})
 }
 
 // cancelFunctionCalls cancels every call in flight that was registered to be

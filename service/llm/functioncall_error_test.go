@@ -282,3 +282,39 @@ func TestAnAsyncCallCanceledByItsDeadlineIsSettledInTheConversation(t *testing.T
 		t.Errorf("messages = %+v, want the canceled call settled", convo.Messages())
 	}
 }
+
+// TestARaisingHandlerMarksTheResultAsFailed covers the failure traveling on the
+// result frame beside the neutral text the model is given. The model is told
+// only that the function failed, and what actually went wrong is there for
+// anything watching the conversation.
+func TestARaisingHandlerMarksTheResultAsFailed(t *testing.T) {
+	watch, _ := runFailingCall(t, func(context.Context, llm.FunctionCallParams) error {
+		return errKaboom
+	})
+
+	watch.mu.Lock()
+	defer watch.mu.Unlock()
+	if len(watch.results) != 1 {
+		t.Fatalf("the call produced %d results, want 1", len(watch.results))
+	}
+	if got := watch.results[0].Error; !strings.Contains(got, "kaboom") {
+		t.Errorf("error = %q, does not carry what the handler said", got)
+	}
+}
+
+// TestACallThatReturnedCarriesNoError covers the other side of the same field: a
+// call that worked must not read as one that failed.
+func TestACallThatReturnedCarriesNoError(t *testing.T) {
+	watch, _ := runFailingCall(t, func(ctx context.Context, params llm.FunctionCallParams) error {
+		return params.Result(ctx, "sunny", nil)
+	})
+
+	watch.mu.Lock()
+	defer watch.mu.Unlock()
+	if len(watch.results) != 1 {
+		t.Fatalf("the call produced %d results, want 1", len(watch.results))
+	}
+	if got := watch.results[0].Error; got != "" {
+		t.Errorf("error = %q, want empty on a call that returned", got)
+	}
+}

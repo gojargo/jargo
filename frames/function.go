@@ -114,6 +114,11 @@ type FunctionCallResultFrame struct {
 	Args json.RawMessage
 	// Result is the tool-result content.
 	Result string
+	// Error is what went wrong, on a call whose handler failed, and "" on one
+	// that returned. Result still carries what the model is told, which names
+	// the function and nothing else: the failure itself is for whoever is
+	// watching the conversation rather than for the model.
+	Error string
 	// RunLLM forces whether generation re-runs after this result. Nil leaves the
 	// decision to the aggregator. Properties, when it sets RunLLM, wins over it.
 	RunLLM *bool
