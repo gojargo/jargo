@@ -66,6 +66,12 @@ type Summarizer struct {
 	autoTrigger bool
 
 	mu sync.Mutex
+	// summary is the summary message the last compression wrote, kept so the
+	// messages added since it can be counted. It is matched against the
+	// conversation rather than trusted, so replacing the messages, resetting the
+	// conversation say, resets the count with them.
+	summary    frames.Message
+	hasSummary bool
 	// inProgress is set from the moment a summary is asked for until its result
 	// arrives, so only one summarization is ever in flight.
 	inProgress bool
@@ -175,15 +181,11 @@ func (s *Summarizer) shouldSummarize() bool {
 	}
 
 	totalTokens := uctx.EstimateContextTokens(s.context)
-	messages := len(s.context.Messages())
 
 	tokenLimit := s.autoConfig.MaxContextTokens
 	tokenLimitExceeded := tokenLimit != nil && totalTokens >= *tokenLimit
 
-	// One message is discounted: the summary written by the previous compression
-	// is itself a message, and counting it would shorten every window after the
-	// first.
-	sinceSummary := messages - 1
+	sinceSummary := s.unsummarizedCount()
 	messageThreshold := s.autoConfig.MaxUnsummarizedMessages
 	messageThresholdExceeded := messageThreshold != nil && sinceSummary >= *messageThreshold
 
@@ -300,6 +302,42 @@ func (s *Summarizer) validateSummaryContext(lastSummarizedIndex int) bool {
 	return remaining >= minKeep
 }
 
+// leadingSystemCount is 1 when the conversation opens with a system message, and
+// 0 otherwise. Only a message at the head of the list is the preamble: one
+// anywhere else is a mid-conversation injection, and belongs to whichever side
+// of a cut it falls on. Both the counting and the rebuild ask this, so the
+// window stays consistent with what a compression actually preserves.
+func leadingSystemCount(messages []frames.Message) int {
+	if len(messages) > 0 && !messages[0].IsLLMSpecific() && messages[0].Role == frames.RoleSystem {
+		return 1
+	}
+	return 0
+}
+
+// unsummarizedCount is how many conversation messages have been added since the
+// last summary was applied, which is what the message threshold is measured
+// against.
+//
+// The preamble does not count, and neither does the summary itself: counting the
+// summary would shorten every window after the first. Both are worked out from
+// the conversation as it stands now, so replacing the messages resets the count
+// with them.
+func (s *Summarizer) unsummarizedCount() int {
+	messages := s.context.Messages()
+	excluded := leadingSystemCount(messages)
+	if s.hasSummary && len(messages) > excluded && sameMessage(messages[excluded], s.summary) {
+		excluded++
+	}
+	return len(messages) - excluded
+}
+
+// sameMessage reports whether a conversation message is the one a compression
+// wrote. Go has no object identity to compare here, so the message is matched by
+// what it holds.
+func sameMessage(a, b frames.Message) bool {
+	return !a.IsLLMSpecific() && a.Role == b.Role && a.Text == b.Text
+}
+
 // applySummary rewrites the conversation as the preserved system message, the
 // summary, and the messages after the summarized range.
 //
@@ -312,23 +350,27 @@ func (s *Summarizer) applySummary(ctx context.Context, summary string, lastSumma
 	// Only a system message at the head of the list is the preamble. One
 	// anywhere else is a mid-conversation injection, and belongs to whichever
 	// side of the cut it fell on.
-	systemPreserved := 0
+	systemPreserved := leadingSystemCount(messages)
 	rebuilt := make([]frames.Message, 0, len(messages))
-	if len(messages) > 0 && !messages[0].IsLLMSpecific() && messages[0].Role == frames.RoleSystem {
+	if systemPreserved == 1 {
 		rebuilt = append(rebuilt, messages[0])
-		systemPreserved = 1
 	}
 
 	recent := messages[lastSummarizedIndex+1:]
 
-	rebuilt = append(rebuilt, frames.Message{
+	summaryMessage := frames.Message{
 		Role: frames.RoleUser,
 		Text: strings.ReplaceAll(cfg.SummaryMessageTemplate, "{summary}", summary),
-	})
+	}
+	rebuilt = append(rebuilt, summaryMessage)
 	rebuilt = append(rebuilt, recent...)
 
 	originalCount := len(messages)
 	s.context.SetMessages(rebuilt)
+
+	s.mu.Lock()
+	s.summary, s.hasSummary = summaryMessage, true
+	s.mu.Unlock()
 
 	summarized := lastSummarizedIndex + 1 - systemPreserved
 

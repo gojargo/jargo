@@ -265,6 +265,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The summarization message window counts the right messages.** It
+  discounted one message unconditionally, so before the first summary a window
+  of twenty compressed at nineteen, and after one it depended on what the
+  conversation happened to hold. The preamble and the summary are now identified
+  rather than assumed, and both are worked out from the conversation as it
+  stands, so replacing the messages resets the window with them.
+
 - **Punctuation no longer shifts the text around it or is recorded twice.**
   The original text now carries two cursors rather than one: what has been
   reported spoken, which stops in front of a mark no event has arrived for, and

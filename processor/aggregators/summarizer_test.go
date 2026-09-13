@@ -530,3 +530,73 @@ func TestMessageThresholdOffDoesNotTriggerBelowTokens(t *testing.T) {
 		t.Errorf("summarized %d times below the token threshold with the message one off", len(*got))
 	}
 }
+
+// TestTheMessageWindowExcludesThePreambleNotAConversationMessage covers the
+// count before any summary has been written. The preamble does not count, and
+// nothing else is discounted: a window of five means five messages of
+// conversation, not four.
+func TestTheMessageWindowExcludesThePreambleNotAConversationMessage(t *testing.T) {
+	convo := summarizerFixture()
+	cfg := frames.AutoSummarizationConfig{
+		MaxContextTokens:        new(100000),
+		MaxUnsummarizedMessages: new(5),
+	}
+	s := aggregators.NewSummarizer(convo, cfg, true)
+	defer s.Cleanup(t.Context())
+	got := recordRequests(s)
+
+	// Four messages of conversation, under a window of five.
+	addUserMessages(convo, 4, "Short message")
+	s.ProcessFrame(t.Context(), frames.NewLLMFullResponseStartFrame())
+	if len(*got) != 0 {
+		t.Fatalf("requested summarization %d times under the window, want 0", len(*got))
+	}
+
+	// The fifth reaches it.
+	addUserMessages(convo, 1, "Short message")
+	s.ProcessFrame(t.Context(), frames.NewLLMFullResponseStartFrame())
+	if len(*got) != 1 {
+		t.Errorf("requested summarization %d times at the window, want 1", len(*got))
+	}
+}
+
+// TestTheMessageWindowRestartsAfterASummary covers the summary itself not
+// counting toward the next window. Counting it would shorten every window after
+// the first, so a conversation would compress more and more often.
+func TestTheMessageWindowRestartsAfterASummary(t *testing.T) {
+	convo := summarizerFixture()
+	cfg := frames.AutoSummarizationConfig{
+		MaxContextTokens:        new(100000),
+		MaxUnsummarizedMessages: new(5),
+	}
+	s := aggregators.NewSummarizer(convo, cfg, true)
+	defer s.Cleanup(t.Context())
+	got := recordRequests(s)
+
+	addUserMessages(convo, 5, "Short message")
+	s.ProcessFrame(t.Context(), frames.NewLLMFullResponseStartFrame())
+	if len(*got) != 1 {
+		t.Fatalf("requested summarization %d times, want 1", len(*got))
+	}
+	// Fold the first message of the conversation into a summary, which leaves
+	// the four most recent as the keep-minimum requires.
+	s.ProcessFrame(t.Context(), frames.NewLLMContextSummaryResultFrame(
+		(*got)[0].RequestID, "a summary", 1))
+
+	// The conversation is now the preamble, the summary, and the four kept, so
+	// four messages count toward the next window of five.
+	if n := len(convo.Messages()); n != 6 {
+		t.Fatalf("the conversation holds %d messages, want 6: preamble, summary and four kept", n)
+	}
+	s.ProcessFrame(t.Context(), frames.NewLLMFullResponseStartFrame())
+	if len(*got) != 1 {
+		t.Errorf("requested summarization %d times, want 1: the summary does not count toward the next window", len(*got))
+	}
+
+	// The fifth message since the summary reaches it again.
+	addUserMessages(convo, 1, "Short message")
+	s.ProcessFrame(t.Context(), frames.NewLLMFullResponseStartFrame())
+	if len(*got) != 2 {
+		t.Errorf("requested summarization %d times, want 2: the next window filled up", len(*got))
+	}
+}
