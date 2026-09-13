@@ -88,6 +88,13 @@ type Config struct {
 	ReconnectOnError *bool
 	// MaxRetries is how many times a reconnect redials before giving up.
 	MaxRetries int
+	// ReconnectBackoffMinWait is the shortest wait between two reconnection
+	// attempts; zero uses four seconds.
+	ReconnectBackoffMinWait time.Duration
+	// ReconnectBackoffMaxWait is the longest wait between two reconnection
+	// attempts; zero uses ten seconds. A provider that refuses a burst of
+	// redials wants a longer ceiling than one that simply dropped the socket.
+	ReconnectBackoffMaxWait time.Duration
 	// QuickFailure configures when repeated instant failures end the retrying.
 	QuickFailure network.QuickFailureConfig
 }
@@ -99,6 +106,7 @@ type Base struct {
 	handler          Handler
 	reconnectOnError bool
 	maxRetries       int
+	minWait, maxWait time.Duration
 	tracker          *network.QuickFailureTracker
 
 	mu                  sync.Mutex
@@ -118,12 +126,23 @@ func New(handler Handler, cfg Config) *Base {
 		handler:          handler,
 		reconnectOnError: cfg.ReconnectOnError == nil || *cfg.ReconnectOnError,
 		maxRetries:       cfg.MaxRetries,
+		minWait:          cfg.ReconnectBackoffMinWait,
+		maxWait:          cfg.ReconnectBackoffMaxWait,
 		tracker:          network.NewQuickFailureTracker(cfg.QuickFailure),
 		now:              time.Now,
 		sleep:            sleepContext,
 	}
 	if b.maxRetries <= 0 {
 		b.maxRetries = DefaultMaxRetries
+	}
+	if b.minWait <= 0 {
+		b.minWait = network.DefaultMinWait
+	}
+	if b.maxWait <= 0 {
+		b.maxWait = network.DefaultMaxWait
+	}
+	if b.maxWait < b.minWait {
+		b.maxWait = b.minWait
 	}
 	return b
 }
@@ -280,7 +299,7 @@ func (b *Base) TryReconnect(ctx context.Context, report ReportError) bool {
 			return true
 		}
 		b.sleep(ctx, network.ExponentialBackoffTime(attempt,
-			network.DefaultMinWait, network.DefaultMaxWait, network.DefaultMultiplier))
+			b.minWait, b.maxWait, network.DefaultMultiplier))
 	}
 
 	message := fmt.Sprintf("failed to reconnect after %d attempts", b.maxRetries)

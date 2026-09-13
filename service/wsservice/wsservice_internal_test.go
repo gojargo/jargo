@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/wsutil"
+	"github.com/gojargo/jargo/utils/network"
 )
 
 // Static failures for the tests to hand back, so each one names what broke.
@@ -658,5 +659,45 @@ func TestServerErrorIsRetried(t *testing.T) {
 	}
 	if _, connects, _ := h.counts(); connects != 3 {
 		t.Errorf("redialed %d times, want 3: a server-side failure may not repeat", connects)
+	}
+}
+
+// TestReconnectBackoffBoundsAreConfigurable covers the waits between redials
+// being the caller's to set: a provider that refuses a burst wants a longer
+// ceiling than one that merely dropped the socket.
+func TestReconnectBackoffBoundsAreConfigurable(t *testing.T) {
+	t.Parallel()
+
+	var waits []time.Duration
+	h := &handler{connect: func(int) error { return errRefused }}
+	b := New(h, Config{
+		MaxRetries:              4,
+		ReconnectBackoffMinWait: 20 * time.Millisecond,
+		ReconnectBackoffMaxWait: 50 * time.Millisecond,
+	})
+	b.now = newClock().Now
+	b.sleep = func(_ context.Context, d time.Duration) { waits = append(waits, d) }
+
+	b.TryReconnect(t.Context(), newRecorder().report)
+
+	if len(waits) == 0 {
+		t.Fatal("no backoff was waited out")
+	}
+	for _, w := range waits {
+		if w < 20*time.Millisecond || w > 50*time.Millisecond {
+			t.Errorf("wait = %s, want it within the configured 20ms to 50ms", w)
+		}
+	}
+}
+
+// TestReconnectBackoffDefaultsToTheStandardBounds covers a caller that sets
+// neither bound getting the four-to-ten-second window.
+func TestReconnectBackoffDefaultsToTheStandardBounds(t *testing.T) {
+	t.Parallel()
+
+	b := New(&handler{}, Config{})
+	if b.minWait != network.DefaultMinWait || b.maxWait != network.DefaultMaxWait {
+		t.Errorf("bounds = %s to %s, want %s to %s",
+			b.minWait, b.maxWait, network.DefaultMinWait, network.DefaultMaxWait)
 	}
 }

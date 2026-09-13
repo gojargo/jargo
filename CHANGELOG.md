@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The websocket reconnect backoff is configurable.**
+  `wsservice.Config.ReconnectBackoffMinWait` and `ReconnectBackoffMaxWait` set
+  the window between redials, which defaulted to four and ten seconds and could
+  not be changed. A provider that refuses a burst of reconnections wants a
+  longer ceiling than one that merely dropped the socket.
+
 - **A segmented transcription is padded before it is sent.** A segment ends
   right where the detector stopped speaking, and models tend to drop or garble
   the final word when audio ends that abruptly, so half a second of silence is
