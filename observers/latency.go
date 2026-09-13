@@ -1,8 +1,6 @@
 package observers
 
 import (
-	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -70,41 +68,16 @@ type LatencyBreakdown struct {
 	// FunctionCalls is how long each tool call of the cycle took. It is empty
 	// when the reply made none.
 	FunctionCalls []FunctionCallMetrics
-}
-
-// ChronologicalEvents renders every measurement in the breakdown as a line of
-// text, ordered by when it started. It is what turns the breakdown into a log of
-// where a slow reply spent its time.
-func (b LatencyBreakdown) ChronologicalEvents() []string {
-	type event struct {
-		at    time.Time
-		label string
-	}
-	var events []event
-
-	if !b.UserTurnStart.IsZero() && b.UserTurn != nil {
-		events = append(events, event{b.UserTurnStart, fmt.Sprintf("User turn: %.3fs", b.UserTurn.Seconds())})
-	}
-	for _, t := range b.TTFB {
-		events = append(events, event{t.StartTime, fmt.Sprintf("%s: TTFB %.3fs", t.Processor, t.Duration.Seconds())})
-	}
-	for _, fc := range b.FunctionCalls {
-		events = append(events, event{fc.StartTime, fmt.Sprintf("%s: %.3fs", fc.FunctionName, fc.Duration.Seconds())})
-	}
-	if ta := b.TextAggregation; ta != nil {
-		events = append(events, event{
-			ta.StartTime,
-			fmt.Sprintf("%s: text aggregation %.3fs", ta.Processor, ta.Duration.Seconds()),
-		})
-	}
-
-	sort.SliceStable(events, func(i, j int) bool { return events[i].at.Before(events[j].at) })
-
-	labels := make([]string, 0, len(events))
-	for _, e := range events {
-		labels = append(labels, e.label)
-	}
-	return labels
+	// Contributions are the named parts of the interval, in chronological order,
+	// summing to the measured latency. A part is listed only if it happened, so
+	// a bot without turn completion has no marker or wait entries.
+	Contributions []LatencyContribution
+	// MeasuredFrom is where the interval was anchored, so a greeting is not
+	// compared with a turn. It is MeasuredFromNothing on a breakdown carrying no
+	// contributions.
+	MeasuredFrom MeasuredFrom
+	// Total is the measured interval, which the contributions sum to.
+	Total time.Duration
 }
 
 // LatencyConfig configures a UserBotLatency observer.
@@ -112,6 +85,14 @@ type LatencyConfig struct {
 	// MaxFrames is how many recent frame ids the observer remembers to
 	// recognize one it has already counted; 0 uses 100.
 	MaxFrames int
+	// MinContribution is the shortest stretch reported in its own right; 0 uses
+	// 5ms. Anything shorter is a frame hop rather than work worth naming, so it
+	// is rolled into the single pipeline contribution. Set it negative to list
+	// every stretch, individual frame hops included.
+	MinContribution time.Duration
+	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
+	// drive a cycle without waiting out the intervals it describes.
+	Now func() time.Time
 	// OnLatency is called with the time from the user stopping speaking to the
 	// bot starting: the user-perceived response latency.
 	OnLatency func(d time.Duration)
@@ -150,11 +131,54 @@ type UserBotLatency struct {
 	clientConnected time.Time
 	firstSpeechDone bool
 
+	// pipelineStarted is when the StartFrame had reached every processor, which
+	// is where the startup report stops measuring. A greeting is timed from
+	// there so the two reports meet rather than overlap.
+	pipelineStarted time.Time
+
+	// moments are the points of the cycle, in the order they were observed, and
+	// llmRequest is the one the model was asked at, kept so a metric reported
+	// against that processor can be worked back to its first chunk.
+	moments    []moment
+	llmRequest *moment
+	// markersSeen reports that this bot uses turn completion at all, which a
+	// marker frame proves. It is not per-cycle: a bot that emits markers keeps
+	// using them.
+	markersSeen bool
+
 	// Per-cycle accumulators, cleared whenever a cycle begins or is abandoned.
 	ttfb       []TTFBBreakdown
 	textAgg    *TextAggregationBreakdown
 	callStarts map[string]FunctionCallMetrics
 	calls      []FunctionCallMetrics
+}
+
+// now reads the clock the observer was configured with.
+func (o *UserBotLatency) now() time.Time {
+	if o.cfg.Now != nil {
+		return o.cfg.Now()
+	}
+	return time.Now()
+}
+
+// minContribution is the threshold below which a stretch is rolled into the
+// pipeline contribution.
+func (o *UserBotLatency) minContribution() time.Duration {
+	if o.cfg.MinContribution == 0 {
+		return defaultMinContribution
+	}
+	return o.cfg.MinContribution
+}
+
+// OnPipelineStarted implements processor.PipelineStartedObserver. The StartFrame
+// has reached every processor by now, which is where the startup report stops
+// measuring.
+func (o *UserBotLatency) OnPipelineStarted() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.pipelineStarted.IsZero() {
+		o.pipelineStarted = o.now()
+	}
 }
 
 // NewUserBotLatency builds a UserBotLatency observer.
@@ -175,10 +199,16 @@ func (o *UserBotLatency) OnPushFrame(data processor.FramePushed) {
 		return
 	}
 
+	// The frames that only place a moment on the timeline are handled apart from
+	// the ones that also move the measurement along.
+	if o.markTimelineMoment(data) || o.timeToolCall(data) {
+		return
+	}
+
 	switch f := data.Frame.(type) {
 	case *frames.ClientConnectedFrame:
 		if o.clientConnected.IsZero() {
-			o.clientConnected = time.Now()
+			o.clientConnected = o.now()
 		}
 	case *frames.VADUserStartedSpeakingFrame:
 		// A new utterance discards whatever the last one had accumulated.
@@ -191,33 +221,110 @@ func (o *UserBotLatency) OnPushFrame(data processor.FramePushed) {
 		// The detector confirms the stop only after its silence window has
 		// elapsed, so the speech itself ended that much earlier. Measuring from
 		// there is what makes the figure the delay the user actually heard.
-		o.stopped = speechStop(f, time.Now())
+		o.stopped = speechStop(f, o.now())
 		o.turnStart = o.stopped
+		// The moment is the determination rather than the speech: the wait the
+		// timeline names is the silence the detector had to hear.
+		at := f.Timestamp
+		if at.IsZero() {
+			at = o.now()
+		}
+		o.mark(moment{at: at, kind: momentVADStop}, false)
 	case *frames.UserStoppedSpeakingFrame:
 		if !o.stopped.IsZero() {
-			d := time.Since(o.stopped)
+			d := o.now().Sub(o.stopped)
 			o.turn = &d
 		}
 	case *frames.InterruptionFrame:
 		// The measurements of a cycle that was cut short describe work nobody
 		// heard, so they are dropped rather than charged to the next reply.
 		o.resetAccumulators()
-	case *frames.FunctionCallInProgressFrame:
-		o.callStarts[f.ToolCallID] = FunctionCallMetrics{
-			FunctionName: f.ToolName,
-			StartTime:    time.Now(),
-		}
-	case *frames.FunctionCallResultFrame:
-		if call, ok := o.callStarts[f.ToolCallID]; ok {
-			delete(o.callStarts, f.ToolCallID)
-			call.Duration = time.Since(call.StartTime)
-			o.calls = append(o.calls, call)
-		}
 	case *frames.MetricsFrame:
 		o.handleMetrics(f)
 	case *frames.BotStartedSpeakingFrame:
+		o.mark(moment{kind: momentBotSpeaking, source: sourceName(data)}, true)
 		o.botStartedSpeaking()
 	}
+}
+
+// timeToolCall times one tool call, from the frame that starts it to the one
+// carrying its result, and reports whether it handled the frame. The caller
+// holds o.mu.
+func (o *UserBotLatency) timeToolCall(data processor.FramePushed) bool {
+	switch f := data.Frame.(type) {
+	case *frames.FunctionCallInProgressFrame:
+		o.callStarts[f.ToolCallID] = FunctionCallMetrics{
+			FunctionName: f.ToolName,
+			StartTime:    o.now(),
+		}
+	case *frames.FunctionCallResultFrame:
+		call, ok := o.callStarts[f.ToolCallID]
+		if !ok {
+			return true
+		}
+		delete(o.callStarts, f.ToolCallID)
+		call.Duration = o.now().Sub(call.StartTime)
+		o.calls = append(o.calls, call)
+	default:
+		return false
+	}
+	return true
+}
+
+// markTimelineMoment records the moment a frame marks, for the frames that do
+// nothing else, and reports whether it handled the frame. The caller holds o.mu.
+func (o *UserBotLatency) markTimelineMoment(data processor.FramePushed) bool {
+	switch f := data.Frame.(type) {
+	case *frames.TranscriptionFrame:
+		// A service can finalize an utterance in several pieces. The turn is not
+		// detectable until the last of them, which is also where the service
+		// stops its own TTFB clock, so a later one replaces the earlier until
+		// the model is asked.
+		if !o.seen(momentLLMRequest) {
+			o.forget(momentTranscript)
+			o.mark(moment{kind: momentTranscript, source: sourceName(data)}, false)
+		}
+	case *frames.LLMFullResponseStartFrame:
+		o.llmRequest = o.mark(moment{kind: momentLLMRequest, source: sourceName(data)}, false)
+	case *frames.LLMMarkerFrame:
+		// A stand-alone marker holds the turn open; one that prefixes a response
+		// is the completion the pipeline was waiting for.
+		o.markersSeen = true
+		// A turn can be held more than once before it completes, so every
+		// incomplete verdict is recorded; only the completion is kept once.
+		kind := momentMarkerComplete
+		if f.AppendToContextImmediately {
+			kind = momentMarkerIncomplete
+		}
+		o.mark(moment{kind: kind}, kind == momentMarkerComplete)
+	case *frames.LLMTextFrame:
+		o.mark(moment{kind: momentFirstText, source: sourceName(data)}, true)
+	case *frames.TTSAudioRawFrame:
+		o.mark(moment{kind: momentFirstAudio, source: sourceName(data)}, true)
+	default:
+		return false
+	}
+	return true
+}
+
+// sourceName is the name of the processor that pushed a frame, and "" where the
+// handover named none.
+func sourceName(data processor.FramePushed) string {
+	if data.Source == nil {
+		return ""
+	}
+	return data.Source.Name()
+}
+
+// forget drops every moment of a kind from the cycle. The caller holds o.mu.
+func (o *UserBotLatency) forget(kind momentKind) {
+	kept := o.moments[:0]
+	for _, m := range o.moments {
+		if m.kind != kind {
+			kept = append(kept, m)
+		}
+	}
+	o.moments = kept
 }
 
 // botStartedSpeaking closes whichever measurements were running and reports
@@ -228,13 +335,13 @@ func (o *UserBotLatency) botStartedSpeaking() {
 	if !o.clientConnected.IsZero() && !o.firstSpeechDone {
 		o.firstSpeechDone = true
 		if o.cfg.OnFirstBotSpeechLatency != nil {
-			o.cfg.OnFirstBotSpeechLatency(time.Since(o.clientConnected))
+			o.cfg.OnFirstBotSpeechLatency(o.now().Sub(o.clientConnected))
 		}
 		report = true
 	}
 
 	if !o.stopped.IsZero() {
-		d := time.Since(o.stopped)
+		d := o.now().Sub(o.stopped)
 		o.stopped = time.Time{}
 		if o.cfg.OnLatency != nil {
 			o.cfg.OnLatency(d)
@@ -246,12 +353,27 @@ func (o *UserBotLatency) botStartedSpeaking() {
 		return
 	}
 	if o.cfg.OnBreakdown != nil {
+		contributions := o.buildContributions()
+		var total time.Duration
+		for _, c := range contributions {
+			total += c.Duration
+		}
+		measuredFrom := MeasuredFromNothing
+		if len(contributions) > 0 {
+			measuredFrom = MeasuredFromClientConnected
+			if !o.turnStart.IsZero() {
+				measuredFrom = MeasuredFromUserSilence
+			}
+		}
 		o.cfg.OnBreakdown(LatencyBreakdown{
 			TTFB:            append([]TTFBBreakdown(nil), o.ttfb...),
 			TextAggregation: o.textAgg,
 			UserTurnStart:   o.turnStart,
 			UserTurn:        o.turn,
 			FunctionCalls:   append([]FunctionCallMetrics(nil), o.calls...),
+			Contributions:   contributions,
+			MeasuredFrom:    measuredFrom,
+			Total:           total,
 		})
 	}
 	o.resetAccumulators()
@@ -267,7 +389,7 @@ func (o *UserBotLatency) handleMetrics(f *frames.MetricsFrame) {
 		return
 	}
 
-	now := time.Now()
+	now := o.now()
 	for _, d := range f.Data {
 		switch m := d.(type) {
 		case frames.TTFBMetricsData:
@@ -280,6 +402,16 @@ func (o *UserBotLatency) handleMetrics(f *frames.MetricsFrame) {
 				StartTime: now.Add(-m.Value),
 				Duration:  m.Value,
 			})
+			if o.llmRequest != nil && m.Processor == o.llmRequest.source {
+				// The first chunk landed before this metric was pushed, so cap
+				// it there rather than letting a derived moment sort after the
+				// frames that followed it.
+				at := o.llmRequest.at.Add(m.Value)
+				if at.After(now) {
+					at = now
+				}
+				o.mark(moment{at: at, kind: momentLLMChunk, source: o.llmRequest.source, derived: true}, false)
+			}
 		case frames.TextAggregationMetricsData:
 			// Only the first is kept: it is the one that held up the start of
 			// the reply, and the ones after it overlap speech already playing.
@@ -296,6 +428,8 @@ func (o *UserBotLatency) handleMetrics(f *frames.MetricsFrame) {
 
 // resetAccumulators clears what a cycle collected. The caller holds o.mu.
 func (o *UserBotLatency) resetAccumulators() {
+	o.moments = nil
+	o.llmRequest = nil
 	o.ttfb = nil
 	o.textAgg = nil
 	o.turnStart = time.Time{}
@@ -328,5 +462,8 @@ func speechStop(f *frames.VADUserStoppedSpeakingFrame, fallback time.Time) time.
 	return at.Add(-time.Duration(f.StopSecs * float64(time.Second)))
 }
 
-// Compile-time interface check.
-var _ processor.Observer = (*UserBotLatency)(nil)
+// Compile-time interface checks.
+var (
+	_ processor.Observer                = (*UserBotLatency)(nil)
+	_ processor.PipelineStartedObserver = (*UserBotLatency)(nil)
+)

@@ -15,6 +15,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The latency breakdown names every part of a turn, not just the measured
+  ones.** `LatencyBreakdown.Contributions` accounts for the whole interval from
+  the user falling silent to the bot speaking, and the parts sum to it exactly.
+  Unlike a TTFB, which reports what a service spent once it was asked, a
+  contribution can name time no service measures: the silence the detector waits
+  out, the tokens a turn-completion marker occupies before anything speakable,
+  the hold while a reply waits for the user to finish, the handler a tool call
+  ran. Each carries a stable key safe to group on, what spent the time, and
+  whether that was a service, a setting, the bot's own code or the pipeline
+  between them, so "where did the turn go" is answerable without matching on
+  names. Time nothing accounts for is reported as pipeline time rather than
+  quietly absorbed, which is what makes a gap visible.
+  `TurnContributionLines` renders it, in order or by cost.
+  `LatencyConfig.Now` and `MinContribution` tune the clock and the threshold
+  below which a stretch is a frame hop rather than work worth naming.
+
 - **Four observers report what a session did, as it happens.**
   `observers.Errors` reports each failure where it is raised rather than where
   it ends up, so a session's history holds the ones a switcher recovered from as
@@ -122,6 +138,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   first logs each frame and its direction, skipping the ones that arrive many
   times a second; the second passes frames through and serializes each for a
   reader outside the pipeline.
+
+### Removed
+
+- **`LatencyBreakdown.ChronologicalEvents` is gone**, replaced by
+  `TurnContributionLines`. The old renderer listed the services that happened to
+  report a metric; the new one names every part of the interval, including the
+  parts no service measures, and always adds up to the latency it describes.
 
 ### Changed
 
