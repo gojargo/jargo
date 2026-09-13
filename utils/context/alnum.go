@@ -133,6 +133,33 @@ func alnumOnly(text string) string {
 // count, so "<break/>" is empty by this measure.
 func hasAlnum(text string) bool { return alnumOnly(text) != "" }
 
+// advanceByChars returns the rune position in runes after advancing past n
+// characters from startPos. Tags (<...>) are crossed without counting against
+// the budget, so the returned span includes any tag met on the way. Everything
+// else counts, punctuation and spaces included.
+//
+// It keeps a cursor in step with one walking the same content written without
+// the tags: both move over the same characters, so neither reaches past what the
+// other has. Where the budget is a count of letters and digits instead, use
+// advanceByAlnums.
+func advanceByChars(runes []rune, startPos, n int) int {
+	pos := startPos
+	count := 0
+	for pos < len(runes) && count < n {
+		if runes[pos] == '<' {
+			if end := indexRune(runes, '>', pos); end != -1 {
+				pos = end + 1
+			} else {
+				pos++
+			}
+			continue
+		}
+		count++
+		pos++
+	}
+	return pos
+}
+
 // advanceByAlnums returns the rune position in runes after advancing past n
 // alphanumeric characters from startPos. Tags (<...>) are skipped entirely and
 // do not count against the budget, so the returned span includes the full tag.

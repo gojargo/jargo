@@ -15,6 +15,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Word tracking recovers from a synthesizer that drops an event.** A word
+  arriving for text a few words further into the frame is now recognized as a
+  recovery rather than rejected: its event arriving means the ones before it
+  were dropped, not that the frame has moved on. The text stepped over travels
+  with the word that found it, so nothing goes missing from the turn, and the
+  word is not also handed to the next frame to be spoken twice. A script written
+  without word separators offers no anchor to match against, so frames in one
+  still end early instead.
+
 - **The latency breakdown names every part of a turn, not just the measured
   ones.** `LatencyBreakdown.Contributions` accounts for the whole interval from
   the user falling silent to the bot speaking, and the parts sum to it exactly.
@@ -242,6 +251,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   through jargo's own encode/decode path, upstream matches the fork it replaces.
 
 ### Fixed
+
+- **Punctuation no longer shifts the text around it or is recorded twice.**
+  The original text now carries two cursors rather than one: what has been
+  reported spoken, which stops in front of a mark no event has arrived for, and
+  what has been attributed, which takes a mark stuck to the end of the word. A
+  synthesizer reporting `","` on its own, after `"Yeah"` already took the comma
+  into its span, now records nothing rather than storing the mark a second time,
+  and `"Yeah,"` then `"I"` reads back correctly where `"Yeah"` then `", I"` put
+  a space before the comma. The word is still emitted either way, because the
+  synthesizer spoke it.
 
 - **The audio buffer's turn buffers survive a recording being stopped, and not
   one being started.** It had the two the wrong way round: stopping a recording

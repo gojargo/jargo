@@ -24,7 +24,12 @@ type WordCompletionTracker struct {
 
 	hasLLM   bool
 	llmRunes []rune
-	llmPos   int
+	// llmPos is what has been attributed and llmSpokenPos what has been reported
+	// spoken. They stop in different places, which is why there are two: a mark
+	// stuck to the end of a word is attributed to it, while nothing has reported
+	// speaking that mark.
+	llmPos       int
+	llmSpokenPos int
 
 	overflowWord string
 	overflowSet  bool
@@ -83,34 +88,54 @@ func (t *WordCompletionTracker) AddWord(word string) bool {
 	}
 
 	prevLLMPos := t.llmPos
+	prevSpokenPos := t.llmSpokenPos
+	prevRawPos := t.segmentMap.RawPos()
 	t.segmentMap.AdvanceWord(word)
 
-	// Neither end of the token is necessarily this frame's: the head can repeat
-	// punctuation the previous word already carried, and the tail can run into
-	// the next frame. The map measures both; keep what is between. Without an
-	// original text there is no recorded span that could already have carried the
-	// mark, so it is new text on this frame.
-	wr := []rune(word)
-	head := 0
-	if t.hasLLM {
-		head = t.segmentMap.LastLeadingDuplicate()
-	}
 	overflow := t.segmentMap.LastOverflow()
-	tail := len(wr)
 	if overflow != "" {
-		tail = len(wr) - len([]rune(overflow))
 		t.overflowWord, t.overflowSet = overflow, true
 	}
-	if head > tail {
-		head = tail
+	spoken := string(t.ttsRunes[prevRawPos:t.segmentMap.RawPos()])
+
+	// Where the text just crossed holds more letters and digits than the word
+	// reported, the synthesizer skipped some: markup does not count, because
+	// synthesizers do not report tags, and only letters and digits are compared
+	// so case, accents, punctuation and spacing make no difference.
+	coversSkipped := len(alnumOnly(stripMarkup(spoken))) > len(alnumOnly(word))
+
+	if coversSkipped {
+		// The text passed over will never be reported on its own, so it travels
+		// with the word that brings the tracker back in sync rather than being
+		// dropped from the turn.
+		t.frameWord, t.frameSet = spoken, true
+	} else {
+		// Neither end of the token is necessarily this frame's: the head can
+		// repeat punctuation the previous word already carried, and the tail can
+		// run into the next frame. The map measures both; keep what is between.
+		// Without an original text there is no recorded span that could already
+		// have carried the mark, so it is new text on this frame.
+		wr := []rune(word)
+		head := 0
+		if t.hasLLM {
+			head = t.segmentMap.LastLeadingDuplicate()
+		}
+		tail := len(wr)
+		if overflow != "" {
+			tail = len(wr) - len([]rune(overflow))
+		}
+		if head > tail {
+			head = tail
+		}
+		t.frameWord, t.frameSet = string(wr[head:tail]), true
 	}
-	t.frameWord, t.frameSet = string(wr[head:tail]), true
 
 	t.userFacingPos = t.segmentMap.UserFacingPos()
 	t.llmPos = t.segmentMap.LLMPos()
+	t.llmSpokenPos = t.segmentMap.LLMSpokenPos()
 
 	if t.hasLLM {
-		t.recordLLMSpan(word, prevLLMPos)
+		t.recordLLMSpan(word, prevLLMPos, prevSpokenPos)
 	}
 
 	complete := t.IsComplete()
@@ -138,8 +163,9 @@ func (t *WordCompletionTracker) forceComplete(word string) bool {
 	t.userFacingPos = len(t.userFacingRunes)
 	if t.hasLLM {
 		// The whole remainder is this frame's by definition, tags included.
-		t.llmConsumed, t.llmSet = string(t.llmRunes[t.llmPos:]), true
+		t.llmConsumed, t.llmSet = string(t.llmRunes[t.llmSpokenPos:]), true
 		t.llmPos = len(t.llmRunes)
+		t.llmSpokenPos = len(t.llmRunes)
 	}
 	t.forceCompleted = true
 	t.overflowWord, t.overflowSet = word, true
@@ -162,14 +188,15 @@ func (t *WordCompletionTracker) forceComplete(word string) bool {
 // be misread as "spent nothing" and would walk the cursor through text the
 // transform covers. Only the word completing the segment carries its original
 // span.
-func (t *WordCompletionTracker) recordLLMSpan(word string, prevLLMPos int) {
+func (t *WordCompletionTracker) recordLLMSpan(word string, prevLLMPos, prevSpokenPos int) {
 	switch {
 	case t.IsComplete():
 		t.llmConsumed, t.llmSet = string(t.llmRunes[prevLLMPos:]), true
 		t.llmPos = len(t.llmRunes)
+		t.llmSpokenPos = len(t.llmRunes)
 	case t.segmentMap.InTransformedSegment():
 		t.llmConsumed, t.llmSet = "", false
-	case t.llmPos == prevLLMPos && !t.segmentMap.hasLastCompleted():
+	case t.llmSpokenPos == prevSpokenPos && t.llmPos == prevLLMPos && !t.segmentMap.hasLastCompleted():
 		start := t.llmPos
 		for start < len(t.llmRunes) && unicode.IsSpace(t.llmRunes[start]) {
 			start++
@@ -190,11 +217,26 @@ func (t *WordCompletionTracker) WordBelongsHere(word string) bool {
 	return t.segmentMap.WordBelongsCurrentSegment(word)
 }
 
-// Suppress reports whether the last word is mid-flight inside a transformed
-// segment. When true, the per-word frame must not be written to the context;
-// only the completing word of the segment carries the original text.
+// Suppress reports whether the last word must not be written to the
+// conversation context. Two kinds of word answer to this, both of which the
+// context already has covered, or will have.
+//
+// One step inside a rewritten span: "$42.50" is spoken as five words, none of
+// which the transcript should contain, and the word that finishes the span
+// carries "$42.50" for all of them.
+//
+// A word with no span of its own: a synthesizer reporting "," on its own, after
+// "Yeah" took the comma into its span, has nothing left to record. The context
+// falls back to the spoken text when a word carries no span, which would store
+// the mark a second time.
+//
+// The word is still emitted either way: the synthesizer spoke it, and a consumer
+// reading the word stream should see it. Without an original text there are no
+// spans at all, so nothing is suppressed and every word is recorded from its
+// spoken text as usual.
 func (t *WordCompletionTracker) Suppress() bool {
-	return t.segmentMap.InTransformedSegment()
+	return t.segmentMap.InTransformedSegment() ||
+		(t.hasLLM && strings.TrimSpace(t.llmConsumed) == "")
 }
 
 // FrameWord returns the portion of the last word belonging to this frame,
@@ -280,7 +322,7 @@ func (t *WordCompletionTracker) AccumulatedRawText() (string, bool) {
 	if !t.hasLLM {
 		return "", false
 	}
-	return string(t.llmRunes[:t.llmPos]), true
+	return string(t.llmRunes[:t.llmSpokenPos]), true
 }
 
 // RemainingRawTextOnly returns the unspoken portion of the original text,
@@ -290,7 +332,7 @@ func (t *WordCompletionTracker) RemainingRawTextOnly() (string, bool) {
 	if !t.hasLLM {
 		return "", false
 	}
-	return strings.TrimSpace(string(t.llmRunes[t.llmPos:])), true
+	return strings.TrimSpace(string(t.llmRunes[t.llmSpokenPos:])), true
 }
 
 // IsComplete reports whether this frame's TTS text has been fully accounted for.
@@ -302,6 +344,7 @@ func (t *WordCompletionTracker) IsComplete() bool {
 func (t *WordCompletionTracker) Reset() {
 	t.userFacingPos = 0
 	t.llmPos = 0
+	t.llmSpokenPos = 0
 	t.overflowWord, t.overflowSet = "", false
 	t.llmConsumed, t.llmSet = "", false
 	t.frameWord, t.frameSet = "", false

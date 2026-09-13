@@ -478,13 +478,18 @@ func TestCJKCompletion(t *testing.T) {
 		}
 	})
 
-	t.Run("Korean, a word belongs only once the one before it is spoken", func(t *testing.T) {
+	t.Run("Korean, a word further into the frame belongs here too", func(t *testing.T) {
 		tr := NewWordCompletionTracker("저는 여러분의", "", "")
 		if !tr.WordBelongsHere("저는") {
 			t.Fatal("the first word was rejected")
 		}
-		if tr.WordBelongsHere("여러분의") {
-			t.Fatal("the second word was accepted before the first was spoken")
+		// Its event arriving means the ones before it were dropped, not that the
+		// frame has moved on.
+		if !tr.WordBelongsHere("여러분의") {
+			t.Fatal("the second word was rejected, want it recognized as a recovery")
+		}
+		if tr.WordBelongsHere("안녕하세요") {
+			t.Fatal("a word this frame never says was accepted")
 		}
 		tr.AddWord("저는")
 		if !tr.WordBelongsHere("여러분의") {
@@ -1688,4 +1693,118 @@ func TestTextNoWordArrivesFor(t *testing.T) {
 			t.Fatalf("what has been said = %q, want %q", got, written)
 		}
 	})
+}
+
+// TestRepeatedMarkIsKeptWithoutAnOriginalText covers the mark being this frame's
+// text when no span is recorded to carry it.
+//
+// A synthesizer may report the comma of "Yeah," with the following word instead.
+// With an original text that repeat is trimmed, because the span attributed to
+// "Yeah" already ends in it. Without one nothing records spans, and the frame
+// word is the synthesizer's own token, which never carried the comma, so
+// trimming here would delete it outright.
+func TestRepeatedMarkIsKeptWithoutAnOriginalText(t *testing.T) {
+	tr := NewWordCompletionTracker("Yeah, I can", "", "")
+
+	var got []string
+	for _, w := range []string{"Yeah", ", I", " can"} {
+		tr.AddWord(w)
+		word, _ := tr.FrameWord()
+		got = append(got, word)
+	}
+
+	want := []string{"Yeah", ", I", "can"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("frame words = %v, want %v", got, want)
+	}
+}
+
+// TestRepeatedMarkIsRecordedOnceWithAnOriginalText covers the same stream where
+// the recorded span does carry the mark: the comma reaches the context once,
+// attributed to the word it is stuck to, rather than twice or on the wrong side
+// of the space.
+func TestRepeatedMarkIsRecordedOnceWithAnOriginalText(t *testing.T) {
+	const text = "Yeah, I can"
+	tr := NewWordCompletionTracker(text, text, text)
+
+	var spans []string
+	for _, w := range []string{"Yeah", ", I", " can"} {
+		tr.AddWord(w)
+		raw, _ := tr.RawText()
+		spans = append(spans, raw)
+	}
+
+	want := []string{"Yeah,", "I", "can"}
+	if strings.Join(spans, "|") != strings.Join(want, "|") {
+		t.Errorf("spans = %v, want %v: the comma is recorded once", spans, want)
+	}
+}
+
+// TestALoneMarkRecordsNothing covers the other half of recording a mark once. A
+// synthesizer reporting "," on its own, after "Yeah" already took the comma into
+// its span, has nothing left to record: the context falls back to the spoken
+// text for a word carrying no span, which would store the mark a second time.
+//
+// The word is still emitted, because the synthesizer spoke it.
+func TestALoneMarkRecordsNothing(t *testing.T) {
+	const text = "Yeah, I can"
+	tr := NewWordCompletionTracker(text, text, text)
+
+	tr.AddWord("Yeah")
+	if tr.Suppress() {
+		t.Fatal("the first word was suppressed, want it recorded")
+	}
+
+	tr.AddWord(",")
+	if !tr.Suppress() {
+		raw, _ := tr.RawText()
+		t.Errorf("the lone mark recorded %q, want it suppressed: Yeah already carried it", raw)
+	}
+	if word, ok := tr.FrameWord(); !ok || word != "," {
+		t.Errorf("frame word = %q, want the mark: it was spoken", word)
+	}
+}
+
+// TestAWordAfterADroppedEventCarriesTheTextBeforeIt covers a synthesizer that
+// never reports one of the words. The text it passed over will never arrive on
+// its own, so it travels with the word that brings the tracker back in sync
+// rather than going missing from the turn.
+func TestAWordAfterADroppedEventCarriesTheTextBeforeIt(t *testing.T) {
+	tr := NewWordCompletionTracker("저는 여러분의", "", "")
+
+	if !tr.AddWord("여러분의") {
+		t.Fatal("the frame did not complete")
+	}
+	word, ok := tr.FrameWord()
+	if !ok || word != "저는 여러분의" {
+		t.Errorf("frame word = %q, want the skipped text carried with it", word)
+	}
+	// The word was consumed here, so it must not also be handed to the next
+	// frame. Ending the frame early instead would emit the same text and then
+	// offer the word on, which speaks it twice.
+	if overflow, ok := tr.OverflowWord(); ok {
+		t.Errorf("overflow = %q, want none: the word was consumed by this frame", overflow)
+	}
+}
+
+// TestAWordAfterAnUnrepeatedCommaIsConsumedNormally covers punctuation the
+// synthesizer did not repeat as its own token: the word after it is recognized
+// and consumed rather than dropped through a force-complete.
+func TestAWordAfterAnUnrepeatedCommaIsConsumedNormally(t *testing.T) {
+	tr := NewWordCompletionTracker("Yeah, I can do that.", "", "")
+
+	for _, w := range []string{"Yeah", "I", "can", "do"} {
+		if !tr.WordBelongsHere(w) {
+			t.Fatalf("%q does not belong here, want it consumed normally", w)
+		}
+		if tr.AddWord(w) {
+			t.Fatalf("the frame completed early on %q", w)
+		}
+		if got, _ := tr.FrameWord(); got != w {
+			t.Errorf("frame word = %q, want %q", got, w)
+		}
+	}
+	if !tr.AddWord("that") {
+		t.Error("the frame did not complete on the last word")
+	}
 }

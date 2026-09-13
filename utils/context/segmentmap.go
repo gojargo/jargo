@@ -141,6 +141,7 @@ type TextSegmentMap struct {
 	segRawPos            int
 	userFacingPos        int
 	llmPos               int
+	llmSpokenPos         int
 	lastCompleted        *textSegment
 	lastOverflow         string
 	lastLeadingDuplicate int
@@ -359,6 +360,64 @@ func markupHop(segmentRemaining, remainingWord string) *hop {
 	return nil
 }
 
+// lookaheadWords is how many word starts past the cursor a word may be found at
+// before the match is treated as coincidence rather than recovery.
+const lookaheadWords = 3
+
+// lookaheadHop looks for remainingWord a few words further into this segment.
+//
+// It is reached only once the three strategies above have all declined, which
+// means the synthesizer garbled or dropped an event and the text at the cursor
+// will never be reported on its own. Matching a word a little further on puts
+// the segment back in step, and the text stepped over is consumed with the word
+// that found it rather than being lost.
+//
+// Two limits keep a coincidence from being read as a recovery. Only whole words
+// anchor the match, so a partial prefix is not enough, and only the next
+// lookaheadWords of them are tried, so a word repeated later in a long segment
+// cannot swallow everything before it.
+//
+// Word separators are what those anchors are found by, so a script written
+// without them (Japanese, Chinese) offers a single word start for the whole run
+// and never matches here; frames in one recover by being force-completed
+// instead. Spaced scripts, Korean among them, recover normally.
+//
+// foldedHop alone does the matching, since it already demands the whole word
+// this needs, and folding only ever widens what matches: the fold is one
+// character for one, so anything matching literally matches folded too.
+//
+// A segment holding markup is left alone: tag names are made of letters, so a
+// word start inside one would read as something spoken. That also keeps the
+// match from anchoring inside a rewritten span whose words carry tags.
+func lookaheadHop(segmentRemaining, remainingWord string) *hop {
+	if strings.ContainsRune(segmentRemaining, '<') {
+		return nil
+	}
+
+	runes := []rune(segmentRemaining)
+	var wordStarts []int
+	for i, r := range runes {
+		if isAlnum(r) && (i == 0 || !isAlnum(runes[i-1])) {
+			wordStarts = append(wordStarts, i)
+		}
+	}
+	// The first word start is where the strategies above already looked.
+	if len(wordStarts) > 1 {
+		wordStarts = wordStarts[1:]
+	} else {
+		return nil
+	}
+	wordStarts = wordStarts[:min(len(wordStarts), lookaheadWords)]
+
+	for _, offset := range wordStarts {
+		h := foldedHop([]cand{{string(runes[offset:]), offset}}, remainingWord)
+		if h != nil && h.kind == hopPlaced {
+			return h
+		}
+	}
+	return nil
+}
+
 // classifyHop decides what remainingWord does to the text left in this segment.
 // Everything here is plain string comparison: no tag names are understood, and
 // nothing is remembered between calls.
@@ -385,6 +444,9 @@ func classifyHop(segmentRemaining, remainingWord string) hop {
 	}
 	if h == nil {
 		h = markupHop(segmentRemaining, remainingWord)
+	}
+	if h == nil {
+		h = lookaheadHop(segmentRemaining, remainingWord)
 	}
 	if h != nil {
 		return *h
@@ -433,7 +495,8 @@ func (m *TextSegmentMap) advanceCursorsTo(seg *textSegment, newPos int) {
 // this step just spoke. The count of letters and digits consumed here is what
 // they move by.
 func (m *TextSegmentMap) keepDerivedCursorsInPace(seg *textSegment, newPos int) {
-	nAlnum := len([]rune(alnumOnly(string(seg.ttsRunes[m.segRawPos:newPos]))))
+	crossed := seg.ttsRunes[m.segRawPos:newPos]
+	nAlnum := len([]rune(alnumOnly(string(crossed))))
 	if nAlnum > 0 {
 		m.userFacingPos = advanceByAlnums(m.origRunes, m.userFacingPos, nAlnum)
 	} else {
@@ -444,7 +507,27 @@ func (m *TextSegmentMap) keepDerivedCursorsInPace(seg *textSegment, newPos int) 
 		// are identical here, so that offset is exact.
 		m.userFacingPos = seg.origStart + rtrimLen(seg.ttsRunes[:newPos])
 	}
-	m.llmPos = advanceByAlnums(m.llmRunes, m.llmPos, nAlnum)
+	m.advanceLLMCursors(crossed, nAlnum)
+}
+
+// advanceLLMCursors moves both cursors into the original text for a step that
+// just spoke crossed.
+//
+// The two answer different questions and so stop in different places, which is
+// the whole reason there are two of them. llmSpokenPos is what has been reported
+// spoken: it crosses exactly the characters the raw cursor did, so it stops in
+// front of a mark no event has arrived for. llmPos is what has been attributed:
+// it also takes a mark stuck to the end of the word, since the conversation
+// context is rebuilt by joining the attributed spans and every character has to
+// belong to one of them. "Yeah," then "I" reads back correctly where "Yeah" then
+// ", I" would put a space before the comma.
+//
+// Attribution never moves backwards and never trails what was spoken, so a step
+// that spends no budget on the attributed side (an emoji, or a symbol the source
+// spells differently) is still credited to the word that crossed it.
+func (m *TextSegmentMap) advanceLLMCursors(crossed []rune, nAlnum int) {
+	m.llmSpokenPos = advanceByChars(m.llmRunes, m.llmSpokenPos, len(crossed))
+	m.llmPos = max(advanceByAlnums(m.llmRunes, m.llmPos, nAlnum), m.llmSpokenPos)
 }
 
 // commitTransformedSpan jumps the other two cursors to the end of seg, now that
@@ -454,6 +537,8 @@ func (m *TextSegmentMap) commitTransformedSpan(seg *textSegment) {
 	// The original's count, not the TTS side's: llmText holds "$42.50" (4
 	// alnums), never the spoken "forty two dollars".
 	m.llmPos = advanceByAlnums(m.llmRunes, m.llmPos, seg.originalAlnumCount())
+	// The span is spoken in full or not at all, so both cursors land together.
+	m.llmSpokenPos = m.llmPos
 }
 
 // finishSegment records seg as finished and moves on to the next segment.
@@ -680,6 +765,11 @@ func (m *TextSegmentMap) UserFacingPos() int { return m.userFacingPos }
 // offset.
 func (m *TextSegmentMap) LLMPos() int { return m.llmPos }
 
+// LLMSpokenPos is how far into the original text has been reported spoken, which
+// stops in front of a mark no word event has arrived for. LLMPos is the
+// companion cursor, which takes that mark.
+func (m *TextSegmentMap) LLMSpokenPos() int { return m.llmSpokenPos }
+
 // RawPos is how far into the TTS text the synthesizer has spoken, counted from
 // its start as a rune offset.
 func (m *TextSegmentMap) RawPos() int {
@@ -789,6 +879,7 @@ func (m *TextSegmentMap) Reset() {
 	m.segRawPos = 0
 	m.userFacingPos = 0
 	m.llmPos = 0
+	m.llmSpokenPos = 0
 	m.lastCompleted = nil
 	m.lastOverflow = ""
 	m.lastLeadingDuplicate = 0
