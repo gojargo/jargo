@@ -51,6 +51,17 @@ type Result struct {
 	// the pipeline can defer to that instead. A result may carry a boundary and
 	// no text.
 	Speech SpeechState
+	// EagerEndOfTurn reports that the provider predicts the turn has ended,
+	// without having committed to it. The text is what it heard for the turn so
+	// far, and the prediction is withdrawn with EagerEndOfTurnWithdrawn if the
+	// user turns out to be mid-sentence.
+	//
+	// It is only acted on by a service configured for it, since answering a
+	// prediction spends an inference on every one, including the withdrawn ones.
+	EagerEndOfTurn bool
+	// EagerEndOfTurnWithdrawn reports that a prediction the provider made has
+	// turned out to be wrong, most often because the user resumed speaking.
+	EagerEndOfTurnWithdrawn bool
 	// FromFinalize reports that this result is the provider answering the
 	// finalize it was asked for. Only a provider that confirms a flush sets it,
 	// and only then is the transcript that follows the last one for the
@@ -245,6 +256,17 @@ type LanguageNamer interface {
 	ServiceLanguage(l language.Language) string
 }
 
+// EagerEndOfTurner is an optional interface a Connector implements when its
+// provider predicts the end of a turn before committing to it.
+//
+// Answering a prediction spends an inference on every one, including the ones
+// the provider withdraws, so it is the provider's own configuration that says
+// whether the service acts on them.
+type EagerEndOfTurner interface {
+	// EagerEndOfTurn reports whether the provider is configured to predict.
+	EagerEndOfTurn() bool
+}
+
 // Metadata describes an STT service to downstream processors. A Connector or
 // Transcriber implements Describer to provide it at pipeline start.
 type Metadata struct {
@@ -310,6 +332,13 @@ type StreamService struct {
 	ws      *wsservice.Base
 	ttfb    *ttfbTracker
 	tracer  *segmentTracer
+
+	// eagerEndOfTurn reports whether this service answers a predicted end of
+	// turn ahead of the committed one, and eagerPending whether a prediction is
+	// outstanding. Both are read and written on the read loop, which is the only
+	// goroutine that emits results.
+	eagerEndOfTurn bool
+	eagerPending   bool
 
 	sampleRate int
 	mu         sync.Mutex
@@ -395,6 +424,9 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s := &StreamService{conn: conn, cfgRate: sampleRate}
 	if d, ok := conn.(Describer); ok {
 		s.model = d.Metadata().Model
+	}
+	if e, ok := conn.(EagerEndOfTurner); ok {
+		s.eagerEndOfTurn = e.EagerEndOfTurn()
 	}
 	if k, ok := conn.(Keepaliver); ok {
 		s.keepalive = k.Keepalive()
@@ -1179,11 +1211,56 @@ func (s *StreamService) emit(ctx context.Context, r Result) {
 	if r.Speech == SpeechStarted {
 		s.emitSpeech(ctx, r)
 	}
+	s.emitEagerEndOfTurn(ctx, r)
 	s.emitTranscript(ctx, r)
 	if r.Speech == SpeechStopped {
 		s.emitSpeech(ctx, r)
 	}
 }
+
+// emitEagerEndOfTurn reports a prediction the provider made about the turn
+// ending, or withdraws one.
+//
+// Both are inert unless the service was configured for eager end of turn, so a
+// connector can report what its protocol says without guarding each call: a
+// provider that predicts is not the same as a pipeline that wants the prediction
+// answered.
+//
+// At most one prediction is outstanding at a time, so neither frame names which
+// one it means.
+func (s *StreamService) emitEagerEndOfTurn(ctx context.Context, r Result) {
+	if !s.eagerEndOfTurn {
+		return
+	}
+	switch {
+	case r.EagerEndOfTurn:
+		s.eagerPending = true
+		slog.DebugContext(ctx, "eager end of turn", "service", s.Name(), "text", r.Text)
+		f := frames.NewEagerTranscriptionFrame(r.Text, "", frames.NowTimestamp())
+		f.Language = r.Language
+		_ = s.PushFrame(ctx, f, processor.Downstream)
+	case r.EagerEndOfTurnWithdrawn:
+		if !s.eagerPending {
+			return
+		}
+		s.eagerPending = false
+		slog.DebugContext(ctx, "eager end of turn withdrawn", "service", s.Name())
+		_ = s.PushFrame(ctx, frames.NewEagerEndOfTurnCancelFrame(), processor.Downstream)
+	case r.Final && r.EndOfTurn:
+		// The turn was committed, so the prediction is resolved. Whatever was
+		// generated from it is settled by the committed transcript rather than
+		// by anything here.
+		s.eagerPending = false
+	}
+}
+
+// EagerEndOfTurnEnabled reports whether predicted ends of turn are answered
+// ahead of committed ones.
+func (s *StreamService) EagerEndOfTurnEnabled() bool { return s.eagerEndOfTurn }
+
+// EagerEndOfTurnPending reports whether a prediction is awaiting a committed end
+// of turn.
+func (s *StreamService) EagerEndOfTurnPending() bool { return s.eagerPending }
 
 // emitTranscript pushes the text a result carries, and settles the finalize it
 // answers.

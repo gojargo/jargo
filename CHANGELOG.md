@@ -15,6 +15,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A predicted end of turn is answered while the turn is still open.** Some
+  transcribers report that a turn has probably ended before committing to it,
+  and withdraw the prediction if the user turns out to be mid-sentence. The gap
+  between the guess and the commit is now spent generating rather than waiting.
+
+  Nothing a speculation produces reaches the user or the conversation. The
+  inference runs against a provisional copy carrying the predicted turn text,
+  and the model service holds every frame of its reply until the turn is
+  confirmed. A prediction can be wrong three ways, and each withdraws the reply:
+  the service takes its guess back, the committed transcript differs from the
+  predicted one, or the turn never commits at all. The message written to the
+  conversation is always the committed transcript, never the eager one.
+
+  `turns.EagerStrategies` installs it, `NormalizedMatch` decides how close the
+  committed transcript has to be (ignoring the capitalization and punctuation
+  services add on commit, `ExactMatch` for a stricter rule), and a transcriber
+  opts in by reporting `EagerEndOfTurn` on its results. Deepgram Flux does so
+  when its eager threshold is set.
+
 - **The cgo ONNX backend uses the runtime's own Go binding.** It bound the C++
   runtime through a third-party package; it now uses
   `github.com/microsoft/onnxruntime/go`, which ships in the runtime's own
@@ -287,6 +306,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   through jargo's own encode/decode path, upstream matches the fork it replaces.
 
 ### Fixed
+
+- **A Deepgram Flux eager end of turn is no longer reported as an interim
+  transcript.** It folded `EagerEndOfTurn` in with `Update` and pushed it as a
+  partial, so the prediction looked like ordinary in-progress text and
+  `TurnResumed` withdrew nothing. The two now report what they are, which is
+  what lets a reply be generated from the prediction and withdrawn when the user
+  turns out to be mid-sentence.
 
 - **The summarization message window counts the right messages.** It
   discounted one message unconditionally, so before the first summary a window

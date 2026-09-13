@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -114,11 +115,27 @@ func TestFluxResults(t *testing.T) {
 		t.Fatalf("EndOfTurn speech = %v, want SpeechStopped", res[0].Speech)
 	}
 
-	// TurnResumed and non-TurnInfo messages produce nothing.
-	resumed := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventTurnResumed}
-	if res := fluxResults(resumed, defaultFluxModel, nil); len(res) != 0 {
-		t.Fatalf("TurnResumed result = %+v", res)
+	// EagerEndOfTurn is Flux predicting the turn has ended without committing
+	// to it. It is not an interim transcript: a reply may be generated from it,
+	// which nothing would do for a partial.
+	eager := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventEagerEndOfTurn, Transcript: "book a flight"}
+	res = fluxResults(eager, defaultFluxModel, nil)
+	if len(res) != 1 || !res[0].EagerEndOfTurn || res[0].Text != "book a flight" {
+		t.Fatalf("EagerEndOfTurn result = %+v", res)
 	}
+	if res[0].Final || res[0].EndOfTurn {
+		t.Fatalf("EagerEndOfTurn result = %+v, want neither final nor the end of the turn", res[0])
+	}
+
+	// TurnResumed says the user was not finished after all, so the prediction
+	// Flux made about this turn is void.
+	resumed := fluxMessage{Type: fluxMsgTurnInfo, Event: fluxEventTurnResumed}
+	res = fluxResults(resumed, defaultFluxModel, nil)
+	if len(res) != 1 || !res[0].EagerEndOfTurnWithdrawn {
+		t.Fatalf("TurnResumed result = %+v, want the prediction withdrawn", res)
+	}
+
+	// A non-TurnInfo message produces nothing.
 	if res := fluxResults(fluxMessage{Type: fluxMsgConnected}, defaultFluxModel, nil); len(res) != 0 {
 		t.Fatalf("Connected result = %+v", res)
 	}
@@ -207,5 +224,25 @@ func TestFluxConnectAndRecv(t *testing.T) {
 	}
 	if len(res) != 1 || res[0].Text != "hello" || !res[0].Final || !res[0].EndOfTurn || res[0].Language != "en" {
 		t.Fatalf("final result = %+v", res)
+	}
+}
+
+// TestFluxRecommendsEagerTurnsOnlyWhenAskedToPredict covers the recommendation
+// following the configuration: answering a prediction spends an inference on
+// every one, including the withdrawn ones, so it is only recommended by a
+// connector actually configured to predict.
+func TestFluxRecommendsEagerTurnsOnlyWhenAskedToPredict(t *testing.T) {
+	plain := newFluxConnector(FluxConfig{Model: defaultFluxModel})
+	if plain.EagerEndOfTurn() {
+		t.Error("a connector with no eager threshold reports that it predicts")
+	}
+	if _, ok := plain.Metadata().UserTurnStrategies.(turns.UserTurnStrategies); !ok {
+		t.Fatal("the metadata carries no turn strategies")
+	}
+
+	threshold := 0.7
+	eager := newFluxConnector(FluxConfig{Model: defaultFluxModel, EagerEOTThreshold: &threshold})
+	if !eager.EagerEndOfTurn() {
+		t.Error("a connector with an eager threshold does not report that it predicts")
 	}
 }

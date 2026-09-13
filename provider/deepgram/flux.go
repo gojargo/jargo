@@ -416,15 +416,33 @@ func (c *fluxConnector) ClassifyError(err error) errs.Category {
 	return errs.Unset
 }
 
+// EagerEndOfTurn reports whether Flux was asked to predict the end of a turn
+// before committing to it, which is what the eager threshold turns on.
+func (c *fluxConnector) EagerEndOfTurn() bool {
+	if c.live != nil {
+		if _, ok := c.live.EagerEOTThreshold.Value(); ok {
+			return true
+		}
+	}
+	return c.cfg.EagerEOTThreshold != nil
+}
+
 // Metadata recommends external user turns: Flux emits its own turn boundaries.
+// With the eager threshold set it recommends the eager ones instead, which
+// answer a predicted end of turn while the turn is still open.
 func (c *fluxConnector) Metadata() stt.Metadata {
 	noTTFS := false
+	external := turns.ExternalStrategiesConfig{EnableInterruptions: c.cfg.ShouldInterrupt}
+	strategies := turns.ExternalStrategies(external)
+	if c.EagerEndOfTurn() {
+		strategies = turns.EagerStrategies(turns.EagerStrategiesConfig{
+			ExternalStrategiesConfig: external,
+		})
+	}
 	return stt.Metadata{
-		UserTurnStrategies: turns.ExternalStrategies(turns.ExternalStrategiesConfig{
-			EnableInterruptions: c.cfg.ShouldInterrupt,
-		}),
-		SupportsTTFS: &noTTFS,
-		Model:        c.live.Model.Or(c.cfg.Model),
+		UserTurnStrategies: strategies,
+		SupportsTTFS:       &noTTFS,
+		Model:              c.live.Model.Or(c.cfg.Model),
 	}
 }
 
@@ -832,11 +850,19 @@ func fluxResults(m fluxMessage, model string, minConf *float64) []stt.Result {
 	switch m.Event {
 	case fluxEventStartOfTurn:
 		return []stt.Result{{Speech: stt.SpeechStarted}}
-	case fluxEventUpdate, fluxEventEagerEndOfTurn:
+	case fluxEventUpdate:
 		if m.Transcript == "" {
 			return nil
 		}
 		return []stt.Result{{Text: m.Transcript, Final: false, Language: lang}}
+	case fluxEventEagerEndOfTurn:
+		if m.Transcript == "" {
+			return nil
+		}
+		// Flux predicts the turn has ended without committing to it. That is not
+		// an interim transcript: a reply may be generated from it, which nothing
+		// would do for a partial, and it is withdrawn on TurnResumed.
+		return []stt.Result{{Text: m.Transcript, EagerEndOfTurn: true, Language: lang}}
 	case fluxEventEndOfTurn:
 		if !confidenceOK(m.Words, minConf) {
 			slog.Warn("transcription confidence is below the configured floor, dropping the text",
@@ -848,7 +874,9 @@ func fluxResults(m fluxMessage, model string, minConf *float64) []stt.Result {
 			Language: lang, Speech: stt.SpeechStopped,
 		}}
 	case fluxEventTurnResumed:
-		return nil
+		// The user was not finished after all, so any prediction Flux made about
+		// this turn is void.
+		return []stt.Result{{EagerEndOfTurnWithdrawn: true}}
 	default:
 		return nil
 	}

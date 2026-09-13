@@ -639,3 +639,94 @@ func TestTrailingSilenceIsConfigurable(t *testing.T) {
 		t.Errorf("transcriber got %d bytes, want %d", len(got), len(want))
 	}
 }
+
+// eagerConnector is a connector whose provider predicts the end of a turn, with
+// the prediction switchable so both halves of the rule can be driven.
+type eagerConnector struct {
+	fakeConnector
+	predicts bool
+}
+
+func (c *eagerConnector) EagerEndOfTurn() bool { return c.predicts }
+
+// eagerFrameNames drives a connector's results through a stream service and
+// returns which of the eager frames reached the pipeline.
+func eagerFrameNames(t *testing.T, predicts bool, results [][]stt.Result) (eager, withdrawn int) {
+	t.Helper()
+
+	conn := &eagerConnector{
+		stream:   &fakeStream{results: results},
+		predicts: predicts,
+	}
+	svc := stt.NewStream("FakeSTT", conn, 16000)
+
+	var mu sync.Mutex
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.EagerTranscriptionFrame:
+			eager++
+		case *frames.EagerEndOfTurnCancelFrame:
+			withdrawn++
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	time.Sleep(400 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	return eager, withdrawn
+}
+
+// TestEagerEndOfTurnReachesThePipelineWhenTheProviderPredicts covers the
+// prediction becoming a frame of its own rather than an interim transcript: a
+// reply may be generated from it, which nothing would do for a partial.
+func TestEagerEndOfTurnReachesThePipelineWhenTheProviderPredicts(t *testing.T) {
+	eager, withdrawn := eagerFrameNames(t, true, [][]stt.Result{
+		{{Text: "book a flight", EagerEndOfTurn: true}},
+		{{EagerEndOfTurnWithdrawn: true}},
+	})
+
+	if eager != 1 {
+		t.Errorf("eager transcripts = %d, want 1", eager)
+	}
+	if withdrawn != 1 {
+		t.Errorf("withdrawals = %d, want 1", withdrawn)
+	}
+}
+
+// TestAPredictionIsInertWithoutTheServiceConfiguredForIt covers the gate:
+// answering a prediction spends an inference on every one, including the ones
+// the provider withdraws, so a service not configured for it reports nothing.
+func TestAPredictionIsInertWithoutTheServiceConfiguredForIt(t *testing.T) {
+	eager, withdrawn := eagerFrameNames(t, false, [][]stt.Result{
+		{{Text: "book a flight", EagerEndOfTurn: true}},
+		{{EagerEndOfTurnWithdrawn: true}},
+	})
+
+	if eager != 0 || withdrawn != 0 {
+		t.Errorf("eager frames = %d/%d, want none from a service that was not asked to predict",
+			eager, withdrawn)
+	}
+}
+
+// TestAWithdrawalWithNothingOutstandingIsNotReported covers the bookkeeping: a
+// provider reporting the turn resumed when it never predicted anything has
+// nothing to withdraw.
+func TestAWithdrawalWithNothingOutstandingIsNotReported(t *testing.T) {
+	_, withdrawn := eagerFrameNames(t, true, [][]stt.Result{
+		{{EagerEndOfTurnWithdrawn: true}},
+	})
+
+	if withdrawn != 0 {
+		t.Errorf("withdrawals = %d, want none: nothing was predicted", withdrawn)
+	}
+}
