@@ -784,6 +784,15 @@ func (b *Base) BroadcastInterruption(ctx context.Context) error {
 	return b.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
 }
 
+// StartInterruption stops what this processor is doing without telling anyone
+// else, which is what a processor needs when work it started turns out to be
+// unwanted but the pipeline is not being interrupted.
+//
+// BroadcastInterruption is the announced half: it tells the whole pipeline to
+// drop what it has. This one is local, so a caller can abandon its own work and
+// leave the turn open.
+func (b *Base) StartInterruption() { b.startInterruption() }
+
 // PushTokenUsage reports LLM token usage measured by a service that does not run
 // through the LLM base: a realtime (speech-to-speech) service that receives a
 // usage event from its provider. It records the aggregate token counts as

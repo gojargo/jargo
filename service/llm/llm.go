@@ -410,6 +410,12 @@ type Base struct {
 	reportsTTFATOnce sync.Once
 	reportsTTFATVal  bool
 
+	// gate holds a speculative reply until its turn is confirmed. Frames are
+	// routed through it on their way out, and it decides synchronously, so its
+	// verdict cannot be torn by another goroutine pushing at the same time.
+	gateMu sync.Mutex
+	gate   *speculationGate
+
 	// The system instruction this service sends, and the parts it is composed
 	// from. baseSystemInstruction is the prompt the application set, which every
 	// rebuild starts from; appendedSystemInstructions are the additions a
@@ -460,6 +466,7 @@ func New(name string, gen Generator, opts ...Option) *Base {
 		self = p
 	}
 	b.Base = service.New(name, self)
+	b.gate = newSpeculationGate(b.Name())
 	return b
 }
 
@@ -1101,6 +1108,9 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	}
 	switch fr := f.(type) {
 	case *frames.LLMContextFrame:
+		// Before the generation starts, so the gate knows what this inference
+		// answers before any of its frames arrive.
+		b.beginSpeculation(fr.Speculation)
 		if b.continuousGeneration {
 			// The service is already generating, so a conversation arriving is
 			// not a prompt to run. It still settles what the model may call, and
@@ -1112,6 +1122,9 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		return b.run(ctx, fr.Context)
 	case *frames.InterruptionFrame:
 		b.cancelFunctionCalls(ctx)
+		return b.PushFrame(ctx, f, dir)
+	case *frames.EagerEndOfTurnCancelFrame:
+		b.handleEagerEndOfTurnCancel(ctx)
 		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
 		if err := b.PushFrame(ctx, f, dir); err != nil {
@@ -1162,7 +1175,59 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Dire
 			fr.SkipTTS = &skip
 		}
 	}
-	return b.Base.PushFrame(ctx, f, dir)
+
+	// Everything the gate hands back is pushed past it: routing it back through
+	// here would gate it a second time.
+	for _, out := range b.gateProcess(f, dir) {
+		if err := b.Base.PushFrame(ctx, out.frame, out.dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// gateProcess runs one frame past the speculation gate, returning what it
+// releases.
+func (b *Base) gateProcess(f frames.Frame, dir processor.Direction) []gatedFrame {
+	b.gateMu.Lock()
+	defer b.gateMu.Unlock()
+	return b.gate.process(f, dir)
+}
+
+// beginSpeculation tells the gate what the inference about to run answers,
+// before any of its frames arrive.
+func (b *Base) beginSpeculation(speculation bool) {
+	b.gateMu.Lock()
+	defer b.gateMu.Unlock()
+	b.gate.beginSpeculation(speculation)
+}
+
+// isSpeculating reports whether the inference in flight answers a turn that has
+// not been confirmed.
+func (b *Base) isSpeculating() bool {
+	b.gateMu.Lock()
+	defer b.gateMu.Unlock()
+	return b.gate.isSpeculating()
+}
+
+// handleEagerEndOfTurnCancel stops generating a reply whose user turn turned out
+// to be unfinished.
+//
+// The tokens are wasted either way; stopping keeps the service from paying for
+// the rest of them. Unlike an interruption this leaves the turn open: the bot
+// never spoke, and the user is still mid-turn.
+//
+// Nothing measured for the abandoned generation is reported, because the
+// measurements go out where a generation finishes and this one never does.
+func (b *Base) handleEagerEndOfTurnCancel(ctx context.Context) {
+	// Runs before the frame reaches the gate, which is what clears the
+	// speculation, so this still sees the one being withdrawn.
+	if !b.isSpeculating() {
+		return
+	}
+	slog.DebugContext(ctx, "eager end of turn withdrawn, stopping the speculative inference",
+		"service", b.Name())
+	b.StartInterruption()
 }
 
 // setSkipTTS records what the tokens of a response are stamped with from here
@@ -1306,6 +1371,17 @@ func (b *Base) RunFunctionCalls(
 	// The built-in cancellation tool is how the model abandons an asynchronous
 	// call, an internal mechanism rather than a tool the application put up, so
 	// it is announced to neither the application nor the pipeline.
+	if b.isSpeculating() {
+		// Tools run inside the service, so no gate downstream can undo their
+		// side effects if the speculation is discarded. Withdraw it instead: the
+		// inference that follows the committed transcript runs the call. A turn
+		// confirmed before the call was reached leaves nothing pending, and the
+		// call runs as an ordinary one.
+		slog.DebugContext(ctx, "a speculative inference wants a tool call, withdrawing it",
+			"service", b.Name())
+		return b.Broadcast(ctx, func() frames.Frame { return frames.NewEagerEndOfTurnCancelFrame() })
+	}
+
 	if visible := b.userVisibleCalls(calls); len(visible) > 0 {
 		// A turn answering with a tool call rather than text answers here, so
 		// this is where its measurement to the first answer token ends.

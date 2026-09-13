@@ -194,6 +194,26 @@ func NewVADParamsUpdateFrame(params vad.Params) *VADParamsUpdateFrame {
 	}
 }
 
+// EagerEndOfTurnCancelFrame withdraws an eager end of turn.
+//
+// It is emitted when a service reports that the user resumed speaking after
+// predicting the turn had ended, or when the committed transcript does not match
+// the predicted one. The LLM service stops generating, and the speculative reply
+// it was holding is discarded: everything that reply produced was held, so
+// nothing further down the pipeline has anything to undo.
+//
+// It is a system frame, so it overtakes the speculative output it cancels.
+type EagerEndOfTurnCancelFrame struct {
+	BaseSystemFrame
+}
+
+// NewEagerEndOfTurnCancelFrame builds an EagerEndOfTurnCancelFrame.
+func NewEagerEndOfTurnCancelFrame() *EagerEndOfTurnCancelFrame {
+	return &EagerEndOfTurnCancelFrame{
+		BaseSystemFrame: NewBaseSystemFrame("EagerEndOfTurnCancelFrame"),
+	}
+}
+
 // LLMMarkerFrame carries a turn-completion marker the LLM emitted (for example
 // "●"). It is informational, since the TTS downstream ignores it, and lets
 // observers see the model's completeness verdict. It is a data frame.
@@ -269,6 +289,7 @@ var (
 	_ SystemFrame  = (*UserMuteStoppedFrame)(nil)
 	_ SystemFrame  = (*UserIdleTimeoutUpdateFrame)(nil)
 	_ SystemFrame  = (*SpeechControlParamsFrame)(nil)
+	_ SystemFrame  = (*EagerEndOfTurnCancelFrame)(nil)
 	_ ControlFrame = (*VADParamsUpdateFrame)(nil)
 	_ ControlFrame = (*UserTurnInferenceCompletedFrame)(nil)
 	_ DataFrame    = (*LLMMarkerFrame)(nil)

@@ -500,6 +500,11 @@ type LLMContextFrame struct {
 	BaseDataFrame
 	// Context is the conversation to generate a response from.
 	Context *LLMContext
+	// Speculation reports that this inference is speculative, run from a
+	// provisional conversation that is not part of the real one. Its reply must
+	// not reach the user or the conversation until the turn is confirmed, and
+	// the service must not run tool calls for it.
+	Speculation bool
 }
 
 // NewLLMContextFrame builds an LLMContextFrame.

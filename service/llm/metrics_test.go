@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -247,5 +248,101 @@ func TestARealtimeServiceReportsNoAnswerToken(t *testing.T) {
 		if _, ok := d.(frames.TTFATMetricsData); ok {
 			t.Error("a realtime service reported a time to first answer token, want none")
 		}
+	}
+}
+
+// speculativeGen answers whatever it is asked, so a test can drive one
+// inference through the service and watch what escapes it.
+type speculativeGen struct {
+	*llm.Base
+}
+
+func (g *speculativeGen) Generate(ctx context.Context, _ *frames.LLMContext, emit llm.Emit) error {
+	return emit("Booking your flight.")
+}
+
+// runSpeculation drives one context frame through a service and returns the
+// frames that reached the pipeline, after sending whatever follow-up frames the
+// test supplies.
+func runSpeculation(t *testing.T, speculation bool, after ...frames.Frame) []frames.Frame {
+	t.Helper()
+
+	gen := &speculativeGen{}
+	svc := llm.New("FakeLLM", gen)
+	gen.Base = svc
+
+	var mu sync.Mutex
+	var got []frames.Frame
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	convo := frames.NewLLMContext("sys")
+	convo.AddUserMessage("book me a flight")
+	cf := frames.NewLLMContextFrame(convo)
+	cf.Speculation = speculation
+	task.QueueFrame(cf)
+	for _, f := range after {
+		task.QueueFrame(f)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	return append([]frames.Frame(nil), got...)
+}
+
+// spokeText reports whether any model text escaped the service.
+func spokeText(fs []frames.Frame) bool {
+	for _, f := range fs {
+		if _, ok := f.(*frames.LLMTextFrame); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// TestASpeculativeReplyIsHeldByTheService covers the service gating what it
+// generates: a reply to a turn that may not have ended reaches nobody until the
+// turn is confirmed.
+func TestASpeculativeReplyIsHeldByTheService(t *testing.T) {
+	if got := runSpeculation(t, true); spokeText(got) {
+		t.Error("the speculative reply escaped the service with the turn still open")
+	}
+}
+
+// TestAnOrdinaryReplyIsNotHeld covers the other side: an inference answering a
+// turn that has ended is not gated at all.
+func TestAnOrdinaryReplyIsNotHeld(t *testing.T) {
+	if got := runSpeculation(t, false); !spokeText(got) {
+		t.Error("an ordinary reply was held, want it pushed straight through")
+	}
+}
+
+// TestAConfirmedTurnReleasesTheSpeculativeReply covers the turn ending letting
+// the held reply out.
+func TestAConfirmedTurnReleasesTheSpeculativeReply(t *testing.T) {
+	got := runSpeculation(t, true, frames.NewUserStoppedSpeakingFrame())
+	if !spokeText(got) {
+		t.Error("the confirmed reply never escaped the service")
+	}
+}
+
+// TestAWithdrawnTurnDiscardsTheSpeculativeReply covers the withdrawal: the reply
+// answered a turn the user had not finished, so nobody ever hears it.
+func TestAWithdrawnTurnDiscardsTheSpeculativeReply(t *testing.T) {
+	got := runSpeculation(t, true, frames.NewEagerEndOfTurnCancelFrame())
+	if spokeText(got) {
+		t.Error("the withdrawn reply escaped the service")
 	}
 }

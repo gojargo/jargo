@@ -154,6 +154,46 @@ func (f *TranscriptionFrame) String() string {
 		f.Name(), f.UserID, f.Text, f.Language, f.Timestamp)
 }
 
+// EagerTranscriptionFrame carries the transcript of a turn a service predicts
+// has ended, before it commits to that.
+//
+// Some transcribers report a provisional end of turn ahead of the real one, so a
+// reply can be generated during the gap. The prediction may be withdrawn (see
+// EagerEndOfTurnCancelFrame) and the committed transcript may differ from this
+// one, so nothing produced from it may reach the user or the conversation until
+// it is confirmed.
+//
+// It is not a TranscriptionFrame: nothing that acts on a committed transcript
+// should act on a predicted one.
+type EagerTranscriptionFrame struct {
+	TextFrame
+	// UserID identifies the user who spoke.
+	UserID string
+	// Timestamp is when the eager end of turn occurred.
+	Timestamp string
+	// Language is the detected or specified language as a BCP-47 tag; "" when
+	// unset.
+	Language string
+	// Result is the raw result from the STT service, if available.
+	Result any
+}
+
+// NewEagerTranscriptionFrame builds an EagerTranscriptionFrame.
+func NewEagerTranscriptionFrame(text, userID, timestamp string) *EagerTranscriptionFrame {
+	return &EagerTranscriptionFrame{
+		BaseDataFrame: NewBaseDataFrame("EagerTranscriptionFrame"),
+		Text:          text,
+		UserID:        userID,
+		Timestamp:     timestamp,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *EagerTranscriptionFrame) String() string {
+	return fmt.Sprintf("%s(user: %s, text: [%s], language: %s, timestamp: %s)",
+		f.Name(), f.UserID, f.Text, f.Language, f.Timestamp)
+}
+
 // InterimTranscriptionFrame carries a partial (non-final) speech transcription
 // for a user.
 type InterimTranscriptionFrame struct {
@@ -194,6 +234,7 @@ var (
 	_ DataFrame = (*TTSSpeakFrame)(nil)
 	_ DataFrame = (*TranscriptionFrame)(nil)
 	_ DataFrame = (*InterimTranscriptionFrame)(nil)
+	_ DataFrame = (*EagerTranscriptionFrame)(nil)
 )
 
 // AggregationType names how a stream of text was aggregated before synthesis.
