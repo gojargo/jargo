@@ -15,6 +15,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Four observers report what a session did, as it happens.**
+  `observers.Errors` reports each failure where it is raised rather than where
+  it ends up, so a session's history holds the ones a switcher recovered from as
+  well as the ones that surfaced, each named for the processor that raised it
+  and carrying whether that processor can still do its job.
+  `observers.Speaking` reports the conversation's speaking lifecycle moment by
+  moment, with the user at two layers: the speech the detector heard, where a
+  cough or a false start appears and stops, and the turn strategy's ruling on
+  it, which is what the pipeline acts on. `observers.FunctionCalls` reports each
+  call when it starts, when it goes in progress and when it settles, saying
+  which of the four ways it settled and whether the conversation was waiting on
+  it. `observers.ServiceMetrics` turns each metric a service publishes into its
+  own record, summing nothing, so a consumer groups by turn, session or model as
+  it needs. What a turn is, and what a total is, stay with whoever reads the
+  records: a policy that ships inside a record can never be revised.
+- **The startup report separates getting ready from starting.**
+  `StartupTimingReport.SetupPhase` and `StartPhase` split the total, which
+  answers different questions: setup runs concurrently, so the longest single
+  connection decides it, while the StartFrame reaches processors one after
+  another, so what each spends on it adds up. Each processor's timing gained
+  `StartDuration` alongside `SetupDuration`, and the two account for the whole
+  of what that processor cost.
+- **`FunctionCallResultFrame` carries the failure that settled a call.** Its new
+  `Error` field holds what went wrong on a call whose handler failed. The model
+  is still told only that the function failed, which is deliberate, but a failed
+  call is no longer indistinguishable from one that returned that sentence on
+  purpose.
 - **RTVI reports what the bot is saying, segment by segment.** The `bot-output`
   message was missing entirely: a client had the model's raw text and the
   spoken captions, and nothing tying them together. Each unit of the bot's

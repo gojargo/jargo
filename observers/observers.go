@@ -1,6 +1,8 @@
 // Package observers provides pipeline observers: components that watch the
-// frames flowing through a pipeline to derive turn, latency and startup
-// metrics, or to log the stream, without modifying it. Register them via
+// frames flowing through a pipeline without modifying it. They derive turn,
+// latency and startup metrics, report the conversation's speaking lifecycle,
+// the function calls it makes, the failures it runs into and what each service
+// spent and consumed, or log the stream. Register them via
 // pipeline.WorkerConfig.Observers.
 //
 // Every handover between two processors is reported, not only what reaches the
