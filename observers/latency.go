@@ -191,7 +191,7 @@ func (o *UserBotLatency) OnPushFrame(data processor.FramePushed) {
 		// The detector confirms the stop only after its silence window has
 		// elapsed, so the speech itself ended that much earlier. Measuring from
 		// there is what makes the figure the delay the user actually heard.
-		o.stopped = speechStop(f)
+		o.stopped = speechStop(f, time.Now())
 		o.turnStart = o.stopped
 	case *frames.UserStoppedSpeakingFrame:
 		if !o.stopped.IsZero() {
@@ -304,13 +304,26 @@ func (o *UserBotLatency) resetAccumulators() {
 	o.calls = nil
 }
 
-// speechStop is the moment the speech a VAD stop frame reports actually ended,
-// which is earlier than the determination by the detector's silence window. A
-// frame carrying no timestamp is taken as having just arrived.
-func speechStop(f *frames.VADUserStoppedSpeakingFrame) time.Time {
+// speechStart is the moment the speech a VAD start frame reports actually began,
+// which is earlier than the determination by however long the detector needed to
+// be sure. A frame carrying no timestamp is taken as having just arrived, and
+// fallback is what "just now" means to the caller.
+func speechStart(f *frames.VADUserStartedSpeakingFrame, fallback time.Time) time.Time {
 	at := f.Timestamp
 	if at.IsZero() {
-		at = time.Now()
+		at = fallback
+	}
+	return at.Add(-time.Duration(f.StartSecs * float64(time.Second)))
+}
+
+// speechStop is the moment the speech a VAD stop frame reports actually ended,
+// which is earlier than the determination by the detector's silence window. A
+// frame carrying no timestamp is taken as having just arrived, and fallback is
+// what "just now" means to the caller.
+func speechStop(f *frames.VADUserStoppedSpeakingFrame, fallback time.Time) time.Time {
+	at := f.Timestamp
+	if at.IsZero() {
+		at = fallback
 	}
 	return at.Add(-time.Duration(f.StopSecs * float64(time.Second)))
 }
