@@ -170,12 +170,17 @@ type OutputDriver interface {
 	// paces its sends, or waits for room downstream, waits on ctx.Done()
 	// alongside whatever else it waits for.
 	//
-	// It reports whether the chunk was sent. A transport with nowhere to put it
-	// returns false and no error: its track is not live yet, its stream has
-	// closed, its serializer produced nothing for this frame. Nothing failed,
-	// but the audio will not be heard, so the base does not forward the frame
-	// downstream as though it had been. An error is a genuine failure, which
-	// the base logs; audio that errored counts as unsent either way.
+	// It reports whether the transport took the chunk. A transport with nowhere
+	// to put it returns false and no error: its track is not live yet, or its
+	// stream has closed. Nothing failed, but the audio will not be heard, so the
+	// base does not forward the frame downstream as though it had been. An error
+	// is a genuine failure, which the base logs; audio that errored counts as
+	// not taken either way.
+	//
+	// Taken is not the same as written. A transport whose wire format buffers
+	// audio across chunks has taken one that produced no payload of its own: the
+	// audio reaches the client inside a later message, so the chunk is still
+	// paced and still travels downstream.
 	WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (sent bool, err error)
 	// SendMessage sends the frame's application message to the client (for
 	// example over a data channel). The transport encodes the payload, because

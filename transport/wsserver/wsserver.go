@@ -45,11 +45,12 @@ type Serializer interface {
 	// Setup captures pipeline configuration from the StartFrame.
 	Setup(s processor.Setup) error
 	// Serialize converts an outbound frame to a wire message, or an empty
-	// Message for frames it does not send. Interruption, end and cancel frames
-	// are passed in so the serializer can emit a "clear" message or hang up the
-	// call, and so are application messages, which the serializer encodes for
-	// its own wire after asking BaseSerializer.ShouldIgnoreFrame whether they
-	// belong on it.
+	// Message when there is nothing to send for this frame: the serializer does
+	// not send it at all, or it is holding the frame's audio back and will emit
+	// it on a later call. Interruption, end and cancel frames are passed in so
+	// the serializer can emit a "clear" message or hang up the call, and so are
+	// application messages, which the serializer encodes for its own wire after
+	// asking BaseSerializer.ShouldIgnoreFrame whether they belong on it.
 	Serialize(f frames.Frame) (Message, error)
 	// Deserialize converts an inbound wire message to a frame, or (nil, nil) for
 	// messages that carry no frame (handshake, marks, stop).
@@ -600,16 +601,18 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 	if err != nil {
 		return false, err
 	}
-	if msg.Empty() {
-		// The serializer had nothing to send for this frame.
-		return false, nil
-	}
-	if err := out.write(ctx, msg); err != nil {
-		if gone(err) {
-			slog.Debug("wsserver: the client went away while audio was being sent", "err", err)
-			return false, nil
+	// A serializer that buffers audio across calls emits nothing on most of
+	// them, and it has still taken the chunk it was given: the audio reaches the
+	// client inside a later message. So the chunk is paced and reported as taken
+	// either way, and only what the serializer never accepts is left unpaced.
+	if !msg.Empty() {
+		if err := out.write(ctx, msg); err != nil {
+			if gone(err) {
+				slog.Debug("wsserver: the client went away while audio was being sent", "err", err)
+				return false, nil
+			}
+			return false, err
 		}
-		return false, err
 	}
 	out.writeAudioSleep(ctx)
 	return true, nil

@@ -565,6 +565,79 @@ func TestOutboundAudioIsPaced(t *testing.T) {
 	}
 }
 
+// bufferingSerializer packs several chunks of audio into one wire message, the
+// way a format with a fixed payload size does, so most calls take a chunk and
+// emit nothing for it.
+type bufferingSerializer struct {
+	wsserver.BaseSerializer
+
+	// perMessage is how many bytes of audio one wire message carries.
+	perMessage int
+
+	mu      sync.Mutex
+	pending []byte
+}
+
+func (s *bufferingSerializer) Setup(processor.Setup) error { return nil }
+
+func (s *bufferingSerializer) Serialize(f frames.Frame) (wsserver.Message, error) {
+	af, ok := f.(frames.OutputAudioFrame)
+	if !ok {
+		return wsserver.Message{}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = append(s.pending, af.AudioData().Audio...)
+	if len(s.pending) < s.perMessage {
+		// The chunk was taken; it goes out inside a later message.
+		return wsserver.Message{}, nil
+	}
+	payload := string(s.pending[:s.perMessage])
+	s.pending = s.pending[s.perMessage:]
+	return wsserver.TextMessage(json.Marshal(message{Kind: "audio", Payload: payload}))
+}
+
+func (s *bufferingSerializer) Deserialize([]byte) (frames.Frame, error) {
+	return nil, nil //nolint:nilnil // nothing inbound is under test here
+}
+
+// TestAudioTheSerializerBufferedIsStillPaced covers a serializer that holds
+// audio back across calls. Such a serializer emits nothing on most of them, and
+// it has still taken the chunk: the audio reaches the client inside a later
+// message. Reading "no payload" as "not taken" leaves those chunks unpaced, so
+// the whole turn is handed over as fast as it is produced and a barge-in has
+// nothing left to cut.
+func TestAudioTheSerializerBufferedIsStillPaced(t *testing.T) {
+	p := params()
+	p.AudioOut10msChunks = 10 // 100 ms chunks, long enough to time reliably
+	// One 100 ms chunk at 8 kHz mono 16-bit is 1600 bytes, so a message carries
+	// two chunks and every other call emits nothing.
+	const chunk = 1600
+	c := dial(t, &bufferingSerializer{perMessage: 2 * chunk}, p)
+	defer c.shutdown(t)
+
+	// Four chunks at once, so pacing is the only thing that can spread them out.
+	c.task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, chunk*4), 8000, 1))
+
+	start := time.Now()
+	for i := range 2 {
+		if got := c.expect(t); got.Kind != "audio" {
+			t.Fatalf("message %d kind = %q, want audio", i, got.Kind)
+		}
+	}
+	elapsed := time.Since(start)
+
+	// The clock starts behind, so the first chunk goes out at once and each one
+	// after it waits an interval: the second message covers chunks three and
+	// four, so it follows two intervals behind the first. Leave the buffered
+	// chunks unpaced and they cost nothing, which puts both messages on the wire
+	// back to back.
+	if want := 150 * time.Millisecond; elapsed < want {
+		t.Errorf("two messages covering four 100 ms chunks arrived in %v, want at least %v: "+
+			"the chunks the serializer buffered were not paced", elapsed, want)
+	}
+}
+
 // TestInterruptionSendsClear covers barge-in: the provider must be told to
 // discard the audio it has already buffered, or the bot keeps talking over the
 // caller.

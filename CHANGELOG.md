@@ -226,6 +226,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`OutputDriver.WriteAudio` reports whether the transport took the chunk, not
+  whether a payload reached the wire.** A serializer that packs several chunks
+  into one message emits nothing on most calls and has still taken the chunk it
+  was given, so such a chunk is now paced and forwarded downstream like any
+  other. A transport outside this module that returns false when its serializer
+  produced nothing should return true instead, unless the chunk really was
+  dropped.
+
 - **`TTSTextFrame` is an aggregated frame.** It now embeds
   `AggregatedTextFrame`, so a chunk of spoken text carries how it was
   aggregated, which synthesis context produced it and whether it will be
@@ -337,6 +345,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that said something and then hung ran unbounded and the conversation was left
   waiting on it. Only a final result settles a call, so only a final result now
   clears the deadline; the update still reaches the conversation as before.
+
+- **Audio a serializer buffers is paced and travels downstream.** A WebSocket
+  serializer that packs several chunks into one wire message emits nothing on
+  most calls, and those chunks were read as unsent: they were neither paced nor
+  forwarded, so a turn was handed to the provider as fast as it was produced and
+  a barge-in had little left to cut.
 
 - **A regional language resolves through the service's own code for its base
   language.** A variant a service was not verified against fell back to the bare
