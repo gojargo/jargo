@@ -22,6 +22,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `resample.NeverClear`, which turns the idle window off for a caller that marks
   those boundaries itself.
 
+- **The VAD reports the user is still speaking on a period.**
+  `vadproc.Config.SpeechActivityPeriod` and `controller.Config`'s field of the
+  same name set the least time between two `UserSpeakingFrame`s, 200ms by
+  default. Speech is heard one short chunk at a time, and the frame is broadcast
+  both ways and read by everything watching the turn, so one per chunk was work
+  nothing asked for. Set it to zero for the old per-chunk report.
+
 - **A predicted end of turn is answered while the turn is still open.** Some
   transcribers report that a turn has probably ended before committing to it,
   and withdraw the prediction if the user turns out to be mid-sentence. The gap

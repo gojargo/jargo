@@ -40,6 +40,10 @@ const resampleQuality = resample.QualityHQ
 // before the user is taken to have stopped.
 const DefaultAudioIdleTimeout = time.Second
 
+// DefaultSpeechActivityPeriod is the least time between two reports that the
+// user is still speaking.
+const DefaultSpeechActivityPeriod = 200 * time.Millisecond
+
 // Handlers receives what the controller decides. Any of them may be nil.
 type Handlers struct {
 	// OnSpeechStarted reports that the user began speaking.
@@ -47,8 +51,8 @@ type Handlers struct {
 	// OnSpeechStopped reports that the user stopped speaking, including when the
 	// audio stopped arriving rather than going quiet.
 	OnSpeechStopped func(ctx context.Context)
-	// OnSpeechActivity reports one more chunk heard as speech. It fires for every
-	// such chunk, the one that started the speech included.
+	// OnSpeechActivity reports that the user is still speaking. It fires while
+	// speech is being heard, at most once per SpeechActivityPeriod.
 	OnSpeechActivity func(ctx context.Context)
 	// OnPushFrame sends a frame through whatever hosts the controller.
 	OnPushFrame func(ctx context.Context, f frames.Frame, dir processor.Direction)
@@ -69,13 +73,24 @@ type Config struct {
 	// off, so it is a pointer rather than a plain value: the two have to be told
 	// apart, and a struct field cannot say which of them it was left as.
 	AudioIdleTimeout *time.Duration
+
+	// SpeechActivityPeriod is the least time between two OnSpeechActivity
+	// reports. Speech is heard one short chunk at a time, and whatever is
+	// counting on the user still being there needs to hear about it far less
+	// often than that, so the report is paced rather than made per chunk.
+	//
+	// Leave it nil for DefaultSpeechActivityPeriod. A zero duration reports
+	// every chunk, so it is a pointer rather than a plain value: the two have to
+	// be told apart, and a struct field cannot say which of them it was left as.
+	SpeechActivityPeriod *time.Duration
 }
 
 // Controller drives a detector over incoming audio and reports what it hears.
 type Controller struct {
-	analyzer    vad.Analyzer
-	handlers    Handlers
-	idleTimeout time.Duration
+	analyzer       vad.Analyzer
+	handlers       Handlers
+	idleTimeout    time.Duration
+	activityPeriod time.Duration
 
 	resampler    *resample.Resampler
 	inRate       int
@@ -86,6 +101,9 @@ type Controller struct {
 	mu          sync.Mutex
 	speaking    bool
 	lastAudioAt time.Time
+	// activityAt is when the last OnSpeechActivity went out, which is what paces
+	// the next one.
+	activityAt time.Time
 
 	// watchMu serializes the idle watch's lifecycle, which Start, Stop and
 	// Cleanup all reach and which the frame goroutine and the teardown reach
@@ -103,7 +121,16 @@ func New(analyzer vad.Analyzer, handlers Handlers, cfg Config) *Controller {
 	if cfg.AudioIdleTimeout != nil {
 		idle = *cfg.AudioIdleTimeout
 	}
-	return &Controller{analyzer: analyzer, handlers: handlers, idleTimeout: idle}
+	activity := DefaultSpeechActivityPeriod
+	if cfg.SpeechActivityPeriod != nil {
+		activity = *cfg.SpeechActivityPeriod
+	}
+	return &Controller{
+		analyzer:       analyzer,
+		handlers:       handlers,
+		idleTimeout:    idle,
+		activityPeriod: activity,
+	}
 }
 
 // Params returns the detection parameters in force.
@@ -200,8 +227,10 @@ func (c *Controller) Setup(s processor.Setup) error {
 func (c *Controller) handleAudio(ctx context.Context, f *frames.InputAudioRawFrame) {
 	state := c.analyzer.AnalyzeAudio(c.toAnalyzerRate(f))
 
+	now := time.Now()
+
 	c.mu.Lock()
-	c.lastAudioAt = time.Now()
+	c.lastAudioAt = now
 	started := state == vad.StateSpeaking && !c.speaking
 	stopped := state == vad.StateQuiet && c.speaking
 	switch {
@@ -210,7 +239,12 @@ func (c *Controller) handleAudio(ctx context.Context, f *frames.InputAudioRawFra
 	case stopped:
 		c.speaking = false
 	}
-	speaking := c.speaking
+	// Speech arrives one short chunk at a time, and nothing counting on the user
+	// still being there needs telling that often, so the report is paced.
+	activityDue := c.speaking && now.Sub(c.activityAt) >= c.activityPeriod
+	if activityDue {
+		c.activityAt = now
+	}
 	c.mu.Unlock()
 
 	switch {
@@ -224,10 +258,7 @@ func (c *Controller) handleAudio(ctx context.Context, f *frames.InputAudioRawFra
 		}
 	}
 
-	// Reported for every chunk heard as speech, the one that started it
-	// included, so anything counting on the user still being there keeps hearing
-	// about it.
-	if speaking && c.handlers.OnSpeechActivity != nil {
+	if activityDue && c.handlers.OnSpeechActivity != nil {
 		c.handlers.OnSpeechActivity(ctx)
 	}
 }

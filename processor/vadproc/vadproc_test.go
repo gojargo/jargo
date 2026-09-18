@@ -36,10 +36,11 @@ func (f *fakeVAD) Reset()                 {}
 func (f *fakeVAD) Close() error           { return nil }
 
 // runVAD drives a VAD processor with the scripted states (one per 20 ms frame at
-// 16 kHz) and returns the ordered names of the VAD frames it emitted.
-func runVAD(t *testing.T, states []vad.State, nframes int) []string {
+// 16 kHz) and returns the ordered names of the VAD frames it emitted. period is
+// the pacing of the speaking report, nil for the processor's own default.
+func runVAD(t *testing.T, states []vad.State, nframes int, period *time.Duration) []string {
 	t.Helper()
-	p := vadproc.New(vadproc.Config{VAD: newFakeVAD(states...)})
+	p := vadproc.New(vadproc.Config{VAD: newFakeVAD(states...), SpeechActivityPeriod: period})
 
 	var mu sync.Mutex
 	var seen []string
@@ -78,15 +79,36 @@ func runVAD(t *testing.T, states []vad.State, nframes int) []string {
 
 func TestVADStartStop(t *testing.T) {
 	states := []vad.State{vad.StateQuiet, vad.StateSpeaking, vad.StateSpeaking, vad.StateQuiet}
-	got := runVAD(t, states, 4)
-	// Every chunk heard as speech is reported, the one that started it included.
+	got := runVAD(t, states, 4, everyChunk())
+	// With the pacing off, every chunk heard as speech is reported, the one that
+	// started it included.
 	assertEvents(t, got, []string{"started", "speaking", "speaking", "stopped"})
 }
 
 func TestVADReportsEverySpeakingChunk(t *testing.T) {
 	states := []vad.State{vad.StateSpeaking, vad.StateSpeaking, vad.StateSpeaking, vad.StateSpeaking, vad.StateQuiet}
-	got := runVAD(t, states, 5)
+	got := runVAD(t, states, 5, everyChunk())
 	assertEvents(t, got, []string{"started", "speaking", "speaking", "speaking", "speaking", "stopped"})
+}
+
+// everyChunk turns the pacing off, so the speaking report goes out per chunk.
+func everyChunk() *time.Duration {
+	var d time.Duration
+	return &d
+}
+
+// TestVADPacesTheSpeakingReport covers the default pacing. Speech arrives in
+// chunks of a few tens of milliseconds, and the frame saying the user is still
+// there is worth far less often than that: it is broadcast both ways and read by
+// everything watching the turn, so one per chunk is work nothing asked for.
+func TestVADPacesTheSpeakingReport(t *testing.T) {
+	states := []vad.State{
+		vad.StateSpeaking, vad.StateSpeaking, vad.StateSpeaking, vad.StateSpeaking, vad.StateQuiet,
+	}
+	// Four 20 ms chunks back to back fit inside one default period, so the turn
+	// is reported as speaking once rather than four times.
+	got := runVAD(t, states, 5, nil)
+	assertEvents(t, got, []string{"started", "speaking", "stopped"})
 }
 
 // TestVADAudioIdleForcesSpeechStop covers audio that stops arriving mid-speech,

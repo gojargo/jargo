@@ -34,6 +34,13 @@ type Config struct {
 	//
 	// Leave it nil for one second. A zero duration turns the watch off.
 	AudioIdleTimeout *time.Duration
+	// SpeechActivityPeriod is the least time between two UserSpeakingFrames.
+	// Speech is heard one short chunk at a time, and whatever is counting on the
+	// user still being there needs to hear about it far less often than that, so
+	// the frame is paced rather than sent per chunk.
+	//
+	// Leave it nil for 200ms. A zero duration sends one per chunk.
+	SpeechActivityPeriod *time.Duration
 }
 
 // Processor is the VAD pipeline processor.
@@ -78,7 +85,10 @@ func New(cfg Config) *Processor {
 		OnBroadcastFrame: func(ctx context.Context, build func() frames.Frame) {
 			_ = p.Broadcast(ctx, build)
 		},
-	}, controller.Config{AudioIdleTimeout: cfg.AudioIdleTimeout})
+	}, controller.Config{
+		AudioIdleTimeout:     cfg.AudioIdleTimeout,
+		SpeechActivityPeriod: cfg.SpeechActivityPeriod,
+	})
 
 	return p
 }

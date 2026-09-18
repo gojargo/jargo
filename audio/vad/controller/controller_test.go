@@ -214,13 +214,15 @@ func TestControllerReportsSpeechStopping(t *testing.T) {
 	}
 }
 
-// TestControllerReportsEverySpeechChunk covers the activity report, which fires
-// for every chunk heard as speech, the one that opened the turn included. What
-// counts on the user still being there is kept fed by it.
+// TestControllerReportsEverySpeechChunk covers the activity report with its
+// pacing turned off, which fires for every chunk heard as speech, the one that
+// opened the turn included. What counts on the user still being there is kept
+// fed by it.
 func TestControllerReportsEverySpeechChunk(t *testing.T) {
 	a := newMockAnalyzer()
 	r := newRecorder()
-	c := newTestController(t, a, r, controller.Config{})
+	every := time.Duration(0)
+	c := newTestController(t, a, r, controller.Config{SpeechActivityPeriod: &every})
 	ctx := context.Background()
 
 	a.setNextState(vad.StateSpeaking)
@@ -232,6 +234,50 @@ func TestControllerReportsEverySpeechChunk(t *testing.T) {
 
 	if _, _, activity := r.counts(); activity != 2 {
 		t.Errorf("two chunks of speech reported %d activity, want 2", activity)
+	}
+}
+
+// TestControllerPacesTheSpeechActivityReport covers the pacing itself. Speech is
+// heard one short chunk at a time, and the report is read by everything watching
+// the turn, so it goes out on a period rather than per chunk. The first chunk
+// still reports, so nothing waits a period to learn the user is there.
+func TestControllerPacesTheSpeechActivityReport(t *testing.T) {
+	a := newMockAnalyzer()
+	r := newRecorder()
+	period := time.Hour // long enough that only the first chunk can report
+	c := newTestController(t, a, r, controller.Config{SpeechActivityPeriod: &period})
+	ctx := context.Background()
+
+	a.setNextState(vad.StateSpeaking)
+	for range 5 {
+		if err := c.ProcessFrame(ctx, audioChunk()); err != nil {
+			t.Fatalf("process speech: %v", err)
+		}
+	}
+
+	if _, _, activity := r.counts(); activity != 1 {
+		t.Errorf("five chunks inside one period reported %d activity, want 1", activity)
+	}
+}
+
+// TestControllerDefaultsTheSpeechActivityPeriod covers the config left unset,
+// which takes the default rather than reporting per chunk.
+func TestControllerDefaultsTheSpeechActivityPeriod(t *testing.T) {
+	a := newMockAnalyzer()
+	r := newRecorder()
+	c := newTestController(t, a, r, controller.Config{})
+	ctx := context.Background()
+
+	a.setNextState(vad.StateSpeaking)
+	for range 5 {
+		if err := c.ProcessFrame(ctx, audioChunk()); err != nil {
+			t.Fatalf("process speech: %v", err)
+		}
+	}
+
+	// Five chunks processed back to back fall well inside the default period.
+	if _, _, activity := r.counts(); activity != 1 {
+		t.Errorf("five chunks reported %d activity, want 1: the default period was not applied", activity)
 	}
 }
 
