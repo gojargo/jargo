@@ -800,9 +800,20 @@ func TestConfiguredMarkersAreTheOnesRead(t *testing.T) {
 	}
 	svc.SetUserTurnCompletionConfig(cfg)
 
-	if !strings.Contains(cfg.CompletionInstructions(), "A") ||
-		strings.Contains(cfg.CompletionInstructions(), MarkerComplete) {
-		t.Error("the instructions still teach the default markers")
+	instructions := cfg.CompletionInstructions()
+	for _, want := range []string{
+		"Write A, a space, then your full reply",
+		"Respond with only B",
+		"Respond with only C",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("the instructions do not say %q", want)
+		}
+	}
+	for _, def := range []string{MarkerComplete, MarkerIncompleteShort, MarkerIncompleteLong} {
+		if strings.Contains(instructions, def) {
+			t.Errorf("the instructions still teach the default marker %q", def)
+		}
 	}
 
 	if err := svc.pushTurnText(t.Context(), "A Answer"); err != nil {

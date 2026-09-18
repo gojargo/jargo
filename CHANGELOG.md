@@ -13,6 +13,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- **The turn-completion instructions are written for the models that need
+  them.** The protocol taught to the model by `UserTurnCompletionConfig` now
+  states the three markers and their rules up front, says that one-word answers,
+  questions back to the bot, corrections and greetings are complete, describes a
+  cutoff as a phrase left open in whatever language the user speaks, says a
+  fragment is not a request for help, and asks the model to judge a continuation
+  together with the fragment before it. The examples are prose rather than
+  arrows or a transcript, because a weaker model reproduces the shape of
+  whatever example it is shown: arrows came back as arrows before the marker,
+  and a transcript came back as invented "User:" lines after it. A configured
+  `Instructions` string is unaffected.
+
 ### Fixed
 
 - **A tool call the model does not wait on settles where it was made, when
