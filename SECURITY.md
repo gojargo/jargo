@@ -29,6 +29,43 @@ updated as we investigate and prepare a fix. Once a fix is available we will
 coordinate disclosure and credit you in the advisory, unless you prefer to
 remain anonymous.
 
+## Verifying a release
+
+Releases are signed, and the release workflow also attests build provenance for
+what it builds. Both are worth checking before you run a downloaded binary.
+Releases up to and including `v0.1.0` predate the provenance step and carry
+signatures only.
+
+**Checksums and signature.** GoReleaser signs `checksums.txt` with cosign
+keyless, which transitively covers every artifact the file lists. Download the
+archive, `checksums.txt`, `checksums.txt.sig` and `checksums.txt.pem` from the
+release, then:
+
+```sh
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github.com/gojargo/jargo/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum --check --ignore-missing checksums.txt
+```
+
+The identity flags are what make the check meaningful: without them cosign
+confirms only that somebody signed the file, not that this project's release
+workflow did.
+
+**Build provenance.** The release workflow attests the artifacts with GitHub
+artifact attestations, which record the workflow and the commit that produced
+them. Verify with the GitHub CLI:
+
+```sh
+gh attestation verify jargo_<version>_linux_amd64.tar.gz --repo gojargo/jargo
+```
+
+Attestations are held in GitHub's attestation store rather than attached to the
+release, so there is no file to download for this step.
+
 ## Scope
 
 jargo is a library and a set of example bots. Vulnerabilities in jargo's own
