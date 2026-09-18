@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1468,3 +1469,64 @@ func TestTurnAnalyzerNoPublishedLatencyWaitsNothing(t *testing.T) {
 type plainStop struct{ StopStrategyBase }
 
 func (p *plainStop) Process(frames.Frame) ProcessFrameResult { return Continue }
+
+// timerStop is a stop strategy that holds nothing but an armed timer, so a test
+// can cancel one from cleanup while its callback is running.
+type timerStop struct {
+	StopStrategyBase
+	cancel func()
+	fired  atomic.Int64
+}
+
+// Process takes no interest in any frame; the timer is all this strategy has.
+func (s *timerStop) Process(frames.Frame) ProcessFrameResult { return Continue }
+
+// arm schedules the timer. Like everything a strategy does, it runs with the
+// shared mutex held.
+func (s *timerStop) arm(d time.Duration) {
+	s.cancel = s.env.after(d, func() { s.fired.Add(1) })
+}
+
+// Cleanup cancels the timer, the way every strategy holding one does.
+func (s *timerStop) Cleanup() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+}
+
+// TestCleanupCancelsATimerWithoutRacingIt covers tearing a controller down while
+// one of its strategies has a timer that has just fired.
+//
+// Canceling a timer is only safe against its own callback with the shared mutex
+// held: the callback takes the mutex and re-reads the cancel flag, which is what
+// keeps a timer that fired just before the teardown from acting on a turn that
+// is over. Cleaning up without the mutex raced the write to that flag against
+// the callback's read of it, and left the callback free to run on state the
+// teardown was already releasing.
+//
+// The test arms a timer and holds the mutex until it has fired, so the callback
+// is waiting on the mutex when cleanup starts. Run with -race.
+func TestCleanupCancelsATimerWithoutRacingIt(t *testing.T) {
+	for range 50 {
+		s := &timerStop{}
+		c := NewUserTurnController(UserTurnStrategies{Stop: []StopStrategy{s}}, 0)
+		if err := c.Setup(t.Context(), processor.Setup{}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+
+		// The callback cannot get past the mutex until this returns, so it is
+		// contending for it exactly when cleanup cancels the timer.
+		s.env.locked(func() {
+			s.arm(time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
+		})
+		c.Cleanup()
+
+		// A canceled timer never runs its callback, whichever of the two got
+		// the mutex first.
+		if got := s.fired.Load(); got != 0 {
+			t.Fatalf("the canceled timer ran its callback %d times", got)
+		}
+	}
+}

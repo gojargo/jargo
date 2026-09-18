@@ -152,14 +152,25 @@ func (c *UserTurnController) setupStrategies() error {
 }
 
 // cleanupStrategies releases what every strategy holds.
+//
+// The mutex is held across the Cleanup calls, because cleaning a strategy up
+// stops its timers and a timer is only stopped safely against its own callback
+// with the mutex held. The callback takes the mutex and re-reads the cancel
+// flag, which is what stops a timer that had already fired from acting on a
+// turn that is over. Releasing the mutex first raced the write to that flag
+// against the callback's read of it, and left the callback free to run after
+// cleanup had returned.
+//
+// No strategy's Cleanup takes this mutex again, and one holding a lock of its
+// own takes that lock underneath this one, so the order here is the order
+// everywhere else.
 func (c *UserTurnController) cleanupStrategies() {
 	c.mu.Lock()
-	strategies := c.strategies
-	c.mu.Unlock()
-	for _, s := range strategies.Start {
+	defer c.mu.Unlock()
+	for _, s := range c.strategies.Start {
 		s.Cleanup()
 	}
-	for _, s := range strategies.Stop {
+	for _, s := range c.strategies.Stop {
 		s.Cleanup()
 	}
 }

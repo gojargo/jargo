@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-18
+
 ### Added
 
 - **The output resampler's stream boundaries are marked rather than guessed.**
@@ -332,6 +334,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   through jargo's own encode/decode path, upstream matches the fork it replaces.
 
 ### Fixed
+
+- **Tearing a session down no longer races a turn timer that has just fired.**
+  Cleaning up the turn strategies released the shared turn mutex before stopping
+  their timers, so the write that cancels a timer raced the callback's read of
+  it. A timer that fired just before the teardown was then free to run on state
+  the teardown was already releasing. The strategies are now cleaned up under
+  the mutex, which is what makes a cancel and its callback see each other. It
+  surfaced as an intermittent race-detector failure in the aggregator tests.
 
 - **Speech is no longer clipped when synthesis pauses between chunks.** The
   output resampler cleared its filter after 200ms of inactivity, and the audio
@@ -3563,7 +3573,8 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/gojargo/jargo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/gojargo/jargo/compare/v0.0.5...v0.1.0
 [0.0.4]: https://github.com/gojargo/jargo/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/gojargo/jargo/compare/v0.0.2...v0.0.3
