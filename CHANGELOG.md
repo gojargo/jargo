@@ -32,6 +32,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Groq takes its own reasoning control, so `groq.NewLLM` takes its own
+  config.** It is now `groq.LLMConfig`, which embeds `chat.LLMConfig` and adds
+  `ReasoningEffort`. The values Groq accepts vary by model: `low`, `medium` and
+  `high` on the GPT-OSS models, `none` and `default` on the Qwen models. `none`
+  is the one that matters on a voice call, because Groq's reasoning format is
+  raw by default, so a Qwen model left to think streams its chain of thought
+  inline in `<think>` tags and the whole of it reaches the TTS. **Breaking:**
+  callers passing a `chat.LLMConfig` now wrap it, as
+  `groq.NewLLM(groq.LLMConfig{APIKey: key})`.
+
 - **The turn-completion instructions are written for the models that need
   them.** The protocol taught to the model by `UserTurnCompletionConfig` now
   states the three markers and their rules up front, says that one-word answers,

@@ -58,7 +58,7 @@ func TestDeveloperRoleRoster(t *testing.T) {
 
 		{"openai", chat.NewLLM, chat.RoleDeveloper},
 		{"fireworks", fireworks.NewLLM, chat.RoleDeveloper},
-		{"groq", groq.NewLLM, chat.RoleDeveloper},
+		{"groq", groqLLM, chat.RoleDeveloper},
 		{"novita", novita.NewLLM, chat.RoleDeveloper},
 		{"nvidia", nvidia.NewLLM, chat.RoleDeveloper},
 		{"grok", grok.NewLLM, chat.RoleDeveloper},
@@ -131,4 +131,10 @@ func contentTexts(raw json.RawMessage) []string {
 		out = append(out, p.Text)
 	}
 	return out
+}
+
+// groqLLM builds a Groq service from the shared config alone, since the roster
+// sends every provider the same one and Groq's own config wraps it.
+func groqLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return groq.NewLLM(groq.LLMConfig{LLMConfig: cfg})
 }

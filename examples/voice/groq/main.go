@@ -30,7 +30,6 @@ import (
 	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/provider/groq"
-	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
@@ -77,7 +76,7 @@ func runBot(conn *rtc.Connection) {
 
 	// --- the provider stack: the only part that differs between examples ---
 	stt := groq.NewSTT(groq.STTConfig{APIKey: os.Getenv("GROQ_API_KEY"), SampleRate: opus.SampleRate})
-	llm := groq.NewLLM(chat.LLMConfig{APIKey: os.Getenv("GROQ_API_KEY")})
+	llm := groq.NewLLM(groq.LLMConfig{APIKey: os.Getenv("GROQ_API_KEY")})
 	tts := elevenlabs.NewTTS(elevenlabs.Config{APIKey: os.Getenv("ELEVENLABS_API_KEY")})
 	// ----------------------------------------------------------------------
 
