@@ -120,7 +120,9 @@ type ToolGenerator interface {
 // It is how a handler reports, rather than returning a value, because a call can
 // have more than one thing to say. A handler registered to survive interruptions
 // calls it repeatedly with props.IsFinal false to stream progress, and once more
-// without to finish.
+// without to finish. An intermediate update does not settle the call, so it
+// leaves any bound on how long the call may take running: the handler still has
+// to finish inside the budget it was given.
 type FunctionCallResultCallback func(
 	ctx context.Context, result string, props *frames.FunctionCallResultProperties,
 ) error
@@ -202,6 +204,9 @@ func WithCancelOnInterruption(cancel bool) RegisterOption {
 // WithTimeout bounds how long one call to this function may take before it is
 // given up on, overriding whatever the service was built with. Zero restores the
 // service's own bound.
+//
+// It covers the handler's run as a whole, so reporting an intermediate result
+// neither clears the bound nor restarts it.
 func WithTimeout(d time.Duration) RegisterOption {
 	return func(i *registryItem) { i.timeout = d }
 }
@@ -216,6 +221,9 @@ type Option func(*Base)
 //
 // Zero, the default, means no bound: a call runs until it reports, is canceled,
 // or the session ends. WithTimeout overrides it for one function.
+//
+// It covers the handler's run as a whole, so reporting an intermediate result
+// neither clears the bound nor restarts it.
 func WithFunctionCallTimeout(d time.Duration) Option {
 	return func(b *Base) { b.callTimeout = d }
 }
@@ -1634,12 +1642,15 @@ func (b *Base) settleCall(
 			"service", b.Name(), "function", call.name, "tool_call_id", call.toolCallID)
 		return nil
 	}
+	var stop func()
 	if props.Final() {
 		call.settled = true
+		// Only a final result settles the call, so only a final result disarms
+		// the bound on how long it may take. An intermediate update leaves it
+		// armed: an update is not a result, and a handler that reports progress
+		// and then hangs would otherwise have bought itself unbounded time.
+		stop = call.stopTimeout
 	}
-	// A tool that has spoken is not stuck, so reporting anything at all,
-	// intermediate results included, disarms the bound on how long it may take.
-	stop := call.stopTimeout
 	b.callsMu.Unlock()
 	if stop != nil {
 		stop()

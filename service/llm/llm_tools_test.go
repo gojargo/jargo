@@ -714,6 +714,89 @@ func TestFunctionCallTimeoutPerFunction(t *testing.T) {
 	<-runDone
 }
 
+// TestAnIntermediateResultKeepsTheDeadlineArmed checks that reporting progress
+// does not buy a handler unbounded time. An update is not a result: only a final
+// result settles the call, so only a final result may disarm the bound. A tool
+// that reported once and then hung would otherwise run for the rest of the
+// session.
+func TestAnIntermediateResultKeepsTheDeadlineArmed(t *testing.T) {
+	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
+
+	release := make(chan struct{})
+	rolledBack := make(chan struct{}, 1)
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		notFinal := false
+		if err := p.Result(ctx, "still looking", &frames.FunctionCallResultProperties{
+			IsFinal: &notFinal,
+		}); err != nil {
+			return err
+		}
+		select {
+		case <-release:
+			return p.Result(ctx, "far too late", nil)
+		case <-ctx.Done():
+			select {
+			case rolledBack <- struct{}{}:
+			default:
+			}
+			return ctx.Err()
+		}
+	}, llm.WithCancelOnInterruption(false), llm.WithTimeout(50*time.Millisecond))
+
+	canceled := make(chan *frames.FunctionCallCancelFrame, 4)
+	results := make(chan *frames.FunctionCallResultFrame, 4)
+	probe := newProbe(func(f frames.Frame) {
+		switch fr := f.(type) {
+		case *frames.FunctionCallCancelFrame:
+			select {
+			case canceled <- fr:
+			default:
+			}
+		case *frames.FunctionCallResultFrame:
+			select {
+			case results <- fr:
+			default:
+			}
+		}
+	})
+	task := pipeline.NewWorker(pipeline.New(svc, probe), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	defer func() {
+		close(release)
+		task.StopWhenDone()
+		<-runDone
+	}()
+
+	task.QueueFrame(frames.NewLLMContextFrame(toolConvo("get_weather")))
+
+	// The update still travels: holding the deadline is not the same as
+	// swallowing what the handler had to say.
+	select {
+	case fr := <-results:
+		if fr.Result != "still looking" {
+			t.Errorf("first result = %q, want the intermediate update", fr.Result)
+		}
+		if fr.Properties.Final() {
+			t.Error("the update was reported as a final result")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the intermediate update never reached the pipeline")
+	}
+
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the deadline was disarmed by the update, so the hanging call was never given up on")
+	}
+
+	select {
+	case <-rolledBack:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the handler was never canceled, so it could not roll anything back")
+	}
+}
+
 // TestCatchAllFunction checks the handler registered under the empty name takes
 // a call no named handler claims, and runs under the name the model used.
 func TestCatchAllFunction(t *testing.T) {
