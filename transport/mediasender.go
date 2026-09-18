@@ -28,6 +28,10 @@ type mediaSender struct {
 	chunkSize  int
 	mixer      audio.Mixer
 
+	// resampleMu guards the resampler. Converting happens on the process
+	// goroutine, but the audio loop ends a turn and resets it from its own, so
+	// the two have to be kept apart.
+	resampleMu sync.Mutex
 	resampler  *resample.Resampler
 	resampleIn int
 
@@ -134,9 +138,33 @@ func (s *mediaSender) stop(ctx context.Context) {
 
 // closeResampler frees the native resampler handle, if one was created.
 func (s *mediaSender) closeResampler() {
+	s.resampleMu.Lock()
+	defer s.resampleMu.Unlock()
 	if s.resampler != nil {
 		s.resampler.Close()
 		s.resampler = nil
+	}
+}
+
+// flushResampler returns the audio the resampler is still holding in its filter
+// and clears it, for a run of speech that has ended. See resample for why the
+// resampler never clears itself.
+func (s *mediaSender) flushResampler() []byte {
+	s.resampleMu.Lock()
+	defer s.resampleMu.Unlock()
+	if s.resampler == nil {
+		return nil
+	}
+	return s.resampler.Flush()
+}
+
+// resetResampler discards the audio the resampler is still holding, for a run of
+// speech that was abandoned rather than finished.
+func (s *mediaSender) resetResampler() {
+	s.resampleMu.Lock()
+	defer s.resampleMu.Unlock()
+	if s.resampler != nil {
+		s.resampler.Clear()
 	}
 }
 
@@ -240,14 +268,23 @@ func (s *mediaSender) handleSyncFrame(ctx context.Context, f frames.Frame) {
 	out.push(f)
 }
 
-// enqueueFlushedAudioBuffer pads whatever is left in the buffer out to a full
-// chunk with silence and queues it for playback, as the same frame type as the
-// audio it was buffered from. It goes through the normal playback path (write,
-// error handling, bot-speaking bookkeeping) like any other chunk, and keeps its
-// order relative to whatever is queued after it.
+// enqueueFlushedAudioBuffer queues every bit of audio still held back at the end
+// of a run of speech: what the resampler is holding in its filter, and what is
+// left in the buffer, padded out to a full chunk with silence. Each goes out as
+// the same frame type as the audio it was buffered from, through the normal
+// playback path (write, error handling, bot-speaking bookkeeping) like any other
+// chunk, keeping its order relative to whatever is queued after it.
 func (s *mediaSender) enqueueFlushedAudioBuffer() {
+	if s.chunkSize == 0 {
+		return
+	}
+	// The resampler holds the tail of the audio it was fed, which belongs at the
+	// end of this run of speech.
+	tail := s.flushResampler()
+
 	s.bufMu.Lock()
-	if len(s.buffer) == 0 || s.chunkSize == 0 {
+	s.buffer = append(s.buffer, tail...)
+	if len(s.buffer) == 0 {
 		s.bufMu.Unlock()
 		return
 	}
@@ -255,7 +292,19 @@ func (s *mediaSender) enqueueFlushedAudioBuffer() {
 	if build == nil {
 		build = chunkBuilder(nil)
 	}
-	tail := s.address(build(padChunk(s.buffer, s.chunkSize), s.sampleRate, s.channels))
+	// The flushed tail can be longer than a chunk, so queue whole chunks first
+	// and pad only what is left over.
+	var flushed []frames.Frame
+	for len(s.buffer) >= s.chunkSize {
+		chunk := make([]byte, s.chunkSize)
+		copy(chunk, s.buffer[:s.chunkSize])
+		flushed = append(flushed, s.address(build(chunk, s.sampleRate, s.channels)))
+		s.buffer = s.buffer[s.chunkSize:]
+	}
+	if len(s.buffer) > 0 {
+		flushed = append(flushed,
+			s.address(build(padChunk(s.buffer, s.chunkSize), s.sampleRate, s.channels)))
+	}
 	s.buffer = nil
 	audioCtx, out := s.audioCtx, s.audioOut
 	s.bufMu.Unlock()
@@ -263,19 +312,32 @@ func (s *mediaSender) enqueueFlushedAudioBuffer() {
 	if audioCtx == nil || out == nil {
 		return
 	}
-	out.push(tail)
+	for _, chunk := range flushed {
+		out.push(chunk)
+	}
 }
 
 // resample converts audio at sampleRate to the transport output rate. The
-// resampler is created lazily and reused across frames; it is only touched on
-// the process goroutine, so it needs no lock.
+// resampler is created lazily and reused across frames.
+//
+// It is built never to clear its own filter history. The boundaries of a run of
+// speech are signaled explicitly, by flushResampler when one ends and
+// resetResampler when one is abandoned, and the output runs ahead of playback,
+// so a resampler left to decide for itself would read the pause between two TTS
+// chunks as the end of the stream and throw away the tail of what it was given.
 func (s *mediaSender) resample(pcm []byte, sampleRate, channels int) []byte {
 	if sampleRate == s.sampleRate {
 		return pcm
 	}
+	s.resampleMu.Lock()
+	defer s.resampleMu.Unlock()
 	if s.resampler == nil || s.resampleIn != sampleRate {
-		s.closeResampler()
-		r, err := resample.New(sampleRate, s.sampleRate, channels)
+		if s.resampler != nil {
+			s.resampler.Close()
+			s.resampler = nil
+		}
+		r, err := resample.NewWithConfig(sampleRate, s.sampleRate, channels,
+			resample.Config{ClearAfter: resample.NeverClear})
 		if err != nil {
 			slog.Error("transport: create resampler",
 				"from", sampleRate, "to", s.sampleRate, "destination", s.destination, "err", err)
@@ -408,7 +470,9 @@ func (s *mediaSender) botStartedSpeaking(ctx context.Context) {
 
 // botStoppedSpeaking broadcasts that the bot gave up the floor. Whatever is left
 // buffered is dropped rather than flushed: after an interruption, or once a turn
-// has ended, that audio is no longer wanted.
+// has ended, that audio is no longer wanted. The same goes for what the
+// resampler is still holding, which would otherwise be prepended to whatever the
+// bot says next.
 func (s *mediaSender) botStoppedSpeaking(ctx context.Context) {
 	s.botMu.Lock()
 	if !s.botSpeaking {
@@ -422,6 +486,7 @@ func (s *mediaSender) botStoppedSpeaking(ctx context.Context) {
 	s.bufMu.Lock()
 	s.buffer = nil
 	s.bufMu.Unlock()
+	s.resetResampler()
 
 	_ = s.out.Broadcast(ctx, func() frames.Frame {
 		return s.address(frames.NewBotStoppedSpeakingFrame())

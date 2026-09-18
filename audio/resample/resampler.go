@@ -73,11 +73,62 @@ func NewWithConfig(inRate, outRate, channels int, cfg Config) (*Resampler, error
 // Clear discards the filter history, so the next chunk is converted as the start
 // of a fresh signal rather than the continuation of the last one. The rate and
 // quality are unchanged.
+//
+// It is the counterpart of Flush: use Clear for a stream that was abandoned, so
+// its leftover tail does not bleed into the next one, and Flush for one that
+// ended, so the tail is heard before the next one starts.
 func (r *Resampler) Clear() {
 	if r.r != nil {
 		r.r.Reset()
 	}
 	r.idle.reset()
+}
+
+// flushFrames is how many output frames Flush drains per call. The tail a
+// converter holds is bounded by its filter delay, which is far shorter than
+// this, so one call drains it; the loop is there for a converter that wants
+// more than one.
+const flushFrames = 4096
+
+// Flush emits the audio the converter is still holding and clears it, so the
+// next chunk starts a fresh stream.
+//
+// A streaming converter keeps the most recent input in its filter, which is
+// what lets a continuous stream convert cleanly across chunk boundaries: the
+// tail of one call is only emitted once the next call supplies the audio that
+// follows it. At the end of a stream there is no next call, so without this the
+// tail is never heard. Call it when a stream has ended; the returned audio
+// belongs at the end of that stream.
+//
+// It returns nothing when the rates match, since a passthrough buffers nothing.
+func (r *Resampler) Flush() []byte {
+	if r.r == nil {
+		return nil
+	}
+	defer r.Clear()
+
+	outSamples := flushFrames * r.channels
+	if cap(r.outF) < outSamples {
+		r.outF = make([]float32, outSamples)
+	}
+	out := r.outF[:outSamples]
+
+	var tail []byte
+	for {
+		d := gore.Data{
+			Out:          out,
+			OutputFrames: flushFrames,
+			Ratio:        r.ratio,
+			EndOfInput:   true,
+		}
+		if err := r.r.Process(&d); err != nil || d.OutputFramesGen == 0 {
+			return tail
+		}
+		tail = append(tail, encodeS16(out[:d.OutputFramesGen*r.channels])...)
+		if d.OutputFramesGen < flushFrames {
+			return tail
+		}
+	}
 }
 
 // Process resamples one buffer of interleaved S16LE PCM and returns the

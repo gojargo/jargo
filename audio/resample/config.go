@@ -48,6 +48,11 @@ func (q Quality) String() string {
 // last one.
 const DefaultClearAfter = 200 * time.Millisecond
 
+// NeverClear is the ClearAfter that turns the idle window off, for a caller that
+// marks the boundaries of a stream itself with Flush and Clear. Any negative
+// duration does the same; this one names the intent.
+const NeverClear = -1 * time.Nanosecond
+
 // Config configures a Resampler.
 type Config struct {
 	// Quality selects the conversion filter; the zero value is QualityVHQ.
@@ -57,9 +62,14 @@ type Config struct {
 	// saw so that a continuous stream converts cleanly across chunk boundaries,
 	// but after a gap that tail is no longer what came before: it is the end of
 	// the previous utterance bleeding into the start of the next one, which is
-	// heard as a click. 0 uses DefaultClearAfter; a negative value never clears,
-	// which is what a telephony leg wants, since its chunks arrive at irregular
-	// intervals that are gaps in delivery rather than gaps in the audio.
+	// heard as a click. 0 uses DefaultClearAfter; NeverClear (or any negative
+	// value) never clears.
+	//
+	// Leave it off for a caller that knows where its streams end, and say so
+	// with Flush and Clear. The window only ever guesses, and it guesses wrong
+	// in both directions: a telephony leg delivers a continuous stream in bursts
+	// that look like gaps, and a stream running ahead of playback pauses
+	// mid-utterance whenever what feeds it does.
 	ClearAfter time.Duration
 }
 

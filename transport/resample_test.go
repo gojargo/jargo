@@ -1,9 +1,12 @@
 package transport_test
 
 import (
+	"encoding/binary"
+	"math"
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/transport"
 )
@@ -139,4 +142,71 @@ func allZero(pcm []byte) bool {
 		}
 	}
 	return true
+}
+
+// minLevel returns the quietest sample in pcm, read as S16LE, skipping the
+// first skip bytes. A steady tone converts to a steady level, so a dip in that
+// level is audio the conversion lost.
+func minLevel(pcm []byte, skip int) int {
+	if skip >= len(pcm) {
+		return 0
+	}
+	minimum := math.MaxInt16
+	for i := skip; i+1 < len(pcm); i += 2 {
+		v := int(int16(binary.LittleEndian.Uint16(pcm[i:])))
+		if v < 0 {
+			v = -v
+		}
+		if v < minimum {
+			minimum = v
+		}
+	}
+	return minimum
+}
+
+// TestBaseOutputKeepsSpeechIntactAcrossAPauseBetweenChunks covers a synthesizer
+// that goes quiet between chunks of one turn, which is what any of them does
+// whenever the next chunk is not ready yet. The output runs ahead of playback,
+// so such a pause is a gap in delivery and not a gap in the audio. A resampler
+// that read it as the end of a stream would throw away the tail it was holding
+// and start its filter again from silence, which is heard as a dip at every
+// pause.
+func TestBaseOutputKeepsSpeechIntactAcrossAPauseBetweenChunks(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+	// The closing silence is silence on purpose, and would fail the check below.
+	params.AudioOutEndSilenceSecs = 0
+
+	o := newFakeOutput(params)
+	task, stop := startFakeOutput(t, o)
+	defer stop()
+
+	// Three chunks of a steady tone, each separated by longer than the window a
+	// resampler left to guess clears itself after.
+	const (
+		chunkBytes = 9600 // 200ms at 24 kHz mono
+		pause      = 2 * resample.DefaultClearAfter
+	)
+	for range 3 {
+		task.QueueFrame(frames.NewTTSAudioRawFrame(dcPCM(chunkBytes), 24000, 1))
+		time.Sleep(pause)
+	}
+	task.QueueFrame(frames.NewTTSStoppedFrame())
+
+	got := drainWrites(t, o, 300*time.Millisecond)
+
+	// Every stream starts by filling the filter, so the level ramps up once at
+	// the very beginning. That is the conversion working, not audio lost, so the
+	// first chunk is skipped and everything after it has to hold the level.
+	const (
+		skipFirstChunk = 1920
+		level          = 16384
+	)
+	if len(got) <= skipFirstChunk {
+		t.Fatalf("wrote only %d bytes for %d bytes of audio", len(got), 3*chunkBytes)
+	}
+	if quietest := minLevel(got, skipFirstChunk); quietest < level/2 {
+		t.Errorf("the tone drops to %d after the first chunk, want no lower than %d: "+
+			"a pause between chunks was read as the end of the stream", quietest, level/2)
+	}
 }

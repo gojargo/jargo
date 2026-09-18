@@ -272,3 +272,61 @@ func TestStreamingLosesNoAudio(t *testing.T) {
 			"%d frames over 20 buffers, %d over 400", short, long)
 	}
 }
+
+func TestFlushEmitsTheTailTheFilterHolds(t *testing.T) {
+	const (
+		inRate  = 16000
+		outRate = 24000
+		frames  = 320 // 20ms
+	)
+	r, err := resample.New(inRate, outRate, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Close()
+
+	out := r.Process(sine(440, inRate, frames))
+	tail := r.Flush()
+	if len(tail) == 0 {
+		t.Fatal("Flush emitted nothing, so the filter tail is being dropped")
+	}
+
+	// Flushing recovers what the filter was holding, so the stream converts to
+	// the frame count the ratio implies rather than falling short of it.
+	want := frames * outRate / inRate
+	got := (len(out) + len(tail)) / 2
+	if got < want-1 || got > want+1 {
+		t.Errorf("flushed stream is %d frames, want %d", got, want)
+	}
+}
+
+func TestFlushLeavesNothingBehind(t *testing.T) {
+	r, err := resample.New(16000, 24000, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Close()
+
+	r.Process(sine(440, 16000, 320))
+	if tail := r.Flush(); len(tail) == 0 {
+		t.Fatal("Flush emitted nothing")
+	}
+	// Flushing clears the converter, so a second flush has nothing to give and
+	// the next stream starts clean.
+	if again := r.Flush(); len(again) != 0 {
+		t.Errorf("a second Flush emitted %d bytes, so the first left state behind", len(again))
+	}
+}
+
+func TestFlushPassesThroughNothingWhenRatesMatch(t *testing.T) {
+	r, err := resample.New(16000, 16000, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Close()
+
+	r.Process(sine(440, 16000, 320))
+	if tail := r.Flush(); len(tail) != 0 {
+		t.Errorf("a passthrough buffers nothing, so Flush should give nothing, got %d bytes", len(tail))
+	}
+}

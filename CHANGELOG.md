@@ -15,6 +15,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The output resampler's stream boundaries are marked rather than guessed.**
+  `resample.Resampler.Flush` emits the audio the converter is still holding in
+  its filter and clears it, for a stream that has ended, and `Clear` discards it,
+  for one that was abandoned. `resample.Config.ClearAfter` gained
+  `resample.NeverClear`, which turns the idle window off for a caller that marks
+  those boundaries itself.
+
 - **A predicted end of turn is answered while the turn is still open.** Some
   transcribers report that a turn has probably ended before committing to it,
   and withdraw the prediction if the user turns out to be mid-sentence. The gap
@@ -306,6 +313,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   through jargo's own encode/decode path, upstream matches the fork it replaces.
 
 ### Fixed
+
+- **Speech is no longer clipped when synthesis pauses between chunks.** The
+  output resampler cleared its filter after 200ms of inactivity, and the audio
+  it was holding went with it. That is a gap in delivery, not a gap in the
+  audio: the output runs ahead of playback, so any synthesizer that has nothing
+  ready for a moment was losing the tail of every chunk before the pause, and
+  the tail of the turn was never emitted at all. The resampler is now told where
+  a run of speech ends, and the audio it holds is queued with the rest of it. A
+  run that was abandoned still discards it, so nothing bleeds into the next
+  turn. It only showed on pipelines whose synthesis rate differs from the
+  transport's output rate.
 
 - **A Deepgram Flux eager end of turn is no longer reported as an interim
   transcript.** It folded `EagerEndOfTurn` in with `Update` and pushed it as a
