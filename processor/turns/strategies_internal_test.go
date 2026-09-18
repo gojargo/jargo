@@ -1523,10 +1523,19 @@ func TestCleanupCancelsATimerWithoutRacingIt(t *testing.T) {
 		})
 		c.Cleanup()
 
-		// A canceled timer never runs its callback, whichever of the two got
-		// the mutex first.
-		if got := s.fired.Load(); got != 0 {
-			t.Fatalf("the canceled timer ran its callback %d times", got)
+		// Whether the callback ran is not fixed, and is not the point: a timer
+		// that fired before the teardown may well win the mutex and complete,
+		// exactly as a canceled task upstream runs to its next suspension
+		// point. What the mutex buys is that it cannot run *alongside* the
+		// teardown, which is what the race detector is here to check.
+		//
+		// What is fixed is that canceling stops it happening again: once
+		// cleanup has returned, the callback either already ran or will take
+		// the mutex, see the cancel, and return without running.
+		ran := s.fired.Load()
+		time.Sleep(10 * time.Millisecond)
+		if got := s.fired.Load(); got != ran {
+			t.Fatalf("the timer ran its callback after cleanup canceled it")
 		}
 	}
 }
