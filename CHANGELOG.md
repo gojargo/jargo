@@ -234,6 +234,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   produced nothing should return true instead, unless the chunk really was
   dropped.
 
+- **DeepSeek's default model is `deepseek-flash`.** It was `deepseek-v4-flash`,
+  which names a retired model that is only temporarily routed to V4.1 Flash. Set
+  `Model` to pin a different one.
+
 - **`TTSTextFrame` is an aggregated frame.** It now embeds
   `AggregatedTextFrame`, so a chunk of spoken text carries how it was
   aggregated, which synthesis context produced it and whether it will be
