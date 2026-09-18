@@ -190,7 +190,7 @@ set. A handler registered by hand always wins and is never dropped.
 
 | Option | What it does |
 |---|---|
-| `llm.WithCancelOnInterruption(false)` | Registers an **asynchronous** tool: the model carries on rather than waiting, the call survives a barge-in, and every result the handler reports reaches the model on a later turn as a developer message. Call `p.Result` with `IsFinal` false for the ones before the last. |
+| `llm.WithCancelOnInterruption(false)` | Registers an **asynchronous** tool: the model carries on rather than waiting, and the call survives a barge-in. A result that arrives before the conversation moves on settles into the call's placeholder like any other; one that arrives after reaches the model on a later turn as a developer message. Call `p.Result` with `IsFinal` false for the ones before the last. |
 | `llm.WithTimeout(d)` | Bounds one function's calls. |
 | `llm.WithFunctionCallTimeout(d)` | Bounds every call. One that overruns is given up on: it records as completed rather than answering on the tool's behalf. |
 | `llm.WithSequentialFunctionCalls()` | Runs the calls of one response one after another, for tools that share something not safe to use concurrently. |

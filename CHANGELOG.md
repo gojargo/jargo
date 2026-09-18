@@ -13,6 +13,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tool call the model does not wait on settles where it was made, when
+  nothing has happened since.** The assistant aggregator decided from the frame
+  alone: every call registered with `CancelOnInterruption` false had its result
+  appended as an async-tool developer message, on the assumption that the
+  conversation had moved past the call. It now decides from the conversation.
+  A result that arrives before a user or developer message follows the call's
+  placeholder is indistinguishable from one the model waited for, so the
+  placeholder becomes the result and no deferred message is written at all. The
+  model's own output does not defer it, so filler spoken with a `TTSSpeakFrame`
+  while the call runs no longer costs the call its place, and neither do other
+  calls' placeholders, results and deferred messages, so a batch of fast calls
+  all settle where they sit. A placeholder the conversation no longer holds,
+  because it was rebuilt while the call ran, still defers, and a cancellation is
+  still delivered as the deferred notice, which has to say the work did not
+  complete. It matters most to `flows`, which registers every node function with
+  `CancelOnInterruption` false so an interruption cannot skip a transition:
+  every flow transition's result was reaching the model as a developer message
+  rather than as the answer to its call.
+
 ## [0.2.0] - 2026-09-18
 
 ### Added

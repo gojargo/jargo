@@ -46,9 +46,11 @@ type FunctionCallInProgressFrame struct {
 	// Args is the raw JSON arguments the model produced for the call.
 	Args json.RawMessage
 	// CancelOnInterruption reports whether the call is canceled when the turn is
-	// interrupted. A call registered with it false is asynchronous: the model
-	// carries on without waiting, and the result arrives later as a developer
-	// message (see AsyncToolMessage).
+	// interrupted. A call registered with it false is asynchronous: the
+	// conversation is not held while it runs, and a result that arrives after the
+	// conversation has moved on is delivered as a developer message (see
+	// AsyncToolMessage). A result that arrives before then settles in place, like
+	// the result of a call the model waited on.
 	CancelOnInterruption bool
 	// GroupID is shared by every call the model requested in one response, so the
 	// aggregator can tell when the last of them completes.

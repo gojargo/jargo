@@ -239,3 +239,229 @@ func TestAssistantAggregatorAsyncToolReportsThroughDeveloperMessages(t *testing.
 		}
 	}
 }
+
+// inProgressAsync builds the frame that starts a call the model does not wait
+// for: one that outlives the turn that made it, and that a barge-in leaves
+// running.
+func inProgressAsync(id, name string) *frames.FunctionCallInProgressFrame {
+	return frames.NewFunctionCallInProgressFrame(id, name, nil, false, group)
+}
+
+// noRun is a result that must not re-run generation, so a test can drive the
+// conversation on its own terms.
+func noRun(fr *frames.FunctionCallResultFrame) *frames.FunctionCallResultFrame {
+	run := false
+	fr.RunLLM = &run
+	return fr
+}
+
+// toolResults collects the tool results the conversation holds, in order.
+func toolResults(msgs []frames.Message) []frames.ToolResult {
+	var out []frames.ToolResult
+	for _, m := range msgs {
+		out = append(out, m.ToolResults...)
+	}
+	return out
+}
+
+// asyncKinds collects the stage of every async-tool message the conversation
+// holds, in order, so a test can say what the protocol wrote and what it did not.
+func asyncKinds(msgs []frames.Message) []frames.AsyncToolKind {
+	var out []frames.AsyncToolKind
+	for _, m := range msgs {
+		if p, ok := frames.ParseAsyncToolMessage(m); ok {
+			out = append(out, p.Kind)
+		}
+	}
+	return out
+}
+
+// TestAsyncToolResultSettlesInPlaceWhenNothingFollows covers the call the model
+// does not wait for whose result beats the conversation to it. Nothing was
+// written after its started message, so there is nothing to catch up on: the
+// result settles into the placeholder exactly as a waited-on call's does, and no
+// deferred message is written at all.
+func TestAsyncToolResultSettlesInPlaceWhenNothingFollows(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "c1", Name: "book_table"}}),
+		inProgressAsync("c1", "book_table"),
+		noRun(frames.NewFunctionCallResultFrame("c1", "book_table", nil, "booked")),
+	)
+
+	msgs := convo.Messages()
+	results := toolResults(msgs)
+	if len(results) != 1 || results[0].ID != "c1" || results[0].Content != "booked" {
+		t.Fatalf("tool results = %+v, want the result settled into c1's placeholder", results)
+	}
+	if kinds := asyncKinds(msgs); len(kinds) != 0 {
+		t.Errorf("async-tool messages = %v, want none: the result settled in place", kinds)
+	}
+}
+
+// TestParallelAsyncToolResultsSettleInPlace checks that a sibling's placeholder
+// and result are protocol bookkeeping rather than the conversation moving on, so
+// a batch of fast calls all settle where they sit.
+func TestParallelAsyncToolResultsSettleInPlace(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{
+			{ID: "c1", Name: "lookup"}, {ID: "c2", Name: "lookup"},
+		}),
+		inProgressAsync("c1", "lookup"),
+		inProgressAsync("c2", "lookup"),
+		noRun(frames.NewFunctionCallResultFrame("c1", "lookup", nil, "one")),
+		noRun(frames.NewFunctionCallResultFrame("c2", "lookup", nil, "two")),
+	)
+
+	msgs := convo.Messages()
+	results := toolResults(msgs)
+	if len(results) != 2 || results[0].Content != "one" || results[1].Content != "two" {
+		t.Fatalf("tool results = %+v, want both settled in place", results)
+	}
+	if kinds := asyncKinds(msgs); len(kinds) != 0 {
+		t.Errorf("async-tool messages = %v, want none: siblings are bookkeeping", kinds)
+	}
+}
+
+// TestAsyncToolResultDuringAModelResponseSettlesInPlace covers a result that
+// lands while a response is still being generated. A response in flight has
+// written nothing to the conversation yet, so there is nothing there to defer
+// against.
+func TestAsyncToolResultDuringAModelResponseSettlesInPlace(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "c1", Name: "lookup"}}),
+		inProgressAsync("c1", "lookup"),
+		frames.NewLLMFullResponseStartFrame(),
+		noRun(frames.NewFunctionCallResultFrame("c1", "lookup", nil, "42")),
+		frames.NewLLMFullResponseEndFrame(),
+	)
+
+	msgs := convo.Messages()
+	results := toolResults(msgs)
+	if len(results) != 1 || results[0].Content != "42" {
+		t.Fatalf("tool results = %+v, want the result settled in place", results)
+	}
+	if kinds := asyncKinds(msgs); len(kinds) != 0 {
+		t.Errorf("async-tool messages = %v, want none", kinds)
+	}
+}
+
+// TestAsyncToolResultAfterSpokenFillerSettlesInPlace covers the filler a handler
+// speaks to cover the wait. It is the bot's own words, not the conversation
+// moving on, so the result it was covering for still settles in place.
+func TestAsyncToolResultAfterSpokenFillerSettlesInPlace(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	started := frames.NewTTSStartedFrame()
+	started.AppendToContext = true
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "c1", Name: "lookup"}}),
+		inProgressAsync("c1", "lookup"),
+		started,
+		frames.NewTTSTextFrame("Let me check on that.", frames.AggregationSentence),
+		frames.NewLLMAssistantPushAggregationFrame(),
+		noRun(frames.NewFunctionCallResultFrame("c1", "lookup", nil, "42")),
+	)
+
+	msgs := convo.Messages()
+	results := toolResults(msgs)
+	if len(results) != 1 || results[0].Content != "42" {
+		t.Fatalf("tool results = %+v, want the result settled in place", results)
+	}
+	if kinds := asyncKinds(msgs); len(kinds) != 0 {
+		t.Errorf("async-tool messages = %v, want none: filler is the bot's own words", kinds)
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != frames.RoleAssistant || last.Text != "Let me check on that." {
+		t.Errorf("last message = %+v, want the spoken filler", last)
+	}
+}
+
+// TestAsyncToolResultAfterAModelResponseSettlesInPlace covers text the model
+// wrote after reading the started message, as when an ungrouped sibling's result
+// re-runs generation. No user turn came between, so the result still settles in
+// place.
+func TestAsyncToolResultAfterAModelResponseSettlesInPlace(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "c1", Name: "lookup"}}),
+		inProgressAsync("c1", "lookup"),
+		frames.NewLLMFullResponseStartFrame(),
+		frames.NewLLMTextFrame("Still looking."),
+		frames.NewLLMFullResponseEndFrame(),
+		noRun(frames.NewFunctionCallResultFrame("c1", "lookup", nil, "42")),
+	)
+
+	msgs := convo.Messages()
+	results := toolResults(msgs)
+	if len(results) != 1 || results[0].Content != "42" {
+		t.Fatalf("tool results = %+v, want the result settled in place", results)
+	}
+	if kinds := asyncKinds(msgs); len(kinds) != 0 {
+		t.Errorf("async-tool messages = %v, want none: assistant text does not defer", kinds)
+	}
+}
+
+// TestAsyncToolResultAfterAUserMessageIsDeferred covers the case the protocol
+// exists for: the user said something while the call ran, so the result arrives
+// where the conversation has got to rather than back where the call sits.
+func TestAsyncToolResultAfterAUserMessageIsDeferred(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "c1", Name: "lookup"}}),
+		inProgressAsync("c1", "lookup"),
+		frames.NewLLMMessagesAppendFrame([]frames.Message{
+			{Role: frames.RoleUser, Text: "Any news?"},
+		}),
+		noRun(frames.NewFunctionCallResultFrame("c1", "lookup", nil, "42")),
+	)
+
+	msgs := convo.Messages()
+	p, ok := frames.ParseAsyncToolMessage(msgs[len(msgs)-1])
+	if !ok || p.Kind != frames.AsyncToolFinal || p.ToolCallID != "c1" || p.Result != "42" {
+		t.Fatalf("last message = %+v, want c1's deferred final result", msgs[len(msgs)-1])
+	}
+}
+
+// TestAsyncToolResultAfterADeveloperMessageIsDeferred covers new task
+// instructions landing while the call ran. They are addressed to the model
+// rather than written by it, so the conversation has moved on.
+func TestAsyncToolResultAfterADeveloperMessageIsDeferred(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "c1", Name: "lookup"}}),
+		inProgressAsync("c1", "lookup"),
+		frames.NewLLMMessagesAppendFrame([]frames.Message{
+			{Role: frames.RoleDeveloper, Text: "Now help with billing."},
+		}),
+		noRun(frames.NewFunctionCallResultFrame("c1", "lookup", nil, "42")),
+	)
+
+	msgs := convo.Messages()
+	p, ok := frames.ParseAsyncToolMessage(msgs[len(msgs)-1])
+	if !ok || p.Kind != frames.AsyncToolFinal || p.ToolCallID != "c1" {
+		t.Fatalf("last message = %+v, want c1's deferred final result", msgs[len(msgs)-1])
+	}
+}
+
+// TestAsyncToolResultAfterAContextRebuildIsDeferred covers a placeholder the
+// conversation no longer holds, because it was replaced while the call ran.
+// There is nothing left to settle into, so the result is deferred.
+func TestAsyncToolResultAfterAContextRebuildIsDeferred(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	drainAssistant(t, convo,
+		frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "c1", Name: "lookup"}}),
+		inProgressAsync("c1", "lookup"),
+		frames.NewLLMMessagesUpdateFrame([]frames.Message{
+			{Role: frames.RoleDeveloper, Text: "Fresh start."},
+		}),
+		noRun(frames.NewFunctionCallResultFrame("c1", "lookup", nil, "42")),
+	)
+
+	msgs := convo.Messages()
+	p, ok := frames.ParseAsyncToolMessage(msgs[len(msgs)-1])
+	if !ok || p.Kind != frames.AsyncToolFinal || p.ToolCallID != "c1" {
+		t.Fatalf("last message = %+v, want c1's deferred final result", msgs[len(msgs)-1])
+	}
+}

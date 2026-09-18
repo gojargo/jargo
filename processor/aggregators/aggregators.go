@@ -1647,14 +1647,14 @@ func (a *AssistantAggregator) groupStillRunning(groupID, exclude string) bool {
 	return false
 }
 
-// finishFunctionCall applies a call's final result and stops tracking it. An
-// ordinary call's placeholder is replaced in place; a call the model did not wait
-// on gets an async-tool final message appended instead, since by now the
-// conversation has moved past the point its placeholder sits at.
+// finishFunctionCall applies a call's final result and stops tracking it. A
+// result that settles in place replaces the call's placeholder; a deferred one
+// gets an async-tool final message appended instead, since by now the
+// conversation has moved past the point the placeholder sits at.
 func (a *AssistantAggregator) finishFunctionCall(
 	fr *frames.FunctionCallResultFrame, started *frames.FunctionCallInProgressFrame,
 ) {
-	async := started != nil && !started.CancelOnInterruption
+	deferred := a.isDeferred(started)
 
 	a.mu.Lock()
 	delete(a.inProgress, fr.ToolCallID)
@@ -1664,11 +1664,69 @@ func (a *AssistantAggregator) finishFunctionCall(
 	if result == "" {
 		result = toolResultCompleted
 	}
-	if async {
+	if deferred {
+		// The conversation moved on while the call ran, so the model is told about
+		// the result in a developer message rather than in the tool result it has
+		// already read.
 		a.context.AddMessage(frames.NewAsyncToolFinalMessage(fr.ToolCallID, result))
 		return
 	}
 	a.context.UpdateToolResult(fr.ToolCallID, result)
+}
+
+// isDeferred reports whether a call's final result has to be delivered as a
+// deferred message rather than settled into the placeholder answering it.
+//
+// A call the model does not wait on (CancelOnInterruption false) whose result
+// arrives before the conversation moved on is indistinguishable from one it
+// waits on, and settles the same way: its started placeholder becomes the tool
+// result, and the model reads an ordinary call. The conversation alone decides.
+//
+// The result is deferred when a user or developer message follows the
+// placeholder: something the user said, new task instructions, or an
+// intermediate update from this call. Assistant messages are ignored, so filler
+// spoken with a TTSSpeakFrame while the call runs does not defer it, whoever
+// spoke it, and neither does text the model wrote after seeing the placeholder
+// with no user turn in between, as when an ungrouped sibling's result runs
+// generation. Other calls' placeholders, results and deferred messages are
+// ignored too, so parallel fast calls all settle in place. A placeholder that is
+// no longer in the conversation, because it was rebuilt while the call ran, also
+// defers.
+func (a *AssistantAggregator) isDeferred(started *frames.FunctionCallInProgressFrame) bool {
+	if started == nil || started.CancelOnInterruption {
+		return false
+	}
+	afterPlaceholder := false
+	for _, m := range a.context.Messages() {
+		if m.IsLLMSpecific() {
+			continue
+		}
+		if !afterPlaceholder {
+			afterPlaceholder = answersToolCall(m, started.ToolCallID)
+			continue
+		}
+		if len(m.ToolResults) > 0 || m.Role == frames.RoleAssistant {
+			// A sibling's placeholder or result, or assistant output.
+			continue
+		}
+		if p, ok := frames.ParseAsyncToolMessage(m); ok && p.ToolCallID != started.ToolCallID {
+			// A sibling's deferred update or result.
+			continue
+		}
+		return true
+	}
+	return !afterPlaceholder
+}
+
+// answersToolCall reports whether the message carries the result answering
+// toolCallID, which is the placeholder while the call is still running.
+func answersToolCall(m frames.Message, toolCallID string) bool {
+	for _, r := range m.ToolResults {
+		if r.ID == toolCallID {
+			return true
+		}
+	}
+	return false
 }
 
 // recordIntermediateResult appends an async-tool intermediate message, leaving

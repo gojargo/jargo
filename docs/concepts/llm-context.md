@@ -176,9 +176,14 @@ side effects, so its result must reach the context even if the user barged in
 meanwhile. See [Interruptions](interruptions.md#surviving-an-interruption).
 
 A tool registered with `llm.WithCancelOnInterruption(false)` is asynchronous: it
-survives the barge-in and the model does not wait for it. Its results arrive as
-`RoleDeveloper` messages appended when they are ready, since by then the
-conversation has moved past where its placeholder sits.
+survives the barge-in and the model does not wait for it. Where its result lands
+depends on what the conversation did while it ran. A result that arrives before a
+user or developer message follows the call's placeholder settles into that
+placeholder, exactly as a call the model waited for does; the model's own output
+does not count, so filler spoken to cover the wait costs the call nothing. Once
+the conversation has moved on, the result arrives as a `RoleDeveloper` message
+appended where the conversation has got to, since the placeholder is no longer
+where the model is reading.
 
 ## Long conversations
 

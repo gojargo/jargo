@@ -14,6 +14,13 @@ import "encoding/json"
 //     the handler reports,
 //   - a final message (a developer message) when the work finishes.
 //
+// The final message exists so that a result arriving after the model has moved
+// on still reaches it. When the result arrives first, with nothing since the
+// started message but the model's own output and other calls' bookkeeping, there
+// is nothing to catch up on: the started message is overwritten with the result,
+// as a synchronous call's placeholder is, and no final message is written. A
+// cancellation always gets one, because it has to say the work did not complete.
+//
 // AsyncToolMessage is the canonical structured form; the JSON string carried in
 // the message is always derived from it and never stored separately, so the two
 // representations cannot drift.
