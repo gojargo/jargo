@@ -48,6 +48,7 @@ const (
 //nolint:gochecknoglobals // a lookup table
 var lowestThinkingLevels = map[string]string{
 	"gemini-3.7-flash": "low",
+	"gemini-3.8-flash": "low",
 }
 
 // SafetySetting is one content-safety filter: a category of harm and the
@@ -70,7 +71,8 @@ type SafetySetting struct {
 type ThinkingConfig struct {
 	// Level is how much a Gemini 3 model thinks: "minimal", "low", "medium" or
 	// "high". Which of them a model accepts varies (Gemini 3 Pro takes "low" and
-	// "high" only), and Google may add more, so it is not checked here.
+	// "high" only, and so do Gemini 3.7 Flash and Gemini 3.8 Flash), and Google
+	// may add more, so it is not checked here.
 	Level string
 	// Budget is the token budget a Gemini 2.5 model may spend on thinking: -1
 	// lets the model decide, 0 turns thinking off, and a positive value caps it.

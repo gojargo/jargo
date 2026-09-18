@@ -358,6 +358,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   map is now consulted for the base language first, and the bare code remains
   the fallback when it names none.
 
+- **Gemini 3.8 Flash is sent the lowest thinking level it accepts.** It rejects
+  `minimal` with a 400, as Gemini 3.7 Flash already did, so it now gets `low`.
+
 - **A Deepgram Flux eager end of turn is no longer reported as an interim
   transcript.** It folded `EagerEndOfTurn` in with `Update` and pushed it as a
   partial, so the prediction looked like ordinary in-progress text and
