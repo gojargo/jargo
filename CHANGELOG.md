@@ -338,6 +338,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   waiting on it. Only a final result settles a call, so only a final result now
   clears the deadline; the update still reaches the conversation as before.
 
+- **A regional language resolves through the service's own code for its base
+  language.** A variant a service was not verified against fell back to the bare
+  base code, so a service naming English `eng` was sent `en` for `en-US`. The
+  map is now consulted for the base language first, and the bare code remains
+  the fallback when it names none.
+
 - **A Deepgram Flux eager end of turn is no longer reported as an interim
   transcript.** It folded `EagerEndOfTurn` in with `Update` and pushed it as a
   partial, so the prediction looked like ordinary in-progress text and

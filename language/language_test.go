@@ -90,6 +90,25 @@ func TestResolveFallsBackToTheBaseCode(t *testing.T) {
 	}
 }
 
+// TestResolveFallsBackThroughTheBaseLanguagesCode checks a service that names
+// its languages in its own way is sent that name for a regional variant it was
+// not verified against. Falling back to the bare base code would send a service
+// naming English "eng" the "en" it does not take.
+func TestResolveFallsBackThroughTheBaseLanguagesCode(t *testing.T) {
+	codes := map[language.Language]string{
+		language.English: "eng",
+		language.Spanish: "spa",
+	}
+
+	if got := language.Resolve(language.EnglishUS, codes, true); got != "eng" {
+		t.Errorf("Resolve(EnglishUS) = %q, want %q: the map names the base language", got, "eng")
+	}
+	// A base language the map does not name still falls back to the base code.
+	if got := language.Resolve(language.FrenchCA, codes, true); got != "fr" {
+		t.Errorf("Resolve(FrenchCA) = %q, want %q", got, "fr")
+	}
+}
+
 // TestResolveFallsBackToTheFullCode checks a service taking full codes is sent
 // the language as it stands.
 func TestResolveFallsBackToTheFullCode(t *testing.T) {

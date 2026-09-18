@@ -598,13 +598,22 @@ func (l Language) BaseCode() string {
 // the ones they refuse are worth seeing.
 //
 // useBaseCode says which form the service takes. A service wanting the base
-// alone ("fr") gets BaseCode; one wanting the full code ("fr-CA") gets that.
+// alone gets the code the map gives for the base language ("eng" for "en-US"
+// against a map holding English as "eng"), falling back to the base code itself
+// ("en") when the map does not name it. One wanting the full code ("fr-CA") gets
+// that.
 func Resolve(l Language, codes map[Language]string, useBaseCode bool) string {
 	if code, ok := codes[l]; ok {
 		return code
 	}
 	if useBaseCode {
 		base := strings.ToLower(l.BaseCode())
+		// A service that names its languages in its own way names the base
+		// language that way too, so a regional variant it does not list resolves
+		// through the map rather than past it.
+		if code, ok := codes[Language(base)]; ok {
+			base = code
+		}
 		slog.Warn("language not verified for this service, using its base code",
 			"language", string(l), "base_code", base)
 		return base
