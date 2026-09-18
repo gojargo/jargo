@@ -50,6 +50,10 @@ type Config struct {
 	SampleRate int
 	// Speed multiplies the speaking rate; nil uses the service default.
 	Speed *float64
+	// MathNotation reads a math operator between digits as a word, so "2 + 2" is
+	// spoken as "two plus two" rather than left to the default number reader; nil
+	// leaves the API's own default, which is off.
+	MathNotation *bool
 }
 
 // Validate reports whether the configuration is usable.

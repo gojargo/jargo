@@ -133,6 +133,11 @@ type ReasoningConfig struct {
 	// effort a model reasons only when the turn calls for it, so a summary may
 	// not arrive at all.
 	Summary string `json:"summary,omitempty"`
+	// Mode is the reasoning mode on a model that offers one, such as the gpt-5.6
+	// series: "standard", or the slower and more thorough "pro". Empty leaves the
+	// field off the request, so the model's own default applies. Effort chooses
+	// how hard the model thinks within the mode.
+	Mode string `json:"mode,omitempty"`
 }
 
 // oSeries matches the reasoning-first o-series model names: o1, o3, o4-mini.

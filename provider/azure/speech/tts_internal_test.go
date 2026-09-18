@@ -46,3 +46,35 @@ func TestSSMLWithoutForceLocale(t *testing.T) {
 		t.Errorf("ssml lost the text:\n%s", doc)
 	}
 }
+
+// TestSSMLEffect checks the audio effect processor reaches the <voice> element,
+// which is what compensates for the playback distortion of the device the audio
+// is bound for.
+func TestSSMLEffect(t *testing.T) {
+	s := &ttsSynthesizer{cfg: TTSConfig{
+		Voice:  "en-US-JennyNeural",
+		Effect: "eq_telecomhp8k",
+	}}
+
+	doc, err := s.ssml("hello")
+	if err != nil {
+		t.Fatalf("ssml: %v", err)
+	}
+	if want := "<voice name='en-US-JennyNeural' effect='eq_telecomhp8k'>"; !strings.Contains(string(doc), want) {
+		t.Errorf("ssml is missing %s:\n%s", want, doc)
+	}
+}
+
+// TestSSMLWithoutEffect checks the attribute is left off rather than sent empty
+// when no effect was asked for.
+func TestSSMLWithoutEffect(t *testing.T) {
+	s := &ttsSynthesizer{cfg: TTSConfig{Voice: "en-US-JennyNeural"}}
+
+	doc, err := s.ssml("hello")
+	if err != nil {
+		t.Fatalf("ssml: %v", err)
+	}
+	if strings.Contains(string(doc), "effect=") {
+		t.Errorf("ssml carries an effect nobody asked for:\n%s", doc)
+	}
+}

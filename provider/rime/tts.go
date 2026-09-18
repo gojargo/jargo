@@ -68,6 +68,7 @@ func (s *synthesizer) requestBody(text string) ([]byte, error) {
 		setBool(m, "reduceLatency", s.cfg.ReduceLatency)
 		setBool(m, "pauseBetweenBrackets", s.cfg.PauseBetweenBrackets)
 		setBool(m, "phonemizeBetweenBrackets", s.cfg.PhonemizeBetweenBrackets)
+		setBool(m, "noTextNormalization", s.cfg.NoTextNormalization)
 	}
 	return json.Marshal(m)
 }

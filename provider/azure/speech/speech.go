@@ -35,6 +35,12 @@ type TTSConfig struct {
 	// Language sets the SSML xml:lang; the zero value derives it from the voice's
 	// locale.
 	Language language.Language
+	// Effect names the audio effect processor that compensates for playback
+	// distortion on the device the audio is bound for, as SSML's effect attribute
+	// on <voice>: "eq_car" for an enclosed vehicle, "eq_telecomhp8k" for
+	// narrowband telephony, which is what the 8 kHz telephony pipelines carry.
+	// Empty leaves the attribute off.
+	Effect string
 	// ForceLocale wraps the text in SSML's <lang> element, so a multilingual
 	// voice (en-US-EmmaMultilingualNeural, say) speaks in Language rather than
 	// the language it reads out of the text. A single-locale voice ignores the

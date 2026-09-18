@@ -36,6 +36,10 @@ type STTConfig struct {
 	Prompt string
 	// Temperature is the sampling temperature (0.0 to 1.0); nil omits it.
 	Temperature *float64
+	// Keywords are words and phrases the transcription is steered towards, such
+	// as product names or acronyms; empty sends none. gpt-transcribe, the default
+	// model, is the one that takes them.
+	Keywords []string
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
 	// HTTPClient makes the requests; nil uses one with the standard library's
@@ -133,6 +137,13 @@ func writeFields(w *multipart.Writer, cfg *STTConfig) error {
 	}
 	if cfg.Temperature != nil {
 		if err := w.WriteField("temperature", strconv.FormatFloat(*cfg.Temperature, 'g', -1, 64)); err != nil {
+			return err
+		}
+	}
+	// A list is written as one bracketed field per entry, which is how the API
+	// reads an array out of a multipart form.
+	for _, k := range cfg.Keywords {
+		if err := w.WriteField("keywords[]", k); err != nil {
 			return err
 		}
 	}

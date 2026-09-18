@@ -169,10 +169,13 @@ func TestControlsFollowTheModel(t *testing.T) {
 	withAll := func(c *Config) {
 		c.RepetitionPenalty, c.Temperature, c.TopP, c.TimeScaleFactor = &f, &f, &f, &f
 		c.ReduceLatency, c.PauseBetweenBrackets, c.PhonemizeBetweenBrackets = &b, &b, &b
+		c.NoTextNormalization = &b
 	}
 
 	coda := []string{"repetition_penalty", "temperature", "top_p", "timeScaleFactor"}
-	mist := []string{"reduceLatency", "pauseBetweenBrackets", "phonemizeBetweenBrackets"}
+	mist := []string{
+		"reduceLatency", "pauseBetweenBrackets", "phonemizeBetweenBrackets", "noTextNormalization",
+	}
 
 	tests := []struct {
 		model   string

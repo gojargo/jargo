@@ -56,6 +56,10 @@ type TTSConfig struct {
 	// Speed multiplies the speaking rate from 0.7 to 1.3; nil leaves it unset
 	// and uses Soniox's default of 1.0.
 	Speed *float64 `validate:"omitempty,min=0.7,max=1.3"`
+	// ClientReferenceID labels the request in Soniox's own usage records, so the
+	// audio generated can be attributed to a customer or a session. Empty omits
+	// it, and Soniox ignores it for a temporary API key.
+	ClientReferenceID string
 	// WordTimestamps requests per-character timings and drives the word-aligned
 	// text path: the TTS base emits a TTSTextFrame for each spoken word as its
 	// audio plays, mapped back to its original written form, so the assistant
@@ -150,6 +154,9 @@ func (s *ttsSynthesizer) config(withTimestamps bool) map[string]any {
 	}
 	if s.cfg.Speed != nil {
 		cfg["speed"] = *s.cfg.Speed
+	}
+	if s.cfg.ClientReferenceID != "" {
+		cfg["client_reference_id"] = s.cfg.ClientReferenceID
 	}
 	return cfg
 }

@@ -88,6 +88,9 @@ func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text strin
 	if s.cfg.Speed != nil {
 		msg["speed"] = *s.cfg.Speed
 	}
+	if s.cfg.MathNotation != nil {
+		msg["math_notation"] = *s.cfg.MathNotation
+	}
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err

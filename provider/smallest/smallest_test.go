@@ -149,3 +149,65 @@ func voiceSent(t *testing.T, cfg Config) string {
 		return ""
 	}
 }
+
+// TestMathNotationReachesTheRequest checks the flag that has a math operator
+// between digits read as a word, and that it is left out when nobody set it: the
+// API reads an absent flag as its own default rather than as false.
+func TestMathNotationReachesTheRequest(t *testing.T) {
+	on := true
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		want any
+	}{
+		{name: "unset", cfg: Config{APIKey: "k"}, want: nil},
+		{name: "on", cfg: Config{APIKey: "k", MathNotation: &on}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := requestField(t, tc.cfg, "math_notation"); got != tc.want {
+				t.Errorf("math_notation = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// requestField synthesizes one sentence against a fake endpoint and reports what
+// the request carried under key, or nil when it carried nothing.
+func requestField(t *testing.T, cfg Config, key string) any {
+	t.Helper()
+
+	got := make(chan map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
+		ctx := r.Context()
+		_, data, err := c.Read(ctx)
+		if err != nil {
+			return
+		}
+		var payload map[string]any
+		_ = json.Unmarshal(data, &payload)
+		select {
+		case got <- payload:
+		default:
+		}
+		done, _ := json.Marshal(map[string]any{"status": "complete"})
+		_ = c.Write(ctx, websocket.MessageText, done)
+	}))
+	defer srv.Close()
+
+	cfg.URL = wsURL(srv.URL)
+	syn := &synthesizer{cfg: withDefaults(cfg)}
+	_ = runPCM(syn, t.Context(), "hello", func([]byte) error { return nil })
+
+	select {
+	case payload := <-got:
+		return payload[key]
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request never reached the endpoint")
+		return nil
+	}
+}

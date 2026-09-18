@@ -62,6 +62,11 @@ type STTConfig struct {
 	// NoiseReduction filters the input audio: "near_field" for a close
 	// microphone, "far_field" for a distant one. Empty disables it.
 	NoiseReduction string `validate:"omitempty,oneof=near_field far_field"`
+	// Delay is how long the model waits before emitting transcription text,
+	// trading latency for accuracy: "minimal", "low", "medium", "high" or
+	// "xhigh". Empty leaves the field off. Only gpt-realtime-whisper, the default
+	// model, honors it.
+	Delay string `validate:"omitempty,oneof=minimal low medium high xhigh"`
 	// SilenceMS is how long the server waits through silence before ending an
 	// utterance; 0 uses the server default.
 	SilenceMS int `validate:"omitempty,min=0"`
@@ -137,6 +142,9 @@ func (c *sttConnector) sessionUpdate() map[string]any {
 	}
 	if c.cfg.Prompt != "" {
 		transcription["prompt"] = c.cfg.Prompt
+	}
+	if c.cfg.Delay != "" {
+		transcription["delay"] = c.cfg.Delay
 	}
 
 	turnDetection := map[string]any{keyType: "server_vad"}

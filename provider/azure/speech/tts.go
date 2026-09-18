@@ -75,8 +75,12 @@ func (s *ttsSynthesizer) ssml(text string) ([]byte, error) {
 		// told; the <lang> element is what tells it.
 		body = fmt.Sprintf("<lang xml:lang='%s'>%s</lang>", lang, body)
 	}
-	doc := fmt.Sprintf("<speak version='1.0' xml:lang='%s'><voice name='%s'>%s</voice></speak>",
-		lang, s.cfg.Voice, body)
+	voiceAttrs := fmt.Sprintf("name='%s'", s.cfg.Voice)
+	if s.cfg.Effect != "" {
+		voiceAttrs += fmt.Sprintf(" effect='%s'", s.cfg.Effect)
+	}
+	doc := fmt.Sprintf("<speak version='1.0' xml:lang='%s'><voice %s>%s</voice></speak>",
+		lang, voiceAttrs, body)
 	return []byte(doc), nil
 }
 

@@ -60,7 +60,7 @@ func TestTTSConfigMessage(t *testing.T) {
 				t.Errorf("%s = %v, want %v", key, cfg[key], val)
 			}
 		}
-		for _, key := range []string{"language", "speed"} {
+		for _, key := range []string{"language", "speed", "client_reference_id"} {
 			if _, ok := cfg[key]; ok {
 				t.Errorf("%s = %v, want it omitted when unset", key, cfg[key])
 			}
@@ -70,10 +70,11 @@ func TestTTSConfigMessage(t *testing.T) {
 	t.Run("optional settings", func(t *testing.T) {
 		speed := 1.1
 		s := &ttsSynthesizer{cfg: TTSConfig{
-			APIKey:   "k",
-			Voice:    "9f2b0c1e",
-			Language: language.FrenchCA,
-			Speed:    &speed,
+			APIKey:            "k",
+			Voice:             "9f2b0c1e",
+			Language:          language.FrenchCA,
+			Speed:             &speed,
+			ClientReferenceID: "call-7",
 		}.withTTSDefaults()}
 		cfg := s.config(false)
 
@@ -88,6 +89,9 @@ func TestTTSConfigMessage(t *testing.T) {
 		}
 		if cfg["return_timestamps"] != false {
 			t.Errorf("return_timestamps = %v, want false", cfg["return_timestamps"])
+		}
+		if cfg["client_reference_id"] != "call-7" {
+			t.Errorf("client_reference_id = %v, want call-7", cfg["client_reference_id"])
 		}
 	})
 }

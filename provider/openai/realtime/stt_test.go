@@ -75,6 +75,9 @@ func TestSTTSessionUpdate(t *testing.T) {
 		if _, ok := transcription["prompt"]; ok {
 			t.Error("prompt is present when unset, want it omitted")
 		}
+		if _, ok := transcription["delay"]; ok {
+			t.Error("delay is present when unset, want it omitted")
+		}
 		turn, _ := input["turn_detection"].(map[string]any)
 		if turn[keyType] != "server_vad" {
 			t.Errorf("turn_detection = %v, want server_vad", turn)
@@ -90,6 +93,7 @@ func TestSTTSessionUpdate(t *testing.T) {
 			Model:          "gpt-4o-transcribe",
 			Language:       language.FrenchCA,
 			Prompt:         "product names",
+			Delay:          "minimal",
 			NoiseReduction: "far_field",
 			SilenceMS:      700,
 		}}
@@ -103,6 +107,9 @@ func TestSTTSessionUpdate(t *testing.T) {
 		}
 		if transcription["prompt"] != "product names" {
 			t.Errorf("prompt = %v, want the configured prompt", transcription["prompt"])
+		}
+		if transcription["delay"] != "minimal" {
+			t.Errorf("delay = %v, want the configured wait", transcription["delay"])
 		}
 		turn, _ := input["turn_detection"].(map[string]any)
 		if turn["silence_duration_ms"] != 700 {

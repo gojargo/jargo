@@ -13,6 +13,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Seven provider settings that had no way through.** `rime.Config` gained
+  `NoTextNormalization`, which leaves numbers, dates and abbreviations as
+  written on the mist models. `smallest.Config` gained `MathNotation`, which has
+  a math operator between digits read as a word, so "2 + 2" is spoken as "two
+  plus two". `soniox.TTSConfig` gained `ClientReferenceID`, the label Soniox
+  records the request under in its usage logs, matching the field `STTConfig`
+  already carried. `chat.STTConfig` gained `Keywords`, the words and phrases
+  `gpt-transcribe` steers a transcript towards. `realtime.STTConfig` gained
+  `Delay`, how long `gpt-realtime-whisper` waits before emitting text, trading
+  latency for accuracy. `speech.TTSConfig` gained `Effect`, SSML's audio effect
+  processor on `<voice>`: `eq_telecomhp8k` is the one for the 8 kHz telephony
+  pipelines. `responses.ReasoningConfig` gained `Mode`, the `standard` or `pro`
+  reasoning mode a model such as the gpt-5.6 series offers beside the effort
+  level.
+
 ### Changed
 
 - **The turn-completion instructions are written for the models that need

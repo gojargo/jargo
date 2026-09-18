@@ -76,6 +76,34 @@ func TestConfiguredReasoningWins(t *testing.T) {
 	}
 }
 
+// TestReasoningModeIsSentAlongsideTheEffort covers the mode a model such as the
+// gpt-5.6 series offers beside the effort level: the two travel together, the
+// effort choosing how hard the model thinks within the mode.
+func TestReasoningModeIsSentAlongsideTheEffort(t *testing.T) {
+	cfg := Config{Model: "gpt-5.6-sol", Reasoning: &ReasoningConfig{Effort: "low", Mode: "pro"}}
+	got := mustRequest(t, cfg, convo()).Reasoning
+	if got == nil || got.Effort != "low" || got.Mode != "pro" {
+		t.Fatalf("reasoning = %+v, want effort low in mode pro", got)
+	}
+}
+
+// TestUnsetReasoningModeIsOmitted checks the mode is absent rather than empty
+// when nobody chose one: "mode": "" is not a mode the API knows.
+func TestUnsetReasoningModeIsOmitted(t *testing.T) {
+	raw, err := json.Marshal(mustRequest(t, Config{Model: "gpt-5.6-terra"}, convo()))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	reasoning, _ := body["reasoning"].(map[string]any)
+	if _, present := reasoning["mode"]; present {
+		t.Errorf("an unset mode reached the request: %s", raw)
+	}
+}
+
 // An empty config is the same as none: it must not send an empty object, which
 // asks the API to reason at its default rather than not at all.
 func TestEmptyReasoningConfigStillDisablesIt(t *testing.T) {

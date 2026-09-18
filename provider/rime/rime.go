@@ -52,6 +52,9 @@ type Config struct {
 	PauseBetweenBrackets *bool
 	// PhonemizeBetweenBrackets phonemizes bracketed content (mistv2 only).
 	PhonemizeBetweenBrackets *bool
+	// NoTextNormalization leaves numbers, dates and abbreviations as written
+	// rather than spelling them out first (mistv2 only).
+	NoTextNormalization *bool
 	// InlineSpeedAlpha is inline speed-control markup; empty omits it.
 	InlineSpeedAlpha string
 	// TimeScaleFactor scales playback speed (coda only); >1 slows down.

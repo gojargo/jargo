@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +23,12 @@ import (
 // uploaded is the transcription request as the endpoint received it: the form
 // fields, and the file part with its declared filename.
 type uploaded struct {
-	path     string
-	header   http.Header
-	fields   map[string]string
+	path   string
+	header http.Header
+	fields map[string]string
+	// lists holds every entry of a repeated field, which is how an array crosses
+	// a multipart form. fields keeps only the last of them.
+	lists    map[string][]string
 	filename string
 	file     []byte
 }
@@ -33,7 +37,7 @@ type uploaded struct {
 // and replying with transcript.
 func newSTTServer(t *testing.T, transcript string) (*httptest.Server, *uploaded) {
 	t.Helper()
-	got := &uploaded{fields: map[string]string{}}
+	got := &uploaded{fields: map[string]string{}, lists: map[string][]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got.path = r.URL.Path
 		got.header = r.Header.Clone()
@@ -64,6 +68,9 @@ func newSTTServer(t *testing.T, transcript string) (*httptest.Server, *uploaded)
 				continue
 			}
 			got.fields[part.FormName()] = string(body)
+			// A repeated field is how an array crosses a multipart form, so the
+			// entries are kept rather than overwriting one another.
+			got.lists[part.FormName()] = append(got.lists[part.FormName()], string(body))
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -188,7 +195,7 @@ func TestTranscribeFields(t *testing.T) {
 	if got.fields["response_format"] != "json" {
 		t.Errorf("response_format = %q, want json", got.fields["response_format"])
 	}
-	for _, f := range []string{"language", "prompt", "temperature"} {
+	for _, f := range []string{"language", "prompt", "temperature", "keywords[]"} {
 		if _, present := got.fields[f]; present {
 			t.Errorf("%s was sent for an unset config: %q", f, got.fields[f])
 		}
@@ -205,6 +212,7 @@ func TestTranscribeOptionalFields(t *testing.T) {
 		Language:    language.FrenchCA,
 		Prompt:      "a product demo",
 		Temperature: &temp,
+		Keywords:    []string{"jargo", "WebRTC"},
 	}, []byte{0, 0}, 16000)
 
 	if got.fields["language"] != "fr" {
@@ -215,6 +223,9 @@ func TestTranscribeOptionalFields(t *testing.T) {
 	}
 	if got.fields["temperature"] != "0.2" {
 		t.Errorf("temperature = %q, want 0.2", got.fields["temperature"])
+	}
+	if want := []string{"jargo", "WebRTC"}; !slices.Equal(got.lists["keywords[]"], want) {
+		t.Errorf("keywords = %q, want one repeated field per entry %q", got.lists["keywords[]"], want)
 	}
 }
 
