@@ -131,8 +131,24 @@ func TestKeytermsReachTheEndpoint(t *testing.T) {
 	}
 }
 
-// Only the ink-2 family honors keyterms, so they are left off any other model
-// rather than being sent where they mean nothing.
+// The ink-preview family honors keyterms alongside ink-2, so they are sent for
+// it rather than dropped with a warning.
+func TestKeytermsReachAnInkPreviewEndpoint(t *testing.T) {
+	t.Parallel()
+
+	cfg := sttConfig()
+	cfg.Model = "ink-preview"
+	cfg.Keyterm = []string{"flat white"}
+	c := newSTTConnector(cfg)
+
+	got := queryOf(t, c.endpoint(16000))["keyterm"]
+	if len(got) != 1 || got[0] != "flat white" {
+		t.Errorf("keyterm = %v, want [flat white] on model %q", got, cfg.Model)
+	}
+}
+
+// Only the ink-2 and ink-preview families honor keyterms, so they are left off
+// any other model rather than being sent where they mean nothing.
 func TestKeytermsAreLeftOffAnUnsupportedModel(t *testing.T) {
 	t.Parallel()
 

@@ -361,6 +361,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Gemini 3.8 Flash is sent the lowest thinking level it accepts.** It rejects
   `minimal` with a 400, as Gemini 3.7 Flash already did, so it now gets `low`.
 
+- **Cartesia keyterms reach the `ink-preview` models.** They were gated on the
+  `ink-2` family alone, so keyterms set on an `ink-preview` connection were
+  dropped with a warning although Cartesia honors them there.
+
 - **A Deepgram Flux eager end of turn is no longer reported as an interim
   transcript.** It folded `EagerEndOfTurn` in with `Update` and pushed it as a
   partial, so the prediction looked like ordinary in-progress text and

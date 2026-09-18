@@ -39,8 +39,6 @@ const (
 	// Cartesia caps a connection at 100 keyterms totaling 1200 characters.
 	maxKeyterms     = 100
 	maxKeytermChars = 1200
-	// Only the ink-2 model family honors keyterms.
-	keytermModelPrefix = "ink-2"
 
 	// Cartesia closes a connection that has been idle for three minutes. The
 	// timeout resets on every message sent, so silence is submitted well inside
@@ -48,6 +46,22 @@ const (
 	sttKeepaliveTimeout  = 120 * time.Second
 	sttKeepaliveInterval = 30 * time.Second
 )
+
+// keytermModelPrefixes are the model families that honor keyterms.
+//
+//nolint:gochecknoglobals // a lookup table
+var keytermModelPrefixes = []string{"ink-2", "ink-preview"}
+
+// honorsKeyterms reports whether the model belongs to a family that honors
+// keyterms.
+func honorsKeyterms(model string) bool {
+	for _, prefix := range keytermModelPrefixes {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // STTConfig configures the Cartesia streaming STT service.
 type STTConfig struct {
@@ -70,8 +84,9 @@ type STTConfig struct {
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
 	// Keyterm biases transcription towards the given terms or phrases. Cartesia
-	// binds them to a connection and only the ink-2 model family honors them, so
-	// changing them while the pipeline runs reopens the session.
+	// binds them to a connection and only the ink-2 and ink-preview model
+	// families honor them, so changing them while the pipeline runs reopens the
+	// session.
 	Keyterm []string
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
@@ -120,7 +135,8 @@ type STTSettings struct {
 
 	// Keyterm biases transcription towards the given terms or phrases, sent as
 	// repeated keyterm query parameters. Cartesia binds keyterms to a
-	// connection, and only the ink-2 model family honors them.
+	// connection, and only the ink-2 and ink-preview model families honor
+	// them.
 	Keyterm settings.Opt[[]string] `settings:"keyterm"`
 }
 
@@ -214,9 +230,10 @@ func keytermsFor(model string, keyterms []string) []string {
 	if len(prepared) == 0 {
 		return nil
 	}
-	if !strings.HasPrefix(model, keytermModelPrefix) {
+	if !honorsKeyterms(model) {
 		slog.Warn("keyterms are ignored on this model",
-			"service", "CartesiaSTT", "model", model, "supported", keytermModelPrefix)
+			"service", "CartesiaSTT", "model", model,
+			"supported", strings.Join(keytermModelPrefixes, ", "))
 		return nil
 	}
 	return prepared
