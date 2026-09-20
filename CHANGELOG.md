@@ -56,6 +56,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A run records what each of its expectations matched.** `eval.Result` gained
+  `Turns`, one `TurnResult` per turn played, each carrying how the turn went,
+  how long it took, and what each of its expectations resolved to: the event it
+  waited for, whether it passed, and what it matched (a function call's name,
+  the text of a reply or a transcript). A failure's reason stays in `Failures`.
+  Until now a run that passed left nothing behind to read, so a sweep could be
+  counted but not analysed. A turn stops at an expectation nothing arrived for,
+  so it lists its expectations up to that one and no further.
+
 - **A suite manifest entry can be named and capped.** An entry's `name:` labels
   it in the results, which is what tells apart two entries differing only in the
   scenarios they play; empty uses the bot's URL, and `SuiteResult` carries the

@@ -929,3 +929,70 @@ turns:
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
 }
+
+// TestResultRecordsWhatEachExpectationMatched covers reading a run back once it
+// is over. The failures say what went wrong; these say what happened, which for
+// a run that passed is the only record there is.
+func TestResultRecordsWhatEachExpectationMatched(t *testing.T) {
+	res := host(t, `
+name: recorded
+turns:
+  - user: "what's the weather in Paris?"
+    expect:
+      - event: function_call
+        name: get_weather
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_contains: "you said"
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass, got %v", res.Failures)
+	}
+	if len(res.Turns) != 2 {
+		t.Fatalf("got %d turns, want one per turn played", len(res.Turns))
+	}
+
+	first := res.Turns[0]
+	if first.Turn != 1 || first.Status != eval.TurnPassed {
+		t.Errorf("first turn = %+v, want turn 1 passed", first)
+	}
+	if len(first.Expectations) != 1 || first.Expectations[0].Matched != "get_weather" {
+		t.Errorf("first turn matched %+v, want the call it made", first.Expectations)
+	}
+	if first.Duration <= 0 {
+		t.Error("a turn that ran should have taken some time")
+	}
+
+	second := res.Turns[1].Expectations
+	if len(second) != 1 || !strings.Contains(second[0].Matched, "you said: hello") {
+		t.Errorf("second turn matched %+v, want the reply it read", second)
+	}
+}
+
+// A turn that fails is recorded as such, and the expectation that failed carries
+// no match: its reason is in the run's failures.
+func TestResultRecordsAFailedTurn(t *testing.T) {
+	res := host(t, `
+name: recorded-failure
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_contains: "goodbye"
+        within_ms: 1000
+`)
+	if res.Passed() {
+		t.Fatal("expected a failure")
+	}
+	if len(res.Turns) != 1 || res.Turns[0].Status != eval.TurnFailed {
+		t.Fatalf("turns = %+v, want the one turn recorded as failed", res.Turns)
+	}
+	got := res.Turns[0].Expectations
+	if len(got) != 1 || got[0].Passed || got[0].Matched != "" {
+		t.Errorf("expectations = %+v, want the failure recorded with no match", got)
+	}
+	if got[0].Event != "llm_response" || got[0].Expectation != 1 {
+		t.Errorf("expectation = %+v, want it named and numbered", got[0])
+	}
+}

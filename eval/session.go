@@ -134,10 +134,19 @@ type session struct {
 	// response begins at the next bot-llm-started.
 	awaitingLLMRestart bool
 
+	// turns is what each turn resolved to, and what each of its expectations
+	// matched. The matcher goroutine owns it.
+	turns []TurnResult
+
 	// pendingCalls holds function_call events popped while matching a different
 	// call, so a turn's calls can be claimed by name in any order. Reset per turn.
 	// The matcher goroutine owns it.
 	pendingCalls []Event
+
+	// lastMatch is what the expectation just matched, in short, which is what a
+	// passing turn records rather than leaving the run readable only by its
+	// failures. The matcher goroutine owns it.
+	lastMatch string
 
 	// onProgress, when set, is told how each turn and expectation resolved as it
 	// happens, for a caller reporting progress live.
@@ -188,6 +197,7 @@ func (s *session) run(ctx context.Context) (res Result, err error) {
 	defer func() {
 		res.Duration = time.Since(s.started)
 		res.DebugLog, res.Events = s.diagnostics()
+		res.Turns = s.turns
 	}()
 
 	s.debugf("run: scenario %q", s.scenario.Name)
@@ -199,10 +209,12 @@ func (s *session) run(ctx context.Context) (res Result, err error) {
 
 	for i, turn := range s.scenario.Turns {
 		s.setTurn(i + 1)
+		startedTurn := time.Now()
 		failures, err := s.runTurn(ctx, turn, i+1)
 		if err != nil {
 			return res, err
 		}
+		s.finishTurn(i+1, failures, time.Since(startedTurn))
 		res.Failures = append(res.Failures, failures...)
 		if len(failures) > 0 {
 			// Fail fast: a failed turn leaves the conversation in an unknown state,
@@ -249,6 +261,40 @@ func (s *session) recordEvent(ev Event) {
 func (s *session) progress(p Progress) {
 	if s.onProgress != nil {
 		s.onProgress(p)
+	}
+}
+
+// record adds what one expectation resolved to, to the turn it belongs to.
+func (s *session) record(turnNum int, r ExpectationResult) {
+	if n := len(s.turns); n > 0 && s.turns[n-1].Turn == turnNum {
+		s.turns[n-1].Expectations = append(s.turns[n-1].Expectations, r)
+		return
+	}
+	s.turns = append(s.turns, TurnResult{
+		Turn: turnNum, Status: TurnPassed, Expectations: []ExpectationResult{r},
+	})
+}
+
+// matchedText is what the expectation matched, which is recorded only where
+// there was a match: a failure's reason is in the turn's failures instead.
+func (s *session) matchedText(fail *Failure) string {
+	if fail != nil {
+		return ""
+	}
+	return s.lastMatch
+}
+
+// finishTurn closes off a turn's record with how it went and how long it took. A
+// turn with no expectations at all, one that only sends input, is recorded too,
+// so the turns read back in the order the scenario wrote them.
+func (s *session) finishTurn(turnNum int, failures []Failure, took time.Duration) {
+	if n := len(s.turns); n == 0 || s.turns[n-1].Turn != turnNum {
+		s.turns = append(s.turns, TurnResult{Turn: turnNum, Status: TurnPassed})
+	}
+	last := &s.turns[len(s.turns)-1]
+	last.Duration = took
+	if len(failures) > 0 {
+		last.Status = TurnFailed
 	}
 }
 
@@ -451,6 +497,9 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 			budget = time.Duration(exp.WithinMS) * time.Millisecond
 		}
 		fail, absent := s.matchExpectation(ctx, exp, anchor.Add(budget), budget, turnNum, j+1)
+		s.record(turnNum, ExpectationResult{
+			Expectation: j + 1, Event: exp.Event, Passed: fail == nil, Matched: s.matchedText(fail),
+		})
 		switch fail {
 		case nil:
 			s.progress(Progress{Turn: turnNum, Expectation: j + 1, Event: exp.Event, Status: StatusMatched})
@@ -596,6 +645,7 @@ func (s *session) matchExpectation(
 		return fail(fmt.Sprintf("no matching %s event arrived within %s", exp.Event, budget))
 	}
 
+	s.lastMatch = ""
 	if exp.Absent {
 		return s.matchAbsent(ctx, exp, deadline, budget, fail), false
 	}
@@ -614,7 +664,11 @@ func (s *session) matchExpectation(
 		if f := checkPayload(ev, exp, fail); f != nil {
 			return f, false
 		}
-		return s.checkJudge(ctx, ev, exp, fail), false
+		if f := s.checkJudge(ctx, ev, exp, fail); f != nil {
+			return f, false
+		}
+		s.lastMatch = ev.summary()
+		return nil, false
 	}
 	return s.matchAggregate(ctx, exp, deadline, budget, fail, missing)
 }
@@ -663,6 +717,7 @@ func (s *session) matchAggregate(
 		status, reason := s.evaluateAggregate(ctx, aggregate, exp)
 		switch status {
 		case statusPass:
+			s.lastMatch = strings.TrimSpace(aggregate)
 			return nil, false
 		case statusFail:
 			return fail(reason), false
@@ -758,6 +813,10 @@ func (s *session) matchFunctionCalls(
 			return f
 		}
 		matched = append(matched, ev.Function)
+	}
+	s.lastMatch = strings.Join(matched, ", ")
+	if s.lastMatch == "" {
+		s.lastMatch = "function call"
 	}
 	return nil
 }
