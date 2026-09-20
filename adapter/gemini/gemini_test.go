@@ -277,3 +277,61 @@ func TestToProviderToolsFormatStripsAdditionalProperties(t *testing.T) {
 		t.Errorf("declaration shape wrong: %s", got)
 	}
 }
+
+// TestTrailingModelTurnTakesANoOpUserTurn covers the request a model that
+// cannot continue a trailing model turn refuses. The conversation ends on an
+// assistant message whenever the model spoke last, so the shape is satisfied
+// with a full stop that says nothing.
+func TestTrailingModelTurnTakesANoOpUserTurn(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddAssistantMessage("let me check on that")
+
+	contents := paramsOf(t, convo, adapter.Options{EnsureLastMessageIsUser: true}).Contents
+	wantRoles(t, contents, roleUser, roleModel, roleUser)
+	if got := textAt(t, contents[2]); got != noOpUserTurn {
+		t.Errorf("appended text = %q, want %q", got, noOpUserTurn)
+	}
+}
+
+// TestFillerAfterAToolResultTakesANoOpUserTurn is the case that made this
+// necessary: a tool call settles where it was made, and filler spoken while the
+// tool ran leaves the model's own words last in the conversation.
+func TestFillerAfterAToolResultTakesANoOpUserTurn(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("what's the weather?")
+	convo.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "get_weather"})
+	convo.AddToolResult(frames.ToolResult{ID: "c1", Name: "get_weather", Content: `{"temperature":"75"}`})
+	convo.AddAssistantMessage("let me check on that")
+
+	contents := paramsOf(t, convo, adapter.Options{EnsureLastMessageIsUser: true}).Contents
+	wantRoles(t, contents, roleUser, roleModel, roleUser, roleModel, roleUser)
+	if got := textAt(t, contents[4]); got != noOpUserTurn {
+		t.Errorf("appended text = %q, want %q", got, noOpUserTurn)
+	}
+}
+
+// TestTrailingModelTurnIsKeptWhenNothingAsks checks the conversation is left
+// alone for a model that does continue one, which is what the option is for.
+func TestTrailingModelTurnIsKeptWhenNothingAsks(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddAssistantMessage("hi there")
+
+	wantRoles(t, paramsOf(t, convo, adapter.Options{}).Contents, roleUser, roleModel)
+}
+
+// TestATrailingUserTurnIsNotDoubled checks nothing is appended to a
+// conversation already ending the way the API wants it.
+func TestATrailingUserTurnIsNotDoubled(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddAssistantMessage("hi there")
+	convo.AddUserMessage("how are you?")
+
+	contents := paramsOf(t, convo, adapter.Options{EnsureLastMessageIsUser: true}).Contents
+	wantRoles(t, contents, roleUser, roleModel, roleUser)
+	if got := textAt(t, contents[2]); got != "how are you?" {
+		t.Errorf("last content = %q, want the user's own words", got)
+	}
+}

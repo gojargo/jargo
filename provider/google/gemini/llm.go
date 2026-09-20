@@ -267,10 +267,41 @@ func (s *Service) handleFinishReason(reason string) {
 		"service", s.Name(), "model", s.cfg.Model, "reason", reason)
 }
 
+// prefillSupportedPatterns lists the models that accept a request whose
+// contents end with a model turn, continuing that turn as the start of the
+// response. The newer models reject such a request outright, so this is a
+// frozen legacy set: a model not matching it is assumed to reject one and is
+// given a trailing user turn instead. Prefixes are matched from the start of
+// the id, and gemini-3.5-flash is left out although it accepts a trailing model
+// turn, because it shares its prefix with gemini-3.5-flash-lite, which does not.
+//
+//nolint:gochecknoglobals // fixed lookup table
+var prefillSupportedPatterns = []string{
+	"gemini-2.",
+	"gemini-3-",
+	"gemini-3.1-",
+	"gemini-pro-latest",
+}
+
+// supportsPrefill reports whether model continues a trailing model turn rather
+// than refusing the request that carries one.
+func supportsPrefill(model string) bool {
+	for _, p := range prefillSupportedPatterns {
+		if strings.HasPrefix(model, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // requestBody builds the generateContent body, optionally advertising tools.
 func (s *Service) requestBody(
 	convo *frames.LLMContext, opts adapter.Options, withTools bool,
 ) (map[string]any, error) {
+	// A model that cannot continue a trailing model turn rejects the request
+	// carrying one, which is what an assistant message last in the conversation
+	// converts to: filler spoken while a tool ran, say.
+	opts.EnsureLastMessageIsUser = !supportsPrefill(s.cfg.Model)
 	p, err := s.adapter.LLMInvocationParams(convo, opts)
 	if err != nil {
 		return nil, err

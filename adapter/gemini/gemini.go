@@ -31,6 +31,11 @@ const (
 // it answers: an asynchronous tool's messages carry only the call's id.
 const unnamedToolResult = "tool_call_result"
 
+// noOpUserTurn is the minimal user content appended to a conversation ending on
+// a model turn. A full stop says nothing in any language, which is the point: it
+// is there to satisfy the shape, not to be read.
+const noOpUserTurn = "."
+
 // Params is what one generateContent call takes from the conversation: the
 // system instruction Gemini carries beside the conversation, the contents
 // themselves, and the tools to advertise.
@@ -77,6 +82,9 @@ func (a *Adapter) LLMInvocationParams(
 		contents = append(contents, textContent(roleUser, system))
 	}
 	contents = dropEmpty(contents)
+	if opts.EnsureLastMessageIsUser {
+		contents = EnsureLastMessageIsUser(contents)
+	}
 
 	params := Params{SystemInstruction: system, Contents: contents}
 	if tools := a.WithBuiltins(convo.ToolsSchema()); len(tools.Standard) > 0 ||
@@ -119,6 +127,17 @@ func ToContents(msgs []frames.Message) ([]map[string]any, error) {
 		}
 	}
 	return out, nil
+}
+
+// EnsureLastMessageIsUser appends a minimal user content when the conversation
+// ends on a model turn, which a model that cannot continue one rejects.
+func EnsureLastMessageIsUser(contents []map[string]any) []map[string]any {
+	if n := len(contents); n > 0 {
+		if role, _ := contents[n-1][keyRole].(string); role == roleModel {
+			return append(contents, textContent(roleUser, noOpUserTurn))
+		}
+	}
+	return contents
 }
 
 // textContent builds a content carrying one text part.

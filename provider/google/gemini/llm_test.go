@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/service/llm"
@@ -513,4 +514,67 @@ func TestRunInferenceAnswersOnce(t *testing.T) {
 // summarizer or a judge asks for.
 func TestServiceRunsOneShotInferences(t *testing.T) {
 	var _ llm.Inferencer = (*Service)(nil)
+}
+
+// TestSupportsPrefill pins the frozen legacy set: the models that continue a
+// trailing model turn, against the newer ones that refuse the request carrying
+// one. A name matching nothing is assumed to refuse, which is what keeps a model
+// released after this list from failing every request.
+func TestSupportsPrefill(t *testing.T) {
+	cases := map[string]bool{
+		// Models that continue a trailing model turn.
+		"gemini-2.0-flash":  true,
+		"gemini-2.5-flash":  true,
+		"gemini-2.5-pro":    true,
+		"gemini-3-pro":      true,
+		"gemini-3.1-flash":  true,
+		"gemini-pro-latest": true,
+		// Models that refuse the request instead.
+		"gemini-3.5-flash":      false,
+		"gemini-3.5-flash-lite": false,
+		"gemini-3.6-flash":      false,
+		"gemini-3.8-pro":        false,
+		// A name matching nothing is assumed to refuse.
+		"some-other-model": false,
+		"":                 false,
+	}
+	for model, want := range cases {
+		if got := supportsPrefill(model); got != want {
+			t.Errorf("supportsPrefill(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
+// TestRequestBodyPrefillFixup checks the service acts on that classification:
+// the conversation ends on the model's own words, which one model takes as the
+// start of its answer and the other refuses outright.
+func TestRequestBodyPrefillFixup(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hi")
+	convo.AddAssistantMessage("hello") // the conversation ends on a model turn
+
+	contentsOf := func(model string) []map[string]any {
+		t.Helper()
+		body, err := NewLLM(Config{APIKey: "k", Model: model}).requestBody(convo, adapter.Options{}, false)
+		if err != nil {
+			t.Fatalf("requestBody(%s): %v", model, err)
+		}
+		contents, ok := body["contents"].([]map[string]any)
+		if !ok {
+			t.Fatalf("requestBody(%s) carries contents %T", model, body["contents"])
+		}
+		return contents
+	}
+
+	refuses := contentsOf("gemini-3.6-flash")
+	if n := len(refuses); n != 3 || refuses[n-1][keyRole] != "user" {
+		t.Errorf("a model that refuses a trailing model turn got %d contents ending in %v, "+
+			"want 3 ending in a user turn", n, refuses[len(refuses)-1][keyRole])
+	}
+
+	continues := contentsOf("gemini-2.5-flash")
+	if n := len(continues); n != 2 || continues[n-1][keyRole] != "model" {
+		t.Errorf("a model that continues one got %d contents ending in %v, "+
+			"want the model turn left last", n, continues[len(continues)-1][keyRole])
+	}
 }

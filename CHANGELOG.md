@@ -56,6 +56,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A conversation ending on the model's own words is sendable to Gemini
+  again.** Gemini rejects a request whose contents end with a model turn, unless
+  the model is one of the older ones that reads that turn as the start of its
+  own answer. `gemini.Service` now appends a minimal user content for every
+  model outside that frozen legacy set (`gemini-2.`, `gemini-3-`, `gemini-3.1-`
+  and `gemini-pro-latest`), a full stop, which says nothing in any language and
+  is there to satisfy the shape rather than to be read. It matters most now that
+  a tool call settles where it was made: filler spoken while the call ran leaves
+  the model's own words last in the conversation, and every request from there
+  on was refused. Vertex AI serves the same models and inherits it.
+
 - **A tool call the model does not wait on settles where it was made, when
   nothing has happened since.** The assistant aggregator decided from the frame
   alone: every call registered with `CancelOnInterruption` false had its result
