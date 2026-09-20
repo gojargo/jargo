@@ -192,6 +192,13 @@ var (
 	errEmptySendAfter  = errors.New("send_after needs an event or a positive delay_ms")
 	errIncludeNotPath  = errors.New("!include expects a file path")
 	errIncludeTooDeep  = errors.New("!include nested too deep, check for a cycle")
+
+	errFileNotMapping     = errors.New("a scenario file must be a mapping")
+	errScenariosNotList   = errors.New("scenarios must be a non-empty list")
+	errScenarioNotMapping = errors.New("a scenario must be a mapping")
+	errNestedScenarios    = errors.New("a scenario cannot hold a scenarios list of its own")
+	errDuplicateScenario  = errors.New("two scenarios share a name")
+	errNotOneScenario     = errors.New("the file holds more than one scenario; read it with LoadFile")
 )
 
 // Event names a scenario can assert on. These are the friendly names scenarios
@@ -434,12 +441,98 @@ type Expectation struct {
 // itself is reported rather than exhausting the stack.
 const includeDepth = 16
 
-// Load reads and validates a scenario YAML file.
-func Load(path string) (*Scenario, error) {
+// ScenarioFile is a scenario file: what it is called, where it was read from,
+// and the scenarios it holds.
+//
+// Most files hold one. A file holds several when they test one behavior through
+// many short conversations, which is cheaper to read and cheaper to run than the
+// same thing spread over a directory of near-identical files.
+type ScenarioFile struct {
+	// Name is the file's own `name:`, which every scenario in it is named under.
+	Name string
+	// Path is the file it was read from.
+	Path string
+	// Scenarios are the scenarios it holds, in the order the file writes them.
+	Scenarios []*Scenario
+}
+
+// LoadFile reads and validates a scenario file, returning every scenario it
+// holds.
+//
+// A file's scenarios sit under `scenarios:`, each with a `name:` of its own, and
+// are named `<file name>/<scenario name>`. Any key a scenario can carry may also
+// sit at the top of the file, where it is the default for every scenario in it;
+// a scenario setting the same key replaces the whole value, so nothing is
+// merged and a `context:` is written out in full rather than added to.
+//
+// A file whose scenario keys sit at the top level with no `scenarios:` is the
+// older shape, and loads as the one scenario it describes.
+func LoadFile(path string) (*ScenarioFile, error) {
 	node, err := loadNode(path, includeDepth)
 	if err != nil {
 		return nil, err
 	}
+	doc := unwrapDocument(node)
+	if doc.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("eval: %s: %w", path, errFileNotMapping)
+	}
+	name, _, _ := rawScalar(doc, "name")
+	if name == "" {
+		return nil, fmt.Errorf("eval: %s: %w", path, errNoName)
+	}
+
+	entries := mappingValue(doc, "scenarios")
+	if entries == nil {
+		// The older shape: the scenario's own keys at the top level.
+		s, err := decodeScenario(doc, path)
+		if err != nil {
+			return nil, err
+		}
+		return &ScenarioFile{Name: name, Path: path, Scenarios: []*Scenario{s}}, nil
+	}
+	if entries.Kind != yaml.SequenceNode || len(entries.Content) == 0 {
+		return nil, fmt.Errorf("eval: %s: %w", path, errScenariosNotList)
+	}
+
+	defaults := withoutKey(doc, "scenarios")
+	file := &ScenarioFile{Name: name, Path: path}
+	seen := make(map[string]bool, len(entries.Content))
+	for i, entry := range entries.Content {
+		s, err := scenarioFromEntry(entry, defaults, name, path, i)
+		if err != nil {
+			return nil, err
+		}
+		if seen[s.Name] {
+			return nil, fmt.Errorf("eval: %s: %w: %s", path, errDuplicateScenario, s.Name)
+		}
+		seen[s.Name] = true
+		file.Scenarios = append(file.Scenarios, s)
+	}
+	return file, nil
+}
+
+// scenarioFromEntry reads one scenario out of a file's `scenarios:` list, over
+// the file's own keys as defaults.
+func scenarioFromEntry(
+	entry, defaults *yaml.Node, fileName, path string, idx int,
+) (*Scenario, error) {
+	if entry.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("eval: %s: scenario #%d: %w", path, idx+1, errScenarioNotMapping)
+	}
+	if mappingValue(entry, "scenarios") != nil {
+		return nil, fmt.Errorf("eval: %s: scenario #%d: %w", path, idx+1, errNestedScenarios)
+	}
+	name, _, _ := rawScalar(entry, "name")
+	if name == "" {
+		return nil, fmt.Errorf("eval: %s: scenario #%d: %w", path, idx+1, errNoName)
+	}
+	merged := mergeMappings(defaults, entry)
+	setScalar(merged, "name", fileName+"/"+name)
+	return decodeScenario(merged, path)
+}
+
+// decodeScenario decodes one scenario mapping and validates it.
+func decodeScenario(node *yaml.Node, path string) (*Scenario, error) {
 	var s Scenario
 	if err := node.Decode(&s); err != nil {
 		return nil, fmt.Errorf("eval: parse %s: %w", path, err)
@@ -448,6 +541,82 @@ func Load(path string) (*Scenario, error) {
 		return nil, fmt.Errorf("eval: %s: %w", path, err)
 	}
 	return &s, nil
+}
+
+// Load reads and validates a scenario file holding a single scenario. A file
+// holding several is an error here; read it with LoadFile.
+func Load(path string) (*Scenario, error) {
+	file, err := LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(file.Scenarios) != 1 {
+		return nil, fmt.Errorf("eval: %s: %w: %d", path, errNotOneScenario, len(file.Scenarios))
+	}
+	return file.Scenarios[0], nil
+}
+
+// unwrapDocument returns the value a parsed document wraps.
+func unwrapDocument(node *yaml.Node) *yaml.Node {
+	if node.Kind == yaml.DocumentNode && len(node.Content) == 1 {
+		return node.Content[0]
+	}
+	return node
+}
+
+// mappingValue returns a mapping's value for key, or nil when it has none.
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// withoutKey is a copy of the mapping with one key left out.
+func withoutKey(node *yaml.Node, key string) *yaml.Node {
+	out := *node
+	out.Content = nil
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			continue
+		}
+		out.Content = append(out.Content, node.Content[i], node.Content[i+1])
+	}
+	return &out
+}
+
+// mergeMappings lays entry over defaults: a key entry sets replaces the whole
+// value defaults gave it, so nothing is merged within a value.
+func mergeMappings(defaults, entry *yaml.Node) *yaml.Node {
+	merged := *defaults
+	merged.Content = append([]*yaml.Node(nil), defaults.Content...)
+	for i := 0; i+1 < len(entry.Content); i += 2 {
+		setNode(&merged, entry.Content[i], entry.Content[i+1])
+	}
+	return &merged
+}
+
+// setNode sets a mapping's value for a key node, replacing any it already had.
+func setNode(node *yaml.Node, key, value *yaml.Node) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key.Value {
+			node.Content[i+1] = value
+			return
+		}
+	}
+	node.Content = append(node.Content, key, value)
+}
+
+// setScalar sets a mapping's value for key to a plain string.
+func setScalar(node *yaml.Node, key, value string) {
+	setNode(node,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
 }
 
 // loadNode parses a YAML file and resolves the !include tags in it.

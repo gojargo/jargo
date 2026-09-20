@@ -468,3 +468,108 @@ turns:
 		t.Error("an absent expectation with a content check should be rejected")
 	}
 }
+
+// A file holds several scenarios when they test one behavior through many short
+// conversations. Each is named under the file, and the file's own keys are the
+// defaults they start from.
+func TestLoadFileReadsEveryScenarioItHolds(t *testing.T) {
+	file, err := eval.LoadFile(writeScenario(t, `
+name: turn_completion
+context:
+  - role: system
+    text: "be brief"
+scenarios:
+  - name: complete
+    turns:
+      - user: "what is the capital of France?"
+        expect:
+          - event: llm_response
+  - name: cutoff
+    context:
+      - role: system
+        text: "wait for the user"
+    turns:
+      - user: "I was going to say"
+        expect:
+          - event: llm_response
+            absent: true
+            within_ms: 1000
+`))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if file.Name != "turn_completion" {
+		t.Errorf("file name = %q, want the file's own name", file.Name)
+	}
+	if len(file.Scenarios) != 2 {
+		t.Fatalf("got %d scenarios, want the two the file holds", len(file.Scenarios))
+	}
+	if got := file.Scenarios[0].Name; got != "turn_completion/complete" {
+		t.Errorf("scenario name = %q, want it named under the file", got)
+	}
+	// The file's context is the default, and a scenario setting its own replaces
+	// the whole value rather than adding to it.
+	if got := file.Scenarios[0].Context; len(got) != 1 || got[0].Text != "be brief" {
+		t.Errorf("first scenario context = %v, want the file's default", got)
+	}
+	if got := file.Scenarios[1].Context; len(got) != 1 || got[0].Text != "wait for the user" {
+		t.Errorf("second scenario context = %v, want its own, replacing the default", got)
+	}
+}
+
+// The older shape, the scenario's own keys at the top level, still loads as the
+// one scenario it describes.
+func TestLoadFileReadsAFileWithNoScenariosList(t *testing.T) {
+	file, err := eval.LoadFile(writeScenario(t, `
+name: greeting
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+`))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(file.Scenarios) != 1 || file.Scenarios[0].Name != "greeting" {
+		t.Fatalf("scenarios = %+v, want the one the file describes, under its own name", file.Scenarios)
+	}
+}
+
+// Load reads a file holding one scenario. A file holding several is read with
+// LoadFile, and says so rather than quietly running the first.
+func TestLoadRefusesAFileHoldingSeveral(t *testing.T) {
+	path := writeScenario(t, `
+name: pair
+scenarios:
+  - name: one
+    turns:
+      - user: "hello"
+  - name: two
+    turns:
+      - user: "goodbye"
+`)
+	if _, err := eval.Load(path); err == nil {
+		t.Error("Load should refuse a file holding several scenarios")
+	}
+	file, err := eval.LoadFile(path)
+	if err != nil || len(file.Scenarios) != 2 {
+		t.Errorf("LoadFile = %+v, %v; want both scenarios", file, err)
+	}
+}
+
+// What a malformed file is told, so the mistake is named rather than guessed at.
+func TestLoadFileRejectsAMalformedFile(t *testing.T) {
+	for name, body := range map[string]string{
+		"no file name":     "scenarios:\n  - name: one\n    turns:\n      - user: hi\n",
+		"empty list":       "name: f\nscenarios: []\n",
+		"not a list":       "name: f\nscenarios: {}\n",
+		"no scenario name": "name: f\nscenarios:\n  - turns:\n      - user: hi\n",
+		"nested list":      "name: f\nscenarios:\n  - name: one\n    scenarios: []\n    turns:\n      - user: hi\n",
+		"duplicate names": "name: f\nscenarios:\n  - name: one\n    turns:\n      - user: hi\n" +
+			"  - name: one\n    turns:\n      - user: ho\n",
+	} {
+		if _, err := eval.LoadFile(writeScenario(t, body)); err == nil {
+			t.Errorf("%s: should be rejected", name)
+		}
+	}
+}

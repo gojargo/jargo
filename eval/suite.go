@@ -98,13 +98,21 @@ func (m *Manifest) concurrency() int {
 	return defaultConcurrency
 }
 
-// job is one scenario to run against one bot.
+// job is one scenario to run against one bot: the scenario as loaded, or the
+// reason the file holding it could not be read.
 type job struct {
 	botURL   string
-	scenario string
+	path     string
+	scenario *Scenario
+	loadErr  error
 }
 
-// jobs flattens the manifest into scenario/bot pairs, resolving scenario paths.
+// jobs flattens the manifest into scenario/bot pairs, resolving scenario paths
+// and reading each file, since one file may hold several scenarios and each is
+// run and reported on its own.
+//
+// A file that will not load becomes one job carrying the failure, so it is
+// reported against that file rather than ending the suite.
 func (m *Manifest) jobs() []job {
 	var js []job
 	for _, e := range m.Suite {
@@ -113,7 +121,14 @@ func (m *Manifest) jobs() []job {
 			if !filepath.IsAbs(path) {
 				path = filepath.Join(m.dir, path)
 			}
-			js = append(js, job{botURL: e.BotURL, scenario: path})
+			file, err := LoadFile(path)
+			if err != nil {
+				js = append(js, job{botURL: e.BotURL, path: path, loadErr: err})
+				continue
+			}
+			for _, scenario := range file.Scenarios {
+				js = append(js, job{botURL: e.BotURL, path: path, scenario: scenario})
+			}
 		}
 	}
 	return js
@@ -149,16 +164,13 @@ func RunSuite(ctx context.Context, m *Manifest, newJudge func() Judge) []SuiteRe
 	return results
 }
 
-// runOne loads and plays a single scenario against its bot.
+// runOne plays a single scenario against its bot.
 func runOne(ctx context.Context, j job, judge Judge) SuiteResult {
-	sr := SuiteResult{BotURL: j.botURL, Scenario: j.scenario}
-	scenario, err := Load(j.scenario)
-	if err != nil {
-		sr.Err = err
+	sr := SuiteResult{BotURL: j.botURL, Scenario: j.path}
+	if j.loadErr != nil {
+		sr.Err = j.loadErr
 		return sr
 	}
-	res, err := RunURL(ctx, scenario, j.botURL, judge)
-	sr.Result = res
-	sr.Err = err
+	sr.Result, sr.Err = RunURL(ctx, j.scenario, j.botURL, judge)
 	return sr
 }

@@ -56,6 +56,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **One scenario file can hold several scenarios.** A file's scenarios sit under
+  `scenarios:`, each with a `name:` of its own, and are named
+  `<file name>/<scenario name>`. Any key a scenario can carry may also sit at
+  the top of the file, where it is the default for every scenario in it; a
+  scenario setting the same key replaces the whole value, so a `context:` is
+  written out in full rather than added to. It is for a behavior tested through
+  many short conversations, which is cheaper to read and to run than the same
+  thing spread over a directory of near-identical files. `eval.LoadFile` reads a
+  file and returns every scenario it holds, `jargo eval run` and a suite
+  manifest play them all, and a file whose scenario keys sit at the top level
+  with no `scenarios:` still loads as the one scenario it describes.
+  `eval.Load` now refuses a file holding several rather than running the first.
+
 - **A scenario can put a tool call to the judge.** An `eval:` on a
   `function_call` expectation is now a criterion about the call rather than
   about the bot's words: each call the expectation matches is put to the judge by

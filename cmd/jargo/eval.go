@@ -59,29 +59,34 @@ func evalRunCmd() *cobra.Command {
 		}
 		out := cmd.OutOrStdout()
 		failed := 0
+		played := 0
 		for _, path := range paths {
-			scenario, err := eval.Load(path)
+			file, err := eval.LoadFile(path)
 			if err != nil {
 				// A scenario that will not load is a failure of that scenario,
 				// not of the run: the rest are still worth playing, and this one
 				// shows in the tally like any other.
 				_, _ = fmt.Fprintf(out, "FAIL %s (failed to load: %v)\n", scenarioName(path), err)
 				failed++
+				played++
 				continue
 			}
-			// A fresh judge per scenario: it holds the conversation it grades
-			// against, so one scenario's turns must not reach the next one's.
-			res, err := eval.RunURL(cmd.Context(), scenario, botURL, getJudge())
-			if err != nil {
-				return fmt.Errorf("%s: %w", scenario.Name, err)
-			}
-			_, _ = fmt.Fprintln(out, res.String())
-			if !res.Passed() {
-				failed++
+			for _, scenario := range file.Scenarios {
+				played++
+				// A fresh judge per scenario: it holds the conversation it grades
+				// against, so one scenario's turns must not reach the next one's.
+				res, err := eval.RunURL(cmd.Context(), scenario, botURL, getJudge())
+				if err != nil {
+					return fmt.Errorf("%s: %w", scenario.Name, err)
+				}
+				_, _ = fmt.Fprintln(out, res.String())
+				if !res.Passed() {
+					failed++
+				}
 			}
 		}
 		if failed > 0 {
-			return fmt.Errorf("%w: %d of %d", errScenariosFailed, failed, len(paths))
+			return fmt.Errorf("%w: %d of %d", errScenariosFailed, failed, played)
 		}
 		return nil
 	}
