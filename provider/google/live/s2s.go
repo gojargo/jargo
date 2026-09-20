@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
@@ -59,6 +60,13 @@ type Service struct {
 	// syncToolWarning keeps the report that a synchronous tool cannot block on
 	// this model to one, however many tools the session advertises.
 	syncToolWarning sync.Once
+
+	// turnHeld records a completed generation held back because the model
+	// reported that it was still working. Guarded by mu.
+	turnHeld bool
+	// heldTurnWatchdog ends a held turn if the session goes quiet without ever
+	// reporting that it has finished. Guarded by mu.
+	heldTurnWatchdog *time.Timer
 }
 
 // Connector customizes how the Live session is addressed and authorized, so a
@@ -499,6 +507,9 @@ func (s *Service) send(v any) error {
 
 // disconnect cancels the session, closes the socket, and waits for the read loop.
 func (s *Service) disconnect() {
+	// Nothing is going to report this session finished now, so a turn held open
+	// waiting for it is dropped rather than left with a watch running on it.
+	s.discardHeldTurn()
 	s.mu.Lock()
 	conn, cancel := s.conn, s.cancel
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
@@ -612,6 +623,28 @@ type serverContent struct {
 	OutputTranscription *textPayload `json:"outputTranscription"` //nolint:tagliatelle // Gemini wire field
 	Interrupted         bool         `json:"interrupted"`
 	GenerationComplete  bool         `json:"generationComplete"` //nolint:tagliatelle // Gemini wire field
+	// InteractionStatus says whether the session is still working. The thinking
+	// models report it, and nothing else does.
+	InteractionStatus string `json:"interactionStatus"` //nolint:tagliatelle // Gemini wire field
+}
+
+// interactionIdle reads whether the session has finished working, and whether it
+// said anything about it at all. A model that does not report the status, and a
+// value this does not know, express no opinion.
+//
+// The idle state was renamed, so both names answer for it.
+func (sc *serverContent) interactionIdle() (idle, known bool) {
+	if sc == nil {
+		return false, false
+	}
+	switch sc.InteractionStatus {
+	case "IDLE", "REQUIRES_ACTION":
+		return true, true
+	case "IN_PROGRESS":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 type part struct {
@@ -647,6 +680,11 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 
 // handle maps a server message onto downstream pipeline frames.
 func (s *Service) handle(ctx context.Context, msg serverMessage) {
+	// Any server message while a turn is held is the session proving it is still
+	// there, so the watch on it measures silence and nothing else.
+	s.restartHeldTurnWatchdog(ctx)
+	idle, statusKnown := msg.ServerContent.interactionIdle()
+
 	if msg.SetupComplete != nil {
 		s.ready.Store(true)
 	}
@@ -662,11 +700,23 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 	if msg.ToolCall != nil {
 		s.runToolCalls(ctx, msg.ToolCall)
 	}
-	sc := msg.ServerContent
-	if sc == nil {
-		return
+	if sc := msg.ServerContent; sc != nil {
+		s.handleServerContent(ctx, sc, idle, statusKnown)
 	}
+}
+
+// handleServerContent turns one message's server content into frames: the
+// barge-in it reports, the words either side spoke, the audio the model
+// produced, and the end of its turn.
+//
+// idle and statusKnown are what the model said about whether it has finished
+// working, which is what decides whether a completed generation ends the turn.
+func (s *Service) handleServerContent(
+	ctx context.Context, sc *serverContent, idle, statusKnown bool,
+) {
 	if sc.Interrupted {
+		// The interruption has ended the turn, so a held one is moot.
+		s.discardHeldTurn()
 		// The bot was cut off, so it gives the floor up and the pipeline is
 		// interrupted. No user-speaking frame goes with it: this API reports an
 		// interruption but never a turn starting or ending, so a start invented
@@ -694,8 +744,87 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 		}
 	}
 	if sc.GenerationComplete {
-		s.setSpeaking(ctx, false)
+		if statusKnown && !idle {
+			// The model is reasoning in the background between chunks of output,
+			// so this completed generation closes one chunk and not the turn.
+			s.holdTurn(ctx)
+		} else {
+			// This one ends the turn, so it stands in for anything still held.
+			s.discardHeldTurn()
+			s.setSpeaking(ctx, false)
+		}
 	}
+	if statusKnown && idle {
+		s.completeHeldTurn(ctx)
+	}
+}
+
+// heldTurnTimeout is how long the session may go quiet while the model still
+// reports that it is working before the bot's turn is closed anyway. Every
+// server message restarts it, so it measures silence rather than the whole hold:
+// a long reply still streaming keeps it at bay, and a session that stops
+// speaking without ever reporting itself finished does not leave everything
+// downstream waiting on a turn that never ends.
+const heldTurnTimeout = 30 * time.Second
+
+// holdTurn keeps the bot's turn open past a completed generation, because the
+// model is still reasoning in the background and has more to say.
+func (s *Service) holdTurn(ctx context.Context) {
+	s.mu.Lock()
+	s.turnHeld = true
+	s.mu.Unlock()
+	s.restartHeldTurnWatchdog(ctx)
+	slog.DebugContext(ctx, "holding the bot's turn open while the model is still working",
+		"service", s.Name())
+}
+
+// restartHeldTurnWatchdog starts the watch again, for a turn being held. It is
+// called on every server message, since one arriving is the session proving it
+// is still there.
+func (s *Service) restartHeldTurnWatchdog(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.turnHeld {
+		return
+	}
+	s.stopHeldTurnWatchdogLocked()
+	s.heldTurnWatchdog = time.AfterFunc(heldTurnTimeout, func() {
+		slog.WarnContext(ctx, "the session went quiet with the model still reporting that it is "+
+			"working, so the bot's turn is being ended", "service", s.Name(), "after", heldTurnTimeout)
+		s.completeHeldTurn(ctx)
+	})
+}
+
+// stopHeldTurnWatchdogLocked stops the watch. Call it with mu held.
+func (s *Service) stopHeldTurnWatchdogLocked() {
+	if s.heldTurnWatchdog != nil {
+		s.heldTurnWatchdog.Stop()
+		s.heldTurnWatchdog = nil
+	}
+}
+
+// completeHeldTurn closes a turn that was held while the model worked. Taking
+// the hold and clearing it happen together, so a status arriving as the watchdog
+// fires closes the turn once between them.
+func (s *Service) completeHeldTurn(ctx context.Context) {
+	s.mu.Lock()
+	held := s.turnHeld
+	s.turnHeld = false
+	s.stopHeldTurnWatchdogLocked()
+	s.mu.Unlock()
+	if !held {
+		return
+	}
+	s.setSpeaking(ctx, false)
+}
+
+// discardHeldTurn drops a held turn without closing it, for an interruption,
+// which has ended the turn already, and for a generation that supersedes it.
+func (s *Service) discardHeldTurn() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.turnHeld = false
+	s.stopHeldTurnWatchdogLocked()
 }
 
 // handlePart emits the audio and any text carried by one model-turn part.

@@ -56,6 +56,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Gemini Live holds the bot's turn open while the model is still working.**
+  The Live thinking models reason in the background between chunks of output, so
+  a completed generation closes a chunk rather than the turn, and reading it as
+  the end of the turn split one reply across several assistant turns. The
+  service now reads the interaction status those models report and holds the
+  turn until the session reports itself finished. A status arriving with the
+  generation closes the turn at once and stands in for anything held; an
+  interruption or a disconnect drops the held turn rather than releasing it; and
+  a session that goes quiet for 30 seconds without ever reporting itself
+  finished has its turn ended anyway, so nothing downstream waits on a turn that
+  never ends. The watch measures silence, so a long reply still streaming keeps
+  it at bay. The models that report no status keep the behavior they had.
+
 - **Gemini Live carries a thinking configuration.** `live.Config` gained
   `Thinking`, the same `gemini.ThinkingConfig` the streaming service takes. The
   Live thinking models require a thinking level and refuse a setup that sets
