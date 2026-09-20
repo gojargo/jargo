@@ -9,11 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
@@ -24,8 +27,21 @@ import (
 //
 //nolint:gochecknoglobals // sentinel errors
 var (
-	errNoTransport = errors.New("mcp: config must set exactly one of Command, SSEURL or HTTPURL")
-	errCallFailed  = errors.New("mcp: tool call failed")
+	errNoTransport  = errors.New("mcp: config must set exactly one of Command, SSEURL or HTTPURL")
+	errNotConnected = errors.New("mcp: client holds no session; Connect it before calling its tools")
+)
+
+// maxErrorDetail is how much of a failure's text the model is told. The line
+// goes into the conversation, where a stack trace or a page of a server's output
+// costs more than it tells the model.
+const maxErrorDetail = 200
+
+// The lines the model reads when a call produced nothing it can use. A failure
+// names its cause, because the model is the thing that decides whether to call
+// again, differently, or not at all.
+const (
+	callFailedTemplate = "The MCP tool %q failed: %s"
+	noResultTemplate   = "The MCP tool %q returned no result."
 )
 
 // Config selects and configures a single MCP server. Exactly one transport must
@@ -92,38 +108,105 @@ func (c Config) transport(ctx context.Context) mcpsdk.Transport {
 }
 
 // Client is a connected MCP session.
+//
+// A tool call that finds its connection gone drops that session and tells the
+// model what happened, and the call after it connects again. A client that was
+// never connected, or whose owner has closed it, fails the call instead.
 type Client struct {
-	session *mcpsdk.ClientSession
 	filter  map[string]bool
 	fixed   map[string]map[string]any
 	filters map[string]func(string) string
-	// closeOnce keeps the session's teardown to one, however many services named
-	// it as the resource their tools work through.
-	closeOnce sync.Once
+
+	// dial builds the transport to connect over, and is called again for a
+	// session opened to replace a dead one.
+	dial func(context.Context) mcpsdk.Transport
+	// baseCtx scopes the connection, and is the context every session is opened
+	// under. It is the one Connect was given rather than a caller's own, so a
+	// reconnect does not tie the server to the tool call that happened to
+	// trigger it: a stdio server is a subprocess, and would be killed with it.
+	baseCtx context.Context //nolint:containedctx // the connection's own lifetime, not a call's
+
+	// mu owns the session's lifetime: opening one, closing it, dropping a dead
+	// one, and the reconnect a tool call does.
+	mu      sync.Mutex
+	session *mcpsdk.ClientSession
+	// wanted records that an owner has asked this client for a session, which is
+	// what tells a session that was dropped, and which a tool call may reconnect,
+	// from one never opened or since closed, which fails the call.
+	wanted bool
 }
 
 // Connect dials the configured MCP server and initializes the session.
+//
+// ctx scopes the connection rather than this call: it is the context every
+// session is opened under, including one opened to replace a session that died,
+// so canceling it ends the server this client talks to.
 func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return connect(ctx, cfg.transport(ctx), cfg)
+	return connect(ctx, cfg.transport, cfg)
 }
 
-func connect(ctx context.Context, tr mcpsdk.Transport, cfg Config) (*Client, error) {
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "jargo", Version: "0.0.1"}, nil)
-	session, err := client.Connect(ctx, tr, nil)
-	if err != nil {
-		return nil, err
+func connect(ctx context.Context, dial func(context.Context) mcpsdk.Transport, cfg Config) (*Client, error) {
+	c := &Client{
+		dial:    dial,
+		baseCtx: ctx,
+		fixed:   cfg.ToolsArguments,
+		filters: cfg.ToolsOutputFilters,
 	}
-	c := &Client{session: session, fixed: cfg.ToolsArguments, filters: cfg.ToolsOutputFilters}
 	if len(cfg.ToolsFilter) > 0 {
 		c.filter = make(map[string]bool, len(cfg.ToolsFilter))
 		for _, name := range cfg.ToolsFilter {
 			c.filter[name] = true
 		}
 	}
+	if _, err := c.openSession(true); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// openSession returns the session the caller runs on, opening one if this client
+// holds none. The lock is held across the open and the read, so a close cannot
+// take the session away in between.
+//
+// asOwner is for a caller that owns the connection. A tool call passes false and
+// runs on the session an owner asked for: it may reconnect one that was dropped,
+// but it neither opens a client nobody connected nor reopens one its owner
+// closed.
+func (c *Client) openSession(asOwner bool) (*mcpsdk.ClientSession, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if asOwner {
+		c.wanted = true
+	}
+	if c.wanted && c.session == nil {
+		client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "jargo", Version: "0.0.1"}, nil)
+		session, err := client.Connect(c.baseCtx, c.dial(c.baseCtx), nil)
+		if err != nil {
+			return nil, err
+		}
+		c.session = session
+	}
+	if c.session == nil {
+		return nil, errNotConnected
+	}
+	return c.session, nil
+}
+
+// dropSession closes the session a failed call ran on, so a later call connects
+// again. A session outlives its transport, so without this every later call runs
+// on a dead one. Tool calls run at the same time on a single client, so a caller
+// whose session another call has already replaced drops nothing.
+func (c *Client) dropSession(session *mcpsdk.ClientSession) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.session != session {
+		return nil
+	}
+	c.session = nil
+	return session.Close()
 }
 
 // Tools lists the server's tools converted to jargo tools, honoring the filter.
@@ -133,7 +216,11 @@ func connect(ctx context.Context, tr mcpsdk.Transport, cfg Config) (*Client, err
 // again when the toolset changes, and the tools and the code answering them stay
 // the same set.
 func (c *Client) Tools(ctx context.Context) ([]frames.Tool, error) {
-	res, err := c.session.ListTools(ctx, nil)
+	session, err := c.openSession(true)
+	if err != nil {
+		return nil, err
+	}
+	res, err := session.ListTools(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +253,10 @@ func (c *Client) Tools(ctx context.Context) ([]frames.Tool, error) {
 	return tools, nil
 }
 
-// handlerFor answers calls of one tool by proxying them to the server.
+// handlerFor answers calls of one tool by proxying them to the server. What the
+// call produced is reported as the result, a failure included, since a handler
+// that returns an error has the service tell the model only that the function
+// failed and keeps the reason from it.
 func (c *Client) handlerFor(name string) llm.FunctionCallHandler {
 	return func(ctx context.Context, params llm.FunctionCallParams) error {
 		result, err := c.call(ctx, name, params.Arguments)
@@ -238,9 +328,17 @@ func (c *Client) Register(ctx context.Context, base *llm.Base, convo *frames.LLM
 	return nil
 }
 
-// call proxies one tool invocation to the MCP server and returns the joined text
-// content. A tool-level error is returned as text (with the error content) so the
-// model can see it and self-correct; only transport failures return a Go error.
+// call proxies one tool invocation to the MCP server and returns what the model
+// is told: the tool's text output, or, when the call produced none, the reason.
+//
+// The failure goes to the model rather than back to the service, because the
+// model holds the tool loop: it is the thing that decides whether to call again,
+// call differently, or answer without the tool. The call is not retried here,
+// since a request that never left and an answer that was lost reach this as one
+// error, and running the tool twice is the more expensive mistake.
+//
+// A Go error is returned only for a call this client cannot make at all: one
+// whose arguments will not parse, or one on a client holding no session.
 func (c *Client) call(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	var argMap map[string]any
 	if len(args) > 0 {
@@ -256,17 +354,68 @@ func (c *Client) call(ctx context.Context, name string, args json.RawMessage) (s
 		}
 		maps.Copy(argMap, fixed)
 	}
-	res, err := c.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: argMap})
+	session, err := c.openSession(false)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s: %w", errCallFailed, name, err)
+		return "", err
 	}
-	var sb strings.Builder
-	for _, content := range res.Content {
-		if tc, ok := content.(*mcpsdk.TextContent); ok {
-			sb.WriteString(tc.Text)
+
+	var failure string
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: argMap})
+	if err != nil {
+		failure = fmt.Sprintf(callFailedTemplate, name, errorDetail(err))
+		slog.Error("an MCP tool call failed", "tool", name, "err", err)
+		if isConnectionLost(err) {
+			slog.Warn("dropping the MCP session a tool call found gone", "tool", name)
+			// The model still gets the cause of its own call, so a transport that
+			// fails on the way out goes to the log and no further.
+			if dropErr := c.dropSession(session); dropErr != nil {
+				slog.Error("an MCP session failed to close after it was dropped", "err", dropErr)
+			}
 		}
 	}
-	return c.filterResult(name, sb.String()), nil
+
+	var sb strings.Builder
+	if res != nil {
+		for _, content := range res.Content {
+			if tc, ok := content.(*mcpsdk.TextContent); ok {
+				sb.WriteString(tc.Text)
+			}
+		}
+	}
+	if out := c.filterResult(name, sb.String()); out != "" {
+		return out, nil
+	}
+	if failure != "" {
+		return failure, nil
+	}
+	return fmt.Sprintf(noResultTemplate, name), nil
+}
+
+// isConnectionLost tells a transport that has gone from an error the MCP server
+// itself reported. The first call after a transport dies fails on the stream
+// itself, and only once the connection has noticed does the SDK report its own
+// closed-connection error, so both have to count: otherwise the session is
+// dropped one call later than it could be, or not at all.
+func isConnectionLost(err error) bool {
+	return errors.Is(err, mcpsdk.ErrConnectionClosed) || // the SDK, once it knows
+		errors.Is(err, io.ErrClosedPipe) || // a stdio server's pipes, closed
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || // either, ended
+		errors.Is(err, net.ErrClosed) || // an HTTP or SSE socket, closed
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) // or broken
+}
+
+// errorDetail names the cause of a failed call, in the one line the model reads.
+// An error carrying no message names its type instead, so the line does not end
+// at the colon, and a long one is cut: it goes into the conversation.
+func errorDetail(err error) string {
+	detail := err.Error()
+	if detail == "" {
+		return fmt.Sprintf("%T", err)
+	}
+	if r := []rune(detail); len(r) > maxErrorDetail {
+		return string(r[:maxErrorDetail]) + "..."
+	}
+	return detail
 }
 
 // filterResult reshapes a tool's output for the model, when this session was
@@ -290,10 +439,20 @@ func (c *Client) filterResult(name, result string) (out string) {
 // Close ends the MCP session. Calling it again does nothing: the session may
 // have been named as the resource behind tools registered on more than one
 // service, and each of those releases it when it is cleaned up.
+//
+// The client stays closed until Tools asks it for a session again. A tool call
+// on a closed client fails rather than reconnecting, since the connection is no
+// longer anybody's to hold open.
 func (c *Client) Close() error {
-	var err error
-	c.closeOnce.Do(func() { err = c.session.Close() })
-	return err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.wanted = false
+	session := c.session
+	c.session = nil
+	if session == nil {
+		return nil
+	}
+	return session.Close()
 }
 
 // CloseTools ends the session when the LLM service that registered this

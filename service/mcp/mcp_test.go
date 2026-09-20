@@ -54,7 +54,7 @@ func testClientWith(t *testing.T, cfg Config) *Client {
 	})
 	go func() { _ = server.Run(ctx, serverT) }()
 
-	c, err := connect(ctx, clientT, cfg)
+	c, err := connect(ctx, func(context.Context) mcpsdk.Transport { return clientT }, cfg)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

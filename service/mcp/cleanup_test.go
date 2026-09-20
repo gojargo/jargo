@@ -19,10 +19,15 @@ func (countingGenerator) Generate(context.Context, *frames.LLMContext, llm.Emit)
 func newLLM(name string) *llm.Base { return llm.New(name, countingGenerator{}) }
 
 // alive reports whether the MCP session is still usable, which is how a closed
-// session is told from an open one without reaching into the SDK.
+// session is told from an open one without reaching into the SDK. A client that
+// was closed holds none at all.
 func alive(t *testing.T, c *Client) bool {
 	t.Helper()
-	_, err := c.session.ListTools(context.Background(), nil)
+	session := held(c)
+	if session == nil {
+		return false
+	}
+	_, err := session.ListTools(context.Background(), nil)
 	return err == nil
 }
 

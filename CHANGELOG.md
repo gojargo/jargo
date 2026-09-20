@@ -56,6 +56,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An MCP server is reachable again after its connection dies, and a failed
+  call tells the model why.** An MCP session outlives its transport, so a server
+  that restarts or times a session out left the client holding a dead one and
+  every later tool call failed for the rest of the conversation. A call that
+  finds its connection gone now drops that session, and the call after it
+  connects again. The failed call is not run again by the client: a request that
+  never left and an answer that was lost arrive as the same error, and running a
+  tool twice is the more expensive mistake, so the model reads the failure and
+  decides. **Behaviour change:** a failed call's result is now the reason it
+  failed, cut to 200 characters, where the service used to report a pipeline
+  error and tell the model only that the function had failed. `Close` leaves the
+  client closed, and a tool call on a closed client fails rather than opening a
+  connection nobody is holding; `Tools` opens one again.
+
 - **A conversation ending on the model's own words is sendable to Gemini
   again.** Gemini rejects a request whose contents end with a model turn, unless
   the model is one of the older ones that reads that turn as the start of its
