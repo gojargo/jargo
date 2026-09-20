@@ -76,6 +76,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a turn that already holds one as it stands: the model signs only the first
   call of a parallel batch and expects the rest unsigned.
 
+- **A force-completed unit pairs its text with the progress that matches it, and
+  drops the words it can no longer place.** Two states left the progress view
+  and the text frames disagreeing about what a turn had said. A unit
+  force-completed with text still to speak emitted the remainder as a word
+  frame, but nothing moved the tracker's cursors, so the progress view stopped
+  where the provider stopped reporting; the tracker now takes that remainder as
+  spoken and a progress frame goes out beside the word frame. In streaming mode
+  a word matching no unit is held until one is promoted to match it against, so
+  at the end of a turn it stayed there and was discarded at the next reset with
+  nothing said about it; a context that ends now reports what it leaves behind
+  and drops it, the way sentence mode reports a word it cannot place when it
+  arrives. Another context's held words are left for their own turn.
+
 - **A tool call the model does not wait on settles where it was made, when
   nothing has happened since.** The assistant aggregator decided from the frame
   alone: every call registered with `CancelOnInterruption` false had its result

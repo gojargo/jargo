@@ -172,6 +172,17 @@ func (t *WordCompletionTracker) forceComplete(word string) bool {
 	return true
 }
 
+// TakeRemainingAsSpoken moves the cursors to the end, for a caller that emits
+// the remainder itself. The accumulated and remaining views then agree with the
+// text that went out.
+func (t *WordCompletionTracker) TakeRemainingAsSpoken() {
+	t.userFacingPos = len(t.userFacingRunes)
+	if t.hasLLM {
+		t.llmPos = len(t.llmRunes)
+		t.llmSpokenPos = len(t.llmRunes)
+	}
+}
+
 // recordLLMSpan records which part of the original text the word just added
 // stands for.
 //

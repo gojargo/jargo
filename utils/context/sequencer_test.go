@@ -91,6 +91,39 @@ func TestSequencerForceCompleteEmitsRemainder(t *testing.T) {
 	}
 }
 
+// The forced remainder carries the rest of the text, so the progress view has to
+// reach the end alongside it: without the pairing the view stops where the
+// provider stopped reporting, and the two disagree about what the turn said.
+func TestSequencerForceCompletePairsRemainderWithProgress(t *testing.T) {
+	s := newSeq(t, false)
+	const text = "Hello there friend"
+	s.RegisterSpoken(frames.NewAggregatedTextFrame(text, frames.AggregationSentence), "c1", text, true, true, false)
+	s.ProcessWord("Hello", 100, "c1", false)
+
+	var words []*frames.TTSTextFrame
+	var progress []*frames.AggregatedTextProgressFrame
+	for _, f := range s.ForceComplete("c1", 200) {
+		switch fr := f.(type) {
+		case *frames.TTSTextFrame:
+			words = append(words, fr)
+		case *frames.AggregatedTextProgressFrame:
+			progress = append(progress, fr)
+		}
+	}
+	if len(words) != 1 || words[0].Text != "there friend" {
+		t.Fatalf("got %d word frames, want one carrying the unspoken remainder", len(words))
+	}
+	if len(progress) != 1 {
+		t.Fatalf("got %d progress frames, want one paired with the remainder", len(progress))
+	}
+	if got := progress[0].AccumulatedText; got != text {
+		t.Errorf("accumulated = %q, want the whole of what went out (%q)", got, text)
+	}
+	if got := progress[0].RemainingText; got != "" {
+		t.Errorf("remaining = %q, want nothing left: the remainder was just emitted", got)
+	}
+}
+
 // An interruption drops everything, so no word of the abandoned turn is written.
 func TestSequencerClearDropsEverything(t *testing.T) {
 	s := newSeq(t, false)

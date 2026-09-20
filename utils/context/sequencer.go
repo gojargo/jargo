@@ -322,11 +322,15 @@ func (s *AggregatedFrameSequencer) flushLocked(lastWordPTS int64) []frames.Frame
 
 // ForceComplete closes out a context whose audio has ended, for a provider that
 // silently drops word timings. Each of the context's incomplete spoken slots
-// emits a frame for its remaining unspoken text and is marked complete; slots of
-// other contexts still in flight are left to their own words. The context is
-// then forgotten, so any word arriving later is stale.
+// emits a frame for its remaining unspoken text, paired with the progress frame
+// that carries the view to the end of it, and is marked complete; slots of other
+// contexts still in flight are left to their own words. The context is then
+// forgotten, so any word arriving later is stale.
 func (s *AggregatedFrameSequencer) forceCompleteLocked(contextID string, lastWordPTS int64) []frames.Frame {
 	var out []frames.Frame
+	if s.streamingMode {
+		s.discardBufferedWords(contextID)
+	}
 	for _, slot := range s.slots {
 		if !slot.spoken || slot.complete || slot.contextID != contextID {
 			continue
@@ -342,6 +346,10 @@ func (s *AggregatedFrameSequencer) forceCompleteLocked(contextID string, lastWor
 			if remaining != "" {
 				out = append(out, s.buildWordFrame(
 					remaining, lastWordPTS, slot.contextID, rawRemaining, false, slot.includesInterFrame))
+				// That frame carries the rest of the text, so the progress view has
+				// to reach the end alongside it.
+				slot.tracker.TakeRemainingAsSpoken()
+				out = append(out, s.buildProgressFrame(slot, lastWordPTS))
 			}
 		}
 		slot.complete = true
@@ -437,6 +445,23 @@ func (s *AggregatedFrameSequencer) drainBufferedWords() []frames.Frame {
 		out = append(out, s.processWordLocked(w.word, w.pts, w.contextID, w.includesInterFrame)...)
 	}
 	return out
+}
+
+// discardBufferedWords drops this context's still-buffered words, which no slot
+// ever matched. Sentence mode drops an unrecognized word where it arrives;
+// streaming only knows one will never match once the context it belongs to has
+// ended. Another context's words are left for their own turn.
+func (s *AggregatedFrameSequencer) discardBufferedWords(contextID string) {
+	var keep []bufferedWord
+	for _, w := range s.buffered {
+		if w.contextID != contextID {
+			keep = append(keep, w)
+			continue
+		}
+		slog.Warn("sequencer dropping a buffered word no slot recognized",
+			"sequencer", s.name, "word", w.word)
+	}
+	s.buffered = keep
 }
 
 // contextLive reports whether the context has been registered and not finished.
