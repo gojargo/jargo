@@ -56,6 +56,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A suite manifest entry can be named and capped.** An entry's `name:` labels
+  it in the results, which is what tells apart two entries differing only in the
+  scenarios they play; empty uses the bot's URL, and `SuiteResult` carries the
+  label as `Entry`. An entry's `concurrency:` is how many of its scenarios run
+  at once, for a bot whose provider rate-limits concurrent connections. A
+  manifest running one scenario twice under one label is now refused, since
+  nothing in the results could tell the two runs apart. **Behaviour change:** an
+  entry's scenarios now run one after another by default rather than taking as
+  much of the suite's concurrency as they can. Each entry gets a queue of its
+  own and the suite's slots are spread across the entries from the start, so a
+  slow or rate-limited bot holds its own share instead of the whole suite. Set
+  an entry's `concurrency:` to run more of it at once.
+
 - **One scenario file can hold several scenarios.** A file's scenarios sit under
   `scenarios:`, each with a `name:` of its own, and are named
   `<file name>/<scenario name>`. Any key a scenario can carry may also sit at

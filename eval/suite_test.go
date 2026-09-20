@@ -3,10 +3,12 @@ package eval_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gojargo/jargo/eval"
@@ -94,5 +96,156 @@ func TestLoadManifestRejectsInvalid(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+// overlapBot counts how many scenarios are being played against it at once, and
+// records the highest that count ever reached, which is what a concurrency cap
+// is about.
+type overlapBot struct {
+	mu   sync.Mutex
+	live int
+	peak int
+}
+
+func (b *overlapBot) enter() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.live++
+	b.peak = max(b.peak, b.live)
+}
+
+func (b *overlapBot) leave() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.live--
+}
+
+func (b *overlapBot) highest() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.peak
+}
+
+// serve runs a bot counting the scenarios being played against it at once. The
+// count is kept around the handler, whose life is the connection's, so a
+// scenario that has finished is no longer counted.
+func (b *overlapBot) serve(t *testing.T) string {
+	t.Helper()
+	bot := eval.Handler(buildFakeBot)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.enter()
+		defer b.leave()
+		bot.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http")
+}
+
+// suiteDir writes a manifest and the scenarios it names, and loads it.
+func suiteDir(t *testing.T, manifest string, scenarios int) *eval.Manifest {
+	t.Helper()
+	dir := t.TempDir()
+	for i := range scenarios {
+		writeFile(t, dir, fmt.Sprintf("s%d.yaml", i), fmt.Sprintf(`name: s%d
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_contains: "you said"
+`, i))
+	}
+	writeFile(t, dir, "manifest.yaml", manifest)
+	m, err := eval.LoadManifest(filepath.Join(dir, "manifest.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// wantAtMost fails unless the bot was played no more scenarios at once than the
+// slots its entry holds.
+//
+// The count is one more than that at most, because a connection the harness has
+// finished with is counted until the bot's own pipeline has torn down behind it.
+// That laxity is far short of the failure being watched for here, where an entry
+// with no cap of its own takes every slot the suite has.
+func wantAtMost(t *testing.T, bot *overlapBot, slots int, what string) {
+	t.Helper()
+	if got := bot.highest(); got > slots+1 {
+		t.Errorf("%s was played %d scenarios at once, want at most its %d", what, got, slots)
+	}
+}
+
+// An entry's scenarios go one after another on the slot it holds, so a bot whose
+// provider rate-limits concurrent connections is never asked for more than one.
+func TestSuiteRunsAnEntrysScenariosBackToBack(t *testing.T) {
+	bot := &overlapBot{}
+	m := suiteDir(t, fmt.Sprintf(`concurrency: 6
+suite:
+  - bot_url: %s
+    scenarios: [s0.yaml, s1.yaml, s2.yaml, s3.yaml, s4.yaml, s5.yaml]
+`, bot.serve(t)), 6)
+
+	results := eval.RunSuite(t.Context(), m, nil)
+	if len(results) != 6 {
+		t.Fatalf("got %d results, want one per scenario", len(results))
+	}
+	wantAtMost(t, bot, 1, "the bot")
+}
+
+// Its concurrency: is how many it may hold at once, for a bot that can take more.
+func TestAnEntrysConcurrencyIsItsOwnCap(t *testing.T) {
+	bot := &overlapBot{}
+	m := suiteDir(t, fmt.Sprintf(`concurrency: 6
+suite:
+  - bot_url: %s
+    concurrency: 2
+    scenarios: [s0.yaml, s1.yaml, s2.yaml, s3.yaml, s4.yaml, s5.yaml]
+`, bot.serve(t)), 6)
+
+	eval.RunSuite(t.Context(), m, nil)
+	wantAtMost(t, bot, 2, "the bot")
+}
+
+// The suite is spread over every entry from the start, rather than putting every
+// slot on one entry's scenarios until they are done.
+func TestSuiteSpreadsItsSlotsOverTheEntries(t *testing.T) {
+	first, second := &overlapBot{}, &overlapBot{}
+	m := suiteDir(t, fmt.Sprintf(`concurrency: 4
+suite:
+  - bot_url: %s
+    scenarios: [s0.yaml, s1.yaml, s2.yaml, s3.yaml]
+  - bot_url: %s
+    scenarios: [s0.yaml, s1.yaml, s2.yaml, s3.yaml]
+`, first.serve(t), second.serve(t)), 4)
+
+	eval.RunSuite(t.Context(), m, nil)
+	wantAtMost(t, first, 1, "the first bot")
+	wantAtMost(t, second, 1, "the second bot")
+}
+
+// An entry is labeled by its name, or by its bot when it has none, and the
+// label is what the results carry.
+func TestSuiteResultsCarryTheEntryLabel(t *testing.T) {
+	bot := &overlapBot{}
+	url := bot.serve(t)
+	m := suiteDir(t, fmt.Sprintf(`suite:
+  - name: nightly
+    bot_url: %s
+    scenarios: [s0.yaml]
+  - bot_url: %s
+    scenarios: [s1.yaml]
+`, url, url), 2)
+
+	results := eval.RunSuite(t.Context(), m, nil)
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want two", len(results))
+	}
+	if results[0].Entry != "nightly" {
+		t.Errorf("entry = %q, want the name the manifest gave it", results[0].Entry)
+	}
+	if results[1].Entry != url {
+		t.Errorf("entry = %q, want the bot's URL where the entry has no name", results[1].Entry)
 	}
 }
