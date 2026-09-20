@@ -15,6 +15,7 @@ import (
 	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/google/uuid"
@@ -216,6 +217,11 @@ func (s *Service) setup() map[string]any {
 		},
 		"inputAudioTranscription":  map[string]any{},
 		"outputAudioTranscription": map[string]any{},
+	}
+	if thinking := gemini.ThinkingParams(resolvedThinking(s.cfg.Model, s.cfg.Thinking)); thinking != nil {
+		if g, ok := setup["generationConfig"].(map[string]any); ok {
+			g["thinkingConfig"] = thinking
+		}
 	}
 	if s.cfg.Instructions != "" {
 		setup["systemInstruction"] = map[string]any{

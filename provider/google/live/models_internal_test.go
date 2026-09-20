@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/service/llm"
 )
 
@@ -155,5 +156,75 @@ func TestNothingIsReportedWhenASyncToolCanBlock(t *testing.T) {
 	taggedDeclarations(t, "gemini-3.8-live")
 	if buf.Len() != 0 {
 		t.Errorf("logged %q, want nothing said", buf.String())
+	}
+}
+
+// The Live thinking models require a thinking level and refuse a setup that
+// sets none, so an unset one takes the lowest they accept. Every other model is
+// left exactly as it was configured.
+func TestThinkingLevelDefaultsOnlyOnLiveThinkingModels(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		level string // "" means no thinking configuration at all
+	}{
+		{"gemini-3.8-live-extended-thinking", lowestThinkingLevel},
+		{"gemini-3.8-live", ""},
+		{"gemini-2.0-flash-live-001", ""},
+		{"gemini-2.5-flash-exp-native-audio-thinking-dialog", ""},
+	} {
+		got := resolvedThinking(tc.model, nil)
+		switch {
+		case tc.level == "" && got != nil:
+			t.Errorf("%s: thinking = %+v, want none configured", tc.model, got)
+		case tc.level != "" && (got == nil || got.Level != tc.level):
+			t.Errorf("%s: thinking = %+v, want level %q", tc.model, got, tc.level)
+		}
+	}
+}
+
+// A level the caller chose is never overridden by the default.
+func TestAConfiguredThinkingLevelIsKept(t *testing.T) {
+	got := resolvedThinking("gemini-3.8-live-extended-thinking", &gemini.ThinkingConfig{Level: "HIGH"})
+	if got == nil || got.Level != "HIGH" {
+		t.Errorf("thinking = %+v, want the configured level", got)
+	}
+}
+
+// Defaulting the level keeps the rest of the configuration, and leaves the
+// caller's own value as it stands.
+func TestDefaultingTheLevelKeepsTheRestOfTheConfiguration(t *testing.T) {
+	cfg := &gemini.ThinkingConfig{IncludeThoughts: true}
+	got := resolvedThinking("gemini-3.8-live-extended-thinking", cfg)
+
+	if got == nil || got.Level != lowestThinkingLevel || !got.IncludeThoughts {
+		t.Errorf("thinking = %+v, want the level defaulted and the rest kept", got)
+	}
+	if cfg.Level != "" {
+		t.Errorf("the configured value was edited: %+v", cfg)
+	}
+}
+
+// The setup message is the only place the session takes its configuration, and
+// the API reads the thinking block inside the generation config rather than
+// beside it.
+func TestTheSetupCarriesTheThinkingConfig(t *testing.T) {
+	svc := New(Config{APIKey: "k", Model: "gemini-3.8-live-extended-thinking"})
+	gen, ok := svc.setup()["setup"].(map[string]any)["generationConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("setup carries no generation config: %v", svc.setup())
+	}
+	thinking, ok := gen["thinkingConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("generation config carries no thinking block: %v", gen)
+	}
+	if thinking["thinkingLevel"] != lowestThinkingLevel {
+		t.Errorf("thinkingLevel = %v, want %q", thinking["thinkingLevel"], lowestThinkingLevel)
+	}
+
+	// A model that needs no level is left without the block entirely.
+	plain := New(Config{APIKey: "k", Model: "gemini-3.8-live"})
+	gen, _ = plain.setup()["setup"].(map[string]any)["generationConfig"].(map[string]any)
+	if _, ok := gen["thinkingConfig"]; ok {
+		t.Errorf("generation config = %v, want no thinking block", gen)
 	}
 }

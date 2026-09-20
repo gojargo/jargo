@@ -185,8 +185,13 @@ func (s *Service) genConfig() map[string]any {
 }
 
 // thinkingParams renders a thinking configuration, or nil when there is none to
-// send.
-func thinkingParams(t *ThinkingConfig) map[string]any {
+// send. It is ThinkingParams under this package's own name.
+func thinkingParams(t *ThinkingConfig) map[string]any { return ThinkingParams(t) }
+
+// ThinkingParams renders a thinking configuration as the generationConfig block
+// the API takes, or nil when there is nothing to send. It is exported for the
+// Live service, which carries the same configuration into its session setup.
+func ThinkingParams(t *ThinkingConfig) map[string]any {
 	if t == nil {
 		return nil
 	}

@@ -56,6 +56,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Gemini Live carries a thinking configuration.** `live.Config` gained
+  `Thinking`, the same `gemini.ThinkingConfig` the streaming service takes. The
+  Live thinking models require a thinking level and refuse a setup that sets
+  none, so an unset level defaults to the lowest they accept, which keeps the
+  reply latency down; a configured level is never overridden, and the rest of
+  the configuration is carried through. Every other model is left exactly as it
+  was configured, with no thinking block on the setup at all.
+
 - **Gemini Live says whether the model should wait for a function call.** The
   3.8 Live family runs every call without waiting unless the declaration asks it
   to, where the models before it waited by default, so a synchronous tool on one

@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/gojargo/jargo/provider/google/gemini"
 )
 
 // modelVersion captures the version a Live model id carries. An id names it with
@@ -69,3 +71,30 @@ func toolsDefaultToNonBlocking(model string) bool { return atLeast(model, 3, 8) 
 // supportsBlockingTools reports whether the model accepts a declaration asking
 // it to wait. The thinking models run every call without waiting and refuse one.
 func supportsBlockingTools(model string) bool { return !expectsInteractionStatus(model) }
+
+// lowestThinkingLevel is the least the Live thinking models will think. They
+// reject "minimal", and the lowest they take keeps the reply latency down, which
+// matches what the streaming service defaults its own flash models to.
+const lowestThinkingLevel = "LOW"
+
+// resolvedThinking is the thinking configuration the session is opened with.
+//
+// The Live thinking models require a level: the API has no default for them and
+// refuses a setup that sets none. An unset level therefore defaults to the
+// lowest they accept, and a configured one is never overridden. The rest of the
+// configuration is carried through, and the caller's own value is left as it
+// stands.
+func resolvedThinking(model string, cfg *gemini.ThinkingConfig) *gemini.ThinkingConfig {
+	if !expectsInteractionStatus(model) {
+		return cfg
+	}
+	if cfg != nil && cfg.Level != "" {
+		return cfg
+	}
+	resolved := gemini.ThinkingConfig{Level: lowestThinkingLevel}
+	if cfg != nil {
+		resolved = *cfg
+		resolved.Level = lowestThinkingLevel
+	}
+	return &resolved
+}

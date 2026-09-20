@@ -16,6 +16,7 @@ import (
 	"errors"
 
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/provider/google/gemini"
 )
 
 // errNotGenerator is returned by the generation entry point this service does
@@ -52,6 +53,11 @@ type Config struct {
 	Voice string
 	// Instructions is the system prompt for the session.
 	Instructions string
+	// Thinking configures what the model may spend on reasoning, for a model
+	// that reasons. The Live thinking models require a level and refuse a setup
+	// without one, so an unset level defaults to the lowest they accept, which
+	// keeps the reply latency down. Nil leaves the field off the setup entirely.
+	Thinking *gemini.ThinkingConfig `validate:"omitempty"`
 }
 
 // Validate reports whether the configuration is usable.
