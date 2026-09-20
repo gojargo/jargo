@@ -67,6 +67,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the model's own words last in the conversation, and every request from there
   on was refused. Vertex AI serves the same models and inherits it.
 
+- **A function call the model did not make travels under the placeholder
+  signature.** Gemini 3 refuses a model turn whose function calls carry no
+  thought signature. That is what a call another provider made looks like after
+  a switch mid-conversation, and what a call the application wrote itself looks
+  like. The adapter now stamps the placeholder signature Google documents for
+  exactly that on the function calls of any model turn holding none, and leaves
+  a turn that already holds one as it stands: the model signs only the first
+  call of a parallel batch and expects the rest unsigned.
+
 - **A tool call the model does not wait on settles where it was made, when
   nothing has happened since.** The assistant aggregator decided from the frame
   alone: every call registered with `CancelOnInterruption` false had its result

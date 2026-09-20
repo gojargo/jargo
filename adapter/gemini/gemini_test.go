@@ -56,6 +56,19 @@ func textAt(t *testing.T, c map[string]any) string {
 	return text
 }
 
+// wantPlaceholder is the placeholder signature as it travels, base64-encoded.
+const wantPlaceholder = "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I="
+
+// partsOf returns a content's parts, failing the test when it carries none.
+func partsOf(t *testing.T, c map[string]any) []map[string]any {
+	t.Helper()
+	parts, ok := c[keyParts].([]map[string]any)
+	if !ok || len(parts) == 0 {
+		t.Fatalf("content %v carries no parts", c)
+	}
+	return parts
+}
+
 // mustContents converts messages and fails the test if the conversion did.
 func mustContents(t *testing.T, msgs []frames.Message) []map[string]any {
 	t.Helper()
@@ -275,6 +288,62 @@ func TestToProviderToolsFormatStripsAdditionalProperties(t *testing.T) {
 	}
 	if !strings.Contains(got, `"functionDeclarations"`) || !strings.Contains(got, `"name":"get_weather"`) {
 		t.Errorf("declaration shape wrong: %s", got)
+	}
+}
+
+// TestUnsignedToolCallCarriesThePlaceholderSignature covers the request shape
+// the newer models validate: a model turn whose function calls carry no thought
+// signature is refused. A call another provider made, or one the application
+// wrote itself, has none, so it travels under the placeholder Google documents
+// for exactly that.
+func TestUnsignedToolCallCarriesThePlaceholderSignature(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("switch to Gemini")
+	convo.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: "switch_llm"})
+
+	parts := partsOf(t, mustContents(t, convo.Messages())[1])
+	if got := parts[0][keyThoughtSignature]; got != wantPlaceholder {
+		t.Errorf("thoughtSignature = %v, want the placeholder %q", got, wantPlaceholder)
+	}
+}
+
+// TestASignedTurnIsLeftAsItStands covers a batch of parallel calls the model
+// made itself: it signs the first and expects the rest unsigned, so a turn
+// holding a signature is not one to add placeholders to.
+func TestASignedTurnIsLeftAsItStands(t *testing.T) {
+	contents := []map[string]any{{
+		keyRole: roleModel,
+		keyParts: []map[string]any{
+			{keyFunctionCall: map[string]any{keyID: "c1"}, keyThoughtSignature: "sig-c1"},
+			{keyFunctionCall: map[string]any{keyID: "c2"}},
+		},
+	}}
+	addPlaceholderThoughtSignatures(contents)
+
+	parts := partsOf(t, contents[0])
+	if got := parts[0][keyThoughtSignature]; got != "sig-c1" {
+		t.Errorf("the model's own signature = %v, want it untouched", got)
+	}
+	if got, ok := parts[1][keyThoughtSignature]; ok {
+		t.Errorf("the second call of the batch carries %v, want it left unsigned", got)
+	}
+}
+
+// TestThePlaceholderSkipsTextAndUserTurns checks it reaches function calls and
+// nothing else: a signature on a text part or on a user turn is not a shape the
+// API takes.
+func TestThePlaceholderSkipsTextAndUserTurns(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	convo.AddAssistantMessage("hi there")
+	convo.AddToolResult(frames.ToolResult{ID: "c1", Name: "get_weather", Content: "sunny"})
+
+	for i, c := range mustContents(t, convo.Messages()) {
+		for j, part := range partsOf(t, c) {
+			if got, ok := part[keyThoughtSignature]; ok {
+				t.Errorf("content %d part %d carries signature %v, want none", i, j, got)
+			}
+		}
 	}
 }
 

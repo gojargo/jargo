@@ -3,6 +3,7 @@
 package gemini
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 
@@ -12,11 +13,13 @@ import (
 
 // The keys Gemini's generateContent body is built from.
 const (
-	keyRole  = "role"
-	keyParts = "parts"
-	keyName  = "name"
-	keyText  = "text"
-	keyID    = "id"
+	keyRole             = "role"
+	keyParts            = "parts"
+	keyName             = "name"
+	keyText             = "text"
+	keyID               = "id"
+	keyFunctionCall     = "functionCall"
+	keyThoughtSignature = "thoughtSignature"
 )
 
 // The roles Gemini's contents take. It calls the assistant the model, and has
@@ -35,6 +38,12 @@ const unnamedToolResult = "tool_call_result"
 // a model turn. A full stop says nothing in any language, which is the point: it
 // is there to satisfy the shape, not to be read.
 const noOpUserTurn = "."
+
+// placeholderThoughtSignature is the signature Google documents for a function
+// call that has none, which skips the validation the model would otherwise
+// refuse the request over. It travels base64-encoded, the field being bytes on
+// the wire.
+const placeholderThoughtSignature = "skip_thought_signature_validator"
 
 // Params is what one generateContent call takes from the conversation: the
 // system instruction Gemini carries beside the conversation, the contents
@@ -126,7 +135,54 @@ func ToContents(msgs []frames.Message) ([]map[string]any, error) {
 			out = append(out, textContent(role, m.Text))
 		}
 	}
+	addPlaceholderThoughtSignatures(out)
 	return out, nil
+}
+
+// addPlaceholderThoughtSignatures gives the function calls of an unsigned model
+// turn the placeholder signature.
+//
+// Gemini 3 refuses a model turn whose function calls carry no thought
+// signature. That is what a call another provider made looks like after a
+// switch mid-conversation, and what a call the application wrote itself looks
+// like. A turn already holding a signed part is left as it stands: the model
+// signs only the first call of a parallel batch and expects the rest unsigned.
+func addPlaceholderThoughtSignatures(contents []map[string]any) {
+	signature := base64.StdEncoding.EncodeToString([]byte(placeholderThoughtSignature))
+	for _, c := range contents {
+		if role, _ := c[keyRole].(string); role != roleModel {
+			continue
+		}
+		parts, ok := c[keyParts].([]map[string]any)
+		if !ok || anySigned(parts) {
+			continue
+		}
+		for _, part := range parts {
+			if _, isCall := part[keyFunctionCall]; isCall {
+				part[keyThoughtSignature] = signature
+			}
+		}
+	}
+}
+
+// anySigned reports whether any of the parts already carries a signature.
+func anySigned(parts []map[string]any) bool {
+	for _, part := range parts {
+		switch sig := part[keyThoughtSignature].(type) {
+		case nil:
+		case string:
+			if sig != "" {
+				return true
+			}
+		case []byte:
+			if len(sig) > 0 {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureLastMessageIsUser appends a minimal user content when the conversation
@@ -197,7 +253,7 @@ func toolCallParts(text string, calls []frames.ToolCall) []map[string]any {
 			args = json.RawMessage("{}")
 		}
 		parts = append(parts, map[string]any{
-			"functionCall": map[string]any{keyID: c.ID, keyName: c.Name, "args": args},
+			keyFunctionCall: map[string]any{keyID: c.ID, keyName: c.Name, "args": args},
 		})
 	}
 	return parts
