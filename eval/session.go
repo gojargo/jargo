@@ -679,7 +679,11 @@ const (
 // monotonic, so a missing substring is a continue and more text may still
 // arrive; only the judge can affirmatively fail.
 func (s *session) evaluateAggregate(ctx context.Context, aggregate string, exp Expectation) (string, string) {
-	if exp.TextContains != "" && !strings.Contains(aggregate, exp.TextContains) {
+	if exp.TextExcludes != "" && textContains(aggregate, exp.TextExcludes) {
+		return statusFail, fmt.Sprintf("text %q contains %q",
+			strings.TrimSpace(aggregate), exp.TextExcludes)
+	}
+	if exp.TextContains != "" && !textContains(aggregate, exp.TextContains) {
 		return statusContinue, fmt.Sprintf("does not contain %q", exp.TextContains)
 	}
 	if exp.Eval != "" {
@@ -846,10 +850,22 @@ func (e Event) summary() string {
 // the first failure or nil. It is the single-event path; an expectation that
 // aggregates goes through evaluateAggregate instead.
 func checkPayload(ev Event, exp Expectation, fail func(string) *Failure) *Failure {
-	if exp.TextContains != "" && !strings.Contains(ev.Text, exp.TextContains) {
+	if exp.TextContains != "" && !textContains(ev.Text, exp.TextContains) {
 		return fail(fmt.Sprintf("text %q does not contain %q", ev.Text, exp.TextContains))
 	}
+	if exp.TextExcludes != "" && textContains(ev.Text, exp.TextExcludes) {
+		return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(ev.Text), exp.TextExcludes))
+	}
 	return nil
+}
+
+// textContains reports whether needle occurs in content, whatever the spacing.
+// A reply arrives in segments and is joined back together here, so where its
+// line breaks and runs of spaces fall is an accident of how it was streamed,
+// not something a scenario should have to write out.
+func textContains(content, needle string) bool {
+	return strings.Contains(strings.Join(strings.Fields(content), " "),
+		strings.Join(strings.Fields(needle), " "))
 }
 
 // checkJudge runs the judge assertion when the expectation carries one. Today

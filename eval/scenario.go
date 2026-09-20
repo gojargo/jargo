@@ -381,8 +381,18 @@ type Expectation struct {
 	// Event is the friendly event name to match (see the Event constants).
 	Event string `yaml:"event"`
 	// TextContains, when set, requires the event's text to contain this
-	// substring, case-sensitively. Applies to llm_response and tts_response.
+	// substring, case-sensitively and whatever the spacing. Applies to
+	// llm_response and tts_response.
 	TextContains string `yaml:"text_contains,omitempty"`
+	// TextExcludes is the mirror of TextContains: the event's text must not hold
+	// this substring. It is for what should never reach the user, a marker the
+	// model let slip into its reply above all.
+	//
+	// On its own it checks the one event it matches. Alongside TextContains or
+	// Eval, which accumulate a reply across its segments, it is checked on each
+	// segment, so the failure lands as soon as the text appears rather than at
+	// the end of the budget.
+	TextExcludes string `yaml:"text_excludes,omitempty"`
 	// Eval, when set, is a natural-language criterion an LLM judge checks the
 	// bot's reply against. Applies to llm_response and tts_response, the two
 	// events carrying text the bot itself produced.
@@ -616,7 +626,8 @@ func (e *Expectation) validate() error {
 	}
 	// An absent expectation matches on event type only: a content or call check
 	// describes an event that must arrive, which contradicts absence.
-	if e.Absent && (e.TextContains != "" || e.Eval != "" || e.Name != "" || e.Args != nil || e.hasCalls) {
+	if e.Absent && (e.TextContains != "" || e.TextExcludes != "" || e.Eval != "" ||
+		e.Name != "" || e.Args != nil || e.hasCalls) {
 		return errAbsentWithCheck
 	}
 	return e.normalizeCalls()

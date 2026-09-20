@@ -729,3 +729,85 @@ turns:
 		t.Fatalf("progress %v, want %v", got, want)
 	}
 }
+
+// TestHarnessReportsExcludedText covers what should never reach the user: the
+// reply holds the string the scenario forbade, so the turn fails on it.
+func TestHarnessReportsExcludedText(t *testing.T) {
+	res := host(t, `
+name: excluded
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_excludes: "hello"
+        within_ms: 2000
+`)
+	if res.Passed() {
+		t.Fatal("the reply echoes the forbidden text, so the turn should fail")
+	}
+	if !strings.Contains(res.Failures[0].Reason, `contains "hello"`) {
+		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
+	}
+}
+
+// A reply the bot never produces the forbidden text in passes, and passes
+// without waiting out the budget the way an unmet text_contains does.
+func TestHarnessPassesWhenTextIsAbsentFromTheReply(t *testing.T) {
+	res := host(t, `
+name: not-excluded
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_contains: "you said"
+        text_excludes: "goodbye"
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass, got %v", res.Failures)
+	}
+}
+
+// Alongside a check that accumulates the reply's segments, it is checked on each
+// one, so the failure lands on the segment that brought the text rather than at
+// the end of the budget. The bot answers this turn with filler and then the
+// answer, and the answer is what holds the forbidden text.
+func TestHarnessReportsExcludedTextInALaterSegment(t *testing.T) {
+	started := time.Now()
+	res := host(t, `
+name: excluded-later
+turns:
+  - user: "check the weather"
+    expect:
+      - event: llm_response
+        text_contains: "Paris"
+        text_excludes: "sunny"
+        within_ms: 8000
+`)
+	if res.Passed() {
+		t.Fatal("the second segment holds the forbidden text, so the turn should fail")
+	}
+	if !strings.Contains(res.Failures[0].Reason, `contains "sunny"`) {
+		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
+	}
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
+		t.Errorf("the failure took %s, want it as soon as the text appeared", elapsed)
+	}
+}
+
+// Spacing is an accident of how a reply was streamed, so it is not something a
+// scenario has to write out.
+func TestHarnessMatchesTextWhateverTheSpacing(t *testing.T) {
+	res := host(t, `
+name: spacing
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_contains: "you   said"
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass whatever the spacing, got %v", res.Failures)
+	}
+}

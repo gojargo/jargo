@@ -431,3 +431,40 @@ func TestLoadDTMFHexRejected(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestTextExcludesIsTheMirrorOfTextContains covers what should never reach the
+// user, a marker the model let slip into its reply above all.
+func TestTextExcludesIsTheMirrorOfTextContains(t *testing.T) {
+	sc, err := eval.Load(writeScenario(t, `
+name: excludes
+turns:
+  - user: "what is the capital of Germany?"
+    expect:
+      - event: llm_response
+        text_contains: Berlin
+        text_excludes: "●"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if exp := sc.Turns[0].Expect[0]; exp.TextContains != "Berlin" || exp.TextExcludes != "●" {
+		t.Errorf("expectation = %+v, want both checks read", exp)
+	}
+}
+
+// It is a content check like any other, so it describes an event that arrives
+// and cannot be asked of one that must not.
+func TestAbsentRejectsTextExcludes(t *testing.T) {
+	_, err := eval.Load(writeScenario(t, `
+name: absent
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        absent: true
+        text_excludes: "●"
+`))
+	if err == nil {
+		t.Error("an absent expectation with a content check should be rejected")
+	}
+}

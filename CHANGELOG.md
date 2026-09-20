@@ -56,6 +56,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A scenario can forbid text as well as require it.** An eval expectation
+  gained `text_excludes:`, the mirror of `text_contains:`: the matched event's
+  text must not hold the substring, which is for what should never reach the
+  user, a turn-completion marker the model let slip into its reply above all. On
+  its own it checks the one event it matches; alongside `text_contains:` or
+  `eval:`, which accumulate a reply across its segments, it is checked on each
+  segment, so the failure lands as soon as the text appears. **Behaviour
+  change:** both checks now ignore how the text is spaced, since where a
+  streamed reply's line breaks and runs of spaces fall is an accident of how it
+  arrived rather than something a scenario should have to write out.
+
 - **Gemini Live holds the bot's turn open while the model is still working.**
   The Live thinking models reason in the background between chunks of output, so
   a completed generation closes a chunk rather than the turn, and reading it as
