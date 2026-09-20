@@ -166,8 +166,18 @@ func (f *fakeLive) awaitToolDeclared(t *testing.T, want string) {
 // which is what carries a tool's result back into the conversation.
 func toolSession(t *testing.T, srv *fakeLive, tools []frames.Tool) (*pipeline.Worker, *frames.LLMContext) {
 	t.Helper()
+	return toolSessionOn(t, srv, "", tools)
+}
+
+// toolSessionOn is toolSession against a named model, for the behavior that
+// depends on which model is in force.
+func toolSessionOn(
+	t *testing.T, srv *fakeLive, model string, tools []frames.Tool,
+) (*pipeline.Worker, *frames.LLMContext) {
+	t.Helper()
 	svc := live.New(live.Config{
 		APIKey:  "k",
+		Model:   model,
 		BaseURL: "ws" + strings.TrimPrefix(srv.URL, "http"),
 	})
 	convo := frames.NewLLMContext("system")
@@ -324,5 +334,103 @@ func TestAResultIsSentOnlyOnce(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if got := srv.toolResponses(); len(got) != 1 {
 		t.Errorf("sent %d results, want the one result sent once", len(got))
+	}
+}
+
+// asyncTool outlives the reply that asked for it, which is what has it declared
+// as a call the model should not wait for.
+func asyncTool() frames.Tool {
+	no := false
+	return frames.Tool{
+		Name:                 "start_delivery",
+		Description:          "start a delivery",
+		Parameters:           json.RawMessage(`{"type":"object"}`),
+		CancelOnInterruption: &no,
+		Handler: func(ctx context.Context, p llm.FunctionCallParams) error {
+			return p.Result(ctx, "on its way", nil)
+		},
+	}
+}
+
+// declarationsIn returns the function declarations of the last setup message.
+func (f *fakeLive) declarationsIn(t *testing.T) map[string]map[string]any {
+	t.Helper()
+	out := map[string]map[string]any{}
+	for _, m := range f.messages() {
+		setup, ok := m["setup"].(map[string]any)
+		if !ok {
+			continue
+		}
+		tools, ok := setup["tools"].([]any)
+		if !ok {
+			continue
+		}
+		for _, tool := range tools {
+			spec, ok := tool.(map[string]any)
+			if !ok {
+				continue
+			}
+			decls, ok := spec["functionDeclarations"].([]any)
+			if !ok {
+				continue
+			}
+			for _, d := range decls {
+				if decl, ok := d.(map[string]any); ok {
+					if name, ok := decl["name"].(string); ok {
+						out[name] = decl
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// The 3.8 family runs a call without waiting unless the declaration asks it to,
+// so what each tool needs travels with it in the setup.
+func TestDeclarationsSayWhetherToWaitForTheCall(t *testing.T) {
+	srv := newFakeLive(t)
+	toolSessionOn(t, srv, "gemini-3.8-live",
+		[]frames.Tool{weatherTool(make(chan string, 1)), asyncTool()})
+	srv.awaitToolDeclared(t, "start_delivery")
+
+	decls := srv.declarationsIn(t)
+	if got := decls["get_weather"]["behavior"]; got != "BLOCKING" {
+		t.Errorf("the synchronous tool was declared %v, want BLOCKING so the model waits for it", got)
+	}
+	if got := decls["start_delivery"]["behavior"]; got != "NON_BLOCKING" {
+		t.Errorf("the asynchronous tool was declared %v, want NON_BLOCKING", got)
+	}
+}
+
+// A result the model was not waiting for can land mid-sentence, so it carries
+// the hint that has the model finish what it is saying before turning to it.
+func TestAnAsyncResultAsksToBeTakenWhenIdle(t *testing.T) {
+	srv := newFakeLive(t)
+	toolSessionOn(t, srv, "gemini-3.8-live",
+		[]frames.Tool{weatherTool(make(chan string, 1)), asyncTool()})
+	srv.awaitToolDeclared(t, "start_delivery")
+
+	srv.speak(t, `{"toolCall":{"functionCalls":[
+		{"id":"call_1","name":"start_delivery","args":{}}]}}`)
+	got := srv.awaitToolResponses(t, 1)
+
+	if got[0]["scheduling"] != "WHEN_IDLE" {
+		t.Errorf("scheduling = %v, want WHEN_IDLE on a result the model was not waiting for", got[0]["scheduling"])
+	}
+}
+
+// A call the model waited for never leaves it mid-turn, so there is nothing to
+// schedule around.
+func TestASynchronousResultCarriesNoSchedule(t *testing.T) {
+	srv := newFakeLive(t)
+	toolSessionOn(t, srv, "gemini-3.8-live", []frames.Tool{weatherTool(make(chan string, 1))})
+
+	srv.speak(t, `{"toolCall":{"functionCalls":[
+		{"id":"call_1","name":"get_weather","args":{}}]}}`)
+	got := srv.awaitToolResponses(t, 1)
+
+	if _, ok := got[0]["scheduling"]; ok {
+		t.Errorf("scheduling = %v, want none on a result the model waited for", got[0]["scheduling"])
 	}
 }

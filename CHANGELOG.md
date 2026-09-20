@@ -54,6 +54,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and a transcript came back as invented "User:" lines after it. A configured
   `Instructions` string is unaffected.
 
+### Added
+
+- **Gemini Live says whether the model should wait for a function call.** The
+  3.8 Live family runs every call without waiting unless the declaration asks it
+  to, where the models before it waited by default, so a synchronous tool on one
+  of them left the model talking over its own result. A tool registered to
+  outlive the reply that asked for it is now declared `NON_BLOCKING`, and its
+  result carries the `WHEN_IDLE` schedule, so a result landing late has the model
+  finish its sentence before turning to it. A synchronous tool is declared
+  `BLOCKING` wherever the model takes that, which restores the semantics it had.
+  The Live thinking models accept only `NON_BLOCKING`: a synchronous tool cannot
+  pause the conversation there, and that is reported once per session.
+  `llm.Base.FunctionIsAsync` reports the distinction the declarations rest on.
+
 ### Fixed
 
 - **An MCP server is reachable again after its connection dies, and a failed

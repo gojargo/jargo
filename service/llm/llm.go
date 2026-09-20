@@ -985,6 +985,18 @@ func (b *Base) HasFunction(name string) bool {
 	return ok
 }
 
+// FunctionIsAsync reports whether the named tool was registered to outlive the
+// reply that asked for it, with WithCancelOnInterruption(false). A registration
+// under the name answers for itself, a catch-all answers for anything else, and
+// a name nothing claims is not asynchronous.
+//
+// It is what a service tells a provider that distinguishes a call it should wait
+// for from one it should not.
+func (b *Base) FunctionIsAsync(name string) bool {
+	item, ok := b.lookupFunction(name)
+	return ok && !item.cancelOnInterruption
+}
+
 // lookupFunction returns the entry that runs a call to name: its own handler, or
 // else the catch-all. It reports false when nothing claims the call, which the
 // caller answers with the missing-function handler.

@@ -55,6 +55,9 @@ type Service struct {
 	// model, so a conversation reported again does not send one twice. Guarded
 	// by mu.
 	sentResults map[string]bool
+	// syncToolWarning keeps the report that a synchronous tool cannot block on
+	// this model to one, however many tools the session advertises.
+	syncToolWarning sync.Once
 }
 
 // Connector customizes how the Live session is addressed and authorized, so a
@@ -223,6 +226,9 @@ func (s *Service) setup() map[string]any {
 	schema := s.tools
 	s.mu.Unlock()
 	if tools := s.adapter.ToProviderToolsFormat(schema); len(tools) > 0 {
+		if supportsNonBlockingTools(s.cfg.Model) {
+			s.tagToolBehaviors(tools)
+		}
 		setup["tools"] = tools
 	}
 	return map[string]any{"setup": setup}
@@ -348,17 +354,71 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 
 	slog.DebugContext(ctx, "sending a tool result to the live session",
 		"service", s.Name(), "tool_call_id", toolCallID, "function", name)
+	response := map[string]any{
+		"id":       toolCallID,
+		"name":     name,
+		"response": geminiadapter.FunctionResponseDict(result),
+	}
+	// Pair the non-blocking declaration on an asynchronous tool with a hint on
+	// its result. WHEN_IDLE has the model finish whatever it is saying before it
+	// turns to the result, so a result landing late does not cut it off
+	// mid-sentence. It means nothing for a call the model waited for, so it is
+	// gated the way the declaration was.
+	if supportsNonBlockingTools(s.cfg.Model) && s.FunctionIsAsync(name) {
+		response["scheduling"] = "WHEN_IDLE"
+	}
 	if err := s.send(map[string]any{
-		"toolResponse": map[string]any{
-			"functionResponses": []any{map[string]any{
-				"id":       toolCallID,
-				"name":     name,
-				"response": geminiadapter.FunctionResponseDict(result),
-			}},
-		},
+		"toolResponse": map[string]any{"functionResponses": []any{response}},
 	}); err != nil {
 		slog.ErrorContext(ctx, "sending a tool result failed", "service", s.Name(), "err", err)
 	}
+}
+
+// tagToolBehaviors says, on each declaration, whether the model should wait for
+// that call.
+//
+// A tool registered to outlive the reply that asked for it is declared
+// non-blocking, so the model is not stalled while it runs. A synchronous tool
+// should block, since the model then finishes its turn only once the result has
+// landed, which is what keeps it from saying it will go and look something up.
+// Where not waiting is the model's own default, a synchronous tool is therefore
+// declared blocking explicitly. The thinking models take only non-blocking
+// declarations, so there a synchronous tool cannot block, which is said once.
+//
+// See https://ai.google.dev/gemini-api/docs/live-api/tools#async-function-calling.
+func (s *Service) tagToolBehaviors(tools []map[string]any) {
+	declareBlocking := toolsDefaultToNonBlocking(s.cfg.Model) && supportsBlockingTools(s.cfg.Model)
+	for _, tool := range tools {
+		decls, ok := tool["functionDeclarations"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, decl := range decls {
+			name, _ := decl["name"].(string)
+			if name == "" {
+				continue
+			}
+			switch {
+			case s.FunctionIsAsync(name):
+				decl["behavior"] = "NON_BLOCKING"
+			case declareBlocking:
+				decl["behavior"] = "BLOCKING"
+			case toolsDefaultToNonBlocking(s.cfg.Model):
+				s.warnSyncToolCannotBlock(name)
+			}
+		}
+	}
+}
+
+// warnSyncToolCannotBlock reports, once for the session, that a synchronous tool
+// will not pause the conversation on a model that runs every call without
+// waiting.
+func (s *Service) warnSyncToolCannotBlock(name string) {
+	s.syncToolWarning.Do(func() {
+		slog.Warn("this model runs every function call without waiting for it, so a synchronous "+
+			"tool does not pause the conversation and the model may keep talking before its result arrives",
+			"service", s.Name(), "model", s.cfg.Model, "function", name)
+	})
 }
 
 // runToolCalls runs the calls the model asked for in one message.
