@@ -166,6 +166,9 @@ func (o *Observer) messagesFor(f frames.Frame) []Message {
 	if msgs, ok := o.llmTextMessages(f); ok {
 		return msgs
 	}
+	if msg, ok := o.llmMarkerMessage(f); ok {
+		return msg
+	}
 	if msg, ok := o.botMessageFor(f); ok {
 		return []Message{msg}
 	}
@@ -378,6 +381,26 @@ func (o *Observer) llmTextMessages(f frames.Frame) ([]Message, bool) {
 		msgs = append(msgs, BotTranscription(sentence))
 	}
 	return msgs, true
+}
+
+// llmMarkerMessage maps what a marker-reading service made of a whole response:
+// the marker it found and the text the model produced before anything was held
+// back.
+//
+// It is off unless a client asked for it. The report is for judging how well a
+// model follows the protocol it was given, and its raw text is what the model
+// said before the gating, which is not a client's business.
+func (o *Observer) llmMarkerMessage(f frames.Frame) ([]Message, bool) {
+	fr, ok := f.(*frames.LLMMarkerResponseFrame)
+	if !ok {
+		return nil, false
+	}
+	if !o.botLLMMarkerEnabled() {
+		return nil, true
+	}
+	return []Message{BotLLMMarker(BotLLMMarkerData{
+		Text: fr.Marker, Kind: fr.Kind, Raw: fr.Raw, Markers: fr.Markers,
+	})}, true
 }
 
 // gatherTranscription folds one token into the bot transcription and reports the

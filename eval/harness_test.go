@@ -996,3 +996,151 @@ turns:
 		t.Errorf("expectation = %+v, want it named and numbered", got[0])
 	}
 }
+
+// markerLLM answers each turn with a marker report as a marker-reading service
+// would: a complete turn is answered, an incomplete one is held open. The text
+// of the turn says which, so a scenario can drive either.
+type markerLLM struct {
+	*processor.Base
+}
+
+func newMarkerLLM() *markerLLM {
+	m := &markerLLM{}
+	m.Base = processor.New("MarkerLLM", m)
+	return m
+}
+
+func (m *markerLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := m.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	cf, ok := f.(*frames.LLMContextFrame)
+	if !ok {
+		return m.PushFrame(ctx, f, dir)
+	}
+	msgs := cf.Context.Messages()
+	last := ""
+	if len(msgs) > 0 {
+		last = msgs[len(msgs)-1].Text
+	}
+
+	if err := m.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
+		return err
+	}
+	// The markers the turn-completion protocol uses, which a bot reports
+	// alongside the raw text so a scenario can check the model against it.
+	markers := []string{"●", "◐", "○"}
+	raw, marker, kind := "● Sure, here you go.", "●", "complete"
+	if strings.Contains(strings.ToLower(last), "hmm") {
+		raw, marker, kind = "◐", "◐", "short"
+	}
+	if strings.Contains(raw, " ") {
+		if err := m.PushFrame(ctx, frames.NewLLMTextFrame("Sure, here you go."), processor.Downstream); err != nil {
+			return err
+		}
+	}
+	report := frames.NewLLMMarkerResponseFrame(raw, marker, kind, markers)
+	if err := m.PushFrame(ctx, report, processor.Downstream); err != nil {
+		return err
+	}
+	return m.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+}
+
+// buildMarkerBot is a bot whose model reads turn-completion markers.
+func buildMarkerBot(in, out processor.Processor) *pipeline.Worker {
+	agg := aggregators.New(frames.NewLLMContext("test system"))
+	rtviProc := rtvi.NewProcessor()
+	return pipeline.NewWorker(pipeline.New(
+		rtviProc, in, agg.User(), newMarkerLLM(), out, agg.Assistant(),
+	), pipeline.WorkerConfig{
+		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+	})
+}
+
+// TestHarnessReadsTheBotsMarkers covers the marker a scenario asserts on: it
+// never reaches a client by default, so the harness asks the bot to report it,
+// and the assertion names what the marker meant rather than the symbol, which
+// is configurable.
+func TestHarnessReadsTheBotsMarkers(t *testing.T) {
+	res := hostWith(t, buildMarkerBot, `
+name: markers
+turns:
+  - user: "let me think about it, hmmm"
+    expect:
+      - event: llm_marker
+        marker: incomplete
+  - user: "I think I'd go to Japan"
+    expect:
+      - event: llm_marker
+        marker: complete
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass, got %v\n%s", res.Failures, strings.Join(res.DebugLog, "\n"))
+	}
+}
+
+// The report carries the response as the model produced it, so a scenario can
+// check how well the model followed the protocol: the marker first, one of them,
+// and text after it only where the turn was complete.
+func TestHarnessChecksTheMarkerProtocol(t *testing.T) {
+	res := hostWith(t, buildMarkerBot, `
+name: protocol
+turns:
+  - user: "let me think about it, hmmm"
+    expect:
+      - event: llm_marker
+        marker: short
+        marker_first: true
+        markers: 1
+        text_after: false
+  - user: "I think I'd go to Japan"
+    expect:
+      - event: llm_marker
+        marker: complete
+        marker_first: true
+        markers: 1
+        text_after: true
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass, got %v", res.Failures)
+	}
+}
+
+// A marker that meant something else fails, naming what it meant.
+func TestHarnessReportsTheWrongMarker(t *testing.T) {
+	res := hostWith(t, buildMarkerBot, `
+name: wrong-marker
+turns:
+  - user: "let me think about it, hmmm"
+    expect:
+      - event: llm_marker
+        marker: complete
+`)
+	if res.Passed() {
+		t.Fatal("the bot held the turn open, so a complete marker should fail")
+	}
+	if !strings.Contains(res.Failures[0].Reason, "meant short") {
+		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
+	}
+}
+
+// A scenario that says nothing about markers is told nothing about them, since
+// they are a diagnostic rather than part of the conversation.
+func TestMarkersAreNotReportedUnlessAsked(t *testing.T) {
+	res := hostWith(t, buildMarkerBot, `
+name: no-markers
+turns:
+  - user: "I think I'd go to Japan"
+    expect:
+      - event: llm_response
+        text_contains: "here you go"
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass, got %v", res.Failures)
+	}
+	for _, ev := range res.Events {
+		if ev.Kind == "llm_marker" {
+			t.Errorf("the bot reported a marker nothing asked for: %v", ev)
+		}
+	}
+}

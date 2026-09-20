@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -826,3 +827,76 @@ func TestConfiguredMarkersAreTheOnesRead(t *testing.T) {
 		t.Errorf("markers = %v, want the configured complete marker", got)
 	}
 }
+
+// The report the service makes of a whole response is a diagnostic, for a
+// consumer checking how well the model followed the protocol it was given. It
+// carries the marker, what it meant, and the text before anything was held back.
+func TestMarkerResponseReportsWhatTheResponseCarried(t *testing.T) {
+	svc, _, _ := gatedService(t)
+
+	if err := svc.pushTurnText(t.Context(), MarkerComplete+" Hello there!"); err != nil {
+		t.Fatalf("pushTurnText: %v", err)
+	}
+	report, ok := svc.markerResponse()
+	if !ok {
+		t.Fatal("gating is on, so there is a protocol to report against")
+	}
+	if report.Raw != MarkerComplete+" Hello there!" {
+		t.Errorf("raw = %q, want the response as the model produced it", report.Raw)
+	}
+	if report.Marker != MarkerComplete || report.Kind != "complete" {
+		t.Errorf("marker = %q kind = %q, want the complete marker", report.Marker, report.Kind)
+	}
+	want := []string{MarkerComplete, MarkerIncompleteShort, MarkerIncompleteLong}
+	if !slices.Equal(report.Markers, want) {
+		t.Errorf("markers = %v, want every marker the protocol uses (%v)", report.Markers, want)
+	}
+}
+
+// An incomplete turn produces no speech, so the marker is the whole of what the
+// response carried, and the report says which of the two reasons it was.
+func TestMarkerResponseReportsAHeldTurn(t *testing.T) {
+	svc, _, _ := gatedService(t)
+
+	if err := svc.pushTurnText(t.Context(), MarkerIncompleteLong); err != nil {
+		t.Fatalf("pushTurnText: %v", err)
+	}
+	report, _ := svc.markerResponse()
+	if report.Marker != MarkerIncompleteLong || report.Kind != "long" {
+		t.Errorf("marker = %q kind = %q, want the long marker", report.Marker, report.Kind)
+	}
+	if report.Raw != MarkerIncompleteLong {
+		t.Errorf("raw = %q, want the marker alone", report.Raw)
+	}
+}
+
+// A response carrying no marker at all is reported as such, which is what tells
+// a model that ignored the protocol from one that followed it.
+func TestMarkerResponseReportsNoMarker(t *testing.T) {
+	svc, _, _ := gatedService(t)
+
+	if err := svc.pushTurnText(t.Context(), "I forgot the protocol"); err != nil {
+		t.Fatalf("pushTurnText: %v", err)
+	}
+	report, _ := svc.markerResponse()
+	if report.Marker != "" || report.Kind != "" {
+		t.Errorf("marker = %q kind = %q, want neither", report.Marker, report.Kind)
+	}
+	if report.Raw != "I forgot the protocol" {
+		t.Errorf("raw = %q, want what the model produced", report.Raw)
+	}
+}
+
+// With gating off there is no protocol to report against, so nothing is
+// reported: the markers are the gating's own convention with the model.
+func TestNoMarkerResponseWithoutGating(t *testing.T) {
+	svc := New("LLM", &markerGenerator{})
+	if _, ok := svc.markerResponse(); ok {
+		t.Error("a service that reads no markers should report none")
+	}
+}
+
+// markerGenerator stands in for a model in a service built without gating.
+type markerGenerator struct{}
+
+func (*markerGenerator) Generate(context.Context, *frames.LLMContext, Emit) error { return nil }

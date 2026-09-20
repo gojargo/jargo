@@ -573,3 +573,42 @@ func TestLoadFileRejectsAMalformedFile(t *testing.T) {
 		}
 	}
 }
+
+// A marker expectation names what the marker meant rather than the symbol, which
+// is configurable, and the check belongs on the event that carries one.
+func TestMarkerExpectationValidation(t *testing.T) {
+	sc, err := eval.Load(writeScenario(t, `
+name: markers
+turns:
+  - user: "hmmm"
+    expect:
+      - event: llm_marker
+        marker: incomplete
+        marker_first: true
+        markers: 1
+        text_after: false
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	exp := sc.Turns[0].Expect[0]
+	if exp.Marker != "incomplete" || exp.MarkerFirst == nil || !*exp.MarkerFirst {
+		t.Errorf("expectation = %+v, want the marker checks read", exp)
+	}
+	if exp.Markers == nil || *exp.Markers != 1 || exp.TextAfter == nil || *exp.TextAfter {
+		t.Errorf("expectation = %+v, want the protocol checks read", exp)
+	}
+
+	for name, body := range map[string]string{
+		"unknown meaning": "name: f\nturns:\n  - user: hi\n    expect:\n" +
+			"      - event: llm_marker\n        marker: maybe\n",
+		"on another event": "name: f\nturns:\n  - user: hi\n    expect:\n" +
+			"      - event: llm_response\n        marker: complete\n",
+		"with absent": "name: f\nturns:\n  - user: hi\n    expect:\n" +
+			"      - event: llm_marker\n        absent: true\n        marker: complete\n",
+	} {
+		if _, err := eval.Load(writeScenario(t, body)); err == nil {
+			t.Errorf("%s: should be rejected", name)
+		}
+	}
+}

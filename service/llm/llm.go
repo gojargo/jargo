@@ -1318,6 +1318,7 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 	}
 	traceOutput(span, out.String())
 	b.emitTiming(ctx, span, time.Since(start))
+	b.pushMarkerResponse(ctx)
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 
@@ -1367,6 +1368,7 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	}
 	traceOutput(span, preamble.String())
 	b.emitTiming(ctx, span, time.Since(start))
+	b.pushMarkerResponse(ctx)
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 }
 

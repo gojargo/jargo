@@ -201,6 +201,12 @@ type ObserverParams struct {
 	// turn, which is what makes the raw signal useful as a timing anchor. Off by
 	// default, because a client wants turns rather than the signal behind them.
 	VADUserSpeakingEnabled bool
+	// BotLLMMarkerEnabled reports the sideband markers the bot's LLM emits, such
+	// as the turn-completion markers, with the raw text of the response behind
+	// each. Off by default: it is meant for judging how well a model follows the
+	// protocol it was given, not for a client, and the raw text it carries is
+	// what the model said before anything was held back.
+	BotLLMMarkerEnabled bool
 	// UserAudioLevelEnabled reports how loud the user is, for a client drawing a
 	// speaking meter. Off by default: it is a message every AudioLevelPeriod for
 	// as long as the call lasts, which a client that draws nothing does not want.
@@ -369,10 +375,14 @@ func (o *Observer) applyConfig(f *ConfigureObserverFrame) {
 	if f.VADUserSpeakingEnabled != nil {
 		o.params.VADUserSpeakingEnabled = *f.VADUserSpeakingEnabled
 	}
+	if f.BotLLMMarkerEnabled != nil {
+		o.params.BotLLMMarkerEnabled = *f.BotLLMMarkerEnabled
+	}
 	o.paramsMu.Unlock()
 	slog.Debug("RTVI observer reconfigured",
 		"function_call_report_level", f.FunctionCallReportLevel,
-		"vad_user_speaking", f.VADUserSpeakingEnabled)
+		"vad_user_speaking", f.VADUserSpeakingEnabled,
+		"bot_llm_marker", f.BotLLMMarkerEnabled)
 }
 
 // audioLevelMessageFor feeds the audio to the rolling window for its side of the
@@ -468,6 +478,14 @@ func (o *Observer) vadUserSpeakingEnabled() bool {
 	o.paramsMu.Lock()
 	defer o.paramsMu.Unlock()
 	return o.params.VADUserSpeakingEnabled
+}
+
+// botLLMMarkerEnabled reports whether the bot's marker reports are exposed. They
+// are off unless asked for: see ObserverParams.BotLLMMarkerEnabled.
+func (o *Observer) botLLMMarkerEnabled() bool {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	return o.params.BotLLMMarkerEnabled
 }
 
 // reportLevelFor is the level to report a call to name at: the function's own

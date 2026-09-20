@@ -43,6 +43,7 @@ type clientMessageData struct {
 type configurePayload struct {
 	FunctionCallReportLevel map[string]rtvi.FunctionCallReportLevel `json:"function_call_report_level,omitempty"`
 	VADUserSpeaking         *bool                                   `json:"vad_user_speaking,omitempty"`
+	BotLLMMarker            *bool                                   `json:"bot_llm_marker,omitempty"`
 }
 
 // contextPayload is the `d` of an eval-context message: the messages the bot's
@@ -88,7 +89,8 @@ func evalControlFrame(data []byte) frames.Frame {
 		if json.Unmarshal(msg.D, &payload) != nil {
 			return nil
 		}
-		return rtvi.NewConfigureObserverFrame(payload.FunctionCallReportLevel, payload.VADUserSpeaking)
+		return rtvi.NewConfigureObserverFrame(
+			payload.FunctionCallReportLevel, payload.VADUserSpeaking, payload.BotLLMMarker)
 	case evalContextMessage:
 		var payload contextPayload
 		if json.Unmarshal(msg.D, &payload) != nil {
@@ -114,7 +116,9 @@ func clientMessage(t string, payload any) rtvi.Message {
 // configureMessage builds the eval-configure client-message that exposes what
 // this scenario asserts on, for the duration of this eval only. A nil level
 // leaves the bot's own report level alone.
-func configureMessage(level *rtvi.FunctionCallReportLevel, vadUserSpeaking *bool) rtvi.Message {
+func configureMessage(
+	level *rtvi.FunctionCallReportLevel, vadUserSpeaking, botLLMMarker *bool,
+) rtvi.Message {
 	var levels map[string]rtvi.FunctionCallReportLevel
 	if level != nil {
 		levels = map[string]rtvi.FunctionCallReportLevel{"*": *level}
@@ -122,6 +126,7 @@ func configureMessage(level *rtvi.FunctionCallReportLevel, vadUserSpeaking *bool
 	return clientMessage(evalConfigureMessage, configurePayload{
 		FunctionCallReportLevel: levels,
 		VADUserSpeaking:         vadUserSpeaking,
+		BotLLMMarker:            botLLMMarker,
 	})
 }
 

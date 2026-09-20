@@ -282,6 +282,15 @@ type turnCompletionState struct {
 	buffer string
 	// marker is the verdict for the response being streamed.
 	marker TurnMarker
+	// foundMarker is the marker text the response carried, and foundKind what it
+	// meant ("complete", "short" or "long"), for the report made when the
+	// response ends. Both are empty until a marker is found.
+	foundMarker string
+	foundKind   string
+	// raw accumulates the response as the model produced it, markers and all,
+	// which is what that report carries: it is how a consumer checks the model
+	// against the protocol it was given.
+	raw strings.Builder
 	// broadcasted reports whether this turn has already been reported complete,
 	// so a turn that both calls a tool and produces the marker reports once.
 	broadcasted bool
@@ -493,6 +502,50 @@ func (b *Base) incompleteTimeoutExpired(ctx context.Context, t IncompleteType) {
 	}
 }
 
+// markerResponse is the report of what the service made of the response that
+// just ended: the marker it found, what that meant, and the text the model
+// produced before anything was held back. It reports false when gating is off,
+// where there is no protocol to report against.
+//
+// It is a diagnostic for a consumer checking the model against the protocol it
+// was given, and plays no part in the conversation.
+func (b *Base) markerResponse() (*frames.LLMMarkerResponseFrame, bool) {
+	if !b.FilterIncompleteUserTurns() {
+		return nil, false
+	}
+	b.turnCompletion.mu.Lock()
+	defer b.turnCompletion.mu.Unlock()
+	cfg := b.turnCompletion.config
+	return frames.NewLLMMarkerResponseFrame(
+		b.turnCompletion.raw.String(),
+		b.turnCompletion.foundMarker,
+		b.turnCompletion.foundKind,
+		protocolMarkers(cfg),
+	), true
+}
+
+// protocolMarkers is every marker the protocol recognizes, in the order the
+// model is taught them.
+func protocolMarkers(cfg UserTurnCompletionConfig) []string {
+	complete, short, long := cfg.Markers()
+	return []string{complete, short, long}
+}
+
+// pushMarkerResponse reports what the service made of the response that just
+// ended, for a consumer that asked to see it, and then clears the per-response
+// state. It is called where the service itself ends a response; a service whose
+// responses are bracketed from elsewhere resets on the frame instead.
+func (b *Base) pushMarkerResponse(ctx context.Context) {
+	report, ok := b.markerResponse()
+	if !ok {
+		return
+	}
+	if err := b.PushFrame(ctx, report, processor.Downstream); err != nil {
+		slog.Error("pushing the marker report failed", "service", b.Name(), "error", err)
+	}
+	b.turnReset(ctx)
+}
+
 // turnReset clears the per-response state. A response that produced no marker
 // at all has its buffered text pushed rather than dropped, so a model that
 // ignored the protocol still says something.
@@ -508,6 +561,8 @@ func (b *Base) turnReset(ctx context.Context) {
 	b.turnCompletion.buffer = ""
 	b.turnCompletion.marker = turnMarkerNone
 	b.turnCompletion.broadcasted = false
+	b.turnCompletion.foundMarker, b.turnCompletion.foundKind = "", ""
+	b.turnCompletion.raw.Reset()
 	b.turnCompletion.mu.Unlock()
 
 	if orphaned != "" {
@@ -559,6 +614,7 @@ func (b *Base) suppressStaleCompletion(ctx context.Context, complete, short stri
 // never becomes a frame.
 func (b *Base) pushTurnText(ctx context.Context, text string) error {
 	b.turnCompletion.mu.Lock()
+	b.turnCompletion.raw.WriteString(text)
 	voiced, marker := b.turnCompletion.voiced, b.turnCompletion.marker
 
 	// One spoken completion per user turn. Once a completion has been voiced,
@@ -606,6 +662,7 @@ func (b *Base) pushTurnText(ctx context.Context, text string) error {
 		}
 		b.turnCompletion.marker = TurnMarkerIncomplete
 		b.turnCompletion.buffer = ""
+		b.turnCompletion.foundMarker, b.turnCompletion.foundKind = marker, incomplete.String()
 		b.turnCompletion.mu.Unlock()
 
 		slog.Debug("an incomplete turn was reported, suppressing the response",
@@ -639,6 +696,7 @@ func (b *Base) pushTurnText(ctx context.Context, text string) error {
 	b.turnCompletion.voiced = true
 	b.turnCompletion.marker = TurnMarkerComplete
 	b.turnCompletion.buffer = ""
+	b.turnCompletion.foundMarker, b.turnCompletion.foundKind = completeMarker, "complete"
 	b.turnCompletion.mu.Unlock()
 
 	slog.Debug("a complete turn was reported, pushing the buffered response")

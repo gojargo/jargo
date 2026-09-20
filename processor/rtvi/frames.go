@@ -24,23 +24,27 @@ type ConfigureObserverFrame struct {
 	// VADUserSpeakingEnabled turns the raw VAD speaking events on or off, or is
 	// nil to leave the observer's current setting unchanged.
 	VADUserSpeakingEnabled *bool
+	// BotLLMMarkerEnabled turns the bot's marker reports on or off, or is nil to
+	// leave the observer's current setting unchanged.
+	BotLLMMarkerEnabled *bool
 }
 
 // NewConfigureObserverFrame builds a ConfigureObserverFrame.
 func NewConfigureObserverFrame(
-	level map[string]FunctionCallReportLevel, vadUserSpeaking *bool,
+	level map[string]FunctionCallReportLevel, vadUserSpeaking, botLLMMarker *bool,
 ) *ConfigureObserverFrame {
 	return &ConfigureObserverFrame{
 		BaseSystemFrame:         frames.NewBaseSystemFrame("RTVIConfigureObserverFrame"),
 		FunctionCallReportLevel: level,
 		VADUserSpeakingEnabled:  vadUserSpeaking,
+		BotLLMMarkerEnabled:     botLLMMarker,
 	}
 }
 
 // String implements fmt.Stringer.
 func (f *ConfigureObserverFrame) String() string {
-	return fmt.Sprintf("%s(function_call_report_level: %v, vad_user_speaking: %v)",
-		f.Name(), f.FunctionCallReportLevel, f.VADUserSpeakingEnabled)
+	return fmt.Sprintf("%s(function_call_report_level: %v, vad_user_speaking: %v, bot_llm_marker: %v)",
+		f.Name(), f.FunctionCallReportLevel, f.VADUserSpeakingEnabled, f.BotLLMMarkerEnabled)
 }
 
 // ClientMessageFrame carries a client-message: something the client asked the

@@ -65,6 +65,16 @@ type Event struct {
 	Function string
 	// Args are the arguments the model produced for a function_call.
 	Args map[string]any
+
+	// Kind, on an llm_marker, is what the marker meant: "complete", "short" or
+	// "long". Text carries the marker as the model wrote it.
+	MarkerKind string
+	// Raw, on an llm_marker, is the response as the model produced it, markers
+	// included, which is what a check on how well it follows the protocol reads.
+	Raw string
+	// Markers, on an llm_marker, is every marker the bot recognizes, so the raw
+	// text can be read without knowing how the bot was configured.
+	Markers []string
 }
 
 // String renders an Event as a short label: the call signature for a tool call,
@@ -393,16 +403,20 @@ func (s *session) handshake(ctx context.Context) error {
 	// this eval only, so a bot keeps its own defaults for its own clients.
 	level, wantLevel := s.requiredReportLevel()
 	vad := s.needsVADEvents()
-	if wantLevel || vad {
+	markers := s.needsMarkerEvents()
+	if wantLevel || vad || markers {
 		var want *rtvi.FunctionCallReportLevel
 		if wantLevel {
 			want = &level
 		}
-		var wantVAD *bool
+		var wantVAD, wantMarkers *bool
 		if vad {
 			wantVAD = &vad
 		}
-		if err := s.client.send(ctx, configureMessage(want, wantVAD)); err != nil {
+		if markers {
+			wantMarkers = &markers
+		}
+		if err := s.client.send(ctx, configureMessage(want, wantVAD, wantMarkers)); err != nil {
 			return err
 		}
 	}
@@ -452,6 +466,24 @@ func (s *session) needsVADEvents() bool {
 		}
 		for _, exp := range turn.Expect {
 			if vadEvents[exp.Event] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// needsMarkerEvents reports whether the scenario asserts on the markers the
+// bot's model emits. They never reach a client by default, being a diagnostic
+// rather than part of the conversation, so the harness asks for them only when a
+// scenario reads them.
+func (s *session) needsMarkerEvents() bool {
+	for _, turn := range s.scenario.Turns {
+		if turn.SendAfter != nil && turn.SendAfter.Event == EventLLMMarker {
+			return true
+		}
+		for _, exp := range turn.Expect {
+			if exp.Event == EventLLMMarker {
 				return true
 			}
 		}
@@ -942,6 +974,9 @@ func (e Event) summary() string {
 // the first failure or nil. It is the single-event path; an expectation that
 // aggregates goes through evaluateAggregate instead.
 func checkPayload(ev Event, exp Expectation, fail func(string) *Failure) *Failure {
+	if f := checkMarker(ev, exp, fail); f != nil {
+		return f
+	}
 	if exp.TextContains != "" && !textContains(ev.Text, exp.TextContains) {
 		return fail(fmt.Sprintf("text %q does not contain %q", ev.Text, exp.TextContains))
 	}
@@ -949,6 +984,92 @@ func checkPayload(ev Event, exp Expectation, fail func(string) *Failure) *Failur
 		return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(ev.Text), exp.TextExcludes))
 	}
 	return nil
+}
+
+// checkMarker applies an llm_marker expectation's checks to the report: what the
+// marker meant, and how well the response followed the protocol it was given.
+func checkMarker(ev Event, exp Expectation, fail func(string) *Failure) *Failure {
+	if exp.Marker != "" && !markerMeans(ev.MarkerKind, exp.Marker) {
+		got := ev.MarkerKind
+		if got == "" {
+			got = "none"
+		}
+		return fail(fmt.Sprintf("the response's marker meant %s, want %s", got, exp.Marker))
+	}
+	if exp.MarkerFirst != nil {
+		if first := markerComesFirst(ev); first != *exp.MarkerFirst {
+			return fail(fmt.Sprintf("the marker came first: %v, want %v, in %q",
+				first, *exp.MarkerFirst, ev.Raw))
+		}
+	}
+	if exp.Markers != nil {
+		if n := countMarkers(ev); n != *exp.Markers {
+			return fail(fmt.Sprintf("the response holds %d marker(s), want %d, in %q",
+				n, *exp.Markers, ev.Raw))
+		}
+	}
+	if exp.TextAfter != nil {
+		if after := textFollowsMarker(ev); after != *exp.TextAfter {
+			return fail(fmt.Sprintf("text follows the marker: %v, want %v, in %q",
+				after, *exp.TextAfter, ev.Raw))
+		}
+	}
+	return nil
+}
+
+// markerMeans reports whether the kind the bot gave the marker is the one the
+// scenario asked for. "incomplete" stands for either reason the bot holds a turn
+// open, for a scenario that cares that it did rather than which reason it read.
+func markerMeans(kind, want string) bool {
+	if want == MarkerIncomplete {
+		return kind == MarkerShort || kind == MarkerLong
+	}
+	return kind == want
+}
+
+// markerComesFirst reports whether the first marker in the response comes before
+// any text, which is what the protocol asks of the model.
+func markerComesFirst(ev Event) bool {
+	at, _ := firstMarker(ev)
+	return at == 0 && strings.TrimSpace(ev.Raw) != ""
+}
+
+// countMarkers is how many markers the response's text holds. The protocol asks
+// for exactly one, so a response holding several is one the model got wrong even
+// where the first of them was right.
+func countMarkers(ev Event) int {
+	n := 0
+	for _, marker := range ev.Markers {
+		if marker != "" {
+			n += strings.Count(ev.Raw, marker)
+		}
+	}
+	return n
+}
+
+// textFollowsMarker reports whether anything the user would hear follows the
+// first marker. A complete turn should have some, an incomplete one none.
+func textFollowsMarker(ev Event) bool {
+	at, marker := firstMarker(ev)
+	if at < 0 {
+		return strings.TrimSpace(ev.Raw) != ""
+	}
+	return strings.TrimSpace(ev.Raw[at+len(marker):]) != ""
+}
+
+// firstMarker is where the earliest marker sits in the response's raw text, and
+// which marker it is. It reports -1 when the response carried none.
+func firstMarker(ev Event) (at int, marker string) {
+	at = -1
+	for _, m := range ev.Markers {
+		if m == "" {
+			continue
+		}
+		if i := strings.Index(ev.Raw, m); i >= 0 && (at < 0 || i < at) {
+			at, marker = i, m
+		}
+	}
+	return at, marker
 }
 
 // textContains reports whether needle occurs in content, whatever the spacing.
@@ -1025,6 +1146,15 @@ func (s *session) translate(in rtvi.Incoming) *Event {
 			return nil
 		}
 		return &Event{Kind: EventTTSResponse, Text: d.Text}
+	case rtvi.TypeBotLLMMarker:
+		var d rtvi.BotLLMMarkerData
+		if json.Unmarshal(in.Data, &d) != nil {
+			return nil
+		}
+		return &Event{
+			Kind: EventLLMMarker, Text: d.Text,
+			MarkerKind: d.Kind, Raw: d.Raw, Markers: d.Markers,
+		}
 	case rtvi.TypeLLMFunctionCall:
 		var d rtvi.LLMFunctionCallData
 		_ = json.Unmarshal(in.Data, &d)

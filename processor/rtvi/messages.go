@@ -48,6 +48,7 @@ const (
 	TypeBotTranscription     = "bot-transcription"
 	TypeBotTTSText           = "bot-tts-text"
 	TypeBotLLMText           = "bot-llm-text"
+	TypeBotLLMMarker         = "bot-llm-marker"
 	TypeUserLLMText          = "user-llm-text"
 	TypeUserMuteStarted      = "user-mute-started"
 	TypeUserMuteStopped      = "user-mute-stopped"
@@ -373,6 +374,29 @@ func BotTTSText(text string) Message {
 // BotLLMText builds a bot-llm-text message.
 func BotLLMText(text string) Message {
 	return newMessage(TypeBotLLMText, "", TextData{Text: text})
+}
+
+// BotLLMMarkerData is the payload of a bot-llm-marker message: the sideband
+// marker the bot's LLM emitted in a response, such as the turn-completion
+// markers, with the response's own text behind it.
+type BotLLMMarkerData struct {
+	// Text is the marker as the model produced it, or empty when the response
+	// carried none.
+	Text string `json:"text"`
+	// Kind is what the marker meant, in the emitter's vocabulary: the
+	// turn-completion protocol's "complete", "short" or "long". Empty when the
+	// emitter gave none.
+	Kind string `json:"kind,omitempty"`
+	// Raw is the response's text as the model produced it, markers included.
+	Raw string `json:"raw,omitempty"`
+	// Markers are every marker the emitter recognizes.
+	Markers []string `json:"markers,omitempty"`
+}
+
+// BotLLMMarker builds a bot-llm-marker message, sent once per response and only
+// to a client that asked to see them.
+func BotLLMMarker(d BotLLMMarkerData) Message {
+	return newMessage(TypeBotLLMMarker, "", d)
 }
 
 // UserLLMText builds a user-llm-text message: what the user said as the model

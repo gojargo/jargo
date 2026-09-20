@@ -56,6 +56,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A bot can report the markers its model emits, and a scenario can assert on
+  them.** A marker-reading LLM service now pushes an `LLMMarkerResponseFrame`
+  when a response ends, carrying the marker it found, what that meant
+  ("complete", "short" or "long") and the response as the model produced it
+  before anything was held back. The RTVI observer sends it as `bot-llm-marker`
+  when `BotLLMMarkerEnabled` is on, which it is not by default: it is a
+  diagnostic for judging how well a model follows the protocol it was given, and
+  its raw text is what the model said before the gating, neither of which is a
+  client's business. An eval scenario asserts on it as the `llm_marker` event,
+  naming what the marker meant with `marker:` (`complete`, `short`, `long`, or
+  `incomplete` for either of the last two) rather than the symbol, which is
+  configurable, and checks the model against the protocol with `marker_first:`,
+  `markers:` and `text_after:`. The harness asks the bot to report markers only
+  when a scenario reads them.
+
 - **A run records what each of its expectations matched.** `eval.Result` gained
   `Turns`, one `TurnResult` per turn played, each carrying how the turn went,
   how long it took, and what each of its expectations resolved to: the event it

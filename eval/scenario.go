@@ -21,6 +21,12 @@
 //	                         (llm_response and tts_response, which carry its text),
 //	                         or, on function_call, the call itself by name and args
 //	text_excludes: <str>     the reverse of text_contains: the text must not hold it
+//	marker: <str>            for llm_marker: what the marker meant, one of
+//	                         complete, short, long, or incomplete for either of
+//	                         the last two
+//	marker_first: <bool>     for llm_marker: the marker came before any text
+//	markers: <int>           for llm_marker: how many markers the response holds
+//	text_after: <bool>       for llm_marker: text follows the first marker
 //	name: <str>              for function_call: the tool the call must be to
 //	args: <mapping>          for function_call: an argument subset the call must carry
 //	calls: <list>            for function_call: several calls, in any order
@@ -55,6 +61,29 @@
 //
 //	llm_response   the text the model produced (bot-llm-text)
 //	tts_response   the text the TTS reports speaking (bot-tts-text)
+//
+// # Asserting on the markers the model emits
+//
+// A model reading the turn-completion protocol begins each response with a
+// marker saying whether the user's turn was finished. The markers are a
+// diagnostic and never reach a client, so a scenario asserting on one asks the
+// bot to report them:
+//
+//	turns:
+//	  - user: "Let me think about it, hmmm"
+//	    expect:
+//	      - event: llm_marker
+//	        marker: incomplete        # the bot held the turn open
+//	  - user: "I think I'd go to Japan."
+//	    expect:
+//	      - event: llm_marker
+//	        marker: complete          # ... and answered this one
+//
+// The event carries the response as the model produced it, before anything was
+// held back, so a scenario can check the model against the protocol it was
+// given: marker_first that nothing came before the marker, markers how many the
+// response holds, and text_after whether anything follows the first one, which a
+// complete turn should have and an incomplete one should not.
 //
 // llm_response is available in both modes. tts_response is audio mode only: a
 // text-mode turn asks for no spoken response, so no TTS runs and no segment is
@@ -193,12 +222,14 @@ var (
 	errIncludeNotPath  = errors.New("!include expects a file path")
 	errIncludeTooDeep  = errors.New("!include nested too deep, check for a cycle")
 
-	errFileNotMapping     = errors.New("a scenario file must be a mapping")
-	errScenariosNotList   = errors.New("scenarios must be a non-empty list")
-	errScenarioNotMapping = errors.New("a scenario must be a mapping")
-	errNestedScenarios    = errors.New("a scenario cannot hold a scenarios list of its own")
-	errDuplicateScenario  = errors.New("two scenarios share a name")
-	errNotOneScenario     = errors.New("the file holds more than one scenario; read it with LoadFile")
+	errFileNotMapping          = errors.New("a scenario file must be a mapping")
+	errScenariosNotList        = errors.New("scenarios must be a non-empty list")
+	errScenarioNotMapping      = errors.New("a scenario must be a mapping")
+	errNestedScenarios         = errors.New("a scenario cannot hold a scenarios list of its own")
+	errDuplicateScenario       = errors.New("two scenarios share a name")
+	errUnknownMarker           = errors.New("marker must be complete, short, long or incomplete")
+	errMarkerCheckOnOtherEvent = errors.New("a marker check belongs on an llm_marker expectation")
+	errNotOneScenario          = errors.New("the file holds more than one scenario; read it with LoadFile")
 )
 
 // Event names a scenario can assert on. These are the friendly names scenarios
@@ -233,7 +264,33 @@ const (
 	// EventVADUserStoppedSpeaking is the raw VAD signal for the end of speech
 	// (audio mode only).
 	EventVADUserStoppedSpeaking = "vad_user_stopped_speaking"
+	// EventLLMMarker carries the sideband marker the bot's model emitted in a
+	// response, such as a turn-completion marker. It arrives when the response
+	// ends, and carries the response's raw text with it. Markers never reach a
+	// client by default; a scenario asserting on one asks the bot to report them.
+	EventLLMMarker = "llm_marker"
 )
+
+// The meanings a marker expectation can name, which are the emitter's own
+// vocabulary rather than the marker text, since that is configurable.
+const (
+	// MarkerComplete means the user's turn was finished and the bot answers.
+	MarkerComplete = "complete"
+	// MarkerShort means the user was cut off and the bot waits.
+	MarkerShort = "short"
+	// MarkerLong means the user asked for time and the bot waits longer.
+	MarkerLong = "long"
+	// MarkerIncomplete matches either of the two above, for a scenario that
+	// cares that the bot held the turn open rather than which reason it read.
+	MarkerIncomplete = "incomplete"
+)
+
+// markerMeanings are the values a marker expectation may name.
+//
+//nolint:gochecknoglobals // fixed lookup table
+var markerMeanings = map[string]bool{
+	MarkerComplete: true, MarkerShort: true, MarkerLong: true, MarkerIncomplete: true,
+}
 
 // judgeableEvents carry text the bot itself produced, which a judge grades as a
 // reply. A function_call is judged too, but as a call rather than as text, so it
@@ -424,6 +481,20 @@ type Expectation struct {
 	// only when all of them are found. Built from `calls:`, or from the
 	// `name:`/`args:` shorthand, by normalizeCalls.
 	Calls []FunctionCall `yaml:"calls,omitempty"`
+	// Marker, on an llm_marker, is what the marker must mean: "complete",
+	// "short", "long", or "incomplete" for either of the last two. A bare
+	// llm_marker asserts only that the bot read a marker from its response.
+	Marker string `yaml:"marker,omitempty"`
+	// MarkerFirst, on an llm_marker, requires that the first marker in the
+	// response came before any text, which is what the protocol asks of the
+	// model.
+	MarkerFirst *bool `yaml:"marker_first,omitempty"`
+	// Markers, on an llm_marker, is how many markers the response's text holds.
+	// The protocol asks for exactly one.
+	Markers *int `yaml:"markers,omitempty"`
+	// TextAfter, on an llm_marker, is whether any text follows the first marker.
+	// A complete turn should have some, an incomplete one none.
+	TextAfter *bool `yaml:"text_after,omitempty"`
 	// Absent inverts the expectation: it passes only when no event of this type
 	// arrives before the WithinMS budget expires, and fails as soon as one does.
 	// It matches on event type only, so no content check may accompany it.
@@ -805,11 +876,34 @@ func (e *Expectation) validate() error {
 	}
 	// An absent expectation matches on event type only: a content or call check
 	// describes an event that must arrive, which contradicts absence.
-	if e.Absent && (e.TextContains != "" || e.TextExcludes != "" || e.Eval != "" ||
-		e.Name != "" || e.Args != nil || e.hasCalls) {
+	if e.Absent && e.checksContent() {
 		return errAbsentWithCheck
 	}
-	return e.normalizeCalls()
+	return errors.Join(e.validateMarker(), e.normalizeCalls())
+}
+
+// checksContent reports whether the expectation checks anything of the event
+// beyond its type.
+func (e *Expectation) checksContent() bool {
+	return e.TextContains != "" || e.TextExcludes != "" || e.Eval != "" ||
+		e.Name != "" || e.Args != nil || e.hasCalls || e.marksAnything()
+}
+
+// validateMarker checks what a marker expectation asks for: a meaning the
+// emitter has a name for, and an event carrying a marker at all.
+func (e *Expectation) validateMarker() error {
+	if e.Marker != "" && !markerMeanings[e.Marker] {
+		return fmt.Errorf("%w: %s", errUnknownMarker, e.Marker)
+	}
+	if e.marksAnything() && e.Event != EventLLMMarker {
+		return fmt.Errorf("%w: %s", errMarkerCheckOnOtherEvent, e.Event)
+	}
+	return nil
+}
+
+// marksAnything reports whether the expectation checks a marker at all.
+func (e *Expectation) marksAnything() bool {
+	return e.Marker != "" || e.MarkerFirst != nil || e.Markers != nil || e.TextAfter != nil
 }
 
 // normalizeCalls resolves an expectation's expected tool calls into Calls: the

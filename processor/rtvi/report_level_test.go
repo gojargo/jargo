@@ -191,7 +191,7 @@ func TestObserverReportLevelPerFunction(t *testing.T) {
 // trusted, server-side source raises it.
 func TestObserverConfigureRaisesLevelAtRuntime(t *testing.T) {
 	configure := rtvi.NewConfigureObserverFrame(
-		map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportFull}, nil)
+		map[string]rtvi.FunctionCallReportLevel{"*": rtvi.ReportFull}, nil, nil)
 	msgs := observerHarness(t, rtvi.DefaultObserverParams(), weatherCall(), configure, weatherCall())
 
 	if len(msgs) != 2 {
@@ -209,7 +209,7 @@ func TestObserverConfigureRaisesLevelAtRuntime(t *testing.T) {
 // TestObserverConfigureNilLeavesLevelUnchanged checks an unset field leaves the
 // observer's current configuration alone.
 func TestObserverConfigureNilLeavesLevelUnchanged(t *testing.T) {
-	msgs := observerHarness(t, levels(rtvi.ReportName), rtvi.NewConfigureObserverFrame(nil, nil), weatherCall())
+	msgs := observerHarness(t, levels(rtvi.ReportName), rtvi.NewConfigureObserverFrame(nil, nil, nil), weatherCall())
 
 	if len(msgs) != 1 {
 		t.Fatalf("expected one message, got %+v", msgs)
@@ -232,7 +232,7 @@ func TestObserverVADUserSpeaking(t *testing.T) {
 	}
 
 	on := true
-	queue := append([]frames.Frame{rtvi.NewConfigureObserverFrame(nil, &on)}, speaking...)
+	queue := append([]frames.Frame{rtvi.NewConfigureObserverFrame(nil, &on, nil)}, speaking...)
 	msgs := observerHarness(t, rtvi.DefaultObserverParams(), queue...)
 	if len(msgs) != 2 ||
 		msgs[0].Type != rtvi.TypeVADUserStarted || msgs[1].Type != rtvi.TypeVADUserStopped {

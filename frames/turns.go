@@ -239,6 +239,39 @@ func NewLLMMarkerFrame(marker string) *LLMMarkerFrame {
 	}
 }
 
+// LLMMarkerResponseFrame is what a marker-reading LLM service made of one whole
+// response: the marker it found, what that meant, and the text the model
+// produced before anything was held back.
+//
+// It is pushed when the response ends, behind the LLMMarkerFrame and the spoken
+// text. It is a diagnostic, for a consumer checking how well the model follows
+// the marker protocol, and plays no part in the conversation. It is a data frame.
+type LLMMarkerResponseFrame struct {
+	BaseDataFrame
+	// Raw is the response as the model produced it, markers included.
+	Raw string
+	// Marker is the marker found, or empty when the response carried none.
+	Marker string
+	// Kind is what the marker meant, in the emitter's own vocabulary, for a
+	// consumer that should not depend on the marker text, which is configurable.
+	// The turn-completion protocol uses "complete", "short" and "long".
+	Kind string
+	// Markers are every marker the emitter recognizes, so a consumer can find
+	// them in Raw without knowing how the emitter was configured.
+	Markers []string
+}
+
+// NewLLMMarkerResponseFrame builds an LLMMarkerResponseFrame.
+func NewLLMMarkerResponseFrame(raw, marker, kind string, markers []string) *LLMMarkerResponseFrame {
+	return &LLMMarkerResponseFrame{
+		BaseDataFrame: NewBaseDataFrame("LLMMarkerResponseFrame"),
+		Raw:           raw,
+		Marker:        marker,
+		Kind:          kind,
+		Markers:       markers,
+	}
+}
+
 // LLMConfigureOutputFrame configures how an LLM service produces output. It
 // tells the service to stamp the tokens it emits so a TTS service downstream
 // passes them through instead of speaking them: the reply is added to the
@@ -293,6 +326,7 @@ var (
 	_ ControlFrame = (*VADParamsUpdateFrame)(nil)
 	_ ControlFrame = (*UserTurnInferenceCompletedFrame)(nil)
 	_ DataFrame    = (*LLMMarkerFrame)(nil)
+	_ DataFrame    = (*LLMMarkerResponseFrame)(nil)
 	_ DataFrame    = (*LLMConfigureOutputFrame)(nil)
 	_ DataFrame    = (*LLMMessagesAppendFrame)(nil)
 )
