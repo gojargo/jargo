@@ -18,7 +18,9 @@
 //	within_ms: <int>         latency budget, measured from the turn's user input
 //	text_contains: <str>     substring check on the event's text, case-sensitive
 //	eval: <str>              criterion an LLM judge checks the bot's reply against
-//	                         (llm_response and tts_response, which carry its text)
+//	                         (llm_response and tts_response, which carry its text),
+//	                         or, on function_call, the call itself by name and args
+//	text_excludes: <str>     the reverse of text_contains: the text must not hold it
 //	name: <str>              for function_call: the tool the call must be to
 //	args: <mapping>          for function_call: an argument subset the call must carry
 //	calls: <list>            for function_call: several calls, in any order
@@ -226,10 +228,11 @@ const (
 	EventVADUserStoppedSpeaking = "vad_user_stopped_speaking"
 )
 
-// judgeableEvents carry text the bot itself produced, which is the only thing a
-// judge can sensibly grade. A criterion on anything else (a user transcript, a
-// tool call, a speaking signal) draws a warning: the test controls the user's
-// input, so judging it costs a round trip and tells you nothing.
+// judgeableEvents carry text the bot itself produced, which a judge grades as a
+// reply. A function_call is judged too, but as a call rather than as text, so it
+// is not one of these. A criterion on anything else (a user transcript, a
+// speaking signal) draws a warning: the test controls the user's input, so
+// judging it costs a round trip and tells you nothing.
 //
 //nolint:gochecknoglobals // fixed lookup table
 var judgeableEvents = map[string]bool{
@@ -396,6 +399,12 @@ type Expectation struct {
 	// Eval, when set, is a natural-language criterion an LLM judge checks the
 	// bot's reply against. Applies to llm_response and tts_response, the two
 	// events carrying text the bot itself produced.
+	//
+	// On a function_call the criterion is about the call instead: each call the
+	// expectation matches is put to the judge by name and arguments, with the
+	// conversation so far as context, which is how a scenario checks what Args
+	// cannot match verbatim. A call is not a partial reply, so the verdict is
+	// yes or no and the first rejected call fails the expectation.
 	Eval string `yaml:"eval,omitempty"`
 	// Name is the single-call shorthand for Calls: the tool name a function_call
 	// event must match.
@@ -620,9 +629,10 @@ func (e *Expectation) validate() error {
 	if e.Event == "" {
 		return errNoEvent
 	}
-	if e.Eval != "" && !judgeableEvents[e.Event] {
-		slog.Warn("eval: a judge criterion is only meaningful on an event carrying the bot's own text",
-			"event", e.Event, "judgeable", []string{EventLLMResponse, EventTTSResponse})
+	if e.Eval != "" && !judgeableEvents[e.Event] && e.Event != EventFunctionCall {
+		slog.Warn("eval: a judge criterion is only meaningful on an event carrying the bot's own "+
+			"text, or on a function call, where the call itself is what is judged",
+			"event", e.Event, "judgeable", []string{EventLLMResponse, EventTTSResponse, EventFunctionCall})
 	}
 	// An absent expectation matches on event type only: a content or call check
 	// describes an event that must arrive, which contradicts absence.

@@ -370,13 +370,19 @@ func (s *session) handshake(ctx context.Context) error {
 }
 
 // requiredReportLevel is the least a bot has to report for this scenario's
-// assertions to be checkable: everything when a call's arguments are asserted,
-// the name when only the name is, and nothing more than the default when the
-// scenario merely asserts that a call happened.
+// assertions to be checkable: everything when a call's arguments are asserted or
+// a judge is asked about the call, the name when only the name is asserted, and
+// nothing more than the default when the scenario merely asserts that a call
+// happened.
 func (s *session) requiredReportLevel() (rtvi.FunctionCallReportLevel, bool) {
 	needsName := false
 	for _, turn := range s.scenario.Turns {
 		for _, exp := range turn.Expect {
+			// A judged call is put to the judge by name and arguments, so both
+			// have to be reported whatever the expectation matches on.
+			if exp.Event == EventFunctionCall && exp.Eval != "" {
+				return rtvi.ReportFull, true
+			}
 			for _, call := range exp.Calls {
 				if call.Args != nil {
 					return rtvi.ReportFull, true
@@ -728,6 +734,9 @@ func (s *session) matchAbsent(
 func (s *session) matchFunctionCalls(
 	ctx context.Context, exp Expectation, deadline time.Time, fail func(string) *Failure,
 ) *Failure {
+	if exp.Eval != "" && s.judge == nil {
+		return fail("scenario uses 'eval:' but no judge could be built")
+	}
 	var matched []string
 	for _, want := range exp.Calls {
 		ev, ok := s.nextFunctionCall(ctx, want.Name, deadline)
@@ -745,9 +754,33 @@ func (s *session) matchFunctionCalls(
 		if missing := missingArgs(want.Args, ev.Args); len(missing) > 0 {
 			return fail(fmt.Sprintf("call %q args %v missing expected %v", ev.Function, ev.Args, missing))
 		}
+		if f := s.judgeCall(ctx, ev, exp, fail); f != nil {
+			return f
+		}
 		matched = append(matched, ev.Function)
 	}
 	return nil
+}
+
+// judgeCall puts one matched call to the judge, when the expectation carries a
+// criterion. The judge is asked about the call by name and arguments, with the
+// conversation so far as context, which is how a scenario checks what an
+// argument subset cannot match verbatim. The first call the judge rejects fails
+// the expectation.
+func (s *session) judgeCall(
+	ctx context.Context, ev Event, exp Expectation, fail func(string) *Failure,
+) *Failure {
+	if exp.Eval == "" {
+		return nil
+	}
+	// matchFunctionCalls fails before matching anything when there is no judge.
+	verdict := s.judge.EvaluateCall(ctx, ev.Function, ev.Args, exp.Eval)
+	s.debugf("judge on call %s: %s (%s)", ev.Function, verdict.Verdict, verdict.Reason)
+	if verdict.Passed() {
+		return nil
+	}
+	return fail(fmt.Sprintf("eval %q on call %q: judge said %s: %s",
+		exp.Eval, ev.Function, verdict.Verdict, verdict.Reason))
 }
 
 // nextFunctionCall claims a function_call event for name, where an empty name

@@ -63,6 +63,13 @@ type Judge interface {
 	// cannot answer reports VerdictNo with the reason, rather than failing: an
 	// unavailable judge is a failed assertion, not a broken run.
 	Evaluate(ctx context.Context, criterion string) JudgeVerdict
+	// EvaluateCall judges a tool call the bot made against criterion, by the
+	// call's name and arguments, with the conversation so far as context. It is
+	// how a scenario checks what an argument subset cannot match verbatim.
+	//
+	// A call is not a partial reply, so there is nothing to wait for and the
+	// verdict is yes or no; a judge answering VerdictContinue is read as a no.
+	EvaluateCall(ctx context.Context, name string, args map[string]any, criterion string) JudgeVerdict
 }
 
 // judgeSystemInstruction steers the grading model toward a parseable verdict,
@@ -91,6 +98,32 @@ const judgeSystemInstruction = "You are a strict but fair judge evaluating a con
 	`interim or filler utterance (e.g. "Let me check on that.", a greeting, or an ` +
 	"obviously incomplete fragment) that does not yet contain enough to decide, more " +
 	"text is expected. Do not include any other text, explanation, or markdown."
+
+// judgeCallSystemInstruction steers the grading model for a tool call rather
+// than a reply. The call is the subject and the conversation is context for it,
+// so the verdict is yes or no: under the reply instructions a judge is told to
+// answer "continue" while the bot has not answered yet, which is exactly what
+// the conversation looks like at the moment a call fires.
+const judgeCallSystemInstruction = "You are a strict but fair judge evaluating a function call made by a bot " +
+	"under test in a conversation with a user. The 'user' messages are the user; the " +
+	"'assistant' messages are the bot's replies so far, given only as context for the " +
+	"call. Judge only the call you are asked about, by its name and its arguments, " +
+	"against the given criterion. " +
+	"When the bot spoke its replies, the 'assistant' text is an automatic speech-to-text " +
+	"transcription, so it may contain homophones, misspellings, split or merged words, and " +
+	"missing punctuation; judge it by the intended spoken meaning. " +
+	"Respond ONLY with a JSON object on a single line containing two fields: " +
+	`{"verdict": "yes" | "no", "reason": "<one short sentence>"}. ` +
+	`Use "yes" if the call satisfies the criterion and "no" if it does not. ` +
+	"Do not include any other text, explanation, or markdown."
+
+// judgeCallAsk is the ask for a criterion on a tool call. It names the call and
+// gives its arguments as JSON, so the verdict is about that call rather than
+// about what the bot said around it.
+const judgeCallAsk = "The bot called the function `%s` with arguments `%s`. " +
+	"Does this call satisfy this criterion?\n\n" +
+	"Criterion: %s\n\n" +
+	"Answer yes or no."
 
 // judgeAsk is the transient final user message appended for the judge call. The
 // conversation it refers to is the one the harness built up; this only poses the
@@ -169,17 +202,68 @@ func (j *LLMJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict 
 	return v
 }
 
+// EvaluateCall judges a tool call the bot made, in the conversation so far. The
+// verdict is cached on the call as well as the criterion, so two calls of the
+// same tool with different arguments are judged separately.
+func (j *LLMJudge) EvaluateCall(
+	ctx context.Context, name string, args map[string]any, criterion string,
+) JudgeVerdict {
+	encoded, err := json.Marshal(argsOrEmpty(args))
+	if err != nil {
+		encoded = []byte("{}")
+	}
+	ask := fmt.Sprintf(judgeCallAsk, name, encoded, criterion)
+	messages := j.convo.Messages()
+	key := cacheKey(ask, messages)
+
+	j.mu.Lock()
+	v, cached := j.cache[key]
+	j.mu.Unlock()
+	if cached {
+		return v
+	}
+
+	v = j.ask(ctx, judgeCallSystemInstruction, ask, messages)
+	// A call is not a partial reply, so there is nothing more to wait for.
+	if v.Verdict == VerdictContinue {
+		v.Verdict = VerdictNo
+	}
+
+	j.mu.Lock()
+	j.cache[key] = v
+	j.mu.Unlock()
+
+	return v
+}
+
+// argsOrEmpty is the call's arguments, or an empty object for a call that
+// carried none, so the judge is always shown the same shape.
+func argsOrEmpty(args map[string]any) map[string]any {
+	if args == nil {
+		return map[string]any{}
+	}
+	return args
+}
+
 // callJudge is a single round-trip over the conversation plus a verdict ask.
 func (j *LLMJudge) callJudge(ctx context.Context, criterion string, messages []frames.Message) JudgeVerdict {
+	return j.ask(ctx, judgeSystemInstruction, fmt.Sprintf(judgeAsk, criterion), messages)
+}
+
+// ask puts one question to the judge model over the conversation, under the
+// instructions the question calls for.
+func (j *LLMJudge) ask(
+	ctx context.Context, instruction, question string, messages []frames.Message,
+) JudgeVerdict {
 	// Copy the conversation and append a transient verdict ask, so neither the
 	// ask nor the judge's answer ever lands in the persistent one.
-	convo := frames.NewLLMContext(judgeSystemInstruction)
+	convo := frames.NewLLMContext(instruction)
 	convo.SetMessages(messages)
-	convo.AddUserMessage(fmt.Sprintf(judgeAsk, criterion))
+	convo.AddUserMessage(question)
 
 	out, err := j.inf.RunInference(ctx, convo, llm.InferenceOptions{
 		MaxTokens:         j.maxTokens,
-		SystemInstruction: judgeSystemInstruction,
+		SystemInstruction: instruction,
 	})
 	if err != nil {
 		slog.Error("eval: judge call failed", "err", err)

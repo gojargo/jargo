@@ -56,6 +56,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A scenario can put a tool call to the judge.** An `eval:` on a
+  `function_call` expectation is now a criterion about the call rather than
+  about the bot's words: each call the expectation matches is put to the judge by
+  name and arguments, with the conversation so far as context, which is how a
+  scenario checks what an `args:` subset cannot match verbatim ("a session about
+  tracing, submitted for the right person"). The judge gets instructions of its
+  own for a call, since a call is not a partial reply: the verdict is yes or no,
+  and a judge answering continue is read as a no. The first rejected call fails
+  the expectation, and a judged call has the bot report its arguments whether or
+  not the scenario matches on them. `eval.Judge` gained `EvaluateCall`, which is
+  a **breaking change** for anything implementing that interface.
+
 - **A scenario can forbid text as well as require it.** An eval expectation
   gained `text_excludes:`, the mirror of `text_contains:`: the matched event's
   text must not hold the substring, which is for what should never reach the

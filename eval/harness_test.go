@@ -156,6 +156,22 @@ func hostWith(t *testing.T, build eval.Bot, body string) eval.Result {
 	return res
 }
 
+// hostWithJudge is host with a judge answering the scenario's criteria.
+func hostWithJudge(t *testing.T, judge eval.Judge, body string) eval.Result {
+	t.Helper()
+	scenario, err := eval.Load(writeScenario(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	res, err := eval.Host(ctx, scenario, buildFakeBot, eval.Options{Judge: judge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
 func TestHarnessTextResponse(t *testing.T) {
 	res := host(t, `
 name: echo
@@ -487,6 +503,7 @@ turns:
 type scriptedJudge struct {
 	verdicts []string
 	calls    int
+	judged   []judgedCall
 }
 
 func (j *scriptedJudge) AddUserMessage(string)      {}
@@ -499,6 +516,22 @@ func (j *scriptedJudge) Evaluate(context.Context, string) eval.JudgeVerdict {
 		v, j.verdicts = j.verdicts[0], j.verdicts[1:]
 	}
 	return eval.JudgeVerdict{Verdict: v, Reason: "(" + v + ")"}
+}
+
+// EvaluateCall answers a call from the same script, and records what it was
+// asked about so a test can assert the call reached the judge.
+func (j *scriptedJudge) EvaluateCall(
+	ctx context.Context, name string, args map[string]any, criterion string,
+) eval.JudgeVerdict {
+	j.judged = append(j.judged, judgedCall{Name: name, Args: args, Criterion: criterion})
+	return j.Evaluate(ctx, criterion)
+}
+
+// judgedCall is one call put to the judge.
+type judgedCall struct {
+	Name      string
+	Args      map[string]any
+	Criterion string
 }
 
 // A turn scheduled from an event waits for it, plus the delay, before sending.
@@ -809,5 +842,90 @@ turns:
 `)
 	if !res.Passed() {
 		t.Fatalf("expected a pass whatever the spacing, got %v", res.Failures)
+	}
+}
+
+// TestHarnessJudgesAFunctionCall covers the criterion on a call rather than on a
+// reply: the judge is asked about the call by name and arguments, which is how a
+// scenario checks what an argument subset cannot match verbatim.
+func TestHarnessJudgesAFunctionCall(t *testing.T) {
+	judge := &scriptedJudge{verdicts: []string{eval.VerdictYes}}
+	res := hostWithJudge(t, judge, `
+name: judged-call
+turns:
+  - user: "what's the weather in Paris?"
+    expect:
+      - event: function_call
+        name: get_weather
+        eval: "asks about a European capital"
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass, got %v", res.Failures)
+	}
+	if len(judge.judged) != 1 {
+		t.Fatalf("the judge saw %d calls, want the one that matched", len(judge.judged))
+	}
+	got := judge.judged[0]
+	if got.Name != "get_weather" || got.Criterion != "asks about a European capital" {
+		t.Errorf("judged %+v, want the matched call and its criterion", got)
+	}
+	if got.Args["city"] != "Paris" {
+		t.Errorf("judged args %v, want the arguments the bot called with", got.Args)
+	}
+}
+
+// A call the judge rejects fails the expectation, naming the call and the reason.
+func TestHarnessReportsARejectedCall(t *testing.T) {
+	res := hostWithJudge(t, &scriptedJudge{verdicts: []string{eval.VerdictNo}}, `
+name: rejected-call
+turns:
+  - user: "what's the weather in Paris?"
+    expect:
+      - event: function_call
+        name: get_weather
+        eval: "asks about somewhere in Antarctica"
+`)
+	if res.Passed() {
+		t.Fatal("the judge rejected the call, so the turn should fail")
+	}
+	if !strings.Contains(res.Failures[0].Reason, `on call "get_weather"`) {
+		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
+	}
+}
+
+// A call is not a partial reply, so there is nothing to wait for: a judge that
+// asks to continue has said no.
+func TestHarnessTreatsContinueOnACallAsNo(t *testing.T) {
+	res := hostWithJudge(t, &scriptedJudge{verdicts: []string{eval.VerdictContinue}}, `
+name: continue-call
+turns:
+  - user: "what's the weather in Paris?"
+    expect:
+      - event: function_call
+        name: get_weather
+        eval: "asks about a European capital"
+`)
+	if res.Passed() {
+		t.Fatal("a call the judge would not pass should fail the turn")
+	}
+}
+
+// A criterion with no judge to answer it is a failed assertion, reported before
+// anything is matched rather than silently passing.
+func TestHarnessReportsAJudgedCallWithNoJudge(t *testing.T) {
+	res := host(t, `
+name: unjudged-call
+turns:
+  - user: "what's the weather in Paris?"
+    expect:
+      - event: function_call
+        name: get_weather
+        eval: "asks about a European capital"
+`)
+	if res.Passed() {
+		t.Fatal("a criterion with no judge should fail")
+	}
+	if !strings.Contains(res.Failures[0].Reason, "no judge") {
+		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
 }

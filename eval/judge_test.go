@@ -272,6 +272,12 @@ func (j *recordingJudge) AddAssistantMessage(text string) {
 
 func (j *recordingJudge) Evaluate(context.Context, string) eval.JudgeVerdict { return j.verdict }
 
+func (j *recordingJudge) EvaluateCall(
+	context.Context, string, map[string]any, string,
+) eval.JudgeVerdict {
+	return j.verdict
+}
+
 // TestJudgeRunsAOneShotInference checks the judge asks for its verdict off to
 // the side of the pipeline, with the instruction that makes it a judge and a
 // bound short enough to keep the answer to a verdict and a reason.
