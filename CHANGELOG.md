@@ -89,6 +89,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and drops it, the way sentence mode reports a word it cannot place when it
   arrives. Another context's held words are left for their own turn.
 
+- **`gpt-6-astra` reasons at its own default.** The Responses services switch
+  reasoning off by default, for latency, on every model that reasons and accepts
+  being told not to. `gpt-6-astra` reasons but takes only a positive effort
+  level and answers `none` with a 400, so every request naming it failed. It is
+  now recognized alongside the o-series as a model to leave at the provider's
+  own default.
+
 - **A tool call the model does not wait on settles where it was made, when
   nothing has happened since.** The assistant aggregator decided from the frame
   alone: every call registered with `CancelOnInterruption` false had its result

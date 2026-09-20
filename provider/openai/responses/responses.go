@@ -153,6 +153,14 @@ var mainlineGPT = regexp.MustCompile(`^gpt-(\d+)`)
 // isOSeries reports whether the model is one of the o-series.
 func isOSeries(model string) bool { return oSeries.MatchString(strings.ToLower(model)) }
 
+// rejectsEffortNone reports whether a reasoning model refuses effort "none",
+// which the API answers with an error rather than ignoring. The reasoning-first
+// o-series and gpt-6-astra accept only a positive effort level, so reasoning
+// cannot be switched off for them.
+func rejectsEffortNone(model string) bool {
+	return isOSeries(model) || strings.HasPrefix(strings.ToLower(model), "gpt-6-astra")
+}
+
 // modelSupportsReasoning classifies a model, and says whether it could tell.
 //
 // Reasoning is the o-series and the mainline gpt series from gpt-5 onward,
@@ -180,17 +188,18 @@ func modelSupportsReasoning(model string) (reasons, known bool) {
 // off it.
 //
 // A configured value is sent as it stands. Nothing configured disables
-// reasoning on every model that reasons and accepts being told not to: the
-// o-series is reasoning-first and refuses "none", and a model that does not
-// reason has no field to set. The default is off rather than the API's own
-// because this is a service for real-time voice, where the thinking happens
-// while somebody is listening to silence.
+// reasoning on every model that reasons and accepts being told not to. Two
+// kinds are left at the provider's own default: the models that reject "none"
+// outright (see rejectsEffortNone), and a model that does not reason, which has
+// no field to set. The default is off rather than the API's own because this is
+// a service for real-time voice, where the thinking happens while somebody is
+// listening to silence.
 func (c Config) reasoningFor() *ReasoningConfig {
 	if c.Reasoning != nil && *c.Reasoning != (ReasoningConfig{}) {
 		r := *c.Reasoning
 		return &r
 	}
-	if reasons, _ := modelSupportsReasoning(c.Model); reasons && !isOSeries(c.Model) {
+	if reasons, _ := modelSupportsReasoning(c.Model); reasons && !rejectsEffortNone(c.Model) {
 		return &ReasoningConfig{Effort: "none"}
 	}
 	return nil

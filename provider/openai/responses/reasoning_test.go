@@ -62,6 +62,16 @@ func TestReasoningIsOmittedWhereItCannotApply(t *testing.T) {
 	}
 }
 
+// TestGPT6AstraIsLeftAtItsOwnDefault covers a model that reasons but accepts
+// only a positive effort level. Sending it "none", as the default off would,
+// has the API refuse the request rather than ignore the value, so every call
+// fails. It is left at the provider's own default instead.
+func TestGPT6AstraIsLeftAtItsOwnDefault(t *testing.T) {
+	if got := mustRequest(t, Config{Model: "gpt-6-astra"}, convo()).Reasoning; got != nil {
+		t.Errorf("gpt-6-astra carries reasoning %+v, want none", got)
+	}
+}
+
 // A configured effort is sent as it stands, on any model.
 func TestConfiguredReasoningWins(t *testing.T) {
 	cfg := Config{Model: "gpt-5.6-terra", Reasoning: &ReasoningConfig{Effort: "high", Summary: "concise"}}
