@@ -164,6 +164,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An ellipsis no longer splits a sentence between its dots.** The sentence
+  aggregator took the second dot of `...` as the text confirming a boundary, so
+  `respect... Vous` came out as `respect..` and a lone `.`, which a provider
+  that validates its input rejects, leaving the turn silent. Punctuation after
+  a candidate boundary is now part of the same mark rather than lookahead. The
+  lookahead also retries a boundary the tokenizer cannot settle at the first
+  character once the following word ends, and never at a partial word, so
+  `Albert I. Do` is not checked before `Douglas` is complete. Whether an
+  ellipsis ends the sentence stays the tokenizer's call.
+
 - **An MCP server is reachable again after its connection dies, and a failed
   call tells the model why.** An MCP session outlives its transport, so a server
   that restarts or times a session out left the client holding a dead one and

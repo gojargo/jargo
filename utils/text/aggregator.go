@@ -2,6 +2,8 @@ package text
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -55,16 +57,43 @@ type Aggregator interface {
 // through when aggregating by token.
 //
 // A sentence boundary is confirmed by lookahead: the mark that could end a
-// sentence is not acted on until the first non-whitespace character after it
-// has arrived. That is what tells "$29." apart from "$29. Next", since only the
-// character following the period says whether the text ended there. Whitespace
-// alone says nothing, because it appears in both.
+// sentence is not acted on until text after it has arrived. That is what tells
+// "$29." apart from "$29. Next", since only what follows the period says whether
+// the text ended there. Whitespace alone says nothing, because it appears in
+// both, and neither does more punctuation: the second dot of "..." is part of
+// the same mark.
 type SimpleAggregator struct {
 	aggregationType frames.AggregationType
 	tokenizer       SentenceTokenizer
 	text            string
-	needsLookahead  bool
+	lookahead       lookaheadState
 }
+
+// lookaheadState tracks the lookahead after a candidate boundary, across
+// chunks, so a clear boundary is emitted early and an unclear one is retried
+// once the following word ends.
+//
+// A clear boundary is emitted at the first character after it: "Hello. N" is
+// released without waiting for "Next ". One the tokenizer cannot resolve at
+// that point is retried only when the following word is complete. Checking a
+// partial word would be wrong: in "Albert I. Douglas" the prefix "Do" could be
+// taken for a sentence starter and split the name after its initial.
+type lookaheadState int
+
+const (
+	// lookaheadIdle means there is no candidate boundary to check.
+	lookaheadIdle lookaheadState = iota
+	// lookaheadAwaitingCharacter means a candidate is waiting for the first
+	// character after it that is neither whitespace nor punctuation.
+	lookaheadAwaitingCharacter
+	// lookaheadAwaitingWord means the first check was made at a character that
+	// does not start a word, such as an opening quote, and the candidate is
+	// waiting for the word itself.
+	lookaheadAwaitingWord
+	// lookaheadInWord means the candidate is waiting for the end of the word
+	// that follows it, to be checked once more there.
+	lookaheadInWord
+)
 
 // NewSimpleAggregator builds an aggregator that groups text by aggregateBy,
 // finding sentence boundaries with tokenizer.
@@ -106,28 +135,105 @@ func (a *SimpleAggregator) Aggregate(text string) []Aggregation {
 
 // checkSentenceWithLookahead reports the sentence the latest character
 // completed, if it completed one. Callers pass the character just appended.
+//
+// Punctuation starts a candidate, and the tokenizer decides whether it really
+// ends a sentence:
+//
+//   - "Hello." or "Hello. " keeps buffering until meaningful text follows.
+//   - "Hello. N" is checked at once and emits "Hello.", where "Dr. N" and
+//     "$29.9" stay buffered as an abbreviation and a decimal.
+//   - "...you and I. D", left unresolved, is retried when the word "Did" ends.
+//     The prefixes in between are not checked: "Do" in "Albert I. Douglas"
+//     could be taken for a sentence starter.
+//   - "...you and I. Did?": the question mark ends the lookahead word and
+//     starts a new candidate. The earlier period is checked first, without the
+//     "?", and then the "?" waits for its own lookahead.
+//
+// A confirmed boundary emits only the text before it; what follows stays in
+// the buffer. After the retry at the end of the word, a candidate is not
+// checked again even if it is still unresolved. Flush returns whatever is left
+// at the end of the response.
 func (a *SimpleAggregator) checkSentenceWithLookahead(r rune) (Aggregation, bool) {
-	if a.needsLookahead {
-		if strings.TrimSpace(string(r)) == "" {
-			// Still whitespace, so nothing has been confirmed yet.
-			return Aggregation{}, false
+	isPunctuation := IsSentenceEnding(r)
+	var (
+		result Aggregation
+		ok     bool
+	)
+
+	// The lookahead asks for a check at the first character after the
+	// candidate and at the end of the following word, not at every character in
+	// between.
+	if a.advanceLookahead(r, isPunctuation) {
+		// For "...I. Did?", check "...I. Did" for the earlier boundary. With the
+		// "?" included, the check that accepts text ending on punctuation could
+		// take the whole buffer. This slice is only for the check; the "?" stays
+		// in the buffer.
+		candidate := a.text
+		if isPunctuation {
+			candidate = a.text[:len(a.text)-utf8.RuneLen(r)]
 		}
-		a.needsLookahead = false
-		end := a.tokenizer.MatchEndOfSentence(a.text)
-		if end <= 0 {
-			// Not a boundary after all; keep accumulating.
-			return Aggregation{}, false
+		if end := a.tokenizer.MatchEndOfSentence(candidate); end > 0 {
+			result = Aggregation{Text: strings.Trim(a.text[:end], " "), Type: frames.AggregationSentence}
+			ok = true
+			// Keep the lookahead text for the next sentence ("N" in "Hello. N").
+			a.text = a.text[end:]
+			a.lookahead = lookaheadIdle
 		}
-		sentence := a.text[:end]
-		a.text = a.text[end:]
-		return Aggregation{Text: strings.Trim(sentence, " "), Type: frames.AggregationSentence}, true
 	}
-	if IsSentenceEnding(r) {
-		// Wait for the next non-whitespace character before deciding.
-		a.needsLookahead = true
+
+	// A trailing "?" in "...I. Did?" needs its own lookahead, whether or not the
+	// check above found a boundary at the earlier period.
+	if isPunctuation {
+		a.lookahead = lookaheadAwaitingCharacter
 	}
-	return Aggregation{}, false
+
+	return result, ok
 }
+
+// advanceLookahead moves the pending candidate on by one character and reports
+// whether the buffer is ready for a tokenizer check.
+//
+// The check is made once at the first character that is neither whitespace nor
+// punctuation, and once more when the word that follows ends. An opening quote
+// or a symbol does not start a word. When the first check finds no boundary:
+//
+//	'I. '      -> awaiting a character
+//	'I. "'     -> awaiting a word (checked at the quote)
+//	'I. "D'    -> in the word (no check)
+//	'I. "Did ' -> idle (retried at the space ending the word)
+func (a *SimpleAggregator) advanceLookahead(r rune, isPunctuation bool) bool {
+	switch a.lookahead {
+	case lookaheadAwaitingCharacter:
+		if unicode.IsSpace(r) || isPunctuation {
+			return false
+		}
+		if isAlnum(r) {
+			a.lookahead = lookaheadInWord
+		} else {
+			a.lookahead = lookaheadAwaitingWord
+		}
+		// An ordinary boundary such as "Hello. N" is emitted at once.
+		return true
+	case lookaheadAwaitingWord:
+		if isAlnum(r) {
+			a.lookahead = lookaheadInWord
+		}
+		return false
+	case lookaheadInWord:
+		// Never retry at a partial word such as "Do" inside "Douglas".
+		if unicode.IsSpace(r) || isPunctuation {
+			a.lookahead = lookaheadIdle
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// isAlnum reports whether r is a letter or a number, the characters a word is
+// made of.
+func isAlnum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 
 // Flush implements Aggregator. Aggregating by token buffers nothing, so there is
 // never anything left.
@@ -149,13 +255,13 @@ func (a *SimpleAggregator) Flush() (Aggregation, bool) {
 // value, and the two are kept apart deliberately.
 func (a *SimpleAggregator) HandleInterruption() {
 	a.text = ""
-	a.needsLookahead = false
+	a.lookahead = lookaheadIdle
 }
 
 // Reset implements Aggregator.
 func (a *SimpleAggregator) Reset() {
 	a.text = ""
-	a.needsLookahead = false
+	a.lookahead = lookaheadIdle
 }
 
 // Text reports what is buffered but not yet complete.
