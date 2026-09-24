@@ -639,7 +639,7 @@ func (b *Base) tracedModelName() string {
 // from the provider's usage shape happens only when metrics are collected.
 func (b *Base) PushTokenUsage(ctx context.Context, u frames.LLMTokenUsage) error {
 	tracing.SetTokenUsage(ctx, u)
-	metrics.RecordTokens(ctx, b.Name(), b.modelName(), u.PromptTokens, u.CompletionTokens)
+	metrics.RecordTokens(ctx, b.TypeName(), b.modelName(), u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
 		Processor: b.Name(), Model: b.modelName(),
 		Value: u,
@@ -746,10 +746,10 @@ func (b *Base) ttfbMetrics() (time.Duration, bool) {
 func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.Duration) {
 	ttfb, hadTTFB := b.ttfbMetrics()
 	model := b.modelName()
-	metrics.RecordProcessing(ctx, "llm", b.Name(), model, processing.Seconds())
+	metrics.RecordProcessing(ctx, "llm", b.TypeName(), model, processing.Seconds())
 	if hadTTFB {
 		span.SetAttributes(attribute.Float64("metrics.ttfb", ttfb.Seconds()))
-		metrics.RecordTTFB(ctx, "llm", b.Name(), model, ttfb.Seconds())
+		metrics.RecordTTFB(ctx, "llm", b.TypeName(), model, ttfb.Seconds())
 	}
 	if !b.MetricsEnabled() {
 		return

@@ -808,7 +808,7 @@ func (b *Base) StartInterruption() { b.startInterruption() }
 // it would have nothing to say about what the model actually did.
 func (b *Base) PushTokenUsage(ctx context.Context, model string, u frames.LLMTokenUsage) error {
 	tracing.SetTokenUsage(ctx, u)
-	metrics.RecordTokens(ctx, b.name, model, u.PromptTokens, u.CompletionTokens)
+	metrics.RecordTokens(ctx, b.typeName, model, u.PromptTokens, u.CompletionTokens)
 	f := frames.NewMetricsFrame(frames.LLMUsageMetricsData{
 		Processor: b.name, Model: model,
 		Value: u,

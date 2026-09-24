@@ -165,7 +165,7 @@ func (t *ttfbTracker) report(ctx context.Context, end time.Time) {
 
 	model := t.model()
 	slog.Debug("stt ttfb", "service", t.svc.Name(), "ttfb", ttfb)
-	metrics.RecordTTFB(ctx, "stt", t.svc.Name(), model, ttfb.Seconds())
+	metrics.RecordTTFB(ctx, "stt", t.svc.TypeName(), model, ttfb.Seconds())
 	if !t.svc.MetricsEnabled() {
 		return
 	}

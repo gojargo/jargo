@@ -34,7 +34,7 @@ func newProcessingMeter(svc *processor.Base, model func() string) *processingMet
 func (m *processingMeter) reportElapsed(ctx context.Context, elapsed time.Duration) {
 	model := m.model()
 	slog.Debug("stt processing time", "service", m.svc.Name(), "elapsed", elapsed)
-	metrics.RecordProcessing(ctx, "stt", m.svc.Name(), model, elapsed.Seconds())
+	metrics.RecordProcessing(ctx, "stt", m.svc.TypeName(), model, elapsed.Seconds())
 	if !m.svc.MetricsEnabled() {
 		return
 	}

@@ -843,7 +843,7 @@ func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, 
 	s.mu.Lock()
 	model := s.model
 	s.mu.Unlock()
-	metrics.RecordSTTAudio(ctx, s.Name(), model, audio.Seconds())
+	metrics.RecordSTTAudio(ctx, s.TypeName(), model, audio.Seconds())
 	s.pushUsageMetrics(ctx, audio)
 }
 

@@ -1271,13 +1271,13 @@ func (b *Base) runTTS(
 // client.
 func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processing time.Duration) {
 	model := b.model()
-	metrics.RecordProcessing(ctx, "tts", b.Name(), model, processing.Seconds())
-	metrics.RecordTTSCharacters(ctx, b.Name(), model, int64(chars))
+	metrics.RecordProcessing(ctx, "tts", b.TypeName(), model, processing.Seconds())
+	metrics.RecordTTSCharacters(ctx, b.TypeName(), model, int64(chars))
 	if m.hadTTFB {
-		metrics.RecordTTFB(ctx, "tts", b.Name(), model, m.ttfb.Seconds())
+		metrics.RecordTTFB(ctx, "tts", b.TypeName(), model, m.ttfb.Seconds())
 	}
 	if m.hadTTFA {
-		metrics.RecordTTFA(ctx, "tts", b.Name(), model, m.ttfa.Seconds())
+		metrics.RecordTTFA(ctx, "tts", b.TypeName(), model, m.ttfa.Seconds())
 	}
 	if !b.MetricsEnabled() {
 		return

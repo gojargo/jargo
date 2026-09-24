@@ -389,7 +389,7 @@ func (s *SegmentService) transcribe(ctx context.Context, audio []byte, rate int)
 	// which the transcript this call produces will open and close.
 	played := pcmDuration(int64(len(audio)), rate)
 	s.tracer.addUsage(frames.STTUsage{AudioSeconds: played.Seconds()})
-	metrics.RecordSTTAudio(ctx, s.Name(), s.modelName(), played.Seconds())
+	metrics.RecordSTTAudio(ctx, s.TypeName(), s.modelName(), played.Seconds())
 	s.pushUsageMetrics(ctx, played)
 
 	start := time.Now()

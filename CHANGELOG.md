@@ -32,6 +32,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The `service` label on metrics names the provider, not the instance.** It
+  carried the processor's instance name, such as `CartesiaTTS#23`, whose number
+  depends on how many processors were built before it. So it changed across
+  restarts and pipeline edits, every value of it was a new series, and a
+  dashboard grouping by it broke as soon as the pipeline did. It is now the
+  processor's type name, `CartesiaTTS`, the same name the tracing spans carry.
+  **Behaviour change:** dashboards, recording rules and alerts matching on the
+  old values need the `#N` suffix dropped. The in-band `MetricsFrame` still
+  names the instance, which is what tells two services of one kind apart in a
+  pipeline.
+
 - **Groq takes its own reasoning control, so `groq.NewLLM` takes its own
   config.** It is now `groq.LLMConfig`, which embeds `chat.LLMConfig` and adds
   `ReasoningEffort`. The values Groq accepts vary by model: `low`, `medium` and
