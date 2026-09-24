@@ -164,6 +164,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A segmented STT service transcribes when the VAD stops, not when the turn
+  ends.** `stt.SegmentService` cut its segments on `UserStartedSpeakingFrame`
+  and `UserStoppedSpeakingFrame`, but a turn strategy that waits for a
+  transcript before ending the turn was then waiting on itself: the turn only
+  closed when its watchdog gave up, with nothing in it, and the transcript that
+  followed opened a second turn. Segments are now cut on
+  `VADUserStartedSpeakingFrame` and `VADUserStoppedSpeakingFrame`. The last
+  second of audio before the VAD reports speech is kept at the start of the
+  segment, since the VAD reports it a little late. Segments are transcribed in
+  order on one background task: an `EndFrame` transcribes what is queued
+  before it goes on, and a `CancelFrame` drops it. **Behaviour change:** a
+  segmented service now needs voice activity detection in the pipeline, from
+  `vadproc` or the user aggregator's VAD; turn frames alone no longer drive it.
+  `vadproc` also logs the start and end of speech at debug level.
+
 - **An ellipsis no longer splits a sentence between its dots.** The sentence
   aggregator took the second dot of `...` as the text confirming a boundary, so
   `respect... Vous` came out as `respect..` and a lone `.`, which a provider

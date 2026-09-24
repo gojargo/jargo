@@ -161,9 +161,9 @@ func TestSegmentServiceTranscribesBufferedSpeech(t *testing.T) {
 	go func() { runDone <- task.Run(context.Background()) }()
 
 	pcm := []byte{1, 2, 3, 4}
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
 	task.QueueFrame(frames.NewInputAudioRawFrame(pcm, 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	select {
 	case got := <-tr.got:
@@ -534,10 +534,9 @@ func TestSegmentServiceSpansOneSegment(t *testing.T) {
 
 	speechStart := time.Now()
 	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, speechStart.Add(200*time.Millisecond)))
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
 	// 16000 bytes of 16-bit mono at 16 kHz is 500 ms of audio.
 	task.QueueFrame(frames.NewInputAudioRawFrame(make([]byte, 16000), 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	select {
 	case <-tr.got:
@@ -594,9 +593,9 @@ func segmentAudio(t *testing.T, svc *stt.SegmentService, tr *fakeTranscriber, pc
 		<-runDone
 	}()
 
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
 	task.QueueFrame(frames.NewInputAudioRawFrame(pcm, 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	select {
 	case got := <-tr.got:

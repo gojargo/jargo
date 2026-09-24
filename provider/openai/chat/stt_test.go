@@ -126,9 +126,9 @@ func TestSTTSegmentTranscribesBufferedSpeech(t *testing.T) {
 	go func() { runDone <- task.Run(context.Background()) }()
 
 	pcm := bytes.Repeat([]byte{0x01, 0x02}, 160)
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
 	task.QueueFrame(frames.NewInputAudioRawFrame(pcm, 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	select {
 	case text := <-transcripts:

@@ -23,13 +23,24 @@ type Transcriber interface {
 // tend to drop or garble the final word when the audio ends that abruptly.
 const DefaultTrailingSilence = 500 * time.Millisecond
 
-// SegmentService buffers a user's audio between UserStartedSpeakingFrame and
-// UserStoppedSpeakingFrame, then transcribes the whole segment with a
-// Transcriber. It requires a turn detector upstream (turntaking.Detector) to
-// delimit segments; without those frames it never transcribes.
+// SegmentService transcribes speech a segment at a time, using the VAD to find
+// the segments: it buffers the audio between VADUserStartedSpeakingFrame and
+// VADUserStoppedSpeakingFrame and hands each segment to a Transcriber whole. It
+// requires voice activity detection in the pipeline; without the VAD frames it
+// never transcribes.
 //
-// A segment ends right where the detector stopped, so each one is padded with
+// The VAD reports the start of speech a little after it began, so while the
+// user is not speaking the service keeps the last second of audio, and a
+// segment starts with it.
+//
+// A segment ends right where the VAD stopped, so each one is padded with
 // trailing silence before transcription and the model hears the end of speech.
+//
+// Transcription runs off the audio path. When the VAD stops, the segment is
+// queued and one background task transcribes the queued segments in order,
+// pushing each transcript as it completes, while audio and other frames keep
+// flowing through the service. An EndFrame transcribes what is queued before it
+// goes on; a CancelFrame drops it.
 type SegmentService struct {
 	*service.Base
 	tr      Transcriber
@@ -48,16 +59,31 @@ type SegmentService struct {
 	// transcribed. It is settable so a caller can turn the padding off.
 	trailingSilence time.Duration
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// buf is the audio of the segment being gathered. While the user is not
+	// speaking it holds at most a second, preRoll bytes.
 	buf      []byte
+	preRoll  int
 	speaking bool
-	wg       sync.WaitGroup
+
+	// queue holds the segments waiting to be transcribed, in the order they
+	// were cut. queued is signaled when one is added.
+	queue  [][]byte
+	queued chan struct{}
+	// finishing tells the segment task to stop once the queue is empty.
+	finishing bool
+	// segmentCancel stops the segment task at once, nil when none is running.
+	segmentCancel context.CancelFunc
+	segmentWG     sync.WaitGroup
 }
 
 // NewSegment builds a segmented STT service named name driven by tr. A non-zero
 // sampleRate overrides the transport's input rate.
 func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
-	s := &SegmentService{tr: tr, cfgRate: sampleRate, trailingSilence: DefaultTrailingSilence}
+	s := &SegmentService{
+		tr: tr, cfgRate: sampleRate, trailingSilence: DefaultTrailingSilence,
+		queued: make(chan struct{}, 1),
+	}
 	if d, ok := tr.(Describer); ok {
 		s.model = d.Metadata().Model
 	}
@@ -70,8 +96,8 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 			Service:  s.TypeName(),
 			Model:    s.modelName(),
 			Settings: s.set.traceSettings(),
-			// A segmented service is handed the speech a turn detector cut out
-			// for it, so voice activity detection is what drives it.
+			// A segmented service transcribes the speech the VAD cut out, so
+			// voice activity detection is what drives it.
 			VADEnabled: true,
 		}
 	})
@@ -159,54 +185,157 @@ func (s *SegmentService) Setup(ctx context.Context, st processor.Setup) error {
 	if s.sampleRate == 0 {
 		s.sampleRate = st.AudioInSampleRate
 	}
+	// One second of 16-bit mono audio.
+	s.preRoll = s.sampleRate * 2
 	return nil
 }
 
-// ProcessFrame buffers speech audio and transcribes each completed segment.
+// ProcessFrame buffers speech audio and queues each completed segment for
+// transcription.
 func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		if err := s.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		return nil
+		s.startSegmentTask(ctx)
+		return s.PushFrame(ctx, f, dir)
+	case *frames.EndFrame:
+		// What was queued is transcribed before the service stops.
+		s.stopSegmentTask(true)
+		return s.PushFrame(ctx, f, dir)
+	case *frames.CancelFrame:
+		s.stopSegmentTask(false)
+		return s.PushFrame(ctx, f, dir)
 	case *frames.STTUpdateSettingsFrame:
 		return s.handleSettings(ctx, fr, dir)
-	case *frames.UserStartedSpeakingFrame:
-		s.mu.Lock()
-		s.buf = nil
-		s.speaking = true
-		s.mu.Unlock()
-		return s.PushFrame(ctx, f, dir)
 	case *frames.InputAudioRawFrame:
-		s.mu.Lock()
-		if s.speaking {
-			s.buf = append(s.buf, fr.Audio...)
-		}
-		s.mu.Unlock()
+		s.bufferAudio(fr.Audio)
 		return s.PushFrame(ctx, f, dir)
-	case *frames.UserStoppedSpeakingFrame:
-		if err := s.PushFrame(ctx, f, dir); err != nil {
-			return err
-		}
-		s.transcribe(ctx)
-		return nil
 	case *frames.VADUserStartedSpeakingFrame:
 		s.ttfb.speechStarted()
 		s.tracer.speechStarted(fr.SpeechStart())
+		s.mu.Lock()
+		s.speaking = true
+		s.mu.Unlock()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.VADUserStoppedSpeakingFrame:
 		s.ttfb.speechEnded(ctx, fr)
-		return s.PushFrame(ctx, f, dir)
+		if err := s.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
+		s.endSegment()
+		return nil
 	case *frames.InterruptionFrame:
 		// The utterance being measured is not the one that matters any more.
 		s.ttfb.interrupted()
 		return s.PushFrame(ctx, f, dir)
 	default:
 		return s.PushFrame(ctx, f, dir)
+	}
+}
+
+// bufferAudio adds audio to the segment being gathered. While the user is
+// speaking the buffer keeps growing; while they are not, only the last second
+// is kept, to cover the delay between the speech starting and the VAD
+// reporting it.
+func (s *SegmentService) bufferAudio(audio []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.buf = append(s.buf, audio...)
+	if !s.speaking && len(s.buf) > s.preRoll {
+		s.buf = append([]byte(nil), s.buf[len(s.buf)-s.preRoll:]...)
+	}
+}
+
+// endSegment closes the segment the VAD just ended and queues it, padded with
+// trailing silence, for the segment task to transcribe.
+func (s *SegmentService) endSegment() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.speaking = false
+	audio := s.buf
+	s.buf = nil
+	// A service that can no longer work cannot transcribe this segment. The
+	// buffered audio is released above rather than growing for the rest of the
+	// session.
+	if !s.Usable() {
+		return
+	}
+	audio = append(audio, silence(s.trailingSilence, s.sampleRate)...)
+	if len(audio) == 0 {
+		return
+	}
+	s.queue = append(s.queue, audio)
+	select {
+	case s.queued <- struct{}{}:
+	default:
+	}
+}
+
+// startSegmentTask starts the task that transcribes queued segments, replacing
+// any still running.
+func (s *SegmentService) startSegmentTask(ctx context.Context) {
+	s.stopSegmentTask(false)
+	taskCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.segmentCancel = cancel
+	s.finishing = false
+	s.mu.Unlock()
+	s.segmentWG.Go(func() { s.segmentTask(taskCtx) })
+}
+
+// stopSegmentTask stops the segment task and waits for it. Draining, the task
+// first transcribes every segment already queued; otherwise they are dropped.
+func (s *SegmentService) stopSegmentTask(drain bool) {
+	s.mu.Lock()
+	cancel := s.segmentCancel
+	s.segmentCancel = nil
+	s.finishing = true
+	if !drain {
+		s.queue = nil
+	}
+	s.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	select {
+	case s.queued <- struct{}{}:
+	default:
+	}
+	if !drain {
+		cancel()
+	}
+	s.segmentWG.Wait()
+	cancel()
+}
+
+// segmentTask transcribes queued segments one at a time, in the order they were
+// cut, until it is told to finish and the queue is empty.
+func (s *SegmentService) segmentTask(ctx context.Context) {
+	for {
+		s.mu.Lock()
+		if len(s.queue) == 0 {
+			finishing := s.finishing
+			s.mu.Unlock()
+			if finishing {
+				return
+			}
+			select {
+			case <-s.queued:
+				continue
+			case <-ctx.Done():
+				return
+			}
+		}
+		audio := s.queue[0]
+		s.queue = s.queue[1:]
+		rate := s.sampleRate
+		s.mu.Unlock()
+		s.transcribe(ctx, audio, rate)
+		if ctx.Err() != nil {
+			return
+		}
 	}
 }
 
@@ -245,60 +374,40 @@ func (s *SegmentService) ServiceMetadataFrame() frames.ServiceMetadata {
 	return mf
 }
 
-// Cleanup waits for any in-flight transcription before tearing down.
+// Cleanup stops the segment task before tearing down.
 func (s *SegmentService) Cleanup(ctx context.Context) error {
-	s.wg.Wait()
+	s.stopSegmentTask(false)
 	s.ttfb.close()
 	s.tracer.close()
 	return s.Base.Cleanup(ctx)
 }
 
-// transcribe hands the buffered segment to the Transcriber on its own goroutine
-// so the input goroutine keeps flowing audio while the request is in flight.
-func (s *SegmentService) transcribe(ctx context.Context) {
-	s.mu.Lock()
-	audio := s.buf
-	rate := s.sampleRate
-	padding := s.trailingSilence
-	s.buf = nil
-	s.speaking = false
-	s.mu.Unlock()
-	if len(audio) == 0 {
-		return
-	}
-	audio = append(audio, silence(padding, rate)...)
-	// A service that can no longer work cannot transcribe this segment. The
-	// buffered audio is released above rather than growing for the rest of the
-	// session.
-	if !s.Usable() {
-		return
-	}
-	s.wg.Go(func() {
-		// The audio handed to the transcriber is what this segment is billed on,
-		// and it is reported against the segment's own span, which the transcript
-		// this call produces will open and close.
-		played := pcmDuration(int64(len(audio)), rate)
-		s.tracer.addUsage(frames.STTUsage{AudioSeconds: played.Seconds()})
-		metrics.RecordSTTAudio(ctx, s.Name(), s.modelName(), played.Seconds())
-		s.pushUsageMetrics(ctx, played)
+// transcribe hands one segment to the Transcriber and pushes its transcript.
+func (s *SegmentService) transcribe(ctx context.Context, audio []byte, rate int) {
+	// The audio handed to the transcriber is what this segment is billed on, and
+	// it is reported before the transcription, against the segment's own span,
+	// which the transcript this call produces will open and close.
+	played := pcmDuration(int64(len(audio)), rate)
+	s.tracer.addUsage(frames.STTUsage{AudioSeconds: played.Seconds()})
+	metrics.RecordSTTAudio(ctx, s.Name(), s.modelName(), played.Seconds())
+	s.pushUsageMetrics(ctx, played)
 
-		start := time.Now()
-		text, err := s.tr.Transcribe(ctx, audio, rate)
-		if err != nil {
-			if ctx.Err() == nil {
-				s.tracer.recordError(err)
-				s.PushError(ctx, "stt transcription failed", err, false)
-			}
-			return
+	start := time.Now()
+	text, err := s.tr.Transcribe(ctx, audio, rate)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.tracer.recordError(err)
+			s.PushError(ctx, "stt transcription failed", err, false)
 		}
-		s.work.reportElapsed(ctx, time.Since(start))
-		if text == "" {
-			return
-		}
-		tf := frames.NewTranscriptionFrame(text, "", frames.NowTimestamp())
-		tf.Finalized = true
-		_ = s.PushFrame(ctx, tf, processor.Downstream)
-	})
+		return
+	}
+	s.work.reportElapsed(ctx, time.Since(start))
+	if text == "" {
+		return
+	}
+	tf := frames.NewTranscriptionFrame(text, "", frames.NowTimestamp())
+	tf.Finalized = true
+	_ = s.PushFrame(ctx, tf, processor.Downstream)
 }
 
 // silence is d of 16-bit mono silence at rate, as the samples a segment is

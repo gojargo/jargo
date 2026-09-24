@@ -48,9 +48,9 @@ func collectSTTUsage(t *testing.T, svc processor.Processor, usageMetrics bool) [
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
 	task.QueueFrame(frames.NewInputAudioRawFrame(make([]byte, 32000), 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	select {
 	case <-done:

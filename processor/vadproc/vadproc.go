@@ -14,6 +14,7 @@ package vadproc
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
@@ -59,6 +60,7 @@ func New(cfg Config) *Processor {
 	// detector and a transcription one downstream, and both are driven by them.
 	p.controller = controller.New(cfg.VAD, controller.Handlers{
 		OnSpeechStarted: func(ctx context.Context) {
+			slog.DebugContext(ctx, "user started speaking", "processor", p.Name())
 			startSecs := p.controller.Params().StartSecs
 			// Taken once, outside the builder, so the frame sent each way
 			// reports the same moment.
@@ -68,6 +70,7 @@ func New(cfg Config) *Processor {
 			})
 		},
 		OnSpeechStopped: func(ctx context.Context) {
+			slog.DebugContext(ctx, "user stopped speaking", "processor", p.Name())
 			stopSecs := p.controller.Params().StopSecs
 			// Taken once, outside the builder, so the frame sent each way
 			// reports the same moment.

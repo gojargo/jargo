@@ -106,7 +106,7 @@ func TestSegmentIsDroppedOnceTheServiceIsUnusable(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
-		if _, ok := f.(*frames.UserStoppedSpeakingFrame); ok {
+		if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
 			select {
 			case stopped <- struct{}{}:
 			default:
@@ -116,9 +116,9 @@ func TestSegmentIsDroppedOnceTheServiceIsUnusable(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
 	task.QueueFrame(frames.NewInputAudioRawFrame([]byte{1, 2, 3, 4}, 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	select {
 	case <-stopped:
@@ -163,17 +163,17 @@ func TestABufferedSegmentIsReleasedRatherThanKept(t *testing.T) {
 	go func() { runDone <- task.Run(context.Background()) }()
 
 	dropped := []byte{9, 9, 9, 9}
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
 	task.QueueFrame(frames.NewInputAudioRawFrame(dropped, 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 	time.Sleep(200 * time.Millisecond)
 
 	// Brought back, the next turn carries its own audio alone.
 	svc.SetUsable(ctx, true)
 	kept := []byte{1, 2, 3, 4}
-	task.QueueFrame(frames.NewUserStartedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
 	task.QueueFrame(frames.NewInputAudioRawFrame(kept, 16000, 1))
-	task.QueueFrame(frames.NewUserStoppedSpeakingFrame())
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
 
 	select {
 	case got := <-tr.got:
