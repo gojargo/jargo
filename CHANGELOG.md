@@ -175,6 +175,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A failed WebSocket dial no longer writes an API key into the log.** The Go
+  HTTP client spells the whole URL out in a dial error, and two providers put
+  their key in the query, so a refused connection, a DNS failure or a TLS
+  problem logged the credential with the error. Gemini Live now sends its key
+  in the `x-goog-api-key` header, as Google's own SDK does, and its URL carries
+  none. `wsutil.Dial` also leaves the query, the user info and the fragment
+  out of the error it returns, keeping the host and the cause, which covers
+  Async, whose WebSocket API takes the key in the query.
+
 - **A segmented STT service transcribes when the VAD stops, not when the turn
   ends.** `stt.SegmentService` cut its segments on `UserStartedSpeakingFrame`
   and `UserStoppedSpeakingFrame`, but a turn strategy that waits for a

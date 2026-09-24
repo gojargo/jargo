@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,15 +82,15 @@ type Connector interface {
 	ModelPath(model string) string
 }
 
-// apiKeyConnector is the standard Gemini Live addressing: the api key travels as
-// a query parameter and the model is named relative to the API.
+// apiKeyConnector is the standard Gemini Live addressing: the api key travels in
+// the x-goog-api-key header and the model is named relative to the API.
 type apiKeyConnector struct {
 	baseURL string
 	apiKey  string
 }
 
 func (c apiKeyConnector) Endpoint(context.Context) (string, http.Header, error) {
-	return c.baseURL + "?key=" + url.QueryEscape(c.apiKey), nil, nil
+	return c.baseURL, http.Header{"X-Goog-Api-Key": {c.apiKey}}, nil
 }
 
 func (apiKeyConnector) ModelPath(model string) string { return "models/" + model }

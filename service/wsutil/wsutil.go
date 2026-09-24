@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
 	"time"
 
 	"github.com/coder/websocket"
@@ -117,6 +118,9 @@ func Adopt(conn *websocket.Conn, readLimit int64) *Conn {
 // response body, and applies readLimit when it is positive. The caller owns the
 // returned connection and must Close it. A handshake the server refused comes
 // back as a *HandshakeError carrying the status.
+//
+// A dial that fails reports the host it tried and why, but never the query: a
+// provider may carry its credential there, and the error ends up in the log.
 func Dial(ctx context.Context, url string, header http.Header, readLimit int64) (*Conn, error) {
 	conn, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
 	status := 0
@@ -127,6 +131,7 @@ func Dial(ctx context.Context, url string, header http.Header, readLimit int64) 
 		}
 	}
 	if err != nil {
+		err = redactDialError(err)
 		if status != 0 {
 			return nil, &HandshakeError{StatusCode: status, Err: err}
 		}
@@ -136,4 +141,27 @@ func Dial(ctx context.Context, url string, header http.Header, readLimit int64) 
 		conn.SetReadLimit(readLimit)
 	}
 	return &Conn{Conn: conn, closeTimeout: DefaultCloseTimeout}, nil
+}
+
+// redactDialError rewrites a dial error so it no longer carries the query of
+// the URL it dialed. The URL is spelled out by the HTTP client in the error
+// text itself, which the library then wraps, so the whole message is rebuilt
+// around the cause rather than the URL replaced in place.
+func redactDialError(err error) error {
+	var ue *neturl.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	u, perr := neturl.Parse(ue.URL)
+	if perr == nil && u.RawQuery == "" && u.User == nil && u.Fragment == "" {
+		return err
+	}
+	// A URL that does not parse is left out altogether, since nothing says
+	// which part of it is safe to show.
+	redacted := ""
+	if perr == nil {
+		u.RawQuery, u.User, u.Fragment = "", nil, ""
+		redacted = u.String()
+	}
+	return fmt.Errorf("websocket dial: %w", &neturl.Error{Op: ue.Op, URL: redacted, Err: ue.Err})
 }

@@ -1,9 +1,11 @@
 package wsutil_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -268,5 +270,38 @@ func TestDialFailureWithoutAHandshakeIsNotPermanent(t *testing.T) {
 	}
 	if wsutil.Permanent(err) {
 		t.Errorf("a dial that never reached a server is treated as permanent: %v", err)
+	}
+}
+
+// A failed dial names the host it tried and why, but not the query, where a
+// provider may carry its credential.
+func TestDialFailureLeavesTheQueryOut(t *testing.T) {
+	_, err := wsutil.Dial(t.Context(), "ws://127.0.0.1:1/v1?api_key=sk-secret&version=v1", nil, 0)
+	if err == nil {
+		t.Fatal("dial to a closed port succeeded")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "sk-secret") || strings.Contains(msg, "api_key") {
+		t.Fatalf("error carries the query: %s", msg)
+	}
+	if !strings.Contains(msg, "127.0.0.1:1") {
+		t.Fatalf("error does not name the host: %s", msg)
+	}
+	if _, ok := errors.AsType[*url.Error](err); !ok {
+		t.Fatalf("error %T is no longer a *url.Error", err)
+	}
+}
+
+// Redacting the URL keeps the cause, so a caller can still tell a dial that
+// was canceled from one that failed.
+func TestDialFailureKeepsItsCause(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := wsutil.Dial(ctx, "ws://127.0.0.1:1/v1?key=sk-secret", nil, 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
+	}
+	if strings.Contains(err.Error(), "sk-secret") {
+		t.Fatalf("error carries the query: %v", err)
 	}
 }
