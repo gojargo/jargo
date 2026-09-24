@@ -175,6 +175,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A tool re-declared with a new handler runs the new one.** A toolset that
+  advertised a tool under a name it had advertised before, carrying a different
+  handler, left the old handler registered: the name was still advertised, so
+  it was never dropped, and it was already claimed, so the new handler was
+  skipped. The model was told it was calling the new tool while the old one
+  answered. A handler registered from a toolset is now rebound when the tool
+  carries a different one. The same handler advertised again is left alone, and
+  a handler registered by hand is never replaced.
+
 - **A failed WebSocket dial no longer writes an API key into the log.** The Go
   HTTP client spells the whole URL out in a dial error, and two providers put
   their key in the query, so a refused connection, a DNS failure or a TLS

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"time"
+	"unsafe"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -56,12 +57,18 @@ func (b *Base) forgetUnadvertisedRemovals(advertised map[string]bool) {
 // which handler runs depend on the order two unrelated calls happened in. So
 // does unregistering by hand, or the removal would be undone here on the very
 // next inference and the call would go on being answered.
+//
+// A name the toolset itself registered is rebound when the tool now carries a
+// different handler, so a toolset that re-declares a tool under the same name
+// with a new handler has the new one run. The same handler advertised again is
+// left alone, so a context sent on every turn does not re-register it each
+// time.
 func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 	b.handlersMu.Lock()
-	_, claimed := b.handlers[t.Name]
+	existing, claimed := b.handlers[t.Name]
 	removed := b.unregisteredByHand[t.Name]
 	b.handlersMu.Unlock()
-	if claimed || removed {
+	if removed || (claimed && !existing.fromToolset) {
 		return
 	}
 
@@ -78,6 +85,9 @@ func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 		}
 		h = fn
 	}
+	if claimed && sameHandler(existing.handler, h) {
+		return
+	}
 
 	b.RegisterFunction(t.Name, h, toolCallOptions(t)...)
 	b.handlersMu.Lock()
@@ -89,8 +99,33 @@ func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 	}
 	b.handlersMu.Unlock()
 
+	if claimed {
+		slog.DebugContext(ctx, "rebound an advertised tool to its new handler",
+			"service", b.Name(), "function", t.Name)
+		return
+	}
 	slog.DebugContext(ctx, "registered the handler an advertised tool carries",
 		"service", b.Name(), "function", t.Name)
+}
+
+// sameHandler reports whether a and b are the same function value: the same
+// closure, not merely closures built from the same code.
+//
+// Go does not compare functions, and reflect identifies one only by its code
+// pointer, which every closure of a function literal shares. So a toolset that
+// builds a fresh handler per step from one literal would look unchanged. What
+// does tell two closures apart is the closure itself, which a func value points
+// to and an interface holding one carries as its data word.
+func sameHandler(a, b FunctionCallHandler) bool {
+	return funcData(a) == funcData(b)
+}
+
+// funcData returns the data word of an interface holding h: the closure a func
+// value points to.
+func funcData(h FunctionCallHandler) unsafe.Pointer {
+	var v any = h
+	//nolint:gosec // reads the data word of an interface value, which the runtime lays out as a pair of words
+	return (*[2]unsafe.Pointer)(unsafe.Pointer(&v))[1]
 }
 
 // toolCallOptions turns the call options a tool carries into registration
