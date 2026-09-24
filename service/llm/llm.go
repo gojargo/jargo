@@ -72,6 +72,26 @@ type InferenceOptions struct {
 	// only, ahead of whatever the conversation carries. Empty leaves the
 	// conversation's own instruction to stand alone.
 	SystemInstruction string
+	// ResponseSchema is a JSON schema the reply must follow. A service that can
+	// have its provider enforce it returns JSON text matching the schema. When
+	// the service or its current model cannot enforce one (see
+	// ResponseSchemaSupporter), the schema is left off with a warning. The
+	// schema must satisfy the strictest provider in use: every object lists all
+	// its properties as required and sets additionalProperties to false. Empty
+	// asks for no schema.
+	ResponseSchema json.RawMessage
+}
+
+// ResponseSchemaSupporter is implemented by a service whose provider can hold
+// an inference's reply to a JSON schema. A service that does not implement it
+// cannot, and a schema it is given is left off with a warning.
+type ResponseSchemaSupporter interface {
+	// SupportsResponseSchema reports whether the provider can enforce a schema
+	// at all. An endpoint speaking another provider's API may not.
+	SupportsResponseSchema() bool
+	// ModelSupportsResponseSchema reports whether model can enforce one, on a
+	// provider that can.
+	ModelSupportsResponseSchema(model string) bool
 }
 
 // Inferencer is implemented by a service that can answer a conversation once,

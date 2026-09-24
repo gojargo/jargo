@@ -111,7 +111,8 @@ type LLMService struct {
 	// adapter converts the conversation into the request this endpoint takes.
 	adapter adapter.LLMAdapter[openai.Params, openai.Tool]
 	// How this endpoint departs from OpenAI's own API, fixed at construction.
-	noDeveloperRole bool
+	noDeveloperRole  bool
+	noResponseSchema bool
 }
 
 // Validate reports whether the configuration is usable.
@@ -136,6 +137,9 @@ type Compat struct {
 	// sent as user messages instead, which is what carries an asynchronous
 	// tool's late results to a model that would otherwise reject the role.
 	NoDeveloperRole bool
+	// NoResponseSchema marks an endpoint whose API has no way to hold a reply to
+	// a JSON schema, so an inference given one runs without it.
+	NoResponseSchema bool
 	// Adapter converts the conversation into the request this endpoint takes. It
 	// is for an endpoint that constrains the shape of a conversation beyond what
 	// OpenAI's schema says: such an adapter embeds the OpenAI one and rewrites
@@ -175,11 +179,12 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 		a = &openai.Adapter{}
 	}
 	s := &LLMService{
-		cfg:             cfg,
-		http:            &http.Client{},
-		shaper:          shaper,
-		adapter:         a,
-		noDeveloperRole: c.NoDeveloperRole,
+		cfg:              cfg,
+		http:             &http.Client{},
+		shaper:           shaper,
+		adapter:          a,
+		noDeveloperRole:  c.NoDeveloperRole,
+		noResponseSchema: c.NoResponseSchema,
 	}
 	s.Base = llm.New(c.Name, s, c.Base...)
 	s.Base.SetModel(cfg.Model)
@@ -201,20 +206,21 @@ type (
 )
 
 type chatRequest struct {
-	Model               string         `json:"model"`
-	Messages            []Message      `json:"messages"`
-	Stream              bool           `json:"stream"`
-	StreamOptions       *streamOptions `json:"stream_options,omitempty"`
-	MaxTokens           int            `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int           `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64       `json:"temperature,omitempty"`
-	TopP                *float64       `json:"top_p,omitempty"`
-	FrequencyPenalty    *float64       `json:"frequency_penalty,omitempty"`
-	PresencePenalty     *float64       `json:"presence_penalty,omitempty"`
-	Seed                *int           `json:"seed,omitempty"`
-	ServiceTier         string         `json:"service_tier,omitempty"`
-	Tools               []openai.Tool  `json:"tools,omitempty"`
-	ToolChoice          string         `json:"tool_choice,omitempty"`
+	Model               string                 `json:"model"`
+	Messages            []Message              `json:"messages"`
+	Stream              bool                   `json:"stream"`
+	StreamOptions       *streamOptions         `json:"stream_options,omitempty"`
+	MaxTokens           int                    `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                   `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64               `json:"temperature,omitempty"`
+	TopP                *float64               `json:"top_p,omitempty"`
+	FrequencyPenalty    *float64               `json:"frequency_penalty,omitempty"`
+	PresencePenalty     *float64               `json:"presence_penalty,omitempty"`
+	Seed                *int                   `json:"seed,omitempty"`
+	ServiceTier         string                 `json:"service_tier,omitempty"`
+	Tools               []openai.Tool          `json:"tools,omitempty"`
+	ToolChoice          string                 `json:"tool_choice,omitempty"`
+	ResponseFormat      *openai.ResponseFormat `json:"response_format,omitempty"`
 }
 
 // streamOptions asks for the token counts to be reported on the stream. Without
@@ -563,6 +569,9 @@ func (s *LLMService) RunInference(
 			reqBody.MaxTokens = opts.MaxTokens
 		}
 	}
+	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
+		reqBody.ResponseFormat = openai.JSONSchemaFormat(schema)
+	}
 	body, err := encodeBody(reqBody, s.cfg.Extra)
 	if err != nil {
 		return "", err
@@ -621,4 +630,15 @@ func (s *LLMService) MessagesForLogging(convo *frames.LLMContext) []map[string]a
 // generation span. It implements llm.TraceRenderer.
 func (s *LLMService) ToolsForLogging(schema frames.ToolsSchema) []any {
 	return adapter.ToolsForLogging(s.adapter, schema)
+}
+
+// SupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI's API
+// can hold a reply to a schema; an OpenAI-compatible endpoint whose API cannot
+// says so through Compat.NoResponseSchema.
+func (s *LLMService) SupportsResponseSchema() bool { return !s.noResponseSchema }
+
+// ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI
+// models before gpt-4o-mini and gpt-4o-2024-08-06 cannot enforce a schema.
+func (s *LLMService) ModelSupportsResponseSchema(model string) bool {
+	return openai.ModelSupportsResponseSchema(model)
 }

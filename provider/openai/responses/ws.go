@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/adapter"
+	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -135,7 +136,17 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 func (s *Service) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
+	opts.ResponseSchema = s.CheckResponseSchema(ctx, opts.ResponseSchema)
 	return runInference(ctx, s.cfg, s.http, convo, opts)
+}
+
+// SupportsResponseSchema implements llm.ResponseSchemaSupporter.
+func (s *Service) SupportsResponseSchema() bool { return true }
+
+// ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI
+// models before gpt-4o-mini and gpt-4o-2024-08-06 cannot enforce a schema.
+func (s *Service) ModelSupportsResponseSchema(model string) bool {
+	return openai.ModelSupportsResponseSchema(model)
 }
 
 // Cleanup closes the connection and tears the processor down.

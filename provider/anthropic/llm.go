@@ -2,6 +2,10 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -287,6 +291,13 @@ func (s *Service) RunInference(
 	}
 	// An inference wants an answer, not a tool call, so the toolset is left off.
 	params.Tools = nil
+	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
+		var m map[string]any
+		if err = json.Unmarshal(schema, &m); err != nil {
+			return "", fmt.Errorf("anthropic: response schema: %w", err)
+		}
+		params.OutputConfig.Format = sdk.JSONOutputFormatParam{Schema: m}
+	}
 	msg, err := s.client.Messages.New(ctx, params)
 	if err != nil {
 		return "", llm.AsCompletionTimeout(ctx, err)
@@ -297,6 +308,29 @@ func (s *Service) RunInference(
 		}
 	}
 	return "", nil
+}
+
+// SupportsResponseSchema implements llm.ResponseSchemaSupporter.
+func (s *Service) SupportsResponseSchema() bool { return true }
+
+// modelVersion reads the generation out of a Claude model id: "claude-3-5-sonnet"
+// is 3.5 and "claude-sonnet-4-5" 4.5. A minor version is at most two digits, so
+// a date suffix is not taken for one.
+//
+//nolint:gochecknoglobals // a compiled pattern
+var modelVersion = regexp.MustCompile(`claude(?:-[a-z]+)?-(\d+)(?:-(\d{1,2})(?:[^\d]|$))?`)
+
+// ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter.
+// Structured outputs arrived with the 4.5 models. A model id without a
+// version, such as a preview, is assumed to support them.
+func (s *Service) ModelSupportsResponseSchema(model string) bool {
+	m := modelVersion.FindStringSubmatch(model)
+	if m == nil {
+		return true
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return major > 4 || (major == 4 && minor >= 5)
 }
 
 // prefillSupportedPatterns lists the Claude models that still accept a request

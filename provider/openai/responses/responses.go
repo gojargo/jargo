@@ -243,6 +243,8 @@ type request struct {
 	ServiceTier     string           `json:"service_tier,omitempty"`
 	Reasoning       *ReasoningConfig `json:"reasoning,omitempty"`
 	Tools           []responsesTool  `json:"tools,omitempty"`
+	// Text holds the reply to a JSON schema, when an inference asks for one.
+	Text *textConfig `json:"text,omitempty"`
 	// PreviousResponseID lets the server recall the conversation it already
 	// holds, so Input carries only what is new. The HTTP service never sets it:
 	// over HTTP the API requires Store, while the WebSocket service's cache is
@@ -287,6 +289,23 @@ func (c Config) newRequest(
 // Both services share it: a one-shot inference is a plain request either way,
 // so the connection the WebSocket service holds open for its turns is left to
 // them.
+// textConfig is the Responses API's text block, which is where a reply's
+// format is set.
+type textConfig struct {
+	Format textFormat `json:"format"`
+}
+
+// textFormat holds a reply to a JSON schema. Strict mode needs every object to
+// list all its properties as required and to set additionalProperties to false.
+type textFormat struct {
+	Type   string          `json:"type"`
+	Name   string          `json:"name"`
+	Schema json.RawMessage `json:"schema"`
+	Strict bool            `json:"strict"`
+}
+
+// runInference answers the conversation once. opts.ResponseSchema is the schema
+// the service has already checked it can enforce.
 func runInference(
 	ctx context.Context, cfg Config, client *http.Client,
 	convo *frames.LLMContext, opts llm.InferenceOptions,
@@ -300,6 +319,11 @@ func runInference(
 	body.Stream = false
 	if opts.MaxTokens > 0 {
 		body.MaxOutputTokens = opts.MaxTokens
+	}
+	if len(opts.ResponseSchema) > 0 {
+		body.Text = &textConfig{Format: textFormat{
+			Type: "json_schema", Name: "response", Schema: opts.ResponseSchema, Strict: true,
+		}}
 	}
 	if opts.SystemInstruction != "" {
 		// The Responses API carries the instruction beside the conversation

@@ -3,6 +3,7 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -219,7 +220,7 @@ func TestLLMSwitcherRunInference(t *testing.T) {
 	if gotConvo != convo {
 		t.Error("the model was given a different conversation")
 	}
-	if gotOpts != opts {
+	if !reflect.DeepEqual(gotOpts, opts) {
 		t.Errorf("the model was given options %+v, want %+v", gotOpts, opts)
 	}
 

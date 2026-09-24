@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -132,6 +134,12 @@ func (s *Service) RunInference(
 			cfg["maxOutputTokens"] = opts.MaxTokens
 		}
 	}
+	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
+		if cfg, ok := body["generationConfig"].(map[string]any); ok {
+			cfg["responseMimeType"] = "application/json"
+			cfg["responseJsonSchema"] = schema
+		}
+	}
 	req, err := s.newRequestTo(ctx, body, false)
 	if err != nil {
 		return "", err
@@ -157,6 +165,28 @@ func (s *Service) RunInference(
 		}
 	}
 	return "", nil
+}
+
+// SupportsResponseSchema implements llm.ResponseSchemaSupporter.
+func (s *Service) SupportsResponseSchema() bool { return true }
+
+// modelVersion reads the version out of a Gemini model id: "gemini-2.5-flash"
+// is 2.5 and "gemini-2.0-flash" 2.0.
+//
+//nolint:gochecknoglobals // a compiled pattern
+var modelVersion = regexp.MustCompile(`gemini(?:-[a-z]+)*-(\d+)(?:\.(\d+))?`)
+
+// ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. Gemini
+// takes a JSON schema from the 2.5 models on. A model id without a version is
+// assumed to support it.
+func (s *Service) ModelSupportsResponseSchema(model string) bool {
+	m := modelVersion.FindStringSubmatch(model)
+	if m == nil {
+		return true
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return major > 2 || (major == 2 && minor >= 5)
 }
 
 // genConfig builds the generationConfig block from the configured controls.

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"maps"
+	"regexp"
 
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
@@ -333,4 +334,47 @@ func asMaps(msgs []Message) []map[string]any {
 		out = append(out, got)
 	}
 	return out
+}
+
+// ResponseFormat asks the chat-completions API to hold the reply to a JSON
+// schema.
+type ResponseFormat struct {
+	// Type is "json_schema".
+	Type string `json:"type"`
+	// JSONSchema is the schema and how strictly it is applied.
+	JSONSchema ResponseJSONSchema `json:"json_schema"`
+}
+
+// ResponseJSONSchema is the schema a reply must follow.
+type ResponseJSONSchema struct {
+	// Name labels the schema. The API requires one.
+	Name string `json:"name"`
+	// Schema is the JSON schema itself.
+	Schema json.RawMessage `json:"schema"`
+	// Strict has the API enforce the schema rather than only suggest it.
+	Strict bool `json:"strict"`
+}
+
+// JSONSchemaFormat is the strict response format for schema. Strict mode needs
+// every object to list all its properties as required and to set
+// additionalProperties to false.
+func JSONSchemaFormat(schema json.RawMessage) *ResponseFormat {
+	return &ResponseFormat{
+		Type:       "json_schema",
+		JSONSchema: ResponseJSONSchema{Name: "response", Schema: schema, Strict: true},
+	}
+}
+
+// modelWithoutResponseSchema matches the OpenAI models that predate strict JSON
+// schema replies: gpt-3.5, gpt-4 and gpt-4-turbo, the first gpt-4o snapshot,
+// chatgpt-4o and the o1 previews.
+//
+//nolint:gochecknoglobals // a compiled pattern
+var modelWithoutResponseSchema = regexp.MustCompile(
+	`^(gpt-3\.5|gpt-4($|-)|gpt-4o-2024-05-13|chatgpt-4o|o1-mini|o1-preview)`)
+
+// ModelSupportsResponseSchema reports whether an OpenAI model can enforce a
+// response schema. Models before gpt-4o-mini and gpt-4o-2024-08-06 cannot.
+func ModelSupportsResponseSchema(model string) bool {
+	return !modelWithoutResponseSchema.MatchString(model)
 }

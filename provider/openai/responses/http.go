@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/gojargo/jargo/adapter"
+	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -54,7 +55,17 @@ func (s *HTTPService) GenerateWithTools(ctx context.Context, convo *frames.LLMCo
 func (s *HTTPService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
+	opts.ResponseSchema = s.CheckResponseSchema(ctx, opts.ResponseSchema)
 	return runInference(ctx, s.cfg, s.http, convo, opts)
+}
+
+// SupportsResponseSchema implements llm.ResponseSchemaSupporter.
+func (s *HTTPService) SupportsResponseSchema() bool { return true }
+
+// ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI
+// models before gpt-4o-mini and gpt-4o-2024-08-06 cannot enforce a schema.
+func (s *HTTPService) ModelSupportsResponseSchema(model string) bool {
+	return openai.ModelSupportsResponseSchema(model)
 }
 
 // run issues one turn and feeds its event stream to the state machine.

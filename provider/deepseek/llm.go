@@ -9,5 +9,7 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		BaseURL:         baseURL,
 		DefaultModel:    defaultModel,
 		NoDeveloperRole: true,
+		// DeepSeek's chat API has no JSON schema response format.
+		NoResponseSchema: true,
 	}, cfg)
 }

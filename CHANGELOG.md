@@ -15,6 +15,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A one-shot inference can hold its reply to a JSON schema.**
+  `llm.InferenceOptions` gained `ResponseSchema`, and a service whose provider
+  can enforce it returns JSON text that matches. OpenAI's chat completions get a
+  strict `json_schema` response format and the Responses API the same as its
+  text format; the OpenAI-compatible services inherit it. Anthropic gets a
+  `json_schema` output format and Gemini a JSON reply with
+  `responseJsonSchema`. Strict mode needs every object to list all its
+  properties as required and set `additionalProperties` to false, so that is
+  what a caller passes. A service reports what it can enforce through
+  `llm.ResponseSchemaSupporter`: DeepSeek's API has no schema type, and OpenAI
+  models before gpt-4o-mini and gpt-4o-2024-08-06, Claude models before 4.5 and
+  Gemini models before 2.5 cannot enforce one. A schema that cannot be enforced
+  is left off with a warning and the inference runs without it. An OpenAI-
+  compatible endpoint without schema support says so with
+  `chat.Compat.NoResponseSchema`. **Breaking:** `InferenceOptions` is no longer
+  comparable with `==`, since it now holds a `json.RawMessage`.
+
 - **Seven provider settings that had no way through.** `rime.Config` gained
   `NoTextNormalization`, which leaves numbers, dates and abbreviations as
   written on the mist models. `smallest.Config` gained `MathNotation`, which has
