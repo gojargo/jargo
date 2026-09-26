@@ -65,9 +65,9 @@ const (
 	// will ever match, an empty side of the diff or a lone <break/>: finish the
 	// segment and try the whole word again on the next one.
 	hopExhausted
-	// hopNoMatch means the word does not belong here: step past punctuation at
-	// the start of the segment and stop, without moving the cursors into the
-	// other two texts.
+	// hopNoMatch means nothing here matches the word, usually a symbol the
+	// provider reports differently from the text. Step every cursor past the
+	// next run of punctuation, which the word stands for, and stop.
 	hopNoMatch
 )
 
@@ -76,7 +76,8 @@ const (
 type hop struct {
 	kind hopKind
 	// segChars is how many runes to move forward in this segment: the length of
-	// the match for hopPlaced, or a step past leading punctuation for hopNoMatch.
+	// the match for hopPlaced, or a step past the next run of punctuation for
+	// hopNoMatch.
 	// The other two leave it at 0 because they finish the whole segment anyway.
 	segChars int
 	// wordChars is how many runes of the word this segment used up, and so how
@@ -215,16 +216,33 @@ func buildSegments(ttsText, originalText string) []textSegment {
 	return segments
 }
 
-// wordVariants returns word, then word with any punctuation at its end removed.
+// wordVariants returns word, then with its last mark removed, then with every
+// trailing mark removed.
+//
 // A synthesizer can add punctuation the text it was given never had, reading a
 // list item "my account" as a sentence and reporting "account.". Matching tries
-// the word as it arrived first, then the trimmed form.
+// the word as it arrived first, then the trimmed forms.
+//
+// Dropping only the added mark comes before dropping them all, so the marks the
+// text does have are still matched: "images:." lands past the colon in
+// "images:", and "---." keeps something to match at all. The variants are tried
+// in order and empty ones are skipped.
 func wordVariants(word string) []string {
-	trimmed := stripTrailingPunctuation(word)
-	if trimmed == word {
+	allMarksDropped := stripTrailingPunctuation(word)
+	// No trailing mark to drop: "hello" -> ["hello"]
+	if allMarksDropped == word {
 		return []string{word}
 	}
-	return []string{word, trimmed}
+
+	runes := []rune(word)
+	lastMarkDropped := string(runes[:len(runes)-1])
+	// A single trailing mark, so both trims agree: "account." -> ["account.", "account"]
+	if lastMarkDropped == allMarksDropped {
+		return []string{word, allMarksDropped}
+	}
+
+	// Several trailing marks: "images:." -> ["images:.", "images:", "images"]
+	return []string{word, lastMarkDropped, allMarksDropped}
 }
 
 // literalHop compares remainingWord to each candidate, rune for rune.
@@ -432,9 +450,9 @@ func lookaheadHop(segmentRemaining, remainingWord string) *hop {
 // trailing spaces and punctuation: the segment is finished so the word can try
 // the next one. That is checked last, so a word that really does match something
 // like a trailing emoji is found by the passes above first. hopNoMatch
-// otherwise: the word belongs somewhere else, so the cursor only steps past
-// punctuation at the start of the segment, never past anything that was actually
-// spoken.
+// otherwise: the word is taken to stand for the next run of punctuation (see
+// unmatchedSymbolLen), so the cursors step past that run alone, never past a
+// letter or digit.
 func classifyHop(segmentRemaining, remainingWord string) hop {
 	candidates := matchCandidates(segmentRemaining)
 
@@ -458,11 +476,29 @@ func classifyHop(segmentRemaining, remainingWord string) hop {
 		return hop{kind: hopExhausted}
 	}
 
-	// Foreign token: nudge past leading punctuation only, then stop. Unlike the
-	// skip candidates this does not stop at markup. It moves the raw cursor
-	// rather than deciding a match, so there is no tag name it could mistake for
-	// spoken content.
-	return hop{kind: hopNoMatch, segChars: leadingNonAlnumLen(segmentRemaining, false)}
+	return hop{kind: hopNoMatch, segChars: unmatchedSymbolLen(segmentRemaining)}
+}
+
+// unmatchedSymbolLen counts how far a word that matched nothing moves the
+// cursor.
+//
+// Such a word is usually a symbol the provider reports differently from the
+// text, "-" for "→", so it stands for the next run of punctuation, and the
+// cursor steps past that run alone:
+//
+//	" → step two"      -> 2, stops before " step"
+//	" → ### **Title**" -> 2, stops before " ###"
+//
+// Stopping at whitespace is what matters: the symbols after it ("###", "**")
+// arrive as events of their own, and stepping past them would leave those events
+// nothing to match.
+func unmatchedSymbolLen(segmentRemaining string) int {
+	runes := []rune(segmentRemaining)
+	i := len(runes) - len(leftTrimSpace(runes))
+	for i < len(runes) && !isAlnum(runes[i]) && !unicode.IsSpace(runes[i]) {
+		i++
+	}
+	return i
 }
 
 // advanceCursorsTo moves every cursor to newPos within seg, and finishes seg if
@@ -593,13 +629,10 @@ func (m *TextSegmentMap) consumeWord(word string) {
 		seg := &m.segments[m.segIdx]
 
 		switch h.kind {
-		case hopNoMatch:
-			// The word belongs somewhere else entirely (a synthesizer swapping a
-			// symbol, say). Nudge the raw cursor past any leading punctuation so
-			// the next word is not blocked by it, but leave the cursors that mean
-			// something alone: nothing was really spoken here.
-			m.segRawPos += h.segChars
-		case hopPlaced:
+		case hopPlaced, hopNoMatch:
+			// hopNoMatch is a symbol the provider reports differently from the
+			// text ("-" for "→"). It was still spoken, so every cursor moves past
+			// the symbol it stands for, the same as a placed word.
 			m.advanceCursorsTo(seg, m.segRawPos+h.segChars)
 		default:
 			// hopCrosses or hopExhausted: this segment is done either way, and the

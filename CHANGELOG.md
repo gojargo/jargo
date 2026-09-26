@@ -326,6 +326,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   client never reached the socket. It now sends them as JSON, as the Twilio,
   Plivo and Exotel serializers do. RTVI messages are still left off the wire.
 
+- **Word tracking keeps pace with markdown-heavy replies.** Most word-timestamp
+  events of such a reply were rejected as belonging to no frame, and the rest of
+  the reply arrived in large chunks, so word highlighting stalled and then
+  jumped ahead. Two token shapes caused it. A synthesizer that adds a period to
+  the last token of a line (`images:.`, `---.`) had its marks all dropped before
+  matching, so `---.` had nothing left to match; the added mark is now dropped
+  first, on its own. A symbol reported as a different one (`→` as `-`) moved
+  only the raw cursor, past every symbol up to the next letter, so the `###` or
+  `**` tokens that followed had nothing left to match; it now moves every cursor
+  past the next run of punctuation and stops at whitespace.
+
 ## [0.2.0] - 2026-09-18
 
 ### Added

@@ -1808,3 +1808,93 @@ func TestAWordAfterAnUnrepeatedCommaIsConsumedNormally(t *testing.T) {
 		t.Error("the frame did not complete on the last word")
 	}
 }
+
+// assertTracksToTheEnd checks every word is placed where it is, and that the
+// frame completes on the last word and not before: once a frame is
+// force-completed, every word after it is dropped for the rest of the turn.
+func assertTracksToTheEnd(t *testing.T, text string, words []string) {
+	t.Helper()
+	tr := NewWordCompletionTracker(text, text, text)
+	for i, w := range words {
+		if !tr.WordBelongsHere(w) {
+			t.Fatalf("word %d %q rejected", i, w)
+		}
+		complete := tr.AddWord(w)
+		if isLast := i == len(words)-1; complete != isLast {
+			t.Fatalf("word %d %q complete=%v", i, w, complete)
+		}
+	}
+	if got := tr.AccumulatedUserFacingText(); got != text {
+		t.Fatalf("accumulated user-facing text = %q, want %q", got, text)
+	}
+}
+
+// Markdown sent to the synthesizer verbatim, reported the way Cartesia reports
+// it. Cartesia keeps the markdown on each whitespace-separated token ("**General",
+// "Overview**") and appends a period to the last token of every line, even one
+// made only of punctuation ("---."). Every such token must be placed where it is,
+// without the frame ending early.
+func TestTrackerMarkdownTokens(t *testing.T) {
+	t.Run("horizontal rule then heading", func(t *testing.T) {
+		assertTracksToTheEnd(t, "Look:\n\n---\n\n### **Title**\nBody text.",
+			[]string{"Look:.", "---.", "###", "**Title**.", "Body", "text."})
+	})
+
+	t.Run("horizontal rule at frame start", func(t *testing.T) {
+		assertTracksToTheEnd(t, "---\n\n### **Summary**\nThe provided images are comprehensive.",
+			[]string{"---.", "###", "**Summary**.", "The", "provided", "images", "are", "comprehensive."})
+	})
+
+	t.Run("bold label after a line ending in bold", func(t *testing.T) {
+		assertTracksToTheEnd(t, "#### **Week 1 (SY 25/26)**\n- **Monday**:\n  - **ENTREE**: Chicken Sandwich",
+			[]string{
+				"####", "**Week", "1", "(SY", "25/26)**.", "-", "**Monday**:.", "-", "**ENTREE**:",
+				"Chicken", "Sandwich.",
+			})
+	})
+
+	t.Run("bullet with bold label", func(t *testing.T) {
+		assertTracksToTheEnd(t, "- **Structure**: Each day has a designated **ENTREE** (main course).",
+			[]string{
+				"-", "**Structure**:", "Each", "day", "has", "a", "designated", "**ENTREE**", "(main",
+				"course).",
+			})
+	})
+
+	t.Run("frame from the log", func(t *testing.T) {
+		text := "Below is a detailed description of the content across the images:\n\n---\n\n" +
+			"### **General Overview**\n" +
+			"- **Purpose**: These menus are designed for elementary and high school " +
+			"students, offering a variety of meals each day."
+		words := []string{
+			"Below", "is", "a", "detailed", "description", "of", "the", "content", "across",
+			"the", "images:.", "---.", "###", "**General", "Overview**.", "-", "**Purpose**:",
+			"These", "menus", "are", "designed", "for", "elementary", "and", "high", "school",
+			"students,", "offering", "a", "variety", "of", "meals", "each", "day.",
+		}
+		assertTracksToTheEnd(t, text, words)
+	})
+}
+
+// A symbol token that matches nothing must not jump over symbols still to come.
+// A synthesizer can report a symbol other than the one it was given (ElevenLabs
+// reports "→" as "-"), so the token is accepted without being placed. The cursor
+// may step past the unmatched symbol, but not past whitespace into the symbol
+// tokens that follow it ("###", "-"). Those arrive as their own events, and once
+// the cursor is past them they no longer belong here, so the frame would be
+// force-completed and every later word of the turn dropped.
+func TestTrackerUnmatchedSymbolStaysPut(t *testing.T) {
+	t.Run("swapped symbol before a heading", func(t *testing.T) {
+		assertTracksToTheEnd(t, "Step one →\n\n### **Step two**\nDone.",
+			[]string{"Step", "one", "-", "###", "**Step", "two**", "Done."})
+	})
+
+	t.Run("swapped symbol before a real one", func(t *testing.T) {
+		assertTracksToTheEnd(t, "Step one → - step two", []string{"Step", "one", "-", "-", "step", "two"})
+	})
+
+	// A letter right after the symbol already stops the step.
+	t.Run("swapped symbol before a word", func(t *testing.T) {
+		assertTracksToTheEnd(t, "Step one → step two", []string{"Step", "one", "-", "step", "two"})
+	})
+}

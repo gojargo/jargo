@@ -1173,3 +1173,87 @@ func TestSpokenFramesSayHowTheyWereAggregated(t *testing.T) {
 		}
 	})
 }
+
+// assertEveryWordReachesTheContext registers sentences as spoken, feeds the
+// words for each, and checks every word produced a TTSTextFrame and the context
+// received every sentence in full.
+func assertEveryWordReachesTheContext(t *testing.T, sentences []string, words [][]string) {
+	t.Helper()
+	seq := newSeq(t, false)
+	for _, text := range sentences {
+		frame := spokenFrame(text)
+		frame.RawText = text
+		seq.RegisterSpoken(frame, "ctx1", text, true, true, false)
+	}
+
+	var contextSpans, dropped []string
+	var pts int64
+	for _, sentence := range words {
+		for _, w := range sentence {
+			pts += 10
+			out := wordFrames(seq.ProcessWord(w, pts, "ctx1", false))
+			if len(out) == 0 {
+				dropped = append(dropped, w)
+			}
+			for _, f := range out {
+				if f.AppendToContext && f.RawText != "" {
+					contextSpans = append(contextSpans, f.RawText)
+				}
+			}
+		}
+	}
+
+	if len(dropped) != 0 {
+		t.Fatalf("dropped words: %q", dropped)
+	}
+	got := strings.Join(strings.Fields(strings.Join(contextSpans, " ")), " ")
+	want := strings.Join(strings.Fields(strings.Join(sentences, " ")), " ")
+	if got != want {
+		t.Fatalf("context received %q\nwant %q", got, want)
+	}
+}
+
+// A markdown-heavy response spoken by Cartesia, several sentences queued.
+// Cartesia keeps the markdown on each token and appends a period to the last
+// token of every line. One misplaced token force-completes its slot, and every
+// later word of the turn is then dropped as unrecognized.
+func TestMarkdownResponseStaysInSync(t *testing.T) {
+	sentences := []string{
+		"Each menu lists food items under categories such as **ENTREE**, **SIDES**, " +
+			"and **SELECTIONS**.",
+		"Below is a detailed description of the content across the images:\n\n---\n\n" +
+			"### **General Overview**\n" +
+			"- **Purpose**: These menus are designed for students, offering meals each day.",
+		"- **Structure**: Each day has a designated **ENTREE** (main course).",
+	}
+	words := [][]string{
+		{
+			"Each", "menu", "lists", "food", "items", "under", "categories", "such", "as",
+			"**ENTREE**,", "**SIDES**,", "and", "**SELECTIONS**.",
+		},
+		{
+			"Below", "is", "a", "detailed", "description", "of", "the", "content", "across",
+			"the", "images:.", "---.", "###", "**General", "Overview**.", "-", "**Purpose**:",
+			"These", "menus", "are", "designed", "for", "students,", "offering", "meals",
+			"each", "day.",
+		},
+		{
+			"-", "**Structure**:", "Each", "day", "has", "a", "designated", "**ENTREE**",
+			"(main", "course).",
+		},
+	}
+	assertEveryWordReachesTheContext(t, sentences, words)
+}
+
+// A swapped symbol followed by more symbol tokens, across two queued sentences.
+// ElevenLabs reports "→" as "-". If the cursor steps past the symbol tokens
+// after it, the next one is rejected, the slot is force-completed, and the
+// following words are dropped as unrecognized.
+func TestUnmatchedSymbolDoesNotDesyncTheTurn(t *testing.T) {
+	sentences := []string{"Step one →\n\n### **Step two**\nDone.", "Then we finish."}
+	words := [][]string{
+		{"Step", "one", "-", "###", "**Step", "two**", "Done."},
+		{"Then", "we", "finish."},
+	}
+	assertEveryWordReachesTheContext(t, sentences, words)
+}
