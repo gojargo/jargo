@@ -66,6 +66,17 @@ func TestSTTEndpoint(t *testing.T) {
 		}
 	})
 
+	t.Run("model is sent as a query parameter", func(t *testing.T) {
+		c := &sttConnector{cfg: STTConfig{APIKey: "k"}.withDefaults()}
+		if got := parseQuery(t, c.endpoint(16000)).Get("model"); got != "grok-voice-transcribe-2.0" {
+			t.Errorf("model = %q, want the default grok-voice-transcribe-2.0", got)
+		}
+		c = &sttConnector{cfg: STTConfig{APIKey: "k", Model: "grok-voice-transcribe-1.0"}.withDefaults()}
+		if got := parseQuery(t, c.endpoint(16000)).Get("model"); got != "grok-voice-transcribe-1.0" {
+			t.Errorf("model = %q, want the configured grok-voice-transcribe-1.0", got)
+		}
+	})
+
 	t.Run("regional language sends its base code", func(t *testing.T) {
 		c := &sttConnector{cfg: STTConfig{APIKey: "k", URL: defaultSTTURL, Language: language.FrenchCA}}
 		if got := parseQuery(t, c.endpoint(16000)).Get("language"); got != "fr" {

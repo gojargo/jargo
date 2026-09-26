@@ -87,6 +87,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and a transcript came back as invented "User:" lines after it. A configured
   `Instructions` string is unaffected.
 
+- **xAI STT names its model, and defaults to `grok-voice-transcribe-2.0`.**
+  `grok.STTConfig` gained `Model`, sent on the session URL and reported on the
+  service's metadata, where the metrics and cost tracking read it. No model was
+  sent before, so xAI used its server default, `grok-voice-transcribe-1.0`.
+  **Behaviour change:** to keep the previous model, set
+  `Model: "grok-voice-transcribe-1.0"`.
+
 ### Added
 
 - **A bot can report the markers its model emits, and a scenario can assert on

@@ -27,6 +27,8 @@ const (
 	// defaultSTTEncoding is signed 16-bit little-endian PCM, the format the
 	// pipeline carries.
 	defaultSTTEncoding = "pcm"
+	// defaultSTTModel is the transcription model sent when none is configured.
+	defaultSTTModel = "grok-voice-transcribe-2.0"
 	// sttUserAgent identifies the client to xAI on the handshake.
 	sttUserAgent = "xAI/1.0 (integration=jargo)"
 )
@@ -62,6 +64,8 @@ type STTConfig struct {
 	// URL overrides the transcription WebSocket endpoint; empty uses the hosted
 	// endpoint.
 	URL string
+	// Model is the transcription model; empty uses "grok-voice-transcribe-2.0".
+	Model string
 	// Encoding is the audio encoding ("pcm", "mulaw" or "alaw"); empty uses
 	// "pcm", signed 16-bit little-endian.
 	Encoding string `validate:"omitempty,oneof=pcm mulaw alaw"`
@@ -105,13 +109,22 @@ func (c STTConfig) Validate() error {
 
 // NewSTT builds an xAI streaming speech-to-text service.
 func NewSTT(cfg STTConfig) *stt.StreamService {
-	if cfg.URL == "" {
-		cfg.URL = defaultSTTURL
-	}
-	if cfg.Encoding == "" {
-		cfg.Encoding = defaultSTTEncoding
-	}
+	cfg = cfg.withDefaults()
 	return stt.NewStream("XAISTT", &sttConnector{cfg: cfg}, cfg.SampleRate)
+}
+
+// withDefaults fills in what the configuration leaves unset.
+func (c STTConfig) withDefaults() STTConfig {
+	if c.URL == "" {
+		c.URL = defaultSTTURL
+	}
+	if c.Encoding == "" {
+		c.Encoding = defaultSTTEncoding
+	}
+	if c.Model == "" {
+		c.Model = defaultSTTModel
+	}
+	return c
 }
 
 type sttConnector struct {
@@ -120,7 +133,7 @@ type sttConnector struct {
 
 // Metadata reports xAI's time-to-final-segment latency to downstream processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.XAITTFSP99)}
+	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.XAITTFSP99), Model: c.cfg.Model}
 }
 
 // Connect opens a transcription session. The session is configured entirely
@@ -144,6 +157,7 @@ func (c *sttConnector) endpoint(sampleRate int) string {
 	q.Set("sample_rate", strconv.Itoa(sampleRate))
 	q.Set("encoding", c.cfg.Encoding)
 	query.SetStrOpt(q, "language", c.cfg.Language.BaseCode())
+	query.SetStrOpt(q, "model", c.cfg.Model)
 	query.SetBoolTrue(q, "interim_results", c.cfg.InterimResults)
 	query.SetIntOpt(q, "endpointing", c.cfg.Endpointing)
 	query.SetBoolOpt(q, "multichannel", c.cfg.Multichannel)
