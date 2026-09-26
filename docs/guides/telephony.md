@@ -206,6 +206,28 @@ For menu navigation, `processor/ivr` handles the traversal, and
 `processor/voicemail` detects an answering machine so the bot does not hold a
 conversation with a recording.
 
+The voicemail detector listens to what the other side says and asks a
+classifier (see `classifier/llm` and `classifier/jev`) whether a person answered.
+It sits after the STT service, and its gate after the TTS service: the gate holds
+the bot's speech back until the verdict, so a greeting is never talked over. The
+verdict acts once the caller has been quiet for `DecisionTimeout`, since "hi,
+this is Sam" is how a person answers and how a greeting starts. A voicemail
+verdict drops the held speech, interrupts the bot, keeps any further input from
+the conversation, and raises `on_voicemail_detected` once the greeting has been
+quiet for `VoicemailResponseDelay`, so the handler can leave a message:
+
+```go
+detector, err := voicemail.New(voicemail.Config{Classifier: c})
+if err != nil {
+    return err
+}
+events.OnSignal(detector.Events(), voicemail.EventVoicemailDetected, func(ctx context.Context) {
+    _ = detector.PushFrame(ctx, frames.NewTTSSpeakFrame("Please call us back."), processor.Downstream)
+})
+
+pipe := pipeline.New(in, stt, detector.Detector(), userAgg, llm, tts, detector.Gate(), out, assistantAgg)
+```
+
 ## Practical notes
 
 - **8 kHz µ-law hurts STT accuracy.** Expect a real drop versus wideband audio and

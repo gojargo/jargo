@@ -83,8 +83,26 @@ func NewInterruptionWorkerFrame() *InterruptionWorkerFrame {
 	return &InterruptionWorkerFrame{BaseSystemFrame: NewBaseSystemFrame("InterruptionWorkerFrame")}
 }
 
+// WorkerFrame is implemented by the frames that ask the pipeline worker to change
+// the run's lifecycle: EndWorkerFrame, StopWorkerFrame, CancelWorkerFrame and
+// InterruptionWorkerFrame. A processor holding back the conversation's frames
+// still lets these through, since they end or control the run.
+type WorkerFrame interface {
+	Frame
+	isWorkerFrame()
+}
+
+func (*EndWorkerFrame) isWorkerFrame()          {}
+func (*StopWorkerFrame) isWorkerFrame()         {}
+func (*CancelWorkerFrame) isWorkerFrame()       {}
+func (*InterruptionWorkerFrame) isWorkerFrame() {}
+
 // Compile-time interface checks.
 var (
+	_ WorkerFrame     = (*EndWorkerFrame)(nil)
+	_ WorkerFrame     = (*StopWorkerFrame)(nil)
+	_ WorkerFrame     = (*CancelWorkerFrame)(nil)
+	_ WorkerFrame     = (*InterruptionWorkerFrame)(nil)
 	_ ControlFrame    = (*EndWorkerFrame)(nil)
 	_ Uninterruptible = (*EndWorkerFrame)(nil)
 	_ ControlFrame    = (*StopWorkerFrame)(nil)

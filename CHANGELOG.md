@@ -156,6 +156,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the output transport, and skips audio frames before anything else when no
   audio level is reported.
 
+- **The voicemail detector decides with a classifier, after the caller stops.**
+  `processor/voicemail` scanned the pipeline's own LLM output for decision tags
+  and called a config callback. It is now a `voicemail.Detector` placed after
+  the STT service, with a `TTSGate` (from `Gate`) placed after the TTS service.
+  After each transcription the detector asks its `Classifier` whether a person
+  answered or the call went to voicemail, and keeps asking as more is said.
+  Once the caller has been quiet for `DecisionTimeout` (1s by default) the
+  latest answer decides; with no answer at all it assumes a conversation. Until
+  then the gate holds the bot's speech back. A conversation verdict releases
+  it and raises `on_conversation_detected`. A voicemail verdict drops it,
+  interrupts the bot, lets only the frames that end or control the pipeline
+  through, and raises `on_voicemail_detected` once the greeting has been quiet
+  for `VoicemailResponseDelay` (2s by default). Both handlers get the detector
+  as their source, to push frames through. The classifier's metrics are pushed
+  as `MetricsFrame`s. `frames.WorkerFrame` marks the worker frames.
+  **Breaking:** `Config` no longer has `OnVoicemailDetected`,
+  `OnConversationDetected` or `VoicemailDelay`, `New` returns an error, and the
+  gate has to be placed in the pipeline. `Config.LLM` and
+  `Config.CustomSystemPrompt` build an LLM classifier and are deprecated from
+  the start; pass a classifier instead.
+
 ### Added
 
 - **A bot can report the markers its model emits, and a scenario can assert on
