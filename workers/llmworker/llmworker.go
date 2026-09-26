@@ -39,15 +39,14 @@ type Config struct {
 	// something else deciding it is time.
 	Active *bool
 	// Bridged names the bridges this worker's pipeline exchanges frames over.
-	// Non-nil wraps the pipeline in bus edges, and turns off the RTVI processor
-	// a standalone worker gets, since a bridged worker has no client of its own.
+	// Non-nil wraps the pipeline in bus edges.
 	Bridged []string
 	// DeferToolFrames says whether what a tool handler queues is held until
 	// every call in flight has finished. Nil holds it, which is what keeps a
 	// tool's own frames behind the result the model is waiting for.
 	DeferToolFrames *bool
 	// WorkerConfig is the rest of the pipeline worker's configuration. Name,
-	// Active, Bridged and the RTVI setting are taken from the fields above.
+	// Active and Bridged are taken from the fields above.
 	WorkerConfig pipeline.WorkerConfig
 }
 
@@ -115,13 +114,6 @@ func New(cfg Config) *Worker {
 		wc.Active = &inactive
 	}
 	wc.Bridged = cfg.Bridged
-	if wc.EnableRTVI == nil {
-		// A bridged worker exchanges frames with another worker rather than with
-		// a client, so there is nobody for the protocol to talk to.
-		bridged := cfg.Bridged != nil
-		enable := !bridged
-		wc.EnableRTVI = &enable
-	}
 	// Metrics are on unless the caller turned them on itself: a worker running a
 	// model is where the cost and the latency are, and both are worth having by
 	// default.

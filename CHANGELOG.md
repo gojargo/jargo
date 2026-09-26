@@ -337,6 +337,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `**` tokens that followed had nothing left to match; it now moves every cursor
   past the next run of punctuation and stops at whitespace.
 
+- **A bridged pipeline worker no longer reports its frames over RTVI a second
+  time.** A `pipeline.Worker` built with `Bridged` set added an RTVI processor
+  and observer like any other, although it has no client of its own, so every
+  frame from its LLM was reported once in its own pipeline and again when it
+  crossed the bridge: every word of a bridged worker's reply was doubled in the
+  client's LLM text. `WorkerConfig.EnableRTVI` left nil now adds RTVI only when
+  the pipeline is not bridged, which `llmworker` already did on its own. Set it
+  to true to keep RTVI on a bridged worker.
+
 ## [0.2.0] - 2026-09-18
 
 ### Added

@@ -202,8 +202,10 @@ type WorkerConfig struct {
 	HandleFlushFrame *bool
 	// EnableRTVI puts an RTVI processor at the head of the pipeline, and its
 	// observer alongside the others, so a client is told what the session is
-	// doing without the pipeline having to be built for it; nil defaults to
-	// true.
+	// doing without the pipeline having to be built for it. Nil, the default,
+	// adds it unless the pipeline is bridged: a bridged worker has no client of
+	// its own, and its RTVI would report every frame a second time as it
+	// crosses the bridge.
 	//
 	// A pipeline that already contains one keeps its own, and the observer for
 	// it must be given in Observers. Set it false for a pipeline with no client
@@ -1583,7 +1585,7 @@ func (t *Worker) maybeAddRTVI(pipe processor.Processor, cfg *WorkerConfig) proce
 			"a worker adds both itself, so they need not be added by hand")
 		t.rtvi = existing
 		return pipe
-	case !boolOrTrue(cfg.EnableRTVI):
+	case !boolOrDefault(cfg.EnableRTVI, cfg.Bridged == nil):
 		return pipe
 	}
 

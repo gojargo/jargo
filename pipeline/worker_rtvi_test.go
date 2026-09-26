@@ -30,6 +30,41 @@ func TestWorkerRTVICanBeTurnedOff(t *testing.T) {
 	}
 }
 
+// RTVI is on by default for the worker that owns the client, and off for a
+// bridged one.
+func TestWorkerRTVIDefault(t *testing.T) {
+	t.Parallel()
+	on, off := true, false
+	worker := func(bridged []string, enable *bool) *pipeline.Worker {
+		return pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
+			IdleTimeout: -1,
+			Bridged:     bridged,
+			EnableRTVI:  enable,
+		})
+	}
+
+	t.Run("an unbridged worker has RTVI", func(t *testing.T) {
+		if worker(nil, nil).RTVI() == nil {
+			t.Error("the worker added no RTVI processor, want one")
+		}
+	})
+
+	t.Run("a bridged worker has no RTVI", func(t *testing.T) {
+		if worker([]string{}, nil).RTVI() != nil {
+			t.Error("the bridged worker added an RTVI processor, want none")
+		}
+	})
+
+	t.Run("an explicit choice wins", func(t *testing.T) {
+		if worker([]string{}, &on).RTVI() == nil {
+			t.Error("the bridged worker added no RTVI processor, want the one asked for")
+		}
+		if worker(nil, &off).RTVI() != nil {
+			t.Error("the worker added an RTVI processor, want none when it is turned off")
+		}
+	})
+}
+
 func TestWorkerKeepsTheRTVIThePipelineCarries(t *testing.T) {
 	t.Parallel()
 	own := rtvi.NewProcessor()
