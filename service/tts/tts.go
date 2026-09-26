@@ -213,6 +213,10 @@ type Base struct {
 	// transforms reshape a unit for the provider after the filters have
 	// normalized it. See TextTransform.
 	transforms []TextTransformer
+	// skippingPronunciations is whether pronunciation transforms are being
+	// skipped, so the warning is logged once each time they start being
+	// skipped, not for every sentence.
+	skippingPronunciations bool
 	// skipTypes name the ways of grouping text whose units are not spoken. See
 	// SetSkipAggregatorTypes.
 	skipTypes []frames.AggregationType
@@ -418,6 +422,75 @@ type TextTransformer struct {
 	AggregatedBy frames.AggregationType
 	// Transform is the reshaping itself.
 	Transform TextTransform
+
+	// pronunciation marks a transform built by PronunciationTransformIPA, which
+	// is skipped while the provider cannot read pronunciation markup.
+	pronunciation bool
+}
+
+// PronunciationFormatter is an optional interface a Synthesizer implements to
+// take pronunciation hints. FormatPronunciation renders a word's pronunciation,
+// given in IPA, in the provider's markup, and reports false when the provider
+// cannot use it. A Synthesizer that does not implement it takes none.
+type PronunciationFormatter interface {
+	FormatPronunciation(word, ipa string) (string, bool)
+}
+
+// PronunciationSupporter is an optional interface a Synthesizer implements when
+// whether it reads pronunciation markup depends on its model or settings.
+// Pronunciation transforms are skipped while SupportsPronunciations reports
+// false, so their words are spoken as written. It is asked for every text sent,
+// so it follows settings updates. A Synthesizer that does not implement it
+// reads its markup always.
+type PronunciationSupporter interface {
+	SupportsPronunciations() bool
+}
+
+// PronunciationTransformIPA returns a text transform that makes this service say
+// words as IPA describes, applied to every unit.
+//
+// Each word is replaced with the provider's FormatPronunciation output, so the
+// same IPA works with any service that supports it. Words the provider cannot
+// use are reported once and spoken as written. While the provider cannot read
+// pronunciation markup at all (see PronunciationSupporter), the transform is
+// skipped.
+//
+// Register it last among the text transformers. They run in order, and one that
+// runs after it (stripping markdown or symbols, replacing text) can rewrite the
+// markup it inserts, such as Cartesia's <<…>> blocks or an SSML <phoneme> tag,
+// and break the hint:
+//
+//	pronounce := t.PronunciationTransformIPA(map[string]string{"Metformin": "mɛtˈfɔɹmɪn"})
+//	t.SetTextTransformers(stripMarkdown, pronounce) // last, so nothing rewrites its markup
+func (b *Base) PronunciationTransformIPA(pronunciations map[string]string) TextTransformer {
+	format := func(string, string) (string, bool) { return "", false }
+	if f, ok := b.syn.(PronunciationFormatter); ok {
+		format = f.FormatPronunciation
+	}
+	name, _, _ := strings.Cut(b.Name(), "#")
+	t := ttstext.NewPronunciationTransform(pronunciations, format, name)
+	return TextTransformer{
+		AggregatedBy: frames.AnyAggregation,
+		Transform: func(_ context.Context, text string, _ frames.AggregationType) (string, error) {
+			return t.Apply(text), nil
+		},
+		pronunciation: true,
+	}
+}
+
+// canApplyPronunciations reports whether the provider reads pronunciation markup
+// with its current settings, warning once each time it stops.
+func (b *Base) canApplyPronunciations() bool {
+	supported := true
+	if s, ok := b.syn.(PronunciationSupporter); ok {
+		supported = s.SupportsPronunciations()
+	}
+	if !supported && !b.skippingPronunciations {
+		slog.Warn("the service does not read pronunciation markup with its current settings, so "+
+			"pronunciation hints are spoken as written", "service", b.Name(), "model", b.model())
+	}
+	b.skippingPronunciations = !supported
+	return supported
 }
 
 // SetTextTransformers sets the transforms applied to each unit just before the
@@ -446,6 +519,9 @@ func (b *Base) transformText(
 			continue
 		}
 		if t.AggregatedBy != aggregatedBy && t.AggregatedBy != frames.AnyAggregation {
+			continue
+		}
+		if t.pronunciation && !b.canApplyPronunciations() {
 			continue
 		}
 		out, err := t.Transform(ctx, text, aggregatedBy)

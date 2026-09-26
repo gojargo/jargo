@@ -129,6 +129,27 @@ Providers that return word timings also implement `WordTimestamps`, which is wha
 lets `TTSTextFrame`s align to the audio actually being spoken, and therefore what
 lets an interrupted response be recorded truncated rather than whole.
 
+#### Pronunciations
+
+A voice guesses a name or a term it does not know from its spelling.
+`PronunciationTransformIPA` builds a text transform from a word-to-IPA mapping,
+and each provider writes the IPA in its own markup: Cartesia as inline phoneme
+blocks, ElevenLabs as SSML `<phoneme>` tags, Inworld as IPA between slashes and
+Deepgram Aura-2 as an inline pronunciation object. One mapping therefore works
+with any of them. A word the provider cannot use is reported once, when the
+transform is built, and spoken as written.
+
+```go
+pronounce := t.PronunciationTransformIPA(map[string]string{"Metformin": "mɛtˈfɔɹmɪn"})
+t.SetTextTransformers(stripMarkdown, pronounce) // last, so nothing rewrites its markup
+```
+
+Register it last, so no later transform rewrites the markup it inserts. The
+ElevenLabs tags are read only by `eleven_flash_v2` and `eleven_turbo_v2`, and on
+the WebSocket service only with `EnableSSMLParsing` on; with any other setup
+the transform is skipped with a warning and the words are spoken as written.
+Deepgram Flux has no pronunciation markup.
+
 ## Tool calling
 
 Register a handler by name, then advertise the tool on the context:

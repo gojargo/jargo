@@ -3,6 +3,8 @@ package cartesia
 import (
 	"strconv"
 	"strings"
+
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // The markup Cartesia reads inside the text it is given. The helpers below build
@@ -114,4 +116,31 @@ func formatTagNumber(v float64) string {
 		s += ".0"
 	}
 	return s
+}
+
+// FormatPronunciation renders a pronunciation as Cartesia inline phonemes.
+//
+// Cartesia reads <<…>> blocks of |-separated IPA phones, with stress marks
+// directly before the vowel they stress. Each word of the IPA becomes its own
+// block, e.g. <<m|ɛ|t|f|ˈ|ɔ|ɹ|m|ɪ|n>>. The word itself is unused: the block
+// replaces it. It reports false for an empty pronunciation.
+func FormatPronunciation(_, ipa string) (string, bool) {
+	var blocks []string
+	for w := range strings.FieldsSeq(text.NormalizeIPA(ipa)) {
+		blocks = append(blocks, "<<"+strings.Join(text.StressBeforeVowels(text.IPAPhones(w)), "|")+">>")
+	}
+	if len(blocks) == 0 {
+		return "", false
+	}
+	return strings.Join(blocks, " "), true
+}
+
+// FormatPronunciation implements tts.PronunciationFormatter.
+func (s *synthesizer) FormatPronunciation(word, ipa string) (string, bool) {
+	return FormatPronunciation(word, ipa)
+}
+
+// FormatPronunciation implements tts.PronunciationFormatter.
+func (s *httpSynthesizer) FormatPronunciation(word, ipa string) (string, bool) {
+	return FormatPronunciation(word, ipa)
 }

@@ -82,6 +82,9 @@ type RealtimeTTSConfig struct {
 	ApplyTextNormalization string
 	// EnableLogging toggles server-side logging; nil leaves it unset.
 	EnableLogging *bool
+	// EnableSSMLParsing has ElevenLabs parse SSML tags in the text, which is
+	// what lets it read <phoneme> tags; nil leaves it unset.
+	EnableSSMLParsing *bool
 	// PronunciationDictionaryLocators applies the given dictionaries.
 	PronunciationDictionaryLocators []PronunciationDictionaryLocator
 	// WordTimestamps reports per-word timing alongside the audio, which lets the
@@ -237,6 +240,9 @@ func (s *realtimeSynthesizer) endpoint() string {
 	}
 	if s.cfg.ApplyTextNormalization != "" {
 		q.Set("apply_text_normalization", s.cfg.ApplyTextNormalization)
+	}
+	if s.cfg.EnableSSMLParsing != nil {
+		q.Set("enable_ssml_parsing", strconv.FormatBool(*s.cfg.EnableSSMLParsing))
 	}
 	if s.cfg.EnableLogging != nil {
 		q.Set("enable_logging", strconv.FormatBool(*s.cfg.EnableLogging))

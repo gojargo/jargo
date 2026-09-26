@@ -105,6 +105,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `FunctionCallsInProgress` and `WaitForUser`. **Behaviour change:** it is on
   by default; an empty `InterruptedPrompt` turns it off.
 
+- **A voice can be told how to pronounce a word, in IPA.** A TTS service's
+  `PronunciationTransformIPA` builds a text transform from a word-to-IPA
+  mapping, so a voice says names and terms it would otherwise guess from their
+  spelling. Each matched word (whole, case-insensitive, longest first) is
+  replaced with the provider's markup, so one mapping works with any provider
+  that takes it: Cartesia writes IPA as inline phoneme blocks, ElevenLabs as
+  SSML `<phoneme>` tags, Inworld as IPA between slashes, Deepgram Aura-2 as an
+  inline pronunciation object. A word the provider cannot use is reported once,
+  when the transform is built, and spoken as written. ElevenLabs reads phoneme
+  tags only with `eleven_flash_v2` or `eleven_turbo_v2`, and on the WebSocket
+  service only with the new `EnableSSMLParsing`; otherwise the transform is
+  skipped with a warning. Deepgram Flux has no pronunciation markup. A provider
+  takes hints by implementing `tts.PronunciationFormatter`, and says when it
+  can read them with `tts.PronunciationSupporter`. `utils/text` gained the IPA
+  helpers the formatters share (`NormalizeIPA`, `IPAPhones`,
+  `StressBeforeVowels`) and `PronunciationTransform`. Register the transform
+  last, so nothing rewrites the markup it inserts.
+
 ### Changed
 
 - **The `service` label on metrics names the provider, not the instance.** It
