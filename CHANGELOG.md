@@ -313,6 +313,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   every flow transition's result was reaching the model as a developer message
   rather than as the answer to its call.
 
+- **A Telnyx call carries the application messages the pipeline sends.** The
+  Telnyx serializer dropped every `OutputTransportMessageFrame` and
+  `OutputTransportMessageUrgentFrame`, so a custom message addressed to the
+  client never reached the socket. It now sends them as JSON, as the Twilio,
+  Plivo and Exotel serializers do. RTVI messages are still left off the wire.
+
 ## [0.2.0] - 2026-09-18
 
 ### Added

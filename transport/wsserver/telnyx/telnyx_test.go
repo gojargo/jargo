@@ -8,6 +8,7 @@ import (
 	"github.com/gojargo/jargo/audio/g711"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -207,3 +208,45 @@ func TestConvertsBetweenWireAndPipelineRates(t *testing.T) {
 // serialized unwraps a serializer result to the bytes it produced. These tests
 // are about the wire format, not about how the message carrying it is framed.
 func serialized(m wsserver.Message, err error) ([]byte, error) { return m.Data, err }
+
+// TestSerializeOutputTransportMessageIsPassedThrough checks a message the
+// pipeline addresses to the client reaches the socket as its own JSON, whether
+// it was sent normally or urgently.
+func TestSerializeOutputTransportMessageIsPassedThrough(t *testing.T) {
+	cases := []struct {
+		name  string
+		frame frames.Frame
+		want  string
+	}{
+		{"normal", frames.NewOutputTransportMessageFrame(map[string]any{"foo": "bar"}), "bar"},
+		{"urgent", frames.NewOutputTransportMessageUrgentFrame(map[string]any{"foo": "urgent"}), "urgent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ready(t, Config{}, wireRate)
+			msg, err := serialized(s.Serialize(tc.frame))
+			if err != nil {
+				t.Fatalf("Serialize: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(msg, &got); err != nil {
+				t.Fatalf("Serialize produced %q: %v", msg, err)
+			}
+			if len(got) != 1 || got["foo"] != tc.want {
+				t.Fatalf("Serialize = %q, want the message as sent", msg)
+			}
+		})
+	}
+}
+
+// TestSerializeRTVIMessageIsDropped checks an RTVI message is not sent: RTVI is
+// the protocol a browser client speaks, and Telnyx expects its own control
+// messages on this socket.
+func TestSerializeRTVIMessageIsDropped(t *testing.T) {
+	s := ready(t, Config{}, wireRate)
+	msg := rtvi.Message{Label: rtvi.MessageLabel, Type: rtvi.TypeBotReady}
+	out, err := serialized(s.Serialize(frames.NewOutputTransportMessageUrgentFrame(msg)))
+	if err != nil || out != nil {
+		t.Fatalf("Serialize(RTVI message) = %q, %v; want nil, nil", out, err)
+	}
+}

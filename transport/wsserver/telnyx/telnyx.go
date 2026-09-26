@@ -94,6 +94,8 @@ func (c Config) Validate() error {
 // Serializer implements wsserver.Serializer for Telnyx. The stream ID, call
 // control ID and receive encoding are learned from the inbound "start" message.
 type Serializer struct {
+	wsserver.BaseSerializer
+
 	cfg   Config
 	http  *http.Client
 	codec *wsserver.Codec
@@ -143,10 +145,15 @@ func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.hangup()
 		return wsserver.Message{}, nil
+	case frames.OutputTransportMessage:
+		// An application message the pipeline addressed to the client. RTVI is
+		// dropped here: it is the protocol a browser client speaks, and a
+		// provider expecting its own control messages has no use for it.
+		if s.ShouldIgnoreFrame(f) {
+			return wsserver.Message{}, nil
+		}
+		return wsserver.TextMessage(json.Marshal(fr.TransportMessage()))
 	default:
-		// Application messages are among the frames not sent: unlike the other
-		// providers, this wire carries no pass-through JSON, so a message the
-		// pipeline addresses to the client has nowhere to go on a Telnyx call.
 		return wsserver.Message{}, nil
 	}
 }
