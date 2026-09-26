@@ -27,10 +27,6 @@ import (
 type Observer struct {
 	sink *Processor
 
-	mu    sync.Mutex
-	seen  map[uint64]struct{}
-	order []uint64
-
 	// outputMu guards the bot's output state below. A segment is reported when
 	// the bot starts speaking, which is a different frame from the one carrying
 	// the text, so the two can arrive from different goroutines.
@@ -245,11 +241,6 @@ func DefaultObserverParams() ObserverParams {
 	}
 }
 
-// seenCap bounds the ids remembered for deduplication. A frame is reported once
-// per handover, so each is recognized on sight, and only a bounded window has to
-// be kept: by the time an id is evicted the frame has long since left.
-const seenCap = 4096
-
 // NewObserver builds an observer that sends through sink, with the default
 // parameters. Use NewObserverWithParams to report more of a tool call than its
 // id.
@@ -270,7 +261,6 @@ func NewObserverWithParams(sink *Processor, params ObserverParams) *Observer {
 	}
 	o := &Observer{
 		sink:      sink,
-		seen:      make(map[uint64]struct{}, seenCap),
 		params:    params,
 		tokenizer: tok,
 	}
@@ -334,30 +324,36 @@ func (o *Observer) transform(seg BotOutputText) BotOutputText {
 	return seg
 }
 
-// OnPushFrame implements processor.Observer.
+// OnPushFrame implements processor.Observer. The observer is told about every
+// push of a frame, and handles a frame on its first push, except the bot's
+// output, which it handles once that has gone through the output transport.
 func (o *Observer) OnPushFrame(data processor.FramePushed) {
 	f, dir := data.Frame, data.Direction
+	// Frames from explicitly ignored sources are always skipped. A frame leaving
+	// such a branch is pushed on again by the pipeline around it, and that later
+	// push is not its first, so it is skipped too.
+	if o.ignores(data.Source) {
+		return
+	}
 	// A broadcast frame is pushed both ways; report only the downstream copy so
 	// the client is not told twice.
 	if _, broadcast := f.Base().BroadcastSiblingID(); broadcast && dir != processor.Downstream {
 		return
 	}
-	// A segment of the bot's output is reported from the transport that plays
-	// it rather than from the service that produced it, because only the copy
-	// coming out of playback carries the timing of what the caller is hearing.
-	// The earlier handovers are passed over without being recorded, so the frame
-	// is still recognized as new when it comes back out.
-	if !o.claimFrame(f.ID(), awaitsPlayback(f) && !playsOutput(data.Source)) {
+	// Audio frames are the bulk of what a pipeline pushes, and they are only
+	// handled when audio levels are reported.
+	if _, audio := f.(frames.AudioFrame); audio && !o.audioLevelsEnabled() {
 		return
 	}
-	// A branch of the pipeline the client is not meant to see says nothing at
-	// all, whatever the frame is.
-	//
-	// Checked after the frame has been recorded, not before, because a frame is
-	// handed over more than once on its way out: a pipeline pushes what leaves
-	// it onward under its own name, so passing over the branch's handover
-	// without recording it would let the pipeline's report it a moment later.
-	if o.ignores(data.Source) {
+	// A frame is handled the first time it is pushed, except a segment of the
+	// bot's output, which is handled once it has gone through the output
+	// transport: only the copy coming out of playback carries the timing of what
+	// the caller is hearing.
+	if awaitsPlayback(f) {
+		if !playsOutput(data.Source) {
+			return
+		}
+	} else if !data.FirstPush {
 		return
 	}
 	if cfg, ok := f.(*ConfigureObserverFrame); ok {
@@ -505,28 +501,12 @@ func (o *Observer) reportLevelFor(name string) FunctionCallReportLevel {
 	return ReportNone
 }
 
-// claimFrame reports whether this handover of the frame is the observer's to
-// act on, recording the frame when it is.
-//
-// A frame already reported is refused. So is one still waiting for playback,
-// and that one is left unrecorded, so the handover that comes out of playback
-// is recognized as its first.
-func (o *Observer) claimFrame(id uint64, waiting bool) bool {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if _, ok := o.seen[id]; ok {
-		return false
-	}
-	if waiting {
-		return false
-	}
-	o.seen[id] = struct{}{}
-	o.order = append(o.order, id)
-	if len(o.order) > seenCap {
-		delete(o.seen, o.order[0])
-		o.order = o.order[1:]
-	}
-	return true
+// audioLevelsEnabled reports whether either side's audio level is reported, the
+// only reason the observer has to look at an audio frame.
+func (o *Observer) audioLevelsEnabled() bool {
+	o.paramsMu.Lock()
+	defer o.paramsMu.Unlock()
+	return o.params.UserAudioLevelEnabled || o.params.BotAudioLevelEnabled
 }
 
 // awaitsPlayback reports whether a frame is one the observer reports only once

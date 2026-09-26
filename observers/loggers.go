@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
@@ -367,9 +366,6 @@ type MetricsLogConfig struct {
 type MetricsLog struct {
 	log     *slog.Logger
 	include map[reflect.Type]struct{}
-
-	mu sync.Mutex
-	dd deduper
 }
 
 // NewMetricsLog builds a MetricsLog observer.
@@ -381,8 +377,12 @@ func NewMetricsLog(cfg MetricsLogConfig) *MetricsLog {
 			include[reflect.TypeOf(d)] = struct{}{}
 		}
 	}
-	return &MetricsLog{log: logger(cfg.Logger), include: include, dd: newDeduper(0)}
+	return &MetricsLog{log: logger(cfg.Logger), include: include}
 }
+
+// ObserveEveryPush implements processor.EveryPushObserver: a metrics frame is
+// logged once, on its first push.
+func (o *MetricsLog) ObserveEveryPush() bool { return false }
 
 // OnPushFrame implements processor.Observer.
 func (o *MetricsLog) OnPushFrame(data processor.FramePushed) {
@@ -390,14 +390,7 @@ func (o *MetricsLog) OnPushFrame(data processor.FramePushed) {
 	if !ok {
 		return
 	}
-	// A metrics frame is reported at every handover it makes, and the
-	// measurements it carries are the same each time.
-	o.mu.Lock()
-	seen := o.dd.seenBefore(f.ID())
-	o.mu.Unlock()
-	if seen {
-		return
-	}
+
 	for _, d := range f.Data {
 		if !o.shouldLog(d) {
 			continue

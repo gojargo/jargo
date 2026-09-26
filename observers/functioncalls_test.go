@@ -352,22 +352,6 @@ func TestBroadcastCallMomentReportedOnce(t *testing.T) {
 	}
 }
 
-// TestResultReportedOnceHoweverFarItTravels covers a result being pushed again
-// by every processor it passes through.
-func TestResultReportedOnceHoweverFarItTravels(t *testing.T) {
-	r := newCallRecorder()
-	o := newFunctionCalls(r, observers.FunctionCallConfig{})
-
-	f := callResult("call_1")
-	for range 4 {
-		push(o, f, processor.Downstream)
-	}
-
-	if got := r.all(); len(got) != 1 {
-		t.Errorf("events = %d, want 1", len(got))
-	}
-}
-
 // TestFramesFromElsewhereAreIgnored covers the observer minding its own
 // business.
 func TestFramesFromElsewhereAreIgnored(t *testing.T) {

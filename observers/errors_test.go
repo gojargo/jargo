@@ -62,26 +62,6 @@ func raised(msg string, source frames.ErrorSource, err error, category errs.Cate
 	return ef
 }
 
-// TestErrorReportedOnceHoweverFarItTravels covers the reason the observer
-// deduplicates at all: an error is pushed again by every processor it passes
-// through on its way upstream, and only the first of those pushes comes from the
-// processor that actually failed.
-func TestErrorReportedOnceHoweverFarItTravels(t *testing.T) {
-	var r errorRecorder
-	o := observers.NewErrors(observers.ErrorConfig{OnError: r.record})
-
-	failing := processor.NewIdentityFilter("tts")
-	ef := raised("failed", failing, nil, errs.Server)
-
-	pushFrom(o, ef, failing)
-	pushFrom(o, ef, processor.NewIdentityFilter("passing it along"))
-	pushFrom(o, ef, processor.NewIdentityFilter("and along"))
-
-	if got := r.only(t).Processor; got != failing.Name() {
-		t.Errorf("processor = %q, want %q: the error is named for the one that raised it", got, failing.Name())
-	}
-}
-
 // TestEachErrorIsItsOwnEvent covers a processor that fails twice having failed
 // twice, which the deduplication must not flatten into one.
 func TestEachErrorIsItsOwnEvent(t *testing.T) {

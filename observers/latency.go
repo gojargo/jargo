@@ -82,8 +82,10 @@ type LatencyBreakdown struct {
 
 // LatencyConfig configures a UserBotLatency observer.
 type LatencyConfig struct {
-	// MaxFrames is how many recent frame ids the observer remembers to
-	// recognize one it has already counted; 0 uses 100.
+	// MaxFrames is unused.
+	//
+	// Deprecated: the observer is told about each frame once, so it keeps no
+	// window of the frames it has seen.
 	MaxFrames int
 	// MinContribution is the shortest stretch reported in its own right; 0 uses
 	// 5ms. Anything shorter is a frame hop rather than work worth naming, so it
@@ -118,7 +120,6 @@ type UserBotLatency struct {
 	cfg LatencyConfig
 
 	mu      sync.Mutex
-	dd      deduper
 	stopped time.Time
 	// turnStart is when the user's speech actually ended, and turn is how long
 	// releasing the turn took from there.
@@ -183,10 +184,14 @@ func (o *UserBotLatency) OnPipelineStarted() {
 
 // NewUserBotLatency builds a UserBotLatency observer.
 func NewUserBotLatency(cfg LatencyConfig) *UserBotLatency {
-	o := &UserBotLatency{cfg: cfg, dd: newDeduper(cfg.MaxFrames)}
+	o := &UserBotLatency{cfg: cfg}
 	o.resetAccumulators()
 	return o
 }
+
+// ObserveEveryPush implements processor.EveryPushObserver: a frame is counted
+// once, on its first push.
+func (o *UserBotLatency) ObserveEveryPush() bool { return false }
 
 // OnPushFrame implements processor.Observer.
 func (o *UserBotLatency) OnPushFrame(data processor.FramePushed) {
@@ -195,9 +200,6 @@ func (o *UserBotLatency) OnPushFrame(data processor.FramePushed) {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.dd.seenBefore(data.Frame.ID()) {
-		return
-	}
 
 	// The frames that only place a moment on the timeline are handled apart from
 	// the ones that also move the measurement along.

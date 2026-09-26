@@ -18,6 +18,9 @@ type FramePushed struct {
 	Direction Direction
 	// Timestamp is when it was pushed, on the pipeline clock.
 	Timestamp time.Duration
+	// FirstPush reports whether this is the first time the frame is pushed. A
+	// frame is pushed again by every processor that passes it along.
+	FirstPush bool
 }
 
 // FrameProcessed is one frame reaching a processor.
@@ -59,11 +62,36 @@ func (d ProcessorSetUp) Duration() time.Duration { return d.FinishedAt.Sub(d.Sta
 // lets it tell a frame that has been through the output transport, and so
 // carries real playback timing, from the same frame earlier in the pipeline.
 //
+// A frame is pushed again by every processor that passes it along, and by
+// default an observer observes every push, with FramePushed.FirstPush set on the
+// first. An observer that handles a frame once, such as one that reports the
+// moment a frame represents, implements EveryPushObserver to say so, and is told
+// about a frame only when it is first pushed.
+//
 // Observers must be safe for concurrent use: a pipeline's processors each run on
 // their own goroutine, so the methods may be called from any of them.
 type Observer interface {
 	// OnPushFrame reports one frame handed from one processor to the next.
 	OnPushFrame(data FramePushed)
+}
+
+// EveryPushObserver is an optional interface an Observer implements to say
+// whether it observes every push of a frame, rather than only its first. An
+// Observer that does not implement it observes every push.
+type EveryPushObserver interface {
+	Observer
+	// ObserveEveryPush reports whether the observer observes every push of a
+	// frame, not only the first.
+	ObserveEveryPush() bool
+}
+
+// ObservesEveryPush reports whether o observes every push of a frame, rather
+// than only its first.
+func ObservesEveryPush(o Observer) bool {
+	if e, ok := o.(EveryPushObserver); ok {
+		return e.ObserveEveryPush()
+	}
+	return true
 }
 
 // ProcessObserver is an optional interface an Observer implements to also see a
@@ -134,6 +162,9 @@ func (b *Base) notifyPush(f frames.Frame, dir Direction, dst Processor) {
 		Frame:       f,
 		Direction:   dir,
 		Timestamp:   b.now(),
+		// Only the pipeline can tell a first push from a later one, and it sets
+		// this before handing the report on.
+		FirstPush: true,
 	}
 	for _, o := range observers {
 		o.OnPushFrame(data)

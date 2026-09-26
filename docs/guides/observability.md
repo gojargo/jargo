@@ -155,6 +155,19 @@ carries real playback timing, from the same frame earlier in the chain. The
 `EventFrameReachedDownstream` and `EventFrameReachedUpstream` events are the
 narrower thing: those fire only at the pipeline source and sink.
 
+A frame is pushed again by every processor that passes it along, and
+`FramePushed.FirstPush` marks the first of those pushes. An observer that
+handles a frame once, such as one that reports the moment a frame represents,
+implements `processor.EveryPushObserver` and returns false from
+`ObserveEveryPush`; it is then told about a frame only on its first push, and
+keeps no record of the frames it has seen. The built-in observers that count or
+report moments (`Errors`, `FunctionCalls`, `Speaking`, `ServiceMetrics`,
+`MetricsLog`, `TurnTracking`, `UserBotLatency`) all do.
+
+```go
+func (o *MyObserver) ObserveEveryPush() bool { return false }
+```
+
 One consequence of watching everything: a turn-taking signal is **broadcast** as
 two frames, one per direction. Observers count only the downstream half, using
 `BroadcastSiblingID` to recognize the pair. Otherwise every turn would be counted

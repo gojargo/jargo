@@ -379,25 +379,6 @@ func TestMetricsLogNarrowsToTheKindsAskedFor(t *testing.T) {
 	}
 }
 
-// TestMetricsLogReportsAFrameOnce covers the same frame being reported at every
-// handover it makes. The measurements it carries were made once.
-func TestMetricsLogReportsAFrameOnce(t *testing.T) {
-	var buf bytes.Buffer
-	o := observers.NewMetricsLog(observers.MetricsLogConfig{Logger: debugLog(&buf)})
-
-	f := frames.NewMetricsFrame(frames.TTFBMetricsData{
-		Processor: "LLM#0",
-		Value:     250 * time.Millisecond,
-	})
-	src, mid, dst := newPlain("Src"), newPlain("Mid"), newPlain("Dst")
-	handover(o, src, mid, f, processor.Downstream)
-	handover(o, mid, dst, f, processor.Downstream)
-
-	if n := strings.Count(buf.String(), "ttfb"); n != 1 {
-		t.Errorf("logged the measurement %d times, want once", n)
-	}
-}
-
 // TestLogObserversDefaultToTheProcessLogger covers a caller who configures no
 // destination, which must not be a crash.
 func TestLogObserversDefaultToTheProcessLogger(t *testing.T) {

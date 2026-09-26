@@ -102,8 +102,10 @@ type ServiceUsageRecord struct {
 
 // ServiceMetricsConfig configures a ServiceMetrics observer.
 type ServiceMetricsConfig struct {
-	// MaxFrames is how many recent frame ids the observer remembers to
-	// recognize one it has already reported; 0 uses 100.
+	// MaxFrames is unused.
+	//
+	// Deprecated: the observer is told about each frame once, so it keeps no
+	// window of the frames it has seen.
 	MaxFrames int
 	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
 	// place records without waiting.
@@ -134,13 +136,16 @@ type ServiceMetrics struct {
 	cfg ServiceMetricsConfig
 
 	mu sync.Mutex
-	dd deduper
 }
 
 // NewServiceMetrics builds a ServiceMetrics observer.
 func NewServiceMetrics(cfg ServiceMetricsConfig) *ServiceMetrics {
-	return &ServiceMetrics{cfg: cfg, dd: newDeduper(cfg.MaxFrames)}
+	return &ServiceMetrics{cfg: cfg}
 }
+
+// ObserveEveryPush implements processor.EveryPushObserver: a frame's metrics are
+// reported once, on its first push.
+func (o *ServiceMetrics) ObserveEveryPush() bool { return false }
 
 // now reads the clock the observer was configured with.
 func (o *ServiceMetrics) now() time.Time {
@@ -162,10 +167,6 @@ func (o *ServiceMetrics) OnPushFrame(data processor.FramePushed) {
 	}
 
 	o.mu.Lock()
-	if o.dd.seenBefore(f.ID()) {
-		o.mu.Unlock()
-		return
-	}
 	at := o.now()
 	o.mu.Unlock()
 

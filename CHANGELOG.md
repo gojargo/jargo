@@ -117,6 +117,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   **Behaviour change:** an entry without `concurrency:` now runs its scenarios
   in parallel; give it `concurrency: 1` to keep them one at a time.
 
+- **An observer can be told about a frame once, on its first push.** A frame is
+  pushed again by every processor that passes it along, and every observer was
+  told about each of those pushes. `processor.FramePushed.FirstPush` now marks
+  the first, and an observer implementing `processor.EveryPushObserver` with
+  `ObserveEveryPush` returning false is only told about that one. The pipeline
+  tells the pushes apart, tracking the frames in flight and forgetting each one
+  once it has been let go. The built-in observers that report a frame once
+  (`Errors`, `FunctionCalls`, `Speaking`, `ServiceMetrics`, `MetricsLog`,
+  `TurnTracking`, `UserBotLatency`) and the worker's idle detection now do, and
+  no longer keep a window of the frame ids they have seen. The RTVI observer
+  handles a frame on its first push, the bot's output once it has gone through
+  the output transport, and skips audio frames before anything else when no
+  audio level is reported.
+
 ### Added
 
 - **A bot can report the markers its model emits, and a scenario can assert on
@@ -224,6 +238,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The Live thinking models accept only `NON_BLOCKING`: a synchronous tool cannot
   pause the conversation there, and that is reported once per session.
   `llm.Base.FunctionIsAsync` reports the distinction the declarations rest on.
+
+### Deprecated
+
+- **`MaxFrames` on the observers.** `TurnTrackingConfig`, `LatencyConfig`,
+  `ErrorConfig`, `FunctionCallConfig`, `SpeakingConfig` and
+  `ServiceMetricsConfig` keep the field, unused: the observers are told about a
+  frame once and keep no window of the frames they have seen.
 
 ### Fixed
 
@@ -382,6 +403,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   landing while they were queued, leaving the LLM running with the previous
   node's context and tools. Both are now uninterruptible, so they are still
   delivered.
+
+- **The observer queues no longer keep delivered reports alive.** Taking a
+  report from an observer's queue left it in the queue's backing array, so the
+  frame it carried stayed reachable until the array was replaced.
 
 ## [0.2.0] - 2026-09-18
 

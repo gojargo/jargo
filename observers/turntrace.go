@@ -38,7 +38,6 @@ type TurnTrace struct {
 	cfg TurnTraceConfig
 
 	mu             sync.Mutex
-	dd             deduper
 	conversation   trace.Span
 	conversationID string
 	turn           trace.Span
@@ -51,23 +50,16 @@ type TurnTrace struct {
 
 // NewTurnTrace builds a TurnTrace observer.
 func NewTurnTrace(cfg TurnTraceConfig) *TurnTrace {
-	return &TurnTrace{cfg: cfg, dd: newDeduper(0), spans: map[int]trace.SpanContext{}}
+	return &TurnTrace{cfg: cfg, spans: map[int]trace.SpanContext{}}
 }
 
 // OnPushFrame implements processor.Observer. The conversation span opens on the
 // StartFrame rather than with the first turn, so whatever a bot does before the
 // user speaks — a greeting, a flow initializing — is part of the conversation.
 func (o *TurnTrace) OnPushFrame(data processor.FramePushed) {
-	f, dir := data.Frame, data.Direction
-	if skipBroadcastSibling(f, dir) {
-		return
-	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.dd.seenBefore(f.ID()) {
-		return
-	}
-	if _, ok := f.(*frames.StartFrame); ok && o.conversation == nil {
+	if _, ok := data.Frame.(*frames.StartFrame); ok && o.conversation == nil {
 		o.startConversation(o.cfg.ConversationID)
 	}
 }

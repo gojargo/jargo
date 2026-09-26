@@ -75,8 +75,10 @@ type FunctionCallEvent struct {
 
 // FunctionCallConfig configures a FunctionCalls observer.
 type FunctionCallConfig struct {
-	// MaxFrames is how many recent frame ids the observer remembers to
-	// recognize one it has already reported; 0 uses 100.
+	// MaxFrames is unused.
+	//
+	// Deprecated: the observer is told about each frame once, so it keeps no
+	// window of the frames it has seen.
 	MaxFrames int
 	// IncludeArguments reports the arguments a call was made with. Nil leaves it
 	// on: they are small, and they are the reason a call is worth reading at all.
@@ -108,7 +110,6 @@ type FunctionCalls struct {
 	cfg FunctionCallConfig
 
 	mu sync.Mutex
-	dd deduper
 	// startedAt and inProgressAt are when each call started and when it went in
 	// progress, so the moment that follows either can carry it.
 	startedAt    map[string]time.Time
@@ -119,7 +120,6 @@ type FunctionCalls struct {
 func NewFunctionCalls(cfg FunctionCallConfig) *FunctionCalls {
 	return &FunctionCalls{
 		cfg:          cfg,
-		dd:           newDeduper(cfg.MaxFrames),
 		startedAt:    map[string]time.Time{},
 		inProgressAt: map[string]time.Time{},
 	}
@@ -157,11 +157,15 @@ func partOfACall(f frames.Frame) bool {
 	}
 }
 
+// ObserveEveryPush implements processor.EveryPushObserver: a moment is reported
+// once, on the first push of the frame that represents it.
+func (o *FunctionCalls) ObserveEveryPush() bool { return false }
+
 // OnPushFrame implements processor.Observer. It reports the moments a frame
-// represents, the first time that frame is seen.
+// represents.
 func (o *FunctionCalls) OnPushFrame(data processor.FramePushed) {
-	// These frames are broadcast, arriving as two frames with two ids, so an id
-	// alone would not tell them apart. Read the downstream one.
+	// These frames are broadcast, arriving as two frames, each pushed for the
+	// first time once. Read the downstream one.
 	if skipBroadcastSibling(data.Frame, data.Direction) {
 		return
 	}
@@ -170,10 +174,6 @@ func (o *FunctionCalls) OnPushFrame(data processor.FramePushed) {
 	}
 
 	o.mu.Lock()
-	if o.dd.seenBefore(data.Frame.ID()) {
-		o.mu.Unlock()
-		return
-	}
 	events := o.eventsFor(data.Frame)
 	o.mu.Unlock()
 

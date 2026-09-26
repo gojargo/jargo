@@ -144,6 +144,10 @@ type idleObserver struct {
 	sig   chan<- struct{}
 }
 
+// ObserveEveryPush implements processor.EveryPushObserver: a frame is activity
+// once, on its first push.
+func (o *idleObserver) ObserveEveryPush() bool { return false }
+
 // OnPushFrame implements processor.Observer.
 func (o *idleObserver) OnPushFrame(data processor.FramePushed) {
 	// The StartFrame counts, so the first idle interval is measured from the
@@ -151,9 +155,9 @@ func (o *idleObserver) OnPushFrame(data processor.FramePushed) {
 	if _, isStart := data.Frame.(*frames.StartFrame); !isStart && !o.match.selects(data.Frame) {
 		return
 	}
-	// A frame is reported at every handover, so the same one arrives many times.
-	// A non-blocking send onto a channel holding one signal absorbs that: the
-	// monitor only needs to know something happened, not how often.
+	// Activity comes in bursts. A non-blocking send onto a channel holding one
+	// signal absorbs them: the monitor only needs to know something happened,
+	// not how often.
 	select {
 	case o.sig <- struct{}{}:
 	default:

@@ -10,8 +10,10 @@ import (
 
 // TurnTrackingConfig configures a TurnTracking observer.
 type TurnTrackingConfig struct {
-	// MaxFrames is how many recent frame ids the observer remembers to
-	// recognize one it has already counted; 0 uses 100.
+	// MaxFrames is unused.
+	//
+	// Deprecated: the observer is told about each frame once, so it keeps no
+	// window of the frames it has seen.
 	MaxFrames int
 	// TurnEndTimeout is how long after the bot stops speaking a turn ends; 0 uses
 	// 2.5s. The delay lets a turn survive a brief gap between bot utterances (an
@@ -36,7 +38,6 @@ type TurnTracking struct {
 	cfg TurnTrackingConfig
 
 	mu       sync.Mutex
-	dd       deduper
 	active   bool
 	botTalk  bool
 	botSpoke bool
@@ -66,8 +67,12 @@ func NewTurnTracking(cfg TurnTrackingConfig) *TurnTracking {
 	if cfg.TurnEndTimeout == 0 {
 		cfg.TurnEndTimeout = defaultTurnEndTimeout
 	}
-	return &TurnTracking{cfg: cfg, dd: newDeduper(cfg.MaxFrames)}
+	return &TurnTracking{cfg: cfg}
 }
+
+// ObserveEveryPush implements processor.EveryPushObserver: a frame is counted
+// once, on its first push.
+func (o *TurnTracking) ObserveEveryPush() bool { return false }
 
 // OnPushFrame implements processor.Observer.
 func (o *TurnTracking) OnPushFrame(data processor.FramePushed) {
@@ -77,9 +82,6 @@ func (o *TurnTracking) OnPushFrame(data processor.FramePushed) {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.dd.seenBefore(f.ID()) {
-		return
-	}
 	switch f.(type) {
 	case *frames.StartFrame:
 		if o.count == 0 {

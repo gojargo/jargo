@@ -205,22 +205,6 @@ func TestBroadcastInterruptionReportedOnce(t *testing.T) {
 	}
 }
 
-// TestRelayedFrameReportedOnce covers a frame passed along the pipeline being
-// one moment rather than one per hop.
-func TestRelayedFrameReportedOnce(t *testing.T) {
-	r := newSpeakingRecorder()
-	o := newSpeaking(r)
-
-	f := frames.NewBotStartedSpeakingFrame()
-	for range 4 {
-		push(o, f, processor.Downstream)
-	}
-
-	if got := r.all(); len(got) != 1 {
-		t.Errorf("events = %d, want 1", len(got))
-	}
-}
-
 // TestStretchWhoseStartWasMissedClosesWithoutOne covers the observer attached
 // mid-conversation: the stretch closes without a start rather than borrowing one
 // from another stretch.

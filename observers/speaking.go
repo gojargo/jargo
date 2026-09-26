@@ -46,8 +46,10 @@ type SpeechEvent struct {
 
 // SpeakingConfig configures a Speaking observer.
 type SpeakingConfig struct {
-	// MaxFrames is how many recent frame ids the observer remembers to
-	// recognize one it has already reported; 0 uses 100.
+	// MaxFrames is unused.
+	//
+	// Deprecated: the observer is told about each frame once, so it keeps no
+	// window of the frames it has seen.
 	MaxFrames int
 	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
 	// place moments without waiting.
@@ -71,7 +73,6 @@ type Speaking struct {
 	cfg SpeakingConfig
 
 	mu sync.Mutex
-	dd deduper
 	// open is when each open stretch of speech began, so the moment that closes
 	// one can carry it.
 	open map[SpeechEventKind]time.Time
@@ -81,7 +82,6 @@ type Speaking struct {
 func NewSpeaking(cfg SpeakingConfig) *Speaking {
 	return &Speaking{
 		cfg:  cfg,
-		dd:   newDeduper(cfg.MaxFrames),
 		open: map[SpeechEventKind]time.Time{},
 	}
 }
@@ -133,11 +133,15 @@ func momentOf(f frames.Frame, now time.Time) (speechMoment, bool) {
 	}
 }
 
+// ObserveEveryPush implements processor.EveryPushObserver: a moment is reported
+// once, on the first push of the frame that represents it.
+func (o *Speaking) ObserveEveryPush() bool { return false }
+
 // OnPushFrame implements processor.Observer. It reports the moment a frame
-// represents, the first time that frame is seen.
+// represents.
 func (o *Speaking) OnPushFrame(data processor.FramePushed) {
-	// An interruption is broadcast, arriving as two frames with two ids, so an
-	// id alone would not tell them apart. Read the downstream one.
+	// An interruption is broadcast, arriving as two frames, each pushed for the
+	// first time once. Read the downstream one.
 	if skipBroadcastSibling(data.Frame, data.Direction) {
 		return
 	}
@@ -145,13 +149,6 @@ func (o *Speaking) OnPushFrame(data processor.FramePushed) {
 	o.mu.Lock()
 	m, ok := momentOf(data.Frame, o.now())
 	if !ok {
-		// Nothing to report, and nothing to remember either: a frame that is not
-		// part of the lifecycle must not crowd one that is out of the window of
-		// recent ids.
-		o.mu.Unlock()
-		return
-	}
-	if o.dd.seenBefore(data.Frame.ID()) {
 		o.mu.Unlock()
 		return
 	}

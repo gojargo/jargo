@@ -35,8 +35,10 @@ type ErrorEvent struct {
 
 // ErrorConfig configures an Errors observer.
 type ErrorConfig struct {
-	// MaxFrames is how many recent frame ids the observer remembers to
-	// recognize one it has already reported; 0 uses 100.
+	// MaxFrames is unused.
+	//
+	// Deprecated: the observer is told about each frame once, so it keeps no
+	// window of the frames it has seen.
 	MaxFrames int
 	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
 	// place failures without waiting.
@@ -60,13 +62,16 @@ type Errors struct {
 	cfg ErrorConfig
 
 	mu sync.Mutex
-	dd deduper
 }
 
 // NewErrors builds an Errors observer.
 func NewErrors(cfg ErrorConfig) *Errors {
-	return &Errors{cfg: cfg, dd: newDeduper(cfg.MaxFrames)}
+	return &Errors{cfg: cfg}
 }
+
+// ObserveEveryPush implements processor.EveryPushObserver: an error is reported
+// once, on its first push.
+func (o *Errors) ObserveEveryPush() bool { return false }
 
 // now reads the clock the observer was configured with.
 func (o *Errors) now() time.Time {
@@ -76,10 +81,8 @@ func (o *Errors) now() time.Time {
 	return time.Now()
 }
 
-// OnPushFrame implements processor.Observer. It reports an error frame the first
-// time it is seen: an error is pushed again by every processor it travels
-// through, and only the first of those pushes comes from the processor that
-// failed.
+// OnPushFrame implements processor.Observer. It reports an error frame. The
+// first push of an error comes from the processor that failed.
 func (o *Errors) OnPushFrame(data processor.FramePushed) {
 	// Match on the reporting interface rather than on ErrorFrame, so an
 	// unrecoverable failure, which is reported by a frame embedding it, is not
@@ -90,10 +93,6 @@ func (o *Errors) OnPushFrame(data processor.FramePushed) {
 	}
 
 	o.mu.Lock()
-	if o.dd.seenBefore(data.Frame.ID()) {
-		o.mu.Unlock()
-		return
-	}
 	at := o.now()
 	o.mu.Unlock()
 

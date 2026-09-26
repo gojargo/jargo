@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"runtime"
 	"sync"
 	"time"
+	"weak"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
 
@@ -25,11 +28,19 @@ const observerDrainTimeout = 5 * time.Second
 //
 // Delivery to a single observer stays in order, which is what the stateful ones
 // need: a turn cannot end before it starts.
+//
+// It also tells a frame's first push from the ones that follow, and only passes
+// the first one to observers that want a frame once.
 type observerProxy struct {
 	mu        sync.Mutex
 	observers []*observerWorker
 	started   bool
 	stopped   bool
+	// framesPushed holds the frames pushed so far, weakly: an entry goes away
+	// with its frame, so this tracks the frames in flight, not every frame ever
+	// pushed. A frame is known by its identity rather than its id, since a frame
+	// rebuilt from a bus carries none.
+	framesPushed map[weak.Pointer[frames.BaseFrame]]struct{}
 }
 
 // observerWorker is one observer with the queue of reports waiting for it.
@@ -38,9 +49,12 @@ type observerProxy struct {
 // observer can be dropped while the pipeline runs without disturbing the rest.
 type observerWorker struct {
 	observer processor.Observer
-	queue    *reportQueue
-	quit     chan struct{}
-	done     chan struct{}
+	// everyPush is whether the observer observes every push of a frame, rather
+	// than only its first.
+	everyPush bool
+	queue     *reportQueue
+	quit      chan struct{}
+	done      chan struct{}
 	// finishing says no more reports are coming, so the worker delivers what is
 	// left and then stops. It is how a normal shutdown differs from dropping an
 	// observer mid-run, which stops it where it stands.
@@ -65,6 +79,7 @@ type setupStarted struct{ at time.Time }
 func newObserverWorker(o processor.Observer) *observerWorker {
 	return &observerWorker{
 		observer:  o,
+		everyPush: processor.ObservesEveryPush(o),
 		queue:     newReportQueue(),
 		quit:      make(chan struct{}),
 		done:      make(chan struct{}),
@@ -74,7 +89,7 @@ func newObserverWorker(o processor.Observer) *observerWorker {
 
 // newObserverProxy builds a proxy over the given observers.
 func newObserverProxy(observers []processor.Observer) *observerProxy {
-	p := &observerProxy{}
+	p := &observerProxy{framesPushed: map[weak.Pointer[frames.BaseFrame]]struct{}{}}
 	for _, o := range observers {
 		p.observers = append(p.observers, newObserverWorker(o))
 	}
@@ -168,8 +183,45 @@ func (p *observerProxy) pipelineStarted() { p.send(pipelineStarted{}) }
 // setupStarted reports the pipeline having begun setting its processors up.
 func (p *observerProxy) setupStarted(at time.Time) { p.send(setupStarted{at: at}) }
 
-// OnPushFrame implements processor.Observer.
-func (p *observerProxy) OnPushFrame(data processor.FramePushed) { p.send(data) }
+// OnPushFrame implements processor.Observer, queueing the push for the
+// observers. A repeated push only reaches the observers that want every push.
+func (p *observerProxy) OnPushFrame(data processor.FramePushed) {
+	p.mu.Lock()
+	workers := p.observers
+	if !p.started || len(workers) == 0 {
+		p.mu.Unlock()
+		return
+	}
+	base := data.Frame.Base()
+	key := weak.Make(base)
+	_, seen := p.framesPushed[key]
+	data.FirstPush = !seen
+	if data.FirstPush {
+		p.framesPushed[key] = struct{}{}
+		runtime.AddCleanup(base, p.forget, key)
+	}
+	p.mu.Unlock()
+
+	for _, w := range workers {
+		if data.FirstPush || w.everyPush {
+			w.queue.push(data)
+		}
+	}
+}
+
+// forget drops a frame the pipeline has let go of from the frames pushed.
+func (p *observerProxy) forget(key weak.Pointer[frames.BaseFrame]) {
+	p.mu.Lock()
+	delete(p.framesPushed, key)
+	p.mu.Unlock()
+}
+
+// pushedFrames is how many frames the proxy is tracking, for tests.
+func (p *observerProxy) pushedFrames() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.framesPushed)
+}
 
 // OnProcessorSetup implements processor.SetupObserver.
 func (p *observerProxy) OnProcessorSetup(data processor.ProcessorSetUp) { p.send(data) }
@@ -288,6 +340,9 @@ func (q *reportQueue) tryGet() (any, bool) {
 		return nil, false
 	}
 	data := q.items[0]
+	// Clear the slot, so the backing array does not keep a report, and the
+	// frame in it, alive after it has been delivered.
+	q.items[0] = nil
 	q.items = q.items[1:]
 	return data, true
 }

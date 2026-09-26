@@ -219,22 +219,6 @@ func TestNothingIsSummed(t *testing.T) {
 	}
 }
 
-// TestRelayedMetricReportedOnce covers a frame passed along the pipeline being
-// one metric rather than one per hop.
-func TestRelayedMetricReportedOnce(t *testing.T) {
-	r := newMetricsRecorder()
-	o := newServiceMetrics(r)
-
-	f := frames.NewMetricsFrame(frames.TTFBMetricsData{BaseMetricsData: base(), Value: time.Second})
-	for range 4 {
-		push(o, f, processor.Downstream)
-	}
-
-	if got := r.allLatencies(); len(got) != 1 {
-		t.Errorf("records = %d, want 1", len(got))
-	}
-}
-
 // TestMetricsMeasuringSomethingElseAreLeftAlone covers the deliberate absences:
 // only what a service made someone wait for is a record here. Processing time,
 // text aggregation and end-of-turn predictions describe how the work was done.
