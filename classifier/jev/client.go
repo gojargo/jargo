@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
-	"github.com/gojargo/jargo/classifier/internal/ordered"
+	"github.com/gojargo/jargo/internal/ordered"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/utils/network"
 )

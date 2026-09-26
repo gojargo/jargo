@@ -45,8 +45,8 @@ func Run(t *testing.T, path string, buildBot Bot) {
 	RunWith(t, path, buildBot, Options{})
 }
 
-// RunWithJudge is Run with an LLM judge for the scenario's `judge:` assertions
-// (see NewLLMJudge). Pass nil when no scenario uses `judge:`.
+// RunWithJudge is Run with a judge for the scenario's `judge:` assertions (see
+// NewEvalJudge). Pass nil when no scenario uses `judge:`.
 func RunWithJudge(t *testing.T, path string, buildBot Bot, judge Judge) {
 	t.Helper()
 	RunWith(t, path, buildBot, Options{Judge: judge})
@@ -113,6 +113,9 @@ func RunURL(ctx context.Context, scenario *Scenario, botURL string, judge Judge)
 
 // runAgainst connects to a bot and plays the scenario.
 func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Options) (Result, error) {
+	// The judge is closed however the run ends, including a run that never
+	// reaches the bot.
+	defer closeJudge(ctx, opts.Judge)
 	c, err := dial(ctx, url)
 	if err != nil {
 		return Result{Scenario: scenario.Name}, err

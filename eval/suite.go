@@ -322,6 +322,8 @@ func (m *Manifest) entryQueues(js []job) []*entryQueue {
 func runOne(ctx context.Context, j job, judge Judge) SuiteResult {
 	sr := SuiteResult{Entry: j.entry, BotURL: j.botURL, Scenario: j.path}
 	if j.loadErr != nil {
+		// A run that is skipped still closes its judge.
+		closeJudge(ctx, judge)
 		sr.Err = j.loadErr
 		return sr
 	}

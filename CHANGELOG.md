@@ -177,6 +177,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Config.CustomSystemPrompt` build an LLM classifier and are deprecated from
   the start; pass a classifier instead.
 
+- **The eval judge decides with a classifier, and asks an LLM for the
+  reasons.** `eval.NewEvalJudge` builds an `EvalJudge` over a `Classifier`: a
+  reply is judged `yes`, `no` or `continue` with the conversation before it and
+  the reply sent apart, a tool call `yes` or `no` by its name and arguments.
+  `JudgeVerdict` gained `Confidence`, and a verdict's reason starts out as the
+  probabilities the classifier gave (`P(yes)=0.97`). A classifier gives no
+  reasons, so an `Explainer` LLM is asked for them: for every `no`, and for a
+  `yes` less sure than `ExplainBelow` (0.75 by default), never for a
+  `continue`. It never changes a verdict; when it disagrees, the reason says so.
+  `AllowContinue: false` judges a reply `yes` or `no` only. A question that
+  fails is asked once more before it gives a `no`. The judge sets its
+  classifier up before its first question, and a run closes it however it
+  ends. `jargo eval` gained `--judge-explainer`, `--judge-explain-below` and
+  `--judge-allow-continue`. **Breaking:** `LLMJudge` is gone and
+  `NewLLMJudge`, now deprecated, returns an `*EvalJudge` that classifies
+  through an LLM classifier and explains with the same service. A borderline
+  reply can get a different verdict than before.
+
 ### Added
 
 - **A bot can report the markers its model emits, and a scenario can assert on

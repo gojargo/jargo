@@ -130,10 +130,10 @@ turns:
 }
 
 func TestBuildJudge(t *testing.T) {
-	if buildJudge("", "", "") != nil {
+	if buildJudge(judgeOptions{}) != nil {
 		t.Fatal("no --judge-model should yield no judge")
 	}
-	if buildJudge("gpt-4o-mini", "", "") == nil {
+	if buildJudge(judgeOptions{model: "gpt-4o-mini", explainer: true, explainBelow: 0.75}) == nil {
 		t.Fatal("a --judge-model should yield a judge")
 	}
 }

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
-	"github.com/gojargo/jargo/classifier/internal/ordered"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ordered"
 )
 
 // MaxChoiceOptions is the most options Jev takes in one choice question.

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/eval"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/spf13/cobra"
@@ -194,26 +195,58 @@ func suiteStatus(r eval.SuiteResult) string {
 // addJudgeFlags registers the --judge-* flags on f and returns a getter that
 // builds the configured judge (nil when no --judge-model is set).
 func addJudgeFlags(f *pflag.FlagSet) func() eval.Judge {
-	var model, baseURL, key string
-	f.StringVar(&model, "judge-model", "", "enable the LLM judge with this model id (for scenarios using judge:)")
-	f.StringVar(&baseURL, "judge-url", "", "OpenAI-compatible base URL for the judge (e.g. a local Ollama)")
-	f.StringVar(&key, "judge-key", "", "API key for the judge endpoint (falls back to $OPENAI_API_KEY)")
-	return func() eval.Judge { return buildJudge(model, baseURL, key) }
+	var opts judgeOptions
+	f.StringVar(&opts.model, "judge-model", "", "enable the LLM judge with this model id (for scenarios using judge:)")
+	f.StringVar(&opts.baseURL, "judge-url", "", "OpenAI-compatible base URL for the judge (e.g. a local Ollama)")
+	f.StringVar(&opts.key, "judge-key", "", "API key for the judge endpoint (falls back to $OPENAI_API_KEY)")
+	f.BoolVar(&opts.explainer, "judge-explainer", true,
+		"ask the judge's model for the reason behind a no or an unsure verdict")
+	f.Float64Var(&opts.explainBelow, "judge-explain-below", 0.75,
+		"explain a yes less sure than this too (0 explains the no verdicts only)")
+	f.BoolVar(&opts.allowContinue, "judge-allow-continue", true,
+		"let a reply be judged continue while the bot is still working toward its answer")
+	return func() eval.Judge { return buildJudge(opts) }
 }
 
-// buildJudge constructs an LLM judge from the flags, or nil when no judge model
-// is set. It targets any OpenAI-compatible endpoint (OpenAI, a local Ollama via
-// --judge-url, etc.).
-func buildJudge(model, baseURL, key string) eval.Judge {
-	if model == "" {
+// judgeOptions is what the --judge-* flags configure.
+type judgeOptions struct {
+	model, baseURL, key string
+	explainer           bool
+	explainBelow        float64
+	allowContinue       bool
+}
+
+// buildJudge constructs a judge from the flags, or nil when no judge model is
+// set. It classifies with a model behind any OpenAI-compatible endpoint (OpenAI,
+// a local Ollama via --judge-url, etc.), and the same model gives the reasons.
+func buildJudge(opts judgeOptions) eval.Judge {
+	if opts.model == "" {
 		return nil
 	}
+	key := opts.key
 	if key == "" {
 		key = os.Getenv("OPENAI_API_KEY")
 	}
-	return eval.NewLLMJudge(chat.NewLLM(chat.LLMConfig{
-		BaseURL: baseURL,
-		Model:   model,
+	service := chat.NewLLM(chat.LLMConfig{
+		BaseURL: opts.baseURL,
+		Model:   opts.model,
 		APIKey:  key,
-	}))
+	})
+	c, err := llmclassifier.New(llmclassifier.Config{LLM: service})
+	if err != nil {
+		return nil
+	}
+	cfg := eval.EvalJudgeConfig{
+		Classifier:    c,
+		ExplainBelow:  &opts.explainBelow,
+		AllowContinue: &opts.allowContinue,
+	}
+	if opts.explainer {
+		cfg.Explainer = service
+	}
+	judge, err := eval.NewEvalJudge(cfg)
+	if err != nil {
+		return nil
+	}
+	return judge
 }
