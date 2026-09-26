@@ -130,6 +130,9 @@ const (
 	ReportNone FunctionCallReportLevel = "none"
 	// ReportName adds the function's name, still without arguments or result.
 	ReportName FunctionCallReportLevel = "name"
+	// ReportArguments adds the function's name and its arguments, still without
+	// the result.
+	ReportArguments FunctionCallReportLevel = "arguments"
 	// ReportFull adds the function's name, its arguments and its result.
 	ReportFull FunctionCallReportLevel = "full"
 )

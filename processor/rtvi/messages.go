@@ -420,10 +420,10 @@ type LLMFunctionCallData struct {
 // much of the call as level allows.
 func LLMFunctionCall(name, toolCallID string, args json.RawMessage, level FunctionCallReportLevel) Message {
 	d := LLMFunctionCallData{ToolCallID: toolCallID}
-	if level == ReportName || level == ReportFull {
+	if level == ReportName || level == ReportArguments || level == ReportFull {
 		d.FunctionName = name
 	}
-	if level == ReportFull {
+	if level == ReportArguments || level == ReportFull {
 		d.Arguments = args
 	}
 	return newMessage(TypeLLMFunctionCall, "", d)
@@ -440,7 +440,7 @@ type LLMFunctionCallStartData struct {
 // much of the call as level allows.
 func LLMFunctionCallStart(name string, level FunctionCallReportLevel) Message {
 	var d LLMFunctionCallStartData
-	if level == ReportName || level == ReportFull {
+	if level == ReportName || level == ReportArguments || level == ReportFull {
 		d.FunctionName = name
 	}
 	return newMessage(TypeLLMFunctionCallStart, "", d)
@@ -465,7 +465,7 @@ func LLMFunctionCallStopped(
 	name, toolCallID, result string, canceled bool, level FunctionCallReportLevel,
 ) Message {
 	d := LLMFunctionCallStoppedData{ToolCallID: toolCallID, Canceled: canceled}
-	if level == ReportName || level == ReportFull {
+	if level == ReportName || level == ReportArguments || level == ReportFull {
 		d.FunctionName = name
 	}
 	if level == ReportFull && !canceled {

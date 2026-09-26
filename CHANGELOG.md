@@ -47,6 +47,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reasoning mode a model such as the gpt-5.6 series offers beside the effort
   level.
 
+- **A tool call can be reported with its arguments and without its result.**
+  `rtvi.ReportArguments` sits between `ReportName` and `ReportFull`: the RTVI
+  function-call events carry the function's name and its arguments, and the
+  result is withheld.
+
 ### Changed
 
 - **The `service` label on metrics names the provider, not the instance.** It

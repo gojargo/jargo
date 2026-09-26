@@ -127,7 +127,8 @@ params := rtvi.ObserverParams{
 observer := rtvi.NewObserverWithParams(proc, params)
 ```
 
-The levels are `disabled` (no event at all), `none`, `name` and `full`. The raw
+The levels are `disabled` (no event at all), `none`, `name`, `arguments`
+(the name and the arguments, but no result) and `full`. The raw
 VAD speaking events are off by default in the same way, under
 `VADUserSpeakingEnabled`.
 

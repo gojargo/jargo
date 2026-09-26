@@ -132,6 +132,10 @@ func TestObserverFunctionCallReportLevel(t *testing.T) {
 		{name: "none withholds everything but the id", params: levels(rtvi.ReportNone), wantMsg: true},
 		{name: "name adds the function name", params: levels(rtvi.ReportName), wantMsg: true, wantName: "get_weather"},
 		{
+			name: "arguments adds the arguments", params: levels(rtvi.ReportArguments),
+			wantMsg: true, wantName: "get_weather", wantArgs: `{"city":"Paris"}`,
+		},
+		{
 			name: "full adds the arguments", params: levels(rtvi.ReportFull),
 			wantMsg: true, wantName: "get_weather", wantArgs: `{"city":"Paris"}`,
 		},
@@ -290,5 +294,44 @@ func TestObserverDisabledFunctionIsSilentThroughout(t *testing.T) {
 	msgs := observerHarness(t, levels(rtvi.ReportDisabled), started, weatherCall(), result, cancel)
 	if len(msgs) != 0 {
 		t.Fatalf("expected no messages, got %+v", msgs)
+	}
+}
+
+// TestObserverArgumentsLevelReportsArgumentsAndNoResult checks the arguments
+// level reports the function name and its arguments at every stage of a call,
+// and never the result.
+//
+//nolint:misspell // the protocol spells "cancelled" this way
+func TestObserverArgumentsLevelReportsArgumentsAndNoResult(t *testing.T) {
+	args := json.RawMessage(`{"query":"pricing"}`)
+	started := frames.NewFunctionCallsStartedFrame([]frames.ToolCall{
+		{ID: "call_1", Name: "search", Args: args},
+	})
+	progress := frames.NewFunctionCallInProgressFrame("call_1", "search", args, true, "g1")
+	result := frames.NewFunctionCallResultFrame("call_1", "search", args, `{"passages":["Pro costs $20 a month."]}`)
+	cancel := frames.NewFunctionCallCancelFrame("call_2", "search")
+
+	msgs := observerHarness(t, levels(rtvi.ReportArguments), started, progress, result, cancel)
+
+	got := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		data, err := json.Marshal(m.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, m.Type+" "+string(data))
+	}
+	want := []string{
+		rtvi.TypeLLMFunctionCallStart + ` {"function_name":"search"}`,
+		rtvi.TypeLLMFunctionCall + ` {"tool_call_id":"call_1","function_name":"search","arguments":{"query":"pricing"}}`,
+		rtvi.TypeLLMFunctionCallStop + ` {"tool_call_id":"call_1","cancelled":false,"function_name":"search"}`,
+		rtvi.TypeLLMFunctionCallStop + ` {"tool_call_id":"call_2","cancelled":true,"function_name":"search"}`,
+	}
+	// System frames can overtake the others, so the order of the messages is
+	// not fixed.
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }
