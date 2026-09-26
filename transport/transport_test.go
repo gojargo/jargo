@@ -384,6 +384,68 @@ func TestBaseOutputChunksAudio(t *testing.T) {
 	<-runDone
 }
 
+// flagOutput records the interruptible flag of every chunk it is asked to write.
+type flagOutput struct {
+	*transport.BaseOutput
+	flags chan bool
+}
+
+func newFlagOutput(p transport.Params) *flagOutput {
+	o := &flagOutput{flags: make(chan bool, 16)}
+	o.BaseOutput = transport.NewBaseOutput("FlagOutput", p, o)
+	return o
+}
+
+func (o *flagOutput) WriteAudio(_ context.Context, f frames.OutputAudioFrame) (bool, error) {
+	o.flags <- frames.Interruptible(f)
+	return true, nil
+}
+
+// TestBaseOutputChunksCarryTheFlagOfTheirAudio checks a chunk cut from the audio
+// buffer keeps the interruptible flag of the audio it holds, and is
+// uninterruptible when any of it is.
+func TestBaseOutputChunksCarryTheFlagOfTheirAudio(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 48000 // 1920-byte chunks
+	const chunk, half = 1920, 960
+
+	o := newFlagOutput(params)
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	frame := func(n int, interruptible bool) frames.Frame {
+		f := frames.NewTTSAudioRawFrame(make([]byte, n), 48000, 1)
+		f.SetInterruptible(interruptible)
+		return f
+	}
+	// One protected chunk, then a chunk that spans a protected frame and a plain
+	// one, then a plain chunk.
+	for _, f := range []frames.Frame{
+		frame(chunk, false),
+		frame(half, false),
+		frame(half, true),
+		frame(chunk, true),
+	} {
+		task.QueueFrame(f)
+	}
+
+	want := []bool{false, false, true}
+	for i, w := range want {
+		select {
+		case got := <-o.flags:
+			if got != w {
+				t.Fatalf("chunk %d interruptible = %v, want %v", i, got, w)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting for chunk %d", i)
+		}
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
+
 // pacedOutput records how many chunks it was asked to write, sleeping on each so
 // a drain must wait for the queued backlog to finish.
 type pacedOutput struct {

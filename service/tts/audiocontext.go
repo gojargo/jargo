@@ -297,11 +297,19 @@ func (q *serialQueue) push(it serialItem) {
 	}
 }
 
-// reset drops everything queued, for an interruption.
+// reset drops everything queued, for an interruption, except the
+// uninterruptible frames (a FunctionCallResultFrame, say), which must not be
+// lost mid-flight. Audio contexts and the shutdown sentinel are dropped.
 func (q *serialQueue) reset() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.items = nil
+	kept := q.items[:0:0]
+	for _, it := range q.items {
+		if it.frame != nil && !frames.Interruptible(it.frame) {
+			kept = append(kept, it)
+		}
+	}
+	q.items = kept
 }
 
 func (q *serialQueue) get(ctx context.Context) (serialItem, bool) {

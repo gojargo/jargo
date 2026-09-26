@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"slices"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
@@ -11,14 +12,11 @@ import (
 // played while keeping the frames that must still be delivered, and a channel
 // cannot express that: it can only be drained wholesale.
 //
-// It counts the uninterruptible frames it holds as they go in and out, so asking
-// whether it holds any costs nothing and does not walk the queue.
+// Whether a frame is uninterruptible is read from its flag at the moment it is
+// asked, since the flag can change after the frame was queued.
 type frameQueue struct {
 	mu    sync.Mutex
 	items []frames.Frame
-	// uninterruptible is how many of the queued frames must survive an
-	// interruption.
-	uninterruptible int
 	// notify carries one wake-up for a waiting reader.
 	notify chan struct{}
 }
@@ -31,9 +29,6 @@ func newFrameQueue() *frameQueue {
 func (q *frameQueue) push(f frames.Frame) {
 	q.mu.Lock()
 	q.items = append(q.items, f)
-	if isUninterruptible(f) {
-		q.uninterruptible++
-	}
 	q.mu.Unlock()
 
 	select {
@@ -51,9 +46,6 @@ func (q *frameQueue) tryGet() (frames.Frame, bool) {
 	}
 	f := q.items[0]
 	q.items = q.items[1:]
-	if isUninterruptible(f) {
-		q.uninterruptible--
-	}
 	return f, true
 }
 
@@ -65,12 +57,13 @@ func (q *frameQueue) wait() <-chan struct{} { return q.notify }
 func (q *frameQueue) hasUninterruptible() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.uninterruptible > 0
+	// O(n), but it runs only when an interruption is being handled, so its cost
+	// is small next to what follows it.
+	return slices.ContainsFunc(q.items, isUninterruptible)
 }
 
-// reset drops every queued frame that is not uninterruptible, keeping the
-// uninterruptible ones in the order they were queued so they are still
-// delivered after an interruption.
+// reset drops every interruptible frame, keeping the uninterruptible ones in the
+// order they were queued so they are still delivered after an interruption.
 func (q *frameQueue) reset() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -81,11 +74,7 @@ func (q *frameQueue) reset() {
 		}
 	}
 	q.items = kept
-	q.uninterruptible = len(kept)
 }
 
 // isUninterruptible reports whether f must survive an interruption.
-func isUninterruptible(f frames.Frame) bool {
-	_, ok := f.(frames.Uninterruptible)
-	return ok
-}
+func isUninterruptible(f frames.Frame) bool { return !frames.Interruptible(f) }

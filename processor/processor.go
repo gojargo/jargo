@@ -833,7 +833,9 @@ func (b *Base) startInterruption() {
 	if b.directMode {
 		return
 	}
-	if isUninterruptible(b.currentFrame()) {
+	if current := b.currentFrame(); current != nil && !frames.Interruptible(current) {
+		// The frame currently being processed is uninterruptible, so it must not
+		// be canceled. Only flush the interruptible frames queued behind it.
 		b.procQueue.reset()
 		return
 	}
@@ -927,14 +929,6 @@ func (b *Base) currentFrame() frames.Frame {
 	b.curMu.Lock()
 	defer b.curMu.Unlock()
 	return b.curFrame
-}
-
-func isUninterruptible(f frames.Frame) bool {
-	if f == nil {
-		return false
-	}
-	_, ok := f.(frames.Uninterruptible)
-	return ok
 }
 
 var _ Processor = (*Base)(nil)

@@ -16,9 +16,17 @@
 //     [TTSStartedFrame], [FunctionCallResultFrame].
 //
 // A frame joins a category by embedding [BaseSystemFrame], [BaseDataFrame] or
-// [BaseControlFrame]; assert the matching interface to test the category. The
-// [Uninterruptible] marker is orthogonal: embed [UninterruptibleMixin] alongside
-// a data or control base to keep a frame queued through an interruption.
+// [BaseControlFrame]; assert the matching interface to test the category.
+//
+// # Interruptibility
+//
+// Whether an interruption may drop a frame is orthogonal to its category, and
+// decided per frame: [Interruptible] reports it. Every frame is interruptible
+// unless its type is uninterruptible by default, which a type declares by
+// embedding [UninterruptibleMixin] alongside its category base, as [EndFrame]
+// does. [BaseFrame.SetInterruptible] decides for one frame alone: set it before
+// pushing the frame to keep that frame through an interruption, or to let one
+// frame of a protected type be dropped.
 //
 // # Ownership
 //
@@ -96,7 +104,18 @@ type BaseFrame struct {
 	metadata           map[string]any
 	transportSource    string
 	transportDest      string
+	interruptible      interruptibility
 }
+
+// interruptibility is whether a frame has been set interruptible, set
+// uninterruptible, or left to the default.
+type interruptibility uint8
+
+const (
+	interruptibleDefault interruptibility = iota
+	interruptibleSet
+	uninterruptibleSet
+)
 
 // NewBaseFrame initializes a BaseFrame for a concrete frame whose type is named
 // typeName (e.g. "TextFrame"). It assigns a unique id; the "<typeName>#<id>"
@@ -160,7 +179,35 @@ func (f *BaseFrame) TransportDestination() string { return f.transportDest }
 // SetTransportDestination implements Frame.
 func (f *BaseFrame) SetTransportDestination(dest string) { f.transportDest = dest }
 
+// SetInterruptible decides whether an interruption may drop this frame from a
+// processor's queue or cancel its processing, for this frame alone, overriding
+// the default its type declares either way. Set it before pushing the frame.
+func (f *BaseFrame) SetInterruptible(interruptible bool) {
+	if interruptible {
+		f.interruptible = interruptibleSet
+	} else {
+		f.interruptible = uninterruptibleSet
+	}
+}
+
 func (f *BaseFrame) isFrame() {}
+
+// Interruptible reports whether an interruption may drop f from a processor's
+// queue or cancel its processing. SetInterruptible decides it when it was
+// called on f; otherwise it is true unless f's type is Uninterruptible. It is
+// read as it is at the time of the call, so a frame set after it was queued is
+// decided by its new value.
+func Interruptible(f Frame) bool {
+	switch f.Base().interruptible {
+	case interruptibleSet:
+		return true
+	case uninterruptibleSet:
+		return false
+	case interruptibleDefault:
+	}
+	_, uninterruptible := f.(Uninterruptible)
+	return !uninterruptible
+}
 
 //
 // Categories
@@ -225,15 +272,19 @@ func NewBaseControlFrame(typeName string) BaseControlFrame {
 // Mixins
 //
 
-// Uninterruptible marks a data or control frame that must survive interruptions:
-// it stays queued and any task processing it is never canceled, guaranteeing
-// delivery and completion. Embed UninterruptibleMixin (alongside a category
-// base) and assert with this interface.
+// Uninterruptible marks a frame type as uninterruptible by default: a frame of
+// the type is kept queued through an interruption, and any task processing it is
+// never canceled, unless SetInterruptible says otherwise for that frame. Embed
+// UninterruptibleMixin (alongside a category base) to declare it.
+//
+// It is only the type's default. Whether a frame may be dropped is what
+// [Interruptible] reports, so test that rather than asserting this interface.
 type Uninterruptible interface {
 	isUninterruptible()
 }
 
-// UninterruptibleMixin is embedded to mark a frame Uninterruptible.
+// UninterruptibleMixin is embedded to make a frame type uninterruptible by
+// default.
 type UninterruptibleMixin struct{}
 
 func (UninterruptibleMixin) isUninterruptible() {}

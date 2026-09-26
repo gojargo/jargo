@@ -74,10 +74,12 @@ processed in order and both are dropped by an interruption. A **data** frame
 carries payload; a **control** frame carries instruction. Treat the split as
 documentation.
 
-### The `Uninterruptible` escape hatch
+### Keeping a frame through an interruption
 
 Some work must complete even when the user barges in: a tool call that charges a
-card, say. Embed `UninterruptibleMixin` alongside a data or control base:
+card, say. Every frame carries an interruptible flag, and `frames.Interruptible`
+reports it. A frame type that should be uninterruptible by default embeds
+`UninterruptibleMixin` alongside its data or control base:
 
 ```go
 type ChargeResultFrame struct {
@@ -90,6 +92,16 @@ type ChargeResultFrame struct {
 An uninterruptible frame **stays queued** through an interruption, and if it is
 the frame currently being processed, the processor is not canceled; it is left
 to finish. `FunctionCallResultFrame` uses this.
+
+The type only sets the default. `SetInterruptible` decides for one frame alone:
+call it before pushing the frame to keep that frame through an interruption, or
+to let one frame of a protected type be dropped, without a frame type of your
+own:
+
+```go
+f := frames.NewTextFrame("Your order is confirmed.")
+f.SetInterruptible(false)
+```
 
 ## How priority actually works
 

@@ -83,3 +83,24 @@ func TestQueueHasFrame(t *testing.T) {
 		t.Error("the frame was taken off the queue and should no longer be reported")
 	}
 }
+
+// TestQueueResetKeepsWhatIsUninterruptibleNow checks reset reads each frame's
+// flag as it is at the time, not as its type declares it.
+func TestQueueResetKeepsWhatIsUninterruptibleNow(t *testing.T) {
+	q := newQueue()
+	plain, end := frames.NewTextFrame("hi"), frames.NewEndFrame()
+	q.push(item{frame: plain})
+	q.push(item{frame: end})
+	plain.SetInterruptible(false)
+	end.SetInterruptible(true)
+
+	q.reset()
+
+	got, ok := q.get(context.Background())
+	if !ok || got.frame != plain {
+		t.Fatalf("reset kept %v, want the frame set uninterruptible", got.frame)
+	}
+	if q.hasFrame(func(frames.Frame) bool { return true }) {
+		t.Fatal("reset kept the frame set interruptible")
+	}
+}

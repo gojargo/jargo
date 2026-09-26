@@ -35,8 +35,11 @@ type mediaSender struct {
 	resampler  *resample.Resampler
 	resampleIn int
 
-	bufMu  sync.Mutex
-	buffer []byte
+	bufMu sync.Mutex
+	// audioRuns is the incoming audio waiting to be cut into chunks, as runs of
+	// audio that came from frames with the same interruptible flag, so a chunk
+	// keeps the flag of the audio it holds.
+	audioRuns []audioRun
 	// newChunk rebuilds a buffered chunk as the same frame type as the audio it
 	// was buffered from, so TTS audio stays a TTSAudioRawFrame and a speech
 	// stream stays a SpeechOutputAudioRawFrame. The bot-speaking bookkeeping
@@ -97,7 +100,7 @@ func (s *mediaSender) start(ctx context.Context) {
 
 	s.parentCtx = ctx
 	s.bufMu.Lock()
-	s.buffer = nil
+	s.clearAudioBuffer()
 	s.bufMu.Unlock()
 
 	if s.mixer != nil {
@@ -209,13 +212,13 @@ func (s *mediaSender) handleAudioFrame(f frames.Frame) {
 	s.bufMu.Lock()
 	s.newChunk = chunkBuilder(f)
 	build := s.newChunk
-	s.buffer = append(s.buffer, pcm...)
+	s.bufferAudio(pcm, !frames.Interruptible(f))
 	var chunks []frames.Frame
-	for len(s.buffer) >= s.chunkSize {
-		chunk := make([]byte, s.chunkSize)
-		copy(chunk, s.buffer[:s.chunkSize])
-		chunks = append(chunks, s.address(build(chunk, s.sampleRate, channels)))
-		s.buffer = s.buffer[s.chunkSize:]
+	for s.bufferedAudioBytes() >= s.chunkSize {
+		audio, uninterruptible := s.takeAudioChunk()
+		chunk := s.address(build(audio, s.sampleRate, channels))
+		chunk.Base().SetInterruptible(!uninterruptible)
+		chunks = append(chunks, chunk)
 	}
 	out := s.audioOut
 	s.bufMu.Unlock()
@@ -279,12 +282,16 @@ func (s *mediaSender) enqueueFlushedAudioBuffer() {
 		return
 	}
 	// The resampler holds the tail of the audio it was fed, which belongs at the
-	// end of this run of speech.
+	// end of this run of speech, with the last run's flag.
 	tail := s.flushResampler()
 
 	s.bufMu.Lock()
-	s.buffer = append(s.buffer, tail...)
-	if len(s.buffer) == 0 {
+	lastUninterruptible := false
+	if n := len(s.audioRuns); n > 0 {
+		lastUninterruptible = s.audioRuns[n-1].uninterruptible
+	}
+	s.bufferAudio(tail, lastUninterruptible)
+	if len(s.audioRuns) == 0 {
 		s.bufMu.Unlock()
 		return
 	}
@@ -295,17 +302,18 @@ func (s *mediaSender) enqueueFlushedAudioBuffer() {
 	// The flushed tail can be longer than a chunk, so queue whole chunks first
 	// and pad only what is left over.
 	var flushed []frames.Frame
-	for len(s.buffer) >= s.chunkSize {
-		chunk := make([]byte, s.chunkSize)
-		copy(chunk, s.buffer[:s.chunkSize])
-		flushed = append(flushed, s.address(build(chunk, s.sampleRate, s.channels)))
-		s.buffer = s.buffer[s.chunkSize:]
+	enqueue := func(audio []byte, uninterruptible bool) {
+		chunk := s.address(build(audio, s.sampleRate, s.channels))
+		chunk.Base().SetInterruptible(!uninterruptible)
+		flushed = append(flushed, chunk)
 	}
-	if len(s.buffer) > 0 {
-		flushed = append(flushed,
-			s.address(build(padChunk(s.buffer, s.chunkSize), s.sampleRate, s.channels)))
+	for s.bufferedAudioBytes() >= s.chunkSize {
+		enqueue(s.takeAudioChunk())
 	}
-	s.buffer = nil
+	if len(s.audioRuns) > 0 {
+		audio, uninterruptible := s.takeAudioChunk()
+		enqueue(padChunk(audio, s.chunkSize), uninterruptible)
+	}
 	audioCtx, out := s.audioCtx, s.audioOut
 	s.bufMu.Unlock()
 
@@ -316,6 +324,60 @@ func (s *mediaSender) enqueueFlushedAudioBuffer() {
 		out.push(chunk)
 	}
 }
+
+// audioRun is audio waiting in the buffer that came from frames with the same
+// interruptible flag.
+type audioRun struct {
+	audio           []byte
+	uninterruptible bool
+}
+
+// bufferAudio adds output-rate audio to the buffer, noting whether it came from
+// uninterruptible frames. The caller holds bufMu.
+func (s *mediaSender) bufferAudio(audio []byte, uninterruptible bool) {
+	if len(audio) == 0 {
+		return
+	}
+	if n := len(s.audioRuns); n > 0 && s.audioRuns[n-1].uninterruptible == uninterruptible {
+		s.audioRuns[n-1].audio = append(s.audioRuns[n-1].audio, audio...)
+		return
+	}
+	s.audioRuns = append(s.audioRuns, audioRun{
+		audio: append([]byte(nil), audio...), uninterruptible: uninterruptible,
+	})
+}
+
+// bufferedAudioBytes is how much audio the buffer holds. The caller holds bufMu.
+func (s *mediaSender) bufferedAudioBytes() int {
+	n := 0
+	for _, run := range s.audioRuns {
+		n += len(run.audio)
+	}
+	return n
+}
+
+// takeAudioChunk cuts up to a chunk from the front of the buffer, and reports
+// whether any of it is uninterruptible. The caller holds bufMu.
+func (s *mediaSender) takeAudioChunk() ([]byte, bool) {
+	chunk := make([]byte, 0, s.chunkSize)
+	uninterruptible := false
+	for len(chunk) < s.chunkSize && len(s.audioRuns) > 0 {
+		run := &s.audioRuns[0]
+		uninterruptible = uninterruptible || run.uninterruptible
+		needed := s.chunkSize - len(chunk)
+		if len(run.audio) <= needed {
+			chunk = append(chunk, run.audio...)
+			s.audioRuns = s.audioRuns[1:]
+		} else {
+			chunk = append(chunk, run.audio[:needed]...)
+			run.audio = run.audio[needed:]
+		}
+	}
+	return chunk, uninterruptible
+}
+
+// clearAudioBuffer drops the buffered audio. The caller holds bufMu.
+func (s *mediaSender) clearAudioBuffer() { s.audioRuns = nil }
 
 // resample converts audio at sampleRate to the transport output rate. The
 // resampler is created lazily and reused across frames.
@@ -354,7 +416,7 @@ func (s *mediaSender) resample(pcm []byte, sampleRate, channels int) []byte {
 // everything else: a barge-in cuts the bot off, tail included.
 func (s *mediaSender) handleInterruption() {
 	s.bufMu.Lock()
-	s.buffer = nil
+	s.clearAudioBuffer()
 	s.bufMu.Unlock()
 	if s.clockQ != nil {
 		// The frames waiting on the clock belong to audio that will never play.
@@ -484,7 +546,7 @@ func (s *mediaSender) botStoppedSpeaking(ctx context.Context) {
 	s.botMu.Unlock()
 
 	s.bufMu.Lock()
-	s.buffer = nil
+	s.clearAudioBuffer()
 	s.bufMu.Unlock()
 	s.resetResampler()
 

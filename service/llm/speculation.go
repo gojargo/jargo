@@ -58,7 +58,7 @@ type gatedFrame struct {
 // While holding, everything is held in arrival order except system frames, which
 // are out of band throughout the pipeline, and which carry the verdicts the gate
 // is waiting for: holding them would deadlock it. That includes uninterruptible
-// frames, which are ordered like any other; discarding a speculation keeps them
+// frames (frames.Interruptible false), which are ordered like any other; discarding a speculation keeps them
 // and emits them on, since they can belong to work started before it.
 //
 // This decides rather than processes frames: process is synchronous and returns
@@ -154,7 +154,7 @@ func (g *speculationGate) process(f frames.Frame, dir processor.Direction) []gat
 		// speculation around them is discarded.
 		g.buffer = append(g.buffer, gatedFrame{f, dir})
 	case speculationDropping:
-		if _, uninterruptible := f.(frames.Uninterruptible); uninterruptible {
+		if !frames.Interruptible(f) {
 			// Not part of the reply being dropped, and nothing is being held
 			// back, so emitting it keeps it in order.
 			emitted = append(emitted, gatedFrame{f, dir})
@@ -251,7 +251,7 @@ func (g *speculationGate) dropHeld(reason string, keepDropping bool) []gatedFram
 	// delivered, which is then emitted rather than discarded with it.
 	kept := g.buffer[:0]
 	for _, held := range g.buffer {
-		if _, uninterruptible := held.frame.(frames.Uninterruptible); uninterruptible {
+		if !frames.Interruptible(held.frame) {
 			kept = append(kept, held)
 		}
 	}

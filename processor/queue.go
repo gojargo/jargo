@@ -108,16 +108,16 @@ func (q *queue) hasFrame(match func(frames.Frame) bool) bool {
 	return false
 }
 
-// reset drops every data and control frame that is not uninterruptible, keeping
-// uninterruptible frames so they are still delivered after an interruption.
-// System frames are untouched. It is used when an interruption flushes the
-// process queue.
+// reset drops every interruptible data and control frame, keeping the
+// uninterruptible ones so they are still delivered after an interruption. Each
+// frame's flag is read as it is now. System frames are untouched. It is used
+// when an interruption flushes the process queue.
 func (q *queue) reset() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	kept := q.other[:0:0]
 	for _, it := range q.other {
-		if _, ok := it.frame.(frames.Uninterruptible); ok {
+		if !frames.Interruptible(it.frame) {
 			kept = append(kept, it)
 		}
 	}

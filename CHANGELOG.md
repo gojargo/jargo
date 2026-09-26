@@ -52,6 +52,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   function-call events carry the function's name and its arguments, and the
   result is withheld.
 
+- **Every frame carries an interruptible flag.** `frames.Interruptible` reports
+  whether an interruption may drop a frame from a queue or cancel its
+  processing, and `SetInterruptible` decides it for one frame alone: set it
+  before pushing a frame to keep that frame through an interruption, or to let
+  one frame of a protected type be dropped, without a frame type of your own. A
+  frame type still declares its default by embedding `UninterruptibleMixin`.
+  The processor's interruption handling and queue, the output transport's frame
+  queue and the speculation gate decide by the flag, read as it is when the
+  interruption lands. The output transport's audio chunks keep the flag of the
+  audio they were cut from, and a chunk holding any uninterruptible audio is
+  itself uninterruptible.
+
 ### Changed
 
 - **The `service` label on metrics names the provider, not the instance.** It
@@ -356,6 +368,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   client's LLM text. `WorkerConfig.EnableRTVI` left nil now adds RTVI only when
   the pipeline is not bridged, which `llmworker` already did on its own. Set it
   to true to keep RTVI on a bridged worker.
+
+- **An interruption no longer drops a function call result queued behind TTS
+  audio.** The TTS service's serialization queue, which keeps frames in order
+  with the audio contexts around them, dropped everything it held on an
+  interruption, so a `FunctionCallResultFrame` waiting there was lost and its
+  result never reached the context. It now keeps the uninterruptible frames and
+  drops the rest.
 
 ## [0.2.0] - 2026-09-18
 

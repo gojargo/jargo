@@ -181,3 +181,39 @@ func TestPipelineFlushDone(t *testing.T) {
 		t.Error("Done should be closed after CloseDone")
 	}
 }
+
+// The interruptible flag on frames: its defaults and how a frame overrides them.
+
+func TestInterruptibleDefaultsFollowTheType(t *testing.T) {
+	if !frames.Interruptible(frames.NewTextFrame("hi")) {
+		t.Error("a text frame should be interruptible by default")
+	}
+	if frames.Interruptible(frames.NewEndFrame()) {
+		t.Error("an EndFrame should be uninterruptible by default")
+	}
+	if frames.Interruptible(frames.NewFunctionCallResultFrame("1", "f", nil, "")) {
+		t.Error("a FunctionCallResultFrame should be uninterruptible by default")
+	}
+}
+
+func TestInterruptibleMayBeSetEitherWay(t *testing.T) {
+	text := frames.NewTextFrame("hi")
+	text.SetInterruptible(false)
+	if frames.Interruptible(text) {
+		t.Error("a text frame set uninterruptible is still interruptible")
+	}
+	end := frames.NewEndFrame()
+	end.SetInterruptible(true)
+	if !frames.Interruptible(end) {
+		t.Error("an EndFrame set interruptible is still uninterruptible")
+	}
+}
+
+func TestATypeDeclaresItsDefaultWithTheMixin(t *testing.T) {
+	if frames.Interruptible(newSampleEndFrame()) {
+		t.Error("a frame type embedding UninterruptibleMixin should be uninterruptible by default")
+	}
+	if !frames.Interruptible(newSampleTextFrame("x")) {
+		t.Error("a frame type without the mixin should be interruptible by default")
+	}
+}

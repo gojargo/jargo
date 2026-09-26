@@ -59,7 +59,7 @@ Inside each processor, `Base.ProcessFrame` sees the `InterruptionFrame` and call
 flowchart TB
     I["InterruptionFrame arrives<br/><i>on the input goroutine</i>"] --> D{"direct mode?"}
     D -->|yes| Skip["ignore: nothing buffered"]
-    D -->|no| U{"is the current frame<br/>Uninterruptible?"}
+    D -->|no| U{"is the current frame<br/>uninterruptible?"}
 
     U -->|yes| Keep["<b>Let it finish.</b><br/>Flush only the queued<br/>interruptible frames."]
     U -->|no| Kill["<b>Cancel the process goroutine</b><br/>(wait up to 3s)<br/>then start a fresh one"]
@@ -75,7 +75,7 @@ Three details in there carry real weight:
 
 - **The process goroutine is disposable.** Interruption cancels its context and
   starts a new one. Whatever it was doing is abandoned, which is why work that
-  must not be abandoned needs the uninterruptible marker.
+  must not be abandoned has to be uninterruptible.
 - **Cancellation is bounded at 3 seconds.** If a `ProcessFrame` implementation
   ignores `ctx`, the pipeline logs a warning and moves on rather than hanging.
   Honor `ctx` in anything slow.
@@ -84,7 +84,9 @@ Three details in there carry real weight:
 
 ## Surviving an interruption
 
-Embed `UninterruptibleMixin` next to the category base:
+Whether an interruption may drop a frame is decided per frame, and
+`frames.Interruptible` reports it. A frame type that should survive by default
+embeds `UninterruptibleMixin` next to the category base:
 
 ```go
 type ChargeCardResultFrame struct {
@@ -101,6 +103,13 @@ canceled**; it finishes.
 `FunctionCallResultFrame` is uninterruptible for exactly this reason. A tool call
 that has already run has side effects; its result has to reach the context even
 if the user talked over the answer.
+
+The type only sets the default. `SetInterruptible` on one frame, before it is
+pushed, decides for that frame alone, either way. The flag is read when the
+interruption lands, so it is what the frame carries then that counts. It also
+travels with the audio: the output transport cuts its chunks from audio runs
+that keep the flag of the frames they came from, and a chunk holding any
+uninterruptible audio is itself uninterruptible.
 
 ## Who decides
 

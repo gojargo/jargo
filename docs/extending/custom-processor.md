@@ -233,7 +233,8 @@ func NewOrderLookupFrame(id string) *OrderLookupFrame {
 ```
 
 Pick the category deliberately: it decides whether an interruption drops your
-frame. Add `frames.UninterruptibleMixin` if the work must survive one. See
+frame. Add `frames.UninterruptibleMixin` if the work must survive one, or call
+`SetInterruptible(false)` on a single frame before pushing it. See
 [Frames](../concepts/frames.md#the-three-categories).
 
 ## Testing
