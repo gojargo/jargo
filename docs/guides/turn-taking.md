@@ -116,6 +116,36 @@ turn is semantically complete (prepend `turns.CompletionInstructions` to the
 system prompt). Mute strategies (`turns.NewAlwaysUserMute`, …) suppress user
 input while the bot speaks or a tool call runs.
 
+### Turns with nothing transcribed
+
+A turn can start on voice activity alone and end with no transcript: a cough,
+background noise, or speech the STT could not make out. Nothing is written to
+the conversation and the LLM does not run. `turns.Config.EmptyUserTurn` decides
+what happens then, and the two cases differ in what silence costs:
+
+- **The turn interrupted the bot**, while it was thinking, speaking or running a
+  tool (a turn before the bot has first finished speaking counts too). Left
+  unanswered, the bot would stay silent mid-response, so by default the
+  aggregator adds a developer message (`turns.DefaultEmptyUserTurnInterruptedPrompt`)
+  and runs the LLM once: the bot asks the user to repeat, or picks up where it
+  left off.
+- **The bot was waiting for the user.** The conversation is not stuck, and
+  answering what may be noise would be intrusive, so the turn gets no answer
+  unless `IdlePrompt` is set. The idle timer starts again, as it would have had
+  the turn not happened.
+
+`MaxConsecutiveRecoveries` (1 by default) bounds how many empty turns in a row
+are answered; a transcribed turn resets the count. An empty `InterruptedPrompt`
+turns the interrupted case off. The recovery is off with a realtime service,
+which hears the user's audio itself.
+
+```go
+idle := "The user may have said something, but it was not recognized. Briefly ask them to repeat it."
+aggregators.WithTurns(turns.Config{
+    EmptyUserTurn: &turns.EmptyUserTurnConfig{IdlePrompt: idle},
+})
+```
+
 ## Implementation notes
 
 - VAD gating is **confidence-only**: jargo trusts Silero's neural confidence

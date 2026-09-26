@@ -393,6 +393,13 @@ type UserAggregator struct {
 	// sessionCtx is the session the processor was set up with, so the deferred
 	// write has a context to push its frames on.
 	sessionCtx context.Context //nolint:containedctx // the session, held for a timer
+	// emptyUserTurn is how a user turn ending with no transcript is answered,
+	// nil when it is not.
+	emptyUserTurn *turns.EmptyUserTurnConfig
+	// turnInterruptedBot is whether the current user turn interrupted the bot.
+	turnInterruptedBot bool
+	// emptyTurnRecoveries is how many empty turns in a row have been answered.
+	emptyTurnRecoveries int
 }
 
 func newUser(
@@ -413,11 +420,17 @@ func newUser(
 		realtime:           realtime,
 	}
 	u.Base = processor.New("UserContextAggregator", u)
+	u.emptyUserTurn = &turns.EmptyUserTurnConfig{}
+	if cfg.EmptyUserTurn != nil {
+		c := *cfg.EmptyUserTurn
+		u.emptyUserTurn = &c
+	}
 	// Only when the mode was asked for outright. Left to be decided from the
 	// services, the mutation waits for the one that announces itself, which is
 	// also where it is applied on top of any strategies a service recommends.
 	if realtime != nil && *realtime {
 		u.mutateForRealtime(&cfg.Strategies)
+		u.disableEmptyUserTurnRecovery()
 	}
 	if vadCfg != nil {
 		u.vad = newVADController(u, *vadCfg)
@@ -754,6 +767,8 @@ func (u *UserAggregator) handleLLMServiceMetadata(fr *frames.LLMServiceMetadataF
 		return
 	}
 
+	u.disableEmptyUserTurnRecovery()
+
 	strategies := u.turn.Strategies()
 	if !u.mutateForRealtime(&strategies) {
 		return
@@ -784,6 +799,20 @@ func (u *UserAggregator) mutateForRealtime(s *turns.UserTurnStrategies) bool {
 		slog.Debug(msg, args...)
 	}
 	return true
+}
+
+// disableEmptyUserTurnRecovery turns off empty user turn recovery for realtime
+// mode. A realtime LLM service hears the user's audio directly, so an empty
+// transcript does not mean the model missed the speech.
+func (u *UserAggregator) disableEmptyUserTurnRecovery() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.emptyUserTurn == nil {
+		return
+	}
+	u.emptyUserTurn = nil
+	slog.Debug("realtime mode: empty user turn recovery disabled; the realtime LLM service "+
+		"hears the user's audio directly", "processor", u.Name())
 }
 
 // realtimeMode reports whether the pipeline is driven by a speech-to-speech
@@ -2161,9 +2190,13 @@ func (u *UserAggregator) Push(ctx context.Context, f frames.Frame, dir processor
 func (u *UserAggregator) onTurnStarted(
 	ctx context.Context, strategy turns.StartStrategy, params turns.UserTurnStartedParams,
 ) {
+	// Unless the bot is waiting for the user, it is thinking, speaking or
+	// running a function call, and the interruption below cancels that.
+	interruptedBot := params.EnableInterruptions && !u.idle.WaitingForUser()
 	u.mu.Lock()
 	u.turnStartedAt = frames.NowTimestamp()
 	u.wholeTurn = ""
+	u.turnInterruptedBot = interruptedBot
 	u.mu.Unlock()
 
 	if params.EnableUserSpeakingFrames {
@@ -2327,18 +2360,80 @@ func (u *UserAggregator) reportTurnStopped(
 	u.wholeTurn = ""
 	u.mu.Unlock()
 
-	if onSessionEnd && content == "" {
-		return
+	if !onSessionEnd || content != "" {
+		u.mu.Lock()
+		u.turnStartedAt = ""
+		u.mu.Unlock()
+		u.Events().Call(ctx, EventUserTurnStopped, u, UserTurnStopped{
+			Strategy:  strategy,
+			Content:   content,
+			Timestamp: startedAt,
+			UserID:    userID,
+		})
 	}
+
 	u.mu.Lock()
-	u.turnStartedAt = ""
+	interruptedBot := u.turnInterruptedBot
+	u.turnInterruptedBot = false
+	if content != "" {
+		u.emptyTurnRecoveries = 0
+	}
 	u.mu.Unlock()
-	u.Events().Call(ctx, EventUserTurnStopped, u, UserTurnStopped{
-		Strategy:  strategy,
-		Content:   content,
-		Timestamp: startedAt,
-		UserID:    userID,
-	})
+
+	if content == "" && !onSessionEnd {
+		// An empty turn does not run the LLM, so the bot stays silent unless a
+		// recovery runs it. Without one, restart the idle timer, which this
+		// turn's start canceled.
+		if !u.maybeRecoverEmptyUserTurn(ctx, interruptedBot) {
+			u.idle.WaitForUser()
+		}
+	}
+}
+
+// maybeRecoverEmptyUserTurn runs the LLM for a user turn that ended with no
+// transcript, and reports whether it did. interruptedBot is whether the turn
+// interrupted a response in progress.
+func (u *UserAggregator) maybeRecoverEmptyUserTurn(ctx context.Context, interruptedBot bool) bool {
+	u.mu.Lock()
+	cfg := u.emptyUserTurn
+	if cfg == nil {
+		u.mu.Unlock()
+		return false
+	}
+	prompt := cfg.Prompt(interruptedBot)
+	if prompt == "" {
+		u.mu.Unlock()
+		return false
+	}
+	if u.emptyTurnRecoveries >= cfg.MaxRecoveries() {
+		u.mu.Unlock()
+		slog.DebugContext(ctx, "empty user turn left unanswered, too many in a row", "processor", u.Name())
+		return false
+	}
+	u.mu.Unlock()
+
+	// A pending function call result runs the LLM itself, and a muted user
+	// should not be prompted to speak.
+	u.muteMu.Lock()
+	muted := u.muted
+	u.muteMu.Unlock()
+	if muted || u.idle.FunctionCallsInProgress() {
+		return false
+	}
+
+	kind := "idle"
+	if interruptedBot {
+		kind = "interrupted"
+	}
+	slog.DebugContext(ctx, "empty user turn, running the LLM", "processor", u.Name(), "turn", kind)
+	u.mu.Lock()
+	u.emptyTurnRecoveries++
+	u.mu.Unlock()
+	u.context.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: prompt})
+	if err := u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream); err != nil {
+		slog.DebugContext(ctx, "pushing the context for an empty user turn failed", "error", err)
+	}
+	return true
 }
 
 var _ turns.Emitter = (*UserAggregator)(nil)

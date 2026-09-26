@@ -24,4 +24,10 @@ type Config struct {
 	// MuteStrategies suppress user input while engaged (e.g. while the bot
 	// speaks or a tool call runs). They are OR-reduced; empty means never mute.
 	MuteStrategies []MuteStrategy
+	// EmptyUserTurn is how the user aggregator responds to a user turn that
+	// ends with no transcript. Nil uses the defaults: such a turn is answered
+	// when it interrupted the bot, and left unanswered otherwise. It is ignored
+	// with a realtime LLM service, which hears the user's audio directly, and by
+	// a UserTurnProcessor, which aggregates nothing.
+	EmptyUserTurn *EmptyUserTurnConfig
 }

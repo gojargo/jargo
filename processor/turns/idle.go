@@ -47,6 +47,7 @@ type UserIdleController struct {
 	// without waiting for the next bot turn. It is tracked even while the
 	// timeout is <= 0 and no timer runs.
 	waitingForUser     bool
+	botSpeaking        bool
 	userTurnInProgress bool
 	functionCalls      int
 	timerCancel        func()
@@ -118,11 +119,13 @@ func (c *UserIdleController) Process(f frames.Frame) {
 			c.startTimer()
 		}
 	case *frames.BotStoppedSpeakingFrame:
+		c.botSpeaking = false
 		if !c.userTurnInProgress && c.functionCalls == 0 {
 			c.waitingForUser = true
 			c.startTimer()
 		}
 	case *frames.BotStartedSpeakingFrame:
+		c.botSpeaking = true
 		c.waitingForUser = false
 		c.cancelTimer()
 	case *frames.UserStartedSpeakingFrame:
@@ -140,6 +143,40 @@ func (c *UserIdleController) Process(f frames.Frame) {
 			c.functionCalls--
 		}
 	}
+}
+
+// WaitingForUser reports whether the bot has finished responding and is waiting
+// for the user. It is false while the bot is thinking, speaking or running a
+// function call, and during a user turn.
+func (c *UserIdleController) WaitingForUser() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.waitingForUser
+}
+
+// FunctionCallsInProgress reports whether function calls have started and not
+// finished.
+func (c *UserIdleController) FunctionCallsInProgress() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.functionCalls > 0
+}
+
+// WaitForUser starts waiting for the user after a turn the bot will not answer.
+//
+// The timer normally starts when the bot stops speaking. A user turn that ends
+// with nothing for the bot to answer (no transcript, say) cancels the timer
+// without the bot speaking again afterwards, so the caller re-arms it here. It
+// does nothing while the bot is speaking, a user turn is in progress, or
+// function calls are pending.
+func (c *UserIdleController) WaitForUser() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.botSpeaking || c.userTurnInProgress || c.functionCalls > 0 {
+		return
+	}
+	c.waitingForUser = true
+	c.startTimer()
 }
 
 // startTimer arms the one-shot idle timer. It runs with the mutex held.

@@ -89,6 +89,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Model` reporting the model it generates with now. Settings are still changed
   through an update frame.
 
+- **A user turn that ends with nothing transcribed can be answered.** A turn can
+  start on voice activity alone and end with no transcript: a cough, background
+  noise, or speech the STT could not recognize. `turns.Config.EmptyUserTurn`, a
+  `turns.EmptyUserTurnConfig`, decides what the user aggregator does then. When
+  the turn interrupted the bot (it was thinking, speaking or running a tool, or
+  had not yet finished speaking once), the bot would otherwise stay silent
+  mid-response, so the aggregator adds a developer message
+  (`InterruptedPrompt`, `turns.DefaultEmptyUserTurnInterruptedPrompt` by
+  default) and runs the LLM once. When the bot was waiting for the user, the
+  turn goes unanswered unless `IdlePrompt` is set. `MaxConsecutiveRecoveries`
+  (1 by default) bounds how many empty turns in a row are answered, and none is
+  while the user is muted or a tool call is pending. It is off with a realtime
+  service. `turns.UserIdleController` gained `WaitingForUser`,
+  `FunctionCallsInProgress` and `WaitForUser`. **Behaviour change:** it is on
+  by default; an empty `InterruptedPrompt` turns it off.
+
 ### Changed
 
 - **The `service` label on metrics names the provider, not the instance.** It
@@ -471,6 +487,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **The observer queues no longer keep delivered reports alive.** Taking a
   report from an observer's queue left it in the queue's backing array, so the
   frame it carried stayed reachable until the array was replaced.
+
+- **`on_user_turn_idle` fires after a user turn with nothing transcribed.** The
+  turn's start canceled the idle timer and, with no reply to follow it, nothing
+  restarted it. The timer now starts again after such a turn, unless the turn
+  is answered.
 
 ## [0.2.0] - 2026-09-18
 

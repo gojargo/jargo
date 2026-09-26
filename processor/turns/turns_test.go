@@ -581,3 +581,57 @@ func TestIdleUpdateDoesNotArmOutsideTheWaitingWindow(t *testing.T) {
 		})
 	}
 }
+
+// WaitForUser arms the timer after a user turn the bot will not answer: the
+// user spoke while the bot was idle, which canceled the timer, and nothing else
+// would restart it.
+func TestIdleWaitForUserArmsTheTimer(t *testing.T) {
+	h := newIdleHarness(t, idleTimeout)
+
+	h.send(frames.NewBotStoppedSpeakingFrame(), frames.NewUserStartedSpeakingFrame(),
+		frames.NewUserStoppedSpeakingFrame())
+	h.ctrl.WaitForUser()
+
+	if !h.waitFired(2 * time.Second) {
+		t.Error("WaitForUser did not arm the timer")
+	}
+}
+
+// WaitForUser does nothing while the bot is speaking or a function call is
+// pending: each arms the timer itself when it is done.
+func TestIdleWaitForUserDoesNotArmWhileBusy(t *testing.T) {
+	cases := map[string]frames.Frame{
+		"the bot is speaking":            frames.NewBotStartedSpeakingFrame(),
+		"a function call is in progress": frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "1"}}),
+	}
+	for name, f := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newIdleHarness(t, idleTimeout)
+			h.send(f)
+			h.ctrl.WaitForUser()
+			if h.waitFired(3 * idleTimeout) {
+				t.Error("WaitForUser armed the timer")
+			}
+		})
+	}
+}
+
+// WaitingForUser follows the bot finishing and the user speaking.
+func TestIdleWaitingForUser(t *testing.T) {
+	h := newIdleHarness(t, idleTimeout)
+	if h.ctrl.WaitingForUser() {
+		t.Fatal("waiting for the user before the bot spoke")
+	}
+	h.send(frames.NewBotStoppedSpeakingFrame())
+	if !h.ctrl.WaitingForUser() {
+		t.Fatal("not waiting for the user after the bot stopped speaking")
+	}
+	h.send(frames.NewUserStartedSpeakingFrame())
+	if h.ctrl.WaitingForUser() {
+		t.Fatal("still waiting for the user once they spoke")
+	}
+	h.send(frames.NewUserStoppedSpeakingFrame())
+	if h.ctrl.WaitingForUser() {
+		t.Fatal("waiting for the user again as soon as they stopped")
+	}
+}
