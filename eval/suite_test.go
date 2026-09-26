@@ -163,13 +163,13 @@ turns:
 	return m
 }
 
-// wantAtMost fails unless the bot was played no more scenarios at once than the
-// slots its entry holds.
+// wantAtMost fails unless the bot was played no more scenarios at once than its
+// entry's cap.
 //
 // The count is one more than that at most, because a connection the harness has
 // finished with is counted until the bot's own pipeline has torn down behind it.
 // That laxity is far short of the failure being watched for here, where an entry
-// with no cap of its own takes every slot the suite has.
+// with a cap of its own takes every slot the suite has.
 func wantAtMost(t *testing.T, bot *overlapBot, slots int, what string) {
 	t.Helper()
 	if got := bot.highest(); got > slots+1 {
@@ -177,24 +177,8 @@ func wantAtMost(t *testing.T, bot *overlapBot, slots int, what string) {
 	}
 }
 
-// An entry's scenarios go one after another on the slot it holds, so a bot whose
-// provider rate-limits concurrent connections is never asked for more than one.
-func TestSuiteRunsAnEntrysScenariosBackToBack(t *testing.T) {
-	bot := &overlapBot{}
-	m := suiteDir(t, fmt.Sprintf(`concurrency: 6
-suite:
-  - bot_url: %s
-    scenarios: [s0.yaml, s1.yaml, s2.yaml, s3.yaml, s4.yaml, s5.yaml]
-`, bot.serve(t)), 6)
-
-	results := eval.RunSuite(t.Context(), m, nil)
-	if len(results) != 6 {
-		t.Fatalf("got %d results, want one per scenario", len(results))
-	}
-	wantAtMost(t, bot, 1, "the bot")
-}
-
-// Its concurrency: is how many it may hold at once, for a bot that can take more.
+// Its concurrency: is how many it may have in flight at once, for a bot whose
+// provider rate-limits concurrent connections.
 func TestAnEntrysConcurrencyIsItsOwnCap(t *testing.T) {
 	bot := &overlapBot{}
 	m := suiteDir(t, fmt.Sprintf(`concurrency: 6
@@ -206,23 +190,6 @@ suite:
 
 	eval.RunSuite(t.Context(), m, nil)
 	wantAtMost(t, bot, 2, "the bot")
-}
-
-// The suite is spread over every entry from the start, rather than putting every
-// slot on one entry's scenarios until they are done.
-func TestSuiteSpreadsItsSlotsOverTheEntries(t *testing.T) {
-	first, second := &overlapBot{}, &overlapBot{}
-	m := suiteDir(t, fmt.Sprintf(`concurrency: 4
-suite:
-  - bot_url: %s
-    scenarios: [s0.yaml, s1.yaml, s2.yaml, s3.yaml]
-  - bot_url: %s
-    scenarios: [s0.yaml, s1.yaml, s2.yaml, s3.yaml]
-`, first.serve(t), second.serve(t)), 4)
-
-	eval.RunSuite(t.Context(), m, nil)
-	wantAtMost(t, first, 1, "the first bot")
-	wantAtMost(t, second, 1, "the second bot")
 }
 
 // An entry is labeled by its name, or by its bot when it has none, and the

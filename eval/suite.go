@@ -42,9 +42,9 @@ type SuiteEntry struct {
 	Name string `yaml:"name"`
 	// BotURL is the bot's RTVI WebSocket endpoint (ws:// or wss://).
 	BotURL string `yaml:"bot_url"`
-	// Concurrency is how many of this entry's scenarios run at once, under the
-	// manifest's own; zero runs them one after another. It is for a bot whose
-	// provider rate-limits concurrent connections.
+	// Concurrency caps how many of this entry's scenarios may be in flight at
+	// once, under the manifest's own; zero sets no cap of its own. It is for a
+	// bot whose provider rate-limits concurrent connections.
 	Concurrency int `yaml:"concurrency"`
 	// Scenarios are scenario file paths, resolved relative to the manifest.
 	Scenarios []string `yaml:"scenarios"`
@@ -56,14 +56,6 @@ func (e SuiteEntry) label() string {
 		return e.Name
 	}
 	return e.BotURL
-}
-
-// slots is how many of the entry's scenarios may run at once.
-func (e SuiteEntry) slots() int {
-	if e.Concurrency > 0 {
-		return e.Concurrency
-	}
-	return 1
 }
 
 // SuiteResult is the outcome of running one scenario against one bot.
@@ -179,111 +171,149 @@ func (m *Manifest) jobs() []job {
 // RunSuite runs every scenario in the manifest against its bot and returns one
 // result per scenario, in manifest order.
 //
-// Each entry gets a queue of its own, and its scenarios go one after another on
-// the slots it holds, one by default and as many as its Concurrency says. The
-// manifest's own Concurrency caps how many run at once across every entry, and
-// the queues take those slots in manifest order, so the suite is spread over
-// every bot from the start rather than putting every slot on one entry's
-// scenarios until they are done. That is what keeps a slow or rate-limited
-// provider from holding the whole suite.
+// The manifest's Concurrency is how many scenarios run at once. The suite keeps
+// that many going, taking the next scenario from the first entry in manifest
+// order that still has one, so an entry's scenarios finish together and no slot
+// waits while any entry still has scenarios. An entry whose provider rate-limits
+// sets its own Concurrency, and never has more than that many scenarios in
+// flight; a worker that finds it full takes the next entry's scenario.
 //
 // newJudge builds the judge for one scenario, and is called once per scenario
 // rather than once for the suite: a judge holds the conversation it grades
 // against, so scenarios running at the same time cannot share one. It may
 // return nil, and may itself be nil, when no scenario uses `judge:`.
 func RunSuite(ctx context.Context, m *Manifest, newJudge func() Judge) []SuiteResult {
+	return m.runSuite(ctx, newJudge, runOne)
+}
+
+// runSuite is RunSuite with the scenario runner given, so the scheduling can be
+// tested without a bot behind it.
+func (m *Manifest) runSuite(
+	ctx context.Context, newJudge func() Judge, run func(context.Context, job, Judge) SuiteResult,
+) []SuiteResult {
 	js := m.jobs()
 	results := make([]SuiteResult, len(js))
 
-	slots := make(chan struct{}, m.concurrency())
+	queue := newRunQueue(m.entryQueues(js))
 	var wg sync.WaitGroup
-	for _, q := range m.entryQueues(js) {
-		for range q.lanes() {
-			wg.Add(1)
-			go func(q *entryQueue) {
-				defer wg.Done()
-				q.drain(ctx, slots, results, newJudge)
-			}(q)
-		}
+	for range min(m.concurrency(), len(js)) {
+		wg.Go(func() {
+			// Take scenarios from the queue and run them, one after another,
+			// until none is left.
+			for {
+				idx, entry, ok := queue.take()
+				if !ok {
+					return
+				}
+				var judge Judge
+				if newJudge != nil {
+					judge = newJudge()
+				}
+				results[idx] = run(ctx, js[idx], judge)
+				queue.done(entry)
+			}
+		})
 	}
 	wg.Wait()
 	return results
 }
 
-// entryQueue is one entry's scenarios, in manifest order, and how many of them
-// may run at once.
+// entryQueue is one entry's scenarios, in manifest order, with the entry's cap
+// on scenarios in flight.
 type entryQueue struct {
-	slots int
-
-	mu    sync.Mutex
-	next  int
+	label string
+	// cap is the most of the entry's scenarios in flight at once; zero is no cap.
+	cap   int
 	items []int // indices into the suite's job list
-	jobs  []job
 }
 
-// lanes is how many of this entry's scenarios to run at once: its slots, or
-// fewer when it holds fewer scenarios than that.
-func (q *entryQueue) lanes() int {
-	return min(q.slots, len(q.items))
+// runQueue is the suite's scenarios, handed out to workers in manifest order.
+//
+// Each queue is one entry's scenarios, in the order the entries were given. A
+// worker takes the next scenario from the first queue whose entry is under its
+// cap; when every queue with scenarios left is at its cap, it waits for a
+// scenario to finish.
+type runQueue struct {
+	mu       sync.Mutex
+	changed  *sync.Cond
+	queues   []*entryQueue
+	inFlight map[string]int
 }
 
-// take claims the next scenario in the queue, reporting false once it is empty.
-func (q *entryQueue) take() (idx int, j job, ok bool) {
+func newRunQueue(queues []*entryQueue) *runQueue {
+	q := &runQueue{queues: queues, inFlight: make(map[string]int, len(queues))}
+	q.changed = sync.NewCond(&q.mu)
+	return q
+}
+
+// take claims the next scenario to run, and the entry it counts against,
+// reporting false once none is left.
+func (q *runQueue) take() (idx int, entry string, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.next >= len(q.items) {
-		return 0, job{}, false
+	for q.anyLeft() {
+		if idx, entry, ok := q.pick(); ok {
+			return idx, entry, true
+		}
+		q.changed.Wait()
 	}
-	i := q.next
-	q.next++
-	return q.items[i], q.jobs[i], true
+	return 0, "", false
 }
 
-// drain holds one of the suite's slots and runs this entry's queue on it, one
-// scenario after another.
-func (q *entryQueue) drain(
-	ctx context.Context, slots chan struct{}, results []SuiteResult, newJudge func() Judge,
-) {
-	slots <- struct{}{}
-	defer func() { <-slots }()
-	for {
-		idx, j, ok := q.take()
-		if !ok {
-			return
-		}
-		var judge Judge
-		if newJudge != nil {
-			judge = newJudge()
-		}
-		results[idx] = runOne(ctx, j, judge)
-	}
+// done counts a scenario of entry as finished, so the entry may take another.
+func (q *runQueue) done(entry string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.inFlight[entry]--
+	q.changed.Broadcast()
 }
 
-// entryQueues splits the job list into one queue per entry, in manifest order,
-// each carrying the slots that entry may hold.
+// anyLeft reports whether any queue still has a scenario to hand out.
+func (q *runQueue) anyLeft() bool {
+	for _, eq := range q.queues {
+		if len(eq.items) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// pick takes the first queued scenario whose entry is under its cap.
+func (q *runQueue) pick() (int, string, bool) {
+	for _, eq := range q.queues {
+		if len(eq.items) > 0 && (eq.cap == 0 || q.inFlight[eq.label] < eq.cap) {
+			q.inFlight[eq.label]++
+			idx := eq.items[0]
+			eq.items = eq.items[1:]
+			return idx, eq.label, true
+		}
+	}
+	return 0, "", false
+}
+
+// entryQueues splits the job list into one queue per entry label, in manifest
+// order, each with the entry's cap. An entry's cap is the lowest Concurrency
+// among the manifest entries under its label, and none when none sets it.
 func (m *Manifest) entryQueues(js []job) []*entryQueue {
-	slots := make(map[string]int, len(m.Suite))
+	caps := make(map[string]int, len(m.Suite))
 	for _, e := range m.Suite {
-		// Two entries under one label share their slots, and the lower cap wins.
-		if have, ok := slots[e.label()]; !ok || e.slots() < have {
-			slots[e.label()] = e.slots()
+		if e.Concurrency <= 0 {
+			continue
+		}
+		if have, ok := caps[e.label()]; !ok || e.Concurrency < have {
+			caps[e.label()] = e.Concurrency
 		}
 	}
-	var order []string
+	var out []*entryQueue
 	queues := make(map[string]*entryQueue, len(m.Suite))
 	for i, j := range js {
 		q, ok := queues[j.entry]
 		if !ok {
-			q = &entryQueue{slots: slots[j.entry]}
+			q = &entryQueue{label: j.entry, cap: caps[j.entry]}
 			queues[j.entry] = q
-			order = append(order, j.entry)
+			out = append(out, q)
 		}
 		q.items = append(q.items, i)
-		q.jobs = append(q.jobs, j)
-	}
-	out := make([]*entryQueue, 0, len(order))
-	for _, label := range order {
-		out = append(out, queues[label])
 	}
 	return out
 }

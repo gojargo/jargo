@@ -94,6 +94,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   **Behaviour change:** to keep the previous model, set
   `Model: "grok-voice-transcribe-1.0"`.
 
+- **An eval suite keeps `concurrency` scenarios going.** Each entry's
+  scenarios ran one after another on a single slot unless the entry set a
+  `concurrency:` of its own, so a manifest with fewer entries than slots left
+  slots idle, and one entry with ten scenarios ran them one by one. The suite
+  now keeps the manifest's `concurrency` scenarios in flight, taking the next
+  one from the first entry in manifest order that still has one, so an entry's
+  scenarios still finish together. An entry's own `concurrency:` is now only a
+  cap on its scenarios in flight, for a bot whose provider rate-limits.
+  **Behaviour change:** an entry without `concurrency:` now runs its scenarios
+  in parallel; give it `concurrency: 1` to keep them one at a time.
+
 ### Added
 
 - **A bot can report the markers its model emits, and a scenario can assert on
