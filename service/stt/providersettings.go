@@ -46,6 +46,13 @@ func (p *providerSettings) hold(fn func()) {
 	fn()
 }
 
+// settings is the provider's own settings, for reading, or nil when it keeps
+// none.
+func (p *providerSettings) settings() any {
+	store, _ := p.store()
+	return store
+}
+
 // store is the provider's own settings, and whether it has any.
 func (p *providerSettings) store() (any, bool) {
 	holder, ok := p.provider.(SettingsHolder)

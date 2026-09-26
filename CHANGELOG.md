@@ -64,6 +64,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   audio they were cut from, and a chunk holding any uninterruptible audio is
   itself uninterruptible.
 
+- **Classifiers answer typed questions about some state.** A classifier is a
+  plain object, not a processor: whoever needs answers builds one and asks it.
+  A question is a `classifier.YesNoQuestion`, a `ChoiceQuestion` among ordered
+  options, or a `ScoreQuestion` on a scale. Questions are asked by name,
+  several about one state at once: `Ask` takes any mix of kinds, and `YesNo`,
+  `Choice` and `Score` take questions of one kind and return typed results
+  (`YesNoResult` with its probability and `IsYes`, `ChoiceResult` with the
+  choice and a probability per option, `ScoreResult` with the position on the
+  scale and a probability per level). A failure wraps `classifier.ErrClassifier`.
+  After every call a classifier raises `on_metrics` with the time it took and,
+  when it knows them, the tokens it used, for its owner to push in a
+  `MetricsFrame`. Two implementations ship. `classifier/llm` asks any service
+  that runs a one-shot inference, all the questions in one call, for one JSON
+  object held to a reply schema where the provider enforces one; it waits 10s
+  by default. `classifier/jev` asks Jev, TypeSafe's classification model,
+  whose probabilities are calibrated; several classifiers can share one
+  `jev.Client`, which keeps an HTTP/2 connection open between questions,
+  retries when Jev is busy and counts the tokens used. A choice question takes
+  at most 255 options there.
+
+- **A service's current settings can be read from outside it.** The LLM, TTS
+  and STT services gained a read-only `CurrentSettings`, and the LLM service a
+  `Model` reporting the model it generates with now. Settings are still changed
+  through an update frame.
+
 ### Changed
 
 - **The `service` label on metrics names the provider, not the instance.** It

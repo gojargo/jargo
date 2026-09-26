@@ -77,6 +77,11 @@ type SegmentService struct {
 	segmentWG     sync.WaitGroup
 }
 
+// CurrentSettings is the service's current settings, for code outside the
+// service to read, or nil when its provider keeps none. They are still changed
+// through an STTUpdateSettingsFrame.
+func (s *SegmentService) CurrentSettings() any { return s.set.settings() }
+
 // NewSegment builds a segmented STT service named name driven by tr. A non-zero
 // sampleRate overrides the transport's input rate.
 func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {

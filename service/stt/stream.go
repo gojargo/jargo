@@ -418,6 +418,11 @@ type StreamService struct {
 	set *providerSettings
 }
 
+// CurrentSettings is the service's current settings, for code outside the
+// service to read, or nil when its provider keeps none. They are still changed
+// through an STTUpdateSettingsFrame.
+func (s *StreamService) CurrentSettings() any { return s.set.settings() }
+
 // NewStream builds a streaming STT service named name driven by conn. A non-zero
 // sampleRate overrides the transport's input rate.
 func NewStream(name string, conn Connector, sampleRate int) *StreamService {

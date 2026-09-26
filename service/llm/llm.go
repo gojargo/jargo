@@ -623,6 +623,16 @@ func (b *Base) SetModel(model string) {
 	b.model = model
 }
 
+// Model is the model the service generates with, as it stands now: the one it
+// was built with, or the one a settings update changed it to.
+func (b *Base) Model() string { return b.modelName() }
+
+// CurrentSettings is the service's current settings, for code outside the
+// service to read, such as the model. They are still changed through an
+// LLMUpdateSettingsFrame. It is not named Settings, which is the method a
+// provider keeping settings of its own implements.
+func (b *Base) CurrentSettings() any { return b.settingsStore() }
+
 // modelName is the identifier the generation is measured and priced against.
 func (b *Base) modelName() string {
 	b.modelMu.Lock()

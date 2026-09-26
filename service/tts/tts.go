@@ -594,6 +594,16 @@ func skipsTTS(f frames.Frame) bool {
 	return skip != nil && *skip
 }
 
+// CurrentSettings is the service's current settings, for code outside the
+// service to read, or nil when its provider keeps none. They are still changed
+// through a TTSUpdateSettingsFrame.
+func (b *Base) CurrentSettings() any {
+	if holder, ok := b.syn.(SettingsHolder); ok {
+		return holder.Settings()
+	}
+	return nil
+}
+
 // updateSettings merges an update into the provider's own settings and lets it
 // act on what changed. A provider whose new settings only take effect on a fresh
 // connection reconnects for itself: unlike a transcription session, which the

@@ -69,6 +69,8 @@ worth knowing:
 - `frames/`, `pipeline/`, `processor/`: the streaming engine.
 - `transport/`: Pion WebRTC, plus WebSocket/telephony and LiveKit.
 - `service/` + `provider/`: STT/LLM/TTS/S2S interfaces and their providers.
+- `classifier/`: typed yes/no, choice and score questions about a state,
+  answered through an LLM service or Jev.
 - `audio/`: Opus, resampling, mixing, VAD and Smart Turn analyzers.
 - `processor/turns`, `processor/aggregators`, `processor/rtvi`: turn-taking,
   conversation context, RTVI.
