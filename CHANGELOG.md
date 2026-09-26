@@ -376,6 +376,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   result never reached the context. It now keeps the uninterruptible frames and
   drops the rest.
 
+- **A Flows node transition survives an interruption.** The messages frame
+  (`LLMMessagesAppendFrame` or `LLMMessagesUpdateFrame`) and the
+  `LLMSetToolsFrame` a transition queues could be dropped by an interruption
+  landing while they were queued, leaving the LLM running with the previous
+  node's context and tools. Both are now uninterruptible, so they are still
+  delivered.
+
 ## [0.2.0] - 2026-09-18
 
 ### Added

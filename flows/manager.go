@@ -369,14 +369,20 @@ func (fm *FlowManager) updateContext(
 
 	messages = append(messages, node.TaskMessages...)
 
+	var contextFrame frames.Frame
 	switch strategy.Strategy {
 	case ContextStrategyReset, ContextStrategyResetWithSummary:
-		out = append(out, frames.NewLLMMessagesUpdateFrame(messages))
+		contextFrame = frames.NewLLMMessagesUpdateFrame(messages)
 	default:
-		out = append(out, frames.NewLLMMessagesAppendFrame(messages))
+		contextFrame = frames.NewLLMMessagesAppendFrame(messages)
 	}
 
-	out = append(out, frames.NewLLMSetToolsFrame(tools))
+	// A node's context and tools must land even if the user interrupts while
+	// they are queued, or the LLM runs with the previous node's.
+	contextFrame.Base().SetInterruptible(false)
+	toolsFrame := frames.NewLLMSetToolsFrame(tools)
+	toolsFrame.SetInterruptible(false)
+	out = append(out, contextFrame, toolsFrame)
 
 	fm.enq.QueueFrames(out)
 	slog.DebugContext(ctx, "flows: updated context", "strategy", strategy.Strategy)

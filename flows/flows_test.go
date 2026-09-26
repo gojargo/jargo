@@ -633,6 +633,51 @@ func TestContextStrategyReset(t *testing.T) {
 	}
 }
 
+// TestContextAndToolsFramesAreUninterruptible checks a node's context and tools
+// frames survive an interruption, under either strategy.
+func TestContextAndToolsFramesAreUninterruptible(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		strategy ContextStrategy
+		isCtx    func(frames.Frame) bool
+	}{
+		{"append", ContextStrategyAppend, func(f frames.Frame) bool {
+			_, ok := f.(*frames.LLMMessagesAppendFrame)
+			return ok
+		}},
+		{"reset", ContextStrategyReset, func(f frames.Frame) bool {
+			_, ok := f.(*frames.LLMMessagesUpdateFrame)
+			return ok
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := ContextStrategyConfig{Strategy: tc.strategy}
+			fm, enq := newManager(t, func(c *Config) { c.ContextStrategy = &cfg })
+			if err := fm.Initialize(context.Background(), node("first")); err != nil {
+				t.Fatalf("Initialize: %v", err)
+			}
+			enq.reset()
+			if err := fm.SetNode(context.Background(), node("second")); err != nil {
+				t.Fatalf("SetNode: %v", err)
+			}
+			var checked []frames.Frame
+			for _, f := range enq.frames() {
+				if _, tools := f.(*frames.LLMSetToolsFrame); tools || tc.isCtx(f) {
+					checked = append(checked, f)
+				}
+			}
+			if len(checked) != 2 {
+				t.Fatalf("got %d context and tools frames, want 2", len(checked))
+			}
+			for _, f := range checked {
+				if frames.Interruptible(f) {
+					t.Errorf("%s is interruptible, want it kept through an interruption", f.Name())
+				}
+			}
+		})
+	}
+}
+
 func TestContextStrategyDefaultsToAppendingOnEveryNode(t *testing.T) {
 	fm, enq := newManager(t)
 	if err := fm.Initialize(context.Background(), node("first")); err != nil {
