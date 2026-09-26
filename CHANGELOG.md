@@ -229,6 +229,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   through an LLM classifier and explains with the same service. A borderline
   reply can get a different verdict than before.
 
+- **Sentences end where the language spoken says they do.** Sentence
+  boundaries now come from per-language segmentation rules built into jargo,
+  with abbreviation lists for some thirty languages and fallbacks for the rest,
+  so no model is loaded at startup. A TTS service splits its text in the
+  language of its settings: `tts.Base.TextAggregationLanguage` reports it, and
+  a settings update that changes the language switches the aggregator with it
+  (a cleared language falls back to English). `text.MatchEndOfSentence` takes
+  the language, and `text.ResolveSentenceTokenizerLanguage` normalizes a code
+  such as `pt-BR` to the one the rules use. **Breaking:** the Punkt tokenizer
+  is gone: `text.SentenceTokenizer`, `PunktTokenizer`, the `NewPunkt`
+  constructors, `tts.Base.TextTokenizer` and `aggregators.NewSentenceWith` are
+  removed. `text.NewSimpleAggregator`, `NewPatternPairAggregator` and
+  `NewSkipTagsAggregator` take a language in place of a tokenizer, the
+  `text.Aggregator` interface gained `Language` and `SetLanguage`, and
+  `RegisterSpoken` on the aggregated frame sequencer takes the language.
+
 ### Added
 
 - **A bot can report the markers its model emits, and a scenario can assert on

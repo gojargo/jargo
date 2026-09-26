@@ -1,0 +1,9 @@
+To słowo bałt. jestskrótem.
+---
+To słowo bałt. jestskrótem.
+===
+Prof. Kowalski przyszedł. Potem wyszedł.
+---
+Prof. Kowalski przyszedł.
+Potem wyszedł.
+===

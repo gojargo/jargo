@@ -134,11 +134,7 @@ type clearingSpy struct {
 
 func newClearingSpy(t *testing.T) *clearingSpy {
 	t.Helper()
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &clearingSpy{SimpleAggregator: text.NewSimpleAggregator(frames.AggregationSentence, tok)}
+	return &clearingSpy{SimpleAggregator: text.NewSimpleAggregator(frames.AggregationSentence, "")}
 }
 
 func (a *clearingSpy) HandleInterruption() {

@@ -19,26 +19,13 @@ import (
 // folding it into a sentence would repeat what the final one says.
 type Sentence struct {
 	*processor.Base
-	tokenizer   text.SentenceTokenizer
 	aggregation string
-	// tokenizerErr is the failure that left this aggregator with no tokenizer,
-	// reported once the pipeline starts and there is somewhere to report it.
-	tokenizerErr error
 }
 
 // NewSentence builds a sentence aggregator that finds sentence boundaries the
-// way the rest of the framework does.
+// way the rest of the framework does, in English.
 func NewSentence(name string) *Sentence {
-	tok, err := text.NewPunktEnglish()
-	s := &Sentence{tokenizer: tok, tokenizerErr: err}
-	s.Base = processor.New(name, s)
-	return s
-}
-
-// NewSentenceWith builds a sentence aggregator finding sentence boundaries with
-// tokenizer, for a caller that has one already or wants another language.
-func NewSentenceWith(name string, tokenizer text.SentenceTokenizer) *Sentence {
-	s := &Sentence{tokenizer: tokenizer}
+	s := &Sentence{}
 	s.Base = processor.New(name, s)
 	return s
 }
@@ -49,16 +36,12 @@ func (s *Sentence) ProcessFrame(ctx context.Context, f frames.Frame, dir process
 		return err
 	}
 
-	if _, isStart := f.(*frames.StartFrame); isStart && s.tokenizerErr != nil {
-		s.PushError(ctx, "sentence aggregator has no tokenizer", s.tokenizerErr, false)
-	}
-
 	switch fr := f.(type) {
 	case *frames.InterimTranscriptionFrame:
 		return nil
 	case *frames.TextFrame:
 		s.aggregation += fr.Text
-		if s.tokenizer == nil || s.tokenizer.MatchEndOfSentence(s.aggregation) == 0 {
+		if text.MatchEndOfSentence(s.aggregation, "") == 0 {
 			return nil
 		}
 		said := s.aggregation

@@ -92,7 +92,7 @@ func TestTTSRequestCarriesWhatTheProviderIsGiven(t *testing.T) {
 // provider, so there is no request to report.
 func TestTTSRequestIsNotAnnouncedForUnspokenText(t *testing.T) {
 	const codeType frames.AggregationType = "code"
-	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, newTokenizer(t))
+	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, "")
 	if err := agg.AddPattern(codeType, "<code>", "</code>", ttstext.MatchAggregate); err != nil {
 		t.Fatalf("add pattern: %v", err)
 	}

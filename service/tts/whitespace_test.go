@@ -76,7 +76,7 @@ func equalUnits(got, want []string) bool {
 // neither inserts nor strips whitespace between the units it is sent would run
 // the words together without it.
 func TestStreamedTokensAreSentAsWritten(t *testing.T) {
-	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, newTokenizer(t))
+	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, "")
 	got := speakUnits(t, agg, false, "Unbelieva", "ble", " isn't it?")
 
 	want := []string{"Unbelieva", "ble", " isn't it?"}
@@ -89,7 +89,7 @@ func TestStreamedTokensAreSentAsWritten(t *testing.T) {
 // carrying something has been sent, a token of nothing but whitespace goes to
 // the provider rather than being dropped as empty.
 func TestWhitespaceBetweenTokensIsSpoken(t *testing.T) {
-	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, newTokenizer(t))
+	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, "")
 	got := speakUnits(t, agg, false, "Hi", " ", "there")
 
 	want := []string{"Hi", " ", "there"}
@@ -101,7 +101,7 @@ func TestWhitespaceBetweenTokensIsSpoken(t *testing.T) {
 // The whitespace opening a context attaches to nothing, so it comes off rather
 // than being sent as a unit of its own or as a lead-in to the first word.
 func TestWhitespaceOpeningAContextIsDropped(t *testing.T) {
-	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, newTokenizer(t))
+	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, "")
 	got := speakUnits(t, agg, false, "  ", "\n  Hi", " there")
 
 	want := []string{"Hi", " there"}

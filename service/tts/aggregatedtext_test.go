@@ -59,20 +59,11 @@ func collectAggregated(
 	return append([]*frames.AggregatedTextFrame(nil), got...)
 }
 
-func newTokenizer(t *testing.T) ttstext.SentenceTokenizer {
-	t.Helper()
-	tok, err := ttstext.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tok
-}
-
 // The frame announcing what is about to be spoken says how the text was
 // grouped. A service passing tokens straight through says so, rather than
 // describing every token as a sentence.
 func TestAggregatedTextCarriesHowItWasGrouped(t *testing.T) {
-	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, newTokenizer(t))
+	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, "")
 	got := collectAggregated(t, agg, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
 		task.QueueFrame(frames.NewLLMTextFrame("Hello there."))
@@ -94,7 +85,7 @@ func TestAggregatedTextCarriesHowItWasGrouped(t *testing.T) {
 // consumer recording the conversation has the delimiters the model wrote even
 // though only the content is spoken.
 func TestAggregatedTextCarriesTheTextItWasCutFrom(t *testing.T) {
-	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, newTokenizer(t))
+	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, "")
 	if err := agg.AddPattern("code", "<code>", "</code>", ttstext.MatchAggregate); err != nil {
 		t.Fatal(err)
 	}

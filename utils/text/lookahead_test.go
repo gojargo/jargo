@@ -122,7 +122,8 @@ func wordEndTokenizer() *recordingTokenizer {
 // retried when the following word ends, and never at a partial word.
 func TestSimpleAggregatorRetriesAtTheEndOfTheNextWord(t *testing.T) {
 	tok := wordEndTokenizer()
-	a := text.NewSimpleAggregator(frames.AggregationSentence, tok)
+	text.StubMatchEndOfSentence(t, tok.match)
+	a := text.NewSimpleAggregator(frames.AggregationSentence, "")
 	if got := a.Aggregate("We make a good team, you and I. D"); len(got) != 0 {
 		t.Fatalf("aggregations = %+v, want none before the word ends", got)
 	}
@@ -145,7 +146,8 @@ func TestSimpleAggregatorRetriesAtTheEndOfTheNextWord(t *testing.T) {
 // earlier boundary is found, and then waits for lookahead of its own.
 func TestSimpleAggregatorChecksTheEarlierBoundaryFirst(t *testing.T) {
 	tok := wordEndTokenizer()
-	a := text.NewSimpleAggregator(frames.AggregationSentence, tok)
+	text.StubMatchEndOfSentence(t, tok.match)
+	a := text.NewSimpleAggregator(frames.AggregationSentence, "")
 	got := a.Aggregate("We make a good team, you and I. Did?")
 	if len(got) != 0 {
 		t.Fatalf("aggregations = %+v, want none: the word ends at the \"?\"", got)
@@ -190,7 +192,8 @@ func TestSimpleAggregatorClearsAPendingRetryBetweenResponses(t *testing.T) {
 	for name, end := range endings {
 		t.Run(name, func(t *testing.T) {
 			tok := wordEndTokenizer()
-			a := text.NewSimpleAggregator(frames.AggregationSentence, tok)
+			text.StubMatchEndOfSentence(t, tok.match)
+			a := text.NewSimpleAggregator(frames.AggregationSentence, "")
 			if got := a.Aggregate(pending); len(got) != 0 {
 				t.Fatalf("aggregations = %+v, want none", got)
 			}
@@ -208,14 +211,14 @@ func TestSimpleAggregatorClearsAPendingRetryBetweenResponses(t *testing.T) {
 	}
 }
 
-// recordingTokenizer records every text it is asked about and answers with
-// boundary.
+// recordingTokenizer records every text a boundary check is made on and
+// answers with boundary.
 type recordingTokenizer struct {
 	calls    []string
 	boundary func(text string) int
 }
 
-func (r *recordingTokenizer) MatchEndOfSentence(s string) int {
+func (r *recordingTokenizer) match(s, _ string) int {
 	r.calls = append(r.calls, s)
 	return r.boundary(s)
 }
@@ -225,7 +228,8 @@ func (r *recordingTokenizer) MatchEndOfSentence(s string) int {
 // the word.
 func TestSimpleAggregatorBoundsTokenizerWork(t *testing.T) {
 	tok := &recordingTokenizer{boundary: func(string) int { return 0 }}
-	a := text.NewSimpleAggregator(frames.AggregationSentence, tok)
+	text.StubMatchEndOfSentence(t, tok.match)
+	a := text.NewSimpleAggregator(frames.AggregationSentence, "")
 	long := strings.Repeat("x", 10_000)
 	input := "I. " + long + " more words without punctuation"
 	if got := a.Aggregate(input); len(got) != 0 {
@@ -250,7 +254,8 @@ func TestSimpleAggregatorRetriesALongWordAtItsDelimiter(t *testing.T) {
 				}
 				return 0
 			}}
-			a := text.NewSimpleAggregator(frames.AggregationSentence, tok)
+			text.StubMatchEndOfSentence(t, tok.match)
+			a := text.NewSimpleAggregator(frames.AggregationSentence, "")
 			word := strings.Repeat("x", n)
 			if got := a.Aggregate("I. " + word); len(got) != 0 {
 				t.Fatalf("aggregations = %+v, want none", got)
@@ -278,7 +283,8 @@ func TestSimpleAggregatorRetriesOnlyAfterTheFollowingWord(t *testing.T) {
 	for _, prefix := range []string{`"`, "“", "—", "👋 "} {
 		t.Run(prefix, func(t *testing.T) {
 			tok := &recordingTokenizer{boundary: func(string) int { return 0 }}
-			a := text.NewSimpleAggregator(frames.AggregationSentence, tok)
+			text.StubMatchEndOfSentence(t, tok.match)
+			a := text.NewSimpleAggregator(frames.AggregationSentence, "")
 			first, _ := firstRune(prefix)
 			if got := a.Aggregate("I. " + prefix); len(got) != 0 {
 				t.Fatalf("aggregations = %+v, want none", got)

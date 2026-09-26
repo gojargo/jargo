@@ -7,13 +7,9 @@ import (
 )
 
 // A boundary is only reported once the text holds a complete sentence, and an
-// abbreviation is not one. Telling those apart is the whole reason a trained
-// model is used rather than a scan for a period.
-func TestPunktMatchEndOfSentence(t *testing.T) {
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
+// abbreviation is not one. Telling those apart is the whole reason language
+// rules are used rather than a scan for a period.
+func TestMatchEndOfSentence(t *testing.T) {
 	cases := []struct {
 		text string
 		want int
@@ -28,19 +24,15 @@ func TestPunktMatchEndOfSentence(t *testing.T) {
 		{"e.g. this is fine. Then", len("e.g. this is fine.")},
 	}
 	for _, c := range cases {
-		if got := tok.MatchEndOfSentence(c.text); got != c.want {
+		if got := text.MatchEndOfSentence(c.text, ""); got != c.want {
 			t.Errorf("MatchEndOfSentence(%q) = %d, want %d", c.text, got, c.want)
 		}
 	}
 }
 
-// A script the model has no training for still ends on its own punctuation,
+// A script the English rules do not cover still ends on its own punctuation,
 // which needs no disambiguation.
-func TestPunktUnambiguousScripts(t *testing.T) {
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestUnambiguousScripts(t *testing.T) {
 	cases := []struct {
 		text string
 		want int
@@ -50,7 +42,7 @@ func TestPunktUnambiguousScripts(t *testing.T) {
 		{"नमस्ते।", len("नमस्ते।")},
 	}
 	for _, c := range cases {
-		if got := tok.MatchEndOfSentence(c.text); got != c.want {
+		if got := text.MatchEndOfSentence(c.text, ""); got != c.want {
 			t.Errorf("MatchEndOfSentence(%q) = %d, want %d", c.text, got, c.want)
 		}
 	}
@@ -67,14 +59,5 @@ func TestIsSentenceEnding(t *testing.T) {
 		if text.IsSentenceEnding(r) {
 			t.Errorf("IsSentenceEnding(%q) = true, want false", r)
 		}
-	}
-}
-
-// A tokenizer for another language is built from the training data the Punkt
-// project publishes; data that is not a trained model is refused rather than
-// producing a tokenizer that finds no boundaries.
-func TestNewPunktRejectsInvalidTraining(t *testing.T) {
-	if _, err := text.NewPunkt([]byte("not a trained model")); err == nil {
-		t.Fatal("NewPunkt accepted training data that is not a model")
 	}
 }

@@ -1,10 +1,11 @@
 package context
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
-	ttstext "github.com/gojargo/jargo/utils/text"
 )
 
 // What a context ending has to account for: a buffered word no slot ever
@@ -14,14 +15,10 @@ import (
 // streamedSeq builds a streaming sequencer and registers each token on it.
 func streamedSeq(t *testing.T, tokens ...string) *AggregatedFrameSequencer {
 	t.Helper()
-	tok, err := ttstext.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewAggregatedFrameSequencer("Test", true, tok)
+	s := NewAggregatedFrameSequencer("Test", true)
 	for _, token := range tokens {
 		s.RegisterSpoken(
-			frames.NewAggregatedTextFrame(token, frames.AggregationToken), "ctx1", token, true, true, false)
+			frames.NewAggregatedTextFrame(token, frames.AggregationToken), "ctx1", token, true, true, false, "")
 	}
 	return s
 }
@@ -69,5 +66,57 @@ func TestBufferedWordForAnotherContextIsLeftAlone(t *testing.T) {
 	s.ForceComplete("ctx1", 30)
 	if got := bufferedWords(s); len(got) != 1 || got[0] != "。" {
 		t.Errorf("buffered = %v, want the other context's word left for its own turn", got)
+	}
+}
+
+// slotTexts is the text of every slot, trimmed.
+func slotTexts(s *AggregatedFrameSequencer) []string {
+	out := make([]string, 0, len(s.slots))
+	for _, slot := range s.slots {
+		out = append(out, strings.TrimSpace(slot.frame.Text))
+	}
+	return out
+}
+
+// The three channels are sliced at the boundaries of one language.
+func TestParallelChannelsUseTheSameLanguageForSlicing(t *testing.T) {
+	p := newParallelSentenceAggregator("de")
+	text := "Das ist bzw. wichtig. Weiter geht es. N"
+	result := p.aggregate(text, text, text)
+	got := make([]string, 0, len(result))
+	for _, a := range result {
+		got = append(got, strings.TrimSpace(a.tts))
+		if a.tts != a.llm || a.llm != a.userFacing {
+			t.Errorf("channels differ: %+v", a)
+		}
+	}
+	if want := []string{"Das ist bzw. wichtig.", "Weiter geht es."}; !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func feedToken(s *AggregatedFrameSequencer, contextID, text, language string) {
+	s.RegisterSpoken(frames.NewAggregatedTextFrame(text, frames.AggregationToken), contextID, text,
+		true, true, false, language)
+}
+
+// A context keeps its own language after another context starts.
+func TestStreamingContextRetainsLanguageAfterAnotherContextStarts(t *testing.T) {
+	s := NewAggregatedFrameSequencer("Test", true)
+	feedToken(s, "de", "Das ist bzw.", "de")
+	feedToken(s, "en", "Hello. Next", "en")
+	feedToken(s, "de", " wichtig. Weiter", "de")
+	if got, want := slotTexts(s), []string{"Hello.", "Das ist bzw. wichtig."}; !slices.Equal(got, want) {
+		t.Fatalf("slots = %q, want %q", got, want)
+	}
+}
+
+// A context's language follows the text registered on it.
+func TestStreamingContextLanguageUpdatesWithIncomingText(t *testing.T) {
+	s := NewAggregatedFrameSequencer("Test", true)
+	feedToken(s, "context", "Das ist bzw.", "de")
+	feedToken(s, "context", " wichtig. Weiter", "en")
+	if got, want := slotTexts(s), []string{"Das ist bzw.", "wichtig."}; !slices.Equal(got, want) {
+		t.Fatalf("slots = %q, want %q", got, want)
 	}
 }

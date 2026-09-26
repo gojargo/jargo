@@ -10,7 +10,6 @@ import (
 	"github.com/gojargo/jargo/audio/loudness"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/text"
 )
 
 // Observer reports pipeline events to an RTVI client. It watches every frame
@@ -55,10 +54,6 @@ type Observer struct {
 	// botTranscription is the model's text gathered since the last sentence
 	// went out. It feeds the superseded bot-transcription messages.
 	botTranscription string
-	// tokenizer finds the sentence boundaries that release a bot transcription.
-	// It is nil when none could be loaded, which silences those messages and
-	// nothing else.
-	tokenizer text.SentenceTokenizer
 
 	// levelMu guards the volume tracking below. Audio for the two sides arrives
 	// from different processors, so on different goroutines.
@@ -251,18 +246,9 @@ func NewObserver(sink *Processor) *Observer {
 // NewObserverWithParams builds an observer that sends through sink and reports
 // what params allows.
 func NewObserverWithParams(sink *Processor, params ObserverParams) *Observer {
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		// Only the superseded bot-transcription messages need it, so the rest of
-		// what the observer reports carries on without one.
-		slog.Warn("no sentence tokenizer, bot transcriptions will not be reported",
-			"error", err)
-		tok = nil
-	}
 	o := &Observer{
-		sink:      sink,
-		params:    params,
-		tokenizer: tok,
+		sink:   sink,
+		params: params,
 	}
 	for _, t := range params.BotOutputTransforms {
 		o.AddBotOutputTransformer(t)

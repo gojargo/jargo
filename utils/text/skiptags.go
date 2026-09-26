@@ -25,13 +25,13 @@ type SkipTagsAggregator struct {
 }
 
 // NewSkipTagsAggregator builds an aggregator that groups text by aggregateBy,
-// finding sentence boundaries with tokenizer, and holds off on the boundaries
-// between any of the given tag pairs.
+// finding sentence boundaries in language (empty uses English), and holds off
+// on the boundaries between any of the given tag pairs.
 func NewSkipTagsAggregator(
-	aggregateBy frames.AggregationType, tokenizer SentenceTokenizer, tags []StartEndTags,
+	aggregateBy frames.AggregationType, language string, tags []StartEndTags,
 ) *SkipTagsAggregator {
 	return &SkipTagsAggregator{
-		SimpleAggregator: NewSimpleAggregator(aggregateBy, tokenizer),
+		SimpleAggregator: NewSimpleAggregator(aggregateBy, language),
 		tags:             tags,
 	}
 }

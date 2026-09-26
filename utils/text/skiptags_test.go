@@ -17,11 +17,7 @@ func newSkipTags(
 	t *testing.T, by frames.AggregationType, tags []text.StartEndTags,
 ) *text.SkipTagsAggregator {
 	t.Helper()
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return text.NewSkipTagsAggregator(by, tok, tags)
+	return text.NewSkipTagsAggregator(by, "", tags)
 }
 
 // texts is the aggregated text of each unit, for comparing a run of them.
@@ -282,7 +278,7 @@ func TestSkipTagsSurvivesASentenceLeavingTheBuffer(t *testing.T) {
 
 	var got []string
 	for _, piece := range []string{
-		"Dial <spell>A.B.C.", "</spell> now. ", "Then wait for the tone. ", "Done.",
+		"Dial <spell>foo.bar@example.com", "</spell> now. ", "Then wait for the tone. ", "Done.",
 	} {
 		got = append(got, texts(a.Aggregate(piece))...)
 	}
@@ -290,7 +286,7 @@ func TestSkipTagsSurvivesASentenceLeavingTheBuffer(t *testing.T) {
 		got = append(got, rest.Text)
 	}
 
-	want := []string{"Dial <spell>A.B.C.</spell> now.", "Then wait for the tone.", "Done."}
+	want := []string{"Dial <spell>foo.bar@example.com</spell> now.", "Then wait for the tone.", "Done."}
 	if !slices.Equal(got, want) {
 		t.Errorf("aggregated = %q, want %q", got, want)
 	}

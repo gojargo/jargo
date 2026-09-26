@@ -23,7 +23,7 @@ const codeType = frames.AggregationType("code")
 func runWithSkippedType(t *testing.T, skip bool, text string) (spoken []string, down []frames.Frame) {
 	t.Helper()
 
-	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, newTokenizer(t))
+	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, "")
 	if err := agg.AddPattern(codeType, "<code>", "</code>", ttstext.MatchAggregate); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestUnskippedAggregationTypeIsSynthesized(t *testing.T) {
 // service that times its words emits them through the sequencer, so it is the
 // one that can order a skipped frame against them.
 func TestSkippedAggregationTypeLandsInOrder(t *testing.T) {
-	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, newTokenizer(t))
+	agg := ttstext.NewPatternPairAggregator(frames.AggregationSentence, "")
 	if err := agg.AddPattern(codeType, "<code>", "</code>", ttstext.MatchAggregate); err != nil {
 		t.Fatal(err)
 	}

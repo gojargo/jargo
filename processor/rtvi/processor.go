@@ -9,6 +9,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // Processor bridges a pipeline to an RTVI client. It completes the handshake,
@@ -408,11 +409,8 @@ func (o *Observer) llmMarkerMessage(f frames.Frame) ([]Message, bool) {
 func (o *Observer) gatherTranscription(token string) (string, bool) {
 	o.transcriptMu.Lock()
 	defer o.transcriptMu.Unlock()
-	if o.tokenizer == nil {
-		return "", false
-	}
 	o.botTranscription += token
-	if o.botTranscription == "" || o.tokenizer.MatchEndOfSentence(o.botTranscription) == 0 {
+	if o.botTranscription == "" || text.MatchEndOfSentence(o.botTranscription, "") == 0 {
 		return "", false
 	}
 	sentence := o.botTranscription

@@ -36,8 +36,7 @@ type parallelAggregation struct {
 // cut falls at the token boundary instead: what was buffered before the token is
 // emitted, and the whole token starts the next sentence.
 type parallelSentenceAggregator struct {
-	inner     *ttstext.SimpleAggregator
-	tokenizer SentenceTokenizer
+	inner *ttstext.SimpleAggregator
 
 	tts        string
 	llm        string
@@ -48,14 +47,18 @@ type parallelSentenceAggregator struct {
 	aligned bool
 }
 
-// newParallelSentenceAggregator builds an aggregator over tokenizer.
-func newParallelSentenceAggregator(tokenizer SentenceTokenizer) *parallelSentenceAggregator {
+// newParallelSentenceAggregator builds an aggregator finding sentence
+// boundaries in the context's language.
+func newParallelSentenceAggregator(language string) *parallelSentenceAggregator {
 	return &parallelSentenceAggregator{
-		inner:     ttstext.NewSimpleAggregator(frames.AggregationSentence, tokenizer),
-		tokenizer: tokenizer,
-		aligned:   true,
+		inner:   ttstext.NewSimpleAggregator(frames.AggregationSentence, language),
+		aligned: true,
 	}
 }
+
+// setLanguage uses language for the text that follows, without clearing what
+// is buffered.
+func (p *parallelSentenceAggregator) setLanguage(language string) { p.inner.SetLanguage(language) }
 
 // aggregate folds one token into all three channels and returns the sentences it
 // completes. Usually none or one, but a coarse chunk can complete several.
@@ -92,7 +95,7 @@ func (p *parallelSentenceAggregator) sliceInsideToken(ttsText string, boundaries
 	var out []parallelAggregation
 	idx := 0
 	for range boundaries {
-		boundary := p.tokenizer.MatchEndOfSentence(combined[idx:])
+		boundary := ttstext.MatchEndOfSentence(combined[idx:], p.inner.Language())
 		if boundary <= 0 {
 			break
 		}

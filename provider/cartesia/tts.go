@@ -50,10 +50,8 @@ func NewTTS(cfg Config) *tts.Base {
 	// a tag. The preferred way to use Cartesia's markup is to have a text
 	// transform insert it for the synthesizer alone; this keeps markup that
 	// reaches the service by any other route intact.
-	if tok := b.TextTokenizer(); tok != nil {
-		b.SetTextAggregator(text.NewSkipTagsAggregator(cfg.TextAggregation, tok,
-			[]text.StartEndTags{{Start: "<spell>", End: "</spell>"}}))
-	}
+	b.SetTextAggregator(text.NewSkipTagsAggregator(cfg.TextAggregation, b.TextAggregationLanguage(),
+		[]text.StartEndTags{{Start: "<spell>", End: "</spell>"}}))
 	return b
 }
 

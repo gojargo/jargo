@@ -69,13 +69,6 @@ type AggregatedFrameSequencer struct {
 	contextAppend map[string]bool
 	streaming     map[string]*streamingContext
 	buffered      []bufferedWord
-	tokenizer     SentenceTokenizer
-}
-
-// SentenceTokenizer finds sentence boundaries. It is the same contract the text
-// package defines, restated here so this package does not depend on it.
-type SentenceTokenizer interface {
-	MatchEndOfSentence(text string) int
 }
 
 // NewAggregatedFrameSequencer builds a sequencer labeled name.
@@ -86,13 +79,12 @@ type SentenceTokenizer interface {
 // context id for a whole turn, since a sentence built from several tokens is
 // registered under a single id and every one of its word timings must arrive
 // tagged with that same id.
-func NewAggregatedFrameSequencer(name string, streaming bool, tokenizer SentenceTokenizer) *AggregatedFrameSequencer {
+func NewAggregatedFrameSequencer(name string, streaming bool) *AggregatedFrameSequencer {
 	return &AggregatedFrameSequencer{
 		name:          name,
 		streamingMode: streaming,
 		contextAppend: map[string]bool{},
 		streaming:     map[string]*streamingContext{},
-		tokenizer:     tokenizer,
 	}
 }
 
@@ -102,11 +94,14 @@ func NewAggregatedFrameSequencer(name string, streaming bool, tokenizer Sentence
 // Not streaming, this registers a slot at once. Streaming, it feeds the token to
 // the context's sentence assembler and registers a slot only once a boundary is
 // confirmed. buildTracker is false for a service with no word timings, whose
-// slot completes on CompleteSpokenSlot instead.
+// slot completes on CompleteSpokenSlot instead. language is what the text is
+// written in, used for this text and the boundaries of the context's pending
+// sentence from here on.
 func (s *AggregatedFrameSequencer) registerSpokenLocked(
 	frame *frames.AggregatedTextFrame,
 	contextID, ttsText string,
 	appendToContext, buildTracker, includesInterFrame bool,
+	language string,
 ) []frames.Frame {
 	if !s.streamingMode {
 		var tracker *WordCompletionTracker
@@ -119,12 +114,13 @@ func (s *AggregatedFrameSequencer) registerSpokenLocked(
 	sc, ok := s.streaming[contextID]
 	if !ok {
 		sc = &streamingContext{
-			aggregator:   newParallelSentenceAggregator(s.tokenizer),
+			aggregator:   newParallelSentenceAggregator(language),
 			appendToCtx:  appendToContext,
 			buildTracker: buildTracker,
 		}
 		s.streaming[contextID] = sc
 	}
+	sc.aggregator.setLanguage(language)
 	var out []frames.Frame
 	for _, agg := range sc.aggregator.aggregate(ttsText, rawOr(frame), frame.Text) {
 		out = append(out, s.promote(agg, contextID, sc.appendToCtx, sc.buildTracker)...)
@@ -557,10 +553,11 @@ func (s *AggregatedFrameSequencer) RegisterSpoken(
 	frame *frames.AggregatedTextFrame,
 	contextID, ttsText string,
 	appendToContext, buildTracker, includesInterFrame bool,
+	language string,
 ) []frames.Frame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.registerSpokenLocked(frame, contextID, ttsText, appendToContext, buildTracker, includesInterFrame)
+	return s.registerSpokenLocked(frame, contextID, ttsText, appendToContext, buildTracker, includesInterFrame, language)
 }
 
 // RegisterSkipped records a frame that is not spoken. See registerSkippedLocked.

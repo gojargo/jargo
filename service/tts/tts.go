@@ -227,16 +227,9 @@ type Base struct {
 
 	// aggregator groups streamed text into the units the provider is given.
 	aggregator ttstext.Aggregator
-	// tokenizer finds the sentence boundaries the aggregator and the sequencer
-	// both work from. Kept so a change of aggregator can rebuild the sequencer
-	// to match it.
-	tokenizer *ttstext.PunktTokenizer
 	// sequencer keeps the frames of a synthesis in the order the text was
 	// spoken, so the conversation records it that way.
 	sequencer *uctx.AggregatedFrameSequencer
-	// aggregatorErr is the failure to build the default aggregator, reported
-	// when the pipeline starts rather than swallowed.
-	aggregatorErr error
 
 	// Audio contexts. serial orders playback across contexts; audioContexts
 	// holds each open context's queue. See audiocontext.go.
@@ -326,13 +319,10 @@ func (b *Base) model() string {
 // itself as syn and embeds the returned Base.
 func New(name string, syn Synthesizer) *Base {
 	b := &Base{syn: syn, zeroAudioLimit: defaultZeroAudioContextLimit}
-	if tok, err := ttstext.NewPunktEnglish(); err != nil {
-		b.aggregatorErr = err
-	} else {
-		b.tokenizer = tok
-		b.aggregator = ttstext.NewSimpleAggregator(frames.AggregationSentence, tok)
-		b.sequencer = uctx.NewAggregatedFrameSequencer(name, false, tok)
-	}
+	// Sentences are found in the language the service speaks, English when its
+	// settings name none.
+	b.aggregator = ttstext.NewSimpleAggregator(frames.AggregationSentence, settingsLanguage(syn))
+	b.sequencer = uctx.NewAggregatedFrameSequencer(name, false)
 	if d, ok := syn.(Describer); ok {
 		b.meta = d.Metadata()
 	}
@@ -357,29 +347,33 @@ func (b *Base) Cleanup(ctx context.Context) error {
 	return b.Base.Cleanup(ctx)
 }
 
-// TextTokenizer is the sentence tokenizer the Base found its boundaries with,
-// so a provider building an aggregator of its own works from the same one
-// rather than loading a second copy of the model. It is nil when the tokenizer
-// could not be built, which is the failure SetTextAggregator cannot recover
-// from either.
-func (b *Base) TextTokenizer() *ttstext.PunktTokenizer { return b.tokenizer }
+// settingsLanguage is the language the provider's settings name, or "" when it
+// keeps none.
+func settingsLanguage(syn Synthesizer) string {
+	holder, ok := syn.(SettingsHolder)
+	if !ok {
+		return ""
+	}
+	value, _ := settings.Get(holder.Settings(), "language")
+	code, _ := value.(string)
+	return code
+}
+
+// TextAggregationLanguage is the language sentence boundaries are found in,
+// derived from the service's settings.
+func (b *Base) TextAggregationLanguage() string { return b.aggregator.Language() }
 
 // SetTextAggregator sets how streamed text is grouped into the units handed to
-// the provider, replacing the default (English sentences). Pass an aggregator
-// built over the language the bot speaks, or one that aggregates by token to
-// stream text through as it arrives. Call this before the pipeline starts.
+// the provider, replacing the default (sentences in the service's language), or
+// one that aggregates by token to stream text through as it arrives. Call this
+// before the pipeline starts.
 func (b *Base) SetTextAggregator(a ttstext.Aggregator) {
 	b.aggregator = a
-	b.aggregatorErr = nil
-	if b.tokenizer == nil {
-		return
-	}
 	// The sequencer has to be told how the text reaching it was grouped. Given
 	// tokens it assembles them back into sentences and opens a slot only once a
 	// boundary is confirmed; given whole units it opens one per unit. Built here
 	// rather than read at push time because the mode is fixed for the run.
-	b.sequencer = uctx.NewAggregatedFrameSequencer(
-		b.Name(), a.Type() == frames.AggregationToken, b.tokenizer)
+	b.sequencer = uctx.NewAggregatedFrameSequencer(b.Name(), a.Type() == frames.AggregationToken)
 }
 
 // EventTTSRequest fires just before each unit of text is handed to the
@@ -701,6 +695,13 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFr
 		return
 	}
 
+	// The language as the update gave it, before it is named the provider's
+	// way, is what sentence boundaries are found in. A language given no value
+	// goes back to English.
+	givenFields, _ := settings.Given(delta)
+	given, hasLanguage := givenFields["language"]
+	lang, _ := given.(string)
+
 	// Naming the language the provider's way before applying is what keeps the
 	// comparison honest: the store holds the provider's code, so a neutral name
 	// meaning the same language must be converted first or it reads as a change
@@ -711,6 +712,11 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFr
 	if err != nil {
 		b.PushError(ctx, "tts: settings update", err, false)
 		return
+	}
+	if hasLanguage {
+		// Applied with the settings, whether or not the stored value changed,
+		// and without clearing what the aggregator has buffered.
+		b.aggregator.SetLanguage(lang)
 	}
 	if len(changed) == 0 {
 		return
@@ -971,11 +977,6 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, _ proc
 // provider its chance to set up before the first sentence.
 func (b *Base) handleStart(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := b.PushFrame(ctx, f, dir); err != nil {
-		return err
-	}
-	if err := b.aggregatorErr; err != nil {
-		// Fatal: with no way to group text into units there is nothing to speak.
-		b.PushError(ctx, "tts text aggregator unavailable", err, true)
 		return err
 	}
 	b.startAudioContexts(ctx)
@@ -1279,7 +1280,7 @@ func (b *Base) pushTTSFrames(
 	b.Events().Call(ctx, EventTTSRequest, b, TTSRequest{ContextID: contextID, Text: prepared})
 	c.addText(prepared)
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
-		aggregated, contextID, prepared, appendToContext, b.wordPath(), false))
+		aggregated, contextID, prepared, appendToContext, b.wordPath(), false, b.TextAggregationLanguage()))
 	return b.runTTS(ctx, c, contextID, original, prepared, agg.Type, appendToContext)
 }
 

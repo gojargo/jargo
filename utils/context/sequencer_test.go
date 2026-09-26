@@ -12,11 +12,7 @@ import (
 
 func newSeq(t *testing.T, streaming bool) *uctx.AggregatedFrameSequencer {
 	t.Helper()
-	tok, err := ttstext.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return uctx.NewAggregatedFrameSequencer("Test", streaming, tok)
+	return uctx.NewAggregatedFrameSequencer("Test", streaming)
 }
 
 func texts(fs []frames.Frame) []string {
@@ -39,7 +35,7 @@ func texts(fs []frames.Frame) []string {
 func TestSequencerEmitsWordAndProgress(t *testing.T) {
 	s := newSeq(t, false)
 	frame := frames.NewAggregatedTextFrame("Hello world.", frames.AggregationSentence)
-	s.RegisterSpoken(frame, "c1", "Hello world.", true, true, false)
+	s.RegisterSpoken(frame, "c1", "Hello world.", true, true, false, "")
 
 	got := texts(s.ProcessWord("Hello", 100, "c1", false))
 	if len(got) != 2 || got[0] != "word:Hello" {
@@ -55,7 +51,7 @@ func TestSequencerEmitsWordAndProgress(t *testing.T) {
 func TestSequencerHoldsSkippedFrameBehindSpokenOne(t *testing.T) {
 	s := newSeq(t, false)
 	spoken := frames.NewAggregatedTextFrame("Here it is.", frames.AggregationSentence)
-	s.RegisterSpoken(spoken, "c1", "Here it is.", true, true, false)
+	s.RegisterSpoken(spoken, "c1", "Here it is.", true, true, false, "")
 
 	skipped := frames.NewAggregatedTextFrame("code block", frames.AggregationSentence)
 	if got := texts(s.RegisterSkipped(skipped, "c1", "")); len(got) != 0 {
@@ -78,7 +74,7 @@ func TestSequencerHoldsSkippedFrameBehindSpokenOne(t *testing.T) {
 func TestSequencerForceCompleteEmitsRemainder(t *testing.T) {
 	s := newSeq(t, false)
 	frame := frames.NewAggregatedTextFrame("One two three.", frames.AggregationSentence)
-	s.RegisterSpoken(frame, "c1", "One two three.", true, true, false)
+	s.RegisterSpoken(frame, "c1", "One two three.", true, true, false, "")
 	s.ProcessWord("One", 100, "c1", false)
 
 	got := texts(s.ForceComplete("c1", 200))
@@ -97,7 +93,7 @@ func TestSequencerForceCompleteEmitsRemainder(t *testing.T) {
 func TestSequencerForceCompletePairsRemainderWithProgress(t *testing.T) {
 	s := newSeq(t, false)
 	const text = "Hello there friend"
-	s.RegisterSpoken(frames.NewAggregatedTextFrame(text, frames.AggregationSentence), "c1", text, true, true, false)
+	s.RegisterSpoken(frames.NewAggregatedTextFrame(text, frames.AggregationSentence), "c1", text, true, true, false, "")
 	s.ProcessWord("Hello", 100, "c1", false)
 
 	var words []*frames.TTSTextFrame
@@ -128,7 +124,7 @@ func TestSequencerForceCompletePairsRemainderWithProgress(t *testing.T) {
 func TestSequencerClearDropsEverything(t *testing.T) {
 	s := newSeq(t, false)
 	frame := frames.NewAggregatedTextFrame("Hello world.", frames.AggregationSentence)
-	s.RegisterSpoken(frame, "c1", "Hello world.", true, true, false)
+	s.RegisterSpoken(frame, "c1", "Hello world.", true, true, false, "")
 	s.Clear()
 	if got := texts(s.ProcessWord("Hello", 100, "c1", false)); len(got) != 0 {
 		t.Fatalf("frames after clear = %v, want none", got)
@@ -142,7 +138,7 @@ func TestSequencerStreamingPromotesOnBoundary(t *testing.T) {
 	s := newSeq(t, true)
 	send := func(tok string) []frames.Frame {
 		f := frames.NewAggregatedTextFrame(tok, frames.AggregationToken)
-		return s.RegisterSpoken(f, "c1", tok, true, true, false)
+		return s.RegisterSpoken(f, "c1", tok, true, true, false, "")
 	}
 	if got := texts(send("Hello ")); len(got) != 0 {
 		t.Fatalf("no boundary yet, got %v", got)
@@ -221,7 +217,7 @@ func TestRegisterSkipped(t *testing.T) {
 
 	t.Run("speech still to come holds it back", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false, "")
 		if out := seq.RegisterSkipped(skippedFrame("code"), "ctx2", ""); len(out) != 0 {
 			t.Fatalf("got %v, want nothing: the speech before it has not been said", texts(out))
 		}
@@ -229,7 +225,7 @@ func TestRegisterSkipped(t *testing.T) {
 
 	t.Run("speech already said does not hold it back", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hi"), "ctx1", "hi", true, false, false)
+		seq.RegisterSpoken(spokenFrame("hi"), "ctx1", "hi", true, false, false, "")
 		seq.CompleteSpokenSlot()
 		if out := seq.RegisterSkipped(skippedFrame("code"), "ctx2", ""); len(out) != 1 {
 			t.Fatalf("got %v, want the frame released", texts(out))
@@ -257,7 +253,7 @@ func TestCompleteSpokenSlot(t *testing.T) {
 
 	t.Run("it completes the slot and releases what waited", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, false, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, false, false, "")
 		skipped := skippedFrame("code")
 		seq.RegisterSkipped(skipped, "ctx2", "")
 
@@ -272,8 +268,8 @@ func TestCompleteSpokenSlot(t *testing.T) {
 
 	t.Run("it completes only the first slot waiting", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("one"), "ctx1", "one", true, false, false)
-		seq.RegisterSpoken(spokenFrame("two"), "ctx2", "two", true, false, false)
+		seq.RegisterSpoken(spokenFrame("one"), "ctx1", "one", true, false, false, "")
+		seq.RegisterSpoken(spokenFrame("two"), "ctx2", "two", true, false, false, "")
 		seq.RegisterSkipped(skippedFrame("code"), "ctx3", "")
 
 		if out := seq.CompleteSpokenSlot(); len(out) != 0 {
@@ -283,8 +279,8 @@ func TestCompleteSpokenSlot(t *testing.T) {
 
 	t.Run("what waited goes once all the speech before it has", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("one"), "ctx1", "one", true, false, false)
-		seq.RegisterSpoken(spokenFrame("two"), "ctx2", "two", true, false, false)
+		seq.RegisterSpoken(spokenFrame("one"), "ctx1", "one", true, false, false, "")
+		seq.RegisterSpoken(spokenFrame("two"), "ctx2", "two", true, false, false, "")
 		skipped := skippedFrame("code")
 		seq.RegisterSkipped(skipped, "ctx3", "")
 
@@ -306,7 +302,7 @@ func TestFlush(t *testing.T) {
 
 	t.Run("it stops at speech that has not been said", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, false, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, false, false, "")
 		seq.RegisterSkipped(skippedFrame("code"), "ctx2", "")
 		if out := seq.Flush(0); len(out) != 0 {
 			t.Fatalf("got %v, want nothing", texts(out))
@@ -315,7 +311,7 @@ func TestFlush(t *testing.T) {
 
 	t.Run("what is released lands after the last word spoken", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
 		skipped := skippedFrame("code")
 		seq.RegisterSkipped(skipped, "ctx2", "")
 
@@ -340,7 +336,7 @@ func TestFlush(t *testing.T) {
 func seqWithSpoken(t *testing.T, text, ctx string, appendToContext bool) *uctx.AggregatedFrameSequencer {
 	t.Helper()
 	seq := newSeq(t, false)
-	seq.RegisterSpoken(spokenFrame(text), ctx, text, appendToContext, true, false)
+	seq.RegisterSpoken(spokenFrame(text), ctx, text, appendToContext, true, false, "")
 	return seq
 }
 
@@ -472,7 +468,7 @@ func TestProcessWordContextRouting(t *testing.T) {
 
 	t.Run("a word no unit claims passes through", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false, "")
 		out := seq.ProcessWord("zzz", 5, "ctx1", false)
 		passed, ok := out[0].(*frames.TTSTextFrame)
 		if len(out) != 1 || !ok || passed.Text != "zzz" {
@@ -484,7 +480,7 @@ func TestProcessWordContextRouting(t *testing.T) {
 		// A provider may register its units under a context and then report the
 		// words without naming one. They are still that unit's words.
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
 		out := seq.ProcessWord("hello", 1, "", false)
 		var words []*frames.TTSTextFrame
 		for _, f := range out {
@@ -524,7 +520,7 @@ func TestProcessWordRawText(t *testing.T) {
 		seq := newSeq(t, false)
 		frame := spokenFrame("4111 1111")
 		frame.RawText = "<card>4111 1111</card>"
-		seq.RegisterSpoken(frame, "ctx1", "4111 1111", true, true, false)
+		seq.RegisterSpoken(frame, "ctx1", "4111 1111", true, true, false, "")
 
 		first := seq.ProcessWord("4111", 10, "ctx1", false)
 		second := seq.ProcessWord("1111", 20, "ctx1", false)
@@ -552,8 +548,8 @@ func TestProcessWordOverflow(t *testing.T) {
 	twoUnits := func(t *testing.T, first, second string) *uctx.AggregatedFrameSequencer {
 		t.Helper()
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame(first), "ctx1", first, true, true, false)
-		seq.RegisterSpoken(spokenFrame(second), "ctx1", second, true, true, false)
+		seq.RegisterSpoken(spokenFrame(first), "ctx1", first, true, true, false, "")
+		seq.RegisterSpoken(spokenFrame(second), "ctx1", second, true, true, false, "")
 		return seq
 	}
 
@@ -599,8 +595,8 @@ func TestProcessWordOverflow(t *testing.T) {
 func TestProcessWordForcesComplete(t *testing.T) {
 	t.Run("a word for the next unit closes this one out", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false)
-		seq.RegisterSpoken(spokenFrame("world"), "ctx1", "world", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
+		seq.RegisterSpoken(spokenFrame("world"), "ctx1", "world", true, true, false, "")
 
 		var said []string
 		for _, w := range wordFrames(seq.ProcessWord("world", 50, "ctx1", false)) {
@@ -613,8 +609,8 @@ func TestProcessWordForcesComplete(t *testing.T) {
 
 	t.Run("closing out and finishing the next releases what waited", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false)
-		seq.RegisterSpoken(spokenFrame("world"), "ctx1", "world", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
+		seq.RegisterSpoken(spokenFrame("world"), "ctx1", "world", true, true, false, "")
 		skipped := skippedFrame("code")
 		seq.RegisterSkipped(skipped, "ctx2", "")
 
@@ -625,8 +621,8 @@ func TestProcessWordForcesComplete(t *testing.T) {
 
 	t.Run("a unit of nothing but space emits no word of its own", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame(" "), "ctx1", " ", true, true, false)
-		seq.RegisterSpoken(spokenFrame("World"), "ctx1", "World", true, true, false)
+		seq.RegisterSpoken(spokenFrame(" "), "ctx1", " ", true, true, false, "")
+		seq.RegisterSpoken(spokenFrame("World"), "ctx1", "World", true, true, false, "")
 
 		got := wordFrames(seq.ProcessWord("World", 10, "ctx1", false))
 		if len(got) != 1 {
@@ -693,7 +689,7 @@ func TestForceComplete(t *testing.T) {
 		seq := newSeq(t, false)
 		frame := spokenFrame("4111 1111")
 		frame.RawText = "<card>4111 1111</card>"
-		seq.RegisterSpoken(frame, "ctx1", "4111 1111", true, true, false)
+		seq.RegisterSpoken(frame, "ctx1", "4111 1111", true, true, false, "")
 		seq.ProcessWord("4111", 10, "ctx1", false) // "1111" never arrives
 
 		got := wordFrames(seq.ForceComplete("ctx1", 20))
@@ -709,7 +705,7 @@ func TestForceComplete(t *testing.T) {
 		seq := newSeq(t, false)
 		frame := spokenFrame("abc")
 		frame.RawText = "xyz"
-		seq.RegisterSpoken(frame, "ctx1", "abc", true, true, false)
+		seq.RegisterSpoken(frame, "ctx1", "abc", true, true, false, "")
 
 		got := wordFrames(seq.ForceComplete("ctx1", 0))
 		if len(got) != 1 || got[0].Text != "abc" {
@@ -723,7 +719,7 @@ func TestForceComplete(t *testing.T) {
 
 	t.Run("a unit with no word tracking is simply completed", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, false, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, false, false, "")
 		skipped := skippedFrame("code")
 		seq.RegisterSkipped(skipped, "ctx2", "")
 
@@ -738,8 +734,8 @@ func TestForceComplete(t *testing.T) {
 
 	t.Run("it closes out only the context it names", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false)
-		seq.RegisterSpoken(spokenFrame("world"), "ctx2", "world", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
+		seq.RegisterSpoken(spokenFrame("world"), "ctx2", "world", true, true, false, "")
 
 		first := wordFrames(seq.ForceComplete("ctx1", 0))
 		if len(first) != 1 || first[0].Text != "hello" {
@@ -783,7 +779,7 @@ func stream(t *testing.T, seq *uctx.AggregatedFrameSequencer, ctx string, tokens
 	t.Helper()
 	var out []frames.Frame
 	for _, tok := range tokens {
-		out = append(out, seq.RegisterSpoken(spokenFrame(tok), ctx, tok, true, true, false)...)
+		out = append(out, seq.RegisterSpoken(spokenFrame(tok), ctx, tok, true, true, false, "")...)
 	}
 	return out
 }
@@ -910,7 +906,7 @@ func TestRegisterSpokenStreaming(t *testing.T) {
 		for _, tok := range []struct{ spoken, written string }{
 			{"five dollars", "$5"}, {".", "."}, {" Ok", " Ok"},
 		} {
-			seq.RegisterSpoken(spokenFrame(tok.written), "ctx1", tok.spoken, true, true, false)
+			seq.RegisterSpoken(spokenFrame(tok.written), "ctx1", tok.spoken, true, true, false, "")
 		}
 		// The promoted sentence carries the written form.
 		out := seq.ProcessWord("five", 10, "ctx1", false)
@@ -972,7 +968,7 @@ func TestRegisterSpokenBufferedWords(t *testing.T) {
 
 	t.Run("without streaming, an unclaimed word still passes through", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false, "")
 		out := seq.ProcessWord("zzz", 5, "ctx1", false)
 		if len(out) != 1 || wordFrames(out)[0].Text != "zzz" {
 			t.Fatalf("got %v, want the word passed through", texts(out))
@@ -1014,7 +1010,7 @@ func TestRegisterSkippedForcesFinalize(t *testing.T) {
 func TestClear(t *testing.T) {
 	t.Run("what waited is dropped and the next unit is not held", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
 		seq.RegisterSkipped(skippedFrame("code"), "ctx2", "")
 		seq.Clear()
 
@@ -1026,7 +1022,7 @@ func TestClear(t *testing.T) {
 
 	t.Run("a word for the cleared turn is dropped", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false)
+		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
 		seq.Clear()
 		if out := seq.ProcessWord("hello", 1, "ctx1", false); len(out) != 0 {
 			t.Fatalf("got %v, want nothing: that turn is over", texts(out))
@@ -1038,9 +1034,9 @@ func TestClear(t *testing.T) {
 		// must not be threaded into the turn that replaced it.
 		seq := newSeq(t, false)
 		seq.RegisterSpoken(spokenFrame("I just wanted to follow up"), "ctxA",
-			"I just wanted to follow up", true, true, false)
+			"I just wanted to follow up", true, true, false, "")
 		seq.Clear()
-		seq.RegisterSpoken(spokenFrame("Hello"), "ctxB", "Hello", true, true, false)
+		seq.RegisterSpoken(spokenFrame("Hello"), "ctxB", "Hello", true, true, false, "")
 
 		for _, stale := range []string{"I", "just", "wanted", "to", "follow", "up"} {
 			if out := seq.ProcessWord(stale, 1, "ctxA", false); len(out) != 0 {
@@ -1083,7 +1079,7 @@ func TestCJKSpacingReachesTheFrames(t *testing.T) {
 	t.Run("the answer given with a word reaches its frame", func(t *testing.T) {
 		seq := newSeq(t, false)
 		// Registered without it, the way the service does.
-		seq.RegisterSpoken(spokenFrame(sentence), "ctx1", sentence, true, true, false)
+		seq.RegisterSpoken(spokenFrame(sentence), "ctx1", sentence, true, true, false, "")
 
 		out := seq.ProcessWord("どんなことでも気", 100, "ctx1", true)
 		got := wordFrames(out)
@@ -1098,7 +1094,7 @@ func TestCJKSpacingReachesTheFrames(t *testing.T) {
 
 	t.Run("two chunks assemble with nothing between them", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame(sentence), "ctx1", sentence, true, true, false)
+		seq.RegisterSpoken(spokenFrame(sentence), "ctx1", sentence, true, true, false, "")
 
 		out := seq.ProcessWord("どんなことでも気", 100, "ctx1", true)
 		out = append(out, seq.ProcessWord("軽に話しかけてくださいね。", 200, "ctx1", true)...)
@@ -1110,7 +1106,7 @@ func TestCJKSpacingReachesTheFrames(t *testing.T) {
 
 	t.Run("closing the unit out keeps the answer", func(t *testing.T) {
 		seq := newSeq(t, false)
-		seq.RegisterSpoken(spokenFrame(sentence), "ctx1", sentence, true, true, false)
+		seq.RegisterSpoken(spokenFrame(sentence), "ctx1", sentence, true, true, false, "")
 
 		seq.ProcessWord("どんなことでも気", 100, "ctx1", true)
 		// The rest is never reported, so the unit is closed out with what is left.
@@ -1147,7 +1143,7 @@ func TestSpokenFramesSayHowTheyWereAggregated(t *testing.T) {
 		seq := newSeq(t, true)
 		send := func(tok string) []frames.Frame {
 			f := frames.NewAggregatedTextFrame(tok, frames.AggregationToken)
-			return seq.RegisterSpoken(f, "c1", tok, true, false, false)
+			return seq.RegisterSpoken(f, "c1", tok, true, false, false, "")
 		}
 		send("Hello ")
 		send("world.")
@@ -1183,7 +1179,7 @@ func assertEveryWordReachesTheContext(t *testing.T, sentences []string, words []
 	for _, text := range sentences {
 		frame := spokenFrame(text)
 		frame.RawText = text
-		seq.RegisterSpoken(frame, "ctx1", text, true, true, false)
+		seq.RegisterSpoken(frame, "ctx1", text, true, true, false, "")
 	}
 
 	var contextSpans, dropped []string

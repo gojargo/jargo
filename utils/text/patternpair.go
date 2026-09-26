@@ -72,13 +72,13 @@ type PatternPairAggregator struct {
 }
 
 // NewPatternPairAggregator builds an aggregator that groups text by aggregateBy
-// and finds sentence boundaries with tokenizer. Register the delimiter pairs to
-// recognize with AddPattern.
+// and finds sentence boundaries in language (empty uses English). Register the
+// delimiter pairs to recognize with AddPattern.
 func NewPatternPairAggregator(
-	aggregateBy frames.AggregationType, tokenizer SentenceTokenizer,
+	aggregateBy frames.AggregationType, language string,
 ) *PatternPairAggregator {
 	return &PatternPairAggregator{
-		SimpleAggregator: NewSimpleAggregator(aggregateBy, tokenizer),
+		SimpleAggregator: NewSimpleAggregator(aggregateBy, language),
 		handlers:         map[frames.AggregationType]PatternHandler{},
 	}
 }

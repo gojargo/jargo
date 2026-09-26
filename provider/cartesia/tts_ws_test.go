@@ -724,7 +724,7 @@ func TestSpellTagReachesTheServiceWhole(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
 	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
-	task.QueueFrame(frames.NewLLMTextFrame("Dial <spell>A.B.C.</spell> now. Then wait."))
+	task.QueueFrame(frames.NewLLMTextFrame("Write to <spell>foo.bar@example.com</spell> now. Then wait."))
 	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
 	task.StopWhenDone()
 	select {
@@ -738,7 +738,7 @@ func TestSpellTagReachesTheServiceWhole(t *testing.T) {
 		t.Fatal("the endpoint saw no synthesis request")
 	}
 	transcript, _ := got[fieldTranscript].(string)
-	if !strings.Contains(transcript, "<spell>A.B.C.</spell>") {
+	if !strings.Contains(transcript, "<spell>foo.bar@example.com</spell>") {
 		t.Errorf("transcript = %q, want the spell tag whole inside it", transcript)
 	}
 }

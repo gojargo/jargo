@@ -9,11 +9,7 @@ import (
 
 func newAggregator(t *testing.T, by frames.AggregationType) *text.SimpleAggregator {
 	t.Helper()
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return text.NewSimpleAggregator(by, tok)
+	return text.NewSimpleAggregator(by, "")
 }
 
 // A sentence is only completed once a non-whitespace character confirms the

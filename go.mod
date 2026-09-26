@@ -22,7 +22,6 @@ require (
 	github.com/livekit/server-sdk-go/v2 v2.18.1
 	github.com/microsoft/onnxruntime/go v0.0.0-20260910060941-f2c39fe2f838
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/neurosnap/sentences v1.1.2
 	github.com/pion/opus v0.1.1-0.20260831205537-1e54f79ccbe1
 	github.com/pion/webrtc/v4 v4.2.20
 	github.com/spf13/cobra v1.10.2

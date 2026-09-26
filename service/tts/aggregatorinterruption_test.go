@@ -24,12 +24,8 @@ type clearingSpy struct {
 
 func newClearingSpy(t *testing.T) *clearingSpy {
 	t.Helper()
-	tok, err := ttstext.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
 	return &clearingSpy{
-		SimpleAggregator: ttstext.NewSimpleAggregator(frames.AggregationSentence, tok),
+		SimpleAggregator: ttstext.NewSimpleAggregator(frames.AggregationSentence, ""),
 	}
 }
 

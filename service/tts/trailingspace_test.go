@@ -179,7 +179,7 @@ func TestTrailingSpaceIsNotAppendedByDefault(t *testing.T) {
 // between sentences does not get one between tokens.
 func TestTrailingSpaceIsNotAppendedWhenStreamingTokens(t *testing.T) {
 	syn := &spacedSynth{requires: true}
-	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, newTokenizer(t))
+	agg := ttstext.NewSimpleAggregator(frames.AggregationToken, "")
 	speakThrough(t, syn, agg, "Hi there!")
 
 	for _, got := range syn.texts() {

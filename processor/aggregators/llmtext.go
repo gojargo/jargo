@@ -24,18 +24,11 @@ import (
 type LLMText struct {
 	*processor.Base
 	aggregator text.Aggregator
-	// aggregatorErr is the failure that left this processor with no aggregator,
-	// reported once the pipeline starts and there is somewhere to report it.
-	aggregatorErr error
 }
 
 // NewLLMText builds a processor grouping the model's output into sentences.
 func NewLLMText(name string) *LLMText {
-	tok, err := text.NewPunktEnglish()
-	p := &LLMText{aggregatorErr: err}
-	if err == nil {
-		p.aggregator = text.NewSimpleAggregator(frames.AggregationSentence, tok)
-	}
+	p := &LLMText{aggregator: text.NewSimpleAggregator(frames.AggregationSentence, "")}
 	p.Base = processor.New(name, p)
 	return p
 }
@@ -51,10 +44,6 @@ func NewLLMTextWith(name string, aggregator text.Aggregator) *LLMText {
 func (p *LLMText) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
-	}
-
-	if _, isStart := f.(*frames.StartFrame); isStart && p.aggregatorErr != nil {
-		p.PushError(ctx, "llm text processor has no aggregator", p.aggregatorErr, false)
 	}
 
 	switch fr := f.(type) {

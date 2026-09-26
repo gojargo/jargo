@@ -51,6 +51,13 @@ type Aggregator interface {
 	HandleInterruption()
 	// Reset clears the buffer.
 	Reset()
+	// Language is the normalized language code the sentence boundaries are
+	// found in.
+	Language() string
+	// SetLanguage selects the language sentence boundaries are found in,
+	// without discarding what is buffered. Call it between generations, to keep
+	// one language for all the text of a generation.
+	SetLanguage(language string)
 }
 
 // SimpleAggregator groups text into sentences, or passes each token straight
@@ -64,7 +71,7 @@ type Aggregator interface {
 // the same mark.
 type SimpleAggregator struct {
 	aggregationType frames.AggregationType
-	tokenizer       SentenceTokenizer
+	language        string
 	text            string
 	lookahead       lookaheadState
 }
@@ -74,7 +81,7 @@ type SimpleAggregator struct {
 // once the following word ends.
 //
 // A clear boundary is emitted at the first character after it: "Hello. N" is
-// released without waiting for "Next ". One the tokenizer cannot resolve at
+// released without waiting for "Next ". One the sentence rules cannot resolve at
 // that point is retried only when the following word is complete. Checking a
 // partial word would be wrong: in "Albert I. Douglas" the prefix "Do" could be
 // taken for a sentence starter and split the name after its initial.
@@ -96,18 +103,26 @@ const (
 )
 
 // NewSimpleAggregator builds an aggregator that groups text by aggregateBy,
-// finding sentence boundaries with tokenizer.
-func NewSimpleAggregator(aggregateBy frames.AggregationType, tokenizer SentenceTokenizer) *SimpleAggregator {
-	return &SimpleAggregator{aggregationType: aggregateBy, tokenizer: tokenizer}
+// finding sentence boundaries in language; empty uses English.
+func NewSimpleAggregator(aggregateBy frames.AggregationType, language string) *SimpleAggregator {
+	return &SimpleAggregator{aggregationType: aggregateBy, language: ResolveSentenceTokenizerLanguage(language)}
+}
+
+// Language implements Aggregator.
+func (a *SimpleAggregator) Language() string { return a.language }
+
+// SetLanguage implements Aggregator.
+func (a *SimpleAggregator) SetLanguage(language string) {
+	a.language = ResolveSentenceTokenizerLanguage(language)
 }
 
 // NewTokenAggregator builds an aggregator that hands text on as it arrives,
-// grouping nothing. It takes no tokenizer because it never looks for a sentence
-// boundary: a service that streams tokens sends each one as the model wrote it,
-// trading the naturalness sentence-sized synthesis gives for the latency of not
-// waiting for one to finish.
+// grouping nothing. It never looks for a sentence boundary: a service that
+// streams tokens sends each one as the model wrote it, trading the naturalness
+// sentence-sized synthesis gives for the latency of not waiting for one to
+// finish.
 func NewTokenAggregator() *SimpleAggregator {
-	return &SimpleAggregator{aggregationType: frames.AggregationToken}
+	return &SimpleAggregator{aggregationType: frames.AggregationToken, language: ResolveSentenceTokenizerLanguage("")}
 }
 
 // Type implements Aggregator.
@@ -136,7 +151,7 @@ func (a *SimpleAggregator) Aggregate(text string) []Aggregation {
 // checkSentenceWithLookahead reports the sentence the latest character
 // completed, if it completed one. Callers pass the character just appended.
 //
-// Punctuation starts a candidate, and the tokenizer decides whether it really
+// Punctuation starts a candidate, and the sentence rules decide whether it
 // ends a sentence:
 //
 //   - "Hello." or "Hello. " keeps buffering until meaningful text follows.
@@ -172,7 +187,7 @@ func (a *SimpleAggregator) checkSentenceWithLookahead(r rune) (Aggregation, bool
 		if isPunctuation {
 			candidate = a.text[:len(a.text)-utf8.RuneLen(r)]
 		}
-		if end := a.tokenizer.MatchEndOfSentence(candidate); end > 0 {
+		if end := matchEndOfSentence(candidate, a.language); end > 0 {
 			result = Aggregation{Text: strings.Trim(a.text[:end], " "), Type: frames.AggregationSentence}
 			ok = true
 			// Keep the lookahead text for the next sentence ("N" in "Hello. N").
@@ -191,7 +206,7 @@ func (a *SimpleAggregator) checkSentenceWithLookahead(r rune) (Aggregation, bool
 }
 
 // advanceLookahead moves the pending candidate on by one character and reports
-// whether the buffer is ready for a tokenizer check.
+// whether the buffer is ready for a boundary check.
 //
 // The check is made once at the first character that is neither whitespace nor
 // punctuation, and once more when the word that follows ends. An opening quote

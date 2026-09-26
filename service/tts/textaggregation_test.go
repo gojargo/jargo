@@ -141,11 +141,7 @@ func TestTextAggregationNotMeasuredWhenMetricsDisabled(t *testing.T) {
 func TestTextAggregationNotMeasuredWhenStreamingTokens(t *testing.T) {
 	// Grouping by token completes no sentences, so there is no aggregation delay
 	// to measure and none is reported, not even at the end of the response.
-	tok, err := ttstext.NewPunktEnglish()
-	if err != nil {
-		t.Fatalf("NewPunktEnglish: %v", err)
-	}
-	byToken := ttstext.NewSimpleAggregator(frames.AggregationToken, tok)
+	byToken := ttstext.NewSimpleAggregator(frames.AggregationToken, "")
 
 	if got := collectTextAggregation(t, true, byToken, speakOneSentence); len(got) != 0 {
 		t.Errorf("got %d reports while streaming tokens, want none: %+v", len(got), got)

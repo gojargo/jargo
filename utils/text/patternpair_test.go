@@ -29,11 +29,7 @@ func newPatternPair(
 	t *testing.T, by frames.AggregationType,
 ) (*text.PatternPairAggregator, *recorder, *recorder) {
 	t.Helper()
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := text.NewPatternPairAggregator(by, tok)
+	a := text.NewPatternPairAggregator(by, "")
 	if err := a.AddPattern("test_pattern", "<test>", "</test>", text.MatchRemove); err != nil {
 		t.Fatal(err)
 	}
@@ -270,11 +266,7 @@ func TestPatternPairFlushFindsTheUnclosedOccurrence(t *testing.T) {
 // Two unclosed runs of different patterns: the cut is made at whichever opens
 // first in the text, not whichever pattern was registered first.
 func TestPatternPairFlushCutsAtTheEarliestRun(t *testing.T) {
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := text.NewPatternPairAggregator(frames.AggregationSentence, tok)
+	a := text.NewPatternPairAggregator(frames.AggregationSentence, "")
 	// Registered in the reverse of the order they appear in the text.
 	if err := a.AddPattern("voice", "<voice>", "</voice>", text.MatchRemove); err != nil {
 		t.Fatal(err)
@@ -361,11 +353,7 @@ func TestPatternPairFlushTrimsAPartialDelimiter(t *testing.T) {
 // newThinkPair builds a token-mode aggregator carrying one removed pattern.
 func newThinkPair(t *testing.T) (*text.PatternPairAggregator, *recorder) {
 	t.Helper()
-	tok, err := text.NewPunktEnglish()
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := text.NewPatternPairAggregator(frames.AggregationToken, tok)
+	a := text.NewPatternPairAggregator(frames.AggregationToken, "")
 	if err := a.AddPattern("think", "<think>", "</think>", text.MatchRemove); err != nil {
 		t.Fatal(err)
 	}

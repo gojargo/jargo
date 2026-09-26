@@ -166,13 +166,16 @@ turns:
 // wantAtMost fails unless the bot was played no more scenarios at once than its
 // entry's cap.
 //
-// The count is one more than that at most, because a connection the harness has
-// finished with is counted until the bot's own pipeline has torn down behind it.
-// That laxity is far short of the failure being watched for here, where an entry
-// with a cap of its own takes every slot the suite has.
+// The count can reach twice the cap, because a connection the harness has
+// finished with is counted until the bot's own pipeline has torn down behind it,
+// and each slot can have one such connection lingering while its next scenario
+// runs. That laxity is short of the failure being watched for here, where an
+// entry with a cap of its own takes every slot the suite has. The runner's own
+// count of what is in flight is held to the cap exactly by the scheduling tests
+// in suite_internal_test.go.
 func wantAtMost(t *testing.T, bot *overlapBot, slots int, what string) {
 	t.Helper()
-	if got := bot.highest(); got > slots+1 {
+	if got := bot.highest(); got > 2*slots {
 		t.Errorf("%s was played %d scenarios at once, want at most its %d", what, got, slots)
 	}
 }

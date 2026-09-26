@@ -1,0 +1,1177 @@
+# Each test case is defined as:
+# Input text
+# ---
+# Expected segments (one per line)
+# ===
+
+This is a test. This is only a test.
+---
+This is a test.
+This is only a test.
+===
+Hello world! How are you?
+---
+Hello world!
+How are you?
+===
+This is Dr. Watson
+---
+This is Dr. Watson
+===
+Roses Are Red. Violets Are Blue
+---
+Roses Are Red.
+Violets Are Blue
+===
+Hello! How are you?
+---
+Hello!
+How are you?
+===
+This is a test.
+---
+This is a test.
+===
+Mr. Smith went to Washington.
+---
+Mr. Smith went to Washington.
+===
+What a suprise?!
+---
+What a suprise?!
+===
+That's all folks...
+---
+That's all folks...
+===
+This is UK. Not US
+---
+This is UK.
+Not US
+===
+This balloon costs $1.20
+---
+This balloon costs $1.20
+===
+Hello World. My name is Jonas.
+---
+Hello World.
+My name is Jonas.
+===
+What is your name? My name is Jonas.
+---
+What is your name?
+My name is Jonas.
+===
+There it is! I found it.
+---
+There it is!
+I found it.
+===
+My name is Jonas E. Smith.
+---
+My name is Jonas E. Smith.
+===
+Please turn to p. 55.
+---
+Please turn to p. 55.
+===
+Were Jane and co. at the party?
+---
+Were Jane and co. at the party?
+===
+They closed the deal with Pitt, Briggs & Co. at noon.
+---
+They closed the deal with Pitt, Briggs & Co. at noon.
+===
+#Let's ask Jane and co. They should know.
+#---
+#Let's ask Jane and co.
+#They should know.
+#===
+#They closed the deal with Pitt, Briggs & Co. It closed yesterday.
+#---
+#They closed the deal with Pitt, Briggs & Co.
+#It closed yesterday.
+#===
+I can see Mt. Fuji from here.
+---
+I can see Mt. Fuji from here.
+===
+St. Michael's Church is on 5th st. near the light.
+---
+St. Michael's Church is on 5th st. near the light.
+===
+That is JFK Jr.'s book.
+---
+That is JFK Jr.'s book.
+===
+I visited the U.S.A. last year.
+---
+I visited the U.S.A. last year.
+===
+#I live in the E.U. How about you?
+#---
+#I live in the E.U.
+#How about you?
+#===
+#I live in the U.S. How about you?
+#---
+#I live in the U.S.
+#How about you?
+===
+I work for the U.S. Government in Virginia.
+---
+I work for the U.S. Government in Virginia.
+===
+I have lived in the U.S. for 20 years.
+---
+I have lived in the U.S. for 20 years.
+===
+#At 5 a.m. Mr. Smith went to the bank. He left the bank at 6 P.M. Mr. Smith then went to the store.
+#---
+#At 5 a.m. Mr. Smith went to the bank.
+#He left the bank at 6 P.M.
+#Mr. Smith then went to the store.
+#===
+She has $100.00 in her bag.
+---
+She has $100.00 in her bag.
+===
+She has $100.00. It is in her bag.
+---
+She has $100.00.
+It is in her bag.
+===
+He teaches science (He previously worked for 5 years as an engineer.) at the local University.
+---
+He teaches science (He previously worked for 5 years as an engineer.) at the local University.
+===
+Her email is Jane.Doe@example.com. I sent her an email.
+---
+Her email is Jane.Doe@example.com.
+I sent her an email.
+===
+The site is, https,//www.example.50.com/new-site/awesome_content.html. Please check it out.
+---
+The site is, https,//www.example.50.com/new-site/awesome_content.html.
+Please check it out.
+===
+She turned to him, 'This is great.' she said.
+---
+She turned to him, 'This is great.' she said.
+===
+She turned to him, "This is great." she said.
+---
+She turned to him, "This is great." she said.
+===
+She turned to him, "This is great." She held the book out to show him.
+---
+She turned to him, "This is great."
+She held the book out to show him.
+===
+Hello!! Long time no see.
+---
+Hello!!
+Long time no see.
+===
+Hello?? Who is there?
+---
+Hello??
+Who is there?
+===
+Hello!? Is that you?
+---
+Hello!?
+Is that you?
+===
+Hello?! Is that you?
+---
+Hello?!
+Is that you?
+===
+You can find it at N°. 1026.253.553. That is where the treasure is.
+---
+You can find it at N°. 1026.253.553.
+That is where the treasure is.
+===
+She works at Yahoo! in the accounting department.
+---
+She works at Yahoo! in the accounting department.
+===
+We make a good team, you and I. Did you see Albert I. Jones yesterday?
+---
+We make a good team, you and I.
+Did you see Albert I. Jones yesterday?
+===
+Thoreau argues that by simplifying one's life, "the laws of the universe will appear less complex. . . ."
+---
+Thoreau argues that by simplifying one's life, "the laws of the universe will appear less complex. . . ."
+===
+"Bohr [...] used the analogy of parallel stairways [...]" (Smith 55).
+---
+"Bohr [...] used the analogy of parallel stairways [...]" (Smith 55).
+===
+#If words are left off at the end of a sentence, and that is all that is omitted, indicate the omission with ellipsis marks (preceded and followed by a space) and then indicate the end of the sentence with a period . . . . Next sentence.
+---
+#If words are left off at the end of a sentence, and that is all that is omitted, indicate the omission with ellipsis marks (preceded and followed by a space) and then indicate the end of the sentence with a period . . . .
+#Next sentence.
+===
+I never meant that.... She left the store.
+---
+I never meant that....
+She left the store.
+===
+#I wasn't really ... well, what I mean...see . . . what I'm saying, the thing is . . . I didn't mean it.
+#---
+#I wasn't really ... well, what I mean...see . . . what I'm saying, the thing is . . . I didn't mean it.
+===
+#One further habit which was somewhat weakened . . . was that of combining words into self-interpreting compounds. . . . The practice was not abandoned. . . .
+#---
+#One further habit which was somewhat weakened . . . was that of combining words into self-interpreting compounds.
+#. . . The practice was not abandoned. . . .
+===
+Saint Maximus (died 250) is a Christian saint and martyr.[1] The emperor Decius published a decree ordering the veneration of busts of the deified emperors.
+---
+Saint Maximus (died 250) is a Christian saint and martyr.[1]
+The emperor Decius published a decree ordering the veneration of busts of the deified emperors.
+===
+Differing agendas can potentially create an understanding gap in a consultation.11 12 Take the example of one of the most common presentations in ill health: the common cold.
+---
+Differing agendas can potentially create an understanding gap in a consultation.11 12 Take the example of one of the most common presentations in ill health: the common cold.
+===
+Its traditional use[1] is well documented in the ethnobotanical literature [2–11]. Leaves, buds, tar and essential oils are used to treat a wide spectrum of diseases.
+---
+Its traditional use[1] is well documented in the ethnobotanical literature [2–11].
+Leaves, buds, tar and essential oils are used to treat a wide spectrum of diseases.
+===
+Thus increasing the desire for political reform both in Lancashire and in the country at large.[7][8] This was a serious misdemeanour,[16] encouraging them to declare the assembly illegal as soon as it was announced on 31 July.[17][18] The radicals sought a second opinion on the meeting's legality.
+---
+Thus increasing the desire for political reform both in Lancashire and in the country at large.[7][8]
+This was a serious misdemeanour,[16] encouraging them to declare the assembly illegal as soon as it was announced on 31 July.[17][18]
+The radicals sought a second opinion on the meeting's legality.
+===
+"How many? I don't know."
+---
+"How many? I don't know."
+===
+Hydrogen is a gas. [1] It is colorless, odorless, tasteless and highly flammable
+---
+Hydrogen is a gas. [1]
+It is colorless, odorless, tasteless and highly flammable
+===
+Hydrogen is a gas. [1][2] [3] It is colorless, odorless, tasteless and highly flammable
+---
+Hydrogen is a gas. [1][2] [3]
+It is colorless, odorless, tasteless and highly flammable
+===
+This function (see. section 4.2) is important. Let's continue.
+---
+This function (see. section 4.2) is important.
+Let's continue.
+===
+The book <War and Peace> is famous. I recommend reading it.
+---
+The book <War and Peace> is famous.
+I recommend reading it.
+===
+The array {1, 2, 3} contains integers. Each element has a value.
+---
+The array {1, 2, 3} contains integers.
+Each element has a value.
+===
+Check the reference [page. 42] for details. You'll find it helpful.
+---
+Check the reference [page. 42] for details.
+You'll find it helpful.
+===
+The Japanese quote 「こんにちは」 means hello. It's a common greeting.
+---
+The Japanese quote 「こんにちは」 means hello.
+It's a common greeting.
+===
+In Chinese 《红楼梦》 is a classic novel. Many people have read it.
+---
+In Chinese 《红楼梦》 is a classic novel.
+Many people have read it.
+===
+The fullwidth parentheses （like. these） are used in Asian text. They serve the same purpose.
+---
+The fullwidth parentheses （like. these） are used in Asian text.
+They serve the same purpose.
+===
+Mixed brackets (normal) and [square] and {cur. ly} work too. This is the next sentence.
+---
+Mixed brackets (normal) and [square] and {cur. ly} work too.
+This is the next sentence.
+===
+Nested brackets (with [inner. brackets] inside) should work. This tests complex cases.
+---
+Nested brackets (with [inner. brackets] inside) should work.
+This tests complex cases.
+===
+Unblanaced bracket with period (. in it will break.
+---
+Unblanaced bracket with period (.
+in it will break.
+===
+Dr. Smith, who arrived at 3:00 p.m., said, "The patient's condition is stable; however, further tests (e.g., MRI, CT scan) are required." Meanwhile, the nurse—who had been on duty since 7:00 a.m.—noted that the patient's vitals (BP: 120/80, HR: 75) were within normal limits. "Let's proceed with the tests ASAP," she added.
+---
+Dr. Smith, who arrived at 3:00 p.m., said, "The patient's condition is stable; however, further tests (e.g., MRI, CT scan) are required."
+Meanwhile, the nurse—who had been on duty since 7:00 a.m.—noted that the patient's vitals (BP: 120/80, HR: 75) were within normal limits.
+"Let's proceed with the tests ASAP," she added.
+===
+Dr. Smith, who arrived at 3:00 p.m., said, "The patient's condition is stable; however, further tests (e.g., MRI, CT scan) are required.". Meanwhile, the nurse—who had been on duty since 7:00 a.m.—noted that the patient's vitals (BP: 120/80, HR: 75) were within normal limits. "Let's proceed with the tests ASAP," she added.
+---
+Dr. Smith, who arrived at 3:00 p.m., said, "The patient's condition is stable; however, further tests (e.g., MRI, CT scan) are required.".
+Meanwhile, the nurse—who had been on duty since 7:00 a.m.—noted that the patient's vitals (BP: 120/80, HR: 75) were within normal limits.
+"Let's proceed with the tests ASAP," she added.
+===
+He said `opens with a different symbol to what is used to close it.' Next sentence. "He said `hello world.' and left."
+---
+He said `opens with a different symbol to what is used to close it.'
+Next sentence.
+"He said `hello world.' and left."
+===
+He said ``opens with a different symbol to what is used to close it.'' Next sentence. "He said ``hello world.'' and left."
+---
+He said ``opens with a different symbol to what is used to close it.''
+Next sentence.
+"He said ``hello world.'' and left."
+===
+He said `opens with a different symbol to what is used to close it.` Next sentence. "He said `hello world.` and left."
+---
+He said `opens with a different symbol to what is used to close it.`
+Next sentence.
+"He said `hello world.` and left."
+===
+He said ``opens with a different symbol to what is used to close it.`` Next sentence. "He said ``hello world.`` and left."
+---
+He said ``opens with a different symbol to what is used to close it.``
+Next sentence.
+"He said ``hello world.`` and left."
+===
+'opens with a different symbol to what is used to close it.' Next sentence.
+---
+'opens with a different symbol to what is used to close it.'
+Next sentence.
+===
+It's fine, `just use L'Hôpital's rule here.'
+---
+It's fine, `just use L'Hôpital's rule here.'
+===
+it`s fine to leave it's foods' smells to the cat`s nose
+---
+it`s fine to leave it's foods' smells to the cat`s nose
+===
+Vincent Cartier , Walter 's brother and manager , later reflected on his observations of Kubrick during the filming . He said , '' Stanley was very stoic , impassive but imaginative type person with strong , imaginative thoughts .
+---
+Vincent Cartier , Walter 's brother and manager , later reflected on his observations of Kubrick during the filming .
+He said , '' Stanley was very stoic , impassive but imaginative type person with strong , imaginative thoughts .
+===
+Walter 's brother . He said , ' Stanley .
+---
+Walter 's brother .
+He said , ' Stanley .
+===
+Wendy Schaal ( born July 2 , 1954 ) is an American actress and voice actress . She is best known as the voice of Francine Smith in the TV series '' American Dad ! '' .
+---
+Wendy Schaal ( born July 2 , 1954 ) is an American actress and voice actress . 
+She is best known as the voice of Francine Smith in the TV series '' American Dad ! '' .
+===
+While the Gonarch is not encountered in '' Half - Life 2 '' , an amputated part of it exists as an unused model in the game 's code . This fusion of living material with technology is entirely in keeping with the Combine forces that are encountered in '' Half - Life 2 '' .
+---
+While the Gonarch is not encountered in '' Half - Life 2 '' , an amputated part of it exists as an unused model in the game 's code . 
+This fusion of living material with technology is entirely in keeping with the Combine forces that are encountered in '' Half - Life 2 '' .
+===
+This version also appeared on Sebadoh 's 1992 compilation album '' Smash Your Head on the Punk Rock '' . It also appeared on a number of various artist compilations , including the City Slang compilation '' Slanged ! '' , and the Eurostar compilation '' Going Underground Vol. II '' .
+---
+This version also appeared on Sebadoh 's 1992 compilation album '' Smash Your Head on the Punk Rock '' . 
+It also appeared on a number of various artist compilations , including the City Slang compilation '' Slanged ! '' , and the Eurostar compilation '' Going Underground Vol. II '' .
+===
+According to the publisher Random House , she is the originator of the '' service dog '' , dogs that are trained to help people with mobility limitations .
+---
+According to the publisher Random House , she is the originator of the '' service dog '' , dogs that are trained to help people with mobility limitations .
+===
+Desprez is also known as a designer and maker of embroidery for purses , as a ' Maistre Boursier . ' He published a map of La Rochelle , and was recorded working in Paris between 1556 and 1580 .
+---
+Desprez is also known as a designer and maker of embroidery for purses , as a ' Maistre Boursier . ' 
+He published a map of La Rochelle , and was recorded working in Paris between 1556 and 1580 .
+===
+Gagan Kokri is an punjabi singer . ' Blessings of Baapu ' and ' Asla ' is his Best ever hits .
+---
+Gagan Kokri is an punjabi singer . 
+' Blessings of Baapu ' and ' Asla ' is his Best ever hits .
+===
+Kate Owen looked at him and said quietly, `And what do you remember next?'  ' I was in bed, in the infirmary, with bandages.'
+---
+Kate Owen looked at him and said quietly, `And what do you remember next?' 
+' I was in bed, in the infirmary, with bandages.'
+===
+' No, they'll not catch you again.  If they try, they'll have Kate Owen to reckon with.'
+---
+' No, they'll not catch you again.  If they try, they'll have Kate Owen to reckon with.'
+===
+Do you know what it means not to know what to do ? '' Graham was ultimately convicted . The informant was immediately released from jail , her sentence commuted to time served .
+---
+Do you know what it means not to know what to do ? ''
+Graham was ultimately convicted .
+The informant was immediately released from jail , her sentence commuted to time served .
+===
+Bloodlines '' ( also known as '' Wrong Turn 5 '' ) is a 2012 American horror film written and directed by Declan O'Brien . It is a prequel and the fifth ( chronologically , the second ) installment in the '' Wrong Turn '' film series .
+---
+Bloodlines '' ( also known as '' Wrong Turn 5 '' ) is a 2012 American horror film written and directed by Declan O'Brien .
+It is a prequel and the fifth ( chronologically , the second ) installment in the '' Wrong Turn '' film series .
+===
+He became notable in the media in 1999 for being one of two councillors to opt out of retroactive salary increases that council had implemented , saying '' ... what the ( salary ) committee recommended was fair and appropriate , but the timing was wrong . It should be for the next council term which would give the electorate time to pass comment on councillors '' remuneration .
+---
+He became notable in the media in 1999 for being one of two councillors to opt out of retroactive salary increases that council had implemented , saying '' ... what the ( salary ) committee recommended was fair and appropriate , but the timing was wrong . It should be for the next council term which would give the electorate time to pass comment on councillors '' remuneration .
+===
+'' The internet exploded with questions about ( Janay Rice ) , '' she wrote . '' Why did n't she leave ?
+---
+'' The internet exploded with questions about ( Janay Rice ) , '' she wrote .
+'' Why did n't she leave ?
+===
+And the music has a melody and a language in and of itself '' . Lead editor Naomi Zeichner went on to compare the album to the work of Interpol and '' the retro biker bar rock that soundtracks '' Sons of Anarchy '' '' .
+---
+And the music has a melody and a language in and of itself '' .
+Lead editor Naomi Zeichner went on to compare the album to the work of Interpol and '' the retro biker bar rock that soundtracks '' Sons of Anarchy '' '' .
+===
+Continuing north to northeast LA 27 enters DeRidder as South Pine street and intersects with U.S. Route 171/U.S . Highway 190 at the northern terminus .
+---
+Continuing north to northeast LA 27 enters DeRidder as South Pine street and intersects with U.S. Route 171/U.S . Highway 190 at the northern terminus .
+===
+Hello Mr . Robinson how are you today?
+---
+Hello Mr . Robinson how are you today?
+===
+In 2006 , Slean teamed up with video director Nelson Chan ( '' Mary '' , '' Day One '' ) to create a three - part short film titled '' Tales of the Baroness '' . The first segment aired on 11 May 2007 on Bravo ! .
+---
+In 2006 , Slean teamed up with video director Nelson Chan ( '' Mary '' , '' Day One '' ) to create a three - part short film titled '' Tales of the Baroness '' .
+The first segment aired on 11 May 2007 on Bravo ! .
+===
+I wasn’t really ... well, what I mean...see . . . what I'm saying, the thing is . . . I didn’t mean it.
+---
+I wasn’t really ... well, what I mean...see . . . what I'm saying, the thing is . . . I didn’t mean it.
+===
+Pausing... for... thought... should not?
+---
+Pausing... for... thought... should not?
+===
+Happy . . .  no one had ever before said anything about wanting him to be happy.
+---
+Happy . . .  no one had ever before said anything about wanting him to be happy.
+===
+Happy ...  no one had ever before said anything about wanting him to be happy.
+---
+Happy ...  no one had ever before said anything about wanting him to be happy.
+===
+Happy...  no one had ever before said anything about wanting him to be happy.
+---
+Happy...  no one had ever before said anything about wanting him to be happy.
+===
+Happy . . .  No one had ever before said anything about wanting him to be happy.
+---
+Happy . . .
+No one had ever before said anything about wanting him to be happy.
+===
+Happy ...  No one had ever before said anything about wanting him to be happy.
+---
+Happy ...
+No one had ever before said anything about wanting him to be happy.
+===
+Happy... No one had ever before said anything about wanting him to be happy.
+---
+Happy...
+No one had ever before said anything about wanting him to be happy.
+===
+Happy! . . .  no one had ever before said anything about wanting him to be happy.
+---
+Happy! . . .  no one had ever before said anything about wanting him to be happy.
+===
+Happy! ...  no one had ever before said anything about wanting him to be happy.
+---
+Happy! ...  no one had ever before said anything about wanting him to be happy.
+===
+Happy!...  no one had ever before said anything about wanting him to be happy.
+---
+Happy!...  no one had ever before said anything about wanting him to be happy.
+===
+Happy! . . .  No one had ever before said anything about wanting him to be happy.
+---
+Happy! . . .
+No one had ever before said anything about wanting him to be happy.
+===
+Happy! ...  No one had ever before said anything about wanting him to be happy.
+---
+Happy! ...
+No one had ever before said anything about wanting him to be happy.
+===
+Happy!... No one had ever before said anything about wanting him to be happy.
+---
+Happy!...
+No one had ever before said anything about wanting him to be happy.
+===
+Happy? . . .  no one had ever before said anything about wanting him to be happy.
+---
+Happy? . . .  no one had ever before said anything about wanting him to be happy.
+===
+Happy? ...  no one had ever before said anything about wanting him to be happy.
+---
+Happy? ...  no one had ever before said anything about wanting him to be happy.
+===
+Happy?...  no one had ever before said anything about wanting him to be happy.
+---
+Happy?...  no one had ever before said anything about wanting him to be happy.
+===
+Happy? . . .  No one had ever before said anything about wanting him to be happy.
+---
+Happy? . . .
+No one had ever before said anything about wanting him to be happy.
+===
+Happy? ...  No one had ever before said anything about wanting him to be happy.
+---
+Happy? ...
+No one had ever before said anything about wanting him to be happy.
+===
+Happy?... No one had ever before said anything about wanting him to be happy.
+---
+Happy?...
+No one had ever before said anything about wanting him to be happy.
+===
+According to '' The Minish Cap '' , they were created to guard the Wind Tribe ! ! ! And there is a Minish - sized chamber inside them where they can be turned on or off .
+---
+According to '' The Minish Cap '' , they were created to guard the Wind Tribe ! ! !
+And there is a Minish - sized chamber inside them where they can be turned on or off .
+===
+Really ? ? ? Then we should go .
+---
+Really ? ? ?
+Then we should go .
+===
+Nf6 , when 7.f4 and 7.Bg5 are the main possibilities for White . However , 6 ... d6 ! ? is an independent alternative for Black .
+---
+Nf6 , when 7.f4 and 7.Bg5 are the main possibilities for White .
+However , 6 ... d6 ! ? is an independent alternative for Black .
+===
+I wasn’t really ... well, what I mean...see . . . what I'm saying, the thing is . . . I didn’t mean it.
+---
+I wasn’t really ... well, what I mean...see . . . what I'm saying, the thing is . . . I didn’t mean it.
+===
+Hello world.Today is Tuesday.Mr. Smith went to the store and bought 1,000.That is a lot.
+---
+Hello world.
+Today is Tuesday.
+Mr. Smith went to the store and bought 1,000.
+That is a lot.
+===
+The pineapple ( '' Ananas comosus '' ) is a sign from god that you need to brush more . It comes with with edible burritos that are filled with whipped cream. , It is not the most economically significant plant in the Bromeliaceae family .
+---
+The pineapple ( '' Ananas comosus '' ) is a sign from god that you need to brush more .
+It comes with with edible burritos that are filled with whipped cream. , It is not the most economically significant plant in the Bromeliaceae family .
+===
+I thought... I would go.
+---
+I thought... I would go.
+===
+Something like U. A. E. Start of another sentence.
+---
+Something like U. A. E.
+Start of another sentence.
+===
+She agreed with him and I. We left.
+---
+She agreed with him and I.
+We left.
+===
+J. R. R. Tolkien wrote it. He was English.
+---
+J. R. R. Tolkien wrote it.
+He was English.
+===
+George W. Bush spoke. The crowd cheered.
+---
+George W. Bush spoke.
+The crowd cheered.
+===
+He left. Albert went home.
+---
+He left.
+Albert went home.
+===
+The Broken Condom '' , in which Superman quickly breaks up with Lois Lane after his X-ray vision reveals that she 's pregnant . Coincidentally , in '' Superman Returns '' , the actual fifth movie in the franchise , Lois has a son , who is implied in the movie to be Superman 's son .
+---
+The Broken Condom '' , in which Superman quickly breaks up with Lois Lane after his X-ray vision reveals that she 's pregnant .
+Coincidentally , in '' Superman Returns '' , the actual fifth movie in the franchise , Lois has a son , who is implied in the movie to be Superman 's son .
+===
+The Battle of Wizards '' is a turn based strategy computer game which was released on the ZX Spectrum in 1985 . In '' Chaos '' , players take the role of wizards who vie with one another to win the game .
+---
+The Battle of Wizards '' is a turn based strategy computer game which was released on the ZX Spectrum in 1985 .
+In '' Chaos '' , players take the role of wizards who vie with one another to win the game .
+===
+'' The internet exploded with questions about ( Janay Rice ) , '' she wrote . '' Why did n't she leave ?
+---
+'' The internet exploded with questions about ( Janay Rice ) , '' she wrote .
+'' Why did n't she leave ?
+===
+And the music has a melody and a language in and of itself '' . Lead editor Naomi Zeichner went on to compare the album to the work of Interpol and '' the retro biker bar rock that soundtracks '' Sons of Anarchy '' '' .
+---
+And the music has a melody and a language in and of itself '' .
+Lead editor Naomi Zeichner went on to compare the album to the work of Interpol and '' the retro biker bar rock that soundtracks '' Sons of Anarchy '' '' .
+===
+Father Came Too ! is a British comedy film first released in 1963 . It starred James Robertson Justice , Stanley Baxter , Leslie Phillips , Sally Smith , Ronnie Barker and Kenneth Cope .
+---
+Father Came Too ! is a British comedy film first released in 1963 .
+It starred James Robertson Justice , Stanley Baxter , Leslie Phillips , Sally Smith , Ronnie Barker and Kenneth Cope .
+===
+Mystery Incorporated '' , Abin Sur in ' , and various teachers in '' Recess '' . He was one of the voice directors on '' Beyblade '' , and did various voices on '' Rugrats '' and '' All Grown Up ! '' and adult voices on '' The Buzz On Maggie '' .
+---
+Mystery Incorporated '' , Abin Sur in ' , and various teachers in '' Recess '' .
+He was one of the voice directors on '' Beyblade '' , and did various voices on '' Rugrats '' and '' All Grown Up ! '' and adult voices on '' The Buzz On Maggie '' .
+===
+Will Sibusiso and Thandeka save their relationship from this bitter feud ? Will their families tear the , apart ? or will their love triumph in the end ?
+---
+Will Sibusiso and Thandeka save their relationship from this bitter feud ?
+Will their families tear the , apart ? or will their love triumph in the end ?
+===
+The episode continues from the previous episode Guess What 's Coming to Dinner ? with the mortally injured Cylon Natalie being taken to the sickbay . After seeing visions of green trees , she dies .
+---
+The episode continues from the previous episode Guess What 's Coming to Dinner ? with the mortally injured Cylon Natalie being taken to the sickbay .
+After seeing visions of green trees , she dies .
+===
+In 2006 , Slean teamed up with video director Nelson Chan ( ' Mary ' , ' Day One ' ) to create a three - part short film titled ' Tales of the Baroness ' . The first segment aired on 11 May 2007 on Bravo ! .
+---
+In 2006 , Slean teamed up with video director Nelson Chan ( ' Mary ' , ' Day One ' ) to create a three - part short film titled ' Tales of the Baroness ' .
+The first segment aired on 11 May 2007 on Bravo ! .
+===
+Do you know what it means not to know what to do ? ' Graham was ultimately convicted . The informant was immediately released from jail , her sentence commuted to time served .
+---
+Do you know what it means not to know what to do ? '
+Graham was ultimately convicted .
+The informant was immediately released from jail , her sentence commuted to time served .
+===
+Bloodlines ' ( also known as ' Wrong Turn 5 ' ) is a 2012 American horror film written and directed by Declan O'Brien . It is a prequel and the fifth ( chronologically , the second ) installment in the ' Wrong Turn ' film series .
+---
+Bloodlines ' ( also known as ' Wrong Turn 5 ' ) is a 2012 American horror film written and directed by Declan O'Brien .
+It is a prequel and the fifth ( chronologically , the second ) installment in the ' Wrong Turn ' film series .
+===
+He became notable in the media in 1999 for being one of two councillors to opt out of retroactive salary increases that council had implemented , saying ' ... what the ( salary ) committee recommended was fair and appropriate , but the timing was wrong . It should be for the next council term which would give the electorate time to pass comment on councillors ' remuneration .
+---
+He became notable in the media in 1999 for being one of two councillors to opt out of retroactive salary increases that council had implemented , saying ' ... what the ( salary ) committee recommended was fair and appropriate , but the timing was wrong . It should be for the next council term which would give the electorate time to pass comment on councillors ' remuneration .
+===
+The Broken Condom ' , in which Superman quickly breaks up with Lois Lane after his X-ray vision reveals that she 's pregnant . Coincidentally , in ' Superman Returns ' , the actual fifth movie in the franchise , Lois has a son , who is implied in the movie to be Superman 's son .
+---
+The Broken Condom ' , in which Superman quickly breaks up with Lois Lane after his X-ray vision reveals that she 's pregnant .
+Coincidentally , in ' Superman Returns ' , the actual fifth movie in the franchise , Lois has a son , who is implied in the movie to be Superman 's son .
+===
+The Battle of Wizards ' is a turn based strategy computer game which was released on the ZX Spectrum in 1985 . In ' Chaos ' , players take the role of wizards who vie with one another to win the game .
+---
+The Battle of Wizards ' is a turn based strategy computer game which was released on the ZX Spectrum in 1985 .
+In ' Chaos ' , players take the role of wizards who vie with one another to win the game .
+===
+' The internet exploded with questions about ( Janay Rice ) , ' she wrote . ' Why did n't she leave ?
+---
+' The internet exploded with questions about ( Janay Rice ) , ' she wrote .
+' Why did n't she leave ?
+===
+And the music has a melody and a language in and of itself ' . Lead editor Naomi Zeichner went on to compare the album to the work of Interpol and ' the retro biker bar rock that soundtracks ' Sons of Anarchy ' ' .
+---
+And the music has a melody and a language in and of itself ' .
+Lead editor Naomi Zeichner went on to compare the album to the work of Interpol and ' the retro biker bar rock that soundtracks ' Sons of Anarchy ' ' .
+===
+night from the County Orphanage.  I got here on that freight that just went through. ' The milkman gave him a quick look.  Then he seemed to turn his whole attention to the business of delivering milk, with a casual remark now and then between brisk directions to Jed to exchange full bottles for the empties at the back doors. '  Guess you could eat something, eh, boy? ' he said, when the truckload was finally delivered and Jed stood beside it, wishing his job wasn't done.  ' I guess I could, sir,' Jed admitted.  He noticed that the man seemed to be looking him over, taking his measure, as it were.  A sudden panic gripped him - could those friendly blue eyes have it in them to be noting down a description of him so as to inform the Orphanage?
+---
+night from the County Orphanage.
+I got here on that freight that just went through. '
+The milkman gave him a quick look.
+Then he seemed to turn his whole attention to the business of delivering milk, with a casual remark now and then between brisk directions to Jed to exchange full bottles for the empties at the back doors.
+'  Guess you could eat something, eh, boy? ' he said, when the truckload was finally delivered and Jed stood beside it, wishing his job wasn't done.
+' I guess I could, sir,' Jed admitted.
+He noticed that the man seemed to be looking him over, taking his measure, as it were.
+A sudden panic gripped him - could those friendly blue eyes have it in them to be noting down a description of him so as to inform the Orphanage?
+===
+'Tis the season to be jolly. Joy to the world.
+---
+'Tis the season to be jolly.
+Joy to the world.
+===
+The '80s were a great decade. I loved that music.
+---
+The '80s were a great decade.
+I loved that music.
+===
+Get 'em while they're hot. They won't last long.
+---
+Get 'em while they're hot.
+They won't last long.
+===
+She said 'twas a dark night. The moon was hidden.
+---
+She said 'twas a dark night.
+The moon was hidden.
+===
+Back in the '60s and '70s, music was different. Now it's all electronic.
+---
+Back in the '60s and '70s, music was different.
+Now it's all electronic.
+===
+For a minute Jed was silent.  I don't just remember - I guess I fell down in the shower. ' , Tim then turned and gave him a sharp look.  'They flogged you in a shower bath - with the water running?'  Jed only nodded.  Kate Owen looked at him and said quietly, `And what do you remember next?'  ' I was in bed, in the infirmary, with bandages.'
+---
+For a minute Jed was silent.
+I don't just remember - I guess I fell down in the shower. ' , Tim then turned and gave him a sharp look.
+'They flogged you in a shower bath - with the water running?'
+Jed only nodded.
+Kate Owen looked at him and said quietly, `And what do you remember next?'
+' I was in bed, in the infirmary, with bandages.'
+===
+Cleveland has four trains per day , Train 48 departs Cleveland at 7a.m . All the others run in the middle of the night .
+---
+Cleveland has four trains per day , Train 48 departs Cleveland at 7a.m .
+All the others run in the middle of the night .
+===
+7 a.m. is before 7 p.m. 7 a.m. is before dinner. 7 a.m. is before p. 753
+---
+7 a.m. is before 7 p.m.
+7 a.m. is before dinner.
+7 a.m. is before p. 753
+===
+At 11:58 p.m. PDT on October 1 , the Las Vegas Metropolitan Police Department stated that one suspect , a Nevada resident , was '' down '' . Police stated that no other shooters were believed to be involved .
+---
+At 11:58 p.m. PDT on October 1 , the Las Vegas Metropolitan Police Department stated that one suspect , a Nevada resident , was '' down '' .
+Police stated that no other shooters were believed to be involved .
+===
+At 11:58 p.m. P.D.T. on October 1 , the Las Vegas Metropolitan Police Department stated that one suspect , a Nevada resident , was '' down '' . Police stated that no other shooters were believed to be involved .
+---
+At 11:58 p.m. P.D.T. on October 1 , the Las Vegas Metropolitan Police Department stated that one suspect , a Nevada resident , was '' down '' .
+Police stated that no other shooters were believed to be involved .
+===
+At 5 a.m. Mr. Smith went to the bank. He left the bank at 6 P.M. Mr. Smith then went to the store.
+---
+At 5 a.m. Mr. Smith went to the bank.
+He left the bank at 6 P.M.
+Mr. Smith then went to the store.
+===
+At 5 a.m. Mr. Smith went to the bank. He left the bank at 6 p.m. Mr. Smith then went to the store.
+---
+At 5 a.m. Mr. Smith went to the bank.
+He left the bank at 6 p.m.
+Mr. Smith then went to the store.
+===
+At 5 a.m. we went to a restaurant.
+---
+At 5 a.m. we went to a restaurant.
+===
+At 5 a. m. we went to a restaurant.
+---
+At 5 a. m. we went to a restaurant.
+===
+5 a. m. is wake up time.
+---
+5 a. m. is wake up time.
+===
+You got home at 5 a. m. The sun had already set.
+---
+You got home at 5 a. m.
+The sun had already set.
+===
+At around 5 a.m. we went to a restaurant.
+---
+At around 5 a.m. we went to a restaurant.
+===
+Rome was founded in 753 B.C. Augustus became emperor centuries later.
+---
+Rome was founded in 753 B.C.
+Augustus became emperor centuries later.
+===
+The temple dates to 200 B.C. and was rebuilt in 50 A.D. Augustus dedicated it.
+---
+The temple dates to 200 B.C. and was rebuilt in 50 A.D.
+Augustus dedicated it.
+===
+Hammurabi reigned in 1792 B.C.E. He died in 1750 B.C.E.
+---
+Hammurabi reigned in 1792 B.C.E.
+He died in 1750 B.C.E.
+===
+The eruption occurred in 79 C.E. Pompeii was buried in ash.
+---
+The eruption occurred in 79 C.E.
+Pompeii was buried in ash.
+===
+In 44 B.C. Caesar was assassinated.
+---
+In 44 B.C. Caesar was assassinated.
+===
+Around 300 A.D. Rome began its slow decline.
+---
+Around 300 A.D. Rome began its slow decline.
+===
+Around 300 a.d. Rome began its slow decline.
+---
+Around 300 a.d. Rome began its slow decline.
+===
+This is clause 5.b.c of the contract. Please review it.
+---
+This is clause 5.b.c of the contract.
+Please review it.
+===
+This is clause 5.a.m of the contract. Please review it.
+---
+This is clause 5.a.m of the contract.
+Please review it.
+===
+At 6a.m the birds sing. Good morning.
+---
+At 6a.m the birds sing.
+Good morning.
+===
+At 6a.m. the birds sing. Good morning.
+---
+At 6a.m. the birds sing.
+Good morning.
+===
+This is at 6 a.m. The birds sing. Good morning.
+---
+This is at 6 a.m.
+The birds sing.
+Good morning.
+===
+At 6 a.m. The birds sing. Good morning.
+---
+At 6 a.m.
+The birds sing.
+Good morning.
+===
+He left in Jan. 2020 and never returned.
+---
+He left in Jan. 2020 and never returned.
+===
+She arrived on Feb. 5, 1995, after a long flight.
+---
+She arrived on Feb. 5, 1995, after a long flight.
+===
+at 6 p.m. He went home.
+---
+at 6 p.m.
+He went home.
+===
+On Jan. 5, at 6 a.m. Mr. Smith arrived.
+---
+On Jan. 5, at 6 a.m. Mr. Smith arrived.
+===
+He left at 6 p.m., the meeting was over.
+---
+He left at 6 p.m., the meeting was over.
+===
+By 9:00 P.M. Mr. Smith was home.
+---
+By 9:00 P.M. Mr. Smith was home.
+===
+A.D. 79 saw the eruption.
+---
+A.D. 79 saw the eruption.
+===
+Caesar died in 44 B.C. The empire mourned.
+---
+Caesar died in 44 B.C.
+The empire mourned.
+===
+He arrived, tired and hungry, at 6 a.m. Mr. Smith greeted him.
+---
+He arrived, tired and hungry, at 6 a.m.
+Mr. Smith greeted him.
+===
+On Monday at 6 a.m. Mr. Smith arrived.
+---
+On Monday at 6 a.m. Mr. Smith arrived.
+===
+On Jan. 5; at 6 a.m. Mr. Smith arrived.
+---
+On Jan. 5; at 6 a.m. Mr. Smith arrived.
+===
+She finished her coffee at 6 a.m. Mr. Smith was waiting.
+---
+She finished her coffee at 6 a.m.
+Mr. Smith was waiting.
+===
+He said "yes, of course" at 6 a.m. Mr. Smith left.
+---
+He said "yes, of course" at 6 a.m.
+Mr. Smith left.
+===
+In the morning at 6 a.m. Mr. Smith arrived.
+---
+In the morning at 6 a.m. Mr. Smith arrived.
+===
+On the day "they all left" at 6 a.m. Mr. Smith greeted him.
+---
+On the day "they all left" at 6 a.m. Mr. Smith greeted him.
+===
+She weighed 5 lb. Tom was impressed.
+---
+She weighed 5 lb.
+Tom was impressed.
+===
+The car goes 60 mph. The highway limit is higher.
+---
+The car goes 60 mph.
+The highway limit is higher.
+===
+He bought 8 oz. The recipe needed more.
+---
+He bought 8 oz.
+The recipe needed more.
+===
+She bought 5 lb. of flour.
+---
+She bought 5 lb. of flour.
+===
+The recipe calls for 8 oz. of sugar.
+---
+The recipe calls for 8 oz. of sugar.
+===
+Drive 60 mph on the highway.
+---
+Drive 60 mph on the highway.
+===
+He is 5 ft. 6 in. tall.
+---
+He is 5 ft. 6 in. tall.
+===
+The bag held 2 lb. 4 oz. of nuts.
+---
+The bag held 2 lb. 4 oz. of nuts.
+===
+The room is 12 sq. ft. wide.
+---
+The room is 12 sq. ft. wide.
+===
+Within 5 ft. of the door, the alarm sounded.
+---
+Within 5 ft. of the door, the alarm sounded.
+===
+At 60 mph the trip takes an hour.
+---
+At 60 mph the trip takes an hour.
+===
+He measured 6 in. The wall was solid.
+---
+He measured 6 in.
+The wall was solid.
+===
+Let's go in for the night.
+---
+Let's go in for the night.
+===
+He bought 5 Lb. of meat.
+---
+He bought 5 Lb. of meat.
+===
+Dr. Mi. arrived for the appointment.
+---
+Dr. Mi. arrived for the appointment.
+===
+Mr. Pt. visited yesterday.
+---
+Mr. Pt. visited yesterday.
+===
+He bought 5 ft. 3 in. 2 lb. of materials.
+---
+He bought 5 ft. 3 in. 2 lb. of materials.
+===
+In my truck 5 lb. of groceries spilled.
+---
+In my truck 5 lb. of groceries spilled.
+===
+He ran 5 mi. Tom walked only 2 mi.
+---
+He ran 5 mi.
+Tom walked only 2 mi.
+===
+Smith, Ph.D. graduated yesterday.
+---
+Smith, Ph.D. graduated yesterday.
+===
+Dr. Jones, M.D. attended the conference.
+---
+Dr. Jones, M.D. attended the conference.
+===
+She holds an M.B.A. from Harvard.
+---
+She holds an M.B.A. from Harvard.
+===
+She earned her Ph.D. The school was proud.
+---
+She earned her Ph.D.
+The school was proud.
+===
+She earned her Ph.D. Tom was impressed.
+---
+She earned her Ph.D.
+Tom was impressed.
+===
+Jones, Ph.D., M.B.A. joined the firm.
+---
+Jones, Ph.D., M.B.A. joined the firm.
+===
+As a Ph.D. holder, she taught at the university.
+---
+As a Ph.D. holder, she taught at the university.
+===
+She earned her ph.d. in physics.
+---
+She earned her ph.d. in physics.
+===
+Dr. Brown, D.D.S. opened her practice.
+---
+Dr. Brown, D.D.S. opened her practice.
+===
+She holds a LL.M. Sam holds a J.D.
+---
+She holds a LL.M.
+Sam holds a J.D.
+===
+Drive NE. for five miles.
+---
+Drive NE. for five miles.
+===
+The wind comes from the NW. of the valley.
+---
+The wind comes from the NW. of the valley.
+===
+# Uppercase starter follower — must BREAK (bypass fires via starter).
+Take SW. The road ends there.
+---
+Take SW.
+The road ends there.
+===
+He went NE. Tom followed.
+---
+He went NE.
+Tom followed.
+===
+The directions read N.E. across the map.
+---
+The directions read N.E. across the map.
+===
+The arrow pointed S.W. Then it spun.
+---
+The arrow pointed S.W.
+Then it spun.
+===
+She is gone. Mark left.
+---
+She is gone.
+Mark left.
+===
+Heading NE. through the woods, she found the cabin.
+---
+Heading NE. through the woods, she found the cabin.
+===
+He noted: In 44 B.C. Caesar died.
+---
+He noted: In 44 B.C. Caesar died.
+===
+She remarked: At 5 a.m. the city was silent.
+---
+She remarked: At 5 a.m. the city was silent.
+===
+The shelf is 3 ft. of solid oak.
+---
+The shelf is 3 ft. of solid oak.
+===
+The shelf is 3 ft. Tom measured it twice.
+---
+The shelf is 3 ft.
+Tom measured it twice.
+===
+She earned her Ph.D. in physics.
+---
+She earned her Ph.D. in physics.
+===
+She earned her Ph.D. Sam was impressed.
+---
+She earned her Ph.D.
+Sam was impressed.
+===
+He holds a LL.B. Sam holds a LL.M.
+---
+He holds a LL.B.
+Sam holds a LL.M.
+===
+She holds a LL.D. from Yale.
+---
+She holds a LL.D. from Yale.
+===
+She holds a LL.M. Tom holds a J.D.
+---
+She holds a LL.M.
+Tom holds a J.D.
+===
+Come in. Sit down.
+---
+Come in.
+Sit down.
+===
+Come on in. Sit down.
+---
+Come on in.
+Sit down.
+===
+# Known limitation. Fallback to default behaviour.
+There are several in. of rain forecast.
+---
+There are several in.
+of rain forecast.
+===
+Give me six fl. oz. of milk.
+---
+Give me six fl. oz. of milk.
+===
+Give me 6 fl. oz. of milk.
+---
+Give me 6 fl. oz. of milk.
+===
+The point is,' said Tom, that I may not take that job.  There's other work coming up here on the Coast.' He paused, steadily eyeing Jed.
+---
+The point is,' said Tom, that I may not take that job.
+There's other work coming up here on the Coast.'
+He paused, steadily eyeing Jed. 
+===
+Jed read on to the conclusion: ' I unhesitatingly recommend him to be the best submarine inspector known to me for deep pier foundations.' 'Gosh, Tom, that's some recommendation!' Jed folded the letter and handed it back. ' But not a bit more than was coming to you,' he added. 'And no one knew that better than good old Bill Carey!' The point is,' said Tom, that I may not take that job. There's other work coming up here on the Coast.' He paused, steadily eyeing Jed. I was thinking,' he went on, 'that you are the one to take this foreign job. Fact is, Kid, I want you to have it.' For some minutes words wouldn't come to Jed. He was ready for any job - he knew that. But what was working by himself, even on a foreign job, compared to working with Tom King? Tom's own gospel, as he'd so often uttered it, answered him now - 'A diver must always aim to go deeper and deeper... he must always be ready to go when the call comes.'
+---
+Jed read on to the conclusion: ' I unhesitatingly recommend him to be the best submarine inspector known to me for deep pier foundations.'
+'Gosh, Tom, that's some recommendation!'
+Jed folded the letter and handed it back.
+' But not a bit more than was coming to you,' he added.
+'And no one knew that better than good old Bill Carey!'
+The point is,' said Tom, that I may not take that job.
+There's other work coming up here on the Coast.'
+He paused, steadily eyeing Jed.
+I was thinking,' he went on, 'that you are the one to take this foreign job. Fact is, Kid, I want you to have it.'
+For some minutes words wouldn't come to Jed.
+He was ready for any job - he knew that.
+But what was working by himself, even on a foreign job, compared to working with Tom King?
+Tom's own gospel, as he'd so often uttered it, answered him now - 'A diver must always aim to go deeper and deeper... he must always be ready to go when the call comes.'
+===
+You've got here just in time, Ivar,' he exclaimed.  `We can drive over the Bridge and take it easy, now. But in another week, traffic will be crowding over it. She's finished, all but a little more painting.'  ' It's a great yob, Tom!  The lad tried to tell me how it would look.  But seeing is believing! ' Tom nodded.  I guess he told you all about our diving job, too.  Eh, Jed?'
+---
+You've got here just in time, Ivar,' he exclaimed.
+`We can drive over the Bridge and take it easy, now. But in another week, traffic will be crowding over it. She's finished, all but a little more painting.'
+' It's a great yob, Tom!  The lad tried to tell me how it would look.  But seeing is believing! '
+Tom nodded.
+I guess he told you all about our diving job, too.
+Eh, Jed?'
+===
+Bill Carey, biting the end of his dead cigar, spoke quietly.  Red Dolan has gone over to get the Chief. ' Jed noticed, then, almost mechanically, that the Swan was heading back across the bay to her berth.
+---
+Bill Carey, biting the end of his dead cigar, spoke quietly.
+Red Dolan has gone over to get the Chief. '
+Jed noticed, then, almost mechanically, that the Swan was heading back across the bay to her berth.
+===
+Bill Carey, biting the end of his dead cigar, spoke quietly.  Red Dolan has gone over to get the Chief.' Jed noticed, then, almost mechanically, that the Swan was heading back across the bay to her berth.
+---
+Bill Carey, biting the end of his dead cigar, spoke quietly.
+Red Dolan has gone over to get the Chief.'
+Jed noticed, then, almost mechanically, that the Swan was heading back across the bay to her berth.
+===

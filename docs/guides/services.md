@@ -129,6 +129,17 @@ Providers that return word timings also implement `WordTimestamps`, which is wha
 lets `TTSTextFrame`s align to the audio actually being spoken, and therefore what
 lets an interrupted response be recorded truncated rather than whole.
 
+#### Sentences in the language spoken
+
+A TTS service is given the model's output a sentence at a time, and where a
+sentence ends depends on the language: "bzw." ends nothing in German, and an
+abbreviation list is what tells "Dr. Smith" from the end of a sentence. The
+service finds its boundaries in the language its settings name, English when
+they name none, with rules for some forty languages; a
+`TTSUpdateSettingsFrame` changing the language applies from the next text, and
+keeps what is already buffered. An aggregator built by hand takes its language
+too, as `text.NewSimpleAggregator(frames.AggregationSentence, "de")`.
+
 #### Pronunciations
 
 A voice guesses a name or a term it does not know from its spelling.
