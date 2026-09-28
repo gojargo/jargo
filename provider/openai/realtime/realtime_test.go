@@ -101,18 +101,24 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 	// frames: the events do not map one-to-one onto what reaches the pipeline, so
 	// a count can be reached while the end of the response is still in flight.
 	// response.done is the last event the fake server sends, and the bot-stopped
-	// frame is what it produces.
+	// frame is what it produces. The user's transcript travels upstream while
+	// that frame travels downstream, so the two reach the ends of the pipeline in
+	// no fixed order, and both are waited for.
 	deadline := time.Now().Add(5 * time.Second)
 	var arrived bool
 	for time.Now().Before(deadline) {
+		var stopped, transcribed bool
 		mu.Lock()
 		for _, f := range got {
-			if _, ok := f.(*frames.BotStoppedSpeakingFrame); ok {
-				arrived = true
-				break
+			switch f.(type) {
+			case *frames.BotStoppedSpeakingFrame:
+				stopped = true
+			case *frames.TranscriptionFrame:
+				transcribed = true
 			}
 		}
 		mu.Unlock()
+		arrived = stopped && transcribed
 		if arrived {
 			break
 		}
