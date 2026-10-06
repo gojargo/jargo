@@ -17,6 +17,7 @@
 
 # Output of `go tool cover`
 *.out
+*.sarif
 coverage.*
 
 # Go workspace files

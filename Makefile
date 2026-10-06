@@ -36,6 +36,8 @@ PROTOC_GEN_GO_VERSION ?= v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.5.1
 GOVULNCHECK_VERSION ?= v1.5.0
 GITLEAKS_IMAGE ?= ghcr.io/gitleaks/gitleaks:latest
+SEMGREP_IMAGE ?= semgrep/semgrep:1.179.0
+SEMGREP_SARIF ?= semgrep.sarif
 
 # Hugo is installed out of band. This is the single pin for it: the docs
 # workflow provisions the runner from `make -s print-HUGO_VERSION`, and the
@@ -169,6 +171,12 @@ vuln: ## Report vulnerabilities jargo's code actually reaches
 secrets: ## Scan the checked-out tree for secrets, as the security workflow does
 	docker run --rm -v "$(CURDIR):/repo" $(GITLEAKS_IMAGE) \
 		dir /repo --redact --no-banner --verbose
+
+.PHONY: sast
+sast: ## Run the Semgrep CE static analysis and write its SARIF report
+	docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$(CURDIR):/src" -w /src $(SEMGREP_IMAGE) \
+		semgrep scan --config p/golang --metrics=off \
+		--sarif-output=$(SEMGREP_SARIF) --text
 
 ##@ Docs
 

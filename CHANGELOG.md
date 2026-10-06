@@ -15,6 +15,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Semgrep static analysis.** The security workflow runs Semgrep Community
+  Edition with the Go ruleset and reports its findings to the Security tab
+  without failing the build. `make sast` runs the same scan locally.
 - **A one-shot inference can hold its reply to a JSON schema.**
   `llm.InferenceOptions` gained `ResponseSchema`, and a service whose provider
   can enforce it returns JSON text that matches. OpenAI's chat completions get a

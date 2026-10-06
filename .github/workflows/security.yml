@@ -101,6 +101,26 @@ jobs:
         with:
           category: "/language:go"
 
+  semgrep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Semgrep Community Edition with the Go registry ruleset, run from its
+      # pinned image through the Makefile so the scan reproduces locally. No
+      # Semgrep account or token is involved. Like Trivy it reports to the
+      # Security tab without failing the build yet.
+      - name: Semgrep scan
+        run: make sast
+      - name: Upload results to the Security tab
+        if: ${{ hashFiles('semgrep.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
   snyk:
     runs-on: ubuntu-latest
     permissions:

@@ -49,6 +49,7 @@ worth knowing:
   and the two native runtimes above. The last two need no root: they install
   under `.native/` and print the `JARGO_*_LIB` values to export.
 - `make vuln`, `make secrets`: the govulncheck and gitleaks scans CI gates on.
+- `make sast`: the Semgrep CE scan; CI reports its findings without gating.
 
 ## Conventions
 
