@@ -47,9 +47,7 @@ func TestSpeechBoundariesAreIgnoredWhenThePipelineDetects(t *testing.T) {
 // TestTranscriptsAreUnaffectedByTheDetectionSetting covers the other messages:
 // whichever side detects speech, the transcripts themselves are read the same.
 func TestTranscriptsAreUnaffectedByTheDetectionSetting(t *testing.T) {
-	var m message
-	m.Type = msgTranscript
-	m.Data.IsFinal = true
+	m := message{Type: msgTranscript, Data: &messageData{IsFinal: true}}
 	m.Data.Utterance.Text = "hello there"
 	m.Data.Utterance.Language = "en"
 

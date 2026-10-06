@@ -23,7 +23,14 @@ import (
 // detector: Gladia finalizes per utterance rather than per turn.
 func NewSTT(cfg Config) *stt.StreamService {
 	cfg = withDefaults(cfg)
-	return stt.NewStream("GladiaSTT", &connector{cfg: cfg, http: &http.Client{}}, cfg.SampleRate)
+	c := &connector{cfg: cfg, http: &http.Client{}}
+	svc := stt.NewStream("GladiaSTT", c, cfg.SampleRate)
+	// The connector is handed the service it drives, so it can report a failure
+	// Gladia attaches to a message without ending the session. There is no call
+	// left to fail by the time it arrives on the read loop, so the service is
+	// the only way back.
+	c.svc = svc
+	return svc
 }
 
 // withDefaults fills in what the service supplies for a caller who left it
@@ -51,6 +58,19 @@ func withDefaults(cfg Config) Config {
 type connector struct {
 	cfg  Config
 	http *http.Client
+	// svc is the service this connector drives, for reporting a problem the
+	// session survives.
+	svc *stt.StreamService
+}
+
+// reportProblem puts a problem the session survived on the pipeline as a
+// non-fatal error, so an application hears about it while transcription
+// carries on over the same connection.
+func (c *connector) reportProblem(ctx context.Context, msg string) {
+	if c.svc == nil {
+		return
+	}
+	c.svc.PushError(ctx, msg, nil, false)
 }
 
 // Metadata describes the service downstream. With Gladia's own detection driving
@@ -78,9 +98,10 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 		return nil, err
 	}
 	return &stream{
-		conn: conn,
-		ctx:  ctx,
-		vad:  c.cfg.EnableVAD,
+		conn:   conn,
+		ctx:    ctx,
+		vad:    c.cfg.EnableVAD,
+		report: c.reportProblem,
 	}, nil
 }
 
@@ -171,18 +192,42 @@ type stream struct {
 	// vad is whether Gladia's own detection drives the turn, which is what makes
 	// its speech boundaries something to act on.
 	vad bool
+	// report puts a problem the session survives on the pipeline; nil drops it.
+	report func(ctx context.Context, msg string)
 }
 
-// message is the subset of a Gladia transcript message we read.
+// message is the subset of a Gladia session message we read.
 type message struct {
 	Type string `json:"type"`
-	Data struct {
-		IsFinal   bool `json:"is_final"`
-		Utterance struct {
-			Text     string `json:"text"`
-			Language string `json:"language"`
-		} `json:"utterance"`
-	} `json:"data"`
+	// Acknowledged is set on an audio chunk Gladia accepted.
+	Acknowledged bool `json:"acknowledged"`
+	// Error is the failure Gladia attaches to a message it could not act on.
+	Error *messageError `json:"error"`
+	// Data is the message's payload; nil when Gladia sent none, as it does
+	// alongside an error.
+	Data *messageData `json:"data"`
+}
+
+// messageData is the payload of a transcript message.
+type messageData struct {
+	IsFinal   bool `json:"is_final"`
+	Utterance struct {
+		Text     string `json:"text"`
+		Language string `json:"language"`
+	} `json:"utterance"`
+}
+
+// messageError is the failure Gladia attaches to a message.
+type messageError struct {
+	Message string `json:"message"`
+}
+
+// errorMessage is the failure's message, or a stand-in when Gladia gave none.
+func (m message) errorMessage() string {
+	if m.Error == nil || m.Error.Message == "" {
+		return "Unknown error"
+	}
+	return m.Error.Message
 }
 
 // Send writes a chunk of PCM audio as a binary frame.
@@ -215,8 +260,22 @@ func (s *stream) Recv() ([]stt.Result, error) {
 // from here would compete with it.
 func (s *stream) result(m message) (stt.Result, bool) {
 	switch m.Type {
+	case msgAudioChunk:
+		// An acknowledged chunk needs nothing: the audio is not held for
+		// resending. One that was not is a chunk Gladia rejected.
+		if !m.Acknowledged {
+			s.reportProblem("Gladia rejected an audio chunk: " + m.errorMessage())
+		}
+		return stt.Result{}, false
+	case msgTranslation:
+		// A failed translation carries an error and no payload. It is the
+		// translation that failed, not the session, so transcription carries on.
+		if m.Error != nil || m.Data == nil {
+			s.reportProblem("Gladia translation addon error: " + m.errorMessage())
+		}
+		return stt.Result{}, false
 	case msgTranscript:
-		if m.Data.Utterance.Text == "" {
+		if m.Data == nil || m.Data.Utterance.Text == "" {
 			return stt.Result{}, false
 		}
 		return stt.Result{
@@ -237,6 +296,13 @@ func (s *stream) result(m message) (stt.Result, bool) {
 		return stt.Result{Speech: stt.SpeechStopped}, true
 	}
 	return stt.Result{}, false
+}
+
+// reportProblem reports a problem the session survives.
+func (s *stream) reportProblem(msg string) {
+	if s.report != nil {
+		s.report(s.ctx, msg)
+	}
 }
 
 // Close stops the session and closes the socket.

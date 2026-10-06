@@ -31,6 +31,8 @@ const (
 	msgTranscript  = "transcript"
 	msgSpeechStart = "speech_start"
 	msgSpeechEnd   = "speech_end"
+	msgAudioChunk  = "audio_chunk"
+	msgTranslation = "translation"
 )
 
 // LanguageConfig configures language detection and handling.

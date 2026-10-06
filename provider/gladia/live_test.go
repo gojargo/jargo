@@ -1,6 +1,7 @@
 package gladia
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -248,5 +249,72 @@ func recvOne(t *testing.T, s stt.Stream) []stt.Result {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Recv returned nothing")
 		return nil
+	}
+}
+
+// captureReports routes the problems a session survives into a slice the test
+// reads once Recv has moved past them.
+func captureReports(t *testing.T, s stt.Stream) *[]string {
+	t.Helper()
+	st, ok := s.(*stream)
+	if !ok {
+		t.Fatalf("Connect returned %T, want *stream", s)
+	}
+	var reports []string
+	st.report = func(_ context.Context, msg string) { reports = append(reports, msg) }
+	return &reports
+}
+
+// TestRecvReportsARejectedAudioChunk checks a chunk Gladia rejected is reported
+// rather than dropped without a word, and that the session carries on.
+func TestRecvReportsARejectedAudioChunk(t *testing.T) {
+	s, got := dialLive(t, Config{})
+	reports := captureReports(t, s)
+
+	got.send <- `{"type":"audio_chunk","acknowledged":true,"data":{"byte_range":[0,3200]}}`
+	got.send <- `{"type":"audio_chunk","acknowledged":false,"error":{"message":"quota exceeded"},"data":null}`
+	got.send <- `{"type":"transcript","data":{"is_final":true,"utterance":{"text":"still here"}}}`
+
+	results := recvOne(t, s)
+	if len(results) != 1 || results[0].Text != "still here" {
+		t.Errorf("results = %+v, want the transcript that followed the rejection", results)
+	}
+	if len(*reports) != 1 || !strings.Contains((*reports)[0], "quota exceeded") {
+		t.Errorf("reports = %q, want the one rejection with its message", *reports)
+	}
+}
+
+// TestRecvReportsAFailedTranslation checks a failed translation, which carries
+// an error and no payload, is reported and leaves the session running: it is
+// the translation that failed, not the transcription.
+func TestRecvReportsAFailedTranslation(t *testing.T) {
+	s, got := dialLive(t, Config{})
+	reports := captureReports(t, s)
+
+	got.send <- `{"type":"translation","error":{"message":"translation addon failed"},"data":null}`
+	got.send <- `{"type":"transcript","data":{"is_final":true,"utterance":{"text":"still here"}}}`
+
+	results := recvOne(t, s)
+	if len(results) != 1 || results[0].Text != "still here" {
+		t.Errorf("results = %+v, want the transcript that followed the failure", results)
+	}
+	if len(*reports) != 1 || !strings.Contains((*reports)[0], "translation addon failed") {
+		t.Errorf("reports = %q, want the one failure with its message", *reports)
+	}
+}
+
+// TestRecvDoesNotReportASuccessfulTranslation checks a translation carrying no
+// error is not mistaken for a failure.
+func TestRecvDoesNotReportASuccessfulTranslation(t *testing.T) {
+	s, got := dialLive(t, Config{})
+	reports := captureReports(t, s)
+
+	got.send <- `{"type":"translation","error":null,"data":{"original_language":"en",` +
+		`"translated_utterance":{"language":"fr","text":"Bonjour"}}}`
+	got.send <- `{"type":"transcript","data":{"is_final":true,"utterance":{"text":"hello"}}}`
+
+	recvOne(t, s)
+	if len(*reports) != 0 {
+		t.Errorf("reports = %q, want none for a translation that succeeded", *reports)
 	}
 }
