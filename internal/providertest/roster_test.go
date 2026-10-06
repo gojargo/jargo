@@ -44,7 +44,7 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		// layer, which sits above user instructions in the prompt hierarchy, so
 		// the message is sent as written.
 		{"cerebras", cerebras.NewLLM, chat.RoleDeveloper},
-		{"deepseek", deepseek.NewLLM, chat.RoleUser},
+		{"deepseek", deepseekLLM, chat.RoleUser},
 		{"inception", inception.NewLLM, chat.RoleUser},
 		{"mistral", mistral.NewLLM, chat.RoleUser},
 		{"nebius", nebius.NewLLM, chat.RoleUser},
@@ -131,6 +131,12 @@ func contentTexts(raw json.RawMessage) []string {
 		out = append(out, p.Text)
 	}
 	return out
+}
+
+// deepseekLLM builds a DeepSeek service from the shared config alone, since the
+// roster sends every provider the same one and DeepSeek's own config wraps it.
+func deepseekLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return deepseek.NewLLM(deepseek.LLMConfig{LLMConfig: cfg})
 }
 
 // groqLLM builds a Groq service from the shared config alone, since the roster

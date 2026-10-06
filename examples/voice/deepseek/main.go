@@ -31,7 +31,6 @@ import (
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/deepseek"
 	"github.com/gojargo/jargo/provider/elevenlabs"
-	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
@@ -78,7 +77,7 @@ func runBot(conn *rtc.Connection) {
 
 	// --- the provider stack: the only part that differs between examples ---
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate})
-	llm := deepseek.NewLLM(chat.LLMConfig{APIKey: os.Getenv("DEEPSEEK_API_KEY")})
+	llm := deepseek.NewLLM(deepseek.LLMConfig{APIKey: os.Getenv("DEEPSEEK_API_KEY")})
 	tts := elevenlabs.NewTTS(elevenlabs.Config{APIKey: os.Getenv("ELEVENLABS_API_KEY")})
 	// ----------------------------------------------------------------------
 

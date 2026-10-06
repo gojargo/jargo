@@ -272,6 +272,43 @@ func TestGenerateExtraOverridesModeledFields(t *testing.T) {
 	}
 }
 
+// TestMergeExtraOmitsNil checks a provider field left nil is not sent, and that
+// nothing at all is set when every field is nil.
+func TestMergeExtraOmitsNil(t *testing.T) {
+	cfg := LLMConfig{}
+	cfg.MergeExtra(map[string]any{"a": 1, "b": nil})
+	if len(cfg.Extra) != 1 || cfg.Extra["a"] != 1 {
+		t.Errorf("Extra = %v, want only a", cfg.Extra)
+	}
+
+	cfg = LLMConfig{}
+	cfg.MergeExtra(map[string]any{"a": nil})
+	if cfg.Extra != nil {
+		t.Errorf("Extra = %v, want it left unset", cfg.Extra)
+	}
+}
+
+// TestMergeExtraCallerWinsAndIsNotModified checks a field the caller set in
+// Extra wins over the provider's, and that the caller's map is not written to.
+func TestMergeExtraCallerWinsAndIsNotModified(t *testing.T) {
+	user := map[string]any{"a": "user", "u": 1}
+	cfg := LLMConfig{Extra: user}
+	cfg.MergeExtra(map[string]any{"a": "service", "s": 2})
+
+	want := map[string]any{"a": "user", "u": 1, "s": 2}
+	if len(cfg.Extra) != len(want) {
+		t.Fatalf("Extra = %v, want %v", cfg.Extra, want)
+	}
+	for k, v := range want {
+		if cfg.Extra[k] != v {
+			t.Errorf("Extra[%q] = %v, want %v", k, cfg.Extra[k], v)
+		}
+	}
+	if len(user) != 2 || user["a"] != "user" || user["u"] != 1 {
+		t.Errorf("the caller's map became %v, want it unchanged", user)
+	}
+}
+
 // TestGenerateJoinsDeltas checks the streamed content deltas arrive at the
 // caller in order and nothing else does.
 func TestGenerateJoinsDeltas(t *testing.T) {

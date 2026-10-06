@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -117,6 +118,26 @@ type LLMService struct {
 
 // Validate reports whether the configuration is usable.
 func (c LLMConfig) Validate() error { return validate.Struct(c) }
+
+// MergeExtra adds provider-specific fields to the request body fields c sends in
+// Extra. It is how an OpenAI-compatible provider sends a field of its own that
+// the modeled parameters have no place for.
+//
+// A field already in Extra, set by the caller, wins key by key, matching how
+// Extra overrides every other request parameter. Extra is copied rather than
+// modified, so a caller's map is never written to. Nil values are omitted.
+func (c *LLMConfig) MergeExtra(fields map[string]any) {
+	extra := make(map[string]any, len(fields)+len(c.Extra))
+	for name, value := range fields {
+		if value != nil {
+			extra[name] = value
+		}
+	}
+	maps.Copy(extra, c.Extra)
+	if len(extra) > 0 {
+		c.Extra = extra
+	}
+}
 
 // Compat describes an OpenAI-compatible endpoint: the label its service runs
 // under, where it lives, and the ways it departs from OpenAI's own API. The
