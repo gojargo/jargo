@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultModel     = "amazon.nova-sonic-v1:0"
+	defaultModel     = "amazon.nova-2-sonic-v1:0"
 	defaultVoice     = "matthew"
 	inputSampleRate  = 16000
 	outputSampleRate = 24000
@@ -37,8 +37,9 @@ var errNotGenerator = errors.New("novasonic: the model generates continuously")
 
 // Config configures the Nova Sonic service.
 type Config struct {
-	// Region is the AWS region (Nova Sonic launched in us-east-1); empty uses the
-	// default chain (AWS_REGION, shared config).
+	// Region is the AWS region where the service is hosted. Supported regions:
+	// us-east-1, us-west-2, eu-north-1, ap-northeast-1. Empty uses the default
+	// chain (AWS_REGION, shared config).
 	Region string
 	// AccessKeyID and SecretAccessKey set static credentials; leave both empty to
 	// use the default AWS credential chain (environment, shared config, IAM role).
@@ -46,10 +47,12 @@ type Config struct {
 	SecretAccessKey string
 	// SessionToken is the optional session token for temporary credentials.
 	SessionToken string
-	// Model is the Nova Sonic model id; empty uses a current default.
+	// Model is the Nova Sonic model id; empty uses amazon.nova-2-sonic-v1:0.
 	Model string
-	// Voice is the output voice id (e.g. matthew, tiffany, ambre, florian); empty
-	// uses a default.
+	// Voice is the output voice id (e.g. matthew, tiffany, amy); empty uses
+	// matthew. Some voices are designed for use with a specific language. For
+	// the available voices, see
+	// https://docs.aws.amazon.com/nova/latest/nova2-userguide/sonic-language-support.html.
 	Voice string
 	// Instructions is the system prompt for the session.
 	Instructions string
