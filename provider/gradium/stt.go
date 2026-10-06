@@ -335,6 +335,12 @@ func (s *sttStream) Send(audio []byte) error {
 // Recv reads the next message. Each "text" fragment accumulates and surfaces the
 // running transcript as an interim result; a "flushed" or "end_of_stream" marker
 // finalizes the accumulated transcript with EndOfTurn set.
+//
+// When the connection drops, the words already held are returned as a
+// transcript before the failure is. The server's decoder state goes with the
+// connection, so the session that replaces this one starts from a clean state,
+// and the words would otherwise be lost. The transcript does not end the turn:
+// the user may still be speaking.
 func (s *sttStream) Recv() ([]stt.Result, error) {
 	for {
 		r, ok := s.next()
@@ -342,6 +348,9 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			return nil, io.EOF
 		}
 		if r.err != nil {
+			if res, ok := s.finalizeOnDrop(r); ok {
+				return res, nil
+			}
 			return nil, r.err
 		}
 		switch r.msg.Type {
@@ -362,6 +371,21 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			return nil, fmt.Errorf("%w: %s", errSTTProtocol, r.msg.Message)
 		}
 	}
+}
+
+// finalizeOnDrop closes out the transcript of a connection that dropped. It
+// returns the words held so far as a transcript and holds the failure for the
+// next call, so the session is still torn down and replaced. A session being
+// shut down on purpose has its context canceled, and its words are dropped with
+// it rather than reported.
+func (s *sttStream) finalizeOnDrop(r sttRead) ([]stt.Result, bool) {
+	if len(s.accumulated) == 0 || s.ctx.Err() != nil {
+		return nil, false
+	}
+	text := strings.Join(s.accumulated, " ")
+	s.accumulated = nil
+	s.pending = &r
+	return []stt.Result{{Text: text, Final: true, Language: s.lang}}, true
 }
 
 // Close tears the session down and stops the reader.

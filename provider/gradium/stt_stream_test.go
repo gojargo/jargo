@@ -1,6 +1,7 @@
 package gradium
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 // stream exactly as the server would.
 func newTestStream() *sttStream {
 	return &sttStream{
+		ctx:   context.Background(),
 		lang:  "en",
 		reads: make(chan sttRead, 16),
 		done:  make(chan struct{}),
@@ -153,6 +155,90 @@ func TestRecvEndsWhenTheReaderStops(t *testing.T) {
 
 	if _, err := s.Recv(); err == nil {
 		t.Error("the stream did not report the reader having stopped")
+	}
+}
+
+// errDropped stands for the connection failing under the reader.
+//
+//nolint:gochecknoglobals // test sentinel
+var errDropped = errors.New("connection dropped")
+
+// drop queues the connection failing, as the reader would have delivered it.
+func (s *sttStream) drop() { s.reads <- sttRead{err: errDropped} }
+
+// TestRecvADropReturnsTheTextSoFarWithoutEndingTheTurn covers the connection
+// dropping mid-utterance. The server's decoder state goes with the connection,
+// so the words already held are returned as a transcript, and the failure
+// follows so the session is replaced. The user may still be speaking, so the
+// transcript does not end the turn, and nothing is carried into the session
+// that replaces this one.
+func TestRecvADropReturnsTheTextSoFarWithoutEndingTheTurn(t *testing.T) {
+	s := newTestStream()
+	s.feed(text("book a table"))
+	s.drop()
+
+	recvOne(t, s) // the interim
+
+	got := recvOne(t, s)
+	if got.Text != "book a table" || !got.Final {
+		t.Errorf("result = %q (final %v), want the text so far as a transcript", got.Text, got.Final)
+	}
+	if got.EndOfTurn {
+		t.Error("the drop ended the turn, but the user may still be speaking")
+	}
+	if len(s.accumulated) != 0 {
+		t.Errorf("the stream still holds %v after the drop", s.accumulated)
+	}
+	if _, err := s.Recv(); !errors.Is(err, errDropped) {
+		t.Errorf("error = %v, want the drop reported after the transcript", err)
+	}
+}
+
+// TestRecvADropWhileSettlingReturnsTheTranscriptOnce covers the connection
+// dropping while a flushed transcript waits for its trailing words. The
+// transcript goes out once, ending the turn the flush closed, and the failure
+// follows without a second transcript.
+func TestRecvADropWhileSettlingReturnsTheTranscriptOnce(t *testing.T) {
+	s := newTestStream()
+	s.feed(text("the tail"), flushed())
+	s.drop()
+
+	recvOne(t, s) // the interim
+
+	got := recvOne(t, s)
+	if got.Text != "the tail" || !got.Final || !got.EndOfTurn {
+		t.Errorf("result = %+v, want the flushed transcript ending the turn", got)
+	}
+	if res, err := s.Recv(); !errors.Is(err, errDropped) {
+		t.Errorf("Recv = %+v, %v, want only the drop reported", res, err)
+	}
+}
+
+// TestRecvADropWithNothingHeldReportsOnlyTheFailure covers a drop between
+// utterances: there is no transcript to close out.
+func TestRecvADropWithNothingHeldReportsOnlyTheFailure(t *testing.T) {
+	s := newTestStream()
+	s.drop()
+
+	if res, err := s.Recv(); !errors.Is(err, errDropped) {
+		t.Errorf("Recv = %+v, %v, want only the drop reported", res, err)
+	}
+}
+
+// TestRecvAShutdownDropsTheTextSoFar covers the session being closed on
+// purpose. Its words go with it rather than being reported as a transcript.
+func TestRecvAShutdownDropsTheTextSoFar(t *testing.T) {
+	s := newTestStream()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.ctx = ctx
+	s.feed(text("never mind"))
+	s.drop()
+
+	recvOne(t, s) // the interim
+	cancel()
+
+	if res, err := s.Recv(); !errors.Is(err, errDropped) {
+		t.Errorf("Recv = %+v, %v, want the failure without a transcript", res, err)
 	}
 }
 
