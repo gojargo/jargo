@@ -656,6 +656,7 @@ func (s *StreamService) connect(ctx context.Context) error {
 	s.connectedAt = time.Now()
 	s.audioBytes = 0
 	s.mu.Unlock()
+	s.startKeepalive(readCtx)
 	s.wg.Go(func() { s.ws.ReceiveTaskHandler(readCtx, s.reportConnectionError) })
 	return nil
 }
@@ -684,6 +685,7 @@ func (s *StreamService) disconnect(ctx context.Context) {
 	// answers with reaches the pipeline through it. Canceling first would tear
 	// the reader down before the answer arrived.
 	s.drainSession()
+	s.stopKeepalive()
 	cancel()
 	s.wg.Wait()
 	_ = s.DisconnectWebsocket(ctx)
@@ -749,10 +751,6 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 	s.sessionCancel = cancel
 	s.sendFailed = false
 	s.mu.Unlock()
-	// Every session gets its own keepalive, the first and each replacement
-	// alike: the goroutine gives up on a failed send, so the one belonging to
-	// the session that just dropped is likely gone.
-	s.startKeepalive(ctx)
 	s.startTurnWatchdog(ctx)
 	return nil
 }
@@ -762,9 +760,6 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 // nothing about whether the next one will open, so the failure is logged rather
 // than failing the reconnect attempt that is about to redial.
 func (s *StreamService) DisconnectWebsocket(context.Context) error {
-	// Stopped before the session goes, so nothing tries to send on a session
-	// that is being closed underneath it.
-	s.stopKeepalive()
 	s.stopTurnWatchdog()
 	s.mu.Lock()
 	stream := s.stream
@@ -1028,7 +1023,8 @@ func (s *StreamService) takeFinalizePending() bool {
 }
 
 // startKeepalive replaces the running keepalive, if any, with one for the
-// session just opened. It does nothing when the provider asked for none.
+// connection just opened. It runs across the sessions the read loop reopens,
+// and does nothing when the provider asked for none.
 func (s *StreamService) startKeepalive(ctx context.Context) {
 	if s.keepalive.Timeout <= 0 {
 		return
@@ -1056,8 +1052,8 @@ func (s *StreamService) stopKeepalive() {
 }
 
 // keepaliveLoop submits silence to a session that has carried no audio for long
-// enough that the provider might close it. It gives up on the first failed send:
-// the session is gone, and the read loop is the one that reopens it.
+// enough that the provider might close it. A failed send is logged and the loop
+// keeps going, so the next keepalive goes out on schedule.
 func (s *StreamService) keepaliveLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.keepalive.Interval)
 	defer ticker.Stop()
@@ -1079,7 +1075,7 @@ func (s *StreamService) keepaliveLoop(ctx context.Context) {
 		if err := s.sendKeepalive(); err != nil {
 			slog.Warn("keeping the transcription session alive failed",
 				"service", s.Name(), "err", err)
-			return
+			continue
 		}
 		s.mu.Lock()
 		s.lastAudio = time.Now()

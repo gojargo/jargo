@@ -287,3 +287,59 @@ func TestKeepaliveIntervalDefaults(t *testing.T) {
 }
 
 var _ processor.Processor = (*StreamService)(nil)
+
+// kaFlakyStream fails its first keepalives, the way a session hit by a transient
+// send error does, and records the ones that went out after.
+type kaFlakyStream struct {
+	kaStream
+	failuresLeft int
+	sentOK       int
+}
+
+func (s *kaFlakyStream) SendKeepalive([]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failuresLeft > 0 {
+		s.failuresLeft--
+		return errNoSession
+	}
+	s.sentOK++
+	return nil
+}
+
+func (s *kaFlakyStream) counts() (failuresLeft, sentOK int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failuresLeft, s.sentOK
+}
+
+// A failed send is logged and later keepalives still go out.
+func TestKeepaliveSurvivesFailedSend(t *testing.T) {
+	t.Parallel()
+
+	const interval = 10 * time.Millisecond
+	st := &kaFlakyStream{failuresLeft: 2}
+	conn := &kaConnector{stream: st, wants: true}
+	s := NewStream("FakeSTT", conn, 16000)
+	s.keepalive = KeepaliveOptions{Timeout: interval, Interval: interval}
+	s.sampleRate = 16000
+	s.stream = st
+
+	s.startKeepalive(t.Context())
+	defer s.stopKeepalive()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		failuresLeft, sentOK := st.counts()
+		if sentOK >= 2 {
+			if failuresLeft != 0 {
+				t.Fatalf("%d failures left, want 0", failuresLeft)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d keepalives went out after the failed sends", sentOK)
+		}
+		time.Sleep(interval)
+	}
+}

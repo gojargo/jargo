@@ -365,6 +365,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A failed STT keepalive no longer stops the keepalives.** The keepalive
+  gave up on its first failed send and was only restarted when a new session
+  opened, so an idle connection could be closed by the provider. A failed
+  keepalive is now logged and the next one is sent on schedule. The keepalive
+  runs for the whole connection, across the sessions the read loop reopens,
+  rather than being restarted with each one.
+
 - **TTS audio frames always hold whole samples.** A provider can cut its PCM
   stream at any byte, and an audio frame ending mid-sample broke whatever read
   audio frame by frame downstream (resamplers, filters, metrics). The TTS base
