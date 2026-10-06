@@ -230,6 +230,52 @@ func TestSTTSendChunksTheAudio(t *testing.T) {
 	}
 }
 
+// TestSTTAudioAtAnUnsupportedRateIsResampled checks audio at a rate Gradium
+// does not accept is announced and sent at one it does. One second at 48 kHz is
+// one second at 24 kHz: about twelve chunks of 80 ms, each sized for 24 kHz.
+func TestSTTAudioAtAnUnsupportedRateIsResampled(t *testing.T) {
+	endpoint, seen := sttServer(t, nil, nil)
+
+	s, err := sttConn(endpoint, func(c *STTConfig) { c.Encoding = encPCM }).Connect(context.Background(), 48000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	if got := seen.await(t)["input_format"]; got != "pcm_24000" {
+		t.Errorf("input_format = %v, want pcm_24000", got)
+	}
+
+	if err := s.Send(make([]byte, 2*48000)); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	chunk := sttChunkMS * 24000 * 2 / 1000
+	sent := 0
+	for {
+		select {
+		case m := <-seen.got:
+			encoded, ok := m[msgAudio].(string)
+			if !ok {
+				t.Fatalf("message = %v, want an audio chunk", m)
+			}
+			raw, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("the audio is not base64: %v", err)
+			}
+			if len(raw) != chunk {
+				t.Errorf("chunk was %d bytes, want %d for 80 ms at 24 kHz", len(raw), chunk)
+			}
+			sent++
+			continue
+		case <-time.After(200 * time.Millisecond):
+		}
+		break
+	}
+	if sent < 11 || sent > 12 {
+		t.Errorf("sent %d chunks, want 11 or 12 for one second at 24 kHz", sent)
+	}
+}
+
 // TestSTTRecvAccumulatesUntilTheFlush checks text fragments build the running
 // transcript and a flush settles it, ending the turn.
 func TestSTTRecvAccumulatesUntilTheFlush(t *testing.T) {

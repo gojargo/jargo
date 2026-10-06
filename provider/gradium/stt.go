@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
@@ -46,7 +47,8 @@ type STTConfig struct {
 	Model string
 	// Encoding is the base audio encoding ("pcm", "wav", or "opus"); empty uses
 	// "pcm". For PCM the sample rate is appended to form the input format (for
-	// example "pcm_16000").
+	// example "pcm_16000"). Audio at a rate Gradium does not accept is resampled
+	// to one it does.
 	Encoding string
 	// Language grounds the transcription in one language; the zero value uses
 	// English. Verified codes are de, en, es, fr, and pt; other languages fall
@@ -97,6 +99,32 @@ func (c *sttConnector) Metadata() stt.Metadata {
 	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.GradiumTTFSP99), Model: c.cfg.Model}
 }
 
+// gradiumPCMSampleRates are the PCM sample rates Gradium accepts, lowest first.
+//
+//nolint:gochecknoglobals // fixed lookup table
+var gradiumPCMSampleRates = []int{8000, 16000, 24000}
+
+// gradiumPCMSampleRate picks the PCM sample rate to send audio at: the lowest
+// rate Gradium accepts at or above sampleRate, or the highest one it accepts.
+func gradiumPCMSampleRate(sampleRate int) int {
+	for _, rate := range gradiumPCMSampleRates {
+		if rate >= sampleRate {
+			return rate
+		}
+	}
+	return gradiumPCMSampleRates[len(gradiumPCMSampleRates)-1]
+}
+
+// sendSampleRate is the rate audio is sent to Gradium at. PCM at a rate Gradium
+// does not accept is resampled to one it does; other encodings are sent at the
+// pipeline's rate.
+func (c *sttConnector) sendSampleRate(sampleRate int) int {
+	if c.cfg.Encoding != encPCM {
+		return sampleRate
+	}
+	return gradiumPCMSampleRate(sampleRate)
+}
+
 // inputFormat builds Gradium's input_format from the encoding and sample rate.
 // For PCM the sample rate is appended; other encodings are used as-is.
 func (c *sttConnector) inputFormat(sampleRate int) string {
@@ -129,8 +157,15 @@ func gradiumLanguage(l language.Language) string {
 }
 
 // Connect dials the WebSocket, sends the setup handshake, and waits for the
-// server's ready acknowledgement.
+// server's ready acknowledgement. Audio is resampled from the pipeline's rate to
+// the rate it is sent at.
 func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
+	sendRate := c.sendSampleRate(sampleRate)
+	rs, err := resample.New(sampleRate, sendRate, 1)
+	if err != nil {
+		return nil, err
+	}
+
 	header := http.Header{}
 	header.Set("x-api-key", c.cfg.APIKey)
 
@@ -139,7 +174,7 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 		return nil, err
 	}
 
-	if err := conn.Write(ctx, websocket.MessageText, c.setup(sampleRate)); err != nil {
+	if err := conn.Write(ctx, websocket.MessageText, c.setup(sendRate)); err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "setup failed")
 		return nil, err
 	}
@@ -148,10 +183,11 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 		return nil, err
 	}
 
-	chunkBytes := sttChunkMS * sampleRate * 2 / 1000
+	chunkBytes := sttChunkMS * sendRate * 2 / 1000
 	s := &sttStream{
 		conn:       conn,
 		ctx:        ctx,
+		rs:         rs,
 		chunkBytes: chunkBytes,
 		lang:       c.cfg.Language.Code(),
 		reads:      make(chan sttRead, 8),
@@ -215,8 +251,11 @@ func awaitReady(ctx context.Context, conn *wsutil.Conn) error {
 const transcriptAggregationDelay = 100 * time.Millisecond
 
 type sttStream struct {
-	conn       *wsutil.Conn
-	ctx        context.Context
+	conn *wsutil.Conn
+	ctx  context.Context
+	// rs converts the pipeline's audio to the rate it is sent at; it passes
+	// the audio through when the two match.
+	rs         *resample.Resampler
 	chunkBytes int
 	// lang is the configured language hint echoed on results, or "".
 	lang string
@@ -311,11 +350,15 @@ type sttMessage struct {
 	Message string `json:"message"`
 }
 
-// Send buffers audio and streams it in fixed 80 ms chunks, base64-encoded.
+// Send resamples the audio to the rate it is sent at, then buffers it and
+// streams it in fixed 80 ms chunks, base64-encoded.
 func (s *sttStream) Send(audio []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	if s.rs != nil {
+		audio = s.rs.Process(audio)
+	}
 	s.buf = append(s.buf, audio...)
 	for len(s.buf) >= s.chunkBytes {
 		chunk := s.buf[:s.chunkBytes]
@@ -388,8 +431,13 @@ func (s *sttStream) finalizeOnDrop(r sttRead) ([]stt.Result, bool) {
 	return []stt.Result{{Text: text, Final: true, Language: s.lang}}, true
 }
 
-// Close tears the session down and stops the reader.
+// Close tears the session down, stops the reader and releases the resampler.
 func (s *sttStream) Close() error {
 	s.closeOnce.Do(func() { close(s.done) })
+	if s.rs != nil {
+		s.writeMu.Lock()
+		s.rs.Close()
+		s.writeMu.Unlock()
+	}
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

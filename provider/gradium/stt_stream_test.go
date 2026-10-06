@@ -270,6 +270,30 @@ func TestInputFormatNamesTheRate(t *testing.T) {
 	}
 }
 
+// TestPCMIsSentAtARateGradiumAccepts covers the rate PCM is sent at. A rate
+// Gradium accepts is kept, and any other is raised to the next one it accepts,
+// or lowered to the highest when there is none above it.
+func TestPCMIsSentAtARateGradiumAccepts(t *testing.T) {
+	tests := []struct{ pipeline, sent int }{
+		{8000, 8000},
+		{16000, 16000},
+		{24000, 24000},
+		{11025, 16000},
+		{22050, 24000},
+		{48000, 24000},
+	}
+	for _, tt := range tests {
+		if got := gradiumPCMSampleRate(tt.pipeline); got != tt.sent {
+			t.Errorf("a %d Hz pipeline is sent at %d Hz, want %d Hz", tt.pipeline, got, tt.sent)
+		}
+	}
+
+	opus := &sttConnector{cfg: STTConfig{Encoding: "opus"}}
+	if got := opus.sendSampleRate(48000); got != 48000 {
+		t.Errorf("opus is sent at %d Hz, want the pipeline's 48000 Hz", got)
+	}
+}
+
 // TestGradiumLanguageUsesTheBaseCode covers the language hint. The service takes
 // a base code, so a regional language is reduced to it, and no language at all
 // leaves the hint off so the server decides.
