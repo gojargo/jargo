@@ -19,6 +19,8 @@ func TestMatchEndOfSentenceSourceOffsets(t *testing.T) {
 		{"👋 Hello. 😀 Next", "en", "👋 Hello."},
 		{"Café is open. Next", "en", "Café is open."},
 		{"こんにちは。次", "ja", "こんにちは。"},
+		{"Dr. 田中が来ます。次の文です。", "ja", "Dr. 田中が来ます。"},
+		{"U.S.のAWSです。次の文です。", "ja", "U.S.のAWSです。"},
 		{"你好。下一句", "zh", "你好。"},
 		{"नमस्ते। यह", "hi", "नमस्ते।"},
 		{"هل أنت بخير؟ نعم", "ar", "هل أنت بخير؟"},
@@ -84,6 +86,8 @@ func TestChunkBoundariesDoNotChangeSentences(t *testing.T) {
 		{"it", []string{"Il dott. Rossi arriva.", "Poi parte."}},
 		{"nl", []string{"Dr. Jansen komt.", "Daarna vertrekt hij."}},
 		{"ja", []string{"こんにちは。", "次の文です。"}},
+		{"ja", []string{"Dr. 田中が来ます。", "次の文です。"}},
+		{"ja", []string{"U.S.のAWSです。", "次の文です。"}},
 	}
 	for _, c := range cases {
 		wantSentences(t, c.language, c.sentences, 1, 3, 1000)

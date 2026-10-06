@@ -50,7 +50,7 @@ copyright (c) The HuggingFace Team, Apache License 2.0).
 Sentence segmentation
 ---------------------
 
-internal/sentencex is a Go port of sentencex v1.0.31
+internal/sentencex is a Go port of sentencex v1.0.32
 (https://github.com/wikimedia/sentencex), copyright (c) 2025 Santhosh
 Thottingal, licensed under the MIT License. The port carries over the upstream
 segmentation rules, and bundles the upstream word lists

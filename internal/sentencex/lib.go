@@ -1,5 +1,5 @@
 // Package sentencex splits text into sentences, with rules for many
-// languages. It is a Go port of sentencex v1.0.31
+// languages. It is a Go port of sentencex v1.0.32
 // (https://github.com/wikimedia/sentencex), the sentence segmentation library
 // by Santhosh Thottingal, released under the MIT License. The algorithm, the
 // per-language rules and the bundled word lists are carried over unchanged,

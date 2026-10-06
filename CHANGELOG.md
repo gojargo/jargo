@@ -365,6 +365,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Japanese sentence aggregation keeps Latin abbreviations whole.** Text such
+  as "Dr. 田中が来ます。" was split after "Dr.", and "U.S." after "U.". The
+  bundled sentence segmenter moves to the rules of sentencex v1.0.32, where
+  Japanese uses the English abbreviation list.
+
 - **The Responses API services no longer fail every request to models that
   reject effort "none".** With no reasoning configured they sent
   `reasoning.effort` "none", which `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, the

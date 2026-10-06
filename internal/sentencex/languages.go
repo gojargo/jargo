@@ -361,9 +361,10 @@ func newItalian() *language {
 	}
 }
 
-// Japanese, with no abbreviations.
+// Japanese, which uses the English abbreviations, so a Latin abbreviation such
+// as "Dr." or "U.S." in Japanese text does not end a sentence.
 func newJapanese() *language {
-	return &language{abbreviations: map[string]struct{}{}}
+	return &language{abbreviations: englishAbbreviations()}
 }
 
 // Kazakh, which extends the continuation rule with the Cyrillic lowercase
