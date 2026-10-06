@@ -172,10 +172,16 @@ secrets: ## Scan the checked-out tree for secrets, as the security workflow does
 	docker run --rm -v "$(CURDIR):/repo" $(GITLEAKS_IMAGE) \
 		dir /repo --redact --no-banner --verbose
 
+# use-tls is excluded: it flags every plain http.ListenAndServe, and the only
+# calls in the tree are the example bots' local development servers. The
+# library starts no HTTP server of its own, so TLS is the application's choice.
+SEMGREP_EXCLUDE_RULES ?= go.lang.security.audit.net.use-tls.use-tls
+
 .PHONY: sast
 sast: ## Run the Semgrep CE static analysis and write its SARIF report
 	docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$(CURDIR):/src" -w /src $(SEMGREP_IMAGE) \
 		semgrep scan --config p/golang --metrics=off \
+		$(addprefix --exclude-rule=,$(SEMGREP_EXCLUDE_RULES)) \
 		--sarif-output=$(SEMGREP_SARIF) --text
 
 ##@ Docs
