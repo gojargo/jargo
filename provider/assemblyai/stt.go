@@ -133,7 +133,8 @@ func prepareLanguageCodes(langs []language.Language) []string {
 func assemblyaiLanguage(l language.Language) string {
 	switch base := l.BaseCode(); base {
 	case "en", "es", "fr", "de", "it", "pt", "tr", "nl", "sv", "no", "da",
-		"fi", "hi", "vi", "ar", "he", "ja", "ur", "zh":
+		"fi", "hi", "vi", "ar", "he", "ja", "ur", "zh", "ru", "ko", "ca",
+		"gl", "ro", "et", "fa", "yue", "af", "mr", "zu", "xh", "nn":
 		return base
 	default:
 		return ""

@@ -1,6 +1,7 @@
 package assemblyai
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/gojargo/jargo/language"
@@ -68,6 +69,88 @@ func TestDefaultModelSendsLanguageCodes(t *testing.T) {
 	cfg := Config{APIKey: "k", LanguageCodes: []language.Language{language.Language("en")}}.withDefaults()
 	if got := cfg.query(16000).Get("language_codes"); got != `["en"]` {
 		t.Errorf("language_codes = %q, want the declared list", got)
+	}
+}
+
+// universal-3-6-pro inherits universal-3-5-pro's full language set, so each of
+// these languages is a verified entry sent as its code, not one dropped as
+// unsupported.
+func TestLanguageCodesCoverUniversal36ProAdditions(t *testing.T) {
+	cases := []struct {
+		lang language.Language
+		want string
+	}{
+		{language.Urdu, "ur"},
+		{language.Russian, "ru"},
+		{language.Korean, "ko"},
+		{language.Catalan, "ca"},
+		{language.Galician, "gl"},
+		{language.Romanian, "ro"},
+		{language.Estonian, "et"},
+		{language.Persian, "fa"},
+		{language.YueChineseCantonese, "yue"},
+		{language.Afrikaans, "af"},
+		{language.Marathi, "mr"},
+		{language.Zulu, "zu"},
+		{language.Xhosa, "xh"},
+		{language.NorwegianNynorsk, "nn"},
+	}
+	for _, c := range cases {
+		cfg := Config{APIKey: "k", LanguageCodes: []language.Language{c.lang}}.withDefaults()
+		want := `["` + c.want + `"]`
+		if got := cfg.query(16000).Get("language_codes"); got != want {
+			t.Errorf("language_codes for %s = %q, want %q", c.lang, got, want)
+		}
+	}
+}
+
+// U3 Pro models accept a prompt together with key terms.
+func TestValidateAcceptsPromptAndKeytermsForU3RtPro(t *testing.T) {
+	cfg := Config{
+		APIKey:         "k",
+		Model:          "u3-rt-pro",
+		Prompt:         "Transcribe the order.",
+		KeytermsPrompt: []string{"espresso"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	cfg = cfg.withDefaults()
+	q := cfg.query(16000)
+	if q.Get("prompt") != "Transcribe the order." || q.Get("keyterms_prompt") != `["espresso"]` {
+		t.Errorf("prompt = %q, keyterms_prompt = %q, want both sent",
+			q.Get("prompt"), q.Get("keyterms_prompt"))
+	}
+}
+
+// A model that is not U3 Pro rejects a prompt, with or without key terms, so
+// it is refused before anything connects.
+func TestValidateRejectsPromptForUniversalStreaming(t *testing.T) {
+	withKeyterms := Config{
+		APIKey:         "k",
+		Model:          "universal-streaming-english",
+		Prompt:         "Transcribe the order.",
+		KeytermsPrompt: []string{"espresso"},
+	}
+	if err := withKeyterms.Validate(); !errors.Is(err, errPromptNotSupported) {
+		t.Errorf("Validate with prompt and key terms = %v, want errPromptNotSupported", err)
+	}
+
+	alone := Config{
+		APIKey: "k",
+		Model:  "universal-streaming-english",
+		Prompt: "Some context for the session.",
+	}
+	if err := alone.Validate(); !errors.Is(err, errPromptNotSupported) {
+		t.Errorf("Validate with prompt alone = %v, want errPromptNotSupported", err)
+	}
+}
+
+// The default model is U3 Pro, so a prompt is accepted without a model being
+// named.
+func TestValidateAcceptsPromptForDefaultModel(t *testing.T) {
+	if err := (Config{APIKey: "k", Prompt: "Transcribe the order."}).Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
 	}
 }
 

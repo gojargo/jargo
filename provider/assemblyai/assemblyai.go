@@ -7,6 +7,7 @@
 package assemblyai
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,6 +36,12 @@ const (
 //
 //nolint:gochecknoglobals // sentinel error
 var errTooManyLanguages = errors.New("assemblyai: too many declared languages")
+
+// errPromptNotSupported is returned when a prompt is set for a model that is not
+// U3 Pro, which the server rejects.
+//
+//nolint:gochecknoglobals // sentinel error
+var errPromptNotSupported = errors.New("assemblyai: prompt is only supported by U3 Pro models")
 
 // u3ProModelPrefixes name the Universal-3 Pro streaming variants: the u3-rt-pro
 // family and the universal-3-5-pro and universal-3-6-pro releases (with any
@@ -107,7 +114,9 @@ type Config struct {
 	MaxTurnSilence *int
 	// KeytermsPrompt boosts recognition of the given terms; empty omits it.
 	KeytermsPrompt []string
-	// Prompt steers transcription with free-text guidance; empty omits it.
+	// Prompt steers transcription with free-text guidance; empty omits it. Only
+	// U3 Pro models accept it (optionally combined with KeytermsPrompt), so
+	// Validate rejects it for any other model.
 	Prompt string
 	// SpeakerLabels enables speaker diarization; nil omits it.
 	SpeakerLabels *bool
@@ -125,11 +134,17 @@ type Config struct {
 }
 
 // Validate reports whether the configuration is usable. An over-long list of
-// declared languages is rejected here, since AssemblyAI closes the session over
-// it rather than ignoring it.
+// declared languages, and a prompt for a model that is not U3 Pro, are rejected
+// here, since AssemblyAI refuses the session over them rather than ignoring
+// them.
 func (cfg Config) Validate() error {
 	if err := validate.Struct(cfg); err != nil {
 		return err
+	}
+	if model := cmp.Or(cfg.Model, defaultModel); cfg.Prompt != "" && !isU3ProModel(model) {
+		return fmt.Errorf("%w: the server rejects it for model %s; use KeytermsPrompt instead, "+
+			"or switch to a U3 Pro model to use Prompt (optionally combined with KeytermsPrompt). "+
+			"See https://www.assemblyai.com/docs/streaming/universal-3-pro", errPromptNotSupported, model)
 	}
 	// Counted after resolution, since that is the list the service sees.
 	if n := len(prepareLanguageCodes(cfg.LanguageCodes)); n > maxLanguageCodes {
