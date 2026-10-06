@@ -36,6 +36,24 @@ func TestQuerySendsLanguageCodesToU3ProOnly(t *testing.T) {
 	}
 }
 
+// universal-3-6-pro is universal-3-5-pro upgraded, so the U3 Pro settings reach
+// it as they reach any model of the family.
+func TestQuerySendsU3ProSettingsToUniversal36Pro(t *testing.T) {
+	cfg := Config{
+		APIKey:        "k",
+		Model:         "universal-3-6-pro",
+		Encoding:      defaultEncoding,
+		LanguageCodes: []language.Language{language.Language("en"), language.Language("es")},
+	}
+	q := cfg.query(16000)
+	if got := q.Get("speech_model"); got != "universal-3-6-pro" {
+		t.Errorf("speech_model = %q, want universal-3-6-pro", got)
+	}
+	if got := q.Get("language_codes"); got != `["en","es"]` {
+		t.Errorf("language_codes = %q, want the declared list", got)
+	}
+}
+
 // More languages than AssemblyAI accepts is rejected before anything connects,
 // since the service closes the session over it rather than ignoring it.
 func TestValidateRejectsTooManyLanguages(t *testing.T) {
@@ -61,6 +79,7 @@ func TestIsU3ProModel(t *testing.T) {
 		"u3-rt-pro":           true,
 		"u3-rt-pro-2026":      true,
 		"universal-3-5-pro":   true,
+		"universal-3-6-pro":   true,
 		"universal-streaming": false,
 		"universal-3-5":       false,
 		"":                    false,

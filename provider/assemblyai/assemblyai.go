@@ -32,13 +32,18 @@ const (
 //nolint:gochecknoglobals // sentinel error
 var errTooManyLanguages = errors.New("assemblyai: too many declared languages")
 
-// u3ProModelPrefixes name the Universal-3 Pro streaming variants. Language
-// steering is prompt-based, so only these models are steered by it.
+// u3ProModelPrefixes name the Universal-3 Pro streaming variants: the u3-rt-pro
+// family and the universal-3-5-pro and universal-3-6-pro releases (with any
+// suffixed release of each). They all expose the full U3 Pro feature set;
+// universal-3-6-pro is universal-3-5-pro upgraded, the same model with the same
+// features. Language steering is prompt-based, so only these models are steered
+// by it.
 //
 //nolint:gochecknoglobals // fixed table
-var u3ProModelPrefixes = []string{"u3-rt-pro", "universal-3-5-pro"}
+var u3ProModelPrefixes = []string{"u3-rt-pro", "universal-3-5-pro", "universal-3-6-pro"}
 
-// isU3ProModel reports whether model is a Universal-3 Pro streaming variant.
+// isU3ProModel reports whether model is a Universal-3 Pro streaming variant, so
+// U3 Pro-only features are gated on the whole family rather than one exact name.
 func isU3ProModel(model string) bool {
 	for _, p := range u3ProModelPrefixes {
 		if strings.HasPrefix(model, p) {
