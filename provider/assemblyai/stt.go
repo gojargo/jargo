@@ -19,14 +19,23 @@ import (
 
 // NewSTT builds an AssemblyAI streaming STT service.
 func NewSTT(cfg Config) *stt.StreamService {
+	cfg = cfg.withDefaults()
+	cfg.warnLanguageSettings()
+	return stt.NewStream("AssemblyAISTT", &connector{cfg: cfg}, cfg.SampleRate)
+}
+
+// withDefaults fills the unset fields that have a default.
+func (cfg Config) withDefaults() Config {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = wsBase
 	}
 	if cfg.Encoding == "" {
 		cfg.Encoding = defaultEncoding
 	}
-	cfg.warnLanguageSettings()
-	return stt.NewStream("AssemblyAISTT", &connector{cfg: cfg}, cfg.SampleRate)
+	if cfg.Model == "" {
+		cfg.Model = defaultModel
+	}
+	return cfg
 }
 
 type connector struct {

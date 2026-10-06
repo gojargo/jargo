@@ -18,6 +18,10 @@ import (
 
 const (
 	wsBase = "wss://streaming.assemblyai.com/v3/ws"
+	// defaultModel is AssemblyAI's flagship streaming model, the one a session
+	// gets when speech_model is omitted. It is a U3 Pro model and covers more
+	// declared languages than universal-3-5-pro.
+	defaultModel = "universal-3-6-pro"
 	// defaultEncoding is the audio encoding AssemblyAI expects from jargo.
 	defaultEncoding = "pcm_s16le"
 	// readLimit bounds a single WebSocket message; long turns carry many words.
@@ -65,8 +69,8 @@ type Config struct {
 	SampleRate int
 	// Encoding is the audio encoding; empty uses "pcm_s16le".
 	Encoding string
-	// Model selects the speech model (sent as speech_model); empty uses the
-	// account default.
+	// Model selects the speech model (sent as speech_model); empty uses
+	// "universal-3-6-pro".
 	Model string
 	// Language declares the audio language (sent as language_code); the zero value
 	// leaves it unset. Mapped to AssemblyAI's base code. AssemblyAI treats this

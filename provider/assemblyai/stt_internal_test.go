@@ -54,6 +54,23 @@ func TestQuerySendsU3ProSettingsToUniversal36Pro(t *testing.T) {
 	}
 }
 
+// universal-3-6-pro is the default model sent to AssemblyAI.
+func TestDefaultModelIsUniversal36Pro(t *testing.T) {
+	cfg := Config{APIKey: "k"}.withDefaults()
+	if got := cfg.query(16000).Get("speech_model"); got != "universal-3-6-pro" {
+		t.Errorf("speech_model = %q, want universal-3-6-pro", got)
+	}
+}
+
+// The default model is a U3 Pro model, so the declared languages steer it
+// without a model being named.
+func TestDefaultModelSendsLanguageCodes(t *testing.T) {
+	cfg := Config{APIKey: "k", LanguageCodes: []language.Language{language.Language("en")}}.withDefaults()
+	if got := cfg.query(16000).Get("language_codes"); got != `["en"]` {
+		t.Errorf("language_codes = %q, want the declared list", got)
+	}
+}
+
 // More languages than AssemblyAI accepts is rejected before anything connects,
 // since the service closes the session over it rather than ignoring it.
 func TestValidateRejectsTooManyLanguages(t *testing.T) {
