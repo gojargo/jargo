@@ -365,6 +365,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The Responses API services no longer fail every request to models that
+  reject effort "none".** With no reasoning configured they sent
+  `reasoning.effort` "none", which `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, the
+  `-pro` models and `gpt-6.1-sol` refuse. The original gpt-5 models now get
+  "minimal", their lowest effort, and the `-pro` models and `gpt-6.1-sol` are
+  left at the provider's default.
+
 - **A failed STT keepalive no longer stops the keepalives.** The keepalive
   gave up on its first failed send and was only restarted when a new session
   opened, so an idle connection could be closed by the provider. A failed

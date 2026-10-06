@@ -99,8 +99,9 @@ type Config struct {
 	// model does not, and the field has no effect there.
 	//
 	// Nil is not "the model's default": left unset, the service asks for
-	// effort "none" on every model that reasons and accepts it, because a
-	// spoken turn cannot afford the thinking time. Set it to ask for more.
+	// effort "none" on every model that reasons and accepts it, and "minimal"
+	// on the original gpt-5 models, which reject "none", because a spoken turn
+	// cannot afford the thinking time. Set it to ask for more.
 	//
 	// The encrypted reasoning is not carried from one turn to the next, so a
 	// model configured to reason starts each turn from the conversation alone.
@@ -153,12 +154,39 @@ var mainlineGPT = regexp.MustCompile(`^gpt-(\d+)`)
 // isOSeries reports whether the model is one of the o-series.
 func isOSeries(model string) bool { return oSeries.MatchString(strings.ToLower(model)) }
 
-// rejectsEffortNone reports whether a reasoning model refuses effort "none",
-// which the API answers with an error rather than ignoring. The reasoning-first
-// o-series and gpt-6-astra accept only a positive effort level, so reasoning
-// cannot be switched off for them.
-func rejectsEffortNone(model string) bool {
-	return isOSeries(model) || strings.HasPrefix(strings.ToLower(model), "gpt-6-astra")
+// snapshotDate matches the date suffix of a pinned model snapshot, as in
+// "gpt-5-2025-08-07".
+//
+//nolint:gochecknoglobals // compiled once, read-only
+var snapshotDate = regexp.MustCompile(`-\d{4}-\d{2}-\d{2}$`)
+
+// defaultReasoningEffort is the effort to request for a model when no reasoning
+// is configured, or "" to leave the provider's own default.
+//
+// "none" switches reasoning off on the mainline gpt series from gpt-5.1 onward.
+// The original gpt-5, gpt-5-mini and gpt-5-nano reject "none", so they get their
+// lowest effort, "minimal". The models that accept neither are left at the
+// provider's default: the o-series, the -pro models, gpt-6-astra and
+// gpt-6.1-sol. So is a model that does not reason or is not recognized (see
+// modelSupportsReasoning). The API answers a value a model rejects with an
+// error rather than ignoring it, so every request would fail.
+func defaultReasoningEffort(model string) string {
+	if reasons, _ := modelSupportsReasoning(model); !reasons {
+		return ""
+	}
+	model = strings.ToLower(model)
+	if isOSeries(model) || strings.HasPrefix(model, "gpt-6-astra") || strings.HasPrefix(model, "gpt-6.1-sol") {
+		return ""
+	}
+	name := snapshotDate.ReplaceAllString(model, "")
+	if strings.HasSuffix(name, "-pro") {
+		return ""
+	}
+	switch name {
+	case "gpt-5", "gpt-5-mini", "gpt-5-nano":
+		return "minimal"
+	}
+	return "none"
 }
 
 // modelSupportsReasoning classifies a model, and says whether it could tell.
@@ -188,19 +216,19 @@ func modelSupportsReasoning(model string) (reasons, known bool) {
 // off it.
 //
 // A configured value is sent as it stands. Nothing configured disables
-// reasoning on every model that reasons and accepts being told not to. Two
-// kinds are left at the provider's own default: the models that reject "none"
-// outright (see rejectsEffortNone), and a model that does not reason, which has
-// no field to set. The default is off rather than the API's own because this is
-// a service for real-time voice, where the thinking happens while somebody is
-// listening to silence.
+// reasoning on every model that reasons and accepts being told not to, or
+// lowers it to the least a model accepts (see defaultReasoningEffort). The
+// models that accept neither are left at the provider's own default, as is a
+// model that does not reason, which has no field to set. The default is off
+// rather than the API's own because this is a service for real-time voice,
+// where the thinking happens while somebody is listening to silence.
 func (c Config) reasoningFor() *ReasoningConfig {
 	if c.Reasoning != nil && *c.Reasoning != (ReasoningConfig{}) {
 		r := *c.Reasoning
 		return &r
 	}
-	if reasons, _ := modelSupportsReasoning(c.Model); reasons && !rejectsEffortNone(c.Model) {
-		return &ReasoningConfig{Effort: "none"}
+	if effort := defaultReasoningEffort(c.Model); effort != "" {
+		return &ReasoningConfig{Effort: effort}
 	}
 	return nil
 }

@@ -72,6 +72,38 @@ func TestGPT6AstraIsLeftAtItsOwnDefault(t *testing.T) {
 	}
 }
 
+// TestGPT61SolIsLeftAtItsOwnDefault covers another model that reasons but
+// rejects effort "none". An explicit effort still reaches it unchanged.
+func TestGPT61SolIsLeftAtItsOwnDefault(t *testing.T) {
+	if got := mustRequest(t, Config{Model: "gpt-6.1-sol"}, convo()).Reasoning; got != nil {
+		t.Errorf("gpt-6.1-sol carries reasoning %+v, want none", got)
+	}
+	cfg := Config{Model: "gpt-6.1-sol", Reasoning: &ReasoningConfig{Effort: "low"}}
+	if got := mustRequest(t, cfg, convo()).Reasoning; got == nil || got.Effort != "low" {
+		t.Errorf("reasoning = %+v, want the configured effort low", got)
+	}
+}
+
+// The original gpt-5 models reject effort "none", so they get "minimal", their
+// lowest effort.
+func TestOriginalGPT5GetsMinimal(t *testing.T) {
+	for _, model := range []string{"gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-2025-08-07"} {
+		got := mustRequest(t, Config{Model: model}, convo()).Reasoning
+		if got == nil || got.Effort != "minimal" {
+			t.Errorf("%s carries reasoning %+v, want effort minimal", model, got)
+		}
+	}
+}
+
+// The -pro models reject effort "none", so they are left at the default.
+func TestProModelsAreLeftAtTheirOwnDefault(t *testing.T) {
+	for _, model := range []string{"gpt-5-pro", "gpt-5.5-pro", "gpt-5.4-pro-2026-03-05"} {
+		if got := mustRequest(t, Config{Model: model}, convo()).Reasoning; got != nil {
+			t.Errorf("%s carries reasoning %+v, want none", model, got)
+		}
+	}
+}
+
 // A configured effort is sent as it stands, on any model.
 func TestConfiguredReasoningWins(t *testing.T) {
 	cfg := Config{Model: "gpt-5.6-terra", Reasoning: &ReasoningConfig{Effort: "high", Summary: "concise"}}
