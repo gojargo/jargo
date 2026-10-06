@@ -16,7 +16,7 @@
 #   ENTRYPOINT ["/usr/local/bin/bot"]
 
 # ---- collect the native runtime libraries from Debian + the ONNX release ----
-FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS libs
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS libs
 ARG ORT_VERSION=1.30.0
 ARG TARGETARCH=amd64
 RUN apt-get update \
@@ -42,7 +42,7 @@ RUN set -eux; \
     make -j"$(nproc)"; make install
 
 # ---- distroless runtime ----
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:b0ae8e989418b458e0f25489bc3be523718938a2b70864cc0f6a00af1ddbd985
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 
 # Both libraries below are loaded by the explicit paths in the env vars, so they
 # need no ldconfig (distroless has none). The ONNX Runtime needs only libstdc++

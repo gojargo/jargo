@@ -31,10 +31,10 @@ export PATH := $(GO_BIN):$(PATH)
 # Tool versions, pinned so CI and a developer machine run the same thing. The
 # two protoc plugin pins must match the versions stamped into the headers of the
 # generated *.pb.go files, or `make generate-check` reports a false stale.
-BUF_VERSION ?= v1.72.0
-PROTOC_GEN_GO_VERSION ?= v1.36.11
-PROTOC_GEN_GO_GRPC_VERSION ?= v1.5.1
-GOVULNCHECK_VERSION ?= v1.5.0
+BUF_VERSION ?= v1.73.0
+PROTOC_GEN_GO_VERSION ?= v1.36.12
+PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.2
+GOVULNCHECK_VERSION ?= v1.8.0
 GITLEAKS_IMAGE ?= ghcr.io/gitleaks/gitleaks:latest
 SEMGREP_IMAGE ?= semgrep/semgrep:1.179.0
 SEMGREP_SARIF ?= semgrep.sarif
@@ -42,7 +42,7 @@ SEMGREP_SARIF ?= semgrep.sarif
 # Hugo is installed out of band. This is the single pin for it: the docs
 # workflow provisions the runner from `make -s print-HUGO_VERSION`, and the
 # require-hugo guard names it when the binary is missing locally.
-HUGO_VERSION ?= 0.152.0
+HUGO_VERSION ?= 0.167.0
 WEBSITE_DIR := website
 HUGO_CHECK_LOG ?= /tmp/hugo-check.log
 # Set by the docs workflow from the Pages configuration; empty for local builds,
