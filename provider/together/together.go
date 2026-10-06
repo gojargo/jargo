@@ -4,7 +4,7 @@ package together
 
 const (
 	baseURL      = "https://api.together.xyz/v1"
-	defaultModel = "zai-org/GLM-5.1"
+	defaultModel = "zai-org/GLM-5.2"
 )
 
 // msgType is the discriminator key shared by the STT and TTS client/server
