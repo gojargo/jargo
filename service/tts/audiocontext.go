@@ -337,6 +337,7 @@ func (b *Base) startAudioContexts(ctx context.Context) {
 	b.audioCtxMu.Lock()
 	b.audioContexts = map[string]*audioContext{}
 	b.ttsContexts = map[string]ttsContext{}
+	b.audioRemainders = map[string]audioRemainder{}
 	// Held response ends go with the contexts they were waiting on. An
 	// interruption comes through here, and what it cut off is not to be reported
 	// as having finished.
@@ -441,9 +442,85 @@ func (b *Base) CreateAudioContext(contextID string) {
 
 // AppendToAudioContext adds a frame to an open context.
 func (b *Base) AppendToAudioContext(contextID string, f frames.Frame) {
-	if c := b.audioContextFor(contextID); c != nil {
-		c.push(ctxItem{frame: f})
+	c := b.audioContextFor(contextID)
+	if c == nil {
+		return
 	}
+	switch fr := f.(type) {
+	case *frames.TTSAudioRawFrame:
+		if !b.alignAudioFrame(contextID, fr) {
+			return
+		}
+	case *frames.TTSStoppedFrame:
+		// The context's audio ends here, so a held-back partial sample must be
+		// queued before the stop frame that follows it.
+		b.flushAudioRemainder(contextID, c)
+	}
+	c.push(ctxItem{frame: f})
+}
+
+// audioRemainder is the bytes of a sample split across audio chunks, with the
+// format they were delivered in.
+type audioRemainder struct {
+	audio       []byte
+	sampleRate  int
+	numChannels int
+}
+
+// alignAudioFrame trims an audio frame to whole samples, carrying a split
+// sample forward.
+//
+// A provider may cut its PCM stream at any byte, so a chunk can end mid-sample.
+// The partial sample is held back and put in front of the context's next frame,
+// which keeps every queued frame sample-aligned for whatever reads audio frame
+// by frame downstream (metrics, resamplers, filters). A frame that is already
+// aligned passes through untouched.
+//
+// It reports false when the frame holds less than one whole sample and is to be
+// dropped.
+func (b *Base) alignAudioFrame(contextID string, f *frames.TTSAudioRawFrame) bool {
+	blockSize := 2 * max(f.NumChannels, 1)
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	remainder, held := b.audioRemainders[contextID]
+	delete(b.audioRemainders, contextID)
+	if !held && len(f.Audio)%blockSize == 0 {
+		return true
+	}
+	audio := append(append([]byte{}, remainder.audio...), f.Audio...)
+	aligned := len(audio) - len(audio)%blockSize
+	if aligned < len(audio) {
+		if b.audioRemainders == nil {
+			b.audioRemainders = map[string]audioRemainder{}
+		}
+		b.audioRemainders[contextID] = audioRemainder{
+			audio:       audio[aligned:],
+			sampleRate:  f.SampleRate,
+			numChannels: f.NumChannels,
+		}
+	}
+	if aligned == 0 {
+		return false
+	}
+	f.Audio = audio[:aligned]
+	return true
+}
+
+// flushAudioRemainder queues a context's held-back partial sample, zero-padded
+// to a whole one.
+func (b *Base) flushAudioRemainder(contextID string, c *audioContext) {
+	b.audioCtxMu.Lock()
+	remainder, held := b.audioRemainders[contextID]
+	delete(b.audioRemainders, contextID)
+	b.audioCtxMu.Unlock()
+	if !held {
+		return
+	}
+	audio := make([]byte, 2*max(remainder.numChannels, 1))
+	copy(audio, remainder.audio)
+	f := frames.NewTTSAudioRawFrame(audio, remainder.sampleRate, remainder.numChannels)
+	f.ContextID = contextID
+	c.push(ctxItem{frame: f})
 }
 
 // AddWordTimestamps queues a batch of spoken tokens for a context, normalizing
@@ -483,6 +560,9 @@ func (b *Base) AppendWordToAudioContext(contextID, word string, offset float64) 
 // the last of the audio from being cut off.
 func (b *Base) RemoveAudioContext(contextID string) {
 	if c := b.audioContextFor(contextID); c != nil {
+		// The context's audio ends here, so a held-back partial sample must be
+		// queued before the end marker.
+		b.flushAudioRemainder(contextID, c)
 		c.push(ctxItem{end: true})
 	}
 }
@@ -632,6 +712,9 @@ func (b *Base) deleteAudioContext(contextID string) {
 	b.audioCtxMu.Lock()
 	defer b.audioCtxMu.Unlock()
 	delete(b.audioContexts, contextID)
+	// If audio resumes after a timeout, the context is recreated without the
+	// partial sample held here.
+	delete(b.audioRemainders, contextID)
 }
 
 // audioContextLoop drains the serialization queue, preserving downstream frame

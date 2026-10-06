@@ -1,6 +1,7 @@
 package onset
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
 	"testing"
@@ -153,5 +154,15 @@ func TestDetectStereo(t *testing.T) {
 	if slack := rate * 2 / 100; got < wantAt-slack || got > wantAt+slack {
 		t.Errorf("onset = %d samples (%.0f ms), want ~%d (100 ms): the channels were not downmixed",
 			got, float64(got)/rate*1000, wantAt)
+	}
+}
+
+func TestDetectToleratesPartialTrailingSample(t *testing.T) {
+	silence := bytes.Repeat([]byte{0x00, 0x00}, 1600)
+	speech := bytes.Repeat([]byte{0x00, 0x40, 0x00, 0xc0}, 1600)
+	sig := append(append(append([]byte(nil), silence...), speech...), 0x01)
+
+	if got := Detect(sig, 16000, 1); got < 0 {
+		t.Fatal("expected an onset despite the partial trailing sample")
 	}
 }

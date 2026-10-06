@@ -239,6 +239,9 @@ type Base struct {
 	// on the drain goroutine, long after the call that set it, which is why the
 	// answers are kept here rather than passed along with each frame.
 	ttsContexts map[string]ttsContext
+	// audioRemainders holds, per context, the trailing bytes of a sample split
+	// across audio chunks. See alignAudioFrame.
+	audioRemainders map[string]audioRemainder
 	// pendingResponseEnd holds the frame ending a model response, keyed by the
 	// context its speech was sent on, until that speech has been heard. Several
 	// contexts can be in flight at once, so each is held under its own key and

@@ -365,6 +365,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **TTS audio frames always hold whole samples.** A provider can cut its PCM
+  stream at any byte, and an audio frame ending mid-sample broke whatever read
+  audio frame by frame downstream (resamplers, filters, metrics). The TTS base
+  now holds the partial sample back and puts it in front of the context's next
+  frame, so every frame it emits is sample-aligned. A partial sample left at
+  the end of a context is zero-padded and played before the stop frame; one
+  left by an interruption or a timed-out context is dropped.
+
 - **A tool re-declared with a new handler runs the new one.** A toolset that
   advertised a tool under a name it had advertised before, carrying a different
   handler, left the old handler registered: the name was still advertised, so
