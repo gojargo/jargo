@@ -112,7 +112,8 @@ type Config struct {
 	// Instructions is the system prompt for the session.
 	Instructions string
 	// SampleRate is the PCM rate the session exchanges audio at; 0 uses 24 kHz.
-	SampleRate int `validate:"omitempty,oneof=8000 16000 21050 22050 24000 32000 44100 48000"`
+	// xAI accepts 8000, 11025, 16000, 22050, 24000, 32000, 44100 and 48000.
+	SampleRate int `validate:"omitempty,oneof=8000 11025 16000 22050 24000 32000 44100 48000"`
 	// ServerVAD lets xAI detect turn boundaries and drive barge-in; nil defaults
 	// to true. Set it to false for manual turn detection, where the pipeline's
 	// own turn frames commit the input buffer and ask for a response.

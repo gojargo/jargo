@@ -174,7 +174,9 @@ func TestConfigValidate(t *testing.T) {
 		{"missing API key", Config{}, false},
 		{"API key only", Config{APIKey: "k"}, true},
 		{"supported sample rate", Config{APIKey: "k", SampleRate: 48000}, true},
-		{"unsupported sample rate", Config{APIKey: "k", SampleRate: 11025}, false},
+		{"supported 11025 Hz sample rate", Config{APIKey: "k", SampleRate: 11025}, true},
+		{"unsupported sample rate", Config{APIKey: "k", SampleRate: 12345}, false},
+		{"unlisted 21050 Hz sample rate", Config{APIKey: "k", SampleRate: 21050}, false},
 		{"file search with a collection", Config{APIKey: "k", FileSearch: &FileSearch{VectorStoreIDs: []string{"c"}}}, true},
 		{"file search without a collection", Config{APIKey: "k", FileSearch: &FileSearch{}}, false},
 	}
