@@ -363,7 +363,85 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `ServiceMetricsConfig` keep the field, unused: the observers are told about a
   frame once and keep no window of the frames they have seen.
 
+### Removed
+
+- **The LMNT TTS provider, because LMNT has shut down.** This breaks the public
+  API. `provider/lmnt` and the `examples/voice/lmnt` bot are removed, with no
+  replacement: choose another TTS provider.
+
 ### Fixed
+
+- **AWS Nova Sonic defaults to `amazon.nova-2-sonic-v1:0`.** Bedrock removed
+  the first-generation `amazon.nova-sonic-v1:0` and rejects requests naming
+  it, so a `Config` with no `Model` failed to connect. The `Region` and `Voice`
+  docs now list the regions and voices Nova 2 Sonic supports.
+
+- **NVIDIA and Together LLMs default to models their endpoints still serve.**
+  `nvidia.NewLLM` now defaults to `nvidia/nemotron-3-super-120b-a12b` (the old
+  `nvidia/nemotron-3-nano-30b-a3b` answers HTTP 410), and `together.NewLLM` to
+  `zai-org/GLM-5.2` (the old `zai-org/GLM-5.1` is no longer available). Set
+  `Model` to choose another.
+
+- **Together TTS escapes the voice and sends the language.** Kokoro blended
+  voices such as `af_bella(2)+af_heart(1)` reached the server with `+` read as
+  a space and were rejected. `TTSConfig` gains a `Language`, defaulting to
+  English and sent as the code Together accepts (`zh-hk` for Hong Kong
+  Chinese), so voices are no longer always synthesized in English.
+
+- **DeepSeek requests after a tool call no longer fail, and thinking is off by
+  default.** This breaks the public API.
+  - The new `adapter/deepseek` sends an empty `reasoning_content` on every
+    assistant message that has none, which DeepSeek requires in thinking mode
+    once a tool call is involved, answering HTTP 400 otherwise.
+  - `deepseek.NewLLM` takes a `deepseek.LLMConfig` with a `Thinking` setting.
+    Nil disables thinking, so V4 models stop reasoning before every answer;
+    `&deepseek.ThinkingConfig{Type: "enabled"}` turns it on and
+    `&deepseek.ThinkingConfig{}` leaves the choice to DeepSeek.
+  - `Seed`, `MaxCompletionTokens` and `ServiceTier` are no longer sent to
+    DeepSeek, which does not support them. Bound the reply with `MaxTokens`.
+  - `chat.LLMConfig.MergeExtra` adds provider-specific body fields while the
+    caller's own `Extra` wins key by key.
+
+- **xAI speech-to-text no longer transcribes each utterance twice.** Chunk
+  finals now arrive as interim transcriptions, and only the utterance final,
+  which restates the whole utterance, is a finalized transcription that ends
+  the turn.
+
+- **xAI realtime accepts an 11025 Hz sample rate.** `realtime.Config.SampleRate`
+  now validates 11025, and the 21050 Hz entry, which the API does not support,
+  is no longer accepted.
+
+- **Gradium speech-to-text keeps the words it heard when the connection drops.**
+  The words already received are delivered as a transcription before the
+  session reconnects, without ending the turn, and the new session starts
+  clean. A session shut down on purpose still discards them.
+
+- **Gradium speech-to-text works at sample rates other than 8, 16 and 24 kHz.**
+  PCM at any other rate was announced as 16 kHz but sent at its real rate, so
+  it was transcribed at the wrong speed. It is now resampled to the lowest
+  accepted rate at or above the pipeline's, or 24 kHz above that.
+
+- **Gladia reports rejected audio chunks and failed translations.** An
+  `audio_chunk` Gladia did not acknowledge and a `translation` carrying an
+  error were silently dropped. Both now surface as non-fatal error frames
+  while transcription continues on the same connection.
+
+- **AssemblyAI recognizes `universal-3-6-pro` and uses it by default.** The
+  model is treated as U3 Pro, so declared `LanguageCodes` reach it. An empty
+  `Model` now sends `universal-3-6-pro` rather than leaving `speech_model`
+  unset, which had the declared languages silently dropped.
+
+- **AssemblyAI rejects a prompt on models that do not take one, and steers
+  more languages.** `Config.Validate` returns an error when `Prompt` is set for
+  a model that is not U3 Pro, rather than the session failing on the server.
+  `LanguageCodes` now covers Russian, Korean, Catalan, Galician, Romanian,
+  Estonian, Persian, Cantonese, Afrikaans, Marathi, Zulu, Xhosa and Norwegian
+  Nynorsk, which were dropped before.
+
+- **Speechmatics accepts Filipino.** It was sent as `fil`, which Speechmatics
+  rejects, and now goes out as `tl`, the Tagalog pack that covers it. Languages
+  resolve through the table of codes Speechmatics supports; one outside it is
+  still sent under its base code, now with a warning.
 
 - **Japanese sentence aggregation keeps Latin abbreviations whole.** Text such
   as "Dr. 田中が来ます。" was split after "Dr.", and "U.S." after "U.". The
