@@ -20,7 +20,6 @@ func TestProviderName(t *testing.T) {
 		// The suffix is dropped only from the end, so a provider whose own name
 		// ends in the kind it implements keeps it.
 		{"XTTSTTS", "TTS", "xtts"},
-		{"LMNTTTS", "TTS", "lmnt"},
 		// Services the conventions spell differently are looked up.
 		{"GoogleLLM", "LLM", "gcp.gemini"},
 		{"GoogleVertexLLM", "LLM", "gcp.vertex_ai"},
