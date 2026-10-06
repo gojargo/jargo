@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 // TestSTTConfigValidate pins which STTConfig fields the provider requires, and
@@ -175,8 +176,8 @@ func newSTTSession(t *testing.T, events []map[string]any) sttSession {
 }
 
 // transcriptEvents is the scripted turn the fake endpoint replays: the session
-// acknowledgement, an interim, a finalized transcript mid-turn, then one that
-// ends the turn.
+// acknowledgement, an interim, a chunk final mid-turn, then the utterance final
+// that ends the turn.
 func transcriptEvents() []map[string]any {
 	return []map[string]any{
 		{"type": "transcript.created"},
@@ -207,7 +208,8 @@ func TestSTTHandshake(t *testing.T) {
 }
 
 // TestSTTRecvTranscripts checks the server's partial and endpointed results map
-// onto interim transcriptions, finalized ones, and the end of the user's turn.
+// onto interim transcriptions, and the utterance final onto the finalized one
+// that ends the user's turn.
 func TestSTTRecvTranscripts(t *testing.T) {
 	session := newSTTSession(t, transcriptEvents())
 	conn := &sttConnector{cfg: STTConfig{
@@ -229,8 +231,8 @@ func TestSTTRecvTranscripts(t *testing.T) {
 		endOfTurn bool
 	}{
 		{"interim", "hel", false, false},
-		{"finalized mid-turn", "hello", true, false},
-		{"finalized ending the turn", "hello there", true, true},
+		{"chunk final as an interim", "hello", false, false},
+		{"utterance final ending the turn", "hello there", true, true},
 	}
 	for _, w := range want {
 		res, err := stream.Recv()
@@ -250,13 +252,99 @@ func TestSTTRecvTranscripts(t *testing.T) {
 	}
 }
 
+// partialEvent is a transcript.partial event with the given flags.
+func partialEvent(text string, isFinal, speechFinal bool) map[string]any {
+	return map[string]any{
+		"type":         "transcript.partial",
+		"text":         text,
+		"is_final":     isFinal,
+		"speech_final": speechFinal,
+	}
+}
+
+// recvResults connects to a fake endpoint replaying events and reads n results.
+func recvResults(t *testing.T, events []map[string]any, n int) []stt.Result {
+	t.Helper()
+	session := newSTTSession(t, append([]map[string]any{{"type": "transcript.created"}}, events...))
+	conn := &sttConnector{cfg: STTConfig{APIKey: "k", URL: session.url, Encoding: defaultSTTEncoding}}
+	stream, err := conn.Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	var got []stt.Result
+	for len(got) < n {
+		res, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv after %d results: %v", len(got), err)
+		}
+		got = append(got, res...)
+	}
+	return got
+}
+
+// TestSTTUtteranceFinalIsTheOnlyTranscription checks the utterance final is the
+// one finalized transcription for the utterance. It restates every chunk final,
+// so the chunk finals are reported as interims.
+func TestSTTUtteranceFinalIsTheOnlyTranscription(t *testing.T) {
+	got := recvResults(t, []map[string]any{
+		partialEvent("my order", false, false),
+		partialEvent("my order number", true, false),
+		partialEvent("is four", false, false),
+		partialEvent("is four two one.", true, false),
+		partialEvent("my order number is four two one.", true, true),
+	}, 5)
+
+	want := []struct {
+		text  string
+		final bool
+	}{
+		{"my order", false},
+		{"my order number", false},
+		{"is four", false},
+		{"is four two one.", false},
+		{"my order number is four two one.", true},
+	}
+	for i, w := range want {
+		if got[i].Text != w.text || got[i].Final != w.final || got[i].EndOfTurn != w.final {
+			t.Errorf("result %d = %+v, want text %q final=%v endOfTurn=%v", i, got[i], w.text, w.final, w.final)
+		}
+	}
+}
+
+// TestSTTEachUtteranceGetsItsOwnTranscription checks utterance finals are
+// scoped to one utterance rather than cumulative across the session, so
+// back-to-back utterances yield one finalized transcription each.
+func TestSTTEachUtteranceGetsItsOwnTranscription(t *testing.T) {
+	got := recvResults(t, []map[string]any{
+		partialEvent("My order number is", false, false),
+		partialEvent("My order number is four two one.", true, false),
+		partialEvent("My order number is four two one.", true, true),
+		partialEvent("And I would like to know when it will ship.", true, false),
+		partialEvent("And I would like to know when it will ship.", true, true),
+	}, 5)
+
+	var finals []string
+	for _, r := range got {
+		if r.Final {
+			finals = append(finals, r.Text)
+		}
+	}
+	want := []string{"My order number is four two one.", "And I would like to know when it will ship."}
+	if strings.Join(finals, "|") != strings.Join(want, "|") {
+		t.Errorf("finalized transcriptions = %q, want %q", finals, want)
+	}
+}
+
 // TestSTTRecvDone checks the closing transcript finalizes the turn, and that
 // empty transcripts are skipped rather than emitted as blank frames.
 func TestSTTRecvDone(t *testing.T) {
 	session := newSTTSession(t, []map[string]any{
 		{"type": "transcript.created"},
 		{"type": "transcript.partial", "text": ""},
-		{"type": "transcript.done", "text": ""},
+		{"type": "transcript.partial", "text": "", "is_final": true},
+		{"type": "transcript.done", "text": "", "duration": 5.6},
 		{"type": "transcript.done", "text": "goodbye"},
 	})
 	conn := &sttConnector{cfg: STTConfig{APIKey: "k", URL: session.url, Encoding: defaultSTTEncoding}}

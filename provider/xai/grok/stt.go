@@ -79,8 +79,9 @@ type STTConfig struct {
 	// InterimResults emits partial transcripts roughly every 500 ms; nil
 	// defaults to true.
 	InterimResults *bool
-	// Endpointing is the silence duration in milliseconds that ends a turn; nil
-	// uses the server default of 10 ms.
+	// Endpointing is the silence duration in milliseconds that triggers the
+	// speech-final event carrying the utterance's transcription; nil uses the
+	// server default of 400 ms.
 	Endpointing *int `validate:"omitempty,min=0,max=5000"`
 	// Multichannel transcribes each interleaved channel independently. It
 	// requires Channels to be set.
@@ -199,8 +200,10 @@ func (s *sttStream) Send(audio []byte) error {
 	return s.conn.Write(s.ctx, websocket.MessageBinary, audio)
 }
 
-// Recv reads the next transcript. A partial with is_final set is a finalized
-// transcription, and speech_final on top of it ends the turn.
+// Recv reads the next transcript. Interim results (is_final unset) and chunk
+// finals (is_final without speech_final) are reported as interims. Only the
+// utterance final (speech_final) is a finalized transcription that ends the
+// turn, because it restates the text of every chunk final before it.
 func (s *sttStream) Recv() ([]stt.Result, error) {
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -218,10 +221,15 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			if m.Text == "" {
 				continue
 			}
+			// Only the utterance final is a transcription. It restates the
+			// whole utterance, including every chunk final before it, so a
+			// chunk final is reported as an interim to keep the text from
+			// reaching the context twice.
+			utteranceFinal := m.IsFinal && m.SpeechFinal
 			return []stt.Result{{
 				Text:      m.Text,
-				Final:     m.IsFinal,
-				EndOfTurn: m.IsFinal && m.SpeechFinal,
+				Final:     utteranceFinal,
+				EndOfTurn: utteranceFinal,
 				Language:  s.lang,
 			}}, nil
 		case sttEventDone:
