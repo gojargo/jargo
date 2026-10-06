@@ -212,6 +212,43 @@ func TestConnectDisablesPartials(t *testing.T) {
 	}
 }
 
+// TestConnectSendsFilipinoAsTagalog checks Filipino starts the session on the
+// Tagalog pack, the one Speechmatics offers for it, rather than on fil, which
+// it refuses.
+func TestConnectSendsFilipinoAsTagalog(t *testing.T) {
+	endpoint, seen := sttServer(t, "", nil)
+
+	s, err := conn(endpoint, func(c *Config) { c.Language = language.Filipino }).
+		Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	tc, _ := seen().start["transcription_config"].(map[string]any)
+	if tc["language"] != "tl" {
+		t.Errorf("language = %v, want tl", tc["language"])
+	}
+}
+
+// TestSpeechmaticsLanguage checks languages resolve to the codes Speechmatics
+// takes: Tagalog and Filipino, in any region, share the one pack, and a regional
+// variant goes out as its base code.
+func TestSpeechmaticsLanguage(t *testing.T) {
+	cases := map[language.Language]string{
+		language.Tagalog:    "tl",
+		language.Filipino:   "tl",
+		language.FilipinoPH: "tl",
+		language.EnglishUS:  "en",
+		language.Spanish:    "es",
+	}
+	for l, want := range cases {
+		if got := speechmaticsLanguage(l); got != want {
+			t.Errorf("speechmaticsLanguage(%q) = %q, want %q", l, got, want)
+		}
+	}
+}
+
 // TestConnectFailsWhenTheStartIsRefused checks the session is not handed back
 // when the provider refuses the start, so audio is never sent into nothing.
 func TestConnectFailsWhenTheStartIsRefused(t *testing.T) {

@@ -68,7 +68,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 
 func (c *connector) startRecognition(sampleRate int) []byte {
 	tc := map[string]any{
-		"language":        c.cfg.Language.BaseCode(),
+		"language":        speechmaticsLanguage(c.cfg.Language),
 		"operating_point": c.cfg.OperatingPoint,
 		"enable_partials": c.cfg.EnablePartials == nil || *c.cfg.EnablePartials,
 		"max_delay":       c.cfg.MaxDelay,
@@ -91,6 +91,79 @@ func (c *connector) startRecognition(sampleRate int) []byte {
 	}
 	b, _ := json.Marshal(msg) //nolint:errchkjson // map of known-serializable values
 	return b
+}
+
+// speechmaticsLanguages are the input languages Speechmatics supports, each
+// under the code it takes for it.
+//
+//nolint:gochecknoglobals // lookup table, read-only
+var speechmaticsLanguages = map[language.Language]string{
+	language.Arabic:              "ar",
+	language.Bashkir:             "ba",
+	language.Basque:              "eu",
+	language.Belarusian:          "be",
+	language.Bulgarian:           "bg",
+	language.Bengali:             "bn",
+	language.YueChineseCantonese: "yue",
+	language.Catalan:             "ca",
+	language.Croatian:            "hr",
+	language.Czech:               "cs",
+	language.Danish:              "da",
+	language.Dutch:               "nl",
+	language.English:             "en",
+	language.Esperanto:           "eo",
+	language.Estonian:            "et",
+	language.Persian:             "fa",
+	language.Finnish:             "fi",
+	language.French:              "fr",
+	language.Galician:            "gl",
+	language.German:              "de",
+	language.Greek:               "el",
+	language.Hebrew:              "he",
+	language.Hindi:               "hi",
+	language.Hungarian:           "hu",
+	language.Italian:             "it",
+	language.Indonesian:          "id",
+	language.Irish:               "ga",
+	language.Japanese:            "ja",
+	language.Korean:              "ko",
+	language.Latvian:             "lv",
+	language.Lithuanian:          "lt",
+	language.Malay:               "ms",
+	language.Maltese:             "mt",
+	language.MandarinChinese:     "cmn",
+	language.Marathi:             "mr",
+	language.Mongolian:           "mn",
+	language.Norwegian:           "no",
+	language.Polish:              "pl",
+	language.Portuguese:          "pt",
+	language.Romanian:            "ro",
+	language.Russian:             "ru",
+	language.Slovak:              "sk",
+	language.Slovenian:           "sl",
+	language.Spanish:             "es",
+	language.Swedish:             "sv",
+	language.Swahili:             "sw",
+	// Speechmatics' Tagalog pack also covers Filipino, its standardized
+	// register, so both map onto the one code the provider offers.
+	language.Tagalog:    "tl",
+	language.Filipino:   "tl",
+	language.Tamil:      "ta",
+	language.Thai:       "th",
+	language.Turkish:    "tr",
+	language.Uyghur:     "ug",
+	language.Ukrainian:  "uk",
+	language.Urdu:       "ur",
+	language.Vietnamese: "vi",
+	language.Welsh:      "cy",
+}
+
+// speechmaticsLanguage maps a Language to the language code Speechmatics takes.
+// It takes the base code, so a regional variant resolves through its base
+// language, and a language not listed is still sent under its own base code,
+// with a warning.
+func speechmaticsLanguage(l language.Language) string {
+	return language.Resolve(l, speechmaticsLanguages, true)
 }
 
 type stream struct {
