@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -39,6 +43,9 @@ type TTSConfig struct {
 	Model string
 	// Voice is the voice id; empty uses a default.
 	Voice string
+	// Language for synthesis; the zero value uses English. Sent as the ISO 639-1
+	// or lowercase locale code Together accepts.
+	Language language.Language
 	// MaxPartialLength caps the partial text length for streaming; nil omits it.
 	MaxPartialLength *int
 }
@@ -48,16 +55,51 @@ func (c TTSConfig) Validate() error { return validate.Struct(c) }
 
 // NewTTS builds a Together AI streaming TTS service.
 func NewTTS(cfg TTSConfig) *tts.Base {
-	if cfg.URL == "" {
-		cfg.URL = ttsURL
+	return tts.New("TogetherTTS", &synthesizer{cfg: cfg.withTTSDefaults()})
+}
+
+// withTTSDefaults fills unset fields with their defaults.
+func (c TTSConfig) withTTSDefaults() TTSConfig {
+	if c.URL == "" {
+		c.URL = ttsURL
 	}
-	if cfg.Model == "" {
-		cfg.Model = defaultTTSModel
+	if c.Model == "" {
+		c.Model = defaultTTSModel
 	}
-	if cfg.Voice == "" {
-		cfg.Voice = defaultTTSVoice
+	if c.Voice == "" {
+		c.Voice = defaultTTSVoice
 	}
-	return tts.New("TogetherTTS", &synthesizer{cfg: cfg})
+	if c.Language == "" {
+		c.Language = language.English
+	}
+	return c
+}
+
+// togetherLanguages are the languages this provider has been verified against,
+// under the code Together takes for each.
+//
+//nolint:gochecknoglobals // read-only lookup table
+var togetherLanguages = map[language.Language]string{
+	language.English:    "en",
+	language.Spanish:    "es",
+	language.French:     "fr",
+	language.Hindi:      "hi",
+	language.Italian:    "it",
+	language.Japanese:   "ja",
+	language.Portuguese: "pt",
+	language.Chinese:    "zh",
+	language.ChineseHK:  "zh-hk",
+}
+
+// togetherLanguage maps a Language to a Together language code. Together accepts
+// ISO 639-1 codes and lowercase locale codes ("zh-hk"); a regional variant
+// without a verified locale code falls back to its base language code. The zero
+// value maps to nothing, which sends no language.
+func togetherLanguage(l language.Language) string {
+	if l == "" {
+		return ""
+	}
+	return language.Resolve(l, togetherLanguages, true)
 }
 
 type synthesizer struct {
@@ -77,13 +119,32 @@ type ttsEvent struct {
 	} `json:"error"`
 }
 
-// endpoint builds the TTS WebSocket URL with model and voice query parameters.
+// endpoint builds the TTS WebSocket URL with the model, voice, language and
+// partial length query parameters.
 func (s *synthesizer) endpoint() string {
-	url := fmt.Sprintf("%s?model=%s&voice=%s", s.cfg.URL, s.cfg.Model, s.cfg.Voice)
-	if s.cfg.MaxPartialLength != nil {
-		url += fmt.Sprintf("&max_partial_length=%d", *s.cfg.MaxPartialLength)
+	params := [][2]string{{"model", s.cfg.Model}, {"voice", s.cfg.Voice}}
+	if lang := togetherLanguage(s.cfg.Language); lang != "" {
+		params = append(params, [2]string{"language", lang})
 	}
-	return url
+	if s.cfg.MaxPartialLength != nil {
+		params = append(params, [2]string{"max_partial_length", strconv.Itoa(*s.cfg.MaxPartialLength)})
+	}
+	// Kokoro blends voices with a `+`-separated name such as
+	// "af_bella(2)+af_heart(1)", which has to be escaped or the server reads
+	// the `+` as a space and rejects the voice.
+	query := make([]string, 0, len(params))
+	for _, p := range params {
+		query = append(query, p[0]+"="+queryEscape(p[1]))
+	}
+	return s.cfg.URL + "?" + strings.Join(query, "&")
+}
+
+// queryEscape percent-encodes a query value, leaving only unreserved characters
+// and `/` as they are, so a space is sent as %20 rather than `+` and a model id
+// keeps its slash.
+func queryEscape(v string) string {
+	escaped := strings.ReplaceAll(url.QueryEscape(v), "+", "%20")
+	return strings.ReplaceAll(escaped, "%2F", "/")
 }
 
 // Synthesize opens a session, sends the transcript, and streams audio chunks.

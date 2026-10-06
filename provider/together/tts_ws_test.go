@@ -105,16 +105,11 @@ func done() map[string]any {
 // synth builds a synthesizer pointed at endpoint with the defaults NewTTS fills
 // in, so the request under test is the real one.
 func synth(endpoint string, opts ...func(*TTSConfig)) *synthesizer {
-	cfg := TTSConfig{
-		APIKey: "test-key",
-		URL:    endpoint,
-		Model:  defaultTTSModel,
-		Voice:  defaultTTSVoice,
-	}
+	cfg := TTSConfig{APIKey: "test-key", URL: endpoint}
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &synthesizer{cfg: cfg}
+	return &synthesizer{cfg: cfg.withTTSDefaults()}
 }
 
 // collect runs a synthesis and returns the PCM it emitted.
@@ -153,6 +148,9 @@ func TestSynthesizeStreamsTheAudio(t *testing.T) {
 	}
 	if s.query.Get("voice") != defaultTTSVoice {
 		t.Errorf("voice = %q, want %q", s.query.Get("voice"), defaultTTSVoice)
+	}
+	if s.query.Get("language") != "en" {
+		t.Errorf("language = %q, want en", s.query.Get("language"))
 	}
 	if s.query.Has("max_partial_length") {
 		t.Error("max_partial_length was sent though none was configured")
