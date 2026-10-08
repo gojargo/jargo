@@ -18,7 +18,7 @@ require (
 	github.com/gojargo/go-resample v1.0.1
 	github.com/google/uuid v1.6.0
 	github.com/jfreymuth/pulse v0.1.3
-	github.com/livekit/protocol v1.50.4
+	github.com/livekit/protocol v1.52.1
 	github.com/livekit/server-sdk-go/v2 v2.18.1
 	github.com/microsoft/onnxruntime/go v0.0.0-20261006082247-e0227cb9d34a
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -100,6 +100,7 @@ require (
 	github.com/pb33f/go-yaml v0.1.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
+	github.com/petermattis/goid v0.0.0-20260820044319-269ab09b5261 // indirect
 	github.com/pion/datachannel v1.6.3 // indirect
 	github.com/pion/dtls/v3 v3.1.10 // indirect
 	github.com/pion/ice/v4 v4.4.6 // indirect
