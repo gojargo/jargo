@@ -16,6 +16,7 @@ var sileroModel []byte
 var (
 	errUnsupportedSampleRate = errors.New("vad: Silero supports only 8000 or 16000 Hz")
 	errUnexpectedTensor      = errors.New("vad: unexpected output tensor type")
+	errClosedModel           = errors.New("vad: shared SileroModel is closed or uninitialized")
 )
 
 // Model state resets.
@@ -53,7 +54,8 @@ const (
 type Silero struct {
 	*stateMachine
 
-	session *onnxrt.Session
+	session       *onnxrt.Session
+	sharedSession bool
 
 	// Recurrent state [2,1,128] fed back into the model each call, and the
 	// trailing input context the model expects prepended to each frame.
@@ -67,16 +69,53 @@ type Silero struct {
 	lowConfidenceWindows int
 }
 
+// SileroModel is a reusable ONNX session holding the loaded Silero VAD model.
+// It must outlive any analyzers built from it.
+type SileroModel struct {
+	session *onnxrt.Session
+}
+
+// NewSileroModel loads the embedded Silero VAD model into a reusable session.
+func NewSileroModel() (*SileroModel, error) {
+	session, err := onnxrt.NewWithOptions(sileroModel,
+		[]string{"input", "state", "sr"}, []string{"output", "stateN"},
+		onnxrt.Options{IntraOpThreads: 1})
+	if err != nil {
+		return nil, fmt.Errorf("vad: load Silero model: %w", err)
+	}
+	return &SileroModel{session: session}, nil
+}
+
+// Close releases the shared model session.
+func (m *SileroModel) Close() error {
+	if m == nil || m.session == nil {
+		return nil
+	}
+	err := m.session.Close()
+	m.session = nil
+	return err
+}
+
 // Option configures a Silero analyzer.
 type Option func(*config)
 
 type config struct {
-	params Params
+	params         Params
+	model          *SileroModel
+	modelSpecified bool
 }
 
 // WithParams sets the detection parameters.
 func WithParams(p Params) Option {
 	return func(c *config) { c.params = p }
+}
+
+// WithModel configures the analyzer to reuse a shared SileroModel session.
+func WithModel(m *SileroModel) Option {
+	return func(c *config) {
+		c.model = m
+		c.modelSpecified = true
+	}
 }
 
 // NewSilero loads the embedded Silero VAD model and returns an analyzer. It
@@ -88,20 +127,34 @@ func NewSilero(opts ...Option) (*Silero, error) {
 		opt(&cfg)
 	}
 
-	// One thread per Run. The model is tiny and runs once per 32 ms of audio, so
-	// the runtime's default pool wins nothing and costs a great deal: its workers
-	// spin between inferences, burning whole cores per stream whatever the
-	// container's CPU limit says.
-	session, err := onnxrt.NewWithOptions(sileroModel,
-		[]string{"input", "state", "sr"}, []string{"output", "stateN"},
-		onnxrt.Options{IntraOpThreads: 1})
-	if err != nil {
-		return nil, fmt.Errorf("vad: load Silero model: %w", err)
+	var (
+		session       *onnxrt.Session
+		sharedSession bool
+	)
+	if cfg.modelSpecified {
+		if cfg.model == nil || cfg.model.session == nil {
+			return nil, errClosedModel
+		}
+		session = cfg.model.session
+		sharedSession = true
+	} else {
+		// One thread per Run. The model is tiny and runs once per 32 ms of audio, so
+		// the runtime's default pool wins nothing and costs a great deal: its workers
+		// spin between inferences, burning whole cores per stream whatever the
+		// container's CPU limit says.
+		var err error
+		session, err = onnxrt.NewWithOptions(sileroModel,
+			[]string{"input", "state", "sr"}, []string{"output", "stateN"},
+			onnxrt.Options{IntraOpThreads: 1})
+		if err != nil {
+			return nil, fmt.Errorf("vad: load Silero model: %w", err)
+		}
 	}
 
 	s := &Silero{
-		session: session,
-		state:   make([]float32, 2*1*128),
+		session:       session,
+		sharedSession: sharedSession,
+		state:         make([]float32, 2*1*128),
 	}
 	s.stateMachine = newStateMachine(s, cfg.params)
 	return s, nil
@@ -226,9 +279,10 @@ func (s *Silero) resetModel() {
 	s.context = make([]float32, s.contextSize)
 }
 
-// Close releases the model session.
+// Close releases the model session if it is owned by this analyzer.
+// Analyzers sharing a model session do not close the underlying session.
 func (s *Silero) Close() error {
-	if s.session == nil {
+	if s.session == nil || s.sharedSession {
 		return nil
 	}
 	err := s.session.Close()

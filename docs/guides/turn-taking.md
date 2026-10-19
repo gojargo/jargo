@@ -102,6 +102,25 @@ endpointing, decides when the bot responds. See
 [Interruptions](../concepts/interruptions.md) for what barge-in does to the
 pipeline.
 
+### Shared VAD across concurrent streams
+
+In high-concurrency servers handling dozens or hundreds of simultaneous calls, creating a dedicated VAD session per stream duplicates ONNX Runtime model weights (~10 MB RSS per stream) and adds setup latency. Callers can instead load a single `vad.SileroModel` and share it across streams:
+
+```go
+// Load the shared Silero model once (e.g. at server startup)
+sileroModel, err := vad.NewSileroModel()
+if err != nil {
+    // handle error
+}
+defer sileroModel.Close()
+
+// Create stream analyzers reusing the shared model session
+vd, err := vad.NewSilero(vad.WithModel(sileroModel))
+```
+
+- **Lifecycle:** A `SileroModel` must outlive every analyzer built from it. Closing the model while analyzers are active will cause subsequent inferences to fail.
+- **Sequential inference & contention:** Inferences on a shared model run sequentially under the ONNX Runtime session's internal mutex (~75–110 µs per 32 ms frame). One shared model comfortably serves 100–200 concurrent streams (< 38% duty cycle under burst load, < 5% under staggered audio arrival). For high-scale deployments (e.g., 500+ streams), callers can shard streams across a small pool of `SileroModel` instances (e.g., 1 session per 100 streams) to keep inference latency sub-millisecond.
+
 ### Strategies, idle, mute, and LLM completion
 
 The start/stop chains are pluggable (`turns.StartStrategy` / `turns.StopStrategy`):
