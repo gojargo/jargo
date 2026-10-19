@@ -2,6 +2,8 @@ package vad
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"math"
 	"testing"
 
@@ -129,5 +131,161 @@ func TestPCMToFloat32(t *testing.T) {
 		if want := float32(v) / 32768.0; got[i] != want {
 			t.Errorf("sample %d = %v, want %v", i, got[i], want)
 		}
+	}
+}
+
+// TestSileroSharedModel verifies that multiple Silero analyzers sharing a single
+// SileroModel produce the exact same confidence sequence as dedicated sessions,
+// and that closing an analyzer does not invalidate the shared session.
+func TestSileroSharedModel(t *testing.T) {
+	if !onnxrt.Available() {
+		t.Skip("ONNX runtime not configured; set JARGO_ONNXRUNTIME_LIB")
+	}
+
+	model, err := NewSileroModel()
+	if err != nil {
+		t.Fatalf("NewSileroModel: %v", err)
+	}
+	defer func() { _ = model.Close() }()
+
+	const tol = 1e-3
+	toneWant := []float64{0.002657, 0.001875, 0.001425, 0.001144, 0.000907, 0.000863, 0.000693, 0.000712}
+	frames := toneFrames(8)
+
+	// Analyzer 1 using shared model
+	s1, err := NewSilero(WithModel(model))
+	if err != nil {
+		t.Fatalf("NewSilero with shared model: %v", err)
+	}
+	if err := s1.SetSampleRate(16000); err != nil {
+		t.Fatalf("SetSampleRate: %v", err)
+	}
+
+	for i, frame := range frames {
+		got := s1.voiceConfidence(frame)
+		if math.Abs(got-toneWant[i]) > tol {
+			t.Errorf("s1 frame %d confidence = %v, want %v", i, got, toneWant[i])
+		}
+	}
+
+	// Close s1; this should NOT close the shared model
+	if err := s1.Close(); err != nil {
+		t.Fatalf("s1.Close: %v", err)
+	}
+
+	// Analyzer 2 using the same shared model must still function properly
+	s2, err := NewSilero(WithModel(model))
+	if err != nil {
+		t.Fatalf("NewSilero s2 with shared model: %v", err)
+	}
+	defer func() { _ = s2.Close() }()
+	if err := s2.SetSampleRate(16000); err != nil {
+		t.Fatalf("SetSampleRate: %v", err)
+	}
+
+	for i, frame := range frames {
+		got := s2.voiceConfidence(frame)
+		if math.Abs(got-toneWant[i]) > tol {
+			t.Errorf("s2 frame %d confidence = %v, want %v", i, got, toneWant[i])
+		}
+	}
+}
+
+// TestSileroSharedModelConcurrency verifies that multiple concurrent goroutines
+// can run inference through separate Silero analyzers backed by one SileroModel
+// without data races or corruption.
+func TestSileroSharedModelConcurrency(t *testing.T) {
+	if !onnxrt.Available() {
+		t.Skip("ONNX runtime not configured; set JARGO_ONNXRUNTIME_LIB")
+	}
+
+	model, err := NewSileroModel()
+	if err != nil {
+		t.Fatalf("NewSileroModel: %v", err)
+	}
+	defer func() { _ = model.Close() }()
+
+	const (
+		numWorkers = 20
+		numFrames  = 8
+		tol        = 1e-3
+	)
+	toneWant := []float64{0.002657, 0.001875, 0.001425, 0.001144, 0.000907, 0.000863, 0.000693, 0.000712}
+
+	errs := make(chan error, numWorkers)
+	for w := 0; w < numWorkers; w++ {
+		go func() {
+			s, err := NewSilero(WithModel(model))
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer func() { _ = s.Close() }()
+
+			if err := s.SetSampleRate(16000); err != nil {
+				errs <- err
+				return
+			}
+
+			frames := toneFrames(numFrames)
+			for i, frame := range frames {
+				got := s.voiceConfidence(frame)
+				if math.Abs(got-toneWant[i]) > tol {
+					errs <- fmt.Errorf("frame %d confidence = %v, want %v", i, got, toneWant[i])
+					return
+				}
+			}
+			errs <- nil
+		}()
+	}
+
+	for w := 0; w < numWorkers; w++ {
+		if err := <-errs; err != nil {
+			t.Errorf("worker failed: %v", err)
+		}
+	}
+}
+
+func TestSileroModelEdgeCases(t *testing.T) {
+	if !onnxrt.Available() {
+		t.Skip("ONNX runtime not configured; set JARGO_ONNXRUNTIME_LIB")
+	}
+
+	model, err := NewSileroModel()
+	if err != nil {
+		t.Fatalf("NewSileroModel: %v", err)
+	}
+
+	s, err := NewSilero(WithModel(model), WithParams(DefaultParams()))
+	if err != nil {
+		t.Fatalf("NewSilero with model: %v", err)
+	}
+	_ = s.Close()
+
+	// NewSilero with nil or uninitialized model returns an error.
+	if _, err := NewSilero(WithModel(nil)); !errors.Is(err, errClosedModel) {
+		t.Errorf("NewSilero(WithModel(nil)) err = %v, want %v", err, errClosedModel)
+	}
+
+	emptyModel := &SileroModel{}
+	if _, err := NewSilero(WithModel(emptyModel)); !errors.Is(err, errClosedModel) {
+		t.Errorf("NewSilero(WithModel(emptyModel)) err = %v, want %v", err, errClosedModel)
+	}
+
+	var nilModel *SileroModel
+	if err := nilModel.Close(); err != nil {
+		t.Errorf("nilModel.Close(): %v", err)
+	}
+	if err := emptyModel.Close(); err != nil {
+		t.Errorf("emptyModel.Close(): %v", err)
+	}
+
+	if err := model.Close(); err != nil {
+		t.Errorf("model.Close(): %v", err)
+	}
+
+	// Model is now closed; NewSilero using it must return an error.
+	if _, err := NewSilero(WithModel(model)); !errors.Is(err, errClosedModel) {
+		t.Errorf("NewSilero with closed model err = %v, want %v", err, errClosedModel)
 	}
 }
