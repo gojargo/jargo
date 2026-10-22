@@ -5,25 +5,25 @@ go 1.27
 toolchain go1.27.2
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.80.0
+	github.com/anthropics/anthropic-sdk-go v1.82.0
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.4
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.5
 	github.com/aws/aws-sdk-go-v2/service/polly v1.65.4
-	github.com/aws/aws-sdk-go-v2/service/transcribestreaming v1.44.5
+	github.com/aws/aws-sdk-go-v2/service/transcribestreaming v1.44.6
 	github.com/coder/websocket v1.8.15
-	github.com/ebitengine/purego v0.11.1
+	github.com/ebitengine/purego v0.11.2
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/gojargo/go-resample v1.0.1
 	github.com/google/uuid v1.6.0
 	github.com/jfreymuth/pulse v0.1.3
-	github.com/livekit/protocol v1.52.1
+	github.com/livekit/protocol v1.53.0
 	github.com/livekit/server-sdk-go/v2 v2.19.0
 	github.com/microsoft/onnxruntime/go v0.0.0-20261006082247-e0227cb9d34a
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pion/opus v0.1.1-0.20260831205537-1e54f79ccbe1
-	github.com/pion/webrtc/v4 v4.2.23
+	github.com/pion/webrtc/v4 v4.2.24
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
@@ -93,7 +93,7 @@ require (
 	github.com/lithammer/shortuuid/v4 v4.3.0 // indirect
 	github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731 // indirect
 	github.com/livekit/mediatransportutil v0.0.0-20260821083140-f234b534b095 // indirect
-	github.com/livekit/psrpc v0.8.1 // indirect
+	github.com/livekit/psrpc v0.8.2 // indirect
 	github.com/magefile/mage v1.17.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats.go v1.54.0 // indirect
@@ -102,7 +102,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/petermattis/goid v0.0.0-20260820044319-269ab09b5261 // indirect
 	github.com/pion/datachannel v1.6.3 // indirect
-	github.com/pion/dtls/v3 v3.1.10 // indirect
+	github.com/pion/dtls/v3 v3.1.13 // indirect
 	github.com/pion/ice/v4 v4.4.7 // indirect
 	github.com/pion/interceptor v0.1.49 // indirect
 	github.com/pion/logging v0.2.4 // indirect
