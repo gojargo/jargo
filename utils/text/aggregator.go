@@ -141,7 +141,7 @@ func (a *SimpleAggregator) Aggregate(text string) []Aggregation {
 	var out []Aggregation
 	for _, r := range text {
 		a.text += string(r)
-		if agg, ok := a.checkSentenceWithLookahead(r); ok {
+		if agg, ok := a.checkSentenceWithLookahead(r, 0); ok {
 			out = append(out, agg)
 		}
 	}
@@ -168,7 +168,12 @@ func (a *SimpleAggregator) Aggregate(text string) []Aggregation {
 // the buffer. After the retry at the end of the word, a candidate is not
 // checked again even if it is still unresolved. Flush returns whatever is left
 // at the end of the response.
-func (a *SimpleAggregator) checkSentenceWithLookahead(r rune) (Aggregation, bool) {
+//
+// protectedEnd is the buffer offset before which no sentence boundary is
+// accepted. An aggregator that keeps delimited runs whole passes the end of the
+// last closed tag or pattern, so punctuation inside it, as in
+// "<spell>St. Louis</spell>", never splits the text.
+func (a *SimpleAggregator) checkSentenceWithLookahead(r rune, protectedEnd int) (Aggregation, bool) {
 	isPunctuation := IsSentenceEnding(r)
 	var (
 		result Aggregation
@@ -187,6 +192,9 @@ func (a *SimpleAggregator) checkSentenceWithLookahead(r rune) (Aggregation, bool
 		if isPunctuation {
 			candidate = a.text[:len(a.text)-utf8.RuneLen(r)]
 		}
+		if protectedEnd > 0 {
+			candidate = blankPunctuation(candidate, protectedEnd)
+		}
 		if end := matchEndOfSentence(candidate, a.language); end > 0 {
 			result = Aggregation{Text: strings.Trim(a.text[:end], " "), Type: frames.TextTypeSentence}
 			ok = true
@@ -203,6 +211,24 @@ func (a *SimpleAggregator) checkSentenceWithLookahead(r rune) (Aggregation, bool
 	}
 
 	return result, ok
+}
+
+// blankPunctuation blanks the sentence-ending punctuation before end with
+// spaces of the same width, so a boundary found in the result is an offset into
+// text.
+func blankPunctuation(text string, end int) string {
+	end = min(end, len(text))
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text[:end] {
+		if IsSentenceEnding(r) {
+			b.WriteString(strings.Repeat(" ", utf8.RuneLen(r)))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	b.WriteString(text[end:])
+	return b.String()
 }
 
 // advanceLookahead moves the pending candidate on by one character and reports

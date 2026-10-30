@@ -1,6 +1,7 @@
 package text
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/gojargo/jargo/frames"
@@ -35,6 +36,9 @@ func NewSkipTagsAggregator(
 		tags:             tags,
 	}
 }
+
+// Tags is the tag pairs whose text is kept in one aggregation.
+func (a *SkipTagsAggregator) Tags() []StartEndTags { return slices.Clone(a.tags) }
 
 // Aggregate implements Aggregator.
 //
@@ -78,11 +82,27 @@ func (a *SkipTagsAggregator) Aggregate(text string) []Aggregation {
 			// Inside a tag, so no punctuation here ends a sentence.
 			continue
 		}
-		if agg, ok := a.checkSentenceWithLookahead(r); ok {
+		// Otherwise the lookahead looks for a boundary, ignoring those inside
+		// tags that have already closed.
+		if agg, ok := a.checkSentenceWithLookahead(r, a.closedTagsOffset()); ok {
+			// The buffer was trimmed, so it is rescanned from the start for tags.
+			a.currentTagIndex = 0
 			out = append(out, agg)
 		}
 	}
 	return out
+}
+
+// closedTagsOffset is the buffer offset just past the last closing tag, or 0
+// when none has closed.
+func (a *SkipTagsAggregator) closedTagsOffset() int {
+	offset := 0
+	for _, t := range a.tags {
+		if at := strings.LastIndex(a.text, t.End); at >= 0 {
+			offset = max(offset, at+len(t.End))
+		}
+	}
+	return offset
 }
 
 // Flush implements Aggregator.

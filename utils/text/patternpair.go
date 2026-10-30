@@ -182,7 +182,9 @@ func (a *PatternPairAggregator) Aggregate(text string) []Aggregation {
 		}
 
 		if a.aggregationType != frames.TextTypeToken {
-			if agg, ok := a.checkSentenceWithLookahead(r); ok {
+			// The lookahead looks for a boundary, ignoring those inside kept runs
+			// still in the buffer.
+			if agg, ok := a.checkSentenceWithLookahead(r, a.keptPatternsOffset()); ok {
 				agg.RawText = agg.Text
 				out = append(out, agg)
 			}
@@ -267,6 +269,21 @@ func (a *PatternPairAggregator) processCompletePatterns(
 	}
 
 	return all, processed
+}
+
+// keptPatternsOffset is the buffer offset just past the last closed run kept
+// in the text, or 0 when none has closed.
+func (a *PatternPairAggregator) keptPatternsOffset() int {
+	offset := 0
+	for _, p := range a.patterns {
+		if p.action != MatchKeep {
+			continue
+		}
+		if at := strings.LastIndex(a.text, p.end); at >= 0 {
+			offset = max(offset, at+len(p.end))
+		}
+	}
+	return offset
 }
 
 // matchStartOfPattern reports where a run was opened and not yet closed, and
