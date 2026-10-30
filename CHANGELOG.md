@@ -134,6 +134,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   while the pipeline runs. It must be an accent the voice supports; unset lets
   Cartesia choose.
 
+- **Shared Silero VAD session across concurrent streams.** `vad.SileroModel`
+  holds the loaded Silero ONNX model in a reusable session, and `vad.WithModel`
+  configures a `Silero` analyzer to share it. Reusing one session across streams
+  saves the runtime's per-stream session overhead and setup latency, while
+  inferences execute sequentially under the session's internal mutex.
+
 - **`LLMWithBackend`, in alpha: a conversational frontend LLM with a backend
   that does the work it hands off.** `llmwithbackend.New` drops into a pipeline
   where an LLM goes. The frontend keeps the conversation moving while a
