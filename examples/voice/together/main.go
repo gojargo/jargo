@@ -30,7 +30,6 @@ import (
 	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/elevenlabs"
-	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/together"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/rtc"
@@ -78,7 +77,7 @@ func runBot(conn *rtc.Connection) {
 
 	// --- the provider stack: the only part that differs between examples ---
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate})
-	llm := together.NewLLM(chat.LLMConfig{APIKey: os.Getenv("TOGETHER_API_KEY")})
+	llm := together.NewLLM(together.LLMConfig{APIKey: os.Getenv("TOGETHER_API_KEY")})
 	tts := elevenlabs.NewTTS(elevenlabs.Config{APIKey: os.Getenv("ELEVENLABS_API_KEY")})
 	// ----------------------------------------------------------------------
 

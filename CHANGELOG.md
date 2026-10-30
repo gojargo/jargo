@@ -279,11 +279,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- ⚠️ **Breaking change: Together's reasoning controls.** `together.NewLLM` now
+  takes a `together.LLMConfig`, which embeds `chat.LLMConfig` and adds
+  `Reasoning`, Together's reasoning toggle (such as `{"enabled": false}`), and
+  `ReasoningEffort` ("low", "medium", "high", and "max" on some models). The
+  effort reaches models that ignore the toggle, such as `zai-org/GLM-5.3`.
+  Either is left out when unset, and the caller's own `Extra` wins key by key.
+
 - **`ServiceSwitcher` hands metadata from a service outside it to its inactive
   services too**, so a service that reads another service's metadata has it
   when it becomes active. It travels on once, from the active service, as it
   would through that service alone. `frames.ServiceMetadata` gains `Copy`, and
   every metadata frame implements it.
+
 - **Inception defaults to `mercury-3`.** Inception retires Mercury 2 and 2.5
   on November 15, 2026, and they are closed to new signups. Set
   `chat.LLMConfig.Model` to `"mercury-2"` to keep it until then.

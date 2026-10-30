@@ -55,7 +55,7 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		{"qwen", qwen.NewLLM, chat.RoleUser},
 		{"sambanova", sambanova.NewLLM, chat.RoleUser},
 		{"sarvam", sarvam.NewLLM, chat.RoleUser},
-		{"together", together.NewLLM, chat.RoleUser},
+		{"together", togetherLLM, chat.RoleUser},
 
 		{"openai", chat.NewLLM, chat.RoleDeveloper},
 		{"fireworks", fireworks.NewLLM, chat.RoleDeveloper},
@@ -132,6 +132,12 @@ func contentTexts(raw json.RawMessage) []string {
 		out = append(out, p.Text)
 	}
 	return out
+}
+
+// togetherLLM builds a Together service from the shared config alone, since the
+// roster sends every provider the same one and Together's own config wraps it.
+func togetherLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return together.NewLLM(together.LLMConfig{LLMConfig: cfg})
 }
 
 // deepseekLLM builds a DeepSeek service from the shared config alone, since the
