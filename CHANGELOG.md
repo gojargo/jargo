@@ -279,6 +279,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **With an eager end of turn, the turn an early reply answers is announced
+  ahead of it.** The user aggregator broadcasts an `LLMContextUserTurnFrame`
+  with the new `Speculation` field set before the speculative inference, so
+  processors after the LLM learn the turn before the held reply is released.
+  The turn is broadcast again, as written to the context, when it ends, so a
+  processor that keeps the conversation should skip speculative turns.
+
 - ⚠️ **Breaking change: Together's reasoning controls.** `together.NewLLM` now
   takes a `together.LLMConfig`, which embeds `chat.LLMConfig` and adds
   `Reasoning`, Together's reasoning toggle (such as `{"enabled": false}`), and

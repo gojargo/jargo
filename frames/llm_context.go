@@ -720,12 +720,22 @@ func (f *LLMContextAssistantTurnFrame) String() string {
 // the conversation, so it holds what the bot heard: a transcription the
 // aggregator leaves out, such as one while the user is muted, is not in it. It
 // is the user's side of LLMContextAssistantTurnFrame. It is a data frame.
+//
+// A turn answered from an eager end of turn is also broadcast as a speculation,
+// ahead of the inference that answers it, so processors after the LLM learn the
+// turn before its held response is released. An EagerEndOfTurnCancelFrame
+// withdraws it, and the turn written to the context once it ends can differ
+// from it.
 type LLMContextUserTurnFrame struct {
 	BaseDataFrame
 	// Text is the user's aggregated transcript for this turn.
 	Text string
 	// Timestamp is when the user's turn began, in ISO 8601.
 	Timestamp string
+	// Speculation reports whether this is the turn a speculative inference
+	// answers, written only to a provisional context and not yet part of the
+	// conversation.
+	Speculation bool
 }
 
 // NewLLMContextUserTurnFrame builds an LLMContextUserTurnFrame.
@@ -739,7 +749,8 @@ func NewLLMContextUserTurnFrame(text, timestamp string) *LLMContextUserTurnFrame
 
 // String implements fmt.Stringer.
 func (f *LLMContextUserTurnFrame) String() string {
-	return fmt.Sprintf("%s(text: [%s], timestamp: %s)", f.Name(), f.Text, f.Timestamp)
+	return fmt.Sprintf("%s(text: [%s], timestamp: %s, speculation: %t)",
+		f.Name(), f.Text, f.Timestamp, f.Speculation)
 }
 
 // LLMContextAssistantTimestampFrame carries when an assistant message was

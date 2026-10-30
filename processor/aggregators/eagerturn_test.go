@@ -1,6 +1,8 @@
 package aggregators_test
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -106,6 +108,39 @@ func TestEagerEndOfTurnRunsInferenceWithoutTouchingTheConversation(t *testing.T)
 	if msgs := convo.Messages(); len(msgs) != 0 {
 		t.Errorf("the conversation holds %v, want nothing until the turn ends", msgs)
 	}
+
+	// The turn the inference answers goes ahead of it, as a speculation.
+	turnAt, inferenceAt := -1, -1
+	for i, f := range got {
+		switch fr := f.(type) {
+		case *frames.LLMContextUserTurnFrame:
+			if turnAt < 0 {
+				turnAt = i
+				if fr.Text != "book a flight" || !fr.Speculation {
+					t.Errorf("turn = (%q, %t), want (book a flight, true)", fr.Text, fr.Speculation)
+				}
+			}
+		case *frames.LLMContextFrame:
+			if inferenceAt < 0 {
+				inferenceAt = i
+			}
+		}
+	}
+	if turnAt < 0 || turnAt > inferenceAt {
+		t.Errorf("the turn landed at %d and the inference at %d, want the turn first", turnAt, inferenceAt)
+	}
+}
+
+// userTurns are the user turns the aggregator announced, by text and whether
+// each was a speculation.
+func userTurns(fs []frames.Frame) []string {
+	var out []string
+	for _, f := range fs {
+		if tf, ok := f.(*frames.LLMContextUserTurnFrame); ok {
+			out = append(out, fmt.Sprintf("%s/%t", tf.Text, tf.Speculation))
+		}
+	}
+	return out
 }
 
 // TestMatchingTranscriptEndsTheTurnAndKeepsTheReply covers the happy path: the
@@ -135,6 +170,10 @@ func TestMatchingTranscriptEndsTheTurnAndKeepsTheReply(t *testing.T) {
 	}
 	if msgs := convo.Messages(); len(msgs) != 1 || msgs[0].Text != "book a flight" {
 		t.Errorf("the conversation holds %v, want the committed transcript", msgs)
+	}
+	// The turn is broadcast as a speculation, then as written once it ends.
+	if got, want := userTurns(got), []string{"book a flight/true", "book a flight/false"}; !slices.Equal(got, want) {
+		t.Errorf("user turns = %v, want %v", got, want)
 	}
 }
 

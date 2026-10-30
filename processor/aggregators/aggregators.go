@@ -2375,6 +2375,18 @@ func (u *UserAggregator) onInferenceTriggered(
 // whenever the turn does end. The reply is held downstream until the turn is
 // confirmed, and discarded if it is not.
 func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.UserTurnSpeculation) {
+	// The turn is broadcast as a speculation first. Queued ahead of the
+	// inference, it passes the LLM before the response is held, while the turn
+	// written once it ends waits for the inference to finish.
+	u.mu.Lock()
+	startedAt := u.turnStartedAt
+	u.mu.Unlock()
+	_ = u.Broadcast(ctx, func() frames.Frame {
+		turn := frames.NewLLMContextUserTurnFrame(s.Text, startedAt)
+		turn.Speculation = true
+		return turn
+	})
+
 	provisional := frames.NewLLMContext(u.context.System())
 	provisional.SetMessages(append(u.context.Messages(), frames.Message{
 		Role: frames.RoleUser,
