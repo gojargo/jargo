@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,8 @@ import (
 	"unicode"
 
 	"github.com/gojargo/jargo/audio/onset"
+	"github.com/gojargo/jargo/expressive"
+	"github.com/gojargo/jargo/expressive/formatter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
@@ -320,6 +323,14 @@ type Base struct {
 	// metaMu guards meta, which the model labeling the metrics is read from
 	// and which a settings update can change while a turn is being measured.
 	metaMu sync.Mutex
+
+	// exprFormatter reads the expression tags an LLM writes, when the pipeline
+	// has expressive conversation on, and is nil otherwise. See expression.go.
+	exprFormatter *formatter.ExpressionFormatter
+	// exprMu guards exprSettings, what the expression adapter asked to send
+	// beside the latest request's text.
+	exprMu       sync.Mutex
+	exprSettings map[string]any
 }
 
 // model is the identifier the synthesis is measured and priced against.
@@ -611,6 +622,7 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 	if err := b.Base.Setup(ctx, s); err != nil {
 		return err
 	}
+	b.setupExpression(s)
 	if st, ok := b.syn.(Starter); ok {
 		// The connection outlives this call, so it is not tied to a context that
 		// ends with it.
@@ -770,9 +782,11 @@ func (b *Base) CurrentSettings() any {
 }
 
 // updateSettings merges an update into the provider's own settings and lets it
-// act on what changed. A provider whose new settings only take effect on a fresh
-// connection reconnects for itself: unlike a transcription session, which the
-// base owns, a synthesizer owns its own connection.
+// act on what changed. A provider whose new settings only take effect on a
+// fresh connection reconnects for itself: unlike a transcription session, which
+// the base owns, a synthesizer owns its own connection. With expressive
+// conversation on, the service's metadata is broadcast again when the change
+// alters what it can perform.
 func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFrame) {
 	holder, ok := b.syn.(SettingsHolder)
 	if !ok {
@@ -802,6 +816,18 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFr
 	// meaning the same language must be converted first or it reads as a change
 	// when nothing changed.
 	b.nameLanguage(delta)
+
+	// A setting such as the model can change what the service performs, which
+	// is broadcast again with expressive conversation on.
+	var capabilities *expressive.ExpressionCapabilities
+	if b.exprFormatter != nil {
+		capabilities = b.exprFormatter.Capabilities()
+	}
+	defer func() {
+		if b.exprFormatter != nil && !reflect.DeepEqual(b.exprFormatter.Capabilities(), capabilities) {
+			b.BroadcastServiceMetadata(ctx)
+		}
+	}()
 
 	changed, err := settings.Apply(store, delta)
 	if err != nil {
@@ -878,10 +904,14 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 	if err := b.flush(ctx); err != nil {
 		return err
 	}
+	if b.exprFormatter != nil {
+		b.exprFormatter.Reset()
+	}
 	// Streaming tokens, a sentence the response ended without punctuating is
 	// still pending in the sequencer, waiting on a boundary that is not coming.
 	// It is promoted now, or its words would never be spoken into the context.
 	b.pushSequencerFrames(ctx, b.sequencer.Finalize(b.turnContextID()), b.turnContextID())
+	b.endTagsOnlyReply(ctx, b.turnContextID())
 	b.holdFramesWhileAudioContextsOpen()
 	// The turn's context is done, so the whitespace opening the next one is its
 	// own to drop again.
@@ -996,6 +1026,9 @@ func (b *Base) handleInterruption(ctx context.Context) {
 		b.aggregator.HandleInterruption()
 	}
 	b.skippedAggregator.HandleInterruption()
+	if b.exprFormatter != nil {
+		b.exprFormatter.Reset()
+	}
 	for _, f := range b.filters {
 		if i, ok := f.(ttstext.InterruptibleFilter); ok {
 			i.HandleInterruption()
@@ -1061,7 +1094,7 @@ func (b *Base) handleSpeak(ctx context.Context, fr *frames.TTSSpeakFrame, _ proc
 		textType = frames.TextTypeSentence
 	}
 	spoken := ttstext.Aggregation{Text: fr.Text, Type: textType}
-	if err := b.pushTTSFrames(ctx, spoken, interruptible); err != nil {
+	if err := b.pushSpeech(ctx, spoken, interruptible); err != nil {
 		return err
 	}
 	// Streaming tokens, the utterance is held as a pending sentence with no
@@ -1115,7 +1148,7 @@ func (b *Base) aggregate(ctx context.Context, text string) error {
 			// was waiting for. Later ones find it already stopped.
 			b.stopTextAggregationMetrics(ctx)
 		}
-		if err := b.pushTTSFrames(ctx, agg, true); err != nil {
+		if err := b.pushTTSFrames(ctx, agg, true, false); err != nil {
 			return err
 		}
 	}
@@ -1134,7 +1167,7 @@ func (b *Base) flush(ctx context.Context) error {
 	if !ok || strings.TrimSpace(rest.Text) == "" {
 		return nil
 	}
-	return b.pushTTSFrames(ctx, rest, true)
+	return b.pushTTSFrames(ctx, rest, true, false)
 }
 
 // setLLMResponding records whether a model response is driving the speech.
@@ -1182,6 +1215,7 @@ func (b *Base) wordPath() bool {
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	b.applyContextInterruptible(f)
 	if stopped, ok := f.(*frames.TTSStoppedFrame); ok {
+		b.reportUnreportedExpression(ctx, stopped, dir)
 		interruptible := frames.Interruptible(stopped)
 		if stopped.ContextID != "" {
 			if err := b.maybeCloseAssistantTurn(ctx, stopped.ContextID, interruptible); err != nil {
@@ -1195,6 +1229,17 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Dire
 		}
 	}
 	b.stampDestination(f)
+	if b.exprFormatter != nil {
+		sounds, keep := b.reportExpression(f)
+		for _, sound := range sounds {
+			if err := b.PushFrame(ctx, sound, dir); err != nil {
+				return err
+			}
+		}
+		if !keep {
+			return nil
+		}
+	}
 	return b.Base.PushFrame(ctx, f, dir)
 }
 
@@ -1294,7 +1339,10 @@ func (b *Base) prepareText(text string) string {
 // pushed by the context's drain loop, so a provider whose audio arrives later on
 // its own receive loop and one that returns it inline reach the pipeline the
 // same way, in the order the audio was generated.
-func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, interruptible bool) error {
+//
+// whole says the text stands on its own, apart from any response, as a
+// TTSSpeakFrame's does; it is only read with expressive conversation on.
+func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, interruptible, whole bool) error {
 	original := agg.Text
 	streaming := b.isStreamingTokens()
 
@@ -1316,11 +1364,34 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 		return nil
 	}
 
+	// With expressive conversation on, the text an LLM writes its replies in is
+	// read for expression tags. Other text, such as a pattern's match, is spoken
+	// as it is.
+	if b.exprFormatter != nil && expressiveTextType(agg.Type) {
+		return b.speakExpression(ctx, agg, contextID, interruptible, whole)
+	}
+
 	text, worthSpeaking := b.trimIncomingWhitespace(original, streaming)
 	if !worthSpeaking {
 		return nil
 	}
 
+	// Reshaped for the provider before anything is announced. A transform that
+	// fails, or that leaves nothing but whitespace, abandons the unit here,
+	// before it is announced or any audio is opened for it, so the turn carries
+	// on with this much unspoken rather than waiting on audio that is never
+	// coming.
+	prepared, ok := b.transformUnit(ctx, text, agg.Type)
+	if !ok {
+		return nil
+	}
+	return b.speakText(ctx, agg, contextID, spokenText{text: original, raw: writtenText(agg)}, prepared, interruptible)
+}
+
+// transformUnit turns text to speak into the text sent to the provider: the
+// filters, then the transforms, then the last shaping the provider needs. It
+// reports false when nothing is left to say or a transform failed.
+func (b *Base) transformUnit(ctx context.Context, text string, by frames.TextType) (string, bool) {
 	filtered := text
 	for _, f := range b.filters {
 		// A stateful filter is told the interruption is over just before it is
@@ -1330,16 +1401,22 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 		}
 		filtered = f.Filter(filtered)
 	}
-
-	// Reshaped for the provider before anything is announced. A transform that
-	// fails, or that leaves nothing but whitespace, abandons the unit here,
-	// before it is announced or any audio is opened for it, so the turn carries
-	// on with this much unspoken rather than waiting on audio that is never
-	// coming.
-	transformed, ok := b.transformText(ctx, filtered, agg.Type)
-	if !ok || !b.keepsFilteredText(transformed, streaming) {
-		return nil
+	transformed, ok := b.transformText(ctx, filtered, by)
+	if !ok || !b.keepsFilteredText(transformed, b.isStreamingTokens()) {
+		return "", false
 	}
+	// The last shaping before the provider sees the text. Everything measured
+	// against the synthesis counts it, because it is what was synthesized.
+	return b.prepareText(transformed), true
+}
+
+// speakText announces a unit, opens its context if it is the turn's first, and
+// asks the provider to speak prepared, the text as the provider is sent it.
+// said is the unit's text as it is reported spoken.
+func (b *Base) speakText(
+	ctx context.Context, agg ttstext.Aggregation, contextID string, said spokenText, prepared string,
+	interruptible bool,
+) error {
 	aggregated := b.aggregatedFrame(agg, contextID)
 	aggregated.WillBeSpoken = true
 	// It is going to be spoken, so it does not go into the conversation here: the
@@ -1378,9 +1455,6 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 	if c == nil {
 		return nil
 	}
-	// The last shaping before the provider sees the text. Everything measured
-	// against the synthesis counts it, because it is what was synthesized.
-	prepared := b.prepareText(transformed)
 	// Announced before the provider is asked, with the text exactly as it will
 	// be sent. It is the last point at which what the bot is about to say can be
 	// seen in the form the synthesizer receives it, filters and transforms
@@ -1390,16 +1464,16 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
 		aggregated, contextID, prepared, appendToContext, b.wordPath(), false, b.TextAggregationLanguage()),
 		contextID)
-	return b.runTTS(ctx, c, contextID, original, prepared, agg.Type, aggregated.ID(), appendToContext)
+	return b.runTTS(ctx, c, contextID, prepared, aggregated, said, appendToContext)
 }
 
 // runTTS asks the provider to speak one unit of text and routes what it yields
 // to the synthesis context. A provider whose audio arrives later on its own
-// receive loop yields nothing here and appends it itself. segmentID is the id of
-// the frame announcing the unit, which the spoken text is reported as.
+// receive loop yields nothing here and appends it itself. aggregated is the
+// frame announcing the unit, which the spoken text is reported as part of.
 func (b *Base) runTTS(
-	ctx context.Context, c *audioContext, contextID, original, prepared string,
-	by frames.TextType, segmentID uint64, appendToContext bool,
+	ctx context.Context, c *audioContext, contextID, prepared string,
+	aggregated *frames.AggregatedTextFrame, said spokenText, appendToContext bool,
 ) error {
 	// Every frame the provider yields is routed to its context, so audio and
 	// anything else it reports stay in the order it produced them.
@@ -1441,28 +1515,66 @@ func (b *Base) runTTS(
 	// the base closes the context itself rather than leaving the turn open on
 	// audio that will never arrive.
 	b.setYieldsSync(yielded || !usable)
-	if !b.wordPath() {
-		// With no word timings there is nothing to place the text against, so the
-		// whole unit goes in as one, carrying the text as written rather than what
-		// the filters made of it.
-		//
-		// This is the only thing that puts the turn into the conversation: the
-		// text the model produced is consumed here and never forwarded, and
-		// without word timings no per-word frames are produced either. It cannot
-		// depend on the provider having answered inline. One that delivers its
-		// audio later on its own receive loop yields nothing here, and gating on
-		// that left every one of its turns out of the context entirely.
-		text := frames.NewTTSTextFrame(original, by)
-		text.SegmentID = segmentID
-		text.ContextID = contextID
-		text.WillBeSpoken = true
-		text.AppendToContext = appendToContext
-		b.AppendToAudioContext(contextID, text)
-		// The text frame is queued, so the slot is complete and whatever was held
-		// behind it (a code block, say) can follow it, in order.
-		b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot(), contextID)
-	}
+	b.pushSpokenText(ctx, aggregated, said, contextID, appendToContext)
 	return nil
+}
+
+// spokenText is a unit's text as it is reported spoken: its words, and the text
+// the LLM wrote, when that differs, such as a pattern's match with its
+// delimiters or a unit with expression tags in it.
+type spokenText struct {
+	text string
+	raw  string
+}
+
+// writtenText is a unit's text as the LLM wrote it: a pattern's match with its
+// delimiters, and any other unit's text as it is.
+func writtenText(agg ttstext.Aggregation) string {
+	if agg.Type == frames.TextTypeSentence || agg.Type == frames.TextTypeToken {
+		return agg.Text
+	}
+	return agg.Original()
+}
+
+// pushSpokenText queues the spoken text behind its audio, for a provider
+// without word timings.
+//
+// With no word timings there is nothing to place the text against, so the
+// whole unit goes in as one, carrying the text as written rather than what the
+// filters made of it: the frame carries the text as the LLM wrote it, which the
+// conversation records, as it does for a provider with word timings.
+//
+// This is the only thing that puts the turn into the conversation: the text
+// the model produced is consumed here and never forwarded, and without word
+// timings no per-word frames are produced either. It cannot depend on the
+// provider having answered inline. One that delivers its audio later on its own
+// receive loop yields nothing here, and gating on that left every one of its
+// turns out of the context entirely.
+//
+// Streaming tokens, the sequencer does this instead as it promotes each
+// sentence, since one token is not the unit the conversation should record.
+func (b *Base) pushSpokenText(
+	ctx context.Context, src *frames.AggregatedTextFrame, said spokenText, contextID string, appendToContext bool,
+) {
+	if b.wordPath() || b.isStreamingTokens() {
+		return
+	}
+	f := frames.NewTTSTextFrame(said.text, src.TextType)
+	f.RawText = said.raw
+	f.SegmentID = src.ID()
+	f.ContextID = contextID
+	f.WillBeSpoken = true
+	f.AppendToContext = appendToContext
+	// Appended to the audio context, so it keeps its place. A unit that is only
+	// tags may come before anything is spoken, with no audio context.
+	if b.AudioContextAvailable(contextID) {
+		b.AppendToAudioContext(contextID, f)
+	} else {
+		_ = b.PushFrame(ctx, f, processor.Downstream)
+	}
+	// The text frame is queued, so the slot is complete and whatever was held
+	// behind it (a code block, say) can follow it, in order.
+	b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot(), contextID)
 }
 
 // emitTiming records the synthesis's time-to-first-byte, time-to-first-audible
@@ -1502,9 +1614,16 @@ func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processi
 }
 
 // ServiceMetadataFrame implements service.MetadataDescriber, describing this
-// synthesizer to the rest of the pipeline.
+// synthesizer to the rest of the pipeline. With expressive conversation on, a
+// TTSMetadataFrame carries its expression adapter's capabilities; otherwise
+// nothing is broadcast.
 func (b *Base) ServiceMetadataFrame() frames.ServiceMetadata {
-	return frames.NewServiceMetadataFrame(b.Name())
+	if b.exprFormatter == nil {
+		return nil
+	}
+	f := frames.NewTTSMetadataFrame(b.Name())
+	f.Expression = b.ExpressionAdapter().Capabilities()
+	return f
 }
 
 // ttfaMeter measures a synthesis's time-to-first-byte and time-to-first-audible

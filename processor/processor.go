@@ -95,6 +95,10 @@ type Setup struct {
 	AudioOutSampleRate int
 	// Clock is the pipeline clock used for timing.
 	Clock clock.Clock
+	// EnableExpressiveConversation is whether the agent takes part in an
+	// expressive conversation (alpha). See
+	// pipeline.Params.EnableExpressiveConversation.
+	EnableExpressiveConversation bool
 	// EnableMetrics turns on performance metrics collection.
 	EnableMetrics bool
 	// EnableUsageMetrics turns on usage metrics collection.

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gojargo/jargo/expressive/spoken"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
@@ -817,6 +818,10 @@ type ttsContext struct {
 	// and every frame it produces is marked uninterruptible so the transport
 	// keeps it too.
 	interruptible bool
+	// spoken is the delivery and sounds of the words the provider reports
+	// speaking in this context, created with its first expressive unit. Part of
+	// expressive conversation (alpha).
+	spoken *spoken.SpokenExpression
 }
 
 // setTTSContext records what a context carries.

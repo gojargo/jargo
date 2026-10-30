@@ -15,6 +15,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
 	"github.com/gojargo/jargo/utils/events"
@@ -226,5 +227,27 @@ func TestTokenModeSpeaksAnUnpunctuatedTrailingSentence(t *testing.T) {
 
 	if got := strings.Join(spokenWords(down), " "); got != "Hello there. Sure thing" {
 		t.Fatalf("words = %q, want %q", got, "Hello there. Sure thing")
+	}
+}
+
+// TestTokenModeWithoutWordTimestampsRecordsEachSentenceOnce covers a provider
+// with no word timings streaming tokens. The sequencer records each sentence it
+// promotes, so the tokens it was built from are not recorded as well.
+func TestTokenModeWithoutWordTimestampsRecordsEachSentenceOnce(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	pair := aggregators.New(convo)
+	base := tts.New("PlainTTS", &plainSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}})
+	base.SetTextAggregator(ttstext.NewTokenAggregator())
+
+	runFrames(t, []frames.Frame{
+		frames.NewLLMFullResponseStartFrame(),
+		frames.NewLLMTextFrame("Hello"),
+		frames.NewLLMTextFrame(" there."),
+		frames.NewLLMFullResponseEndFrame(),
+	}, base, pair.Assistant())
+
+	msgs := convo.Messages()
+	if len(msgs) != 1 || msgs[0].Text != "Hello there." {
+		t.Fatalf("messages = %+v, want one assistant %q", msgs, "Hello there.")
 	}
 }

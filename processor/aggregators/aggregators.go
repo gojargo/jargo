@@ -30,6 +30,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/audio/vad/controller"
+	"github.com/gojargo/jargo/expressive/formatter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
@@ -174,8 +175,10 @@ type AssistantThought struct {
 
 // AssistantTurnStopped describes a bot turn that has just ended.
 type AssistantTurnStopped struct {
-	// Content is everything the bot said during the turn, as one message. It is
-	// empty for a turn that said nothing.
+	// Content is everything the bot said during the turn, as one message, which
+	// the context also records. It is empty for a turn that said nothing. With
+	// expressive conversation on, it is the words alone, while the context keeps
+	// the expression tags the LLM wrote.
 	Content string
 	// Interrupted reports whether the turn was cut off rather than finishing.
 	Interrupted bool
@@ -1089,6 +1092,10 @@ func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool) (string, e
 type AssistantAggregator struct {
 	*processor.Base
 	context *frames.LLMContext
+	// expressive is whether the pipeline has expressive conversation on (alpha):
+	// the context keeps the expression tags the LLM wrote, and what the turn is
+	// reported to have said is the words alone.
+	expressive bool
 	// toolChangeMessages announces a change of toolset to the model.
 	toolChangeMessages bool
 	// pairedUser is the user half this one was built with, so a proposal this
@@ -1243,6 +1250,7 @@ func (a *AssistantAggregator) Setup(ctx context.Context, s processor.Setup) erro
 	if err := a.Base.Setup(ctx, s); err != nil {
 		return err
 	}
+	a.expressive = s.EnableExpressiveConversation
 	a.taskCtx, a.taskCancel = context.WithCancel(ctx)
 	return nil
 }
@@ -1633,7 +1641,9 @@ func (a *AssistantAggregator) handleMessagesTransform(
 // arrive later saying the opposite, which is what makes an interruption leave
 // exactly the words that were heard.
 func (a *AssistantAggregator) handleText(fr *frames.TextFrame, original string) {
-	if !fr.AppendToContext || fr.Text == "" {
+	// The text as the LLM wrote it, which a unit that is only tags has without
+	// any words to show. Spaces count, too.
+	if !fr.AppendToContext || original == "" {
 		return
 	}
 	a.mu.Lock()
@@ -2153,6 +2163,11 @@ func (a *AssistantAggregator) commit(ctx context.Context, interrupted bool) erro
 	// reads its own earlier verdicts back.
 	if said != "" {
 		said = frames.StripUserTurnMarkers(said, a.markersSeen()...)
+	}
+	// The context keeps the expression tags the LLM wrote; the transcript is the
+	// words.
+	if said != "" && a.expressive {
+		said = formatter.StripExpressionTags(said)
 	}
 
 	a.Events().Call(ctx, EventAssistantTurnStopped, a, AssistantTurnStopped{

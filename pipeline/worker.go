@@ -59,6 +59,10 @@ type Params struct {
 	AudioInSampleRate int
 	// AudioOutSampleRate is the StartFrame output sample rate; default 24000.
 	AudioOutSampleRate int
+	// EnableExpressiveConversation is whether the agent takes part in an
+	// expressive conversation (alpha). TTS services then read the expression
+	// tags an LLM writes into its reply instead of speaking them.
+	EnableExpressiveConversation bool
 	// EnableMetrics enables performance-metrics collection across the pipeline.
 	EnableMetrics bool
 	// EnableUsageMetrics enables usage-metrics collection (e.g. LLM token usage)
@@ -1179,16 +1183,17 @@ func (t *Worker) Run(ctx context.Context) error {
 	t.observerProxy.setupStarted(time.Now())
 
 	setup := processor.Setup{
-		AudioInSampleRate:     t.params.AudioInSampleRate,
-		AudioOutSampleRate:    t.params.AudioOutSampleRate,
-		Clock:                 t.clk,
-		EnableMetrics:         t.params.EnableMetrics,
-		EnableUsageMetrics:    t.params.EnableUsageMetrics,
-		Observers:             []processor.Observer{t.observerProxy},
-		ReportOnlyInitialTTFB: t.params.ReportOnlyInitialTTFB,
-		Tracing:               t.tracing,
-		TracingEnabled:        t.cfg.EnableTracing,
-		Running:               t,
+		AudioInSampleRate:            t.params.AudioInSampleRate,
+		AudioOutSampleRate:           t.params.AudioOutSampleRate,
+		Clock:                        t.clk,
+		EnableExpressiveConversation: t.params.EnableExpressiveConversation,
+		EnableMetrics:                t.params.EnableMetrics,
+		EnableUsageMetrics:           t.params.EnableUsageMetrics,
+		Observers:                    []processor.Observer{t.observerProxy},
+		ReportOnlyInitialTTFB:        t.params.ReportOnlyInitialTTFB,
+		Tracing:                      t.tracing,
+		TracingEnabled:               t.cfg.EnableTracing,
+		Running:                      t,
 	}
 	setUp, err := t.setupWithinTimeout(runCtx, pipeCtx, setup)
 	if err != nil {
