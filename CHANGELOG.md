@@ -331,6 +331,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   words, such as "Let me look into that". A longer acknowledgement sounds
   awkward, and holds up a backend's answer that lands while the acknowledgement
   is still being spoken.
+- `LLMWithBackend`'s frontend avoids the awkward double acknowledgement of a
+  delegation. When it has acknowledged in the same response as its `delegate`
+  call (for example "Stopping the retry test fix, I'll leave that alone for
+  you."), which it sometimes does, the reply it generates when the call settles
+  completes the thought (for example "Checking CI on main for you now!"), or
+  adds nothing when the first part said it all.
 - ⚠️ **Breaking change:** `responses.ThinkingReporter` gains
   `UseProviderThinkingDefault`, which the LLM base implements.
 - **What kind of text a frame holds is its `TextType`.** `frames.AggregationType`
