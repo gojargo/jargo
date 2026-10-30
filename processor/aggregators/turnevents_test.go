@@ -502,9 +502,14 @@ func TestUserAnnouncesTheTurnToThePipeline(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		n := len(up)
+		announced := false
+		for _, f := range up {
+			if _, ok := f.(*frames.LLMContextUserTurnFrame); ok {
+				announced = true
+			}
+		}
 		mu.Unlock()
-		if n > 0 {
+		if announced {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
