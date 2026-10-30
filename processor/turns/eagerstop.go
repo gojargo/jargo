@@ -148,6 +148,13 @@ func (s *EagerStop) ResolvesProposedTurnStopFrames() bool {
 	return s.inner.ResolvesProposedTurnStopFrames()
 }
 
+// WaitsForInference reports that the strategy listens to the service rather
+// than waiting for the turn's inference.
+func (s *EagerStop) WaitsForInference() bool { return false }
+
+// DecisionScheduled reports that the strategy schedules no decision of its own.
+func (s *EagerStop) DecisionScheduled() bool { return false }
+
 // WaitForTranscript reports whether the turn is held open for a transcript.
 func (s *EagerStop) WaitForTranscript() bool { return s.inner.WaitForTranscript() }
 

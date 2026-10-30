@@ -744,6 +744,10 @@ func NewExternalCompletionStop() *ExternalCompletionStop {
 	return s
 }
 
+// WaitsForInference reports that the strategy decides on the
+// UserTurnInferenceCompletedFrame the turn's inference produces.
+func (s *ExternalCompletionStop) WaitsForInference() bool { return true }
+
 // Process finalizes the turn on a completion frame.
 func (s *ExternalCompletionStop) Process(f frames.Frame) ProcessFrameResult {
 	if _, ok := f.(*frames.UserTurnInferenceCompletedFrame); ok {
@@ -783,3 +787,9 @@ func (d *deferredStop) TurnStopped()                              { d.inner.Turn
 func (d *deferredStop) Cleanup()                                  { d.inner.Cleanup() }
 
 func (d *deferredStop) Setup(s processor.Setup) error { return d.inner.Setup(s) }
+
+// WaitsForInference reports what the wrapped strategy does.
+func (d *deferredStop) WaitsForInference() bool { return d.inner.WaitsForInference() }
+
+// DecisionScheduled reports what the wrapped strategy does.
+func (d *deferredStop) DecisionScheduled() bool { return d.inner.DecisionScheduled() }

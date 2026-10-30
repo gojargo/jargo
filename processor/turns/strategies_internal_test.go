@@ -647,8 +647,10 @@ func TestExternalStop(t *testing.T) {
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
-	if spy.inferences != 1 {
-		t.Errorf("inference triggers = %d, want 1", spy.inferences)
+	// The strategy only reports the user done: the controller runs the
+	// turn's inference.
+	if spy.inferences != 0 {
+		t.Errorf("inference triggers = %d, want 0", spy.inferences)
 	}
 	if p := spy.stopped[0]; p.EnableUserSpeakingFrames {
 		t.Error("adopting a turn stop must not re-emit user speaking frames")
@@ -1093,22 +1095,17 @@ func TestFilterIncompleteUserTurnStrategies(t *testing.T) {
 	})
 }
 
-// TestDeferredStopSuppressesFinalization is the point of Deferred: the inner
-// strategy may start inference but must not end the turn itself.
+// TestDeferredStopSuppressesFinalization: attached on its own, the deprecated
+// wrapper still drops the inner strategy's decision. The controller unwraps it.
 func TestDeferredStopSuppressesFinalization(t *testing.T) {
 	inner := NewExternalStop(ExternalStopConfig{Timeout: 10 * time.Millisecond})
-	d := Deferred(inner)
+	d := Deferred(inner) //nolint:staticcheck // the deprecated wrapper is what is tested
 	spy := attachStop(d)
 	defer d.Cleanup()
 
 	spy.sendStop(d, transcript("done"))
 	spy.sendStop(d, frames.NewUserStoppedSpeakingFrame())
-
-	eventually(t, func() bool {
-		spy.mu.Lock()
-		defer spy.mu.Unlock()
-		return spy.inferences == 1
-	}, 2*time.Second, "deferred strategy should still trigger inference")
+	time.Sleep(50 * time.Millisecond)
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
@@ -1253,7 +1250,7 @@ func TestStopStrategyBaseEmits(t *testing.T) {
 
 	b.Push(frames.NewUserSpeakingFrame(), processor.Upstream)
 	b.Broadcast(func() frames.Frame { return frames.NewBotSpeakingFrame() })
-	b.TriggerStopped()
+	b.ReportStopped()
 
 	// The decision is attributed to the strategy that made it, which is what
 	// lets a listener tell one stop strategy's verdict from another's.
@@ -1267,9 +1264,10 @@ func TestStopStrategyBaseEmits(t *testing.T) {
 	if len(spy.broadcast) != 1 {
 		t.Errorf("broadcast = %d frames, want 1", len(spy.broadcast))
 	}
-	// TriggerStopped is inference-then-finalize, in that order.
-	if spy.inferences != 1 || len(spy.stopped) != 1 {
-		t.Errorf("inferences = %d, stops = %d, want 1 and 1", spy.inferences, len(spy.stopped))
+	// ReportStopped only reports the decision: the controller runs the
+	// inference.
+	if spy.inferences != 0 || len(spy.stopped) != 1 {
+		t.Errorf("inferences = %d, stops = %d, want 0 and 1", spy.inferences, len(spy.stopped))
 	}
 	if !spy.stopped[0].EnableUserSpeakingFrames {
 		t.Error("the base's EnableUserSpeakingFrames should reach the stop params")

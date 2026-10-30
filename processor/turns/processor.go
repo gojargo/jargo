@@ -19,15 +19,24 @@ const (
 	EventUserTurnStarted = "on_user_turn_started"
 	// EventUserTurnInferenceTriggered fires when there is enough signal to start
 	// LLM inference, carrying the StopStrategy that decided. It fires together
-	// with EventUserTurnStopped for most strategies, and alone when a strategy
-	// further down the chain gates finalization on someone else's verdict.
+	// with EventUserTurnStopped for most strategies, and alone when the turn's
+	// end waits for a decision on the inference, or for an eager end of turn to
+	// be confirmed.
 	EventUserTurnInferenceTriggered = "on_user_turn_inference_triggered"
 	// EventUserTurnStopped fires when a user turn is semantically final,
 	// carrying the StopStrategy that decided. It is nil when nothing decided:
 	// the turn was closed because no strategy did.
 	EventUserTurnStopped = "on_user_turn_stopped"
-	// EventUserTurnStopTimeout fires when no stop strategy triggered before the
-	// watchdog gave up. It carries no argument.
+	// EventUserTurnResumed fires when the user starts speaking again in an open
+	// turn, after they stopped or after the turn's inference was triggered. It
+	// carries the UserTurnResumedParams, which say whether the turn interrupts
+	// the bot and whether that inference was triggered.
+	//
+	//	events.On(p.Events(), turns.EventUserTurnResumed,
+	//	    func(ctx context.Context, params turns.UserTurnResumedParams) { … })
+	EventUserTurnResumed = "on_user_turn_resumed"
+	// EventUserTurnStopTimeout fires when the stop timeout ends a user turn its
+	// stop strategies did not end. It carries no argument.
 	EventUserTurnStopTimeout = "on_user_turn_stop_timeout"
 	// EventUserTurnIdle fires when the user has been idle for the configured
 	// timeout. It carries no argument.
@@ -59,14 +68,14 @@ func NewUserTurnProcessor(cfg Config) *UserTurnProcessor {
 	p.Base = processor.New("UserTurnProcessor", p)
 	for _, name := range []string{
 		EventUserTurnStarted, EventUserTurnInferenceTriggered, EventUserTurnStopped,
-		EventUserTurnStopTimeout, EventUserTurnIdle,
+		EventUserTurnResumed, EventUserTurnStopTimeout, EventUserTurnIdle,
 	} {
 		// Asynchronous: a handler may do anything, and the turn must not wait on
 		// whatever is listening to it.
 		p.Events().Register(name, false)
 	}
 
-	p.turn = NewUserTurnController(cfg.Strategies, cfg.StopTimeout)
+	p.turn = NewUserTurnControllerWithParams(cfg.Strategies, cfg.StrategiesParams, cfg.StopTimeout)
 	onIdle := func(ctx context.Context, c *UserIdleController) error {
 		p.Events().Call(ctx, EventUserTurnIdle, p)
 		if cfg.OnIdle == nil {
@@ -80,6 +89,7 @@ func NewUserTurnProcessor(cfg Config) *UserTurnProcessor {
 		Stopped:             p.onTurnStopped,
 		InferenceTriggered:  p.onInferenceTriggered,
 		SpeculationCanceled: p.onSpeculationCanceled,
+		Resumed:             p.onTurnResumed,
 		StopTimeout:         p.onStopTimeout,
 		Push: func(ctx context.Context, f frames.Frame, dir processor.Direction) {
 			_ = p.PushFrame(ctx, f, dir)
@@ -217,6 +227,11 @@ func (p *UserTurnProcessor) onInferenceTriggered(
 func (p *UserTurnProcessor) onSpeculationCanceled(ctx context.Context) {
 	slog.Debug("withdrawing the speculative reply", "processor", p.Name())
 	_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() })
+}
+
+// onTurnResumed reports the user speaking again in an open turn.
+func (p *UserTurnProcessor) onTurnResumed(ctx context.Context, params UserTurnResumedParams) {
+	p.Events().Call(ctx, EventUserTurnResumed, p, params)
 }
 
 // onStopTimeout reports a turn closed because no strategy closed it.

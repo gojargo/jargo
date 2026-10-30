@@ -1,6 +1,8 @@
 package turns
 
 import (
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -152,15 +154,19 @@ type StartedOverrides struct {
 	EnableUserSpeakingFrames *bool
 }
 
-// TriggerStarted signals that the user's turn has begun, with the flags the
-// strategy was built with.
-func (b *StartStrategyBase) TriggerStarted() {
-	b.TriggerStartedOverriding(StartedOverrides{})
+// ReportStarted reports that the user started, with the flags the strategy was
+// built with.
+//
+// A strategy calls it when it decides the user's turn has started. The
+// controller starts the turn on the first decision, or once every start
+// strategy has decided in a StrategyModeAll list.
+func (b *StartStrategyBase) ReportStarted() {
+	b.ReportStartedOverriding(StartedOverrides{})
 }
 
-// TriggerStartedOverriding signals that the user's turn has begun, overriding
-// the strategy's configured flags for this turn.
-func (b *StartStrategyBase) TriggerStartedOverriding(o StartedOverrides) {
+// ReportStartedOverriding reports that the user started, overriding the
+// strategy's configured flags for this turn.
+func (b *StartStrategyBase) ReportStartedOverriding(o StartedOverrides) {
 	if b.env.started == nil {
 		return
 	}
@@ -168,6 +174,20 @@ func (b *StartStrategyBase) TriggerStartedOverriding(o StartedOverrides) {
 		EnableInterruptions:      boolOr(o.EnableInterruptions, b.EnableInterruptions),
 		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, b.EnableUserSpeakingFrames),
 	})
+}
+
+// TriggerStarted reports that the user started.
+//
+// Deprecated: use ReportStarted. A strategy reports its decision, and the
+// controller decides when the turn starts.
+func (b *StartStrategyBase) TriggerStarted() { b.ReportStarted() }
+
+// TriggerStartedOverriding reports that the user started, overriding the
+// strategy's configured flags for this turn.
+//
+// Deprecated: use ReportStartedOverriding.
+func (b *StartStrategyBase) TriggerStartedOverriding(o StartedOverrides) {
+	b.ReportStartedOverriding(o)
 }
 
 // TriggerResetAggregation asks the user aggregator to drop the in-progress
@@ -201,6 +221,12 @@ type StopStrategy interface {
 	// ResolvesProposedTurnStopFrames reports whether this strategy resolves
 	// proposals into turn stops.
 	ResolvesProposedTurnStopFrames() bool
+	// WaitsForInference reports whether this strategy waits for the turn's
+	// inference before deciding.
+	WaitsForInference() bool
+	// DecisionScheduled reports whether this strategy has a decision of its own
+	// scheduled, which the stop timeout then waits for.
+	DecisionScheduled() bool
 	attach(self StopStrategy, env strategyEnv)
 }
 
@@ -226,6 +252,9 @@ type StopStrategyBase struct {
 	env                      strategyEnv
 	// self is the concrete strategy this base belongs to. See StartStrategyBase.
 	self StopStrategy
+	// warnedInferenceWithoutSpeculation records that the deprecated
+	// TriggerInferenceTriggered was called, so it warns once.
+	warnedInferenceWithoutSpeculation bool
 }
 
 func (b *StopStrategyBase) attach(self StopStrategy, env strategyEnv) {
@@ -254,6 +283,24 @@ func (b *StopStrategyBase) Cleanup() {}
 // while before deciding.
 func (b *StopStrategyBase) ResolvesProposedTurnStopFrames() bool { return false }
 
+// WaitsForInference reports whether this strategy waits for the turn's
+// inference before deciding.
+//
+// In a StrategyModeAll list, the turn's inference runs once every other stop
+// strategy has decided, and this strategy then decides on it. Override to true
+// in a strategy that decides from the turn's answer, such as one reading the
+// LLM's turn-completion marker.
+func (b *StopStrategyBase) WaitsForInference() bool { return false }
+
+// DecisionScheduled reports whether this strategy has a decision of its own
+// scheduled.
+//
+// While a stop strategy has one, the controller's stop timeout waits for it
+// instead of ending the turn. Override to return true only while the strategy
+// is sure to decide soon on its own, as when a timer of its own will fire, so
+// a turn whose decision never comes still times out.
+func (b *StopStrategyBase) DecisionScheduled() bool { return false }
+
 // StoppedOverrides overrides, for one turn, the flags the strategy was built
 // with. A nil field keeps the configured value.
 type StoppedOverrides struct {
@@ -266,56 +313,19 @@ type StoppedOverrides struct {
 	ConfirmsSpeculation bool
 }
 
-// TriggerStopped fires inference-triggered then finalized, the usual "turn is
-// over" signal.
+// ReportStopped reports that the user is done, with the flags the strategy was
+// built with.
 //
-// To leave finalization to another strategy, so this one fires only the
-// inference trigger, wrap it with Deferred rather than changing the call.
-func (b *StopStrategyBase) TriggerStopped() {
-	b.TriggerStoppedOverriding(StoppedOverrides{})
+// A strategy calls it when it decides the user's turn has ended. The
+// controller combines the stop strategies' decisions into the turn end, and
+// runs the turn's inference itself once they have decided.
+func (b *StopStrategyBase) ReportStopped() {
+	b.ReportStoppedOverriding(StoppedOverrides{})
 }
 
-// TriggerStoppedOverriding fires inference-triggered then finalized, overriding
-// the strategy's configured flags for this turn.
-func (b *StopStrategyBase) TriggerStoppedOverriding(o StoppedOverrides) {
-	b.TriggerInferenceTriggered()
-	b.TriggerFinalizedOverriding(o)
-}
-
-// TriggerInferenceTriggered signals that there is enough evidence to start LLM
-// inference, without finalizing the turn.
-func (b *StopStrategyBase) TriggerInferenceTriggered() {
-	if b.env.inferenceTriggered != nil {
-		b.env.inferenceTriggered(b.self, nil)
-	}
-}
-
-// TriggerInferenceTriggeredSpeculating signals that there is enough evidence to
-// start inference on a turn that has not ended, so the reply it produces is held
-// until the turn is confirmed.
-func (b *StopStrategyBase) TriggerInferenceTriggeredSpeculating(s UserTurnSpeculation) {
-	if b.env.inferenceTriggered != nil {
-		b.env.inferenceTriggered(b.self, &s)
-	}
-}
-
-// TriggerSpeculationCanceled withdraws a speculative reply, whatever voided it:
-// the service withdrawing its prediction, a committed transcript that does not
-// match, or a turn that never resolved the speculation at all.
-func (b *StopStrategyBase) TriggerSpeculationCanceled() {
-	if b.env.speculationCanceled != nil {
-		b.env.speculationCanceled(b.self)
-	}
-}
-
-// TriggerFinalized signals that the turn is semantically final.
-func (b *StopStrategyBase) TriggerFinalized() {
-	b.TriggerFinalizedOverriding(StoppedOverrides{})
-}
-
-// TriggerFinalizedOverriding signals that the turn is semantically final,
-// overriding the strategy's configured flags for this turn.
-func (b *StopStrategyBase) TriggerFinalizedOverriding(o StoppedOverrides) {
+// ReportStoppedOverriding reports that the user is done, overriding the
+// strategy's configured flags for this turn.
+func (b *StopStrategyBase) ReportStoppedOverriding(o StoppedOverrides) {
 	if b.env.stopped == nil {
 		return
 	}
@@ -323,6 +333,90 @@ func (b *StopStrategyBase) TriggerFinalizedOverriding(o StoppedOverrides) {
 		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, b.EnableUserSpeakingFrames),
 		ConfirmsSpeculation:      o.ConfirmsSpeculation,
 	})
+}
+
+// StartSpeculation starts a speculative inference against a provisional
+// conversation carrying the turn text the speculation names, for a turn that
+// has not ended yet. The reply it produces is held until the turn is confirmed.
+//
+// The controller runs a turn's inference itself once the stop strategies have
+// decided, so a strategy only calls this to answer ahead of that, as an eager
+// end of turn does.
+func (b *StopStrategyBase) StartSpeculation(s UserTurnSpeculation) {
+	if b.env.inferenceTriggered != nil {
+		b.env.inferenceTriggered(b.self, &s)
+	}
+}
+
+// CancelSpeculation withdraws the speculation this strategy has in flight,
+// whatever voided it: the service withdrawing its prediction, a committed
+// transcript that does not match, or a turn that never resolved the speculation
+// at all.
+//
+// It is broadcast the same way the turn end is. A withdrawal that took the
+// queued path would reach a downstream gate after the turn end that follows it,
+// and the gate would release the reply the withdrawal was meant to discard.
+func (b *StopStrategyBase) CancelSpeculation() {
+	if b.env.speculationCanceled != nil {
+		b.env.speculationCanceled(b.self)
+	}
+}
+
+// TriggerStopped reports that the user is done. It no longer starts the turn's
+// inference, which the controller now runs once the stop strategies have
+// decided.
+//
+// Deprecated: use ReportStopped.
+func (b *StopStrategyBase) TriggerStopped() { b.ReportStopped() }
+
+// TriggerStoppedOverriding reports that the user is done, overriding the
+// strategy's configured flags for this turn.
+//
+// Deprecated: use ReportStoppedOverriding.
+func (b *StopStrategyBase) TriggerStoppedOverriding(o StoppedOverrides) {
+	b.ReportStoppedOverriding(o)
+}
+
+// TriggerInferenceTriggered used to start the turn's inference. It does
+// nothing now, with a warning the first time, since the controller runs the
+// turn's inference once the stop strategies have decided.
+//
+// Deprecated: call ReportStopped when the user is done, and StartSpeculation to
+// answer ahead of that.
+func (b *StopStrategyBase) TriggerInferenceTriggered() {
+	if b.warnedInferenceWithoutSpeculation {
+		return
+	}
+	b.warnedInferenceWithoutSpeculation = true
+	slog.Warn("turns: TriggerInferenceTriggered without a speculation does nothing, since "+
+		"the controller runs the turn's inference once the stop strategies have decided; "+
+		"call ReportStopped when the user is done", "strategy", fmt.Sprintf("%T", b.self))
+}
+
+// TriggerInferenceTriggeredSpeculating starts a speculative inference.
+//
+// Deprecated: use StartSpeculation.
+func (b *StopStrategyBase) TriggerInferenceTriggeredSpeculating(s UserTurnSpeculation) {
+	b.StartSpeculation(s)
+}
+
+// TriggerSpeculationCanceled withdraws the speculation this strategy has in
+// flight.
+//
+// Deprecated: use CancelSpeculation.
+func (b *StopStrategyBase) TriggerSpeculationCanceled() { b.CancelSpeculation() }
+
+// TriggerFinalized reports that the user is done.
+//
+// Deprecated: use ReportStopped, which reports the same decision.
+func (b *StopStrategyBase) TriggerFinalized() { b.ReportStopped() }
+
+// TriggerFinalizedOverriding reports that the user is done, overriding the
+// strategy's configured flags for this turn.
+//
+// Deprecated: use ReportStoppedOverriding, which reports the same decision.
+func (b *StopStrategyBase) TriggerFinalizedOverriding(o StoppedOverrides) {
+	b.ReportStoppedOverriding(o)
 }
 
 // Push sends a frame to the neighbor in dir.

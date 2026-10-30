@@ -297,3 +297,42 @@ func TestSessionEndDoesNotCleanUpTwice(t *testing.T) {
 		t.Errorf("strategy cleanups = %d, want 1 over an ordinary session", stop.cleanups)
 	}
 }
+
+// The user speaking again in a turn that is still open resumes it.
+func TestUserTurnProcessorUserTurnResumed(t *testing.T) {
+	p := turns.NewUserTurnProcessor(turns.Config{
+		Strategies: turns.UserTurnStrategies{
+			Stop: []turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{
+				UserSpeechTimeout: time.Second,
+			})},
+		},
+	})
+	resumes := make(chan bool, 4)
+	events.On(p.Events(), turns.EventUserTurnResumed, func(_ context.Context, params turns.UserTurnResumedParams) {
+		resumes <- params.InferenceTriggered
+	})
+	task, _, runDone := runProcessor(t, p)
+	defer func() { task.StopWhenDone(); <-runDone }()
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	task.QueueFrame(frames.NewTranscriptionFrame("Book a flight", "", "now"))
+	time.Sleep(50 * time.Millisecond)
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	time.Sleep(50 * time.Millisecond)
+	// The turn is still open, so speaking again resumes it.
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+
+	select {
+	case triggered := <-resumes:
+		if triggered {
+			t.Error("the resume says the inference ran, want it not to have")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the turn was never resumed")
+	}
+	select {
+	case <-resumes:
+		t.Error("the turn was resumed twice")
+	case <-time.After(100 * time.Millisecond):
+	}
+}

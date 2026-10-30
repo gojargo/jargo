@@ -476,7 +476,7 @@ func newUser(
 	} {
 		u.Events().Register(name, false)
 	}
-	u.turn = turns.NewUserTurnController(cfg.Strategies, cfg.StopTimeout)
+	u.turn = turns.NewUserTurnControllerWithParams(cfg.Strategies, cfg.StrategiesParams, cfg.StopTimeout)
 	// The event fires alongside the configured callback, so something watching
 	// the aggregator hears about an idle conversation without having to be the
 	// one thing the pipeline was built with.

@@ -59,6 +59,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `[[laughter]]`. A tag the TTS cannot perform is never reported, so a
   scenario can check that what the LLM wrote was performed.
 
+- **How user turn strategies combine.** `turns.UserTurnStrategiesParams`,
+  passed as `turns.Config.StrategiesParams` (to `aggregators.WithTurns` or a
+  `UserTurnProcessor`) or to the new `turns.NewUserTurnControllerWithParams`,
+  chooses how the strategies decide and how they combine with the ones a
+  service recommends. `StartMode` and `StopMode` take a `StrategyMode`: with
+  `StrategyModeFirst` the first strategy to decide wins, and with
+  `StrategyModeAll` every strategy has to agree. The start list defaults to
+  first and the stop list to all. `StartMergeMode` and `StopMergeMode` take a
+  `MergeMode`: `MergeModeReplace`, the default, uses the application's
+  strategies instead of the ones a service recommends, and `MergeModeExtend`
+  adds them to the service's. `UserTurnStrategies.MergeWith` does the merging.
+- **Stop strategies that wait for the turn's inference.**
+  `StopStrategy.WaitsForInference` reports a strategy that decides from the
+  turn's answer rather than from the user, such as `LLMTurnCompletionStop`.
+  The controller runs the turn's inference once the other stop strategies have
+  decided, and that strategy then decides from it.
+  `StopStrategy.DecisionScheduled` reports a strategy sure to decide soon on
+  its own, and the stop timeout then waits instead of ending the turn.
+- **`EventUserTurnResumed` and `ControllerHooks.Resumed`**, raised when the
+  user starts speaking again in an open turn, with `UserTurnResumedParams`
+  saying whether the turn interrupts the bot and whether its inference was
+  already triggered.
+- **Strategies report their decisions.** `StartStrategyBase.ReportStarted`,
+  `StopStrategyBase.ReportStopped` and their `Overriding` forms report a
+  strategy's decision, and the controller decides when the turn starts and
+  ends. `StopStrategyBase.StartSpeculation` and `CancelSpeculation` start and
+  withdraw a speculative inference.
+- `turns.UserTurnController.ProcessFromHook`, for an owner handing the
+  strategies a frame from inside one of the controller's hooks.
+
 - **`text_matches` in scripted eval expectations:** one or more regular
   expressions the event's text must each match, such as a format a reply must
   open with. The failure names the first pattern that did not match. The
@@ -362,6 +392,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Word tracking lines a word sent in other capitals up with the text it was
   written in**, such as "BACK" sent for a stressed "back", rather than taking
   the two for a rewrite.
+
+- **Breaking change:** several stop strategies in one `UserTurnStrategies.Stop`
+  list now all have to agree before a user turn ends, because `StopMode`
+  defaults to `StrategyModeAll`. For example, `TurnAnalyzerStop` next to
+  `SpeechTimeoutStop` now ends the turn only once both say the user is done.
+  Pass `UserTurnStrategiesParams{StopMode: StrategyModeFirst}` to end the turn
+  on the first stop strategy that decides, as before. A list with a single stop
+  strategy behaves as before. Every strategy now sees every frame.
+- **Breaking change:** a user turn stop strategy now only reports that the user
+  is done. `ReportStopped`, which replaces `TriggerStopped`, no longer starts the
+  turn's inference: the controller runs it itself once the stop strategies have
+  decided. A custom strategy starts an inference only to speculate, with
+  `StartSpeculation`, and the deprecated `TriggerInferenceTriggered` does
+  nothing, with a warning the first time.
+- **Breaking change:** a custom stop strategy that decides from the turn's
+  inference, for example one next to `Deferred` strategies, must now return
+  true from `WaitsForInference`. Otherwise the controller treats it as a
+  strategy that listens to the user: in a `StrategyModeAll` list the inference
+  does not run until the stop timeout ends the turn, and in a
+  `StrategyModeFirst` list the turn ends without waiting for it.
+- **A stop decision made while the user speaks now counts**, as when a service
+  still hears them while an eager answer runs; the turn ends once they stop.
+  New speech clears the decisions made so far. The stop timeout now waits
+  while a stop strategy has a decision scheduled.
 
 - **With an eager end of turn, the turn an early reply answers is announced
   ahead of it.** The user aggregator broadcasts an `LLMContextUserTurnFrame`
@@ -685,6 +739,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Deprecated
 
+- **`turns.ProcessFrameResult`.** Use `StrategyMode` instead: strategies return
+  `Continue`, and every strategy sees every frame. Until it is removed, a
+  `StrategyModeFirst` list still honors `Stop`, with a deprecation warning.
+- **The strategies' `Trigger` methods.** `TriggerStarted` and
+  `TriggerStartedOverriding` become `ReportStarted` and
+  `ReportStartedOverriding`; `TriggerStopped`, `TriggerStoppedOverriding`,
+  `TriggerFinalized` and `TriggerFinalizedOverriding` become `ReportStopped`
+  and `ReportStoppedOverriding`; `TriggerInferenceTriggeredSpeculating` and
+  `TriggerSpeculationCanceled` become `StartSpeculation` and
+  `CancelSpeculation`. `TriggerInferenceTriggered` has no replacement: report
+  the user done instead.
 - **`frames.EagerEndOfTurnCancelFrame`.** Use `UserTurnResponseCancelFrame`
   instead; the old name is an alias of it, so a frame built under it still
   cancels. `NewEagerEndOfTurnCancelFrame` is deprecated with it.
@@ -2411,7 +2476,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   makes it reliable: a barge-in ends one turn and starts the next in the same
   moment.
 
-
 ### Changed
 
 - **`processor.TreatAsPermanent` is now `processor.ForceTreatAsPermanent`**, and
@@ -2440,7 +2504,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   before the pipeline starts, in time for a switcher to move off it; the TTS
   base previously dialed in a detached goroutine, where a failure reached
   nobody.
-
 
 - **`AudioIdleTimeout` is now a `*time.Duration`** on `vadproc.Config` and
   `audio/vad/controller.Config`. Nil takes the one-second default and a zero
