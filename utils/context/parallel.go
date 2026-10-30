@@ -114,7 +114,8 @@ func (p *parallelSentenceAggregator) sliceInsideToken(ttsText string, boundaries
 // flush emits the trailing partial sentence at the end of a turn.
 func (p *parallelSentenceAggregator) flush() (parallelAggregation, bool) {
 	p.inner.Flush()
-	if strings.TrimSpace(p.userFacing) == "" {
+	// A trailing tag has no words to show, but is still text the LLM wrote.
+	if strings.TrimSpace(p.userFacing) == "" && strings.TrimSpace(p.llm) == "" {
 		return parallelAggregation{}, false
 	}
 	out := parallelAggregation{tts: p.tts, llm: p.llm, userFacing: p.userFacing}

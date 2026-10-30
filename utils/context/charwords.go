@@ -23,6 +23,12 @@ var ErrCharTimingLength = errors.New("context: character timing length mismatch"
 // The zero value is ready to use. It is not safe for concurrent use; a
 // synthesizer drives one per synthesis.
 type CharAccumulator struct {
+	// AudioTags makes a bracketed audio tag, such as "[short pause]", one word,
+	// spaces and all. A synthesizer returning the tags it performs in its
+	// character timings sets it, so a tag reported whole matches the text it
+	// was sent in.
+	AudioTags bool
+
 	word string
 	// start is the offset of the carried word's first character, in seconds from
 	// the beginning of the synthesis.
@@ -40,8 +46,13 @@ func (a *CharAccumulator) Add(chars []string, starts []float64) ([]WordTiming, e
 		return nil, fmt.Errorf("%w: %d characters, %d offsets", ErrCharTimingLength, len(chars), len(starts))
 	}
 	var words []WordTiming
+	// A word carried over can end inside a tag cut off between batches.
+	inTag := a.AudioTags && strings.LastIndex(a.word, "[") > strings.LastIndex(a.word, "]")
 	for i, ch := range chars {
-		if strings.TrimSpace(ch) == "" {
+		if a.AudioTags && (ch == "[" || ch == "]") {
+			inTag = ch == "["
+		}
+		if strings.TrimSpace(ch) == "" && !inTag {
 			if wt, ok := a.Flush(); ok {
 				words = append(words, wt)
 			}

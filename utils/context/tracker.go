@@ -48,6 +48,16 @@ type WordCompletionTracker struct {
 // ttsText with markup stripped. llmText is the original model-produced text
 // (with any delimiters); pass "" to disable original-text mapping.
 func NewWordCompletionTracker(ttsText, userFacingText, llmText string) *WordCompletionTracker {
+	return NewWordCompletionTrackerWithMarkup(ttsText, userFacingText, llmText, nil)
+}
+
+// NewWordCompletionTrackerWithMarkup is NewWordCompletionTracker for an LLM
+// text that carries tags of its own beyond <...> markup, such as an expressive
+// conversation's, which llmMarkup finds and word tracking passes over in it. A
+// nil llmMarkup is NewWordCompletionTracker.
+func NewWordCompletionTrackerWithMarkup(
+	ttsText, userFacingText, llmText string, llmMarkup LLMMarkup,
+) *WordCompletionTracker {
 	if userFacingText == "" {
 		userFacingText = stripCompleteMarkup(ttsText)
 	}
@@ -56,7 +66,7 @@ func NewWordCompletionTracker(ttsText, userFacingText, llmText string) *WordComp
 		userFacingRunes: []rune(userFacingText),
 		hasLLM:          llmText != "",
 		llmRunes:        []rune(llmText),
-		segmentMap:      NewTextSegmentMap(ttsText, userFacingText, llmText),
+		segmentMap:      NewTextSegmentMapWithMarkup(ttsText, userFacingText, llmText, llmMarkup),
 	}
 	return t
 }
@@ -223,8 +233,12 @@ func (t *WordCompletionTracker) recordLLMSpan(word string, prevLLMPos, prevSpoke
 // WordBelongsHere reports whether word plausibly belongs to the remaining TTS
 // text of this frame. It is how a dropped word-timestamp event is detected: a
 // word that does not match this frame's remaining content belongs to the next
-// one, and this frame has to be force-completed.
+// one, and this frame has to be force-completed. A frame that is only markup,
+// such as a pause tag, is never reported, so no word belongs to it.
 func (t *WordCompletionTracker) WordBelongsHere(word string) bool {
+	if strings.TrimSpace(stripCompleteMarkup(string(t.ttsRunes))) == "" {
+		return false
+	}
 	return t.segmentMap.WordBelongsCurrentSegment(word)
 }
 

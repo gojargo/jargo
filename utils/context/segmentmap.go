@@ -3,6 +3,7 @@ package context
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // textSegment is a piece of the utterance, paired with what the synthesizer was
@@ -136,7 +137,12 @@ type TextSegmentMap struct {
 	ttsRunes  []rune
 	origRunes []rune
 	llmRunes  []rune
-	segments  []textSegment
+	// llmScan is the LLM text as its cursors read it: the extra tags blanked to
+	// <...> of the same length, so positions in it are positions in the LLM
+	// text. A tag takes the space after it, as the service's markup for it
+	// does, so the cursor never counts a space the spoken words didn't cross.
+	llmScan  []rune
+	segments []textSegment
 
 	segIdx               int
 	segRawPos            int
@@ -159,6 +165,14 @@ type TextSegmentMap struct {
 // never see; it rides its own cursor rather than being diffed. Pass "" for
 // llmText to default it to originalText.
 func NewTextSegmentMap(ttsText, originalText, llmText string) *TextSegmentMap {
+	return NewTextSegmentMapWithMarkup(ttsText, originalText, llmText, nil)
+}
+
+// NewTextSegmentMapWithMarkup is NewTextSegmentMap for an LLM text that carries
+// tags of its own beyond <...> markup, such as an expressive conversation's,
+// which llmMarkup finds. Its cursors pass over them without counting their
+// letters. A nil llmMarkup is NewTextSegmentMap.
+func NewTextSegmentMapWithMarkup(ttsText, originalText, llmText string, llmMarkup LLMMarkup) *TextSegmentMap {
 	if llmText == "" {
 		llmText = originalText
 	}
@@ -166,9 +180,28 @@ func NewTextSegmentMap(ttsText, originalText, llmText string) *TextSegmentMap {
 		ttsRunes:  []rune(ttsText),
 		origRunes: []rune(originalText),
 		llmRunes:  []rune(llmText),
+		llmScan:   blankLLMMarkup(llmText, llmMarkup),
 	}
 	m.segments = buildSegments(ttsText, originalText)
 	return m
+}
+
+// blankLLMMarkup is the LLM text with each tag llmMarkup finds, and the spaces
+// and tabs after it, blanked to <...> of the same length in runes.
+func blankLLMMarkup(llmText string, llmMarkup LLMMarkup) []rune {
+	scan := []rune(llmText)
+	if llmMarkup == nil {
+		return scan
+	}
+	for _, span := range markupSpans(llmText, llmMarkup) {
+		start := utf8.RuneCountInString(llmText[:span[0]])
+		end := start + utf8.RuneCountInString(llmText[span[0]:span[1]])
+		for i := start; i < end; i++ {
+			scan[i] = ' '
+		}
+		scan[start], scan[end-1] = '<', '>'
+	}
+	return scan
 }
 
 // buildSegments compares the two texts and cuts them into the segments the map
@@ -179,23 +212,33 @@ func NewTextSegmentMap(ttsText, originalText, llmText string) *TextSegmentMap {
 // One extra step: a piece that came out equal is cut around any tag inside it,
 // so a single tag does not turn the whole sentence into an all-or-nothing
 // segment. Only equal pieces can be split this way. Both sides hold the same
-// text there, so a single position cuts both; where the sides differ there is no
-// position that means the same thing on each.
+// text there, but for capitals, so a single position cuts both; where the sides
+// differ there is no position that means the same thing on each.
+//
+// Words are compared without their capitals, so a word the synthesizer was sent
+// in other capitals, such as "BACK" for stress, still lines up with the
+// original.
 func buildSegments(ttsText, originalText string) []textSegment {
 	origTokens := tokenizeWS(originalText)
 	ttsTokens := tokenizeWS(ttsText)
 
 	var segments []textSegment
 	origPos := 0
-	for _, op := range getOpcodes(origTokens, ttsTokens) {
+	for _, op := range getOpcodes(matchKeys(origTokens), matchKeys(ttsTokens)) {
 		origChunk := strings.Join(origTokens[op.i1:op.i2], "")
 		ttsChunk := strings.Join(ttsTokens[op.j1:op.j2], "")
 
 		type part struct{ orig, tts string }
 		var parts []part
 		if op.tag == "equal" {
+			// The two sides differ at most in capitals, so the runs the original
+			// is cut into cut the TTS text at the same places.
+			ttsChunkRunes := []rune(ttsChunk)
+			pos := 0
 			for _, run := range splitMarkupRuns(origChunk) {
-				parts = append(parts, part{run, run})
+				n := utf8.RuneCountInString(run)
+				parts = append(parts, part{run, string(ttsChunkRunes[pos:min(pos+n, len(ttsChunkRunes))])})
+				pos += n
 			}
 		} else {
 			parts = []part{{origChunk, ttsChunk}}
@@ -214,6 +257,21 @@ func buildSegments(ttsText, originalText string) []textSegment {
 		}
 	}
 	return segments
+}
+
+// matchKeys is each token as the diff compares it: lowercased, where that keeps
+// its length, so one position still cuts both sides.
+func matchKeys(tokens []string) []string {
+	keys := make([]string, len(tokens))
+	for i, token := range tokens {
+		lowered := strings.ToLower(token)
+		if utf8.RuneCountInString(lowered) == utf8.RuneCountInString(token) {
+			keys[i] = lowered
+		} else {
+			keys[i] = token
+		}
+	}
+	return keys
 }
 
 // wordVariants returns word, then with its last mark removed, then with every
@@ -562,8 +620,8 @@ func (m *TextSegmentMap) keepDerivedCursorsInPace(seg *textSegment, newPos int) 
 // that spends no budget on the attributed side (an emoji, or a symbol the source
 // spells differently) is still credited to the word that crossed it.
 func (m *TextSegmentMap) advanceLLMCursors(crossed []rune, nAlnum int) {
-	m.llmSpokenPos = advanceByChars(m.llmRunes, m.llmSpokenPos, len(crossed))
-	m.llmPos = max(advanceByAlnums(m.llmRunes, m.llmPos, nAlnum), m.llmSpokenPos)
+	m.llmSpokenPos = advanceByChars(m.llmScan, m.llmSpokenPos, len(crossed))
+	m.llmPos = max(advanceByAlnums(m.llmScan, m.llmPos, nAlnum), m.llmSpokenPos)
 }
 
 // commitTransformedSpan jumps the other two cursors to the end of seg, now that
@@ -572,7 +630,7 @@ func (m *TextSegmentMap) commitTransformedSpan(seg *textSegment) {
 	m.userFacingPos = seg.origEnd
 	// The original's count, not the TTS side's: llmText holds "$42.50" (4
 	// alnums), never the spoken "forty two dollars".
-	m.llmPos = advanceByAlnums(m.llmRunes, m.llmPos, seg.originalAlnumCount())
+	m.llmPos = advanceByAlnums(m.llmScan, m.llmPos, seg.originalAlnumCount())
 	// The span is spoken in full or not at all, so both cursors land together.
 	m.llmSpokenPos = m.llmPos
 }

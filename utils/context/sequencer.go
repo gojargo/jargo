@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
@@ -75,6 +76,19 @@ type AggregatedFrameSequencer struct {
 	contextAppend map[string]bool
 	streaming     map[string]*streamingContext
 	buffered      []bufferedWord
+	// llmMarkup is the tags only the LLM's text carries, such as an expressive
+	// conversation's, which word tracking passes over in it. Set by the TTS
+	// service.
+	llmMarkup LLMMarkup
+}
+
+// SetLLMMarkup sets the tags only the LLM's text carries, such as an
+// expressive conversation's, which word tracking passes over in it. The TTS
+// service sets it before it speaks.
+func (s *AggregatedFrameSequencer) SetLLMMarkup(m LLMMarkup) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.llmMarkup = m
 }
 
 // NewAggregatedFrameSequencer builds a sequencer labeled name.
@@ -112,7 +126,7 @@ func (s *AggregatedFrameSequencer) registerSpokenLocked(
 	if !s.streamingMode {
 		var tracker *WordCompletionTracker
 		if buildTracker {
-			tracker = NewWordCompletionTracker(ttsText, frame.Text, rawOr(frame))
+			tracker = NewWordCompletionTrackerWithMarkup(ttsText, frame.Text, rawOr(frame), s.llmMarkup)
 		}
 		s.appendSpokenSlot(frame, contextID, tracker, appendToContext, includesInterFrame)
 		return nil
@@ -347,12 +361,22 @@ func (s *AggregatedFrameSequencer) forceCompleteLocked(contextID string, lastWor
 		if slot.tracker != nil {
 			remaining := slot.tracker.RemainingTTSText(true)
 			rawRemaining, hasRaw := slot.tracker.RemainingRawTextOnly()
-			if hasRaw && rawRemaining != "" && remaining != "" && !contains(rawRemaining, remaining) {
+			// The words left, not the markup the service was sent for its tags,
+			// are what the LLM's text has to hold, read without its own tags.
+			remainingWords := strings.Join(strings.Fields(stripCompleteMarkup(remaining)), " ")
+			llmWords := rawRemaining
+			if s.llmMarkup != nil {
+				llmWords = stripLLMMarkup(llmWords, s.llmMarkup)
+			}
+			llmWords = strings.Join(strings.Fields(llmWords), " ")
+			if hasRaw && rawRemaining != "" && remainingWords != "" && !contains(llmWords, remainingWords) {
 				slog.Warn("sequencer force-complete: remaining texts disagree, discarding the original",
 					"sequencer", s.name, "raw", rawRemaining, "text", remaining)
 				rawRemaining = ""
 			}
-			if remaining != "" {
+			// A slot that is only tags, such as a sound, has LLM text and nothing
+			// left to say.
+			if remaining != "" || rawRemaining != "" {
 				out = append(out, s.buildWordFrame(remaining, lastWordPTS, slot.contextID,
 					slot.frame.ID(), rawRemaining, false, slot.includesInterFrame))
 				// That frame carries the rest of the text, so the progress view has
@@ -415,7 +439,9 @@ func (s *AggregatedFrameSequencer) appendSpokenSlot(
 func (s *AggregatedFrameSequencer) promote(
 	agg parallelAggregation, contextID string, sc *streamingContext,
 ) []frames.Frame {
-	if trimSpace(agg.userFacing) == "" {
+	// A sentence that is only tags has no words to show, but its text still
+	// reaches the context in order.
+	if trimSpace(agg.userFacing) == "" && trimSpace(agg.llm) == "" {
 		return nil
 	}
 	appendToContext, buildTracker := sc.appendToCtx, sc.buildTracker
@@ -427,10 +453,13 @@ func (s *AggregatedFrameSequencer) promote(
 
 	var tracker *WordCompletionTracker
 	if buildTracker {
-		tracker = NewWordCompletionTracker(agg.tts, agg.userFacing, agg.llm)
+		tracker = NewWordCompletionTrackerWithMarkup(agg.tts, agg.userFacing, agg.llm, s.llmMarkup)
 	}
 	s.appendSpokenSlot(frame, contextID, tracker, appendToContext, false)
-	out := []frames.Frame{frame}
+	var out []frames.Frame
+	if trimSpace(agg.userFacing) != "" {
+		out = append(out, frame)
+	}
 
 	if !buildTracker {
 		// No timings are coming, so the whole unit is spoken at once: the frame

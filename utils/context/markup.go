@@ -2,6 +2,7 @@ package context
 
 import (
 	"regexp"
+	"strings"
 	"unicode"
 )
 
@@ -28,6 +29,49 @@ var markupRE = regexp.MustCompile(`<[^>]+>`)
 // lone '<' with no later '>' is left in place as real content.
 func stripCompleteMarkup(text string) string {
 	return markupRE.ReplaceAllString(text, "")
+}
+
+// LLMMarkup finds the tags only an LLM's text carries, beyond <...> markup, such
+// as an expressive conversation's, which word tracking passes over in it. A
+// *regexp.Regexp is one.
+type LLMMarkup interface {
+	// FindAllStringIndex reports where each tag is in s, at most n of them or
+	// all when n is negative, as byte offsets.
+	FindAllStringIndex(s string, n int) [][]int
+}
+
+// markupSpans is where each tag llmMarkup finds is in text, each with the
+// spaces and tabs after it, as byte offsets.
+func markupSpans(text string, llmMarkup LLMMarkup) [][2]int {
+	var out [][2]int
+	last := 0
+	for _, loc := range llmMarkup.FindAllStringIndex(text, -1) {
+		if loc[0] < last || loc[1] <= loc[0] {
+			continue
+		}
+		end := loc[1]
+		for end < len(text) && (text[end] == ' ' || text[end] == '\t') {
+			end++
+		}
+		out = append(out, [2]int{loc[0], end})
+		last = end
+	}
+	return out
+}
+
+// stripLLMMarkup is text without the tags llmMarkup finds.
+func stripLLMMarkup(text string, llmMarkup LLMMarkup) string {
+	var b strings.Builder
+	last := 0
+	for _, loc := range llmMarkup.FindAllStringIndex(text, -1) {
+		if loc[0] < last {
+			continue
+		}
+		b.WriteString(text[last:loc[0]])
+		last = loc[1]
+	}
+	b.WriteString(text[last:])
+	return b.String()
 }
 
 // iterCleanChars returns the rune indices of runes that lie outside markup.
