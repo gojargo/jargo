@@ -1183,14 +1183,15 @@ func (b *Base) pushWord(ctx context.Context, c *audioContext, contextID string, 
 // pushSequencerFrames emits what the sequencer returned for text registered on a
 // context, in audio order.
 //
-// Streaming tokens, these frames (a promoted sentence and the words replayed
-// against it) describe a context whose audio and words the drain loop emits.
+// These frames (skipped text the spoken text before it has released and,
+// streaming tokens, a promoted sentence and the words replayed against it)
+// follow text queued in a context whose audio and text the drain loop emits.
 // They go through that context's queue, so one goroutine emits everything in
-// order; pushed from here they would race it. With the context gone, or not
-// streaming, they are pushed directly.
+// order; pushed from here they would overtake it. With the context gone, they
+// are pushed directly.
 func (b *Base) pushSequencerFrames(ctx context.Context, out []frames.Frame, contextID string) {
 	for _, f := range out {
-		if b.isStreamingTokens() && b.AudioContextAvailable(contextID) {
+		if contextID != "" && b.AudioContextAvailable(contextID) {
 			b.AppendToAudioContext(contextID, f)
 			continue
 		}

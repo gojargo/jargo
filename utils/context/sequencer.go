@@ -434,10 +434,12 @@ func (s *AggregatedFrameSequencer) promote(
 
 	if !buildTracker {
 		// No timings are coming, so the whole unit is spoken at once: the frame
-		// stands for the sentence rather than a word within it.
-		wordFrame := frames.NewTTSTextFrame(agg.userFacing, sc.textType)
+		// stands for the sentence rather than a word within it. It is trimmed
+		// like a sentence-mode unit: the context joins its parts with a space,
+		// and a streamed sentence keeps the spaces of its tokens.
+		wordFrame := frames.NewTTSTextFrame(trimSpace(agg.userFacing), sc.textType)
 		wordFrame.SegmentID = frame.ID()
-		wordFrame.RawText = agg.llm
+		wordFrame.RawText = trimSpace(agg.llm)
 		wordFrame.ContextID = contextID
 		wordFrame.WillBeSpoken = true
 		wordFrame.AppendToContext = appendToContext

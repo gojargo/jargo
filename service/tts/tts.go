@@ -1459,10 +1459,8 @@ func (b *Base) runTTS(
 		text.AppendToContext = appendToContext
 		b.AppendToAudioContext(contextID, text)
 		// The text frame is queued, so the slot is complete and whatever was held
-		// behind it can go on.
-		for _, f := range b.sequencer.CompleteSpokenSlot() {
-			_ = b.PushFrame(ctx, f, processor.Downstream)
-		}
+		// behind it (a code block, say) can follow it, in order.
+		b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot(), contextID)
 	}
 	return nil
 }

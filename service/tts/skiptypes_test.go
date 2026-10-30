@@ -8,6 +8,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/utils/events"
 	ttstext "github.com/gojargo/jargo/utils/text"
@@ -186,5 +187,41 @@ func TestSkippedAggregationTypeLandsInOrder(t *testing.T) {
 	}
 	if skipped < lastWord {
 		t.Errorf("the skipped block landed at %d, ahead of the last spoken word at %d", skipped, lastWord)
+	}
+}
+
+// longSynth says each unit as half a second of audio, so the text queued behind
+// it is still waiting when the next unit arrives.
+type longSynth struct{}
+
+func (longSynth) SampleRate() int { return 24000 }
+
+func (s longSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
+	return tts.PCMYielder(yield, s.SampleRate())(make([]byte, s.SampleRate()))
+}
+
+// TestSkippedFrameFollowsTheTextFrameSpokenBeforeIt checks a service without
+// word timings, which queues its text behind the audio, lets skipped text follow
+// that text: the conversation reads in the order the units came.
+func TestSkippedFrameFollowsTheTextFrameSpokenBeforeIt(t *testing.T) {
+	agg := ttstext.NewPatternPairAggregator(frames.TextTypeSentence, "")
+	if err := agg.AddPattern(codeType, "<code>", "</code>", ttstext.MatchAggregate); err != nil {
+		t.Fatal(err)
+	}
+	base := tts.New("SkipOrderTTS", &longSynth{})
+	base.SetTextAggregator(agg)
+	base.SetSkipTextTypes(codeType)
+	convo := frames.NewLLMContext("")
+	pair := aggregators.New(convo)
+
+	runFrames(t, []frames.Frame{
+		frames.NewLLMFullResponseStartFrame(),
+		frames.NewLLMTextFrame("Hello there. <code>print(1)</code> Done."),
+		frames.NewLLMFullResponseEndFrame(),
+	}, base, pair.Assistant())
+
+	msgs := convo.Messages()
+	if len(msgs) == 0 || msgs[len(msgs)-1].Text != "Hello there. <code>print(1)</code> Done." {
+		t.Errorf("messages = %+v, want the reply in order", msgs)
 	}
 }

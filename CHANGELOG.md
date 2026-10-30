@@ -572,6 +572,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Fixed TTS services without word timestamps joining streamed sentences in the
+  context with two spaces, and pushing skipped text, such as a code block,
+  ahead of the sentence spoken before it.
 - Fixed TTS services with word timestamps attributing a closing tag written
   against a word to the word after it, so the context recorded
   `<card>4111</card> is yours` as `<card>4111 </card> is yours`, and left the

@@ -1341,3 +1341,22 @@ func TestProcessWordTheClosingDelimiterGoesWithTheWordItTouches(t *testing.T) {
 		t.Fatalf("it stands for %q, want %q", got[0].RawText, "<card>4111</card>")
 	}
 }
+
+// TestStreamingNoTrackerSentenceTextIsTrimmedForTheContext checks a sentence
+// promoted without a tracker is trimmed: the context joins its parts with a
+// space, so a second sentence that kept its token's leading space would be
+// joined with two.
+func TestStreamingNoTrackerSentenceTextIsTrimmedForTheContext(t *testing.T) {
+	seq := newSeq(t, true)
+	var out []frames.Frame
+	for _, tok := range []string{"Hi.", " Bye", " now", ".", " Ok"} {
+		out = append(out, seq.RegisterSpoken(spokenFrame(tok), "ctx1", tok, true, false, false, "")...)
+	}
+	words := wordFrames(out)
+	if len(words) == 0 {
+		t.Fatal("no sentence was promoted")
+	}
+	if last := words[len(words)-1]; last.Text != "Bye now." || last.RawText != "Bye now." {
+		t.Fatalf("last sentence = (%q, %q), want (%q, %q)", last.Text, last.RawText, "Bye now.", "Bye now.")
+	}
+}
