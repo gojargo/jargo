@@ -75,10 +75,11 @@ const RelayNote = "(Relay this to the user now, in your own words, once, even if
 // FrontendPairingInstruction.
 const StrategyPlaceholder = "{strategy}"
 
-// The prompts that follow are read by the frontend's model. A small change in
-// wording can change what a model does in ways no unit test catches: gpt-4.1
-// stops delegating a "never mind", or starts delegating questions about how the
-// work is going.
+// The prompts that follow are read by the frontend's model, and the pairing
+// instruction and the tool descriptions are also read by predictive
+// delegation's classifier. A small change in wording can change what a model
+// does in ways no unit test catches: gpt-4.1 stops delegating a "never mind",
+// or the classifier starts delegating questions about how the work is going.
 
 // FrontendPairingInstruction is how the frontend's model works with a backend,
 // appended to its system instruction: what the backend is and when to

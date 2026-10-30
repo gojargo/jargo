@@ -281,6 +281,25 @@ requests are composed, and whether each exchange is traced to the client as an
 RTVI server message. The frontend has to carry built-in tools: the OpenAI chat
 completions, Anthropic and Gemini services do.
 
+A text frontend spends a whole inference deciding to call `delegate` before the
+backend can start. `llmwithbackend.PredictiveDelegation` can save that time: a
+fast yes/no classifier, such as `classifier/jev`, races the frontend on each
+user turn, and a "yes" that comes before the frontend's first output cancels its
+inference and delegates the turn at once. The cost is money, not time: the
+classifier runs on every turn, and an early delegation abandons a frontend
+request already under way.
+
+```go
+judge, err := jev.New(jev.Config{APIKey: jevKey})
+pd, err := llmwithbackend.NewPredictiveDelegation(llmwithbackend.PredictiveDelegationConfig{Classifier: judge})
+llm, err := llmwithbackend.New(llmwithbackend.Config{
+    Frontend: openaiLLM, Backend: backend, PredictiveDelegation: pd,
+})
+```
+
+It needs a text frontend and a request strategy whose `delegate` call takes no
+arguments, such as the default transcript strategy.
+
 ## Switching at runtime
 
 `pipeline.NewServiceSwitcher` routes to one of several services, changed mid-call

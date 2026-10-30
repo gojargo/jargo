@@ -48,6 +48,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   speech-to-speech one. The frontend has to carry built-in tools, which the OpenAI
   chat completions, Anthropic and Gemini services do. See
   [Services](docs/guides/services.md#a-frontend-with-a-backend).
+- **`llmwithbackend.PredictiveDelegation`, in alpha: an optimization that can
+  speed up responses that need backend involvement.** Set as
+  `Config.PredictiveDelegation`, it uses a fast yes/no classifier (such as
+  `classifier/jev`) to determine, after each user request, whether it needs to
+  wait for a frontend inference or can go ahead and trigger an early backend
+  delegation. The cost is money, not time: the classifier runs in parallel with
+  the frontend, but on every turn, and an early delegation abandons a frontend
+  request already under way. Only text frontends are supported, and only
+  request strategies whose `DelegateNeedsArguments` reports false (like
+  `TranscriptBackendRequestStrategy`).
+- `processor.Base.CancelFrameInProgress` stops processing a frame if it is the
+  one in progress, and, unlike an interruption, leaves the frames queued behind
+  it to be processed next. `llm.OutputGate`, installed with
+  `llm.Base.SetOutputGate`, sees each frame an LLM service processes and can
+  drop what it pushes or the function calls it runs; predictive delegation uses
+  one to drop what a frontend's inference outputs once its turn is delegated
+  early.
 - **`llmworker.BackendWorker` and `llmworker.BackendSession`.** A backend worker
   runs an LLM, with its own conversation and multi-step tool calling, for a
   frontend that attaches with the `attach` job and from then on hears everything

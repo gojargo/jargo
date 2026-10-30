@@ -728,6 +728,17 @@ func weatherBackend(t *testing.T, runs ...scriptedRun) *llmworker.BackendWorker 
 // arriving, and returns them.
 func runService(t *testing.T, service *LLMWithBackend, convo *frames.LLMContext) []frames.Frame {
 	t.Helper()
+	if convo == nil {
+		return runSteps(t, service)
+	}
+	return runSteps(t, service, frames.NewLLMContextFrame(convo))
+}
+
+// runSteps runs the service as runService does, sending it each frame of steps
+// in turn and sleeping for each duration, and returns the frames that reached
+// the end of the pipeline.
+func runSteps(t *testing.T, service *LLMWithBackend, steps ...any) []frames.Frame {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	off := false
@@ -750,8 +761,13 @@ func runService(t *testing.T, service *LLMWithBackend, convo *frames.LLMContext)
 	runDone := make(chan error, 1)
 	go func() { runDone <- runner.Run(ctx, workers.RunOptions{}) }()
 
-	if convo != nil {
-		worker.QueueFrame(frames.NewLLMContextFrame(convo))
+	for _, step := range steps {
+		switch s := step.(type) {
+		case time.Duration:
+			time.Sleep(s)
+		case frames.Frame:
+			worker.QueueFrame(s)
+		}
 	}
 	// Settle: stop once nothing new has arrived for a while.
 	count := func() int {

@@ -59,6 +59,11 @@ type Config struct {
 	BackendName string
 	// Connector is how delegation works. A default BackendConnector when nil.
 	Connector *BackendConnector
+	// PredictiveDelegation speeds up responses that need backend involvement:
+	// its classifier determines whether to wait for the frontend's inference or
+	// go ahead and trigger an early backend delegation. Only for a text
+	// frontend. None when nil.
+	PredictiveDelegation *PredictiveDelegation
 }
 
 // workerHost is what the pipeline worker the frontend runs in offers: adding
@@ -103,6 +108,7 @@ type LLMWithBackend struct {
 	backend     *llmworker.BackendWorker
 	backendName string
 	connector   *BackendConnector
+	predictive  *PredictiveDelegation
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -110,9 +116,11 @@ type LLMWithBackend struct {
 }
 
 // New builds an LLMWithBackend. It reports an error when the frontend service
-// declines the role, when it cannot carry built-in tools, or when the
-// connector's request strategy reads the frontend's context and the frontend is
-// speech-to-speech.
+// declines the role, when it cannot carry built-in tools, when the connector's
+// request strategy reads the frontend's context and the frontend is
+// speech-to-speech, or when predictive delegation is given with a
+// speech-to-speech frontend or with a request strategy whose delegate call needs
+// arguments.
 func New(cfg Config) (*LLMWithBackend, error) {
 	slog.Warn("LLMWithBackend is alpha: its API is likely to change between releases")
 	frontend := cfg.Frontend
@@ -131,11 +139,27 @@ func New(cfg Config) (*LLMWithBackend, error) {
 	if connector == nil {
 		connector = NewBackendConnector(ConnectorConfig{})
 	}
+	realtime := isRealtime(frontend)
 	if err := connector.Bind(ConnectorContext{
 		BackendName:        name,
-		FrontendIsRealtime: isRealtime(frontend),
+		FrontendIsRealtime: realtime,
 	}); err != nil {
 		return nil, err
+	}
+	var gated predictiveFrontend
+	if predictive := cfg.PredictiveDelegation; predictive != nil {
+		if realtime {
+			return nil, ErrPredictiveDelegationNeedsTextFrontend
+		}
+		if strategy := connector.RequestStrategy(); strategy.DelegateNeedsArguments() {
+			return nil, fmt.Errorf("%w, which %T cannot build a request from; use a strategy that needs "+
+				"none, such as TranscriptBackendRequestStrategy", ErrPredictiveDelegationNeedsNoArguments, strategy)
+		}
+		var ok bool
+		if gated, ok = frontend.(predictiveFrontend); !ok {
+			return nil, fmt.Errorf("%w: %T is not built on the LLM service base",
+				ErrPredictiveDelegationNeedsTextFrontend, frontend)
+		}
 	}
 	if instruction := connector.FrontendInstruction(); instruction != "" {
 		frontend.AppendSystemInstruction(instruction)
@@ -150,12 +174,18 @@ func New(cfg Config) (*LLMWithBackend, error) {
 		builtin.Handler = nil
 		holder.SetBuiltin(adapter.Builtin{Tool: builtin})
 	}
+	procs := []processor.Processor{frontend}
+	if predictive := cfg.PredictiveDelegation; predictive != nil {
+		predictive.bind(gated, connector)
+		procs = []processor.Processor{predictive, frontend}
+	}
 	return &LLMWithBackend{
-		Pipeline:    pipeline.New(frontend),
+		Pipeline:    pipeline.New(procs...),
 		frontend:    frontend,
 		backend:     cfg.Backend,
 		backendName: name,
 		connector:   connector,
+		predictive:  cfg.PredictiveDelegation,
 	}, nil
 }
 
@@ -176,6 +206,10 @@ func (l *LLMWithBackend) BackendName() string { return l.backendName }
 
 // Connector is the connector joining the two layers.
 func (l *LLMWithBackend) Connector() *BackendConnector { return l.connector }
+
+// PredictiveDelegation is the PredictiveDelegation in front of the frontend, or
+// nil.
+func (l *LLMWithBackend) PredictiveDelegation() *PredictiveDelegation { return l.predictive }
 
 // Tool is the delegate tool installed on the frontend.
 func (l *LLMWithBackend) Tool() frames.Tool { return l.connector.Tool() }
