@@ -12,6 +12,7 @@ import (
 
 	"github.com/gojargo/jargo/bus"
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/pipeline/capabilities"
@@ -63,6 +64,11 @@ type Params struct {
 	// expressive conversation (alpha). TTS services then read the expression
 	// tags an LLM writes into its reply instead of speaking them.
 	EnableExpressiveConversation bool
+	// ExpressionPolicy is which expression tags the LLMs are offered and when
+	// to use them, with expressive conversation on. Nil offers every tag the
+	// TTS service performs among the core ones, with no guidance. Part of
+	// expressive conversation (alpha).
+	ExpressionPolicy *expressive.ExpressionPolicy
 	// EnableMetrics enables performance-metrics collection across the pipeline.
 	EnableMetrics bool
 	// EnableUsageMetrics enables usage-metrics collection (e.g. LLM token usage)
@@ -402,6 +408,9 @@ func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
 	}
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = defaultIdleTimeout
+	}
+	if cfg.Params.ExpressionPolicy != nil && !cfg.Params.EnableExpressiveConversation {
+		slog.Warn("ExpressionPolicy has no effect without EnableExpressiveConversation", "worker", cfg.Name)
 	}
 	if cfg.IdleTimeoutFrames == nil {
 		cfg.IdleTimeoutFrames = FrameTypes(
@@ -1187,6 +1196,7 @@ func (t *Worker) Run(ctx context.Context) error {
 		AudioOutSampleRate:           t.params.AudioOutSampleRate,
 		Clock:                        t.clk,
 		EnableExpressiveConversation: t.params.EnableExpressiveConversation,
+		ExpressionPolicy:             t.params.ExpressionPolicy,
 		EnableMetrics:                t.params.EnableMetrics,
 		EnableUsageMetrics:           t.params.EnableUsageMetrics,
 		Observers:                    []processor.Observer{t.observerProxy},

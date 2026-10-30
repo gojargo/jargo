@@ -462,6 +462,10 @@ type Base struct {
 	baseSystemInstruction      string
 	appendedSystemInstructions []string
 	systemInstruction          string
+	// expression is what the service knows of the expressive conversation it
+	// takes part in, which feeds the instruction. Guarded by systemMu. See
+	// expression.go.
+	expression expressionState
 
 	// loggedThinkingDefaultModel is the model the thinking default was last
 	// reported for, so it is reported once per model rather than on every
@@ -583,6 +587,7 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 	}
 	b.callsCtx, b.callsCancel = context.WithCancel(ctx)
 	b.summaryCtx, b.summaryCancel = context.WithCancel(ctx)
+	b.setupExpression(s)
 	if !b.runInParallel {
 		b.sequential = make(chan *functionCall, sequentialQueueDepth)
 		b.callsWG.Go(b.runSequentially)
@@ -1174,6 +1179,7 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	// The inference a turn-completion report names is tracked whether or not
 	// the markers are on, so turning them on mid-response names the right one.
 	b.handleTurnCompletionProcessFrame(ctx, f)
+	b.handleExpressionMetadata(f)
 	switch fr := f.(type) {
 	case *frames.LLMContextFrame:
 		// Before the generation starts, so the gate knows what this inference

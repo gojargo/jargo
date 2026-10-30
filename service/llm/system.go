@@ -67,6 +67,11 @@ func (b *Base) composeSystemInstruction() {
 			parts = append(parts, p)
 		}
 	}
+	// With expressive conversation on, the expression tags the TTS service
+	// performs. They come and go with its metadata.
+	if expression := b.expressionInstructionsLocked(); expression != "" {
+		parts = append(parts, expression)
+	}
 	b.systemMu.Unlock()
 
 	// The marker protocol is composed on rather than appended, so turning the

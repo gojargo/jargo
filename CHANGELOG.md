@@ -54,6 +54,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
     names, `expressive/formatter` the tag reader and request builder, and
     `expressive/spoken` the delivery of the words a service reports speaking.
 
+- **The LLM's side of expressive conversation, in alpha: an LLM service teaches
+  itself the expression tags the TTS service it feeds can perform**, by their
+  universal names and as a list to keep to, in its system instruction, so a
+  prompt does not need to describe them. It reads them from the
+  `frames.TTSMetadataFrame` that TTS service broadcasts, with
+  `pipeline.Params.EnableExpressiveConversation` on.
+  - `pipeline.Params.ExpressionPolicy` takes an `expressive.ExpressionPolicy`,
+    which every LLM service in the pipeline is taught, each one in an
+    `LLMSwitcher` included. Its `Delivery` and `Sounds` say which tags are
+    offered, by their universal names, or by default a core set such as
+    `<<calm>>`, `<<warm>>` and `[[laugh]]`. Its `Guidance` lines say when to
+    use them: presets such as `GuidanceMatchStyle`, which answers in the user's
+    mood and energy, `GuidanceSlowForDetails`, which says just a code or a
+    number slowly, in a span such as `<<slow: A B 7>>`, and `GuidanceBreathe`,
+    for an occasional breath, and the developer's own, as `GuidanceLine`s,
+    joined in order. Tags in the policy the TTS service cannot perform are left
+    out, with a warning, and a policy set without expressive conversation is
+    warned about.
+  - The instruction follows the active TTS service: a `ServiceSwitcher` switch,
+    or a settings change such as a new model that changes what a TTS service
+    performs, broadcasts its metadata again, and the LLM's instruction is
+    rebuilt from it.
+  - `expressive.ExpressionInstructions` returns the instruction for a service's
+    capabilities and a policy, to read or to build a prompt of one's own, and
+    `expressive.ExpressionPolicyWarning` what that policy asks for that the
+    service cannot perform.
+
 - **The `expression` event in scripted evals:** the expression the bot's TTS
   performed, in the tags the LLM writes, such as `<<excited>>` or
   `[[laughter]]`. A tag the TTS cannot perform is never reported, so a

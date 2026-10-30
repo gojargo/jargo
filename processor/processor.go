@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/goid"
 	"github.com/gojargo/jargo/pipeline/capabilities"
@@ -99,6 +100,10 @@ type Setup struct {
 	// expressive conversation (alpha). See
 	// pipeline.Params.EnableExpressiveConversation.
 	EnableExpressiveConversation bool
+	// ExpressionPolicy is which expression tags the LLMs are offered and when
+	// to use them (alpha), or nil for the default policy. See
+	// pipeline.Params.ExpressionPolicy.
+	ExpressionPolicy *expressive.ExpressionPolicy
 	// EnableMetrics turns on performance metrics collection.
 	EnableMetrics bool
 	// EnableUsageMetrics turns on usage metrics collection.
