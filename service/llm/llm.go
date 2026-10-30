@@ -453,6 +453,9 @@ type Base struct {
 	// verdict cannot be torn by another goroutine pushing at the same time.
 	gateMu sync.Mutex
 	gate   *speculationGate
+	// outputGate can drop what this service pushes or the function calls it
+	// runs. See OutputGate.
+	outputGate OutputGate
 
 	// The system instruction this service sends, and the parts it is composed
 	// from. baseSystemInstruction is the prompt the application set, which every
@@ -1174,7 +1177,7 @@ func (b *Base) settingsStore() any {
 // ProcessFrame runs the generator on each LLMContextFrame and forwards other
 // frames untouched.
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
+	if err := b.processBaseAndGate(ctx, f, dir); err != nil {
 		return err
 	}
 	if b.FilterIncompleteUserTurns() {
@@ -1229,8 +1232,12 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 // the ones a TTS service reads to decide what it synthesizes.
 //
 // Nothing is stamped until something configures the output, which leaves the
-// decision to whatever else in the pipeline may set it on a frame.
+// decision to whatever else in the pipeline may set it on a frame. An output
+// gate, when one is set, may drop the frame before any of this.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if b.outputGate != nil && !b.outputGate.AllowPush(f) {
+		return nil
+	}
 	// The gating sees the response-lifecycle frames the service generates before
 	// anything downstream does. They never arrive as input, so this is the only
 	// place they can be intercepted.
@@ -1469,6 +1476,9 @@ func (b *Base) announceFunctionCalls(
 		calls = b.callFilter(convo, calls)
 	}
 	if len(calls) == 0 {
+		return noop, nil
+	}
+	if b.outputGate != nil && !b.outputGate.AllowFunctionCalls() {
 		return noop, nil
 	}
 	// The built-in cancellation tool is how the model abandons an asynchronous
