@@ -20,7 +20,7 @@ const (
 	// MessageLabel tags every RTVI message.
 	MessageLabel = "rtvi-ai"
 	// ProtocolVersion is the RTVI protocol version this implementation speaks.
-	ProtocolVersion = "2.1.0"
+	ProtocolVersion = "2.2.0"
 	// LegacySupportedMajor is the older protocol generation still served. A
 	// client of that generation is deprecated but answered rather than turned
 	// away, and is told its own version back in the bot-ready rather than this

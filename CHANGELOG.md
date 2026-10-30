@@ -668,6 +668,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   frontend could take it for the end of its own first request and miss the
   reply. The idle update now goes only to the frontend attached when the check
   was asked for.
+- Fixed the RTVI processor declaring protocol 2.1.0 while it sends what came
+  with 2.2.0 (bot capabilities in `bot-ready`, the raw text messages,
+  `user-input` and bot backchannels as `bot-output`). `rtvi.ProtocolVersion` is
+  now `2.2.0`, so a client learns from `bot-ready` that the session speaks it.
 - Fixed a user turn ending on the user's earlier words with segmented STT
   services. When the user spoke again before an earlier segment was
   transcribed, that segment's transcript was marked finalized, so the stop
