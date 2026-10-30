@@ -749,6 +749,9 @@ func (s *session) matchAggregate(
 		status, reason := s.evaluateAggregate(ctx, aggregate, exp)
 		switch status {
 		case statusPass:
+			if f := checkTextMatches(aggregate, exp, fail); f != nil {
+				return f, false
+			}
 			s.lastMatch = strings.TrimSpace(aggregate)
 			return nil, false
 		case statusFail:
@@ -982,6 +985,19 @@ func checkPayload(ev Event, exp Expectation, fail func(string) *Failure) *Failur
 	}
 	if exp.TextExcludes != "" && textContains(ev.Text, exp.TextExcludes) {
 		return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(ev.Text), exp.TextExcludes))
+	}
+	return checkTextMatches(ev.Text, exp, fail)
+}
+
+// checkTextMatches fails on the first of the expectation's text_matches
+// patterns content does not match.
+func checkTextMatches(content string, exp Expectation, fail func(string) *Failure) *Failure {
+	if pattern, missed := exp.TextMatches.firstUnmatched(content); missed {
+		text := strings.TrimSpace(content)
+		if r := []rune(text); len(r) > 200 {
+			text = string(r[:200])
+		}
+		return fail(fmt.Sprintf("text %q does not match %q", text, pattern))
 	}
 	return nil
 }

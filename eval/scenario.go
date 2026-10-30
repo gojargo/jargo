@@ -21,6 +21,11 @@
 //	                         (llm_response and tts_response, which carry its text),
 //	                         or, on function_call, the call itself by name and args
 //	text_excludes: <str>     the reverse of text_contains: the text must not hold it
+//	text_matches: <regex> | [<regex>, ...]
+//	                         regular expressions (RE2, as Go's regexp reads them)
+//	                         the text must each match, such as a format the reply
+//	                         must open with; the failure names the first pattern
+//	                         that did not match
 //	marker: <str>            for llm_marker: what the marker meant, one of
 //	                         complete, short, long, or incomplete for either of
 //	                         the last two
@@ -198,6 +203,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/gojargo/jargo/frames"
 	"gopkg.in/yaml.v3"
@@ -217,6 +223,7 @@ var (
 	errNoEvent         = errors.New("expectation has no event")
 	errEmptyCalls      = errors.New("calls must not be empty")
 	errAbsentWithCheck = errors.New("absent cannot be combined with a content or call check")
+	errTextMatches     = errors.New("text_matches must be a pattern or a list of patterns")
 	errNegativeDelay   = errors.New("send_after delay_ms must be non-negative")
 	errEmptySendAfter  = errors.New("send_after needs an event or a positive delay_ms")
 	errIncludeNotPath  = errors.New("!include expects a file path")
@@ -460,6 +467,12 @@ type Expectation struct {
 	// segment, so the failure lands as soon as the text appears rather than at
 	// the end of the budget.
 	TextExcludes string `yaml:"text_excludes,omitempty"`
+	// TextMatches are regular expressions the event's text must each match,
+	// checked on the same text as TextExcludes, such as a format the reply must
+	// open with. YAML takes one pattern or a list of them. The patterns are RE2,
+	// as Go's regexp reads them, so a lookaround or a backreference is rejected
+	// when the scenario is loaded.
+	TextMatches Patterns `yaml:"text_matches,omitempty"`
 	// Eval, when set, is a natural-language criterion an LLM judge checks the
 	// bot's reply against. Applies to llm_response and tts_response, the two
 	// events carrying text the bot itself produced.
@@ -686,8 +699,8 @@ func setNode(node *yaml.Node, key, value *yaml.Node) {
 // setScalar sets a mapping's value for key to a plain string.
 func setScalar(node *yaml.Node, key, value string) {
 	setNode(node,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: value})
 }
 
 // loadNode parses a YAML file and resolves the !include tags in it.
@@ -879,13 +892,66 @@ func (e *Expectation) validate() error {
 	if e.Absent && e.checksContent() {
 		return errAbsentWithCheck
 	}
-	return errors.Join(e.validateMarker(), e.normalizeCalls())
+	return errors.Join(e.TextMatches.compile(), e.validateMarker(), e.normalizeCalls())
+}
+
+// strTag is the YAML tag of a plain string.
+const strTag = "!!str"
+
+// Patterns are regular expressions an event's text must each match. YAML takes
+// one pattern or a list of them.
+type Patterns []string
+
+// UnmarshalYAML reads one pattern or a list of them.
+func (p *Patterns) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag != strTag {
+			return errTextMatches
+		}
+		*p = Patterns{node.Value}
+		return nil
+	case yaml.SequenceNode:
+		out := make(Patterns, 0, len(node.Content))
+		for _, item := range node.Content {
+			if item.Kind != yaml.ScalarNode || item.Tag != strTag {
+				return errTextMatches
+			}
+			out = append(out, item.Value)
+		}
+		*p = out
+		return nil
+	default:
+		return errTextMatches
+	}
+}
+
+// compile checks every pattern is a regular expression.
+func (p Patterns) compile() error {
+	for _, pattern := range p {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("%w: %q: %w", errTextMatches, pattern, err)
+		}
+	}
+	return nil
+}
+
+// firstUnmatched is the first pattern content does not match, and whether
+// there is one.
+func (p Patterns) firstUnmatched(content string) (string, bool) {
+	for _, pattern := range p {
+		// The patterns were compiled when the scenario was loaded.
+		if !regexp.MustCompile(pattern).MatchString(content) {
+			return pattern, true
+		}
+	}
+	return "", false
 }
 
 // checksContent reports whether the expectation checks anything of the event
 // beyond its type.
 func (e *Expectation) checksContent() bool {
-	return e.TextContains != "" || e.TextExcludes != "" || e.Eval != "" ||
+	return e.TextContains != "" || e.TextExcludes != "" || len(e.TextMatches) > 0 || e.Eval != "" ||
 		e.Name != "" || e.Args != nil || e.hasCalls || e.marksAnything()
 }
 

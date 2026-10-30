@@ -801,6 +801,62 @@ turns:
 	}
 }
 
+// TestHarnessChecksTextMatches covers the patterns a reply must match: each
+// must, and the failure names the first that did not.
+func TestHarnessChecksTextMatches(t *testing.T) {
+	res := host(t, `
+name: matches
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_matches: ["^you said", "hello$"]
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected a pass, got %v", res.Failures)
+	}
+
+	res = host(t, `
+name: unmatched
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        text_matches: ["^you said", "^goodbye"]
+        within_ms: 2000
+`)
+	if res.Passed() {
+		t.Fatal("the reply does not open with goodbye, so the turn should fail")
+	}
+	if !strings.Contains(res.Failures[0].Reason, `does not match "^goodbye"`) {
+		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
+	}
+}
+
+// TestHarnessChecksTextMatchesOnTheAccumulatedReply checks that alongside a
+// check that accumulates the reply, the patterns are matched against the whole
+// of it once that check passes.
+func TestHarnessChecksTextMatchesOnTheAccumulatedReply(t *testing.T) {
+	for pattern, pass := range map[string]bool{"^Let me check": true, "^It is sunny": false} {
+		t.Run(pattern, func(t *testing.T) {
+			res := host(t, `
+name: matches-accumulated
+turns:
+  - user: "check the weather"
+    expect:
+      - event: llm_response
+        text_contains: "Paris"
+        text_matches: "`+pattern+`"
+        within_ms: 8000
+`)
+			if res.Passed() != pass {
+				t.Fatalf("passed = %t, want %t: %v", res.Passed(), pass, res.Failures)
+			}
+		})
+	}
+}
+
 // Alongside a check that accumulates the reply's segments, it is checked on each
 // one, so the failure lands on the segment that brought the text rather than at
 // the end of the budget. The bot answers this turn with filler and then the

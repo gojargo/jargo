@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`text_matches` in scripted eval expectations:** one or more regular
+  expressions the event's text must each match, such as a format a reply must
+  open with. The failure names the first pattern that did not match. The
+  patterns are RE2, as Go's `regexp` reads them, so a lookaround or a
+  backreference fails the scenario when it is loaded.
+
 - **Smallest content filter, date order and number language.**
   `smallest.Config.ContentFilter` checks the text against Smallest's profanity
   list before synthesis, with the action `"reject"`, `"flag"` or `"redact"`.

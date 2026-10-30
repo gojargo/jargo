@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -463,6 +464,66 @@ turns:
       - event: llm_response
         absent: true
         text_excludes: "●"
+`))
+	if err == nil {
+		t.Error("an absent expectation with a content check should be rejected")
+	}
+}
+
+// TestTextMatchesTakesAPatternOrAList checks text_matches reads one regular
+// expression or a list of them.
+func TestTextMatchesTakesAPatternOrAList(t *testing.T) {
+	sc, err := eval.Load(writeScenario(t, `
+name: matches
+turns:
+  - user: "x"
+    expect:
+      - event: llm_response
+        text_matches: "^Hi"
+      - event: llm_response
+        text_matches: ["^Hi", "!$"]
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := sc.Turns[0].Expect[0].TextMatches; !slices.Equal(got, eval.Patterns{"^Hi"}) {
+		t.Errorf("one pattern = %q, want [^Hi]", got)
+	}
+	if got := sc.Turns[0].Expect[1].TextMatches; !slices.Equal(got, eval.Patterns{"^Hi", "!$"}) {
+		t.Errorf("a list = %q, want [^Hi !$]", got)
+	}
+}
+
+// TestTextMatchesRejectsBadPatterns checks a pattern that does not compile, and
+// a value that is not a pattern, fail the scenario as it is loaded. The patterns
+// are RE2, so a lookahead is one that does not compile.
+func TestTextMatchesRejectsBadPatterns(t *testing.T) {
+	for _, value := range []string{`"(unclosed"`, "[1, 2]", `"^(?=Hi)"`} {
+		t.Run(value, func(t *testing.T) {
+			_, err := eval.Load(writeScenario(t, `
+name: bad_matches
+turns:
+  - user: "x"
+    expect:
+      - event: llm_response
+        text_matches: `+value+"\n"))
+			if err == nil {
+				t.Errorf("text_matches: %s was accepted", value)
+			}
+		})
+	}
+}
+
+// It is a content check too, so an absent expectation cannot take it.
+func TestAbsentRejectsTextMatches(t *testing.T) {
+	_, err := eval.Load(writeScenario(t, `
+name: absent
+turns:
+  - user: "hello"
+    expect:
+      - event: llm_response
+        absent: true
+        text_matches: "x"
 `))
 	if err == nil {
 		t.Error("an absent expectation with a content check should be rejected")
