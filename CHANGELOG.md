@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Cartesia accent.** `cartesia.Config.Accent` and
+  `cartesia.HTTPTTSConfig.Accent` pick the accent a multilingual voice speaks
+  the language with, such as `"british"`, and `TTSSettings.Accent` changes it
+  while the pipeline runs. It must be an accent the voice supports; unset lets
+  Cartesia choose.
+
 - **`LLMWithBackend`, in alpha: a conversational frontend LLM with a backend
   that does the work it hands off.** `llmwithbackend.New` drops into a pipeline
   where an LLM goes. The frontend keeps the conversation moving while a

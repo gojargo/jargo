@@ -70,6 +70,11 @@ type Config struct {
 	GenerationConfig *GenerationConfig
 	// PronunciationDictID applies a custom pronunciation dictionary; empty omits it.
 	PronunciationDictID string
+	// Accent is the accent a multilingual voice speaks the language with (for
+	// example "british"). It must be one the voice supports, as listed in the
+	// accents field of Cartesia's Get Voice response. Empty lets Cartesia pick
+	// the closest accent the voice supports for the requested language.
+	Accent string
 	// TextAggregation is how streamed text is grouped before synthesis:
 	// frames.AggregationSentence (the zero value) waits for a sentence boundary,
 	// frames.AggregationToken passes each token through as it arrives, which

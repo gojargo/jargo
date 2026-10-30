@@ -456,6 +456,9 @@ func (s *synthesizer) request(text, contextID string, more bool) map[string]any 
 	if dict := s.live.PronunciationDictID.Or(s.cfg.PronunciationDictID); dict != "" {
 		msg["pronunciation_dict_id"] = dict
 	}
+	if accent := s.live.Accent.Or(s.cfg.Accent); accent != "" {
+		msg["accent"] = accent
+	}
 	return msg
 }
 

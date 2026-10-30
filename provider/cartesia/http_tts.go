@@ -64,6 +64,11 @@ type HTTPTTSConfig struct {
 	GenerationConfig *GenerationConfig
 	// PronunciationDictID applies a custom pronunciation dictionary; empty omits it.
 	PronunciationDictID string
+	// Accent is the accent a multilingual voice speaks the language with (for
+	// example "british"). It must be one the voice supports, as listed in the
+	// accents field of Cartesia's Get Voice response. Empty lets Cartesia pick
+	// the closest accent the voice supports for the requested language.
+	Accent string
 	// Headers are sent on every request, on top of the ones the service sets.
 	Headers map[string]string
 	// Client makes the requests; nil uses a client of its own.
@@ -185,6 +190,9 @@ func (s *httpSynthesizer) payload(text string) map[string]any {
 	}
 	if s.cfg.PronunciationDictID != "" {
 		msg["pronunciation_dict_id"] = s.cfg.PronunciationDictID
+	}
+	if s.cfg.Accent != "" {
+		msg["accent"] = s.cfg.Accent
 	}
 	return msg
 }

@@ -353,7 +353,7 @@ func TestRunTTSOptionalFields(t *testing.T) {
 	s := newSynthesizer(ttsConfig(endpoint))
 	speak(t, s, "hi")
 	got := seen.first()
-	for _, f := range []string{"language", "generation_config", "pronunciation_dict_id"} {
+	for _, f := range []string{"language", "generation_config", "pronunciation_dict_id", "accent"} {
 		if _, present := got[f]; present {
 			t.Errorf("%s was sent for an unset config: %v", f, got[f])
 		}
@@ -365,6 +365,7 @@ func TestRunTTSOptionalFields(t *testing.T) {
 	cfg.Language = language.French
 	cfg.GenerationConfig = &GenerationConfig{Speed: &speed, Emotion: "excited"}
 	cfg.PronunciationDictID = "dict-1"
+	cfg.Accent = "british"
 	speak(t, newSynthesizer(cfg), "hi")
 
 	got = seen.first()
@@ -373,6 +374,9 @@ func TestRunTTSOptionalFields(t *testing.T) {
 	}
 	if got["pronunciation_dict_id"] != "dict-1" {
 		t.Errorf("pronunciation_dict_id = %v", got["pronunciation_dict_id"])
+	}
+	if got["accent"] != "british" {
+		t.Errorf("accent = %v, want british", got["accent"])
 	}
 	gen, _ := got["generation_config"].(map[string]any)
 	if gen["speed"] != 1.2 || gen["emotion"] != "excited" {

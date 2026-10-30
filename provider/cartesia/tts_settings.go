@@ -15,8 +15,8 @@ import (
 // Cartesia fixes the voice, the model and the language for the length of a
 // context, so a change to any of them takes effect on the next one: the turn
 // being spoken is closed out and the rest of it is said with the new settings.
-// The generation controls and the pronunciation dictionary go out on every
-// request, so a change to those applies to the next sentence.
+// The generation controls, the pronunciation dictionary and the accent go out
+// on every request, so a change to those applies to the next sentence.
 type TTSSettings struct {
 	settings.TTS
 
@@ -25,6 +25,8 @@ type TTSSettings struct {
 	GenerationConfig settings.Opt[*GenerationConfig] `settings:"generation_config"`
 	// PronunciationDictID applies a custom pronunciation dictionary.
 	PronunciationDictID settings.Opt[string] `settings:"pronunciation_dict_id"`
+	// Accent is the accent a multilingual voice speaks the language with.
+	Accent settings.Opt[string] `settings:"accent"`
 }
 
 // newTTSSettings is the starting state, taken from what the service was built
@@ -41,6 +43,9 @@ func newTTSSettings(cfg Config) *TTSSettings {
 	}
 	if cfg.PronunciationDictID != "" {
 		s.PronunciationDictID = settings.Set(cfg.PronunciationDictID)
+	}
+	if cfg.Accent != "" {
+		s.Accent = settings.Set(cfg.Accent)
 	}
 	return s
 }

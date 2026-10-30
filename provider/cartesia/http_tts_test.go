@@ -137,15 +137,15 @@ func TestHTTPTTSRequestShape(t *testing.T) {
 		t.Errorf("output_format.sample_rate = %v, want %d", format["sample_rate"], defaultSampleRate)
 	}
 	// Nothing optional was configured, so nothing optional is sent.
-	for _, f := range []string{"language", "generation_config", "pronunciation_dict_id"} {
+	for _, f := range []string{"language", "generation_config", "pronunciation_dict_id", "accent"} {
 		if _, present := got.body[f]; present {
 			t.Errorf("%s was sent for an unset config: %v", f, got.body[f])
 		}
 	}
 }
 
-// TestHTTPTTSOptionalFields checks the language, generation config and
-// pronunciation dictionary are sent when they are set.
+// TestHTTPTTSOptionalFields checks the language, generation config,
+// pronunciation dictionary and accent are sent when they are set.
 func TestHTTPTTSOptionalFields(t *testing.T) {
 	base, seen := httpTTSServer(t, http.StatusOK, []byte{1, 2})
 	speed := 1.2
@@ -153,6 +153,7 @@ func TestHTTPTTSOptionalFields(t *testing.T) {
 	cfg.Language = language.French
 	cfg.GenerationConfig = &GenerationConfig{Speed: &speed, Emotion: "excited"}
 	cfg.PronunciationDictID = "dict-1"
+	cfg.Accent = "british"
 	collectHTTP(t, &httpSynthesizer{cfg: cfg}, "hi")
 
 	got := seen()
@@ -161,6 +162,9 @@ func TestHTTPTTSOptionalFields(t *testing.T) {
 	}
 	if got.body["pronunciation_dict_id"] != "dict-1" {
 		t.Errorf("pronunciation_dict_id = %v", got.body["pronunciation_dict_id"])
+	}
+	if got.body["accent"] != "british" {
+		t.Errorf("accent = %v, want british", got.body["accent"])
 	}
 	gen, _ := got.body["generation_config"].(map[string]any)
 	if gen["speed"] != 1.2 || gen["emotion"] != "excited" {
