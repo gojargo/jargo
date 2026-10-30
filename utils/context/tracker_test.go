@@ -1898,3 +1898,18 @@ func TestTrackerUnmatchedSymbolStaysPut(t *testing.T) {
 		assertTracksToTheEnd(t, "Step one → step two", []string{"Step", "one", "-", "step", "two"})
 	})
 }
+
+// TestTrackerTheClosingTagGoesWithTheWordItTouches checks the "</card>" written
+// against "4111" is attributed with it, not left for the next word.
+func TestTrackerTheClosingTagGoesWithTheWordItTouches(t *testing.T) {
+	tr := NewWordCompletionTracker(
+		"Call <spell>4111</spell> when it is ready",
+		"Call 4111 when it is ready",
+		"Call <card>4111</card> when it is ready",
+	)
+	tr.AddWord("Call")
+	tr.AddWord("4111")
+	if got, _ := tr.RawText(); got != "<card>4111</card>" {
+		t.Fatalf("RawText() = %q, want %q", got, "<card>4111</card>")
+	}
+}

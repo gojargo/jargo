@@ -29,12 +29,19 @@ func TestAdvanceByAlnumsSkipsTagsAndTrailingPunct(t *testing.T) {
 
 func TestAdvanceByAlnumsSkipsLeadingTag(t *testing.T) {
 	runes := []rune("<b>hi</b>")
-	// The leading tag is skipped without spending budget, so the two alnum chars
-	// of "hi" carry the cursor to just before the closing tag (which, being the
-	// next tag, is not consumed).
+	// The leading tag is skipped without spending budget, and the closing tag
+	// written against "hi" goes with it.
 	pos := advanceByAlnums(runes, 0, 2) // "hi"
-	if got := string(runes[:pos]); got != "<b>hi" {
-		t.Fatalf("span = %q, want %q", got, "<b>hi")
+	if got := string(runes[:pos]); got != "<b>hi</b>" {
+		t.Fatalf("span = %q, want %q", got, "<b>hi</b>")
+	}
+}
+
+func TestAdvanceByAlnumsLeavesATagForTheNextWord(t *testing.T) {
+	runes := []rune("<b>hi")
+	// With nothing consumed, a tag is left for the word it opens.
+	if pos := advanceByAlnums(runes, 0, 0); pos != 0 {
+		t.Fatalf("pos = %d, want 0", pos)
 	}
 }
 

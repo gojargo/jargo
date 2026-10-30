@@ -164,7 +164,8 @@ func advanceByChars(runes []rune, startPos, n int) int {
 // alphanumeric characters from startPos. Tags (<...>) are skipped entirely and
 // do not count against the budget, so the returned span includes the full tag.
 // After the n alnum characters, it advances further past any immediately
-// following punctuation, stopping before the next space, alnum char, or tag.
+// following punctuation or tags (the "," in "questions," or the "</card>." in
+// "4111</card>."), stopping before the next space or alnum char.
 func advanceByAlnums(runes []rune, startPos, n int) int {
 	pos := startPos
 	count := 0
@@ -185,7 +186,17 @@ func advanceByAlnums(runes []rune, startPos, n int) int {
 		}
 	}
 	for pos < len(runes) {
-		if runes[pos] == '<' || isAlnum(runes[pos]) || unicode.IsSpace(runes[pos]) {
+		if runes[pos] == '<' {
+			// A tag goes with the word it touches, so with none consumed it is
+			// left for the next word.
+			end := indexRune(runes, '>', pos)
+			if end == -1 || count == 0 {
+				break
+			}
+			pos = end + 1
+			continue
+		}
+		if isAlnum(runes[pos]) || unicode.IsSpace(runes[pos]) {
 			break
 		}
 		pos++

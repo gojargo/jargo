@@ -1322,3 +1322,22 @@ func TestUnmatchedSymbolDoesNotDesyncTheTurn(t *testing.T) {
 	}
 	assertEveryWordReachesTheContext(t, sentences, words)
 }
+
+// TestProcessWordTheClosingDelimiterGoesWithTheWordItTouches checks a slot whose
+// TTS text carries synthesis tags and whose LLM text carries delimiters of its
+// own attributes the "</card>" written against "4111" to that word.
+func TestProcessWordTheClosingDelimiterGoesWithTheWordItTouches(t *testing.T) {
+	seq := newSeq(t, false)
+	frame := spokenFrame("Call 4111 when it is ready")
+	frame.RawText = "Call <card>4111</card> when it is ready"
+	seq.RegisterSpoken(frame, "ctx1", "Call <spell>4111</spell> when it is ready", true, true, false, "")
+	seq.ProcessWord("Call", 10, "ctx1", false)
+
+	got := wordFrames(seq.ProcessWord("4111", 20, "ctx1", false))
+	if len(got) == 0 {
+		t.Fatal("no word was emitted for 4111")
+	}
+	if got[0].RawText != "<card>4111</card>" {
+		t.Fatalf("it stands for %q, want %q", got[0].RawText, "<card>4111</card>")
+	}
+}

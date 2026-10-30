@@ -62,3 +62,27 @@ func TestSegmentMapOverflowCarriesSuffix(t *testing.T) {
 		t.Fatalf("overflow = %q, want %q", got, "There")
 	}
 }
+
+// TestSegmentMapLLMPosTakesTheClosingTagOnTheDigits checks "$42" spoken as
+// "forty two dollars" counts the "4" and "2" of "<card>$42</card>", and then
+// takes the "</card>" written against them.
+func TestSegmentMapLLMPosTakesTheClosingTagOnTheDigits(t *testing.T) {
+	m := NewTextSegmentMap("forty two dollars", "$42", "<card>$42</card>")
+	m.AdvanceWord("forty")
+	m.AdvanceWord("two")
+	m.AdvanceWord("dollars")
+	if got := m.LLMPos(); got != 16 {
+		t.Fatalf("LLMPos() = %d, want 16", got)
+	}
+}
+
+// TestSegmentMapLLMPosDefaultsToTheOriginalText checks "50%" spoken as "fifty
+// percent" consumes "5" and "0" and then the "%" after them.
+func TestSegmentMapLLMPosDefaultsToTheOriginalText(t *testing.T) {
+	m := NewTextSegmentMap("fifty percent", "50%", "")
+	m.AdvanceWord("fifty")
+	m.AdvanceWord("percent")
+	if got := m.LLMPos(); got != 3 {
+		t.Fatalf("LLMPos() = %d, want 3", got)
+	}
+}

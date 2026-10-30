@@ -572,6 +572,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Fixed TTS services with word timestamps attributing a closing tag written
+  against a word to the word after it, so the context recorded
+  `<card>4111</card> is yours` as `<card>4111 </card> is yours`, and left the
+  tag out when the bot was interrupted right after that word.
 - Fixed `SkipTagsAggregator` recognizing only the first of several tag pairs,
   and never opening a pair whose start and end are the same, such as
   `{"**", "**"}`. `text.ParseStartEndTags` now resumes just past the start of
