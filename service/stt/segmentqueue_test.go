@@ -182,3 +182,88 @@ func TestASegmentIsTranscribedWithoutTheTurnEnding(t *testing.T) {
 		t.Fatal("the segment was not transcribed on the VAD stop")
 	}
 }
+
+// finalizedOf runs svc, hands the worker to feed, stops the pipeline gracefully,
+// and returns whether each transcript that reached the end was finalized.
+func finalizedOf(t *testing.T, svc *stt.SegmentService, feed func(*pipeline.Worker)) []bool {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		seen []bool
+	)
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.TranscriptionFrame); ok {
+			mu.Lock()
+			seen = append(seen, tf.Finalized)
+			mu.Unlock()
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	feed(task)
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pipeline did not stop")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return seen
+}
+
+// queueAll queues fs on task.
+func queueAll(task *pipeline.Worker, fs []frames.Frame) {
+	for _, f := range fs {
+		task.QueueFrame(f)
+	}
+}
+
+// A transcript whose segment is the latest is finalized.
+func TestATranscriptIsFinalizedWhenItsSegmentIsTheLatest(t *testing.T) {
+	svc := stt.NewSegment("FakeSegmentSTT", &slowTranscriber{delay: 50 * time.Millisecond}, 16000)
+	svc.SetTrailingSilence(0)
+
+	got := finalizedOf(t, svc, func(task *pipeline.Worker) { queueAll(task, segmentFrames([]byte{1, 2, 3, 4})) })
+	if fmt.Sprint(got) != "[true]" {
+		t.Fatalf("finalized = %v, want [true]", got)
+	}
+}
+
+// Segments are transcribed in order, so an earlier one can finish after the
+// user's next stop; its transcript is then not finalized.
+func TestTranscriptsOfSegmentsSpokenPastAreNotFinalized(t *testing.T) {
+	svc := stt.NewSegment("FakeSegmentSTT", &slowTranscriber{delay: 200 * time.Millisecond}, 16000)
+	svc.SetTrailingSilence(0)
+
+	pcm := []byte{1, 2, 3, 4}
+	got := finalizedOf(t, svc, func(task *pipeline.Worker) {
+		for range 3 {
+			queueAll(task, segmentFrames(pcm))
+		}
+	})
+	if fmt.Sprint(got) != "[false false true]" {
+		t.Fatalf("finalized = %v, want [false false true]", got)
+	}
+}
+
+// A transcript that lands while the user speaks again is not finalized.
+func TestATranscriptLandingWhileTheUserSpeaksAgainIsNotFinalized(t *testing.T) {
+	svc := stt.NewSegment("FakeSegmentSTT", &slowTranscriber{delay: 100 * time.Millisecond}, 16000)
+	svc.SetTrailingSilence(0)
+
+	pcm := []byte{1, 2, 3, 4}
+	got := finalizedOf(t, svc, func(task *pipeline.Worker) {
+		queueAll(task, segmentFrames(pcm))
+		task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
+		task.QueueFrame(frames.NewInputAudioRawFrame(pcm, 16000, 1))
+		time.Sleep(300 * time.Millisecond)
+		task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
+	})
+	if fmt.Sprint(got) != "[false true]" {
+		t.Fatalf("finalized = %v, want [false true]", got)
+	}
+}

@@ -67,9 +67,14 @@ type SegmentService struct {
 	preRoll  int
 	speaking bool
 
-	// queue holds the segments waiting to be transcribed, in the order they
-	// were cut. queued is signaled when one is added.
-	queue  [][]byte
+	// segmentCount numbers the user's speech segments, so a transcript can tell
+	// whether its segment is still the latest; transcribingSegment is the number
+	// of the one being transcribed.
+	segmentCount        int
+	transcribingSegment int
+	// queue holds the segments waiting to be transcribed, with their numbers,
+	// in the order they were cut. queued is signaled when one is added.
+	queue  []queuedSegment
 	queued chan struct{}
 	// finishing tells the segment task to stop once the queue is empty.
 	finishing bool
@@ -246,6 +251,7 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		s.tracer.speechStarted(fr.SpeechStart())
 		s.mu.Lock()
 		s.speaking = true
+		s.segmentCount++
 		s.mu.Unlock()
 		return s.PushFrame(ctx, f, dir)
 	case *frames.VADUserStoppedSpeakingFrame:
@@ -296,11 +302,18 @@ func (s *SegmentService) endSegment() {
 	if len(audio) == 0 {
 		return
 	}
-	s.queue = append(s.queue, audio)
+	s.queue = append(s.queue, queuedSegment{audio: audio, number: s.segmentCount})
 	select {
 	case s.queued <- struct{}{}:
 	default:
 	}
+}
+
+// queuedSegment is a segment waiting to be transcribed, with the number of the
+// speech it was cut from.
+type queuedSegment struct {
+	audio  []byte
+	number int
 }
 
 // startSegmentTask starts the task that transcribes queued segments, replacing
@@ -358,11 +371,12 @@ func (s *SegmentService) segmentTask(ctx context.Context) {
 				return
 			}
 		}
-		audio := s.queue[0]
+		segment := s.queue[0]
 		s.queue = s.queue[1:]
+		s.transcribingSegment = segment.number
 		rate := s.sampleRate
 		s.mu.Unlock()
-		s.transcribe(ctx, audio, rate)
+		s.transcribe(ctx, segment.audio, rate)
 		if ctx.Err() != nil {
 			return
 		}
@@ -373,12 +387,20 @@ func (s *SegmentService) segmentTask(ctx context.Context) {
 // segment's transcript closes the utterance it was cut from, and ends the wait
 // the VAD started when it reported the speech over.
 //
+// A transcript is marked finalized when its segment is the latest. Once the
+// user speaks again, the transcript of an earlier segment covers only the words
+// before they resumed, so it is not finalized, the same way a streaming service
+// drops a pending finalize when the user starts speaking.
+//
 // The segment's span is opened before the transcript is pushed and written after
 // it. Opening first is what lets the metrics frame that the timing raises, which
 // is pushed from inside this call, find the span it belongs to already open.
 func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	tf, isTranscript := f.(*frames.TranscriptionFrame)
 	if isTranscript {
+		s.mu.Lock()
+		tf.Finalized = s.transcribingSegment == s.segmentCount
+		s.mu.Unlock()
 		s.tracer.open()
 		s.ttfb.transcript(ctx, tf.Finalized)
 	}
@@ -439,7 +461,6 @@ func (s *SegmentService) transcribe(ctx context.Context, audio []byte, rate int)
 	userID := s.userID
 	s.mu.Unlock()
 	tf := frames.NewTranscriptionFrame(text, userID, frames.NowTimestamp())
-	tf.Finalized = true
 	_ = s.PushFrame(ctx, tf, processor.Downstream)
 }
 

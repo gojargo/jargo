@@ -577,6 +577,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Fixed a user turn ending on the user's earlier words with segmented STT
+  services. When the user spoke again before an earlier segment was
+  transcribed, that segment's transcript was marked finalized, so the stop
+  strategies took it as the user's last words and could end the turn before the
+  new words were transcribed. `stt.SegmentService` now marks a transcript
+  finalized only when the user has not spoken again since its segment ended.
 - Fixed TTS services without word timestamps joining streamed sentences in the
   context with two spaces, and pushing skipped text, such as a code block,
   ahead of the sentence spoken before it.
