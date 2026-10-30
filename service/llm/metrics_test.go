@@ -341,7 +341,7 @@ func TestAConfirmedTurnReleasesTheSpeculativeReply(t *testing.T) {
 // TestAWithdrawnTurnDiscardsTheSpeculativeReply covers the withdrawal: the reply
 // answered a turn the user had not finished, so nobody ever hears it.
 func TestAWithdrawnTurnDiscardsTheSpeculativeReply(t *testing.T) {
-	got := runSpeculation(t, true, frames.NewEagerEndOfTurnCancelFrame())
+	got := runSpeculation(t, true, frames.NewUserTurnResponseCancelFrame())
 	if spokeText(got) {
 		t.Error("the withdrawn reply escaped the service")
 	}

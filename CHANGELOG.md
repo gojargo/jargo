@@ -685,6 +685,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Deprecated
 
+- **`frames.EagerEndOfTurnCancelFrame`.** Use `UserTurnResponseCancelFrame`
+  instead; the old name is an alias of it, so a frame built under it still
+  cancels. `NewEagerEndOfTurnCancelFrame` is deprecated with it.
+
 - **`AggregationType` and the names built on it.** `frames.AggregationType`
   and its constants, `tts.Base.SetSkipAggregatorTypes`,
   `rtvi.ObserverParams.SkipAggregatorTypes`, the `AggregatedBy` fields of

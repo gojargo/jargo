@@ -15,7 +15,14 @@ type Config struct {
 	// defaults, which are VAD and transcription to start and a speech timeout to
 	// stop. For end-of-turn from a model, build Stop with NewTurnAnalyzerStop.
 	Strategies UserTurnStrategies
-	// StopTimeout is the watchdog that force-stops a stuck turn; 0 uses 5s.
+	// StrategiesParams is how the strategies combine with the ones a service
+	// recommends, and how they decide. The zero value is the defaults: the
+	// application's lists replace the service's, the first start strategy to
+	// decide starts the turn, and the turn ends once every stop strategy
+	// agrees.
+	StrategiesParams UserTurnStrategiesParams
+	// StopTimeout is how long an open turn goes without user activity before it
+	// is ended, unless a stop strategy has a decision scheduled; 0 uses 5s.
 	StopTimeout time.Duration
 	// IdleTimeout enables the idle watchdog; a value <= 0 disables it.
 	IdleTimeout time.Duration

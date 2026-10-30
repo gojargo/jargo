@@ -110,7 +110,7 @@ func (s *EagerStop) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
 	case *frames.EagerTranscriptionFrame:
 		s.speculate(fr)
-	case *frames.EagerEndOfTurnCancelFrame:
+	case *frames.UserTurnResponseCancelFrame:
 		// The service withdrew its prediction, and its frame reaches every
 		// consumer on its own. Only our own state is left to clear.
 		s.takeSpeculation()

@@ -16,14 +16,30 @@ import (
 
 // ProcessFrameResult is what a strategy returns from Process to control the
 // per-frame strategy loop.
+//
+// Deprecated: use StrategyMode. Every strategy sees every frame, and a list
+// whose strategies all have to agree, such as a wake phrase next to VAD, is
+// StrategyModeAll. Strategies return Continue; until the type is removed, a
+// StrategyModeFirst list still honors Stop, with a deprecation warning.
 type ProcessFrameResult int
 
 const (
 	// Continue evaluates the next strategy in the chain.
 	Continue ProcessFrameResult = iota
-	// Stop short-circuits the remaining strategies for this frame.
+	// Stop short-circuits the remaining strategies for this frame, and only in
+	// a StrategyModeFirst list.
 	Stop
 )
+
+// UserTurnResumedParams describes the user speaking again in an open turn.
+type UserTurnResumedParams struct {
+	// EnableInterruptions reports whether the turn interrupts the bot, as
+	// decided when it started.
+	EnableInterruptions bool
+	// InferenceTriggered reports whether the turn's inference was already
+	// triggered. The new speech voids the answer it started.
+	InferenceTriggered bool
+}
 
 // UserTurnStartedParams describes how a start strategy wants a turn opened.
 type UserTurnStartedParams struct {

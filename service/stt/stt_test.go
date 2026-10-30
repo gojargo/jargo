@@ -669,7 +669,7 @@ func eagerFrameNames(t *testing.T, predicts bool, results [][]stt.Result) (eager
 		switch f.(type) {
 		case *frames.EagerTranscriptionFrame:
 			eager++
-		case *frames.EagerEndOfTurnCancelFrame:
+		case *frames.UserTurnResponseCancelFrame:
 			withdrawn++
 		}
 	})

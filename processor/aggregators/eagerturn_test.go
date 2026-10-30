@@ -154,7 +154,7 @@ func TestMatchingTranscriptEndsTheTurnAndKeepsTheReply(t *testing.T) {
 		frames.NewProposedUserStoppedSpeakingFrame(),
 	)
 
-	if n := countOf[*frames.EagerEndOfTurnCancelFrame](got); n != 0 {
+	if n := countOf[*frames.UserTurnResponseCancelFrame](got); n != 0 {
 		t.Errorf("withdrawals = %d, want none: the prediction was right", n)
 	}
 	cfs := contextFrames(got)
@@ -188,7 +188,7 @@ func TestDifferingTranscriptWithdrawsTheSpeculation(t *testing.T) {
 		frames.NewProposedUserStoppedSpeakingFrame(),
 	)
 
-	if n := countOf[*frames.EagerEndOfTurnCancelFrame](got); n != 1 {
+	if n := countOf[*frames.UserTurnResponseCancelFrame](got); n != 1 {
 		t.Errorf("withdrawals = %d, want 1", n)
 	}
 	cfs := contextFrames(got)
@@ -221,7 +221,7 @@ func TestFormattingDifferencesAreToleratedByDefault(t *testing.T) {
 		frames.NewProposedUserStoppedSpeakingFrame(),
 	)
 
-	if n := countOf[*frames.EagerEndOfTurnCancelFrame](got); n != 0 {
+	if n := countOf[*frames.UserTurnResponseCancelFrame](got); n != 0 {
 		t.Errorf("withdrawals = %d, want none: only the formatting differed", n)
 	}
 	if cfs := contextFrames(got); len(cfs) != 1 {
@@ -239,7 +239,7 @@ func TestTurnWithoutAnEagerPredictionBehavesNormally(t *testing.T) {
 		frames.NewProposedUserStoppedSpeakingFrame(),
 	)
 
-	if n := countOf[*frames.EagerEndOfTurnCancelFrame](got); n != 0 {
+	if n := countOf[*frames.UserTurnResponseCancelFrame](got); n != 0 {
 		t.Errorf("withdrawals = %d, want none: nothing was ever speculated", n)
 	}
 	cfs := contextFrames(got)
@@ -269,7 +269,7 @@ func TestWithdrawalPrecedesTheTurnEnd(t *testing.T) {
 	withdrawal, turnEnd := -1, -1
 	for i, f := range got {
 		switch f.(type) {
-		case *frames.EagerEndOfTurnCancelFrame:
+		case *frames.UserTurnResponseCancelFrame:
 			if withdrawal < 0 {
 				withdrawal = i
 			}

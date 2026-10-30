@@ -2421,7 +2421,7 @@ func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.Us
 // ahead of the turn end that may follow it. Queued, it would arrive after, and
 // the gate would have released the reply this withdraws.
 func (u *UserAggregator) onSpeculationCanceled(ctx context.Context) {
-	_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewEagerEndOfTurnCancelFrame() })
+	_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() })
 }
 
 // onResetAggregation drops the speech aggregated so far, at a start strategy's

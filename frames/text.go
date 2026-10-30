@@ -195,7 +195,7 @@ func (f *TranscriptionFrame) String() string {
 //
 // Some transcribers report a provisional end of turn ahead of the real one, so a
 // reply can be generated during the gap. The prediction may be withdrawn (see
-// EagerEndOfTurnCancelFrame) and the committed transcript may differ from this
+// UserTurnResponseCancelFrame) and the committed transcript may differ from this
 // one, so nothing produced from it may reach the user or the conversation until
 // it is confirmed.
 //

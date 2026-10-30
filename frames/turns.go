@@ -154,6 +154,42 @@ func NewUserTurnInferenceCompletedFrame() *UserTurnInferenceCompletedFrame {
 	}
 }
 
+// UserTurnCompletionFrame is the LLM's judgment of whether the user's turn is
+// complete.
+//
+// An LLM service that uses turn-completion markers pushes it upstream, once per
+// inference and as soon as the judgment is known: when the response's marker is
+// read, when the response calls a tool before writing a marker (Kind
+// "complete"), or when the response ends without one (Kind ""). The marker
+// itself reaches the conversation as an LLMMarkerFrame. It is a system frame.
+type UserTurnCompletionFrame struct {
+	BaseSystemFrame
+	// Kind is "complete", "short" (the user will continue shortly) or "long"
+	// (the user needs more time), or "" when the response carried no marker.
+	Kind string
+	// Marker is the marker read, or "" for a tool call or no marker.
+	Marker string
+	// ContextFrameID is the ID of the LLMContextFrame that started the
+	// inference, or 0 when it is not known.
+	ContextFrameID uint64
+}
+
+// NewUserTurnCompletionFrame builds a UserTurnCompletionFrame.
+func NewUserTurnCompletionFrame(kind, marker string, contextFrameID uint64) *UserTurnCompletionFrame {
+	return &UserTurnCompletionFrame{
+		BaseSystemFrame: NewBaseSystemFrame("UserTurnCompletionFrame"),
+		Kind:            kind,
+		Marker:          marker,
+		ContextFrameID:  contextFrameID,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *UserTurnCompletionFrame) String() string {
+	return fmt.Sprintf("%s(kind: %q, marker: %q, context_frame_id: %d)",
+		f.Name(), f.Kind, f.Marker, f.ContextFrameID)
+}
+
 // SpeechControlParamsFrame reports the parameters governing speech detection and
 // end-of-turn analysis, so a processor downstream can size its own behavior to
 // them (speech recognition matching its endpointing to the detector's, say) and
@@ -194,24 +230,40 @@ func NewVADParamsUpdateFrame(params vad.Params) *VADParamsUpdateFrame {
 	}
 }
 
-// EagerEndOfTurnCancelFrame withdraws an eager end of turn.
+// UserTurnResponseCancelFrame cancels the speculative response for the current
+// user turn.
 //
-// It is emitted when a service reports that the user resumed speaking after
-// predicting the turn had ended, or when the committed transcript does not match
-// the predicted one. The LLM service stops generating, and the speculative reply
-// it was holding is discarded: everything that reply produced was held, so
-// nothing further down the pipeline has anything to undo.
+// It is emitted when an eager end of turn is withdrawn: the user resumed
+// speaking, or the committed transcript does not match the predicted one. The
+// LLM service stops generating, and the speculative reply it was holding is
+// discarded: everything that reply produced was held, so nothing further down
+// the pipeline has anything to undo. A reply already released is left alone;
+// stopping that one is what an InterruptionFrame does.
 //
 // It is a system frame, so it overtakes the speculative output it cancels.
-type EagerEndOfTurnCancelFrame struct {
+type UserTurnResponseCancelFrame struct {
 	BaseSystemFrame
 }
 
-// NewEagerEndOfTurnCancelFrame builds an EagerEndOfTurnCancelFrame.
-func NewEagerEndOfTurnCancelFrame() *EagerEndOfTurnCancelFrame {
-	return &EagerEndOfTurnCancelFrame{
-		BaseSystemFrame: NewBaseSystemFrame("EagerEndOfTurnCancelFrame"),
+// NewUserTurnResponseCancelFrame builds a UserTurnResponseCancelFrame.
+func NewUserTurnResponseCancelFrame() *UserTurnResponseCancelFrame {
+	return &UserTurnResponseCancelFrame{
+		BaseSystemFrame: NewBaseSystemFrame("UserTurnResponseCancelFrame"),
 	}
+}
+
+// EagerEndOfTurnCancelFrame is the former name of UserTurnResponseCancelFrame.
+//
+// Deprecated: use UserTurnResponseCancelFrame. It is the same type, so a frame
+// built under the old name still cancels.
+type EagerEndOfTurnCancelFrame = UserTurnResponseCancelFrame
+
+// NewEagerEndOfTurnCancelFrame is the former name of
+// NewUserTurnResponseCancelFrame.
+//
+// Deprecated: use NewUserTurnResponseCancelFrame.
+func NewEagerEndOfTurnCancelFrame() *UserTurnResponseCancelFrame {
+	return NewUserTurnResponseCancelFrame()
 }
 
 // LLMMarkerFrame carries a turn-completion marker the LLM emitted (for example
@@ -322,7 +374,8 @@ var (
 	_ SystemFrame  = (*UserMuteStoppedFrame)(nil)
 	_ SystemFrame  = (*UserIdleTimeoutUpdateFrame)(nil)
 	_ SystemFrame  = (*SpeechControlParamsFrame)(nil)
-	_ SystemFrame  = (*EagerEndOfTurnCancelFrame)(nil)
+	_ SystemFrame  = (*UserTurnResponseCancelFrame)(nil)
+	_ SystemFrame  = (*UserTurnCompletionFrame)(nil)
 	_ ControlFrame = (*VADParamsUpdateFrame)(nil)
 	_ SystemFrame  = (*UserTurnInferenceCompletedFrame)(nil)
 	_ DataFrame    = (*LLMMarkerFrame)(nil)

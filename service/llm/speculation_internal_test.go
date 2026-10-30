@@ -115,7 +115,7 @@ func TestWithdrawnSpeculationIsDiscarded(t *testing.T) {
 	if got := speculate(g, true, false, "Canceling ", "your booking."); len(got) != 0 {
 		t.Fatalf("emitted %s, want nothing", names(got))
 	}
-	if got := emit(g, frames.NewEagerEndOfTurnCancelFrame()); names(got) != "EagerEndOfTurnCancel" {
+	if got := emit(g, frames.NewUserTurnResponseCancelFrame()); names(got) != "UserTurnResponseCancel" {
 		t.Fatalf("emitted %s, want only the cancellation", names(got))
 	}
 	if got := emit(g, frames.NewLLMTextFrame(" Done.")); len(got) != 0 {
@@ -133,7 +133,7 @@ func TestWithdrawnSpeculationIsDiscarded(t *testing.T) {
 func TestWithdrawalArrivingBeforeTheReplyItCancels(t *testing.T) {
 	g := newSpeculationGate("Test")
 
-	emit(g, frames.NewEagerEndOfTurnCancelFrame())
+	emit(g, frames.NewUserTurnResponseCancelFrame())
 	if got := speculate(g, true, true, "Canceling."); len(got) != 0 {
 		t.Fatalf("emitted %s, want nothing: the reply is void", names(got))
 	}
@@ -253,7 +253,7 @@ func TestAWithdrawalClearsIt(t *testing.T) {
 	g := newSpeculationGate("Test")
 
 	speculate(g, true, false, "Booking.")
-	emit(g, frames.NewEagerEndOfTurnCancelFrame())
+	emit(g, frames.NewUserTurnResponseCancelFrame())
 
 	if g.isSpeculating() {
 		t.Error("the withdrawn inference still reads as speculative")
@@ -292,7 +292,7 @@ func TestAWithdrawnReplyIsNotReleasedByTheTurnEnding(t *testing.T) {
 	g := newSpeculationGate("Test")
 
 	speculate(g, true, false, "Canceling.")
-	if got := emit(g, frames.NewEagerEndOfTurnCancelFrame()); names(got) != "EagerEndOfTurnCancel" {
+	if got := emit(g, frames.NewUserTurnResponseCancelFrame()); names(got) != "UserTurnResponseCancel" {
 		t.Fatalf("emitted %s, want only the cancellation", names(got))
 	}
 	if got := emit(g, frames.NewUserStoppedSpeakingFrame()); names(got) != "UserStoppedSpeaking" {
@@ -306,7 +306,7 @@ func TestAWithdrawnReplyIsNotReleasedByTheTurnEnding(t *testing.T) {
 func TestANewReplySupersedesAHeldOne(t *testing.T) {
 	g := newSpeculationGate("Test")
 
-	emit(g, frames.NewEagerEndOfTurnCancelFrame())
+	emit(g, frames.NewUserTurnResponseCancelFrame())
 	if got := speculate(g, true, false, "Canceling."); len(got) != 0 {
 		t.Fatalf("emitted %s, want nothing", names(got))
 	}
@@ -349,8 +349,8 @@ func TestAToolResultSurvivesADiscardedSpeculation(t *testing.T) {
 	emit(g, reply(false, "Booking.")...)
 	emit(g, toolResult("booked"))
 
-	got := emit(g, frames.NewEagerEndOfTurnCancelFrame())
-	if want := "EagerEndOfTurnCancel|FunctionCallResult"; names(got) != want {
+	got := emit(g, frames.NewUserTurnResponseCancelFrame())
+	if want := "UserTurnResponseCancel|FunctionCallResult"; names(got) != want {
 		t.Fatalf("emitted %s, want %s", names(got), want)
 	}
 	for _, f := range got {
@@ -383,7 +383,7 @@ func TestAToolResultIsNotDroppedWithAReplyBeingDropped(t *testing.T) {
 	g := newSpeculationGate("Test")
 
 	speculate(g, true, false, "Booking.")
-	if got := emit(g, frames.NewEagerEndOfTurnCancelFrame()); names(got) != "EagerEndOfTurnCancel" {
+	if got := emit(g, frames.NewUserTurnResponseCancelFrame()); names(got) != "UserTurnResponseCancel" {
 		t.Fatalf("emitted %s, want only the cancellation", names(got))
 	}
 	got := emit(g, frames.NewLLMTextFrame(" Done."), toolResult("booked"))

@@ -216,7 +216,7 @@ func (p *UserTurnProcessor) onInferenceTriggered(
 // already released.
 func (p *UserTurnProcessor) onSpeculationCanceled(ctx context.Context) {
 	slog.Debug("withdrawing the speculative reply", "processor", p.Name())
-	_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewEagerEndOfTurnCancelFrame() })
+	_ = p.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() })
 }
 
 // onStopTimeout reports a turn closed because no strategy closed it.

@@ -725,7 +725,7 @@ func (f *LLMContextAssistantTurnFrame) String() string {
 //
 // A turn answered from an eager end of turn is also broadcast as a speculation,
 // ahead of the inference that answers it, so processors after the LLM learn the
-// turn before its held response is released. An EagerEndOfTurnCancelFrame
+// turn before its held response is released. A UserTurnResponseCancelFrame
 // withdraws it, and the turn written to the context once it ends can differ
 // from it.
 type LLMContextUserTurnFrame struct {

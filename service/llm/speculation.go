@@ -37,7 +37,7 @@ type gatedFrame struct {
 // The host calls beginSpeculation when it starts an inference for a turn that
 // may not have ended, and the reply that follows is held from its
 // LLMFullResponseStartFrame onward. A UserStoppedSpeakingFrame releases it, the
-// turn it answers having ended, and an EagerEndOfTurnCancelFrame discards it.
+// turn it answers having ended, and a UserTurnResponseCancelFrame discards it.
 // Neither names a reply: only one speculation is ever in flight, since producing
 // one takes a whole user turn.
 //
@@ -123,7 +123,7 @@ func (g *speculationGate) process(f frames.Frame, dir processor.Direction) []gat
 		// follows the frame that ended the turn it answers.
 		emitted := []gatedFrame{{f, dir}}
 		switch f.(type) {
-		case *frames.EagerEndOfTurnCancelFrame, *frames.InterruptionFrame:
+		case *frames.UserTurnResponseCancelFrame, *frames.InterruptionFrame:
 			emitted = append(emitted, g.discard()...)
 		case *frames.UserStoppedSpeakingFrame:
 			emitted = append(emitted, g.release()...)

@@ -1323,7 +1323,7 @@ func (s *StreamService) emitEagerEndOfTurn(ctx context.Context, r Result) {
 		}
 		s.eagerPending = false
 		slog.DebugContext(ctx, "eager end of turn withdrawn", "service", s.Name())
-		_ = s.PushFrame(ctx, frames.NewEagerEndOfTurnCancelFrame(), processor.Downstream)
+		_ = s.PushFrame(ctx, frames.NewUserTurnResponseCancelFrame(), processor.Downstream)
 	case r.Final && r.EndOfTurn:
 		// The turn was committed, so the prediction is resolved. Whatever was
 		// generated from it is settled by the committed transcript rather than

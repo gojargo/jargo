@@ -1200,8 +1200,8 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	case *frames.InterruptionFrame:
 		b.handleInterruptions(ctx)
 		return b.PushFrame(ctx, f, dir)
-	case *frames.EagerEndOfTurnCancelFrame:
-		b.handleEagerEndOfTurnCancel(ctx)
+	case *frames.UserTurnResponseCancelFrame:
+		b.handleUserTurnResponseCancel(ctx)
 		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
 		if err := b.PushFrame(ctx, f, dir); err != nil {
@@ -1291,7 +1291,7 @@ func (b *Base) isSpeculating() bool {
 	return b.gate.isSpeculating()
 }
 
-// handleEagerEndOfTurnCancel stops generating a reply whose user turn turned out
+// handleUserTurnResponseCancel stops generating a reply whose user turn turned out
 // to be unfinished.
 //
 // The tokens are wasted either way; stopping keeps the service from paying for
@@ -1300,7 +1300,7 @@ func (b *Base) isSpeculating() bool {
 //
 // Nothing measured for the abandoned generation is reported, because the
 // measurements go out where a generation finishes and this one never does.
-func (b *Base) handleEagerEndOfTurnCancel(ctx context.Context) {
+func (b *Base) handleUserTurnResponseCancel(ctx context.Context) {
 	// Runs before the frame reaches the gate, which is what clears the
 	// speculation, so this still sees the one being withdrawn.
 	if !b.isSpeculating() {
@@ -1492,7 +1492,7 @@ func (b *Base) announceFunctionCalls(
 		// call runs as an ordinary one.
 		slog.DebugContext(ctx, "a speculative inference wants a tool call, withdrawing it",
 			"service", b.Name())
-		return noop, b.Broadcast(ctx, func() frames.Frame { return frames.NewEagerEndOfTurnCancelFrame() })
+		return noop, b.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() })
 	}
 
 	if visible := b.userVisibleCalls(calls); len(visible) > 0 {
