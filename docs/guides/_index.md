@@ -20,5 +20,6 @@ Task-oriented pages for the subsystems around the core engine.
   and speaking state.
 - **[Observability](observability.md)**: observers, metrics and tracing, and which
   numbers actually matter for a voice agent.
-- **[Expressive conversation](expressive-conversation.md)** (alpha): the LLM writes
-  expression into its reply as tags, and the TTS performs them.
+- **[Expressive conversation](expressive-conversation.md)** (alpha): the LLM hears
+  how the user spoke and writes expression into its reply as tags, and the TTS
+  performs them.

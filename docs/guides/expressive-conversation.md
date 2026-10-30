@@ -8,9 +8,9 @@ weight: 7
 > **Alpha.** The tag syntax and the types behind it are likely to change between
 > releases.
 
-An expressive conversation lets the bot answer in kind: the LLM writes
-expression into its reply as inline tags, and the TTS service performs them
-instead of reading them aloud.
+An expressive conversation lets the bot answer in kind: the LLM hears how the
+user spoke, writes expression into its reply as inline tags, and the TTS
+service performs them instead of reading them aloud.
 
 ```text
 <<warm>> It's [[laugh]] ^^back^^ up. [[pause 300]] Your code is <<slow: A B 7>>.
@@ -48,11 +48,101 @@ With it on, the TTS service:
   can match.
 
 The conversation keeps the reply as the LLM wrote it, tags included, so the
-model reads its own expression back. What the assistant turn is reported to
+model reads its own expression back, unless a [tagger](#a-tagger-after-the-llm)
+wrote them. What the assistant turn is reported to
 have said (`aggregators.AssistantTurnStopped` and `LLMContextAssistantTurnFrame`)
 is the words alone.
 
-Teaching the LLM to write the tags is up to the prompt for now.
+## Teaching the LLM
+
+With it on, every LLM service teaches itself the tags the TTS service it feeds
+can perform, in its system instruction, after the application's prompt. It
+reads them from the `frames.TTSMetadataFrame` that TTS service broadcasts, so
+the prompt does not describe them. The instruction follows the active TTS
+service: a `ServiceSwitcher` switch, or a settings change such as a new model,
+broadcasts the metadata again, and the instruction is rebuilt from it. An LLM
+held inactive in an `LLMSwitcher` is taught too.
+
+The pipeline's `expressive.ExpressionPolicy` says which tags are offered and
+when to use them:
+
+```go
+Params: pipeline.Params{
+	EnableExpressiveConversation: true,
+	ExpressionPolicy: &expressive.ExpressionPolicy{
+		Guidance: []expressive.Guidance{
+			expressive.GuidanceMatchStyle,
+			expressive.GuidanceLine("Never laugh while discussing billing."),
+		},
+		Delivery: []expressive.ExpressionDelivery{
+			expressive.DeliveryCalm, expressive.DeliveryHappy,
+			expressive.DeliverySympathetic, expressive.DeliveryExcited,
+		},
+	},
+},
+```
+
+- `Delivery` and `Sounds` narrow the tags offered, by their universal names.
+  Left nil, the core ones are offered (`expressive.CoreDelivery` and
+  `expressive.CoreSounds`), those the TTS service performs; an empty list
+  offers none. An LLM starts inventing names when offered more than about 15
+  from a fixed list. Tags the TTS service cannot perform are left out, with a
+  warning.
+- `Guidance` lines say when to express, joined in order: the presets
+  `GuidanceMatchStyle` (answer in the user's mood and energy, but stay calm
+  with hostility), `GuidanceSlowForDetails` (say just what the user may need
+  to write down slowly, in a span such as `<<slow: A B 7>>`) and
+  `GuidanceBreathe` (an occasional breath before a long or difficult
+  sentence, which is also what offers `[[breath]]`), and lines of your own,
+  as `GuidanceLine`.
+
+`expressive.ExpressionInstructions` returns the instruction for a service's
+capabilities and a policy, to read it or to build a prompt of your own, and
+`expressive.ExpressionPolicyWarning` what the policy asks for that the service
+cannot perform.
+
+## Perception
+
+A perception producer, such as an STT service or a processor after it, reads
+how the user spoke and sets the reading on the transcription it passes along,
+in `Perception`: signals such as a tone, each with its likeliest labels and how
+sure the reading is, or a measure such as speech rate. It declares the signals
+it reports in a `frames.PerceptionMetadataFrame` at start.
+
+The user aggregator writes the turn's final reading at the head of its user
+message:
+
+```text
+([tone frustrated=0.86, neutral=0.10]) Can you tell me where my order is?
+```
+
+and the LLM's instruction explains how to read it, from the producer's
+metadata: what the confidences mean, that a reading below 0.5 is a guess, and
+each signal. A reading changes the bot's delivery on its own, but changes what
+it says only when the policy's guidance names a reaction, such as a
+`GuidanceLine("If the user sounds frustrated at 0.7 or above, apologize once.")`.
+A reading of an interim transcription is provisional and never reaches the
+context. One of an eager transcription is written into the message an early
+reply is generated from.
+
+The application gets the turn's reading in `aggregators.UserTurnStopped.Perception`,
+processors after the user aggregator in `frames.LLMContextUserTurnFrame.Perception`,
+and clients in the `perception` field of the transcription's `user-input`
+message (see [RTVI](rtvi.md)), which waits for a producer after the STT to read
+it.
+
+jargo ships no perception producer yet: implement one as a processor after
+the STT that broadcasts its `PerceptionMetadataFrame` at start and sets
+`Perception` on each final `frames.TranscriptionFrame`.
+
+## A tagger after the LLM
+
+A processor between the LLM and the TTS service can write the tags itself, from
+plain replies. It broadcasts a `frames.ExpressionMetadataFrame` at start. The
+LLM is then taught no tags, keeping how to read perception and the policy's own
+guidance lines when there is a reading to act on, while the presets are left
+to the tagger. The assistant aggregator writes each reply to the context as its
+words alone, so the LLM reads back what it wrote.
 
 ## Universal names
 
