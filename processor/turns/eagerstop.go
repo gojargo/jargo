@@ -225,7 +225,7 @@ func (s *EagerStop) reportStopped(params UserTurnStoppedParams) {
 func (s *EagerStop) speculate(fr *frames.EagerTranscriptionFrame) {
 	// Segments committed earlier in this turn are part of what the model will
 	// see, so they are part of what the committed transcript is compared to.
-	speculation := &UserTurnSpeculation{Text: s.inner.text + fr.Text}
+	speculation := &UserTurnSpeculation{Text: s.inner.text + fr.Text, Perception: fr.Perception}
 
 	timer := time.AfterFunc(s.timeout, func() { s.speculationTimedOut(speculation) })
 	s.mu.Lock()

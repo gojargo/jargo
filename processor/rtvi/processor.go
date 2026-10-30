@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline/capabilities"
 	"github.com/gojargo/jargo/processor"
@@ -319,9 +320,9 @@ func (o *Observer) userInputMessages(f frames.Frame) ([]Message, bool) {
 	var d UserInputData
 	switch fr := f.(type) {
 	case *frames.TranscriptionFrame:
-		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, true), true
+		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, true, fr.Perception), true
 	case *frames.InterimTranscriptionFrame:
-		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, false), true
+		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, false, fr.Perception), true
 	case *frames.UserBackchannelFrame:
 		d = UserInputData{
 			Text: fr.Text, InputType: UserInputBackchannel, Timestamp: fr.Timestamp, Final: true, UserID: fr.UserID,
@@ -341,12 +342,16 @@ func (o *Observer) userInputMessages(f frames.Frame) ([]Message, bool) {
 }
 
 // transcriptionMessages reports a transcription, final or interim, in each of
-// the messages enabled for it.
-func (o *Observer) transcriptionMessages(text, userID, timestamp string, final bool) []Message {
+// the messages enabled for it. Its user-input message carries how the user said
+// it, when the transcription comes with a reading.
+func (o *Observer) transcriptionMessages(
+	text, userID, timestamp string, final bool, perception []expressive.PerceptionSignal,
+) []Message {
 	var msgs []Message
 	if o.enabled(userInputOf) {
 		msgs = append(msgs, UserInput(UserInputData{
 			Text: text, InputType: UserInputTranscription, Timestamp: timestamp, Final: final, UserID: userID,
+			Perception: userPerception(perception),
 		}))
 	}
 	if o.rawTextEnabled(sttRawTextOf) {
@@ -356,6 +361,23 @@ func (o *Observer) transcriptionMessages(text, userID, timestamp string, final b
 		msgs = append(msgs, UserTranscription(text, userID, timestamp, final)) //nolint:staticcheck // still sent
 	}
 	return msgs
+}
+
+// userPerception is a reading of how the user spoke, as a user-input message
+// carries it, or nil for none.
+func userPerception(perception []expressive.PerceptionSignal) []UserPerceptionSignal {
+	if len(perception) == 0 {
+		return nil
+	}
+	signals := make([]UserPerceptionSignal, 0, len(perception))
+	for _, signal := range perception {
+		labels := make([]UserPerceptionLabel, 0, len(signal.Labels))
+		for _, l := range signal.Labels {
+			labels = append(labels, UserPerceptionLabel{Label: l.Label, Confidence: l.Confidence})
+		}
+		signals = append(signals, UserPerceptionSignal{Name: signal.Name, Labels: labels, Value: signal.Value})
+	}
+	return signals
 }
 
 // userMessageFor maps user- and system-originated frames. The second result

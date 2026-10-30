@@ -156,10 +156,43 @@ func (f *TTSMetadataFrame) String() string {
 	return fmt.Sprintf("%s(service: %s, expression: %t)", f.Name(), f.ServiceName, f.Expression != nil)
 }
 
+// PerceptionMetadataFrame is the metadata a processor that perceives how the
+// user spoke broadcasts at start. The processor may be an STT service or a
+// processor of its own, so the signals it reports have a frame of their own.
+// Part of expressive conversation (alpha).
+type PerceptionMetadataFrame struct {
+	ServiceMetadataFrame
+	// Perception is the signals the processor reports.
+	Perception expressive.PerceptionCapabilities
+}
+
+// NewPerceptionMetadataFrame builds a PerceptionMetadataFrame for the named
+// processor, reporting perception.
+func NewPerceptionMetadataFrame(service string, perception expressive.PerceptionCapabilities) *PerceptionMetadataFrame {
+	return &PerceptionMetadataFrame{
+		BaseSystemFrame: NewBaseSystemFrame("PerceptionMetadataFrame"),
+		ServiceName:     service,
+		Perception:      perception,
+	}
+}
+
+// Copy implements ServiceMetadata.
+func (f *PerceptionMetadataFrame) Copy() ServiceMetadata {
+	c := *f
+	c.BaseSystemFrame = NewBaseSystemFrame("PerceptionMetadataFrame")
+	return &c
+}
+
+// String implements fmt.Stringer.
+func (f *PerceptionMetadataFrame) String() string {
+	return fmt.Sprintf("%s(service: %s, signals: %d)", f.Name(), f.ServiceName, len(f.Perception.Signals))
+}
+
 // Compile-time interface checks.
 var (
 	_ SystemFrame     = (*ServiceMetadataFrame)(nil)
 	_ ServiceMetadata = (*TTSMetadataFrame)(nil)
+	_ ServiceMetadata = (*PerceptionMetadataFrame)(nil)
 	_ ServiceMetadata = (*ServiceMetadataFrame)(nil)
 	_ ServiceMetadata = (*LLMServiceMetadataFrame)(nil)
 	_ SystemFrame     = (*STTMetadataFrame)(nil)

@@ -2,6 +2,7 @@ package rtvi
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -23,7 +24,7 @@ func TestAUserBackchannelIsSentAsUserInput(t *testing.T) {
 		t.Fatalf("sent %+v, want one user-input", o.sent)
 	}
 	want := UserInputData{Text: "mhm", InputType: UserInputBackchannel, UserID: "user", Timestamp: "now", Final: true}
-	if got := o.sent[0].Data; got != want {
+	if got := o.sent[0].Data; !reflect.DeepEqual(got, want) {
 		t.Errorf("data = %+v, want %+v", got, want)
 	}
 }
@@ -41,7 +42,8 @@ func TestATranscriptionIsSentAsUserInputThenUserTranscription(t *testing.T) {
 		{Text: "Hel", InputType: UserInputTranscription, UserID: "user", Timestamp: "t1", Final: false},
 		{Text: "Hello.", InputType: UserInputTranscription, UserID: "user", Timestamp: "t2", Final: true},
 	}
-	if got := []any{o.sent[0].Data, o.sent[2].Data}; got[0] != wantData[0] || got[1] != wantData[1] {
+	if got := []any{o.sent[0].Data, o.sent[2].Data}; !reflect.DeepEqual(got[0], wantData[0]) ||
+		!reflect.DeepEqual(got[1], wantData[1]) {
 		t.Errorf("data = %+v, want %+v", got, wantData)
 	}
 }

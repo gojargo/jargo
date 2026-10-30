@@ -30,6 +30,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/audio/vad/controller"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/expressive/formatter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -116,6 +117,10 @@ type UserTurnStopped struct {
 	// UserID identifies the speaker, and is empty when the transcription service
 	// does not say who spoke.
 	UserID string
+	// Perception is the turn's final reading of how the user spoke, with
+	// expressive conversation on and a perception producer in the pipeline, or
+	// nil. Part of expressive conversation (alpha).
+	Perception []expressive.PerceptionSignal
 }
 
 // UserTurnMessageAdded describes a user message written to the conversation.
@@ -437,6 +442,14 @@ type UserAggregator struct {
 	// words already in the conversation. Without new words, the turn's next
 	// inference recovers it like an empty user turn that interrupted the bot.
 	turnAnswerVoided bool
+	// expressive is whether the pipeline has expressive conversation on
+	// (alpha), which is what writes how the user spoke into the conversation.
+	expressive bool
+	// perception is the latest final reading of how the user spoke, for the
+	// user message, written at its head. turnPerception is the same reading
+	// for the turn, reported when it stops: a turn can write several messages.
+	perception     []expressive.PerceptionSignal
+	turnPerception []expressive.PerceptionSignal
 }
 
 func newUser(
@@ -566,6 +579,7 @@ func (u *UserAggregator) Setup(ctx context.Context, s processor.Setup) error {
 	}
 	u.mu.Lock()
 	u.sessionCtx = ctx
+	u.expressive = s.EnableExpressiveConversation
 	u.mu.Unlock()
 	if u.vad != nil {
 		if err := u.vad.Setup(s); err != nil {
@@ -1012,6 +1026,7 @@ func (u *UserAggregator) appendMessages(msgs []frames.Message) {
 // which watches it where the transcription service pushes it rather than
 // waiting for it to travel any further.
 func (u *UserAggregator) handleTranscription(fr *frames.TranscriptionFrame) error {
+	u.handlePerception(fr.Perception)
 	// Whitespace is not something the user said. A service that reports a final
 	// transcript of nothing but spaces would otherwise open a turn, commit it as
 	// a message and have the model answer it.
@@ -1036,6 +1051,34 @@ func (u *UserAggregator) handleTranscription(fr *frames.TranscriptionFrame) erro
 	// turn, and one arriving after a turn closed is the beginning of the next one
 	// rather than a second answer to the one that just ended.
 	return nil
+}
+
+// handlePerception keeps a final transcription's reading of how the user spoke,
+// with expressive conversation on: for the user message and for the turn. A
+// later reading in the same turn replaces it. It is folded in under the turn
+// controller's lock, as the transcript is.
+func (u *UserAggregator) handlePerception(signals []expressive.PerceptionSignal) {
+	u.mu.Lock()
+	on := u.expressive
+	u.mu.Unlock()
+	if !on || len(signals) == 0 {
+		return
+	}
+	u.turn.Locked(func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		u.perception = signals
+		u.turnPerception = signals
+	})
+}
+
+// withPerception is the user message for what was said: the reading of how the
+// user spoke at its head, when there is one.
+func withPerception(said string, perception []expressive.PerceptionSignal) string {
+	if len(perception) == 0 {
+		return said
+	}
+	return expressive.FormatPerception(perception) + " " + said
 }
 
 // aggregate folds a transcript into what the turn has said so far.
@@ -1089,6 +1132,10 @@ func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool, feed func(
 	parts := u.aggregation
 	u.aggregation = nil
 	startedAt, userID := u.turnStartedAt, u.userID
+	perception := u.perception
+	if len(parts) > 0 {
+		u.perception = nil
+	}
 	u.mu.Unlock()
 
 	said := text.Concatenate(parts)
@@ -1104,9 +1151,11 @@ func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool, feed func(
 		}
 		return "", nil
 	}
-	u.context.AddUserMessage(said)
+	u.context.AddUserMessage(withPerception(said, perception))
 	if err := u.Broadcast(ctx, func() frames.Frame {
-		return frames.NewLLMContextUserTurnFrame(said, startedAt)
+		turn := frames.NewLLMContextUserTurnFrame(said, startedAt)
+		turn.Perception = perception
+		return turn
 	}); err != nil {
 		return said, err
 	}
@@ -2439,7 +2488,7 @@ func (u *UserAggregator) onInferenceTriggered(
 // runSpeculativeInference runs an inference for a turn that has not ended.
 //
 // The turn is still open, so the conversation must not record it. The inference
-// runs against a provisional copy carrying the speculated turn text: nothing
+// runs against a provisional copy carrying the speculated turn and its reading: nothing
 // here touches the real conversation, and the aggregation keeps accumulating for
 // whenever the turn does end. The reply is held downstream until the turn is
 // confirmed, and discarded if it is not.
@@ -2449,9 +2498,14 @@ func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.Us
 	// written once it ends waits for the inference to finish.
 	u.mu.Lock()
 	startedAt := u.turnStartedAt
+	var perception []expressive.PerceptionSignal
+	if u.expressive {
+		perception = s.Perception
+	}
 	u.mu.Unlock()
 	_ = u.Broadcast(ctx, func() frames.Frame {
 		turn := frames.NewLLMContextUserTurnFrame(s.Text, startedAt)
+		turn.Perception = perception
 		turn.Speculation = true
 		return turn
 	})
@@ -2459,7 +2513,7 @@ func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.Us
 	provisional := frames.NewLLMContext(u.context.System())
 	provisional.SetMessages(append(u.context.Messages(), frames.Message{
 		Role: frames.RoleUser,
-		Text: s.Text,
+		Text: withPerception(s.Text, perception),
 	}))
 	provisional.SetTools(u.context.Tools())
 	provisional.SetToolChoice(u.context.ToolChoice())
@@ -2507,6 +2561,8 @@ func (u *UserAggregator) onSpeculationCanceled(ctx context.Context) {
 func (u *UserAggregator) onResetAggregation(context.Context, turns.StartStrategy) {
 	u.mu.Lock()
 	u.aggregation = nil
+	u.perception = nil
+	u.turnPerception = nil
 	u.mu.Unlock()
 }
 
@@ -2591,6 +2647,8 @@ func (u *UserAggregator) reportTurnStopped(
 	u.mu.Lock()
 	content, startedAt, userID := u.wholeTurn, u.turnStartedAt, u.userID
 	u.wholeTurn = ""
+	perception := u.turnPerception
+	u.turnPerception = nil
 	u.mu.Unlock()
 
 	if !onSessionEnd || content != "" {
@@ -2598,10 +2656,11 @@ func (u *UserAggregator) reportTurnStopped(
 		u.turnStartedAt = ""
 		u.mu.Unlock()
 		u.Events().Call(ctx, EventUserTurnStopped, u, UserTurnStopped{
-			Strategy:  strategy,
-			Content:   content,
-			Timestamp: startedAt,
-			UserID:    userID,
+			Strategy:   strategy,
+			Content:    content,
+			Timestamp:  startedAt,
+			UserID:     userID,
+			Perception: perception,
 		})
 	}
 

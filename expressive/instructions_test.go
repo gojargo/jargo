@@ -53,32 +53,34 @@ func lacks(t *testing.T, instructions, unwanted string) {
 }
 
 func TestNothingIsTaughtForAServiceThatPerformsNothing(t *testing.T) {
-	if got := expressive.ExpressionInstructions(nil, nil); got != "" {
+	if got := expressive.ExpressionInstructions(nil, nil, nil); got != "" {
 		t.Errorf("nil capabilities taught %q", got)
 	}
-	if got := expressive.ExpressionInstructions(&expressive.ExpressionCapabilities{}, nil); got != "" {
+	if got := expressive.ExpressionInstructions(&expressive.ExpressionCapabilities{}, nil, nil); got != "" {
 		t.Errorf("empty capabilities taught %q", got)
 	}
 }
 
 func TestAServiceIsOfferedTheCoreUniversalNamesItPerforms(t *testing.T) {
-	instructions := expressive.ExpressionInstructions(fixed(), nil)
+	instructions := expressive.ExpressionInstructions(fixed(), nil, nil)
 
 	contains(t, instructions, "Use only these deliveries, written exactly as listed: <<calm>>, <<warm>>, <<sad>>.")
 	contains(t, instructions, "Use only these sounds, written exactly as listed: [[laugh]].")
 }
 
 func TestAServiceThatPerformsDeliveryIsTaughtSpans(t *testing.T) {
-	contains(t, expressive.ExpressionInstructions(fixed(), nil),
+	contains(t, expressive.ExpressionInstructions(fixed(), nil, nil),
 		"- <<calm: A B 7>> speaks just the words after the colon, A B 7")
 	lacks(t, expressive.ExpressionInstructions(&expressive.ExpressionCapabilities{
 		Sounds:            []expressive.ExpressionTerm{{Name: "laughter"}},
 		ServiceVocabulary: map[expressive.UniversalName][]string{expressive.SoundLaugh: {"laughter"}},
-	}, nil), "speaks just the words after the colon")
+	}, nil, nil),
+
+		"speaks just the words after the colon")
 }
 
 func TestAFreeTextServiceIsOfferedUniversalNamesAsTheOnlyChoices(t *testing.T) {
-	instructions := expressive.ExpressionInstructions(freeText(), nil)
+	instructions := expressive.ExpressionInstructions(freeText(), nil, nil)
 
 	contains(t, instructions, "Use only these deliveries, written exactly as listed: <<calm>>, <<sympathetic>>, "+
 		"<<apologetic>>, <<warm>>, <<excited>>, <<surprised>>, <<sad>>, <<grateful>>, "+
@@ -90,13 +92,13 @@ func TestAFreeTextServiceIsOfferedUniversalNamesAsTheOnlyChoices(t *testing.T) {
 func TestABreathIsOfferedOnlyToAPolicyThatAsksForBreaths(t *testing.T) {
 	breathes := &expressive.ExpressionPolicy{Guidance: []expressive.Guidance{expressive.GuidanceBreathe}}
 
-	lacks(t, expressive.ExpressionInstructions(freeText(), nil), "[[breath]]")
-	contains(t, expressive.ExpressionInstructions(freeText(), breathes), "[[sigh]], [[breath]].")
+	lacks(t, expressive.ExpressionInstructions(freeText(), nil, nil), "[[breath]]")
+	contains(t, expressive.ExpressionInstructions(freeText(), breathes, nil), "[[sigh]], [[breath]].")
 }
 
 func TestOnlyTheControlsAServicePerformsAreTaught(t *testing.T) {
-	fixedText := expressive.ExpressionInstructions(fixed(), nil)
-	free := expressive.ExpressionInstructions(freeText(), nil)
+	fixedText := expressive.ExpressionInstructions(fixed(), nil, nil)
+	free := expressive.ExpressionInstructions(freeText(), nil, nil)
 
 	lacks(t, fixedText, "^^word^^")
 	contains(t, fixedText, "[[pause 500]]")
@@ -110,7 +112,7 @@ func TestAPolicyNarrowsAFixedListInItsOwnOrder(t *testing.T) {
 		Sounds:   []expressive.ExpressionSound{},
 	}
 
-	instructions := expressive.ExpressionInstructions(fixed(), policy)
+	instructions := expressive.ExpressionInstructions(fixed(), policy, nil)
 
 	contains(t, instructions, "exactly as listed: <<sad>>, <<calm>>.")
 	lacks(t, instructions, "[[sound]]")
@@ -120,7 +122,7 @@ func TestAPolicyNamesAnyDeliveryForAFreeTextService(t *testing.T) {
 	policy := &expressive.ExpressionPolicy{Delivery: []expressive.ExpressionDelivery{"whispering", "relieved"}}
 
 	// A universal name is described as the service describes its own name for it.
-	contains(t, expressive.ExpressionInstructions(freeText(), policy),
+	contains(t, expressive.ExpressionInstructions(freeText(), policy, nil),
 		"exactly as listed: <<whispering>> (speaking in a whisper), <<relieved>>.")
 }
 
@@ -131,7 +133,7 @@ func TestNothingIsTaughtWhenAPolicyOffersNothingPerformable(t *testing.T) {
 		Delivery: []expressive.ExpressionDelivery{"relieved"},
 	}
 
-	if got := expressive.ExpressionInstructions(capabilities, policy); got != "" {
+	if got := expressive.ExpressionInstructions(capabilities, policy, nil); got != "" {
 		t.Errorf("taught %q, want nothing", got)
 	}
 }
@@ -141,7 +143,7 @@ func TestGuidanceFollowsTheTagsInOrder(t *testing.T) {
 		expressive.GuidanceMatchStyle, expressive.GuidanceLine("Never laugh while discussing billing."),
 	}}
 
-	instructions := expressive.ExpressionInstructions(fixed(), policy)
+	instructions := expressive.ExpressionInstructions(fixed(), policy, nil)
 
 	want := "\n\n" + string(expressive.GuidanceMatchStyle) + "\nNever laugh while discussing billing."
 	if !strings.HasSuffix(instructions, want) {
@@ -151,7 +153,7 @@ func TestGuidanceFollowsTheTagsInOrder(t *testing.T) {
 
 func TestNeutralInAPolicyIsTaughtOnItsOwnLine(t *testing.T) {
 	instructions := expressive.ExpressionInstructions(fixed(),
-		&expressive.ExpressionPolicy{Delivery: []expressive.ExpressionDelivery{"neutral", "calm"}})
+		&expressive.ExpressionPolicy{Delivery: []expressive.ExpressionDelivery{"neutral", "calm"}}, nil)
 
 	contains(t, instructions, "exactly as listed: <<calm>>.")
 	contains(t, instructions, "<<neutral>> returns to your normal voice.")
@@ -166,7 +168,7 @@ func TestAServiceThatPerformsSpeedIsOfferedSlowWithWhenToUseIt(t *testing.T) {
 		Delivery: []expressive.ExpressionDelivery{"calm", "slow"},
 	}
 
-	instructions := expressive.ExpressionInstructions(capabilities, policy)
+	instructions := expressive.ExpressionInstructions(capabilities, policy, nil)
 
 	contains(t, instructions, "<<slow>> (to say something carefully, such as a number, a code or an address)")
 	// A span is shown slowing a detail, as details are said.
@@ -179,7 +181,7 @@ func TestAServiceThatPerformsSpeedIsOfferedSlowWithWhenToUseIt(t *testing.T) {
 func TestAFreeTextServiceWithNoExamplesIsOfferedTheCoreNames(t *testing.T) {
 	capabilities := &expressive.ExpressionCapabilities{AllowsFreeTextSounds: true, AllowsFreeTextDelivery: true}
 
-	instructions := expressive.ExpressionInstructions(capabilities, nil)
+	instructions := expressive.ExpressionInstructions(capabilities, nil, nil)
 
 	contains(t, instructions, "written exactly as listed: <<calm>>, <<sympathetic>>,")
 	contains(t, instructions, "- <<slow: A B 7>> speaks just the words after the colon")
@@ -193,7 +195,7 @@ func TestAFreeTextServiceIsTaughtNoneOfAKindThePolicyNamesNoneOf(t *testing.T) {
 
 	got := expressive.ExpressionInstructions(capabilities, &expressive.ExpressionPolicy{
 		Delivery: []expressive.ExpressionDelivery{}, Sounds: []expressive.ExpressionSound{},
-	})
+	}, nil)
 
 	if want := "You can direct how your words are spoken with tags:\n- ^^word^^ stresses a word."; got != want {
 		t.Errorf("taught %q, want %q", got, want)
@@ -258,5 +260,63 @@ func TestAWarningSaysWhenTheServicePerformsNoneOfThePolicy(t *testing.T) {
 	}
 	if got := expressive.ExpressionPolicyWarning(nil, &expressive.ExpressionPolicy{}); got != want {
 		t.Errorf("warned %q, want %q", got, want)
+	}
+}
+
+func tonePerception() *expressive.PerceptionCapabilities {
+	return &expressive.PerceptionCapabilities{Signals: []expressive.PerceptionTerm{
+		{Name: "tone", Labels: []string{"positive", "neutral", "sad", "frustrated"}},
+		{Name: "speech_rate", Description: "Words per second."},
+	}}
+}
+
+func TestPerceptionIsTaughtWithAnExampleAndItsSignals(t *testing.T) {
+	instructions := expressive.ExpressionInstructions(nil, nil, tonePerception())
+
+	contains(t, instructions, "in parentheses, such as ([tone positive=0.86, neutral=0.10]), each")
+	contains(t, instructions, "A reading below 0.5 is a guess: don't act on it.")
+	want := "- tone: positive, neutral, sad, frustrated.\n- speech_rate: Words per second."
+	if !strings.HasSuffix(instructions, want) {
+		t.Errorf("the instruction ends %q, want it to end %q", instructions, want)
+	}
+}
+
+func TestPerceptionComesBeforeTheTagsAndTheGuidanceLast(t *testing.T) {
+	policy := &expressive.ExpressionPolicy{Guidance: []expressive.Guidance{expressive.GuidanceMatchStyle}}
+
+	instructions := expressive.ExpressionInstructions(fixed(), policy, tonePerception())
+
+	reading := strings.Index(instructions, "([tone")
+	tags := strings.Index(instructions, "You can direct how your words are spoken")
+	guidance := strings.Index(instructions, string(expressive.GuidanceMatchStyle))
+	if reading < 0 || reading >= tags || tags >= guidance {
+		t.Errorf("reading at %d, tags at %d, guidance at %d, want them in that order", reading, tags, guidance)
+	}
+}
+
+func TestOnlyTheDeveloperGuidanceIsKeptForPerceptionWithoutTags(t *testing.T) {
+	policy := &expressive.ExpressionPolicy{Guidance: []expressive.Guidance{
+		expressive.GuidanceMatchStyle,
+		expressive.GuidanceLine("If the user sounds frustrated, apologize once."),
+		expressive.GuidanceSlowForDetails,
+	}}
+
+	instructions := expressive.ExpressionInstructions(nil, policy, tonePerception())
+
+	if !strings.HasSuffix(instructions, "\n\nIf the user sounds frustrated, apologize once.") {
+		t.Errorf("the instruction does not end with the developer's line:\n%s", instructions)
+	}
+	lacks(t, instructions, string(expressive.GuidanceMatchStyle))
+	lacks(t, instructions, "<<slow")
+}
+
+func TestADeveloperLineWithAPresetsTextIsKeptForPerceptionWithoutTags(t *testing.T) {
+	line := expressive.GuidanceLine(expressive.GuidanceMatchStyle)
+
+	instructions := expressive.ExpressionInstructions(nil,
+		&expressive.ExpressionPolicy{Guidance: []expressive.Guidance{line}}, tonePerception())
+
+	if !strings.HasSuffix(instructions, "\n\n"+string(line)) {
+		t.Errorf("the instruction does not end with the developer's line:\n%s", instructions)
 	}
 }

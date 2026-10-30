@@ -6,29 +6,44 @@ import (
 )
 
 // The instruction that teaches an LLM to take part in an expressive
-// conversation (alpha). It has two parts: the tags the active TTS service can
-// perform, by their universal names, built from its ExpressionCapabilities;
-// and the developer's guidance on how to answer, from an ExpressionPolicy.
+// conversation (alpha). It has three parts: how to read what was perceived of
+// how the user spoke, built from a perception producer's
+// PerceptionCapabilities; the tags the active TTS service can perform, by
+// their universal names, built from its ExpressionCapabilities; and the
+// developer's guidance on how to answer, from an ExpressionPolicy.
 
 // ExpressionInstructions builds the instruction for an LLM in an expressive
 // conversation.
 //
 // capabilities is what the TTS service that speaks the LLM's replies can
 // perform, or nil for nothing; policy is which tags to offer, and guidance on
-// how to answer, or nil for the default policy. It returns the empty string
-// when the TTS service can perform none of the tags offered.
-func ExpressionInstructions(capabilities *ExpressionCapabilities, policy *ExpressionPolicy) string {
+// how to answer, or nil for the default policy; perception is the signals
+// perceived of how the user spoke, or nil when nothing is perceived. It returns
+// the empty string when nothing is perceived and the TTS service can perform
+// none of the tags offered.
+func ExpressionInstructions(
+	capabilities *ExpressionCapabilities, policy *ExpressionPolicy, perception *PerceptionCapabilities,
+) string {
 	if policy == nil {
 		policy = &ExpressionPolicy{}
 	}
 	tags := tagsSection(capabilities, policy)
-	if tags == "" {
+	var parts []string
+	for _, part := range []string{perceptionSection(perception), tags} {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	parts := []string{tags}
+	// The presets are about tags, so an LLM taught none is not given them.
 	var guidance []string
 	for _, line := range policy.Guidance {
-		if line != nil {
+		if line == nil {
+			continue
+		}
+		if _, preset := line.(ExpressionGuidance); tags != "" || !preset {
 			guidance = append(guidance, line.String())
 		}
 	}
@@ -57,6 +72,46 @@ func ExpressionPolicyWarning(capabilities *ExpressionCapabilities, policy *Expre
 			"policy, so they aren't offered", strings.Join(leftOut, ", "))
 	}
 	return ""
+}
+
+func perceptionSection(perception *PerceptionCapabilities) string {
+	if perception == nil || len(perception.Signals) == 0 {
+		return ""
+	}
+	suchAs := ""
+	for _, term := range perception.Signals {
+		if len(term.Labels) >= 2 {
+			example := PerceptionSignal{Name: term.Name, Labels: []PerceptionLabel{
+				{Label: term.Labels[0], Confidence: 0.86}, {Label: term.Labels[1], Confidence: 0.10},
+			}}
+			suchAs = " such as " + FormatPerception([]PerceptionSignal{example}) + ","
+			break
+		}
+	}
+	signals := make([]string, 0, len(perception.Signals))
+	for _, term := range perception.Signals {
+		signals = append(signals, signalLine(term))
+	}
+	return "A user message may start with how the user sounded, in parentheses," + suchAs + " each " +
+		"signal with its likeliest labels and how sure the reading is, from 0 to 1, or with a " +
+		"measure. The reading can be wrong, so weigh it against their words. A reading below " +
+		"0.5 is a guess: don't act on it. Never write it yourself. The signals are:\n" +
+		strings.Join(signals, "\n")
+}
+
+func signalLine(term PerceptionTerm) string {
+	if len(term.Labels) == 0 {
+		description := term.Description
+		if description == "" {
+			description = "a measure"
+		}
+		return "- " + term.Name + ": " + strings.TrimRight(description, ".") + "."
+	}
+	line := "- " + term.Name + ": " + strings.Join(term.Labels, ", ") + "."
+	if term.Description != "" {
+		return line + " " + term.Description
+	}
+	return line
 }
 
 func tagsSection(capabilities *ExpressionCapabilities, policy *ExpressionPolicy) string {

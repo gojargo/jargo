@@ -1,6 +1,10 @@
 package frames
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/gojargo/jargo/expressive"
+)
 
 // TextFrame is a chunk of text flowing through the pipeline — emitted by LLM
 // services and consumed by aggregators, TTS services and more. It is a data
@@ -171,6 +175,10 @@ type TranscriptionFrame struct {
 	// Finalized reports whether this is the final transcription for an
 	// utterance, for STT services that signal commit/finalize.
 	Finalized bool
+	// Perception is how the user said these words, as a perception producer
+	// read them, or nil. Set by an STT service that perceives, or by a
+	// processor after it. Part of expressive conversation (alpha).
+	Perception []expressive.PerceptionSignal
 }
 
 // NewTranscriptionFrame builds a TranscriptionFrame.
@@ -212,6 +220,10 @@ type EagerTranscriptionFrame struct {
 	Language string
 	// Result is the raw result from the STT service, if available.
 	Result any
+	// Perception is how the user said the turn, as a perception producer read
+	// it at the predicted end of turn, or nil. A speculative inference answers
+	// the turn with it. Part of expressive conversation (alpha).
+	Perception []expressive.PerceptionSignal
 }
 
 // NewEagerTranscriptionFrame builds an EagerTranscriptionFrame.
@@ -272,6 +284,9 @@ type InterimTranscriptionFrame struct {
 	Language string
 	// Result is the raw result from the STT service, if available.
 	Result any
+	// Perception is a provisional reading of how the user said these words, or
+	// nil. Part of expressive conversation (alpha).
+	Perception []expressive.PerceptionSignal
 }
 
 // NewInterimTranscriptionFrame builds an InterimTranscriptionFrame.

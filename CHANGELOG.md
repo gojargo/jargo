@@ -81,6 +81,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
     `expressive.ExpressionPolicyWarning` what that policy asks for that the
     service cannot perform.
 
+- **Perception in expressive conversation, in alpha: the LLM reads how the
+  user spoke**, as reported by a perception producer such as an STT service or
+  a processor after it, with `pipeline.Params.EnableExpressiveConversation` on.
+  - `frames.TranscriptionFrame`, `InterimTranscriptionFrame` and
+    `EagerTranscriptionFrame` carry the reading in a new `Perception` field:
+    `expressive.PerceptionSignal`s, each read as the likeliest labels with how
+    sure the reading is, such as a tone of frustrated at 0.86, or as a value.
+    An STT service that perceives sets it on the transcriptions it pushes, and
+    a processor after the STT can set it on the ones it passes along. A
+    reading of an interim transcription is provisional. A reading of an eager
+    transcription is written into the user message an early reply is
+    generated from, and carried on `turns.UserTurnSpeculation`. The producer
+    declares the signals it reports in a new `frames.PerceptionMetadataFrame`
+    at start.
+  - The user aggregator writes the turn's final reading at the head of its
+    user message, such as `([tone frustrated=0.86, neutral=0.10]) Can you tell
+    me where my order is?` (`expressive.FormatPerception`), and the LLM
+    service's system instruction explains how to read it: what the
+    confidences mean, that a reading below 0.5 is a guess, and each signal the
+    producer declares. With a reading but no tags to teach, the LLM is given
+    the policy's own guidance lines but not its presets, which are about tags.
+  - Apps get the turn's final reading in `aggregators.UserTurnStopped.Perception`,
+    and processors after the user aggregator the reading written into the
+    context in `frames.LLMContextUserTurnFrame.Perception`. Clients get it in
+    the `perception` field of the transcription's RTVI `user-input` message,
+    which waits for a processor after the STT that announced itself with a
+    `PerceptionMetadataFrame` to read it.
+
 - **The `expression` event in scripted evals:** the expression the bot's TTS
   performed, in the tags the LLM writes, such as `<<excited>>` or
   `[[laughter]]`. A tag the TTS cannot perform is never reported, so a

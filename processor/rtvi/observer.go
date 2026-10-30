@@ -69,6 +69,17 @@ type Observer struct {
 	botVolume    loudness.Tracker
 	lastUserSent time.Time
 	lastBotSent  time.Time
+
+	// perceptionMu guards the perception tracking below. Transcriptions are
+	// pushed by the STT and passed along by every processor after it, each on
+	// its own goroutine.
+	perceptionMu sync.Mutex
+	// perceivers are the processors that read how the user spoke, known from
+	// their PerceptionMetadataFrame, and unreadTranscriptions the
+	// transcriptions pushed to one that it has not read yet. See
+	// transcriptionRead.
+	perceivers           map[processor.Processor]struct{}
+	unreadTranscriptions map[uint64]struct{}
 }
 
 // BotOutputText is one segment of the bot's output as the client will see it.
@@ -379,10 +390,13 @@ func (o *Observer) OnPushFrame(data processor.FramePushed) {
 	if _, audio := f.(frames.AudioFrame); audio && !o.audioLevelsEnabled() {
 		return
 	}
-	// A frame is handled the first time it is pushed, except a segment of the
-	// bot's output, which is handled once it has gone through the output
-	// transport: only the copy coming out of playback carries the timing of what
-	// the caller is hearing.
+	if o.handledAsPerceived(data) {
+		return
+	}
+	// A frame is handled the first time it is pushed, except transcriptions
+	// (above) and a segment of the bot's output, which is handled once it has
+	// gone through the output transport: only the copy coming out of playback
+	// carries the timing of what the caller is hearing.
 	if awaitsPlayback(f) {
 		if !playsOutput(data.Source) {
 			return
@@ -397,6 +411,63 @@ func (o *Observer) OnPushFrame(data processor.FramePushed) {
 	for _, msg := range o.messagesFor(f) {
 		o.sink.Send(msg)
 	}
+}
+
+// handledAsPerceived records a perceiver as its metadata goes by, and reports a
+// transcription once it has been read, rather than on its first push. It
+// reports whether the push was a transcription's, which it has handled.
+func (o *Observer) handledAsPerceived(data processor.FramePushed) bool {
+	switch data.Frame.(type) {
+	case *frames.PerceptionMetadataFrame:
+		if data.FirstPush {
+			o.addPerceiver(data.Source)
+		}
+	case *frames.TranscriptionFrame, *frames.InterimTranscriptionFrame:
+		if o.transcriptionRead(data.Frame, data) {
+			for _, msg := range o.messagesFor(data.Frame) {
+				o.sink.Send(msg)
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// addPerceiver records a processor that reads how the user spoke.
+func (o *Observer) addPerceiver(p processor.Processor) {
+	o.perceptionMu.Lock()
+	defer o.perceptionMu.Unlock()
+	if o.perceivers == nil {
+		o.perceivers = make(map[processor.Processor]struct{})
+	}
+	o.perceivers[p] = struct{}{}
+}
+
+// transcriptionRead reports whether a push of a transcription is the one to
+// report it on: once every perceiver it is pushed to has read it.
+//
+// A processor after the STT that perceives how the user spoke sets the reading
+// on the transcription it passes along. Reported on the STT's push, the
+// user-input message would go out before that processor had read it, without
+// its perception. So a transcription pushed to a perceiver waits until it is
+// pushed on to a processor that is not one.
+func (o *Observer) transcriptionRead(f frames.Frame, data processor.FramePushed) bool {
+	o.perceptionMu.Lock()
+	defer o.perceptionMu.Unlock()
+	if _, ok := o.perceivers[data.Destination]; ok && data.Destination != nil {
+		if data.FirstPush {
+			if o.unreadTranscriptions == nil {
+				o.unreadTranscriptions = make(map[uint64]struct{})
+			}
+			o.unreadTranscriptions[f.ID()] = struct{}{}
+		}
+		return false
+	}
+	if _, ok := o.unreadTranscriptions[f.ID()]; ok {
+		delete(o.unreadTranscriptions, f.ID())
+		return true
+	}
+	return data.FirstPush
 }
 
 // applyConfig applies a runtime reconfiguration, leaving unset fields alone.

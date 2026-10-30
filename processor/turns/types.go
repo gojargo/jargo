@@ -10,6 +10,7 @@ package turns
 import (
 	"context"
 
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 )
@@ -78,6 +79,9 @@ type UserTurnStoppedParams struct {
 type UserTurnSpeculation struct {
 	// Text is the user turn text the inference was run against.
 	Text string
+	// Perception is how the user said it, as read at the eager end of turn,
+	// or nil. Part of expressive conversation (alpha).
+	Perception []expressive.PerceptionSignal
 }
 
 // DefaultStoppedParams is the params a typical stop strategy uses.

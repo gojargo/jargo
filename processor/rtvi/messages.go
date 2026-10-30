@@ -639,6 +639,29 @@ type UserInputData struct {
 	UserID string `json:"user_id,omitempty"`
 	// MsgID is, for chat, the id of the client's send-text message.
 	MsgID string `json:"msg_id,omitempty"`
+	// Perception is, for a transcription, how the user said it, when it comes
+	// with a reading. Part of expressive conversation (alpha).
+	Perception []UserPerceptionSignal `json:"perception,omitempty"`
+}
+
+// UserPerceptionLabel is a label of a perception signal, with how sure the
+// reading is.
+type UserPerceptionLabel struct {
+	// Label is the label, such as "frustrated".
+	Label string `json:"label"`
+	// Confidence is how sure the reading is, from 0 to 1.
+	Confidence float64 `json:"confidence"`
+}
+
+// UserPerceptionSignal is one signal of a reading of how the user spoke.
+type UserPerceptionSignal struct {
+	// Name is what is read, such as "tone".
+	Name string `json:"name"`
+	// Labels is the likeliest labels, likeliest first, for a signal read as
+	// labels.
+	Labels []UserPerceptionLabel `json:"labels"`
+	// Value is the measure, for a signal read as a value.
+	Value *float64 `json:"value,omitempty"`
 }
 
 // UserInput builds a user-input message: what the user said or typed. It is the

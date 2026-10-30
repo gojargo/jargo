@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+
+	"github.com/gojargo/jargo/expressive"
 )
 
 // Role identifies who authored a conversation message.
@@ -738,6 +740,11 @@ type LLMContextUserTurnFrame struct {
 	// answers, written only to a provisional context and not yet part of the
 	// conversation.
 	Speculation bool
+	// Perception is the reading of how the user spoke that is written at the
+	// head of the user message, with expressive conversation on and a
+	// perception producer in the pipeline, or nil. Part of expressive
+	// conversation (alpha).
+	Perception []expressive.PerceptionSignal
 }
 
 // NewLLMContextUserTurnFrame builds an LLMContextUserTurnFrame.

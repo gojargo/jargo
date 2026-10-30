@@ -18,6 +18,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/turn"
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -200,6 +201,12 @@ func catalog() []catalogEntry {
 		{
 			label: "TTSMetadataFrame", cat: system, wantString: "service: tts-1",
 			build: func() frames.Frame { return frames.NewTTSMetadataFrame("tts-1") },
+		},
+		{
+			label: "PerceptionMetadataFrame", cat: system, wantString: "service: tone-1",
+			build: func() frames.Frame {
+				return frames.NewPerceptionMetadataFrame("tone-1", expressive.PerceptionCapabilities{})
+			},
 		},
 		{
 			label: "InputAudioRawFrame", cat: system, wantString: "sample_rate: 16000",

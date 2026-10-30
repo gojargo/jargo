@@ -13,7 +13,9 @@ import (
 // instruction, so a prompt does not need to describe them. It reads them from
 // the TTSMetadataFrame that TTS service broadcasts, and rebuilds the
 // instruction from each one, so it follows a switch of TTS service or a
-// settings change that alters what the TTS performs.
+// settings change that alters what the TTS performs. It is taught how to read
+// what a perception producer perceives of how the user spoke the same way,
+// from that producer's PerceptionMetadataFrame.
 
 // expressionState is what the service knows of the expressive conversation it
 // takes part in.
@@ -23,6 +25,9 @@ type expressionState struct {
 	// tts is the expression the TTS service downstream performs, from its
 	// latest TTSMetadataFrame.
 	tts *expressive.ExpressionCapabilities
+	// perception is the signals perceived of how the user spoke, from the
+	// latest PerceptionMetadataFrame.
+	perception *expressive.PerceptionCapabilities
 	// policy is the pipeline's policy on which tags to offer and when.
 	policy *expressive.ExpressionPolicy
 	// policyWarning is the last warning about the policy, so it is not
@@ -42,8 +47,9 @@ func (b *Base) setupExpression(s processor.Setup) {
 // handleExpressionMetadata teaches the expression a metadata frame announces,
 // with expressive conversation on. The frame travels on either way.
 func (b *Base) handleExpressionMetadata(f frames.Frame) {
-	md, ok := f.(*frames.TTSMetadataFrame)
-	if !ok {
+	switch f.(type) {
+	case *frames.TTSMetadataFrame, *frames.PerceptionMetadataFrame:
+	default:
 		return
 	}
 	b.systemMu.Lock()
@@ -51,9 +57,16 @@ func (b *Base) handleExpressionMetadata(f frames.Frame) {
 		b.systemMu.Unlock()
 		return
 	}
-	// The TTS service's metadata replaces any before it.
-	b.expression.tts = md.Expression
-	warning := b.policyWarningLocked()
+	var warning string
+	switch md := f.(type) {
+	case *frames.TTSMetadataFrame:
+		// The TTS service's metadata replaces any before it.
+		b.expression.tts = md.Expression
+		warning = b.policyWarningLocked()
+	case *frames.PerceptionMetadataFrame:
+		perception := md.Perception
+		b.expression.perception = &perception
+	}
 	b.systemMu.Unlock()
 	if warning != "" {
 		slog.Warn(warning, "service", b.Name())
@@ -76,7 +89,8 @@ func (b *Base) policyWarningLocked() string {
 }
 
 // expressionInstructionsLocked is the part of the system instruction that
-// teaches the expression tags, or the empty string. It runs under systemMu.
+// teaches how to read perception and the expression tags, or the empty string.
+// It runs under systemMu.
 func (b *Base) expressionInstructionsLocked() string {
-	return expressive.ExpressionInstructions(b.expression.tts, b.expression.policy)
+	return expressive.ExpressionInstructions(b.expression.tts, b.expression.policy, b.expression.perception)
 }

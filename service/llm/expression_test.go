@@ -133,7 +133,7 @@ func TestTheTTSExpressionIsTaughtAfterThePrompt(t *testing.T) {
 
 	up := sendUp(t, svc, expressiveParams(nil), ttsMetadata(calmHappy()))
 
-	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(calmHappy(), nil))
+	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(calmHappy(), nil, nil))
 	if countOf[*frames.TTSMetadataFrame](up) == 0 {
 		t.Error("the TTS metadata did not travel on")
 	}
@@ -152,7 +152,7 @@ func TestTheLatestTTSReplacesWhatIsTaught(t *testing.T) {
 
 	sendUp(t, svc, expressiveParams(nil), ttsMetadata(calmHappy()), ttsMetadata(laughter()))
 
-	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(laughter(), nil))
+	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(laughter(), nil, nil))
 }
 
 func TestATTSThatPerformsNothingIsTaughtNothing(t *testing.T) {
@@ -172,7 +172,7 @@ func TestThePolicyShapesWhatIsTaught(t *testing.T) {
 
 	sendUp(t, svc, expressiveParams(policy), ttsMetadata(calmHappy()))
 
-	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(calmHappy(), policy))
+	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(calmHappy(), policy, nil))
 }
 
 func TestEveryLLMInASwitcherIsTaughtThePolicy(t *testing.T) {
@@ -186,7 +186,7 @@ func TestEveryLLMInASwitcherIsTaughtThePolicy(t *testing.T) {
 	// Sent up as the TTS service after the switcher would, while the first is active.
 	sendUp(t, sw, expressiveParams(policy), ttsMetadata(calmHappy()))
 
-	taught := "APP\n\n" + expressive.ExpressionInstructions(calmHappy(), policy)
+	taught := "APP\n\n" + expressive.ExpressionInstructions(calmHappy(), policy, nil)
 	checkInstruction(t, first, taught)
 	checkInstruction(t, second, taught)
 }
@@ -266,4 +266,63 @@ func countOf[T frames.Frame](fs []frames.Frame) int {
 		}
 	}
 	return n
+}
+
+func tone() expressive.PerceptionCapabilities {
+	return expressive.PerceptionCapabilities{Signals: []expressive.PerceptionTerm{
+		{Name: "tone", Labels: []string{"positive", "neutral", "frustrated"}},
+	}}
+}
+
+func perceptionMetadata() frames.Frame { return frames.NewPerceptionMetadataFrame("tone", tone()) }
+
+func TestThePerceptionUpstreamIsTaughtWithTheTTSExpression(t *testing.T) {
+	svc := appLLM("llm")
+
+	runWith(t, svc, expressiveParams(nil), []frames.Frame{perceptionMetadata()}, []frames.Frame{ttsMetadata(calmHappy())})
+
+	perception := tone()
+	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(calmHappy(), nil, &perception))
+}
+
+func TestPerceptionWithoutTTSExpressionIsTaughtWithoutPresetsOrWarnings(t *testing.T) {
+	svc := appLLM("llm")
+	policy := &expressive.ExpressionPolicy{
+		Guidance: []expressive.Guidance{expressive.GuidanceMatchStyle, expressive.GuidanceLine("Apologize once.")},
+		Sounds:   []expressive.ExpressionSound{"sighs"},
+	}
+
+	warnings := captureWarnings(t, func() {
+		runWith(t, svc, expressiveParams(policy), []frames.Frame{perceptionMetadata()}, nil)
+	})
+
+	perception := tone()
+	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(nil, nil, &perception)+"\n\nApologize once.")
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none", warnings)
+	}
+}
+
+func TestPerceptionIsNotTaughtWithoutExpressiveConversation(t *testing.T) {
+	svc := appLLM("llm")
+
+	runWith(t, svc, pipeline.Params{}, []frames.Frame{perceptionMetadata()}, nil)
+
+	checkInstruction(t, svc, "APP")
+}
+
+func TestEveryLLMInASwitcherIsTaughtThePerception(t *testing.T) {
+	first, second := appLLM("first"), appLLM("second")
+	sw, err := pipeline.NewLLMSwitcher([]pipeline.LLMMember{first, second}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sent down as a perception producer before the switcher would, while the first is active.
+	runWith(t, sw, expressiveParams(nil), []frames.Frame{perceptionMetadata()}, nil)
+
+	perception := tone()
+	taught := "APP\n\n" + expressive.ExpressionInstructions(nil, nil, &perception)
+	checkInstruction(t, first, taught)
+	checkInstruction(t, second, taught)
 }

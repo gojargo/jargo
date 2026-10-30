@@ -37,9 +37,16 @@ type pause time.Duration
 // since that drops the frames queued behind it.
 func sendAndCollect(t *testing.T, ps []processor.Processor, send ...any) []frames.Frame {
 	t.Helper()
+	return sendAndCollectWith(t, pipeline.Params{}, ps, send...)
+}
+
+// sendAndCollectWith is sendAndCollect in a pipeline told params.
+func sendAndCollectWith(t *testing.T, params pipeline.Params, ps []processor.Processor, send ...any) []frames.Frame {
+	t.Helper()
 	var mu sync.Mutex
 	var got []frames.Frame
 	task := pipeline.NewWorker(pipeline.New(ps...), pipeline.WorkerConfig{
+		Params:                  params,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
