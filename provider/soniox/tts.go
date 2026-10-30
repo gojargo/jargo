@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttssoniox "github.com/gojargo/jargo/adapter/tts/soniox"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -119,6 +121,15 @@ type timedTTSSynthesizer struct {
 
 // SampleRate reports the requested PCM output rate.
 func (s *ttsSynthesizer) SampleRate() int { return s.cfg.SampleRate }
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: audio tags on
+// tts-rt-v2, and none on the other models.
+func (s *ttsSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	if strings.HasPrefix(s.cfg.Model, "tts-rt-v2") {
+		return ttssoniox.SonioxExpressionAdapter{}
+	}
+	return ttsadapter.BaseExpressionAdapter{}
+}
 
 // Metadata reports the Soniox model and voice synthesis is billed against.
 func (s *ttsSynthesizer) Metadata() tts.Metadata {
@@ -296,6 +307,25 @@ func (s *ttsSynthesizer) receive(
 	}
 }
 
+// withoutStressMarks is a timing payload without the asterisks that stress a
+// word. The two lists are passed on as they are when they do not line up, for
+// the accumulator to report.
+func withoutStressMarks(chars []string, starts []float64) ([]string, []float64) {
+	if len(chars) != len(starts) {
+		return chars, starts
+	}
+	keptChars := make([]string, 0, len(chars))
+	keptStarts := make([]float64, 0, len(starts))
+	for i, ch := range chars {
+		if ch == "*" {
+			continue
+		}
+		keptChars = append(keptChars, ch)
+		keptStarts = append(keptStarts, starts[i])
+	}
+	return keptChars, keptStarts
+}
+
 // reportWords turns one timing payload into words and forwards them. A language
 // written without spaces is reported a character at a time, since there is no
 // word boundary to split on.
@@ -311,7 +341,11 @@ func (s *ttsSynthesizer) reportWords(
 	if s.spacelessLanguage() {
 		words, err = uctx.CharsAsWords(t.Characters, t.Starts)
 	} else {
-		words, err = acc.Add(t.Characters, t.Starts)
+		// An audio tag is one word, spaces and all, such as [long pause], and
+		// the asterisks that stress a word, as in *really*, are left out of it.
+		acc.AudioTags = true
+		chars, starts := withoutStressMarks(t.Characters, t.Starts)
+		words, err = acc.Add(chars, starts)
 	}
 	if err != nil {
 		return err

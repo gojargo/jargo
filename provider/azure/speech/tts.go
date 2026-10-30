@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttsazure "github.com/gojargo/jargo/adapter/tts/azure"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -31,6 +33,16 @@ type ttsSynthesizer struct {
 
 // SampleRate reports the PCM output rate.
 func (s *ttsSynthesizer) SampleRate() int { return s.cfg.SampleRate }
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: style markers on
+// DragonHD and DragonHD Omni voices, and none on the others. DragonHD Flash
+// voices each have styles of their own, so they perform none.
+func (s *ttsSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	if strings.Contains(s.cfg.Voice, ":DragonHD") && !strings.Contains(s.cfg.Voice, ":DragonHDFlash") {
+		return ttsazure.AzureHDExpressionAdapter{}
+	}
+	return ttsadapter.BaseExpressionAdapter{}
+}
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {

@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttsinworld "github.com/gojargo/jargo/adapter/tts/inworld"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -45,6 +48,19 @@ type synthesizer struct {
 
 // SampleRate reports the requested PCM output rate.
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: audio markup on
+// TTS-2 models, and none on the older ones.
+func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	switch {
+	case strings.HasPrefix(s.cfg.Model, "inworld-tts-2-flash"):
+		return ttsinworld.InworldFlashExpressionAdapter{}
+	case strings.HasPrefix(s.cfg.Model, "inworld-tts-2"):
+		return ttsinworld.InworldExpressionAdapter{}
+	default:
+		return ttsadapter.BaseExpressionAdapter{}
+	}
+}
 
 // requestBody builds the Inworld request body for text.
 func (s *synthesizer) requestBody(text string) ([]byte, error) {
