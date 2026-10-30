@@ -1,15 +1,19 @@
-// Package assemblyai is a streaming speech-to-text service backed by
-// AssemblyAI's Universal-Streaming (v3) WebSocket. It streams audio and pushes
-// InterimTranscriptionFrames and finalized TranscriptionFrames downstream.
+// Package assemblyai holds the AssemblyAI streaming services.
 //
-// A turn is finalized once AssemblyAI reports a formatted end-of-turn, which
-// marks the end of the user's speech.
+// NewSTT is speech-to-text over AssemblyAI's Universal-Streaming (v3)
+// WebSocket. It streams audio and pushes InterimTranscriptionFrames and
+// finalized TranscriptionFrames downstream. A turn is finalized once AssemblyAI
+// reports a formatted end-of-turn, which marks the end of the user's speech.
+//
+// NewTTS is text-to-speech over AssemblyAI's Streaming TTS WebSocket, which
+// synthesizes text into streamed PCM audio with per-word timings.
 package assemblyai
 
 import (
 	"cmp"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -23,9 +27,11 @@ const (
 	// gets when speech_model is omitted. It is a U3 Pro model and covers more
 	// declared languages than universal-3-5-pro.
 	defaultModel = "universal-3-6-pro"
-	// defaultEncoding is the audio encoding AssemblyAI expects from jargo.
+	// defaultEncoding is the audio encoding jargo exchanges with AssemblyAI, in
+	// both directions.
 	defaultEncoding = "pcm_s16le"
-	// readLimit bounds a single WebSocket message; long turns carry many words.
+	// readLimit bounds a single WebSocket message; long turns carry many words,
+	// and synthesized audio arrives base64.
 	readLimit = 1 << 20
 	// maxLanguageCodes is the longest declared-language list AssemblyAI accepts.
 	maxLanguageCodes = 10
@@ -62,6 +68,14 @@ func isU3ProModel(model string) bool {
 		}
 	}
 	return false
+}
+
+// authHeader is the handshake header every AssemblyAI streaming session is
+// authorized with: the API key as it is, with no scheme in front of it.
+func authHeader(apiKey string) http.Header {
+	header := http.Header{}
+	header.Set("Authorization", apiKey)
+	return header
 }
 
 // Config configures the AssemblyAI STT service. Optional fields modeled as

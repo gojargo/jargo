@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"strconv"
 	"sync"
@@ -145,10 +144,7 @@ func assemblyaiLanguage(l language.Language) string {
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := c.cfg.query(sampleRate)
 
-	header := http.Header{}
-	header.Set("Authorization", c.cfg.APIKey)
-
-	conn, err := wsutil.Dial(ctx, c.cfg.BaseURL+"?"+q.Encode(), header, readLimit)
+	conn, err := wsutil.Dial(ctx, c.cfg.BaseURL+"?"+q.Encode(), authHeader(c.cfg.APIKey), readLimit)
 	if err != nil {
 		return nil, err
 	}

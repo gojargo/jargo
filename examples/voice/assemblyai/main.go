@@ -1,13 +1,14 @@
 // Command voice-assemblyai is a headless jargo voice backend.
 //
-// It uses AssemblyAI speech-to-text, with an Anthropic LLM and ElevenLabs TTS.
+// It uses AssemblyAI for both speech-to-text and text-to-speech, with an
+// Anthropic LLM.
 //
 // jargo is a backend framework, so this is a server only — it exposes the
 // WebRTC signaling endpoint POST /offer and no web UI. Point a browser client
 // at it (the nextjs-voicebot example in gojargo/jargo-client-react, with
 // NEXT_PUBLIC_JARGO_URL=http://localhost:8080).
 //
-//	ASSEMBLYAI_API_KEY=… ANTHROPIC_API_KEY=… ELEVENLABS_API_KEY=… go run ./examples/voice/assemblyai
+//	ASSEMBLYAI_API_KEY=… ANTHROPIC_API_KEY=… go run ./examples/voice/assemblyai
 package main
 
 import (
@@ -30,7 +31,6 @@ import (
 	"github.com/gojargo/jargo/processor/vadproc"
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/provider/assemblyai"
-	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/pion/webrtc/v4"
@@ -78,7 +78,7 @@ func runBot(conn *rtc.Connection) {
 	// --- the provider stack: the only part that differs between examples ---
 	stt := assemblyai.NewSTT(assemblyai.Config{APIKey: os.Getenv("ASSEMBLYAI_API_KEY"), SampleRate: opus.SampleRate})
 	llm := anthropic.NewLLM(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
-	tts := elevenlabs.NewTTS(elevenlabs.Config{APIKey: os.Getenv("ELEVENLABS_API_KEY")})
+	tts := assemblyai.NewTTS(assemblyai.TTSConfig{APIKey: os.Getenv("ASSEMBLYAI_API_KEY")})
 	// ----------------------------------------------------------------------
 
 	params := transport.DefaultParams()

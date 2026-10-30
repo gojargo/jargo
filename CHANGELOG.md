@@ -277,6 +277,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `StressBeforeVowels`) and `PronunciationTransform`. Register the transform
   last, so nothing rewrites the markup it inserts.
 
+- **AssemblyAI text-to-speech** (`provider/assemblyai.NewTTS`), streaming
+  synthesis over AssemblyAI's Streaming TTS WebSocket API. One session carries
+  the call: each sentence is sent as its own request and flushed, or, with
+  `TextAggregation` set to tokens, the turn's text streams as it is generated
+  and is flushed when the turn ends. Per-word timings drive the word-aligned
+  text path, and an interruption cancels the synthesis in flight without
+  reconnecting. The session is kept alive while the bot is silent, replaced
+  between requests before it expires, and reconnected after a retryable error
+  no sooner than the server asks; a voice, model or key refused before the
+  session starts leaves the service unusable. The voice defaults to Audrey and
+  takes a library slug or a cloned voice's slug; the language and model are
+  left to the server unless set, and changing any of the three reconnects. The
+  AssemblyAI voice example now speaks with it. `provider/assemblyai` previously
+  offered speech-to-text only. Two accessors came with it:
+  `tts.Base.IsStreamingTokens` and `wsservice.Base.ReconnectInProgress`.
+
 ### Changed
 
 - **With an eager end of turn, the turn an early reply answers is announced
