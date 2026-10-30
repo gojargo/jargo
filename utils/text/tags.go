@@ -11,50 +11,54 @@ type StartEndTags struct {
 	End string
 }
 
-// ParseStartEndTags reports which tag pair the text is currently inside, and the
-// offset a later call should resume scanning from.
+// ParseStartEndTags reports which tag pair the text ends inside, and the offset
+// a later call should resume scanning from.
 //
 // Text arrives a piece at a time, so a tag can be split across pieces and the
-// buffer has to be rescanned as it grows. The returned offset is how much of the
-// buffer this call settled: pass it back with the next call, along with the tag
-// returned, and only what is new gets scanned again.
+// buffer has to be rescanned as it grows. Pass the returned offset back with the
+// next call, along with the tag returned, and only what is new gets scanned
+// again.
 //
-// A nil current means no tag is open, and the scan looks for one to open. A
-// non-nil current means one is, and the scan looks only for its closing tag.
+// The scan starts at index. Inside a tag, it looks for that tag's end; outside
+// one, for the earliest start of any pair, and then for that pair's end after
+// it. A pair whose start and end are the same, such as {"**", "**"}, is found
+// the same way. The offset returned is just past the start of the tag left
+// open, or past the last tag that closed.
 func ParseStartEndTags(
 	text string, tags []StartEndTags, current *StartEndTags, index int,
 ) (*StartEndTags, int) {
-	// Already inside a tag, so the only thing worth looking for is the end of it.
-	if current != nil {
-		if strings.Contains(from(text, index), current.End) {
-			return nil, len(text)
+	index = max(index, 0)
+	for {
+		if current != nil {
+			end := find(text, current.End, index)
+			if end < 0 {
+				return current, index
+			}
+			index = end + len(current.End)
+			current = nil
 		}
-		return current, index
-	}
-
-	for _, tag := range tags {
-		rest := from(text, index)
-		starts := strings.Count(rest, tag.Start)
-		ends := strings.Count(rest, tag.End)
-		switch {
-		case starts == 0 && ends == 0:
-			// Neither delimiter is here, so nothing has been settled and the
-			// same text is scanned again once it has grown.
+		position := -1
+		for _, tag := range tags {
+			if at := find(text, tag.Start, index); at >= 0 && (position < 0 || at < position) {
+				position = at
+				t := tag
+				current = &t
+			}
+		}
+		if current == nil {
 			return nil, index
-		case starts > ends:
-			// A run was opened and not closed, so the text from here on belongs
-			// to it until the closing tag arrives.
-			t := tag
-			return &t, len(text)
-		case starts == ends:
-			// Every run opened here was also closed, so none is left open.
-			return nil, len(text)
 		}
-		// More ends than starts, which says nothing about this pair: the closing
-		// tag belongs to a run opened before the text under scan. Try the next.
+		index = position + len(current.Start)
 	}
+}
 
-	return nil, index
+// find is the offset of the first sub in text at or after index, or -1.
+func find(text, sub string, index int) int {
+	at := strings.Index(from(text, index), sub)
+	if at < 0 {
+		return -1
+	}
+	return index + at
 }
 
 // from is text from index on, and nothing when the offset is past its end.

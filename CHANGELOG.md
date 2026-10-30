@@ -572,6 +572,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Fixed `SkipTagsAggregator` recognizing only the first of several tag pairs,
+  and never opening a pair whose start and end are the same, such as
+  `{"**", "**"}`. `text.ParseStartEndTags` now resumes just past the start of
+  the tag left open, or past the last tag that closed.
 - Fixed an LLM service never sending the tools it implements itself, such as a
   `cancel_<tool>` tool, when the conversation advertised none of its own.
 - Fixed a tool that answered at once reporting its result ahead of the end of the
