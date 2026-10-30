@@ -31,8 +31,10 @@ func filterIncomplete(cfg llm.UserTurnCompletionConfig) turns.UserTurnStrategies
 // pause stands in for the time between two frames a test sends.
 type pause time.Duration
 
-// sendAndCollect queues the frames into a pipeline around ps, sleeping on a
-// pause, and returns every frame that reached its end.
+// sendAndCollect queues the frames into a pipeline around ps, flushing on a
+// flush and sleeping on a pause, and returns every frame that reached its end.
+// A flush after the user starts speaking lets the interruption it raises go by,
+// since that drops the frames queued behind it.
 func sendAndCollect(t *testing.T, ps []processor.Processor, send ...any) []frames.Frame {
 	t.Helper()
 	var mu sync.Mutex
@@ -50,13 +52,15 @@ func sendAndCollect(t *testing.T, ps []processor.Processor, send ...any) []frame
 	flushPipeline(t, task)
 	for _, s := range send {
 		switch v := s.(type) {
+		case flush:
+			flushPipeline(t, task)
 		case pause:
 			time.Sleep(time.Duration(v))
 		case frames.Frame:
 			task.QueueFrame(v)
 		}
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	task.StopWhenDone()
 	<-runDone
 	mu.Lock()
@@ -92,8 +96,12 @@ func resumeAfterTheAnswerStartedThen(t *testing.T, cfg turns.Config, after ...an
 	t.Helper()
 	pair := aggregators.New(frames.NewLLMContext(""), aggregators.WithTurns(cfg))
 	send := append([]any{
-		vadStart(), transcriptOf("Hi"), pause(50 * time.Millisecond), vadStop(),
-		pause(speechTimeout + 100*time.Millisecond), vadStart(), pause(50 * time.Millisecond),
+		vadStart(),
+		flush{},
+		transcriptOf("Hi"), pause(50 * time.Millisecond), vadStop(),
+		pause(speechTimeout + 300*time.Millisecond), vadStart(),
+		flush{},
+		pause(50 * time.Millisecond),
 	}, after...)
 	return sendAndCollect(t, []processor.Processor{pair.User()}, send...)
 }
@@ -114,7 +122,7 @@ func contextFramesIn(fs []frames.Frame) []*frames.LLMContextFrame {
 func TestSpeechWithoutWordsRecoversTheVoidedAnswer(t *testing.T) {
 	down := resumeAfterTheAnswerStartedThen(t,
 		turns.Config{Strategies: filterIncomplete(llm.UserTurnCompletionConfig{})},
-		vadStop(), pause(speechTimeout+100*time.Millisecond))
+		vadStop(), pause(speechTimeout+300*time.Millisecond))
 
 	answers := contextFramesIn(down)
 	if len(answers) != 2 {
@@ -132,7 +140,7 @@ func TestSpeechWithoutWordsLeavesTheVoidedAnswerWithoutRecovery(t *testing.T) {
 	down := resumeAfterTheAnswerStartedThen(t, turns.Config{
 		Strategies:    filterIncomplete(llm.UserTurnCompletionConfig{}),
 		EmptyUserTurn: &turns.EmptyUserTurnConfig{InterruptedPrompt: &off},
-	}, vadStop(), pause(speechTimeout+100*time.Millisecond))
+	}, vadStop(), pause(speechTimeout+300*time.Millisecond))
 
 	if n := len(contextFramesIn(down)); n != 1 {
 		t.Fatalf("inferences = %d, want only the turn's", n)
@@ -161,7 +169,7 @@ func TestSpeechWithoutWordsDoesNotRunAnAnswerItDidNotInterrupt(t *testing.T) {
 	strategies.Start = []turns.StartStrategy{quiet}
 
 	down := resumeAfterTheAnswerStartedThen(t, turns.Config{Strategies: strategies},
-		vadStop(), pause(speechTimeout+100*time.Millisecond))
+		vadStop(), pause(speechTimeout+300*time.Millisecond))
 
 	if n := len(contextFramesIn(down)); n != 1 {
 		t.Fatalf("inferences = %d, want only the turn's", n)
@@ -206,7 +214,7 @@ func TestSpeakingAgainBeforeTheAnswerStartedInterruptsNothing(t *testing.T) {
 		Strategies: filterIncomplete(llm.UserTurnCompletionConfig{}),
 	}))
 	down := sendAndCollect(t, []processor.Processor{pair.User()},
-		vadStart(), transcriptOf("Hi"), vadStop(), vadStart(), pause(50*time.Millisecond))
+		vadStart(), flush{}, transcriptOf("Hi"), vadStop(), vadStart(), pause(50*time.Millisecond))
 
 	resumed := -1
 	for i, f := range down {
@@ -252,12 +260,12 @@ func TestMultipleInferencesInOneTurnPreserveTheAggregation(t *testing.T) {
 		})
 
 	down := sendAndCollect(t, []processor.Processor{pair.User()},
-		vadStart(), transcriptOf("I'm thinking"), pause(50*time.Millisecond), vadStop(),
-		pause(speechTimeout+100*time.Millisecond),
+		vadStart(), flush{}, transcriptOf("I'm thinking"), pause(50*time.Millisecond), vadStop(),
+		pause(speechTimeout+300*time.Millisecond),
 		// The first inference ran here. Nothing decided on it, so the turn stays
 		// open and the user keeps talking.
-		vadStart(), transcriptOf("about pizza"), pause(50*time.Millisecond), vadStop(),
-		pause(speechTimeout+100*time.Millisecond),
+		vadStart(), flush{}, transcriptOf("about pizza"), pause(50*time.Millisecond), vadStop(),
+		pause(speechTimeout+300*time.Millisecond),
 		// The second inference ran here, and the decision on it ends the turn.
 		frames.NewUserTurnInferenceCompletedFrame(), pause(50*time.Millisecond))
 
@@ -378,8 +386,10 @@ func runFiltering(t *testing.T, cfg turns.Config, model *scriptedMarkerLLM, send
 // utterance is the user saying text and going quiet for the speech timeout.
 func utterance(text string) []any {
 	return []any{
-		vadStart(), transcriptOf(text), pause(50 * time.Millisecond), vadStop(),
-		pause(speechTimeout + 200*time.Millisecond),
+		vadStart(),
+		flush{},
+		transcriptOf(text), pause(50 * time.Millisecond), vadStop(),
+		pause(speechTimeout + 400*time.Millisecond),
 	}
 }
 
@@ -450,7 +460,7 @@ func TestFilteringWordsAfterTheInferenceAreAnsweredWithoutAReprompt(t *testing.T
 		filteringConfig(turns.StrategyModeDefault,
 			llm.UserTurnCompletionConfig{IncompleteShortTimeout: 300 * time.Millisecond}),
 		&scriptedMarkerLLM{replies: []string{"◐", "● Sure, Boston it is.", "● Are you still there?"}},
-		vadStart(), transcriptOf("Book a flight"), pause(50*time.Millisecond), vadStop(),
+		vadStart(), flush{}, transcriptOf("Book a flight"), pause(50*time.Millisecond), vadStop(),
 		pause(speechTimeout+50*time.Millisecond), transcriptOf("to Boston"), pause(600*time.Millisecond))
 
 	if got := run.recorder.spokenText(); !slices.Equal(got, []string{"Sure, Boston it is."}) {
@@ -491,7 +501,7 @@ func runEagerFiltering(t *testing.T, model *scriptedMarkerLLM) filteringRun {
 		},
 	}, model,
 		recommendation, pause(50*time.Millisecond),
-		frames.NewProposedUserStartedSpeakingFrame(), pause(50*time.Millisecond),
+		frames.NewProposedUserStartedSpeakingFrame(), flush{},
 		frames.NewEagerTranscriptionFrame(text, "user", "now"), pause(100*time.Millisecond),
 		frames.NewTranscriptionFrame(text, "user", "now"), pause(50*time.Millisecond),
 		frames.NewProposedUserStoppedSpeakingFrame(), pause(800*time.Millisecond))

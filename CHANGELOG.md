@@ -2556,6 +2556,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   makes it reliable: a barge-in ends one turn and starts the next in the same
   moment.
 
+
 ### Changed
 
 - **`processor.TreatAsPermanent` is now `processor.ForceTreatAsPermanent`**, and
@@ -2584,6 +2585,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   before the pipeline starts, in time for a switcher to move off it; the TTS
   base previously dialed in a detached goroutine, where a failure reached
   nobody.
+
 
 - **`AudioIdleTimeout` is now a `*time.Duration`** on `vadproc.Config` and
   `audio/vad/controller.Config`. Nil takes the one-second default and a zero
