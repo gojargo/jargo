@@ -326,3 +326,63 @@ func TestEveryLLMInASwitcherIsTaughtThePerception(t *testing.T) {
 	checkInstruction(t, first, taught)
 	checkInstruction(t, second, taught)
 }
+
+func taggerMetadata() frames.Frame { return frames.NewExpressionMetadataFrame("tagger") }
+
+func TestATaggerAfterTheLLMLeavesItTaughtNoTags(t *testing.T) {
+	policy := &expressive.ExpressionPolicy{
+		Guidance: []expressive.Guidance{expressive.GuidanceMatchStyle, expressive.GuidanceLine("Apologize once.")},
+		Sounds:   []expressive.ExpressionSound{"sighs"},
+	}
+	svc := appLLM("llm")
+
+	var up []frames.Frame
+	warnings := captureWarnings(t, func() {
+		up = runWith(t, svc, expressiveParams(policy),
+			[]frames.Frame{perceptionMetadata()}, []frames.Frame{taggerMetadata(), ttsMetadata(calmHappy())})
+	})
+
+	// The tagger follows the policy's presets; the LLM keeps the developer's own lines.
+	perception := tone()
+	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(nil, nil, &perception)+"\n\nApologize once.")
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none", warnings)
+	}
+	if countOf[*frames.ExpressionMetadataFrame](up) == 0 {
+		t.Error("the tagger's metadata did not travel on")
+	}
+}
+
+func TestATaggerAnnouncedAfterTheTTSUnteachesItsTags(t *testing.T) {
+	svc := appLLM("llm")
+
+	sendUp(t, svc, expressiveParams(nil), ttsMetadata(calmHappy()), taggerMetadata())
+
+	checkInstruction(t, svc, "APP")
+}
+
+func TestAnLLMBeforeATaggerWithoutAReadingIsGivenNoGuidance(t *testing.T) {
+	policy := &expressive.ExpressionPolicy{
+		Guidance: []expressive.Guidance{expressive.GuidanceMatchStyle, expressive.GuidanceLine("Apologize once.")},
+	}
+	svc := appLLM("llm")
+
+	sendUp(t, svc, expressiveParams(policy), taggerMetadata(), ttsMetadata(calmHappy()))
+
+	// With no tags to write and no reading to act on, the LLM has no part to play.
+	checkInstruction(t, svc, "APP")
+}
+
+func TestEveryLLMInASwitcherLearnsOfTheTagger(t *testing.T) {
+	first, second := appLLM("first"), appLLM("second")
+	sw, err := pipeline.NewLLMSwitcher([]pipeline.LLMMember{first, second}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sent up as a tagger and TTS service after the switcher would, while the first is active.
+	sendUp(t, sw, expressiveParams(nil), taggerMetadata(), ttsMetadata(calmHappy()))
+
+	checkInstruction(t, first, "APP")
+	checkInstruction(t, second, "APP")
+}

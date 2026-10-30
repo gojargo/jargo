@@ -109,6 +109,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
     which waits for a processor after the STT that announced itself with a
     `PerceptionMetadataFrame` to read it.
 
+- **`frames.ExpressionMetadataFrame` in expressive conversation, in alpha**,
+  broadcast at start by a processor between the LLM and the TTS service that
+  writes the expression tags itself. The LLM is then taught no tags, keeping
+  how to read perception and the policy's own guidance lines when there is a
+  reading to act on, and the assistant aggregator writes each reply to the
+  context as its words alone.
+
 - **The `expression` event in scripted evals:** the expression the bot's TTS
   performed, in the tags the LLM writes, such as `<<excited>>` or
   `[[laughter]]`. A tag the TTS cannot perform is never reported, so a

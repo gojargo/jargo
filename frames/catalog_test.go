@@ -203,6 +203,10 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewTTSMetadataFrame("tts-1") },
 		},
 		{
+			label: "ExpressionMetadataFrame", cat: system, wantString: "service: tagger-1",
+			build: func() frames.Frame { return frames.NewExpressionMetadataFrame("tagger-1") },
+		},
+		{
 			label: "PerceptionMetadataFrame", cat: system, wantString: "service: tone-1",
 			build: func() frames.Frame {
 				return frames.NewPerceptionMetadataFrame("tone-1", expressive.PerceptionCapabilities{})

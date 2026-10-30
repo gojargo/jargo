@@ -188,11 +188,39 @@ func (f *PerceptionMetadataFrame) String() string {
 	return fmt.Sprintf("%s(service: %s, signals: %d)", f.Name(), f.ServiceName, len(f.Perception.Signals))
 }
 
+// ExpressionMetadataFrame is the metadata a processor that tags the LLM's
+// replies broadcasts, once it can. Part of expressive conversation (alpha).
+//
+// A tagger sits between the LLM and the TTS service and writes the expression
+// tags itself. Upstream, the LLM is then taught no tags, so it writes plain
+// words; downstream, the assistant aggregator writes each reply to the context
+// as its words alone, keeping the tags out of what the LLM reads.
+type ExpressionMetadataFrame struct {
+	ServiceMetadataFrame
+}
+
+// NewExpressionMetadataFrame builds an ExpressionMetadataFrame for the named
+// processor.
+func NewExpressionMetadataFrame(service string) *ExpressionMetadataFrame {
+	return &ExpressionMetadataFrame{
+		BaseSystemFrame: NewBaseSystemFrame("ExpressionMetadataFrame"),
+		ServiceName:     service,
+	}
+}
+
+// Copy implements ServiceMetadata.
+func (f *ExpressionMetadataFrame) Copy() ServiceMetadata {
+	c := *f
+	c.BaseSystemFrame = NewBaseSystemFrame("ExpressionMetadataFrame")
+	return &c
+}
+
 // Compile-time interface checks.
 var (
 	_ SystemFrame     = (*ServiceMetadataFrame)(nil)
 	_ ServiceMetadata = (*TTSMetadataFrame)(nil)
 	_ ServiceMetadata = (*PerceptionMetadataFrame)(nil)
+	_ ServiceMetadata = (*ExpressionMetadataFrame)(nil)
 	_ ServiceMetadata = (*ServiceMetadataFrame)(nil)
 	_ ServiceMetadata = (*LLMServiceMetadataFrame)(nil)
 	_ SystemFrame     = (*STTMetadataFrame)(nil)

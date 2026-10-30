@@ -1198,6 +1198,10 @@ type AssistantAggregator struct {
 	// the context keeps the expression tags the LLM wrote, and what the turn is
 	// reported to have said is the words alone.
 	expressive bool
+	// taggedAfterLLM is whether a tagger after the LLM writes the replies'
+	// expression tags, announced by an ExpressionMetadataFrame. The LLM, never
+	// taught them, then reads its replies back as plain words. Guarded by mu.
+	taggedAfterLLM bool
 	// toolChangeMessages announces a change of toolset to the model.
 	toolChangeMessages bool
 	// pairedUser is the user half this one was built with, so a proposal this
@@ -1371,6 +1375,11 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	}
 	if mf, ok := f.(*frames.LLMMarkerFrame); ok {
 		return a.handleMarker(ctx, mf)
+	}
+	if _, ok := f.(*frames.ExpressionMetadataFrame); ok {
+		a.mu.Lock()
+		a.taggedAfterLLM = true
+		a.mu.Unlock()
 	}
 	if handled, err := a.handleContextUpdate(ctx, f); handled {
 		return err
@@ -2298,9 +2307,15 @@ func (a *AssistantAggregator) pushAggregation(ctx context.Context) (string, erro
 	a.mu.Lock()
 	parts := a.aggregation
 	a.aggregation = nil
+	taggedAfterLLM := a.taggedAfterLLM
 	a.mu.Unlock()
 
 	said := text.Concatenate(parts)
+	// The LLM writes its own replies' tags, or a tagger writes them and the
+	// LLM, never taught them, reads its replies as plain words.
+	if said != "" && a.expressive && taggedAfterLLM {
+		said = formatter.StripExpressionTags(said)
+	}
 	if said == "" {
 		// Nothing was written and nothing is pushed, so a run a tool result
 		// deferred or owes is kept for whatever releases it.

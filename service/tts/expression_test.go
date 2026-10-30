@@ -329,6 +329,40 @@ func TestAppsGetTheWordsWhileTheContextKeepsTheTags(t *testing.T) {
 	}
 }
 
+func TestTheContextKeepsOnlyTheWordsWhenATaggerWroteTheTags(t *testing.T) {
+	for _, switched := range []bool{false, true} {
+		name := "tts"
+		if switched {
+			name = "tts switcher"
+		}
+		t.Run(name, func(t *testing.T) {
+			convo := frames.NewLLMContext("")
+			pair := aggregators.New(convo)
+			var svc processor.Processor = newBase(&timedSynth{adapter: bracketAdapter{}}, frames.TextTypeSentence)
+			if switched {
+				sw, err := pipeline.NewServiceSwitcher([]processor.Processor{
+					svc, newBase(&timedSynth{adapter: bracketAdapter{}}, frames.TextTypeSentence),
+				}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				svc = sw
+			}
+
+			feed := append([]frames.Frame{frames.NewExpressionMetadataFrame("tagger")}, response(reply()...)...)
+			runExpressive(t, false, feed, svc, pair.Assistant())
+
+			msgs := convo.Messages()
+			if len(msgs) == 0 {
+				t.Fatal("the conversation holds nothing")
+			}
+			if got := msgs[len(msgs)-1].Text; got != "It's back up now. Bye!" {
+				t.Fatalf("context = %q, want the words alone", got)
+			}
+		})
+	}
+}
+
 func TestTheContextKeepsTheReplyAsWritten(t *testing.T) {
 	for _, svc := range services() {
 		t.Run(svc.name, func(t *testing.T) {

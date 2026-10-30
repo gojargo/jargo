@@ -15,13 +15,17 @@ import (
 // instruction from each one, so it follows a switch of TTS service or a
 // settings change that alters what the TTS performs. It is taught how to read
 // what a perception producer perceives of how the user spoke the same way,
-// from that producer's PerceptionMetadataFrame.
+// from that producer's PerceptionMetadataFrame. A tagger after the LLM,
+// announced by an ExpressionMetadataFrame, writes the tags instead, so the LLM
+// is taught none.
 
 // expressionState is what the service knows of the expressive conversation it
 // takes part in.
 type expressionState struct {
 	// expressive is whether the pipeline has expressive conversation on.
 	expressive bool
+	// taggedAfterLLM is whether a tagger after the LLM writes the tags.
+	taggedAfterLLM bool
 	// tts is the expression the TTS service downstream performs, from its
 	// latest TTSMetadataFrame.
 	tts *expressive.ExpressionCapabilities
@@ -48,7 +52,7 @@ func (b *Base) setupExpression(s processor.Setup) {
 // with expressive conversation on. The frame travels on either way.
 func (b *Base) handleExpressionMetadata(f frames.Frame) {
 	switch f.(type) {
-	case *frames.TTSMetadataFrame, *frames.PerceptionMetadataFrame:
+	case *frames.TTSMetadataFrame, *frames.PerceptionMetadataFrame, *frames.ExpressionMetadataFrame:
 	default:
 		return
 	}
@@ -66,6 +70,8 @@ func (b *Base) handleExpressionMetadata(f frames.Frame) {
 	case *frames.PerceptionMetadataFrame:
 		perception := md.Perception
 		b.expression.perception = &perception
+	case *frames.ExpressionMetadataFrame:
+		b.expression.taggedAfterLLM = true
 	}
 	b.systemMu.Unlock()
 	if warning != "" {
@@ -79,6 +85,9 @@ func (b *Base) handleExpressionMetadata(f frames.Frame) {
 // until what is left out changes, so a switch to a service with the same gap
 // does not repeat it. It runs under systemMu.
 func (b *Base) policyWarningLocked() string {
+	if b.expression.taggedAfterLLM {
+		return ""
+	}
 	warning := expressive.ExpressionPolicyWarning(b.expression.tts, b.expression.policy)
 	repeated := warning == b.expression.policyWarning
 	b.expression.policyWarning = warning
@@ -92,5 +101,9 @@ func (b *Base) policyWarningLocked() string {
 // teaches how to read perception and the expression tags, or the empty string.
 // It runs under systemMu.
 func (b *Base) expressionInstructionsLocked() string {
-	return expressive.ExpressionInstructions(b.expression.tts, b.expression.policy, b.expression.perception)
+	tts := b.expression.tts
+	if b.expression.taggedAfterLLM {
+		tts = nil
+	}
+	return expressive.ExpressionInstructions(tts, b.expression.policy, b.expression.perception)
 }
