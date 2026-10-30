@@ -14,20 +14,23 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// ProcessFrameResult is what a strategy returns from Process to control the
-// per-frame strategy loop.
+// ProcessFrameResult is what a strategy returns from Process.
 //
-// Deprecated: use StrategyMode. Every strategy sees every frame, and a list
-// whose strategies all have to agree, such as a wake phrase next to VAD, is
-// StrategyModeAll. Strategies return Continue; until the type is removed, a
-// StrategyModeFirst list still honors Stop, with a deprecation warning.
+// The result is deprecated in favor of StrategyMode: strategies return
+// Continue, and every strategy sees every frame. A list whose strategies all
+// have to agree, such as a wake phrase next to VAD, is StrategyModeAll. The type
+// stays in the strategy interfaces until the result is removed.
 type ProcessFrameResult int
 
 const (
-	// Continue evaluates the next strategy in the chain.
+	// Continue evaluates the next strategy in the chain. It is what every
+	// strategy returns.
 	Continue ProcessFrameResult = iota
 	// Stop short-circuits the remaining strategies for this frame, and only in
-	// a StrategyModeFirst list.
+	// a StrategyModeFirst list, with a deprecation warning.
+	//
+	// Deprecated: use StrategyMode instead. Every strategy sees every frame,
+	// and a list whose strategies all have to agree is StrategyModeAll.
 	Stop
 )
 

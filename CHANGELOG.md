@@ -412,6 +412,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   strategy that listens to the user: in a `StrategyModeAll` list the inference
   does not run until the stop timeout ends the turn, and in a
   `StrategyModeFirst` list the turn ends without waiting for it.
+- **Breaking change:** `WakePhraseStart` now starts turns on its own: once
+  awake, it starts a turn when the user speaks or a final transcript arrives.
+  Use it as the only start strategy. In a `StrategyModeFirst` list, the start
+  strategies after it no longer decide once it is awake. To combine it with
+  others, such as `MinWordsStart`, use `StartMode: StrategyModeAll`.
+- **`ExternalStop` decides once per round of speech.** It reports the user done
+  once a final transcript has settled for its timeout, rather than retrying on
+  a timer that ticks while the turn is open, and decides again only after the
+  user speaks again or new text arrives. The start strategies no longer return
+  `Stop`.
 - **A stop decision made while the user speaks now counts**, as when a service
   still hears them while an eager answer runs; the turn ends once they stop.
   New speech clears the decisions made so far. The stop timeout now waits
@@ -739,9 +749,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Deprecated
 
-- **`turns.ProcessFrameResult`.** Use `StrategyMode` instead: strategies return
-  `Continue`, and every strategy sees every frame. Until it is removed, a
-  `StrategyModeFirst` list still honors `Stop`, with a deprecation warning.
+- **Returning `turns.Stop` from a strategy.** Use `StrategyMode` instead:
+  strategies return `Continue`, and every strategy sees every frame. The
+  `ProcessFrameResult` type stays in the strategy interfaces, and until `Stop`
+  is removed a `StrategyModeFirst` list still honors it, with a deprecation
+  warning.
+- **`turns.ExternalCompletionStop`.** Use `ExternalStop` instead, and push a
+  `ProposedUserStoppedSpeakingFrame` once the user is done. For the LLM's
+  turn-completion markers, use `LLMTurnCompletionStop`.
+- **`turns.Deferred`**, with no replacement. Pass the wrapped strategy itself:
+  the controller now runs the turn's inference once the stop strategies have
+  decided.
 - **The strategies' `Trigger` methods.** `TriggerStarted` and
   `TriggerStartedOverriding` become `ReportStarted` and
   `ReportStartedOverriding`; `TriggerStopped`, `TriggerStoppedOverriding`,

@@ -138,8 +138,8 @@ func TestVADStart(t *testing.T) {
 		t.Error("a transcript must not open a VAD-gated turn")
 	}
 
-	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0, time.Now())); got != Stop {
-		t.Errorf("Process(vad start) = %v, want Stop", got)
+	if got := spy.send(s, frames.NewVADUserStartedSpeakingFrame(0, time.Now())); got != Continue {
+		t.Errorf("Process(vad start) = %v, want Continue", got)
 	}
 	if spy.starts() != 1 {
 		t.Fatalf("starts = %d, want 1", spy.starts())
@@ -172,12 +172,10 @@ func TestTranscriptionStart(t *testing.T) {
 			if started := spy.starts() == 1; started != tt.wantStart {
 				t.Errorf("started = %v, want %v", started, tt.wantStart)
 			}
-			want := Continue
-			if tt.wantStart {
-				want = Stop
-			}
-			if got != want {
-				t.Errorf("Process = %v, want %v", got, want)
+			// Every strategy sees every frame, so a start no longer stops the
+			// chain.
+			if got != Continue {
+				t.Errorf("Process = %v, want Continue", got)
 			}
 		})
 	}
@@ -212,8 +210,8 @@ func TestMinWordsStartThreshold(t *testing.T) {
 				t.Errorf("started = %v, want %v", started, tt.wantStart)
 			}
 			if tt.wantStart {
-				if got != Stop {
-					t.Errorf("Process = %v, want Stop", got)
+				if got != Continue {
+					t.Errorf("Process = %v, want Continue", got)
 				}
 			} else {
 				if got != Continue {
@@ -272,8 +270,8 @@ func TestMinWordsStartInterim(t *testing.T) {
 	t.Run("counted by default", func(t *testing.T) {
 		s := NewMinWordsStart(MinWordsStartConfig{MinWords: 2})
 		spy := attachStart(s)
-		if got := spy.send(s, interim("hello")); got != Stop {
-			t.Errorf("Process(interim) = %v, want Stop", got)
+		if got := spy.send(s, interim("hello")); got != Continue {
+			t.Errorf("Process(interim) = %v, want Continue", got)
 		}
 		if spy.starts() != 1 {
 			t.Error("interim transcript should open the turn by default")
@@ -316,15 +314,16 @@ func TestWakePhraseStartGates(t *testing.T) {
 		t.Fatalf("the wake phrase should open a turn: starts = %d", spy.starts())
 	}
 
-	// Awake, the strategy defers to the rest of the chain.
+	// Awake, the strategy lets the rest of the chain see the frames, and starts
+	// turns itself: a final transcript is the user speaking.
 	if got := spy.send(s, transcript("and the traffic")); got != Continue {
 		t.Errorf("awake: Process = %v, want Continue", got)
 	}
 	if got := spy.send(s, frames.NewUserSpeakingFrame()); got != Continue {
 		t.Errorf("awake: Process(user speaking) = %v, want Continue", got)
 	}
-	if spy.starts() != 1 {
-		t.Errorf("awake speech must not re-trigger a start: starts = %d", spy.starts())
+	if spy.starts() != 2 {
+		t.Errorf("awake, a transcript should report the user started: starts = %d", spy.starts())
 	}
 }
 
@@ -569,8 +568,8 @@ func TestExternalStart(t *testing.T) {
 		t.Error("ExternalStart must ignore VAD")
 	}
 
-	if got := spy.send(s, frames.NewUserStartedSpeakingFrame()); got != Stop {
-		t.Errorf("Process(user started) = %v, want Stop", got)
+	if got := spy.send(s, frames.NewUserStartedSpeakingFrame()); got != Continue {
+		t.Errorf("Process(user started) = %v, want Continue", got)
 	}
 	if spy.starts() != 1 {
 		t.Fatalf("starts = %d, want 1", spy.starts())
@@ -587,8 +586,8 @@ func TestExternalStartResolvesAProposal(t *testing.T) {
 	s := NewExternalStart(ExternalStartConfig{})
 	spy := attachStart(s)
 
-	if got := spy.send(s, frames.NewProposedUserStartedSpeakingFrame()); got != Stop {
-		t.Errorf("Process(proposal) = %v, want Stop", got)
+	if got := spy.send(s, frames.NewProposedUserStartedSpeakingFrame()); got != Continue {
+		t.Errorf("Process(proposal) = %v, want Continue", got)
 	}
 	if spy.starts() != 1 {
 		t.Fatalf("a proposal did not start the turn: starts = %d", spy.starts())

@@ -13,6 +13,26 @@ import (
 	"github.com/gojargo/jargo/utils/events"
 )
 
+// completionStop decides the user is done when a
+// UserTurnInferenceCompletedFrame arrives, which the turn's inference produces,
+// so it waits for that inference.
+type completionStop struct{ turns.StopStrategyBase }
+
+func newCompletionStop() *completionStop {
+	s := &completionStop{}
+	s.EnableUserSpeakingFrames = true
+	return s
+}
+
+func (s *completionStop) WaitsForInference() bool { return true }
+
+func (s *completionStop) Process(f frames.Frame) turns.ProcessFrameResult {
+	if _, ok := f.(*frames.UserTurnInferenceCompletedFrame); ok {
+		s.ReportStopped()
+	}
+	return turns.Continue
+}
+
 // flushPipeline waits for the pipeline to settle, which includes the
 // interruption a turn start sends back upstream. Every processor that
 // interruption reaches drops the frames waiting in its queue, so a test sending
@@ -83,7 +103,7 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{newCompletionStop()},
 		},
 		StopTimeout: 2 * time.Second,
 	}))
@@ -394,23 +414,23 @@ func TestUserAggregatorKeepsTheSpeechThatOpensTheTurn(t *testing.T) {
 	}
 }
 
-// Deferred finalization exists so the answer can start being written while a
-// separate judge is still deciding whether the turn is really over. The detector
-// says there is enough to answer and inference begins; the judge finalizes
-// later. Acting only on the finalization would mean waiting for the judge before
-// starting at all, which is the delay the arrangement is meant to remove.
+// A stop strategy that waits for the turn's inference lets the answer start
+// being written while it is still deciding whether the turn is really over. The
+// detector says the user is done and inference begins; the judge decides on the
+// inference later. Waiting for the judge before starting at all is the delay
+// the arrangement is meant to remove.
 func TestUserAggregatorRunsInferenceBeforeDeferredFinalization(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			Stop: []turns.StopStrategy{
-				// The detector triggers inference but cannot finalize.
-				turns.Deferred(turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{
+				// The detector decides the user is done, which runs the inference.
+				turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{
 					UserSpeechTimeout: 20 * time.Millisecond,
-				})),
-				// Only the judge finalizes.
-				turns.NewExternalCompletionStop(),
+				}),
+				// The judge decides on the inference, which ends the turn.
+				newCompletionStop(),
 			},
 		},
 		StopTimeout: 3 * time.Second,
@@ -469,7 +489,7 @@ func TestUserAggregatorCommitsWhatIsHeldWhenTheSessionEnds(t *testing.T) {
 	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{newCompletionStop()},
 		},
 		StopTimeout: 3 * time.Second,
 	}))

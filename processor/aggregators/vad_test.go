@@ -100,7 +100,7 @@ func TestDetectedSpeechDrivesTheTurn(t *testing.T) {
 		aggregators.WithTurns(turns.Config{
 			Strategies: turns.UserTurnStrategies{
 				Start: []turns.StartStrategy{turns.NewVADStart()},
-				Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+				Stop:  []turns.StopStrategy{newCompletionStop()},
 			},
 		}),
 	)

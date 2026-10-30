@@ -258,6 +258,33 @@ func TestDeferredWrapperSkipsStoppedInAFirstList(t *testing.T) {
 	})
 }
 
+// The service says the user is done while the local VAD still hears a breath.
+func TestAnExternalTurnDecidedWhileTheVADHearsSpeechEndsOnceTheVADStops(t *testing.T) {
+	for _, mode := range []turns.StrategyMode{turns.StrategyModeAll, turns.StrategyModeFirst} {
+		h := newHarness(t, turns.ExternalStrategies(turns.ExternalStrategiesConfig{}),
+			turns.UserTurnStrategiesParams{StopMode: mode}, 3*time.Second)
+
+		h.send(frames.NewUserStartedSpeakingFrame(), frames.NewUserStoppedSpeakingFrame(),
+			vadStarted(), frames.NewTranscriptionFrame("Hello", "", "now"))
+		// The transcript settles, and the strategy decides while the VAD still
+		// hears speech.
+		time.Sleep(700 * time.Millisecond)
+		h.read(func() {
+			if len(h.stops) != 0 {
+				t.Fatalf("mode %v: the turn ended while the VAD heard speech", mode)
+			}
+		})
+
+		h.send(vadStopped())
+
+		h.read(func() {
+			if len(h.stops) != 1 || h.timeouts != 0 {
+				t.Fatalf("mode %v: stops = %d, timeouts = %d, want 1 and 0", mode, len(h.stops), h.timeouts)
+			}
+		})
+	}
+}
+
 func TestTheTurnEndsOnceEveryStrategyDecides(t *testing.T) {
 	first, last := newDecidingStop(), newDecidingStop()
 	h := newStopHarness(t, turns.StrategyModeDefault, first, last)

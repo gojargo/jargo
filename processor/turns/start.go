@@ -29,11 +29,10 @@ func NewVADStart() *VADStart {
 	return s
 }
 
-// Process triggers the turn on a VAD speech-start.
+// Process reports the user started on a VAD speech-start.
 func (s *VADStart) Process(f frames.Frame) ProcessFrameResult {
 	if _, ok := f.(*frames.VADUserStartedSpeakingFrame); ok {
-		s.TriggerStarted()
-		return Stop
+		s.ReportStarted()
 	}
 	return Continue
 }
@@ -59,16 +58,14 @@ func NewTranscriptionStart(cfg TranscriptionStartConfig) *TranscriptionStart {
 	return s
 }
 
-// Process triggers the turn on a transcript.
+// Process reports the user started on a transcript.
 func (s *TranscriptionStart) Process(f frames.Frame) ProcessFrameResult {
 	switch f.(type) {
 	case *frames.TranscriptionFrame:
-		s.TriggerStarted()
-		return Stop
+		s.ReportStarted()
 	case *frames.InterimTranscriptionFrame:
 		if s.useInterim {
-			s.TriggerStarted()
-			return Stop
+			s.ReportStarted()
 		}
 	}
 	return Continue
@@ -105,7 +102,7 @@ func NewMinWordsStart(cfg MinWordsStartConfig) *MinWordsStart {
 // without waiting for the bot-stopped frame to catch up.
 func (s *MinWordsStart) TurnStarted() { s.botSpeaking = false }
 
-// Process counts words and triggers once the threshold is met.
+// Process counts words and reports the user started once the threshold is met.
 func (s *MinWordsStart) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
 	case *frames.BotStartedSpeakingFrame:
@@ -113,26 +110,25 @@ func (s *MinWordsStart) Process(f frames.Frame) ProcessFrameResult {
 	case *frames.BotStoppedSpeakingFrame:
 		s.botSpeaking = false
 	case *frames.TranscriptionFrame:
-		return s.check(fr.Text)
+		s.check(fr.Text)
 	case *frames.InterimTranscriptionFrame:
 		if s.useInterim {
-			return s.check(fr.Text)
+			s.check(fr.Text)
 		}
 	}
 	return Continue
 }
 
-func (s *MinWordsStart) check(text string) ProcessFrameResult {
+func (s *MinWordsStart) check(text string) {
 	threshold := 1
 	if s.botSpeaking {
 		threshold = s.minWords
 	}
 	if len(strings.Fields(text)) >= threshold {
-		s.TriggerStarted()
-		return Stop
+		s.ReportStarted()
+		return
 	}
 	s.TriggerResetAggregation()
-	return Continue
 }
 
 // WakePhraseStartConfig configures a WakePhraseStart strategy.
@@ -156,11 +152,28 @@ type WakePhraseStartConfig struct {
 	OnWakePhraseTimeout func()
 }
 
-// WakePhraseStart gates a turn behind a spoken wake phrase. Place it first in
-// the start chain: while asleep it blocks the other start strategies; once awake
-// it lets them run until an inactivity timeout puts it back to sleep.
+// WakePhraseStart requires a spoken wake phrase before interaction.
 //
-// Use SingleActivation to require the phrase before every turn.
+// It starts a turn when it hears a wake phrase in a final transcript, and then,
+// until the timeout, whenever the user starts speaking or a final transcript
+// arrives, which covers speech the VAD missed. Use SingleActivation to require
+// the phrase before every turn. Speech before the wake phrase is dropped from
+// the aggregation.
+//
+// It starts turns on its own, so use it as the only start strategy:
+//
+//	turns.UserTurnStrategies{
+//	    Start: []turns.StartStrategy{turns.NewWakePhraseStart(turns.WakePhraseStartConfig{
+//	        Phrases: []string{"hey jargo"},
+//	    })},
+//	}
+//
+// To combine it with other start strategies, such as MinWordsStart, put them in
+// a StrategyModeAll list, where it is one more condition a turn needs. In a
+// StrategyModeFirst list next to other start strategies it has to come first:
+// until it hears the wake phrase it keeps the strategies after it from seeing
+// frames, and once awake it starts turns itself, so the strategies after it no
+// longer decide. That is deprecated, along with ProcessFrameResult.
 type WakePhraseStart struct {
 	StartStrategyBase
 	phrases  []string
@@ -221,23 +234,28 @@ func compileWakePatterns(phrases []string) ([]string, []*regexp.Regexp) {
 //nolint:gochecknoglobals // compiled once
 var wakePunctuation = regexp.MustCompile(`[^\p{L}\p{N}_\s]`)
 
-// Process matches the wake phrase while asleep and keeps the session alive while
-// awake.
+// Process matches the wake phrase while asleep, and starts turns and keeps the
+// session alive while awake.
+//
+// It returns Stop until the wake phrase is heard, which keeps the strategies
+// after this one in a StrategyModeFirst list from seeing the frame. That gating
+// is deprecated, along with ProcessFrameResult.
 func (s *WakePhraseStart) Process(f frames.Frame) ProcessFrameResult {
 	if !s.awake {
 		return s.processIdle(f)
 	}
-	return s.processAwake(f)
+	s.processAwake(f)
+	return Continue
 }
 
 // processIdle handles a frame while asleep. Only a final transcript is checked
 // for the phrase; one that does not match has its text dropped, so speech before
-// the wake phrase never reaches the conversation. Every frame returns Stop,
-// which is what blocks the rest of the start chain.
+// the wake phrase never reaches the conversation. Every frame returns Stop, for
+// a StrategyModeFirst list.
 func (s *WakePhraseStart) processIdle(f frames.Frame) ProcessFrameResult {
 	if fr, ok := f.(*frames.TranscriptionFrame); ok {
 		if s.checkWakePhrase(fr.Text) {
-			s.TriggerStarted()
+			s.ReportStarted()
 			return Stop
 		}
 		s.TriggerResetAggregation()
@@ -245,13 +263,19 @@ func (s *WakePhraseStart) processIdle(f frames.Frame) ProcessFrameResult {
 	return Stop
 }
 
-// processAwake handles a frame while awake: it refreshes the inactivity timeout
-// on activity and lets the rest of the start chain run.
+// processAwake handles a frame while awake: it starts a turn when the user
+// starts speaking or a final transcript arrives, which covers speech the VAD
+// missed, and refreshes the inactivity timeout on activity.
 //
 // Single activation does not refresh. Its timeout is a keepalive window opened
 // when the phrase was detected, not an inactivity timer, so activity must not
 // extend it.
-func (s *WakePhraseStart) processAwake(f frames.Frame) ProcessFrameResult {
+func (s *WakePhraseStart) processAwake(f frames.Frame) {
+	switch f.(type) {
+	case *frames.VADUserStartedSpeakingFrame, *frames.UserStartedSpeakingFrame,
+		*frames.ProposedUserStartedSpeakingFrame, *frames.TranscriptionFrame:
+		s.ReportStarted()
+	}
 	if !s.single {
 		switch f.(type) {
 		case *frames.UserSpeakingFrame, *frames.BotSpeakingFrame,
@@ -259,7 +283,6 @@ func (s *WakePhraseStart) processAwake(f frames.Frame) ProcessFrameResult {
 			s.refresh()
 		}
 	}
-	return Continue
 }
 
 // checkWakePhrase folds text into the accumulator and reports whether a wake
@@ -383,17 +406,15 @@ func (s *ExternalStart) Process(f frames.Frame) ProcessFrameResult {
 	switch f.(type) {
 	case *frames.ProposedUserStartedSpeakingFrame:
 		slog.Debug("turns: resolving a proposed user turn start")
-		s.TriggerStarted()
-		return Stop
+		s.ReportStarted()
 	case *frames.UserStartedSpeakingFrame:
 		// Already announced elsewhere: adopt the decision without repeating it.
 		slog.Debug("turns: adopting a user turn start decided elsewhere")
 		off := false
-		s.TriggerStartedOverriding(StartedOverrides{
+		s.ReportStartedOverriding(StartedOverrides{
 			EnableInterruptions:      &off,
 			EnableUserSpeakingFrames: &off,
 		})
-		return Stop
 	}
 	return Continue
 }

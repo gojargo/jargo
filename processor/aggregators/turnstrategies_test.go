@@ -142,7 +142,7 @@ func TestConfiguredTurnStrategiesOverrideTheServiceRecommendation(t *testing.T) 
 	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{newCompletionStop()},
 		},
 		StopTimeout: 30 * time.Second,
 	}))
@@ -265,7 +265,7 @@ func TestProposalsTravelOnWhenNothingResolvesThem(t *testing.T) {
 	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{newCompletionStop()},
 		},
 		StopTimeout: 30 * time.Second,
 	}))
@@ -307,7 +307,7 @@ func TestProposalsPassTheAssistantHalfWhenTheUserHalfIgnoresThem(t *testing.T) {
 	pair := aggregators.New(convo, aggregators.WithTurns(turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{newCompletionStop()},
 		},
 		StopTimeout: 30 * time.Second,
 	}))

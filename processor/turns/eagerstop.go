@@ -51,9 +51,10 @@ type EagerStopConfig struct {
 // user message written to the conversation is always the committed transcript,
 // never the eager one.
 //
-// It wraps an external strategy rather than replacing it, the way Deferred does:
-// the service owns turn detection, so what ends the turn is unchanged, and what
-// this adds is the speculation around it.
+// It wraps an external strategy rather than replacing it: the service owns turn
+// detection, so what ends the turn is unchanged, and what this adds is the
+// speculation around it. The decision the strategy underneath reports comes
+// back here first, which is where the speculation is kept or withdrawn.
 //
 // Install it with EagerStrategies rather than directly.
 type EagerStop struct {
@@ -68,11 +69,10 @@ type EagerStop struct {
 	mu          sync.Mutex
 	speculation *UserTurnSpeculation
 	stopTimer   func()
-	// pendingInference records that the strategy underneath asked for inference
-	// while a speculation was in flight. The ask is held until the turn's
-	// verdict is known: a speculation the committed transcript confirms has
-	// answered already, and asking again would answer the same turn twice.
-	pendingInference bool
+	// confirmed is the speculation this turn's end confirmed. Other stop
+	// strategies may still be deciding, and a stop reported again confirms it
+	// again. It is only touched under the controller's lock.
+	confirmed *UserTurnSpeculation
 }
 
 // NewEagerStop builds an eager stop strategy.
@@ -99,13 +99,17 @@ func (s *EagerStop) MatchPolicy() EagerMatchPolicy { return s.policy }
 func (s *EagerStop) attach(self StopStrategy, env strategyEnv) {
 	s.self, s.env = self, env
 	inner := env
-	inner.inferenceTriggered = s.onInnerInference
+	inner.inferenceTriggered = func(_ StopStrategy, speculation *UserTurnSpeculation) {
+		if env.inferenceTriggered != nil {
+			env.inferenceTriggered(self, speculation)
+		}
+	}
 	inner.stopped = s.onInnerStopped
 	s.inner.attach(s.inner, inner)
 }
 
-// Process starts a speculation on an eager end of turn, or withdraws one, then
-// lets the strategy underneath see the frame as usual.
+// Process starts a speculation on an eager end of turn, withdraws one, or
+// forgets one, then lets the strategy underneath see the frame as usual.
 func (s *EagerStop) Process(f frames.Frame) ProcessFrameResult {
 	switch fr := f.(type) {
 	case *frames.EagerTranscriptionFrame:
@@ -114,6 +118,12 @@ func (s *EagerStop) Process(f frames.Frame) ProcessFrameResult {
 		// The service withdrew its prediction, and its frame reaches every
 		// consumer on its own. Only our own state is left to clear.
 		s.takeSpeculation()
+		s.confirmed = nil
+	case *frames.VADUserStartedSpeakingFrame, *frames.UserStartedSpeakingFrame,
+		*frames.ProposedUserStartedSpeakingFrame:
+		// Speech voids the turn's answer, and with it the confirmation of the
+		// speculation that gave it.
+		s.confirmed = nil
 	}
 	return s.inner.Process(f)
 }
@@ -121,16 +131,26 @@ func (s *EagerStop) Process(f frames.Frame) ProcessFrameResult {
 // TurnStarted readies per-turn state, withdrawing a speculation left over from
 // the turn before.
 func (s *EagerStop) TurnStarted() {
-	s.withdrawIfPending("a new turn began before the speculation resolved")
-	s.inner.TurnStarted()
+	s.reset(s.inner.TurnStarted)
 }
 
 // TurnStopped clears per-turn state, withdrawing a speculation the turn ended
 // without resolving: the stop watchdog, an interruption, the session ending.
 // Nothing else would withdraw it, so the reply would stay held.
 func (s *EagerStop) TurnStopped() {
-	s.withdrawIfPending("the turn ended unresolved")
-	s.inner.TurnStopped()
+	s.reset(s.inner.TurnStopped)
+}
+
+// reset clears per-turn state at a turn boundary, around the strategy
+// underneath doing the same.
+func (s *EagerStop) reset(inner func()) {
+	speculation := s.takeSpeculation()
+	s.confirmed = nil
+	inner()
+	if speculation != nil {
+		slog.Debug("turns: the turn ended unresolved, withdrawing the speculative reply")
+		s.cancelSpeculation()
+	}
 }
 
 // Setup hands the pipeline's configuration to the strategy underneath.
@@ -161,60 +181,41 @@ func (s *EagerStop) WaitForTranscript() bool { return s.inner.WaitForTranscript(
 // SetWaitForTranscript changes it for the turns that follow.
 func (s *EagerStop) SetWaitForTranscript(wait bool) { s.inner.SetWaitForTranscript(wait) }
 
-// onInnerInference holds the ask for inference while a speculation is in flight,
-// and passes it on otherwise.
-func (s *EagerStop) onInnerInference(_ StopStrategy, speculation *UserTurnSpeculation) {
-	s.mu.Lock()
-	inFlight := s.speculation != nil
-	if inFlight {
-		s.pendingInference = true
-	}
-	s.mu.Unlock()
-	if inFlight {
-		return
-	}
-	if s.env.inferenceTriggered != nil {
-		s.env.inferenceTriggered(s.self, speculation)
-	}
-}
-
-// onInnerStopped ends the turn, keeping the speculative reply only if it still
-// applies.
+// onInnerStopped reports that the user is done, keeping the speculative reply
+// only if it still applies.
 func (s *EagerStop) onInnerStopped(_ StopStrategy, params UserTurnStoppedParams) {
 	speculation := s.takeSpeculation()
-	pending := s.takePendingInference()
-
 	if speculation == nil {
-		s.forwardStop(params, pending)
+		speculation = s.confirmed
+	}
+	if speculation == nil {
+		s.reportStopped(params)
 		return
 	}
 
 	if s.policy.Matches(speculation.Text, s.inner.text) {
 		slog.Debug("turns: the eager end of turn held, keeping the speculative reply")
-		// The inference already ran, on the eager transcript. Only finalize: the
-		// turn frame it emits is what releases the reply, and the flag stops a
-		// second inference answering the same turn.
+		s.confirmed = speculation
+		// The inference already ran, on the eager transcript. The turn frame the
+		// turn end emits is what releases the reply, and the flag stops a second
+		// inference answering the same turn.
 		params.ConfirmsSpeculation = true
-		if s.env.stopped != nil {
-			s.env.stopped(s.self, params)
-		}
+		s.reportStopped(params)
 		return
 	}
 
 	slog.Debug("turns: the eager end of turn missed, withdrawing the speculative reply",
 		"eager", speculation.Text, "committed", s.inner.text)
+	s.confirmed = nil
 	s.cancelSpeculation()
-	// Inference has to run again, on the committed transcript, so the ask that
-	// was held goes out after the withdrawal rather than being dropped with it.
-	s.forwardStop(params, pending)
+	// The committed transcript needs an inference of its own, which the
+	// controller runs for this decision.
+	params.ConfirmsSpeculation = false
+	s.reportStopped(params)
 }
 
-// forwardStop passes the turn end on, preceded by the ask for inference that was
-// held while a speculation was in flight.
-func (s *EagerStop) forwardStop(params UserTurnStoppedParams, pending bool) {
-	if pending && s.env.inferenceTriggered != nil {
-		s.env.inferenceTriggered(s.self, nil)
-	}
+// reportStopped passes the decision on as this strategy's.
+func (s *EagerStop) reportStopped(params UserTurnStoppedParams) {
 	if s.env.stopped != nil {
 		s.env.stopped(s.self, params)
 	}
@@ -230,6 +231,7 @@ func (s *EagerStop) speculate(fr *frames.EagerTranscriptionFrame) {
 	s.mu.Lock()
 	s.speculation, s.stopTimer = speculation, func() { timer.Stop() }
 	s.mu.Unlock()
+	s.confirmed = nil
 
 	slog.Debug("turns: speculating on an eager end of turn", "text", speculation.Text)
 	if s.env.inferenceTriggered != nil {
@@ -255,15 +257,6 @@ func (s *EagerStop) speculationTimedOut(speculation *UserTurnSpeculation) {
 	})
 }
 
-// withdrawIfPending withdraws a speculation still in flight, saying why.
-func (s *EagerStop) withdrawIfPending(reason string) {
-	if s.takeSpeculation() == nil {
-		return
-	}
-	slog.Debug("turns: withdrawing the speculative reply", "reason", reason)
-	s.cancelSpeculation()
-}
-
 // cancelSpeculation tells the pipeline the speculative reply is void.
 func (s *EagerStop) cancelSpeculation() {
 	if s.env.speculationCanceled != nil {
@@ -284,15 +277,6 @@ func (s *EagerStop) takeSpeculation() *UserTurnSpeculation {
 		stop()
 	}
 	return speculation
-}
-
-// takePendingInference takes the held ask for inference, if there was one.
-func (s *EagerStop) takePendingInference() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pending := s.pendingInference
-	s.pendingInference = false
-	return pending
 }
 
 // Compile-time interface checks.
