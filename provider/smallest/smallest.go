@@ -54,6 +54,22 @@ type Config struct {
 	// spoken as "two plus two" rather than left to the default number reader; nil
 	// leaves the API's own default, which is off.
 	MathNotation *bool
+	// ContentFilter checks the text against Smallest's profanity word list
+	// before synthesis, taking this action on a match: "reject" fails the
+	// request with a CONTENT_FILTER_BLOCKED error and synthesizes nothing;
+	// "flag" synthesizes normally and records the match; "redact" drops the
+	// matched term and speaks the rest, failing like "reject" when nothing is
+	// left to speak. Empty leaves the API default, which is off.
+	ContentFilter string
+	// DateFormat is the order all-numeric dates are read in, independent of the
+	// synthesis voice: "EU" reads 05/03/2024 day-first ("fifth March, twenty
+	// twenty four"), "US" month-first ("May third, twenty twenty four"). Empty
+	// leaves the API default, "US".
+	DateFormat string
+	// NumberPronunciationLanguage is the language code numerals, currency,
+	// times and dates are read in, independent of the synthesis language.
+	// Empty reads them in the synthesis language.
+	NumberPronunciationLanguage string
 }
 
 // Validate reports whether the configuration is usable.

@@ -91,6 +91,15 @@ func (s *synthesizer) request(ctx context.Context, conn *wsutil.Conn, text strin
 	if s.cfg.MathNotation != nil {
 		msg["math_notation"] = *s.cfg.MathNotation
 	}
+	if s.cfg.ContentFilter != "" {
+		msg["content_filter"] = map[string]any{"enabled": true, "action": s.cfg.ContentFilter}
+	}
+	if s.cfg.DateFormat != "" {
+		msg["date_format"] = s.cfg.DateFormat
+	}
+	if s.cfg.NumberPronunciationLanguage != "" {
+		msg["number_pronunciation_language"] = s.cfg.NumberPronunciationLanguage
+	}
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err

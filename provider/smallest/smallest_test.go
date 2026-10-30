@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,47 @@ func TestMathNotationReachesTheRequest(t *testing.T) {
 				t.Errorf("math_notation = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestContentFilterReachesTheRequest checks the filter is enabled with the
+// action it was given, and left out when nobody set it.
+func TestContentFilterReachesTheRequest(t *testing.T) {
+	if got := requestField(t, Config{APIKey: "k"}, "content_filter"); got != nil {
+		t.Errorf("content_filter = %v, want it left out", got)
+	}
+	for _, action := range []string{"reject", "flag", "redact"} {
+		t.Run(action, func(t *testing.T) {
+			got := requestField(t, Config{APIKey: "k", ContentFilter: action}, "content_filter")
+			want := map[string]any{"enabled": true, "action": action}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("content_filter = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestDateFormatReachesTheRequest checks the date order is sent when set.
+func TestDateFormatReachesTheRequest(t *testing.T) {
+	if got := requestField(t, Config{APIKey: "k"}, "date_format"); got != nil {
+		t.Errorf("date_format = %v, want it left out", got)
+	}
+	if got := requestField(t, Config{APIKey: "k", DateFormat: "EU"}, "date_format"); got != "EU" {
+		t.Errorf("date_format = %v, want EU", got)
+	}
+}
+
+// TestNumberPronunciationLanguageReachesTheRequest checks numerals are read in
+// the synthesis language unless a language is set, and a code is sent as given.
+func TestNumberPronunciationLanguageReachesTheRequest(t *testing.T) {
+	const key = "number_pronunciation_language"
+	if got := requestField(t, Config{APIKey: "k"}, key); got != nil {
+		t.Errorf("%s = %v, want it left out", key, got)
+	}
+	for _, code := range []string{"hi", "auto"} {
+		if got := requestField(t, Config{APIKey: "k", NumberPronunciationLanguage: code}, key); got != code {
+			t.Errorf("%s = %v, want %s", key, got, code)
+		}
 	}
 }
 

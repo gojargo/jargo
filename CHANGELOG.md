@@ -15,6 +15,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Smallest content filter, date order and number language.**
+  `smallest.Config.ContentFilter` checks the text against Smallest's profanity
+  list before synthesis, with the action `"reject"`, `"flag"` or `"redact"`.
+  `DateFormat` reads all-numeric dates day-first (`"EU"`) or month-first
+  (`"US"`), and `NumberPronunciationLanguage` reads numerals, currency, times
+  and dates in a language of their own.
+
 - **Cartesia accent.** `cartesia.Config.Accent` and
   `cartesia.HTTPTTSConfig.Accent` pick the accent a multilingual voice speaks
   the language with, such as `"british"`, and `TTSSettings.Accent` changes it
