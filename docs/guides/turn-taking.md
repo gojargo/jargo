@@ -158,6 +158,13 @@ aggregators.WithTurns(turns.Config{
 })
 ```
 
+For an LLM that does not follow the marker instructions well,
+`turns.ClassifierUserTurnStrategies` asks a [classifier](../../classifier) instead:
+at each pause with new words, `turns.ClassifierStop` asks whether the turn so far
+is complete, cut short, or one where the user needs time, and holds the turn open
+for `ShortTimeout` or `LongTimeout` on the last two. It runs after Smart Turn by
+default, and the turn ends once both have decided.
+
 `turns.NewWakePhraseStart` starts turns on its own once it hears the wake
 phrase, so use it as the only start strategy. To combine it with another start
 condition, such as `turns.NewMinWordsStart`, put both in a `StrategyModeAll`

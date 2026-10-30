@@ -59,6 +59,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `[[laughter]]`. A tag the TTS cannot perform is never reported, so a
   scenario can check that what the LLM wrote was performed.
 
+- **A stop strategy that asks a classifier whether the user's turn is
+  complete.** `turns.ClassifierStop` asks its classifier, at each pause with
+  new words, whether the turn so far is complete, cut short, or one where the
+  user needs time, with the assistant's last message as context when given the
+  conversation. It reports the user done on a complete verdict, after
+  `ShortTimeout` or `LongTimeout` otherwise unless the user continues, and at
+  once when the classifier fails or exceeds `ClassificationTimeout`.
+  `turns.ClassifierUserTurnStrategies` adds it after the default stop
+  strategies (Smart Turn), or after the ones given, as an alternative to
+  `FilterIncompleteUserTurnStrategies` for an LLM that does not follow the
+  marker instructions well. `turns.TurnCompletionQuestion` is the question it
+  asks.
+
+  ```go
+  strategies, err := turns.ClassifierUserTurnStrategies(nil, turns.ClassifierStopConfig{
+      Classifier: jevClassifier,
+      Context:    convo,
+  })
+  ```
 - **How user turn strategies combine.** `turns.UserTurnStrategiesParams`,
   passed as `turns.Config.StrategiesParams` (to `aggregators.WithTurns` or a
   `UserTurnProcessor`) or to the new `turns.NewUserTurnControllerWithParams`,

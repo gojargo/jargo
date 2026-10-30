@@ -124,7 +124,7 @@ func (s *LLMTurnCompletionStop) handleReport(report *frames.UserTurnCompletionFr
 
 	speculation := s.awaited.Speculation
 	s.awaited = nil
-	incomplete := report.Kind == "short" || report.Kind == "long"
+	incomplete := report.Kind == kindShort || report.Kind == kindLong
 	switch {
 	case incomplete && speculation:
 		s.CancelSpeculation()
@@ -141,7 +141,7 @@ func (s *LLMTurnCompletionStop) handleReport(report *frames.UserTurnCompletionFr
 func (s *LLMTurnCompletionStop) startReprompt(kind string) {
 	s.stopReprompt()
 	timeout, prompt := s.config.ShortTimeout(), s.config.ShortPrompt()
-	if kind == "long" {
+	if kind == kindLong {
 		timeout, prompt = s.config.LongTimeout(), s.config.LongPrompt()
 	}
 	s.cancelReprompt = s.after(timeout, func() {
