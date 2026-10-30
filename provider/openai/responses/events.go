@@ -14,7 +14,7 @@ import (
 // SSE and over the WebSocket, so both transports share this decoding.
 const (
 	// evtCreated announces the response's id, which the WebSocket service needs
-	// both to cancel it and to continue from it next turn.
+	// to continue from it next turn.
 	evtCreated = "response.created"
 	// evtTextDelta is a chunk of generated text.
 	evtTextDelta = "response.output_text.delta"
@@ -41,6 +41,9 @@ const (
 // event is the subset of a Responses stream event the services read.
 type event struct {
 	Type string `json:"type"`
+	// StreamID is the lane of the WebSocket connection the event's response
+	// runs on, empty for an event that concerns the connection.
+	StreamID string `json:"stream_id"`
 	// Delta carries text or argument fragments, depending on Type.
 	Delta string `json:"delta"`
 	// ItemID and OutputIndex identify which output item a delta belongs to.
@@ -139,7 +142,7 @@ type streamState struct {
 	// calls tracks function calls by output index, since their arguments arrive
 	// in fragments interleaved with other output.
 	calls map[int]*pendingCall
-	// responseID is the id the response announced, for continuation and cancel.
+	// responseID is the id the response announced, for continuation.
 	responseID string
 	// usage is the token accounting the terminal event reported.
 	usage *usage

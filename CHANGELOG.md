@@ -354,6 +354,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   you."), which it sometimes does, the reply it generates when the call settles
   completes the thought (for example "Checking CI on main for you now!"), or
   adds nothing when the first part said it all.
+- **The OpenAI Responses WebSocket service replies sooner after an
+  interruption.** The next request no longer waits for the interrupted response
+  to finish. Each response goes on its own lane of the connection (its
+  `stream_id`), so the interrupted one finishes on the side and its events are
+  discarded, while the next request can still send only the new messages,
+  continuing from the previous response (`previous_response_id`), rather than
+  the full context. It no longer sends `response.cancel`, which WebSocket mode
+  ignores.
 - ⚠️ **Breaking change:** `responses.ThinkingReporter` gains
   `UseProviderThinkingDefault`, which the LLM base implements.
 - **What kind of text a frame holds is its `TextType`.** `frames.AggregationType`

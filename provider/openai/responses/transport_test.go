@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -282,15 +283,20 @@ func TestHTTPErrorStatus(t *testing.T) {
 
 // wsTurn is one turn a fake Responses WebSocket served.
 type wsTurn struct {
-	request map[string]any
+	request  map[string]any
+	streamID string
 }
 
 // fakeResponsesWS is a WebSocket standing in for the Responses endpoint. It
-// records each response.create it receives and replies with a scripted turn.
+// records each message it receives and replies to each response.create with a
+// scripted turn; a script that ends without a terminal event leaves the
+// response running.
 type fakeResponsesWS struct {
 	*httptest.Server
 	mu    sync.Mutex
 	turns []wsTurn
+	// types is the type of every message received, in order.
+	types []string
 }
 
 // newFakeResponsesWS starts a server that answers the Nth request with the Nth
@@ -312,14 +318,21 @@ func newFakeResponsesWS(t *testing.T, scripts [][]string) *fakeResponsesWS {
 				return
 			}
 			var msg struct {
+				Type     string         `json:"type"`
+				StreamID string         `json:"stream_id"`
 				Response map[string]any `json:"response"`
 			}
 			if json.Unmarshal(data, &msg) != nil {
 				continue
 			}
 			f.mu.Lock()
+			f.types = append(f.types, msg.Type)
+			if msg.Type != "response.create" {
+				f.mu.Unlock()
+				continue
+			}
 			n := len(f.turns)
-			f.turns = append(f.turns, wsTurn{request: msg.Response})
+			f.turns = append(f.turns, wsTurn{request: msg.Response, streamID: msg.StreamID})
 			f.mu.Unlock()
 
 			if n >= len(scripts) {
@@ -347,6 +360,24 @@ func (f *fakeResponsesWS) turn(n int) map[string]any {
 		return nil
 	}
 	return f.turns[n].request
+}
+
+// streamIDs is the lane of each response.create received, in order.
+func (f *fakeResponsesWS) streamIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ids := make([]string, 0, len(f.turns))
+	for _, t := range f.turns {
+		ids = append(ids, t.streamID)
+	}
+	return ids
+}
+
+// messageTypes is the type of every message received, in order.
+func (f *fakeResponsesWS) messageTypes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.types)
 }
 
 // TestWSIncrementalContext is the point of the WebSocket service: after a first
@@ -524,139 +555,5 @@ func TestClassifyStreamError(t *testing.T) {
 	}
 	if err := classifyStreamError(event{Type: evtTextDelta}); err != nil {
 		t.Errorf("non-error event = %v, want nil", err)
-	}
-}
-
-// interruptibleWS is a fake endpoint whose first turn starts generating and
-// never finishes on its own, so the client has to cancel it. Reads and writes
-// share the handler goroutine, which returns to reading immediately, so a
-// cancel arriving mid-generation is still processed.
-type interruptibleWS struct {
-	*httptest.Server
-	started  chan struct{}
-	mu       sync.Mutex
-	canceled string
-	requests []map[string]any
-}
-
-func newInterruptibleWS(t *testing.T) *interruptibleWS {
-	t.Helper()
-	f := &interruptibleWS{started: make(chan struct{}, 4)}
-	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
-		if err != nil {
-			return
-		}
-		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
-		ctx := r.Context()
-
-		write := func(ev string) bool { return c.Write(ctx, websocket.MessageText, []byte(ev)) == nil }
-
-		for {
-			_, data, err := c.Read(ctx)
-			if err != nil {
-				return
-			}
-			var msg struct {
-				Type       string         `json:"type"`
-				ResponseID string         `json:"response_id"`
-				Response   map[string]any `json:"response"`
-			}
-			if json.Unmarshal(data, &msg) != nil {
-				continue
-			}
-
-			if msg.Type == "response.cancel" {
-				f.mu.Lock()
-				f.canceled = msg.ResponseID
-				f.mu.Unlock()
-				// The API terminates a canceled response rather than dropping it.
-				if !write(`{"type":"response.incomplete","response":{"id":"` + msg.ResponseID + `"}}`) {
-					return
-				}
-				continue
-			}
-
-			f.mu.Lock()
-			f.requests = append(f.requests, msg.Response)
-			n := len(f.requests)
-			f.mu.Unlock()
-
-			if n == 1 {
-				// Start generating, then stall: only a cancel ends this turn.
-				if !write(`{"type":"response.created","response":{"id":"resp_1"}}`) ||
-					!write(`{"type":"response.output_text.delta","delta":"thinking"}`) {
-					return
-				}
-				f.started <- struct{}{}
-				continue
-			}
-			for _, ev := range []string{
-				`{"type":"response.created","response":{"id":"resp_2"}}`,
-				`{"type":"response.output_text.delta","delta":"second"}`,
-				`{"type":"response.completed","response":{"id":"resp_2"}}`,
-			} {
-				if !write(ev) {
-					return
-				}
-			}
-		}
-	}))
-	t.Cleanup(f.Close)
-	return f
-}
-
-// TestWSInterruptionCleansConnection checks a barge-in cancels the response
-// server-side and drains its remaining events, so the next turn reads its own
-// output rather than the interrupted one's. It must also stop continuing from
-// the abandoned response, whose content the local context no longer matches.
-func TestWSInterruptionCleansConnection(t *testing.T) {
-	srv := newInterruptibleWS(t)
-	svc := NewLLM(Config{APIKey: "k", WSURL: "ws" + strings.TrimPrefix(srv.URL, "http")})
-	t.Cleanup(svc.disconnect)
-
-	convo := frames.NewLLMContext("")
-	convo.AddUserMessage("hello")
-
-	// Interrupt the first turn once it has started generating.
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- svc.Generate(ctx, convo, func(string) error { return nil })
-	}()
-	<-srv.started
-	cancel()
-
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("interrupted Generate = %v, want context.Canceled", err)
-	}
-
-	srv.mu.Lock()
-	canceledID := srv.canceled
-	srv.mu.Unlock()
-	if canceledID != "resp_1" {
-		t.Errorf("canceled response = %q, want the interrupted response to be canceled server-side", canceledID)
-	}
-
-	// The connection must now be clean: the next turn reads its own output.
-	convo.AddAssistantMessage("thinking")
-	convo.AddUserMessage("again")
-
-	var text strings.Builder
-	if err := svc.Generate(context.Background(), convo, func(s string) error {
-		text.WriteString(s)
-		return nil
-	}); err != nil {
-		t.Fatalf("second Generate: %v", err)
-	}
-	if text.String() != "second" {
-		t.Errorf("text = %q, want only the second turn's output", text.String())
-	}
-
-	srv.mu.Lock()
-	second := srv.requests[1]
-	srv.mu.Unlock()
-	if _, ok := second["previous_response_id"]; ok {
-		t.Error("continued from the interrupted response, whose content the context no longer matches")
 	}
 }

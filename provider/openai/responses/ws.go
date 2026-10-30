@@ -8,8 +8,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
-	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/adapter"
@@ -24,9 +24,20 @@ import (
 // context, which cannot hit the same fault again.
 const maxTurnAttempts = 2
 
-// drainTimeout bounds how long an interrupted turn is given to finish draining
-// before the connection is discarded instead.
-const drainTimeout = 5 * time.Second
+// laneCount is how many lanes the service's responses go on. A connection runs
+// at most this many responses at once, abandoned ones included.
+const laneCount = 16
+
+// endsResponse reports whether an event ends a response on its lane: it
+// completed, failed or was cut short, or its request got an error.
+func endsResponse(eventType string) bool {
+	switch eventType {
+	case evtCompleted, evtFailed, evtIncomplete, evtError:
+		return true
+	default:
+		return false
+	}
+}
 
 // errPreviousResponseGone reports that the server no longer holds the response
 // the turn tried to continue from. Its cache is connection-local, so a reconnect
@@ -74,13 +85,21 @@ type Service struct {
 	// cont is what the server is known to hold, so the next turn can send only
 	// what is new. It is reset whenever the connection is replaced.
 	cont continuation
-	wg   sync.WaitGroup
+	// currentLane is the lane of the response in flight, from its
+	// response.create until its last event, and draining holds the lanes still
+	// draining an abandoned response (see chooseNextLane).
+	currentLane string
+	draining    map[string]bool
+	wg          sync.WaitGroup
 }
 
 // wsCreate is the client message that starts a turn. The request travels
 // pre-encoded so the configured extra fields are merged into it, not around it.
 type wsCreate struct {
-	Type     string          `json:"type"`
+	Type string `json:"type"`
+	// StreamID is the lane the response goes on, which each of its events
+	// names.
+	StreamID string          `json:"stream_id"`
 	Response json.RawMessage `json:"response"`
 }
 
@@ -98,6 +117,8 @@ type continuation struct {
 	// outputLen is how many items the server's own response added, which the
 	// next turn must skip because the server already has them.
 	outputLen int
+	// lane is the lane the response ran on, which the next response avoids.
+	lane string
 }
 
 // NewLLM builds a Responses LLM service over a persistent WebSocket. It sends
@@ -161,9 +182,10 @@ func (s *Service) Cleanup(ctx context.Context) error {
 // Both recoverable faults are properties of the connection rather than the
 // request, so the retry drops the continuation and resends the full context.
 func (s *Service) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
+	lane := s.chooseNextLane()
 	var err error
 	for attempt := range maxTurnAttempts {
-		err = s.turn(ctx, convo, sink, withTools)
+		err = s.turn(ctx, convo, sink, withTools, lane)
 		if !isRecoverable(err) {
 			return err
 		}
@@ -183,9 +205,11 @@ func isRecoverable(err error) bool {
 	return errors.Is(err, errPreviousResponseGone) || errors.Is(err, errConnectionExpired)
 }
 
-// turn runs one exchange: it builds the request, sends it, and reads events
-// until the response ends.
-func (s *Service) turn(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
+// turn runs one exchange on a lane: it builds the request, sends it, and reads
+// events until the response ends.
+func (s *Service) turn(
+	ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool, lane string,
+) error {
 	sess, err := s.connect(ctx)
 	if err != nil {
 		return err
@@ -203,36 +227,41 @@ func (s *Service) turn(ctx context.Context, convo *frames.LLMContext, sink llm.S
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(wsCreate{Type: "response.create", Response: inner})
+	body, err := json.Marshal(wsCreate{Type: "response.create", StreamID: lane, Response: inner})
 	if err != nil {
 		return err
 	}
 	// The write uses the session's context, not the turn's: canceling a write
 	// closes the socket, and an interruption has to leave it usable.
 	s.StartTTFBMetrics()
+	// Set before sending: an interruption during the send may still let the
+	// response go out, and its lane must then count as draining.
+	s.mu.Lock()
+	s.currentLane = lane
+	s.mu.Unlock()
 	if werr := sess.conn.Write(sess.ctx, websocket.MessageText, body); werr != nil {
 		return werr
 	}
 
-	state, err := s.readTurn(ctx, sess, sink)
+	state, err := s.readTurn(ctx, sess, sink, lane)
 	if err != nil {
 		if ctx.Err() != nil {
-			// An interruption. The response is still being generated, and its
-			// remaining events would otherwise be read as the next turn's.
-			s.abandonTurn(sess, state.responseID)
+			// An interruption. The response drains from its lane, and the next
+			// one goes on another (see chooseNextLane).
+			s.abandonResponse()
 			return ctx.Err()
 		}
 		return err
 	}
-	s.recordContinuation(state, full, sent)
+	s.recordContinuation(state, full, sent, lane)
 	s.reportUsage(ctx, state)
 	return nil
 }
 
-// readTurn consumes events until the response ends. It watches the turn's
-// context rather than passing it to the socket, so an interruption leaves the
-// connection open for the cleanup that follows.
-func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink) (*streamState, error) {
+// readTurn consumes the events of the response on lane until it ends. It
+// watches the turn's context rather than passing it to the socket, so an
+// interruption leaves the connection open for the next turn.
+func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink, lane string) (*streamState, error) {
 	state := newStreamState(sink)
 	for {
 		select {
@@ -244,6 +273,9 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink) (*
 			}
 			if m.err != nil {
 				return state, m.err
+			}
+			if !s.followLane(m.ev, lane) {
+				continue
 			}
 			if carriesModelOutput(m.ev) {
 				s.StopTTFBMetrics()
@@ -262,64 +294,77 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink) (*
 	}
 }
 
-// abandonTurn leaves the connection usable after an interruption. It asks the
-// server to stop generating, then reads and discards the response's remaining
-// events: the API gives no way to tell which response a delta belongs to, so
-// events left unread would be attributed to the next turn.
+// chooseNextLane chooses the lane for the next response.
 //
-// The continuation is dropped either way. The server holds however much of the
-// response it produced before stopping, while the context holds only what was
-// actually spoken, so the two have diverged and the next turn must send
-// everything. If the connection cannot be cleaned in time it is discarded, and
-// the next turn dials a fresh one.
-func (s *Service) abandonTurn(sess *session, responseID string) {
-	canceled := s.sendCancel(sess, responseID)
-	deadline := time.After(drainTimeout)
-	for {
-		select {
-		case <-deadline:
-			slog.Debug("openai responses timed out draining an interrupted turn")
-			s.disconnect()
-			return
-		case m, ok := <-sess.events:
-			if !ok || m.err != nil {
-				s.disconnect()
-				return
-			}
-			// Interrupted before the response announced itself: cancel it now
-			// that its id is known.
-			if m.ev.Type == evtCreated && !canceled && m.ev.Response != nil {
-				canceled = s.sendCancel(sess, m.ev.Response.ID)
-				continue
-			}
-			switch m.ev.Type {
-			case evtCompleted, evtFailed, evtIncomplete:
-				s.resetContinuation()
-				return
-			}
+// Every response goes on a named lane of the connection (the API's stream_id),
+// so each of its events says which lane it came from. That lets an interrupted
+// response be abandoned rather than waited for: WebSocket mode cannot stop a
+// response (it ignores response.cancel), so an abandoned response drains from
+// its lane while the next one runs on another, and its events are discarded as
+// they arrive. The lane is free again once the response ends.
+//
+// The lane chosen is not draining, since a lane runs its responses one at a
+// time, and is not the previous response's lane. Each lane caches only its
+// latest response, so an abandoned response on the previous response's lane
+// would evict the previous response when it ended, and the next request could
+// not continue from it. Continuing from another lane's response (a fork) costs
+// no more than continuing on the same lane.
+//
+// If every lane is taken, the connection is closed, which ends the abandoned
+// responses; the next send opens a new one.
+func (s *Service) chooseNextLane() string {
+	s.mu.Lock()
+	for i := range laneCount {
+		lane := laneName(i)
+		if lane != s.cont.lane && !s.draining[lane] {
+			s.mu.Unlock()
+			return lane
 		}
 	}
-}
-
-// sendCancel asks the server to stop generating a response, reporting whether
-// the request went out.
-func (s *Service) sendCancel(sess *session, responseID string) bool {
-	if responseID == "" {
-		return false
-	}
-	body, err := json.Marshal(map[string]any{"type": "response.cancel", "response_id": responseID})
-	if err != nil {
-		return false
-	}
-	return sess.conn.Write(sess.ctx, websocket.MessageText, body) == nil
-}
-
-// resetContinuation forgets what the server held, so the next turn sends the
-// whole conversation.
-func (s *Service) resetContinuation() {
-	s.mu.Lock()
-	s.cont = continuation{}
 	s.mu.Unlock()
+	slog.Debug("openai responses: every lane is draining or holds the previous response, reconnecting")
+	s.disconnect()
+	return laneName(0)
+}
+
+// laneName is the stream_id of the ith lane.
+func laneName(i int) string { return "lane-" + strconv.Itoa(i) }
+
+// abandonResponse leaves the response in flight to drain from its lane.
+func (s *Service) abandonResponse() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentLane == "" {
+		return
+	}
+	slog.Debug("openai responses: abandoning the response", "lane", s.currentLane)
+	if s.draining == nil {
+		s.draining = map[string]bool{}
+	}
+	s.draining[s.currentLane] = true
+	s.currentLane = ""
+}
+
+// followLane reports whether an event belongs to the response on lane, and
+// notes when it ends a response.
+//
+// An event on another lane is a draining lane's, from an abandoned response;
+// the lane is free again once that response ends. Events with no stream_id
+// concern the connection, and so the response in flight.
+func (s *Service) followLane(ev event, lane string) bool {
+	ends := endsResponse(ev.Type)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ev.StreamID != "" && ev.StreamID != lane {
+		if ends {
+			delete(s.draining, ev.StreamID)
+		}
+		return false
+	}
+	if ends {
+		s.currentLane = ""
+	}
+	return true
 }
 
 // classifyStreamError recognizes the two failures that are worth retrying on a
@@ -366,9 +411,10 @@ func (s *Service) applyContinuation(req *request) int {
 }
 
 // recordContinuation stores what the server now holds, so the next turn can send
-// only what is new. full is the whole input the conversation rendered to and
-// sent is how many of those items the server has seen.
-func (s *Service) recordContinuation(state *streamState, full []inputItem, sent int) {
+// only what is new. full is the whole input the conversation rendered to, sent
+// is how many of those items the server has seen, and lane is the lane the
+// response ran on.
+func (s *Service) recordContinuation(state *streamState, full []inputItem, sent int, lane string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if state.responseID == "" {
@@ -383,6 +429,7 @@ func (s *Service) recordContinuation(state *streamState, full []inputItem, sent 
 		// The response's own output items land in the context before the next
 		// turn, and the server already has them.
 		outputLen: state.outputItems(),
+		lane:      lane,
 	}
 }
 
@@ -463,12 +510,14 @@ func (s *Service) readLoop(sess *session) {
 }
 
 // disconnect closes the connection, stops the read loop, and forgets what the
-// server held. It is safe to call more than once.
+// server held and which lanes were in use. It is safe to call more than once.
 func (s *Service) disconnect() {
 	s.mu.Lock()
 	sess := s.sess
 	s.sess = nil
 	s.cont = continuation{}
+	s.currentLane = ""
+	s.draining = nil
 	s.mu.Unlock()
 	if sess == nil {
 		return
