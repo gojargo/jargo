@@ -27,6 +27,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   first time, or from `Config.ModelDir`. A model that cannot be loaded leaves
   the reader unusable, and transcriptions pass through unread. See
   [Expressive conversation](docs/guides/expressive-conversation.md#the-tone-reader).
+- **The tone tagger, in alpha: expression tags for an LLM's plain replies.**
+  `processor/tone/tagger` goes between the LLM and the TTS service and labels
+  each sentence as it streams in, with the tone tagger model
+  (`pipecat-ai/tone-models`, release `tagger-rc1`, sizes 17m and 32m): a
+  delivery, slow spans for details, stressed words, a sound before or after,
+  and with `GuidanceBreathe` a breath. It reads the call so far, how the user
+  sounded, its previous reply's labels and the policy, and writes the labels
+  in the names the TTS service performs. It broadcasts an
+  `ExpressionMetadataFrame` at start, so the LLM writes plain words. A model
+  that cannot be loaded leaves the tagger unusable, and the LLM writes the
+  tags itself. See
+  [Expressive conversation](docs/guides/expressive-conversation.md#the-tone-tagger).
 - `aggregators.LLMText` takes text transforms, with `SetTextTransformers` and
   `AddTextTransformer`, which rewrite each aggregation for everything
   downstream: the TTS service, the context and the client. A transform

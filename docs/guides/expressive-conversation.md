@@ -181,6 +181,48 @@ guidance lines when there is a reading to act on, while the presets are left
 to the tagger. The assistant aggregator writes each reply to the context as its
 words alone, so the LLM reads back what it wrote.
 
+### The tone tagger
+
+`processor/tone/tagger` is such a tagger. It labels each sentence of a reply
+as it streams in, with the tone tagger model
+([pipecat-ai/tone-models](https://huggingface.co/pipecat-ai/tone-models)) on
+the CPU, in about 15 milliseconds a sentence: a delivery, slow spans for
+details someone might write down, stressed words, and a sound before or after.
+It reads the call so far, how the user sounded (add a
+[tone reader](#the-tone-reader) for that), the labels of its previous reply,
+and the policy. It goes between the LLM and the TTS service:
+
+```go
+toneTagger, err := tagger.New(tagger.Config{})
+if err != nil {
+	return err
+}
+p := pipeline.New(transport.Input(), stt, toneReader, userAgg, llm, toneTagger, tts,
+	transport.Output(), assistantAgg)
+```
+
+The labels are the core deliveries and sounds, written by the names the TTS
+service performs them by, and only where it performs them and the policy
+offers them. The policy's presets steer it, and a breath is written only with
+`GuidanceBreathe`, drawn as a light breath, a deep breath or an exhale. The
+developer's own guidance lines are for the LLM. `Config.Vocabulary` names a
+label first by a name of your own, such as
+`map[expressive.UniversalName][]string{expressive.DeliveryWarm: {"cheerful"}}`,
+where the service performs it.
+
+`Config.Size` picks the model: `tagger.Size17M`, the default, or
+`tagger.Size32M`, which agrees with its teacher a little more often and takes
+nearly three times as long a sentence. The model loads as the reader's does,
+once a process, from Hugging Face or `Config.ModelDir`:
+
+```sh
+huggingface-cli download pipecat-ai/tone-models --revision tagger-rc1 --include 'tagger/17m/*'
+```
+
+The tagger needs `EnableExpressiveConversation`; without it, replies pass
+through untagged. A model that cannot be loaded is reported as an error that
+leaves the tagger unusable, and the LLM then writes the tags itself.
+
 ## Universal names
 
 Each delivery and sound has one universal name, the same on every service:

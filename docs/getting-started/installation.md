@@ -29,7 +29,7 @@ it unless you have a measured reason not to.
 
 | Library | Needed for | Env var | Without it |
 |---|---|---|---|
-| **ONNX Runtime** | Silero VAD, Smart Turn v3, the tone reader | `JARGO_ONNXRUNTIME_LIB` | Bot still runs; falls back to STT endpointing, loses barge-in. |
+| **ONNX Runtime** | Silero VAD, Smart Turn v3, the tone reader and tagger | `JARGO_ONNXRUNTIME_LIB` | Bot still runs; falls back to STT endpointing, loses barge-in. |
 | **RNNoise** | Optional input noise reduction | `JARGO_RNNOISE_LIB` | Bot runs without denoising. |
 
 Both are located by their conventional name on the loader's default search path
