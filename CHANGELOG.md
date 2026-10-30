@@ -323,6 +323,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   configured**, like the other models whose lowest documented effort is
   `none`.
 
+- ⚠️ **Breaking change:** `llmwithbackend.BackendRequestStrategy` gains
+  `DelegateNeedsArguments`, which reports whether a `delegate` call has to carry
+  arguments for the request to be built: false for the transcript strategy, true
+  for the explicit one.
 - ⚠️ **Breaking change:** `responses.ThinkingReporter` gains
   `UseProviderThinkingDefault`, which the LLM base implements.
 - **What kind of text a frame holds is its `TextType`.** `frames.AggregationType`
@@ -638,6 +642,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and never opening a pair whose start and end are the same, such as
   `{"**", "**"}`. `text.ParseStartEndTags` now resumes just past the start of
   the tag left open, or past the last tag that closed.
+
+- **`LLMWithBackend`'s frontend more reliably delegates a stop or a change to
+  work it has handed over to the backend.** Before, gpt-4.1 and Claude often
+  answered a user's "never mind" themselves, with no call, and the backend
+  carried on with its work. Asked how the work is going before any of the
+  backend's progress has reached it, the frontend now says there is no update
+  yet instead of describing work it cannot see. The pairing instruction opens
+  with what the backend is and when to delegate, and ends by restating that a
+  message about delegated work gets a `delegate` call; the tool descriptions say
+  the tool is the only way to start, change or stop the backend's work.
 - Fixed an LLM service never sending the tools it implements itself, such as a
   `cancel_<tool>` tool, when the conversation advertised none of its own.
 - Fixed a tool that answered at once reporting its result ahead of the end of the

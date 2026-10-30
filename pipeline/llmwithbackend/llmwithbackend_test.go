@@ -250,7 +250,7 @@ func TestTheToolDescriptionFramesAHandoff(t *testing.T) {
 func TestTheFrontendGuidanceCoversDelegationAndTheBackendsMessages(t *testing.T) {
 	guidance := bound(t, nil, false, nil).FrontendInstruction()
 	for _, want := range []string{
-		"delegate tool", `marked "Backend:"`, `"Backend (working):"`, "calling it off, in any words",
+		"delegate tool", `marked "Backend:"`, `"Backend (working):"`, "to start, change or stop its work",
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Errorf("guidance lacks %q", want)
@@ -260,7 +260,7 @@ func TestTheFrontendGuidanceCoversDelegationAndTheBackendsMessages(t *testing.T)
 
 func TestTheStrategysGuidanceSitsInsideTheDelegatingParagraph(t *testing.T) {
 	guidance := bound(t, nil, false, nil).FrontendInstruction()
-	if !strings.HasPrefix(guidance, "DELEGATING:") {
+	if !strings.HasPrefix(guidance, "THE BACKEND:") {
 		t.Errorf("guidance starts %q", guidance[:20])
 	}
 	delegating, _, _ := strings.Cut(guidance, "\n\n")
@@ -274,6 +274,13 @@ func TestTheStrategysGuidanceSitsInsideTheDelegatingParagraph(t *testing.T) {
 		strings.Index(guidance, "AFTER DELEGATING:"), strings.Index(guidance, "BACKEND MESSAGES:")
 	if one >= after || after >= messages {
 		t.Errorf("paragraphs out of order: %d %d %d", one, after, messages)
+	}
+	// The instruction ends by restating its rule for messages about delegated
+	// work.
+	paragraphs := strings.Split(guidance, "\n\n")
+	if last := paragraphs[len(paragraphs)-1]; !strings.HasPrefix(last,
+		"Whatever else a reply does, a user message about work") {
+		t.Errorf("the last paragraph is %q", last)
 	}
 }
 
@@ -299,7 +306,7 @@ func TestAStrategyTakesItsThreeTextsAsArguments(t *testing.T) {
 		RequestInstruction:  "Do it now.",
 	})
 	c := bound(t, NewBackendConnector(ConnectorConfig{RequestStrategy: strategy}), false, nil)
-	if !strings.Contains(c.FrontendInstruction(), "around it. Say it plainly.") {
+	if !strings.Contains(c.FrontendInstruction(), "waiting. Say it plainly.") {
 		t.Error("the frontend instruction was not placed")
 	}
 	if c.Tool().Description != "Hand it over." {

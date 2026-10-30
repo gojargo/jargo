@@ -75,52 +75,45 @@ const RelayNote = "(Relay this to the user now, in your own words, once, even if
 // FrontendPairingInstruction.
 const StrategyPlaceholder = "{strategy}"
 
+// The prompts that follow are read by the frontend's model. A small change in
+// wording can change what a model does in ways no unit test catches: gpt-4.1
+// stops delegating a "never mind", or starts delegating questions about how the
+// work is going.
+
 // FrontendPairingInstruction is how the frontend's model works with a backend,
-// appended to its system instruction: when and how to delegate, that to the user
-// there is one assistant, what to do after delegating, and what to do with the
-// backend's messages. The request strategy's guidance (how the request is
-// worded) goes where StrategyPlaceholder stands, inside the delegating
-// paragraph. The frontend's own system instruction says what the backend is
-// for. ConnectorConfig.FrontendPairingInstruction replaces it.
+// appended to its system instruction: what the backend is and when to
+// delegate, that to the user there is one assistant, what to do after
+// delegating, and what to do with the backend's messages. The request
+// strategy's guidance (how the request is worded) goes where
+// StrategyPlaceholder stands, at the end of the first paragraph. The frontend's
+// own system instruction says what the backend is for.
+// ConnectorConfig.FrontendPairingInstruction replaces it.
 //
-// The order of the paragraphs matters, and the placeholder's place inside the
-// first one: with the one-assistant paragraph first, or the strategy's guidance
-// in a paragraph of its own, a model answers a user's "never mind" with "I won't
-// make any changes" and no delegate call in nearly every run, where this order
-// delegates the stop every time.
-const FrontendPairingInstruction = "DELEGATING: Delegate to the backend when any part of what the user " +
-	"asks needs a backend tool or careful reasoning, and whenever the user says anything about work " +
-	"already handed over: a change, a narrowing, or calling it off, in any words, even in passing. " +
-	"Whether that work goes on is not yours to decide: hand the message over and the " +
-	"backend decides. You cannot stop or change that work yourself, and nothing you say " +
-	"reaches the backend: only a delegate call does, so saying you will stop without one " +
-	"leaves the work running. A request that arrives while the backend is already working " +
-	"is delegated like any other. Do not delegate only when the message neither needs " +
-	"backend work nor concerns work already handed over: small talk, or a question you can " +
-	"answer from a result you already have, or when you need a brief clarification first. " +
-	"Delegate before giving any answer that depends on backend work, and do not guess the " +
-	"result while waiting. To delegate, call the delegate tool at once, in that same reply, " +
-	"and do the rest of the reply yourself around it. " + StrategyPlaceholder + "\n\n" +
+// The instruction ends by restating its one rule, that a message about
+// delegated work, a stop included, gets a delegate call. A stop is where a
+// model goes wrong: it answers "never mind" with "I won't make any changes" and
+// no call, and the backend carries on. gpt-4.1 weighs the end of the
+// instruction most, so the restatement is what makes it delegate a stop; the
+// first paragraph alone, with the rule in it, does not, nor does the rule as a
+// list of cases.
+const FrontendPairingInstruction = "THE BACKEND: You have a backend for anything that needs a " +
+	"backend tool or careful reasoning. It sees nothing of the conversation but what you delegate, and nothing you " +
+	"say reaches it: to start, change or stop its work, call the delegate tool, at once, in " +
+	"the same reply, and do the rest of the reply yourself around it. That holds for every " +
+	"message that concerns its work, whether a new request, a yes to something that was " +
+	"offered, a correction or a \"never mind\", and even while earlier work is still running: " +
+	"a stop you only speak leaves the work running. Do not delegate what you can do " +
+	"yourself: small talk, a question that a result you already have answers, or a question " +
+	"about how the work is going, which you answer from the backend's latest notes or, with " +
+	"none yet, by saying there is no update yet. Never guess a result while waiting. " +
+	StrategyPlaceholder + "\n\n" +
 	"ONE ASSISTANT: To the user there is one assistant, you: never mention the backend, " +
 	"delegation, a handoff or tools. Say what is being done as your own doing, such as \"I'm " +
-	"checking\" or \"I've fixed it\", never \"the backend is checking\". A stop or a change you " +
-	"hand over is your own doing too: never say that you passed it along, relayed it, handed " +
-	"it over or told anyone.\n\n" +
-	"AFTER DELEGATING: Acknowledge briefly, without offering updates or asking whether to " +
-	"go ahead, and do whatever else the user asked that you can do yourself. The result says " +
-	"whether the backend was idle or already working; if it was working, your request joins " +
-	"that work. The backend sees nothing of the conversation but what you delegate, so every " +
-	"new request that needs it takes a delegate call of its own, even while it is still " +
-	"working on an earlier one; that includes the user saying yes to something you or the " +
-	"backend offered to do, and the user calling off or changing work already under way, " +
-	"which the backend keeps doing until you hand that over. Saying you will check " +
-	"or look into something is not doing it: " +
-	"the backend hears nothing until you call delegate, so a reply that promises backend " +
-	"work calls delegate in that same reply. When the user asks whether work is under way, " +
-	"look at the conversation: if you never delegated it, say it is not started yet and delegate " +
-	"it then. When you hand over a stop or a change, the backend stops or changes the work as " +
-	"told: tell the user plainly that you are stopping or changing it, and do not promise results " +
-	"from work the user called off.\n\n" +
+	"checking\", never \"the backend is checking\", and never that you passed anything along.\n\n" +
+	"AFTER DELEGATING: Acknowledge briefly, without offering updates or asking whether to go " +
+	"ahead, and answer whatever else the user asked that you can. Never say work is done, or " +
+	"give a result, that the backend has not given you; if the user asks whether work is " +
+	"under way and you never delegated it, say so and delegate it then.\n\n" +
 	"BACKEND MESSAGES: The backend works on its own after you delegate and may be doing " +
 	"several things at once. What it has to say arrives as messages in the conversation " +
 	"marked \"Backend:\": a result, a question for the user, or news " +
@@ -141,7 +134,10 @@ const FrontendPairingInstruction = "DELEGATING: Delegate to the backend when any
 	"latest of them, concretely: name the step, such as which file it is reading or that it " +
 	"is running the tests, rather than saying only that it is still working. Never state a " +
 	"result you have not received from the backend, and never say work is done that the " +
-	"backend has not said is done."
+	"backend has not said is done.\n\n" +
+	"Whatever else a reply does, a user message about work you delegated, whether to add to " +
+	"it, change it or stop it, a never mind included, gets a delegate call in that reply: " +
+	"nothing else stops or changes that work."
 
 // TranscriptFrontendInstruction is the transcript strategy's guidance, in the
 // pairing instruction's delegating paragraph.
@@ -151,15 +147,14 @@ const TranscriptFrontendInstruction = "A delegation hands over the whole convers
 
 // TranscriptToolDescription is how the transcript strategy describes the
 // delegate tool.
-const TranscriptToolDescription = "Hand the conversation over to the backend, which reads it and does " +
-	"everything in it that needs a backend tool or careful reasoning. Call this as soon as any part of " +
-	"what the user asks needs that, and do the rest yourself. One handoff per reply, however " +
-	"many things the user asked for: two questions, or one question about two places, is " +
-	"one handoff. The backend sees nothing but what is handed over, so a request the user " +
-	"makes after your last handoff needs a handoff of its own, even while the backend is " +
-	"still working, and so does anything the user says about work already handed over: a " +
-	"change, a narrowing, or calling it off, in any words. It takes no arguments. Keep " +
-	"talking with the user while it works."
+const TranscriptToolDescription = "The only way to start, change or stop the backend's work. Hands " +
+	"the conversation over to the backend, which reads it and does everything in it that needs a " +
+	"backend tool or careful reasoning, and stops or changes what the user has called off or " +
+	"changed. Call it as soon as any part of what the user says concerns that work, even while " +
+	"the backend is still working, and do the rest yourself. Not for a question about how the " +
+	"work is going, which you answer from the backend's notes. One handoff per reply, however " +
+	"many things the user asked for. It takes no arguments. Keep talking with the user while " +
+	"it works."
 
 // ExplicitFrontendInstruction is the explicit strategy's guidance, in the
 // pairing instruction's delegating paragraph.
@@ -171,13 +166,15 @@ const ExplicitFrontendInstruction = "Word the request so it stands on its own: t
 
 // ExplicitToolDescription is how the explicit strategy describes the delegate
 // tool.
-const ExplicitToolDescription = "Hand a request to the backend, which does everything in it that needs a " +
-	"backend tool or careful reasoning. Call this as soon as any part of what the user asks needs " +
-	"that, with the request worded to stand on its own, and do the rest yourself. One call per " +
-	"reply, however many things the user asked for: two questions, or one question about " +
-	"two places, go in one request. Work already handed over stays with the backend, so " +
-	"send only what is new, including anything the user says about that work, such as to " +
-	"stop or change it. Keep talking with the user while it works."
+const ExplicitToolDescription = "The only way to start, change or stop the backend's work. Hands " +
+	"a request to the backend, which does everything in it that needs a backend tool or careful " +
+	"reasoning, and stops or changes what the user has called off or changed. Call it as soon " +
+	"as any part of what the user says concerns that work, even while the backend is still " +
+	"working, with the request worded to stand on its own, and do the rest yourself. Not for a " +
+	"question about how the work is going, which you answer from the backend's notes. One call " +
+	"per reply, however many things the user asked for. Work already handed over stays with the " +
+	"backend, so send only what is new, including anything the user says about that work, such " +
+	"as to stop or change it. Keep talking with the user while it works."
 
 // requestArgument is the explicit strategy's one argument, the request as the
 // model words it.
@@ -237,6 +234,11 @@ type BackendRequestStrategy interface {
 	// delegate tool runs. A speech-to-speech frontend's context lags the audio,
 	// so the connector refuses such a strategy there.
 	RequiresContext() bool
+	// DelegateNeedsArguments reports whether a delegate call has to carry
+	// arguments for the request to be built. Predictive delegation makes its
+	// delegate call with none, so it works only with a strategy that reports
+	// false.
+	DelegateNeedsArguments() bool
 	// ComposeRequest turns a delegate call into the text put to the backend. It
 	// reports false when the call carries nothing new for the backend, in which
 	// case nothing is sent.
@@ -326,6 +328,10 @@ func (s *TranscriptBackendRequestStrategy) ToolDescription() string { return s.t
 // from the frontend's context.
 func (*TranscriptBackendRequestStrategy) RequiresContext() bool { return true }
 
+// DelegateNeedsArguments implements BackendRequestStrategy: the request is the
+// transcript, so a call with no arguments builds it.
+func (*TranscriptBackendRequestStrategy) DelegateNeedsArguments() bool { return false }
+
 // ComposeRequest renders the turns since the previous delegation as the
 // request.
 func (s *TranscriptBackendRequestStrategy) ComposeRequest(
@@ -414,6 +420,10 @@ func (s *ExplicitBackendRequestStrategy) ToolDescription() string { return s.too
 // RequiresContext implements BackendRequestStrategy: the request comes from the
 // call's arguments.
 func (*ExplicitBackendRequestStrategy) RequiresContext() bool { return false }
+
+// DelegateNeedsArguments implements BackendRequestStrategy: the request is the
+// call's request argument.
+func (*ExplicitBackendRequestStrategy) DelegateNeedsArguments() bool { return true }
 
 // ComposeRequest sends the model's request as it stands, with the reporting
 // expectation after it.
