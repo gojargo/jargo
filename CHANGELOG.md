@@ -15,6 +15,50 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Expressive conversation, in alpha: TTS services perform the expression
+  tags the LLM writes into its reply instead of speaking them.** Turned on with
+  `pipeline.Params.EnableExpressiveConversation`. The tag syntax and these APIs
+  are likely to change between releases. See
+  [Expressive conversation](docs/guides/expressive-conversation.md).
+  - `<<name>>` sets the delivery of the words that follow, such as
+    `<<excited>>`, until the next delivery tag or the end of the reply, and
+    `<<neutral>>` returns to the voice's baseline. `[[sound]]` is a sound at one
+    point, such as `[[laugh]]`, `[[pause 500]]` a pause in milliseconds, and
+    `^^word^^` stresses a word. `<<slow: A B 7>>` speaks just those words in that
+    delivery, on top of the delivery around them.
+  - Each delivery and sound has a universal name, the same on every service:
+    `expressive.ExpressionDelivery` and `expressive.ExpressionSound`. A
+    universal name in a tag is sent by the provider's own name for it, through
+    `ExpressionCapabilities.ServiceVocabulary`, while everything reported keeps
+    it as written. `DeliveryName` and `SoundName` give the name a service
+    performs, and `AllowsFreeTextDelivery` and `AllowsFreeTextSounds` say
+    whether it takes free text for each kind.
+  - Each TTS service performs what its expression adapter supports and leaves
+    out the rest, with a warning. Adapters embed `BaseExpressionAdapter` from
+    `adapter/tts`, beside the LLM adapters, and a synthesizer offers one with
+    `tts.ExpressionAdapterProvider`. They ship for Cartesia (WebSocket and
+    HTTP), ElevenLabs HTTP on Eleven v3 and v4, Fish Audio S2, MiniMax
+    speech-2.8, Inworld `inworld-tts-2` and `inworld-tts-2-flash`, Soniox
+    `tts-rt-v2`, Mistral Voxtral 3 and Azure DragonHD voices, and for Gemini
+    3.8, which jargo has no Gemini API TTS service for yet. A service
+    broadcasts what it can perform at start in the new `frames.TTSMetadataFrame`,
+    and again when a settings change alters it.
+  - The context records the reply as the LLM wrote it, tags included, and
+    clients see the words without the tags; what the assistant turn is
+    reported to have said is the words alone. `frames.TTSTextFrame` and
+    `AggregatedTextProgressFrame` gained `Delivery`, and RTVI `bot-output`
+    carries it. Each sound and pause performed is a `bot-output` segment of
+    the new `expression_sound` or `expression_pause` text type, sent to clients
+    of RTVI protocol 2.3.0 or later, the protocol version now.
+  - The expressive packages hold the pieces: `expressive` the capabilities and
+    names, `expressive/formatter` the tag reader and request builder, and
+    `expressive/spoken` the delivery of the words a service reports speaking.
+
+- **The `expression` event in scripted evals:** the expression the bot's TTS
+  performed, in the tags the LLM writes, such as `<<excited>>` or
+  `[[laughter]]`. A tag the TTS cannot perform is never reported, so a
+  scenario can check that what the LLM wrote was performed.
+
 - **`text_matches` in scripted eval expectations:** one or more regular
   expressions the event's text must each match, such as a format a reply must
   open with. The failure names the first pattern that did not match. The
@@ -311,6 +355,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `tts.Base.IsStreamingTokens` and `wsservice.Base.ReconnectInProgress`.
 
 ### Changed
+
+- **A TTS service broadcasts its metadata only in an expressive
+  conversation**, as a `frames.TTSMetadataFrame`. It broadcast a plain
+  `ServiceMetadataFrame` at start before.
+- **Word tracking lines a word sent in other capitals up with the text it was
+  written in**, such as "BACK" sent for a stressed "back", rather than taking
+  the two for a rewrite.
 
 - **With an eager end of turn, the turn an early reply answers is announced
   ahead of it.** The user aggregator broadcasts an `LLMContextUserTurnFrame`
@@ -663,6 +714,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Fixed a TTS service without word timestamps that streams tokens recording
+  each reply twice in the conversation: once token by token and once sentence
+  by sentence. Only the sentences are recorded now.
+- Fixed `SkipTagsAggregator` and `PatternPairAggregator` ending a sentence at
+  punctuation inside a tag or a kept pattern that has already closed, as in
+  `<spell>A. B. C.</spell>`, and `SkipTagsAggregator` losing track of a tag
+  after the sentence before it was emitted.
 - Fixed a backend worker telling a frontend that had just attached that it was
   idle, from a check asked for while the previous frontend was attached. The
   frontend could take it for the end of its own first request and miss the
