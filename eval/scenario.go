@@ -18,7 +18,8 @@
 //	within_ms: <int>         latency budget, measured from the turn's user input
 //	text_contains: <str>     substring check on the event's text, case-sensitive
 //	eval: <str>              criterion an LLM judge checks the bot's reply against
-//	                         (llm_response and tts_response, which carry its text),
+//	                         (llm_response and tts_response, which carry its text,
+//	                         and the expression its TTS performed),
 //	                         or, on function_call, the call itself by name and args
 //	text_excludes: <str>     the reverse of text_contains: the text must not hold it
 //	text_matches: <regex> | [<regex>, ...]
@@ -66,6 +67,13 @@
 //
 //	llm_response   the text the model produced (bot-llm-text)
 //	tts_response   the text the TTS reports speaking (bot-tts-text)
+//
+// In an expressive conversation (alpha), expression is the expression the bot's
+// TTS performed, from bot-output, in the tags the LLM writes: <<excited>> where
+// the delivery of its spoken text changes (<<neutral>> back to the baseline),
+// [[laughter]] for a sound, [[pause 600]] for a pause. A tag the TTS can't
+// perform is never reported. A content check on it accumulates the expression
+// performed in the turn.
 //
 // # Asserting on the markers the model emits
 //
@@ -276,6 +284,12 @@ const (
 	// ends, and carries the response's raw text with it. Markers never reach a
 	// client by default; a scenario asserting on one asks the bot to report them.
 	EventLLMMarker = "llm_marker"
+	// EventExpression is the expression the bot's TTS performed in an
+	// expressive conversation (alpha), from bot-output, in the tags the LLM
+	// writes: <<excited>> where the delivery of its spoken text changes
+	// (<<neutral>> back to the baseline), [[laughter]] for a sound,
+	// [[pause 600]] for a pause. A tag the TTS can't perform is never reported.
+	EventExpression = "expression"
 )
 
 // The meanings a marker expectation can name, which are the emitter's own
@@ -309,6 +323,8 @@ var markerMeanings = map[string]bool{
 var judgeableEvents = map[string]bool{
 	EventLLMResponse: true,
 	EventTTSResponse: true,
+	// The expression the bot's TTS performed.
+	EventExpression: true,
 }
 
 // vadEvents are the events the bot reports only when asked to. The harness asks
@@ -885,7 +901,7 @@ func (e *Expectation) validate() error {
 	if e.Eval != "" && !judgeableEvents[e.Event] && e.Event != EventFunctionCall {
 		slog.Warn("eval: a judge criterion is only meaningful on an event carrying the bot's own "+
 			"text, or on a function call, where the call itself is what is judged",
-			"event", e.Event, "judgeable", []string{EventLLMResponse, EventTTSResponse, EventFunctionCall})
+			"event", e.Event, "judgeable", []string{EventLLMResponse, EventTTSResponse, EventExpression, EventFunctionCall})
 	}
 	// An absent expectation matches on event type only: a content or call check
 	// describes an event that must arrive, which contradicts absence.

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -143,6 +144,11 @@ type session struct {
 	// straggler must not be attributed to the new turn. The genuinely new
 	// response begins at the next bot-llm-started.
 	awaitingLLMRestart bool
+	// exprDelivery is the delivery the bot last reported speaking in during the
+	// current response, so an expression event marks only where the delivery
+	// changes, and exprSegments the sound and pause segments already reported.
+	exprDelivery []string
+	exprSegments map[uint64]bool
 
 	// turns is what each turn resolved to, and what each of its expectations
 	// matched. The matcher goroutine owns it.
@@ -707,10 +713,10 @@ func (s *session) matchExpectation(
 
 // aggregates reports whether an expectation accumulates successive response
 // segments rather than checking the first one. Only a content check on the
-// bot's own text does; a bare event, or a check on a user transcription,
-// matches once.
+// bot's own text does, and on the expression performed in the turn; a bare
+// event, or a check on a user transcription, matches once.
 func (s *session) aggregates(exp Expectation) bool {
-	if exp.Event != EventLLMResponse && exp.Event != EventTTSResponse {
+	if exp.Event != EventLLMResponse && exp.Event != EventTTSResponse && exp.Event != EventExpression {
 		return false
 	}
 	return exp.TextContains != "" || exp.Eval != ""
@@ -1151,17 +1157,8 @@ func (s *session) translate(in rtvi.Incoming) *Event {
 		return &Event{Kind: EventUserTranscription, Text: d.Text}
 	case rtvi.TypeBotLLMStarted, rtvi.TypeBotLLMText, rtvi.TypeBotLLMStopped:
 		return s.translateLLM(in)
-	case rtvi.TypeBotTTSText:
-		// The text the TTS reports speaking, one segment per spoken sentence,
-		// emitted as it arrives. It cannot be bounded on bot-tts-stopped the way
-		// llm_response is bounded on bot-llm-stopped, because some services report
-		// the text after the audio has finished. The matcher aggregates the
-		// segments of the turn instead.
-		var d rtvi.TextData
-		if json.Unmarshal(in.Data, &d) != nil {
-			return nil
-		}
-		return &Event{Kind: EventTTSResponse, Text: d.Text}
+	case rtvi.TypeBotTTSText, rtvi.TypeBotOutput:
+		return s.translateOutput(in)
 	case rtvi.TypeBotLLMMarker:
 		var d rtvi.BotLLMMarkerData
 		if json.Unmarshal(in.Data, &d) != nil {
@@ -1180,6 +1177,68 @@ func (s *session) translate(in rtvi.Incoming) *Event {
 	default:
 		return nil
 	}
+}
+
+// translateOutput handles what the bot's TTS reports speaking: its text, and in
+// expressive conversation the expression it performed.
+func (s *session) translateOutput(in rtvi.Incoming) *Event {
+	if in.Type == rtvi.TypeBotOutput {
+		return s.expressionEvent(in)
+	}
+	// The text the TTS reports speaking, one segment per spoken sentence,
+	// emitted as it arrives. It cannot be bounded on bot-tts-stopped the way
+	// llm_response is bounded on bot-llm-stopped, because some services report
+	// the text after the audio has finished. The matcher aggregates the
+	// segments of the turn instead.
+	var d rtvi.TextData
+	if json.Unmarshal(in.Data, &d) != nil {
+		return nil
+	}
+	return &Event{Kind: EventTTSResponse, Text: d.Text}
+}
+
+// expressionEvent is the expression the bot performed, from a bot-output
+// message, written as the LLM writes it.
+//
+// Only expressive conversation reports it: a sound or pause segment, once, or
+// spoken text carrying a delivery, where it differs from the delivery before
+// it in the response. Each is reported as it is spoken rather than announced,
+// so they keep the order they were performed in.
+func (s *session) expressionEvent(in rtvi.Incoming) *Event {
+	var d rtvi.BotOutputData
+	if json.Unmarshal(in.Data, &d) != nil {
+		return nil
+	}
+	if d.WillBeSpoken == nil || !*d.WillBeSpoken || d.SpokenStatus == rtvi.SpokenNew {
+		return nil
+	}
+	if d.OutputType == frames.TextTypeExpressionSound || d.OutputType == frames.TextTypeExpressionPause {
+		var id uint64
+		if d.SegmentID != nil {
+			id = *d.SegmentID
+		}
+		if s.exprSegments[id] {
+			return nil
+		}
+		if s.exprSegments == nil {
+			s.exprSegments = map[uint64]bool{}
+		}
+		s.exprSegments[id] = true
+		tag := "[[" + d.Text + "]]"
+		if d.OutputType == frames.TextTypeExpressionPause {
+			tag = "[[pause " + d.Text + "]]"
+		}
+		return &Event{Kind: EventExpression, Text: tag}
+	}
+	if d.Delivery == nil || slices.Equal(d.Delivery, s.exprDelivery) {
+		return nil
+	}
+	s.exprDelivery = d.Delivery
+	delivery := strings.Join(d.Delivery, ", ")
+	if delivery == "" {
+		delivery = "neutral"
+	}
+	return &Event{Kind: EventExpression, Text: "<<" + delivery + ">>"}
 }
 
 // next reads the next translated event, blocking until one arrives, the deadline
@@ -1210,6 +1269,7 @@ func (s *session) translateLLM(in rtvi.Incoming) *Event {
 		// interrupted prior response are now behind us.
 		s.awaitingLLMRestart = false
 		s.llmBuf.Reset()
+		s.exprDelivery = nil
 		return &Event{Kind: EventLLMStarted}
 	case rtvi.TypeBotLLMText:
 		if s.awaitingLLMRestart {
