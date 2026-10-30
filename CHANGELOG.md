@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-30
+
 ### Added
 
 - **Expressive conversation, in alpha: TTS services perform the expression
@@ -5096,7 +5098,8 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/gojargo/jargo/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/gojargo/jargo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/gojargo/jargo/compare/v0.0.5...v0.1.0
 [0.0.4]: https://github.com/gojargo/jargo/compare/v0.0.3...v0.0.4
