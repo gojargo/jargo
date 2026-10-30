@@ -869,6 +869,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   with 2.2.0 (bot capabilities in `bot-ready`, the raw text messages,
   `user-input` and bot backchannels as `bot-output`). `rtvi.ProtocolVersion` is
   now `2.2.0`, so a client learns from `bot-ready` that the session speaks it.
+
+- Fixed `FilterIncompleteUserTurnStrategies` leaving the bot silent when the
+  user made a sound with no words while the LLM was answering, for example
+  right before a tool call. The bot now responds as it does to an empty user
+  turn that interrupted it, following `turns.Config.EmptyUserTurn`: by default
+  it asks the user to repeat what they said. The recovery is the turn's own
+  inference, so the turn ends on that response's marker rather than on the
+  stop timeout. A turn that does not interrupt the bot voids nothing, and the
+  session ending recovers nothing.
+
 - Fixed a user turn ending on the user's earlier words with segmented STT
   services. When the user spoke again before an earlier segment was
   transcribed, that segment's transcript was marked finalized, so the stop

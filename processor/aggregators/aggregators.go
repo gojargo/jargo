@@ -433,6 +433,10 @@ type UserAggregator struct {
 	turnInterruptedBot bool
 	// emptyTurnRecoveries is how many empty turns in a row have been answered.
 	emptyTurnRecoveries int
+	// turnAnswerVoided is whether the user speaking again voided the answer to
+	// words already in the conversation. Without new words, the turn's next
+	// inference recovers it like an empty user turn that interrupted the bot.
+	turnAnswerVoided bool
 }
 
 func newUser(
@@ -1076,6 +1080,10 @@ func (u *UserAggregator) maybeRun(ctx context.Context, feed func(frames.Frame)) 
 // strategy that waits for the turn's inference, such as LLMTurnCompletionStop,
 // waits for that one. A caller inside one of the controller's hooks passes its
 // ProcessFromHook, and any other its Process.
+//
+// With nothing new to write after the user speaking again voided the answer to
+// the words already written, it recovers that answer like an empty user turn
+// that interrupted the bot.
 func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool, feed func(frames.Frame)) (string, error) {
 	u.mu.Lock()
 	parts := u.aggregation
@@ -1085,6 +1093,15 @@ func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool, feed func(
 
 	said := text.Concatenate(parts)
 	if said == "" {
+		u.mu.Lock()
+		voided := runLLM && u.turnAnswerVoided
+		if voided {
+			u.turnAnswerVoided = false
+		}
+		u.mu.Unlock()
+		if voided {
+			u.maybeRecoverEmptyUserTurn(ctx, true, feed)
+		}
 		return "", nil
 	}
 	u.context.AddUserMessage(said)
@@ -1105,6 +1122,9 @@ func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool, feed func(
 // runLLM pushes the conversation for the turn's inference, and hands the frame
 // that runs it to the turn controller through feed.
 func (u *UserAggregator) runLLM(ctx context.Context, feed func(frames.Frame)) error {
+	u.mu.Lock()
+	u.turnAnswerVoided = false
+	u.mu.Unlock()
 	f := frames.NewLLMContextFrame(u.context)
 	err := u.PushFrame(ctx, f, processor.Downstream)
 	// A stop strategy that waits for the inference, such as
@@ -2368,6 +2388,7 @@ func (u *UserAggregator) onTurnStarted(
 	u.turnStartedAt = frames.NowTimestamp()
 	u.wholeTurn = ""
 	u.turnInterruptedBot = interruptedBot
+	u.turnAnswerVoided = false
 	u.mu.Unlock()
 
 	if params.EnableUserSpeakingFrames {
@@ -2460,6 +2481,10 @@ func (u *UserAggregator) onTurnResumed(ctx context.Context, params turns.UserTur
 	}
 	if params.EnableInterruptions {
 		_ = u.BroadcastInterruption(ctx)
+		// An answer ran only if the turn's words were written for it.
+		u.mu.Lock()
+		u.turnAnswerVoided = u.wholeTurn != ""
+		u.mu.Unlock()
 		return
 	}
 	_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() })
@@ -2550,6 +2575,13 @@ func (u *UserAggregator) reportTurnStopped(
 	ctx context.Context, strategy turns.StopStrategy, onSessionEnd, confirmsSpeculation bool,
 	feed func(frames.Frame),
 ) {
+	// Like an empty turn, a voided answer is not recovered when the session
+	// ends.
+	if onSessionEnd {
+		u.mu.Lock()
+		u.turnAnswerVoided = false
+		u.mu.Unlock()
+	}
 	// The message is written to the conversation either way: the committed
 	// transcript is what the conversation records, never the speculated one. Only
 	// the inference is skipped, the speculative reply having already answered it.
@@ -2585,16 +2617,23 @@ func (u *UserAggregator) reportTurnStopped(
 		// An empty turn does not run the LLM, so the bot stays silent unless a
 		// recovery runs it. Without one, restart the idle timer, which this
 		// turn's start canceled.
-		if !u.maybeRecoverEmptyUserTurn(ctx, interruptedBot) {
+		if !u.maybeRecoverEmptyUserTurn(ctx, interruptedBot, nil) {
 			u.idle.WaitForUser()
 		}
 	}
 }
 
-// maybeRecoverEmptyUserTurn runs the LLM for a user turn that ended with no
-// transcript, and reports whether it did. interruptedBot is whether the turn
-// interrupted a response in progress.
-func (u *UserAggregator) maybeRecoverEmptyUserTurn(ctx context.Context, interruptedBot bool) bool {
+// maybeRecoverEmptyUserTurn runs the LLM for a user turn with no transcript,
+// and reports whether it did. It also covers the part of a turn after its
+// answer was voided, when the user said nothing new. interruptedBot is whether
+// the turn interrupted a response in progress.
+//
+// turnInference is set when the run is the turn's own inference, which a stop
+// strategy such as LLMTurnCompletionStop waits for: the frame that runs it is
+// handed to the turn controller through it, as commitTurn's feed is.
+func (u *UserAggregator) maybeRecoverEmptyUserTurn(
+	ctx context.Context, interruptedBot bool, turnInference func(frames.Frame),
+) bool {
 	u.mu.Lock()
 	cfg := u.emptyUserTurn
 	if cfg == nil {
@@ -2631,7 +2670,13 @@ func (u *UserAggregator) maybeRecoverEmptyUserTurn(ctx context.Context, interrup
 	u.emptyTurnRecoveries++
 	u.mu.Unlock()
 	u.context.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: prompt})
-	if err := u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream); err != nil {
+	var err error
+	if turnInference != nil {
+		err = u.runLLM(ctx, turnInference)
+	} else {
+		err = u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+	}
+	if err != nil {
 		slog.DebugContext(ctx, "pushing the context for an empty user turn failed", "error", err)
 	}
 	return true

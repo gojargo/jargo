@@ -83,10 +83,89 @@ func firstIndex[T frames.Frame](fs []frames.Frame) int {
 // user speak again.
 func resumeAfterTheAnswerStarted(t *testing.T, strategies turns.UserTurnStrategies) []frames.Frame {
 	t.Helper()
-	pair := aggregators.New(frames.NewLLMContext(""), aggregators.WithTurns(turns.Config{Strategies: strategies}))
-	return sendAndCollect(t, []processor.Processor{pair.User()},
-		vadStart(), transcriptOf("Hi"), pause(50*time.Millisecond), vadStop(),
-		pause(speechTimeout+100*time.Millisecond), vadStart(), pause(50*time.Millisecond))
+	return resumeAfterTheAnswerStartedThen(t, turns.Config{Strategies: strategies})
+}
+
+// resumeAfterTheAnswerStartedThen is resumeAfterTheAnswerStarted under cfg,
+// sending after once the user spoke again.
+func resumeAfterTheAnswerStartedThen(t *testing.T, cfg turns.Config, after ...any) []frames.Frame {
+	t.Helper()
+	pair := aggregators.New(frames.NewLLMContext(""), aggregators.WithTurns(cfg))
+	send := append([]any{
+		vadStart(), transcriptOf("Hi"), pause(50 * time.Millisecond), vadStop(),
+		pause(speechTimeout + 100*time.Millisecond), vadStart(), pause(50 * time.Millisecond),
+	}, after...)
+	return sendAndCollect(t, []processor.Processor{pair.User()}, send...)
+}
+
+// contextFramesIn are the inferences that went downstream.
+func contextFramesIn(fs []frames.Frame) []*frames.LLMContextFrame {
+	var out []*frames.LLMContextFrame
+	for _, f := range fs {
+		if cf, ok := f.(*frames.LLMContextFrame); ok {
+			out = append(out, cf)
+		}
+	}
+	return out
+}
+
+// The voided answer is recovered like an empty user turn that interrupted the
+// bot.
+func TestSpeechWithoutWordsRecoversTheVoidedAnswer(t *testing.T) {
+	down := resumeAfterTheAnswerStartedThen(t,
+		turns.Config{Strategies: filterIncomplete(llm.UserTurnCompletionConfig{})},
+		vadStop(), pause(speechTimeout+100*time.Millisecond))
+
+	answers := contextFramesIn(down)
+	if len(answers) != 2 {
+		t.Fatalf("inferences = %d, want the turn's and the recovery", len(answers))
+	}
+	msgs := answers[1].Context.Messages()
+	last := msgs[len(msgs)-1]
+	if last.Role != frames.RoleDeveloper || last.Text != turns.DefaultEmptyUserTurnInterruptedPrompt {
+		t.Fatalf("last message = %+v, want the interrupted empty-turn prompt", last)
+	}
+}
+
+func TestSpeechWithoutWordsLeavesTheVoidedAnswerWithoutRecovery(t *testing.T) {
+	off := ""
+	down := resumeAfterTheAnswerStartedThen(t, turns.Config{
+		Strategies:    filterIncomplete(llm.UserTurnCompletionConfig{}),
+		EmptyUserTurn: &turns.EmptyUserTurnConfig{InterruptedPrompt: &off},
+	}, vadStop(), pause(speechTimeout+100*time.Millisecond))
+
+	if n := len(contextFramesIn(down)); n != 1 {
+		t.Fatalf("inferences = %d, want only the turn's", n)
+	}
+}
+
+// The session ending in the turn that voided the answer does not recover it.
+func TestSessionEndDoesNotRecoverTheVoidedAnswer(t *testing.T) {
+	down := resumeAfterTheAnswerStarted(t, filterIncomplete(llm.UserTurnCompletionConfig{}))
+
+	answers := contextFramesIn(down)
+	if len(answers) == 0 {
+		t.Fatal("the turn's answer never started")
+	}
+	for _, m := range answers[0].Context.Messages() {
+		if m.Text == turns.DefaultEmptyUserTurnInterruptedPrompt {
+			t.Fatal("the session ending recovered the voided answer")
+		}
+	}
+}
+
+func TestSpeechWithoutWordsDoesNotRunAnAnswerItDidNotInterrupt(t *testing.T) {
+	strategies := filterIncomplete(llm.UserTurnCompletionConfig{})
+	quiet := turns.NewVADStart()
+	quiet.EnableInterruptions = false
+	strategies.Start = []turns.StartStrategy{quiet}
+
+	down := resumeAfterTheAnswerStartedThen(t, turns.Config{Strategies: strategies},
+		vadStop(), pause(speechTimeout+100*time.Millisecond))
+
+	if n := len(contextFramesIn(down)); n != 1 {
+		t.Fatalf("inferences = %d, want only the turn's", n)
+	}
 }
 
 // The user speaking again after the answer started voids it.
