@@ -266,6 +266,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`ServiceSwitcher` hands metadata from a service outside it to its inactive
+  services too**, so a service that reads another service's metadata has it
+  when it becomes active. It travels on once, from the active service, as it
+  would through that service alone. `frames.ServiceMetadata` gains `Copy`, and
+  every metadata frame implements it.
 - **Inception defaults to `mercury-3`.** Inception retires Mercury 2 and 2.5
   on November 15, 2026, and they are closed to new signups. Set
   `chat.LLMConfig.Model` to `"mercury-2"` to keep it until then.

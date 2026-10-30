@@ -16,6 +16,10 @@ type ServiceMetadata interface {
 	// RecommendedUserTurnStrategies are the user turn strategies the service
 	// recommends, or nil.
 	RecommendedUserTurnStrategies() any
+	// Copy returns the same metadata as a new frame with an id of its own, and
+	// of the same concrete kind. It is how one service's metadata is handed to
+	// several others and still told apart afterwards.
+	Copy() ServiceMetadata
 }
 
 // ServiceMetadataFrame is broadcast by a service at pipeline start to share its
@@ -52,6 +56,13 @@ func (f *ServiceMetadataFrame) Service() string { return f.ServiceName }
 // RecommendedUserTurnStrategies implements ServiceMetadata.
 func (f *ServiceMetadataFrame) RecommendedUserTurnStrategies() any { return f.UserTurnStrategies }
 
+// Copy implements ServiceMetadata.
+func (f *ServiceMetadataFrame) Copy() ServiceMetadata {
+	c := *f
+	c.BaseSystemFrame = NewBaseSystemFrame("ServiceMetadataFrame")
+	return &c
+}
+
 // String implements fmt.Stringer.
 func (f *ServiceMetadataFrame) String() string {
 	return fmt.Sprintf("%s(service: %s, recommends turns: %t)",
@@ -75,6 +86,13 @@ func NewLLMServiceMetadataFrame(service string) *LLMServiceMetadataFrame {
 	}
 }
 
+// Copy implements ServiceMetadata.
+func (f *LLMServiceMetadataFrame) Copy() ServiceMetadata {
+	c := *f
+	c.BaseSystemFrame = NewBaseSystemFrame("LLMServiceMetadataFrame")
+	return &c
+}
+
 // STTMetadataFrame is the metadata an STT service broadcasts. Turn-stop
 // strategies use the p99 time-to-final-speech latency to size their safety-net
 // timeouts, and a service that does its own server-side endpointing recommends
@@ -94,6 +112,13 @@ func NewSTTMetadataFrame(ttfsP99 time.Duration) *STTMetadataFrame {
 		BaseSystemFrame: NewBaseSystemFrame("STTMetadataFrame"),
 		TTFSP99Latency:  ttfsP99,
 	}
+}
+
+// Copy implements ServiceMetadata.
+func (f *STTMetadataFrame) Copy() ServiceMetadata {
+	c := *f
+	c.BaseSystemFrame = NewBaseSystemFrame("STTMetadataFrame")
+	return &c
 }
 
 // String implements fmt.Stringer.

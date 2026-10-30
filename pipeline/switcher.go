@@ -19,9 +19,9 @@ import (
 //nolint:gochecknoglobals // sentinel error
 var errNoServices = errors.New("pipeline: service switcher needs at least one service")
 
-// inactiveUpdateRing is how many settings updates handed to inactive services
-// are remembered so they can be consumed on the way out. An update crosses its
-// service long before the ring wraps.
+// inactiveUpdateRing is how many settings updates, and how many pieces of
+// metadata, handed to inactive services are remembered so they can be consumed
+// on the way out. A copy crosses its service long before the ring wraps.
 const inactiveUpdateRing = 64
 
 // SwitcherStrategy decides which of a switcher's services is active and when
@@ -69,10 +69,13 @@ type StrategyFunc func(services []processor.Processor) SwitcherStrategy
 // decided on the way out, which is where the copies the gating produces are
 // dropped so the rest of the pipeline sees one service, not several.
 //
-// A settings update is the exception to the gating. One addressed to a member
-// service reaches it whether or not it is in use, and one marked
+// Two kinds of frame are exceptions to the gating. A settings update addressed
+// to a member service reaches it whether or not it is in use, and one marked
 // ReachInactiveServices reaches every member, so whichever service becomes
-// active later is already configured.
+// active later is already configured. And metadata from a service outside the
+// switcher reaches every member, so a member that reads another service's
+// metadata has it when it becomes active. It travels on once, from the active
+// member, as it would through that service alone.
 // A switcher is only as dead as its last service, so its own usability is a
 // reading of theirs rather than a state of its own.
 type ServiceSwitcher struct {
@@ -83,6 +86,9 @@ type ServiceSwitcher struct {
 	// inactiveUpdates are the ids of the settings updates handed to services
 	// that were not active, so they can be consumed again on their way out.
 	inactiveUpdates []uint64
+	// inactiveMetadata are the ids of the metadata from outside handed to
+	// services that were not active, consumed the same way.
+	inactiveMetadata []uint64
 	// announcedUsable is the last reading announced, kept because a service
 	// changing its own usability does not always change the switcher's.
 	announcedUsable bool
@@ -241,7 +247,8 @@ func (s *ServiceSwitcher) requestMetadata(svc processor.Processor) {
 }
 
 // ProcessFrame steers the switcher on the frames that ask it to, and hands every
-// settings update to the member services the gating would otherwise keep it from.
+// settings update, and metadata from outside, to the member services the gating
+// would otherwise keep it from.
 func (s *ServiceSwitcher) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if _, isSwitcher := f.(frames.SwitcherFrame); isSwitcher {
 		if switched := s.strategy.HandleFrame(f, dir); switched != nil {
@@ -256,10 +263,29 @@ func (s *ServiceSwitcher) ProcessFrame(ctx context.Context, f frames.Frame, dir 
 		return err
 	}
 
-	if u, ok := f.(frames.SettingsUpdate); ok {
-		s.updateInactiveServices(ctx, u, dir)
+	switch fr := f.(type) {
+	case frames.SettingsUpdate:
+		s.updateInactiveServices(ctx, fr, dir)
+	case frames.ServiceMetadata:
+		s.shareMetadata(ctx, fr, dir)
 	}
 	return nil
+}
+
+// shareMetadata hands metadata from a service outside the switcher to the
+// inactive members. The active one receives it through its branch, and that
+// frame travels on; the copies the inactive ones pass on go no further than the
+// switcher.
+func (s *ServiceSwitcher) shareMetadata(ctx context.Context, m frames.ServiceMetadata, dir processor.Direction) {
+	active := s.ActiveService()
+	for _, svc := range s.Services() {
+		if svc == active {
+			continue
+		}
+		copied := m.Copy()
+		s.remember(&s.inactiveMetadata, copied.ID())
+		_ = svc.QueueFrame(ctx, copied, dir)
+	}
 }
 
 // PushFrame decides what leaves the switcher.
@@ -276,15 +302,21 @@ func (s *ServiceSwitcher) PushFrame(ctx context.Context, f frames.Frame, dir pro
 			return nil
 		}
 	case frames.ServiceMetadata:
-		// Only the active service describes the switcher. Every service
-		// broadcasts at startup, since the lifecycle frames reach them all.
-		if fr.Service() != s.ActiveService().Name() {
+		// Metadata escapes from the active service's branch: its own, or another
+		// service's passing through it. A copy of another service's metadata
+		// handed to an inactive service stops here, and so does an inactive
+		// service's own, which every service broadcasts at startup since the
+		// lifecycle frames reach them all.
+		if s.consume(&s.inactiveMetadata, fr.ID()) {
+			return nil
+		}
+		if fr.Service() != s.ActiveService().Name() && s.isMemberNamed(fr.Service()) {
 			return nil
 		}
 	case frames.SettingsUpdate:
 		// The copies handed to the inactive services have been delivered; the
 		// one the rest of the pipeline sees is the active service's.
-		if s.consumeInactiveUpdate(fr.ID()) {
+		if s.consume(&s.inactiveUpdates, fr.ID()) {
 			return nil
 		}
 	case frames.ErrorReport:
@@ -341,6 +373,11 @@ func (s *ServiceSwitcher) isMember(p processor.Processor) bool {
 	return slices.Contains(s.Services(), p)
 }
 
+// isMemberNamed reports whether one of the switched services goes by name.
+func (s *ServiceSwitcher) isMemberNamed(name string) bool {
+	return slices.ContainsFunc(s.Services(), func(p processor.Processor) bool { return p.Name() == name })
+}
+
 // reportServiceFailure reports a service failure the switcher could not switch
 // away from.
 //
@@ -370,7 +407,7 @@ func (s *ServiceSwitcher) updateInactiveServices(
 ) {
 	for _, svc := range s.inactiveUpdateTargets(u) {
 		copied := u.Copy()
-		s.rememberInactiveUpdate(copied.ID())
+		s.remember(&s.inactiveUpdates, copied.ID())
 		_ = svc.QueueFrame(ctx, copied, dir)
 	}
 }
@@ -405,23 +442,25 @@ func (s *ServiceSwitcher) inactiveUpdateTargets(u frames.SettingsUpdate) []proce
 	return nil
 }
 
-func (s *ServiceSwitcher) rememberInactiveUpdate(id uint64) {
+// remember records id in ring, the ids of the copies handed to inactive
+// services, dropping the oldest once it is full.
+func (s *ServiceSwitcher) remember(ring *[]uint64, id uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.inactiveUpdates) == inactiveUpdateRing {
-		s.inactiveUpdates = s.inactiveUpdates[1:]
+	if len(*ring) == inactiveUpdateRing {
+		*ring = (*ring)[1:]
 	}
-	s.inactiveUpdates = append(s.inactiveUpdates, id)
+	*ring = append(*ring, id)
 }
 
-// consumeInactiveUpdate reports whether id is one of the copies handed to an
-// inactive service, removing it when it is.
-func (s *ServiceSwitcher) consumeInactiveUpdate(id uint64) bool {
+// consume reports whether id is one of the copies in ring, removing it when it
+// is.
+func (s *ServiceSwitcher) consume(ring *[]uint64, id uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, seen := range s.inactiveUpdates {
+	for i, seen := range *ring {
 		if seen == id {
-			s.inactiveUpdates = append(s.inactiveUpdates[:i], s.inactiveUpdates[i+1:]...)
+			*ring = append((*ring)[:i], (*ring)[i+1:]...)
 			return true
 		}
 	}

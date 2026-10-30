@@ -3,6 +3,7 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -534,5 +535,108 @@ func TestManualStrategyIgnoresErrors(t *testing.T) {
 	}
 	if got := strategy.ActiveService(); got != processor.Processor(a) {
 		t.Errorf("ActiveService() = %v, want it left on the first service", got)
+	}
+}
+
+// metaRecorder records the metadata of other services that reaches it, standing
+// in for a service that reads another's metadata.
+type metaRecorder struct {
+	*processor.Base
+	mu   sync.Mutex
+	seen []string
+}
+
+func newMetaRecorder(name string) *metaRecorder {
+	s := &metaRecorder{}
+	s.Base = processor.New("MetaRecorder:"+name, s)
+	return s
+}
+
+func (s *metaRecorder) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if mf, ok := f.(frames.ServiceMetadata); ok {
+		s.mu.Lock()
+		s.seen = append(s.seen, mf.Service())
+		s.mu.Unlock()
+	}
+	return s.PushFrame(ctx, f, dir)
+}
+
+func (s *metaRecorder) received() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.seen...)
+}
+
+// TestMetadataFromOutsideReachesEveryService checks metadata from a service
+// outside the switcher reaches the inactive services too, so a member that reads
+// another service's metadata has it when it becomes active. It arrives once at
+// each member, and travels on once, from the active member, as it would through
+// that service alone.
+func TestMetadataFromOutsideReachesEveryService(t *testing.T) {
+	for _, dir := range []processor.Direction{processor.Downstream, processor.Upstream} {
+		t.Run(dir.String(), func(t *testing.T) {
+			svcs := []*metaRecorder{newMetaRecorder("1"), newMetaRecorder("2")}
+			sw, err := pipeline.NewServiceSwitcher([]processor.Processor{svcs[0], svcs[1]}, pipeline.NewManualStrategy)
+			if err != nil {
+				t.Fatalf("NewServiceSwitcher: %v", err)
+			}
+			meta := frames.NewServiceMetadataFrame("tts")
+			procs := []processor.Processor{sw}
+			if dir == processor.Upstream {
+				procs = append(procs, newUpstreamRaiser(meta))
+			}
+
+			var (
+				mu       sync.Mutex
+				down, up int
+			)
+			task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
+				ReachedDownstreamFilter: pipeline.AnyFrame,
+				ReachedUpstreamFilter:   pipeline.AnyFrame,
+			})
+			count := func(n *int) func(context.Context, frames.Frame) {
+				return func(_ context.Context, f frames.Frame) {
+					if mf, ok := f.(frames.ServiceMetadata); ok && mf.Service() == "tts" {
+						mu.Lock()
+						*n++
+						mu.Unlock()
+					}
+				}
+			}
+			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, count(&down))
+			events.On(&task.Registry, pipeline.EventFrameReachedUpstream, count(&up))
+			done := make(chan struct{})
+			go func() { _ = task.Run(context.Background()); close(done) }()
+			defer func() { task.Cancel(t.Context(), ""); <-done }()
+
+			if dir == processor.Downstream {
+				task.QueueFrame(meta)
+			} else {
+				task.QueueFrame(frames.NewTextFrame("tick")) // reaches the raiser, which sends it up
+			}
+
+			deadline := time.Now().Add(2 * time.Second)
+			for !slices.Equal(svcs[0].received(), []string{"tts"}) || !slices.Equal(svcs[1].received(), []string{"tts"}) {
+				if time.Now().After(deadline) {
+					t.Fatalf("metadata received = %v, %v; want it once at each service",
+						svcs[0].received(), svcs[1].received())
+				}
+				time.Sleep(time.Millisecond)
+			}
+			time.Sleep(100 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+			wantDown, wantUp := 1, 0
+			if dir == processor.Upstream {
+				wantDown, wantUp = 0, 1
+			}
+			if down != wantDown || up != wantUp {
+				t.Errorf("metadata passed on down %d, up %d; want down %d, up %d", down, up, wantDown, wantUp)
+			}
+		})
 	}
 }
