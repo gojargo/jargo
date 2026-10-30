@@ -949,12 +949,61 @@ func (b *Base) createProcessTask() {
 		return
 	}
 	b.resetProcessTask()
+	b.spawnProcessLoop()
+}
+
+// spawnProcessLoop starts the process goroutine on the queue as it stands. The
+// caller holds procMu and has checked that none is running.
+func (b *Base) spawnProcessLoop() {
 	ctx, cancel := context.WithCancel(b.baseContext())
 	done := make(chan struct{})
 	b.procCancel = cancel
 	b.procDone = done
 	b.procRunning = true
 	go b.processLoop(ctx, done)
+}
+
+// CancelFrameInProgress stops processing f if it is the frame in progress,
+// leaving the queue as it is.
+//
+// Unlike an interruption, it drops nothing else: the frames queued behind the
+// canceled one, interruptible or not, are processed next, on a process
+// goroutine started afresh.
+//
+// Call it while processing a system frame, as interruptions are, so it runs on
+// the input goroutine and never overlaps an interruption. It reports whether f
+// was in progress and its processing was canceled.
+func (b *Base) CancelFrameInProgress(f frames.Frame) bool {
+	if b.directMode || f == nil {
+		return false
+	}
+	if b.onProcessGoroutine() {
+		slog.Warn("ignoring attempt to cancel the process goroutine from itself", "processor", b.name)
+		return false
+	}
+	// Decided under the lock the process goroutine takes a frame under, so f
+	// cannot stop being current between the check and the cancel.
+	b.curMu.Lock()
+	if b.curFrame != f {
+		b.curMu.Unlock()
+		return false
+	}
+	b.procMu.Lock()
+	running := b.procRunning
+	b.procMu.Unlock()
+	if !running {
+		b.curMu.Unlock()
+		return false
+	}
+	wait := b.stopProcessTask()
+	b.curMu.Unlock()
+	wait()
+	b.procMu.Lock()
+	defer b.procMu.Unlock()
+	if !b.procRunning {
+		b.spawnProcessLoop()
+	}
+	return true
 }
 
 // resetProcessTask clears the in-order queue and starts the pause gate afresh,
