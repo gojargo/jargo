@@ -1,22 +1,3 @@
-// Package llmwithbackend pairs a conversational frontend LLM with a backend that
-// does the work it hands off.
-//
-// The frontend is any LLM service, text or speech-to-speech, and holds the
-// conversation. The backend is an llmworker.BackendWorker running a heavier
-// model with the tools, and does the work the frontend hands off. LLMWithBackend
-// wraps the frontend so the pair drops into a pipeline where an LLM goes, and
-// installs the tool that joins them.
-//
-// The two exchange messages. The frontend's delegate tool puts a message to the
-// backend and returns at once; what the backend has to say comes back as a
-// stream of outputs, each appended to the frontend's conversation as a message
-// marked "Backend:", spoken or silent as the backend's flag says. A second
-// request joins the first, and a correction changes or stops it. How a request
-// is worded is the BackendRequestStrategy's business, and the BackendConnector
-// owns the tool, the session with the backend, and how each output is rendered
-// into the conversation.
-//
-// The package is alpha: its API is likely to change between releases.
 package llmwithbackend
 
 import (
@@ -41,168 +22,15 @@ import (
 	"github.com/gojargo/jargo/workers/llmworker"
 )
 
+// The connector, which joins a frontend to its backend: it owns the tools the
+// frontend calls, the session with the backend, and how each backend output is
+// rendered into the frontend's conversation.
+
 // DelegateToolName is the name of the tool the frontend calls to delegate.
 const DelegateToolName = "delegate"
 
-// How a backend's messages are marked in the frontend's conversation.
-const (
-	// BackendMessagePrefix marks a backend output.
-	BackendMessagePrefix = "Backend: "
-	// BackendThoughtPrefix marks a backend reasoning summary.
-	BackendThoughtPrefix = "Backend (thinking): "
-	// BackendNotePrefix marks a backend note: text its model wrote without the
-	// mark that asks for the user to be told it.
-	BackendNotePrefix = "Backend (note): "
-	// BackendWorkingPrefix marks a function call the backend is making.
-	BackendWorkingPrefix = "Backend (working): "
-)
-
-// backendPrefixes is every mark a rendered backend message can open with.
-//
-//nolint:gochecknoglobals // a fixed list, read only
-var backendPrefixes = []string{
-	BackendMessagePrefix, BackendThoughtPrefix, BackendNotePrefix, BackendWorkingPrefix,
-}
-
-// RelayNote is carried on each spoken backend message, so the frontend relays it
-// on whatever turn it lands on, a user's turn included, where the standing
-// instruction alone leaves it unsaid.
-const RelayNote = "(Relay this to the user now, in your own words, once, even if the conversation has " +
-	"moved on. If the user has just said something you have not answered yet, answer that " +
-	"first and relay this at the end of the same reply.)"
-
-// StrategyPlaceholder is where the request strategy's own guidance goes in
-// FrontendPairingInstruction.
-const StrategyPlaceholder = "{strategy}"
-
-// The prompts that follow are read by the frontend's model, and the pairing
-// instruction and the tool descriptions are also read by predictive
-// delegation's classifier. A small change in wording can change what a model
-// does in ways no unit test catches: gpt-4.1 stops delegating a "never mind",
-// or the classifier starts delegating questions about how the work is going.
-
-// FrontendPairingInstruction is how the frontend's model works with a backend,
-// appended to its system instruction: what the backend is and when to
-// delegate, that to the user there is one assistant, what to do after
-// delegating, and what to do with the backend's messages. The request
-// strategy's guidance (how the request is worded) goes where
-// StrategyPlaceholder stands, at the end of the first paragraph. The frontend's
-// own system instruction says what the backend is for.
-// ConnectorConfig.FrontendPairingInstruction replaces it.
-//
-// The instruction ends by restating its one rule, that a message about
-// delegated work, a stop included, gets a delegate call. A stop is where a
-// model goes wrong: it answers "never mind" with "I won't make any changes" and
-// no call, and the backend carries on. gpt-4.1 weighs the end of the
-// instruction most, so the restatement is what makes it delegate a stop; the
-// first paragraph alone, with the rule in it, does not, nor does the rule as a
-// list of cases.
-const FrontendPairingInstruction = "THE BACKEND: You have a backend for anything that needs a " +
-	"backend tool or careful reasoning. It sees nothing of the conversation but what you delegate, and nothing you " +
-	"say reaches it: to start, change or stop its work, call the delegate tool, at once, in " +
-	"the same reply, and do the rest of the reply yourself (if any is needed) around it. That " +
-	"holds for every message that concerns its work, whether a new request, a yes to something " +
-	"that was offered, a correction or a \"never mind\", and even while earlier work is still " +
-	"running: a stop you only speak leaves the work running. Do not delegate what you can do " +
-	"yourself: small talk, a question that a result you already have answers, or a question " +
-	"about how the work is going, which you answer from the backend's latest notes or, with " +
-	"none yet, by saying there is no update yet. Never guess a result while waiting. " +
-	StrategyPlaceholder + "\n\n" +
-	"ONE ASSISTANT: To the user there is one assistant, you: never mention the backend, " +
-	"delegation, a handoff or tools. Say what is being done as your own doing, such as \"I'm " +
-	"checking\", never \"the backend is checking\", and never that you passed anything along.\n\n" +
-	"AFTER DELEGATING: Acknowledge in one short sentence of your own that fits the request, " +
-	"naming the task briefly if that reads naturally. For example: " +
-	"\"Let me look into that\", \"Sure, I'll get on that now\" or \"Okay, pulling that up now\". If " +
-	"you already acknowledged alongside the delegate call, even in part, the user has heard it, " +
-	"and this reply should *not* acknowledge again (though it can \"finish the thought\" of the " +
-	"previous acknowledgement, if appropriate). Saying it in other words is repeating yourself, " +
-	"and so is adding that you are on it now, that it will take a moment, or that you will " +
-	"report back when it is done; the initial acknowledgement already said all of that. After " +
-	"\"Let me look that up for you!\", e.g., there is nothing left to say, so say nothing. Finish " +
-	"the thought only when the user asked for something else that you have not answered yet. An " +
-	"acknowledgement is never a substitute for the delegate call. In the acknowledgement, avoid " +
-	"restating the request in full, or describing in detail what you are going to do, or " +
-	"following up on your own with promises, offers or questions: you've fired off the delegate " +
-	"call, so let it be. " +
-	"Then answer whatever else the user asked that you can. Never say work is done, or give a " +
-	"result, that the backend has not given you; if the user asks whether work is under way and " +
-	"you never delegated it, say so and delegate it then.\n\n" +
-	"BACKEND MESSAGES: The backend works on its own after you delegate and may be doing " +
-	"several things at once. What it has to say arrives as messages in the conversation " +
-	"marked \"Backend:\": a result, a question for the user, or news " +
-	"worth an update, on whatever turn happens to be in progress by then. Such a message is " +
-	"owed to the user, whatever the conversation has moved on to: small talk, other " +
-	"questions or a long wait do not make it unwanted. If the user has said something you " +
-	"have not answered yet, answer that first, then relay the message at the end of that " +
-	"same reply, in your own words. If you have already answered everything the user said, " +
-	"relay just the message; do not repeat or rephrase your earlier reply. Relay each " +
-	//nolint:misspell // the prompt as upstream words it
-	"message once. Only when the user has cancelled or changed what they asked for does a " +
-	"message go unsaid, and then say only what still helps. Messages marked " +
-	"\"Backend (working):\", \"Backend (note):\" and " +
-	"\"Backend (thinking):\" are what the backend is doing and thinking. They " +
-	"carry no results: what a call found reaches you only in a message marked " +
-	"\"Backend:\", so never describe or guess what a call found. Never " +
-	"relay them on their own, but when the user asks how the work is going, answer from the " +
-	"latest of them, concretely: name the step, such as which file it is reading or that it " +
-	"is running the tests, rather than saying only that it is still working. Never state a " +
-	"result you have not received from the backend, and never say work is done that the " +
-	"backend has not said is done.\n\n" +
-	"Whatever else a reply does, a user message about work you delegated, whether to add to " +
-	"it, change it or stop it, a never mind included, gets a delegate call in that reply: " +
-	"nothing else stops or changes that work."
-
-// TranscriptFrontendInstruction is the transcript strategy's guidance, in the
-// pairing instruction's delegating paragraph.
-const TranscriptFrontendInstruction = "A delegation hands over the whole conversation, not one item: the " +
-	"backend reads it and does everything in it that is its job, so delegate once per reply however " +
-	"many things the user asked for, and do not word the request."
-
-// TranscriptToolDescription is how the transcript strategy describes the
-// delegate tool.
-const TranscriptToolDescription = "The only way to start, change or stop the backend's work. Hands " +
-	"the conversation over to the backend, which reads it and does everything in it that needs a " +
-	"backend tool or careful reasoning, and stops or changes what the user has called off or " +
-	"changed. Call it as soon as any part of what the user says concerns that work, even while " +
-	"the backend is still working, and do the rest yourself. Not for a question about how the " +
-	"work is going, which you answer from the backend's notes. One handoff per reply, however " +
-	"many things the user asked for. It takes no arguments. Keep talking with the user while " +
-	"it works."
-
-// ExplicitFrontendInstruction is the explicit strategy's guidance, in the
-// pairing instruction's delegating paragraph.
-const ExplicitFrontendInstruction = "Word the request so it stands on its own: the user's goal, the exact " +
-	"details they gave and their latest correction, with everything new they asked for in " +
-	"the one request, so you delegate once per reply however many things that is. Work " +
-	"already handed over stays with the backend: a new request joins it, so do not restate " +
-	"earlier requests; a correction names what changes, and a stop names what to stop."
-
-// ExplicitToolDescription is how the explicit strategy describes the delegate
-// tool.
-const ExplicitToolDescription = "The only way to start, change or stop the backend's work. Hands " +
-	"a request to the backend, which does everything in it that needs a backend tool or careful " +
-	"reasoning, and stops or changes what the user has called off or changed. Call it as soon " +
-	"as any part of what the user says concerns that work, even while the backend is still " +
-	"working, with the request worded to stand on its own, and do the rest yourself. Not for a " +
-	"question about how the work is going, which you answer from the backend's notes. One call " +
-	"per reply, however many things the user asked for. Work already handed over stays with the " +
-	"backend, so send only what is new, including anything the user says about that work, such " +
-	"as to stop or change it. Keep talking with the user while it works."
-
-// requestArgument is the explicit strategy's one argument, the request as the
-// model words it.
-const requestArgument = "request"
-
 // traceEvent is the field of a traced exchange that says what it was.
 const traceEvent = "event"
-
-// explicitRequestParameter describes the explicit strategy's one argument.
-const explicitRequestParameter = "What the user is asking for now, self-contained: their goal, the details " +
-	"they gave (places, dates, names) and their latest correction, or what they " +
-	"said about work already under way, such as to stop it or change it. Work " +
-	"already handed over stays with the backend; a new request joins it, so do " +
-	"not restate earlier requests."
 
 // ConnectorContext is what a connector needs to know about the layers it joins.
 type ConnectorContext struct {
@@ -213,260 +41,6 @@ type ConnectorContext struct {
 	// service, whose context can lag the audio, which changes how a delegation
 	// words its request.
 	FrontendIsRealtime bool
-}
-
-// BackendRequestStrategy defines the delegate tool the frontend calls, and turns
-// a call into the request the backend receives.
-//
-// The tool's parameters are the strategy's to declare, so the connector's
-// handler has one signature and reads whatever was declared back from the call's
-// arguments in ComposeRequest.
-//
-// Two strategies are provided, chosen by frontend kind when the app gives none.
-// TranscriptBackendRequestStrategy hands over the conversation since the
-// previous delegation: the default for a text frontend, whose context is current
-// when the tool runs. ExplicitBackendRequestStrategy has the frontend model word
-// the request itself: the default for a speech-to-speech frontend, which
-// responds to audio before the transcript of that audio reaches its context, so
-// the turns that prompted a handoff may not be in the context yet, and a
-// transcript taken then would miss them.
-type BackendRequestStrategy interface {
-	// ToolParameters are the JSON-schema properties of the delegate tool, empty
-	// when it takes none.
-	ToolParameters() map[string]any
-	// ToolRequired are which of the properties are required.
-	ToolRequired() []string
-	// FrontendInstruction is the strategy's guidance to the frontend model, if
-	// any: how the request is worded. It goes where the pairing instruction's
-	// StrategyPlaceholder stands.
-	FrontendInstruction() string
-	// ToolDescription is how the delegate tool is described to the frontend
-	// model.
-	ToolDescription() string
-	// RequiresContext reports whether the strategy reads the conversation from
-	// the frontend's context, so it needs that context to be current when the
-	// delegate tool runs. A speech-to-speech frontend's context lags the audio,
-	// so the connector refuses such a strategy there.
-	RequiresContext() bool
-	// DelegateNeedsArguments reports whether a delegate call has to carry
-	// arguments for the request to be built. Predictive delegation makes its
-	// delegate call with none, so it works only with a strategy that reports
-	// false.
-	DelegateNeedsArguments() bool
-	// ComposeRequest turns a delegate call into the text put to the backend. It
-	// reports false when the call carries nothing new for the backend, in which
-	// case nothing is sent.
-	ComposeRequest(ctx context.Context, params llm.FunctionCallParams) (string, bool)
-}
-
-// StrategyTexts are the texts a request strategy puts to the models. A field
-// left empty takes the strategy's default.
-type StrategyTexts struct {
-	// FrontendInstruction is the strategy's guidance to the frontend model,
-	// placed in the pairing instruction.
-	FrontendInstruction string
-	// NoFrontendInstruction leaves the strategy without guidance of its own.
-	NoFrontendInstruction bool
-	// ToolDescription is how the delegate tool is described.
-	ToolDescription string
-	// RequestInstruction is what the backend should do with the request, placed
-	// after it.
-	RequestInstruction string
-}
-
-// frontendInstruction is the guidance the texts give, or def.
-func (t StrategyTexts) frontendInstruction(def string) string {
-	switch {
-	case t.NoFrontendInstruction:
-		return ""
-	case t.FrontendInstruction != "":
-		return t.FrontendInstruction
-	default:
-		return def
-	}
-}
-
-// orDefault is s, or def when s is empty.
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}
-
-// TranscriptBackendRequestStrategy hands the backend the conversation and lets
-// it work out the request.
-//
-// The frontend model calls the tool with no arguments; the request is the
-// transcript of what was said since the previous delegation (the whole
-// conversation the first time), rendered by llmworker.RenderTranscriptRequest.
-// The backend's own messages in the conversation are left out: the backend
-// already has what it said. The default for a text frontend, whose context is
-// current when the tool runs.
-//
-// The cursor assumes the conversation accrues. A rewritten context or a failed
-// delegation's turns are not re-sent; the user's next request carries what
-// matters. A call that finds no new turn since the previous delegation sends
-// nothing.
-type TranscriptBackendRequestStrategy struct {
-	frontendInstruction string
-	toolDescription     string
-	requestInstruction  string
-
-	mu               sync.Mutex
-	delegatedThrough int
-}
-
-// NewTranscriptBackendRequestStrategy builds a transcript strategy.
-func NewTranscriptBackendRequestStrategy(texts StrategyTexts) *TranscriptBackendRequestStrategy {
-	return &TranscriptBackendRequestStrategy{
-		frontendInstruction: texts.frontendInstruction(TranscriptFrontendInstruction),
-		toolDescription:     orDefault(texts.ToolDescription, TranscriptToolDescription),
-		requestInstruction:  orDefault(texts.RequestInstruction, llmworker.TranscriptRequestInstruction),
-	}
-}
-
-// ToolParameters implements BackendRequestStrategy: the tool takes none.
-func (*TranscriptBackendRequestStrategy) ToolParameters() map[string]any { return map[string]any{} }
-
-// ToolRequired implements BackendRequestStrategy.
-func (*TranscriptBackendRequestStrategy) ToolRequired() []string { return nil }
-
-// FrontendInstruction implements BackendRequestStrategy.
-func (s *TranscriptBackendRequestStrategy) FrontendInstruction() string { return s.frontendInstruction }
-
-// ToolDescription implements BackendRequestStrategy.
-func (s *TranscriptBackendRequestStrategy) ToolDescription() string { return s.toolDescription }
-
-// RequiresContext implements BackendRequestStrategy: the transcript is read
-// from the frontend's context.
-func (*TranscriptBackendRequestStrategy) RequiresContext() bool { return true }
-
-// DelegateNeedsArguments implements BackendRequestStrategy: the request is the
-// transcript, so a call with no arguments builds it.
-func (*TranscriptBackendRequestStrategy) DelegateNeedsArguments() bool { return false }
-
-// ComposeRequest renders the turns since the previous delegation as the
-// request.
-func (s *TranscriptBackendRequestStrategy) ComposeRequest(
-	_ context.Context, params llm.FunctionCallParams,
-) (string, bool) {
-	messages := params.Context.Messages()
-	s.mu.Lock()
-	if s.delegatedThrough > len(messages) {
-		// The context holds fewer messages than the previous delegation read: it
-		// was reset since, so the transcript starts from the top.
-		s.delegatedThrough = 0
-	}
-	// A message in a service's own format is not a user or assistant turn, so
-	// the transcript leaves it out.
-	var conversation []frames.Message
-	for _, m := range messages[s.delegatedThrough:] {
-		if !m.IsLLMSpecific() && !isBackendMessage(m) {
-			conversation = append(conversation, m)
-		}
-	}
-	first := s.delegatedThrough == 0
-	s.delegatedThrough = len(messages)
-	s.mu.Unlock()
-
-	hasTurn := false
-	for _, m := range conversation {
-		hasTurn = hasTurn || isTurn(m)
-	}
-	if !hasTurn {
-		return "", false
-	}
-	return llmworker.RenderTranscriptRequest(conversation, s.requestInstruction, first), true
-}
-
-// isTurn reports whether a message is a user or assistant turn. A tool's result
-// is written with the user's role but is not the user speaking.
-func isTurn(m frames.Message) bool {
-	switch m.Role {
-	case frames.RoleAssistant:
-		return true
-	case frames.RoleUser:
-		return len(m.ToolResults) == 0
-	default:
-		return false
-	}
-}
-
-// ExplicitBackendRequestStrategy has the frontend model word the request itself.
-//
-// The tool takes a request argument, which is sent to the backend as it stands.
-// The default for a speech-to-speech frontend, which responds to audio before
-// the transcript of that audio reaches its context, so the turns that prompted a
-// handoff may not be recorded when the tool runs.
-type ExplicitBackendRequestStrategy struct {
-	frontendInstruction string
-	toolDescription     string
-	requestInstruction  string
-}
-
-// NewExplicitBackendRequestStrategy builds an explicit strategy.
-func NewExplicitBackendRequestStrategy(texts StrategyTexts) *ExplicitBackendRequestStrategy {
-	return &ExplicitBackendRequestStrategy{
-		frontendInstruction: texts.frontendInstruction(ExplicitFrontendInstruction),
-		toolDescription:     orDefault(texts.ToolDescription, ExplicitToolDescription),
-		requestInstruction:  orDefault(texts.RequestInstruction, llmworker.ExplicitRequestInstruction),
-	}
-}
-
-// ToolParameters implements BackendRequestStrategy: the request, as the model
-// words it.
-func (*ExplicitBackendRequestStrategy) ToolParameters() map[string]any {
-	return map[string]any{
-		requestArgument: map[string]any{"type": "string", "description": explicitRequestParameter},
-	}
-}
-
-// ToolRequired implements BackendRequestStrategy.
-func (*ExplicitBackendRequestStrategy) ToolRequired() []string { return []string{requestArgument} }
-
-// FrontendInstruction implements BackendRequestStrategy.
-func (s *ExplicitBackendRequestStrategy) FrontendInstruction() string { return s.frontendInstruction }
-
-// ToolDescription implements BackendRequestStrategy.
-func (s *ExplicitBackendRequestStrategy) ToolDescription() string { return s.toolDescription }
-
-// RequiresContext implements BackendRequestStrategy: the request comes from the
-// call's arguments.
-func (*ExplicitBackendRequestStrategy) RequiresContext() bool { return false }
-
-// DelegateNeedsArguments implements BackendRequestStrategy: the request is the
-// call's request argument.
-func (*ExplicitBackendRequestStrategy) DelegateNeedsArguments() bool { return true }
-
-// ComposeRequest sends the model's request as it stands, with the reporting
-// expectation after it.
-func (s *ExplicitBackendRequestStrategy) ComposeRequest(
-	_ context.Context, params llm.FunctionCallParams,
-) (string, bool) {
-	var args struct {
-		Request string `json:"request"`
-	}
-	_ = json.Unmarshal(params.Arguments, &args)
-	request := strings.TrimSpace(args.Request)
-	if request == "" {
-		return "", false
-	}
-	return llmworker.RenderExplicitRequest(request, s.requestInstruction), true
-}
-
-// isBackendMessage reports whether a context message is one the connector
-// rendered from a backend output.
-func isBackendMessage(m frames.Message) bool {
-	if m.Role != frames.RoleDeveloper {
-		return false
-	}
-	for _, prefix := range backendPrefixes {
-		if strings.HasPrefix(m.Text, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // backendSession is what the connector needs of the session with the backend.
@@ -502,7 +76,8 @@ type ConnectorConfig struct {
 	// One of its own has to say what that one says: when and how to delegate,
 	// that to the user there is one assistant, what to do after delegating, and
 	// what to do with the backend's messages. The request strategy's guidance
-	// goes where StrategyPlaceholder stands, or after the text when it has none.
+	// goes where PairingInstructionStrategyPlaceholder stands, or after the text
+	// when it has none.
 	FrontendPairingInstruction string
 	// RespondOnDelegate reports whether the frontend runs again as soon as a
 	// delegation is sent, which is where its acknowledgement comes from: a text
@@ -595,8 +170,8 @@ func (c *BackendConnector) Tool() frames.Tool { return c.tools[0] }
 func (c *BackendConnector) FrontendInstruction() string {
 	pairing := orDefault(c.cfg.FrontendPairingInstruction, FrontendPairingInstruction)
 	guidance := c.requestStrategy.FrontendInstruction()
-	if strings.Contains(pairing, StrategyPlaceholder) {
-		placed := strings.ReplaceAll(pairing, StrategyPlaceholder, guidance)
+	if strings.Contains(pairing, PairingInstructionStrategyPlaceholder) {
+		placed := strings.ReplaceAll(pairing, PairingInstructionStrategyPlaceholder, guidance)
 		return strings.TrimSpace(strings.ReplaceAll(placed, " \n", "\n"))
 	}
 	var parts []string
@@ -810,7 +385,7 @@ func (c *BackendConnector) Deliver(ctx context.Context, frontend frontendFrames,
 		slog.WarnContext(ctx, "backend error", "error", e.Error)
 		c.appendMessage(ctx, frontend, frames.Message{
 			Role: frames.RoleDeveloper,
-			Text: BackendMessagePrefix + "The work could not be completed.\n\n" + RelayNote,
+			Text: BackendMessagePrefix + "The work could not be completed.\n\n" + BackendMessageRelayInstruction,
 		}, true)
 	case llmworker.BackendIdle:
 		c.trace(ctx, frontend, map[string]any{traceEvent: "idle"})
@@ -843,9 +418,10 @@ func (c *BackendConnector) appendMessage(ctx context.Context, frontend frontendF
 // DefaultRenderOutput renders a backend output as the message the frontend's
 // conversation takes in. It marks the message so the frontend can tell it from
 // the user's and its own, and so the transcript strategy can leave it out of
-// what it sends the backend: a spoken output as "Backend:" with RelayNote after
-// it, a silent one as "Backend (note):", a reasoning summary as
-// "Backend (thinking):". An output with no text delivers nothing.
+// what it sends the backend: a spoken output as "Backend:" with
+// BackendMessageRelayInstruction after it, a silent one as "Backend (note):", a
+// reasoning summary as "Backend (thinking):". An output with no text delivers
+// nothing.
 func DefaultRenderOutput(output llmworker.BackendOutput) (frames.Message, bool) {
 	switch {
 	case output.Text == "":
@@ -856,7 +432,7 @@ func DefaultRenderOutput(output llmworker.BackendOutput) (frames.Message, bool) 
 		return frames.Message{Role: frames.RoleDeveloper, Text: BackendNotePrefix + output.Text}, true
 	default:
 		return frames.Message{
-			Role: frames.RoleDeveloper, Text: BackendMessagePrefix + output.Text + "\n\n" + RelayNote,
+			Role: frames.RoleDeveloper, Text: BackendMessagePrefix + output.Text + "\n\n" + BackendMessageRelayInstruction,
 		}, true
 	}
 }

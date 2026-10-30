@@ -610,7 +610,7 @@ func renderForClassifier(messages []frames.Message) []classifierMessage {
 			}
 		case isBackendMessage(m):
 			rendered = append(rendered, classifierMessage{
-				Speaker: speakerBackend, Text: strings.TrimSuffix(m.Text, "\n\n"+RelayNote),
+				Speaker: speakerBackend, Text: strings.TrimSuffix(m.Text, "\n\n"+BackendMessageRelayInstruction),
 			})
 		}
 	}

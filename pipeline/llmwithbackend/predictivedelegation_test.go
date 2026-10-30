@@ -391,7 +391,9 @@ func TestTheClassifierSeesTheFrontendsInstructionAndTheLatestConversation(t *tes
 	convo := conversation(user("Fix the flaky test."))
 	convo.AddAssistantToolCall(frames.ToolCall{ID: "c1", Name: DelegateToolName, Args: json.RawMessage(`{}`)})
 	convo.AddToolResult(frames.ToolResult{ID: "c1", Name: DelegateToolName, Content: `{"status": "delegated"}`})
-	convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Backend: Fixed it.\n\n" + RelayNote})
+	convo.AddMessage(frames.Message{
+		Role: frames.RoleDeveloper, Text: "Backend: Fixed it.\n\n" + BackendMessageRelayInstruction,
+	})
 	convo.AddMessage(user("Thanks!"))
 
 	runSteps(t, service, frames.NewLLMContextFrame(convo), 100*ms)

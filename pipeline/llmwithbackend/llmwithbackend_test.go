@@ -267,7 +267,7 @@ func TestTheStrategysGuidanceSitsInsideTheDelegatingParagraph(t *testing.T) {
 	if !strings.HasSuffix(delegating, " "+TranscriptFrontendInstruction) {
 		t.Errorf("the delegating paragraph ends %q", delegating[len(delegating)-60:])
 	}
-	if strings.Contains(guidance, StrategyPlaceholder) {
+	if strings.Contains(guidance, PairingInstructionStrategyPlaceholder) {
 		t.Error("the placeholder was left in")
 	}
 	one, after, messages := strings.Index(guidance, "ONE ASSISTANT:"),
@@ -515,7 +515,7 @@ func TestOutputsAreAppendedToTheFrontendAndRunItAsFlagged(t *testing.T) {
 	want := []appendedMessage{
 		{frames.RoleDeveloper, "Backend (note): Let me check.", false, false},
 		{frames.RoleDeveloper, "Backend (thinking): Weather first.", false, false},
-		{frames.RoleDeveloper, "Backend: It's 62 and raining.\n\n" + RelayNote, true, false},
+		{frames.RoleDeveloper, "Backend: It's 62 and raining.\n\n" + BackendMessageRelayInstruction, true, false},
 	}
 	if got := frontend.appended(); !slices.Equal(got, want) {
 		t.Errorf("appended %+v, want %+v", got, want)
@@ -891,7 +891,9 @@ func TestALocalBackendIsHeardThroughTheFrontendsConversation(t *testing.T) {
 		{frames.RoleDeveloper, "Backend (note): Let me check.", false, false},
 		{frames.RoleDeveloper, "Backend (working): get_weather(location='Seattle')", false, false},
 	}
-	spoken := appendedMessage{frames.RoleDeveloper, "Backend: It's 62 and raining.\n\n" + RelayNote, true, false}
+	spoken := appendedMessage{
+		frames.RoleDeveloper, "Backend: It's 62 and raining.\n\n" + BackendMessageRelayInstruction, true, false,
+	}
 	if len(appended) != 3 || !slices.Contains(appended[:2], silent[0]) || !slices.Contains(appended[:2], silent[1]) ||
 		appended[2] != spoken {
 		t.Errorf("appended %+v, want %+v in either order, then %+v", appended, silent, spoken)

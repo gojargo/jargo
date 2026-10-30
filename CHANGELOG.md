@@ -340,6 +340,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   configured**, like the other models whose lowest documented effort is
   `none`.
 
+- ⚠️ **Breaking change:** `llmwithbackend.RelayNote` is renamed
+  `BackendMessageRelayInstruction`, and `llmwithbackend.StrategyPlaceholder` is
+  renamed `PairingInstructionStrategyPlaceholder`.
 - ⚠️ **Breaking change:** `llmwithbackend.BackendRequestStrategy` gains
   `DelegateNeedsArguments`, which reports whether a `delegate` call has to carry
   arguments for the request to be built: false for the transcript strategy, true
