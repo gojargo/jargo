@@ -264,6 +264,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   on November 15, 2026, and they are closed to new signups. Set
   `chat.LLMConfig.Model` to `"mercury-2"` to keep it until then.
 
+- **`gpt-6.1-terra` runs with reasoning effort `none` when reasoning is not
+  configured**, like the other models whose lowest documented effort is
+  `none`.
+
 - ⚠️ **Breaking change:** `responses.ThinkingReporter` gains
   `UseProviderThinkingDefault`, which the LLM base implements.
 - **What kind of text a frame holds is its `TextType`.** `frames.AggregationType`

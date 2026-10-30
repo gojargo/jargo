@@ -62,7 +62,7 @@ func TestOriginalGPT5GetsMinimal(t *testing.T) {
 // TestLaterModelsGetNone covers the models from gpt-5.1 on, most of which can
 // skip reasoning entirely.
 func TestLaterModelsGetNone(t *testing.T) {
-	for _, model := range []string{"gpt-5.1", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-5.1", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-6-luna", "gpt-6.1-terra"} {
 		if got := reasoningSent(t, model); got == nil || *got != (ReasoningConfig{Effort: "none"}) {
 			t.Errorf("%s carries reasoning %+v, want effort none", model, got)
 		}
