@@ -663,6 +663,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Fixed a backend worker telling a frontend that had just attached that it was
+  idle, from a check asked for while the previous frontend was attached. The
+  frontend could take it for the end of its own first request and miss the
+  reply. The idle update now goes only to the frontend attached when the check
+  was asked for.
 - Fixed a user turn ending on the user's earlier words with segmented STT
   services. When the user spoke again before an earlier segment was
   transcribed, that segment's transcript was marked finalized, so the stop

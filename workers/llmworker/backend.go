@@ -915,8 +915,20 @@ func (b *BackendWorker) onAssistantTurnStopped(ctx context.Context, message aggr
 // backend idle with its next step already under way. Letting the pipeline
 // settle first leaves nothing half done in sight, which is the state every
 // check is meant to read.
+//
+// The check belongs to the frontend attached when it was asked for. Waiting for
+// the pipeline to settle can outlast that frontend detaching and another
+// attaching, and the lull it was asked for is not the new frontend's to hear
+// about: a backend a frontend attaches to while idle says nothing until it has
+// worked for it.
 func (b *BackendWorker) announceIdleIfDone(ctx context.Context) {
 	ctx = context.WithoutCancel(ctx)
+	b.mu.Lock()
+	attached := b.attached
+	b.mu.Unlock()
+	if attached == nil {
+		return
+	}
 	b.runSerially(func() {
 		if err := b.Flush(ctx); err != nil {
 			// A pipeline that will not settle is either stopping or still busy
@@ -925,15 +937,16 @@ func (b *BackendWorker) announceIdleIfDone(ctx context.Context) {
 				"worker", b.Name(), "err", err)
 			return
 		}
-		b.checkIdle(ctx)
+		b.checkIdle(ctx, attached)
 	})
 }
 
-// checkIdle sends the idle update if the backend has nothing left to do and has
+// checkIdle sends the idle update to the attached frontend if it is still the
+// one the check was asked for, the backend has nothing left to do and it has
 // not said so already for this lull.
-func (b *BackendWorker) checkIdle(ctx context.Context) {
+func (b *BackendWorker) checkIdle(ctx context.Context, attached *attachedFrontend) {
 	b.mu.Lock()
-	skip := b.attached == nil || b.idleAnnounced
+	skip := b.attached != attached || b.idleAnnounced
 	b.mu.Unlock()
 	if skip || b.Working() {
 		return
