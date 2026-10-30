@@ -319,7 +319,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The turn is broadcast again, as written to the context, when it ends, so a
   processor that keeps the conversation should skip speculative turns.
 
-- ⚠️ **Breaking change: Together's reasoning controls.** `together.NewLLM` now
+- **Breaking change: Together's reasoning controls.** `together.NewLLM` now
   takes a `together.LLMConfig`, which embeds `chat.LLMConfig` and adds
   `Reasoning`, Together's reasoning toggle (such as `{"enabled": false}`), and
   `ReasoningEffort` ("low", "medium", "high", and "max" on some models). The
@@ -340,10 +340,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   configured**, like the other models whose lowest documented effort is
   `none`.
 
-- ⚠️ **Breaking change:** `llmwithbackend.RelayNote` is renamed
+- **Breaking change:** `llmwithbackend.RelayNote` is renamed
   `BackendMessageRelayInstruction`, and `llmwithbackend.StrategyPlaceholder` is
   renamed `PairingInstructionStrategyPlaceholder`.
-- ⚠️ **Breaking change:** `llmwithbackend.BackendRequestStrategy` gains
+- **Breaking change:** `llmwithbackend.BackendRequestStrategy` gains
   `DelegateNeedsArguments`, which reports whether a `delegate` call has to carry
   arguments for the request to be built: false for the transcript strategy, true
   for the explicit one.
@@ -365,7 +365,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   continuing from the previous response (`previous_response_id`), rather than
   the full context. It no longer sends `response.cancel`, which WebSocket mode
   ignores.
-- ⚠️ **Breaking change:** `responses.ThinkingReporter` gains
+- **Breaking change:** `responses.ThinkingReporter` gains
   `UseProviderThinkingDefault`, which the LLM base implements.
 - **What kind of text a frame holds is its `TextType`.** `frames.AggregationType`
   is now `frames.TextType`, with `TextTypeSentence`, `TextTypeToken`,
