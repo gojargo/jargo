@@ -200,7 +200,10 @@ type ObserverParams struct {
 	BotOutputTransforms []BotOutputTransformer
 	// SkipTextTypes are the text types not reported as bot output
 	// or spoken text, and neither are the words a skipped segment is spoken in
-	// or the progress through it. It keeps a unit the bot produces but should not show from
+	// or the progress through it. Text of type backchannel is only sent to
+	// clients of protocol 2.2.0 or later, and expression sounds and pauses
+	// (expression_sound, expression_pause) to clients of 2.3.0 or later; add a
+	// type here to keep it from every client. It keeps a unit the bot produces but should not show from
 	// the client's view, a pattern-matched block carrying something private
 	// being the case for it. A client can still be told about it through the
 	// model's own text, so turn BotLLMEnabled off alongside this when that is
@@ -592,6 +595,12 @@ func (o *Observer) clientSupportsRawText() bool {
 	return o.clientIsAtLeast([3]int{2, 2, 0})
 }
 
+// clientSupportsExpression reports whether the connected client knows the
+// expression sound and pause text types, which came with protocol 2.3.0.
+func (o *Observer) clientSupportsExpression() bool {
+	return o.clientIsAtLeast([3]int{2, 3, 0})
+}
+
 // rawTextEnabled reports whether the raw text messages pick chooses are sent:
 // turned on, and to a client that knows them.
 func (o *Observer) rawTextEnabled(pick func(ObserverParams) bool) bool {
@@ -607,6 +616,12 @@ func (o *Observer) skipsAggregation(by frames.TextType) bool {
 	// A client that does not support backchannels would show one as part of
 	// the bot's response.
 	if by == frames.TextTypeBackchannel && !o.clientSupportsBackchannels() {
+		return true
+	}
+	// Expression sounds and pauses are part of protocol 2.3.0; an earlier
+	// client would take one for part of the bot's response.
+	if (by == frames.TextTypeExpressionSound || by == frames.TextTypeExpressionPause) &&
+		!o.clientSupportsExpression() {
 		return true
 	}
 	o.paramsMu.Lock()

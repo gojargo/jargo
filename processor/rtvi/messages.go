@@ -20,7 +20,7 @@ const (
 	// MessageLabel tags every RTVI message.
 	MessageLabel = "rtvi-ai"
 	// ProtocolVersion is the RTVI protocol version this implementation speaks.
-	ProtocolVersion = "2.2.0"
+	ProtocolVersion = "2.3.0"
 	// LegacySupportedMajor is the older protocol generation still served. A
 	// client of that generation is deprecated but answered rather than turned
 	// away, and is told its own version back in the bot-ready rather than this
@@ -380,6 +380,12 @@ type BotOutputData struct {
 	SpokenStatus SpokenStatus `json:"spoken_status,omitempty"`
 	// SpokenProgress splits the segment at the word being spoken now.
 	SpokenProgress *SpokenProgressData `json:"spoken_progress,omitempty"`
+	// Delivery is the delivery of the text just spoken, such as
+	// ["cheerful", "emphasis"], empty for the voice's baseline. It changes
+	// within a segment where its delivery does, so a segment's "new" message
+	// has none. Present in expressive conversation (alpha). Added in protocol
+	// 2.3.0.
+	Delivery []string `json:"delivery,omitzero"`
 }
 
 // BotOutput builds a bot-output message. Whichever of OutputType and its

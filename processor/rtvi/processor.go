@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
@@ -531,6 +532,9 @@ type segment struct {
 	// segmentID is the id of the segment spoken text was spoken in, carried by
 	// the spoken frame, or zero when it names none.
 	segmentID uint64
+	// delivery is the delivery spoken text is spoken in, nil when it carries
+	// none. Part of expressive conversation (alpha).
+	delivery []string
 }
 
 // botSpeakingMessages maps the bot's audio starting and stopping.
@@ -569,7 +573,9 @@ func (o *Observer) botSpeakingMessages(f frames.Frame) ([]Message, bool) {
 func (o *Observer) outputMessages(f frames.Frame) ([]Message, bool) {
 	switch fr := f.(type) {
 	case *frames.TTSTextFrame:
-		return o.reportSegment(segment{frame: &fr.AggregatedTextFrame, spoken: true, segmentID: fr.SegmentID}), true
+		return o.reportSegment(segment{
+			frame: &fr.AggregatedTextFrame, spoken: true, segmentID: fr.SegmentID, delivery: fr.Delivery,
+		}), true
 	case *frames.AggregatedTextFrame:
 		return o.reportSegment(segment{frame: fr}), true
 	case *frames.AggregatedTextProgressFrame:
@@ -592,6 +598,10 @@ func (o *Observer) reportSegment(seg segment) []Message {
 func (o *Observer) segmentMessages(seg segment) []Message {
 	agg := seg.frame
 	if o.isSkipped(seg) {
+		return nil
+	}
+	// A unit that is only tags reaches the context, with no words to show.
+	if strings.TrimSpace(agg.Text) == "" {
 		return nil
 	}
 
@@ -621,6 +631,7 @@ func (o *Observer) segmentMessages(seg segment) []Message {
 			SegmentID:    &id,
 			Spoken:       &spoken,
 			WillBeSpoken: &willBeSpoken,
+			Delivery:     seg.delivery,
 		}
 		switch {
 		case !willBeSpoken:
@@ -640,12 +651,24 @@ func (o *Observer) segmentMessages(seg segment) []Message {
 		}
 		msgs = append(msgs, BotOutput(d))
 	}
-	// The caption is a channel of its own and is not suppressed with the
-	// segment: a client rendering spoken text word by word still wants each one.
-	if seg.spoken && o.rawTextEnabled(ttsRawTextOf) {
+	return append(msgs, o.captionMessages(seg, text)...)
+}
+
+// captionMessages builds the caption for text the synthesizer has spoken. The
+// caption is a channel of its own and is not suppressed with the segment: a
+// client rendering spoken text word by word still wants each one.
+func (o *Observer) captionMessages(seg segment, text string) []Message {
+	// A sound or pause isn't a word the bot spoke: bot-output alone carries it,
+	// with its text type.
+	if !seg.spoken || seg.frame.TextType == frames.TextTypeExpressionSound ||
+		seg.frame.TextType == frames.TextTypeExpressionPause {
+		return nil
+	}
+	var msgs []Message
+	if o.rawTextEnabled(ttsRawTextOf) {
 		msgs = append(msgs, TTSRawText(text))
 	}
-	if seg.spoken && o.enabled(botTTSOf) {
+	if o.enabled(botTTSOf) {
 		msgs = append(msgs, BotTTSText(text)) //nolint:staticcheck // still sent
 	}
 	return msgs
@@ -692,6 +715,7 @@ func (o *Observer) progressMessages(fr *frames.AggregatedTextProgressFrame) []Me
 			AccumulatedText: seg.Accumulated,
 			RemainingText:   seg.Remaining,
 		},
+		Delivery: fr.Delivery,
 	})}
 }
 

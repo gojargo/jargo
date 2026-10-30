@@ -53,10 +53,10 @@ speech it describes.
 ## The messages
 
 Every message is `{"label":"rtvi-ai","type":…,"id":…,"data":…}`. The processor
-speaks protocol version `2.2.0`.
+speaks protocol version `2.3.0`.
 
 The `client-ready` handshake settles which version the session speaks. A client
-of this generation is answered with `2.2.0`; one of the previous generation
+of this generation is answered with `2.3.0`; one of the previous generation
 (`1.x`) is answered with its own version, so it stays on the paths it
 understands. Any other version gets an `error-response` saying so, and the
 session goes ahead anyway: the client is better placed than the bot to decide
@@ -68,6 +68,15 @@ client can show only the UI that applies. The worker derives it from its
 transports and from `Params.EnableMetrics`; set `WorkerConfig.Capabilities` for
 what the pipeline cannot show. A field nobody knows is left out, and the client
 keeps its default for it.
+
+In an [expressive conversation](expressive-conversation.md) (alpha), each
+`bot-output` for text the bot has spoken carries `delivery`, the delivery the
+words were spoken in (such as `["cheerful", "emphasis"]`, empty for the voice's
+baseline), and each sound or pause the TTS performed is a `bot-output` segment
+of its own, of type `expression_sound` (its text is the sound's name) or
+`expression_pause` (its text is the milliseconds). Sounds and pauses came with
+protocol 2.3.0, so an earlier client, which would take one for part of the
+bot's response, is not sent them.
 
 | Type | Meaning |
 |---|---|
