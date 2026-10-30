@@ -413,13 +413,9 @@ type Base struct {
 	// one at a time. Nil unless the service was built to run them that way.
 	sequential chan *functionCall
 
-	// Turn-completion gating: the marker protocol the model answers under, and
-	// the state of the response being parsed. Its re-prompt runs on the
-	// session's lifetime, like the tool calls and summaries above.
+	// Turn-completion markers: the protocol the model answers under, and the
+	// state of the response being read.
 	turnCompletion turnCompletionState
-	turnCtx        context.Context
-	turnCancel     context.CancelFunc
-	turnWG         sync.WaitGroup
 
 	// Summary generations in flight. They run on the session's lifetime rather
 	// than the turn's, like the tool calls above: compressing the conversation
@@ -587,7 +583,6 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 	}
 	b.callsCtx, b.callsCancel = context.WithCancel(ctx)
 	b.summaryCtx, b.summaryCancel = context.WithCancel(ctx)
-	b.turnCtx, b.turnCancel = context.WithCancel(ctx)
 	if !b.runInParallel {
 		b.sequential = make(chan *functionCall, sequentialQueueDepth)
 		b.callsWG.Go(b.runSequentially)
@@ -627,10 +622,6 @@ func (b *Base) Cleanup(ctx context.Context) error {
 		b.summaryCancel()
 	}
 	b.summaryWG.Wait()
-	if b.turnCancel != nil {
-		b.turnCancel()
-	}
-	b.turnWG.Wait()
 	// Released after the calls that were using them have been stopped and waited
 	// for, so nothing is mid-call against a connection being closed.
 	b.runToolCleanups(ctx)
@@ -1180,9 +1171,9 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	if err := b.processBaseAndGate(ctx, f, dir); err != nil {
 		return err
 	}
-	if b.FilterIncompleteUserTurns() {
-		b.handleTurnCompletionProcessFrame(ctx, f)
-	}
+	// The inference a turn-completion report names is tracked whether or not
+	// the markers are on, so turning them on mid-response names the right one.
+	b.handleTurnCompletionProcessFrame(ctx, f)
 	switch fr := f.(type) {
 	case *frames.LLMContextFrame:
 		// Before the generation starts, so the gate knows what this inference

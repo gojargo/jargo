@@ -86,6 +86,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   strategy's decision, and the controller decides when the turn starts and
   ends. `StopStrategyBase.StartSpeculation` and `CancelSpeculation` start and
   withdraw a speculative inference.
+- **`frames.UserTurnCompletionFrame`**, which an LLM service using
+  turn-completion markers pushes upstream once per inference. Its `Kind` is
+  `"complete"`, `"short"`, `"long"`, or empty when the response has no marker,
+  and its `ContextFrameID` is the ID of the `LLMContextFrame` that started the
+  inference. A tool call before any marker counts as `"complete"`.
+  `llm.UserTurnCompletionConfig.ShortTimeout` and `LongTimeout` give the
+  re-prompt waits in force.
 - `turns.UserTurnController.ProcessFromHook`, for an owner handing the
   strategies a frame from inside one of the controller's hooks.
 
@@ -422,6 +429,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a timer that ticks while the turn is open, and decides again only after the
   user speaks again or new text arrives. The start strategies no longer return
   `Stop`.
+- **`FilterIncompleteUserTurnStrategies` keeps the stop strategies it is
+  given** instead of deferring them, and adds `LLMTurnCompletionStop`, which
+  now waits for the turn's inference and decides from its marker: done on the
+  complete marker, a tool call or a response with no marker, not done on the
+  short or long one. It works with an eager end of turn, where the speculative
+  answer goes out once the transcript commits and the LLM marks the turn
+  complete, in either order, and an incomplete marker withdraws it; and with
+  the stop strategies a service recommends, with
+  `StopMergeMode: MergeModeExtend`. A turn the LLM marks incomplete now stays
+  open until the user is re-prompted, after `IncompleteShortTimeout` or
+  `IncompleteLongTimeout`, where before the stop timeout ended it first.
+- **Breaking change:** the re-prompt after an incomplete turn moved from the
+  LLM service into `LLMTurnCompletionStop`. Turning on turn-completion markers
+  with only the `filter_incomplete_user_turns` LLM setting no longer
+  re-prompts a user who goes quiet after an incomplete marker, and the service
+  no longer suppresses a complete marker read while the user speaks or voices
+  only one complete answer per user turn. Use
+  `FilterIncompleteUserTurnStrategies` instead.
 - **A stop decision made while the user speaks now counts**, as when a service
   still hears them while an eager answer runs; the turn ends once they stop.
   New speech clears the decisions made so far. The stop timeout now waits

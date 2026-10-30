@@ -12,17 +12,24 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// Turn-completion gating lives on the LLM service rather than beside it,
-// because it works on the text the service is about to emit, not on the frames
-// that have already left. The service calls pushTurnText instead of pushing an
-// LLMTextFrame, so a suppressed response never becomes a frame at all, and it
-// intercepts its own PushFrame so the response-lifecycle frames it generates
-// reach the state machine before anything downstream sees them.
+// Reading the turn-completion markers lives on the LLM service rather than
+// beside it, because it works on the text the service is about to emit, not on
+// the frames that have already left. The service calls pushTurnText instead of
+// pushing an LLMTextFrame, so a dropped response never becomes a frame at all,
+// and it intercepts its own PushFrame so the response-lifecycle frames it
+// generates reach the state machine before anything downstream sees them.
 //
 // The protocol: the model is told to begin every response with one of three
-// markers. A complete turn is answered normally; an incomplete one is
-// suppressed and a re-prompt is armed, so the user is given time to finish and
-// nudged if they do not.
+// markers: complete, the user will continue shortly, or the user needs more
+// time. The service strips the marker from the spoken text and reports it:
+// upstream, once per inference, as a UserTurnCompletionFrame for the
+// LLMTurnCompletionStop strategy to decide on (a tool call before any marker
+// reports a complete turn, and a response without a marker reports no kind); in
+// both directions as a UserTurnInferenceCompletedFrame when the turn is
+// complete; and downstream as an LLMMarkerFrame, which the assistant aggregator
+// writes to the conversation. Text after an incomplete marker is not spoken:
+// the marker is the whole response. Re-prompting a user who goes quiet after an
+// incomplete turn is the stop strategy's job.
 
 // The markers the model is instructed to begin each response with. They are
 // defined with the frames that carry them, since the conversation aggregator
@@ -45,13 +52,13 @@ const (
 	turnMarkerNone TurnMarker = iota
 	// TurnMarkerComplete means the response flows through as speech.
 	TurnMarkerComplete
-	// TurnMarkerIncomplete means the response is suppressed and a re-prompt is
-	// armed. It doubles as a latch: the prompt asks for the marker alone, and a
-	// model that disobeys and keeps streaming stays suppressed.
+	// TurnMarkerIncomplete means the rest of the response is dropped. It doubles
+	// as a latch: the prompt asks for the marker alone, and a model that
+	// disobeys and keeps streaming stays suppressed.
 	TurnMarkerIncomplete
 )
 
-// IncompleteType is how long to wait before re-prompting.
+// IncompleteType is which incomplete marker the response carried.
 type IncompleteType int
 
 const (
@@ -247,37 +254,46 @@ func (c UserTurnCompletionConfig) LongPrompt() string {
 	return renderMarkers(incompleteLongPromptTemplate, complete, short, long)
 }
 
-// timeout is the wait before re-prompting for the given kind of incomplete turn.
-func (c UserTurnCompletionConfig) timeout(t IncompleteType) time.Duration {
-	if t == IncompleteShort {
-		if c.IncompleteShortTimeout != 0 {
-			return c.IncompleteShortTimeout
-		}
-		return defaultIncompleteShortTimeout
+// ShortTimeout is how long a user who left a short incomplete turn is given
+// before being re-prompted: the configured wait, or 5s.
+func (c UserTurnCompletionConfig) ShortTimeout() time.Duration {
+	if c.IncompleteShortTimeout != 0 {
+		return c.IncompleteShortTimeout
 	}
+	return defaultIncompleteShortTimeout
+}
+
+// LongTimeout is how long a user who left a long incomplete turn is given
+// before being re-prompted: the configured wait, or 10s.
+func (c UserTurnCompletionConfig) LongTimeout() time.Duration {
 	if c.IncompleteLongTimeout != 0 {
 		return c.IncompleteLongTimeout
 	}
 	return defaultIncompleteLongTimeout
 }
 
-// prompt is the re-prompt for the given kind of incomplete turn.
-func (c UserTurnCompletionConfig) prompt(t IncompleteType) string {
-	if t == IncompleteShort {
-		return c.ShortPrompt()
-	}
-	return c.LongPrompt()
-}
+// Kinds of turn-completion judgment, as a UserTurnCompletionFrame reports them.
+const (
+	completionKindComplete = "complete"
+	// completionKindNone is a response that carried no marker.
+	completionKindNone = ""
+)
 
-// turnCompletionState is the gating state of one service. Upstream runs on a
+// turnCompletionState is the marker state of one service. Upstream runs on a
 // single event loop and needs no lock; jargo reaches this from the frame
-// goroutine and from the re-prompt timer, so it carries its own.
+// goroutine and from the generation, so it carries its own.
 type turnCompletionState struct {
 	mu sync.Mutex
-	// enabled reports whether gating is on. It is set by a settings update, which
-	// is how the stop strategy turns it on once the pipeline is running.
+	// enabled reports whether the markers are on. It is set by a settings
+	// update, which is how the stop strategy turns them on once the pipeline is
+	// running.
 	enabled bool
 	config  UserTurnCompletionConfig
+	// contextFrameID is the LLMContextFrame that started the current inference,
+	// and reported whether its turn-completion judgment has been reported
+	// upstream yet.
+	contextFrameID uint64
+	reported       bool
 	// buffer holds the response text seen so far, until a marker appears in it.
 	buffer string
 	// marker is the verdict for the response being streamed.
@@ -291,42 +307,22 @@ type turnCompletionState struct {
 	// which is what that report carries: it is how a consumer checks the model
 	// against the protocol it was given.
 	raw strings.Builder
-	// broadcasted reports whether this turn has already been reported complete,
-	// so a turn that both calls a tool and produces the marker reports once.
-	broadcasted bool
-	// voiced reports whether a complete verdict has been spoken since the user
-	// last started speaking. A turn detector can trigger several inferences
-	// within one user turn, each producing its own marker; this latch voices at
-	// most one of them, so the bot does not repeat itself. It is not a per-turn
-	// guarantee: it is cleared on a mid-turn resume as well, because a
-	// completion the controller dropped as stale would otherwise silence the
-	// turn for good.
-	voiced bool
-	// userSpeaking reports whether the detector currently hears the user. A
-	// complete verdict arriving while it does is stale: the user resumed after
-	// the inference was triggered, so the turn is not over after all.
-	userSpeaking bool
-	// cancelTimeout stops the armed re-prompt, and is nil when none is armed.
-	cancelTimeout func()
 }
 
-// setUserSpeaking records whether the detector currently hears the user.
-func (b *Base) setUserSpeaking(v bool) {
-	b.turnCompletion.mu.Lock()
-	b.turnCompletion.userSpeaking = v
-	b.turnCompletion.mu.Unlock()
-}
-
-// FilterIncompleteUserTurns reports whether turn-completion gating is on.
+// FilterIncompleteUserTurns reports whether turn-completion markers are on.
 func (b *Base) FilterIncompleteUserTurns() bool {
 	b.turnCompletion.mu.Lock()
 	defer b.turnCompletion.mu.Unlock()
 	return b.turnCompletion.enabled
 }
 
-// SetFilterIncompleteUserTurns turns turn-completion gating on or off, and
+// SetFilterIncompleteUserTurns turns turn-completion markers on or off, and
 // rebuilds the system instruction so the marker protocol is taught exactly while
 // it is on.
+//
+// The service only reads and reports the markers. Deciding the turn from them,
+// and re-prompting a user who goes quiet after an incomplete one, is the job of
+// the turns package's LLMTurnCompletionStop, which turns them on itself.
 func (b *Base) SetFilterIncompleteUserTurns(on bool) {
 	b.turnCompletion.mu.Lock()
 	b.turnCompletion.enabled = on
@@ -335,7 +331,7 @@ func (b *Base) SetFilterIncompleteUserTurns(on bool) {
 	b.composeSystemInstruction()
 }
 
-// SetUserTurnCompletionConfig replaces the gating configuration, and rebuilds
+// SetUserTurnCompletionConfig replaces the marker configuration, and rebuilds
 // the system instruction in case the protocol taught to the model changed.
 func (b *Base) SetUserTurnCompletionConfig(cfg UserTurnCompletionConfig) {
 	b.turnCompletion.mu.Lock()
@@ -344,7 +340,7 @@ func (b *Base) SetUserTurnCompletionConfig(cfg UserTurnCompletionConfig) {
 	b.composeSystemInstruction()
 }
 
-// UserTurnCompletionConfig is the gating configuration in force.
+// UserTurnCompletionConfig is the marker configuration in force.
 func (b *Base) UserTurnCompletionConfig() UserTurnCompletionConfig {
 	b.turnCompletion.mu.Lock()
 	defer b.turnCompletion.mu.Unlock()
@@ -357,81 +353,55 @@ func (b *Base) UserTurnCompletionConfig() UserTurnCompletionConfig {
 func (b *Base) handleTurnCompletionProcessFrame(ctx context.Context, f frames.Frame) {
 	switch fr := f.(type) {
 	case *frames.InterruptionFrame:
-		b.cancelIncompleteTimeout()
 		b.turnReset(ctx)
-		b.clearVoiced()
-	case *frames.UserStartedSpeakingFrame:
-		// A new user turn: allow one fresh spoken completion.
-		b.clearVoiced()
-	case *frames.LLMMessagesAppendFrame:
-		// A message appended from outside that asks for a run is an explicit
-		// request for fresh speech, and it arrives precisely while the user is
-		// silent. Clear the latch so the guard does not drop its text.
-		if fr.RunLLM {
-			b.clearVoiced()
-		}
-	case *frames.VADUserStartedSpeakingFrame:
-		// The user resumed inside a turn that is already open, so no interruption
-		// fires and two things that normally reset on a fresh turn are handled
-		// here instead. An armed re-prompt would talk over a user who is speaking
-		// again, so it is canceled; and one fresh spoken completion is allowed,
-		// because a completion the controller dropped as stale would otherwise
-		// silence the turn for good.
-		b.setUserSpeaking(true)
-		b.cancelIncompleteTimeout()
-		b.clearVoiced()
-	case *frames.VADUserStoppedSpeakingFrame:
-		b.setUserSpeaking(false)
+	case *frames.LLMContextFrame:
+		b.turnCompletion.mu.Lock()
+		b.turnCompletion.contextFrameID = fr.ID()
+		b.turnCompletion.reported = false
+		b.turnCompletion.mu.Unlock()
 	}
 }
 
-// handleTurnCompletionPushFrame reacts to the frames the service itself
-// generates, which is why it lives on the push path: they never arrive as
-// input, so nothing on the receiving side would see them in time.
+// handleTurnCompletionPushFrame follows the response the service is pushing,
+// resetting at its end. It lives on the push path because these frames are the
+// service's own and never arrive as input, and it runs before anything decides
+// whether the frame goes out: a speculative response the gate drops still ends
+// here, and its marker is reported while the turn waits for it.
 func (b *Base) handleTurnCompletionPushFrame(ctx context.Context, f frames.Frame) {
 	switch f.(type) {
 	case *frames.FunctionCallsStartedFrame:
-		// Report the turn complete before the call dispatches, which gives the
-		// user-stopped-speaking frame the most time to propagate before a result
-		// travels back to the aggregator.
-		b.broadcastTurnCompletion(ctx)
-		// A tool call means a fresh inference is coming and that one is expected
-		// to speak, so clear the latch. The response that voiced the marker keeps
-		// streaming: its verdict is already complete, so its text takes the
-		// complete branch rather than the latch guard.
-		b.clearVoiced()
-	case *frames.LLMFullResponseStartFrame:
-		// A response is starting while a re-prompt is armed, so the model is
-		// already re-engaging: either the turn completed and this response
-		// carries the marker, or the timeout already fired its own re-prompt.
-		// Either way the armed one is now redundant. This is the single point
-		// that settles the race between the timeout firing and a completion
-		// arriving: whichever inference starts first disarms it.
-		b.cancelIncompleteTimeout()
+		// A tool call is the model judging the turn complete. Reported before
+		// the function dispatches, so the turn can end before its result
+		// reaches the assistant aggregator.
+		b.reportTurnCompletion(ctx, completionKindComplete, "")
 	case *frames.LLMFullResponseEndFrame:
+		// A response that ends without a marker or a tool call carries no
+		// judgment.
+		b.reportTurnCompletion(ctx, completionKindNone, "")
 		b.turnReset(ctx)
 	}
 }
 
-// setVoiced records whether this user turn has had its one spoken completion.
-func (b *Base) clearVoiced() {
+// reportTurnCompletion pushes the turn-completion judgment upstream, once per
+// inference, as a UserTurnCompletionFrame naming the inference it judges. A
+// complete turn is also broadcast as a UserTurnInferenceCompletedFrame.
+func (b *Base) reportTurnCompletion(ctx context.Context, kind, marker string) {
 	b.turnCompletion.mu.Lock()
-	b.turnCompletion.voiced = false
-	b.turnCompletion.mu.Unlock()
-}
-
-// broadcastTurnCompletion reports the user's turn complete, at most once per
-// turn. It is called from the two places the model has committed to answering:
-// the complete marker appearing in the text, and a tool call starting.
-func (b *Base) broadcastTurnCompletion(ctx context.Context) {
-	b.turnCompletion.mu.Lock()
-	if b.turnCompletion.broadcasted {
+	if b.turnCompletion.reported {
 		b.turnCompletion.mu.Unlock()
 		return
 	}
-	b.turnCompletion.broadcasted = true
+	b.turnCompletion.reported = true
+	id := b.turnCompletion.contextFrameID
 	b.turnCompletion.mu.Unlock()
 
+	report := frames.NewUserTurnCompletionFrame(kind, marker, id)
+	if err := b.PushFrame(ctx, report, processor.Upstream); err != nil {
+		slog.Error("reporting the turn-completion judgment failed", "service", b.Name(), "error", err)
+	}
+	if kind != completionKindComplete {
+		return
+	}
 	if err := b.Broadcast(ctx, func() frames.Frame {
 		return frames.NewUserTurnInferenceCompletedFrame()
 	}); err != nil {
@@ -439,73 +409,27 @@ func (b *Base) broadcastTurnCompletion(ctx context.Context) {
 	}
 }
 
-// startIncompleteTimeout arms the re-prompt for an incomplete turn, replacing
-// any already armed.
-func (b *Base) startIncompleteTimeout(t IncompleteType) {
-	b.cancelIncompleteTimeout()
-
+// pushMarker reports the marker read from the response, and pushes it for the
+// conversation. Only a complete turn's marker belongs to the response that
+// follows: it is held and flushed with that text, while an incomplete one is
+// written as an assistant message of its own, since such a turn produces no
+// speech and the marker is the whole entry.
+func (b *Base) pushMarker(ctx context.Context, marker, kind string) error {
 	b.turnCompletion.mu.Lock()
-	timeout := b.turnCompletion.config.timeout(t)
+	b.turnCompletion.foundMarker, b.turnCompletion.foundKind = marker, kind
 	b.turnCompletion.mu.Unlock()
 
-	slog.Debug("arming the incomplete-turn re-prompt", "kind", t.String(), "timeout", timeout)
+	b.reportTurnCompletion(ctx, kind, marker)
 
-	ctx, cancel := context.WithCancel(b.turnCtx)
-	b.turnCompletion.mu.Lock()
-	b.turnCompletion.cancelTimeout = cancel
-	b.turnCompletion.mu.Unlock()
-
-	b.turnWG.Go(func() {
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
-		b.incompleteTimeoutExpired(ctx, t)
-	})
-}
-
-// cancelIncompleteTimeout disarms the re-prompt, if one is armed.
-func (b *Base) cancelIncompleteTimeout() {
-	b.turnCompletion.mu.Lock()
-	cancel := b.turnCompletion.cancelTimeout
-	b.turnCompletion.cancelTimeout = nil
-	b.turnCompletion.mu.Unlock()
-	if cancel != nil {
-		slog.Debug("disarming the incomplete-turn re-prompt")
-		cancel()
-	}
-}
-
-// incompleteTimeoutExpired re-prompts the model after the user did not
-// continue. The state is reset first, so the response the re-prompt draws is
-// parsed as a fresh one.
-func (b *Base) incompleteTimeoutExpired(ctx context.Context, t IncompleteType) {
-	slog.Debug("the incomplete-turn re-prompt expired, prompting the model", "kind", t.String())
-
-	b.turnReset(ctx)
-
-	b.turnCompletion.mu.Lock()
-	b.turnCompletion.cancelTimeout = nil
-	prompt := b.turnCompletion.config.prompt(t)
-	b.turnCompletion.mu.Unlock()
-
-	msg := []frames.Message{{Role: frames.RoleDeveloper, Text: prompt}}
-	if err := b.PushFrame(ctx, frames.NewLLMMessagesAppendFrame(msg), processor.Downstream); err != nil {
-		slog.Error("sending the incomplete-turn re-prompt failed", "error", err)
-		return
-	}
-	if err := b.PushFrame(ctx, frames.NewLLMRunFrame(), processor.Downstream); err != nil {
-		slog.Error("running the incomplete-turn re-prompt failed", "error", err)
-	}
+	mf := frames.NewLLMMarkerFrame(marker)
+	mf.AppendToContextImmediately = kind != completionKindComplete
+	return b.PushFrame(ctx, mf, processor.Downstream)
 }
 
 // markerResponse is the report of what the service made of the response that
 // just ended: the marker it found, what that meant, and the text the model
-// produced before anything was held back. It reports false when gating is off,
-// where there is no protocol to report against.
+// produced before anything was held back. It reports false when the markers
+// are off, where there is no protocol to report against.
 //
 // It is a diagnostic for a consumer checking the model against the protocol it
 // was given, and plays no part in the conversation.
@@ -549,9 +473,6 @@ func (b *Base) pushMarkerResponse(ctx context.Context) {
 // turnReset clears the per-response state. A response that produced no marker
 // at all has its buffered text pushed rather than dropped, so a model that
 // ignored the protocol still says something.
-//
-// It deliberately leaves an armed re-prompt alone: that is disarmed when the
-// user speaks and when a new inference begins, not when a response ends.
 func (b *Base) turnReset(ctx context.Context) {
 	b.turnCompletion.mu.Lock()
 	orphaned := ""
@@ -560,13 +481,12 @@ func (b *Base) turnReset(ctx context.Context) {
 	}
 	b.turnCompletion.buffer = ""
 	b.turnCompletion.marker = turnMarkerNone
-	b.turnCompletion.broadcasted = false
 	b.turnCompletion.foundMarker, b.turnCompletion.foundKind = "", ""
 	b.turnCompletion.raw.Reset()
 	b.turnCompletion.mu.Unlock()
 
 	if orphaned != "" {
-		slog.Warn("turn-completion gating is on but the response carried no marker; "+
+		slog.Warn("turn-completion markers are on but the response carried none; "+
 			"pushing its text anyway, as the system prompt may be missing the protocol",
 			"service", b.Name())
 		if err := b.PushFrame(ctx, frames.NewLLMTextFrame(orphaned), processor.Downstream); err != nil {
@@ -576,10 +496,10 @@ func (b *Base) turnReset(ctx context.Context) {
 }
 
 // pushLLMText emits one chunk of generated text, through the turn-completion
-// gating when it is on and straight out when it is not.
+// markers when they are on and straight out when they are not.
 func (b *Base) pushLLMText(ctx context.Context, text string) error {
-	// Measured before turn-completion filtering, which can hold text back or drop
-	// it entirely. Neither says anything about how fast the model answered.
+	// Measured before the markers are read, which can hold text back or drop it
+	// entirely. Neither says anything about how fast the model answered.
 	b.StopTTFATMetrics()
 	if b.FilterIncompleteUserTurns() {
 		return b.pushTurnText(ctx, text)
@@ -587,44 +507,16 @@ func (b *Base) pushLLMText(ctx context.Context, text string) error {
 	return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
 }
 
-// suppressStaleCompletion handles a complete verdict that arrives after the user
-// has resumed speaking. The inference was triggered when the turn looked over;
-// by the time it answers the turn is not over after all, so the response is
-// suppressed and the short timeout re-armed, exactly as if the model had
-// reported the turn incomplete. The next inference re-evaluates the fuller turn.
-//
-// The caller holds the lock and hands it over.
-func (b *Base) suppressStaleCompletion(ctx context.Context, complete, short string) error {
-	b.turnCompletion.marker = TurnMarkerIncomplete
-	b.turnCompletion.buffer = ""
-	b.turnCompletion.mu.Unlock()
-
-	slog.Debug("a complete turn was reported while the user is speaking, "+
-		"treating it as stale and suppressing the response", "marker", complete)
-
-	if err := b.PushFrame(ctx, frames.NewLLMMarkerFrame(short), processor.Downstream); err != nil {
-		return err
-	}
-	b.startIncompleteTimeout(IncompleteShort)
-	return nil
-}
-
-// pushTurnText emits one chunk of generated text through the gating. The
-// service calls it instead of pushing an LLMTextFrame, so a suppressed response
-// never becomes a frame.
+// pushTurnText emits one chunk of generated text through the markers. The
+// service calls it instead of pushing an LLMTextFrame, so text after an
+// incomplete marker never becomes a frame. It buffers text until a marker
+// appears; on the short or long marker it reports it and drops the rest of the
+// response, and on the complete marker it reports it and pushes the text after
+// it, which then flows straight through.
 func (b *Base) pushTurnText(ctx context.Context, text string) error {
 	b.turnCompletion.mu.Lock()
 	b.turnCompletion.raw.WriteString(text)
-	voiced, marker := b.turnCompletion.voiced, b.turnCompletion.marker
-
-	// One spoken completion per user turn. Once a completion has been voiced,
-	// text from any later inference is dropped; a turn detector can trigger
-	// several within one turn. The check on the marker scopes this to fresh
-	// responses, since the one that voiced the completion has its verdict set.
-	if voiced && marker == turnMarkerNone {
-		b.turnCompletion.mu.Unlock()
-		return nil
-	}
+	marker := b.turnCompletion.marker
 
 	// Suppress everything after an incomplete verdict, in case the model
 	// disobeys the protocol and keeps talking past the marker.
@@ -656,29 +548,19 @@ func (b *Base) pushTurnText(ctx context.Context, text string) error {
 	}
 
 	if isIncomplete {
-		marker := shortMarker
+		found := shortMarker
 		if incomplete == IncompleteLong {
-			marker = longMarker
+			found = longMarker
 		}
 		b.turnCompletion.marker = TurnMarkerIncomplete
 		b.turnCompletion.buffer = ""
-		b.turnCompletion.foundMarker, b.turnCompletion.foundKind = marker, incomplete.String()
 		b.turnCompletion.mu.Unlock()
 
-		slog.Debug("an incomplete turn was reported, suppressing the response",
-			"kind", incomplete.String(), "marker", marker)
-
-		// Nothing reports the turn complete here: it explicitly is not. The
-		// re-prompt below is what drives the turn on.
-		//
-		// The marker is written to the conversation as an assistant message of
-		// its own, since an incomplete turn produces no speech and the marker is
-		// therefore the whole entry.
-		if err := b.PushFrame(ctx, frames.NewLLMMarkerFrame(marker), processor.Downstream); err != nil {
-			return err
-		}
-		b.startIncompleteTimeout(incomplete)
-		return nil
+		slog.Debug("an incomplete turn was reported, dropping the response",
+			"kind", incomplete.String(), "marker", found)
+		// The user was cut off or needs time, and the marker is the whole
+		// response.
+		return b.pushMarker(ctx, found, incomplete.String())
 	}
 
 	_, rest, found := strings.Cut(buffer, completeMarker)
@@ -687,31 +569,16 @@ func (b *Base) pushTurnText(ctx context.Context, text string) error {
 		return nil // still buffering, no marker yet
 	}
 
-	if b.turnCompletion.userSpeaking {
-		return b.suppressStaleCompletion(ctx, completeMarker, shortMarker)
-	}
-
-	// This user turn now has its one spoken completion. Any armed re-prompt was
-	// already disarmed when this response's start frame was pushed.
-	b.turnCompletion.voiced = true
 	b.turnCompletion.marker = TurnMarkerComplete
 	b.turnCompletion.buffer = ""
-	b.turnCompletion.foundMarker, b.turnCompletion.foundKind = completeMarker, "complete"
 	b.turnCompletion.mu.Unlock()
 
 	slog.Debug("a complete turn was reported, pushing the buffered response")
 
-	// Report the turn complete before the marker, so a stop strategy gating
-	// finalization on it sees the signal ahead of the response. It is idempotent:
-	// a tool call earlier in the turn may already have reported.
-	b.broadcastTurnCompletion(ctx)
-
 	// The marker goes to the conversation as a sideband signal the assistant
 	// aggregator prepends to the text it is aggregating, so the message it
 	// finally writes reads as the marker followed by the response.
-	mf := frames.NewLLMMarkerFrame(completeMarker)
-	mf.AppendToContextImmediately = false
-	if err := b.PushFrame(ctx, mf, processor.Downstream); err != nil {
+	if err := b.pushMarker(ctx, completeMarker, completionKindComplete); err != nil {
 		return err
 	}
 

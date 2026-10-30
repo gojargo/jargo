@@ -33,6 +33,7 @@ type spy struct {
 	stoppedBy   []StopStrategy
 	resets      int
 	inferences  int
+	withdrawals int
 	pushed      []processor.Direction
 	pushedFrame []frames.Frame
 	broadcast   []frames.Frame
@@ -51,8 +52,9 @@ func (s *spy) env() strategyEnv {
 			s.stopped = append(s.stopped, p)
 			s.stoppedBy = append(s.stoppedBy, str)
 		},
-		resetAggregation:   func(StartStrategy) { s.resets++ },
-		inferenceTriggered: func(StopStrategy, *UserTurnSpeculation) { s.inferences++ },
+		resetAggregation:    func(StartStrategy) { s.resets++ },
+		inferenceTriggered:  func(StopStrategy, *UserTurnSpeculation) { s.inferences++ },
+		speculationCanceled: func(StopStrategy) { s.withdrawals++ },
 		push: func(f frames.Frame, d processor.Direction) {
 			s.pushed = append(s.pushed, d)
 			s.pushedFrame = append(s.pushedFrame, f)
@@ -1066,17 +1068,17 @@ func TestExternalStrategies(t *testing.T) {
 	}
 }
 
-// TestFilterIncompleteUserTurnStrategies checks the detectors are wrapped as
-// deferred (they may only trigger inference) and the LLM decides the turn end.
+// TestFilterIncompleteUserTurnStrategies checks the stop strategies given are
+// kept as they are and the LLM gate is added after them.
 func TestFilterIncompleteUserTurnStrategies(t *testing.T) {
-	t.Run("wraps supplied detectors", func(t *testing.T) {
-		got := FilterIncompleteUserTurnStrategies(
-			[]StopStrategy{NewExternalStop(ExternalStopConfig{})}, llm.UserTurnCompletionConfig{})
+	t.Run("keeps supplied detectors", func(t *testing.T) {
+		detector := NewExternalStop(ExternalStopConfig{})
+		got := FilterIncompleteUserTurnStrategies([]StopStrategy{detector}, llm.UserTurnCompletionConfig{})
 		if len(got.Stop) != 2 {
 			t.Fatalf("stop len = %d, want detector + completion", len(got.Stop))
 		}
-		if _, ok := got.Stop[0].(*deferredStop); !ok {
-			t.Errorf("detector = %T, want *deferredStop", got.Stop[0])
+		if got.Stop[0] != StopStrategy(detector) {
+			t.Errorf("detector = %T, want the one given", got.Stop[0])
 		}
 		if _, ok := got.Stop[1].(*LLMTurnCompletionStop); !ok {
 			t.Errorf("finalizer = %T, want *LLMTurnCompletionStop", got.Stop[1])
@@ -1190,20 +1192,6 @@ func TestLLMTurnCompletionStopConfiguresTheLLM(t *testing.T) {
 	}
 	if c, ok := got.(llm.UserTurnCompletionConfig); !ok || c.IncompleteShortPrompt != "Go on." {
 		t.Errorf("the update carries %v, want the configuration the gate was built with", got)
-	}
-}
-
-// TestNewLLMTurnCompletionStop checks the gate finalizes on the completion the
-// LLM service reports, which it inherits, and carries the configuration it
-// applies to the service on start.
-func TestNewLLMTurnCompletionStop(t *testing.T) {
-	cfg := llm.UserTurnCompletionConfig{IncompleteShortTimeout: time.Second}
-	s := NewLLMTurnCompletionStop(cfg)
-	if s.ExternalCompletionStop == nil {
-		t.Fatal("the gate should be built on an ExternalCompletionStop")
-	}
-	if s.Config().IncompleteShortTimeout != time.Second {
-		t.Errorf("Config() did not carry the configuration it was built with")
 	}
 }
 

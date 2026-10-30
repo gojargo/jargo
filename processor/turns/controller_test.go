@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // decidingStop is a stop strategy that decides the user is done when a test
@@ -254,6 +255,55 @@ func TestDeferredWrapperSkipsStoppedInAFirstList(t *testing.T) {
 	h.read(func() {
 		if len(h.events) == 0 || h.events[0] != "inference_triggered" {
 			t.Fatalf("events = %v, want the inference first", h.events)
+		}
+	})
+}
+
+// startWithTheMarker opens a turn the user has been decided done with, ahead of
+// the marker strategy.
+func startWithTheMarker(t *testing.T) (*harness, *turns.LLMTurnCompletionStop) {
+	t.Helper()
+	user := newDecidingStop()
+	marker := turns.NewLLMTurnCompletionStop(llm.UserTurnCompletionConfig{
+		IncompleteLongTimeout: 3 * shortStopTimeout,
+	})
+	h := newHarness(t, turns.UserTurnStrategies{Stop: []turns.StopStrategy{user, marker}},
+		turns.UserTurnStrategiesParams{}, shortStopTimeout)
+	h.speak()
+	h.do(user.decide)
+	return h, marker
+}
+
+// After the long marker, the turn stays open until the marker strategy's own
+// timeout decides.
+func TestATurnTheLLMNeedsMoreTimeOnWaitsForTheMarker(t *testing.T) {
+	h, marker := startWithTheMarker(t)
+	inference := frames.NewLLMContextFrame(frames.NewLLMContext(""))
+	h.send(inference, frames.NewUserTurnCompletionFrame("long", "", inference.ID()))
+
+	time.Sleep(2 * shortStopTimeout)
+	h.read(func() {
+		if len(h.stops) != 0 {
+			t.Fatalf("stops = %d, want the turn to wait for the re-prompt", len(h.stops))
+		}
+	})
+
+	time.Sleep(2 * shortStopTimeout)
+	h.read(func() {
+		if !sameStrategies(h.stoppedBy(), marker) || h.timeouts != 0 {
+			t.Fatalf("stopped by %v, timeouts = %d, want the marker strategy and none", h.stoppedBy(), h.timeouts)
+		}
+	})
+}
+
+func TestAMarkerThatNeverComesStillTimesOut(t *testing.T) {
+	h, _ := startWithTheMarker(t)
+	h.send(frames.NewLLMContextFrame(frames.NewLLMContext("")))
+
+	time.Sleep(shortStopTimeout + 100*time.Millisecond)
+	h.read(func() {
+		if !sameStrategies(h.stoppedBy(), nil) || h.timeouts != 1 {
+			t.Fatalf("stopped by %v, timeouts = %d, want the timeout to end the turn", h.stoppedBy(), h.timeouts)
 		}
 	})
 }

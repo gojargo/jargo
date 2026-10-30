@@ -277,317 +277,6 @@ func TestTurnStateResetAfterResponseEnd(t *testing.T) {
 	}
 }
 
-// A response starting disarms a pending re-prompt. It is the single point that
-// settles the race between the timeout firing and a completion arriving.
-func TestNewResponseCancelsPendingIncompleteTimeout(t *testing.T) {
-	svc, _, _ := gatedService(t)
-
-	if err := svc.pushTurnText(t.Context(), MarkerIncompleteShort); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-	svc.turnCompletion.mu.Lock()
-	armed := svc.turnCompletion.cancelTimeout != nil
-	svc.turnCompletion.mu.Unlock()
-	if !armed {
-		t.Fatal("the incomplete marker did not arm a re-prompt")
-	}
-
-	if err := svc.PushFrame(t.Context(), frames.NewLLMFullResponseStartFrame(), processor.Downstream); err != nil {
-		t.Fatalf("PushFrame: %v", err)
-	}
-
-	svc.turnCompletion.mu.Lock()
-	defer svc.turnCompletion.mu.Unlock()
-	if svc.turnCompletion.cancelTimeout != nil {
-		t.Error("a new response did not disarm the pending re-prompt")
-	}
-}
-
-// A resume inside an open turn produces no interruption, so the re-prompt has
-// to be disarmed here or it talks over the user.
-func TestVADResumeCancelsPendingIncompleteTimeout(t *testing.T) {
-	svc, _, _ := gatedService(t)
-
-	if err := svc.pushTurnText(t.Context(), MarkerIncompleteShort); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-
-	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
-
-	svc.turnCompletion.mu.Lock()
-	defer svc.turnCompletion.mu.Unlock()
-	if svc.turnCompletion.cancelTimeout != nil {
-		t.Error("a resumed speech did not disarm the pending re-prompt")
-	}
-}
-
-// A turn detector can trigger several inferences per turn, each with its own
-// verdict; only the first is spoken.
-func TestOnlyFirstCompletionVoicedPerUserTurn(t *testing.T) {
-	svc, up, down := gatedService(t)
-
-	if err := svc.pushTurnText(t.Context(), MarkerComplete+" How are you?"); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-	svc.turnReset(t.Context())
-
-	if got := textsOf(down); len(got) != 1 || got[0] != "How are you?" {
-		t.Fatalf("first inference pushed %v, want [How are you?]", got)
-	}
-	before := completionsIn(up, down)
-
-	if err := svc.pushTurnText(t.Context(), MarkerComplete+" How are you?"); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-
-	if got := textsOf(down); len(got) != 1 {
-		t.Errorf("a second inference in the same turn was voiced: %v", got)
-	}
-	if completionsIn(up, down) != before {
-		t.Error("a second inference in the same turn reported completion again")
-	}
-}
-
-// The response that set the latch keeps streaming its own continuation.
-func TestVoicedResponseKeepsStreamingAfterLatch(t *testing.T) {
-	svc, _, down := gatedService(t)
-
-	for _, chunk := range []string{MarkerComplete + " Hello", " there!"} {
-		if err := svc.pushTurnText(t.Context(), chunk); err != nil {
-			t.Fatalf("pushTurnText: %v", err)
-		}
-	}
-
-	want := []string{"Hello", " there!"}
-	if got := textsOf(down); !equalStrings(got, want) {
-		t.Errorf("pushed text = %v, want %v", got, want)
-	}
-}
-
-func TestNewUserTurnResetsCompletionLatch(t *testing.T) {
-	svc, _, _ := gatedService(t)
-	svc.turnCompletion.mu.Lock()
-	svc.turnCompletion.voiced = true
-	svc.turnCompletion.mu.Unlock()
-
-	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewUserStartedSpeakingFrame())
-
-	if voicedOf(svc) {
-		t.Error("a new user turn did not clear the completion latch")
-	}
-}
-
-func TestVADResumeResetsCompletionLatch(t *testing.T) {
-	svc, _, _ := gatedService(t)
-	svc.turnCompletion.mu.Lock()
-	svc.turnCompletion.voiced = true
-	svc.turnCompletion.mu.Unlock()
-
-	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
-
-	if voicedOf(svc) {
-		t.Error("a resumed speech did not clear the completion latch")
-	}
-}
-
-// A completion voiced mid-turn, then the user resumes inside the same open
-// turn, then a second legitimate completion arrives. Without clearing the latch
-// on the resume the second response is dropped and the bot never replies.
-func TestResumedSpeechDoesNotPermanentlySilenceTheTurn(t *testing.T) {
-	svc, _, down := gatedService(t)
-
-	if err := svc.pushTurnText(t.Context(), MarkerComplete+" First answer"); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-	svc.turnReset(t.Context())
-	if !voicedOf(svc) {
-		t.Fatal("the first completion did not set the latch")
-	}
-
-	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
-	// The resumed speech ends before the second inference answers. A completion
-	// arriving while the user is still speaking is stale and suppressed, which
-	// TestACompletionWhileTheUserSpeaksIsStale covers.
-	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
-
-	if err := svc.pushTurnText(t.Context(), MarkerComplete+" Second answer"); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-	svc.turnReset(t.Context())
-
-	want := []string{"First answer", "Second answer"}
-	if got := textsOf(down); !equalStrings(got, want) {
-		t.Errorf("pushed text = %v, want %v", got, want)
-	}
-}
-
-func TestFunctionCallResetsCompletionLatch(t *testing.T) {
-	svc, _, _ := gatedService(t)
-	svc.turnCompletion.mu.Lock()
-	svc.turnCompletion.voiced = true
-	svc.turnCompletion.mu.Unlock()
-
-	if err := svc.PushFrame(t.Context(),
-		frames.NewFunctionCallsStartedFrame(nil), processor.Downstream); err != nil {
-		t.Fatalf("PushFrame: %v", err)
-	}
-
-	if voicedOf(svc) {
-		t.Error("a tool call did not clear the completion latch")
-	}
-}
-
-// A spoken acknowledgement, then a tool call, then the real answer. Without
-// clearing the latch on the tool-call path the answer is dropped and the bot
-// goes quiet despite the tool succeeding.
-func TestPostToolResponseSpeaksAfterVoicedFiller(t *testing.T) {
-	svc, _, down := gatedService(t)
-	ctx := t.Context()
-
-	if err := svc.pushTurnText(ctx, MarkerComplete+" One moment."); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-	if !voicedOf(svc) {
-		t.Fatal("the acknowledgement did not set the latch")
-	}
-
-	if err := svc.PushFrame(ctx, frames.NewFunctionCallsStartedFrame(nil), processor.Downstream); err != nil {
-		t.Fatalf("PushFrame: %v", err)
-	}
-	if err := svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream); err != nil {
-		t.Fatalf("PushFrame: %v", err)
-	}
-
-	if err := svc.pushTurnText(ctx, MarkerComplete+" Here are the openings."); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-	if err := svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream); err != nil {
-		t.Fatalf("PushFrame: %v", err)
-	}
-
-	want := []string{"One moment.", "Here are the openings."}
-	if got := textsOf(down); !equalStrings(got, want) {
-		t.Errorf("pushed text = %v, want %v", got, want)
-	}
-}
-
-// A tool call grants exactly one extra spoken completion, then re-latches, so
-// the reset cannot widen into an open-ended window.
-func TestToolCallAllowsOnlyOneExtraCompletion(t *testing.T) {
-	svc, _, down := gatedService(t)
-	ctx := t.Context()
-
-	_ = svc.pushTurnText(ctx, MarkerComplete+" One moment.")
-	_ = svc.PushFrame(ctx, frames.NewFunctionCallsStartedFrame(nil), processor.Downstream)
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-	_ = svc.pushTurnText(ctx, MarkerComplete+" Here are the openings.")
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-	// A stray inference in the same turn, with no new tool call.
-	_ = svc.pushTurnText(ctx, MarkerComplete+" Duplicate!")
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-
-	want := []string{"One moment.", "Here are the openings."}
-	if got := textsOf(down); !equalStrings(got, want) {
-		t.Errorf("pushed text = %v, want %v", got, want)
-	}
-	if !voicedOf(svc) {
-		t.Error("the latch should be armed again after the extra completion")
-	}
-}
-
-// An application-driven re-prompt fires while the user is silent, so no speech
-// frame clears the latch for it.
-func TestRequestedRunResetsCompletionLatch(t *testing.T) {
-	svc, _, _ := gatedService(t)
-	svc.turnCompletion.mu.Lock()
-	svc.turnCompletion.voiced = true
-	svc.turnCompletion.mu.Unlock()
-
-	f := frames.NewLLMMessagesAppendFrame([]frames.Message{
-		{Role: frames.RoleDeveloper, Text: "The user has been quiet."},
-	})
-	f.RunLLM = true
-	svc.handleTurnCompletionProcessFrame(t.Context(), f)
-
-	if voicedOf(svc) {
-		t.Error("a requested run did not clear the completion latch")
-	}
-}
-
-// Appending without asking for a run leaves the latch armed: nothing asked for
-// fresh speech.
-func TestAppendWithoutRunKeepsCompletionLatch(t *testing.T) {
-	svc, _, _ := gatedService(t)
-	svc.turnCompletion.mu.Lock()
-	svc.turnCompletion.voiced = true
-	svc.turnCompletion.mu.Unlock()
-
-	f := frames.NewLLMMessagesAppendFrame([]frames.Message{
-		{Role: frames.RoleDeveloper, Text: "Background note."},
-	})
-	svc.handleTurnCompletionProcessFrame(t.Context(), f)
-
-	if !voicedOf(svc) {
-		t.Error("an append with no run cleared the latch, want it left armed")
-	}
-}
-
-// A completion is voiced, the user stays silent, an idle handler asks for a
-// run: the response it draws must be spoken.
-func TestRepromptSpeaksAfterVoicedCompletion(t *testing.T) {
-	svc, _, down := gatedService(t)
-	ctx := t.Context()
-
-	_ = svc.pushTurnText(ctx, MarkerComplete+" Japan is a great pick.")
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-	if !voicedOf(svc) {
-		t.Fatal("the first reply did not set the latch")
-	}
-
-	f := frames.NewLLMMessagesAppendFrame([]frames.Message{
-		{Role: frames.RoleDeveloper, Text: "The user has been quiet."},
-	})
-	f.RunLLM = true
-	svc.handleTurnCompletionProcessFrame(ctx, f)
-
-	_ = svc.pushTurnText(ctx, MarkerComplete+" Are you still there?")
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-
-	want := []string{"Japan is a great pick.", "Are you still there?"}
-	if got := textsOf(down); !equalStrings(got, want) {
-		t.Errorf("pushed text = %v, want %v", got, want)
-	}
-}
-
-func TestRequestedRunAllowsOnlyOneExtraCompletion(t *testing.T) {
-	svc, _, down := gatedService(t)
-	ctx := t.Context()
-
-	_ = svc.pushTurnText(ctx, MarkerComplete+" Japan is a great pick.")
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-
-	f := frames.NewLLMMessagesAppendFrame([]frames.Message{
-		{Role: frames.RoleDeveloper, Text: "The user has been quiet."},
-	})
-	f.RunLLM = true
-	svc.handleTurnCompletionProcessFrame(ctx, f)
-
-	_ = svc.pushTurnText(ctx, MarkerComplete+" Are you still there?")
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-
-	// A stray inference in the same turn, with no run requested.
-	_ = svc.pushTurnText(ctx, MarkerComplete+" Duplicate!")
-	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-
-	want := []string{"Japan is a great pick.", "Are you still there?"}
-	if got := textsOf(down); !equalStrings(got, want) {
-		t.Errorf("pushed text = %v, want %v", got, want)
-	}
-	if !voicedOf(svc) {
-		t.Error("the latch should be armed again after the extra completion")
-	}
-}
-
 // A response that carried no marker at all has its text pushed rather than
 // dropped, so a model that ignored the protocol still says something.
 func TestUnmarkedResponseIsPushedAnyway(t *testing.T) {
@@ -668,59 +357,6 @@ func TestSystemInstructionCompositionWithNoBasePrompt(t *testing.T) {
 	}
 }
 
-// The re-prompt delivery has no upstream test, since upstream mocks the timeout
-// out; this one is ours. It is the path the whole incomplete branch exists for,
-// so it is worth covering end to end.
-func TestIncompleteTimeoutRepromptsTheModel(t *testing.T) {
-	svc, _, down := gatedService(t)
-	svc.SetUserTurnCompletionConfig(UserTurnCompletionConfig{
-		IncompleteShortTimeout: 20 * time.Millisecond,
-		IncompleteShortPrompt:  "Go on.",
-	})
-
-	if err := svc.pushTurnText(t.Context(), MarkerIncompleteShort); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-
-	var appended *frames.LLMMessagesAppendFrame
-	sawRun := false
-	for range 100 {
-		for _, f := range down.frames() {
-			switch v := f.(type) {
-			case *frames.LLMMessagesAppendFrame:
-				appended = v
-			case *frames.LLMRunFrame:
-				sawRun = true
-			}
-		}
-		if appended != nil && sawRun {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if appended == nil {
-		t.Fatal("the re-prompt never reached the pipeline")
-	}
-	if len(appended.Messages) != 1 || appended.Messages[0].Text != "Go on." {
-		t.Errorf("re-prompt messages = %+v, want the configured prompt", appended.Messages)
-	}
-	if appended.Messages[0].Role != frames.RoleDeveloper {
-		t.Errorf("re-prompt role = %q, want %q", appended.Messages[0].Role, frames.RoleDeveloper)
-	}
-	if !sawRun {
-		t.Error("the re-prompt did not ask for a run")
-	}
-
-	// The re-prompt resets the response state, so the answer it draws is parsed
-	// as a fresh one rather than being suppressed by the incomplete verdict.
-	svc.turnCompletion.mu.Lock()
-	defer svc.turnCompletion.mu.Unlock()
-	if svc.turnCompletion.marker != turnMarkerNone {
-		t.Errorf("marker = %v, want it cleared before the re-prompt ran", svc.turnCompletion.marker)
-	}
-}
-
 // The strategy that drives the protocol configures the service over a settings
 // update once the pipeline is running, so both halves of that update have to
 // land: the enable flag and the configuration it runs under.
@@ -744,48 +380,6 @@ func TestSettingsUpdateEnablesGatingAndCarriesItsConfig(t *testing.T) {
 	}
 	if got := svc.SystemInstruction(); got != "Base prompt.\n\nCustom turn instructions." {
 		t.Errorf("SystemInstruction() = %q, want the custom protocol composed on", got)
-	}
-}
-
-func voicedOf(b *Base) bool {
-	b.turnCompletion.mu.Lock()
-	defer b.turnCompletion.mu.Unlock()
-	return b.turnCompletion.voiced
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// TestACompletionWhileTheUserSpeaksIsStale covers a complete verdict that
-// arrives after the user has resumed. The inference was triggered when the turn
-// looked over; by the time it answers the turn is not over after all, so the
-// response is suppressed and the short timeout re-armed, exactly as if the model
-// had reported the turn incomplete.
-//
-// Ported from upstream's stale-complete handling.
-func TestACompletionWhileTheUserSpeaksIsStale(t *testing.T) {
-	svc, _, down := gatedService(t)
-
-	svc.handleTurnCompletionProcessFrame(t.Context(), frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
-
-	if err := svc.pushTurnText(t.Context(), MarkerComplete+" Answer"); err != nil {
-		t.Fatalf("pushTurnText: %v", err)
-	}
-
-	if got := textsOf(down); len(got) != 0 {
-		t.Errorf("pushed text = %v, want none: the completion was stale", got)
-	}
-	if got := markersOf(down); len(got) != 1 || got[0].Marker != MarkerIncompleteShort {
-		t.Errorf("markers = %v, want the short incomplete one", got)
 	}
 }
 
@@ -900,3 +494,138 @@ func TestNoMarkerResponseWithoutGating(t *testing.T) {
 type markerGenerator struct{}
 
 func (*markerGenerator) Generate(context.Context, *frames.LLMContext, Emit) error { return nil }
+
+func TestTextAfterACompleteMarkerStreamsStraightThrough(t *testing.T) {
+	svc, _, down := gatedService(t)
+
+	for _, chunk := range []string{MarkerComplete + " Hello", " there!"} {
+		if err := svc.pushTurnText(t.Context(), chunk); err != nil {
+			t.Fatalf("pushTurnText: %v", err)
+		}
+	}
+
+	if got := textsOf(down); !slices.Equal(got, []string{"Hello", " there!"}) {
+		t.Errorf("pushed text = %v, want [Hello  there!]", got)
+	}
+}
+
+// The turn-completion judgment is pushed upstream as a UserTurnCompletionFrame.
+
+// reportsIn returns every turn-completion report captured.
+func reportsIn(c *capture) []*frames.UserTurnCompletionFrame {
+	var out []*frames.UserTurnCompletionFrame
+	for _, f := range c.frames() {
+		if r, ok := f.(*frames.UserTurnCompletionFrame); ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestEachMarkerIsReportedUpstream(t *testing.T) {
+	for _, tt := range []struct{ marker, kind string }{
+		{MarkerComplete, "complete"},
+		{MarkerIncompleteShort, "short"},
+		{MarkerIncompleteLong, "long"},
+	} {
+		t.Run(tt.kind, func(t *testing.T) {
+			svc, up, down := gatedService(t)
+
+			if err := svc.pushTurnText(t.Context(), tt.marker+" Hello"); err != nil {
+				t.Fatalf("pushTurnText: %v", err)
+			}
+
+			reports := reportsIn(up)
+			if len(reports) != 1 || reports[0].Kind != tt.kind || reports[0].Marker != tt.marker {
+				t.Fatalf("reports upstream = %v, want one %q", reports, tt.kind)
+			}
+			if got := reportsIn(down); len(got) != 0 {
+				t.Errorf("reports downstream = %v, want none", got)
+			}
+		})
+	}
+}
+
+func TestReportsCarryTheContextFrameID(t *testing.T) {
+	svc, up, _ := gatedService(t)
+	contextFrame := frames.NewLLMContextFrame(frames.NewLLMContext(""))
+	svc.handleTurnCompletionProcessFrame(t.Context(), contextFrame)
+
+	if err := svc.pushTurnText(t.Context(), MarkerComplete+" Hello"); err != nil {
+		t.Fatalf("pushTurnText: %v", err)
+	}
+
+	reports := reportsIn(up)
+	if len(reports) != 1 || reports[0].ContextFrameID != contextFrame.ID() {
+		t.Fatalf("reports = %v, want one naming frame %d", reports, contextFrame.ID())
+	}
+}
+
+func TestAToolCallIsReportedAsComplete(t *testing.T) {
+	svc, up, down := gatedService(t)
+
+	if err := svc.PushFrame(t.Context(), frames.NewFunctionCallsStartedFrame(nil), processor.Downstream); err != nil {
+		t.Fatal(err)
+	}
+
+	reports := reportsIn(up)
+	if len(reports) != 1 || reports[0].Kind != "complete" || reports[0].Marker != "" {
+		t.Fatalf("reports = %v, want one complete with no marker", reports)
+	}
+	if n := completionsIn(up, down); n != 2 {
+		t.Errorf("completion broadcasts = %d, want 2", n)
+	}
+}
+
+func TestAResponseWithoutAMarkerIsReportedWithNoKind(t *testing.T) {
+	svc, up, _ := gatedService(t)
+
+	ctx := t.Context()
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
+	_ = svc.pushTurnText(ctx, "Hello there")
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+
+	reports := reportsIn(up)
+	if len(reports) != 1 || reports[0].Kind != "" || reports[0].Marker != "" {
+		t.Fatalf("reports = %v, want one with no kind", reports)
+	}
+}
+
+func TestEachInferenceIsReportedOnce(t *testing.T) {
+	svc, up, _ := gatedService(t)
+	ctx := t.Context()
+
+	svc.handleTurnCompletionProcessFrame(ctx, frames.NewLLMContextFrame(frames.NewLLMContext("")))
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
+	_ = svc.pushTurnText(ctx, MarkerComplete+" Let me check")
+	_ = svc.PushFrame(ctx, frames.NewFunctionCallsStartedFrame(nil), processor.Downstream)
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+
+	// The next inference is reported afresh.
+	svc.handleTurnCompletionProcessFrame(ctx, frames.NewLLMContextFrame(frames.NewLLMContext("")))
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
+	_ = svc.pushTurnText(ctx, MarkerIncompleteShort)
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+
+	var kinds []string
+	for _, r := range reportsIn(up) {
+		kinds = append(kinds, r.Kind)
+	}
+	if !slices.Equal(kinds, []string{"complete", "short"}) {
+		t.Fatalf("kinds = %v, want [complete short]", kinds)
+	}
+}
+
+func TestNothingIsReportedWhileFilteringIsOff(t *testing.T) {
+	svc, up, _ := gatedService(t)
+	svc.SetFilterIncompleteUserTurns(false)
+	ctx := t.Context()
+
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
+	_ = svc.PushFrame(ctx, frames.NewFunctionCallsStartedFrame(nil), processor.Downstream)
+	_ = svc.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+
+	if got := reportsIn(up); len(got) != 0 {
+		t.Fatalf("reports = %v, want none", got)
+	}
+}

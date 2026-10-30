@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // An application's user turn strategies merge with a service's, list by list.
@@ -103,5 +104,46 @@ func TestOnlyTwoReplacingListsLeaveARecommendationUnused(t *testing.T) {
 	}
 	if (turns.UserTurnStrategiesParams{StartMergeMode: turns.MergeModeExtend}).ReplacesServiceStrategies() {
 		t.Fatal("extending the start list should not replace both")
+	}
+}
+
+// Filtering incomplete turns replaces a service's stop strategies, or joins
+// them.
+
+func TestReplacingFiltersWithTheDefaultStopStrategy(t *testing.T) {
+	recommended := turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
+
+	merged := turns.FilterIncompleteUserTurnStrategies(nil, llm.UserTurnCompletionConfig{}).
+		MergeWith(&recommended, turns.UserTurnStrategiesParams{})
+
+	want := []string{"*turns.TurnAnalyzerStop", "*turns.LLMTurnCompletionStop"}
+	if got := typesOf(merged.Stop); !equalLists(got, want) {
+		t.Fatalf("stop = %v, want %v", got, want)
+	}
+}
+
+func TestExtendingAddsOnlyTheLLMGate(t *testing.T) {
+	recommended := turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
+
+	merged := turns.FilterIncompleteUserTurnStrategies(nil, llm.UserTurnCompletionConfig{}).
+		MergeWith(&recommended, extendStop)
+
+	want := []string{"*turns.ExternalStop", "*turns.LLMTurnCompletionStop"}
+	if got := typesOf(merged.Stop); !equalLists(got, want) {
+		t.Fatalf("stop = %v, want %v", got, want)
+	}
+}
+
+func TestExtendingAddsTheStopStrategiesGivenWithTheLLMGate(t *testing.T) {
+	recommended := turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
+	strategies := turns.FilterIncompleteUserTurnStrategies(
+		[]turns.StopStrategy{turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{})},
+		llm.UserTurnCompletionConfig{})
+
+	merged := strategies.MergeWith(&recommended, extendStop)
+
+	want := []string{"*turns.ExternalStop", "*turns.SpeechTimeoutStop", "*turns.LLMTurnCompletionStop"}
+	if got := typesOf(merged.Stop); !equalLists(got, want) {
+		t.Fatalf("stop = %v, want %v", got, want)
 	}
 }
