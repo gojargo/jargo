@@ -69,6 +69,11 @@ type TTSTextFrame struct {
 	// the TTS service built it from one: a word carries the ID of the sentence
 	// or other segment it was spoken in. Zero means it belongs to none.
 	SegmentID uint64
+	// Delivery is the delivery this text is spoken in, such as ["cheerful"],
+	// and "emphasis" for stressed words; empty for the voice's baseline. Nil
+	// when the text carries no delivery. Part of expressive conversation
+	// (alpha).
+	Delivery []string
 }
 
 // NewTTSTextFrame builds a TTSTextFrame for the spoken text, of the text type by
@@ -302,6 +307,11 @@ var (
 // TextType is the kind of text a frame holds: a sentence, a word, or a custom
 // type such as "code", which a pattern-matching aggregator gives the text it
 // cuts out.
+//
+// TextTypeExpressionSound and TextTypeExpressionPause are part of expressive
+// conversation (alpha): a sound or a silence an LLM writes into its reply,
+// which isn't spoken as words. The text is the sound's name, or the pause's
+// duration in milliseconds.
 type TextType string
 
 // The built-in text types.
@@ -315,6 +325,12 @@ const (
 	// TextTypeBackchannel is a short acknowledgment the bot says while the user
 	// talks, such as "Mm-hmm.".
 	TextTypeBackchannel TextType = "backchannel"
+	// TextTypeExpressionSound is a sound an LLM wrote into its reply, such as a
+	// laugh, which the TTS service performed. The text is the sound's name.
+	TextTypeExpressionSound TextType = "expression_sound"
+	// TextTypeExpressionPause is a pause an LLM wrote into its reply, which the
+	// TTS service performed. The text is its duration in milliseconds.
+	TextTypeExpressionPause TextType = "expression_pause"
 	// AnyTextType is not a kind of text but a wildcard standing for every one
 	// of them, for something registered against a type that should apply
 	// whatever the text is.
@@ -389,6 +405,10 @@ type AggregatedTextProgressFrame struct {
 	AccumulatedText string
 	// RemainingText is what has not been spoken yet.
 	RemainingText string
+	// Delivery is the delivery of the word just spoken, which changes within
+	// the text where its delivery does. Nil when the text carries no delivery.
+	// Part of expressive conversation (alpha).
+	Delivery []string
 }
 
 // NewAggregatedTextProgressFrame builds an AggregatedTextProgressFrame.

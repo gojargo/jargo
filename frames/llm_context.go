@@ -688,9 +688,11 @@ func (f *LLMEnablePromptCachingFrame) String() string {
 // LLMContextAssistantTurnFrame carries the aggregated text of a completed
 // assistant turn.
 //
-// The assistant aggregator broadcasts it as a turn ends, carrying the same text
-// it wrote to the conversation, so processors on either side can act on each
-// completed reply without an observer of their own. It is a data frame.
+// The assistant aggregator broadcasts it as a turn ends, carrying the text it
+// wrote to the conversation, so processors on either side can act on each
+// completed reply without an observer of their own. With expressive
+// conversation on, it is the words alone, while the conversation keeps the
+// expression tags the LLM wrote. It is a data frame.
 type LLMContextAssistantTurnFrame struct {
 	BaseDataFrame
 	// Text is what the assistant said this turn.

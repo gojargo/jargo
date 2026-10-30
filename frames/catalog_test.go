@@ -198,6 +198,10 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewLLMServiceMetadataFrame("llm-1") },
 		},
 		{
+			label: "TTSMetadataFrame", cat: system, wantString: "service: tts-1",
+			build: func() frames.Frame { return frames.NewTTSMetadataFrame("tts-1") },
+		},
+		{
 			label: "InputAudioRawFrame", cat: system, wantString: "sample_rate: 16000",
 			build: func() frames.Frame { return frames.NewInputAudioRawFrame(make([]byte, 4), 16000, 1) },
 		},
@@ -639,6 +643,7 @@ func TestServiceMetadataInterface(t *testing.T) {
 	stt.UserTurnStrategies = recommended
 
 	llm := frames.NewLLMServiceMetadataFrame("openai-realtime")
+	tts := frames.NewTTSMetadataFrame("cartesia")
 
 	tests := []struct {
 		name      string
@@ -648,6 +653,7 @@ func TestServiceMetadataInterface(t *testing.T) {
 	}{
 		{"STT", stt, "deepgram", recommended},
 		{"LLM", llm, "openai-realtime", nil},
+		{"TTS", tts, "cartesia", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

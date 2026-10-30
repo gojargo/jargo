@@ -3,6 +3,8 @@ package frames
 import (
 	"fmt"
 	"time"
+
+	"github.com/gojargo/jargo/expressive"
 )
 
 // ServiceMetadata is implemented by every metadata frame a service broadcasts at
@@ -126,9 +128,38 @@ func (f *STTMetadataFrame) String() string {
 	return fmt.Sprintf("%s(ttfs_p99: %s)", f.Name(), f.TTFSP99Latency)
 }
 
+// TTSMetadataFrame is the metadata a TTS service broadcasts at pipeline start.
+type TTSMetadataFrame struct {
+	ServiceMetadataFrame
+	// Expression is the expression tags the service can perform, or nil when
+	// it performs none. Part of expressive conversation (alpha).
+	Expression *expressive.ExpressionCapabilities
+}
+
+// NewTTSMetadataFrame builds a TTSMetadataFrame for the named service.
+func NewTTSMetadataFrame(service string) *TTSMetadataFrame {
+	return &TTSMetadataFrame{
+		BaseSystemFrame: NewBaseSystemFrame("TTSMetadataFrame"),
+		ServiceName:     service,
+	}
+}
+
+// Copy implements ServiceMetadata.
+func (f *TTSMetadataFrame) Copy() ServiceMetadata {
+	c := *f
+	c.BaseSystemFrame = NewBaseSystemFrame("TTSMetadataFrame")
+	return &c
+}
+
+// String implements fmt.Stringer.
+func (f *TTSMetadataFrame) String() string {
+	return fmt.Sprintf("%s(service: %s, expression: %t)", f.Name(), f.ServiceName, f.Expression != nil)
+}
+
 // Compile-time interface checks.
 var (
 	_ SystemFrame     = (*ServiceMetadataFrame)(nil)
+	_ ServiceMetadata = (*TTSMetadataFrame)(nil)
 	_ ServiceMetadata = (*ServiceMetadataFrame)(nil)
 	_ ServiceMetadata = (*LLMServiceMetadataFrame)(nil)
 	_ SystemFrame     = (*STTMetadataFrame)(nil)
