@@ -1,0 +1,561 @@
+[
+ {
+  "text": "Oh great, a forty minute wait.",
+  "previous": "The next visit is in forty minutes. Sorry.",
+  "tags": {
+   "emotion": {
+    "label": "angry",
+    "intensity": "low",
+    "confidence": 0.8957,
+    "probabilities": {
+     "neutral": 0.0018,
+     "happy": 0.0031,
+     "amused": 0.0072,
+     "angry": 0.8957,
+     "sad": 0.0134,
+     "afraid": 0.0113,
+     "surprised": 0.0135,
+     "disgusted": 0.0473,
+     "contemptuous": 0.0067
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.7832,
+    "probabilities": {
+     "asks": 0.0168,
+     "answers": 0.025,
+     "hedges": 0.0252,
+     "doesnt_know": 0.0297,
+     "withholds": 0.0517,
+     "closes": 0.0685,
+     "other": 0.7832
+    }
+   },
+   "sarcasm": {
+    "sarcastic": true,
+    "probability": 0.9437
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ },
+ {
+  "text": "Thank you so much, that's wonderful!",
+  "previous": "",
+  "tags": {
+   "emotion": {
+    "label": "happy",
+    "intensity": "medium",
+    "confidence": 0.9444,
+    "probabilities": {
+     "neutral": 0.001,
+     "happy": 0.9444,
+     "amused": 0.0031,
+     "angry": 0.0015,
+     "sad": 0.0074,
+     "afraid": 0.0072,
+     "surprised": 0.0079,
+     "disgusted": 0.0255,
+     "contemptuous": 0.0021
+    }
+   },
+   "move": {
+    "label": "closes",
+    "confidence": 0.973,
+    "probabilities": {
+     "asks": 0.0017,
+     "answers": 0.002,
+     "hedges": 0.0066,
+     "doesnt_know": 0.0061,
+     "withholds": 0.006,
+     "closes": 0.973,
+     "other": 0.0046
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0089
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ },
+ {
+  "text": "Mm-hmm.",
+  "previous": "Your order shipped yesterday.",
+  "tags": {
+   "emotion": {
+    "label": "neutral",
+    "intensity": "low",
+    "confidence": 0.8971,
+    "probabilities": {
+     "neutral": 0.8971,
+     "happy": 0.0041,
+     "amused": 0.0053,
+     "angry": 0.0049,
+     "sad": 0.0156,
+     "afraid": 0.0183,
+     "surprised": 0.0136,
+     "disgusted": 0.0378,
+     "contemptuous": 0.0034
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.766,
+    "probabilities": {
+     "asks": 0.0046,
+     "answers": 0.0496,
+     "hedges": 0.018,
+     "doesnt_know": 0.0199,
+     "withholds": 0.0178,
+     "closes": 0.1242,
+     "other": 0.766
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0176
+   },
+   "backchannel": {
+    "is_backchannel": true,
+    "probability": 0.9998
+   }
+  }
+ },
+ {
+  "text": "I don't know.",
+  "previous": "What time works for you?",
+  "tags": {
+   "emotion": {
+    "label": "neutral",
+    "intensity": "low",
+    "confidence": 0.8997,
+    "probabilities": {
+     "neutral": 0.8997,
+     "happy": 0.0065,
+     "amused": 0.0057,
+     "angry": 0.0051,
+     "sad": 0.013,
+     "afraid": 0.0156,
+     "surprised": 0.0127,
+     "disgusted": 0.0369,
+     "contemptuous": 0.0049
+    }
+   },
+   "move": {
+    "label": "doesnt_know",
+    "confidence": 0.9882,
+    "probabilities": {
+     "asks": 0.001,
+     "answers": 0.0006,
+     "hedges": 0.0035,
+     "doesnt_know": 0.9882,
+     "withholds": 0.0031,
+     "closes": 0.0019,
+     "other": 0.0016
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0141
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0006
+   }
+  }
+ },
+ {
+  "text": "Why is this still not fixed?? I've called three times!",
+  "previous": "  ",
+  "tags": {
+   "emotion": {
+    "label": "angry",
+    "intensity": "medium",
+    "confidence": 0.9089,
+    "probabilities": {
+     "neutral": 0.0018,
+     "happy": 0.0028,
+     "amused": 0.006,
+     "angry": 0.9089,
+     "sad": 0.0113,
+     "afraid": 0.0108,
+     "surprised": 0.0128,
+     "disgusted": 0.0417,
+     "contemptuous": 0.0038
+    }
+   },
+   "move": {
+    "label": "asks",
+    "confidence": 0.6663,
+    "probabilities": {
+     "asks": 0.6663,
+     "answers": 0.0266,
+     "hedges": 0.0533,
+     "doesnt_know": 0.0424,
+     "withholds": 0.1165,
+     "closes": 0.0246,
+     "other": 0.0704
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0107
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ },
+ {
+  "text": "  ok  ",
+  "previous": "",
+  "tags": {
+   "emotion": {
+    "label": "neutral",
+    "intensity": "low",
+    "confidence": 0.8914,
+    "probabilities": {
+     "neutral": 0.8914,
+     "happy": 0.0047,
+     "amused": 0.0059,
+     "angry": 0.0038,
+     "sad": 0.0147,
+     "afraid": 0.0189,
+     "surprised": 0.0163,
+     "disgusted": 0.0408,
+     "contemptuous": 0.0035
+    }
+   },
+   "move": {
+    "label": "closes",
+    "confidence": 0.9172,
+    "probabilities": {
+     "asks": 0.0025,
+     "answers": 0.0347,
+     "hedges": 0.0095,
+     "doesnt_know": 0.0125,
+     "withholds": 0.0105,
+     "closes": 0.9172,
+     "other": 0.013
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0177
+   },
+   "backchannel": {
+    "is_backchannel": true,
+    "probability": 0.9937
+   }
+  }
+ },
+ {
+  "text": "Café déjà vu, naïve résumé!",
+  "previous": "Ça va?",
+  "tags": {
+   "emotion": {
+    "label": "contemptuous",
+    "intensity": "low",
+    "confidence": 0.8716,
+    "probabilities": {
+     "neutral": 0.0019,
+     "happy": 0.0046,
+     "amused": 0.0431,
+     "angry": 0.0044,
+     "sad": 0.0128,
+     "afraid": 0.0125,
+     "surprised": 0.0138,
+     "disgusted": 0.0354,
+     "contemptuous": 0.8716
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.5722,
+    "probabilities": {
+     "asks": 0.0134,
+     "answers": 0.2336,
+     "hedges": 0.0356,
+     "doesnt_know": 0.0518,
+     "withholds": 0.0757,
+     "closes": 0.0177,
+     "other": 0.5722
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0199
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ },
+ {
+  "text": "I'm terrified of what the results will say.",
+  "previous": "",
+  "tags": {
+   "emotion": {
+    "label": "afraid",
+    "intensity": "medium",
+    "confidence": 0.9823,
+    "probabilities": {
+     "neutral": 0.0006,
+     "happy": 0.0005,
+     "amused": 0.001,
+     "angry": 0.0004,
+     "sad": 0.0028,
+     "afraid": 0.9823,
+     "surprised": 0.0028,
+     "disgusted": 0.0088,
+     "contemptuous": 0.001
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.6785,
+    "probabilities": {
+     "asks": 0.0209,
+     "answers": 0.0447,
+     "hedges": 0.1189,
+     "doesnt_know": 0.0841,
+     "withholds": 0.0282,
+     "closes": 0.0247,
+     "other": 0.6785
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0252
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0001
+   }
+  }
+ },
+ {
+  "text": "Wow, I did not expect that at all.",
+  "previous": "We upgraded you for free.",
+  "tags": {
+   "emotion": {
+    "label": "surprised",
+    "intensity": "medium",
+    "confidence": 0.9905,
+    "probabilities": {
+     "neutral": 0.0001,
+     "happy": 0.0002,
+     "amused": 0.0006,
+     "angry": 0.0001,
+     "sad": 0.0013,
+     "afraid": 0.001,
+     "surprised": 0.9905,
+     "disgusted": 0.0058,
+     "contemptuous": 0.0004
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.8208,
+    "probabilities": {
+     "asks": 0.0322,
+     "answers": 0.0058,
+     "hedges": 0.0371,
+     "doesnt_know": 0.0495,
+     "withholds": 0.0308,
+     "closes": 0.0238,
+     "other": 0.8208
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0101
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ },
+ {
+  "text": "That's disgusting, honestly.",
+  "previous": "",
+  "tags": {
+   "emotion": {
+    "label": "disgusted",
+    "intensity": "medium",
+    "confidence": 0.9992,
+    "probabilities": {
+     "neutral": 0.0,
+     "happy": 0.0,
+     "amused": 0.0001,
+     "angry": 0.0,
+     "sad": 0.0002,
+     "afraid": 0.0002,
+     "surprised": 0.0002,
+     "disgusted": 0.9992,
+     "contemptuous": 0.0
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.9658,
+    "probabilities": {
+     "asks": 0.002,
+     "answers": 0.0013,
+     "hedges": 0.0077,
+     "doesnt_know": 0.0075,
+     "withholds": 0.0105,
+     "closes": 0.0052,
+     "other": 0.9658
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0113
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ },
+ {
+  "text": "Sure, whatever you say, genius.",
+  "previous": "I think the problem is your router.",
+  "tags": {
+   "emotion": {
+    "label": "contemptuous",
+    "intensity": "medium",
+    "confidence": 0.9452,
+    "probabilities": {
+     "neutral": 0.0014,
+     "happy": 0.002,
+     "amused": 0.0029,
+     "angry": 0.0013,
+     "sad": 0.0085,
+     "afraid": 0.0064,
+     "surprised": 0.0071,
+     "disgusted": 0.0252,
+     "contemptuous": 0.9452
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.636,
+    "probabilities": {
+     "asks": 0.0109,
+     "answers": 0.1483,
+     "hedges": 0.0443,
+     "doesnt_know": 0.0486,
+     "withholds": 0.0555,
+     "closes": 0.0564,
+     "other": 0.636
+    }
+   },
+   "sarcasm": {
+    "sarcastic": true,
+    "probability": 0.9755
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ },
+ {
+  "text": "lol ok 😀",
+  "previous": "",
+  "tags": {
+   "emotion": {
+    "label": "amused",
+    "intensity": "low",
+    "confidence": 0.9347,
+    "probabilities": {
+     "neutral": 0.0004,
+     "happy": 0.0273,
+     "amused": 0.9347,
+     "angry": 0.0004,
+     "sad": 0.0054,
+     "afraid": 0.0065,
+     "surprised": 0.0057,
+     "disgusted": 0.0181,
+     "contemptuous": 0.0013
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.86,
+    "probabilities": {
+     "asks": 0.0041,
+     "answers": 0.0035,
+     "hedges": 0.0112,
+     "doesnt_know": 0.0141,
+     "withholds": 0.012,
+     "closes": 0.0951,
+     "other": 0.86
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0227
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.014
+   }
+  }
+ },
+ {
+  "text": "I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. I keep calling and nobody ever answers the phone, this is ridiculous. ",
+  "previous": "Let me check that for you right away. Let me check that for you right away. Let me check that for you right away. Let me check that for you right away. Let me check that for you right away. Let me check that for you right away. Let me check that for you right away. Let me check that for you right away. ",
+  "tags": {
+   "emotion": {
+    "label": "angry",
+    "intensity": "medium",
+    "confidence": 0.8973,
+    "probabilities": {
+     "neutral": 0.0017,
+     "happy": 0.0033,
+     "amused": 0.0063,
+     "angry": 0.8973,
+     "sad": 0.0128,
+     "afraid": 0.012,
+     "surprised": 0.0149,
+     "disgusted": 0.0473,
+     "contemptuous": 0.0044
+    }
+   },
+   "move": {
+    "label": "other",
+    "confidence": 0.7809,
+    "probabilities": {
+     "asks": 0.0316,
+     "answers": 0.0523,
+     "hedges": 0.0389,
+     "doesnt_know": 0.0327,
+     "withholds": 0.0452,
+     "closes": 0.0183,
+     "other": 0.7809
+    }
+   },
+   "sarcasm": {
+    "sarcastic": false,
+    "probability": 0.0084
+   },
+   "backchannel": {
+    "is_backchannel": false,
+    "probability": 0.0
+   }
+  }
+ }
+]

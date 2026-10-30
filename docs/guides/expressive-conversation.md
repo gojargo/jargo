@@ -131,9 +131,46 @@ and clients in the `perception` field of the transcription's `user-input`
 message (see [RTVI](rtvi.md)), which waits for a producer after the STT to read
 it.
 
-jargo ships no perception producer yet: implement one as a processor after
-the STT that broadcasts its `PerceptionMetadataFrame` at start and sets
-`Perception` on each final `frames.TranscriptionFrame`.
+### The tone reader
+
+`processor/tone/reader` is a perception producer that reads how each user
+turn was meant from its words, with the tone reader model
+([pipecat-ai/tone-models](https://huggingface.co/pipecat-ai/tone-models)) on
+the CPU, in a few milliseconds a turn. It goes between the STT service and the
+user aggregator:
+
+```go
+toneReader, err := reader.New(reader.Config{})
+if err != nil {
+	return err
+}
+p := pipeline.New(transport.Input(), stt, toneReader, userAgg, llm, tts,
+	transport.Output(), assistantAgg)
+```
+
+Each final transcription is read with the bot's reply before it, and gets two
+signals: `emotion`, its two likeliest labels with their confidences (`neutral`,
+`happy`, `amused`, `angry`, `sad`, `afraid`, `surprised`, `disgusted`,
+`contemptuous`), and `sarcasm`, the chance the turn is sarcastic, from 0 to 1.
+
+The model loads while the pipeline is set up, once a process, and every reader
+shares it. The first load downloads it from Hugging Face into its cache
+(`~/.cache/huggingface/hub`, or `Config.CacheDir`), which holds the pipeline's
+start, so download it ahead, such as when building the image:
+
+```sh
+huggingface-cli download pipecat-ai/tone-models --revision reader-rc2 --include 'reader/*'
+```
+
+`Config.ModelDir` loads a folder of your own instead, laid out as a release's
+`reader` folder, and `Config.Precision` picks the weights (`reader.FP16`, the
+default, or `reader.FP32`). The model runs through the ONNX Runtime (see
+[Installation](../getting-started/installation.md#runtime-libraries)). A model that cannot be loaded is reported as an error
+that leaves the reader unusable, and transcriptions pass through unread.
+
+A perception producer of your own is a processor after the STT that
+broadcasts its `PerceptionMetadataFrame` at start and sets `Perception` on
+each final `frames.TranscriptionFrame`.
 
 ## A tagger after the LLM
 

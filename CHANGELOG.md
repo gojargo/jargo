@@ -15,6 +15,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The tone reader, in alpha: a perception producer that reads how each user
+  turn was meant from its words.** `processor/tone/reader` goes between the STT
+  service and the user aggregator and sets each final transcription's
+  `Perception`: its `emotion`, the two likeliest labels with their
+  confidences, and its `sarcasm`, the chance it is sarcastic. It reads with
+  the bot's reply before it, using the tone reader model
+  (`pipecat-ai/tone-models`, release `reader-rc2`) on the CPU through the ONNX
+  Runtime, in a few milliseconds a turn. The model loads while the pipeline is
+  set up, once a process, downloaded from Hugging Face into its cache the
+  first time, or from `Config.ModelDir`. A model that cannot be loaded leaves
+  the reader unusable, and transcriptions pass through unread. See
+  [Expressive conversation](docs/guides/expressive-conversation.md#the-tone-reader).
 - `aggregators.LLMText` takes text transforms, with `SetTextTransformers` and
   `AddTextTransformer`, which rewrite each aggregation for everything
   downstream: the TTS service, the context and the client. A transform
