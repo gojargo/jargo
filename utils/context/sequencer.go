@@ -66,8 +66,8 @@ type AggregatedFrameSequencer struct {
 	// processing frames and from the one draining a context's audio: a barge-in
 	// clears it while the audio still playing is completing slots against it.
 	//
-	// The upstream project needs no such guard, running all of this on one event
-	// loop; the guard is here because these are genuinely separate goroutines.
+	// A single event loop would need no such guard; it is here because these are
+	// genuinely separate goroutines.
 	mu sync.Mutex
 
 	name          string
