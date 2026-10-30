@@ -1,11 +1,22 @@
 package aggregators_test
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/utils/text"
 )
 
@@ -193,5 +204,279 @@ func TestLLMTextResetIsNotAnInterruption(t *testing.T) {
 	}
 	if interruptions != 0 {
 		t.Errorf("aggregator was interrupted %d times, want 0", interruptions)
+	}
+}
+
+// runLLMText sends a response through an LLMText and returns the aggregations
+// that reached the end of the pipeline and the errors that reached its start.
+func runLLMText(
+	t *testing.T, p *aggregators.LLMText, texts ...string,
+) ([]*frames.AggregatedTextFrame, []*frames.ErrorFrame) {
+	t.Helper()
+	var (
+		mu         sync.Mutex
+		aggregated []*frames.AggregatedTextFrame
+		errors     []*frames.ErrorFrame
+	)
+	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if af, ok := f.(*frames.AggregatedTextFrame); ok {
+			mu.Lock()
+			aggregated = append(aggregated, af)
+			mu.Unlock()
+		}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if ef, ok := f.(*frames.ErrorFrame); ok {
+			mu.Lock()
+			errors = append(errors, ef)
+			mu.Unlock()
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
+	for _, s := range texts {
+		task.QueueFrame(frames.NewLLMTextFrame(s))
+	}
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+	task.StopWhenDone()
+	if err := <-runDone; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return aggregated, errors
+}
+
+func transformer(textType frames.TextType, transform func(string) (string, error)) tts.TextTransformer {
+	return tts.TextTransformer{
+		TextType: textType,
+		Transform: func(_ context.Context, text string, _ frames.TextType) (string, error) {
+			return transform(text)
+		},
+	}
+}
+
+func upper(text string) (string, error) { return strings.ToUpper(text), nil }
+
+var errBoom = errors.New("boom")
+
+// A "*" transform rewrites every aggregation, flushed text included.
+func TestLLMTextTransformRewritesTextAndRawText(t *testing.T) {
+	plain, _ := runLLMText(t, aggregators.NewLLMText("LLMText"), "Hello there. ", "Bye")
+	p := aggregators.NewLLMText("LLMText")
+	p.SetTextTransformers(transformer(frames.AnyTextType, upper))
+	got, _ := runLLMText(t, p, "Hello there. ", "Bye")
+
+	if len(got) != len(plain) || len(got) != 2 {
+		t.Fatalf("%d aggregations, want %d", len(got), len(plain))
+	}
+	for i := range got {
+		want := strings.ToUpper(plain[i].Text)
+		if got[i].Text != want || got[i].RawText != want || got[i].TextType != plain[i].TextType {
+			t.Errorf("aggregation %d = %q (raw %q, %s), want %q (raw %q, %s)",
+				i, got[i].Text, got[i].RawText, got[i].TextType, want, want, plain[i].TextType)
+		}
+	}
+}
+
+func codeAggregator(t *testing.T) *text.PatternPairAggregator {
+	t.Helper()
+	a := text.NewPatternPairAggregator(frames.TextTypeSentence, "")
+	if err := a.AddPattern("code", "<code>", "</code>", text.MatchAggregate); err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// A transform for one type leaves the other types alone and keeps delimiters.
+func TestLLMTextTransformAppliesToItsTypeOnly(t *testing.T) {
+	const reply = "Run this <code>print(1)</code> now. "
+	plain, _ := runLLMText(t, aggregators.NewLLMTextWith("LLMText", codeAggregator(t)), reply)
+	p := aggregators.NewLLMTextWith("LLMText", codeAggregator(t))
+	p.SetTextTransformers(transformer("code", upper))
+	got, _ := runLLMText(t, p, reply)
+
+	var code []*frames.AggregatedTextFrame
+	type pair struct{ text, raw string }
+	var others, plainOthers []pair
+	for _, f := range got {
+		if f.TextType == "code" {
+			code = append(code, f)
+		} else {
+			others = append(others, pair{f.Text, f.RawText})
+		}
+	}
+	for _, f := range plain {
+		if f.TextType != "code" {
+			plainOthers = append(plainOthers, pair{f.Text, f.RawText})
+		}
+	}
+	if len(code) != 1 || code[0].Text != "PRINT(1)" || code[0].RawText != "<code>PRINT(1)</code>" {
+		t.Fatalf("code aggregations = %+v, want one PRINT(1) inside its delimiters", code)
+	}
+	if !slices.Equal(others, plainOthers) || len(others) != 2 {
+		t.Errorf("other aggregations = %+v, want them untouched: %+v", others, plainOthers)
+	}
+}
+
+func TestLLMTextTransformLeavingWhitespaceDropsTheAggregation(t *testing.T) {
+	p := aggregators.NewLLMText("LLMText")
+	p.SetTextTransformers(transformer(frames.AnyTextType, func(string) (string, error) { return "", nil }))
+	if got, _ := runLLMText(t, p, "Leaked reasoning. "); len(got) != 0 {
+		t.Errorf("aggregated %+v, want nothing", got)
+	}
+}
+
+func TestLLMTextFailingTransformDropsTheAggregationAndReports(t *testing.T) {
+	p := aggregators.NewLLMText("LLMText")
+	p.SetTextTransformers(transformer(frames.AnyTextType, func(string) (string, error) {
+		return "", errBoom
+	}))
+	got, errs := runLLMText(t, p, "Hello there. ")
+	if len(got) != 0 {
+		t.Errorf("aggregated %+v, want nothing", got)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error, "boom") {
+		t.Errorf("errors = %+v, want one reporting the failure", errs)
+	}
+}
+
+// Go function values cannot be compared, so a transform is withdrawn by setting
+// the list again without it.
+func TestLLMTextTransformerCanBeAddedAndRemoved(t *testing.T) {
+	p := aggregators.NewLLMText("LLMText")
+	p.AddTextTransformer(transformer(frames.AnyTextType, upper))
+	p.SetTextTransformers()
+	got, _ := runLLMText(t, p, "Hello there. ")
+	if len(got) != 1 || got[0].Text != "Hello there." {
+		t.Errorf("aggregated %+v, want the text untouched", got)
+	}
+}
+
+// A speech-to-speech service stops its speech before it ends the response. The
+// last sentence has no following text to close it, so the processor still holds
+// it when the speech stops. It was spoken before the stop and goes out ahead of
+// it.
+func TestLLMTextPushesHeldTextBeforeTTSStopped(t *testing.T) {
+	task, seen, runDone := runProcessor(t, aggregators.NewLLMText("LLMText"))
+	task.QueueFrame(frames.NewLLMTextFrame("Hello there. "))
+	task.QueueFrame(frames.NewLLMTextFrame("It's provider-agnostic."))
+	task.QueueFrame(frames.NewTTSStoppedFrame())
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+
+	var names, texts []string
+	for _, f := range drainAfterGrace(seen) {
+		switch fr := f.(type) {
+		case *frames.AggregatedTextFrame:
+			names = append(names, "AggregatedTextFrame")
+			texts = append(texts, fr.Text)
+		case *frames.TTSStoppedFrame:
+			names = append(names, "TTSStoppedFrame")
+		case *frames.LLMFullResponseEndFrame:
+			names = append(names, "LLMFullResponseEndFrame")
+		}
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	wantNames := []string{"AggregatedTextFrame", "AggregatedTextFrame", "TTSStoppedFrame", "LLMFullResponseEndFrame"}
+	if !slices.Equal(names, wantNames) {
+		t.Errorf("frames = %v, want %v", names, wantNames)
+	}
+	if want := []string{"Hello there.", "It's provider-agnostic."}; !slices.Equal(texts, want) {
+		t.Errorf("texts = %q, want %q", texts, want)
+	}
+}
+
+// messageOutput is an output transport that takes every audio frame without
+// playing it and records the RTVI messages it is asked to send.
+type messageOutput struct {
+	*transport.BaseOutput
+	mu   sync.Mutex
+	sent []rtvi.Message
+}
+
+func newMessageOutput() *messageOutput {
+	o := &messageOutput{}
+	o.BaseOutput = transport.NewBaseOutput("Output", transport.Params{AudioOutEnabled: true}, o)
+	return o
+}
+
+func (o *messageOutput) WriteAudio(context.Context, frames.OutputAudioFrame) (bool, error) {
+	return true, nil
+}
+
+func (o *messageOutput) SendMessage(_ context.Context, f frames.OutputTransportMessage) error {
+	if m, ok := f.TransportMessage().(rtvi.Message); ok {
+		o.mu.Lock()
+		o.sent = append(o.sent, m)
+		o.mu.Unlock()
+	}
+	return nil
+}
+
+func (o *messageOutput) botOutput() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var out []string
+	for _, m := range o.sent {
+		if d, ok := m.Data.(rtvi.BotOutputData); ok && m.Type == rtvi.TypeBotOutput {
+			out = append(out, d.Text)
+		}
+	}
+	return out
+}
+
+func speech(contextID string) *frames.TTSAudioRawFrame {
+	f := frames.NewTTSAudioRawFrame(bytes.Repeat([]byte{0x10, 0x27}, 1600), 16000, 1)
+	f.ContextID = contextID
+	return f
+}
+
+// A reply's last sentence reaches clients before the user speaks again. Text
+// that reaches the output transport after the bot stopped speaking waits for the
+// next speech, and the user's next turn interrupts before that.
+func TestLLMTextSpeechToSpeechReplyEndsWithItsLastSentence(t *testing.T) {
+	proc := rtvi.NewProcessor()
+	out := newMessageOutput()
+	task := pipeline.NewWorker(pipeline.New(proc, aggregators.NewLLMText("LLMText"), out), pipeline.WorkerConfig{
+		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	started := frames.NewTTSStartedFrame()
+	started.ContextID = "reply"
+	stopped := frames.NewTTSStoppedFrame()
+	stopped.ContextID = "reply"
+	for _, f := range []frames.Frame{
+		frames.NewLLMFullResponseStartFrame(),
+		started,
+		speech("reply"),
+		frames.NewLLMTextFrame("Hello there. "),
+		speech("reply"),
+		frames.NewLLMTextFrame("It's provider-agnostic."),
+		stopped,
+		frames.NewLLMFullResponseEndFrame(),
+	} {
+		task.QueueFrame(f)
+	}
+	time.Sleep(500 * time.Millisecond)
+	// The user starts their next turn.
+	task.QueueFrame(frames.NewInterruptionFrame())
+	time.Sleep(100 * time.Millisecond)
+	task.StopWhenDone()
+	if err := <-runDone; err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := out.botOutput(), []string{"Hello there.", "It's provider-agnostic."}; !slices.Equal(got, want) {
+		t.Errorf("bot output = %q, want %q", got, want)
 	}
 }

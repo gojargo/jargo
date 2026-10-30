@@ -13,6 +13,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `aggregators.LLMText` takes text transforms, with `SetTextTransformers` and
+  `AddTextTransformer`, which rewrite each aggregation for everything
+  downstream: the TTS service, the context and the client. A transform
+  registered on the TTS service changes only what is spoken. A transform that
+  leaves only whitespace drops the aggregation, and one that fails drops it and
+  reports an application error. A pattern match keeps its delimiters around
+  the rewritten text in `RawText`. `NewLLMTextFor` builds it for a processor
+  that embeds it.
+
+### Fixed
+
+- `aggregators.LLMText` sends the text it still holds ahead of a
+  `TTSStoppedFrame`, so the last sentence of a speech-to-speech reply reaches
+  the client before the bot stops speaking rather than waiting for the next
+  speech.
+
 ## [0.3.0] - 2026-10-30
 
 ### Added
