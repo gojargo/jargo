@@ -53,6 +53,11 @@ func (b *Base) isStreamingTokens() bool {
 	return b.aggregator != nil && b.aggregator.Type() == frames.TextTypeToken
 }
 
+// IsStreamingTokens reports whether the service passes text straight through
+// as it arrives rather than grouping it into sentences, for a provider that
+// sends a turn's text differently in that mode.
+func (b *Base) IsStreamingTokens() bool { return b.isStreamingTokens() }
+
 // startTextAggregationMetrics starts the clock, unless it is already running.
 // Text keeps arriving while a sentence is being waited for, and the measurement
 // runs from the first of it, not the most recent. The clock is stopped by the

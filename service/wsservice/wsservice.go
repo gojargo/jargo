@@ -386,6 +386,15 @@ func (b *Base) sendOnce(send func() error) error {
 	return send()
 }
 
+// ReconnectInProgress reports whether the receive loop is redialing. A service
+// whose connection the loop owns until it is back holds off on using it
+// meanwhile.
+func (b *Base) ReconnectInProgress() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.reconnectInProgress
+}
+
 func (b *Base) beginReconnect() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
