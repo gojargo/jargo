@@ -72,6 +72,10 @@ func (s *heldSynth) RunTTS(_ context.Context, text, contextID string, yield func
 	}
 	s.wg.Go(func() {
 		<-s.release
+		// A request made after the release still answers over the network, a
+		// little after RunTTS returns. Answering at once could end the context
+		// before the base has queued the request's text behind its audio.
+		time.Sleep(10 * time.Millisecond)
 		s.deliver(host, contextID, nil)
 	})
 	return nil
