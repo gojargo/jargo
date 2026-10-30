@@ -105,16 +105,63 @@ pipeline.
 ### Strategies, idle, mute, and LLM completion
 
 The start/stop chains are pluggable (`turns.StartStrategy` / `turns.StopStrategy`):
-VAD, transcription, min-words and wake-phrase starts; Smart-Turn, speech-timeout
-and external stops, plus a `deferred` wrapper. Smart Turn runs locally by default
+VAD, transcription, min-words and wake-phrase starts; Smart-Turn, speech-timeout,
+external and eager stops. Smart Turn runs locally by default
 (`turn.NewSmartTurnV3`); `turn.NewHTTPSmartTurn` asks a remote service for the
 same verdict instead, for a deployment that scores turns somewhere other than in
-the bot. `turns.FilterIncompleteUserTurnStrategies`
-together with a `turns.CompletionFilter` placed after the LLM add the optional
-✓/○/◐ LLM turn-completion gate, where the model itself judges whether the user's
-turn is semantically complete (prepend `turns.CompletionInstructions` to the
-system prompt). Mute strategies (`turns.NewAlwaysUserMute`, …) suppress user
-input while the bot speaks or a tool call runs.
+the bot. Mute strategies (`turns.NewAlwaysUserMute`, …) suppress user input
+while the bot speaks or a tool call runs.
+
+Every strategy sees every frame and reports its own decision (`ReportStarted`,
+`ReportStopped`); the turn controller combines them. `turns.Config.StrategiesParams`
+says how:
+
+- `StartMode` and `StopMode` take a `turns.StrategyMode`. With
+  `StrategyModeFirst` the first strategy to decide wins; with `StrategyModeAll`
+  every strategy has to agree. The start list defaults to first, so speech or a
+  transcript opens a turn on its own, and the stop list to all, so a turn ends
+  only once every stop strategy says the user is done. New speech clears the
+  stop decisions made so far.
+- `StartMergeMode` and `StopMergeMode` take a `turns.MergeMode`. A service with
+  its own turn detection can recommend strategies; with `MergeModeReplace`, the
+  default, the application's lists are used instead, and with `MergeModeExtend`
+  they are added to the service's (or to the defaults, while no service has
+  recommended any).
+
+The controller runs the turn's inference itself, once every stop strategy that
+listens to the user has decided. A stop strategy that decides from the answer
+instead, such as one reading the LLM's turn-completion marker, returns true from
+`WaitsForInference` and decides on that inference. If the user speaks again
+after the answer started but before the turn ended, the answer is void: the
+user aggregator interrupts the bot, or, for a turn that does not interrupt,
+cancels a speculative answer with a `UserTurnResponseCancelFrame`. The stop
+timeout (`Config.StopTimeout`) ends a turn left open without user activity,
+unless a stop strategy has a decision of its own scheduled
+(`DecisionScheduled`).
+
+`turns.FilterIncompleteUserTurnStrategies` adds the optional LLM turn-completion
+gate. The model starts every response with a marker (● complete, ◐ the user will
+go on shortly, ○ the user needs more time), and the service reports each one as
+a `UserTurnCompletionFrame`. `LLMTurnCompletionStop` turns the markers on in the
+LLM when the pipeline starts and ends the turn on ●, a tool call, or a response
+with no marker; ◐ and ○ keep the turn open, and a user who then stays quiet for
+`IncompleteShortTimeout` or `IncompleteLongTimeout` is re-prompted. It works
+next to any other stop strategy, an eager end of turn included, and on top of a
+service's own turn detection with `StopMergeMode: turns.MergeModeExtend`:
+
+```go
+aggregators.WithTurns(turns.Config{
+    Strategies: turns.FilterIncompleteUserTurnStrategies(nil, llm.UserTurnCompletionConfig{}),
+    StrategiesParams: turns.UserTurnStrategiesParams{
+        StopMergeMode: turns.MergeModeExtend,
+    },
+})
+```
+
+`turns.NewWakePhraseStart` starts turns on its own once it hears the wake
+phrase, so use it as the only start strategy. To combine it with another start
+condition, such as `turns.NewMinWordsStart`, put both in a `StrategyModeAll`
+list.
 
 ### Turns with nothing transcribed
 

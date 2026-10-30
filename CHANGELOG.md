@@ -447,6 +447,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   no longer suppresses a complete marker read while the user speaks or voices
   only one complete answer per user turn. Use
   `FilterIncompleteUserTurnStrategies` instead.
+- **Speaking again voids a turn's answer.** When the user speaks again after a
+  turn's answer has started but before the turn ended, the user aggregator
+  interrupts the bot, or broadcasts a `UserTurnResponseCancelFrame` when the
+  turn does not interrupt it. The aggregator also hands the `LLMContextFrame`
+  of each inference it runs, speculative ones included, to the turn controller,
+  so a stop strategy that waits for the inference decides on that one, and it
+  applies `StrategiesParams`' merge modes to the strategies a service
+  recommends.
 - **A stop decision made while the user speaks now counts**, as when a service
   still hears them while an eager answer runs; the turn ends once they stop.
   New speech clears the decisions made so far. The stop timeout now waits

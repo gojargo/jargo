@@ -378,10 +378,11 @@ type UserAggregator struct {
 	context *frames.LLMContext
 	// toolChangeMessages announces a change of toolset to the model.
 	toolChangeMessages bool
-	// pinnedStrategies records that the application configured the turn
-	// strategies itself, which is what makes them win over anything a service
-	// recommends.
-	pinnedStrategies bool
+	// provided are the turn strategies the application configured itself, nil
+	// when it configured none. They replace what a service recommends, unless
+	// strategiesParams extends a list, which they are then added to.
+	provided         *turns.UserTurnStrategies
+	strategiesParams turns.UserTurnStrategiesParams
 
 	turn *turns.UserTurnController
 	idle *turns.UserIdleController
@@ -448,8 +449,16 @@ func newUser(
 		context:            ctx,
 		toolChangeMessages: toolChangeMessages,
 		muteStrategies:     mute,
-		pinnedStrategies:   len(cfg.Strategies.Start) > 0 || len(cfg.Strategies.Stop) > 0,
+		strategiesParams:   cfg.StrategiesParams,
 		realtime:           realtime,
+	}
+	strategies := cfg.Strategies
+	if len(cfg.Strategies.Start) > 0 || len(cfg.Strategies.Stop) > 0 {
+		provided := cfg.Strategies
+		u.provided = &provided
+		// No service has recommended strategies yet, so an extending list joins
+		// the defaults.
+		strategies = provided.MergeWith(nil, cfg.StrategiesParams)
 	}
 	u.Base = processor.New("UserContextAggregator", u)
 	u.emptyUserTurn = &turns.EmptyUserTurnConfig{}
@@ -461,7 +470,7 @@ func newUser(
 	// services, the mutation waits for the one that announces itself, which is
 	// also where it is applied on top of any strategies a service recommends.
 	if realtime != nil && *realtime {
-		u.mutateForRealtime(&cfg.Strategies)
+		u.mutateForRealtime(&strategies)
 		u.disableEmptyUserTurnRecovery()
 	}
 	if vadCfg != nil {
@@ -476,7 +485,7 @@ func newUser(
 	} {
 		u.Events().Register(name, false)
 	}
-	u.turn = turns.NewUserTurnControllerWithParams(cfg.Strategies, cfg.StrategiesParams, cfg.StopTimeout)
+	u.turn = turns.NewUserTurnControllerWithParams(strategies, cfg.StrategiesParams, cfg.StopTimeout)
 	// The event fires alongside the configured callback, so something watching
 	// the aggregator hears about an idle conversation without having to be the
 	// one thing the pipeline was built with.
@@ -493,6 +502,7 @@ func newUser(
 		Stopped:             u.onTurnStopped,
 		InferenceTriggered:  u.onInferenceTriggered,
 		SpeculationCanceled: u.onSpeculationCanceled,
+		Resumed:             u.onTurnResumed,
 		StopTimeout:         u.onStopTimeout,
 		ResetAggregation:    u.onResetAggregation,
 		Push: func(ctx context.Context, f frames.Frame, dir processor.Direction) {
@@ -616,7 +626,7 @@ func (u *UserAggregator) commitOnSessionEnd(ctx context.Context) {
 		u.realtimeHandoffNow(ctx)
 		return
 	}
-	u.reportTurnStopped(ctx, nil, true, false)
+	u.reportTurnStopped(ctx, nil, true, false, u.turn.Process)
 }
 
 // startControllers brings the controllers up for the session, which is where the
@@ -834,7 +844,7 @@ func (u *UserAggregator) mutateForRealtime(s *turns.UserTurnStrategies) bool {
 		"dropped", strings.Join(dropped, ", "),
 		"no_longer_waiting", strings.Join(flipped, ", "),
 	}
-	if u.pinnedStrategies {
+	if u.provided != nil {
 		slog.Warn(msg, args...)
 	} else {
 		slog.Debug(msg, args...)
@@ -867,8 +877,9 @@ func (u *UserAggregator) realtimeMode() bool {
 // handleServiceUserTurnStrategies applies the turn strategies a service
 // recommends through its metadata.
 //
-// They are honored only when the application did not configure its own, which
-// always win. Updating is idempotent, so a later broadcast (a switcher making
+// The application's own strategies replace them, except for a list its
+// UserTurnStrategiesParams extends, which the application's strategies are
+// added to. Updating is idempotent, so a later broadcast (a switcher making
 // another service the active one, say) can safely re-run it.
 func (u *UserAggregator) handleServiceUserTurnStrategies(service string, recommended any) {
 	if recommended == nil {
@@ -880,7 +891,7 @@ func (u *UserAggregator) handleServiceUserTurnStrategies(service string, recomme
 			"processor", u.Name(), "service", service, "recommended", fmt.Sprintf("%T", recommended))
 		return
 	}
-	if u.pinnedStrategies {
+	if u.provided != nil && u.strategiesParams.ReplacesServiceStrategies() {
 		slog.Debug("ignoring the user turn strategies a service recommends; "+
 			"the ones the application configured are used instead",
 			"processor", u.Name(), "service", service)
@@ -889,6 +900,9 @@ func (u *UserAggregator) handleServiceUserTurnStrategies(service string, recomme
 	}
 	slog.Debug("applying the user turn strategies a service recommends",
 		"processor", u.Name(), "service", service)
+	if u.provided != nil {
+		strategies = u.provided.MergeWith(&strategies, u.strategiesParams)
+	}
 	if err := u.turn.UpdateStrategies(strategies); err != nil {
 		slog.Error("could not apply the user turn strategies a service recommends",
 			"processor", u.Name(), "service", service, "err", err)
@@ -900,8 +914,9 @@ func (u *UserAggregator) handleServiceUserTurnStrategies(service string, recomme
 //
 // A service recommends turn strategies by putting them on its metadata frame,
 // and one built with interruptions off carries that setting there. Strategies
-// the application configured discard the recommendation whole, so the pipeline
-// would start interrupting with nothing to say why.
+// the application configured that replace both lists discard the
+// recommendation whole, so the pipeline would start interrupting with nothing
+// to say why.
 //
 // Only the external container is checked. Strategies assembled by hand around a
 // bare external start strategy contradict the service the same way and go
@@ -914,7 +929,7 @@ func (u *UserAggregator) warnOnDiscardedInterruptionSetting(
 	if !isExternal || wanted {
 		return
 	}
-	provided, ok := u.turn.Strategies().ExternalInterruptions()
+	provided, ok := u.provided.ExternalInterruptions()
 	if !ok || !provided {
 		return
 	}
@@ -1046,8 +1061,8 @@ func (u *UserAggregator) aggregate(part text.Part) {
 // With turn taking it is called only from the turn controller's hooks, which
 // are the sole authority on when the aggregation becomes a message. Without turn
 // taking a finalized transcript alone suffices.
-func (u *UserAggregator) maybeRun(ctx context.Context) (string, error) {
-	return u.commitTurn(ctx, true)
+func (u *UserAggregator) maybeRun(ctx context.Context, feed func(frames.Frame)) (string, error) {
+	return u.commitTurn(ctx, true, feed)
 }
 
 // commitTurn writes what the user said to the conversation and, when runLLM is
@@ -1056,7 +1071,12 @@ func (u *UserAggregator) maybeRun(ctx context.Context) (string, error) {
 // A turn confirming a speculation writes the message and does not ask: the reply
 // was generated already, from the eager transcript, and is waiting on the turn
 // frame this turn end emits.
-func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool) (string, error) {
+//
+// feed hands the turn controller the LLMContextFrame that asks, so a stop
+// strategy that waits for the turn's inference, such as LLMTurnCompletionStop,
+// waits for that one. A caller inside one of the controller's hooks passes its
+// ProcessFromHook, and any other its Process.
+func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool, feed func(frames.Frame)) (string, error) {
 	u.mu.Lock()
 	parts := u.aggregation
 	u.aggregation = nil
@@ -1075,11 +1095,24 @@ func (u *UserAggregator) commitTurn(ctx context.Context, runLLM bool) (string, e
 	}
 	var err error
 	if runLLM {
-		err = u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
+		err = u.runLLM(ctx, feed)
 	}
 	u.Events().Call(ctx, EventUserTurnMessageAdded, u,
 		UserTurnMessageAdded{Content: said, Timestamp: startedAt, UserID: userID})
 	return said, err
+}
+
+// runLLM pushes the conversation for the turn's inference, and hands the frame
+// that runs it to the turn controller through feed.
+func (u *UserAggregator) runLLM(ctx context.Context, feed func(frames.Frame)) error {
+	f := frames.NewLLMContextFrame(u.context)
+	err := u.PushFrame(ctx, f, processor.Downstream)
+	// A stop strategy that waits for the inference, such as
+	// LLMTurnCompletionStop, waits for this one.
+	if feed != nil {
+		feed(f)
+	}
+	return err
 }
 
 // AssistantAggregator collects the LLM's streamed text into a single assistant
@@ -2377,7 +2410,7 @@ func (u *UserAggregator) onInferenceTriggered(
 	// What is committed now is the segment since the last commit, so it is kept
 	// alongside the rest of the turn: the report of the turn ending carries
 	// everything the user said, not just the tail nobody answered yet.
-	segment, _ := u.maybeRun(ctx)
+	segment, _ := u.maybeRun(ctx, u.turn.ProcessFromHook)
 	u.rememberSegment(segment)
 	u.Events().Call(ctx, EventUserTurnInferenceTriggered, u, strategy)
 }
@@ -2413,6 +2446,23 @@ func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.Us
 	f := frames.NewLLMContextFrame(provisional)
 	f.Speculation = true
 	_ = u.PushFrame(ctx, f, processor.Downstream)
+	// A stop strategy that waits for the inference decides on this one too. It
+	// runs from the controller's hook, which holds its lock.
+	u.turn.ProcessFromHook(f)
+}
+
+// onTurnResumed voids the answer started for the turn so far when the user
+// speaks again in it. An interruption stops that answer wherever it got to. A
+// turn that does not interrupt the bot only withdraws a speculation.
+func (u *UserAggregator) onTurnResumed(ctx context.Context, params turns.UserTurnResumedParams) {
+	if !params.InferenceTriggered {
+		return
+	}
+	if params.EnableInterruptions {
+		_ = u.BroadcastInterruption(ctx)
+		return
+	}
+	_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() })
 }
 
 // onSpeculationCanceled withdraws a speculative reply.
@@ -2487,7 +2537,7 @@ func (u *UserAggregator) onTurnStopped(
 	}
 	// A turn end confirming a speculation has its reply already: running the
 	// model again would answer the same turn twice.
-	u.reportTurnStopped(ctx, strategy, false, params.ConfirmsSpeculation)
+	u.reportTurnStopped(ctx, strategy, false, params.ConfirmsSpeculation, u.turn.ProcessFromHook)
 }
 
 // reportTurnStopped commits whatever the turn had left to say and reports the
@@ -2498,11 +2548,12 @@ func (u *UserAggregator) onTurnStopped(
 // must not be reported a second time on the way out.
 func (u *UserAggregator) reportTurnStopped(
 	ctx context.Context, strategy turns.StopStrategy, onSessionEnd, confirmsSpeculation bool,
+	feed func(frames.Frame),
 ) {
 	// The message is written to the conversation either way: the committed
 	// transcript is what the conversation records, never the speculated one. Only
 	// the inference is skipped, the speculative reply having already answered it.
-	segment, _ := u.commitTurn(ctx, !confirmsSpeculation)
+	segment, _ := u.commitTurn(ctx, !confirmsSpeculation, feed)
 	u.rememberSegment(segment)
 
 	u.mu.Lock()
@@ -2685,7 +2736,7 @@ func (u *UserAggregator) realtimeHandoffNow(ctx context.Context) {
 // writeUserMessage commits whatever the user has said, and forgets when the turn
 // began so the next one is stamped for itself.
 func (u *UserAggregator) writeUserMessage(ctx context.Context) {
-	segment, _ := u.maybeRun(ctx)
+	segment, _ := u.maybeRun(ctx, u.turn.Process)
 	if segment == "" {
 		return
 	}
