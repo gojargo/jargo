@@ -327,6 +327,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `DelegateNeedsArguments`, which reports whether a `delegate` call has to carry
   arguments for the request to be built: false for the transcript strategy, true
   for the explicit one.
+- `LLMWithBackend`'s frontend acknowledges a delegation to the backend in fewer
+  words, such as "Let me look into that". A longer acknowledgement sounds
+  awkward, and holds up a backend's answer that lands while the acknowledgement
+  is still being spoken.
 - ⚠️ **Breaking change:** `responses.ThinkingReporter` gains
   `UseProviderThinkingDefault`, which the LLM base implements.
 - **What kind of text a frame holds is its `TextType`.** `frames.AggregationType`
