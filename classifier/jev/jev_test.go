@@ -223,6 +223,30 @@ func TestClientUnreachableIsAnError(t *testing.T) {
 	wantClassifierError(t, err, "failed")
 }
 
+// brokenTLSClient is a client speaking TLS to a server that does not, so every
+// request fails in the TLS handshake.
+func brokenTLSClient(t *testing.T) *Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(ClientConfig{APIKey: "key", BaseURL: "https://" + srv.Listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	return c
+}
+
+func TestClientABrokenTLSConnectionIsAnError(t *testing.T) {
+	_, _, err := brokenTLSClient(t).Ask(t.Context(), "a", noul("?"))
+	wantClassifierError(t, err, "failed")
+}
+
+func TestClientABrokenTLSConnectionAtConnectIsAnError(t *testing.T) {
+	err := brokenTLSClient(t).Connect(t.Context())
+	wantClassifierError(t, err, "could not connect")
+}
+
 func TestClientNeedsAnAPIKey(t *testing.T) {
 	if _, err := NewClient(ClientConfig{}); err == nil {
 		t.Fatal("a client with no key was built")
