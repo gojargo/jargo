@@ -13,8 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttselevenlabs "github.com/gojargo/jargo/adapter/tts/elevenlabs"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -76,12 +79,18 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
 	}
-	return tts.New("ElevenLabsTTS", &synthesizer{cfg: cfg, http: &http.Client{}})
+	s := &synthesizer{cfg: cfg, http: &http.Client{}}
+	b := tts.New("ElevenLabsTTS", s)
+	s.expressive = b.ExpressiveConversation
+	return b
 }
 
 type synthesizer struct {
 	cfg  Config
 	http *http.Client
+	// expressive reports whether the pipeline has expressive conversation on,
+	// in which the audio tags sent mark when the sounds are performed.
+	expressive func() bool
 
 	// mu guards the state carried across the sentences of one turn. The base
 	// synthesizes a turn's sentences one after another, but the lifecycle
@@ -119,6 +128,15 @@ func (s *synthesizer) OnAudioContextInterrupted(context.Context, string) { s.res
 // OnTurnContextCompleted drops the turn's state once the turn has been spoken.
 // The next turn answers a new question and starts its timeline afresh.
 func (s *synthesizer) OnTurnContextCompleted(context.Context, string) { s.resetTurn() }
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: audio tags on
+// Eleven v3 and v4, and none on the other models.
+func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	if strings.HasPrefix(s.cfg.Model, "eleven_v3") || strings.HasPrefix(s.cfg.Model, "eleven_v4") {
+		return ttselevenlabs.ElevenLabsAudioTagExpressionAdapter{}
+	}
+	return ttsadapter.BaseExpressionAdapter{}
+}
 
 // Metadata reports the ElevenLabs model and voice synthesis is billed against.
 func (s *synthesizer) Metadata() tts.Metadata {
@@ -385,6 +403,9 @@ func (u *utterance) align(a *httpAlignment) error {
 	for i, t := range a.StartTimesSecs {
 		starts[i] = u.syn.cumulative + t
 	}
+	// The audio tags expressive conversation sends mark when its sounds are
+	// performed, each reported as one word.
+	u.syn.acc.AudioTags = u.syn.expressive != nil && u.syn.expressive()
 	words, err := u.syn.acc.Add(a.Characters, starts)
 	u.syn.mu.Unlock()
 	if err != nil {

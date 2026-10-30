@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
 
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttsminimax "github.com/gojargo/jargo/adapter/tts/minimax"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -31,16 +34,31 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
 	}
-	return tts.New("MiniMaxTTS", &synthesizer{cfg: cfg, http: &http.Client{}})
+	s := &synthesizer{cfg: cfg, http: &http.Client{}}
+	b := tts.New("MiniMaxTTS", s)
+	s.expressionSettings = b.ExpressionSettings
+	return b
 }
 
 type synthesizer struct {
 	cfg  Config
 	http *http.Client
+	// expressionSettings is what the service's expression adapter asks to send
+	// with the request being synthesized, in an expressive conversation.
+	expressionSettings func() map[string]any
 }
 
 // SampleRate reports the PCM output rate.
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: speech-2.8 models
+// perform expression, and the others none.
+func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	if strings.HasPrefix(s.cfg.Model, "speech-2.8") {
+		return ttsminimax.MiniMaxExpressionAdapter{}
+	}
+	return ttsadapter.BaseExpressionAdapter{}
+}
 
 // Synthesize requests speech for text and streams the hex-decoded PCM
 // downstream.
@@ -91,6 +109,11 @@ func (s *synthesizer) request(text string) map[string]any {
 	}
 	if s.cfg.Pitch != nil {
 		voice["pitch"] = *s.cfg.Pitch
+	}
+	// In expressive conversation, the request's delivery chooses its emotion
+	// and its speed.
+	if s.expressionSettings != nil {
+		maps.Copy(voice, s.expressionSettings())
 	}
 	return map[string]any{
 		"model":         s.cfg.Model,

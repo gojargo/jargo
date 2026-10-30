@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
 	"github.com/gojargo/jargo/utils/text"
 )
 
@@ -18,72 +19,71 @@ import (
 
 // Emotion guides the emotional tone of the speech. Cartesia recognizes the set
 // below; the recommended voices for it are Leo, Jace, Kyle, Gavin, Maya, Tessa,
-// Dana and Marian.
-type Emotion string
+// Dana and Marian. It is the emotion its expression adapter performs in an
+// expressive conversation.
+type Emotion = ttscartesia.CartesiaEmotion
 
 // The emotions Cartesia recognizes.
 const (
-	// The primary emotions.
-	EmotionNeutral Emotion = "neutral"
-	EmotionAngry   Emotion = "angry"
-	EmotionExcited Emotion = "excited"
-	EmotionContent Emotion = "content"
-	EmotionSad     Emotion = "sad"
-	EmotionScared  Emotion = "scared"
-	// The rest of the set.
-	EmotionHappy         Emotion = "happy"
-	EmotionEnthusiastic  Emotion = "enthusiastic"
-	EmotionElated        Emotion = "elated"
-	EmotionEuphoric      Emotion = "euphoric"
-	EmotionTriumphant    Emotion = "triumphant"
-	EmotionAmazed        Emotion = "amazed"
-	EmotionSurprised     Emotion = "surprised"
-	EmotionFlirtatious   Emotion = "flirtatious"
-	EmotionJokingComedic Emotion = "joking/comedic"
-	EmotionCurious       Emotion = "curious"
-	EmotionPeaceful      Emotion = "peaceful"
-	EmotionSerene        Emotion = "serene"
-	EmotionCalm          Emotion = "calm"
-	EmotionGrateful      Emotion = "grateful"
-	EmotionAffectionate  Emotion = "affectionate"
-	EmotionTrust         Emotion = "trust"
-	EmotionSympathetic   Emotion = "sympathetic"
-	EmotionAnticipation  Emotion = "anticipation"
-	EmotionMysterious    Emotion = "mysterious"
-	EmotionMad           Emotion = "mad"
-	EmotionOutraged      Emotion = "outraged"
-	EmotionFrustrated    Emotion = "frustrated"
-	EmotionAgitated      Emotion = "agitated"
-	EmotionThreatened    Emotion = "threatened"
-	EmotionDisgusted     Emotion = "disgusted"
-	EmotionContempt      Emotion = "contempt"
-	EmotionEnvious       Emotion = "envious"
-	EmotionSarcastic     Emotion = "sarcastic"
-	EmotionIronic        Emotion = "ironic"
-	EmotionDejected      Emotion = "dejected"
-	EmotionMelancholic   Emotion = "melancholic"
-	EmotionDisappointed  Emotion = "disappointed"
-	EmotionHurt          Emotion = "hurt"
-	EmotionGuilty        Emotion = "guilty"
-	EmotionBored         Emotion = "bored"
-	EmotionTired         Emotion = "tired"
-	EmotionRejected      Emotion = "rejected"
-	EmotionNostalgic     Emotion = "nostalgic"
-	EmotionWistful       Emotion = "wistful"
-	EmotionApologetic    Emotion = "apologetic"
-	EmotionHesitant      Emotion = "hesitant"
-	EmotionInsecure      Emotion = "insecure"
-	EmotionConfused      Emotion = "confused"
-	EmotionResigned      Emotion = "resigned"
-	EmotionAnxious       Emotion = "anxious"
-	EmotionPanicked      Emotion = "panicked"
-	EmotionAlarmed       Emotion = "alarmed"
-	EmotionProud         Emotion = "proud"
-	EmotionConfident     Emotion = "confident"
-	EmotionDistant       Emotion = "distant"
-	EmotionSkeptical     Emotion = "skeptical"
-	EmotionContemplative Emotion = "contemplative"
-	EmotionDetermined    Emotion = "determined"
+	EmotionNeutral       = ttscartesia.EmotionNeutral
+	EmotionAngry         = ttscartesia.EmotionAngry
+	EmotionExcited       = ttscartesia.EmotionExcited
+	EmotionContent       = ttscartesia.EmotionContent
+	EmotionSad           = ttscartesia.EmotionSad
+	EmotionScared        = ttscartesia.EmotionScared
+	EmotionHappy         = ttscartesia.EmotionHappy
+	EmotionEnthusiastic  = ttscartesia.EmotionEnthusiastic
+	EmotionElated        = ttscartesia.EmotionElated
+	EmotionEuphoric      = ttscartesia.EmotionEuphoric
+	EmotionTriumphant    = ttscartesia.EmotionTriumphant
+	EmotionAmazed        = ttscartesia.EmotionAmazed
+	EmotionSurprised     = ttscartesia.EmotionSurprised
+	EmotionFlirtatious   = ttscartesia.EmotionFlirtatious
+	EmotionJokingComedic = ttscartesia.EmotionJokingComedic
+	EmotionCurious       = ttscartesia.EmotionCurious
+	EmotionPeaceful      = ttscartesia.EmotionPeaceful
+	EmotionSerene        = ttscartesia.EmotionSerene
+	EmotionCalm          = ttscartesia.EmotionCalm
+	EmotionGrateful      = ttscartesia.EmotionGrateful
+	EmotionAffectionate  = ttscartesia.EmotionAffectionate
+	EmotionTrust         = ttscartesia.EmotionTrust
+	EmotionSympathetic   = ttscartesia.EmotionSympathetic
+	EmotionAnticipation  = ttscartesia.EmotionAnticipation
+	EmotionMysterious    = ttscartesia.EmotionMysterious
+	EmotionMad           = ttscartesia.EmotionMad
+	EmotionOutraged      = ttscartesia.EmotionOutraged
+	EmotionFrustrated    = ttscartesia.EmotionFrustrated
+	EmotionAgitated      = ttscartesia.EmotionAgitated
+	EmotionThreatened    = ttscartesia.EmotionThreatened
+	EmotionDisgusted     = ttscartesia.EmotionDisgusted
+	EmotionContempt      = ttscartesia.EmotionContempt
+	EmotionEnvious       = ttscartesia.EmotionEnvious
+	EmotionSarcastic     = ttscartesia.EmotionSarcastic
+	EmotionIronic        = ttscartesia.EmotionIronic
+	EmotionDejected      = ttscartesia.EmotionDejected
+	EmotionMelancholic   = ttscartesia.EmotionMelancholic
+	EmotionDisappointed  = ttscartesia.EmotionDisappointed
+	EmotionHurt          = ttscartesia.EmotionHurt
+	EmotionGuilty        = ttscartesia.EmotionGuilty
+	EmotionBored         = ttscartesia.EmotionBored
+	EmotionTired         = ttscartesia.EmotionTired
+	EmotionRejected      = ttscartesia.EmotionRejected
+	EmotionNostalgic     = ttscartesia.EmotionNostalgic
+	EmotionWistful       = ttscartesia.EmotionWistful
+	EmotionApologetic    = ttscartesia.EmotionApologetic
+	EmotionHesitant      = ttscartesia.EmotionHesitant
+	EmotionInsecure      = ttscartesia.EmotionInsecure
+	EmotionConfused      = ttscartesia.EmotionConfused
+	EmotionResigned      = ttscartesia.EmotionResigned
+	EmotionAnxious       = ttscartesia.EmotionAnxious
+	EmotionPanicked      = ttscartesia.EmotionPanicked
+	EmotionAlarmed       = ttscartesia.EmotionAlarmed
+	EmotionProud         = ttscartesia.EmotionProud
+	EmotionConfident     = ttscartesia.EmotionConfident
+	EmotionDistant       = ttscartesia.EmotionDistant
+	EmotionSkeptical     = ttscartesia.EmotionSkeptical
+	EmotionContemplative = ttscartesia.EmotionContemplative
+	EmotionDetermined    = ttscartesia.EmotionDetermined
 )
 
 // Spell wraps text so Cartesia reads it out character by character, which is how

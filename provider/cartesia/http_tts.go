@@ -15,6 +15,8 @@ import (
 	"io"
 	"net/http"
 
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -101,11 +103,23 @@ func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{}
 	}
-	return tts.New("CartesiaHTTPTTS", &httpSynthesizer{cfg: cfg})
+	s := &httpSynthesizer{cfg: cfg}
+	b := tts.New("CartesiaHTTPTTS", s)
+	s.expressionSettings = b.ExpressionSettings
+	return b
 }
 
 type httpSynthesizer struct {
 	cfg HTTPTTSConfig
+	// expressionSettings is what the service's expression adapter asks to send
+	// with the request being synthesized, in an expressive conversation.
+	expressionSettings func() map[string]any
+}
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: Cartesia's
+// emotions, laughter and pauses.
+func (s *httpSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	return ttscartesia.CartesiaExpressionAdapter{}
 }
 
 // SampleRate reports the requested PCM output rate.
@@ -185,8 +199,8 @@ func (s *httpSynthesizer) payload(text string) map[string]any {
 	if lang := cartesiaLanguage(s.cfg.Language); lang != "" {
 		msg["language"] = lang
 	}
-	if s.cfg.GenerationConfig != nil {
-		msg["generation_config"] = s.cfg.GenerationConfig
+	if gen := generationConfig(s.cfg.GenerationConfig, expression(s.expressionSettings)); gen != nil {
+		msg["generation_config"] = gen
 	}
 	if s.cfg.PronunciationDictID != "" {
 		msg["pronunciation_dict_id"] = s.cfg.PronunciationDictID

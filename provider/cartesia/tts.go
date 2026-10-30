@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"regexp"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/coder/websocket"
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -52,6 +55,7 @@ func NewTTS(cfg Config) *tts.Base {
 	// reaches the service by any other route intact.
 	b.SetTextAggregator(text.NewSkipTagsAggregator(cfg.TextAggregation, b.TextAggregationLanguage(),
 		[]text.StartEndTags{{Start: "<spell>", End: "</spell>"}}))
+	s.expressionSettings = b.ExpressionSettings
 	return b
 }
 
@@ -105,6 +109,9 @@ type synthesizer struct {
 	// from cfg, and is what every request is built from.
 	live *TTSSettings
 	host tts.AudioContextHost
+	// expressionSettings is what the service's expression adapter asks to send
+	// with the request being synthesized, in an expressive conversation.
+	expressionSettings func() map[string]any
 
 	// writeMu serializes writes; the connection permits one writer at a time.
 	writeMu sync.Mutex
@@ -135,6 +142,42 @@ type timedSynthesizer struct {
 // SetAudioContextHost records the host this provider appends its audio to,
 // implementing tts.ContextSynthesizer.
 func (s *synthesizer) SetAudioContextHost(h tts.AudioContextHost) { s.host = h }
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: Cartesia's
+// emotions, laughter and pauses.
+func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	return ttscartesia.CartesiaExpressionAdapter{}
+}
+
+// generationConfig is a request's generation config: the settings', with what
+// its expression asks for, or nil when it holds nothing.
+func generationConfig(config *GenerationConfig, expression map[string]any) map[string]any {
+	values := map[string]any{}
+	if config != nil {
+		if config.Volume != nil {
+			values["volume"] = *config.Volume
+		}
+		if config.Speed != nil {
+			values["speed"] = *config.Speed
+		}
+		if config.Emotion != "" {
+			values["emotion"] = config.Emotion
+		}
+	}
+	maps.Copy(values, expression)
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
+// expression is what the expression adapter asks to send with the request.
+func expression(settings func() map[string]any) map[string]any {
+	if settings == nil {
+		return nil
+	}
+	return settings()
+}
 
 // Metadata reports the Cartesia model and voice synthesis is billed against.
 func (s *synthesizer) Metadata() tts.Metadata {
@@ -450,7 +493,8 @@ func (s *synthesizer) request(text, contextID string, more bool) map[string]any 
 	if lang := s.live.Language.Or(cartesiaLanguage(s.cfg.Language)); lang != "" {
 		msg["language"] = lang
 	}
-	if gen := s.live.GenerationConfig.Or(s.cfg.GenerationConfig); gen != nil {
+	if gen := generationConfig(
+		s.live.GenerationConfig.Or(s.cfg.GenerationConfig), expression(s.expressionSettings)); gen != nil {
 		msg["generation_config"] = gen
 	}
 	if dict := s.live.PronunciationDictID.Or(s.cfg.PronunciationDictID); dict != "" {

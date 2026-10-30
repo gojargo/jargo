@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
+	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	ttsfish "github.com/gojargo/jargo/adapter/tts/fish"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -31,6 +34,15 @@ type synthesizer struct {
 
 // SampleRate reports the PCM output rate.
 func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
+
+// ExpressionAdapter implements tts.ExpressionAdapterProvider: S2 tags on S2
+// models, and none on the others.
+func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	if strings.HasPrefix(s.cfg.Model, "s2") {
+		return ttsfish.FishAudioS2ExpressionAdapter{}
+	}
+	return ttsadapter.BaseExpressionAdapter{}
+}
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
