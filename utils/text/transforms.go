@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // replaceAllSubmatch rewrites every match of re, passing the replacer the full
@@ -42,36 +43,171 @@ func replaceAllSubmatch(re *regexp.Regexp, text string, repl func(groups []strin
 var (
 	mdFence1     = regexp.MustCompile("```[\\s\\S]*?```")
 	mdFence2     = regexp.MustCompile(`~~~[\s\S]*?~~~`)
+	mdLink       = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
 	mdInlineCode = regexp.MustCompile("`([^`]+)`")
+	mdRule       = regexp.MustCompile(`(?m)^[ \t]*(?:-(?:[ \t]*-){2,}|\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,})[ \t]*$\n?`)
+	mdBullet     = regexp.MustCompile(`(?m)^([ \t]*)[-+*][ \t]+(\S)`)
 	mdBoldItalic = regexp.MustCompile(`\*{3}(.+?)\*{3}`)
 	mdBoldItalU  = regexp.MustCompile(`_{3}(.+?)_{3}`)
 	mdBold       = regexp.MustCompile(`\*{2}(.+?)\*{2}`)
 	mdBoldU      = regexp.MustCompile(`_{2}(.+?)_{2}`)
-	mdItalic     = regexp.MustCompile(`\*(.+?)\*`)
 	mdItalicU    = regexp.MustCompile(`\b_(.+?)_\b`)
 	mdHeader     = regexp.MustCompile(`(?m)^#{1,6}\s+`)
 	mdQuote      = regexp.MustCompile(`(?m)^>\s?`)
-	mdRule       = regexp.MustCompile(`(?m)^\s*[-*_]{3,}\s*$`)
 )
 
+// mdStar stands in for an asterisk that is content rather than emphasis while
+// the emphasis rules run. It is a private-use character, so it cannot occur in
+// the text.
+const mdStar = "\uE000"
+
 // StripMarkdown removes Markdown formatting symbols that have no spoken
-// equivalent: fenced and inline code, bold/italic markers, ATX headers,
-// blockquote markers and horizontal rules. Link and image syntax is left
-// intact, since the label text is meaningful.
+// equivalent: bold/italic markers, backtick code spans, fenced code blocks, ATX
+// headers, list bullets, blockquote markers and horizontal rules. Struck-through
+// text (~~like this~~) is removed along with its markers, since it is text the
+// reply takes back. A link or image is reduced to its label or alt text, so the
+// URL is not read out; NewStripMarkdown builds one that keeps them.
+//
+// An asterisk that is content stays: one between digits (2*3), one escaped as
+// \*, or one standing alone between spaces ("Press * then #").
+//
+// Outside of fenced code, struck-through text and link URLs, it preserves the
+// text's letters and digits: the normalized alphanumeric sequence of the output
+// is the input's, so word tracking needs no segment map.
 func StripMarkdown(text string) string {
+	return stripMarkdown(text, true)
+}
+
+// NewStripMarkdown returns StripMarkdown with the given URL handling. With
+// stripURLs off, [label](url) and ![alt](url) are left as written.
+func NewStripMarkdown(stripURLs bool) Transform {
+	return func(text string) string { return stripMarkdown(text, stripURLs) }
+}
+
+func stripMarkdown(text string, stripURLs bool) string {
 	text = mdFence1.ReplaceAllString(text, "")
 	text = mdFence2.ReplaceAllString(text, "")
+	// Images and links, keeping the alt text or label.
+	if stripURLs {
+		text = mdLink.ReplaceAllString(text, "$1")
+	}
 	text = mdInlineCode.ReplaceAllString(text, "$1")
+	text = stripStrikethrough(text)
+	// Horizontal rules (---, ***, * * *) go before list bullets, so a spaced
+	// one is not taken for an item.
+	text = mdRule.ReplaceAllString(text, "")
+	// List bullets (-, +, *) at any indent, since nested items are indented.
+	text = mdBullet.ReplaceAllString(text, "$1$2")
+	text = protectContentAsterisks(text)
 	text = mdBoldItalic.ReplaceAllString(text, "$1")
 	text = mdBoldItalU.ReplaceAllString(text, "$1")
 	text = mdBold.ReplaceAllString(text, "$1")
 	text = mdBoldU.ReplaceAllString(text, "$1")
-	text = mdItalic.ReplaceAllString(text, "$1")
+	text = stripItalic(text)
 	text = mdItalicU.ReplaceAllString(text, "$1")
 	text = mdHeader.ReplaceAllString(text, "")
 	text = mdQuote.ReplaceAllString(text, "")
-	text = mdRule.ReplaceAllString(text, "")
-	return text
+	return strings.ReplaceAll(text, mdStar, "*")
+}
+
+// protectContentAsterisks replaces each asterisk that is content with mdStar:
+// one escaped as \*, which loses its backslash, and each in a run between two
+// digits (2*3, 2**3).
+func protectContentAsterisks(text string) string {
+	rs := []rune(text)
+	var b strings.Builder
+	for i := 0; i < len(rs); i++ {
+		if rs[i] == '\\' && i+1 < len(rs) && rs[i+1] == '*' {
+			b.WriteString(mdStar)
+			i++
+			continue
+		}
+		if rs[i] == '*' && i > 0 && unicode.IsDigit(rs[i-1]) {
+			j := i
+			for j < len(rs) && rs[j] == '*' {
+				j++
+			}
+			if j < len(rs) && unicode.IsDigit(rs[j]) {
+				b.WriteString(strings.Repeat(mdStar, j-i))
+				i = j - 1
+				continue
+			}
+		}
+		b.WriteRune(rs[i])
+	}
+	return b.String()
+}
+
+// stripItalic unwraps *text* whose markers hug it: the opening asterisk is
+// followed by a non-space and the closing one preceded by one, so a standalone
+// asterisk ("Press * then #") opens and closes nothing. The text is one line,
+// and the closing asterisk is the nearest one that qualifies.
+func stripItalic(text string) string {
+	rs := []rune(text)
+	var b strings.Builder
+	for i := 0; i < len(rs); i++ {
+		if rs[i] == '*' {
+			if end := hugged(rs, i+1, "*"); end >= 0 {
+				b.WriteString(string(rs[i+1 : end]))
+				i = end
+				continue
+			}
+		}
+		b.WriteRune(rs[i])
+	}
+	return b.String()
+}
+
+// stripStrikethrough removes ~~struck~~ text whose markers hug it, along with
+// one space or tab before it so the words around it still join. The text is
+// one line, and the closing marker is the nearest one that qualifies.
+func stripStrikethrough(text string) string {
+	rs := []rune(text)
+	var b strings.Builder
+	for i := 0; i < len(rs); i++ {
+		at := i
+		if (rs[i] == ' ' || rs[i] == '\t') && hasPrefixAt(rs, i+1, "~~") {
+			at = i + 1
+		}
+		if hasPrefixAt(rs, at, "~~") {
+			if end := hugged(rs, at+2, "~~"); end >= 0 {
+				i = end + 1
+				continue
+			}
+		}
+		b.WriteRune(rs[i])
+	}
+	return b.String()
+}
+
+// hugged finds the closing marker for content starting at from. The content is
+// at least one character, starts with a non-space, holds no newline, and ends
+// with a non-space right before the marker. It returns where the nearest such
+// marker starts, or -1 when there is none.
+func hugged(rs []rune, from int, marker string) int {
+	if from >= len(rs) || unicode.IsSpace(rs[from]) {
+		return -1
+	}
+	for j := from + 1; j < len(rs); j++ {
+		if rs[j] == '\n' {
+			return -1
+		}
+		if hasPrefixAt(rs, j, marker) && !unicode.IsSpace(rs[j-1]) {
+			return j
+		}
+	}
+	return -1
+}
+
+// hasPrefixAt reports whether rs holds prefix starting at i.
+func hasPrefixAt(rs []rune, i int, prefix string) bool {
+	for _, r := range prefix {
+		if i >= len(rs) || rs[i] != r {
+			return false
+		}
+		i++
+	}
+	return true
 }
 
 //

@@ -48,8 +48,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the rewritten text in `RawText`. `NewLLMTextFor` builds it for a processor
   that embeds it.
 
+### Changed
+
+- `text.StripMarkdown` reduces a Markdown link or image to its label or alt
+  text, so the URL is no longer read out. To keep the syntax as it was, register
+  `text.NewStripMarkdown(false)` instead, or turn off the new
+  `FormatterOptions.StripURLs`, which `DefaultFormatterOptions` turns on.
+
 ### Fixed
 
+- `text.StripMarkdown` keeps asterisks that are content (`2*3*4`, `5 * 3`,
+  `Press * then #`, `\*`), strips list bullets at any indent and spaced
+  horizontal rules (`* * *`), and drops `~~struck~~` text instead of speaking
+  the tildes.
 - `text.PatternPairAggregator` handles a pattern whose opening and closing
   delimiters are the same string, such as a Markdown code fence (` ``` `). The
   text before such a block used to be dropped, and a sentence ending before it

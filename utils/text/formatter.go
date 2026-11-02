@@ -12,6 +12,9 @@ import (
 type FormatterOptions struct {
 	// StripMarkdown removes Markdown formatting symbols.
 	StripMarkdown bool
+	// StripURLs reduces a Markdown link or image to its label or alt text, so
+	// the URL is not spoken. Only used with StripMarkdown.
+	StripURLs bool
 	// EmailToSpeech spells email addresses ("a@b.com" → "a at b dot com").
 	EmailToSpeech bool
 	// ExpandPhoneNumbers spaces out phone-number digits.
@@ -41,6 +44,7 @@ type FormatterOptions struct {
 func DefaultFormatterOptions() FormatterOptions {
 	return FormatterOptions{
 		StripMarkdown:      true,
+		StripURLs:          true,
 		EmailToSpeech:      true,
 		ExpandPhoneNumbers: true,
 		NormalizeDates:     true,
@@ -73,7 +77,7 @@ type VoiceFormatter struct {
 func NewVoiceFormatter(opts FormatterOptions) (*VoiceFormatter, error) {
 	var ts []Transform
 	if opts.StripMarkdown {
-		ts = append(ts, StripMarkdown)
+		ts = append(ts, NewStripMarkdown(opts.StripURLs))
 	}
 	// Email must run before phone (its digit-only domains match the phone
 	// pattern) and before acronyms (all-caps local parts would be letter-spaced).

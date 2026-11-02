@@ -14,13 +14,88 @@ func TestStripMarkdown(t *testing.T) {
 		"# Heading":                "Heading",
 		"> quoted":                 "quoted",
 		"plain text":               "plain text",
-		"see [the docs](x) please": "see [the docs](x) please",
+		"see [the docs](x) please": "see the docs please",
 	}
 	for in, want := range cases {
 		if got := StripMarkdown(in); got != want {
 			t.Errorf("StripMarkdown(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func assertStripMarkdown(t *testing.T, strip Transform, cases map[string]string) {
+	t.Helper()
+	for in, want := range cases {
+		if got := strip(in); got != want {
+			t.Errorf("StripMarkdown(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An asterisk that is content rather than emphasis is kept.
+func TestStripMarkdownKeepsContentAsterisks(t *testing.T) {
+	assertStripMarkdown(t, StripMarkdown, map[string]string{
+		"Press * then #":              "Press * then #",
+		"5 * 3 = 15":                  "5 * 3 = 15",
+		"2 * 3 * 4 = 24":              "2 * 3 * 4 = 24",
+		"Use the * key, then * again": "Use the * key, then * again",
+		"2*3*4 is 24":                 "2*3*4 is 24",
+		"2**3 is 8":                   "2**3 is 8",
+		`Type \*literal\* asterisks`:  "Type *literal* asterisks",
+	})
+}
+
+// List bullets are stripped at any indent, and numbered items are left alone.
+func TestStripMarkdownStripsListBullets(t *testing.T) {
+	assertStripMarkdown(t, StripMarkdown, map[string]string{
+		"\n- Coffee for three dollars.": "\nCoffee for three dollars.",
+		"- Step one.\n    - Sub step.":  "Step one.\n    Sub step.",
+		"* item one\n* item two":        "item one\nitem two",
+		"+ plus item":                   "plus item",
+		"1. First\n2. Second":           "1. First\n2. Second",
+		"a - b":                         "a - b",
+	})
+}
+
+// Struck-through text is text the reply takes back, so it is dropped along
+// with its markers.
+func TestStripMarkdownDropsStrikethrough(t *testing.T) {
+	assertStripMarkdown(t, StripMarkdown, map[string]string{
+		"The price was ~~ten~~ eight dollars.": "The price was eight dollars.",
+		"It is ~~not ready~~ ready now.":       "It is ready now.",
+		"~~Old.~~ New.":                        " New.",
+		"About ~~ 5 minutes":                   "About ~~ 5 minutes",
+		"Roughly ~5 minutes":                   "Roughly ~5 minutes",
+	})
+}
+
+// A link or image is reduced to its label or alt text, so the URL is not read
+// out.
+func TestStripMarkdownReducesLinksToTheirLabel(t *testing.T) {
+	assertStripMarkdown(t, StripMarkdown, map[string]string{
+		"See [the docs](https://example.com/docs) here.": "See the docs here.",
+		"See ![a cat](cat.png) here.":                    "See a cat here.",
+		"Go to [example.com](https://example.com).":      "Go to example.com.",
+		"Visit https://example.com today":                "Visit https://example.com today",
+		"[**bold** link](x)":                             "bold link",
+	})
+}
+
+// With URL stripping off, a link is left as written.
+func TestStripMarkdownCanKeepLinks(t *testing.T) {
+	text := "See [the docs](https://example.com/docs) here."
+	if got := NewStripMarkdown(false)(text); got != text {
+		t.Errorf("NewStripMarkdown(false)(%q) = %q, want it unchanged", text, got)
+	}
+}
+
+// Horizontal rules are removed, spaced ones included.
+func TestStripMarkdownRemovesHorizontalRules(t *testing.T) {
+	assertStripMarkdown(t, StripMarkdown, map[string]string{
+		"First part.\n\n---\n\nSecond part.": "First part.\n\n\nSecond part.",
+		"* * *\ntext":                        "text",
+		"___\ntext":                          "text",
+	})
 }
 
 func TestEmailToSpeech(t *testing.T) {
