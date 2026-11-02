@@ -70,6 +70,8 @@ type Connection struct {
 	partMu      sync.Mutex
 	partHandler func(identity string)
 	pendingPart []string
+	leftHandler func(identity string)
+	pendingLeft []string
 
 	audioMu      sync.Mutex
 	audioHandler func(track *webrtc.TrackRemote, participant string)
@@ -124,6 +126,7 @@ func Connect(cfg Config) (*Connection, error) {
 		}
 	}
 	cb.OnParticipantConnected = func(p *lksdk.RemoteParticipant) { c.deliverParticipant(p.Identity()) }
+	cb.OnParticipantDisconnected = func(p *lksdk.RemoteParticipant) { c.deliverParticipantLeft(p.Identity()) }
 	cb.OnActiveSpeakersChanged = func(speakers []lksdk.Participant) {
 		identities := make([]string, len(speakers))
 		for i, p := range speakers {
@@ -377,6 +380,34 @@ func (c *Connection) deliverParticipant(identity string) {
 	h := c.partHandler
 	if h == nil {
 		c.pendingPart = append(c.pendingPart, identity)
+		c.partMu.Unlock()
+		return
+	}
+	c.partMu.Unlock()
+	h(identity)
+}
+
+// OnParticipantDisconnected registers the handler for a remote participant
+// leaving the room. Departures before a handler was set are reported
+// immediately, in order.
+func (c *Connection) OnParticipantDisconnected(h func(identity string)) {
+	c.partMu.Lock()
+	c.leftHandler = h
+	pending := c.pendingLeft
+	c.pendingLeft = nil
+	c.partMu.Unlock()
+	for _, identity := range pending {
+		h(identity)
+	}
+}
+
+// deliverParticipantLeft hands one departure to the handler, holding it when
+// none is registered yet.
+func (c *Connection) deliverParticipantLeft(identity string) {
+	c.partMu.Lock()
+	h := c.leftHandler
+	if h == nil {
+		c.pendingLeft = append(c.pendingLeft, identity)
 		c.partMu.Unlock()
 		return
 	}

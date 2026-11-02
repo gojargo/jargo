@@ -14,6 +14,20 @@ import (
 	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
+)
+
+// The events a transport raises about its clients.
+const (
+	// EventClientConnected fires when a client connects, with the client as
+	// its argument. What a client is depends on the transport.
+	EventClientConnected = "on_client_connected"
+	// EventClientDisconnected fires when a client disconnects, with the client
+	// as its argument.
+	EventClientDisconnected = "on_client_disconnected"
+	// EventAppMessage fires for an application message from a client, with the
+	// message and its sender as arguments.
+	EventAppMessage = "on_app_message"
 )
 
 // Params configures a transport's audio input and output.
@@ -151,6 +165,9 @@ type Transport interface {
 	Input() processor.Processor
 	// Output returns the processor that sends frames as media.
 	Output() processor.Processor
+	// Events returns the registry of the events the transport raises, such as
+	// EventClientConnected and EventClientDisconnected.
+	Events() *events.Registry
 }
 
 // InputDriver is implemented by a concrete input transport so the base can

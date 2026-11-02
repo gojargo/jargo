@@ -14,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -48,20 +49,49 @@ func WithAudioInUserTracks(enabled bool) Option {
 	return func(o *options) { o.audioInUserTracks = enabled }
 }
 
+// The participant events a LiveKit transport raises, with the participant's
+// identity as their argument. It also raises transport.EventClientConnected and
+// transport.EventClientDisconnected for the same arrivals and departures, with a
+// Client, the way every transport reports its clients.
+const (
+	EventParticipantConnected    = "on_participant_connected"
+	EventParticipantDisconnected = "on_participant_disconnected"
+	// EventParticipantLeft fires on a departure with the identity and the
+	// reason, "disconnected".
+	EventParticipantLeft = "on_participant_left"
+)
+
+// Client is the client the client events carry: a participant in the room.
+type Client struct {
+	// ID is the participant's identity.
+	ID string
+}
+
 // NewTransport builds a transport over a joined LiveKit connection.
 func NewTransport(conn *Connection, params transport.Params, opts ...Option) *Transport {
 	o := options{audioInUserTracks: true}
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return &Transport{
+	t := &Transport{
 		in:  newInput(conn, params, o),
 		out: newOutput(conn, params),
 	}
+	ev := t.in.Events()
+	for _, name := range []string{
+		EventParticipantConnected, EventParticipantDisconnected, EventParticipantLeft,
+		transport.EventClientConnected, transport.EventClientDisconnected,
+	} {
+		ev.Register(name, false)
+	}
+	return t
 }
 
 // Input returns the input processor.
 func (t *Transport) Input() processor.Processor { return t.in }
+
+// Events returns the registry of the events the transport raises.
+func (t *Transport) Events() *events.Registry { return t.in.Events() }
 
 // Output returns the output processor.
 func (t *Transport) Output() processor.Processor { return t.out }
@@ -170,11 +200,21 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	// running over this connection it has already happened.
 	in.PushBotConnected(readCtx)
 
-	in.conn.OnParticipantConnected(func(string) {
+	in.conn.OnParticipantConnected(func(identity string) {
 		if readCtx.Err() != nil {
 			return
 		}
+		ev := in.Events()
+		ev.Call(readCtx, EventParticipantConnected, in, identity)
+		ev.Call(readCtx, transport.EventClientConnected, in, Client{ID: identity})
 		in.PushClientConnected(readCtx)
+	})
+	in.conn.OnParticipantDisconnected(func(identity string) {
+		ctx := context.WithoutCancel(readCtx)
+		ev := in.Events()
+		ev.Call(ctx, EventParticipantDisconnected, in, identity)
+		ev.Call(ctx, EventParticipantLeft, in, identity, "disconnected")
+		ev.Call(ctx, transport.EventClientDisconnected, in, Client{ID: identity})
 	})
 	return nil
 }

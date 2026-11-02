@@ -15,6 +15,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // readDeadline bounds a blocking RTP read so the read loop can notice
@@ -23,17 +24,35 @@ const readDeadline = 500 * time.Millisecond
 
 // Transport is a WebRTC transport backed by a Pion connection. It provides the
 // input and output processors for a pipeline.
+//
+// It raises transport.EventClientConnected when the peer connection is
+// established (again after a restart), transport.EventClientDisconnected when
+// the client goes away, and transport.EventAppMessage for each message the
+// client sends. The client passed to the first two is the *Connection.
 type Transport struct {
-	in  *inputTransport
-	out *outputTransport
+	in   *inputTransport
+	out  *outputTransport
+	conn *Connection
+	// closing is set once the bot disconnects, so the connection closing then
+	// is not reported as the client leaving.
+	closing atomic.Bool
 }
 
 // NewTransport builds a WebRTC transport over conn.
 func NewTransport(conn *Connection, params transport.Params) *Transport {
-	return &Transport{
-		in:  newInput(conn, params),
-		out: newOutput(conn, params),
-	}
+	t := &Transport{conn: conn}
+	t.in = newInput(conn, params)
+	t.out = newOutput(conn, params, &t.closing)
+
+	ev := t.in.Events()
+	ev.Register(transport.EventAppMessage, false)
+	ev.Register(transport.EventClientConnected, false)
+	ev.Register(transport.EventClientDisconnected, false)
+
+	conn.OnMessage(t.onAppMessage)
+	conn.OnConnected(t.onClientConnected)
+	conn.OnClosed(t.onClientClosed)
+	return t
 }
 
 // Input returns the input processor.
@@ -41,6 +60,44 @@ func (t *Transport) Input() processor.Processor { return t.in }
 
 // Output returns the output processor.
 func (t *Transport) Output() processor.Processor { return t.out }
+
+// Events returns the registry of the events the transport raises.
+func (t *Transport) Events() *events.Registry { return t.in.Events() }
+
+// onAppMessage surfaces a message from the client as a frame in the pipeline,
+// then raises EventAppMessage with the message and the peer connection's id.
+func (t *Transport) onAppMessage(raw []byte) {
+	ctx := t.in.readContext()
+	if ctx == nil {
+		return
+	}
+	t.in.PushTransportMessage(ctx, raw)
+	t.in.Events().Call(ctx, transport.EventAppMessage, t, json.RawMessage(raw), t.conn.PCID())
+}
+
+// onClientConnected raises EventClientConnected and reports the client to the
+// pipeline. The connection raises it only once the pipeline is ready for it.
+func (t *Transport) onClientConnected() {
+	ctx := t.in.readContext()
+	if ctx == nil {
+		return
+	}
+	t.in.Events().Call(ctx, transport.EventClientConnected, t, t.conn)
+	t.in.PushClientConnected(ctx)
+}
+
+// onClientClosed raises EventClientDisconnected when the client went away,
+// rather than the bot disconnecting.
+func (t *Transport) onClientClosed() {
+	if t.closing.Load() {
+		return
+	}
+	ctx := t.in.readContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	t.in.Events().Call(context.WithoutCancel(ctx), transport.EventClientDisconnected, t, t.conn)
+}
 
 // inputTransport reads Opus RTP from the connection, decodes it to PCM, and
 // pushes InputAudioRawFrames into the pipeline at the input sample rate.
@@ -53,8 +110,18 @@ type inputTransport struct {
 	resampler *resample.Resampler
 
 	readWG     sync.WaitGroup
-	mu         sync.Mutex // guards readCancel
+	mu         sync.Mutex // guards readCancel and readCtx
 	readCancel context.CancelFunc
+	// readCtx is the context the input reads under, nil while it is not.
+	readCtx context.Context //nolint:containedctx // the reading's lifetime, for the connection's callbacks
+}
+
+// readContext returns the context the input reads under, or nil when it is
+// not reading.
+func (in *inputTransport) readContext() context.Context {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.readCtx
 }
 
 func newInput(conn *Connection, params transport.Params) *inputTransport {
@@ -90,45 +157,23 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	readCtx, cancel := context.WithCancel(ctx)
 	in.mu.Lock()
 	in.readCancel = cancel
+	in.readCtx = readCtx
 	in.mu.Unlock()
 	in.readWG.Add(1)
 	go in.readLoop(readCtx)
 
-	// Surface data channel messages as frames in the pipeline.
-	in.conn.OnMessage(func(raw []byte) {
-		if readCtx.Err() != nil {
-			return
-		}
-		in.PushTransportMessage(readCtx, raw)
-	})
-	// The pipeline is ready for the connection now: the connected event and
-	// any messages held until this point are released.
+	// The pipeline is ready for the connection now. The connected event is
+	// raised now if the peer is already connected, or when it connects, and
+	// the client's messages held until this point are released.
 	in.conn.Connect()
-
-	in.readWG.Add(1)
-	go in.reportClientConnected(readCtx)
 	return nil
-}
-
-// reportClientConnected reports the client having connected, once the peer
-// connection is established.
-//
-// Signaling is an offer and answer exchanged before the pipeline runs, so the
-// connection is usually up already and the report is immediate. When it is not,
-// the wait is the part of the setup a caller spends looking at a silent line,
-// which is what makes it worth reporting rather than assuming.
-func (in *inputTransport) reportClientConnected(ctx context.Context) {
-	defer in.readWG.Done()
-	if err := in.conn.WaitConnected(ctx); err != nil {
-		return
-	}
-	in.PushClientConnected(ctx)
 }
 
 // StopReading stops the read goroutine.
 func (in *inputTransport) StopReading(context.Context) error {
 	in.mu.Lock()
 	cancel := in.readCancel
+	in.readCtx = nil
 	in.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -283,10 +328,12 @@ type outputTransport struct {
 	queued atomic.Int64
 
 	disconnectOnce sync.Once
+	// closing is the transport's flag that the bot is disconnecting.
+	closing *atomic.Bool
 }
 
-func newOutput(conn *Connection, params transport.Params) *outputTransport {
-	out := &outputTransport{conn: conn}
+func newOutput(conn *Connection, params transport.Params, closing *atomic.Bool) *outputTransport {
+	out := &outputTransport{conn: conn, closing: closing}
 	out.BaseOutput = transport.NewBaseOutput("PionOutput", params, out)
 	return out
 }
@@ -335,6 +382,7 @@ func (out *outputTransport) disconnect() {
 		default:
 		}
 		slog.Info("rtc: disconnecting from the peer")
+		out.closing.Store(true)
 		_ = out.conn.Disconnect()
 	})
 }

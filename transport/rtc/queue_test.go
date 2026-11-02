@@ -2,6 +2,7 @@ package rtc
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func newTestOutput(t *testing.T) *outputTransport {
 
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = opus.SampleRate
-	out := newOutput(conn, params)
+	out := newOutput(conn, params, &atomic.Bool{})
 	if err := out.startSending(); err != nil {
 		t.Fatal(err)
 	}

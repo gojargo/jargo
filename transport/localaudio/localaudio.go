@@ -20,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/jfreymuth/pulse"
 	"github.com/jfreymuth/pulse/proto"
 )
@@ -78,6 +79,10 @@ func New(cfg Config) (*Transport, error) {
 		out:    newOutput(client, cfg.Params),
 	}, nil
 }
+
+// Events returns the registry of the events the transport raises. A local
+// device has no clients, so it raises none of the client events.
+func (t *Transport) Events() *events.Registry { return t.in.Events() }
 
 // Input returns the input processor.
 func (t *Transport) Input() processor.Processor { return t.in }

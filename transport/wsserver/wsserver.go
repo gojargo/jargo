@@ -75,11 +75,11 @@ const (
 	// session can carry conversation. Register for it before running the
 	// pipeline: the socket was accepted before the pipeline was built, so the
 	// client is already there and this fires as the pipeline starts.
-	EventClientConnected = "on_client_connected"
+	EventClientConnected = transport.EventClientConnected
 	// EventClientDisconnected fires when the client hangs up. It does not fire
 	// for a session this side ended, which is a shutdown already under way
 	// rather than news about the client.
-	EventClientDisconnected = "on_client_disconnected"
+	EventClientDisconnected = transport.EventClientDisconnected
 	// EventSessionTimeout fires when a session has run for
 	// Params.SessionTimeout without ending.
 	EventSessionTimeout = "on_session_timeout"

@@ -15,6 +15,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Every transport reports its clients through events.** The WebRTC
+  transport raises `transport.EventClientConnected` when the peer connection
+  is established (again after a restart) and `transport.EventClientDisconnected`
+  when the client goes away, both with the `*rtc.Connection`, and
+  `transport.EventAppMessage` for each message the client sends. The LiveKit
+  transport raises `on_participant_connected`, `on_participant_disconnected`
+  and `on_participant_left` with the participant's identity, and the two client
+  events with a `livekit.Client`. `livekit.Connection.OnParticipantDisconnected`
+  reports departures. **Breaking:** `transport.Transport` gained `Events()`, so a
+  transport of your own has to add it.
 - **The development runner (`runner`).** A bot is one `runner.Bot` function,
   called once per session, and `runner.Main(bot)` serves it: WebRTC through
   `POST /start` and `/api/offer` (renegotiation and trickled ICE candidates
@@ -161,6 +171,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A WebRTC connection runs its event handlers off Pion's callbacks**, one at
+  a time and in order, so a handler that blocks no longer holds up the peer
+  connection.
 - **A WebRTC connection ends only when it closes or fails, no longer when it is
   merely disconnected.** A disconnected peer connection may still recover,
   through ICE or a client restart, so `rtc.Connection.Done` now waits for it to

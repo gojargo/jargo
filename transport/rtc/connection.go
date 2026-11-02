@@ -157,6 +157,45 @@ type Connection struct {
 	connected     chan struct{}
 	closeOnce     sync.Once
 	closed        chan struct{}
+
+	// events runs the event handlers, one at a time and in the order the
+	// events happened, off the goroutine that raised them: most are raised from
+	// inside Pion's callbacks, which a handler that blocks would stall.
+	events serialExecutor
+}
+
+// serialExecutor runs functions one at a time, in the order they were handed
+// over, on a goroutine of its own that lasts while there is work.
+type serialExecutor struct {
+	mu      sync.Mutex
+	queue   []func()
+	running bool
+}
+
+// run queues fn behind everything handed over before it.
+func (e *serialExecutor) run(fn func()) {
+	e.mu.Lock()
+	e.queue = append(e.queue, fn)
+	if e.running {
+		e.mu.Unlock()
+		return
+	}
+	e.running = true
+	e.mu.Unlock()
+	go func() {
+		for {
+			e.mu.Lock()
+			if len(e.queue) == 0 {
+				e.running = false
+				e.mu.Unlock()
+				return
+			}
+			next := e.queue[0]
+			e.queue = e.queue[1:]
+			e.mu.Unlock()
+			next()
+		}
+	}()
 }
 
 // Option configures a Connection.
@@ -633,9 +672,11 @@ func (c *Connection) handleSignalingMessage(raw json.RawMessage) {
 	c.mu.Lock()
 	hs := append([]func(int, bool){}, c.onTrackStatus...)
 	c.mu.Unlock()
-	for _, h := range hs {
-		h(m.ReceiverIndex, m.Enabled)
-	}
+	c.events.run(func() {
+		for _, h := range hs {
+			h(m.ReceiverIndex, m.Enabled)
+		}
+	})
 }
 
 // AskToRenegotiate asks the client to send a new offer. A request made while a
@@ -770,19 +811,26 @@ func (c *Connection) failedHandlers() []func() {
 	return append([]func(){}, c.onFailed...)
 }
 
+// emit raises an event: its handlers run after those of every event raised
+// before it.
 func (c *Connection) emit(hs []func()) {
-	for _, h := range hs {
-		h()
-	}
+	c.events.run(func() {
+		for _, h := range hs {
+			h()
+		}
+	})
 }
 
+// emitAppMessage raises an application message, in order with the events.
 func (c *Connection) emitAppMessage(m []byte) {
 	c.mu.Lock()
 	hs := append([]func([]byte){}, c.onAppMessage...)
 	c.mu.Unlock()
-	for _, h := range hs {
-		h(m)
-	}
+	c.events.run(func() {
+		for _, h := range hs {
+			h(m)
+		}
+	})
 }
 
 // SendMessage sends an application message to the client over the data channel.
@@ -853,9 +901,7 @@ func (c *Connection) markClosed() {
 		c.mu.Lock()
 		hs := append([]func(){}, c.onClosed...)
 		c.mu.Unlock()
-		for _, h := range hs {
-			h()
-		}
+		c.emit(hs)
 	})
 }
 
