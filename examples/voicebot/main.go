@@ -7,8 +7,8 @@
 // transcripts) flow over the data channel.
 //
 // The provider stack is fixed here so the example can focus on those advanced
-// features. To see other STT/LLM/TTS providers wired explicitly — one provider
-// per file — look at examples/voice (e.g. `go run ./examples/voice/cartesia`).
+// features. To see other STT/LLM/TTS providers wired explicitly (one provider
+// per file), look at examples/voice (e.g. `go run ./examples/voice/cartesia`).
 //
 // Set DEEPGRAM_API_KEY, ANTHROPIC_API_KEY and ELEVENLABS_API_KEY, then run it,
 // open http://localhost:8080, click start, and allow the mic. Long-term memory
@@ -55,7 +55,7 @@ import (
 var staticFiles embed.FS
 
 const systemPrompt = "You are a friendly voice assistant. Keep your replies short, " +
-	"warm and conversational — one or two sentences."
+	"warm and conversational, in one or two sentences."
 
 func main() {
 	if err := run(); err != nil {
@@ -250,8 +250,8 @@ func build[C interface{ Validate() error }, S processor.Processor](cfg C, ctor f
 	return ctor(cfg), nil
 }
 
-// buildStack constructs the fixed provider stack — Deepgram (STT), Anthropic
-// (LLM) and ElevenLabs (TTS) — validating each config so misconfiguration fails
+// buildStack constructs the fixed provider stack (Deepgram for STT, Anthropic
+// for the LLM and ElevenLabs for TTS), validating each config so misconfiguration fails
 // fast. See examples/voice for other providers wired one per file.
 func buildStack(v *viper.Viper) (stt, llm, tts processor.Processor, err error) {
 	sttCfg := deepgram.Config{APIKey: v.GetString("DEEPGRAM_API_KEY"), SampleRate: opus.SampleRate}

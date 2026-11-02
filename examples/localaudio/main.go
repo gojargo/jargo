@@ -1,6 +1,6 @@
 // Command localaudio echoes the local microphone straight back to the local
 // speaker using jargo's pure-Go local-audio transport. It needs no API keys and
-// no browser — just a running PulseAudio or PipeWire server — so it is a quick
+// no browser, only a running PulseAudio or PipeWire server, so it is a quick
 // way to check that capture and playback work. Wear headphones: echoing the mic
 // to the speaker will otherwise feed back.
 //

@@ -1,8 +1,8 @@
 // Command voice-openai is a headless jargo voice backend.
 //
-// It uses OpenAI across the board — speech-to-text, the LLM, and text-to-speech.
+// It uses OpenAI across the board: speech-to-text, the LLM, and text-to-speech.
 //
-// jargo is a backend framework, so this is a server only — it exposes the
+// jargo is a backend framework, so this is a server only: it exposes the
 // WebRTC signaling endpoint POST /offer and no web UI. Point a browser client
 // at it (the nextjs-voicebot example in gojargo/jargo-client-react, with
 // NEXT_PUBLIC_JARGO_URL=http://localhost:8080).
@@ -36,7 +36,7 @@ import (
 )
 
 const systemPrompt = "You are a friendly voice assistant. Keep your replies short, " +
-	"warm and conversational — one or two sentences."
+	"warm and conversational, in one or two sentences."
 
 func main() {
 	http.HandleFunc("/offer", withCORS(handleOffer))
@@ -84,7 +84,7 @@ func runBot(conn *rtc.Connection) {
 	params.AudioInSampleRate = opus.SampleRate
 	params.AudioOutSampleRate = opus.SampleRate
 	// Optional input noise reduction (RNNoise). It loads librnnoise at run time
-	// via purego — no build tag — so New errors only when the library is not
+	// via purego (no build tag), so New errors only when the library is not
 	// installed, in which case we run without it.
 	//	JARGO_DENOISE=1 go run ./examples/voice/openai
 	if os.Getenv("JARGO_DENOISE") != "" {

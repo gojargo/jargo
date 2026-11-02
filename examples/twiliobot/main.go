@@ -46,7 +46,7 @@ import (
 const pipelineSampleRate = 16000
 
 const systemPrompt = "You are a friendly voice assistant on a phone call. Keep " +
-	"your replies short, warm and conversational — one or two sentences."
+	"your replies short, warm and conversational, in one or two sentences."
 
 func main() {
 	if err := run(); err != nil {
@@ -164,7 +164,7 @@ func runBot(t *wsserver.Transport, v *viper.Viper) {
 	slog.Info("twiliobot pipeline stopped")
 }
 
-// newTurnStack builds the turn-taking stack — a Silero VAD processor and a
+// newTurnStack builds the turn-taking stack: a Silero VAD processor and a
 // UserTurnProcessor (Smart Turn v3 stop) with an idle watchdog. The idle
 // callback re-engages a quiet caller and, after idle_max_retries unanswered
 // nudges, ends the call (which auto-hangs-up via the Twilio serializer); both

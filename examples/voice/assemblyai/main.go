@@ -3,7 +3,7 @@
 // It uses AssemblyAI for both speech-to-text and text-to-speech, with an
 // Anthropic LLM.
 //
-// jargo is a backend framework, so this is a server only — it exposes the
+// jargo is a backend framework, so this is a server only: it exposes the
 // WebRTC signaling endpoint POST /offer and no web UI. Point a browser client
 // at it (the nextjs-voicebot example in gojargo/jargo-client-react, with
 // NEXT_PUBLIC_JARGO_URL=http://localhost:8080).
@@ -37,7 +37,7 @@ import (
 )
 
 const systemPrompt = "You are a friendly voice assistant. Keep your replies short, " +
-	"warm and conversational — one or two sentences."
+	"warm and conversational, in one or two sentences."
 
 func main() {
 	http.HandleFunc("/offer", withCORS(handleOffer))

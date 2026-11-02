@@ -76,7 +76,7 @@
         });
         if (!resp.ok) throw new Error("signaling failed: " + resp.status);
         await pc.setRemoteDescription(await resp.json());
-        setStatus("connected — speak and hear yourself");
+        setStatus("connected: speak and hear yourself");
       } catch (err) {
         setStatus("error: " + err.message);
         console.error(err);

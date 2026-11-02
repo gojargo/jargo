@@ -54,7 +54,7 @@
         }));
         dc.onmessage = (e) => {
           const msg = JSON.parse(e.data);
-          if (msg.type === "bot-ready") log(null, "— connected —");
+          if (msg.type === "bot-ready") log(null, "[connected]");
           else if (msg.type === "user-transcription" && msg.data.final) log("user", "you: " + msg.data.text);
           else if (msg.type === "bot-llm-text" || msg.type === "bot-transcription" || msg.type === "bot-tts-text") log("bot", "bot: " + msg.data.text);
         };
@@ -76,7 +76,7 @@
         });
         if (!resp.ok) throw new Error("signaling failed: " + resp.status);
         await pc.setRemoteDescription(await resp.json());
-        setStatus("connected — start talking");
+        setStatus("connected: start talking");
       } catch (err) {
         setStatus("error: " + err.message);
         console.error(err);

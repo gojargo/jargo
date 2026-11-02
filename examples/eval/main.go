@@ -1,5 +1,5 @@
 // Command eval is a tiny demo bot for the jargo eval harness. It serves an eval
-// endpoint over a plain WebSocket — no WebRTC, no API keys — so you can drive it
+// endpoint over a plain WebSocket (no WebRTC, no API keys), so you can drive it
 // with the CLI or from a Go test.
 //
 // Run it and eval it from the command line:

@@ -1,8 +1,8 @@
 // Command outbound is an outbound telephony voice agent: it places a phone call
 // over Twilio, talks to whoever answers, collects a few details and hangs up.
 //
-// The program starts a small HTTP server that exposes two endpoints — /twiml
-// (the call's instructions) and /ws (the bidirectional media stream) — then asks
+// The program starts a small HTTP server that exposes two endpoints, /twiml
+// (the call's instructions) and /ws (the bidirectional media stream), then asks
 // Twilio's REST API to dial the target number. When the call connects, Twilio
 // fetches /twiml, opens a μ-law 8 kHz media stream to wss://<public_host>/ws, and
 // an STT -> LLM -> TTS pipeline runs the conversation. The assistant gathers the
@@ -350,7 +350,7 @@ func recordInfo(collected *atomic.Bool) llm.FunctionCallHandler {
 // hangUpAfterGoodbye ends the call once the assistant has finished speaking after
 // the information was recorded. BotStoppedSpeakingFrame travels upstream from the
 // output transport; placed just before the output, this processor sees it, and
-// when collected is set it pushes an EndFrame downstream — which the Twilio
+// when collected is set it pushes an EndFrame downstream, which the Twilio
 // serializer turns into a REST hang-up. The single-shot guard keeps the goodbye
 // from being cut off by an earlier BotStoppedSpeakingFrame.
 type hangUpAfterGoodbye struct {
