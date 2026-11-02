@@ -179,6 +179,15 @@ func NewLLMSpecificMessage(llm string, native any) Message {
 // format rather than in the universal one.
 func (m Message) IsLLMSpecific() bool { return m.LLM != "" }
 
+// StandardText returns the text of a message in the universal format, or ""
+// for a message in a provider's own format or one that carries no text.
+func (m Message) StandardText() string {
+	if m.IsLLMSpecific() {
+		return ""
+	}
+	return m.Text
+}
+
 // clone returns a message that shares nothing with this one. Copying the struct
 // alone would copy the slice headers, leaving both messages pointing at one
 // array: a tool result updated in place would then be rewritten under whoever

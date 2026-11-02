@@ -46,10 +46,10 @@ import (
 const (
 	// toolResultCanceled replaces the placeholder when the call is canceled.
 	// The spelling is the protocol's, not prose.
-	toolResultCanceled = "CANCELLED" //nolint:misspell // the literal written to the conversation
+	toolResultCanceled = frames.ToolResultCanceled
 	// toolResultCompleted stands in for a call that finished having produced no
 	// result of its own.
-	toolResultCompleted = "COMPLETED"
+	toolResultCompleted = frames.ToolResultCompleted
 )
 
 // The events the user half of a pair raises around each turn it collects.

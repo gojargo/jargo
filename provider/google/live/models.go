@@ -63,6 +63,12 @@ func supportsNonBlockingTools(model string) bool {
 	return !known || major < 3 || atLeast(model, 3, 8)
 }
 
+// isGemini3 reports whether the model is of the 3.x generation.
+func isGemini3(model string) bool {
+	major, _, known := version(model)
+	return known && major == 3
+}
+
 // toolsDefaultToNonBlocking reports whether the model runs a function call
 // without waiting for it unless the declaration asks it to. The 3.8 family
 // flipped that default.

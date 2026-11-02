@@ -90,7 +90,13 @@ type FunctionCallResultProperties struct {
 	OnContextUpdated func(ctx context.Context) error
 	// IsFinal reports whether this is the call's final result. Nil means final.
 	// A false value marks an intermediate update, which is only meaningful for an
-	// asynchronous call (one registered with CancelOnInterruption false).
+	// asynchronous call (one registered with CancelOnInterruption false). A
+	// speech-to-speech service takes one output per call, so it puts an
+	// intermediate result to its model some other way (a conversation item, a
+	// text event, a response that keeps the call open), and RunLLM says whether
+	// the model should answer it or just take it in. A service that cannot do
+	// that at all says so with AcceptsIntermediateFunctionCallResults and drops
+	// intermediate results with a warning.
 	IsFinal *bool
 }
 

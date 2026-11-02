@@ -53,6 +53,15 @@ const (
 // the call runs. It is replaced in place once the call reports.
 const ToolResultInProgress = "IN_PROGRESS"
 
+const (
+	// ToolResultCanceled replaces the placeholder when the call is canceled.
+	// The spelling is the protocol's, not prose.
+	ToolResultCanceled = "CANCELLED" //nolint:misspell // the literal written to the conversation
+	// ToolResultCompleted stands in for a call that finished having produced no
+	// result of its own.
+	ToolResultCompleted = "COMPLETED"
+)
+
 // The descriptions shipped on each stage say only what the model has to act on.
 // None of them describes the shape of the message a result will arrive in: a
 // model told the shape of a message it should expect will try to produce one,

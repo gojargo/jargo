@@ -1,11 +1,13 @@
 package live
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -66,6 +68,10 @@ type Service struct {
 	// heldTurnWatchdog ends a held turn if the session goes quiet without ever
 	// reporting that it has finished. Guarded by mu.
 	heldTurnWatchdog *time.Timer
+	// contentAwaitingResponse says content was appended to the session that no
+	// turn has answered yet; the aggregator's next upstream conversation
+	// completes the turn. Guarded by mu.
+	contentAwaitingResponse bool
 }
 
 // Connector customizes how the Live session is addressed and authorized, so a
@@ -157,15 +163,26 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 			s.PushError(ctx, "gemini live connect failed", err, true)
 		}
 		return nil
+	case *frames.InterruptionFrame:
+		// The interruption ends the turn, so a held one is moot, and so is a
+		// reply owed for appended content: the user's turn makes one.
+		s.discardHeldTurn()
+		s.mu.Lock()
+		s.contentAwaitingResponse = false
+		s.mu.Unlock()
+		return nil
 	case *frames.LLMContextFrame:
 		// The conversation the session is part of: the toolset it advertises, and
 		// the tool results it has gained since it was last reported. The base
 		// holds a conversation back from a service generating continuously, so
 		// this is where it travels on.
 		if fr.Context != nil {
-			s.handleContext(ctx, fr.Context)
+			s.handleContext(ctx, fr.Context, dir)
 		}
 		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMMessagesAppendFrame:
+		s.handleMessagesAppend(ctx, fr)
+		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
 		return nil
@@ -233,7 +250,7 @@ func (s *Service) setup() map[string]any {
 	}
 	if s.cfg.Instructions != "" {
 		setup["systemInstruction"] = map[string]any{
-			"parts": []any{map[string]any{"text": s.cfg.Instructions}},
+			"parts": []any{map[string]any{keyText: s.cfg.Instructions}},
 		}
 	}
 	s.mu.Lock()
@@ -257,7 +274,7 @@ func (s *Service) setup() map[string]any {
 // The toolset is only settled once. The Live API takes it in the setup message
 // and offers no way to change it afterwards, so a conversation bringing tools to
 // a session opened without them is applied by opening another session with them.
-func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
+func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, dir processor.Direction) {
 	s.mu.Lock()
 	first := s.convo == nil
 	s.convo = convo
@@ -276,6 +293,160 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
 	// session existed, so they are recorded as known rather than sent: the model
 	// never asked for them and has nothing to do with them.
 	s.processCompletedCalls(ctx, convo, !first)
+
+	// A conversation from upstream is the aggregator asking for inference, with
+	// the bot speech and user speech it accounts for, so it is what has the
+	// model answer content appended since it last spoke.
+	s.mu.Lock()
+	complete := !first && dir == processor.Upstream && s.contentAwaitingResponse
+	s.mu.Unlock()
+	if complete {
+		s.completeTurn(ctx)
+	}
+}
+
+// PushFrame pushes a frame, sending function call results to the session on
+// the way.
+//
+// Results are broadcast by the base; the downstream copy is observed here and
+// sent as it is produced, so a tool that reports progress reaches the model
+// while it is still working.
+func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if r, ok := f.(*frames.FunctionCallResultFrame); ok && dir == processor.Downstream {
+		s.handleFunctionCallResult(ctx, r)
+	}
+	return s.Base.PushFrame(ctx, f, dir)
+}
+
+// AcceptsIntermediateFunctionCallResults reports whether the model takes a
+// call's intermediate results. They ride the tool-response channel as a
+// response that keeps the call open, which only a non-blocking call allows, so
+// this follows the same model gating as the rest of the asynchronous tool
+// support.
+func (s *Service) AcceptsIntermediateFunctionCallResults() bool {
+	return supportsNonBlockingTools(s.cfg.Model)
+}
+
+// unnamedToolResult names a result whose call was never seen, as the
+// conversation names one.
+const unnamedToolResult = "tool_call_result"
+
+// handleFunctionCallResult sends one result to the session, and says whether
+// the model should answer it.
+func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.FunctionCallResultFrame) {
+	final := f.Properties.Final()
+	s.mu.Lock()
+	name, known := s.toolNames[f.ToolCallID]
+	s.mu.Unlock()
+	if !known {
+		name = unnamedToolResult
+	}
+	if !final && !s.AcceptsIntermediateFunctionCallResults() {
+		slog.WarnContext(ctx, "the model takes one result per function call, dropping an intermediate result",
+			"service", s.Name(), "model", s.cfg.Model, "function", f.ToolName)
+		return
+	}
+	spoken := true
+	switch {
+	case f.Properties != nil && f.Properties.RunLLM != nil:
+		spoken = *f.Properties.RunLLM
+	case f.RunLLM != nil:
+		spoken = *f.RunLLM
+	}
+	result := f.Result
+	if result == "" {
+		result = frames.ToolResultCompleted
+	}
+	s.sendToolResultAs(ctx, f.ToolCallID, name, result, final, spoken)
+	if final {
+		s.recordResult(f.ToolCallID)
+	}
+}
+
+// handleMessagesAppend puts appended messages into the session, for the model
+// to take in.
+//
+// They go in as client content that does not complete a turn, so the model
+// reads them without answering. Whether it answers is the aggregator's call: an
+// append that asks to run comes back to this service as the conversation the
+// assistant aggregator pushes upstream, which completes the turn (see
+// handleContext). Without a conversation, the append starts one on its own,
+// which is how a pipeline with no aggregators kicks one off.
+func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
+	s.mu.Lock()
+	convo, connected := s.convo, s.conn != nil
+	s.mu.Unlock()
+	if convo == nil {
+		s.createSingleResponse(ctx, f.Messages)
+		return
+	}
+	if !connected {
+		return
+	}
+	var turns []any
+	for _, m := range f.Messages {
+		if text := m.StandardText(); text != "" {
+			turns = append(turns, map[string]any{"role": "user", "parts": []any{map[string]any{keyText: text}}})
+		}
+	}
+	if len(turns) == 0 {
+		return
+	}
+	if err := s.send(map[string]any{
+		"clientContent": map[string]any{"turns": turns, keyTurnComplete: false},
+	}); err != nil {
+		slog.ErrorContext(ctx, "sending appended content failed", "service", s.Name(), "err", err)
+		return
+	}
+	s.mu.Lock()
+	s.contentAwaitingResponse = true
+	s.mu.Unlock()
+}
+
+// completeTurn asks the model to answer the content it has been given.
+func (s *Service) completeTurn(ctx context.Context) {
+	s.mu.Lock()
+	connected := s.conn != nil
+	s.contentAwaitingResponse = false
+	s.mu.Unlock()
+	if !connected {
+		return
+	}
+	slog.DebugContext(ctx, "completing the turn for appended content", "service", s.Name())
+	s.sendTurnComplete(ctx, map[string]any{keyTurnComplete: true})
+}
+
+// createSingleResponse has the model answer messages appended with no
+// conversation to append them to, the case of a pipeline with no aggregators
+// that starts the conversation this way.
+func (s *Service) createSingleResponse(ctx context.Context, messages []frames.Message) {
+	s.mu.Lock()
+	connected := s.conn != nil
+	s.mu.Unlock()
+	if !connected {
+		return
+	}
+	contents, err := geminiadapter.ToContents(messages)
+	if err != nil || len(contents) == 0 {
+		return
+	}
+	slog.DebugContext(ctx, "creating a response", "service", s.Name())
+	s.sendTurnComplete(ctx, map[string]any{"turns": contents, keyTurnComplete: true})
+}
+
+// sendTurnComplete sends client content that completes the turn. The 3.x
+// models want that, but also run no inference without a realtime input, so one
+// follows.
+func (s *Service) sendTurnComplete(ctx context.Context, content map[string]any) {
+	if err := s.send(map[string]any{"clientContent": content}); err != nil {
+		slog.ErrorContext(ctx, "completing the turn failed", "service", s.Name(), "err", err)
+		return
+	}
+	if isGemini3(s.cfg.Model) {
+		if err := s.send(map[string]any{"realtimeInput": map[string]any{keyText: " "}}); err != nil {
+			slog.ErrorContext(ctx, "nudging the model to answer failed", "service", s.Name(), "err", err)
+		}
+	}
 }
 
 // reconnectWithTools opens the session again so its setup carries the tools. The
@@ -302,6 +473,19 @@ func (s *Service) reconnectWithTools(ctx context.Context) {
 // its own, unlike the sessions that have to be asked.
 func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
 	for _, m := range convo.Messages() {
+		if async, ok := frames.ParseAsyncToolMessage(m); ok {
+			// The started marker opens a call the model already knows it is
+			// waiting on, and an intermediate result was sent as it was
+			// produced, keeping the call open for the result that settles it.
+			if async.Kind != frames.AsyncToolFinal || s.resultSeen(async.ToolCallID) {
+				continue
+			}
+			s.recordResult(async.ToolCallID)
+			if send {
+				s.sendToolResult(ctx, async.ToolCallID, async.Result)
+			}
+			continue
+		}
 		for _, r := range m.ToolResults {
 			if s.resultSeen(r.ID) {
 				continue
@@ -312,33 +496,11 @@ func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMCo
 			if r.Content == frames.ToolResultInProgress {
 				continue
 			}
-			if async, ok := frames.ParseAsyncToolMessage(m); ok && !s.asyncResultSendable(ctx, async) {
-				s.recordResult(r.ID)
-				continue
-			}
 			s.recordResult(r.ID)
 			if send {
 				s.sendToolResult(ctx, r.ID, r.Content)
 			}
 		}
-	}
-}
-
-// asyncResultSendable reports whether an asynchronous tool's message carries a
-// result this session can take. Only the final one does: the session has no way
-// to receive a result in parts, and the marker that opens the call says nothing
-// the model does not already know, having made the call itself.
-func (s *Service) asyncResultSendable(ctx context.Context, m frames.AsyncToolMessage) bool {
-	switch m.Kind {
-	case frames.AsyncToolFinal:
-		return true
-	case frames.AsyncToolIntermediate:
-		msg := "gemini live takes no streamed result from an asynchronous tool"
-		slog.ErrorContext(ctx, msg, "function", m.ToolCallID)
-		s.PushError(ctx, msg, nil, false)
-		return false
-	default:
-		return false
 	}
 }
 
@@ -358,14 +520,22 @@ func (s *Service) recordResult(toolCallID string) {
 	s.mu.Unlock()
 }
 
-// sendToolResult hands one call's result to the session. The response names the
-// function as well as the call, so the name the call went out under is looked
-// back up here.
+// sendToolResult hands one call's final result to the session, for the model
+// to answer. The response names the function as well as the call, so the name
+// the call went out under is looked back up here.
 func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string) {
 	s.mu.Lock()
 	name := s.toolNames[toolCallID]
 	s.mu.Unlock()
+	s.sendToolResultAs(ctx, toolCallID, name, result, true, true)
+}
 
+// sendToolResultAs hands one call's result to the session. final says whether
+// the result completes the call: an intermediate one keeps it open, which only
+// a non-blocking call allows. spoken says whether the model should address the
+// result; it is told to stay silent otherwise, so the result is context it can
+// draw on if the conversation turns that way.
+func (s *Service) sendToolResultAs(ctx context.Context, toolCallID, name, result string, final, spoken bool) {
 	slog.DebugContext(ctx, "sending a tool result to the live session",
 		"service", s.Name(), "tool_call_id", toolCallID, "function", name)
 	response := map[string]any{
@@ -376,16 +546,48 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 	// Pair the non-blocking declaration on an asynchronous tool with a hint on
 	// its result. WHEN_IDLE has the model finish whatever it is saying before it
 	// turns to the result, so a result landing late does not cut it off
-	// mid-sentence. It means nothing for a call the model waited for, so it is
-	// gated the way the declaration was.
+	// mid-sentence; SILENT takes the result in without answering it. It means
+	// nothing for a call the model waited for, so it is gated the way the
+	// declaration was.
 	if supportsNonBlockingTools(s.cfg.Model) && s.FunctionIsAsync(name) {
-		response["scheduling"] = "WHEN_IDLE"
+		scheduling := "WHEN_IDLE"
+		if !spoken {
+			scheduling = "SILENT"
+		}
+		// The guides document scheduling inside the response, the API
+		// reference as a field of its own; both are set so whichever the
+		// server reads is there. willContinue only exists as a field: true
+		// keeps the call open for more responses, and false closes it, which
+		// the last response has to say or the call stays open for good.
+		response["response"] = withScheduling(response["response"], scheduling)
+		response["scheduling"] = scheduling
+		response["willContinue"] = !final
 	}
 	if err := s.send(map[string]any{
 		"toolResponse": map[string]any{"functionResponses": []any{response}},
 	}); err != nil {
 		slog.ErrorContext(ctx, "sending a tool result failed", "service", s.Name(), "err", err)
 	}
+}
+
+// withScheduling adds the scheduling hint to a function response object.
+func withScheduling(response any, scheduling string) any {
+	var obj map[string]any
+	switch r := response.(type) {
+	case map[string]any:
+		obj = make(map[string]any, len(r)+1)
+		maps.Copy(obj, r)
+	case json.RawMessage:
+		dec := json.NewDecoder(bytes.NewReader(r))
+		dec.UseNumber()
+		if dec.Decode(&obj) != nil {
+			return response
+		}
+	default:
+		return response
+	}
+	obj["scheduling"] = scheduling
+	return obj
 }
 
 // tagToolBehaviors says, on each declaration, whether the model should wait for

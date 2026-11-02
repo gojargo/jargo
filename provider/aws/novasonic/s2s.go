@@ -51,6 +51,10 @@ type Service struct {
 	// model, so a conversation reported again does not send one twice. Guarded
 	// by mu.
 	sentResults map[string]bool
+
+	// write, when set, takes every event in place of the stream, so a test can
+	// see what the session is sent.
+	write func(ev map[string]any) error
 }
 
 // New builds a Nova Sonic service.
@@ -109,6 +113,9 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 			s.handleContext(ctx, fr.Context)
 		}
 		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMMessagesAppendFrame:
+		s.handleMessagesAppend(ctx, fr)
+		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
 		return nil
@@ -295,6 +302,19 @@ func (s *Service) reopenWithTools(ctx context.Context) {
 // application answered for.
 func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
 	for _, m := range convo.Messages() {
+		if async, ok := frames.ParseAsyncToolMessage(m); ok {
+			// The started marker opens a call the model already knows it is
+			// waiting on, and an intermediate result was sent as text when it
+			// was produced; the call stays open for the result that settles it.
+			if async.Kind != frames.AsyncToolFinal || s.resultSeen(async.ToolCallID) {
+				continue
+			}
+			s.recordResult(async.ToolCallID)
+			if send {
+				s.sendToolResult(ctx, async.ToolCallID, async.Result)
+			}
+			continue
+		}
 		for _, r := range m.ToolResults {
 			if s.resultSeen(r.ID) {
 				continue
@@ -305,10 +325,6 @@ func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMCo
 			if r.Content == frames.ToolResultInProgress {
 				continue
 			}
-			if async, ok := frames.ParseAsyncToolMessage(m); ok && !s.asyncResultSendable(ctx, async) {
-				s.recordResult(r.ID)
-				continue
-			}
 			s.recordResult(r.ID)
 			if send {
 				s.sendToolResult(ctx, r.ID, r.Content)
@@ -317,21 +333,78 @@ func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMCo
 	}
 }
 
-// asyncResultSendable reports whether an asynchronous tool's message carries a
-// result this session can take. Only the final one does: the session has no way
-// to receive a result in parts, and the marker that opens the call says nothing
-// the model does not already know, having made the call itself.
-func (s *Service) asyncResultSendable(ctx context.Context, m frames.AsyncToolMessage) bool {
-	switch m.Kind {
-	case frames.AsyncToolFinal:
-		return true
-	case frames.AsyncToolIntermediate:
-		msg := "nova sonic takes no streamed result from an asynchronous tool"
-		slog.ErrorContext(ctx, msg, "function", m.ToolCallID)
-		s.PushError(ctx, msg, nil, false)
-		return false
-	default:
-		return false
+// PushFrame pushes a frame, sending function call results to the session on
+// the way.
+//
+// Results are broadcast by the base; the downstream copy is observed here and
+// sent as it is produced, so a tool that reports progress reaches the model
+// while it is still working.
+func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if r, ok := f.(*frames.FunctionCallResultFrame); ok && dir == processor.Downstream {
+		s.handleFunctionCallResult(ctx, r)
+	}
+	return s.Base.PushFrame(ctx, f, dir)
+}
+
+// handleFunctionCallResult sends one result to the session as it is produced.
+//
+// A final result goes through the tool-result channel, which Nova Sonic always
+// folds into what it says next. Nova Sonic takes one tool result per call, so
+// an intermediate one goes in as text beside the call, which is what the docs
+// suggest for keeping a conversation going while an asynchronous tool runs:
+// interactive when the model should say something about it, plain text for it
+// to take in otherwise.
+func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.FunctionCallResultFrame) {
+	result := f.Result
+	if result == "" {
+		result = frames.ToolResultCompleted
+	}
+	if f.Properties.Final() {
+		s.sendToolResult(ctx, f.ToolCallID, result)
+		s.recordResult(f.ToolCallID)
+		return
+	}
+	run := true
+	switch {
+	case f.Properties != nil && f.Properties.RunLLM != nil:
+		run = *f.Properties.RunLLM
+	case f.RunLLM != nil:
+		run = *f.RunLLM
+	}
+	s.sendText(ctx, frames.NewAsyncToolIntermediateMessage(f.ToolCallID, result).Text, run)
+}
+
+// handleMessagesAppend puts appended messages into the session as text, for
+// the model to take in: interactive when the append asks to run, which the
+// model answers as it would the user speaking, and plain text otherwise, which
+// it takes in without answering.
+func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
+	for _, m := range f.Messages {
+		if text := m.StandardText(); text != "" {
+			s.sendText(ctx, text, f.RunLLM)
+		}
+	}
+}
+
+// sendText sends text from the user as a content block of its own.
+// interactive says whether the model should answer it.
+func (s *Service) sendText(ctx context.Context, text string, interactive bool) {
+	s.mu.Lock()
+	prompt := s.promptName
+	s.mu.Unlock()
+	if prompt == "" {
+		return
+	}
+	content := uuid.NewString()
+	for _, ev := range []map[string]any{
+		contentStart(prompt, content, "TEXT", "USER", interactive, nil),
+		textInput(prompt, content, text),
+		contentEnd(prompt, content),
+	} {
+		if err := s.send(ev); err != nil {
+			slog.ErrorContext(ctx, "sending text failed", "service", s.Name(), "err", err)
+			return
+		}
 	}
 }
 
@@ -440,6 +513,9 @@ func (s *Service) sendAudio(pcm []byte) {
 
 // send marshals an event and writes it as one input chunk, serializing writes.
 func (s *Service) send(ev map[string]any) error {
+	if s.write != nil {
+		return s.write(ev)
+	}
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return err

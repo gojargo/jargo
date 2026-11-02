@@ -36,6 +36,11 @@ const (
 	pcmFormat = "audio/pcm"
 	// keyType is the discriminator key on every wire object.
 	keyType = "type"
+	// keyItem and keyText are the keys of a conversation item and of its text.
+	keyItem = "item"
+	keyText = "text"
+	// msgItemCreate creates a conversation item.
+	msgItemCreate = "conversation.item.create"
 	// readLimit bounds a single inbound WebSocket message; audio deltas are far
 	// larger than the library's 32 KiB default.
 	readLimit = 1 << 24

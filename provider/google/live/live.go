@@ -37,6 +37,10 @@ const (
 	// modalityAudio and modalityText are the Live API's modality names.
 	modalityAudio = "AUDIO"
 	modalityText  = "TEXT"
+	// keyText and keyTurnComplete are the keys of a text part and of the flag
+	// that completes a turn of client content.
+	keyText         = "text"
+	keyTurnComplete = "turnComplete"
 )
 
 // Config configures the Gemini Live service.

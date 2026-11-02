@@ -56,6 +56,19 @@ type Service struct {
 	// model, so a conversation reported again does not send one twice. Guarded
 	// by mu.
 	sentResults map[string]bool
+	// openCalls are the calls the session is waiting on, by call id: only these
+	// can be answered with a function_call_output. Cleared on disconnect, since
+	// a new session knows none of the old ids. Guarded by mu.
+	openCalls map[string]bool
+	// resultsAwaitingResponse says something was delivered that no response
+	// has taken in yet. A response starting clears it; a request to respond
+	// while it stands creates one. Guarded by mu.
+	resultsAwaitingResponse bool
+	// responseCreateOwed says a response was asked for while one was already
+	// running, and is owed once that one is done. Guarded by mu.
+	responseCreateOwed bool
+	// responseActive says a response is running. Guarded by mu.
+	responseActive bool
 
 	// audioResp is the assistant audio item currently being played, which an
 	// interruption truncates on the server so the conversation the model keeps
@@ -143,6 +156,7 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 		connector:    conn,
 		pendingCalls: map[string]string{},
 		sentResults:  map[string]bool{},
+		openCalls:    map[string]bool{},
 	}
 	// A model service, so it keeps the tool registry and the machinery that runs
 	// what the model calls. It generates continuously rather than being run by a
@@ -186,16 +200,24 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		return nil
 	case *frames.InterruptionFrame:
 		// The session's own VAD cancels the response it heard the user speak
-		// over, so only its record of that response is put right here.
+		// over, so only its record of that response is put right here. A
+		// response owed behind it is moot too: the user's turn makes one of its
+		// own.
 		s.truncateAudioResponse(ctx)
+		s.mu.Lock()
+		s.responseCreateOwed = false
+		s.mu.Unlock()
 		return nil
 	case *frames.LLMContextFrame:
 		// The conversation the session is part of: the toolset it advertises, and
 		// the tool results it has gained since it was last reported.
 		if fr.Context != nil {
-			s.handleContext(ctx, fr.Context)
+			s.handleContext(ctx, fr.Context, dir)
 		}
 		return s.PushFrame(ctx, f, dir)
+	case *frames.LLMMessagesAppendFrame:
+		s.handleMessagesAppend(ctx, fr)
+		return nil
 	case *frames.LLMSetToolsFrame:
 		// The toolset changed mid-conversation. A text LLM would pick this up on
 		// its next run; this model is generating continuously, so tell it now.
@@ -309,13 +331,34 @@ func (s *Service) currentToolChoice() frames.ToolChoice {
 	return s.toolChoice
 }
 
+// PushFrame pushes a frame, delivering function call outcomes to the session on
+// the way.
+//
+// Function call results and cancellations are broadcast by the base; the
+// downstream copy is observed here and sent to the session as it is produced,
+// intermediate results included. The frames travel on to the assistant
+// aggregator, which records them in the conversation and decides when the
+// model should answer.
+func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if dir == processor.Downstream {
+		switch fr := f.(type) {
+		case *frames.FunctionCallResultFrame:
+			s.handleFunctionCallResult(ctx, fr)
+		case *frames.FunctionCallCancelFrame:
+			s.handleFunctionCallCancel(ctx, fr)
+		}
+	}
+	return s.Base.PushFrame(ctx, f, dir)
+}
+
 // handleContext takes the conversation the pipeline reported.
 //
 // The model generates continuously and never re-reads it, so a conversation
-// arriving means two things and only two: the toolset it advertises may have
-// changed, and it may have gained the result of a tool call the model asked for.
-// Both are pushed to the session here.
-func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
+// arriving means three things: the toolset it advertises may have changed, it
+// may hold a tool result that reached it some other way than from this
+// service, and, traveling upstream, it is the assistant aggregator asking the
+// model to answer what was delivered since its last response.
+func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, dir processor.Direction) {
 	s.mu.Lock()
 	first := s.convo == nil
 	s.convo = convo
@@ -325,20 +368,75 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
 
 	// The results already in the first conversation were produced before this
 	// session existed, so they are recorded as known rather than sent: the model
-	// never asked for them and has nothing to do with them.
+	// never asked for them and has nothing to do with them. Results this service
+	// pushed are already sent; this catches any written into the conversation
+	// some other way.
 	s.processCompletedCalls(ctx, convo, !first)
+
+	s.mu.Lock()
+	respond := !first && dir == processor.Upstream && s.resultsAwaitingResponse
+	s.mu.Unlock()
+	if respond {
+		s.createResponse(ctx)
+	}
 }
 
-// processCompletedCalls finds the tool results the model has not been given yet
-// and, when send is set, hands each to the session and asks for a reply.
+// handleMessagesAppend puts appended messages into the conversation as items,
+// for the model to take in.
 //
-// The results are read out of the conversation rather than taken from the
-// handler directly, because that is where a call's result lands however it was
-// produced: a handler that answered at once, one that answered later, or one the
-// application answered for.
+// Whether the model answers them is the aggregator's call: an append that asks
+// to run comes back to this service as the conversation the assistant
+// aggregator pushes upstream, which creates the response (see handleContext).
+// Before the session has a conversation, nothing is sent: the first
+// conversation carries what the aggregator recorded.
+func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
+	s.mu.Lock()
+	ready := s.conn != nil && s.convo != nil
+	s.mu.Unlock()
+	if !ready {
+		return
+	}
+	for _, m := range f.Messages {
+		text := m.StandardText()
+		if text == "" {
+			continue
+		}
+		role := "system"
+		if m.Role == frames.RoleAssistant {
+			role = "assistant"
+		}
+		s.sendMessageItem(ctx, text, role)
+	}
+	s.mu.Lock()
+	s.resultsAwaitingResponse = true
+	s.mu.Unlock()
+}
+
+// processCompletedCalls sends any tool result the conversation holds that has
+// not reached the session yet, when send is set.
+//
+// Results this service produced are already sent, as they are produced (see
+// PushFrame), so what this finds is a result written into the conversation
+// some other way, plus, with send unset, the results a conversation brings
+// with it at the start of a session.
 func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
-	sent := false
 	for _, m := range convo.Messages() {
+		if async, ok := frames.ParseAsyncToolMessage(m); ok {
+			// The started marker opens a call the model already knows it is
+			// waiting on, and an intermediate result was sent as a message when
+			// it was produced; the call stays open for the final one.
+			if async.Kind != frames.AsyncToolFinal || s.resultSeen(async.ToolCallID) {
+				continue
+			}
+			// Delivered through the tool-result channel, as a synchronous
+			// result is, just later.
+			s.recordResult(async.ToolCallID)
+			if send {
+				s.awaitResponse()
+				s.sendToolResult(ctx, async.ToolCallID, async.Result)
+			}
+			continue
+		}
 		for _, r := range m.ToolResults {
 			if s.resultSeen(r.ID) {
 				continue
@@ -349,41 +447,21 @@ func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMCo
 			if r.Content == frames.ToolResultInProgress {
 				continue
 			}
-			if async, ok := frames.ParseAsyncToolMessage(m); ok && !s.asyncResultSendable(ctx, async) {
-				s.recordResult(r.ID)
-				continue
-			}
 			s.recordResult(r.ID)
 			if send {
+				s.awaitResponse()
 				s.sendToolResult(ctx, r.ID, r.Content)
-				sent = true
 			}
 		}
 	}
-	if sent {
-		// The model has been told what its calls returned, so it can speak the
-		// answer. It is generating from audio otherwise, and nothing else would
-		// prompt it.
-		s.createResponse(ctx)
-	}
 }
 
-// asyncResultSendable reports whether an asynchronous tool's message carries a
-// result this session can take. Only the final one does: the session has no way
-// to receive a result in parts, and the marker that opens the call says nothing
-// the model does not already know, having made the call itself.
-func (s *Service) asyncResultSendable(ctx context.Context, m frames.AsyncToolMessage) bool {
-	switch m.Kind {
-	case frames.AsyncToolFinal:
-		return true
-	case frames.AsyncToolIntermediate:
-		msg := "openai realtime takes no streamed result from an asynchronous tool"
-		slog.ErrorContext(ctx, msg, "function", m.ToolCallID)
-		s.PushError(ctx, msg, nil, false)
-		return false
-	default:
-		return false
-	}
+// awaitResponse records that something was delivered that no response has
+// taken in yet.
+func (s *Service) awaitResponse() {
+	s.mu.Lock()
+	s.resultsAwaitingResponse = true
+	s.mu.Unlock()
 }
 
 // resultSeen reports whether the model has already been given this call's
@@ -406,6 +484,9 @@ func (s *Service) recordResult(toolCallID string) {
 func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string) {
 	slog.DebugContext(ctx, "sending a tool result to the realtime session",
 		"service", s.Name(), "tool_call_id", toolCallID)
+	s.mu.Lock()
+	delete(s.openCalls, toolCallID)
+	s.mu.Unlock()
 	if err := s.send(map[string]any{
 		keyType: "conversation.item.create",
 		"item": map[string]any{
@@ -418,10 +499,80 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 	}
 }
 
+// sendMessageItem puts text into the conversation for the model to take in,
+// without answering it.
+func (s *Service) sendMessageItem(ctx context.Context, text, role string) {
+	if err := s.send(map[string]any{
+		keyType: "conversation.item.create",
+		"item": map[string]any{
+			keyType:   "message",
+			"role":    role,
+			"content": []map[string]any{{keyType: "input_text", "text": text}},
+		},
+	}); err != nil {
+		slog.ErrorContext(ctx, "sending a message item failed", "service", s.Name(), "err", err)
+	}
+}
+
+// handleFunctionCallResult sends one function call result to the session as it
+// is produced.
+//
+// An intermediate result cannot go through the tool-result channel, which
+// takes one output per call, so it goes in as a message carrying the same
+// envelope a text LLM reads from the conversation. A final result answers the
+// call, unless a reconnect has left the session without the id to answer, in
+// which case it goes in as a message too.
+func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.FunctionCallResultFrame) {
+	result := f.Result
+	if result == "" {
+		result = frames.ToolResultCompleted
+	}
+	s.mu.Lock()
+	open := s.openCalls[f.ToolCallID]
+	s.mu.Unlock()
+
+	switch {
+	case !f.Properties.Final():
+		s.sendMessageItem(ctx, frames.NewAsyncToolIntermediateMessage(f.ToolCallID, result).Text, "system")
+	case open:
+		s.sendToolResult(ctx, f.ToolCallID, result)
+	default:
+		s.sendMessageItem(ctx, frames.NewAsyncToolFinalMessage(f.ToolCallID, result).Text, "system")
+	}
+
+	s.mu.Lock()
+	s.sentResults[f.ToolCallID] = true
+	s.resultsAwaitingResponse = true
+	s.mu.Unlock()
+}
+
+// handleFunctionCallCancel settles a canceled call, so the session is not left
+// waiting on it.
+func (s *Service) handleFunctionCallCancel(ctx context.Context, f *frames.FunctionCallCancelFrame) {
+	s.mu.Lock()
+	open := s.openCalls[f.ToolCallID]
+	s.mu.Unlock()
+	if !open {
+		return
+	}
+	s.sendToolResult(ctx, f.ToolCallID, frames.ToolResultCanceled)
+	s.recordResult(f.ToolCallID)
+}
+
 // createResponse asks the model to speak. The session generates from audio on
 // its own, so this is for the turns nothing spoken prompted: the reply to a tool
-// result.
+// result. The session refuses a second response while one is running, so one
+// asked for then is held until that one is done rather than lost to the error.
 func (s *Service) createResponse(ctx context.Context) {
+	s.mu.Lock()
+	if s.responseActive {
+		s.responseCreateOwed = true
+		s.mu.Unlock()
+		slog.DebugContext(ctx, "a response is already running, holding the next one until it is done",
+			"service", s.Name())
+		return
+	}
+	s.mu.Unlock()
 	if err := s.send(map[string]any{keyType: "response.create"}); err != nil {
 		slog.ErrorContext(ctx, "asking for a response failed", "service", s.Name(), "err", err)
 	}
@@ -551,6 +702,11 @@ func (s *Service) disconnect() {
 	conn, cancel := s.conn, s.cancel
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
 	s.audioResp = nil
+	// A new session knows none of the old call ids, and no response is running
+	// in it.
+	s.openCalls = map[string]bool{}
+	s.responseActive = false
+	s.responseCreateOwed = false
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -717,7 +873,11 @@ func (s *Service) handleTurnEvent(ctx context.Context, ev serverEvent) bool {
 	switch ev.Type {
 	case "input_audio_buffer.speech_started":
 		// The model has stopped speaking as far as the caller is concerned, so
-		// its record of the turn is cut back to what was heard.
+		// its record of the turn is cut back to what was heard, and a response
+		// owed behind the one it was giving is moot.
+		s.mu.Lock()
+		s.responseCreateOwed = false
+		s.mu.Unlock()
 		s.truncateAudioResponse(ctx)
 		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStartedSpeakingFrame() })
 	case "input_audio_buffer.speech_stopped":
@@ -735,6 +895,11 @@ func (s *Service) handleTurnEvent(ctx context.Context, ev serverEvent) bool {
 func (s *Service) handleResponseEvent(ctx context.Context, ev serverEvent) bool {
 	switch ev.Type {
 	case "response.created":
+		// The response takes in everything delivered before it.
+		s.mu.Lock()
+		s.responseActive = true
+		s.resultsAwaitingResponse = false
+		s.mu.Unlock()
 		_ = s.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Downstream)
 	case "response.audio.delta", "response.output_audio.delta":
 		if pcm, err := base64.StdEncoding.DecodeString(ev.Delta); err == nil && len(pcm) > 0 {
@@ -752,8 +917,16 @@ func (s *Service) handleResponseEvent(ctx context.Context, ev serverEvent) bool 
 		// would cut back.
 		s.mu.Lock()
 		s.audioResp = nil
+		s.responseActive = false
+		// A response asked for while this one was running is owed now, unless
+		// this one took in what it was for.
+		owed := s.responseCreateOwed && s.resultsAwaitingResponse
+		s.responseCreateOwed = false
 		s.mu.Unlock()
 		_ = s.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Downstream)
+		if owed {
+			s.createResponse(ctx)
+		}
 	default:
 		return false
 	}
@@ -876,6 +1049,11 @@ func (s *Service) runToolCall(ctx context.Context, ev serverEvent) {
 	name, tracked := s.pendingCalls[ev.CallID]
 	// Taken out first, so a repeated event cannot run the same call twice.
 	delete(s.pendingCalls, ev.CallID)
+	if tracked {
+		// The session is waiting on this call now, so its id can be answered
+		// with a function_call_output.
+		s.openCalls[ev.CallID] = true
+	}
 	convo := s.convo
 	s.mu.Unlock()
 

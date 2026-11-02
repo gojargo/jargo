@@ -39,6 +39,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that cannot be loaded leaves the tagger unusable, and the LLM writes the
   tags itself. See
   [Expressive conversation](docs/guides/expressive-conversation.md#the-tone-tagger).
+- **Speech-to-speech services take messages appended to the conversation**
+  (`LLMMessagesAppendFrame`) into their session, each on whatever second
+  channel its provider offers: OpenAI Realtime (Azure included) and xAI
+  Realtime as conversation items, Gemini Live as client content that does not
+  complete the turn, Nova Sonic as a text event. Whether the model answers them
+  is the assistant aggregator's call, as for a tool result: an append that asks
+  to run comes back as the conversation the aggregator pushes upstream, which
+  creates the response, so the hold while the bot speaks and the bundling of a
+  burst apply. This is what carries a backend's messages to a speech-to-speech
+  frontend of an `LLMWithBackend`. Without a conversation, an append starts one
+  on Gemini Live, as in a pipeline with no aggregators.
+- **Speech-to-speech services deliver a tool's intermediate results** (reported
+  with `FunctionCallResultProperties.IsFinal` false) to their model, each on
+  whatever second channel its provider offers, since a function call itself
+  takes one output: OpenAI Realtime and xAI Realtime put them in as
+  conversation items, Gemini Live as a response that keeps the call open
+  (`willContinue`), Nova Sonic as a text event. The result's `RunLLM` says
+  whether the model should answer it or just take it in, which Gemini Live
+  says with `SILENT` scheduling and Nova Sonic with a text event that is not
+  interactive. A service that cannot do this says so with
+  `llm.Base.AcceptsIntermediateFunctionCallResults`: Gemini Live on a model
+  without non-blocking tools, which drops intermediate results with a warning.
+  `frames.Message.StandardText`, `frames.ToolResultCompleted` and
+  `frames.ToolResultCanceled` go with it.
 - **Error messages have the credentials they quote masked.**
   `security.RedactSecrets` masks the value of any `name=value` or `name: value`
   pair (or `:=`, `=>`) whose name marks a credential (`api_key`,
@@ -125,6 +149,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `StartFrame` and never start. The pipeline is only cleaned up: no
   `CancelFrame` is pushed, and the processors that had already started are
   stopped by their `Cleanup`.
+- Speech-to-speech services take each function call result from the
+  `FunctionCallResultFrame` the service broadcasts, as it is produced, rather
+  than finding it in the conversation on the next frame the aggregator pushes.
+  A result therefore reaches the provider even when it asks for no inference,
+  or arrives while the user is speaking. What runs the model is the
+  conversation the assistant aggregator pushes upstream after a result, which
+  weighs `RunLLM`, sibling calls, bot speech and user speech. On OpenAI Realtime
+  and xAI Realtime a response asked for while one is already running is now
+  held until that one is done, where before the API refused it and the reply
+  was lost, and a canceled call is settled so the session is not left waiting
+  on it.
 - `observers.StartupTiming` ends the setup phase when the last processor is
   set up, rather than when the `StartFrame` entered the pipeline.
 - `text.StripMarkdown` reduces a Markdown link or image to its label or alt

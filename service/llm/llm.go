@@ -1867,6 +1867,23 @@ type LLMWithBackendRoleObjector interface {
 // them, say nothing; a service that cannot fill one overrides this.
 func (b *Base) LLMWithBackendRoleObjection(LLMWithBackendRole) string { return "" }
 
+// IntermediateResultAcceptor is implemented by every service, through Base,
+// to say whether it delivers a tool's intermediate results to its model.
+type IntermediateResultAcceptor interface {
+	// AcceptsIntermediateFunctionCallResults reports whether intermediate
+	// results reach the model.
+	AcceptsIntermediateFunctionCallResults() bool
+}
+
+// AcceptsIntermediateFunctionCallResults reports whether this service delivers
+// a tool's intermediate results to the model. An intermediate result is one
+// reported with FunctionCallResultProperties.IsFinal false while the call keeps
+// running. A text service passes them on as context messages. A
+// speech-to-speech service has to map them onto whatever second channel its
+// provider offers, and not all of them have one; one that has none overrides
+// this and drops them with a warning.
+func (b *Base) AcceptsIntermediateFunctionCallResults() bool { return true }
+
 // cancelFunctionCallTasks cancels the calls in flight that match, and returns
 // them. Each handler's context is canceled so a cancel-aware handler runs its
 // cleanup, a FunctionCallCancelFrame is broadcast so the rest of the pipeline
