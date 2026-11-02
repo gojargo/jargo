@@ -245,8 +245,8 @@ type synthesizer struct {
 	// receiveStop and receiveDone stop and wait for the receive loop.
 	receiveStop context.CancelFunc
 	receiveDone chan struct{}
-	// keepaliveStop stops the keepalive loop.
-	keepaliveStop context.CancelFunc
+	// keepalive holds an idle session open.
+	keepalive tts.Keepalive
 
 	// Session state reported by Begin. A session ID means Begin arrived.
 	sessionID        string
@@ -322,7 +322,7 @@ func (s *synthesizer) connect(ctx context.Context) {
 	s.reconnectDelay = 0
 	s.mu.Unlock()
 	s.openSession(ctx)
-	s.startKeepalive(ctx)
+	s.keepalive.Start(context.WithoutCancel(ctx), s.keepaliveInterval, s)
 }
 
 // disconnect disconnects from AssemblyAI and stops the receive and keepalive
@@ -330,7 +330,7 @@ func (s *synthesizer) connect(ctx context.Context) {
 func (s *synthesizer) disconnect(ctx context.Context) {
 	s.closeConnectionContexts()
 	s.ws.Disconnect()
-	s.stopKeepalive()
+	s.keepalive.Stop()
 	s.closeSession(ctx)
 }
 
@@ -579,49 +579,16 @@ func (s *synthesizer) sendFlush(ctx context.Context) error {
 	return s.sendLocked(ctx, map[string]any{fieldType: ttsMsgFlush})
 }
 
-// startKeepalive starts the keepalive loop if it isn't running.
-func (s *synthesizer) startKeepalive(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.keepaliveStop != nil {
-		return
-	}
-	runCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
-	s.keepaliveStop = stop
-	go s.keepalive(runCtx, s.keepaliveInterval)
+// KeepaliveReady reports whether the session is connected, implementing
+// tts.KeepaliveHandler.
+func (s *synthesizer) KeepaliveReady() bool {
+	return s.Connected()
 }
 
-// stopKeepalive stops the keepalive loop if running.
-func (s *synthesizer) stopKeepalive() {
-	s.mu.Lock()
-	stop := s.keepaliveStop
-	s.keepaliveStop = nil
-	s.mu.Unlock()
-	if stop != nil {
-		stop()
-	}
-}
-
-// keepalive sends KeepAlive every interval while connected, so an idle session
-// stays open. A failed send is logged and the loop keeps going: the receive
-// loop handles a lost connection, and the next keepalive goes out on the
-// reconnected socket.
-func (s *synthesizer) keepalive(ctx context.Context, interval time.Duration) {
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-		if !s.Connected() {
-			continue
-		}
-		if err := s.send(ctx, map[string]any{fieldType: ttsMsgKeepAlive}); err != nil && ctx.Err() == nil {
-			slog.Warn("assemblyai tts keepalive failed", "err", err)
-		}
-	}
+// SendKeepalive sends KeepAlive so an idle session stays open, implementing
+// tts.KeepaliveHandler.
+func (s *synthesizer) SendKeepalive(ctx context.Context) error {
+	return s.send(ctx, map[string]any{fieldType: ttsMsgKeepAlive})
 }
 
 // contextState returns a context's bookkeeping, creating it on first use.

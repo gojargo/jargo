@@ -157,6 +157,8 @@ type realtimeSynthesizer struct {
 	mu       sync.Mutex
 	conn     *wsutil.Conn
 	connStop context.CancelFunc
+	// keepalive holds the connection open between turns.
+	keepalive tts.Keepalive
 	// active is the context the keepalive may name, set once its opening message
 	// has gone out.
 	active string
@@ -272,13 +274,14 @@ func (s *realtimeSynthesizer) stream(ctx context.Context) (*wsutil.Conn, error) 
 	runCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
 	s.conn, s.connStop = conn, stop
 	go s.readLoop(runCtx, conn)
-	go s.keepalive(runCtx, conn)
+	s.keepalive.Start(runCtx, keepaliveInterval, s)
 	return conn, nil
 }
 
 // drop closes the connection so the next sentence dials a fresh one, releasing
 // every context still open on it. Callers hold mu.
 func (s *realtimeSynthesizer) drop(cause error) {
+	s.keepalive.Stop()
 	if s.connStop != nil {
 		s.connStop()
 		s.connStop = nil
@@ -491,31 +494,32 @@ func (s *realtimeSynthesizer) forgetContext(contextID string) {
 	}
 }
 
-// keepalive holds an idle connection open. Between turns nothing is written for
-// as long as the user is talking, and the server drops a stream that goes quiet.
-func (s *realtimeSynthesizer) keepalive(ctx context.Context, conn *wsutil.Conn) {
-	tick := time.NewTicker(keepaliveInterval)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-		msg := map[string]any{keyText: ""}
-		s.mu.Lock()
-		active := s.active
-		s.mu.Unlock()
-		if active != "" {
-			// Only a context whose opening message has gone out may be named: a
-			// keepalive that opened one would open it without the voice settings
-			// the opening message carries, and the server rejects the later one.
-			msg[keyContextID] = active
-		}
-		if err := s.write(ctx, conn, msg); err != nil {
-			return
-		}
+// KeepaliveReady reports whether the connection is open, implementing
+// tts.KeepaliveHandler.
+func (s *realtimeSynthesizer) KeepaliveReady() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn != nil
+}
+
+// SendKeepalive sends empty text, implementing tts.KeepaliveHandler. Between
+// turns nothing is written for as long as the user is talking, and the server
+// drops a stream that goes quiet.
+func (s *realtimeSynthesizer) SendKeepalive(ctx context.Context) error {
+	s.mu.Lock()
+	conn, active := s.conn, s.active
+	s.mu.Unlock()
+	if conn == nil {
+		return nil
 	}
+	msg := map[string]any{keyText: ""}
+	if active != "" {
+		// Only a context whose opening message has gone out may be named: a
+		// keepalive that opened one would open it without the voice settings
+		// the opening message carries, and the server rejects the later one.
+		msg[keyContextID] = active
+	}
+	return s.write(ctx, conn, msg)
 }
 
 // Start dials the shared connection when the pipeline starts, implementing

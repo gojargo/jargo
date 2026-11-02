@@ -51,6 +51,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   credential. `frames.NewErrorFrame` and `frames.NewFatalErrorFrame` apply it,
   so an error's message is masked on every route it takes: the log, observers,
   event handlers and RTVI clients.
+- `tts.Keepalive` holds a websocket synthesizer's connection open for a
+  provider that closes an idle one. A synthesizer starts it from its connect
+  with a `tts.KeepaliveHandler` that sends the provider's keepalive message,
+  and stops it from its disconnect. It sends only while the websocket is open,
+  logs a failed send and keeps going, and a loop that has ended is replaced by
+  the next start. The ElevenLabs realtime and AssemblyAI TTS services use it.
 - `aggregators.LLMText` takes text transforms, with `SetTextTransformers` and
   `AddTextTransformer`, which rewrite each aggregation for everything
   downstream: the TTS service, the context and the client. A transform
@@ -83,6 +89,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A failed keepalive no longer stops the ElevenLabs realtime TTS service's
+  keepalive for the rest of the connection.
 - `text.StripMarkdown` keeps asterisks that are content (`2*3*4`, `5 * 3`,
   `Press * then #`, `\*`), strips list bullets at any indent and spaced
   horizontal rules (`* * *`), and drops `~~struck~~` text instead of speaking
