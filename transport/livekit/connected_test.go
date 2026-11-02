@@ -193,3 +193,45 @@ func TestParticipantsAlreadyInTheRoomAreConnected(t *testing.T) {
 		}
 	}
 }
+
+// TestActiveSpeakerReportsTheLoudest checks the loudest of the room's active
+// speakers, listed first, is the one reported.
+func TestActiveSpeakerReportsTheLoudest(t *testing.T) {
+	c := &Connection{}
+	var got []string
+	c.OnActiveSpeakerChanged(func(identity string) { got = append(got, identity) })
+
+	c.activeSpeakersChanged([]string{"alice", "bob"})
+	if len(got) != 1 || got[0] != "alice" {
+		t.Fatalf("speakers reported = %v, want the loudest, alice", got)
+	}
+}
+
+// TestActiveSpeakerReportsOnlyAChange checks a speaker is reported only when
+// they take over from another, and a room falling quiet keeps the current one.
+func TestActiveSpeakerReportsOnlyAChange(t *testing.T) {
+	c := &Connection{}
+	var got []string
+	c.OnActiveSpeakerChanged(func(identity string) { got = append(got, identity) })
+
+	for _, speakers := range [][]string{{"alice"}, {"alice", "bob"}, {}, {"alice"}, {"bob"}} {
+		c.activeSpeakersChanged(speakers)
+	}
+	if want := []string{"alice", "bob"}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("speakers reported = %v, want %v", got, want)
+	}
+}
+
+// TestActiveSpeakerHeldUntilAHandler checks a change before a handler is set
+// is reported to it once it is, the latest only.
+func TestActiveSpeakerHeldUntilAHandler(t *testing.T) {
+	c := &Connection{}
+	c.activeSpeakersChanged([]string{"alice"})
+	c.activeSpeakersChanged([]string{"bob"})
+
+	var got []string
+	c.OnActiveSpeakerChanged(func(identity string) { got = append(got, identity) })
+	if len(got) != 1 || got[0] != "bob" {
+		t.Fatalf("speakers reported = %v, want the latest, bob", got)
+	}
+}

@@ -66,6 +66,14 @@ type Connection struct {
 	partMu      sync.Mutex
 	partHandler func(identity string)
 	pendingPart []string
+
+	speakerMu      sync.Mutex
+	speakerHandler func(identity string)
+	// activeSpeaker is the loudest speaker last reported, "" before any.
+	activeSpeaker string
+	// speakerPending reports that activeSpeaker changed before a handler was
+	// registered, so the handler is told it when it is.
+	speakerPending bool
 }
 
 // Connect joins the configured room, publishes an Opus audio track, and returns
@@ -104,6 +112,13 @@ func Connect(cfg Config) (*Connection, error) {
 		}
 	}
 	cb.OnParticipantConnected = func(p *lksdk.RemoteParticipant) { c.deliverParticipant(p.Identity()) }
+	cb.OnActiveSpeakersChanged = func(speakers []lksdk.Participant) {
+		identities := make([]string, len(speakers))
+		for i, p := range speakers {
+			identities[i] = p.Identity()
+		}
+		c.activeSpeakersChanged(identities)
+	}
 	cb.OnDisconnected = func() { c.closeOnce.Do(func() { close(c.closed) }) }
 
 	room, err := lksdk.ConnectToRoom(cfg.URL, lksdk.ConnectInfo{
@@ -271,6 +286,45 @@ func (c *Connection) deliverParticipant(identity string) {
 	}
 	c.partMu.Unlock()
 	h(identity)
+}
+
+// OnActiveSpeakerChanged registers the handler for a change of the room's
+// loudest speaker, called with their identity. The bot can be the speaker. A
+// change that came before a handler was set is reported to it at once, the
+// latest only.
+func (c *Connection) OnActiveSpeakerChanged(h func(identity string)) {
+	c.speakerMu.Lock()
+	c.speakerHandler = h
+	pending, speaker := c.speakerPending, c.activeSpeaker
+	c.speakerPending = false
+	c.speakerMu.Unlock()
+	if pending {
+		h(speaker)
+	}
+}
+
+// activeSpeakersChanged takes the room's active speakers, loudest first, and
+// reports the loudest when it changes. A room that falls quiet keeps the
+// current speaker: only a change of speaker is reported.
+func (c *Connection) activeSpeakersChanged(identities []string) {
+	if len(identities) == 0 {
+		return
+	}
+	speaker := identities[0]
+	c.speakerMu.Lock()
+	if speaker == c.activeSpeaker {
+		c.speakerMu.Unlock()
+		return
+	}
+	c.activeSpeaker = speaker
+	h := c.speakerHandler
+	if h == nil {
+		c.speakerPending = true
+	}
+	c.speakerMu.Unlock()
+	if h != nil {
+		h(speaker)
+	}
 }
 
 // SendMessage publishes an application message to the room.

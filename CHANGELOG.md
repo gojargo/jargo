@@ -68,6 +68,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the mixer, and an interruption doesn't drop them. The volume starts at the
   new `transport.Params.AudioOutVolume`, 1.0 when unset. `audio.ScaleAudio`
   does the scaling. See [Audio](docs/guides/audio.md#volume).
+- `livekit.Connection.OnActiveSpeakerChanged` reports a change of the room's
+  loudest speaker, with their identity. Only a change of speaker is reported,
+  and a room that falls quiet keeps the current one. A change before a handler
+  is set is reported to it once it is, the latest only.
 - `tts.Keepalive` holds a websocket synthesizer's connection open for a
   provider that closes an idle one. A synthesizer starts it from its connect
   with a `tts.KeepaliveHandler` that sends the provider's keepalive message,
