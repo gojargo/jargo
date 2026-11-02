@@ -15,6 +15,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`wsserver.NewTransport` builds a transport on a WebSocket already
+  accepted**, taking the messages already read off it. A server that reads the
+  first messages to tell which telephony provider is calling hands them over,
+  and the transport deserializes them before anything else, so the serializer
+  still learns the call from the provider's opening messages.
+- **`livekit.Config.Token`: join a room with an access token minted
+  elsewhere.** The token names the room and the participant, so the API key,
+  secret, room and identity are then not needed.
+- **`whatsapp.Client.TerminateAllCalls`** ends every ongoing call, through the
+  Graph API and by disconnecting its media, for a server shutting down.
 - **`rtc.RequestHandler`: the WebRTC signaling a browser client speaks.** It
   answers offers and keeps each connection under its `pc_id`, so a later offer
   carrying that id renegotiates the same session, and with `restart_pc` moves

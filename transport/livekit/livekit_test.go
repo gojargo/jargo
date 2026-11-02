@@ -25,6 +25,17 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// TestValidateWithToken covers joining with an access token minted elsewhere:
+// the token names the room and the participant, so only the URL is needed.
+func TestValidateWithToken(t *testing.T) {
+	if err := (Config{URL: "ws://x", Token: "t"}).Validate(); err != nil {
+		t.Fatalf("config with a token rejected: %v", err)
+	}
+	if err := (Config{Token: "t"}).Validate(); err == nil {
+		t.Fatal("config with a token but no URL accepted")
+	}
+}
+
 func TestConnectValidatesConfig(t *testing.T) {
 	if _, err := Connect(Config{}); err == nil {
 		t.Fatal("Connect with empty config should fail validation")

@@ -171,13 +171,25 @@ func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params Param
 	if err != nil {
 		return nil, err
 	}
+	return NewTransport(c, ser, params), nil
+}
+
+// NewTransport builds a Transport on a WebSocket that has already been
+// accepted, using ser for the wire format.
+//
+// pending are messages already read off the socket, oldest first: a server that
+// reads the first messages to tell which provider is calling hands them over
+// here, and the transport deserializes them before anything else it reads. A
+// provider's opening messages carry what its serializer learns the call from,
+// such as the stream to address audio to, so they must not be lost.
+func NewTransport(c *websocket.Conn, ser Serializer, params Params, pending ...[]byte) *Transport {
 	c.SetReadLimit(readLimit)
-	sess := &Session{conn: c, done: make(chan struct{})}
+	sess := &Session{conn: c, done: make(chan struct{}), pending: pending}
 	return &Transport{
 		sess: sess,
 		in:   newInput(sess, ser, params),
 		out:  newOutput(sess, ser, params),
-	}, nil
+	}
 }
 
 // Input returns the input processor.
@@ -216,6 +228,9 @@ type Session struct {
 	done      chan struct{}
 
 	mu sync.Mutex
+	// pending are messages read off the socket before the transport was built,
+	// delivered ahead of anything read from it.
+	pending [][]byte
 	// holds counts the sides of the transport still using the connection.
 	holds int
 	// stopRead ends the read loop, registered by the input once it starts
@@ -226,6 +241,14 @@ type Session struct {
 }
 
 func (s *Session) read(ctx context.Context) ([]byte, error) {
+	s.mu.Lock()
+	if len(s.pending) > 0 {
+		data := s.pending[0]
+		s.pending = s.pending[1:]
+		s.mu.Unlock()
+		return data, nil
+	}
+	s.mu.Unlock()
 	_, data, err := s.conn.Read(ctx)
 	return data, err
 }

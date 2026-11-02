@@ -151,6 +151,56 @@ func TestWebhookTerminateClosesCall(t *testing.T) {
 	}
 }
 
+// TestTerminateAllCallsEndsEveryCall covers shutting down with calls under way:
+// each is terminated over the Graph API, its media is disconnected, and none is
+// left behind.
+func TestTerminateAllCallsEndsEveryCall(t *testing.T) {
+	var mu sync.Mutex
+	terminated := map[string]bool{}
+	graph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		if b["action"] == "terminate" {
+			mu.Lock()
+			terminated[fmt.Sprint(b["call_id"])] = true
+			mu.Unlock()
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer graph.Close()
+
+	c := mustClient(t, graph.URL+"/")
+	var conns []*rtc.Connection
+	for _, id := range []string{"call-1", "call-2"} {
+		conn, err := rtc.NewConnection(rtc.WithICEServers())
+		if err != nil {
+			t.Fatalf("new connection: %v", err)
+		}
+		c.store(id, conn)
+		conns = append(conns, conn)
+	}
+
+	c.TerminateAllCalls(t.Context())
+
+	for i, conn := range conns {
+		select {
+		case <-conn.Done():
+		case <-time.After(3 * time.Second):
+			t.Fatalf("call %d's media was not disconnected", i+1)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !terminated["call-1"] || !terminated["call-2"] {
+		t.Fatalf("terminated = %v, want both calls", terminated)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.calls) != 0 {
+		t.Fatalf("%d calls left behind", len(c.calls))
+	}
+}
+
 // --- helpers ---
 
 func mustClient(t *testing.T, baseURL string) *Client {

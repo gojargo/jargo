@@ -207,6 +207,31 @@ func (c *Client) handleConnect(call webhookCall) {
 	}
 }
 
+// TerminateAllCalls ends every ongoing call: it asks the Graph API to terminate
+// each one and disconnects its media, all at once, then forgets them. Call it
+// when the server shuts down.
+func (c *Client) TerminateAllCalls(ctx context.Context) {
+	c.mu.Lock()
+	calls := c.calls
+	c.calls = map[string]*rtc.Connection{}
+	c.mu.Unlock()
+	if len(calls) == 0 {
+		slog.Debug("whatsapp: no ongoing calls to terminate")
+		return
+	}
+	slog.Debug("whatsapp: terminating ongoing calls", "count", len(calls))
+	var wg sync.WaitGroup
+	for id, conn := range calls {
+		wg.Go(func() {
+			if err := c.api.terminate(ctx, id); err != nil {
+				slog.Warn("whatsapp: terminate call", "call", id, "err", err)
+			}
+		})
+		wg.Go(func() { _ = conn.Disconnect() })
+	}
+	wg.Wait()
+}
+
 func (c *Client) handleTerminate(callID string) {
 	c.mu.Lock()
 	conn := c.calls[callID]

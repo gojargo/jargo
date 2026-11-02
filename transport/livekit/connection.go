@@ -23,19 +23,23 @@ import (
 // errConnectionClosed is returned when the room disconnects while a caller waits.
 var errConnectionClosed = errors.New("livekit: connection closed")
 
-// Config configures a LiveKit room connection. The SDK mints the participant
-// access token from the API key and secret.
+// Config configures a LiveKit room connection. Either Token is an access token
+// already minted for the room, or the SDK mints one from the API key and secret
+// for RoomName and Identity.
 type Config struct {
 	// URL is the LiveKit server URL (ws(s)://...). Required.
 	URL string `validate:"required"`
-	// APIKey is the LiveKit API key. Required.
-	APIKey string `validate:"required"`
-	// APISecret is the LiveKit API secret. Required.
-	APISecret string `validate:"required"`
-	// RoomName is the room to join. Required.
-	RoomName string `validate:"required"`
-	// Identity is this participant's identity. Required.
-	Identity string `validate:"required"`
+	// Token is an access token for the room, which names the room and the
+	// participant itself. When set, the fields below are not needed.
+	Token string
+	// APIKey is the LiveKit API key. Required without Token.
+	APIKey string `validate:"required_without=Token"`
+	// APISecret is the LiveKit API secret. Required without Token.
+	APISecret string `validate:"required_without=Token"`
+	// RoomName is the room to join. Required without Token.
+	RoomName string `validate:"required_without=Token"`
+	// Identity is this participant's identity. Required without Token.
+	Identity string `validate:"required_without=Token"`
 }
 
 // Validate reports whether the configuration is usable.
@@ -129,12 +133,18 @@ func Connect(cfg Config) (*Connection, error) {
 	}
 	cb.OnDisconnected = func() { c.closeOnce.Do(func() { close(c.closed) }) }
 
-	room, err := lksdk.ConnectToRoom(cfg.URL, lksdk.ConnectInfo{
-		APIKey:              cfg.APIKey,
-		APISecret:           cfg.APISecret,
-		RoomName:            cfg.RoomName,
-		ParticipantIdentity: cfg.Identity,
-	}, cb)
+	var room *lksdk.Room
+	var err error
+	if cfg.Token != "" {
+		room, err = lksdk.ConnectToRoomWithToken(cfg.URL, cfg.Token, cb)
+	} else {
+		room, err = lksdk.ConnectToRoom(cfg.URL, lksdk.ConnectInfo{
+			APIKey:              cfg.APIKey,
+			APISecret:           cfg.APISecret,
+			RoomName:            cfg.RoomName,
+			ParticipantIdentity: cfg.Identity,
+		}, cb)
+	}
 	if err != nil {
 		return nil, err
 	}

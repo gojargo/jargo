@@ -198,6 +198,9 @@ type dialOpts struct {
 	// is already on the line by the time the pipeline starts, so a handler
 	// registered after it has already missed the connection.
 	onTransport func(*wsserver.Transport)
+	// pending, when set, builds the transport with NewTransport on a socket
+	// accepted by hand, handing these over as messages already read.
+	pending [][]byte
 }
 
 // dial serves the transport over httptest, dials it, and runs a pipeline whose
@@ -230,11 +233,22 @@ func dialWith(
 	t.Cleanup(cancel)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tr, err := wsserver.Accept(w, r, ser, params)
-		if err != nil {
-			t.Errorf("Accept: %v", err)
-			close(ready)
-			return
+		var tr *wsserver.Transport
+		if opts.pending != nil {
+			conn, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				t.Errorf("websocket accept: %v", err)
+				close(ready)
+				return
+			}
+			tr = wsserver.NewTransport(conn, ser, params, opts.pending...)
+		} else {
+			var err error
+			if tr, err = wsserver.Accept(w, r, ser, params); err != nil {
+				t.Errorf("Accept: %v", err)
+				close(ready)
+				return
+			}
 		}
 		c.tr = tr
 		if opts.onTransport != nil {
@@ -465,6 +479,28 @@ func TestInboundAudioBecomesFrames(t *testing.T) {
 			}
 		}
 		return false
+	})
+}
+
+// TestPendingMessagesAreReadFirst covers a transport built on a socket whose
+// first messages were already read, as a server does to tell which provider is
+// calling: those messages are deserialized before anything read afterwards, so
+// the serializer still sees the call's opening.
+func TestPendingMessagesAreReadFirst(t *testing.T) {
+	first, _ := json.Marshal(message{Kind: "audio", Payload: "opening"})
+	c := dialWith(t, &testSerializer{}, params(), dialOpts{pending: [][]byte{first}})
+	defer c.shutdown(t)
+
+	c.send(t, message{Kind: "audio", Payload: "later"})
+
+	c.waitFor(t, "both messages, in order", func(fs []frames.Frame) bool {
+		var got []string
+		for _, f := range fs {
+			if af, ok := f.(*frames.InputAudioRawFrame); ok {
+				got = append(got, string(af.Audio))
+			}
+		}
+		return strings.Join(got, ",") == "opening,later"
 	})
 }
 
