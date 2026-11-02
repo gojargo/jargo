@@ -50,6 +50,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `text.PatternPairAggregator` handles a pattern whose opening and closing
+  delimiters are the same string, such as a Markdown code fence (` ``` `). The
+  text before such a block used to be dropped, and a sentence ending before it
+  could be split inside the delimiter so the block was spoken.
 - `aggregators.LLMText` sends the text it still holds ahead of a
   `TTSStoppedFrame`, so the last sentence of a speech-to-speech reply reaches
   the client before the bot stops speaking rather than waiting for the next

@@ -575,3 +575,90 @@ func TestPatternPairHandleInterruptionKeepsThePatterns(t *testing.T) {
 		t.Fatalf("handler saw %q, want the pattern to have survived as %q", got.Text, "after")
 	}
 }
+
+// newCodeFence builds an aggregator for a pattern whose opening and closing
+// delimiters are the same string, as a Markdown code fence's are.
+func newCodeFence(t *testing.T) *text.PatternPairAggregator {
+	t.Helper()
+	a := text.NewPatternPairAggregator(frames.TextTypeSentence, "")
+	if err := a.AddPattern("code", "```", "```", text.MatchAggregate); err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// fenceStep is one aggregation, named by its type or by "flush" for what Flush
+// returned.
+type fenceStep struct {
+	typ, text string
+}
+
+// runFence feeds the chunks through the aggregator and flushes it, returning
+// every aggregation in order.
+func runFence(a *text.PatternPairAggregator, chunks ...string) []fenceStep {
+	var got []fenceStep
+	for _, chunk := range chunks {
+		for _, agg := range a.Aggregate(chunk) {
+			got = append(got, fenceStep{string(agg.Type), agg.Text})
+		}
+	}
+	if rest, ok := a.Flush(); ok {
+		got = append(got, fenceStep{"flush", rest.Text})
+	}
+	return got
+}
+
+func assertFenceSteps(t *testing.T, got, want []fenceStep) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("aggregations = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("aggregations = %q, want %q", got, want)
+		}
+	}
+}
+
+// The text before a fence is released as soon as the fence opens.
+func TestPatternPairSameDelimiterReleasesTheTextBefore(t *testing.T) {
+	got := runFence(newCodeFence(t), "Here is the code:\n```python\nprint(1)\n```\nDone.")
+	assertFenceSteps(t, got, []fenceStep{
+		{"sentence", "Here is the code:"}, {"code", "python\nprint(1)"}, {"flush", "Done."},
+	})
+}
+
+// A sentence ending before a fence is not split inside it.
+func TestPatternPairSameDelimiterKeepsTheSentenceOutOfTheFence(t *testing.T) {
+	got := runFence(newCodeFence(t), "Here is the code.\n```python\nprint(1)\n```\nDone.")
+	assertFenceSteps(t, got, []fenceStep{
+		{"sentence", "Here is the code."}, {"code", "python\nprint(1)"}, {"flush", "Done."},
+	})
+}
+
+// A fence split across chunks is reassembled before it is matched.
+func TestPatternPairSameDelimiterAcrossChunks(t *testing.T) {
+	got := runFence(newCodeFence(t),
+		"Here is", " the code.\n", "``", "`python\nprint(1)\n", "``", "`\nDone.")
+	assertFenceSteps(t, got, []fenceStep{
+		{"sentence", "Here is the code."}, {"code", "python\nprint(1)"}, {"flush", "Done."},
+	})
+}
+
+// Two blocks pair their fences in order: the first with the second, the third
+// with the fourth.
+func TestPatternPairSameDelimiterPairsTwoBlocksInOrder(t *testing.T) {
+	got := runFence(newCodeFence(t), "A.\n```\none\n```\nB.\n```\ntwo\n```\nC.")
+	assertFenceSteps(t, got, []fenceStep{
+		{"sentence", "A."}, {"code", "one"}, {"sentence", "B."}, {"code", "two"}, {"flush", "C."},
+	})
+}
+
+// A fence that never closes is dropped at the flush, and the next reply starts
+// clean.
+func TestPatternPairSameDelimiterDropsAnUnclosedFence(t *testing.T) {
+	a := newCodeFence(t)
+	assertFenceSteps(t, runFence(a, "Type ``` to start a block."), []fenceStep{{"sentence", "Type"}})
+	assertFenceSteps(t, runFence(a, "How else can I help?"),
+		[]fenceStep{{"flush", "How else can I help?"}})
+}

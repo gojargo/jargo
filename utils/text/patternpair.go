@@ -290,14 +290,40 @@ func (a *PatternPairAggregator) keptPatternsOffset() int {
 // which pattern opened it. A negative offset and a nil pattern mean every run in
 // the text is closed.
 func (a *PatternPairAggregator) matchStartOfPattern(text string) (int, *pattern) {
+	// Only one run is ever open at a time, so the first one found is that one.
 	for _, p := range a.patterns {
-		// More openings than closings means one of them is still open. Only one
-		// run is ever open at a time, so the first opening is that one.
-		if strings.Count(text, p.start) > strings.Count(text, p.end) {
-			return strings.Index(text, p.start), p
+		if idx := p.unmatchedStart(text); idx >= 0 {
+			return idx, p
 		}
 	}
 	return -1, nil
+}
+
+// unmatchedStart reports where the first opening delimiter in text with no
+// closing delimiter after it begins, or -1 when every opening is closed.
+// Delimiters pair the way complete runs are found, left to right and without
+// overlapping, which also holds for a delimiter that reads the same at both
+// ends, such as a Markdown code fence.
+func (p *pattern) unmatchedStart(text string) int {
+	spans := p.re.FindAllStringIndex(text, -1)
+
+	from := 0
+	for {
+		idx := strings.Index(text[from:], p.start)
+		if idx < 0 {
+			return -1
+		}
+		idx += from
+
+		span := spanContaining(spans, idx)
+		if span == nil {
+			return idx
+		}
+		// An opening delimiter inside a run that did close belongs to that run.
+		// Skip the whole run so a delimiter nested in its content is not read as
+		// one left open.
+		from = span[1]
+	}
 }
 
 // Flush implements Aggregator.
@@ -336,28 +362,8 @@ func (a *PatternPairAggregator) earliestDroppableStart(text string) int {
 		if p.action == MatchKeep {
 			continue
 		}
-		spans := p.re.FindAllStringIndex(text, -1)
-
-		from := 0
-		for {
-			idx := strings.Index(text[from:], p.start)
-			if idx < 0 {
-				break
-			}
-			idx += from
-
-			// An opening delimiter inside a run that did close belongs to that
-			// run. Skip the whole run so a delimiter nested in its content is
-			// not read as one left open.
-			if span := spanContaining(spans, idx); span != nil {
-				from = span[1]
-				continue
-			}
-
-			if earliest < 0 || idx < earliest {
-				earliest = idx
-			}
-			break
+		if idx := p.unmatchedStart(text); idx >= 0 && (earliest < 0 || idx < earliest) {
+			earliest = idx
 		}
 	}
 
