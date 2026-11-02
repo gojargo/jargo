@@ -540,9 +540,8 @@ func (b *startBlocker) ProcessFrame(ctx context.Context, f frames.Frame, dir pro
 }
 
 // TestCancelBeforeStartReachesSink checks canceling while the pipeline is
-// still coming up ends the run. The run loop waits for the StartFrame to reach
-// the sink before it drains the queue the CancelFrame goes into, so canceling
-// has to release that wait or the frame would never be pushed at all.
+// still coming up ends the run. The pipeline never started, so it is only
+// cleaned up: no CancelFrame is pushed, so nothing waits for one to time out.
 func TestCancelBeforeStartReachesSink(t *testing.T) {
 	blocker := newStartBlocker()
 	task := pipeline.NewWorker(pipeline.New(blocker), pipeline.WorkerConfig{
@@ -567,15 +566,10 @@ func TestCancelBeforeStartReachesSink(t *testing.T) {
 		t.Error("HasFinished() = false, want true")
 	}
 
-	// The blocked processor never lets the CancelFrame drain, so the worker
-	// gives up waiting for it and reports the timeout.
 	select {
 	case f := <-timedOut:
-		if _, ok := f.(*frames.CancelFrame); !ok {
-			t.Errorf("the timeout reported %T, want the CancelFrame", f)
-		}
+		t.Errorf("the worker reported a timeout for %T, want none", f)
 	default:
-		t.Error("the worker never reported that the cancel frame did not arrive")
 	}
 	close(blocker.release)
 }

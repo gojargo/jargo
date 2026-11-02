@@ -74,14 +74,29 @@ func (t *setupTracker) settled(p processor.Processor) bool {
 // The failure is permanent whatever caused it, since setting up is not attempted
 // again: the processor is left half-built for the rest of the session, so it
 // loses its usability and a switcher can move off it before the pipeline starts.
+//
+// Call it right after the pipeline's own setup, once it has released itself
+// with SetupFinished. Each processor holds the StartFrame until its own setup
+// is done, so one slow processor does not block the ones ahead of it. The
+// processors are all held before any is set up, so the StartFrame cannot get
+// past one whose Setup has not begun yet. A processor whose setup was abandoned
+// (ctx ended) keeps holding it, so it never starts.
 func setupProcessors(
 	ctx context.Context, t *setupTracker, procs []processor.Processor, s processor.Setup,
 ) {
 	t.begin(procs)
+	for _, p := range procs {
+		p.SetupStarted()
+	}
 
 	var wg sync.WaitGroup
 	for _, p := range procs {
 		wg.Go(func() {
+			defer func() {
+				if ctx.Err() == nil {
+					p.SetupFinished()
+				}
+			}()
 			startedAt := time.Now()
 			if err := p.Setup(ctx, s); err != nil {
 				ef := frames.NewErrorFrame(fmt.Sprintf("error setting up the processor: %v", err))

@@ -100,8 +100,12 @@ sequenceDiagram
     participant P as Pipeline
     participant S as Sink
 
-    R->>P: Setup(ctx, Setup{Clock})
-    R->>P: StartFrame
+    par
+        R->>P: Setup(ctx, Setup{Clock})
+    and
+        R->>P: StartFrame
+        Note over P: each processor holds it<br/>until its own setup is done
+    end
     P->>S: StartFrame
     S-->>R: startSig
     Note over R: pipeline is ready
@@ -115,6 +119,21 @@ sequenceDiagram
     S-->>R: endSig
     R->>P: Cleanup(context.Background())
 ```
+
+The `StartFrame` goes out while the processors are still being set up, and each
+processor holds it only until its own setup is done. A slow connection (the
+LLM's, say) therefore does not delay the processors ahead of it: the input
+transport starts reading audio at once, and speech-to-text gets it as soon as its
+own connection is up. `EventPipelineStarted` still fires only once the
+`StartFrame` reaches the end of the pipeline, after every processor has been set
+up and has handled it, so a transport's `ClientConnectedFrame` can arrive before
+the services after it have connected; react to `EventPipelineStarted` for
+anything that needs them. `SetupTimeout` bounds setting up, and `StartTimeout`
+counts from when every processor is set up.
+
+A cancel, or a setup that times out, before the pipeline has started abandons
+it: the processors still being set up never get the `StartFrame` and never start.
+The pipeline is only cleaned up, and no `CancelFrame` is pushed into it.
 
 Note the last step: cleanup runs on a **fresh context**, so a canceled `ctx` does
 not abort goroutine shutdown.

@@ -89,6 +89,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`pipeline.Worker` pushes the `StartFrame` while the processors are still
+  being set up, and each processor holds it only until its own `Setup` is
+  done.** A slow connection (the LLM's, say) no longer delays the processors
+  ahead of it: the input transport starts reading audio right away and
+  speech-to-text gets it as soon as its own connection is up.
+  `EventPipelineStarted` still fires when the `StartFrame` reaches the end of
+  the pipeline, after every processor has been set up and has handled it.
+  `StartTimeout` now counts from when every processor is set up, and the idle
+  timeout from when the pipeline has started. A transport's
+  `ClientConnectedFrame` can now arrive before the services after it have
+  connected; use `EventPipelineStarted` for anything that needs them.
+  A `SyncParallelPipeline` passes the `StartFrame` on once it is through all
+  its branches. **Breaking:** `processor.Processor` gained `SetupStarted` and
+  `SetupFinished`, which `processor.Base` implements, so a processor that does
+  not embed it has to add them.
+- If a `pipeline.Worker` is canceled, or its setup times out, before the
+  pipeline has started, the processors still being set up never get the
+  `StartFrame` and never start. The pipeline is only cleaned up: no
+  `CancelFrame` is pushed, and the processors that had already started are
+  stopped by their `Cleanup`.
+- `observers.StartupTiming` ends the setup phase when the last processor is
+  set up, rather than when the `StartFrame` entered the pipeline.
 - `text.StripMarkdown` reduces a Markdown link or image to its label or alt
   text, so the URL is no longer read out. To keep the syntax as it was, register
   `text.NewStripMarkdown(false)` instead, or turn off the new

@@ -165,6 +165,11 @@ type Processor interface {
 	Setup(ctx context.Context, s Setup) error
 	// Cleanup stops the processor's goroutines and releases resources.
 	Cleanup(ctx context.Context) error
+	// SetupStarted holds the StartFrame until SetupFinished is called. A
+	// pipeline calls it before setting the processor up.
+	SetupStarted()
+	// SetupFinished lets the processor start, once its own Setup has returned.
+	SetupFinished()
 
 	// QueueFrame hands a frame to this processor for processing.
 	QueueFrame(ctx context.Context, f frames.Frame, dir Direction) error
@@ -253,9 +258,18 @@ type Base struct {
 	// queued, so nothing is drained before the processor has been started.
 	inputQueue *queue
 	inputWG    sync.WaitGroup
-	// startGate is opened by the StartFrame being queued, and is what the input
-	// goroutine waits on before it drains anything.
+	// startGate is opened by the StartFrame being queued once the processor is
+	// set up, and is what the input goroutine waits on before it drains
+	// anything.
 	startGate *event
+	// setupDone is clear while a pipeline is setting this processor up. The
+	// StartFrame is held until it is set, so a processor never starts before
+	// its own setup is done, while the ones ahead of it in the pipeline can.
+	setupDone *event
+	// startReceived records that the StartFrame has been queued. startMu
+	// guards it.
+	startMu       sync.Mutex
+	startReceived bool
 
 	// Pause gates. Each loop checks its gate after taking a frame off its queue
 	// and before handling it, so a pause takes effect from the next frame on.
@@ -320,6 +334,7 @@ func New(name string, self Processor, opts ...Option) *Base {
 		id:         nextID(),
 		inputQueue: newQueue(),
 		startGate:  newEvent(),
+		setupDone:  newEvent(),
 		inputEvent: newEvent(),
 		procQueue:  newQueue(),
 		// Armed before any StartFrame, so a measurement started early is not
@@ -328,6 +343,8 @@ func New(name string, self Processor, opts ...Option) *Base {
 		// A processor can do its job until something says otherwise.
 		usability: usability{usable: true},
 	}
+	// A processor is set up unless a pipeline says it is being set up.
+	b.setupDone.Set()
 	// The usability change runs on its own goroutine, since a handler may do
 	// anything; the error event is synchronous, so a handler has seen the error
 	// before the frame travels past it.
@@ -533,19 +550,55 @@ func (b *Base) QueueFrame(ctx context.Context, f frames.Frame, dir Direction) er
 		return nil
 	}
 	if b.directMode {
+		if isStartFrame(f) && !b.setupDone.Wait(ctx) {
+			return ctx.Err()
+		}
 		return b.processFrame(ctx, item{frame: f, dir: dir})
 	}
 	b.inputQueue.push(item{frame: f, dir: dir})
 
-	// Nothing drains the queue until the StartFrame arrives, so a processor
-	// never acts on a frame before it has been started. Processors are set up
-	// concurrently, so one that connects during setup can push frames at a
-	// processor that has not started yet; those frames simply wait, and the
-	// StartFrame is taken off the queue ahead of them.
+	// Nothing drains the queue until the StartFrame arrives and this processor
+	// is set up, so a processor never acts on a frame before it has been
+	// started. Processors are set up concurrently, so one that connects during
+	// setup can push frames at a processor that has not started yet; those
+	// frames simply wait, and the StartFrame is taken off the queue ahead of
+	// them.
 	if isStartFrame(f) {
-		b.startGate.Set()
+		b.startMu.Lock()
+		b.startReceived = true
+		b.startMu.Unlock()
+		b.maybeOpenStartGate()
 	}
 	return nil
+}
+
+// SetupStarted implements Processor.
+func (b *Base) SetupStarted() {
+	b.setupDone.Clear()
+}
+
+// SetupFinished implements Processor.
+func (b *Base) SetupFinished() {
+	if !b.directMode && b.baseContext() == nil {
+		// Setting up was cut short before Base.Setup ran, so there is no input
+		// goroutine to start processing frames with.
+		slog.Error("processor can't start, setup ended before Base.Setup was called "+
+			"(call Base.Setup before anything that can block)", "processor", b.name)
+	}
+	b.setupDone.Set()
+	b.maybeOpenStartGate()
+}
+
+// maybeOpenStartGate lets the input goroutine start draining once the
+// StartFrame is here and setting this processor up is done.
+func (b *Base) maybeOpenStartGate() {
+	b.startMu.Lock()
+	received := b.startReceived
+	b.startMu.Unlock()
+	if !received || !b.setupDone.IsSet() {
+		return
+	}
+	b.startGate.Set()
 }
 
 // inputLoop handles every frame queued to the processor. System frames are

@@ -131,6 +131,10 @@ func (p *SyncParallelPipeline) ProcessFrame(ctx context.Context, f frames.Frame,
 		return err
 	}
 
+	if _, ok := f.(*frames.StartFrame); ok && dir == processor.Downstream {
+		return p.startBranches(ctx, f)
+	}
+
 	// System frames pass through every branch without the queued output being
 	// drained. Draining here would let a system frame's wait take the frames a
 	// data frame's wait is collecting.
@@ -173,6 +177,28 @@ func (p *SyncParallelPipeline) ProcessFrame(ctx context.Context, f frames.Frame,
 	p.drain(ctx, p.upQueue, processor.Upstream)
 	p.drain(ctx, p.downQueue, processor.Downstream)
 	return nil
+}
+
+// startBranches starts every branch, then passes the StartFrame on once it is
+// through all of them.
+//
+// It goes into each branch pipeline rather than straight to its source, so the
+// branch and each of its processors hold it until they are set up.
+func (p *SyncParallelPipeline) startBranches(ctx context.Context, f frames.Frame) error {
+	var wg sync.WaitGroup
+	for i, branch := range p.branches {
+		wg.Go(func() {
+			if err := branch.QueueFrame(ctx, f, processor.Downstream); err != nil {
+				return
+			}
+			p.sources[i].queue.get(ctx)
+		})
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return p.PushFrame(ctx, f, processor.Downstream)
 }
 
 // endpoints returns the ends of the branches a frame flowing in dir enters by: a
@@ -290,6 +316,9 @@ func (p *SyncParallelPipeline) Setup(ctx context.Context, s processor.Setup) err
 	if err := p.Base.Setup(ctx, s); err != nil {
 		return err
 	}
+	// This pipeline is set up, so let the StartFrame in: each of its
+	// processors holds it until its own setup is done.
+	p.SetupFinished()
 	setupProcessors(ctx, &p.setupTracker, branchProcessors(p.branches), s)
 	return nil
 }

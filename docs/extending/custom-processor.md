@@ -182,6 +182,9 @@ func (p *Recorder) Cleanup(ctx context.Context) error {
 
 `Setup` runs before any frame arrives; `Clock()` is available after it. Do not
 push frames from `Setup`, because the pipeline has not started. Use the `StartFrame`.
+Call the base first, before anything that can block: the processor holds the
+`StartFrame` until its `Setup` returns, and one whose setup is cut short before
+the base ran has nothing to start with.
 
 ## Reporting errors
 

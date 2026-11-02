@@ -21,6 +21,13 @@ type event struct {
 
 func newEvent() *event { return &event{ch: make(chan struct{})} }
 
+// IsSet reports whether the event is set.
+func (e *event) IsSet() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.set
+}
+
 // Set releases every waiter, and lets a later wait pass straight through.
 func (e *event) Set() {
 	e.mu.Lock()

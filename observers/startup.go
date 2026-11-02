@@ -82,9 +82,8 @@ type StartupTimingConfig struct {
 // and when it entered the pipeline. A pipeline is started once, so a second
 // StartFrame belongs to something else and is ignored.
 type startFrameInfo struct {
-	frameID   uint64
-	arrival   time.Duration
-	wallClock time.Time
+	frameID uint64
+	arrival time.Duration
 }
 
 // arrivalInfo records a processor having been handed the StartFrame, waiting for
@@ -114,7 +113,9 @@ type StartupTiming struct {
 	// setupStartedAt is when the pipeline began setting its processors up, and
 	// setupDurations is what each processor's setup cost.
 	setupStartedAt time.Time
-	setupDurations map[uint64]time.Duration
+	// setupFinishedAt is when the last processor finished being set up.
+	setupFinishedAt time.Time
+	setupDurations  map[uint64]time.Duration
 	// startupReported and transportReported make each report happen once.
 	startupReported   bool
 	transportReported bool
@@ -158,7 +159,16 @@ func (o *StartupTiming) OnPipelineSetupStarted(at time.Time) {
 func (o *StartupTiming) OnProcessorSetup(data processor.ProcessorSetUp) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.startupReported || !o.shouldTrack(data.Processor) {
+	if o.startupReported {
+		return
+	}
+	// Setting up runs concurrently, so the last processor to finish is what
+	// ends the phase. Filtered-out processors still hold it open, so they count
+	// here.
+	if data.FinishedAt.After(o.setupFinishedAt) {
+		o.setupFinishedAt = data.FinishedAt
+	}
+	if !o.shouldTrack(data.Processor) {
 		return
 	}
 	o.setupDurations[data.Processor.ID()] = data.Duration()
@@ -177,9 +187,8 @@ func (o *StartupTiming) OnProcessFrame(data processor.FrameProcessed) {
 	}
 	if o.startFrame == nil {
 		o.startFrame = &startFrameInfo{
-			frameID:   data.Frame.ID(),
-			arrival:   data.Timestamp,
-			wallClock: time.Now(),
+			frameID: data.Frame.ID(),
+			arrival: data.Timestamp,
 		}
 	} else if data.Frame.ID() != o.startFrame.frameID {
 		return
@@ -295,12 +304,12 @@ func (o *StartupTiming) emitReport() {
 		return
 	}
 
-	// Setting up ends where the StartFrame begins: the frame is not dispatched
-	// until every processor is ready, so the moment it entered the pipeline is
-	// the boundary between the two phases.
+	// Setting up ends when the last processor is set up. The StartFrame goes
+	// out while they are still being set up, so the moment it entered the
+	// pipeline is not the boundary.
 	var setupPhase time.Duration
-	if !startedAt.IsZero() && o.startFrame != nil {
-		setupPhase = min(max(o.startFrame.wallClock.Sub(startedAt), 0), total)
+	if !startedAt.IsZero() && !o.setupFinishedAt.IsZero() {
+		setupPhase = min(max(o.setupFinishedAt.Sub(startedAt), 0), total)
 	}
 
 	o.cfg.OnStartupTimingReport(StartupTimingReport{

@@ -355,8 +355,15 @@ type Worker struct {
 
 	startOnce sync.Once
 	startSig  chan struct{}
-	endOnce   sync.Once
-	endSig    chan struct{}
+	// startedSig is closed once the StartFrame has reached the sink, and only
+	// then. startSig is closed by a cancel too, to release whatever waits on it.
+	startedOnce sync.Once
+	startedSig  chan struct{}
+	// cancelSig is closed once a cancel has been asked for.
+	cancelOnce sync.Once
+	cancelSig  chan struct{}
+	endOnce    sync.Once
+	endSig     chan struct{}
 
 	mu        sync.Mutex
 	finished  bool
@@ -429,6 +436,8 @@ func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
 		heartbeats:        newFrameQueue(),
 		idleSig:           make(chan struct{}, 1),
 		startSig:          make(chan struct{}),
+		startedSig:        make(chan struct{}),
+		cancelSig:         make(chan struct{}),
 		endSig:            make(chan struct{}),
 		handleFlush:       boolOrDefault(cfg.HandleFlushFrame, cfg.Bridged == nil),
 		foreignProbes:     map[uint64]string{},
@@ -1028,11 +1037,12 @@ func (t *Worker) cancelWithReason(reason string) {
 	t.cancelReason = reason
 	t.mu.Unlock()
 
-	// Release the run loop if it is still waiting for the StartFrame to reach
-	// the sink. Canceling before the pipeline is up is exactly the case where
-	// something is wedged during startup, and the run loop only starts draining
-	// the queue this frame goes into once it has stopped waiting. Without this
-	// the CancelFrame would sit in the queue and the run would never end.
+	// Stop setting up and starting the pipeline if it has not started yet. It
+	// is then only cleaned up, and the CancelFrame queued below is never
+	// pushed. Only asked for: a processor's Setup may be what is canceling, and
+	// waiting for the setup from inside it would never return.
+	t.cancelOnce.Do(func() { close(t.cancelSig) })
+	// Release whatever waits for the pipeline to start, such as a flush.
 	t.startOnce.Do(func() { close(t.startSig) })
 
 	cancel := frames.NewCancelFrame()
@@ -1089,49 +1099,145 @@ func (t *Worker) cancelOnContextEnd(ctx context.Context) frames.Frame {
 	return cancelFrame
 }
 
-// setupWithinTimeout sets the pipeline up, giving up once the setup timeout
-// passes or the worker is canceled (or ctx, the caller's context, ends) first. It
-// reports whether the pipeline was set up.
+// startPipeline sets the pipeline up and starts it. It reports whether the
+// pipeline started: the StartFrame reached the end of it.
 //
-// Giving up abandons the setup: the processors still being set up are told to
-// stop, never get the StartFrame, and never start. The pipeline is then only
+// The StartFrame is pushed right away, while the processors are still being
+// set up, and each processor holds it until its own setup is done. A slow
+// connection (the LLM's, say) therefore no longer delays the processors ahead
+// of it: the input transport starts reading audio at once, and speech-to-text
+// gets it as soon as its own connection is up. The pipeline still only counts
+// as started once every processor is set up and has handled the StartFrame.
+//
+// Setting up is bounded by the setup timeout, and starting by the start
+// timeout counted from when every processor is set up. A setup that times out,
+// or a cancel (or ctx, the caller's context, ending) before the pipeline has
+// started, abandons it: the processors still being set up are told to stop,
+// keep holding the StartFrame, and never start. The pipeline is then only
 // cleaned up, and no CancelFrame is pushed into it. A cancel takes effect at
 // once, rather than once every processor has finished connecting, which for a
 // caller hanging up while a service was still connecting could be the whole of
 // the setup timeout.
-func (t *Worker) setupWithinTimeout(
+func (t *Worker) startPipeline(
 	ctx, pipeCtx context.Context, setup processor.Setup,
 ) (bool, error) {
 	setupCtx, abandon := context.WithCancel(pipeCtx)
-	done := make(chan error, 1)
-	go func() { done <- t.pipeline.Setup(setupCtx, setup) }()
+	setupDone := make(chan error, 1)
+	t.pipeline.SetupStarted()
+	go func() {
+		err := t.pipeline.Setup(setupCtx, setup)
+		// Released once set up, unless setting up was abandoned: then the
+		// StartFrame stays held, so the pipeline never starts.
+		if setupCtx.Err() == nil {
+			t.pipeline.SetupFinished()
+		}
+		setupDone <- err
+	}()
 
-	timeout := time.NewTimer(t.cfg.SetupTimeout)
-	defer timeout.Stop()
+	// Pushing it can wait too, while the pipeline is still held, so giving up
+	// on starting gives up on that as well.
+	start := t.newStartFrame()
+	startCtx, stopStart := context.WithCancel(pipeCtx)
+	defer stopStart()
+	go func() { _ = t.pipeline.QueueFrame(startCtx, start, processor.Downstream) }()
+
+	giveUp := func() (bool, error) {
+		abandon()
+		// The processors told to stop are given a moment to wind down before
+		// the pipeline is cleaned up, so a cleanup does not run against a setup
+		// still in progress. One that does not stop in time is left where it
+		// is.
+		select {
+		case <-setupDone:
+		case <-time.After(setupWindDownTimeout):
+		}
+		return false, nil
+	}
+
+	setupTimeout := time.NewTimer(t.cfg.SetupTimeout)
+	defer setupTimeout.Stop()
 	select {
-	case err := <-done:
+	case err := <-setupDone:
+		if err != nil {
+			abandon()
+			return false, err
+		}
 		// Not abandoned: the processors keep the context they were set up with
 		// for as long as they run.
-		_ = abandon
-		return err == nil, err
-	case <-timeout.C:
+	case <-setupTimeout.C:
 		slog.Error("timed out setting the pipeline up, stopping it "+
 			"(a processor blocked while connecting?)", "timeout", t.cfg.SetupTimeout)
 		t.Call(pipeCtx, EventSetupTimeout, t)
-	case <-t.startSig:
+		return giveUp()
+	case <-t.cancelSig:
+		if t.hasStarted() {
+			return true, <-setupDone
+		}
 		slog.Debug("pipeline worker canceled while setting up, stopping it", "worker", t.Name())
+		return giveUp()
 	case <-ctx.Done():
+		if t.hasStarted() {
+			return true, <-setupDone
+		}
 		slog.Debug("pipeline worker's context ended while setting up, stopping it", "worker", t.Name())
+		return giveUp()
 	}
-	abandon()
-	// The processors told to stop are given a moment to wind down before the
-	// pipeline is cleaned up, so a cleanup does not run against a setup still in
-	// progress. One that does not stop in time is left where it is.
+
+	// Setting up has its own timeout, so the start timeout only counts from the
+	// moment every processor is set up.
+	return t.waitForStart(ctx, start), nil
+}
+
+// waitForStart waits for the StartFrame to reach the end of the pipeline once
+// every processor is set up, and reports whether it did.
+func (t *Worker) waitForStart(ctx context.Context, start *frames.StartFrame) bool {
+	startTimeout := time.NewTimer(t.cfg.StartTimeout)
+	defer startTimeout.Stop()
 	select {
-	case <-done:
-	case <-time.After(setupWindDownTimeout):
+	case <-t.startedSig:
+		return true
+	case <-t.cancelSig:
+		// The pipeline may have started at the same moment it was canceled.
+		if t.hasStarted() {
+			return true
+		}
+		slog.Debug("pipeline worker canceled while starting, stopping it", "worker", t.Name())
+		return false
+	case <-startTimeout.C:
+		// A pipeline that never started cannot process anything pushed into it,
+		// so the run gives up here and goes straight to tearing it down.
+		slog.Error("timed out waiting for the start frame to reach the end of the pipeline, "+
+			"stopping it (being blocked somewhere?)", "timeout", t.cfg.StartTimeout)
+		t.Call(ctx, EventPipelineTimeout, t, start)
+		return false
+	case <-ctx.Done():
+		return t.hasStarted()
 	}
-	return false, nil
+}
+
+// hasStarted reports whether the StartFrame has reached the end of the
+// pipeline.
+func (t *Worker) hasStarted() bool {
+	select {
+	case <-t.startedSig:
+		return true
+	default:
+		return false
+	}
+}
+
+// newStartFrame builds the StartFrame the pipeline is started with.
+func (t *Worker) newStartFrame() *frames.StartFrame {
+	start := frames.NewStartFrame()
+	start.AudioInSampleRate = t.params.AudioInSampleRate
+	start.AudioOutSampleRate = t.params.AudioOutSampleRate
+	start.EnableMetrics = t.params.EnableMetrics
+	start.EnableUsageMetrics = t.params.EnableUsageMetrics
+	start.ReportOnlyInitialTTFB = t.params.ReportOnlyInitialTTFB
+	if len(t.params.StartMetadata) > 0 {
+		maps.Copy(start.Metadata(), t.params.StartMetadata)
+	}
+	return start
 }
 
 // setupWindDownTimeout bounds how long an abandoned setup is given to stop
@@ -1205,15 +1311,21 @@ func (t *Worker) Run(ctx context.Context) error {
 		TracingEnabled:               t.cfg.EnableTracing,
 		Running:                      t,
 	}
-	setUp, err := t.setupWithinTimeout(runCtx, pipeCtx, setup)
+	// The monitors are up before the StartFrame goes out: it reaches the end of
+	// the pipeline, which starts the heartbeats, from inside startPipeline.
+	monCtx := t.monitors.start(runCtx)
+	started, err := t.startPipeline(runCtx, pipeCtx, setup)
 	if err != nil {
+		t.monitors.stop()
 		return err
 	}
-	if !setUp {
-		// Nothing was pushed into the pipeline, so there is nothing to drain:
-		// release whatever came up and give up. The teardown is the same as the
-		// one at the end of a run, minus the monitors and the frame path, which
-		// never started.
+	if !started {
+		// The pipeline never started, so nothing was pushed past the StartFrame
+		// and there is nothing to drain: release whatever came up and give up.
+		// The processors that had started are stopped by their cleanup. The
+		// teardown is the same as the one at the end of a run, minus the
+		// frame path, which never started.
+		t.monitors.stop()
 		_ = t.pipeline.Cleanup(context.Background())
 		t.Registry.Cleanup(context.Background())
 		t.observerProxy.stop()
@@ -1225,7 +1337,6 @@ func (t *Worker) Run(ctx context.Context) error {
 		return nil
 	}
 
-	monCtx := t.monitors.start(runCtx)
 	endFrame, runErr := t.runLoop(monCtx)
 
 	// The caller's context ended the run rather than a frame doing it, so the
@@ -1280,43 +1391,15 @@ func (t *Worker) cancelChildren(ctx context.Context) {
 	t.PropagateCancelToChildren(ctx, t.Name()+" finished")
 }
 
-// runLoop sends the StartFrame, waits for the pipeline to be ready, then pushes
-// queued frames until a pipeline-ending frame has traveled through. It returns
+// runLoop pushes queued frames into the started pipeline until a
+// pipeline-ending frame has traveled through. It returns
 // that frame, so the caller can tell a StopFrame from the ways of ending that
 // shut the processors down, and nil when the context ended the run instead.
 func (t *Worker) runLoop(ctx context.Context) (frames.Frame, error) {
-	// Watching starts before the StartFrame goes out, so a pipeline that never
-	// comes to life is noticed too.
+	// Setting up is not idle time: the idle timeout only counts once the
+	// pipeline has started.
 	if t.cfg.IdleTimeout > 0 {
 		t.monitors.spawn(t.idleMonitorLoop)
-	}
-
-	start := frames.NewStartFrame()
-	start.AudioInSampleRate = t.params.AudioInSampleRate
-	start.AudioOutSampleRate = t.params.AudioOutSampleRate
-	start.EnableMetrics = t.params.EnableMetrics
-	start.EnableUsageMetrics = t.params.EnableUsageMetrics
-	start.ReportOnlyInitialTTFB = t.params.ReportOnlyInitialTTFB
-	if len(t.params.StartMetadata) > 0 {
-		maps.Copy(start.Metadata(), t.params.StartMetadata)
-	}
-	if err := t.pipeline.QueueFrame(ctx, start, processor.Downstream); err != nil {
-		return nil, err
-	}
-
-	startTimeout := time.NewTimer(t.cfg.StartTimeout)
-	defer startTimeout.Stop()
-	select {
-	case <-t.startSig:
-	case <-startTimeout.C:
-		// A pipeline that never started cannot process anything pushed into it,
-		// so the run gives up here and goes straight to tearing it down.
-		slog.Error("timed out waiting for the start frame to reach the end of the pipeline, "+
-			"stopping it (being blocked somewhere?)", "timeout", t.cfg.StartTimeout)
-		t.Call(ctx, EventPipelineTimeout, t, start)
-		return start, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
 	}
 
 	if t.params.EnableMetrics && boolOrTrue(t.params.SendInitialEmptyMetrics) {
@@ -1449,6 +1532,9 @@ func (t *Worker) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direc
 
 	switch fr := f.(type) {
 	case *frames.StartFrame:
+		// Started before anyone hears of it, so a handler that cancels on the
+		// news finds a started pipeline, which a CancelFrame then stops.
+		t.startedOnce.Do(func() { close(t.startedSig) })
 		t.Call(ctx, EventPipelineStarted, t, fr)
 		t.observerProxy.pipelineStarted()
 		t.startHeartbeats()
