@@ -23,3 +23,5 @@ Task-oriented pages for the subsystems around the core engine.
 - **[Expressive conversation](expressive-conversation.md)** (alpha): the LLM hears
   how the user spoke and writes expression into its reply as tags, and the TTS
   performs them.
+- **[Development runner](runner.md)**: run a bot behind one server that speaks
+  WebRTC, LiveKit, telephony and WebSocket, with a session per call.

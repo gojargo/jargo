@@ -59,7 +59,9 @@ worth knowing:
 - **Config is explicit.** Library packages read no environment variables: take a
   plain `Config` struct and validate it with go-playground `validate` tags.
   Prefer structs over functional options. Env/flags/Viper belong in the app
-  (see `examples/`), not the library.
+  (see `examples/`), not the library. The one exception is `runner`, the
+  development runner: it is an application's entry point, so it reads flags,
+  the environment and a `.env` file.
 - **Commits** follow Conventional Commits (`feat:`, `fix:`, `ci:`, `docs:`, …).
 - Record notable changes in [`CHANGELOG.md`](CHANGELOG.md). The project is
   pre-1.0: the public API may still change in any minor release, and a change

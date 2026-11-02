@@ -18,6 +18,7 @@ require (
 	github.com/gojargo/go-resample v1.0.1
 	github.com/google/uuid v1.6.0
 	github.com/jfreymuth/pulse v0.1.3
+	github.com/joho/godotenv v1.5.1
 	github.com/livekit/protocol v1.53.1
 	github.com/livekit/server-sdk-go/v2 v2.19.0
 	github.com/microsoft/onnxruntime/go v0.0.0-20261006082247-e0227cb9d34a

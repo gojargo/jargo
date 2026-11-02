@@ -15,6 +15,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The development runner (`runner`).** A bot is one `runner.Bot` function,
+  called once per session, and `runner.Main(bot)` serves it: WebRTC through
+  `POST /start` and `/api/offer` (renegotiation and trickled ICE candidates
+  included, directly or through the `/sessions/{id}/...` proxy), LiveKit with
+  tokens minted for the bot and the caller, Twilio, Telnyx, Plivo and Exotel on
+  `/ws` with the provider detected from its first messages, plain WebSocket
+  clients on `/ws-client`, and the WhatsApp calling webhook with `--whatsapp`.
+  `runner.CreateTransport` turns a session's arguments into its transport, with
+  the parameters `runner.TransportParams` gives for each. `/start` can hand out
+  single-use HMAC tokens that the WebSocket routes then require
+  (`--ws-auth token`), requests can be limited to `--allowed-origins`, and
+  `--ice-servers` configures STUN and TURN for both peers. Unlike the rest of
+  jargo it reads the command line, the environment and a `.env` file. Not
+  served: Daily, Vonage and MoQ, which have no jargo transport, file uploads,
+  and the eval harness's connection. See
+  [Development runner](docs/guides/runner.md).
 - **`wsserver.NewTransport` builds a transport on a WebSocket already
   accepted**, taking the messages already read off it. A server that reads the
   first messages to tell which telephony provider is calling hands them over,
