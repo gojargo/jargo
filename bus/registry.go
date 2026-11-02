@@ -118,6 +118,8 @@ func init() {
 	Types.Register("MetricsFrame", &frames.MetricsFrame{})
 	Types.Register("MixerEnableFrame", &frames.MixerEnableFrame{})
 	Types.Register("MixerUpdateSettingsFrame", &frames.MixerUpdateSettingsFrame{})
+	Types.Register("VolumeFrame", &frames.VolumeFrame{})
+	Types.Register("VolumeGainFrame", &frames.VolumeGainFrame{})
 	Types.Register("OutputAudioRawFrame", &frames.OutputAudioRawFrame{})
 	Types.Register("OutputDTMFFrame", &frames.OutputDTMFFrame{})
 	Types.Register("OutputDTMFUrgentFrame", &frames.OutputDTMFUrgentFrame{})

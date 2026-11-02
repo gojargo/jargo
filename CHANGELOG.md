@@ -60,6 +60,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   written. Filter control frames reach it through the same queue, so a setting
   takes effect after the audio queued ahead of it. See
   [Audio](docs/guides/audio.md#output-filtering).
+- **Output volume.** `frames.VolumeFrame` sets the output transport's volume,
+  and `frames.VolumeGainFrame` sets a gain on top of it for some audio, for
+  example `NewVolumeGainFrame(0.5)` before a `TTSSpeakFrame` and
+  `NewVolumeGainFrame(1.0)` after it to play that utterance at half volume.
+  Both take effect in order with the audio, after the output filter and before
+  the mixer, and an interruption doesn't drop them. The volume starts at the
+  new `transport.Params.AudioOutVolume`, 1.0 when unset. `audio.ScaleAudio`
+  does the scaling. See [Audio](docs/guides/audio.md#volume).
 - `tts.Keepalive` holds a websocket synthesizer's connection open for a
   provider that closes an idle one. A synthesizer starts it from its connect
   with a `tts.KeepaliveHandler` that sends the provider's keepalive message,

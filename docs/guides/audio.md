@@ -106,6 +106,25 @@ effect from the audio after it. An input transport with a filter of its own
 applies those frames itself, so send one meant for the output from a processor
 after the input.
 
+## Volume
+
+The output transport plays its audio at a volume times a gain, applied after the
+output filter and before the mixer, on every destination. The volume starts at
+`AudioOutVolume` (1.0 when unset) and a `VolumeFrame` changes it. A
+`VolumeGainFrame` adjusts it for some audio without touching the volume:
+
+```go
+task.QueueFrames([]frames.Frame{
+    frames.NewVolumeGainFrame(0.5),
+    frames.NewTTSSpeakFrame("This part is quieter."),
+    frames.NewVolumeGainFrame(1.0),
+})
+```
+
+Both are uninterruptible control frames: they take effect in order with the
+audio before them, and a barge-in does not drop them, so a gain that was meant
+to be reset is reset even when the audio between them is cut off.
+
 ## Background audio
 
 An output mixer plays a background track under the bot's speech: hold music,

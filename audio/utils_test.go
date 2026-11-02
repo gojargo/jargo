@@ -180,3 +180,24 @@ func TestPCMToWAV(t *testing.T) {
 		}
 	})
 }
+
+func TestScaleAudio(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     []byte
+		factor float64
+		want   []byte
+	}{
+		{"unchanged", pcm(1000, -1000), 1.0, pcm(1000, -1000)},
+		{"halved", pcm(1000, -1000, 3), 0.5, pcm(500, -500, 1)},
+		{"clipped high", pcm(30000), 2.0, pcm(32767)},
+		{"clipped low", pcm(-30000), 2.0, pcm(-32768)},
+		{"silenced", pcm(1234), 0, pcm(0)},
+		{"a trailing odd byte is dropped", append(pcm(1000), 0x01), 1.0, pcm(1000)},
+	}
+	for _, c := range cases {
+		if got := audio.ScaleAudio(c.in, c.factor); !bytes.Equal(got, c.want) {
+			t.Errorf("%s: ScaleAudio = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

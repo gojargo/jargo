@@ -60,6 +60,11 @@ type Params struct {
 	// generates itself (mixer audio, end silence, DTMF tones) is not filtered.
 	// A FilterControlFrame reaches it in step with the audio queued around it.
 	AudioOutFilter audio.Filter
+	// AudioOutVolume is the volume of the output audio, as a multiplier on its
+	// samples, applied after the filter and before the mixer; nil plays it at
+	// 1.0. A VolumeFrame changes it while the transport runs, and a
+	// VolumeGainFrame adjusts it for some audio.
+	AudioOutVolume *float64
 	// AudioOutMixer, when set, mixes auxiliary audio (for example background
 	// music) into the outgoing audio before it is sent. It serves the default
 	// destination only; use AudioOutMixers to mix into a named one.
@@ -114,6 +119,15 @@ func (p Params) AudioOutWrite() time.Duration {
 		return p.AudioOutWriteTimeout
 	}
 	return DefaultAudioOutWriteTimeout
+}
+
+// AudioOutStartVolume is the volume the output audio starts at: the configured
+// one, or 1.0.
+func (p Params) AudioOutStartVolume() float64 {
+	if p.AudioOutVolume == nil {
+		return 1.0
+	}
+	return *p.AudioOutVolume
 }
 
 // AudioInStreamsOnStart reports whether received audio reaches the pipeline as

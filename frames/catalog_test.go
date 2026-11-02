@@ -457,6 +457,14 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewMixerEnableFrame(true) },
 		},
 		{
+			label: "VolumeFrame", cat: control, uninterruptible: true, wantString: "volume: 0.5",
+			build: func() frames.Frame { return frames.NewVolumeFrame(0.5) },
+		},
+		{
+			label: "VolumeGainFrame", cat: control, uninterruptible: true, wantString: "gain: 0.5",
+			build: func() frames.Frame { return frames.NewVolumeGainFrame(0.5) },
+		},
+		{
 			label: "LLMUpdateSettingsFrame", cat: control, uninterruptible: true,
 			wantString: "service: all",
 			build:      func() frames.Frame { return frames.NewLLMUpdateSettingsFrame(nil) },

@@ -30,6 +30,11 @@ type mediaSender struct {
 	// filter runs over the audio taken from the queue, before the mixer and
 	// the write. Only the default destination has one.
 	filter audio.Filter
+	// volume (VolumeFrame) and volumeGain (VolumeGainFrame) scale the audio
+	// taken from the queue, after the filter and before the mixer. They are
+	// updated in order with the audio, and only the audio loop touches them.
+	volume     float64
+	volumeGain float64
 
 	// resampleMu guards the resampler. Converting happens on the process
 	// goroutine, but the audio loop ends a turn and resets it from its own, so
@@ -96,6 +101,8 @@ func newMediaSender(out *BaseOutput, destination string) *mediaSender {
 		chunkSize:   out.chunkSize,
 		mixer:       out.mixerFor(destination),
 		filter:      out.filterFor(destination),
+		volume:      out.params.AudioOutStartVolume(),
+		volumeGain:  1.0,
 	}
 }
 
@@ -604,6 +611,7 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 				continue
 			}
 			s.filterAudio(ctx, queued)
+			s.applyVolume(queued)
 			if s.blendMixer(ctx, queued) {
 				lastAudioAt = time.Now()
 			}
@@ -646,6 +654,18 @@ func (s *mediaSender) filterAudio(ctx context.Context, f frames.Frame) {
 		return
 	}
 	setOutputAudio(f, filtered)
+}
+
+// applyVolume scales an audio frame taken from the queue by the volume and its
+// gain, in place.
+func (s *mediaSender) applyVolume(f frames.Frame) {
+	volume := s.volume * s.volumeGain
+	if volume == 1.0 {
+		return
+	}
+	if pcm, _, _ := outputAudio(f); pcm != nil {
+		setOutputAudio(f, audio.ScaleAudio(pcm, volume))
+	}
 }
 
 // blendMixer mixes the mixer's audio into a queued frame, in place. It reports
@@ -696,6 +716,7 @@ func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
 				continue
 			}
 			s.filterAudio(ctx, queued)
+			s.applyVolume(queued)
 			if !s.handleQueuedFrame(ctx, queued) {
 				return
 			}
@@ -820,6 +841,10 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 		s.ttsStopped(ctx)
 	case frames.FilterControlFrame:
 		s.handleFilterControl(ctx, af)
+	case *frames.VolumeFrame:
+		s.volume = af.Volume
+	case *frames.VolumeGainFrame:
+		s.volumeGain = af.Gain
 	case *frames.OutputDTMFFrame:
 		// The keys waited behind the audio around them, so they land where the
 		// caller meant them rather than over what was still being said.

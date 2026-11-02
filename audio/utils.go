@@ -56,6 +56,22 @@ func MixAudio(a, b []byte) []byte {
 	return out
 }
 
+// ScaleAudio scales the volume of a stream of 16-bit signed PCM by multiplying
+// its samples by factor: 1.0 leaves the audio unchanged, 0.5 halves it. Each
+// sample is scaled in single precision, clipped to the 16-bit range and
+// truncated toward zero.
+func ScaleAudio(pcm []byte, factor float64) []byte {
+	n := len(pcm) - len(pcm)%2
+	out := make([]byte, n)
+	f := float32(factor)
+	for i := 0; i+1 < n; i += 2 {
+		v := float32(int16(binary.LittleEndian.Uint16(pcm[i:]))) * f
+		v = min(max(v, -32768), 32767)
+		binary.LittleEndian.PutUint16(out[i:], uint16(int16(v)))
+	}
+	return out
+}
+
 // InterleaveStereo weaves two mono streams of 16-bit signed PCM into one stereo
 // stream, left channel first (L, R, L, R and so on). The channels are truncated
 // to the shorter of the two, since a frame is only complete when both channels
