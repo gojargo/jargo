@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo-web/prebuilt"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/gojargo/jargo/transport/whatsapp"
 	"github.com/gojargo/jargo/utils/security"
@@ -123,10 +124,12 @@ func RunnerPort() int {
 var App = http.NewServeMux()
 
 // Frontend is the browser client the runner serves at /client, with / sending
-// there. Nil serves none.
+// there. It is the prebuilt client (github.com/gojargo/jargo-web/prebuilt) by
+// default; set it to another handler before Main to serve your own, or to nil
+// to serve none.
 //
-//nolint:gochecknoglobals // set once by the package providing the client
-var Frontend http.Handler
+//nolint:gochecknoglobals // the client Main serves, replaceable by the bot
+var Frontend = prebuilt.Handler()
 
 // Args are the runner's parsed command-line arguments.
 type Args struct {

@@ -27,7 +27,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   single-use HMAC tokens that the WebSocket routes then require
   (`--ws-auth token`), requests can be limited to `--allowed-origins`, and
   `--ice-servers` configures STUN and TURN for both peers. Unlike the rest of
-  jargo it reads the command line, the environment and a `.env` file. Not
+  jargo it reads the command line, the environment and a `.env` file. It serves
+  a browser client at `/client` (`runner.Frontend`), by default the
+  pipecat-ai-prebuilt client from `github.com/gojargo/jargo-web/prebuilt`. Not
   served: Daily, Vonage and MoQ, which have no jargo transport, file uploads,
   and the eval harness's connection. See
   [Development runner](docs/guides/runner.md).

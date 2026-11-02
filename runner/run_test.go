@@ -382,6 +382,31 @@ func TestMalformedOfferIs422(t *testing.T) {
 	}
 }
 
+// --- the browser client ---
+
+// TestServesThePrebuiltClient covers the default frontend: / sends the browser
+// to /client/, which serves the prebuilt client.
+func TestServesThePrebuiltClient(t *testing.T) {
+	tr := newTestRunner(t, &Args{})
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, tr.srv.URL+"/", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect || resp.Header.Get("Location") != "/client/" {
+		t.Fatalf("/ = %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	req, _ = http.NewRequestWithContext(t.Context(), http.MethodGet, tr.srv.URL+"/client/", nil)
+	status, _, body := send(t, req)
+	if status != http.StatusOK || !strings.Contains(string(body), "<html") {
+		t.Fatalf("/client/ = %d", status)
+	}
+}
+
 // --- downloads ---
 
 func TestDownloads(t *testing.T) {
@@ -624,7 +649,8 @@ func TestResolveFlags(t *testing.T) {
 // TestRunServesUntilCanceled covers the entry point: it parses its flags,
 // serves, and shuts down when its context ends.
 func TestRunServesUntilCanceled(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

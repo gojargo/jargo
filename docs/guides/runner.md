@@ -79,11 +79,13 @@ library a program configures.
 
 ## The browser client
 
-`runner.Frontend` is served at `/client`, and `/` redirects there. With no
-frontend set, the runner serves the endpoints only, and a client such as the
-`nextjs-voicebot` in
-[jargo-client-react](https://github.com/gojargo/jargo-client-react) connects to
-them.
+The runner serves a ready-made browser client at `/client`, and `/` redirects
+there: the published build of
+[pipecat-ai-prebuilt](https://github.com/pipecat-ai/pipecat-prebuilt), embedded
+by the `github.com/gojargo/jargo-web/prebuilt` module. It connects over WebRTC
+and shows the conversation, events and metrics, which makes it a debugging UI.
+Set `runner.Frontend` before `runner.Main` to serve your own handler instead, or
+to nil to serve none.
 
 ## Not available
 
