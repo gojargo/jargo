@@ -51,6 +51,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   credential. `frames.NewErrorFrame` and `frames.NewFatalErrorFrame` apply it,
   so an error's message is masked on every route it takes: the log, observers,
   event handlers and RTVI clients.
+- **An output audio filter.** `transport.Params.AudioOutFilter` is the
+  output counterpart of `AudioInFilter`. The output transport starts it on
+  setup with its sample rate and stops it on cleanup. The default destination
+  runs it on each chunk of audio it takes from its queue, before the mixer and
+  the write, so audio the transport generates itself (mixer audio, end
+  silence, DTMF tones) is not filtered. A chunk the filter returns empty is not
+  written. Filter control frames reach it through the same queue, so a setting
+  takes effect after the audio queued ahead of it. See
+  [Audio](docs/guides/audio.md#output-filtering).
 - `tts.Keepalive` holds a websocket synthesizer's connection open for a
   provider that closes an idle one. A synthesizer starts it from its connect
   with a `tts.KeepaliveHandler` that sends the provider's keepalive message,

@@ -67,6 +67,11 @@ type BaseOutput struct {
 	channels   int
 	chunkSize  int
 
+	// filterActive reports whether the output filter came up, and so whether
+	// the default destination runs it. It is settled in Setup and cleared in
+	// Cleanup, once the senders have stopped.
+	filterActive bool
+
 	sendersMu sync.RWMutex
 	senders   map[string]*mediaSender
 }
@@ -210,6 +215,17 @@ func (bo *BaseOutput) Setup(ctx context.Context, s processor.Setup) error {
 	}
 	bytesPer10ms := bo.sampleRate / 100 * bo.channels * 2
 	bo.chunkSize = bytesPer10ms * chunks
+
+	// The filter starts here and stops in Cleanup, the only two calls guaranteed
+	// to happen exactly once. A filter that fails to start is skipped, not
+	// fatal.
+	if f := bo.params.AudioOutFilter; f != nil {
+		if err := f.Start(ctx, bo.sampleRate); err != nil {
+			bo.PushError(ctx, "audio output filter failed to start", err, false)
+		} else {
+			bo.filterActive = true
+		}
+	}
 	return nil
 }
 
@@ -302,9 +318,15 @@ func (bo *BaseOutput) handleFrame(ctx context.Context, f frames.Frame) error {
 	return nil
 }
 
-// Cleanup stops the senders and the processor.
+// Cleanup stops the senders, the output filter and the processor.
 func (bo *BaseOutput) Cleanup(ctx context.Context) error {
 	bo.stopStreaming(ctx)
+	// Paired with the start in Setup. The audio loops have finished by now, so
+	// no Filter call can race with this Stop.
+	if bo.filterActive {
+		bo.filterActive = false
+		_ = bo.params.AudioOutFilter.Stop(ctx)
+	}
 	// Free the resampler handles after the base stops the process goroutine, so
 	// no in-flight resample touches a freed native resampler.
 	err := bo.Base.Cleanup(ctx)
@@ -356,6 +378,15 @@ func (bo *BaseOutput) mixerFor(destination string) audio.Mixer {
 		return bo.params.AudioOutMixer
 	}
 	return nil
+}
+
+// filterFor returns the output filter a destination runs. The filter belongs to
+// the default destination, like a single mixer.
+func (bo *BaseOutput) filterFor(destination string) audio.Filter {
+	if destination != defaultDestination || !bo.filterActive {
+		return nil
+	}
+	return bo.params.AudioOutFilter
 }
 
 func (bo *BaseOutput) startStreaming(ctx context.Context) {

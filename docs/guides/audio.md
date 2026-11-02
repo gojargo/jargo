@@ -14,10 +14,11 @@ mixing.
 flowchart LR
     Net(["WebRTC"]) --> Dec["Opus decode"] --> Rs1["resample<br/>→ 16 kHz"]
     Rs1 --> Filt["AudioInFilter<br/><i>(RNNoise)</i>"] --> Pipe["pipeline"]
-    Pipe --> Rs2["resample<br/>→ 24 kHz"] --> Mix["AudioOutMixer"]
+    Pipe --> Rs2["resample<br/>→ 24 kHz"] --> OutFilt["AudioOutFilter"] --> Mix["AudioOutMixer"]
     Mix --> Enc["Opus encode"] --> Net2(["WebRTC"])
 
     style Filt fill:#fef3c7,stroke:#d97706
+    style OutFilt fill:#fef3c7,stroke:#d97706
     style Mix fill:#fef3c7,stroke:#d97706
 ```
 
@@ -91,6 +92,19 @@ so a custom one (gain, a high-pass, your own model) drops in the same way.
 
 Denoising helps in genuinely noisy rooms and can hurt otherwise: it removes
 information the VAD uses. Measure before shipping it.
+
+## Output filtering
+
+`AudioOutFilter` is the output counterpart: any `audio.Filter`, run on the audio
+the pipeline sends to the default destination, before the mixer and the write.
+Audio the transport generates itself (mixer audio, end silence, DTMF tones) is
+not filtered, and a chunk the filter returns empty is not written. The output
+transport starts it with its own sample rate when it is set up and stops it when
+it is cleaned up. A `FilterEnableFrame` or `FilterUpdateSettingsFrame` that
+reaches the output queues behind the audio already there, so a setting takes
+effect from the audio after it. An input transport with a filter of its own
+applies those frames itself, so send one meant for the output from a processor
+after the input.
 
 ## Background audio
 

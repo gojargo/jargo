@@ -55,6 +55,11 @@ type Params struct {
 	// A transport that frames the audio itself (Opus at 20 ms, say) re-splits
 	// what it is given, so this sizes the buffering rather than the framing.
 	AudioOut10msChunks int
+	// AudioOutFilter, when set, transforms the audio the pipeline sends to the
+	// default destination, before the mixer and the write. Audio the transport
+	// generates itself (mixer audio, end silence, DTMF tones) is not filtered.
+	// A FilterControlFrame reaches it in step with the audio queued around it.
+	AudioOutFilter audio.Filter
 	// AudioOutMixer, when set, mixes auxiliary audio (for example background
 	// music) into the outgoing audio before it is sent. It serves the default
 	// destination only; use AudioOutMixers to mix into a named one.

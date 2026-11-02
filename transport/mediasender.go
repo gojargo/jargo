@@ -27,6 +27,9 @@ type mediaSender struct {
 	channels   int
 	chunkSize  int
 	mixer      audio.Mixer
+	// filter runs over the audio taken from the queue, before the mixer and
+	// the write. Only the default destination has one.
+	filter audio.Filter
 
 	// resampleMu guards the resampler. Converting happens on the process
 	// goroutine, but the audio loop ends a turn and resets it from its own, so
@@ -92,6 +95,7 @@ func newMediaSender(out *BaseOutput, destination string) *mediaSender {
 		channels:    out.channels,
 		chunkSize:   out.chunkSize,
 		mixer:       out.mixerFor(destination),
+		filter:      out.filterFor(destination),
 	}
 }
 
@@ -599,6 +603,7 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 				s.signalDrained()
 				continue
 			}
+			s.filterAudio(ctx, queued)
 			if s.blendMixer(ctx, queued) {
 				lastAudioAt = time.Now()
 			}
@@ -622,6 +627,25 @@ func (s *mediaSender) audioLoopWithMixer(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// filterAudio runs the output filter over a frame taken from the queue, in
+// place. Only audio frames are filtered. A filter that fails leaves the audio
+// as it was, so the bot is still heard.
+func (s *mediaSender) filterAudio(ctx context.Context, f frames.Frame) {
+	if s.filter == nil {
+		return
+	}
+	pcm, _, _ := outputAudio(f)
+	if pcm == nil {
+		return
+	}
+	filtered, err := s.filter.Filter(ctx, pcm)
+	if err != nil {
+		s.out.PushError(ctx, "audio output filter failed", err, false)
+		return
+	}
+	setOutputAudio(f, filtered)
 }
 
 // blendMixer mixes the mixer's audio into a queued frame, in place. It reports
@@ -671,6 +695,7 @@ func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
 				s.signalDrained()
 				continue
 			}
+			s.filterAudio(ctx, queued)
 			if !s.handleQueuedFrame(ctx, queued) {
 				return
 			}
@@ -769,6 +794,12 @@ func (s *mediaSender) signalDrained() {
 // unforwarded, and the loop ends with it. A barge-in does not cancel the loop,
 // so a frame already handed to the transport is always seen through.
 func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) bool {
+	// A frame left with no audio (a filter buffering it, say) has nothing to
+	// write.
+	if pcm, _, _ := outputAudio(f); pcm != nil && len(pcm) == 0 {
+		return true
+	}
+
 	pushDownstream := true
 
 	switch af := f.(type) {
@@ -787,6 +818,8 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 		s.out.sendTransportMessage(ctx, af)
 	case *frames.TTSStoppedFrame:
 		s.ttsStopped(ctx)
+	case frames.FilterControlFrame:
+		s.handleFilterControl(ctx, af)
 	case *frames.OutputDTMFFrame:
 		// The keys waited behind the audio around them, so they land where the
 		// caller meant them rather than over what was still being said.
@@ -798,10 +831,7 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 		// A frame that carries no audio has waited behind the audio it belongs
 		// to (a word-aligned text frame, say). Give the concrete transport a
 		// chance to act on it now that that audio has played.
-		if err := s.out.self.WriteTransportFrame(ctx, f); err != nil && !canceled(ctx) {
-			slog.Error("write transport frame",
-				"processor", s.out.Name(), "frame", f.Name(), "err", err)
-		}
+		s.writeTransportFrame(ctx, f)
 	}
 
 	// Whichever of those calls the cancellation landed in, and whether or not it
@@ -814,6 +844,30 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 		_ = s.out.PushFrame(ctx, f, processor.Downstream)
 	}
 	return true
+}
+
+// handleFilterControl applies a filter control frame taken from the queue. It
+// waited behind the audio queued ahead of it, so a setting takes effect from
+// the audio after it. With no filter here it is the concrete transport's, like
+// any other frame.
+func (s *mediaSender) handleFilterControl(ctx context.Context, f frames.FilterControlFrame) {
+	if s.filter == nil {
+		s.writeTransportFrame(ctx, f)
+		return
+	}
+	if err := s.filter.ProcessFrame(ctx, f); err != nil && !canceled(ctx) {
+		slog.Error("audio output filter control",
+			"processor", s.out.Name(), "frame", f.Name(), "err", err)
+	}
+}
+
+// writeTransportFrame gives the concrete transport a frame that carries no
+// audio, once the audio queued ahead of it has played.
+func (s *mediaSender) writeTransportFrame(ctx context.Context, f frames.Frame) {
+	if err := s.out.self.WriteTransportFrame(ctx, f); err != nil && !canceled(ctx) {
+		slog.Error("write transport frame",
+			"processor", s.out.Name(), "frame", f.Name(), "err", err)
+	}
 }
 
 // canceled reports whether ctx is done, which is how a stop tearing the audio
