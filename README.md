@@ -99,7 +99,17 @@ the **[Quickstart](docs/getting-started/quickstart.md)** for the full setup.
 
 ## Examples
 
-Runnable bots live in [`examples/`](examples):
+Runnable bots live in [`examples/`](examples). Start with the
+[getting-started](examples/getting-started) series, which builds up from one
+spoken sentence to a voice agent with tools, each step a short `bot` function on
+the [development runner](docs/guides/runner.md):
+
+```sh
+CARTESIA_API_KEY=... go run ./examples/getting-started/01-say-one-thing
+# then open http://localhost:7860
+```
+
+The others:
 
 - **echo**: hear yourself back, no API keys.
 - **voicebot**: the full voice agent (STT → LLM → TTS over WebRTC) with
