@@ -180,3 +180,20 @@ func TestAudioStringFormat(t *testing.T) {
 		}
 	}
 }
+
+// An error frame masks the credentials its message quotes.
+func TestErrorFrameMasksTheCredentialsItsMessageQuotes(t *testing.T) {
+	f := frames.NewErrorFrame("Sarvam API error: headers: {'api-subscription-key': 'k'}")
+	if want := "Sarvam API error: headers: {'api-subscription-key': '[REDACTED]'}"; f.Error != want {
+		t.Errorf("Error = %q, want %q", f.Error, want)
+	}
+	fatal := frames.NewFatalErrorFrame("Authorization: Bearer abc123")
+	if want := "Authorization: Bearer [REDACTED]"; fatal.Error != want {
+		t.Errorf("fatal Error = %q, want %q", fatal.Error, want)
+	}
+}
+
+// An error frame takes a long chain of pairs.
+func TestErrorFrameAcceptsALongChainOfPairs(t *testing.T) {
+	frames.NewErrorFrame(strings.Repeat("a:", 5000) + "a")
+}

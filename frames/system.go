@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gojargo/jargo/utils/errors"
+	"github.com/gojargo/jargo/utils/security"
 )
 
 // The sample rates NewStartFrame applies when the application does not override
@@ -84,7 +85,10 @@ type ErrorSource interface {
 // is unrecoverable and the bot should exit. It is a system frame.
 type ErrorFrame struct {
 	BaseSystemFrame
-	// Error describes the error that occurred.
+	// Error describes the error that occurred. NewErrorFrame and
+	// NewFatalErrorFrame mask the credentials it quotes (see
+	// security.RedactSecrets), so every route an error takes carries the masked
+	// message.
 	Error string
 	// Fatal reports whether the error is unrecoverable and requires shutdown.
 	Fatal bool
@@ -113,9 +117,10 @@ type ErrorReport interface {
 	ErrorInfo() *ErrorFrame
 }
 
-// NewErrorFrame builds a non-fatal ErrorFrame describing message.
+// NewErrorFrame builds a non-fatal ErrorFrame describing message, with the
+// credentials it quotes masked.
 func NewErrorFrame(message string) *ErrorFrame {
-	return &ErrorFrame{BaseSystemFrame: NewBaseSystemFrame("ErrorFrame"), Error: message}
+	return &ErrorFrame{BaseSystemFrame: NewBaseSystemFrame("ErrorFrame"), Error: security.RedactSecrets(message)}
 }
 
 // String implements fmt.Stringer. An unset or unknown category is left out:
@@ -136,11 +141,12 @@ type FatalErrorFrame struct {
 	ErrorFrame
 }
 
-// NewFatalErrorFrame builds a FatalErrorFrame describing message.
+// NewFatalErrorFrame builds a FatalErrorFrame describing message, with the
+// credentials it quotes masked.
 func NewFatalErrorFrame(message string) *FatalErrorFrame {
 	return &FatalErrorFrame{
 		BaseSystemFrame: NewBaseSystemFrame("FatalErrorFrame"),
-		Error:           message,
+		Error:           security.RedactSecrets(message),
 		Fatal:           true,
 	}
 }

@@ -1,5 +1,6 @@
 // Package security holds the checks that decide whether a connection from
-// outside is allowed in.
+// outside is allowed in, and the masking of credentials in text bound for logs
+// and error reports.
 package security
 
 import (

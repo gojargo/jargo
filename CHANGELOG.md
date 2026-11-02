@@ -39,6 +39,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that cannot be loaded leaves the tagger unusable, and the LLM writes the
   tags itself. See
   [Expressive conversation](docs/guides/expressive-conversation.md#the-tone-tagger).
+- **Error messages have the credentials they quote masked.**
+  `security.RedactSecrets` masks the value of any `name=value` or `name: value`
+  pair (or `:=`, `=>`) whose name marks a credential (`api_key`,
+  `Authorization`, `X-Amz-Signature`, `apiKey`...), keeping an auth scheme such
+  as `Bearer` ahead of it, a URL's password, and tokens recognizable by format
+  alone: OpenAI, Anthropic, AWS and Amazon Bedrock, Google, GitHub, Slack,
+  Hugging Face, Perplexity and Twilio keys, JWTs and PEM private keys. The rest
+  of the text is kept as written, so a message still says what went wrong, and
+  an exception name followed by its message (`KeyError: ...`) is not taken for a
+  credential. `frames.NewErrorFrame` and `frames.NewFatalErrorFrame` apply it,
+  so an error's message is masked on every route it takes: the log, observers,
+  event handlers and RTVI clients.
 - `aggregators.LLMText` takes text transforms, with `SetTextTransformers` and
   `AddTextTransformer`, which rewrite each aggregation for everything
   downstream: the TTS service, the context and the client. A transform
