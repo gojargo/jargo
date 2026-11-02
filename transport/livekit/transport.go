@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
+	"github.com/pion/webrtc/v4"
 )
 
 // readDeadline bounds a blocking RTP read so the read loop can notice
@@ -26,10 +28,34 @@ type Transport struct {
 	out *outputTransport
 }
 
+// options are the LiveKit-specific settings of a Transport.
+type options struct {
+	audioInUserTracks bool
+}
+
+// Option sets a LiveKit-specific setting of a Transport.
+type Option func(*options)
+
+// WithAudioInUserTracks says how several participants' audio enters the
+// pipeline. Enabled, the default, each participant's audio is its own stream
+// of UserAudioRawFrames tagged with their identity. All of these streams enter
+// the pipeline through the one input transport, so a pipeline that runs a
+// single speech-to-text and VAD should only receive one of them. Disabled, the
+// participants' audio is mixed into a single stream of InputAudioRawFrames,
+// which a pipeline with one speech-to-text and VAD can follow however many
+// participants publish a microphone.
+func WithAudioInUserTracks(enabled bool) Option {
+	return func(o *options) { o.audioInUserTracks = enabled }
+}
+
 // NewTransport builds a transport over a joined LiveKit connection.
-func NewTransport(conn *Connection, params transport.Params) *Transport {
+func NewTransport(conn *Connection, params transport.Params, opts ...Option) *Transport {
+	o := options{audioInUserTracks: true}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return &Transport{
-		in:  newInput(conn, params),
+		in:  newInput(conn, params, o),
 		out: newOutput(conn, params),
 	}
 }
@@ -47,51 +73,81 @@ func channels(n int) int {
 	return n
 }
 
-// inputTransport reads Opus RTP from the subscribed remote track, decodes it to
-// PCM, and pushes InputAudioRawFrames into the pipeline at the input sample
-// rate.
+// The mix is made of 10 ms chunks, and waits for a participant with nothing
+// buffered until another has 50 ms.
+const (
+	mixChunkMs   = 10
+	mixMaxWaitMs = 50
+)
+
+// participantAudio is one decoded frame of a participant's audio at the
+// codec's rate, or, with released set, word that their track is gone.
+type participantAudio struct {
+	participant string
+	pcm         []byte
+	released    bool
+}
+
+// inputTransport reads Opus RTP from every subscribed remote audio track,
+// decodes it to PCM, and pushes it into the pipeline at the input sample rate:
+// each participant's as UserAudioRawFrames, or all of them mixed into
+// InputAudioRawFrames.
 type inputTransport struct {
 	*transport.BaseInput
 	conn *Connection
-	dec  *opus.Decoder
-	// resampler converts the 48 kHz the codec decodes to into the rate the
-	// transport reads at. It passes audio through when the two match.
-	resampler *resample.Resampler
+	opts options
+
+	// audio carries every participant's decoded audio to the one goroutine
+	// that converts and pushes it, in the order it was decoded. mu guards it.
+	audio chan participantAudio
+	// resamplers convert each participant's audio from the 48 kHz the codec
+	// decodes to into the rate the transport reads at, one each: a stream
+	// resampler keeps filter state between calls, so sharing one would mix
+	// the audio of participants who talk at once. Only the audio goroutine
+	// touches them.
+	resamplers map[string]*resample.Resampler
+	// mixer and mixedResampler serve the mixed stream, with user tracks off.
+	mixer          *participantAudioMixer
+	mixedResampler *resample.Resampler
 
 	readWG     sync.WaitGroup
-	mu         sync.Mutex // guards readCancel
+	mu         sync.Mutex // guards readCancel and readers
 	readCancel context.CancelFunc
+	// readers stop each participant's track reader, by identity.
+	readers map[string]context.CancelFunc
 }
 
-func newInput(conn *Connection, params transport.Params) *inputTransport {
-	in := &inputTransport{conn: conn}
+func newInput(conn *Connection, params transport.Params, opts options) *inputTransport {
+	in := &inputTransport{conn: conn, opts: opts}
 	in.BaseInput = transport.NewBaseInput("LiveKitInput", params, in)
 	return in
 }
 
-// StartReading decodes incoming audio on its own goroutine.
+// StartReading reads every participant's audio on goroutines of its own.
 func (in *inputTransport) StartReading(ctx context.Context) error {
-	ch := channels(in.Params().AudioInChannels)
-	dec, err := opus.NewDecoder(ch)
-	if err != nil {
-		return err
-	}
-	// The participant's audio is one continuous stream, so the resampler keeps
-	// its filter history for as long as the session lasts.
-	r, err := resample.NewWithConfig(opus.SampleRate, in.sampleRate(), ch,
-		resample.Config{ClearAfter: resample.NeverClear})
-	if err != nil {
-		return err
-	}
-	in.dec = dec
-	in.resampler = r
-
 	readCtx, cancel := context.WithCancel(ctx)
+	audio := make(chan participantAudio, 64)
+	in.resamplers = map[string]*resample.Resampler{}
+	in.mixer, in.mixedResampler = nil, nil
 	in.mu.Lock()
 	in.readCancel = cancel
+	in.readers = map[string]context.CancelFunc{}
+	in.audio = audio
 	in.mu.Unlock()
-	in.readWG.Add(1)
-	go in.readLoop(readCtx)
+	in.readWG.Go(func() { in.audioLoop(readCtx, audio) })
+
+	in.conn.OnAudioTrack(func(track *webrtc.TrackRemote, participant string) {
+		if readCtx.Err() != nil {
+			return
+		}
+		in.readTrack(readCtx, audio, track, participant)
+	})
+	in.conn.OnAudioTrackUnsubscribed(func(participant string) {
+		select {
+		case audio <- participantAudio{participant: participant, released: true}:
+		case <-readCtx.Done():
+		}
+	})
 
 	in.conn.OnMessage(func(raw []byte, sender string) {
 		if readCtx.Err() != nil {
@@ -123,7 +179,7 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	return nil
 }
 
-// StopReading stops the read goroutine.
+// StopReading stops the read goroutines.
 func (in *inputTransport) StopReading(context.Context) error {
 	in.mu.Lock()
 	cancel := in.readCancel
@@ -132,9 +188,13 @@ func (in *inputTransport) StopReading(context.Context) error {
 		cancel()
 	}
 	in.readWG.Wait()
-	if in.resampler != nil {
-		in.resampler.Close()
-		in.resampler = nil
+	for id, r := range in.resamplers {
+		r.Close()
+		delete(in.resamplers, id)
+	}
+	if in.mixedResampler != nil {
+		in.mixedResampler.Close()
+		in.mixedResampler = nil
 	}
 	return nil
 }
@@ -148,16 +208,36 @@ func (in *inputTransport) sampleRate() int {
 	return opus.SampleRate
 }
 
-func (in *inputTransport) readLoop(ctx context.Context) {
-	defer in.readWG.Done()
-
-	track, err := in.conn.RemoteAudioTrack(ctx)
+// readTrack starts reading a participant's audio track. A participant who
+// publishes again (a mute and unmute cycle, say) has the reader of their
+// previous track stopped first, so two readers never feed the audio goroutine
+// for the same participant.
+func (in *inputTransport) readTrack(
+	ctx context.Context, audio chan<- participantAudio, track *webrtc.TrackRemote, participant string,
+) {
+	ch := channels(in.Params().AudioInChannels)
+	dec, err := opus.NewDecoder(ch)
 	if err != nil {
+		slog.Error("livekit can't decode a participant's audio", "participant", participant, "err", err)
 		return
 	}
-	ch := channels(in.Params().AudioInChannels)
-	rate := in.sampleRate()
+	trackCtx, stop := context.WithCancel(ctx)
+	in.mu.Lock()
+	if prev := in.readers[participant]; prev != nil {
+		prev()
+	}
+	in.readers[participant] = stop
+	in.mu.Unlock()
 
+	in.readWG.Go(func() { in.readLoop(trackCtx, audio, track, dec, participant) })
+}
+
+// readLoop decodes one participant's track, handing each frame to the audio
+// goroutine, until the track ends or ctx is done.
+func (in *inputTransport) readLoop(
+	ctx context.Context, audio chan<- participantAudio, track *webrtc.TrackRemote, dec *opus.Decoder,
+	participant string,
+) {
 	for {
 		if ctx.Err() != nil {
 			return
@@ -173,18 +253,101 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 		if len(pkt.Payload) == 0 {
 			continue
 		}
-		pcm, err := in.dec.Decode(pkt.Payload)
+		pcm, err := dec.Decode(pkt.Payload)
 		if err != nil {
 			continue
 		}
-		// The codec always decodes at 48 kHz; the pipeline gets the rate it
-		// asked for.
-		pcm = in.resampler.Process(pcm)
+		select {
+		case audio <- participantAudio{participant: participant, pcm: pcm}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// audioLoop converts the participants' audio and pushes it into the pipeline,
+// in the order it was decoded.
+func (in *inputTransport) audioLoop(ctx context.Context, audio <-chan participantAudio) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case a := <-audio:
+			in.handleAudio(ctx, a)
+		}
+	}
+}
+
+// handleAudio pushes one frame of a participant's audio, or drops their
+// resampler once their track is gone.
+func (in *inputTransport) handleAudio(ctx context.Context, a participantAudio) {
+	if a.released {
+		if r := in.resamplers[a.participant]; r != nil {
+			r.Close()
+			delete(in.resamplers, a.participant)
+		}
+		return
+	}
+	if !in.opts.audioInUserTracks {
+		in.pushMixedAudio(ctx, a)
+		return
+	}
+	r, err := in.resamplerFor(a.participant)
+	if err != nil {
+		return
+	}
+	// The codec always decodes at 48 kHz; the pipeline gets the rate it asked
+	// for.
+	pcm := r.Process(a.pcm)
+	if len(pcm) == 0 {
+		return
+	}
+	ch := channels(in.Params().AudioInChannels)
+	in.PushAudioFrame(ctx, frames.NewUserAudioRawFrame(a.participant, pcm, in.sampleRate(), ch))
+}
+
+// resamplerFor returns a participant's resampler, building it on their first
+// audio. Their audio is one continuous stream, so it keeps its filter history
+// for as long as their track lasts.
+func (in *inputTransport) resamplerFor(participant string) (*resample.Resampler, error) {
+	if r := in.resamplers[participant]; r != nil {
+		return r, nil
+	}
+	r, err := newStreamResampler(in.sampleRate(), channels(in.Params().AudioInChannels))
+	if err != nil {
+		return nil, err
+	}
+	in.resamplers[participant] = r
+	return r, nil
+}
+
+// pushMixedAudio mixes a participant's audio into the room's stream and pushes
+// what is ready.
+func (in *inputTransport) pushMixedAudio(ctx context.Context, a participantAudio) {
+	ch := channels(in.Params().AudioInChannels)
+	if in.mixer == nil {
+		in.mixer = newParticipantAudioMixer(opus.SampleRate, ch, mixChunkMs, mixMaxWaitMs)
+	}
+	if in.mixedResampler == nil {
+		r, err := newStreamResampler(in.sampleRate(), ch)
+		if err != nil {
+			return
+		}
+		in.mixedResampler = r
+	}
+	for _, chunk := range in.mixer.add(a.participant, a.pcm) {
+		pcm := in.mixedResampler.Process(chunk)
 		if len(pcm) == 0 {
 			continue
 		}
-		in.PushAudioFrame(ctx, frames.NewInputAudioRawFrame(pcm, rate, ch))
+		in.PushAudioFrame(ctx, frames.NewInputAudioRawFrame(pcm, in.sampleRate(), ch))
 	}
+}
+
+// newStreamResampler builds a resampler from the codec's rate to rate for one
+// continuous stream, which keeps its filter history for as long as it lasts.
+func newStreamResampler(rate, ch int) (*resample.Resampler, error) {
+	return resample.NewWithConfig(opus.SampleRate, rate, ch, resample.Config{ClearAfter: resample.NeverClear})
 }
 
 // outputTransport encodes outgoing PCM chunks into Opus and writes them to the

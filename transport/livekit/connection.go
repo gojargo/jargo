@@ -42,8 +42,8 @@ type Config struct {
 func (c Config) Validate() error { return validate.Struct(c) }
 
 // Connection wraps a joined LiveKit room for one session. It owns the published
-// audio track and exposes the first subscribed remote audio track. It is safe
-// for concurrent use.
+// audio track and hands on every subscribed remote audio track, with the
+// participant publishing it. It is safe for concurrent use.
 type Connection struct {
 	room       *lksdk.Room
 	localTrack *lksdk.LocalTrack
@@ -67,6 +67,12 @@ type Connection struct {
 	partHandler func(identity string)
 	pendingPart []string
 
+	audioMu      sync.Mutex
+	audioHandler func(track *webrtc.TrackRemote, participant string)
+	pendingAudio []remoteAudio
+	unsubHandler func(participant string)
+	pendingUnsub []string
+
 	speakerMu      sync.Mutex
 	speakerHandler func(identity string)
 	// activeSpeaker is the loudest speaker last reported, "" before any.
@@ -89,17 +95,19 @@ func Connect(cfg Config) (*Connection, error) {
 	}
 
 	cb := lksdk.NewRoomCallback()
-	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
+	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		if track.Kind() != webrtc.RTPCodecTypeAudio {
 			return
 		}
-		c.mu.Lock()
-		c.remoteAudio = track
-		c.mu.Unlock()
-		select {
-		case c.remoteCh <- track:
-		default:
+		c.subscribedAudio(track, rp.Identity())
+	}
+	cb.OnTrackUnsubscribed = func(
+		track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant,
+	) {
+		if track.Kind() != webrtc.RTPCodecTypeAudio {
+			return
 		}
+		c.deliverAudioUnsubscribed(rp.Identity())
 	}
 	cb.OnDataPacket = func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
 		switch p := data.(type) {
@@ -162,6 +170,84 @@ func (c *Connection) reportPresent(identities []string) {
 	for _, identity := range identities {
 		c.deliverParticipant(identity)
 	}
+}
+
+// remoteAudio is a subscribed remote audio track and the participant
+// publishing it.
+type remoteAudio struct {
+	track       *webrtc.TrackRemote
+	participant string
+}
+
+// subscribedAudio records a remote audio track the room subscribed to and
+// hands it on.
+func (c *Connection) subscribedAudio(track *webrtc.TrackRemote, participant string) {
+	c.mu.Lock()
+	c.remoteAudio = track
+	c.mu.Unlock()
+	select {
+	case c.remoteCh <- track:
+	default:
+	}
+	c.deliverAudioTrack(track, participant)
+}
+
+// OnAudioTrack registers the handler for a remote audio track the room
+// subscribed to, called with the track and the identity of the participant
+// publishing it. A participant who publishes again (a mute and unmute cycle,
+// say) is handed the new track. Tracks subscribed before a handler was set
+// are handed to it at once, in order.
+func (c *Connection) OnAudioTrack(h func(track *webrtc.TrackRemote, participant string)) {
+	c.audioMu.Lock()
+	c.audioHandler = h
+	pending := c.pendingAudio
+	c.pendingAudio = nil
+	c.audioMu.Unlock()
+	for _, a := range pending {
+		h(a.track, a.participant)
+	}
+}
+
+// deliverAudioTrack hands one track to the handler, holding it when none is
+// registered yet.
+func (c *Connection) deliverAudioTrack(track *webrtc.TrackRemote, participant string) {
+	c.audioMu.Lock()
+	h := c.audioHandler
+	if h == nil {
+		c.pendingAudio = append(c.pendingAudio, remoteAudio{track: track, participant: participant})
+		c.audioMu.Unlock()
+		return
+	}
+	c.audioMu.Unlock()
+	h(track, participant)
+}
+
+// OnAudioTrackUnsubscribed registers the handler for a participant's audio
+// track being unsubscribed, called with their identity. Unsubscriptions before
+// a handler was set are reported to it at once, in order.
+func (c *Connection) OnAudioTrackUnsubscribed(h func(participant string)) {
+	c.audioMu.Lock()
+	c.unsubHandler = h
+	pending := c.pendingUnsub
+	c.pendingUnsub = nil
+	c.audioMu.Unlock()
+	for _, p := range pending {
+		h(p)
+	}
+}
+
+// deliverAudioUnsubscribed reports one unsubscription to the handler, holding
+// it when none is registered yet.
+func (c *Connection) deliverAudioUnsubscribed(participant string) {
+	c.audioMu.Lock()
+	h := c.unsubHandler
+	if h == nil {
+		c.pendingUnsub = append(c.pendingUnsub, participant)
+		c.audioMu.Unlock()
+		return
+	}
+	c.audioMu.Unlock()
+	h(participant)
 }
 
 // RemoteAudioTrack returns the first subscribed remote audio track, blocking

@@ -51,7 +51,7 @@ func TestNewTransportProcessors(t *testing.T) {
 // the way out. StopReading returning is what says the goroutine is gone, so a
 // session that ends cannot leave one decoding into a closed pipeline.
 func TestStartAndStopReading(t *testing.T) {
-	in := newInput(&Connection{}, transport.Params{})
+	in := newInput(&Connection{}, transport.Params{}, options{audioInUserTracks: true})
 
 	if err := in.StartReading(t.Context()); err != nil {
 		t.Fatalf("StartReading: %v", err)

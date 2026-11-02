@@ -104,6 +104,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   its branches. **Breaking:** `processor.Processor` gained `SetupStarted` and
   `SetupFinished`, which `processor.Base` implements, so a processor that does
   not embed it has to add them.
+- **The LiveKit transport takes in every participant's audio.** It read only
+  the first remote audio track. Now each participant's audio enters the
+  pipeline as its own stream of `UserAudioRawFrame`s tagged with their
+  identity, all through the one input transport, each converted by a
+  resampler of its own so the voices of participants who talk at once do not
+  bleed into each other. With `livekit.WithAudioInUserTracks(false)` the
+  participants' audio is mixed instead into a single real-time stream of
+  `InputAudioRawFrame`s, which a pipeline with one speech-to-text and VAD can
+  follow however many participants publish a microphone. The mix is made of
+  10 ms chunks once every participant has one buffered, and waits for a
+  participant who stops sending until another has 50 ms buffered. A
+  participant who publishes again has their previous track's reader stopped,
+  and their resampler is released when their track is unsubscribed.
+  `livekit.Connection` gains `OnAudioTrack` and `OnAudioTrackUnsubscribed`.
+  **Breaking:** the audio arrives as `UserAudioRawFrame`s by default rather
+  than `InputAudioRawFrame`s.
 - If a `pipeline.Worker` is canceled, or its setup times out, before the
   pipeline has started, the processors still being set up never get the
   `StartFrame` and never start. The pipeline is only cleaned up: no

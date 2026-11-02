@@ -55,7 +55,8 @@ func (r *rateRecorder) ProcessFrame(ctx context.Context, f frames.Frame, dir pro
 	if err := r.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	if in, ok := f.(*frames.InputAudioRawFrame); ok {
+	if af, ok := f.(frames.InputAudioFrame); ok {
+		in := af.AudioData()
 		r.mu.Lock()
 		r.rates[in.SampleRate]++
 		r.samples += len(in.Audio) / 2
@@ -159,13 +160,7 @@ func connectParticipant(
 	}
 	c.localTrack = local
 	bot.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		c.mu.Lock()
-		c.remoteAudio = tr
-		c.mu.Unlock()
-		select {
-		case c.remoteCh <- tr:
-		default:
-		}
+		c.subscribedAudio(tr, "participant")
 	})
 
 	participant := newPeer(t)
