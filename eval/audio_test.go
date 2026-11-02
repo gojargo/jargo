@@ -193,7 +193,7 @@ func buildSilentBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
 	speech := tts.New("fakeTTS", fakeSynth{})
-	speech.SetTextFilters(unspeakable{})
+	speech.SetTextFilters(unspeakable{}) //nolint:staticcheck // the deprecated filters still run
 	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), speech, out, agg.Assistant(),
 	), pipeline.WorkerConfig{

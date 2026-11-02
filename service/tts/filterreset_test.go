@@ -16,9 +16,9 @@ import (
 func TestFilterStateDoesNotCarryIntoTheNextReply(t *testing.T) {
 	syn := &fakeSynth{rate: 24000, chunk: []byte{1, 2, 3, 4}, spoken: make(chan string, 8)}
 	base := tts.New("FilterTTS", syn)
-	opts := ttstext.DefaultMarkdownFilterOptions()
+	opts := ttstext.DefaultMarkdownFilterOptions() //nolint:staticcheck // the deprecated filter under test
 	opts.FilterCode = true
-	base.SetTextFilters(ttstext.NewMarkdownFilter(opts))
+	base.SetTextFilters(ttstext.NewMarkdownFilter(opts)) //nolint:staticcheck // the deprecated filter under test
 
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{})
 	done := make(chan error, 1)

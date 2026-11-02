@@ -16,6 +16,12 @@ import (
 // MarkdownFilterOptions configures a MarkdownFilter. The zero value filters
 // nothing at all (Enabled is false); use DefaultMarkdownFilterOptions for the
 // recommended set and toggle individual fields from there.
+//
+// Deprecated: use StripMarkdown instead, registered as a text transform with
+// (*tts.Base).SetTextTransformers. In place of FilterCode and FilterTables,
+// give the block its own text type with a PatternPairAggregator and list that
+// type in (*tts.Base).SetSkipTextTypes, which keeps the block in the context
+// and out of the audio.
 type MarkdownFilterOptions struct {
 	// Enabled turns the filter on. When false, Filter returns its input as
 	// written, which is the switch to reach for to see what the model actually
@@ -40,6 +46,12 @@ type MarkdownFilterOptions struct {
 
 // DefaultMarkdownFilterOptions returns the recommended set: filtering on, with
 // repeated sequences dropped, and code and tables spoken rather than skipped.
+//
+// Deprecated: use StripMarkdown instead, registered as a text transform with
+// (*tts.Base).SetTextTransformers. In place of FilterCode and FilterTables,
+// give the block its own text type with a PatternPairAggregator and list that
+// type in (*tts.Base).SetSkipTextTypes, which keeps the block in the context
+// and out of the audio.
 func DefaultMarkdownFilterOptions() MarkdownFilterOptions {
 	return MarkdownFilterOptions{
 		Enabled:                 true,
@@ -54,6 +66,12 @@ func DefaultMarkdownFilterOptions() MarkdownFilterOptions {
 // It is stateful. Code blocks and tables arrive split across several calls, so
 // the filter remembers that it is inside one; an interruption abandons whatever
 // was half-read. Build one with NewMarkdownFilter.
+//
+// Deprecated: use StripMarkdown instead, registered as a text transform with
+// (*tts.Base).SetTextTransformers. In place of FilterCode and FilterTables,
+// give the block its own text type with a PatternPairAggregator and list that
+// type in (*tts.Base).SetSkipTextTypes, which keeps the block in the context
+// and out of the audio.
 type MarkdownFilter struct {
 	opts MarkdownFilterOptions
 	md   goldmark.Markdown
@@ -64,6 +82,12 @@ type MarkdownFilter struct {
 }
 
 // NewMarkdownFilter builds a MarkdownFilter from opts.
+//
+// Deprecated: use StripMarkdown instead, registered as a text transform with
+// (*tts.Base).SetTextTransformers. In place of FilterCode and FilterTables,
+// give the block its own text type with a PatternPairAggregator and list that
+// type in (*tts.Base).SetSkipTextTypes, which keeps the block in the context
+// and out of the audio.
 func NewMarkdownFilter(opts MarkdownFilterOptions) *MarkdownFilter {
 	var exts []goldmark.Extender
 	if opts.FilterTables {

@@ -17,6 +17,11 @@ package text
 
 // Filter transforms text before it is handed to a speech synthesizer. The TTS
 // base calls Filter on each complete sentence just before synthesizing it.
+//
+// Deprecated: use a tts.TextTransform instead. Registered with
+// (*tts.Base).SetTextTransformers it rewrites what is spoken, and registered
+// with (*aggregators.LLMText).SetTextTransformers it rewrites what everything
+// downstream sees.
 type Filter interface {
 	Filter(text string) string
 }
@@ -27,6 +32,11 @@ type Filter interface {
 // abandon it when the text that would have closed it never arrives. The TTS base
 // calls HandleInterruption on an interruption, and ResetInterruption before
 // filtering resumes.
+//
+// Deprecated: use a tts.TextTransform instead. Registered with
+// (*tts.Base).SetTextTransformers it rewrites what is spoken, and registered
+// with (*aggregators.LLMText).SetTextTransformers it rewrites what everything
+// downstream sees.
 type InterruptibleFilter interface {
 	Filter
 	HandleInterruption()
@@ -39,4 +49,7 @@ type InterruptibleFilter interface {
 type Transform func(text string) string
 
 // Filter lets a bare Transform satisfy the Filter interface.
+//
+// Deprecated: Filter is deprecated. Wrap the Transform in a tts.TextTransform
+// instead.
 func (t Transform) Filter(text string) string { return t(text) }

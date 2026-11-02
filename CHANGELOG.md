@@ -55,6 +55,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `text.NewStripMarkdown(false)` instead, or turn off the new
   `FormatterOptions.StripURLs`, which `DefaultFormatterOptions` turns on.
 
+### Deprecated
+
+- `(*tts.Base).SetTextFilters`, along with `text.Filter`,
+  `text.InterruptibleFilter` and `text.MarkdownFilter` (with
+  `NewMarkdownFilter`, `MarkdownFilterOptions` and
+  `DefaultMarkdownFilterOptions`). Use text transforms instead:
+  `text.StripMarkdown` replaces `MarkdownFilter`, and a transform registered on
+  `aggregators.LLMText` rewrites the context as well as the speech. In place of
+  `FilterCode` and `FilterTables`, give the block its own text type with
+  `PatternPairAggregator` and list it in the TTS service's `SetSkipTextTypes`,
+  which keeps it in the context and out of the audio.
+- `(*wsservice.Base).SendWithRetry`. No replacement: send on the websocket
+  directly and leave reconnecting to the receive loop.
+
 ### Fixed
 
 - `text.StripMarkdown` keeps asterisks that are content (`2*3*4`, `5 * 3`,

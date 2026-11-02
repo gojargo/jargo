@@ -212,7 +212,7 @@ type Base struct {
 	*service.Base
 	syn     Synthesizer
 	meta    Metadata
-	filters []ttstext.Filter
+	filters []ttstext.Filter //nolint:staticcheck // the deprecated filters still run
 	// transforms reshape a unit for the provider after the filters have
 	// normalized it. See TextTransform.
 	transforms []TextTransformer
@@ -607,6 +607,11 @@ func (b *Base) skipsSynthesis(t frames.TextType) bool {
 // SetTextTransformers instead: a text.VoiceFormatter goes there.
 // Call this before the pipeline starts; the filter set is not safe to change
 // while it is running.
+//
+// Deprecated: use SetTextTransformers instead, with text.StripMarkdown in place
+// of text.MarkdownFilter. A transform registered with
+// (*aggregators.LLMText).SetTextTransformers rewrites the context as well as
+// the speech.
 func (b *Base) SetTextFilters(filters ...ttstext.Filter) {
 	b.filters = filters
 }
@@ -920,7 +925,7 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 	// interruption clears it: a code block one reply left open must not mute
 	// the next.
 	for _, f := range b.filters {
-		if i, ok := f.(ttstext.InterruptibleFilter); ok {
+		if i, ok := f.(ttstext.InterruptibleFilter); ok { //nolint:staticcheck // the deprecated filters still run
 			i.HandleInterruption()
 		}
 	}
@@ -1030,7 +1035,7 @@ func (b *Base) handleInterruption(ctx context.Context) {
 		b.exprFormatter.Reset()
 	}
 	for _, f := range b.filters {
-		if i, ok := f.(ttstext.InterruptibleFilter); ok {
+		if i, ok := f.(ttstext.InterruptibleFilter); ok { //nolint:staticcheck // the deprecated filters still run
 			i.HandleInterruption()
 		}
 	}
@@ -1396,7 +1401,7 @@ func (b *Base) transformUnit(ctx context.Context, text string, by frames.TextTyp
 	for _, f := range b.filters {
 		// A stateful filter is told the interruption is over just before it is
 		// asked for text again, which is the point it can resume from.
-		if i, ok := f.(ttstext.InterruptibleFilter); ok {
+		if i, ok := f.(ttstext.InterruptibleFilter); ok { //nolint:staticcheck // the deprecated filters still run
 			i.ResetInterruption()
 		}
 		filtered = f.Filter(filtered)

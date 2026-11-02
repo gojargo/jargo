@@ -362,6 +362,9 @@ func (b *Base) reconnectWebsocket(ctx context.Context, attempt int) (bool, error
 // SendWithRetry sends and, when that fails, reconnects and sends once more. It
 // returns the failure that stood when there was no connection left to send on,
 // and nil once the message is away.
+//
+// Deprecated: it has no replacement. Send on the websocket directly and leave
+// reconnecting to the receive loop.
 func (b *Base) SendWithRetry(ctx context.Context, send func() error, report ReportError) error {
 	err := b.sendOnce(send)
 	if err == nil {
