@@ -106,6 +106,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The LiveKit transport reports participants already in the room when the
+  bot joins. The room reports only who joins after the bot, so a participant
+  who was there first never raised a `ClientConnectedFrame`. They now raise
+  the same one as a participant who joins later.
 - A failed keepalive no longer stops the ElevenLabs realtime TTS service's
   keepalive for the rest of the connection.
 - `text.StripMarkdown` keeps asterisks that are content (`2*3*4`, `5 * 3`,

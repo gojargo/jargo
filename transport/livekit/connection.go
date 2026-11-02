@@ -130,7 +130,23 @@ func Connect(cfg Config) (*Connection, error) {
 		return nil, err
 	}
 	c.localTrack = track
+
+	// Participants already in the room raise the same events as those who join
+	// later. The room reports only who joins after the bot does.
+	var present []string
+	for _, p := range room.GetRemoteParticipants() {
+		present = append(present, p.Identity())
+	}
+	c.reportPresent(present)
 	return c, nil
+}
+
+// reportPresent reports the participants who were in the room when the bot
+// joined, as though each had just joined.
+func (c *Connection) reportPresent(identities []string) {
+	for _, identity := range identities {
+		c.deliverParticipant(identity)
+	}
 }
 
 // RemoteAudioTrack returns the first subscribed remote audio track, blocking
@@ -230,8 +246,8 @@ func (c *Connection) deliverDTMF(digit string) {
 //
 // Holding them matters here because the room is joined before the transport is
 // built: someone arriving in that window would otherwise go unreported. Someone
-// already in the room when the bot joined is a different case and is not
-// reported at all, since they did not join while the bot was there to see it.
+// already in the room when the bot joined is reported the same way, as though
+// they had just joined.
 func (c *Connection) OnParticipantConnected(h func(identity string)) {
 	c.partMu.Lock()
 	c.partHandler = h

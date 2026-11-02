@@ -171,3 +171,25 @@ func TestTheRoomConnectionsAreTimedByAnObserver(t *testing.T) {
 		t.Fatal("the worker never finished")
 	}
 }
+
+// TestParticipantsAlreadyInTheRoomAreConnected checks each participant already
+// in the room when the bot joins is reported as connected, and one who joins
+// later is reported after them.
+func TestParticipantsAlreadyInTheRoomAreConnected(t *testing.T) {
+	c := &Connection{}
+	c.reportPresent([]string{"alice", "bob"})
+
+	var got []string
+	c.OnParticipantConnected(func(identity string) { got = append(got, identity) })
+	c.deliverParticipant("carol")
+
+	want := []string{"alice", "bob", "carol"}
+	if len(got) != len(want) {
+		t.Fatalf("participants connected = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("participants connected = %v, want %v", got, want)
+		}
+	}
+}
