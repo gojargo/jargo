@@ -101,6 +101,9 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		}
 		in.PushTransportMessage(readCtx, raw)
 	})
+	// The pipeline is ready for the connection now: the connected event and
+	// any messages held until this point are released.
+	in.conn.Connect()
 
 	in.readWG.Add(1)
 	go in.reportClientConnected(readCtx)
@@ -164,12 +167,20 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 		_ = track.SetReadDeadline(time.Now().Add(readDeadline))
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
-			// A deadline lets us re-check ctx; any other error means the track
-			// is gone.
+			// A deadline lets us re-check ctx.
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				continue
 			}
-			return
+			// Any other error means the track is gone. Reading it again would
+			// fail the same way, so park until a restart brings a fresh one;
+			// that is how the session survives the client restarting its peer
+			// connection.
+			slog.Warn("rtc: audio track stopped, waiting for a new one", "err", err)
+			track, err = in.conn.nextRemoteAudioTrack(ctx, track)
+			if err != nil {
+				return
+			}
+			continue
 		}
 		if len(pkt.Payload) == 0 {
 			continue
@@ -270,6 +281,8 @@ type outputTransport struct {
 	// queued counts frames handed over but not yet sent, so a graceful end can
 	// wait for them rather than cutting the last words off.
 	queued atomic.Int64
+
+	disconnectOnce sync.Once
 }
 
 func newOutput(conn *Connection, params transport.Params) *outputTransport {
@@ -302,10 +315,28 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 		// the sender goes away, or the farewell loses its last words.
 		out.waitDrained(ctx)
 		out.stopSending()
+		out.disconnect()
 	case *frames.CancelFrame:
 		out.stopSending()
+		out.disconnect()
 	}
 	return nil
+}
+
+// disconnect tells the client the bot has left and closes the connection, once.
+// It happens here rather than on the input, which sees the EndFrame first:
+// closing there would cut off the audio the output is still draining.
+func (out *outputTransport) disconnect() {
+	out.disconnectOnce.Do(func() {
+		select {
+		case <-out.conn.Done():
+			// The client is already gone.
+			return
+		default:
+		}
+		slog.Info("rtc: disconnecting from the peer")
+		_ = out.conn.Disconnect()
+	})
 }
 
 // SendMessage sends an application message over the data channel. The payload is

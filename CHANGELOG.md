@@ -15,6 +15,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`rtc.RequestHandler`: the WebRTC signaling a browser client speaks.** It
+  answers offers and keeps each connection under its `pc_id`, so a later offer
+  carrying that id renegotiates the same session, and with `restart_pc` moves
+  it onto a new peer connection (and a new `pc_id`) without starting a second
+  session. `HandlePatchRequest` adds ICE candidates the client trickles in
+  after its offer, empty end-of-candidates markers included. It runs in
+  multiple-connection mode by default, or `ConnectionModeSingle`, and with
+  `ESP32Mode` rewrites each answer for ESP32 clients through `rtc.SDPMunging`.
+  Refusals come back as `*rtc.RequestError` carrying the HTTP status.
+  `rtc.Connection` gained what this needs: `PCID`, `Initialize` and `GetAnswer`,
+  `Renegotiate`, `AddICECandidate`, `AskToRenegotiate`, `Disconnect`,
+  `IsConnected`, `SendAppMessage`, and the `OnConnected`, `OnDisconnected`,
+  `OnClosed`, `OnFailed` and `OnTrackStatus` events. It also honours the
+  client's keep-alive pings and its track-status signaling messages, closes a
+  peer connection stuck connecting for a minute (`WithConnectionTimeout`), and
+  stops queueing outgoing messages when no data channel has opened 10 seconds
+  after connecting. A restarted peer connection's new audio track is picked up
+  by the transport's reader, which waits on a track that stopped rather than
+  ending.
+
 - **The tone reader, in alpha: a perception producer that reads how each user
   turn was meant from its words.** `processor/tone/reader` goes between the STT
   service and the user aggregator and sets each final transcription's
@@ -112,6 +132,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that embeds it.
 
 ### Changed
+
+- **A WebRTC connection ends only when it closes or fails, no longer when it is
+  merely disconnected.** A disconnected peer connection may still recover,
+  through ICE or a client restart, so `rtc.Connection.Done` now waits for it to
+  close or fail; a client closing its side still closes it at once. The WebRTC
+  transport also connects to the connection when it starts reading (messages
+  from the client that arrive earlier are held until then), and when the
+  pipeline ends or is cancelled it tells the client the bot has left and
+  closes the connection, after the last of the audio has played.
+  **Breaking:** code that relied on `Done` firing on a disconnection now sees
+  it later, when the connection fails.
 
 - **`pipeline.Worker` pushes the `StartFrame` while the processors are still
   being set up, and each processor holds it only until its own `Setup` is
