@@ -321,8 +321,9 @@ func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMCo
 			}
 			// A call still running has a placeholder standing in for its result.
 			// It is not an answer, so it is neither sent nor recorded: the real
-			// one has still to come.
-			if r.Content == frames.ToolResultInProgress {
+			// one has still to come. Nor is the placeholder a canceled call
+			// leaves: the model is not told about the cancellation.
+			if r.Content == frames.ToolResultInProgress || r.Content == frames.ToolResultCanceled {
 				continue
 			}
 			s.recordResult(r.ID)

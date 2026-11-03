@@ -273,6 +273,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Nova Sonic no longer sends a canceled tool call's `CANCELLED` placeholder to
+  the model as the call's result. It skips it, as it skips the `IN_PROGRESS`
+  placeholder of a call still running.
+
 - Vertex AI Gemini Live no longer declares asynchronous tools NON_BLOCKING or
   sends scheduling hints with their results, which break tool calling against
   the Vertex endpoint. Its default model would otherwise have taken them. A

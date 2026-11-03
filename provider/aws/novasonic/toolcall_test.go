@@ -175,6 +175,27 @@ func TestAnInProgressResultIsNotSettled(t *testing.T) {
 	}
 }
 
+// A canceled call has a placeholder saying so in place of its result. The model
+// is never told about it: it is neither sent as the call's result nor recorded
+// as settled.
+func TestACanceledResultIsNotSent(t *testing.T) {
+	s, _ := newTestService(t)
+	sent := recordSent(s)
+	convo := frames.NewLLMContext("system")
+	convo.AddToolResult(frames.ToolResult{
+		ID: "call_1", Name: "get_weather", Content: frames.ToolResultCanceled,
+	})
+
+	s.processCompletedCalls(context.Background(), convo, true)
+
+	if n := sent.toolResults(); n != 0 {
+		t.Errorf("sent %d tool results, want the canceled placeholder left out", n)
+	}
+	if s.resultSeen("call_1") {
+		t.Error("the canceled placeholder was recorded as the call's result")
+	}
+}
+
 // A result already reported is not reported again: the conversation is handed to
 // the service whenever it changes, and every change carries every result it
 // holds.
