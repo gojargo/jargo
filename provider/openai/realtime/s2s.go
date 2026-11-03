@@ -314,7 +314,14 @@ func (s *Service) sessionUpdate() sessionUpdateMsg {
 func (s *Service) toolSession(
 	schema frames.ToolsSchema, choice frames.ToolChoice,
 ) map[string]any {
-	return s.adapter.SessionParams(schema, choice).Session()
+	tools := s.adapter.ToProviderToolsFormat(s.adapter.WithBuiltins(schema))
+	if len(tools) == 0 {
+		return nil
+	}
+	if choice == "" {
+		choice = frames.ToolChoiceAuto
+	}
+	return map[string]any{"tools": tools, "tool_choice": string(choice)}
 }
 
 // currentTools returns the toolset currently advertised to the session.

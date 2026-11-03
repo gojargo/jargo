@@ -331,6 +331,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The OpenAI Realtime adapter settles a whole session.** Its
+  `LLMInvocationParams` now returns the system instruction (the one given
+  wins over the conversation's prompt), the items to seed the session with (a
+  single user message as it stands, anything more packed into one user
+  message holding the history) and the tools the session carries, the
+  configured ones standing in while the conversation advertises none. A tool
+  always carries its description and an object schema of its parameters.
+  Messages written for it are identified as `openai-realtime`. **Breaking:**
+  `realtime.Params` changed shape and `SessionParams` is gone.
+
 - **`SyncToolHandlers` takes a `frames.ToolsSchema`** rather than a slice of
   standard tools, so a conversation advertising only custom tools counts as
   advertising tools. It now also settles the cancel tools and recomposes the
