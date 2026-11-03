@@ -49,6 +49,7 @@ too, for the user aggregator's default turn strategies.
 
 | Example | What it shows | Keys |
 | --- | --- | --- |
+| [`realtime-openai`](realtime/realtime-openai) | OpenAI Realtime, with semantic turn detection, noise reduction, a tool added at runtime and transcript logging. | OpenAI |
 | [`realtime-azure`](realtime/realtime-azure) | Azure OpenAI Realtime, with tools and transcript logging. | Azure OpenAI |
 | [`realtime-grok`](realtime/realtime-grok) | xAI's Grok Voice Agent, with tools and transcript logging. | xAI |
 | [`realtime-gemini-live`](realtime/realtime-gemini-live) | Gemini Live, with tools configured on the service, Google Search and transcript logging. | Google AI |

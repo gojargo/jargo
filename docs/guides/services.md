@@ -247,6 +247,13 @@ pipeline.New(t.Input(), s2s, t.Output())
 The three implementations are `provider/openai/realtime`,
 `provider/google/live` and `provider/aws/novasonic`.
 
+Each takes its session's configuration in its `Config`. For OpenAI Realtime that
+is `SessionProperties`: the voice, the transcription of the user's speech, turn
+detection (server or semantic VAD, or turned off so the pipeline's own turn
+detection drives the session), noise reduction and reasoning. An
+`LLMUpdateSettingsFrame` carrying a `realtime.Settings` delta changes them while
+the pipeline runs.
+
 Lower latency and better prosody, at the cost of the per-stage control you get
 from three separate services. You cannot inspect the transcript before the model
 answers, or swap just the voice.

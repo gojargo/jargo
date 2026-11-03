@@ -388,6 +388,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   properties. `llm.Base.CurrentTTFB` reads the time to first byte of the
   response being timed.
 
+- **A `realtime-openai` example.** A voice agent on OpenAI Realtime with
+  semantic turn detection, near-field noise reduction, the user's speech
+  transcribed, and a tool added fifteen seconds into the conversation.
+
 - **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
   takes the v1 `BaseURL` and names the deployment with `Model`, and can
   authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.
