@@ -43,6 +43,13 @@ const (
 	// that completes a turn of client content.
 	keyText         = "text"
 	keyTurnComplete = "turnComplete"
+	// The keys of the client messages that carry content and realtime input,
+	// of a content's parts, and the role of the user's turns.
+	keyClientContent = "clientContent"
+	keyRealtimeInput = "realtimeInput"
+	keyParts         = "parts"
+	keyTurns         = "turns"
+	roleUser         = "user"
 )
 
 // Config configures the Gemini Live service.
@@ -105,6 +112,10 @@ type Config struct {
 	// conversation that brings tools of its own replaces them. Tools in Gemini's
 	// own format go under Custom, keyed frames.AdapterTypeGemini.
 	Tools frames.ToolsSchema
+	// InferenceOnContextInitialization says whether the model answers the
+	// conversation the session is seeded with as soon as it is: the bot speaks
+	// first. Nil means true. False seeds the session and waits for the user.
+	InferenceOnContextInitialization *bool
 	// Thinking configures what the model may spend on reasoning, for a model
 	// that reasons. The Live thinking models require a level and refuse a setup
 	// without one, so an unset level defaults to the lowest they accept, which

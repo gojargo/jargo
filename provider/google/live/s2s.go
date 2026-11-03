@@ -74,6 +74,21 @@ type Service struct {
 	// turn has answered yet; the aggregator's next upstream conversation
 	// completes the turn. Guarded by mu.
 	contentAwaitingResponse bool
+
+	// readyForInput says the session has been seeded with the conversation, or
+	// needed no seeding, and takes realtime input. Audio before it is dropped.
+	readyForInput atomic.Bool
+	// runWhenReady says the conversation arrived before the session was ready,
+	// so seeding it waits for the session. Guarded by mu.
+	runWhenReady bool
+	// settlingFirstContext says the first conversation is being taken in, which
+	// seeds the session itself once it is done. A session becoming ready
+	// meanwhile leaves the seeding to it. Guarded by mu.
+	settlingFirstContext bool
+	// needsInitialTurnComplete says a 2.5 session was seeded without being asked
+	// to answer, so the user's first turn has to complete one: otherwise the
+	// model ignores what it was seeded with. Guarded by mu.
+	needsInitialTurnComplete bool
 }
 
 // Connector customizes how the Live session is addressed and authorized, so a
@@ -88,6 +103,13 @@ type Connector interface {
 	// ModelPath returns the resource name the setup message identifies the model
 	// by.
 	ModelPath(model string) string
+}
+
+// HistoryConfigGate is an optional interface a Connector implements when the
+// deployment it dials does not take the history configuration in the setup
+// message. The service then leaves it out.
+type HistoryConfigGate interface {
+	SupportsHistoryConfig() bool
 }
 
 // NonBlockingToolsGate is an optional interface a Connector implements when the
@@ -196,6 +218,9 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	case *frames.LLMMessagesAppendFrame:
 		s.handleMessagesAppend(ctx, fr)
 		return nil
+	case *frames.UserStoppedSpeakingFrame:
+		s.handleUserStoppedSpeaking(ctx)
+		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
 		return nil
@@ -282,6 +307,11 @@ func (s *Service) setup() (map[string]any, error) {
 		"inputAudioTranscription":  map[string]any{},
 		"outputAudioTranscription": map[string]any{},
 	}
+	// The conversation the session is seeded with goes in as client content,
+	// which the API has to be told to expect.
+	if gate, ok := s.connector.(HistoryConfigGate); !ok || gate.SupportsHistoryConfig() {
+		setup["historyConfig"] = map[string]any{"initialHistoryInClientContent": true}
+	}
 	if cwc := live.ContextWindowCompression.Or(nil); cwc != nil && cwc.Enabled {
 		// Compression always slides the window.
 		compression := map[string]any{"slidingWindow": map[string]any{}}
@@ -312,7 +342,7 @@ func (s *Service) setup() (map[string]any, error) {
 	}
 	if system != "" {
 		setup["systemInstruction"] = map[string]any{
-			"parts": []any{map[string]any{keyText: system}},
+			keyParts: []any{map[string]any{keyText: system}},
 		}
 	}
 	if len(tools) > 0 {
@@ -436,6 +466,15 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 		return
 	}
 
+	s.mu.Lock()
+	s.settlingFirstContext = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.settlingFirstContext = false
+		s.mu.Unlock()
+	}()
+
 	// Whether the conversation changes the effective instruction is the
 	// adapter's to settle, and it still prefers the configured one when there is
 	// one.
@@ -460,6 +499,140 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 	// session existed, so they are recorded as known rather than sent: the model
 	// never asked for them and has nothing to do with them.
 	s.processCompletedCalls(ctx, convo, false)
+
+	// A conversation with nothing in it gives the model nothing to answer, so
+	// the configured instruction is put in for it to answer, when it is to
+	// answer at all.
+	if len(params.Contents) == 0 && s.inferenceOnContextInitialization() {
+		if s.cfg.Instructions != "" {
+			slog.DebugContext(ctx, "no messages in the initial conversation; seeding it with the "+
+				"system instruction to have the bot answer", "service", s.Name())
+			convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: s.cfg.Instructions})
+		} else {
+			slog.WarnContext(ctx, "no messages in the initial conversation and no system instruction; "+
+				"the bot cannot be made to speak first", "service", s.Name())
+		}
+	}
+	s.createInitialResponse(ctx, false)
+}
+
+// inferenceOnContextInitialization says whether the model answers the
+// conversation the session is seeded with.
+func (s *Service) inferenceOnContextInitialization() bool {
+	return s.cfg.InferenceOnContextInitialization == nil || *s.cfg.InferenceOnContextInitialization
+}
+
+// handleSessionReady takes the server's acknowledgement of a session's setup.
+// A conversation that arrived first is seeded now. On a session opened again
+// after the conversation was taken in, the conversation is seeded again, so the
+// new session has what the old one had before it takes input. Otherwise the
+// conversation has yet to arrive, and seeding waits for it.
+func (s *Service) handleSessionReady(ctx context.Context) {
+	s.mu.Lock()
+	s.ready.Store(true)
+	run := s.runWhenReady
+	s.runWhenReady = false
+	reseed := !run && s.convo != nil && !s.settlingFirstContext
+	s.mu.Unlock()
+	switch {
+	case run:
+		s.createInitialResponse(ctx, false)
+	case reseed:
+		s.createInitialResponse(ctx, true)
+	}
+}
+
+// createInitialResponse seeds the session with the conversation and, when it
+// is to answer, asks the model to.
+//
+// On the session the conversation first arrived on, the model answers when
+// InferenceOnContextInitialization says so. A 2.5 model seeded without being
+// asked to answer ignores what it was seeded with once the user speaks, unless
+// the user's first turn completes one, which is arranged for here.
+//
+// On a session opened again, a 3.x model needs nothing: the user's next turn is
+// answered with the history in mind. A 2.5 model is asked to answer at once,
+// recapping the conversation, rather than seeming for a turn to have forgotten
+// it.
+//
+// A 2.5 model also requires the seed to end on a user turn, so a blank one is
+// added when it does not.
+func (s *Service) createInitialResponse(ctx context.Context, forReconnect bool) {
+	s.mu.Lock()
+	if !s.ready.Load() {
+		s.runWhenReady = true
+		s.mu.Unlock()
+		return
+	}
+	convo := s.convo
+	s.mu.Unlock()
+	if convo == nil {
+		return
+	}
+
+	params, err := s.adapter.LLMInvocationParams(convo, adapter.Options{})
+	if err != nil {
+		s.PushError(ctx, "gemini live: converting the conversation", err, false)
+		return
+	}
+	if len(params.Contents) == 0 {
+		// Nothing to seed the session with, so it takes input right away.
+		s.readyForInput.Store(true)
+		return
+	}
+
+	gemini3 := isGemini3(s.model())
+	trigger := s.inferenceOnContextInitialization()
+	if forReconnect {
+		trigger = !gemini3
+	}
+
+	seed := params.Contents
+	if !gemini3 {
+		if role, _ := seed[len(seed)-1]["role"].(string); role != roleUser {
+			seed = append(seed, map[string]any{"role": roleUser, keyParts: []any{map[string]any{keyText: " "}}})
+		}
+	}
+
+	slog.DebugContext(ctx, "seeding the live session with the conversation",
+		"service", s.Name(), "turns", len(seed), "answer", trigger)
+	s.StartTTFBMetrics()
+	if err := s.send(map[string]any{
+		keyClientContent: map[string]any{keyTurns: seed, keyTurnComplete: trigger},
+	}); err != nil {
+		slog.ErrorContext(ctx, "seeding the live session failed", "service", s.Name(), "err", err)
+	} else if gemini3 && trigger {
+		// 3.x completes the turn but runs no inference without a realtime input.
+		if err := s.send(map[string]any{keyRealtimeInput: map[string]any{keyText: " "}}); err != nil {
+			slog.ErrorContext(ctx, "nudging the model to answer failed", "service", s.Name(), "err", err)
+		}
+	}
+
+	if !trigger && !gemini3 {
+		s.mu.Lock()
+		s.needsInitialTurnComplete = true
+		s.mu.Unlock()
+	}
+	s.readyForInput.Store(true)
+}
+
+// handleUserStoppedSpeaking starts the wait for the model's answer, and on a
+// 2.5 session seeded without being asked to answer, completes the turn so the
+// model answers with what it was seeded with in mind.
+func (s *Service) handleUserStoppedSpeaking(ctx context.Context) {
+	s.StartTTFBMetrics()
+	if !s.ready.Load() {
+		return
+	}
+	s.mu.Lock()
+	needed := s.needsInitialTurnComplete
+	s.needsInitialTurnComplete = false
+	s.mu.Unlock()
+	if needed {
+		if err := s.send(map[string]any{keyClientContent: map[string]any{keyTurnComplete: true}}); err != nil {
+			slog.ErrorContext(ctx, "completing the first turn failed", "service", s.Name(), "err", err)
+		}
+	}
 }
 
 // PushFrame pushes a frame, sending function call results to the session on
@@ -531,26 +704,26 @@ func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.Functi
 // which is how a pipeline with no aggregators kicks one off.
 func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
 	s.mu.Lock()
-	convo, connected := s.convo, s.conn != nil
+	convo := s.convo
 	s.mu.Unlock()
 	if convo == nil {
 		s.createSingleResponse(ctx, f.Messages)
 		return
 	}
-	if !connected {
+	if !s.ready.Load() {
 		return
 	}
 	var turns []any
 	for _, m := range f.Messages {
 		if text := m.StandardText(); text != "" {
-			turns = append(turns, map[string]any{"role": "user", "parts": []any{map[string]any{keyText: text}}})
+			turns = append(turns, map[string]any{"role": roleUser, keyParts: []any{map[string]any{keyText: text}}})
 		}
 	}
 	if len(turns) == 0 {
 		return
 	}
 	if err := s.send(map[string]any{
-		"clientContent": map[string]any{"turns": turns, keyTurnComplete: false},
+		keyClientContent: map[string]any{keyTurns: turns, keyTurnComplete: false},
 	}); err != nil {
 		slog.ErrorContext(ctx, "sending appended content failed", "service", s.Name(), "err", err)
 		return
@@ -562,13 +735,12 @@ func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessage
 
 // completeTurn asks the model to answer the content it has been given.
 func (s *Service) completeTurn(ctx context.Context) {
-	s.mu.Lock()
-	connected := s.conn != nil
-	s.contentAwaitingResponse = false
-	s.mu.Unlock()
-	if !connected {
+	if !s.ready.Load() {
 		return
 	}
+	s.mu.Lock()
+	s.contentAwaitingResponse = false
+	s.mu.Unlock()
 	slog.DebugContext(ctx, "completing the turn for appended content", "service", s.Name())
 	s.sendTurnComplete(ctx, map[string]any{keyTurnComplete: true})
 }
@@ -577,30 +749,37 @@ func (s *Service) completeTurn(ctx context.Context) {
 // conversation to append them to, the case of a pipeline with no aggregators
 // that starts the conversation this way.
 func (s *Service) createSingleResponse(ctx context.Context, messages []frames.Message) {
-	s.mu.Lock()
-	connected := s.conn != nil
-	s.mu.Unlock()
-	if !connected {
+	if !s.ready.Load() {
 		return
 	}
-	contents, err := geminiadapter.ToContents(messages)
-	if err != nil || len(contents) == 0 {
+	// A throwaway conversation, only to convert the messages the way the
+	// session takes them. A leading system message is its prompt, as it would
+	// be of any conversation built from a message list.
+	system := ""
+	if len(messages) > 0 && messages[0].Role == frames.RoleSystem && !messages[0].IsLLMSpecific() {
+		system, messages = messages[0].Text, messages[1:]
+	}
+	convo := frames.NewLLMContext(system)
+	convo.SetMessages(messages)
+	params, err := s.adapter.LLMInvocationParams(convo, adapter.Options{})
+	if err != nil || len(params.Contents) == 0 {
 		return
 	}
 	slog.DebugContext(ctx, "creating a response", "service", s.Name())
-	s.sendTurnComplete(ctx, map[string]any{"turns": contents, keyTurnComplete: true})
+	s.StartTTFBMetrics()
+	s.sendTurnComplete(ctx, map[string]any{keyTurns: params.Contents, keyTurnComplete: true})
 }
 
 // sendTurnComplete sends client content that completes the turn. The 3.x
 // models want that, but also run no inference without a realtime input, so one
 // follows.
 func (s *Service) sendTurnComplete(ctx context.Context, content map[string]any) {
-	if err := s.send(map[string]any{"clientContent": content}); err != nil {
+	if err := s.send(map[string]any{keyClientContent: content}); err != nil {
 		slog.ErrorContext(ctx, "completing the turn failed", "service", s.Name(), "err", err)
 		return
 	}
 	if isGemini3(s.model()) {
-		if err := s.send(map[string]any{"realtimeInput": map[string]any{keyText: " "}}); err != nil {
+		if err := s.send(map[string]any{keyRealtimeInput: map[string]any{keyText: " "}}); err != nil {
 			slog.ErrorContext(ctx, "nudging the model to answer failed", "service", s.Name(), "err", err)
 		}
 	}
@@ -832,11 +1011,11 @@ func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
 
 // sendAudio streams a chunk of input PCM to the model once the session is ready.
 func (s *Service) sendAudio(pcm []byte, sampleRate int) {
-	if len(pcm) == 0 || !s.ready.Load() {
+	if len(pcm) == 0 || !s.ready.Load() || !s.readyForInput.Load() {
 		return
 	}
 	_ = s.send(map[string]any{
-		"realtimeInput": map[string]any{
+		keyRealtimeInput: map[string]any{
 			"audio": map[string]any{
 				"data":     base64.StdEncoding.EncodeToString(pcm),
 				"mimeType": fmt.Sprintf("audio/pcm;rate=%d", sampleRate),
@@ -870,8 +1049,12 @@ func (s *Service) disconnect() {
 	s.mu.Lock()
 	conn, cancel := s.conn, s.cancel
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
-	s.mu.Unlock()
 	s.ready.Store(false)
+	// What was sent to the closed session is forgotten with it.
+	s.sentResults = map[string]bool{}
+	s.toolNames = map[string]string{}
+	s.mu.Unlock()
+	s.readyForInput.Store(false)
 	if cancel != nil {
 		cancel()
 	}
@@ -1043,7 +1226,7 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 	idle, statusKnown := msg.ServerContent.interactionIdle()
 
 	if msg.SetupComplete != nil {
-		s.ready.Store(true)
+		s.handleSessionReady(ctx)
 	}
 	if msg.UsageMetadata != nil {
 		// The accounting arrives with the turn it belongs to, so the span

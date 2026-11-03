@@ -34,6 +34,9 @@ type S2SConfig struct {
 	// Tools are tools configured on the service itself, as an alternative to
 	// advertising them through the conversation; see live.Config.Tools.
 	Tools frames.ToolsSchema
+	// InferenceOnContextInitialization says whether the model answers the
+	// conversation the session is seeded with; see live.Config.
+	InferenceOnContextInitialization *bool
 
 	// The settings below are Gemini Live's; see live.Config for each.
 
@@ -76,6 +79,8 @@ func NewS2S(cfg S2SConfig) *live.Service {
 		Instructions: cfg.Instructions,
 		Tools:        cfg.Tools,
 
+		InferenceOnContextInitialization: cfg.InferenceOnContextInitialization,
+
 		MaxTokens:                cfg.MaxTokens,
 		Temperature:              cfg.Temperature,
 		TopP:                     cfg.TopP,
@@ -95,8 +100,12 @@ func NewS2S(cfg S2SConfig) *live.Service {
 	})
 }
 
-// The Vertex endpoint decides non-blocking support itself, whatever the model.
-var _ live.NonBlockingToolsGate = (*liveConnector)(nil)
+// The Vertex endpoint decides non-blocking support itself, whatever the model,
+// and takes no history configuration.
+var (
+	_ live.NonBlockingToolsGate = (*liveConnector)(nil)
+	_ live.HistoryConfigGate    = (*liveConnector)(nil)
+)
 
 // liveConnector dials the Vertex AI Live endpoint with an OAuth token.
 type liveConnector struct {
@@ -127,6 +136,10 @@ func (c *liveConnector) Endpoint(ctx context.Context) (string, http.Header, erro
 // appears to break tool calling against Vertex. A tool registered as not
 // canceled on interruption therefore runs as a call the model waits for.
 func (*liveConnector) SupportsNonBlockingTools(string) bool { return false }
+
+// SupportsHistoryConfig reports false: Vertex AI does not take the history
+// configuration in the setup message.
+func (*liveConnector) SupportsHistoryConfig() bool { return false }
 
 // ModelPath names the model by project and location, as Vertex requires.
 func (c *liveConnector) ModelPath(model string) string {

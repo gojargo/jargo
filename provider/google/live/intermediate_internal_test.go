@@ -52,6 +52,14 @@ func newRecordingSession(t *testing.T) *recordingSession {
 			r.mu.Lock()
 			r.received = append(r.received, msg)
 			r.mu.Unlock()
+			// Like the server, acknowledge a setup, which is what makes the
+			// session ready.
+			if _, ok := msg["setup"]; ok {
+				ack, _ := json.Marshal(map[string]any{"setupComplete": map[string]any{}})
+				if c.Write(req.Context(), websocket.MessageText, ack) != nil {
+					return
+				}
+			}
 		}
 	}))
 	t.Cleanup(r.Close)
@@ -97,7 +105,7 @@ func startedService(t *testing.T, srv *recordingSession, model string) *Service 
 // wsURL is the WebSocket address of srv.
 func wsURL(srv *recordingSession) string { return "ws" + strings.TrimPrefix(srv.URL, "http") }
 
-// startedServiceBuilt runs s in a pipeline until it has connected, with the
+// startedServiceBuilt runs s in a pipeline until its session is ready, with the
 // async tool delegate registered and the call call_1 to it.
 func startedServiceBuilt(t *testing.T, s *Service) *Service {
 	t.Helper()
@@ -118,14 +126,11 @@ func startedServiceBuilt(t *testing.T, s *Service) *Service {
 		t.Fatal("the pipeline never started")
 	}
 	for deadline := time.Now().Add(3 * time.Second); ; {
-		s.mu.Lock()
-		connected := s.conn != nil
-		s.mu.Unlock()
-		if connected {
+		if s.ready.Load() {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the service never connected")
+			t.Fatal("the session never became ready")
 		}
 		time.Sleep(time.Millisecond)
 	}

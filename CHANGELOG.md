@@ -54,6 +54,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   **Breaking:** the defaults are now the Charon voice (was Puck), US English
   and 4096 output tokens, which are sent on every setup.
 
+- **Gemini Live seeds its session with the conversation.** The first
+  conversation is sent as the session's history and, unless
+  `live.Config.InferenceOnContextInitialization` is false, answered at once,
+  so the bot can speak first. A conversation arriving before the session is
+  ready is seeded once it is, and a session opened again after the
+  conversation is in is seeded again. The 2.5 models get a seed ending on a
+  user turn, and, when seeded without being asked to answer, the user's first
+  turn completes one. The setup declares that the history comes as client
+  content (not on Vertex AI, which does not take it). Audio is held back until
+  the session is seeded, appended messages and turn completions wait for the
+  session to be ready rather than merely connected, and messages appended with
+  no conversation are converted through the adapter.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.
