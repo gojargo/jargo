@@ -20,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/adapter/geminilive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	googleframes "github.com/gojargo/jargo/provider/google/frames"
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
@@ -103,6 +104,11 @@ type Service struct {
 	// heldMessage is the message that completed a held turn, which closes it
 	// when the hold ends. Guarded by mu.
 	heldMessage *serverMessage
+	// searchText is the answer so far, which a web search it drew on is
+	// reported against, and grounding the search the model reported during the
+	// turn, reported when the turn completes. Guarded by mu.
+	searchText string
+	grounding  *groundingMetadata
 	// userTranscript holds the user's words until they make up a sentence, or
 	// go quiet for transcriptFlushAfter. Guarded by mu.
 	userTranscript string
@@ -1465,6 +1471,9 @@ type serverContent struct {
 	OutputTranscription *textPayload `json:"outputTranscription"` //nolint:tagliatelle // Gemini wire field
 	Interrupted         bool         `json:"interrupted"`
 	TurnComplete        bool         `json:"turnComplete"` //nolint:tagliatelle // Gemini wire field
+	// GroundingMetadata is what the model reports about the web search it
+	// answered from.
+	GroundingMetadata *groundingMetadata `json:"groundingMetadata"` //nolint:tagliatelle // Gemini wire field
 	// InteractionStatus says whether the session is still working. The thinking
 	// models report it, and nothing else does.
 	InteractionStatus string `json:"interactionStatus"` //nolint:tagliatelle // Gemini wire field
@@ -1497,6 +1506,28 @@ type part struct {
 		MimeType string `json:"mimeType"` //nolint:tagliatelle // Gemini wire field
 		Data     string `json:"data"`
 	} `json:"inlineData"` //nolint:tagliatelle // Gemini wire field
+}
+
+// groundingMetadata is the web search an answer drew on: the suggestions to
+// show beside it, the pages it found, and which parts of the answer each page
+// supports.
+type groundingMetadata struct {
+	SearchEntryPoint *struct {
+		RenderedContent string `json:"renderedContent"` //nolint:tagliatelle // Gemini wire field
+	} `json:"searchEntryPoint"` //nolint:tagliatelle // Gemini wire field
+	GroundingChunks []struct {
+		Web *struct {
+			URI   string `json:"uri"`
+			Title string `json:"title"`
+		} `json:"web"`
+	} `json:"groundingChunks"` //nolint:tagliatelle // Gemini wire field
+	GroundingSupports []struct {
+		Segment *struct {
+			Text string `json:"text"`
+		} `json:"segment"`
+		GroundingChunkIndices []int     `json:"groundingChunkIndices"` //nolint:tagliatelle // Gemini wire field
+		ConfidenceScores      []float64 `json:"confidenceScores"`      //nolint:tagliatelle // Gemini wire field
+	} `json:"groundingSupports"` //nolint:tagliatelle // Gemini wire field
 }
 
 type textPayload struct {
@@ -1579,13 +1610,21 @@ func (s *Service) handleServerContent(ctx context.Context, msg serverMessage, id
 		_ = s.BroadcastInterruption(ctx)
 	}
 	if sc.ModelTurn != nil {
-		s.handleModelTurn(ctx, sc.ModelTurn.Parts)
+		s.handleModelTurn(ctx, sc.ModelTurn.Parts, sc.GroundingMetadata)
 	}
 	if sc.InputTranscription != nil {
 		s.handleInputTranscription(ctx, sc.InputTranscription.Text)
 	}
 	if sc.OutputTranscription != nil {
-		s.handleOutputTranscription(ctx, sc.OutputTranscription.Text)
+		s.handleOutputTranscription(ctx, sc.OutputTranscription.Text, sc.GroundingMetadata)
+	}
+	if sc.GroundingMetadata != nil && sc.ModelTurn == nil && sc.OutputTranscription == nil {
+		// Grounding on its own is reported at once; bundled with the answer, it
+		// waits for the turn to complete.
+		s.mu.Lock()
+		text := s.searchText
+		s.mu.Unlock()
+		s.pushGrounding(ctx, sc.GroundingMetadata, text)
 	}
 	if !sc.TurnComplete {
 		return
@@ -1661,7 +1700,7 @@ func (s *Service) startResponse(ctx context.Context, spoken bool) {
 
 // handleModelTurn takes the first part of what the model produced: its text, in
 // the text modality, as the response or as a thought, and its audio.
-func (s *Service) handleModelTurn(ctx context.Context, parts []part) {
+func (s *Service) handleModelTurn(ctx context.Context, parts []part, grounding *groundingMetadata) {
 	if len(parts) == 0 {
 		return
 	}
@@ -1678,9 +1717,15 @@ func (s *Service) handleModelTurn(ctx context.Context, parts []part) {
 		} else {
 			s.mu.Lock()
 			s.botText += p.Text
+			s.searchText += p.Text
 			s.mu.Unlock()
 			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(p.Text), processor.Downstream)
 		}
+	}
+	if grounding != nil {
+		s.mu.Lock()
+		s.grounding = grounding
+		s.mu.Unlock()
 	}
 
 	if p.InlineData == nil {
@@ -1712,9 +1757,14 @@ func (s *Service) handleTurnComplete(ctx context.Context, msg *serverMessage) {
 	s.mu.Lock()
 	text, spoken := s.botText, s.spokenText
 	s.botText, s.spokenText = "", ""
+	grounding, searchText := s.grounding, s.searchText
+	s.grounding, s.searchText = nil, ""
 	s.mu.Unlock()
 	end := s.traceResponse(ctx, msg, text, spoken)
 	defer end()
+	if grounding != nil {
+		s.pushGrounding(ctx, grounding, searchText)
+	}
 	s.mu.Lock()
 	stopped := s.setBotRespondingLocked(false)
 	s.mu.Unlock()
@@ -1770,6 +1820,39 @@ func (s *Service) stopEndDeferralLocked() {
 		s.endDeferral.Stop()
 		s.endDeferral = nil
 	}
+}
+
+// pushGrounding reports the web search an answer drew on: the suggestions to
+// show beside it, and each page found with the parts of the answer it supports.
+func (s *Service) pushGrounding(ctx context.Context, g *groundingMetadata, searchResult string) {
+	rendered := ""
+	if g.SearchEntryPoint != nil {
+		rendered = g.SearchEntryPoint.RenderedContent
+	}
+	var origins []googleframes.LLMSearchOrigin
+	if len(g.GroundingChunks) > 0 && len(g.GroundingSupports) > 0 {
+		byChunk := map[int]int{}
+		for i, chunk := range g.GroundingChunks {
+			if chunk.Web == nil {
+				continue
+			}
+			byChunk[i] = len(origins)
+			origins = append(origins, googleframes.LLMSearchOrigin{SiteURI: chunk.Web.URI, SiteTitle: chunk.Web.Title})
+		}
+		for _, support := range g.GroundingSupports {
+			if support.Segment == nil || len(support.GroundingChunkIndices) == 0 {
+				continue
+			}
+			for _, i := range support.GroundingChunkIndices {
+				if o, ok := byChunk[i]; ok {
+					origins[o].Results = append(origins[o].Results, googleframes.LLMSearchResult{
+						Text: support.Segment.Text, Confidence: support.ConfidenceScores,
+					})
+				}
+			}
+		}
+	}
+	_ = s.PushFrame(ctx, googleframes.NewLLMSearchResponseFrame(searchResult, rendered, origins), processor.Downstream)
 }
 
 // transcriptFlushAfter is how long the user's words may go without completing a
@@ -1841,11 +1924,15 @@ func (s *Service) pushUserTranscript(ctx context.Context, text string) {
 // response. They go out as an LLMTextFrame, which RTVI reports as the bot's
 // text but which is kept out of the conversation, and as a TTSTextFrame, which
 // is what the assistant aggregator records the spoken answer from.
-func (s *Service) handleOutputTranscription(ctx context.Context, text string) {
+func (s *Service) handleOutputTranscription(ctx context.Context, text string, grounding *groundingMetadata) {
 	if text == "" {
 		return
 	}
 	s.mu.Lock()
+	s.searchText += text
+	if grounding != nil {
+		s.grounding = grounding
+	}
 	s.spokenText += text
 	s.mu.Unlock()
 	s.startResponse(ctx, true)

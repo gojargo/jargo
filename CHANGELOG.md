@@ -114,6 +114,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   computes the total, and leaves the cache count unreported when nothing was
   read from the cache.
 
+- **Gemini Live reports the web search an answer drew on.** A new
+  `provider/google/frames` package holds `LLMSearchResponseFrame`, which Gemini
+  Live pushes with the answer's text, the rendered search suggestions and each
+  page found with the parts of the answer it supports: at the end of the turn
+  when the grounding came with the answer, at once when it came on its own.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.
