@@ -422,6 +422,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   service no longer pushes `BotStartedSpeakingFrame` and
   `BotStoppedSpeakingFrame`; input audio travels on after it is sent.
 
+- **A `realtime-aws-nova-sonic` example.** A voice agent on Amazon Nova Sonic
+  with a weather tool, the tiffany voice, and session continuation configured.
+
 - **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
   takes the v1 `BaseURL` and names the deployment with `Model`, and can
   authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.
