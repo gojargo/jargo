@@ -27,6 +27,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.
 
+- **A settings type can merge and map updates its own way.** A store
+  implementing `settings.Updater` is merged by its own `ApplyUpdate`, and a
+  delta implementing `settings.Mapper` is filled from plain data by its own
+  `FromMap`. `settings.ApplyFields` and `settings.FromMapFields` are the
+  field-by-field behaviour every other type keeps, and what an override builds
+  on. It is what a settings type with a nested value mirroring a top-level
+  field needs to keep the two in step.
+
 - **Every transport reports its clients through events.** The WebRTC
   transport raises `transport.EventClientConnected` when the peer connection
   is established (again after a restart) and `transport.EventClientDisconnected`

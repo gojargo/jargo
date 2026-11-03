@@ -179,6 +179,29 @@ type Aliaser interface {
 	Aliases() map[string]string
 }
 
+// Updater is implemented by a settings type that merges an update its own way,
+// for one whose fields depend on each other: a nested value that mirrors a
+// top-level field, say, has to be kept in step with it whichever of the two the
+// update gave. ApplyUpdate is called on the store with a delta of the same type,
+// and reports what changed with each field's previous value, as [Apply] does.
+//
+// An implementation does the field-by-field merge with [ApplyFields], never with
+// Apply, which would call it again, and adjusts the result.
+type Updater interface {
+	ApplyUpdate(delta any) (Changed, error)
+}
+
+// Mapper is implemented by a settings type that builds a delta from plain names
+// and values its own way, for one that routes some names somewhere other than a
+// field of the same name: into a nested value, say. FromMap is called on an
+// empty delta and fills it, as [FromMap] does.
+//
+// An implementation fills the declared fields with [FromMapFields], never with
+// the package's FromMap, which would call it again.
+type Mapper interface {
+	FromMap(values map[string]any) error
+}
+
 // Base is the part every service's settings share. Embed it.
 type Base struct {
 	// Model is the service's model identifier.
@@ -326,14 +349,29 @@ func NewDelta(store any) (any, error) {
 	return reflect.New(sv.Type()).Interface(), nil
 }
 
-// Apply merges delta into store and reports what changed. Only the fields the
-// delta gives are considered, and a field changes only when what it carries
-// differs from what is already there, so re-sending a service what it already
-// has reports nothing and a service that reconnects on a change is not made to
-// reconnect for a non-change.
+// Apply merges delta into store and reports what changed. A store implementing
+// [Updater] merges the update its own way; any other is merged by
+// [ApplyFields].
 //
 // store and delta must be pointers to the same settings type.
 func Apply(store, delta any) (Changed, error) {
+	if u, ok := store.(Updater); ok {
+		return u.ApplyUpdate(delta)
+	}
+	return ApplyFields(store, delta)
+}
+
+// ApplyFields merges delta into store field by field and reports what changed.
+// Only the fields the delta gives are considered, and a field changes only when
+// what it carries differs from what is already there, so re-sending a service
+// what it already has reports nothing and a service that reconnects on a change
+// is not made to reconnect for a non-change. The extra settings are merged key
+// by key.
+//
+// It is the merge every settings type gets, and the one an [Updater] builds on.
+//
+// store and delta must be pointers to the same settings type.
+func ApplyFields(store, delta any) (Changed, error) {
 	sv, dv, err := settingsValues(store, delta)
 	if err != nil {
 		return nil, err
@@ -410,14 +448,25 @@ func Given(delta any) (map[string]any, error) {
 }
 
 // FromMap fills delta from plain setting names and values, for an update that
-// arrived as data rather than as a typed value. A name the settings type
-// declares, or one of its aliases, gives that field; anything else lands in
-// Extra, so a provider-specific setting survives the trip rather than being
-// dropped on the way.
+// arrived as data rather than as a typed value. A delta implementing [Mapper]
+// is filled its own way; any other is filled by [FromMapFields].
+func FromMap(delta any, values map[string]any) error {
+	if m, ok := delta.(Mapper); ok {
+		return m.FromMap(values)
+	}
+	return FromMapFields(delta, values)
+}
+
+// FromMapFields fills delta from plain setting names and values, field by
+// field. A name the settings type declares, or one of its aliases, gives that
+// field; anything else lands in Extra, so a provider-specific setting survives
+// the trip rather than being dropped on the way.
 //
 // A value whose type does not fit its field is reported rather than skipped:
 // applying half an update silently is worse than refusing it.
-func FromMap(delta any, values map[string]any) error {
+//
+// It is the filling every settings type gets, and the one a [Mapper] builds on.
+func FromMapFields(delta any, values map[string]any) error {
 	dv, err := settingsValue(delta)
 	if err != nil {
 		return err
