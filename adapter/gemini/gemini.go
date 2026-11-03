@@ -122,10 +122,25 @@ func (*Adapter) IDForLLMSpecificMessages() string { return "google" }
 func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
-	fromContext, msgs := a.ExtractInitialSystem(
-		convo.System(), opts.SystemInstruction,
-		convo.MessagesFor(a.IDForLLMSpecificMessages()),
-	)
+	params, err := a.ParamsFromMessages(convo.System(), convo.MessagesFor(a.IDForLLMSpecificMessages()), opts)
+	if err != nil {
+		return Params{}, err
+	}
+	if tools := a.WithBuiltins(convo.ToolsSchema()); !tools.Empty() {
+		params.Tools = a.ToProviderToolsFormat(tools)
+	}
+	return params, nil
+}
+
+// ParamsFromMessages converts a system prompt and the messages written for this
+// provider into the system instruction and contents of a request, leaving the
+// tools for the caller to settle. It is what LLMInvocationParams runs on the
+// conversation's own messages, and what an adapter built on this one runs on
+// messages it has reworked first.
+func (a *Adapter) ParamsFromMessages(
+	contextSystem string, messages []frames.Message, opts adapter.Options,
+) (Params, error) {
+	fromContext, msgs := a.ExtractInitialSystem(contextSystem, opts.SystemInstruction, messages)
 	system := a.ResolveSystemInstruction(fromContext, opts.SystemInstruction, true)
 
 	contents, err := ToContents(msgs)
@@ -143,12 +158,7 @@ func (a *Adapter) LLMInvocationParams(
 		contents = EnsureLastMessageIsUser(contents)
 	}
 
-	params := Params{SystemInstruction: system, Contents: contents}
-	if tools := a.WithBuiltins(convo.ToolsSchema()); len(tools.Standard) > 0 ||
-		len(tools.Custom) > 0 {
-		params.Tools = a.ToProviderToolsFormat(tools)
-	}
-	return params, nil
+	return Params{SystemInstruction: system, Contents: contents}, nil
 }
 
 // ToContents converts the conversation's messages into Gemini contents. The

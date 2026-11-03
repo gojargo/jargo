@@ -65,6 +65,11 @@ type Options struct {
 	// conversation ends on an assistant message. It is for a model without
 	// assistant-prefill support, which rejects a request ending that way.
 	EnsureLastMessageIsUser bool
+	// ServiceTools are the tools the service was configured with, for a realtime
+	// adapter settling the tools a session carries: they stand in when the
+	// conversation advertises none (see Base.RealtimeSessionTools). Other
+	// adapters ignore it.
+	ServiceTools frames.ToolsSchema
 }
 
 // LLMAdapter converts a universal conversation into one provider's invocation

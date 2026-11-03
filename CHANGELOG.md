@@ -23,6 +23,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   ones included, takes precedence. `frames.ToolsSchema.Empty` reports a
   toolset advertising nothing.
 
+- **A Gemini Live adapter, `adapter/geminilive`.** It converts like the Gemini
+  adapter, except that tool calls and their results become text (all the Live
+  API accepts when a session is seeded with history) and the tools are the
+  ones a realtime session carries, taking the service's configured tools from
+  the new `adapter.Options.ServiceTools`. Its messages are identified as
+  `gemini-live`. `gemini.Adapter.ParamsFromMessages` converts a prompt and
+  messages without settling tools, for an adapter built on Gemini's.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.
