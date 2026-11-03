@@ -21,8 +21,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   when the client goes away, both with the `*rtc.Connection`, and
   `transport.EventAppMessage` for each message the client sends. The LiveKit
   transport raises `on_participant_connected`, `on_participant_disconnected`
-  and `on_participant_left` with the participant's identity, and the two client
-  events with a `livekit.Client`. `livekit.Connection.OnParticipantDisconnected`
+  and `on_participant_left` with the participant's identity, the two client
+  events with a `livekit.Client`, `on_first_participant_joined` for the first
+  other participant (again once the room has emptied), and `on_data_received`
+  for every data packet. A packet holding a JSON object is also raised as
+  `transport.EventAppMessage` and enters the pipeline; one that does not no
+  longer does. `livekit.Connection.OnParticipantDisconnected`
   reports departures. **Breaking:** `transport.Transport` gained `Events()`, so a
   transport of your own has to add it.
 - **The development runner (`runner`).** A bot is one `runner.Bot` function,

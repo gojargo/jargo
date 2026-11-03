@@ -59,6 +59,12 @@ const (
 	// EventParticipantLeft fires on a departure with the identity and the
 	// reason, "disconnected".
 	EventParticipantLeft = "on_participant_left"
+	// EventFirstParticipantJoined fires when the first other participant joins
+	// the room, with their identity; again once the room has emptied.
+	EventFirstParticipantJoined = "on_first_participant_joined"
+	// EventDataReceived fires for every data packet, with its bytes and the
+	// sender's identity ("" when a server sent it).
+	EventDataReceived = "on_data_received"
 )
 
 // Client is the client the client events carry: a participant in the room.
@@ -80,7 +86,8 @@ func NewTransport(conn *Connection, params transport.Params, opts ...Option) *Tr
 	ev := t.in.Events()
 	for _, name := range []string{
 		EventParticipantConnected, EventParticipantDisconnected, EventParticipantLeft,
-		transport.EventClientConnected, transport.EventClientDisconnected,
+		EventFirstParticipantJoined, EventDataReceived,
+		transport.EventClientConnected, transport.EventClientDisconnected, transport.EventAppMessage,
 	} {
 		ev.Register(name, false)
 	}
@@ -127,6 +134,14 @@ type inputTransport struct {
 	conn *Connection
 	opts options
 
+	// partMu guards participants and otherJoined.
+	partMu sync.Mutex
+	// participants are the other participants in the room.
+	participants map[string]struct{}
+	// otherJoined records that another participant has joined since the room
+	// was last empty.
+	otherJoined bool
+
 	// audio carries every participant's decoded audio to the one goroutine
 	// that converts and pushes it, in the order it was decoded. mu guards it.
 	audio chan participantAudio
@@ -148,7 +163,7 @@ type inputTransport struct {
 }
 
 func newInput(conn *Connection, params transport.Params, opts options) *inputTransport {
-	in := &inputTransport{conn: conn, opts: opts}
+	in := &inputTransport{conn: conn, opts: opts, participants: map[string]struct{}{}}
 	in.BaseInput = transport.NewBaseInput("LiveKitInput", params, in)
 	return in
 }
@@ -183,7 +198,7 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		if readCtx.Err() != nil {
 			return
 		}
-		in.PushParticipantMessage(readCtx, raw, sender)
+		in.dataReceived(readCtx, raw, sender)
 	})
 	// A key a SIP caller presses becomes a frame, so the DTMF aggregator works
 	// on a LiveKit call the same way it does on a telephony one.
@@ -204,19 +219,63 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		if readCtx.Err() != nil {
 			return
 		}
-		ev := in.Events()
-		ev.Call(readCtx, EventParticipantConnected, in, identity)
-		ev.Call(readCtx, transport.EventClientConnected, in, Client{ID: identity})
-		in.PushClientConnected(readCtx)
+		in.participantConnected(readCtx, identity)
 	})
 	in.conn.OnParticipantDisconnected(func(identity string) {
-		ctx := context.WithoutCancel(readCtx)
-		ev := in.Events()
-		ev.Call(ctx, EventParticipantDisconnected, in, identity)
-		ev.Call(ctx, EventParticipantLeft, in, identity, "disconnected")
-		ev.Call(ctx, transport.EventClientDisconnected, in, Client{ID: identity})
+		in.participantDisconnected(context.WithoutCancel(readCtx), identity)
 	})
 	return nil
+}
+
+// participantConnected reports a participant in the room, and whether they are
+// the first.
+func (in *inputTransport) participantConnected(ctx context.Context, identity string) {
+	slog.Info("livekit: participant connected", "participant", identity)
+	ev := in.Events()
+	ev.Call(ctx, EventParticipantConnected, in, identity)
+	// Also reported as a client, the way every transport reports its clients.
+	ev.Call(ctx, transport.EventClientConnected, in, Client{ID: identity})
+	in.PushClientConnected(ctx)
+
+	in.partMu.Lock()
+	in.participants[identity] = struct{}{}
+	first := !in.otherJoined
+	in.otherJoined = true
+	in.partMu.Unlock()
+	if first {
+		ev.Call(ctx, EventFirstParticipantJoined, in, identity)
+	}
+}
+
+// participantDisconnected reports a participant leaving the room. Once nobody
+// else is left, the next arrival is the first again.
+func (in *inputTransport) participantDisconnected(ctx context.Context, identity string) {
+	slog.Info("livekit: participant disconnected", "participant", identity)
+	ev := in.Events()
+	ev.Call(ctx, EventParticipantDisconnected, in, identity)
+	ev.Call(ctx, EventParticipantLeft, in, identity, "disconnected")
+	ev.Call(ctx, transport.EventClientDisconnected, in, Client{ID: identity})
+
+	in.partMu.Lock()
+	delete(in.participants, identity)
+	if len(in.participants) == 0 {
+		in.otherJoined = false
+	}
+	in.partMu.Unlock()
+}
+
+// dataReceived handles a data packet. One holding a JSON object is an
+// application message: it enters the pipeline and is raised as one. Every
+// packet is raised as data received.
+func (in *inputTransport) dataReceived(ctx context.Context, raw []byte, sender string) {
+	var message map[string]any
+	if err := json.Unmarshal(raw, &message); err != nil || message == nil {
+		slog.Debug("livekit: ignoring data that is not a JSON object", "participant", sender)
+	} else {
+		in.PushParticipantMessage(ctx, raw, sender)
+		in.Events().Call(ctx, transport.EventAppMessage, in, json.RawMessage(raw), sender)
+	}
+	in.Events().Call(ctx, EventDataReceived, in, raw, sender)
 }
 
 // StopReading stops the read goroutines.
