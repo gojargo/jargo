@@ -400,6 +400,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   text, settled like a realtime session's. Its messages are identified as
   `aws-nova-sonic`.
 
+- **Nova Sonic is rebuilt on the session lifecycle of the other
+  speech-to-speech services.** The session opens when the service is set up
+  and is set up when the first conversation arrives, through the new Nova
+  Sonic adapter: the tools (the conversation's, else `Config.Tools`, whose
+  handlers register on their own), the system instruction, the history, and a
+  last user message as the one to answer. Responses are reported with
+  `LLMFullResponseStartFrame`/`LLMFullResponseEndFrame` and
+  `TTSStartedFrame`/`TTSStoppedFrame`; the speculative text goes out as an
+  `LLMTextFrame` and an `AggregatedTextFrame` kept out of the conversation, and
+  as a `TTSTextFrame` once its audio has. The user's transcript is joined and
+  pushed upstream when the turn ends. A barge-in is broadcast as an
+  interruption ahead of the response's end. A session that fails is reported
+  and the conversation reset onto a new one (`ResetConversation`). Sessions are
+  rotated before the AWS time limit (`SessionContinuationParams`, on by
+  default). The original model can be started with `TriggerAssistantResponse`.
+  New `Settings` (voice, endpointing sensitivity, inference settings),
+  `AudioConfig`, `Config.Tools` and `Config.EndpointingSensitivity`.
+  **Breaking:** the default model is `amazon.nova-2-5-sonic`; `MaxTokens` is a
+  pointer; temperature, top-p and max tokens default to 0.7, 0.9 and 1024; the
+  service no longer pushes `BotStartedSpeakingFrame` and
+  `BotStoppedSpeakingFrame`; input audio travels on after it is sent.
+
 - **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
   takes the v1 `BaseURL` and names the deployment with `Model`, and can
   authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.
