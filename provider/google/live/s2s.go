@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/adapter"
 	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
+	"github.com/gojargo/jargo/adapter/geminilive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/google/gemini"
@@ -25,9 +27,9 @@ import (
 
 // Service is the Gemini Live speech-to-speech processor.
 type Service struct {
-	// adapter renders the tools and their results the way the Live API takes
-	// them, which is the same way the Gemini API does.
-	adapter geminiadapter.Adapter
+	// adapter converts the conversation into what the session takes: the
+	// system instruction, the history, and the tools it carries.
+	adapter geminilive.Adapter
 	*llm.Base
 	cfg Config
 
@@ -46,10 +48,6 @@ type Service struct {
 	// but a tool call is answered into it and its results are read back out of
 	// it here. Guarded by mu.
 	convo *frames.LLMContext
-	// tools are the tools the session was opened with. The Live API takes them
-	// in the setup message and nowhere else, so a conversation bringing tools
-	// to a session that has none is applied by opening another. Guarded by mu.
-	tools frames.ToolsSchema
 	// toolNames maps a call id to the function it called. A result has to name
 	// the function as well as the call, and by the time it comes back only the
 	// id is at hand. Guarded by mu.
@@ -226,7 +224,13 @@ func (s *Service) connect(ctx context.Context) error {
 	s.mu.Unlock()
 
 	s.traceSetup(ctx)
-	if err := s.send(s.setup()); err != nil {
+	setup, err := s.setup()
+	if err != nil {
+		cancel()
+		_ = conn.Close(websocket.StatusInternalError, "setup failed")
+		return err
+	}
+	if err := s.send(setup); err != nil {
 		cancel()
 		_ = conn.Close(websocket.StatusInternalError, "setup failed")
 		return err
@@ -238,7 +242,7 @@ func (s *Service) connect(ctx context.Context) error {
 }
 
 // setup is the initial session-configuration message.
-func (s *Service) setup() map[string]any {
+func (s *Service) setup() (map[string]any, error) {
 	setup := map[string]any{
 		"model": s.connector.ModelPath(s.cfg.Model),
 		"generationConfig": map[string]any{
@@ -257,61 +261,116 @@ func (s *Service) setup() map[string]any {
 			g["thinkingConfig"] = thinking
 		}
 	}
-	if s.cfg.Instructions != "" {
+	// The system instruction and the tools come from the conversation when
+	// there is one, which the adapter settles against the configured ones: the
+	// instruction configured on the service wins over the conversation's own
+	// prompt, and the conversation's tools win over the configured ones. The
+	// built-in tools ride along either way.
+	system, tools, err := s.sessionInstructionAndTools()
+	if err != nil {
+		return nil, err
+	}
+	if system != "" {
 		setup["systemInstruction"] = map[string]any{
-			"parts": []any{map[string]any{keyText: s.cfg.Instructions}},
+			"parts": []any{map[string]any{keyText: system}},
 		}
 	}
-	s.mu.Lock()
-	schema := s.tools
-	s.mu.Unlock()
-	if tools := s.adapter.ToProviderToolsFormat(schema); len(tools) > 0 {
+	if len(tools) > 0 {
 		if s.supportsNonBlockingTools() {
 			s.tagToolBehaviors(tools)
 		}
 		setup["tools"] = tools
 	}
-	return map[string]any{"setup": setup}
+	return map[string]any{"setup": setup}, nil
 }
+
+// sessionInstructionAndTools settles the system instruction and the tools a
+// session opens with. Without a conversation yet, they are the configured ones,
+// with the built-in tools added.
+func (s *Service) sessionInstructionAndTools() (string, []map[string]any, error) {
+	s.mu.Lock()
+	convo := s.convo
+	s.mu.Unlock()
+	if convo == nil {
+		return s.cfg.Instructions, s.adapter.ToProviderToolsFormat(s.adapter.WithBuiltins(s.cfg.Tools)), nil
+	}
+	params, err := s.sessionParams(convo)
+	if err != nil {
+		return "", nil, err
+	}
+	return params.SystemInstruction, params.Tools, nil
+}
+
+// sessionParams converts the conversation against what the service was
+// configured with.
+func (s *Service) sessionParams(convo *frames.LLMContext) (geminiadapter.Params, error) {
+	return s.adapter.LLMInvocationParams(convo, adapter.Options{
+		SystemInstruction: s.cfg.Instructions,
+		ServiceTools:      s.cfg.Tools,
+	})
+}
+
+// ServiceTools returns the tools configured on the service, which the base
+// registers the handlers of while the conversation advertises no tools.
+func (s *Service) ServiceTools() frames.ToolsSchema { return s.cfg.Tools }
+
+// LLMAdapter returns the adapter this service converts through, so the base can
+// give it the tools the service implements itself.
+func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // handleContext takes the conversation the pipeline reported.
 //
-// The model generates continuously and never re-reads it, so a conversation
-// arriving means two things and only two: the toolset it advertises, and the
-// results of the tool calls the model asked for.
+// The first one settles the session. The session was opened with the
+// configured system instruction and tools, and the Live API takes both in the
+// setup message and nowhere else, so a conversation that changes the effective
+// instruction, or brings tools of its own, is applied by opening the session
+// again with it.
 //
-// The toolset is only settled once. The Live API takes it in the setup message
-// and offers no way to change it afterwards, so a conversation bringing tools to
-// a session opened without them is applied by opening another session with them.
+// A later one is the conversation moving on. The model keeps its own history,
+// so what it brings is the results of the tool calls the model asked for, and,
+// when it comes from upstream, the aggregator asking the model to answer content
+// appended since it last spoke.
 func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, dir processor.Direction) {
 	s.mu.Lock()
 	first := s.convo == nil
 	s.convo = convo
-	had := len(s.tools.Standard) > 0 || len(s.tools.Custom) > 0
 	s.mu.Unlock()
 
-	schema := convo.ToolsSchema()
-	if first && !had && (len(schema.Standard) > 0 || len(schema.Custom) > 0) {
+	if !first {
 		s.mu.Lock()
-		s.tools = schema
+		complete := dir == processor.Upstream && s.contentAwaitingResponse
 		s.mu.Unlock()
-		s.reconnectWithTools(ctx)
+		if complete {
+			s.completeTurn(ctx)
+		}
+		s.processCompletedCalls(ctx, convo, true)
+		return
+	}
+
+	// Whether the conversation changes the effective instruction is the
+	// adapter's to settle, and it still prefers the configured one when there is
+	// one.
+	params, err := s.sessionParams(convo)
+	if err != nil {
+		s.PushError(ctx, "gemini live: converting the conversation", err, false)
+		return
+	}
+	instructionChanged := params.SystemInstruction != s.cfg.Instructions
+	// Tools of its own warrant reopening without being compared with the
+	// configured ones.
+	hasTools := !convo.ToolsSchema().Empty()
+	if hasTools && !s.cfg.Tools.Empty() {
+		slog.WarnContext(ctx, "tools were configured on the service and the conversation brings its own; "+
+			"using the conversation's", "service", s.Name())
+	}
+	if instructionChanged || hasTools {
+		s.reconnect(ctx)
 	}
 
 	// The results already in the first conversation were produced before this
 	// session existed, so they are recorded as known rather than sent: the model
 	// never asked for them and has nothing to do with them.
-	s.processCompletedCalls(ctx, convo, !first)
-
-	// A conversation from upstream is the aggregator asking for inference, with
-	// the bot speech and user speech it accounts for, so it is what has the
-	// model answer content appended since it last spoke.
-	s.mu.Lock()
-	complete := !first && dir == processor.Upstream && s.contentAwaitingResponse
-	s.mu.Unlock()
-	if complete {
-		s.completeTurn(ctx)
-	}
+	s.processCompletedCalls(ctx, convo, false)
 }
 
 // PushFrame pushes a frame, sending function call results to the session on
@@ -458,12 +517,10 @@ func (s *Service) sendTurnComplete(ctx context.Context, content map[string]any) 
 	}
 }
 
-// reconnectWithTools opens the session again so its setup carries the tools. The
-// conversation so far is the model's own, and it is lost with the session: the
-// Live API keeps it server-side and jargo has no way to replay it.
-func (s *Service) reconnectWithTools(ctx context.Context) {
-	slog.InfoContext(ctx, "reopening the live session to declare its tools",
-		"service", s.Name())
+// reconnect opens the session again, so its setup carries what the conversation
+// settled.
+func (s *Service) reconnect(ctx context.Context) {
+	slog.InfoContext(ctx, "reopening the live session", "service", s.Name())
 	s.disconnect()
 	if err := s.connect(ctx); err != nil {
 		s.PushError(ctx, "gemini live reconnect failed", err, true)

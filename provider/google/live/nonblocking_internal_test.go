@@ -24,13 +24,15 @@ func (gatedConnector) SupportsNonBlockingTools(string) bool { return false }
 // and synchronous ones are not declared BLOCKING either, since tagging is gated
 // on the same support.
 func TestAConnectorWithoutNonBlockingToolsDeclaresNoBehavior(t *testing.T) {
-	s := NewWithConnector("Gated", gatedConnector{}, Config{Model: "gemini-3.8-live"})
+	s := NewWithConnector("Gated", gatedConnector{}, Config{
+		Model: "gemini-3.8-live",
+		Tools: frames.ToolsSchema{Standard: []frames.Tool{{Name: "sync_tool"}, {Name: "async_tool"}}},
+	})
 	noop := func(ctx context.Context, p llm.FunctionCallParams) error { return p.Result(ctx, "", nil) }
 	s.RegisterFunction("sync_tool", noop)
 	s.RegisterFunction("async_tool", noop, llm.WithCancelOnInterruption(false))
-	s.tools = frames.ToolsSchema{Standard: []frames.Tool{{Name: "sync_tool"}, {Name: "async_tool"}}}
 
-	tools, _ := s.setup()["setup"].(map[string]any)["tools"].([]map[string]any)
+	tools, _ := setupOf(t, s)["tools"].([]map[string]any)
 	if len(tools) == 0 {
 		t.Fatal("the setup carries no tools")
 	}

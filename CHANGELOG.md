@@ -31,6 +31,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `gemini-live`. `gemini.Adapter.ParamsFromMessages` converts a prompt and
   messages without settling tools, for an adapter built on Gemini's.
 
+- **Gemini Live takes tools configured on the service.** `live.Config.Tools`
+  (and `vertex.S2SConfig.Tools`) are what the session carries while the
+  conversation advertises none, and the handlers they carry register on their
+  own. The session now settles its system instruction and tools through the
+  Gemini Live adapter, so the built-in tools reach it. A first conversation
+  reopens the session when it brings tools of its own, which replace the
+  configured ones (with a warning when both are given), or when its prompt
+  becomes the effective instruction because none is configured. Previously
+  only a conversation bringing tools to a session opened without any reopened
+  it.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

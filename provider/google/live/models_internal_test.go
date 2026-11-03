@@ -209,9 +209,9 @@ func TestDefaultingTheLevelKeepsTheRestOfTheConfiguration(t *testing.T) {
 // beside it.
 func TestTheSetupCarriesTheThinkingConfig(t *testing.T) {
 	svc := New(Config{APIKey: "k", Model: "gemini-3.8-live-extended-thinking"})
-	gen, ok := svc.setup()["setup"].(map[string]any)["generationConfig"].(map[string]any)
+	gen, ok := setupOf(t, svc)["generationConfig"].(map[string]any)
 	if !ok {
-		t.Fatalf("setup carries no generation config: %v", svc.setup())
+		t.Fatalf("setup carries no generation config: %v", setupOf(t, svc))
 	}
 	thinking, ok := gen["thinkingConfig"].(map[string]any)
 	if !ok {
@@ -223,8 +223,19 @@ func TestTheSetupCarriesTheThinkingConfig(t *testing.T) {
 
 	// A model that needs no level is left without the block entirely.
 	plain := New(Config{APIKey: "k", Model: "gemini-3.8-live"})
-	gen, _ = plain.setup()["setup"].(map[string]any)["generationConfig"].(map[string]any)
+	gen, _ = setupOf(t, plain)["generationConfig"].(map[string]any)
 	if _, ok := gen["thinkingConfig"]; ok {
 		t.Errorf("generation config = %v, want no thinking block", gen)
 	}
+}
+
+// setupOf is the body of the setup message s would open a session with.
+func setupOf(t *testing.T, s *Service) map[string]any {
+	t.Helper()
+	msg, err := s.setup()
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	body, _ := msg["setup"].(map[string]any)
+	return body
 }

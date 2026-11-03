@@ -15,6 +15,7 @@ package live
 import (
 	"errors"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/google/gemini"
 )
@@ -57,6 +58,13 @@ type Config struct {
 	Voice string
 	// Instructions is the system prompt for the session.
 	Instructions string
+	// Tools are tools configured on the service itself, as an alternative to
+	// advertising them through the conversation. They are what the session
+	// carries while the conversation advertises none, and the handlers of the
+	// standard ones register without a separate RegisterFunction call. A
+	// conversation that brings tools of its own replaces them. Tools in Gemini's
+	// own format go under Custom, keyed frames.AdapterTypeGemini.
+	Tools frames.ToolsSchema
 	// Thinking configures what the model may spend on reasoning, for a model
 	// that reasons. The Live thinking models require a level and refuse a setup
 	// without one, so an unset level defaults to the lowest they accept, which

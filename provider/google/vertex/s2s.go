@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/google/live"
 )
 
@@ -28,6 +29,9 @@ type S2SConfig struct {
 	Voice string
 	// Instructions is the system prompt for the session.
 	Instructions string
+	// Tools are tools configured on the service itself, as an alternative to
+	// advertising them through the conversation; see live.Config.Tools.
+	Tools frames.ToolsSchema
 }
 
 // Validate reports whether the configuration is usable.
@@ -49,6 +53,7 @@ func NewS2S(cfg S2SConfig) *live.Service {
 		Model:        cfg.Model,
 		Voice:        cfg.Voice,
 		Instructions: cfg.Instructions,
+		Tools:        cfg.Tools,
 	})
 }
 
