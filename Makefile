@@ -136,6 +136,19 @@ build-matrix: ## Compile with cgo off and on
 	@echo "==> cgo enabled"
 	CGO_ENABLED=1 $(GO) build ./...
 
+##@ Benchmarks
+
+# The benchmark suite is a module of its own (benchmarks/go.mod), so the root
+# `go build ./...` and `go vet ./...` never reach it. Without this check a change
+# to the library's API could leave the suite broken until someone next tried to
+# run it.
+BENCH_DIR := benchmarks
+
+.PHONY: bench-check
+bench-check: ## Vet and build the benchmark suite against the library in the tree
+	$(GO) -C $(BENCH_DIR) vet ./...
+	$(GO) -C $(BENCH_DIR) build ./...
+
 ##@ Generate
 
 .PHONY: tools-proto

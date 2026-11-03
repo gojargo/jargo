@@ -51,3 +51,6 @@ CLAUDE.local.md
 /website/resources/_gen/
 /website/_vendor/
 /website/.hugo_build.lock
+
+# Benchmark results, kept as CI artifacts and never committed
+/benchmarks/out/

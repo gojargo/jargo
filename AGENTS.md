@@ -55,7 +55,9 @@ worth knowing:
 
 - **No upstream references in code.** Keep Pipecat/Python out of `.go` comments;
   attribution lives only in `LICENSE`, `NOTICE`, and `README.md`. No per-file
-  copyright headers.
+  copyright headers. The one exception is the comparison suite: under
+  `benchmarks/` and in `docs/benchmarks.md`, Pipecat is what is being measured,
+  so it is named there in code, file names and results.
 - **Config is explicit.** Library packages read no environment variables: take a
   plain `Config` struct and validate it with go-playground `validate` tags.
   Prefer structs over functional options. Env/flags/Viper belong in the app
