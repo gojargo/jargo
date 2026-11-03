@@ -392,6 +392,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   semantic turn detection, near-field noise reduction, the user's speech
   transcribed, and a tool added fifteen seconds into the conversation.
 
+- **A Nova Sonic adapter, `adapter/novasonic`.** It converts a conversation
+  into what a Nova Sonic session takes: the system instruction (the one given
+  wins over the conversation's prompt), the history of the user's and the
+  assistant's words (system and developer messages become the user's; tool
+  traffic is left out), and the tools as toolSpecs whose input schema is JSON
+  text, settled like a realtime session's. Its messages are identified as
+  `aws-nova-sonic`.
+
 - **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
   takes the v1 `BaseURL` and names the deployment with `Model`, and can
   authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.
