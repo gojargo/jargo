@@ -27,6 +27,21 @@ The numbering follows the getting-started series these are ported from. Steps
 03 to 05 show images and video, which jargo's transports do not carry, so they
 are not here.
 
+## Function calling
+
+The voice agent with tools the LLM calls, each tool carrying its own handler.
+Speech-to-text is Deepgram (Groq for the Groq one) and text-to-speech Cartesia.
+
+| Example | LLM |
+| --- | --- |
+| [`function-calling-anthropic`](function-calling/function-calling-anthropic) | Anthropic |
+| [`function-calling-anthropic-async`](function-calling/function-calling-anthropic-async) | Anthropic, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel |
+| [`function-calling-deepseek`](function-calling/function-calling-deepseek) | DeepSeek |
+| [`function-calling-groq`](function-calling/function-calling-groq) | Groq |
+| [`function-calling-mistral`](function-calling/function-calling-mistral) | Mistral |
+| [`function-calling-openai-responses`](function-calling/function-calling-openai-responses) | OpenAI Responses API |
+| [`function-calling-together`](function-calling/function-calling-together) | Together AI |
+
 ## Speech-to-speech
 
 One model hears the caller and speaks its answers. These need the ONNX Runtime
