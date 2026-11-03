@@ -17,6 +17,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/google/gemini"
 )
 
@@ -30,7 +31,7 @@ const (
 	defaultBaseURL = "wss://generativelanguage.googleapis.com/ws/" +
 		"google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 	defaultModel = "gemini-3.8-live"
-	defaultVoice = "Puck"
+	defaultVoice = "Charon"
 	// outputSampleRate is the fixed rate of the Live API's output audio.
 	outputSampleRate = 24000
 	// readLimit bounds a single inbound message; audio parts are large.
@@ -53,11 +54,50 @@ type Config struct {
 	// Model is the Live model id (without the "models/" prefix); empty uses a
 	// current default.
 	Model string
-	// Voice is the prebuilt voice name (e.g. "Puck", "Kore"); empty uses a
-	// default.
+	// Voice is the prebuilt voice name (e.g. "Puck", "Kore"); empty uses
+	// Charon.
 	Voice string
 	// Instructions is the system prompt for the session.
 	Instructions string
+	// MaxTokens bounds each response; nil uses 4096.
+	MaxTokens *int `validate:"omitempty,min=1"`
+	// Temperature is the sampling temperature (0 to 2); nil leaves the model's.
+	Temperature *float64 `validate:"omitempty,min=0,max=2"`
+	// TopP is the nucleus sampling probability (0 to 1); nil leaves the model's.
+	TopP *float64 `validate:"omitempty,min=0,max=1"`
+	// TopK is the top-k sampling cutoff; nil leaves the model's.
+	TopK *int `validate:"omitempty,min=0"`
+	// FrequencyPenalty discourages repeating the same tokens (0 to 2); nil
+	// leaves the model's.
+	FrequencyPenalty *float64 `validate:"omitempty,min=0,max=2"`
+	// PresencePenalty discourages repeating the same subjects (0 to 2); nil
+	// leaves the model's.
+	PresencePenalty *float64 `validate:"omitempty,min=0,max=2"`
+	// Seed makes generation reproducible; nil leaves it random.
+	Seed *int
+	// Modalities is what the model responds with; empty uses audio.
+	Modalities Modality `validate:"omitempty,oneof=AUDIO TEXT"`
+	// Language is the language the model speaks; empty uses en-US. A language
+	// Gemini Live lists is sent as its locale code ("es" as "es-ES"); any other
+	// is sent as it stands.
+	Language language.Language
+	// MediaResolution is how finely the model sees images and video; empty
+	// leaves it to the model.
+	MediaResolution MediaResolution
+	// VAD tunes the server's voice activity detection; nil leaves its defaults.
+	VAD *VADParams
+	// TurnCoverage is which realtime input a user turn covers; empty uses the
+	// model's own default.
+	TurnCoverage TurnCoverage
+	// ContextWindowCompression bounds the context window by sliding it; nil
+	// leaves it off.
+	ContextWindowCompression *ContextWindowCompression
+	// EnableAffectiveDialog lets the model adapt to expression and tone, on a
+	// model that supports it.
+	EnableAffectiveDialog bool
+	// Proactivity lets the model decide how to behave on its own, on a model
+	// that supports it; nil leaves it off.
+	Proactivity *Proactivity
 	// Tools are tools configured on the service itself, as an alternative to
 	// advertising them through the conversation. They are what the session
 	// carries while the conversation advertises none, and the handlers of the

@@ -42,6 +42,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   only a conversation bringing tools to a session opened without any reopened
   it.
 
+- **Gemini Live has runtime settings.** `live.Settings` holds the voice,
+  modalities, language, media resolution, voice activity detection, turn
+  coverage, context window compression, thinking, affective dialog,
+  proactivity and the sampling settings, each with a matching `live.Config`
+  field (and `vertex.S2SConfig` field), and the setup message is built from
+  it. An `LLMUpdateSettingsFrame` is stored for the next session and reported
+  as not applied to the one already open, since the Live API takes all of it
+  at setup. A language Gemini Live lists is sent as its locale code ("es" as
+  "es-ES"). `SetModelModalities` and `SetLanguage` change them directly.
+  **Breaking:** the defaults are now the Charon voice (was Puck), US English
+  and 4096 output tokens, which are sent on every setup.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

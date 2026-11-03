@@ -29,12 +29,12 @@ func (s *Service) traceSetup(ctx context.Context) {
 	_, span := s.StartSpan(ctx, "llm_setup")
 	defer span.End()
 	tracing.SetGeminiLiveAttributes(span, tracing.GeminiLiveAttributes{
-		Model:      s.cfg.Model,
+		Model:      s.model(),
 		Operation:  "llm_setup",
-		VoiceID:    s.cfg.Voice,
+		VoiceID:    s.live.Voice.Or(""),
 		Modalities: modalityAudio,
 		Settings: map[string]any{
-			"voice":                s.cfg.Voice,
+			"voice":                s.live.Voice.Or(""),
 			"response_modalities":  modalityAudio,
 			"input_transcription":  true,
 			"output_transcription": true,
@@ -61,9 +61,9 @@ func instructionAttrs(instruction string) map[string]any {
 func (s *Service) traceResponse(ctx context.Context, msg serverMessage) (context.Context, func()) {
 	spanCtx, span := s.StartSpan(ctx, "llm_response")
 	attrs := tracing.GeminiLiveAttributes{
-		Model:      s.cfg.Model,
+		Model:      s.model(),
 		Operation:  "llm_response",
-		VoiceID:    s.cfg.Voice,
+		VoiceID:    s.live.Voice.Or(""),
 		Modalities: modalityAudio,
 	}
 	if sc := msg.ServerContent; sc != nil {

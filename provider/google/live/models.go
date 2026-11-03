@@ -109,7 +109,7 @@ func resolvedThinking(model string, cfg *gemini.ThinkingConfig) *gemini.Thinking
 // calls: the model decides, unless the connector's deployment overrides it.
 func (s *Service) supportsNonBlockingTools() bool {
 	if gate, ok := s.connector.(NonBlockingToolsGate); ok {
-		return gate.SupportsNonBlockingTools(s.cfg.Model)
+		return gate.SupportsNonBlockingTools(s.model())
 	}
-	return modelSupportsNonBlockingTools(s.cfg.Model)
+	return modelSupportsNonBlockingTools(s.model())
 }

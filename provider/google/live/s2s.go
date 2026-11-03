@@ -21,6 +21,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/google/uuid"
 )
@@ -32,6 +33,9 @@ type Service struct {
 	adapter geminilive.Adapter
 	*llm.Base
 	cfg Config
+	// live is what the service holds of its configuration while the pipeline
+	// runs, which the setup message is built from.
+	live *Settings
 
 	mu        sync.Mutex
 	conn      *wsutil.Conn
@@ -126,8 +130,10 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	if cfg.Voice == "" {
 		cfg.Voice = defaultVoice
 	}
+	warnTextModality(cfg.Modalities)
 	s := &Service{
 		cfg:         cfg,
+		live:        newSettings(cfg),
 		connector:   conn,
 		toolNames:   map[string]string{},
 		sentResults: map[string]bool{},
@@ -241,26 +247,60 @@ func (s *Service) connect(ctx context.Context) error {
 	return nil
 }
 
-// setup is the initial session-configuration message.
+// setup is the initial session-configuration message, built from the settings
+// the service holds.
 func (s *Service) setup() (map[string]any, error) {
-	setup := map[string]any{
-		"model": s.connector.ModelPath(s.cfg.Model),
-		"generationConfig": map[string]any{
-			"responseModalities": []string{modalityAudio},
-			"speechConfig": map[string]any{
-				"voiceConfig": map[string]any{
-					"prebuiltVoiceConfig": map[string]any{"voiceName": s.cfg.Voice},
-				},
+	live := s.live
+	gen := map[string]any{
+		"responseModalities": []string{string(live.Modalities.Or(ModalityAudio))},
+		"speechConfig": map[string]any{
+			"voiceConfig": map[string]any{
+				"prebuiltVoiceConfig": map[string]any{"voiceName": live.Voice.Or("")},
 			},
+			"languageCode": string(live.Language.Or(defaultLanguage)),
 		},
+		"mediaResolution": string(live.MediaResolution.Or(MediaResolutionUnspecified)),
+	}
+	// The sampling settings go out only when set, leaving the model's own.
+	setGiven(gen, "frequencyPenalty", live.FrequencyPenalty)
+	setGiven(gen, "maxOutputTokens", live.MaxTokens)
+	setGiven(gen, "presencePenalty", live.PresencePenalty)
+	setGiven(gen, "seed", live.Seed)
+	setGiven(gen, "temperature", live.Temperature)
+	setGiven(gen, "topK", live.TopK)
+	setGiven(gen, "topP", live.TopP)
+	if thinking := gemini.ThinkingParams(resolvedThinking(s.model(), live.Thinking.Or(nil))); thinking != nil {
+		gen["thinkingConfig"] = thinking
+	}
+	if live.EnableAffectiveDialog.Or(false) {
+		gen["enableAffectiveDialog"] = true
+	}
+
+	setup := map[string]any{
+		"model":                    s.connector.ModelPath(s.model()),
+		"generationConfig":         gen,
 		"inputAudioTranscription":  map[string]any{},
 		"outputAudioTranscription": map[string]any{},
 	}
-	if thinking := gemini.ThinkingParams(resolvedThinking(s.cfg.Model, s.cfg.Thinking)); thinking != nil {
-		if g, ok := setup["generationConfig"].(map[string]any); ok {
-			g["thinkingConfig"] = thinking
+	if cwc := live.ContextWindowCompression.Or(nil); cwc != nil && cwc.Enabled {
+		// Compression always slides the window.
+		compression := map[string]any{"slidingWindow": map[string]any{}}
+		if cwc.TriggerTokens != nil {
+			compression["triggerTokens"] = *cwc.TriggerTokens
 		}
+		setup["contextWindowCompression"] = compression
 	}
+	if p := live.Proactivity.Or(nil); p != nil {
+		proactivity := map[string]any{}
+		if p.ProactiveAudio != nil {
+			proactivity["proactiveAudio"] = *p.ProactiveAudio
+		}
+		setup["proactivity"] = proactivity
+	}
+	if input := realtimeInputConfig(live.VAD.Or(nil), live.TurnCoverage.Or("")); input != nil {
+		setup["realtimeInputConfig"] = input
+	}
+
 	// The system instruction and the tools come from the conversation when
 	// there is one, which the adapter settles against the configured ones: the
 	// instruction configured on the service wins over the conversation's own
@@ -282,6 +322,55 @@ func (s *Service) setup() (map[string]any, error) {
 		setup["tools"] = tools
 	}
 	return map[string]any{"setup": setup}, nil
+}
+
+// setGiven sets key to the value o holds, if it holds one.
+func setGiven[T any](m map[string]any, key string, o settings.Opt[T]) {
+	if v, ok := o.Value(); ok {
+		m[key] = v
+	}
+}
+
+// realtimeInputConfig is how the server detects activity and what a turn
+// covers, or nil when nothing about either is set. Only the detection
+// parameters that are set are sent.
+func realtimeInputConfig(vad *VADParams, coverage TurnCoverage) map[string]any {
+	config := map[string]any{}
+	if detection := activityDetection(vad); len(detection) > 0 {
+		config["automaticActivityDetection"] = detection
+	}
+	if coverage != "" {
+		config["turnCoverage"] = string(coverage)
+	}
+	if len(config) == 0 {
+		return nil
+	}
+	return config
+}
+
+// activityDetection is the server's activity detection as vad sets it: only the
+// parameters that are set, so the server's own default holds for the rest.
+func activityDetection(vad *VADParams) map[string]any {
+	if vad == nil {
+		return nil
+	}
+	detection := map[string]any{}
+	if vad.Disabled != nil {
+		detection["disabled"] = *vad.Disabled
+	}
+	if vad.StartSensitivity != "" {
+		detection["startOfSpeechSensitivity"] = string(vad.StartSensitivity)
+	}
+	if vad.EndSensitivity != "" {
+		detection["endOfSpeechSensitivity"] = string(vad.EndSensitivity)
+	}
+	if vad.PrefixPaddingMs != nil {
+		detection["prefixPaddingMs"] = *vad.PrefixPaddingMs
+	}
+	if vad.SilenceDurationMs != nil {
+		detection["silenceDurationMs"] = *vad.SilenceDurationMs
+	}
+	return detection
 }
 
 // sessionInstructionAndTools settles the system instruction and the tools a
@@ -411,7 +500,7 @@ func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.Functi
 	}
 	if !final && !s.AcceptsIntermediateFunctionCallResults() {
 		slog.WarnContext(ctx, "the model takes one result per function call, dropping an intermediate result",
-			"service", s.Name(), "model", s.cfg.Model, "function", f.ToolName)
+			"service", s.Name(), "model", s.model(), "function", f.ToolName)
 		return
 	}
 	spoken := true
@@ -510,7 +599,7 @@ func (s *Service) sendTurnComplete(ctx context.Context, content map[string]any) 
 		slog.ErrorContext(ctx, "completing the turn failed", "service", s.Name(), "err", err)
 		return
 	}
-	if isGemini3(s.cfg.Model) {
+	if isGemini3(s.model()) {
 		if err := s.send(map[string]any{"realtimeInput": map[string]any{keyText: " "}}); err != nil {
 			slog.ErrorContext(ctx, "nudging the model to answer failed", "service", s.Name(), "err", err)
 		}
@@ -669,7 +758,7 @@ func withScheduling(response any, scheduling string) any {
 //
 // See https://ai.google.dev/gemini-api/docs/live-api/tools#async-function-calling.
 func (s *Service) tagToolBehaviors(tools []map[string]any) {
-	declareBlocking := toolsDefaultToNonBlocking(s.cfg.Model) && supportsBlockingTools(s.cfg.Model)
+	declareBlocking := toolsDefaultToNonBlocking(s.model()) && supportsBlockingTools(s.model())
 	for _, tool := range tools {
 		decls, ok := tool["functionDeclarations"].([]map[string]any)
 		if !ok {
@@ -685,7 +774,7 @@ func (s *Service) tagToolBehaviors(tools []map[string]any) {
 				decl["behavior"] = "NON_BLOCKING"
 			case declareBlocking:
 				decl["behavior"] = "BLOCKING"
-			case toolsDefaultToNonBlocking(s.cfg.Model):
+			case toolsDefaultToNonBlocking(s.model()):
 				s.warnSyncToolCannotBlock(name)
 			}
 		}
@@ -699,7 +788,7 @@ func (s *Service) warnSyncToolCannotBlock(name string) {
 	s.syncToolWarning.Do(func() {
 		slog.Warn("this model runs every function call without waiting for it, so a synchronous "+
 			"tool does not pause the conversation and the model may keep talking before its result arrives",
-			"service", s.Name(), "model", s.cfg.Model, "function", name)
+			"service", s.Name(), "model", s.model(), "function", name)
 	})
 }
 
