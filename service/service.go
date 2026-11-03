@@ -9,6 +9,9 @@ package service
 
 import (
 	"context"
+	"log/slog"
+	"slices"
+	"strings"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -61,6 +64,20 @@ func (b *Base) SettingsUpdated(ctx context.Context) {
 	// the one that decides: an embedded method is not an override, and calling
 	// it here directly would skip whatever the concrete service does.
 	b.Self().SetUsable(ctx, true)
+}
+
+// WarnUnhandledUpdatedSettings reports settings an update changed that will not
+// take effect while the service runs: a service that applies some fields at
+// runtime and only stores the rest calls it with the rest, so a caller who asked
+// for them hears that rather than assuming they took effect. It does nothing
+// when there is nothing to report.
+func (b *Base) WarnUnhandledUpdatedSettings(ctx context.Context, unhandled []string) {
+	if len(unhandled) == 0 {
+		return
+	}
+	fields := slices.Sorted(slices.Values(unhandled))
+	slog.WarnContext(ctx, "runtime update of these settings is not currently supported",
+		"service", b.Name(), "fields", strings.Join(fields, ", "))
 }
 
 // BroadcastServiceMetadata sends this service's metadata both ways through the

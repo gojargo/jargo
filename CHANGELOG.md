@@ -35,6 +35,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   on. It is what a settings type with a nested value mirroring a top-level
   field needs to keep the two in step.
 
+- **`service.Base.WarnUnhandledUpdatedSettings`** reports the settings an
+  update changed that will not take effect while the service runs, for a
+  service that applies some fields at runtime and only stores the rest.
+
 - **Every transport reports its clients through events.** The WebRTC
   transport raises `transport.EventClientConnected` when the peer connection
   is established (again after a restart) and `transport.EventClientDisconnected`
