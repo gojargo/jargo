@@ -51,6 +51,8 @@ too, for the user aggregator's default turn strategies.
 | --- | --- | --- |
 | [`realtime-azure`](realtime/realtime-azure) | Azure OpenAI Realtime, with tools and transcript logging. | Azure OpenAI |
 | [`realtime-grok`](realtime/realtime-grok) | xAI's Grok Voice Agent, with tools and transcript logging. | xAI |
+| [`realtime-gemini-live`](realtime/realtime-gemini-live) | Gemini Live, with tools configured on the service, Google Search and transcript logging. | Google AI |
+| [`realtime-gemini-live-vertex`](realtime/realtime-gemini-live-vertex) | Gemini Live through Vertex AI, with tools configured on the service. | Google Cloud |
 
 ## Transports
 
