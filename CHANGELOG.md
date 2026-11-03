@@ -351,6 +351,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   gone (set them in the properties; the user's audio is no longer transcribed
   unless a transcription is configured), the tool choice is no longer taken
   from the conversation, and only the GA event names are read.
+- **OpenAI Realtime reports its responses the way a cascade does.** A response
+  opens with `LLMFullResponseStartFrame` when it is asked for and when the
+  model starts an assistant message, and closes with `LLMFullResponseEndFrame`
+  when it is done; its audio is bracketed once by `TTSStartedFrame` and
+  `TTSStoppedFrame`, however many output items it spans, and an interruption
+  is truncated against the item being heard. The spoken words go out as an
+  `LLMTextFrame` kept out of the conversation and a `TTSTextFrame`; the user's
+  transcripts carry a timestamp. A failed response is reported as an error.
+  The service reports its time to first byte and processing time, raises
+  `EventConversationItemCreated` and `EventConversationItemUpdated`, and an
+  interruption closes the response in progress ahead of it. **Breaking:**
+  the service no longer pushes `BotStartedSpeakingFrame` and
+  `BotStoppedSpeakingFrame`.
+
 - **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
   takes the v1 `BaseURL` and names the deployment with `Model`, and can
   authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.

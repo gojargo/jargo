@@ -59,6 +59,9 @@ type Service struct {
 	// addedManually are the items this service put into the conversation,
 	// whose echo from the server is not the model's doing. Guarded by mu.
 	addedManually map[string]bool
+	// assistantResponding says an assistant message is being produced, which an
+	// interruption closes. Guarded by mu.
+	assistantResponding bool
 	// retrievals are the callers waiting on a conversation item, by item id.
 	// Guarded by mu.
 	retrievals map[string][]chan retrieval
@@ -115,6 +118,7 @@ type Service struct {
 type audioResponse struct {
 	itemID       string
 	contentIndex int
+	responseID   string
 	started      time.Time
 	total        int
 }
@@ -183,6 +187,8 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
 	s.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
+	s.Events().Register(EventConversationItemCreated, false)
+	s.Events().Register(EventConversationItemUpdated, false)
 	return s
 }
 
@@ -209,18 +215,20 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		s.sendAudio(ctx, *audio)
 		return nil
 	}
+	if _, ok := f.(*frames.InterruptionFrame); ok {
+		// Before the interruption travels on, so what closes the response in
+		// progress reaches the processors after this one ahead of it.
+		s.handleInterruption(ctx)
+	}
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
 	switch fr := f.(type) {
-	case *frames.InterruptionFrame:
-		// The session's own VAD cancels the response it heard the user speak
-		// over, so only its record of that response is put right here. A
-		// response owed behind it is moot too: the user's turn makes one of its
-		// own.
-		s.truncateAudioResponse(ctx)
+	case *frames.BotStoppedSpeakingFrame:
+		// The audio has played out, so there is no longer an item an
+		// interruption would cut back.
 		s.mu.Lock()
-		s.responseCreateOwed = false
+		s.audioResp = nil
 		s.mu.Unlock()
 		return nil
 	case *frames.LLMContextFrame:
@@ -404,7 +412,7 @@ func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessage
 		}
 		role := "system"
 		if m.Role == frames.RoleAssistant {
-			role = "assistant"
+			role = roleAssistant
 		}
 		s.sendMessageItem(ctx, text, role)
 	}
@@ -600,6 +608,9 @@ func (s *Service) createResponse(ctx context.Context) {
 	s.responseActive = true
 	s.mu.Unlock()
 	slog.DebugContext(ctx, "creating a response", "service", s.Name())
+	_ = s.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
+	s.StartProcessingMetrics()
+	s.StartTTFBMetrics()
 	s.sendEvent(ctx, events.NewResponseCreateEvent(&events.ResponseProperties{
 		OutputModalities: s.enabledModalities(),
 	}))
@@ -757,6 +768,7 @@ func (s *Service) sendEvent(ctx context.Context, ev any) {
 // disconnect cancels the session context, closes the socket, and waits for the
 // read loop to exit. It is safe to call more than once.
 func (s *Service) disconnect() {
+	s.StopAllMetrics(context.Background())
 	s.mu.Lock()
 	conn, cancel := s.conn, s.cancel
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
@@ -861,7 +873,11 @@ func (s *Service) handleEvent(ctx context.Context, ev *events.ServerEvent) bool 
 			s.resolveRetrieval(ev.Item.ID, retrieval{item: ev.Item})
 		}
 	case ev.Type == "conversation.item.added":
-		s.handleItemAdded(ev.Item)
+		s.handleItemAdded(ctx, ev.Item)
+	case ev.Type == "conversation.item.done":
+		if ev.Item != nil {
+			s.Events().Call(ctx, EventConversationItemUpdated, s, ConversationItemEvent{ItemID: ev.Item.ID, Item: ev.Item})
+		}
 	case ev.Type == "response.function_call_arguments.done":
 		s.runToolCall(ctx, ev)
 	case ev.Type == "error":
@@ -889,6 +905,8 @@ func (s *Service) handleTurnEvent(ctx context.Context, ev *events.ServerEvent) b
 		s.truncateAudioResponse(ctx)
 		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStartedSpeakingFrame() })
 	case "input_audio_buffer.speech_stopped":
+		s.StartTTFBMetrics()
+		s.StartProcessingMetrics()
 		_ = s.Broadcast(ctx, func() frames.Frame { return frames.NewProposedUserStoppedSpeakingFrame() })
 	default:
 		return false
@@ -908,36 +926,138 @@ func (s *Service) handleResponseEvent(ctx context.Context, ev *events.ServerEven
 		s.responseActive = true
 		s.resultsAwaitingResponse = false
 		s.mu.Unlock()
-		_ = s.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Downstream)
 	case "response.output_audio.delta":
-		if pcm, err := base64.StdEncoding.DecodeString(ev.Delta); err == nil && len(pcm) > 0 {
-			s.trackAudio(ev, len(pcm))
-			_ = s.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, sampleRate, 1), processor.Downstream)
+		s.handleAudioDelta(ctx, ev)
+	case "response.output_audio_transcript.delta":
+		// The transcript of the spoken answer: kept out of the conversation as
+		// LLM text, which RTVI reports, and recorded by the assistant aggregator
+		// as the words spoken.
+		if ev.Delta != "" {
+			llmText := frames.NewLLMTextFrame(ev.Delta)
+			llmText.AppendToContext = false
+			_ = s.PushFrame(ctx, llmText, processor.Downstream)
+			ttsText := frames.NewTTSTextFrame(ev.Delta, frames.TextTypeSentence)
+			ttsText.IncludesInterFrameSpaces = true
+			_ = s.PushFrame(ctx, ttsText, processor.Downstream)
 		}
-	case "response.output_audio_transcript.delta", "response.output_text.delta":
+	case "response.output_text.delta":
+		// The answer itself, in the text modality.
 		if ev.Delta != "" {
 			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(ev.Delta), processor.Downstream)
 		}
 	case "response.done":
-		s.reportUsage(ctx, ev)
-		// The response is over, so there is no longer an item an interruption
-		// would cut back.
-		s.mu.Lock()
-		s.audioResp = nil
-		s.responseActive = false
-		// A response asked for while this one was running is owed now, unless
-		// this one took in what it was for.
-		owed := s.responseCreateOwed && s.resultsAwaitingResponse
-		s.responseCreateOwed = false
-		s.mu.Unlock()
-		_ = s.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Downstream)
-		if owed {
-			s.createResponse(ctx)
-		}
+		s.handleResponseDone(ctx, ev)
 	default:
 		return false
 	}
 	return true
+}
+
+// handleAudioDelta plays a chunk of the model's audio. The first chunk of a
+// response opens the spoken answer; a chunk of the next output item of the same
+// response continues it, the item being tracked anew so an interruption cuts
+// back the item the caller was hearing.
+func (s *Service) handleAudioDelta(ctx context.Context, ev *events.ServerEvent) {
+	s.ReportTTFBMetrics(ctx)
+	s.mu.Lock()
+	started := false
+	switch {
+	case s.audioResp == nil:
+		s.audioResp = &audioResponse{
+			itemID: ev.ItemID, contentIndex: ev.ContentIndex, responseID: ev.ResponseID, started: time.Now(),
+		}
+		started = true
+	case s.audioResp.itemID != ev.ItemID:
+		slog.DebugContext(ctx, "advancing to the next audio output item", "service", s.Name(),
+			"prev_item_id", s.audioResp.itemID, "item_id", ev.ItemID, "response_id", ev.ResponseID)
+		*s.audioResp = audioResponse{
+			itemID: ev.ItemID, contentIndex: ev.ContentIndex, responseID: ev.ResponseID, started: time.Now(),
+		}
+	}
+	s.mu.Unlock()
+	if started {
+		_ = s.PushFrame(ctx, frames.NewTTSStartedFrame(), processor.Downstream)
+	}
+	pcm, err := base64.StdEncoding.DecodeString(ev.Delta)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	if s.audioResp != nil {
+		s.audioResp.total += len(pcm)
+	}
+	s.mu.Unlock()
+	_ = s.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, sampleRate, 1), processor.Downstream)
+}
+
+// handleResponseDone closes the response: its usage is reported, a spoken
+// answer is closed with a TTS stop and the response with its end, a response
+// owed behind it is created, and one that failed is reported as an error.
+func (s *Service) handleResponseDone(ctx context.Context, ev *events.ServerEvent) {
+	s.reportUsage(ctx, ev)
+	s.StopProcessingMetrics(ctx)
+	s.mu.Lock()
+	spoken := s.audioResp != nil
+	s.assistantResponding = false
+	s.responseActive = false
+	// A response asked for while this one was running is owed now, unless this
+	// one took in what it was for.
+	owed := s.responseCreateOwed && s.resultsAwaitingResponse
+	s.responseCreateOwed = false
+	s.mu.Unlock()
+	// Closed once for the whole response, however many output items it held.
+	if spoken {
+		_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+	}
+	_ = s.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+	if owed {
+		s.createResponse(ctx)
+	}
+	if ev.Response == nil {
+		return
+	}
+	if ev.Response.Status == "failed" {
+		message := "Response failed"
+		if e, ok := ev.Response.StatusDetails["error"].(map[string]any); ok {
+			if m, ok := e["message"].(string); ok && m != "" {
+				message = m
+			}
+		}
+		s.PushError(ctx, message, fmt.Errorf("%w: %s", errServer, message), false)
+		return
+	}
+	for i := range ev.Response.Output {
+		item := &ev.Response.Output[i]
+		s.Events().Call(ctx, EventConversationItemUpdated, s, ConversationItemEvent{ItemID: item.ID, Item: item})
+	}
+}
+
+// handleInterruption puts right what the interruption makes moot: the
+// session's record of the response being played is cut back to what the caller
+// heard, the response's timing ends, a response owed behind it is dropped (the
+// user's turn makes one of its own), and a response in progress is closed.
+func (s *Service) handleInterruption(ctx context.Context) {
+	s.truncateAudioResponse(ctx)
+	s.StopAllMetrics(ctx)
+	s.mu.Lock()
+	s.responseCreateOwed = false
+	responding := s.assistantResponding
+	s.mu.Unlock()
+	if responding {
+		_ = s.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+		if slices.Contains(s.outputModalities(), events.ModalityAudio) {
+			_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+		}
+	}
+}
+
+// outputModalities are what the session responds with: audio and text unless
+// the session properties say otherwise.
+func (s *Service) outputModalities() []events.Modality {
+	if m := s.sessionProperties().OutputModalities; len(m) > 0 {
+		return m
+	}
+	return []events.Modality{events.ModalityAudio, events.ModalityText}
 }
 
 // handleTranscriptEvent takes what the session heard the user say, reporting
@@ -948,13 +1068,12 @@ func (s *Service) handleResponseEvent(ctx context.Context, ev *events.ServerEven
 func (s *Service) handleTranscriptEvent(ctx context.Context, ev *events.ServerEvent) bool {
 	switch ev.Type {
 	case "conversation.item.input_audio_transcription.delta":
-		if ev.Delta != "" {
-			_ = s.PushFrame(ctx, frames.NewInterimTranscriptionFrame(ev.Delta, "", ""), processor.Upstream)
-		}
+		_ = s.PushFrame(ctx, frames.NewInterimTranscriptionFrame(ev.Delta, "", frames.NowTimestamp()),
+			processor.Upstream)
 	case "conversation.item.input_audio_transcription.completed":
-		if ev.Transcript != "" {
-			_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(ev.Transcript, "", ""), processor.Upstream)
-		}
+		s.Events().Call(ctx, EventConversationItemUpdated, s, ConversationItemEvent{ItemID: ev.ItemID})
+		_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(ev.Transcript, "", frames.NowTimestamp()),
+			processor.Upstream)
 	default:
 		return false
 	}
@@ -989,22 +1108,6 @@ func (s *Service) handleServerError(ctx context.Context, ev *events.ServerEvent)
 	return true
 }
 
-// trackAudio records the assistant audio item being played, so an interruption
-// can say how much of it the caller heard. The first chunk opens the item and
-// starts its clock; the rest only add to its size.
-func (s *Service) trackAudio(ev *events.ServerEvent, n int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.audioResp == nil {
-		s.audioResp = &audioResponse{
-			itemID:       ev.ItemID,
-			contentIndex: ev.ContentIndex,
-			started:      time.Now(),
-		}
-	}
-	s.audioResp.total += n
-}
-
 // truncateAudioResponse cuts the item being played back to what the caller
 // actually heard, so the conversation the model keeps matches it. Without this
 // the model believes it said a whole answer the user cut off after a word.
@@ -1032,14 +1135,23 @@ func (s *Service) truncateAudioResponse(ctx context.Context) {
 // handleItemAdded takes an item added to the session's conversation: a tool
 // call the model announced is tracked, and the echo of an item this service put
 // in is recognized as such.
-func (s *Service) handleItemAdded(item *events.ConversationItem) {
+func (s *Service) handleItemAdded(ctx context.Context, item *events.ConversationItem) {
 	if item == nil {
 		return
 	}
 	s.trackToolCall(item)
+	s.Events().Call(ctx, EventConversationItemCreated, s, ConversationItemEvent{ItemID: item.ID, Item: item})
 	s.mu.Lock()
+	manual := s.addedManually[item.ID]
 	delete(s.addedManually, item.ID)
+	assistant := !manual && item.Role == roleAssistant
+	if assistant {
+		s.assistantResponding = true
+	}
 	s.mu.Unlock()
+	if assistant {
+		_ = s.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
+	}
 }
 
 // trackToolCall records a tool call the model has announced. The call is named
@@ -1135,4 +1247,24 @@ func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
 	// a proposal reaches nothing and no turn is ever opened or closed.
 	f.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
 	return f
+}
+
+// The events the service raises about the session's conversation items, each
+// with a ConversationItemEvent.
+//
+//	events.On(svc.Events(), realtime.EventConversationItemUpdated,
+//	    func(ctx context.Context, e realtime.ConversationItemEvent) { … })
+const (
+	// EventConversationItemCreated fires when an item is added to the
+	// conversation, whoever added it.
+	EventConversationItemCreated = "on_conversation_item_created"
+	// EventConversationItemUpdated fires when an item is complete, and when the
+	// transcription of the user's audio item is (with no item).
+	EventConversationItemUpdated = "on_conversation_item_updated"
+)
+
+// ConversationItemEvent names a conversation item, and carries it when known.
+type ConversationItemEvent struct {
+	ItemID string
+	Item   *events.ConversationItem
 }

@@ -110,7 +110,7 @@ func responseAttrs(r *events.Response) map[string]any {
 func assistantTranscript(output []events.ConversationItem) string {
 	var parts []string
 	for _, item := range output {
-		if item.Role != "assistant" {
+		if item.Role != roleAssistant {
 			continue
 		}
 		for _, c := range item.Content {

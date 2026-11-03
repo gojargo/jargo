@@ -196,13 +196,13 @@ func TestInterruptionTruncatesTheAudioBeingPlayed(t *testing.T) {
 func TestBenignErrorsLeaveTheSessionRunning(t *testing.T) {
 	srv := newScriptedRealtime(t, []string{
 		`{"type":"error","error":{"code":"response_cancel_not_active","message":"no active response"}}`,
-		`{"type":"response.created"}`,
+		`{"type":"response.output_audio.delta","item_id":"item-1","delta":"AAAA"}`,
 	})
 	task, done, collected := runRealtime(t, srv.wsURL())
 
 	// The session carried on: an event after the error still reached the
 	// pipeline, which it would not have had the read loop stopped.
-	waitForFrame[*frames.BotStartedSpeakingFrame](t, collected)
+	waitForFrame[*frames.TTSStartedFrame](t, collected)
 	for _, f := range collected() {
 		if _, ok := f.(*frames.ErrorFrame); ok {
 			t.Error("a cancel race was reported as an error")

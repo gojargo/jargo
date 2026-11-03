@@ -35,10 +35,10 @@ func fakeRealtime(t *testing.T, audio []byte) *httptest.Server {
 		`{"type":"response.created"}`,
 		`{"type":"response.output_audio.delta","delta":"` + base64.StdEncoding.EncodeToString(audio) + `"}`,
 		`{"type":"response.output_audio_transcript.delta","delta":"hello"}`,
+		`{"type":"response.done"}`,
 		`{"type":"input_audio_buffer.speech_started"}`,
 		`{"type":"input_audio_buffer.speech_stopped"}`,
 		`{"type":"conversation.item.input_audio_transcription.completed","transcript":"hi there"}`,
-		`{"type":"response.done"}`,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
@@ -117,7 +117,7 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 		mu.Lock()
 		for _, f := range got {
 			switch f.(type) {
-			case *frames.BotStoppedSpeakingFrame:
+			case *frames.LLMFullResponseEndFrame:
 				stopped = true
 			case *frames.TranscriptionFrame:
 				transcribed = true
@@ -167,9 +167,9 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 			proposedStop = true
 		case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame:
 			announcedTurn = true
-		case *frames.BotStartedSpeakingFrame:
+		case *frames.TTSStartedFrame:
 			botStarted = true
-		case *frames.BotStoppedSpeakingFrame:
+		case *frames.TTSStoppedFrame:
 			botStopped = true
 		}
 	}
@@ -201,6 +201,6 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 		t.Error("the service broadcast an interruption itself, rather than proposing a turn")
 	}
 	if !botStarted || !botStopped {
-		t.Error("response lifecycle did not produce bot started/stopped speaking")
+		t.Error("the spoken response was not opened and closed with TTS started and stopped")
 	}
 }

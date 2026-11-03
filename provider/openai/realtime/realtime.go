@@ -39,6 +39,8 @@ const (
 	keyType          = "type"
 	keyAudio         = "audio"
 	msgSessionUpdate = "session.update"
+	// roleAssistant is the role of the model's messages.
+	roleAssistant = "assistant"
 )
 
 // errNotConnected is returned when audio is sent before the socket is open.
