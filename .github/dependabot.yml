@@ -24,3 +24,30 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # The benchmark suite is a module of its own, with its own go.mod.
+  - package-ecosystem: gomod
+    directory: /benchmarks
+    schedule:
+      interval: weekly
+    groups:
+      benchmarks-go-modules:
+        patterns: ["*"]
+
+  # The Python side of the comparison: requirements.txt is compiled from
+  # requirements.in by pip-compile with hashes, which Dependabot regenerates.
+  - package-ecosystem: pip
+    directory: /benchmarks/pipecat
+    schedule:
+      interval: weekly
+    groups:
+      benchmarks-python:
+        patterns: ["*"]
+
+  # The two comparison images' base images, pinned by digest.
+  - package-ecosystem: docker
+    directories:
+      - /benchmarks
+      - /benchmarks/pipecat
+    schedule:
+      interval: weekly

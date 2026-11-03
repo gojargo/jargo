@@ -160,7 +160,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   committed. See [Benchmarks](docs/benchmarks.md) for the method and how to
   read the output. The suite is a module of its own, so the library takes on
   none of its dependencies, and CI vets, builds and lints it on every pull
-  request (`make bench-check`).
+  request (`make bench-check`). A weekly workflow runs the full comparison on
+  a hosted runner and keeps the results as an artifact.
 
 - **Every transport reports its clients through events.** The WebRTC
   transport raises `transport.EventClientConnected` when the peer connection

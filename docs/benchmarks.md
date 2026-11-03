@@ -120,6 +120,21 @@ go -C benchmarks tool benchstat old.txt new.txt
   numbers you mean to keep, use `performance` and a machine that is otherwise
   idle.
 
+## In CI
+
+The `Benchmarks` workflow (`.github/workflows/bench.yml`) runs
+`make bench-compare` with the full profile on a GitHub-hosted runner every week,
+on demand, and on pull requests that change the Python side. Both sides are
+pinned to every CPU of the runner but the first, which is left to the runner
+agent and the Docker daemon, with 4 GiB each. The job uploads `benchmarks/out`
+(both raw outputs, the benchstat summary and a description of the runner) as an
+artifact and shows the summary on the run's page.
+
+Hosted runners are shared virtual machines, so their absolute numbers move from
+one run to the next; only the ratio between the two sides measured in the same
+job, on the same runner, means anything. Never compare numbers from different
+jobs.
+
 ## Reading the result
 
 `compare.txt` is benchstat's table, one per unit, with a column per framework:

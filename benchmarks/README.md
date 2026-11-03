@@ -66,6 +66,10 @@ rules and how to read the result.
 `make bench` runs the `testing.B` benchmarks on the host, throttled, into
 `out/bench.txt`.
 
+In CI, `.github/workflows/bench.yml` runs the full profile weekly, on demand,
+and on pull requests that change `pipecat/`, and uploads `out/` as an
+artifact.
+
 ## Running jargo's side
 
 ```sh

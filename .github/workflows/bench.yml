@@ -1,0 +1,72 @@
+name: Benchmarks
+
+# Runs the benchmark comparison (make bench-compare) with the full profile and
+# keeps the results as an artifact. Numbers are never committed: a hosted runner
+# is a shared virtual machine, so its absolute numbers move from run to run, and
+# only the ratio between the two sides measured in the same job means anything.
+# See docs/benchmarks.md.
+on:
+  schedule:
+    - cron: "0 4 * * 1" # weekly, Monday 04:00 UTC
+  workflow_dispatch:
+  # A change to the Python side's driver, image or lock is checked by running
+  # it, since nothing else does.
+  pull_request:
+    paths:
+      - "benchmarks/pipecat/**"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+# A newer run on the same ref supersedes one still measuring.
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # For benchstat, which the comparison runs on the host as a tool of the
+      # benchmarks module.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # CPU 0 is left to the runner agent and the Docker daemon; both sides are
+      # pinned to the rest. The outputs record the cpuset each side was given.
+      - name: Size the cpuset for the runner
+        run: |
+          last=$(( $(nproc) - 1 ))
+          if (( last < 1 )); then last=1; fi
+          echo "BENCH_CPUSET=1-${last}" >> "$GITHUB_ENV"
+      - name: Record the runner
+        run: |
+          mkdir -p benchmarks/out
+          { uname -a; lscpu; docker info --format '{{.CgroupVersion}} cgroup, {{.NCPU}} CPUs, {{.MemTotal}} bytes'; } \
+            | tee benchmarks/out/runner.txt
+      # An empty BENCH_BUILD_PROCS lifts the cap on the image's compile, which
+      # only exists to spare a laptop.
+      - run: make bench-compare BENCH_PROFILE=full BENCH_MEM=4g BENCH_BUILD_PROCS=
+      - name: Summarize
+        if: always() && hashFiles('benchmarks/out/compare.txt') != ''
+        run: |
+          {
+            echo '### Benchmark comparison (full profile)'
+            echo
+            echo 'Ratios hold within this job only. See docs/benchmarks.md before quoting.'
+            echo
+            echo '```text'
+            cat benchmarks/out/compare.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: benchmarks
+          path: benchmarks/out
+          retention-days: 90
