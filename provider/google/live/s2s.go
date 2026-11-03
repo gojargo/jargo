@@ -123,7 +123,29 @@ type Service struct {
 	// resize it. Guarded by mu.
 	prerollSecs   float64
 	prerollPinned bool
+
+	// connMu serializes opening and closing the session, which the frame
+	// goroutine and a reconnection after a failed read can both do.
+	connMu sync.Mutex
+	// stopped says the pipeline is ending, so a failed session is not opened
+	// again.
+	stopped atomic.Bool
+	// resumptionHandle is the latest handle the server gave for resuming the
+	// session, which a session opened again resumes from. Guarded by mu.
+	resumptionHandle string
+	// consecutiveFailures counts the sessions lost in a row; connectedAt is when
+	// the current one opened, and a session that stays up long enough resets
+	// the count. Guarded by mu.
+	consecutiveFailures int
+	connectedAt         time.Time
 }
+
+// A session lost maxConsecutiveFailures times in a row is not opened again; one
+// that stays up for stableConnection resets the count.
+const (
+	maxConsecutiveFailures = 3
+	stableConnection       = 10 * time.Second
+)
 
 // The pre-roll windows, in seconds: the margin added to the start delay of the
 // pipeline's voice activity detection, and the window used until that is known.
@@ -235,7 +257,7 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		s.sendAudio(audio.Audio, audio.SampleRate, audio.NumChannels)
+		s.sendAudio(ctx, audio.Audio, audio.SampleRate, audio.NumChannels)
 		return nil
 	}
 	if _, ok := f.(*frames.InterruptionFrame); ok {
@@ -265,7 +287,7 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		s.handleMessagesAppend(ctx, fr)
 		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
-		s.disconnect()
+		s.stop()
 		return nil
 	default:
 		s.handleUserInput(ctx, f)
@@ -291,8 +313,17 @@ func (s *Service) handleUserInput(ctx context.Context, f frames.Frame) {
 
 // Cleanup tears down the session and stops the read loop.
 func (s *Service) Cleanup(ctx context.Context) error {
-	s.disconnect()
+	s.stop()
 	return s.Base.Cleanup(ctx)
+}
+
+// stop closes the session for good: a session lost from now on is not opened
+// again.
+func (s *Service) stop() {
+	s.stopped.Store(true)
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	s.disconnect()
 }
 
 // connect dials the Live WebSocket, sends the setup message, and starts the read
@@ -332,9 +363,10 @@ func (s *Service) connect(ctx context.Context) error {
 	return nil
 }
 
-// setup is the initial session-configuration message, built from the settings
-// the service holds.
-func (s *Service) setup() (map[string]any, error) {
+// generationConfig is the part of the setup the model generates by: what it
+// responds with, its voice and language, and the sampling and reasoning
+// settings.
+func (s *Service) generationConfig() map[string]any {
 	live := s.live
 	gen := map[string]any{
 		"responseModalities": []string{string(live.Modalities.Or(ModalityAudio))},
@@ -360,12 +392,29 @@ func (s *Service) setup() (map[string]any, error) {
 	if live.EnableAffectiveDialog.Or(false) {
 		gen["enableAffectiveDialog"] = true
 	}
+	return gen
+}
 
+// setup is the initial session-configuration message, built from the settings
+// the service holds.
+func (s *Service) setup() (map[string]any, error) {
+	live := s.live
+	gen := s.generationConfig()
+
+	// Resumption is always on, so the server hands out handles; a session
+	// opened again resumes from the last one.
+	resumption := map[string]any{}
+	s.mu.Lock()
+	if s.resumptionHandle != "" {
+		resumption["handle"] = s.resumptionHandle
+	}
+	s.mu.Unlock()
 	setup := map[string]any{
 		"model":                    s.connector.ModelPath(s.model()),
 		"generationConfig":         gen,
 		"inputAudioTranscription":  map[string]any{},
 		"outputAudioTranscription": map[string]any{},
+		"sessionResumption":        resumption,
 	}
 	// The conversation the session is seeded with goes in as client content,
 	// which the API has to be told to expect.
@@ -583,20 +632,26 @@ func (s *Service) inferenceOnContextInitialization() bool {
 }
 
 // handleSessionReady takes the server's acknowledgement of a session's setup.
-// A conversation that arrived first is seeded now. On a session opened again
-// after the conversation was taken in, the conversation is seeded again, so the
-// new session has what the old one had before it takes input. Otherwise the
-// conversation has yet to arrive, and seeding waits for it.
+// A conversation that arrived first is seeded now. A session resumed from a
+// handle is restored by the server and takes input at once. On a session opened
+// again without one after the conversation was taken in, the conversation is
+// seeded again, so the new session has what the old one had before it takes
+// input. Otherwise the conversation has yet to arrive, and seeding waits for it.
 func (s *Service) handleSessionReady(ctx context.Context) {
 	s.mu.Lock()
 	s.ready.Store(true)
+	s.connectedAt = time.Now()
 	run := s.runWhenReady
 	s.runWhenReady = false
-	reseed := !run && s.convo != nil && !s.settlingFirstContext
+	resumed := !run && s.resumptionHandle != ""
+	reseed := !run && !resumed && s.convo != nil && !s.settlingFirstContext
 	s.mu.Unlock()
 	switch {
 	case run:
 		s.createInitialResponse(ctx, false)
+	case resumed:
+		// The server restores the session it resumes, so it takes input at once.
+		s.readyForInput.Store(true)
 	case reseed:
 		s.createInitialResponse(ctx, true)
 	}
@@ -660,11 +715,11 @@ func (s *Service) createInitialResponse(ctx context.Context, forReconnect bool) 
 	if err := s.send(map[string]any{
 		keyClientContent: map[string]any{keyTurns: seed, keyTurnComplete: trigger},
 	}); err != nil {
-		slog.ErrorContext(ctx, "seeding the live session failed", "service", s.Name(), "err", err)
+		s.handleSendError(ctx, err)
 	} else if gemini3 && trigger {
 		// 3.x completes the turn but runs no inference without a realtime input.
 		if err := s.send(map[string]any{keyRealtimeInput: map[string]any{keyText: " "}}); err != nil {
-			slog.ErrorContext(ctx, "nudging the model to answer failed", "service", s.Name(), "err", err)
+			s.handleSendError(ctx, err)
 		}
 	}
 
@@ -792,7 +847,7 @@ func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessage
 	if err := s.send(map[string]any{
 		keyClientContent: map[string]any{keyTurns: turns, keyTurnComplete: false},
 	}); err != nil {
-		slog.ErrorContext(ctx, "sending appended content failed", "service", s.Name(), "err", err)
+		s.handleSendError(ctx, err)
 		return
 	}
 	s.mu.Lock()
@@ -842,24 +897,77 @@ func (s *Service) createSingleResponse(ctx context.Context, messages []frames.Me
 // follows.
 func (s *Service) sendTurnComplete(ctx context.Context, content map[string]any) {
 	if err := s.send(map[string]any{keyClientContent: content}); err != nil {
-		slog.ErrorContext(ctx, "completing the turn failed", "service", s.Name(), "err", err)
+		s.handleSendError(ctx, err)
 		return
 	}
 	if isGemini3(s.model()) {
 		if err := s.send(map[string]any{keyRealtimeInput: map[string]any{keyText: " "}}); err != nil {
-			slog.ErrorContext(ctx, "nudging the model to answer failed", "service", s.Name(), "err", err)
+			s.handleSendError(ctx, err)
 		}
 	}
 }
 
 // reconnect opens the session again, so its setup carries what the conversation
-// settled.
+// settled, and resumes it from the last handle the server gave.
 func (s *Service) reconnect(ctx context.Context) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.stopped.Load() {
+		return
+	}
 	slog.InfoContext(ctx, "reopening the live session", "service", s.Name())
 	s.disconnect()
 	if err := s.connect(ctx); err != nil {
 		s.PushError(ctx, "gemini live reconnect failed", err, true)
 	}
+}
+
+// handleConnectionError opens a lost session again, unless sessions have been
+// lost maxConsecutiveFailures times in a row, which is reported as an error
+// instead.
+func (s *Service) handleConnectionError(ctx context.Context, lost *wsutil.Conn, err error) {
+	s.mu.Lock()
+	s.consecutiveFailures++
+	failures := s.consecutiveFailures
+	current := s.conn == lost
+	s.mu.Unlock()
+	if !current || s.stopped.Load() {
+		// Already replaced, or the pipeline is ending.
+		return
+	}
+	slog.WarnContext(ctx, "the live session was lost", "service", s.Name(),
+		"failure", failures, "max", maxConsecutiveFailures, "err", err)
+	if failures >= maxConsecutiveFailures {
+		s.PushError(ctx, fmt.Sprintf("max consecutive failures (%d) reached, treating as fatal error",
+			maxConsecutiveFailures), err, false)
+		return
+	}
+	slog.InfoContext(ctx, "reconnecting", "service", s.Name(),
+		"attempt", failures, "max", maxConsecutiveFailures)
+	s.reconnect(ctx)
+}
+
+// resetFailuresOnceStable forgets the sessions lost before, once the current
+// one has stayed up for stableConnection.
+func (s *Service) resetFailuresOnceStable() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.consecutiveFailures > 0 && !s.connectedAt.IsZero() && time.Since(s.connectedAt) >= stableConnection {
+		slog.Info("the live session is stable; resetting the failure count",
+			"service", s.Name(), "after", stableConnection, "failures", s.consecutiveFailures)
+		s.consecutiveFailures = 0
+	}
+}
+
+// handleSendError reports a failed send. A send failing is rare between
+// servers and hard to recover from cleanly, so it is reported as an error
+// rather than retried. One failing because the session was closing, or was not
+// ready, is expected and ignored.
+func (s *Service) handleSendError(ctx context.Context, err error) {
+	if s.stopped.Load() || !s.ready.Load() {
+		return
+	}
+	s.PushError(ctx, "gemini live: send error", err, false)
 }
 
 // processCompletedCalls finds the tool results the model has not been given yet
@@ -967,7 +1075,7 @@ func (s *Service) sendToolResultAs(ctx context.Context, toolCallID, name, result
 	if err := s.send(map[string]any{
 		"toolResponse": map[string]any{"functionResponses": []any{response}},
 	}); err != nil {
-		slog.ErrorContext(ctx, "sending a tool result failed", "service", s.Name(), "err", err)
+		s.handleSendError(ctx, err)
 	}
 }
 
@@ -1082,7 +1190,7 @@ func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
 // only inside the user's turn, the session discarding anything outside one, and
 // keeps the most recent audio outside a turn as the pre-roll to replay when the
 // next one starts.
-func (s *Service) sendAudio(pcm []byte, sampleRate, channels int) {
+func (s *Service) sendAudio(ctx context.Context, pcm []byte, sampleRate, channels int) {
 	if len(pcm) == 0 || s.audioPaused.Load() || !s.ready.Load() || !s.readyForInput.Load() {
 		return
 	}
@@ -1102,17 +1210,15 @@ func (s *Service) sendAudio(pcm []byte, sampleRate, channels int) {
 		return
 	}
 	s.mu.Unlock()
-	s.sendAudioBlob(pcm, sampleRate)
+	s.sendAudioBlob(ctx, pcm, sampleRate)
 }
 
 // sendAudioBlob sends one chunk of PCM as realtime input.
-func (s *Service) sendAudioBlob(pcm []byte, sampleRate int) {
-	_ = s.send(map[string]any{
-		keyRealtimeInput: map[string]any{
-			"audio": map[string]any{
-				"data":     base64.StdEncoding.EncodeToString(pcm),
-				"mimeType": fmt.Sprintf("audio/pcm;rate=%d", sampleRate),
-			},
+func (s *Service) sendAudioBlob(ctx context.Context, pcm []byte, sampleRate int) {
+	s.sendRealtimeInput(ctx, map[string]any{
+		"audio": map[string]any{
+			"data":     base64.StdEncoding.EncodeToString(pcm),
+			"mimeType": fmt.Sprintf("audio/pcm;rate=%d", sampleRate),
 		},
 	})
 }
@@ -1120,7 +1226,7 @@ func (s *Service) sendAudioBlob(pcm []byte, sampleRate int) {
 // sendRealtimeInput sends one realtime input message.
 func (s *Service) sendRealtimeInput(ctx context.Context, input map[string]any) {
 	if err := s.send(map[string]any{keyRealtimeInput: input}); err != nil {
-		slog.ErrorContext(ctx, "sending realtime input failed", "service", s.Name(), "err", err)
+		s.handleSendError(ctx, err)
 	}
 }
 
@@ -1136,11 +1242,11 @@ func (s *Service) handleUserStartedSpeaking(ctx context.Context) {
 		return
 	}
 	s.sendRealtimeInput(ctx, map[string]any{"activityStart": map[string]any{}})
-	s.flushPreroll()
+	s.flushPreroll(ctx)
 }
 
 // flushPreroll sends the pre-roll, then clears it.
-func (s *Service) flushPreroll() {
+func (s *Service) flushPreroll(ctx context.Context) {
 	s.mu.Lock()
 	pcm, rate := s.preroll, s.prerollRate
 	s.preroll = nil
@@ -1148,7 +1254,7 @@ func (s *Service) flushPreroll() {
 	if len(pcm) == 0 || rate == 0 {
 		return
 	}
-	s.sendAudioBlob(pcm, rate)
+	s.sendAudioBlob(ctx, pcm, rate)
 }
 
 // handleSpeechControlParams sizes the pre-roll from the start delay of the
@@ -1229,6 +1335,11 @@ type serverMessage struct {
 	ServerContent *serverContent   `json:"serverContent"` //nolint:tagliatelle // Gemini wire field
 	UsageMetadata *usageMetadata   `json:"usageMetadata"` //nolint:tagliatelle // Gemini wire field
 	ToolCall      *toolCall        `json:"toolCall"`      //nolint:tagliatelle // Gemini wire field
+	// SessionResumptionUpdate hands out a handle to resume the session from.
+	SessionResumptionUpdate *struct {
+		NewHandle string `json:"newHandle"` //nolint:tagliatelle // Gemini wire field
+		Resumable bool   `json:"resumable"`
+	} `json:"sessionResumptionUpdate"` //nolint:tagliatelle // Gemini wire field
 }
 
 // toolCall is the model asking for one or more functions to be called. They
@@ -1363,8 +1474,12 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 	for {
 		_, data, err := conn.Read(connCtx)
 		if err != nil {
-			if connCtx.Err() == nil {
-				slog.Debug("gemini live read ended", "err", err)
+			if connCtx.Err() == nil && !s.stopped.Load() {
+				// Not closed by this service, so the session was lost. Opening it
+				// again closes this one, which waits for this loop, so it is done
+				// once this loop has ended, and outlives this session's context,
+				// which closing it cancels.
+				go s.handleConnectionError(context.WithoutCancel(connCtx), conn, err)
 			}
 			return
 		}
@@ -1381,6 +1496,7 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 	if msg.SetupComplete != nil {
 		s.handleSessionReady(ctx)
 	}
+	s.resetFailuresOnceStable()
 	idle, statusKnown := msg.ServerContent.interactionIdle()
 	// Any server message while a turn is held is the session proving it is still
 	// there, so the watch on it measures silence and nothing else.
@@ -1390,6 +1506,11 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 	}
 	if msg.ToolCall != nil {
 		s.runToolCalls(ctx, msg.ToolCall)
+	}
+	if u := msg.SessionResumptionUpdate; u != nil && u.Resumable && u.NewHandle != "" {
+		s.mu.Lock()
+		s.resumptionHandle = u.NewHandle
+		s.mu.Unlock()
 	}
 	// A held turn is closed only once any tool call bundled with the message is
 	// on its way, so the turn ends with the message fully taken in.

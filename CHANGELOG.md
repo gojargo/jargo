@@ -93,6 +93,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`InputTextRawFrame`) goes in as realtime input. `SetAudioInputPaused` and
   `live.Config.StartAudioPaused` stop user audio reaching the session.
 
+- **Gemini Live recovers a lost session.** The setup asks for session
+  resumption, and a session the server drops is opened again resuming from
+  the last handle it gave, taking input at once. After three sessions lost in
+  a row (the count resets once one stays up for ten seconds) the service
+  reports an error instead of retrying. A failed send on a ready session is
+  reported as an error.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

@@ -97,8 +97,8 @@ func (s *Service) prerollLen() int {
 func TestManualVADBuffersAudioUntilTurnStarts(t *testing.T) {
 	s, srv := audioService(t, true, nil)
 
-	s.sendAudio([]byte{0xaa, 0xbb}, 16000, 1)
-	s.sendAudio([]byte{0xcc, 0xdd}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0xaa, 0xbb}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0xcc, 0xdd}, 16000, 1)
 	settle()
 
 	if got := srv.kinds(); len(got) != 0 {
@@ -116,8 +116,8 @@ func TestManualVADBuffersAudioUntilTurnStarts(t *testing.T) {
 func TestManualVADFlushesPrerollAfterActivityStart(t *testing.T) {
 	s, srv := audioService(t, true, nil)
 
-	s.sendAudio([]byte{0xaa, 0xbb}, 16000, 1)
-	s.sendAudio([]byte{0xcc, 0xdd}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0xaa, 0xbb}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0xcc, 0xdd}, 16000, 1)
 	s.handleUserStartedSpeaking(t.Context())
 	settle()
 
@@ -142,8 +142,8 @@ func TestManualVADStreamsAudioDuringTurn(t *testing.T) {
 		t.Fatalf("sent %v, want only the activity start: nothing was buffered", got)
 	}
 
-	s.sendAudio([]byte{0x11, 0x22}, 16000, 1)
-	s.sendAudio([]byte{0x33, 0x44}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0x11, 0x22}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0x33, 0x44}, 16000, 1)
 	settle()
 
 	if got := srv.kinds(); !equalKinds(got, "activity_start", "audio", "audio") {
@@ -160,7 +160,7 @@ func TestManualVADSendsActivityEndOnTurnStop(t *testing.T) {
 	s, srv := audioService(t, true, nil)
 
 	s.handleUserStartedSpeaking(t.Context())
-	s.sendAudio([]byte{0x11, 0x22}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0x11, 0x22}, 16000, 1)
 	s.handleUserStoppedSpeaking(t.Context())
 	settle()
 
@@ -174,7 +174,7 @@ func TestManualVADPrerollCappedToDefaultWindow(t *testing.T) {
 	s, srv := audioService(t, true, nil)
 
 	// One second at 16 kHz mono, 16-bit, is 32000 bytes; half a second is 16000.
-	s.sendAudio(make([]byte, 32000), 16000, 1)
+	s.sendAudio(t.Context(), make([]byte, 32000), 16000, 1)
 	if n := s.prerollLen(); n != 16000 {
 		t.Errorf("pre-roll holds %d bytes, want 16000", n)
 	}
@@ -196,7 +196,7 @@ func TestManualVADPrerollSizedFromVADStartSecs(t *testing.T) {
 
 	// Two seconds, comfortably more than the window, so the buffer is capped to
 	// the window rather than by how much was sent.
-	s.sendAudio(make([]byte, 64000), 16000, 1)
+	s.sendAudio(t.Context(), make([]byte, 64000), 16000, 1)
 	want := int(16000 * 1 * 2 * (startSecs + prerollMarginSecs))
 	if n := s.prerollLen(); n != want {
 		t.Errorf("pre-roll holds %d bytes, want %d", n, want)
@@ -217,7 +217,7 @@ func TestManualVADPrerollOverridePinsValueAndIgnoresVADParams(t *testing.T) {
 	s.handleSpeechControlParams(frames.NewSpeechControlParamsFrame(&vad.Params{StartSecs: 0.5}, nil))
 
 	// A tenth of a second at 16 kHz mono, 16-bit, is 3200 bytes.
-	s.sendAudio(make([]byte, 32000), 16000, 1)
+	s.sendAudio(t.Context(), make([]byte, 32000), 16000, 1)
 	if n := s.prerollLen(); n != 3200 {
 		t.Errorf("pre-roll holds %d bytes, want 3200", n)
 	}
@@ -233,8 +233,8 @@ func TestManualVADPrerollOverridePinsValueAndIgnoresVADParams(t *testing.T) {
 func TestServerVADStreamsAudioWhenIdle(t *testing.T) {
 	s, srv := audioService(t, false, nil)
 
-	s.sendAudio([]byte{0xaa, 0xbb}, 16000, 1)
-	s.sendAudio([]byte{0xcc, 0xdd}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0xaa, 0xbb}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{0xcc, 0xdd}, 16000, 1)
 	settle()
 
 	if got := srv.kinds(); !equalKinds(got, "audio", "audio") {
@@ -271,9 +271,9 @@ func TestPausedAudioIsNotSent(t *testing.T) {
 	s, srv := audioService(t, false, nil)
 
 	s.SetAudioInputPaused(true)
-	s.sendAudio([]byte{1, 2}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{1, 2}, 16000, 1)
 	s.SetAudioInputPaused(false)
-	s.sendAudio([]byte{3, 4}, 16000, 1)
+	s.sendAudio(t.Context(), []byte{3, 4}, 16000, 1)
 	settle()
 
 	if got := srv.audioPayloads(t); len(got) != 1 || !bytes.Equal(got[0], []byte{3, 4}) {
