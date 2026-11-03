@@ -394,7 +394,8 @@ async def execute(sc, count, pattern):
                       "larger sizes skipped", flush=True)
                 skip_from[g] = i
                 continue
-            except Exception as exc:  # noqa: BLE001 - reported, and the run goes on
+            except Exception as exc:  # noqa: BLE001
+                # Any other failure is reported, and the run goes on.
                 print(f"--- FAIL: Benchmark{name}: {exc!r}", flush=True)
                 skip_from[g], failed = i, True
                 continue

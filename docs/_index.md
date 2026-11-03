@@ -60,13 +60,17 @@ between them. Understanding it makes everything else obvious.
 |---|---|
 | [Deploy with Docker](deploy/docker.md) | The build and distroless runtime base images, and a Dockerfile. |
 
+## Benchmarks
+
+| Page | What it covers |
+|---|---|
+| [Benchmarks](benchmarks.md) | What the framework itself costs, how that is measured, and how to run the comparison. |
+
 ## Elsewhere
 
 - **[Go reference](https://pkg.go.dev/github.com/gojargo/jargo)**: the API. These
   pages deliberately do not duplicate it.
 - **[Examples](https://github.com/gojargo/jargo/tree/main/examples)**: runnable
   bots, one per provider.
-- **[Benchmarks](https://github.com/gojargo/jargo-benchmarks)**: the honest
-  performance picture.
 - **[Changelog](https://github.com/gojargo/jargo/blob/main/CHANGELOG.md)**: what
   changed, and what broke.

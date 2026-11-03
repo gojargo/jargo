@@ -241,5 +241,5 @@ aggregators.WithTurns(turns.Config{
   log-mel features; it and both models are validated to within `1e-3` of the
   reference Python implementation by unit tests.
 - Smart Turn runs inside the `TurnAnalyzerStop` strategy, driven by the turn
-  controller (~tens of ms per end-of-turn). See [benchmarks](https://github.com/gojargo/jargo-benchmarks)
-  for the performance picture and the planned FFT optimization.
+  controller (~tens of ms per end-of-turn). The [benchmarks](../benchmarks.md)
+  measure the framework around it, not the model.

@@ -120,10 +120,6 @@ enableRobotsTXT = true
   url = "https://github.com/gojargo/jargo/tree/main/examples"
   weight = 10
 [[menu.sidebar]]
-  name = "Benchmarks ↗"
-  url = "https://github.com/gojargo/jargo-benchmarks"
-  weight = 11
-[[menu.sidebar]]
   name = "Changelog ↗"
   url = "https://github.com/gojargo/jargo/blob/main/CHANGELOG.md"
   weight = 12

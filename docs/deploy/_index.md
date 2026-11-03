@@ -15,5 +15,6 @@ and optionally RNNoise.
 
 One task per session, and a task dies with its connection: build the pipeline
 inside your `/offer` handler and cancel on close. Scaling is therefore a matter of
-how many concurrent sessions one process holds. See the
-[benchmarks](https://github.com/gojargo/jargo-benchmarks) for measured numbers.
+how many concurrent sessions one process holds. The
+[benchmarks](../benchmarks.md) measure what each session costs, on your own
+machine.

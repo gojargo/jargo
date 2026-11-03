@@ -1,0 +1,152 @@
+---
+title: Benchmarks
+weight: 6
+---
+
+# Benchmarks
+
+jargo is a Go port of [Pipecat](https://github.com/pipecat-ai/pipecat). The
+benchmark suite in [`benchmarks/`](https://github.com/gojargo/jargo/tree/main/benchmarks)
+measures the overhead the framework itself adds to a voice agent, and runs the
+same measurements against Pipecat under the same limits so the two can be
+compared on equal terms.
+
+What it measures is the framework, not a conversation. The latency a caller
+hears is dominated by the round trips to the speech-to-text, LLM and
+text-to-speech services, which are the same whichever framework calls them.
+What differs between the two is everything around those calls: moving frames
+between processors, starting a session, and running many sessions in one
+process. Those are the numbers here.
+
+This page gives the method and how to run it. It deliberately quotes no results:
+numbers depend on the machine, and the ones that matter are the ones you measure
+on yours.
+
+## What is measured
+
+Every pipeline is a chain of pass-through processors, each forwarding every frame
+and doing nothing else, so all that is timed is the framework: the queue, the
+handoff and the dispatch at each hop. Each pipeline is run the way an application
+runs a bot, by a runner holding one pipeline worker, and a frame is seen
+arriving through the worker's reached-downstream event.
+
+| Kind | Sizes | One sample |
+|---|---|---|
+| Latency | chain depth 1, 4, 16, 64 | Closed loop: one frame is queued, and the next only once it has reached the end. Reports the mean per frame and per hop, and the median and 99th percentile per frame. |
+| Throughput | chain depth 1, 4, 16, 64 | Open loop: every frame is queued at once, timed from the first queued to the last arrived. Reports time per frame and frames per second. |
+| Startup | chain depth 1, 4, 16, 64 | From asking a pipeline to run to its StartFrame reaching the end, when it is ready for frames. Building the pipeline beforehand is reported apart. |
+| Sessions | 1, 10, 100 sessions (and 1,000 in the full profile) | That many depth-4 pipelines at once: the startup per session, then rounds of one frame into every pipeline and all of them back out, and the resident memory each session holds. |
+
+Latency and throughput exclude starting the pipeline and a number of warm-up
+frames. Every sample has a time budget: one that runs past it is reported as
+timed out and the larger sizes of that benchmark are skipped, so a run that
+overwhelms one side ends with that fact recorded rather than hanging.
+
+## How the two sides are kept equal
+
+- **One definition.** Both sides read the same scenario files
+  (`benchmarks/scenarios/*.json`), which hold the sizes, sample lengths, warm-up
+  and budgets. The Go side (`jbench`, over `benchmarks/internal/run`) and the
+  Python side (`benchmarks/pipecat/bench.py`) implement each kind the same way,
+  step for step: the closed loop really waits for each frame, every frame is
+  built fresh on both sides, and the samples are interleaved the same way so a
+  slow drift in the machine spreads across all of them.
+- **The same configuration.** The worker runs with turn tracking, the idle
+  timeout, RTVI and every observer off, and logging silenced, on both sides.
+  Both use their framework's defaults otherwise: Pipecat runs on the standard
+  asyncio event loop, as it does unless told otherwise.
+- **The same limits.** `make bench-compare` runs each side in its own container,
+  one after the other and never at once, pinned to the same CPUs with
+  `--cpuset-cpus`, held to the same memory with swap off, and with GOMAXPROCS set
+  to the number of CPUs in the set.
+- **Pinned versions.** The Pipecat side is Python 3.12 (the version Pipecat
+  recommends and tests on) in an image pinned by digest, with `pipecat-ai`
+  pinned to one release and every package installed from a lock checked by hash.
+  The jargo side is built from the tree it runs in. Each side's output names
+  its framework version and runtime, along with the CPU model, the CPUs it was
+  allowed, their frequency governor, the kernel, the cgroup version and the
+  memory limit.
+
+What is not measured: the Python interpreter's own startup and import time, and
+anything a real service, transport or model would add.
+
+The resident memory per session is read from `/proc` after both sides have
+collected garbage and handed freed memory back to the system, so it counts what
+the running sessions hold. It is only meaningful at the larger session counts;
+at one session it is mostly the noise of the allocator.
+
+## Running it locally
+
+On Linux with Docker:
+
+```sh
+make bench-compare
+```
+
+The defaults suit a laptop that is also in use: the quick profile, CPUs `2,3`
+and 1 GiB (`BENCH_CPUSET=2,3`, `BENCH_MEM=1g`, `BENCH_PROFILE=quick`), six
+samples of every sub-benchmark (`BENCH_COUNT=6`). The full profile adds a
+thousand concurrent sessions and is meant for a dedicated machine:
+
+```sh
+make bench-compare BENCH_PROFILE=full BENCH_CPUSET=0-3 BENCH_MEM=4g
+```
+
+`BENCH_RUN` selects sub-benchmarks by regexp on both sides, for example
+`BENCH_RUN=Latency`. The raw results land in `benchmarks/out/jargo.txt` and
+`benchmarks/out/pipecat.txt`, and the benchstat summary in
+`benchmarks/out/compare.txt`. That directory is ignored by git: results are
+never committed.
+
+For jargo on its own, to compare two commits:
+
+```sh
+make bench                    # writes benchmarks/out/bench.txt
+go -C benchmarks tool benchstat old.txt new.txt
+```
+
+### Docker caveats
+
+- **Pin with `--cpuset-cpus`, not `--cpus`.** `--cpus` is a CFS quota: the
+  container may run on every core in short bursts and is then throttled until
+  the next period, which shows up as tail latency that belongs to the quota, not
+  to the framework. The Makefile only ever pins.
+- **Docker Desktop numbers are not comparable.** On macOS and Windows the
+  containers run inside a virtual machine, whose scheduling and timers sit
+  between the benchmark and the hardware. Compare the two sides measured there
+  with each other if you must, never with numbers from native Linux.
+- **The governor matters.** A `powersave` governor, or a laptop on battery,
+  lowers and varies the clock. The governor is recorded in the output; for
+  numbers you mean to keep, use `performance` and a machine that is otherwise
+  idle.
+
+## Reading the result
+
+`compare.txt` is benchstat's table, one per unit, with a column per framework:
+
+```text
+                         │    jargo    │              pipecat               │
+                         │   sec/hop   │   sec/hop    vs base               │
+PlumbingLatency/depth=4    ...
+```
+
+Each cell is the median of the samples with its 95% confidence interval, and the
+`vs base` column is Pipecat's median relative to jargo's, with the p-value of the
+difference (`~` when it could be noise). A `vs base` of +900% is a ratio of 10.
+benchstat needs at least six samples per side for an interval (fewer show
+`± ∞`), which is why `BENCH_COUNT` defaults to 6.
+
+To quote a comparison, quote it as a ratio of the medians together with both
+confidence intervals, the number of samples, and the machine spec from the
+config lines. In the shape of: "at depth 4, Pipecat's median time per hop was
+R times jargo's (jargo X ± a%, Pipecat Y ± b%, n=6, p=P; 2 CPUs of an Intel
+Core Ultra 7, governor performance, cgroup v2)". A single multiplier with no
+interval and no machine is not a result.
+
+## Next steps
+
+Two kinds of measurement are planned and not yet in the suite: session density
+with real-time audio (how many sessions, each fed 20 ms audio frames in real
+time, a set of CPUs holds before frames arrive late), and an end-to-end run
+against a mock AI server with scripted latencies, driven by a load generator
+speaking the protobuf WebSocket protocol.

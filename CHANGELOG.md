@@ -150,6 +150,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   update changed that will not take effect while the service runs, for a
   service that applies some fields at runtime and only stores the rest.
 
+- **A benchmark suite, in `benchmarks/`.** It measures what the framework
+  itself costs: closed-loop latency and open-loop throughput through chains of
+  pass-through processors, the time to start a pipeline, and many sessions
+  running at once. `make bench-compare` runs the same scenarios against the
+  Python reference framework, each side in its own container under the same
+  CPU and memory limits, and sets the two side by side with benchstat;
+  `make bench` runs jargo's own `testing.B` benchmarks. Results are never
+  committed. See [Benchmarks](docs/benchmarks.md) for the method and how to
+  read the output. The suite is a module of its own, so the library takes on
+  none of its dependencies, and CI vets, builds and lints it on every pull
+  request (`make bench-check`).
+
 - **Every transport reports its clients through events.** The WebRTC
   transport raises `transport.EventClientConnected` when the peer connection
   is established (again after a restart) and `transport.EventClientDisconnected`
