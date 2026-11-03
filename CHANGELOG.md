@@ -120,6 +120,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   page found with the parts of the answer it supports: at the end of the turn
   when the grounding came with the answer, at once when it came on its own.
 
+- **Gemini Live moves frames the way upstream does.** The session opens when
+  the service is set up, before the pipeline starts, and a failure to open it
+  is reported as a non-fatal error. Input audio travels on after it has been
+  sent to the session; the conversation and `LLMSetToolsFrame` stop at the
+  service. A tool registered as not canceled on interruption, on a model that
+  takes no non-blocking calls, is reported once as an error. **Breaking:**
+  input audio and the conversation frame changed how they travel past the
+  service.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

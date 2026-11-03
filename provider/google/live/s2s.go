@@ -116,6 +116,9 @@ type Service struct {
 	transcriptFlush *time.Timer
 	// warnedMimeType keeps the report of audio without a sample rate to one.
 	warnedMimeType sync.Once
+	// asyncToolWarned keeps the report of an async tool on a session that takes
+	// no non-blocking calls to one per session.
+	asyncToolWarned atomic.Bool
 
 	// vadDisabled says server-side voice activity detection is off, so the
 	// pipeline's own turn detection drives the session: the user's turns are
@@ -278,13 +281,19 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	}
 	if in, ok := f.(frames.InputAudioFrame); ok && dir == processor.Downstream {
 		audio := in.AudioData()
-		// The model consumes the audio, so it does not travel on. Only the
-		// processor bookkeeping runs: the LLM base would forward it.
+		// Only the processor bookkeeping runs here: the LLM base would forward
+		// the frame ahead of the audio being sent.
 		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
 			return err
 		}
 		s.sendAudio(ctx, audio.Audio, audio.SampleRate, audio.NumChannels)
-		return nil
+		return s.PushFrame(ctx, f, dir)
+	}
+	if _, ok := f.(*frames.LLMSetToolsFrame); ok {
+		// The Live API takes tools only at setup, and changing them while the
+		// session runs is not supported yet, so the frame stops here. Only the
+		// processor bookkeeping runs: the LLM base would forward it.
+		return s.Base.Base.ProcessFrame(ctx, f, dir)
 	}
 	if _, ok := f.(*frames.InterruptionFrame); ok {
 		// Before the interruption travels on, so whatever closes the response
@@ -295,20 +304,15 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		return err
 	}
 	switch fr := f.(type) {
-	case *frames.StartFrame:
-		if err := s.connect(ctx); err != nil {
-			s.PushError(ctx, "gemini live connect failed", err, true)
-		}
-		return nil
 	case *frames.LLMContextFrame:
-		// The conversation the session is part of: the toolset it advertises, and
-		// the tool results it has gained since it was last reported. The base
-		// holds a conversation back from a service generating continuously, so
-		// this is where it travels on.
+		// The conversation the session is part of: what it is seeded with, and
+		// the tool results it has gained since it was last reported. It stops
+		// here: the base holds a conversation back from a service generating
+		// continuously, and nothing past this service acts on it.
 		if fr.Context != nil {
 			s.handleContext(ctx, fr.Context, dir)
 		}
-		return s.PushFrame(ctx, f, dir)
+		return nil
 	case *frames.LLMMessagesAppendFrame:
 		s.handleMessagesAppend(ctx, fr)
 		return nil
@@ -335,6 +339,21 @@ func (s *Service) handleUserInput(ctx context.Context, f frames.Frame) {
 	case *frames.InputTextRawFrame:
 		s.sendUserText(ctx, fr.Text)
 	}
+}
+
+// Setup sets the service up and opens the session, ahead of the pipeline
+// starting, so it is ready sooner. A session that cannot be opened is reported
+// as an error.
+func (s *Service) Setup(ctx context.Context, setup processor.Setup) error {
+	if err := s.Base.Setup(ctx, setup); err != nil {
+		return err
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if err := s.connect(ctx); err != nil {
+		s.PushError(ctx, "gemini live: initialization error", err, false)
+	}
+	return nil
 }
 
 // Cleanup tears down the session and stops the read loop.
@@ -805,6 +824,33 @@ func (s *Service) AcceptsIntermediateFunctionCallResults() bool {
 	return s.supportsNonBlockingTools()
 }
 
+// reportUnsupportedAsyncTools reports, once, a tool registered as not canceled
+// on interruption on a session that takes no non-blocking calls: the
+// conversation freezes while the tool runs, so what the option asks for, the
+// conversation carrying on meanwhile, cannot happen.
+func (s *Service) reportUnsupportedAsyncTools(ctx context.Context, convo *frames.LLMContext) {
+	if s.supportsNonBlockingTools() || s.asyncToolWarned.Load() {
+		return
+	}
+	for _, m := range convo.Messages() {
+		if m.IsLLMSpecific() {
+			continue
+		}
+		if _, ok := frames.ParseAsyncToolMessage(m); !ok {
+			continue
+		}
+		if !s.asyncToolWarned.CompareAndSwap(false, true) {
+			return
+		}
+		slog.ErrorContext(ctx, "a tool not canceled on interruption is not properly supported by the current "+
+			"Gemini Live model; cancel it on interruption (the default), or use a non-realtime LLM service "+
+			"if the tool needs the conversation to carry on while it runs", "service", s.Name(), "model", s.model())
+		s.PushError(ctx, "cancel-on-interruption off is not properly supported by the current Gemini Live model",
+			nil, false)
+		return
+	}
+}
+
 // unnamedToolResult names a result whose call was never seen, as the
 // conversation names one.
 const unnamedToolResult = "tool_call_result"
@@ -1007,6 +1053,7 @@ func (s *Service) handleSendError(ctx context.Context, err error) {
 // Nothing prompts a reply afterwards: the Live API answers a tool response on
 // its own, unlike the sessions that have to be asked.
 func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
+	s.reportUnsupportedAsyncTools(ctx, convo)
 	for _, m := range convo.Messages() {
 		if async, ok := frames.ParseAsyncToolMessage(m); ok {
 			// The started marker opens a call the model already knows it is
@@ -1348,6 +1395,7 @@ func (s *Service) disconnect() {
 	s.toolNames = map[string]string{}
 	s.mu.Unlock()
 	s.readyForInput.Store(false)
+	s.asyncToolWarned.Store(false)
 	if cancel != nil {
 		cancel()
 	}

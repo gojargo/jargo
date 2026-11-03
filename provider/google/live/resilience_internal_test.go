@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 )
 
 // These tests are not ports of upstream tests: upstream has none for session
@@ -78,17 +80,26 @@ func (d *droppingSession) setup(i int) map[string]any {
 	return d.setups[i]
 }
 
-// startedOn runs a service against url in a pipeline, with sink after it.
-func startedOn(t *testing.T, url string) (*Service, *capture) {
+// startedOn sets up a service against url, which opens its session.
+func startedOn(t *testing.T, url string) (*Service, *capture, *capture) {
 	t.Helper()
-	s, sink, _ := newTestServiceBothWays(t)
-	s.cfg.BaseURL = url
-	s.connector = apiKeyConnector{baseURL: url, apiKey: "k"}
-	if err := s.connect(context.Background()); err != nil {
-		t.Fatalf("connect: %v", err)
+	s := New(Config{APIKey: "k", BaseURL: url})
+	sink, source := newCapture(), newCapture()
+	s.Link(sink)
+	source.Link(s)
+	ctx := context.Background()
+	setup := processor.Setup{Clock: clock.NewSystem()}
+	for _, p := range []processor.Processor{source, sink, s} {
+		if err := p.Setup(ctx, setup); err != nil {
+			t.Fatalf("setup %s: %v", p.Name(), err)
+		}
+		t.Cleanup(func() { _ = p.Cleanup(ctx) })
+	}
+	if err := s.Base.ProcessFrame(ctx, frames.NewStartFrame(), processor.Downstream); err != nil {
+		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(s.stop)
-	return s, sink
+	return s, sink, source
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -113,7 +124,7 @@ func TestTheSetupAsksForResumption(t *testing.T) {
 // gave, and the resumed session takes input at once.
 func TestALostSessionIsResumed(t *testing.T) {
 	srv := newDroppingSession(t, 1)
-	s, _ := startedOn(t, wsURL(&recordingSession{Server: srv.Server}))
+	s, _, _ := startedOn(t, wsURL(&recordingSession{Server: srv.Server}))
 
 	waitFor(t, "the session to be opened again", func() bool { return srv.setupCount() >= 2 })
 	resumption, _ := srv.setup(1)["sessionResumption"].(map[string]any)
@@ -127,13 +138,7 @@ func TestALostSessionIsResumed(t *testing.T) {
 // reopening and reports an error.
 func TestRepeatedLossesAreReportedAndNotRetried(t *testing.T) {
 	srv := newDroppingSession(t, 10)
-	s, _, source := newTestServiceBothWays(t)
-	url := wsURL(&recordingSession{Server: srv.Server})
-	s.connector = apiKeyConnector{baseURL: url, apiKey: "k"}
-	if err := s.connect(context.Background()); err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(s.stop)
+	_, _, source := startedOn(t, wsURL(&recordingSession{Server: srv.Server}))
 
 	waitFor(t, "the error to be reported", func() bool { return hasName(source.names(), "ErrorFrame") })
 	time.Sleep(200 * time.Millisecond)
@@ -145,7 +150,7 @@ func TestRepeatedLossesAreReportedAndNotRetried(t *testing.T) {
 // A session closed by the service itself is not reopened.
 func TestAStoppedServiceDoesNotReopen(t *testing.T) {
 	srv := newDroppingSession(t, 0)
-	s, _ := startedOn(t, wsURL(&recordingSession{Server: srv.Server}))
+	s, _, _ := startedOn(t, wsURL(&recordingSession{Server: srv.Server}))
 	waitFor(t, "the session to be ready", s.ready.Load)
 
 	s.stop()

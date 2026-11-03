@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -77,6 +80,10 @@ func newTestService(t *testing.T) (*Service, *capture) {
 func newTestServiceBothWays(t *testing.T) (*Service, *capture, *capture) {
 	t.Helper()
 	s := New(Config{APIKey: "k", Model: "m"})
+	// Setting the service up opens its session, so it gets one that is never
+	// acknowledged: these tests drive the message handler themselves.
+	silent := newSilentSession(t)
+	s.connector = apiKeyConnector{baseURL: "ws" + strings.TrimPrefix(silent.URL, "http"), apiKey: "k"}
 	sink := newCapture()
 	source := newCapture()
 	s.Link(sink)
@@ -90,8 +97,8 @@ func newTestServiceBothWays(t *testing.T) (*Service, *capture, *capture) {
 		}
 		t.Cleanup(func() { _ = p.Cleanup(ctx) })
 	}
-	// Started through the base only: the service's own ProcessFrame would open a
-	// session, and these tests drive the message handler instead.
+	// Started through the base only, so the frame handling these tests drive
+	// is the service's own.
 	if err := s.Base.ProcessFrame(ctx, frames.NewStartFrame(), processor.Downstream); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -350,8 +357,8 @@ func TestHandleSetupCompleteMarksReady(t *testing.T) {
 
 // TestFramesTravelOnce covers what the service forwards. The LLM base forwards
 // what it handles, so a service pushing again would deliver two of every frame,
-// and describe itself to the pipeline twice with them. The audio is the
-// exception: the model consumes it, so it must not travel on at all.
+// and describe itself to the pipeline twice with them. The input audio travels
+// on once, after the session has been sent it, as upstream forwards it.
 func TestFramesTravelOnce(t *testing.T) {
 	s, sink, _ := newTestServiceBothWays(t)
 	ctx := context.Background()
@@ -375,8 +382,8 @@ func TestFramesTravelOnce(t *testing.T) {
 	if ends != 1 {
 		t.Errorf("EndFrames forwarded = %d, want 1", ends)
 	}
-	if audio != 0 {
-		t.Errorf("input audio frames forwarded = %d, want none: the model consumes them", audio)
+	if audio != 1 {
+		t.Errorf("input audio frames forwarded = %d, want 1", audio)
 	}
 }
 
@@ -407,4 +414,24 @@ func (c *capture) frames() []frames.Frame {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]frames.Frame(nil), c.got...)
+}
+
+// newSilentSession is a Live server that accepts a session and never answers,
+// so a session opened on it is never ready.
+func newSilentSession(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		c, err := websocket.Accept(w, req, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
+		for {
+			if _, _, err := c.Read(req.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
