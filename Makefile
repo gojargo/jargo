@@ -149,12 +149,70 @@ bench-check: ## Vet and build the benchmark suite against the library in the tre
 	$(GO) -C $(BENCH_DIR) vet ./...
 	$(GO) -C $(BENCH_DIR) build ./...
 
+# The comparison runs each side in its own container, one after the other, both
+# pinned to the same CPUs (BENCH_CPUSET, a cpuset list such as 2,3 or 0-3) and
+# held to the same memory with no swap (BENCH_MEM). Pinning with --cpuset-cpus
+# rather than --cpus matters for latency: a CFS quota lets a container run on
+# every core in short bursts and then throttles it, which shows up as tail
+# latency that belongs to the quota, not the framework. GOMAXPROCS is set to the
+# number of CPUs in the set.
+#
+# The defaults suit a laptop: two cores and the quick profile. CI runs the full
+# profile (BENCH_PROFILE=full) on a cpuset sized for its runner.
+BENCH_CPUSET ?= 2,3
+BENCH_MEM ?= 1g
+BENCH_PROFILE ?= quick
+BENCH_COUNT ?= 6
+BENCH_RUN ?=
+BENCH_OUT ?= $(CURDIR)/$(BENCH_DIR)/out
+BENCH_PKGS ?= ./...
+BENCH_PROCS = $(shell echo '$(BENCH_CPUSET)' | tr ',' '\n' | \
+	awk -F- '{ n += (NF == 2 ? $$2 - $$1 + 1 : 1) } END { print n }')
+# The compile inside the jargo image is held to this many CPUs; empty lifts it.
+BENCH_BUILD_PROCS ?= 2
+BENCH_JARGO_IMAGE ?= jargo-bench-jargo:local
+BENCH_PIPECAT_IMAGE ?= jargo-bench-pipecat:local
+BENCH_DOCKER_RUN = docker run --rm --cpuset-cpus=$(BENCH_CPUSET) \
+	--memory=$(BENCH_MEM) --memory-swap=$(BENCH_MEM) \
+	-v "$(CURDIR)/$(BENCH_DIR)/scenarios:/scenarios:ro"
+BENCH_ARGS = run -count $(BENCH_COUNT) -run '$(BENCH_RUN)' /scenarios/$(BENCH_PROFILE).json
+
+# jargo's own testing.B benchmarks, throttled so they can run on a machine that
+# is in use. Compare two commits by running this on each and passing the two
+# files to `go -C benchmarks tool benchstat`.
+.PHONY: bench
+bench: ## Run jargo's own benchmarks into benchmarks/out/bench.txt
+	@mkdir -p $(BENCH_OUT)
+	nice -n 19 env GOMAXPROCS=2 $(GO) -C $(BENCH_DIR) test -run '^$$' -bench . \
+		-benchtime 1s -count 6 -p 1 $(BENCH_PKGS) | tee $(BENCH_OUT)/bench.txt
+
+.PHONY: bench-images
+bench-images: ## Build the two comparison images, jargo's and the Python side's
+	nice -n 19 docker build -f $(BENCH_DIR)/Dockerfile \
+		--build-arg FRAMEWORK_VERSION="$$(git describe --always --dirty 2>/dev/null || echo unknown)" \
+		--build-arg GOMAXPROCS=$(BENCH_BUILD_PROCS) \
+		-t $(BENCH_JARGO_IMAGE) .
+	nice -n 19 docker build -f $(BENCH_DIR)/pipecat/Dockerfile \
+		-t $(BENCH_PIPECAT_IMAGE) $(BENCH_DIR)/pipecat
+
+# The two sides run one after the other, never at once, so neither competes
+# with the other for the cpuset. benchstat then sets them side by side; the
+# keys that necessarily differ between them (the framework's version and the
+# runtime) are ignored so the two land in the same table.
+.PHONY: bench-compare
+bench-compare: bench-images ## Run the scenario on both sides under equal limits and compare
+	@mkdir -p $(BENCH_OUT)
+	@echo "==> jargo: cpuset $(BENCH_CPUSET), $(BENCH_MEM), GOMAXPROCS=$(BENCH_PROCS), profile $(BENCH_PROFILE)"
+	$(BENCH_DOCKER_RUN) -e GOMAXPROCS=$(BENCH_PROCS) $(BENCH_JARGO_IMAGE) $(BENCH_ARGS) \
+		| tee $(BENCH_OUT)/jargo.txt
+	@echo "==> pipecat: cpuset $(BENCH_CPUSET), $(BENCH_MEM), profile $(BENCH_PROFILE)"
+	$(BENCH_DOCKER_RUN) $(BENCH_PIPECAT_IMAGE) $(BENCH_ARGS) | tee $(BENCH_OUT)/pipecat.txt
+	$(GO) -C $(BENCH_DIR) tool benchstat -col framework -ignore framework_version,runtime \
+		$(BENCH_OUT)/jargo.txt $(BENCH_OUT)/pipecat.txt | tee $(BENCH_OUT)/compare.txt
+
 # The Python side's lock is resolved inside the image it is installed in, so it
 # holds the wheels Python 3.12 on Linux actually takes. The image is read from
 # the Dockerfile, which Dependabot keeps current, rather than pinned twice.
-# These caps keep the resolve off the cores a benchmark may be using.
-BENCH_CPUSET ?= 2,3
-BENCH_MEM ?= 1g
 PIP_TOOLS_VERSION ?= 7.6.2
 BENCH_PYTHON_IMAGE = $(shell sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' $(BENCH_DIR)/pipecat/Dockerfile)
 

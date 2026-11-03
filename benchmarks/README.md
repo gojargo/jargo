@@ -45,6 +45,27 @@ are skipped, so a run ends rather than hangs.
 | `pipecat/requirements.in`, `requirements.txt` | The pinned `pipecat-ai` release, and its lock with every package's hashes. |
 | `out/` | Results of local runs. Ignored by git: numbers are never committed. |
 
+## Comparing the two
+
+```sh
+make bench-compare                       # quick profile on CPUs 2,3 with 1g
+make bench-compare BENCH_PROFILE=full BENCH_CPUSET=0-3 BENCH_MEM=4g
+```
+
+This builds both images (`make bench-images`), runs jargo's and then Pipecat's
+side, one after the other, each with `--cpuset-cpus=$(BENCH_CPUSET)`,
+`--memory=$(BENCH_MEM)` and no swap (GOMAXPROCS is set to the size of the
+cpuset), and writes `out/jargo.txt`, `out/pipecat.txt` and the benchstat
+summary `out/compare.txt`. Other knobs: `BENCH_COUNT` (samples per
+sub-benchmark, 6 by default) and `BENCH_RUN` (a regexp selecting
+sub-benchmarks, on both sides).
+
+See [docs/benchmarks.md](../docs/benchmarks.md) for the method, the fairness
+rules and how to read the result.
+
+`make bench` runs the `testing.B` benchmarks on the host, throttled, into
+`out/bench.txt`.
+
 ## Running jargo's side
 
 ```sh
@@ -86,3 +107,15 @@ make bench-check
 
 CI runs this on every pull request, so a change to the library's API that breaks
 the suite fails there rather than the next time someone runs it.
+
+## Next steps
+
+Not measured yet, and planned:
+
+- **Session density with real-time audio.** Many sessions each fed 20 ms audio
+  frames in real time, reporting how many a set of CPUs holds before frames
+  start arriving late.
+- **End to end.** A full voice pipeline against a mock AI server (STT, LLM, TTS
+  with fixed, scripted latencies), driven by a load generator speaking the
+  protobuf WebSocket protocol, so the time from the end of user speech to the
+  first bot audio is measured through the transports as well.

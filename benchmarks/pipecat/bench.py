@@ -317,9 +317,38 @@ def cpu_model():
     return "unknown"
 
 
+def read_value(path):
+    """The trimmed content of a one-line file, or "unknown"."""
+    try:
+        with open(path) as f:
+            return f.read().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def cpus_allowed():
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("Cpus_allowed_list:"):
+                    return line.partition(":")[2].strip()
+    except OSError:
+        pass
+    return "unknown"
+
+
+def governor(allowed):
+    first = re.match(r"\d+", allowed)
+    if not first:
+        return "unknown"
+    return read_value(f"/sys/devices/system/cpu/cpu{first.group()}/cpufreq/scaling_governor")
+
+
 def config_lines(scenario_name):
     """The same keys jbench prints, read the same way."""
     arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), platform.machine())
+    allowed = cpus_allowed()
+    cgroup = "v2" if os.path.exists("/sys/fs/cgroup/cgroup.controllers") else "v1"
     return [
         ("framework", "pipecat"),
         ("framework_version", dist_version("pipecat-ai")),
@@ -328,6 +357,11 @@ def config_lines(scenario_name):
         ("goarch", arch),
         ("cpu", cpu_model()),
         ("cpus", str(len(os.sched_getaffinity(0)))),
+        ("cpus_allowed", allowed),
+        ("governor", governor(allowed)),
+        ("kernel", read_value("/proc/sys/kernel/osrelease")),
+        ("cgroup", cgroup),
+        ("memory_limit", read_value("/sys/fs/cgroup/memory.max")),
         ("scenario", scenario_name),
     ]
 

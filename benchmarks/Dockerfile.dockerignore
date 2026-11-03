@@ -1,0 +1,13 @@
+# Context for benchmarks/Dockerfile, which builds from the repository root. It
+# replaces the root .dockerignore, which leaves benchmarks/ out.
+.git
+.github
+.native
+*.md
+assets
+docs
+website
+examples
+benchmarks/out
+benchmarks/pipecat
+coverage.out
