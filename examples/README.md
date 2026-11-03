@@ -27,6 +27,23 @@ The numbering follows the getting-started series these are ported from. Steps
 03 to 05 show images and video, which jargo's transports do not carry, so they
 are not here.
 
+## Speech-to-speech
+
+One model hears the caller and speaks its answers. These need the ONNX Runtime
+too, for the user aggregator's default turn strategies.
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`realtime-azure`](realtime/realtime-azure) | Azure OpenAI Realtime, with tools and transcript logging. | Azure OpenAI |
+| [`realtime-grok`](realtime/realtime-grok) | xAI's Grok Voice Agent, with tools and transcript logging. | xAI |
+
+## Transports
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`transports-livekit`](transports/transports-livekit) | A voice agent that joins a LiveKit room on its own and takes text chat as speech. | LiveKit, Deepgram, OpenAI, Cartesia |
+| [`transports-small-webrtc`](transports/transports-small-webrtc) | A voice agent that builds its WebRTC transport itself, from the runner's connection. | Deepgram, OpenAI, Cartesia |
+
 ## No API keys
 
 | Example | What it shows |
