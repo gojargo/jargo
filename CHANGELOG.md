@@ -15,6 +15,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **The OpenAI Realtime API's messages as types.** A new
+  `provider/openai/realtime/events` package holds the session's properties
+  (`SessionProperties`: audio formats, transcription, server or semantic turn
+  detection, which can be turned off, noise reduction, voice, reasoning, token
+  bounds), the conversation items, and the events the client sends and the
+  server sends back, in the API's GA shape. An event of an undocumented type
+  parses to nothing.
+
 - **An LLM service can carry tools of its own.** A service whose generator
   implements `llm.ServiceToolsHolder` has the handlers of its configured tools
   registered when the conversation advertises no tools, and as soon as the
