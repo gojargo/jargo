@@ -83,6 +83,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `BotStoppedSpeakingFrame`, and the end of a turn is read from
   `turnComplete` rather than `generationComplete`.
 
+- **Gemini Live can be driven by the pipeline's own turn detection.** With
+  server-side voice activity detection disabled (`VADParams.Disabled`), the
+  user's turns are marked to the session with activity signals and audio is
+  sent only inside one; the audio before a turn starts is kept and replayed
+  inside it, sized from the pipeline's voice activity detection
+  (`SpeechControlParamsFrame`) or pinned with
+  `live.Config.UserAudioPrerollSecs`. The user's typed text
+  (`InputTextRawFrame`) goes in as realtime input. `SetAudioInputPaused` and
+  `live.Config.StartAudioPaused` stop user audio reaching the session.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

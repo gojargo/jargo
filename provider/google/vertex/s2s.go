@@ -37,6 +37,10 @@ type S2SConfig struct {
 	// InferenceOnContextInitialization says whether the model answers the
 	// conversation the session is seeded with; see live.Config.
 	InferenceOnContextInitialization *bool
+	// StartAudioPaused and UserAudioPrerollSecs are Gemini Live's; see
+	// live.Config.
+	StartAudioPaused     bool
+	UserAudioPrerollSecs *float64 `validate:"omitempty,min=0"`
 
 	// The settings below are Gemini Live's; see live.Config for each.
 
@@ -80,6 +84,8 @@ func NewS2S(cfg S2SConfig) *live.Service {
 		Tools:        cfg.Tools,
 
 		InferenceOnContextInitialization: cfg.InferenceOnContextInitialization,
+		StartAudioPaused:                 cfg.StartAudioPaused,
+		UserAudioPrerollSecs:             cfg.UserAudioPrerollSecs,
 
 		MaxTokens:                cfg.MaxTokens,
 		Temperature:              cfg.Temperature,

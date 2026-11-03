@@ -225,14 +225,14 @@ func TestAudioWaitsForTheSessionToBeSeeded(t *testing.T) {
 	srv := newRecordingSession(t)
 	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv)}))
 
-	s.sendAudio([]byte{1, 2, 3, 4}, 16000)
+	s.sendAudio([]byte{1, 2, 3, 4}, 16000, 1)
 	settle()
 	if n := len(srv.withKey("realtimeInput")); n != 0 {
 		t.Fatalf("sent %d realtime inputs before the session was seeded, want none", n)
 	}
 
 	s.handleContext(t.Context(), frames.NewLLMContext(""), processor.Downstream)
-	s.sendAudio([]byte{1, 2, 3, 4}, 16000)
+	s.sendAudio([]byte{1, 2, 3, 4}, 16000, 1)
 	settle()
 	if n := len(srv.withKey("realtimeInput")); n != 1 {
 		t.Errorf("sent %d realtime inputs, want the audio", n)

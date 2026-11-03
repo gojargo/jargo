@@ -104,7 +104,33 @@ type Service struct {
 	transcriptFlush *time.Timer
 	// warnedMimeType keeps the report of audio without a sample rate to one.
 	warnedMimeType sync.Once
+
+	// vadDisabled says server-side voice activity detection is off, so the
+	// pipeline's own turn detection drives the session: the user's turns are
+	// marked with activity signals, and audio is sent only inside one.
+	vadDisabled bool
+	// audioPaused stops user audio reaching the session.
+	audioPaused atomic.Bool
+	// userIsSpeaking says the user's turn is in progress. Guarded by mu.
+	userIsSpeaking bool
+	// preroll holds the most recent user audio outside a turn, while server-side
+	// detection is off, to replay once a turn starts, so the onset that started
+	// it is not clipped. Guarded by mu.
+	preroll     []byte
+	prerollRate int
+	// prerollSecs is how much audio preroll holds, and prerollPinned says
+	// Config.UserAudioPrerollSecs set it, so the pipeline's detection does not
+	// resize it. Guarded by mu.
+	prerollSecs   float64
+	prerollPinned bool
 }
+
+// The pre-roll windows, in seconds: the margin added to the start delay of the
+// pipeline's voice activity detection, and the window used until that is known.
+const (
+	prerollMarginSecs  = 0.1
+	defaultPrerollSecs = 0.5
+)
 
 // Connector customizes how the Live session is addressed and authorized, so a
 // deployment with a different endpoint or auth scheme (Vertex AI, which
@@ -168,18 +194,26 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 		cfg.Voice = defaultVoice
 	}
 	warnTextModality(cfg.Modalities)
+	prerollSecs := defaultPrerollSecs
+	if cfg.UserAudioPrerollSecs != nil {
+		prerollSecs = *cfg.UserAudioPrerollSecs
+	}
 	s := &Service{
-		cfg:         cfg,
-		live:        newSettings(cfg),
-		connector:   conn,
-		toolNames:   map[string]string{},
-		sentResults: map[string]bool{},
+		vadDisabled:   cfg.VAD != nil && cfg.VAD.Disabled != nil && *cfg.VAD.Disabled,
+		prerollSecs:   prerollSecs,
+		prerollPinned: cfg.UserAudioPrerollSecs != nil,
+		cfg:           cfg,
+		live:          newSettings(cfg),
+		connector:     conn,
+		toolNames:     map[string]string{},
+		sentResults:   map[string]bool{},
 	}
 	// A model service, so it keeps the tool registry and the machinery that runs
 	// what the model calls. It generates continuously rather than being run by a
 	// conversation arriving, which is what the option says.
 	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
 	s.SetModel(cfg.Model)
+	s.audioPaused.Store(cfg.StartAudioPaused)
 	return s
 }
 
@@ -201,7 +235,7 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		s.sendAudio(audio.Audio, audio.SampleRate)
+		s.sendAudio(audio.Audio, audio.SampleRate, audio.NumChannels)
 		return nil
 	}
 	if _, ok := f.(*frames.InterruptionFrame); ok {
@@ -230,14 +264,28 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 	case *frames.LLMMessagesAppendFrame:
 		s.handleMessagesAppend(ctx, fr)
 		return nil
-	case *frames.UserStoppedSpeakingFrame:
-		s.handleUserStoppedSpeaking(ctx)
-		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
 		return nil
 	default:
+		s.handleUserInput(ctx, f)
 		return nil
+	}
+}
+
+// handleUserInput takes what the pipeline reports about the user: their turn
+// starting and stopping, how its own voice activity detection is tuned, and
+// text they typed.
+func (s *Service) handleUserInput(ctx context.Context, f frames.Frame) {
+	switch fr := f.(type) {
+	case *frames.UserStartedSpeakingFrame:
+		s.handleUserStartedSpeaking(ctx)
+	case *frames.UserStoppedSpeakingFrame:
+		s.handleUserStoppedSpeaking(ctx)
+	case *frames.SpeechControlParamsFrame:
+		s.handleSpeechControlParams(fr)
+	case *frames.InputTextRawFrame:
+		s.sendUserText(ctx, fr.Text)
 	}
 }
 
@@ -632,9 +680,16 @@ func (s *Service) createInitialResponse(ctx context.Context, forReconnect bool) 
 // 2.5 session seeded without being asked to answer, completes the turn so the
 // model answers with what it was seeded with in mind.
 func (s *Service) handleUserStoppedSpeaking(ctx context.Context) {
+	s.mu.Lock()
+	s.userIsSpeaking = false
+	s.preroll = nil
+	s.mu.Unlock()
 	s.StartTTFBMetrics()
 	if !s.ready.Load() {
 		return
+	}
+	if s.vadDisabled && s.readyForInput.Load() {
+		s.sendRealtimeInput(ctx, map[string]any{"activityEnd": map[string]any{}})
 	}
 	s.mu.Lock()
 	needed := s.needsInitialTurnComplete
@@ -1021,11 +1076,37 @@ func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
 	}
 }
 
-// sendAudio streams a chunk of input PCM to the model once the session is ready.
-func (s *Service) sendAudio(pcm []byte, sampleRate int) {
-	if len(pcm) == 0 || !s.ready.Load() || !s.readyForInput.Load() {
+// sendAudio streams the user's audio to the session, once it is seeded and
+// unless audio is paused. With server-side detection on, it streams all of it,
+// since the detection needs the uninterrupted stream. With it off, it streams
+// only inside the user's turn, the session discarding anything outside one, and
+// keeps the most recent audio outside a turn as the pre-roll to replay when the
+// next one starts.
+func (s *Service) sendAudio(pcm []byte, sampleRate, channels int) {
+	if len(pcm) == 0 || s.audioPaused.Load() || !s.ready.Load() || !s.readyForInput.Load() {
 		return
 	}
+	s.mu.Lock()
+	inTurn := s.userIsSpeaking
+	if s.vadDisabled && !inTurn {
+		if channels < 1 {
+			channels = 1
+		}
+		keep := int(float64(sampleRate*channels*2) * s.prerollSecs)
+		s.preroll = append(s.preroll, pcm...)
+		if len(s.preroll) > keep {
+			s.preroll = s.preroll[len(s.preroll)-keep:]
+		}
+		s.prerollRate = sampleRate
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	s.sendAudioBlob(pcm, sampleRate)
+}
+
+// sendAudioBlob sends one chunk of PCM as realtime input.
+func (s *Service) sendAudioBlob(pcm []byte, sampleRate int) {
 	_ = s.send(map[string]any{
 		keyRealtimeInput: map[string]any{
 			"audio": map[string]any{
@@ -1035,6 +1116,68 @@ func (s *Service) sendAudio(pcm []byte, sampleRate int) {
 		},
 	})
 }
+
+// sendRealtimeInput sends one realtime input message.
+func (s *Service) sendRealtimeInput(ctx context.Context, input map[string]any) {
+	if err := s.send(map[string]any{keyRealtimeInput: input}); err != nil {
+		slog.ErrorContext(ctx, "sending realtime input failed", "service", s.Name(), "err", err)
+	}
+}
+
+// handleUserStartedSpeaking marks the user's turn started. With server-side
+// detection off, the session is told so, and the pre-roll is replayed inside
+// the turn: the speech that started it arrived, and was kept, before the turn
+// was detected.
+func (s *Service) handleUserStartedSpeaking(ctx context.Context) {
+	s.mu.Lock()
+	s.userIsSpeaking = true
+	s.mu.Unlock()
+	if !s.vadDisabled || !s.ready.Load() || !s.readyForInput.Load() {
+		return
+	}
+	s.sendRealtimeInput(ctx, map[string]any{"activityStart": map[string]any{}})
+	s.flushPreroll()
+}
+
+// flushPreroll sends the pre-roll, then clears it.
+func (s *Service) flushPreroll() {
+	s.mu.Lock()
+	pcm, rate := s.preroll, s.prerollRate
+	s.preroll = nil
+	s.mu.Unlock()
+	if len(pcm) == 0 || rate == 0 {
+		return
+	}
+	s.sendAudioBlob(pcm, rate)
+}
+
+// handleSpeechControlParams sizes the pre-roll from the start delay of the
+// pipeline's voice activity detection, which is the speech its turn detection
+// takes in before confirming a turn, plus a margin. A pre-roll pinned in the
+// Config is left as it is.
+func (s *Service) handleSpeechControlParams(f *frames.SpeechControlParamsFrame) {
+	if f.VADParams == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prerollPinned {
+		return
+	}
+	s.prerollSecs = f.VADParams.StartSecs + prerollMarginSecs
+}
+
+// sendUserText sends the user's text as realtime input, in step with their
+// audio. The API infers the end of the turn from the user's activity.
+func (s *Service) sendUserText(ctx context.Context, text string) {
+	if !s.ready.Load() || !s.readyForInput.Load() {
+		return
+	}
+	s.sendRealtimeInput(ctx, map[string]any{keyText: text})
+}
+
+// SetAudioInputPaused stops, or resumes, user audio reaching the session.
+func (s *Service) SetAudioInputPaused(paused bool) { s.audioPaused.Store(paused) }
 
 // send marshals v and writes it as a text frame, serializing concurrent writes.
 func (s *Service) send(v any) error {

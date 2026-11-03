@@ -116,6 +116,16 @@ type Config struct {
 	// conversation the session is seeded with as soon as it is: the bot speaks
 	// first. Nil means true. False seeds the session and waits for the user.
 	InferenceOnContextInitialization *bool
+	// StartAudioPaused starts the service with user audio paused; see
+	// Service.SetAudioInputPaused.
+	StartAudioPaused bool
+	// UserAudioPrerollSecs pins how much user audio is kept, while server-side
+	// voice activity detection is disabled, to replay once the user's turn
+	// starts so its onset is not clipped. Nil sizes it from the start delay of
+	// the pipeline's own voice activity detection plus a margin, and uses half
+	// a second until that is known. Pin it for a turn-start strategy that is
+	// not driven by voice activity.
+	UserAudioPrerollSecs *float64 `validate:"omitempty,min=0"`
 	// Thinking configures what the model may spend on reasoning, for a model
 	// that reasons. The Live thinking models require a level and refuse a setup
 	// without one, so an unset level defaults to the lowest they accept, which
