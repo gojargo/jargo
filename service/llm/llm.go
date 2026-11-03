@@ -436,8 +436,11 @@ type Base struct {
 
 	ttfbMu    sync.Mutex
 	ttfbStart time.Time
-	ttfb      time.Duration
-	hasTTFB   bool
+	// processingStart is when a continuously generating service started
+	// processing what it reports the time of. Guarded by ttfbMu.
+	processingStart time.Time
+	ttfb            time.Duration
+	hasTTFB         bool
 	// ttfat runs from the same request start as ttfb and ends at the first token
 	// of the answer the caller sees, so whatever the model streamed first falls
 	// between the two.

@@ -458,6 +458,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A continuously generating LLM service can report its timing. `llm.Base`
+  gains `ReportTTFBMetrics`, `StartProcessingMetrics`,
+  `StopProcessingMetrics` and `StopAllMetrics`, which report each measurement
+  as it completes, since such a service has no generation for the base to
+  time. Gemini Live now reports its time to first byte on the model's first
+  output; it measured it before but never reported it.
+
 - Nova Sonic no longer sends a canceled tool call's `CANCELLED` placeholder to
   the model as the call's result. It skips it, as it skips the `IN_PROGRESS`
   placeholder of a call still running.

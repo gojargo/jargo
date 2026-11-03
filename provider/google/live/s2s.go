@@ -1380,6 +1380,7 @@ func (s *Service) send(v any) error {
 
 // disconnect cancels the session, closes the socket, and waits for the read loop.
 func (s *Service) disconnect() {
+	s.StopAllMetrics(context.Background())
 	// Nothing is going to report this session finished now, so a turn held open
 	// waiting for it is dropped rather than left with a watch running on it.
 	s.discardHeldTurn()
@@ -1753,7 +1754,7 @@ func (s *Service) handleModelTurn(ctx context.Context, parts []part, grounding *
 		return
 	}
 	p := parts[0]
-	s.StopTTFBMetrics()
+	s.ReportTTFBMetrics(ctx)
 
 	if p.Text != "" {
 		s.startResponse(ctx, false)
