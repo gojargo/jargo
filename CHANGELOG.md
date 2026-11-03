@@ -100,6 +100,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reports an error instead of retrying. A failed send on a ready session is
   reported as an error.
 
+- **Gemini Live lets the model finish before the pipeline ends.** An
+  `EndFrame` arriving while the model is answering is held until the answer
+  finishes or is interrupted, or for thirty seconds at most, and then
+  processed.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

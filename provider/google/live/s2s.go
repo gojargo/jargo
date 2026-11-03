@@ -138,7 +138,18 @@ type Service struct {
 	// the count. Guarded by mu.
 	consecutiveFailures int
 	connectedAt         time.Time
+
+	// deferredEnd is an EndFrame held while the model finishes answering, so
+	// the pipeline does not end mid-reply; endDeferral releases it anyway if the
+	// reply never finishes. Guarded by mu.
+	deferredEnd *frames.EndFrame
+	endDeferral *time.Timer
 }
+
+// endFrameDeferral bounds how long an EndFrame is held for the model to finish
+// answering, so a reply that never completes does not leave the pipeline
+// unable to end.
+const endFrameDeferral = 30 * time.Second
 
 // A session lost maxConsecutiveFailures times in a row is not opened again; one
 // that stays up for stableConnection resets the count.
@@ -250,6 +261,9 @@ func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error 
 // ProcessFrame opens the session on StartFrame, forwards input audio to the
 // model, and tears the session down when the pipeline ends.
 func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if end, ok := f.(*frames.EndFrame); ok && s.deferEnd(ctx, end) {
+		return nil
+	}
 	if in, ok := f.(frames.InputAudioFrame); ok && dir == processor.Downstream {
 		audio := in.AudioData()
 		// The model consumes the audio, so it does not travel on. Only the
@@ -1312,6 +1326,8 @@ func (s *Service) disconnect() {
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
 	s.ready.Store(false)
 	s.stopTranscriptFlushLocked()
+	s.stopEndDeferralLocked()
+	s.deferredEnd = nil
 	// What was sent to the closed session is forgotten with it.
 	s.sentResults = map[string]bool{}
 	s.toolNames = map[string]string{}
@@ -1595,6 +1611,9 @@ func (s *Service) handleInterruption(ctx context.Context) {
 	if stopped && s.live.Modalities.Or(ModalityAudio) == ModalityAudio {
 		_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
 	}
+	if stopped {
+		s.releaseDeferredEnd(ctx)
+	}
 }
 
 // setBotRespondingLocked records whether the model is answering and reports
@@ -1685,6 +1704,51 @@ func (s *Service) handleTurnComplete(ctx context.Context) {
 		_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
 	}
 	_ = s.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+	s.releaseDeferredEnd(ctx)
+}
+
+// deferEnd holds an EndFrame while the model is answering, reporting whether it
+// did. The frame is processed once the answer finishes, or after
+// endFrameDeferral if it never does.
+func (s *Service) deferEnd(ctx context.Context, end *frames.EndFrame) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.botResponding {
+		return false
+	}
+	slog.DebugContext(ctx, "deferring the EndFrame until the bot's turn is finished", "service", s.Name())
+	s.deferredEnd = end
+	s.stopEndDeferralLocked()
+	s.endDeferral = time.AfterFunc(endFrameDeferral, func() {
+		slog.WarnContext(ctx, "the EndFrame deferral timed out without the turn completing; "+
+			"releasing the EndFrame", "service", s.Name(), "after", endFrameDeferral)
+		s.releaseDeferredEnd(ctx)
+	})
+	return true
+}
+
+// releaseDeferredEnd processes an EndFrame held while the model answered, by
+// queuing it to this service again.
+func (s *Service) releaseDeferredEnd(ctx context.Context) {
+	s.mu.Lock()
+	end := s.deferredEnd
+	s.deferredEnd = nil
+	s.stopEndDeferralLocked()
+	if end != nil {
+		s.botResponding = false
+	}
+	s.mu.Unlock()
+	if end != nil {
+		_ = s.QueueFrame(ctx, end, processor.Downstream)
+	}
+}
+
+// stopEndDeferralLocked stops the release timer. Call it with mu held.
+func (s *Service) stopEndDeferralLocked() {
+	if s.endDeferral != nil {
+		s.endDeferral.Stop()
+		s.endDeferral = nil
+	}
 }
 
 // transcriptFlushAfter is how long the user's words may go without completing a
