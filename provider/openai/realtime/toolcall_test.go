@@ -41,6 +41,10 @@ func newFakeSession(t *testing.T) *fakeSession {
 		}
 		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
 		ctx := req.Context()
+		// Like the server, report the session created first.
+		if c.Write(ctx, websocket.MessageText, []byte(`{"type":"session.created","event_id":"ev_0","session":{}}`)) != nil {
+			return
+		}
 
 		go func() {
 			for {
@@ -67,6 +71,10 @@ func newFakeSession(t *testing.T) *fakeSession {
 			f.mu.Lock()
 			f.received = append(f.received, msg)
 			f.mu.Unlock()
+			// Like the server, confirm a session update.
+			if msg["type"] == "session.update" {
+				f.toClient <- []byte(`{"type":"session.updated","event_id":"ev_u","session":{}}`)
+			}
 		}
 	}))
 	t.Cleanup(f.Close)

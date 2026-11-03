@@ -14,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -39,6 +40,11 @@ func newRecordingSession(t *testing.T) *recordingSession {
 			return
 		}
 		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
+		// Like the server, report the session created first.
+		if c.Write(req.Context(), websocket.MessageText,
+			[]byte(`{"type":"session.created","event_id":"ev_0","session":{}}`)) != nil {
+			return
+		}
 		for {
 			_, data, err := c.Read(req.Context())
 			if err != nil {
@@ -51,6 +57,11 @@ func newRecordingSession(t *testing.T) *recordingSession {
 			r.mu.Lock()
 			r.received = append(r.received, msg)
 			r.mu.Unlock()
+			// Like the server, confirm a session update.
+			if msg["type"] == "session.update" {
+				_ = c.Write(req.Context(), websocket.MessageText,
+					[]byte(`{"type":"session.updated","event_id":"ev_u","session":{}}`))
+			}
 		}
 	}))
 	t.Cleanup(r.Close)
@@ -103,21 +114,23 @@ func startedService(t *testing.T, srv *recordingSession) *Service {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the pipeline never started")
 	}
-	// The service dials once it has passed the StartFrame on.
+	// The session is ready once the server has confirmed its configuration.
 	for deadline := time.Now().Add(3 * time.Second); ; {
 		s.mu.Lock()
-		connected := s.conn != nil
+		ready := s.sessionReady
 		s.mu.Unlock()
-		if connected {
+		if ready {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the service never connected")
+			t.Fatal("the session never became ready")
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// A conversation already set up, as upstream's harness has it.
 	s.mu.Lock()
 	s.convo = frames.NewLLMContext("")
+	s.needsConversationSetup = false
 	s.openCalls["call_1"] = true
 	s.mu.Unlock()
 	return s
@@ -164,11 +177,11 @@ func (s *Service) pushContextUpstream(ctx context.Context) {
 }
 
 func (s *Service) responseCreated(ctx context.Context) {
-	s.handleResponseEvent(ctx, serverEvent{Type: "response.created"})
+	s.handleResponseEvent(ctx, &rtevents.ServerEvent{Type: "response.created"})
 }
 
 func (s *Service) responseDone(ctx context.Context) {
-	s.handleResponseEvent(ctx, serverEvent{Type: "response.done"})
+	s.handleResponseEvent(ctx, &rtevents.ServerEvent{Type: "response.done"})
 }
 
 func TestAnIntermediateResultGoesInBesideTheCall(t *testing.T) {
@@ -377,7 +390,7 @@ func TestNothingIsAppendedBeforeTheConversationIsSetUp(t *testing.T) {
 	srv := newRecordingSession(t)
 	s := startedService(t, srv)
 	s.mu.Lock()
-	s.convo = nil
+	s.needsConversationSetup = true
 	s.mu.Unlock()
 
 	s.handleMessagesAppend(t.Context(), appendFrame(true))

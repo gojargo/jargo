@@ -50,9 +50,15 @@ func newScriptedRealtime(t *testing.T, serverEvents []string) *scriptedRealtime 
 				f.mu.Lock()
 				f.sent = append(f.sent, msg)
 				f.mu.Unlock()
+				// Like the server, confirm a session update.
+				if msg["type"] == "session.update" {
+					_ = c.Write(ctx, websocket.MessageText, []byte(`{"type":"session.updated","event_id":"ev_u","session":{}}`))
+				}
 			}
 		}()
-		for _, e := range serverEvents {
+		// Like the server, report the session created first.
+		created := `{"type":"session.created","event_id":"ev_0","session":{}}`
+		for _, e := range append([]string{created}, serverEvents...) {
 			if c.Write(ctx, websocket.MessageText, []byte(e)) != nil {
 				return
 			}
@@ -136,7 +142,7 @@ func playingResponse(extra ...string) []string {
 	audio := base64.StdEncoding.EncodeToString(make([]byte, 48000)) // 1s at 24 kHz
 	return append([]string{
 		`{"type":"response.created"}`,
-		`{"type":"response.audio.delta","item_id":"item-audio","content_index":0,"delta":"` + audio + `"}`,
+		`{"type":"response.output_audio.delta","item_id":"item-audio","content_index":0,"delta":"` + audio + `"}`,
 	}, extra...)
 }
 

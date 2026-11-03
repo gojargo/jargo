@@ -9,26 +9,27 @@
 // audio at any other rate is resampled to it before it is sent, and the model's
 // audio comes out at 24 kHz.
 //
-// The model's server VAD drives turn-taking: on detected user speech the service
-// emits an InterruptionFrame (barge-in) so the output transport drops buffered
-// bot audio.
+// The session's properties (events.SessionProperties) configure it: its audio,
+// transcription, turn detection, voice and tools. By default the server detects
+// the user's turns; the service proposes each boundary it reports, and the
+// pipeline's turn strategies turn the proposals into turns and interruptions.
 //
-// Tools reach the model from the conversation, and the ones carrying a handler
-// are run when it calls them: the result goes back to the session and the model
-// is asked to speak the answer.
+// Tools reach the model from the conversation, or from the session properties
+// while the conversation advertises none, and the ones carrying a handler are
+// run when it calls them: the result goes back to the session and the model is
+// asked to speak the answer.
 package realtime
 
 import (
 	"errors"
 
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/provider/openai/realtime/events"
 )
 
 const (
-	defaultBaseURL            = "wss://api.openai.com/v1/realtime"
-	defaultModel              = "gpt-realtime-2.1"
-	defaultVoice              = "alloy"
-	defaultTranscriptionModel = "whisper-1"
+	defaultBaseURL = "wss://api.openai.com/v1/realtime"
+	defaultModel   = "gpt-realtime-2.1"
 	// sampleRate is the fixed rate of the Realtime API's pcm16 audio format.
 	sampleRate = 24000
 	// readLimit bounds a single inbound WebSocket message; audio deltas are far
@@ -62,15 +63,18 @@ type Config struct {
 	APIKey string `validate:"required"`
 	// BaseURL overrides the Realtime WebSocket endpoint.
 	BaseURL string
-	// Model is the realtime model id; empty uses a current default.
+	// Model is the realtime model id; empty uses a current default. It is
+	// chosen when the session opens and cannot change while it runs.
 	Model string
-	// Voice is the model voice (e.g. alloy, echo, shimmer); empty uses a default.
-	Voice string
-	// Instructions is the system prompt for the session.
+	// Instructions is the system instruction for the session.
 	Instructions string
-	// TranscriptionModel transcribes the user's audio; empty uses whisper-1. Set
-	// to "-" to disable input transcription.
-	TranscriptionModel string
+	// SessionProperties configure the session: its audio (format,
+	// transcription, turn detection, noise reduction, voice), modalities,
+	// tools, reasoning and the rest. A property left unset leaves the server's
+	// own, so the user's audio is not transcribed unless a transcription is
+	// configured. The model and instructions are kept in step with the fields
+	// above, which win.
+	SessionProperties events.SessionProperties
 }
 
 // Validate reports whether the configuration is usable.

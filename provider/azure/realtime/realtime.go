@@ -1,51 +1,53 @@
 // Package realtime is a speech-to-speech service built on Azure OpenAI's
 // Realtime API. It wraps the OpenAI Realtime service and changes only how the
-// session is addressed and authorized: Azure serves the model per resource and
-// deployment rather than by name, and authorizes with an api-key header rather
-// than a bearer token. Everything downstream of that behaves identically.
+// session is addressed and authorized: Azure serves the model as a deployment
+// of a resource, and authorizes with an api-key header or a Microsoft Entra ID
+// token. Everything downstream of that behaves identically.
+//
+// It reaches Azure over its v1 API surface, whose realtime protocol is the one
+// the OpenAI service speaks. An endpoint carrying a dated api-version serves the
+// superseded preview protocol, which rejects the session configuration and
+// names its events differently, so it is not usable here.
 package realtime
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/gojargo/jargo/internal/validate"
 	openairealtime "github.com/gojargo/jargo/provider/openai/realtime"
+	"github.com/gojargo/jargo/provider/openai/realtime/events"
 )
 
-// defaultAPIVersion is a recent Azure OpenAI Realtime API version.
-const defaultAPIVersion = "2025-04-01-preview"
-
-// realtimePath is the Realtime endpoint under an Azure OpenAI resource.
-const realtimePath = "/openai/realtime"
+// TokenProvider supplies a Microsoft Entra ID bearer token, for the
+// https://ai.azure.com/.default scope. It is called each time the session is
+// opened, so it can refresh the token.
+type TokenProvider func(ctx context.Context) (string, error)
 
 // Config configures the Azure OpenAI Realtime service.
 type Config struct {
-	// APIKey is the Azure OpenAI resource key, sent as the api-key header.
+	// BaseURL is the Realtime WebSocket endpoint on Azure's v1 API surface,
+	// e.g. wss://my-resource.openai.azure.com/openai/v1/realtime. The
+	// deployment is appended as ?model=<Model>. A URL that already carries a
+	// query string is used as it stands, leaving the deployment for it to name.
 	// Required.
-	APIKey string `validate:"required"`
-	// Endpoint is the Azure OpenAI resource endpoint, e.g.
-	// https://my-resource.openai.azure.com. It is dialed over WebSocket, so an
-	// https scheme is rewritten to wss. Required unless URL is set.
-	Endpoint string `validate:"required_without=URL"`
-	// Deployment is the realtime model deployment name. Required unless URL is
-	// set.
-	Deployment string `validate:"required_without=URL"`
-	// APIVersion is the Azure OpenAI REST API version; empty uses a recent one.
-	APIVersion string
-	// URL overrides the whole endpoint, for a deployment whose address is not
-	// derivable from the fields above. It must already carry the api-version and
-	// deployment query parameters.
-	URL string
-	// Voice is the model voice; empty uses a default.
-	Voice string
-	// Instructions is the system prompt for the session.
+	BaseURL string `validate:"required"`
+	// APIKey is the Azure OpenAI resource key, sent as the api-key header.
+	// Required unless TokenProvider is set.
+	APIKey string `validate:"required_without=TokenProvider"`
+	// TokenProvider supplies a Microsoft Entra ID bearer token, used instead of
+	// APIKey when set.
+	TokenProvider TokenProvider
+	// Model names the deployment.
+	Model string
+	// Instructions is the system instruction for the session.
 	Instructions string
-	// TranscriptionModel transcribes the user's audio; empty uses a default. Set
-	// it to "-" to disable input transcription.
-	TranscriptionModel string
+	// SessionProperties configure the session; see the OpenAI Realtime
+	// service's Config.
+	SessionProperties events.SessionProperties
 }
 
 // Validate reports whether the configuration is usable.
@@ -53,56 +55,48 @@ func (c Config) Validate() error { return validate.Struct(c) }
 
 // New builds an Azure OpenAI Realtime service.
 func New(cfg Config) *openairealtime.Service {
-	conn := &connector{
-		apiKey: cfg.APIKey,
-		url:    endpoint(cfg),
+	if strings.Contains(cfg.BaseURL, "api-version=") {
+		// The preview surface rejects the session configuration and names its
+		// events differently, so it fails partway through a connection that opens
+		// cleanly. It is said up front, where the URL that caused it is in view.
+		slog.Warn("BaseURL selects Azure's preview realtime API, whose protocol this service doesn't " +
+			"implement; use an /openai/v1/realtime URL instead")
 	}
-	return openairealtime.NewWithConnector("AzureRealtime", conn, openairealtime.Config{
-		Voice:              cfg.Voice,
-		Instructions:       cfg.Instructions,
-		TranscriptionModel: cfg.TranscriptionModel,
+	conn := &connector{baseURL: cfg.BaseURL, apiKey: cfg.APIKey, tokenProvider: cfg.TokenProvider}
+	svc := openairealtime.NewWithConnector("AzureRealtime", conn, openairealtime.Config{
+		Model:             cfg.Model,
+		Instructions:      cfg.Instructions,
+		SessionProperties: cfg.SessionProperties,
 	})
+	conn.model = svc.Model()
+	return svc
 }
 
-// endpoint builds the session URL. Azure selects the model with a deployment
-// query parameter rather than a model name, so nothing about the model travels
-// in the session configuration.
-func endpoint(cfg Config) string {
-	if cfg.URL != "" {
-		return cfg.URL
-	}
-	apiVersion := cfg.APIVersion
-	if apiVersion == "" {
-		apiVersion = defaultAPIVersion
-	}
-	q := url.Values{}
-	q.Set("api-version", apiVersion)
-	q.Set("deployment", cfg.Deployment)
-	return wsScheme(strings.TrimSuffix(cfg.Endpoint, "/")) + realtimePath + "?" + q.Encode()
-}
-
-// wsScheme rewrites an https endpoint to the WebSocket scheme, so the resource
-// endpoint can be copied from the Azure portal as-is.
-func wsScheme(endpoint string) string {
-	switch {
-	case strings.HasPrefix(endpoint, "https://"):
-		return "wss://" + strings.TrimPrefix(endpoint, "https://")
-	case strings.HasPrefix(endpoint, "http://"):
-		return "ws://" + strings.TrimPrefix(endpoint, "http://")
-	default:
-		return endpoint
-	}
-}
-
-// connector dials the Azure endpoint with an api-key header.
+// connector dials the Azure endpoint with an api-key header or an Entra ID
+// bearer token.
 type connector struct {
-	apiKey string
-	url    string
+	baseURL       string
+	model         string
+	apiKey        string
+	tokenProvider TokenProvider
 }
 
-// Endpoint returns the session URL and the header Azure authorizes with.
-func (c *connector) Endpoint(context.Context) (string, http.Header, error) {
+// Endpoint returns the session URL, naming the deployment unless the URL
+// already does, and the header Azure authorizes with.
+func (c *connector) Endpoint(ctx context.Context) (string, http.Header, error) {
+	endpoint := c.baseURL
+	if !strings.Contains(endpoint, "?") {
+		endpoint += "?model=" + url.QueryEscape(c.model)
+	}
 	header := http.Header{}
+	if c.tokenProvider != nil {
+		token, err := c.tokenProvider(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		header.Set("Authorization", "Bearer "+token)
+		return endpoint, header, nil
+	}
 	header.Set("api-key", c.apiKey)
-	return c.url, header, nil
+	return endpoint, header, nil
 }

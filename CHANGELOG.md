@@ -331,6 +331,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **OpenAI Realtime speaks the GA protocol and holds runtime settings.** The
+  service no longer sends the beta header; it configures the session once the
+  server reports it created, from `realtime.Settings`, whose
+  `SessionProperties` (in `realtime.Config.SessionProperties`) carry the
+  audio, transcription, turn detection, voice, modalities, tools and
+  reasoning. The model and instruction are kept in step with the properties.
+  An `LLMUpdateSettingsFrame` changing the properties or the instruction
+  reaches the session as a session update; reasoning is stripped for a model
+  that cannot take it, and a transcription prompt the realtime whisper model
+  does not take is dropped. The session waits for the server to confirm its
+  configuration; the first conversation is answered at once and seeds the
+  session (the history as items, then the conversation's instruction and
+  tools); a response is active from the moment it is asked for, and asks for
+  one modality. Tools configured in the properties stand in while the
+  conversation advertises none. `ResetConversation` and
+  `RetrieveConversationItem` are new. The session opens when the service is
+  set up. **Breaking:** `Config.Voice` and `Config.TranscriptionModel` are
+  gone (set them in the properties; the user's audio is no longer transcribed
+  unless a transcription is configured), the tool choice is no longer taken
+  from the conversation, and only the GA event names are read.
+- **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
+  takes the v1 `BaseURL` and names the deployment with `Model`, and can
+  authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.
+  A URL carrying a preview `api-version` is reported. **Breaking:**
+  `Endpoint`, `Deployment`, `APIVersion`, `URL`, `Voice` and
+  `TranscriptionModel` are gone.
+
 - **The OpenAI Realtime adapter settles a whole session.** Its
   `LLMInvocationParams` now returns the system instruction (the one given
   wins over the conversation's prompt), the items to seed the session with (a

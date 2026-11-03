@@ -2,8 +2,9 @@
 // speech-to-speech model: it hears the caller, speaks its answers, and calls
 // tools, with turn detection done server-side.
 //
-// AZURE_REALTIME_BASE_URL is the deployment's full Realtime WebSocket URL,
-// with its api-version and deployment query parameters.
+// AZURE_REALTIME_BASE_URL is the resource's Realtime WebSocket URL on Azure's
+// v1 API surface, e.g. wss://my-resource.openai.azure.com/openai/v1/realtime,
+// with ?model=<deployment> to name the deployment.
 //
 //	AZURE_REALTIME_API_KEY=… AZURE_REALTIME_BASE_URL=wss://… go run ./examples/realtime/realtime-azure
 //
@@ -22,6 +23,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/azure/realtime"
+	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport"
@@ -132,10 +134,24 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	slog.Info("Starting bot")
 
 	s2s := realtime.New(realtime.Config{
-		APIKey:             os.Getenv("AZURE_REALTIME_API_KEY"),
-		URL:                os.Getenv("AZURE_REALTIME_BASE_URL"),
-		Instructions:       systemInstruction,
-		TranscriptionModel: "whisper-1",
+		APIKey:       os.Getenv("AZURE_REALTIME_API_KEY"),
+		BaseURL:      os.Getenv("AZURE_REALTIME_BASE_URL"),
+		Instructions: systemInstruction,
+		SessionProperties: rtevents.SessionProperties{
+			Audio: &rtevents.AudioConfiguration{
+				Input: &rtevents.AudioInput{
+					Transcription: &rtevents.InputAudioTranscription{Model: "whisper-1"},
+					// Set the server's turn detection parameters. Not setting this at
+					// all leaves it on, at the server's defaults:
+					// TurnDetection: &rtevents.TurnDetection{Type: rtevents.TurnDetectionServerVAD, SilenceDurationMs: &ms},
+					// Or turn it off to have the pipeline's own turn detection drive the
+					// session:
+					// TurnDetection: rtevents.NoTurnDetection(),
+				},
+			},
+			// The tools could be given here rather than through the conversation:
+			// Tools: frames.ToolsSchema{Standard: tools()},
+		},
 	})
 
 	// A standard conversation; the realtime service converts it into the

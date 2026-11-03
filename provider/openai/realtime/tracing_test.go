@@ -3,6 +3,8 @@ package realtime
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/gojargo/jargo/provider/openai/realtime/events"
 )
 
 // TestResponseSpanRecordsTurn checks that a completed response is recorded with
@@ -20,7 +22,7 @@ func TestResponseSpanRecordsTurn(t *testing.T) {
 			]
 		}
 	}`
-	var ev serverEvent
+	var ev events.ServerEvent
 	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

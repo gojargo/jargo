@@ -31,9 +31,10 @@ func TestConfigValidate(t *testing.T) {
 func fakeRealtime(t *testing.T, audio []byte) *httptest.Server {
 	t.Helper()
 	serverEvents := []string{
+		`{"type":"session.created","event_id":"ev_0","session":{}}`,
 		`{"type":"response.created"}`,
-		`{"type":"response.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(audio) + `"}`,
-		`{"type":"response.audio_transcript.delta","delta":"hello"}`,
+		`{"type":"response.output_audio.delta","delta":"` + base64.StdEncoding.EncodeToString(audio) + `"}`,
+		`{"type":"response.output_audio_transcript.delta","delta":"hello"}`,
 		`{"type":"input_audio_buffer.speech_started"}`,
 		`{"type":"input_audio_buffer.speech_stopped"}`,
 		`{"type":"conversation.item.input_audio_transcription.completed","transcript":"hi there"}`,
@@ -48,8 +49,13 @@ func fakeRealtime(t *testing.T, audio []byte) *httptest.Server {
 		ctx := r.Context()
 		go func() {
 			for {
-				if _, _, err := c.Read(ctx); err != nil {
+				_, data, err := c.Read(ctx)
+				if err != nil {
 					return
+				}
+				// Like the server, confirm a session update.
+				if strings.Contains(string(data), `"session.update"`) {
+					_ = c.Write(ctx, websocket.MessageText, []byte(`{"type":"session.updated","event_id":"ev_u","session":{}}`))
 				}
 			}
 		}()

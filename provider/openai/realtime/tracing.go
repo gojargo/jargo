@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/telemetry/tracing"
 )
 
@@ -26,27 +27,24 @@ const instructionLimit = 500
 // traceSetup records a session configuration message: the properties the session
 // was given and the tools it advertises. It covers the configuration rather than
 // the connection, and closes once the message has been built.
-func (s *Service) traceSetup(ctx context.Context, session map[string]any) {
+func (s *Service) traceSetup(ctx context.Context, session events.SessionProperties) {
 	_, span := s.StartSpan(ctx, "llm_setup")
 	defer span.End()
 
-	properties := make(map[string]any, len(session))
-	for k, v := range session {
-		if k == "instructions" {
-			if text, ok := v.(string); ok {
-				properties[k] = truncate(text, instructionLimit)
-			}
-			continue
-		}
-		properties[k] = v
+	var properties map[string]any
+	if raw, err := json.Marshal(session); err == nil {
+		_ = json.Unmarshal(raw, &properties)
+	}
+	if text, ok := properties["instructions"].(string); ok {
+		properties["instructions"] = truncate(text, instructionLimit)
 	}
 
 	attrs := tracing.OpenAIRealtimeAttributes{
-		Model:             s.cfg.Model,
+		Model:             s.model(),
 		Operation:         "llm_setup",
 		SessionProperties: properties,
 	}
-	if tools, ok := session["tools"].([]map[string]any); ok && len(tools) > 0 {
+	if tools := session.WireTools; len(tools) > 0 {
 		attrs.Tools = toolNamesOf(tools)
 		if data, err := json.Marshal(tools); err == nil {
 			attrs.ToolsSerialized = string(data)
@@ -71,10 +69,10 @@ func toolNamesOf(tools []map[string]any) []string {
 // and what it asked to have called. It returns a context carrying the span so
 // the turn's usage lands on the operation that incurred it, and the function
 // that ends it.
-func (s *Service) traceResponse(ctx context.Context, r *responseObject) (context.Context, func()) {
+func (s *Service) traceResponse(ctx context.Context, r *events.Response) (context.Context, func()) {
 	spanCtx, span := s.StartSpan(ctx, "llm_response")
 	attrs := tracing.OpenAIRealtimeAttributes{
-		Model:     s.cfg.Model,
+		Model:     s.model(),
 		Operation: "llm_response",
 	}
 	if r != nil {
@@ -87,7 +85,7 @@ func (s *Service) traceResponse(ctx context.Context, r *responseObject) (context
 
 // responseAttrs reports how the turn ended and what it produced. A field the
 // response does not carry is left off rather than recorded as empty.
-func responseAttrs(r *responseObject) map[string]any {
+func responseAttrs(r *events.Response) map[string]any {
 	attrs := map[string]any{}
 	if r.Status != "" {
 		attrs["response.status"] = r.Status
@@ -109,7 +107,7 @@ func responseAttrs(r *responseObject) map[string]any {
 
 // assistantTranscript is everything the model said this turn, as the model
 // itself transcribed it. A native-audio turn has no text output otherwise.
-func assistantTranscript(output []responseOutputItem) string {
+func assistantTranscript(output []events.ConversationItem) string {
 	var parts []string
 	for _, item := range output {
 		if item.Role != "assistant" {
@@ -126,7 +124,7 @@ func assistantTranscript(output []responseOutputItem) string {
 
 // functionCallNames is the name of each function the model asked to have called,
 // in the order it asked, one entry per call.
-func functionCallNames(output []responseOutputItem) []string {
+func functionCallNames(output []events.ConversationItem) []string {
 	var names []string
 	for _, item := range output {
 		if item.Type == "function_call" {

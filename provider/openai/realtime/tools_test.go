@@ -22,7 +22,8 @@ import (
 // on what it actually sent.
 
 // recordingRealtime is a WebSocket server that records every message the client
-// sends and never speaks first.
+// sends. Like the server, it reports the session created and confirms each
+// session update.
 type recordingRealtime struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -39,6 +40,9 @@ func newRecordingRealtime(t *testing.T) *recordingRealtime {
 		}
 		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
 		ctx := req.Context()
+		if c.Write(ctx, websocket.MessageText, []byte(`{"type":"session.created","event_id":"ev_0","session":{}}`)) != nil {
+			return
+		}
 		for {
 			_, data, err := c.Read(ctx)
 			if err != nil {
@@ -51,14 +55,17 @@ func newRecordingRealtime(t *testing.T) *recordingRealtime {
 			r.mu.Lock()
 			r.sent = append(r.sent, msg)
 			r.mu.Unlock()
+			if msg["type"] == "session.update" {
+				_ = c.Write(ctx, websocket.MessageText, []byte(`{"type":"session.updated","event_id":"ev_u","session":{}}`))
+			}
 		}
 	}))
 	return r
 }
 
 // awaitSessionWithTools waits for a session.update whose session carries a tool
-// named want, returning the tool_choice it was sent with.
-func (r *recordingRealtime) awaitSessionWithTools(t *testing.T, want string) string {
+// named want.
+func (r *recordingRealtime) awaitSessionWithTools(t *testing.T, want string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -81,15 +88,13 @@ func (r *recordingRealtime) awaitSessionWithTools(t *testing.T, want string) str
 			for _, tool := range tools {
 				spec, ok := tool.(map[string]any)
 				if ok && spec["name"] == want {
-					choice, _ := session["tool_choice"].(string)
-					return choice
+					return
 				}
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("no session.update advertising tool %q was sent", want)
-	return ""
 }
 
 // runService starts the realtime service in a pipeline against srv.
@@ -107,22 +112,25 @@ func runService(t *testing.T, url string) (*pipeline.Worker, chan error) {
 
 // TestSetToolsFrameReachesTheSession is the regression test for the defect:
 // changing tools mid-conversation must produce a session.update, or the running
-// model keeps offering the old toolset.
+// model keeps offering the old toolset. The update carries the toolset the
+// conversation holds, which the aggregator has changed by then.
 func TestSetToolsFrameReachesTheSession(t *testing.T) {
 	srv := newRecordingRealtime(t)
 	defer srv.Close()
 
 	task, done := runService(t, srv.URL)
+	convo := frames.NewLLMContext("")
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
 
-	task.QueueFrame(frames.NewLLMSetToolsFrame([]frames.Tool{{
+	weather := []frames.Tool{{
 		Name:        "get_weather",
 		Description: "look up the weather",
 		Parameters:  json.RawMessage(`{"type":"object"}`),
-	}}))
+	}}
+	convo.SetTools(weather)
+	task.QueueFrame(frames.NewLLMSetToolsFrame(weather))
 
-	if choice := srv.awaitSessionWithTools(t, "get_weather"); choice != string(frames.ToolChoiceAuto) {
-		t.Errorf("tool_choice = %q, want auto by default", choice)
-	}
+	srv.awaitSessionWithTools(t, "get_weather")
 
 	task.StopWhenDone()
 	<-done
@@ -137,14 +145,11 @@ func TestContextFrameSeedsSessionTools(t *testing.T) {
 
 	convo := frames.NewLLMContext("system")
 	convo.SetTools([]frames.Tool{{Name: "book_table"}})
-	convo.SetToolChoice(frames.ToolChoiceRequired)
 
 	task, done := runService(t, srv.URL)
 	task.QueueFrame(frames.NewLLMContextFrame(convo))
 
-	if choice := srv.awaitSessionWithTools(t, "book_table"); choice != string(frames.ToolChoiceRequired) {
-		t.Errorf("tool_choice = %q, want required", choice)
-	}
+	srv.awaitSessionWithTools(t, "book_table")
 
 	task.StopWhenDone()
 	<-done

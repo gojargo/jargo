@@ -1,24 +1,28 @@
 package realtime
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/adapter"
 	realtimeadapter "github.com/gojargo/jargo/adapter/realtime"
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -37,12 +41,27 @@ type Service struct {
 	writeMu sync.Mutex
 	wg      sync.WaitGroup
 
-	// tools and toolChoice are the function-calling configuration currently
-	// advertised to the session. The model generates continuously, so it does not
-	// re-read the context between turns: every change must be pushed to it with a
-	// session.update. They are guarded by mu.
-	tools      frames.ToolsSchema
-	toolChoice frames.ToolChoice
+	// live is what the service holds of its configuration while the pipeline
+	// runs, which the session is configured from.
+	live *Settings
+	// reasoningWarned keeps the report of reasoning stripped for a model that
+	// cannot take it to one.
+	reasoningWarned atomic.Bool
+	// sessionReady says the server has applied the session's configuration.
+	// Guarded by mu.
+	sessionReady bool
+	// runWhenReady says a response was asked for before the session was ready,
+	// and is created once it is. Guarded by mu.
+	runWhenReady bool
+	// needsConversationSetup says the session has not been seeded with the
+	// conversation yet; the first response does it. Guarded by mu.
+	needsConversationSetup bool
+	// addedManually are the items this service put into the conversation,
+	// whose echo from the server is not the model's doing. Guarded by mu.
+	addedManually map[string]bool
+	// retrievals are the callers waiting on a conversation item, by item id.
+	// Guarded by mu.
+	retrievals map[string][]chan retrieval
 
 	// convo is the conversation this session is part of, as the pipeline last
 	// reported it. The model generates continuously and so never re-reads it,
@@ -77,6 +96,9 @@ type Service struct {
 	audioResp *audioResponse
 
 	connector Connector
+	// write, when set, stands in for the socket: tests capture what the service
+	// sends through it.
+	write func(v any) error
 
 	// inRS converts input audio to the session's fixed 24 kHz, and inRate and
 	// inChannels are the format it was built for: it is rebuilt when the input
@@ -119,7 +141,6 @@ type bearerConnector struct {
 func (c bearerConnector) Endpoint(context.Context) (string, http.Header, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.apiKey)
-	header.Set("OpenAI-Beta", "realtime=v1")
 	return c.baseURL + "?model=" + url.QueryEscape(c.model), header, nil
 }
 
@@ -145,24 +166,23 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	if cfg.Voice == "" {
-		cfg.Voice = defaultVoice
-	}
-	if cfg.TranscriptionModel == "" {
-		cfg.TranscriptionModel = defaultTranscriptionModel
-	}
 	s := &Service{
-		cfg:          cfg,
-		connector:    conn,
-		pendingCalls: map[string]string{},
-		sentResults:  map[string]bool{},
-		openCalls:    map[string]bool{},
+		cfg:                    cfg,
+		live:                   newSettings(cfg),
+		connector:              conn,
+		pendingCalls:           map[string]string{},
+		addedManually:          map[string]bool{},
+		retrievals:             map[string][]chan retrieval{},
+		needsConversationSetup: true,
+		sentResults:            map[string]bool{},
+		openCalls:              map[string]bool{},
 	}
 	// A model service, so it keeps the tool registry and the machinery that runs
 	// what the model calls. It generates continuously rather than being run by a
 	// conversation arriving, which is what the option says.
 	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
 	s.SetModel(cfg.Model)
+	s.SetSystemInstruction(cfg.Instructions)
 	return s
 }
 
@@ -186,18 +206,13 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		s.sendAudio(*audio)
+		s.sendAudio(ctx, *audio)
 		return nil
 	}
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
 	switch fr := f.(type) {
-	case *frames.StartFrame:
-		if err := s.connect(ctx); err != nil {
-			s.PushError(ctx, "openai realtime connect failed", err, true)
-		}
-		return nil
 	case *frames.InterruptionFrame:
 		// The session's own VAD cancels the response it heard the user speak
 		// over, so only its record of that response is put right here. A
@@ -220,15 +235,13 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		return nil
 	case *frames.LLMSetToolsFrame:
 		// The toolset changed mid-conversation. A text LLM would pick this up on
-		// its next run; this model is generating continuously, so tell it now.
-		// The handlers the new tools carry are registered here for the same
-		// reason: the base does that when a conversation arrives, and this
-		// service does not get one per turn.
-		s.syncTools(frames.ToolsSchema{Standard: fr.Tools}, s.currentToolChoice())
+		// its next run; this model is generating continuously, so the session is
+		// updated now, with the toolset the conversation holds. The handlers the
+		// new tools carry are registered here for the same reason: the base does
+		// that when a conversation arrives, and this service does not get one per
+		// turn.
 		s.SyncToolHandlers(ctx, frames.ToolsSchema{Standard: fr.Tools})
-		return nil
-	case *frames.LLMSetToolChoiceFrame:
-		s.syncTools(s.currentTools(), fr.ToolChoice)
+		s.sendSessionUpdate(ctx)
 		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()
@@ -245,8 +258,20 @@ func (s *Service) Cleanup(ctx context.Context) error {
 	return s.Base.Cleanup(ctx)
 }
 
-// connect dials the Realtime WebSocket, configures the session, and starts the
-// read loop.
+// Setup sets the service up and opens the session, ahead of the pipeline
+// starting. A session that cannot be opened is reported as an error.
+func (s *Service) Setup(ctx context.Context, setup processor.Setup) error {
+	if err := s.Base.Setup(ctx, setup); err != nil {
+		return err
+	}
+	if err := s.connect(ctx); err != nil {
+		s.PushError(ctx, "openai realtime: error connecting", err, false)
+	}
+	return nil
+}
+
+// connect dials the Realtime WebSocket and starts the read loop. The session is
+// configured once the server reports it created.
 func (s *Service) connect(ctx context.Context) error {
 	endpoint, header, err := s.connector.Endpoint(ctx)
 	if err != nil {
@@ -265,77 +290,41 @@ func (s *Service) connect(ctx context.Context) error {
 	s.cancel = cancel
 	s.mu.Unlock()
 
-	setup := s.sessionUpdate()
-	s.traceSetup(ctx, setup.Session)
-	if err := s.send(setup); err != nil {
-		cancel()
-		_ = conn.Close(websocket.StatusInternalError, "session update failed")
-		return err
-	}
-
 	s.wg.Add(1)
 	go s.readLoop(conn, connCtx)
 	return nil
 }
 
-// sessionUpdateMsg configures the session at the start of the connection.
-type sessionUpdateMsg struct {
-	Type    string         `json:"type"`
-	Session map[string]any `json:"session"`
-}
-
-// audioAppendMsg appends a chunk of input PCM to the model's input buffer.
-type audioAppendMsg struct {
-	Type  string `json:"type"`
-	Audio string `json:"audio"`
-}
-
-// sessionUpdate is the initial session configuration message.
-func (s *Service) sessionUpdate() sessionUpdateMsg {
-	session := map[string]any{
-		"modalities":          []string{keyAudio, "text"},
-		"voice":               s.cfg.Voice,
-		"input_audio_format":  "pcm16",
-		"output_audio_format": "pcm16",
-		"turn_detection":      map[string]any{keyType: "server_vad"},
-	}
-	if s.cfg.Instructions != "" {
-		session["instructions"] = s.cfg.Instructions
-	}
-	if s.cfg.TranscriptionModel != "-" {
-		session["input_audio_transcription"] = map[string]any{"model": s.cfg.TranscriptionModel}
-	}
-	maps.Copy(session, s.toolSession(s.currentTools(), s.currentToolChoice()))
-	return sessionUpdateMsg{Type: msgSessionUpdate, Session: session}
-}
-
-// toolSession renders the function-calling part of a session payload. It is
-// nil when the conversation advertises no tools.
-func (s *Service) toolSession(
-	schema frames.ToolsSchema, choice frames.ToolChoice,
-) map[string]any {
-	tools := s.adapter.ToProviderToolsFormat(s.adapter.WithBuiltins(schema))
-	if len(tools) == 0 {
-		return nil
-	}
-	if choice == "" {
-		choice = frames.ToolChoiceAuto
-	}
-	return map[string]any{"tools": tools, "tool_choice": string(choice)}
-}
-
-// currentTools returns the toolset currently advertised to the session.
-func (s *Service) currentTools() frames.ToolsSchema {
+// sendSessionUpdate configures the session from the properties the service
+// holds, on a copy so the stored ones are left as they are.
+//
+// With a conversation, the adapter settles the instruction and the tools: the
+// instruction the service holds wins over the conversation's prompt, and the
+// conversation's tools win over the configured ones, the built-in tools riding
+// along either way. Without one, the session carries the configured tools and
+// the built-in ones.
+func (s *Service) sendSessionUpdate(ctx context.Context) {
+	sp := s.sessionProperties().Copy()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.tools
-}
-
-// currentToolChoice returns the tool choice currently advertised to the session.
-func (s *Service) currentToolChoice() frames.ToolChoice {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.toolChoice
+	convo := s.convo
+	s.mu.Unlock()
+	if convo != nil {
+		params, err := s.adapter.LLMInvocationParams(convo, adapter.Options{
+			SystemInstruction: s.SystemInstruction(),
+			ServiceTools:      sp.Tools,
+		})
+		if err != nil {
+			s.PushError(ctx, "openai realtime: converting the conversation", err, false)
+			return
+		}
+		if params.SystemInstruction != "" {
+			sp.Instructions = params.SystemInstruction
+		}
+		sp.WireTools = params.Tools
+	} else {
+		sp.WireTools = s.adapter.ToProviderToolsFormat(s.adapter.WithBuiltins(sp.Tools))
+	}
+	s.sendEvent(ctx, events.NewSessionUpdateEvent(s.stripUnsupportedReasoning(sp)))
 }
 
 // PushFrame pushes a frame, delivering function call outcomes to the session on
@@ -371,17 +360,22 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 	s.convo = convo
 	s.mu.Unlock()
 
-	s.syncTools(convo.ToolsSchema(), convo.ToolChoice())
+	if first {
+		// The results already in the first conversation were produced before
+		// this session existed, so they are recorded as known rather than sent:
+		// the model never asked for them and has nothing to do with them.
+		s.processCompletedCalls(ctx, convo, false)
+		// The model answers at the first opportunity.
+		s.createResponse(ctx)
+		return
+	}
 
-	// The results already in the first conversation were produced before this
-	// session existed, so they are recorded as known rather than sent: the model
-	// never asked for them and has nothing to do with them. Results this service
-	// pushed are already sent; this catches any written into the conversation
-	// some other way.
-	s.processCompletedCalls(ctx, convo, !first)
+	// Results this service pushed are already sent; this catches any written
+	// into the conversation some other way.
+	s.processCompletedCalls(ctx, convo, true)
 
 	s.mu.Lock()
-	respond := !first && dir == processor.Upstream && s.resultsAwaitingResponse
+	respond := dir == processor.Upstream && s.resultsAwaitingResponse
 	s.mu.Unlock()
 	if respond {
 		s.createResponse(ctx)
@@ -394,11 +388,11 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 // Whether the model answers them is the aggregator's call: an append that asks
 // to run comes back to this service as the conversation the assistant
 // aggregator pushes upstream, which creates the response (see handleContext).
-// Before the session has a conversation, nothing is sent: the first
-// conversation carries what the aggregator recorded.
+// Before the session's conversation is set up, nothing is sent: the setup sends
+// the conversation, which the aggregator records the messages in.
 func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
 	s.mu.Lock()
-	ready := s.conn != nil && s.convo != nil
+	ready := s.sessionReady && !s.needsConversationSetup
 	s.mu.Unlock()
 	if !ready {
 		return
@@ -494,31 +488,18 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 	s.mu.Lock()
 	delete(s.openCalls, toolCallID)
 	s.mu.Unlock()
-	if err := s.send(map[string]any{
-		keyType: "conversation.item.create",
-		"item": map[string]any{
-			keyType:   "function_call_output",
-			"call_id": toolCallID,
-			"output":  result,
-		},
-	}); err != nil {
-		slog.ErrorContext(ctx, "sending a tool result failed", "service", s.Name(), "err", err)
-	}
+	item := events.NewConversationItem(events.ItemFunctionCallOutput)
+	item.CallID, item.Output = toolCallID, result
+	s.sendEvent(ctx, events.NewConversationItemCreateEvent(item))
 }
 
 // sendMessageItem puts text into the conversation for the model to take in,
 // without answering it.
 func (s *Service) sendMessageItem(ctx context.Context, text, role string) {
-	if err := s.send(map[string]any{
-		keyType: "conversation.item.create",
-		"item": map[string]any{
-			keyType:   "message",
-			"role":    role,
-			"content": []map[string]any{{keyType: "input_text", "text": text}},
-		},
-	}); err != nil {
-		slog.ErrorContext(ctx, "sending a message item failed", "service", s.Name(), "err", err)
-	}
+	item := events.NewConversationItem(events.ItemMessage)
+	item.Role = role
+	item.Content = []events.ItemContent{{Type: "input_text", Text: text}}
+	s.sendEvent(ctx, events.NewConversationItemCreateEvent(item))
 }
 
 // handleFunctionCallResult sends one function call result to the session as it
@@ -566,12 +547,20 @@ func (s *Service) handleFunctionCallCancel(ctx context.Context, f *frames.Functi
 	s.recordResult(f.ToolCallID)
 }
 
-// createResponse asks the model to speak. The session generates from audio on
-// its own, so this is for the turns nothing spoken prompted: the reply to a tool
-// result. The session refuses a second response while one is running, so one
-// asked for then is held until that one is done rather than lost to the error.
+// createResponse asks the model to respond.
+//
+// Before the session is ready, the response waits for it. The session refuses a
+// second response while one is running, so one asked for then is held until
+// that one is done rather than lost to the error. The first response seeds the
+// session with the conversation, and configures it again now that the
+// conversation's instruction and tools are known.
 func (s *Service) createResponse(ctx context.Context) {
 	s.mu.Lock()
+	if !s.sessionReady {
+		s.runWhenReady = true
+		s.mu.Unlock()
+		return
+	}
 	if s.responseActive {
 		s.responseCreateOwed = true
 		s.mu.Unlock()
@@ -579,78 +568,121 @@ func (s *Service) createResponse(ctx context.Context) {
 			"service", s.Name())
 		return
 	}
+	convo, setup := s.convo, s.needsConversationSetup
 	s.mu.Unlock()
-	if err := s.send(map[string]any{keyType: "response.create"}); err != nil {
-		slog.ErrorContext(ctx, "asking for a response failed", "service", s.Name(), "err", err)
+	if convo == nil {
+		return
 	}
-}
 
-// syncTools records the function-calling configuration and, when it differs from
-// what the live session was told, pushes a session.update so the continuously
-// running model picks the change up. It is a no-op before the session connects;
-// the initial sessionUpdate carries whatever has been recorded by then.
-func (s *Service) syncTools(schema frames.ToolsSchema, choice frames.ToolChoice) {
-	s.mu.Lock()
-	if sameTools(s.tools, schema) && s.toolChoice == choice {
+	if setup {
+		params, err := s.adapter.LLMInvocationParams(convo, adapter.Options{})
+		if err != nil {
+			s.PushError(ctx, "openai realtime: converting the conversation", err, false)
+			return
+		}
+		slog.DebugContext(ctx, "setting the realtime conversation up", "service", s.Name(),
+			"items", len(params.Messages))
+		for _, item := range params.Messages {
+			s.mu.Lock()
+			s.addedManually[item.ID] = true
+			s.mu.Unlock()
+			s.sendEvent(ctx, events.NewConversationItemCreateEvent(item))
+		}
+		s.sendSessionUpdate(ctx)
+		s.mu.Lock()
+		s.needsConversationSetup = false
 		s.mu.Unlock()
-		return
 	}
-	s.tools = schema
-	s.toolChoice = choice
-	live := s.conn != nil
-	s.mu.Unlock()
 
-	if !live {
-		return
+	// Active from the moment the request is sent, not from response.created: a
+	// second request in between would be refused.
+	s.mu.Lock()
+	s.responseActive = true
+	s.mu.Unlock()
+	slog.DebugContext(ctx, "creating a response", "service", s.Name())
+	s.sendEvent(ctx, events.NewResponseCreateEvent(&events.ResponseProperties{
+		OutputModalities: s.enabledModalities(),
+	}))
+}
+
+// enabledModalities is what a response is made of: audio when the session
+// responds with it, text otherwise. The API takes one modality per response.
+func (s *Service) enabledModalities() []events.Modality {
+	modalities := s.sessionProperties().OutputModalities
+	if len(modalities) == 0 || slices.Contains(modalities, events.ModalityAudio) {
+		return []events.Modality{events.ModalityAudio}
 	}
-	session := s.toolSession(schema, choice)
-	if session == nil {
-		// Clearing the toolset still has to reach the model.
-		session = map[string]any{"tools": []map[string]any{}}
+	return []events.Modality{events.ModalityText}
+}
+
+// ResetConversation starts the conversation over: the session is closed and
+// opened again, and seeded afresh from the conversation on the next response.
+// It must not be called from the read loop.
+func (s *Service) ResetConversation(ctx context.Context) error {
+	slog.DebugContext(ctx, "resetting the realtime conversation", "service", s.Name())
+	s.disconnect()
+	s.mu.Lock()
+	s.needsConversationSetup = true
+	convo := s.convo
+	s.mu.Unlock()
+	if convo != nil {
+		s.processCompletedCalls(ctx, convo, false)
 	}
-	// Reconfiguring a live session is the same operation as configuring it at the
-	// start, so it is recorded the same way: a trace shows every toolset the
-	// model was given, not just the one it opened with.
-	s.traceSetup(context.Background(), session)
-	if err := s.send(sessionUpdateMsg{Type: msgSessionUpdate, Session: session}); err != nil {
-		slog.Warn("openai realtime tool update failed", "err", err)
+	return s.connect(ctx)
+}
+
+// retrieval is the outcome of retrieving a conversation item.
+type retrieval struct {
+	item *events.ConversationItem
+	err  error
+}
+
+// errRetrieve reports an item the server could not retrieve.
+var errRetrieve = errors.New("openairealtime: retrieving a conversation item")
+
+// RetrieveConversationItem asks the server for a conversation item and waits
+// for it. Callers asking for the same item share one request.
+func (s *Service) RetrieveConversationItem(ctx context.Context, itemID string) (*events.ConversationItem, error) {
+	ch := make(chan retrieval, 1)
+	s.mu.Lock()
+	inFlight := len(s.retrievals[itemID]) > 0
+	s.retrievals[itemID] = append(s.retrievals[itemID], ch)
+	s.mu.Unlock()
+	if !inFlight {
+		ev := events.NewConversationItemRetrieveEvent(itemID)
+		// The id names the item, so a failed retrieval can be traced back to it.
+		ev.EventID = "rci_" + itemID
+		s.sendEvent(ctx, ev)
+	}
+	select {
+	case r := <-ch:
+		return r.item, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
-// sameTools reports whether two toolsets are equivalent for session purposes.
-// A custom tool is compared by identity of the slice it came in, which is enough
-// to tell a toolset that was replaced from one that was not.
-func sameTools(a, b frames.ToolsSchema) bool {
-	if len(a.Standard) != len(b.Standard) || len(a.Custom) != len(b.Custom) {
-		return false
+// resolveRetrieval hands a retrieved item, or the error retrieving it, to the
+// callers waiting on it.
+func (s *Service) resolveRetrieval(itemID string, r retrieval) {
+	s.mu.Lock()
+	waiting := s.retrievals[itemID]
+	delete(s.retrievals, itemID)
+	s.mu.Unlock()
+	for _, ch := range waiting {
+		ch <- r
 	}
-	for i := range a.Standard {
-		if a.Standard[i].Name != b.Standard[i].Name ||
-			a.Standard[i].Description != b.Standard[i].Description ||
-			!bytes.Equal(a.Standard[i].Parameters, b.Standard[i].Parameters) {
-			return false
-		}
-	}
-	for k, av := range a.Custom {
-		if len(b.Custom[k]) != len(av) {
-			return false
-		}
-	}
-	return true
 }
 
 // sendAudio appends a chunk of input PCM to the model's input buffer. The
 // session's input format is PCM at a fixed 24 kHz, so audio at any other rate
 // is resampled first.
-func (s *Service) sendAudio(audio frames.AudioRawData) {
+func (s *Service) sendAudio(ctx context.Context, audio frames.AudioRawData) {
 	pcm := s.toSessionRate(audio)
 	if len(pcm) == 0 {
 		return
 	}
-	_ = s.send(audioAppendMsg{
-		Type:  "input_audio_buffer.append",
-		Audio: base64.StdEncoding.EncodeToString(pcm),
-	})
+	s.sendEvent(ctx, events.NewInputAudioBufferAppendEvent(base64.StdEncoding.EncodeToString(pcm)))
 }
 
 // toSessionRate converts input audio to the session's rate.
@@ -687,6 +719,9 @@ func (s *Service) closeResampler() {
 
 // send marshals v and writes it as a text frame, serializing concurrent writes.
 func (s *Service) send(v any) error {
+	if s.write != nil {
+		return s.write(v)
+	}
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -702,6 +737,23 @@ func (s *Service) send(v any) error {
 	return conn.Write(connCtx, websocket.MessageText, data)
 }
 
+// sendEvent sends a client event. A send failing while the session is open is
+// rare between servers and hard to recover from cleanly, so it is reported as
+// an error rather than retried; one failing because the session is closed is
+// expected and ignored.
+func (s *Service) sendEvent(ctx context.Context, ev any) {
+	err := s.send(ev)
+	if err == nil || errors.Is(err, errNotConnected) {
+		return
+	}
+	s.mu.Lock()
+	open := s.conn != nil
+	s.mu.Unlock()
+	if open {
+		s.PushError(ctx, "openai realtime: error sending client event", err, false)
+	}
+}
+
 // disconnect cancels the session context, closes the socket, and waits for the
 // read loop to exit. It is safe to call more than once.
 func (s *Service) disconnect() {
@@ -714,6 +766,8 @@ func (s *Service) disconnect() {
 	s.openCalls = map[string]bool{}
 	s.responseActive = false
 	s.responseCreateOwed = false
+	s.sessionReady = false
+	s.sentResults = map[string]bool{}
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -724,100 +778,18 @@ func (s *Service) disconnect() {
 	s.wg.Wait()
 }
 
-// serverEvent is the subset of Realtime server events the service handles. The
-// delta field carries base64 PCM for audio events and plain text for transcript
-// events; response carries the token accounting on the response.done event.
-type serverEvent struct {
-	Type       string          `json:"type"`
-	Delta      string          `json:"delta"`
-	Transcript string          `json:"transcript"`
-	Response   *responseObject `json:"response"`
-	// ItemID and ContentIndex name the piece of the conversation an event is
-	// about, which an interruption needs to truncate the audio being played.
-	ItemID       string `json:"item_id"` //nolint:tagliatelle // OpenAI wire field
-	ContentIndex int    `json:"content_index"`
-	// CallID and Arguments carry a tool call the model finished naming. The
-	// arguments arrive as the JSON text the model wrote, not as a decoded
-	// object.
-	CallID    string `json:"call_id"` //nolint:tagliatelle // OpenAI wire field
-	Arguments string `json:"arguments"`
-	// Item is the conversation item an item event is about. A tool call is
-	// announced as one of these before its arguments are finished.
-	Item  *conversationItem `json:"item"`
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-// conversationItem is the subset of a conversation item we read: enough to
-// recognize a tool call and name it.
-type conversationItem struct {
-	Type   string `json:"type"`
-	Name   string `json:"name"`
-	CallID string `json:"call_id"` //nolint:tagliatelle // OpenAI wire field
-}
-
-// responseObject is the completed-response payload on a response.done event: the
-// token accounting the turn is billed on, and what the model produced.
-type responseObject struct {
-	ID     string               `json:"id"`
-	Status string               `json:"status"`
-	Usage  *usage               `json:"usage"`
-	Output []responseOutputItem `json:"output"`
-}
-
-// responseOutputItem is one item the model produced: a spoken message, or a
-// function it asked to have called.
-type responseOutputItem struct {
-	Type    string `json:"type"`
-	Role    string `json:"role"`
-	Name    string `json:"name"`
-	CallID  string `json:"call_id"` //nolint:tagliatelle // OpenAI wire field
-	Content []struct {
-		Transcript string `json:"transcript"`
-	} `json:"content"`
-}
-
-// usage is the Realtime API's per-response token accounting. The *_token_details
-// break the input and output token counts down by modality (text vs audio),
-// which is how a speech-to-speech model exposes its audio-token billing.
-type usage struct {
-	TotalTokens        int64         `json:"total_tokens"`         //nolint:tagliatelle // OpenAI wire field
-	InputTokens        int64         `json:"input_tokens"`         //nolint:tagliatelle // OpenAI wire field
-	OutputTokens       int64         `json:"output_tokens"`        //nolint:tagliatelle // OpenAI wire field
-	InputTokenDetails  *tokenDetails `json:"input_token_details"`  //nolint:tagliatelle // OpenAI wire field
-	OutputTokenDetails *tokenDetails `json:"output_token_details"` //nolint:tagliatelle // OpenAI wire field
-}
-
-// tokenDetails is the per-modality (and cache) breakdown of one direction's
-// token count. The counts are pointers because the model reports only the ones
-// that apply to it, and a breakdown it omits is not the same as one it reports
-// as zero.
-type tokenDetails struct {
-	TextTokens   *int64 `json:"text_tokens"`   //nolint:tagliatelle // OpenAI wire field
-	AudioTokens  *int64 `json:"audio_tokens"`  //nolint:tagliatelle // OpenAI wire field
-	CachedTokens *int64 `json:"cached_tokens"` //nolint:tagliatelle // OpenAI wire field
-	// CachedTokenDetails splits the cache-read count by modality. Cached audio
-	// is priced apart from cached text, so it is reported separately.
-	CachedTokenDetails *struct {
-		TextTokens  *int64 `json:"text_tokens"`  //nolint:tagliatelle // OpenAI wire field
-		AudioTokens *int64 `json:"audio_tokens"` //nolint:tagliatelle // OpenAI wire field
-	} `json:"cached_tokens_details"` //nolint:tagliatelle // OpenAI wire field
-}
-
 // tokenUsage converts the wire accounting into the framework's usage shape.
-func (u usage) tokenUsage() frames.LLMTokenUsage {
+func tokenUsage(u *events.Usage) frames.LLMTokenUsage {
 	out := frames.LLMTokenUsage{
-		PromptTokens:     u.InputTokens,
-		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.TotalTokens,
+		PromptTokens:     valueOr(u.InputTokens),
+		CompletionTokens: valueOr(u.OutputTokens),
+		TotalTokens:      valueOr(u.TotalTokens),
 	}
 	if d := u.InputTokenDetails; d != nil {
 		out.CacheReadTokens = d.CachedTokens
 		out.InputAudioTokens = d.AudioTokens
 		out.InputTextTokens = d.TextTokens
-		if c := d.CachedTokenDetails; c != nil {
+		if c := d.CachedTokensDetails; c != nil {
 			out.CacheReadAudioTokens = c.AudioTokens
 		}
 	}
@@ -826,6 +798,14 @@ func (u usage) tokenUsage() frames.LLMTokenUsage {
 		out.OutputTextTokens = d.TextTokens
 	}
 	return out
+}
+
+// valueOr is the count p points to, or zero when the server reported none.
+func valueOr(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 // readLoop reads server events until the connection is closed or canceled.
@@ -839,8 +819,12 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 			}
 			return
 		}
-		var ev serverEvent
-		if json.Unmarshal(data, &ev) != nil {
+		ev, err := events.ParseServerEvent(data)
+		if err != nil {
+			s.PushError(connCtx, "openai realtime: reading a server event", err, false)
+			return
+		}
+		if ev == nil {
 			continue
 		}
 		if stop := s.handleEvent(connCtx, ev); stop {
@@ -851,7 +835,7 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 
 // handleEvent maps a server event onto pipeline frames, reporting whether the
 // session has failed in a way that ends the read loop.
-func (s *Service) handleEvent(ctx context.Context, ev serverEvent) bool {
+func (s *Service) handleEvent(ctx context.Context, ev *events.ServerEvent) bool {
 	switch {
 	case s.handleTurnEvent(ctx, ev):
 		return false
@@ -859,8 +843,25 @@ func (s *Service) handleEvent(ctx context.Context, ev serverEvent) bool {
 		return false
 	case s.handleTranscriptEvent(ctx, ev):
 		return false
+	case ev.Type == "session.created":
+		// The session exists, so it is configured now.
+		s.traceSetup(ctx, s.sessionProperties())
+		s.sendSessionUpdate(ctx)
+	case ev.Type == "session.updated":
+		s.mu.Lock()
+		s.sessionReady = true
+		run := s.runWhenReady
+		s.runWhenReady = false
+		s.mu.Unlock()
+		if run {
+			s.createResponse(ctx)
+		}
+	case ev.Type == "conversation.item.retrieved":
+		if ev.Item != nil {
+			s.resolveRetrieval(ev.Item.ID, retrieval{item: ev.Item})
+		}
 	case ev.Type == "conversation.item.added":
-		s.trackToolCall(ev.Item)
+		s.handleItemAdded(ev.Item)
 	case ev.Type == "response.function_call_arguments.done":
 		s.runToolCall(ctx, ev)
 	case ev.Type == "error":
@@ -876,7 +877,7 @@ func (s *Service) handleEvent(ctx context.Context, ev serverEvent) bool {
 // service recommends decide the turn from it and broadcast the interruption,
 // which comes back here as the frame that truncates what the model believes it
 // said.
-func (s *Service) handleTurnEvent(ctx context.Context, ev serverEvent) bool {
+func (s *Service) handleTurnEvent(ctx context.Context, ev *events.ServerEvent) bool {
 	switch ev.Type {
 	case "input_audio_buffer.speech_started":
 		// The model has stopped speaking as far as the caller is concerned, so
@@ -899,7 +900,7 @@ func (s *Service) handleTurnEvent(ctx context.Context, ev serverEvent) bool {
 // audio, the transcript of that audio, the same answer in text from a session
 // answering in that modality, and the end of the response. It reports whether it
 // took the event.
-func (s *Service) handleResponseEvent(ctx context.Context, ev serverEvent) bool {
+func (s *Service) handleResponseEvent(ctx context.Context, ev *events.ServerEvent) bool {
 	switch ev.Type {
 	case "response.created":
 		// The response takes in everything delivered before it.
@@ -908,13 +909,12 @@ func (s *Service) handleResponseEvent(ctx context.Context, ev serverEvent) bool 
 		s.resultsAwaitingResponse = false
 		s.mu.Unlock()
 		_ = s.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Downstream)
-	case "response.audio.delta", "response.output_audio.delta":
+	case "response.output_audio.delta":
 		if pcm, err := base64.StdEncoding.DecodeString(ev.Delta); err == nil && len(pcm) > 0 {
 			s.trackAudio(ev, len(pcm))
 			_ = s.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, sampleRate, 1), processor.Downstream)
 		}
-	case "response.audio_transcript.delta", "response.output_audio_transcript.delta",
-		"response.text.delta", "response.output_text.delta":
+	case "response.output_audio_transcript.delta", "response.output_text.delta":
 		if ev.Delta != "" {
 			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(ev.Delta), processor.Downstream)
 		}
@@ -945,7 +945,7 @@ func (s *Service) handleResponseEvent(ctx context.Context, ev serverEvent) bool 
 //
 // A transcript travels upstream, where the user aggregator is: it is the user's
 // message, and everything downstream of this service is the reply to it.
-func (s *Service) handleTranscriptEvent(ctx context.Context, ev serverEvent) bool {
+func (s *Service) handleTranscriptEvent(ctx context.Context, ev *events.ServerEvent) bool {
 	switch ev.Type {
 	case "conversation.item.input_audio_transcription.delta":
 		if ev.Delta != "" {
@@ -968,7 +968,16 @@ func (s *Service) handleTranscriptEvent(ctx context.Context, ev serverEvent) boo
 // what was wanted. So is asking for a response while one is running. Both are
 // logged and the session carries on; anything else is reported and ends the read
 // loop, since the session cannot be relied on afterwards.
-func (s *Service) handleServerError(ctx context.Context, ev serverEvent) bool {
+func (s *Service) handleServerError(ctx context.Context, ev *events.ServerEvent) bool {
+	if ev.Error == nil {
+		return false
+	}
+	if ev.Error.Code == "item_retrieve_invalid_item_id" {
+		// A retrieval failed: the event id names the item.
+		_, itemID, _ := strings.Cut(ev.Error.EventID, "_")
+		s.resolveRetrieval(itemID, retrieval{err: fmt.Errorf("%w: %s", errRetrieve, ev.Error.Message)})
+		return false
+	}
 	switch ev.Error.Code {
 	case "response_cancel_not_active", "conversation_already_has_active_response":
 		slog.DebugContext(ctx, "the realtime session reported a benign error",
@@ -983,7 +992,7 @@ func (s *Service) handleServerError(ctx context.Context, ev serverEvent) bool {
 // trackAudio records the assistant audio item being played, so an interruption
 // can say how much of it the caller heard. The first chunk opens the item and
 // starts its clock; the rest only add to its size.
-func (s *Service) trackAudio(ev serverEvent, n int) {
+func (s *Service) trackAudio(ev *events.ServerEvent, n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.audioResp == nil {
@@ -1017,23 +1026,26 @@ func (s *Service) truncateAudioResponse(ctx context.Context) {
 	endMS := max(0, min(elapsedMS, audioMS))
 	slog.DebugContext(ctx, "truncating the interrupted response", "service", s.Name(),
 		"item_id", resp.itemID, "audio_ms", audioMS, "elapsed_ms", elapsedMS, "end_ms", endMS)
-	if err := s.send(map[string]any{
-		keyType:         "conversation.item.truncate",
-		"item_id":       resp.itemID,
-		"content_index": resp.contentIndex,
-		"audio_end_ms":  endMS,
-	}); err != nil {
-		// Non-fatal: the session has moved on either way, and only the model's
-		// own record of the turn is left overstated.
-		slog.WarnContext(ctx, "truncating the interrupted response failed",
-			"service", s.Name(), "err", err)
+	s.sendEvent(ctx, events.NewConversationItemTruncateEvent(resp.itemID, resp.contentIndex, int(endMS)))
+}
+
+// handleItemAdded takes an item added to the session's conversation: a tool
+// call the model announced is tracked, and the echo of an item this service put
+// in is recognized as such.
+func (s *Service) handleItemAdded(item *events.ConversationItem) {
+	if item == nil {
+		return
 	}
+	s.trackToolCall(item)
+	s.mu.Lock()
+	delete(s.addedManually, item.ID)
+	s.mu.Unlock()
 }
 
 // trackToolCall records a tool call the model has announced. The call is named
 // here and its arguments finish arriving later, so the name has to be kept until
 // they do.
-func (s *Service) trackToolCall(item *conversationItem) {
+func (s *Service) trackToolCall(item *events.ConversationItem) {
 	if item == nil || item.Type != "function_call" || item.CallID == "" {
 		return
 	}
@@ -1051,7 +1063,7 @@ func (s *Service) trackToolCall(item *conversationItem) {
 //
 // It runs on the arguments rather than waiting for the response to complete,
 // because a response that only calls a tool may never report itself done.
-func (s *Service) runToolCall(ctx context.Context, ev serverEvent) {
+func (s *Service) runToolCall(ctx context.Context, ev *events.ServerEvent) {
 	s.mu.Lock()
 	name, tracked := s.pendingCalls[ev.CallID]
 	// Taken out first, so a repeated event cannot run the same call twice.
@@ -1091,13 +1103,13 @@ func (s *Service) runToolCall(ctx context.Context, ev serverEvent) {
 // reportUsage records the completed turn and the token accounting it was billed
 // on. The accounting arrives with the response it belongs to, so the span
 // covering that response is opened here and the usage recorded against it.
-func (s *Service) reportUsage(ctx context.Context, ev serverEvent) {
+func (s *Service) reportUsage(ctx context.Context, ev *events.ServerEvent) {
 	spanCtx, end := s.traceResponse(ctx, ev.Response)
 	defer end()
 	if ev.Response == nil || ev.Response.Usage == nil || !s.UsageMetricsEnabled() {
 		return
 	}
-	_ = s.PushTokenUsage(spanCtx, ev.Response.Usage.tokenUsage())
+	_ = s.PushTokenUsage(spanCtx, tokenUsage(ev.Response.Usage))
 }
 
 // CanGenerateMetrics reports that this service times the conversation and reports
