@@ -91,7 +91,16 @@ func settle() { time.Sleep(100 * time.Millisecond) }
 // async tool delegate registered and the call call_1 to it.
 func startedService(t *testing.T, srv *recordingSession, model string) *Service {
 	t.Helper()
-	s := New(Config{APIKey: "k", Model: model, BaseURL: "ws" + strings.TrimPrefix(srv.URL, "http")})
+	return startedServiceBuilt(t, New(Config{APIKey: "k", Model: model, BaseURL: wsURL(srv)}))
+}
+
+// wsURL is the WebSocket address of srv.
+func wsURL(srv *recordingSession) string { return "ws" + strings.TrimPrefix(srv.URL, "http") }
+
+// startedServiceBuilt runs s in a pipeline until it has connected, with the
+// async tool delegate registered and the call call_1 to it.
+func startedServiceBuilt(t *testing.T, s *Service) *Service {
+	t.Helper()
 	s.RegisterFunction("delegate", func(context.Context, llm.FunctionCallParams) error { return nil },
 		llm.WithCancelOnInterruption(false))
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})

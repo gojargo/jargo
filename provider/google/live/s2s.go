@@ -88,6 +88,15 @@ type Connector interface {
 	ModelPath(model string) string
 }
 
+// NonBlockingToolsGate is an optional interface a Connector implements when the
+// deployment it dials does not follow the model on non-blocking tool calls. The
+// service then asks the connector, rather than the model, whether to declare
+// asynchronous tools NON_BLOCKING, attach scheduling hints to their results, and
+// take intermediate results.
+type NonBlockingToolsGate interface {
+	SupportsNonBlockingTools(model string) bool
+}
+
 // apiKeyConnector is the standard Gemini Live addressing: the api key travels in
 // the x-goog-api-key header and the model is named relative to the API.
 type apiKeyConnector struct {
@@ -257,7 +266,7 @@ func (s *Service) setup() map[string]any {
 	schema := s.tools
 	s.mu.Unlock()
 	if tools := s.adapter.ToProviderToolsFormat(schema); len(tools) > 0 {
-		if supportsNonBlockingTools(s.cfg.Model) {
+		if s.supportsNonBlockingTools() {
 			s.tagToolBehaviors(tools)
 		}
 		setup["tools"] = tools
@@ -324,7 +333,7 @@ func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.D
 // this follows the same model gating as the rest of the asynchronous tool
 // support.
 func (s *Service) AcceptsIntermediateFunctionCallResults() bool {
-	return supportsNonBlockingTools(s.cfg.Model)
+	return s.supportsNonBlockingTools()
 }
 
 // unnamedToolResult names a result whose call was never seen, as the
@@ -549,7 +558,7 @@ func (s *Service) sendToolResultAs(ctx context.Context, toolCallID, name, result
 	// mid-sentence; SILENT takes the result in without answering it. It means
 	// nothing for a call the model waited for, so it is gated the way the
 	// declaration was.
-	if supportsNonBlockingTools(s.cfg.Model) && s.FunctionIsAsync(name) {
+	if s.supportsNonBlockingTools() && s.FunctionIsAsync(name) {
 		scheduling := "WHEN_IDLE"
 		if !spoken {
 			scheduling = "SILENT"

@@ -301,3 +301,17 @@ func TestLLMRequestReachesVertex(t *testing.T) {
 		t.Errorf("Authorization = %q, want the bearer token", gotAuth)
 	}
 }
+
+// The Vertex Live endpoint takes no non-blocking tool calls, so the service
+// built for it does not offer them even on a model that would, the default
+// included. (Not a port of an upstream test.)
+func TestVertexLiveTakesNoNonBlockingToolCalls(t *testing.T) {
+	creds := Credentials{TokenSource: staticSource{"t"}}
+	s2s := NewS2S(S2SConfig{ProjectID: "p", Credentials: creds})
+	if s2s.AcceptsIntermediateFunctionCallResults() {
+		t.Error("the default Vertex Live model accepts intermediate results, want not")
+	}
+	if (&liveConnector{}).SupportsNonBlockingTools("gemini-3.8-live") {
+		t.Error("the Vertex connector reports non-blocking support")
+	}
+}

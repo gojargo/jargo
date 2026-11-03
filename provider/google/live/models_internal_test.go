@@ -51,8 +51,8 @@ func TestSupportsNonBlockingTools(t *testing.T) {
 		"gemini-4-live":                                 true,
 		"some-other-model":                              true,
 	} {
-		if got := supportsNonBlockingTools(model); got != want {
-			t.Errorf("supportsNonBlockingTools(%q) = %v, want %v", model, got, want)
+		if got := modelSupportsNonBlockingTools(model); got != want {
+			t.Errorf("modelSupportsNonBlockingTools(%q) = %v, want %v", model, got, want)
 		}
 	}
 }

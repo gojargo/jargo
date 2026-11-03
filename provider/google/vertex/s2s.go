@@ -52,6 +52,9 @@ func NewS2S(cfg S2SConfig) *live.Service {
 	})
 }
 
+// The Vertex endpoint decides non-blocking support itself, whatever the model.
+var _ live.NonBlockingToolsGate = (*liveConnector)(nil)
+
 // liveConnector dials the Vertex AI Live endpoint with an OAuth token.
 type liveConnector struct {
 	auth      *authorizer
@@ -74,6 +77,13 @@ func (c *liveConnector) Endpoint(ctx context.Context) (string, http.Header, erro
 	}
 	return host + liveBidiPath, header, nil
 }
+
+// SupportsNonBlockingTools reports false whatever the model: the Vertex AI Live
+// endpoint does not yet support non-blocking tool calls. Sending the NON_BLOCKING
+// behavior on a function declaration, or scheduling on a function response,
+// appears to break tool calling against Vertex. A tool registered as not
+// canceled on interruption therefore runs as a call the model waits for.
+func (*liveConnector) SupportsNonBlockingTools(string) bool { return false }
 
 // ModelPath names the model by project and location, as Vertex requires.
 func (c *liveConnector) ModelPath(model string) string {

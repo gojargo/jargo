@@ -273,6 +273,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Vertex AI Gemini Live no longer declares asynchronous tools NON_BLOCKING or
+  sends scheduling hints with their results, which break tool calling against
+  the Vertex endpoint. Its default model would otherwise have taken them. A
+  `live.Connector` can now decide this for its deployment by implementing
+  `live.NonBlockingToolsGate`; the Vertex connector reports no support.
+
 - A toolset that registers an asynchronous tool the model cannot cancel now
   brings the guidance on asynchronous results into the system instruction. The
   instruction was only recomposed when the cancel tools changed, so such a tool

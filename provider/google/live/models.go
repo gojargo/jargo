@@ -54,11 +54,11 @@ func expectsInteractionStatus(model string) bool {
 	return strings.Contains(model, "thinking") && atLeast(model, 3, 8)
 }
 
-// supportsNonBlockingTools reports whether the model takes a function
+// modelSupportsNonBlockingTools reports whether the model takes a function
 // declaration that says whether to wait for the call. The 3.x models before 3.8
 // do not; the thinking models require it. A model of no readable generation is
 // assumed to take it, as is anything before 3.
-func supportsNonBlockingTools(model string) bool {
+func modelSupportsNonBlockingTools(model string) bool {
 	major, _, known := version(model)
 	return !known || major < 3 || atLeast(model, 3, 8)
 }
@@ -103,4 +103,13 @@ func resolvedThinking(model string, cfg *gemini.ThinkingConfig) *gemini.Thinking
 		resolved.Level = lowestThinkingLevel
 	}
 	return &resolved
+}
+
+// supportsNonBlockingTools reports whether this session takes non-blocking tool
+// calls: the model decides, unless the connector's deployment overrides it.
+func (s *Service) supportsNonBlockingTools() bool {
+	if gate, ok := s.connector.(NonBlockingToolsGate); ok {
+		return gate.SupportsNonBlockingTools(s.cfg.Model)
+	}
+	return modelSupportsNonBlockingTools(s.cfg.Model)
 }
