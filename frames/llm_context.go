@@ -120,6 +120,11 @@ func (s ToolsSchema) clone() ToolsSchema {
 	return out
 }
 
+// Empty reports whether the schema advertises no tools at all: no standard
+// tools and no custom tools for any format. An empty schema is the same as no
+// toolset, which is what a conversation advertising nothing carries.
+func (s ToolsSchema) Empty() bool { return len(s.Standard) == 0 && len(s.Custom) == 0 }
+
 // CustomFor returns the custom tools written for the named format, or nil if
 // there are none.
 func (s ToolsSchema) CustomFor(t AdapterType) []any { return s.Custom[t] }

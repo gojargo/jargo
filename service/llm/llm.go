@@ -1189,8 +1189,7 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 			// The service is already generating, so a conversation arriving is
 			// not a prompt to run. It still settles what the model may call, and
 			// what the service does with it beyond that is the service's own.
-			b.SyncToolHandlers(ctx, fr.Context.Tools())
-			b.syncCancelTools()
+			b.SyncToolHandlers(ctx, fr.Context.ToolsSchema())
 			return nil
 		}
 		return b.run(ctx, fr.Context)
@@ -1201,6 +1200,10 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		b.handleUserTurnResponseCancel(ctx)
 		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
+		// A realtime service can run a tool it was configured with before the
+		// first conversation reaches it, so the handlers of its own tools are
+		// registered up front. Conversations re-sync them from then on.
+		b.SyncToolHandlers(ctx, frames.ToolsSchema{})
 		if err := b.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
@@ -1341,8 +1344,7 @@ func (b *Base) run(ctx context.Context, convo *frames.LLMContext) error {
 	// the one place tool changes take effect: pick up the handler any advertised
 	// tool carries, drop the ones for tools no longer advertised, and only then
 	// settle what this service adds on its own account.
-	b.SyncToolHandlers(ctx, convo.Tools())
-	b.syncCancelTools()
+	b.SyncToolHandlers(ctx, convo.ToolsSchema())
 	// The tools this service implements itself go out on every request, so they
 	// are the toolset when the conversation advertises none of its own.
 	if len(convo.Tools()) > 0 || b.hasBuiltinTools() {

@@ -182,7 +182,7 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		// reason: the base does that when a conversation arrives, and this
 		// service does not get one per turn.
 		s.syncTools(fr.Tools)
-		s.SyncToolHandlers(ctx, fr.Tools)
+		s.SyncToolHandlers(ctx, frames.ToolsSchema{Standard: fr.Tools})
 		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect()

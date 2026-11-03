@@ -77,7 +77,7 @@ func (s *scriptedLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 		return err
 	}
 	convo := fr.Context
-	s.SyncToolHandlers(ctx, convo.Tools())
+	s.SyncToolHandlers(ctx, convo.ToolsSchema())
 
 	s.mu.Lock()
 	s.contexts = append(s.contexts, convo.Messages())

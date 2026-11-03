@@ -15,6 +15,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **An LLM service can carry tools of its own.** A service whose generator
+  implements `llm.ServiceToolsHolder` has the handlers of its configured tools
+  registered when the conversation advertises no tools, and as soon as the
+  pipeline starts, so a tool the service was built with needs no separate
+  `RegisterFunction` call. A conversation advertising tools of its own, custom
+  ones included, takes precedence. `frames.ToolsSchema.Empty` reports a
+  toolset advertising nothing.
+
 - **Every transport reports its clients through events.** The WebRTC
   transport raises `transport.EventClientConnected` when the peer connection
   is established (again after a restart) and `transport.EventClientDisconnected`
@@ -175,6 +183,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **`SyncToolHandlers` takes a `frames.ToolsSchema`** rather than a slice of
+  standard tools, so a conversation advertising only custom tools counts as
+  advertising tools. It now also settles the cancel tools and recomposes the
+  system instruction itself, so callers no longer follow it with anything.
+  **Breaking** for anything calling it or implementing `pipeline.LLMMember`.
+
 - **A WebRTC connection runs its event handlers off Pion's callbacks**, one at
   a time and in order, so a handler that blocks no longer holds up the peer
   connection.
@@ -258,6 +272,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   directly and leave reconnecting to the receive loop.
 
 ### Fixed
+
+- A toolset that registers an asynchronous tool the model cannot cancel now
+  brings the guidance on asynchronous results into the system instruction. The
+  instruction was only recomposed when the cancel tools changed, so such a tool
+  ran without it.
 
 - The LiveKit transport reports participants already in the room when the
   bot joins. The room reports only who joins after the bot, so a participant

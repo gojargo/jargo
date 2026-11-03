@@ -75,7 +75,7 @@ func TestAReDeclaredToolRunsItsNewHandler(t *testing.T) {
 	}
 
 	// Still the toolset's, so withdrawing the tool takes the handler with it.
-	svc.SyncToolHandlers(context.Background(), nil)
+	svc.SyncToolHandlers(context.Background(), frames.ToolsSchema{})
 	if svc.HasFunction("get_weather") {
 		t.Error("a rebound handler should still be dropped when its tool is withdrawn")
 	}
@@ -97,10 +97,10 @@ func TestTheSameHandlerAdvertisedAgainIsLeftAlone(t *testing.T) {
 	svc := llm.New("FakeToolLLM", cancelOnInterruptionGen{})
 	h := markedHandler("A")
 	ctx := context.Background()
-	svc.SyncToolHandlers(ctx, []frames.Tool{weatherToolWith(h)})
+	svc.SyncToolHandlers(ctx, frames.ToolsSchema{Standard: []frames.Tool{weatherToolWith(h)}})
 
 	buf, restore := captureDebug(t)
-	svc.SyncToolHandlers(ctx, []frames.Tool{weatherToolWith(h)})
+	svc.SyncToolHandlers(ctx, frames.ToolsSchema{Standard: []frames.Tool{weatherToolWith(h)}})
 	restore()
 
 	if strings.Contains(buf.String(), "rebound") || strings.Contains(buf.String(), "registered the handler") {
@@ -115,8 +115,8 @@ func TestAHandRegisteredHandlerIsNotRebound(t *testing.T) {
 	ctx := context.Background()
 
 	buf, restore := captureDebug(t)
-	svc.SyncToolHandlers(ctx, []frames.Tool{weatherToolWith(markedHandler("carried"))})
-	svc.SyncToolHandlers(ctx, nil)
+	svc.SyncToolHandlers(ctx, frames.ToolsSchema{Standard: []frames.Tool{weatherToolWith(markedHandler("carried"))}})
+	svc.SyncToolHandlers(ctx, frames.ToolsSchema{})
 	restore()
 
 	if strings.Contains(buf.String(), "rebound") {

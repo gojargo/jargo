@@ -677,7 +677,7 @@ func (s *scriptedLLM) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 	if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	s.SyncToolHandlers(ctx, fr.Context.Tools())
+	s.SyncToolHandlers(ctx, fr.Context.ToolsSchema())
 	s.mu.Lock()
 	var run scriptedRun
 	if len(s.runs) > 0 {

@@ -96,7 +96,7 @@ func TestToolUseRunsTheHandler(t *testing.T) {
 		},
 	}})
 	s.convo = convo
-	s.SyncToolHandlers(context.Background(), convo.Tools())
+	s.SyncToolHandlers(context.Background(), convo.ToolsSchema())
 
 	s.handle(outputEvent{ToolUse: &toolUse{
 		ToolName:  "get_weather",

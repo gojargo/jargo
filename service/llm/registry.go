@@ -22,9 +22,24 @@ import (
 // It takes the toolset rather than the conversation carrying it, because a
 // service generating continuously is told about a new toolset on its own and
 // has no conversation to read it from.
-func (b *Base) SyncToolHandlers(ctx context.Context, tools []frames.Tool) {
-	advertised := make(map[string]bool, len(tools))
-	for _, t := range tools {
+//
+// When the toolset advertises nothing, the handlers come from the tools the
+// service was configured with instead, if it implements [ServiceToolsHolder].
+// Only standard tools carry handlers, so custom tools written in a provider's
+// own format contribute nothing to register.
+//
+// It ends by settling what the registry decides: the cancel tools, and the
+// system instruction, whose guidance on asynchronous tools and on canceling
+// them depends on which handlers are registered.
+func (b *Base) SyncToolHandlers(ctx context.Context, tools frames.ToolsSchema) {
+	if tools.Empty() {
+		// No tools advertised? Fall back to the service's own configured tools.
+		if holder, ok := b.gen.(ServiceToolsHolder); ok {
+			tools = holder.ServiceTools()
+		}
+	}
+	advertised := make(map[string]bool, len(tools.Standard))
+	for _, t := range tools.Standard {
 		if t.Handler == nil {
 			// Advertise-only. Something must have registered a handler by hand, or
 			// the call falls through to the missing-function answer.
@@ -35,6 +50,30 @@ func (b *Base) SyncToolHandlers(ctx context.Context, tools []frames.Tool) {
 	}
 	b.dropUnadvertisedToolHandlers(advertised)
 	b.forgetUnadvertisedRemovals(advertised)
+
+	// What the registry holds decides both whether the asynchronous-tool
+	// guidance belongs in the system instruction and whether the cancel tools
+	// do, and it is settled only here: tools advertised on a conversation
+	// register during this sync, and a conversation can advertise nothing.
+	b.syncCancelTools()
+	b.composeSystemInstruction()
+}
+
+// ServiceToolsHolder is an optional interface a Generator implements when it
+// accepts tools configured on the service itself, as an alternative to
+// advertising them through the conversation. The realtime services do: their
+// tools can be given when the service is built.
+//
+// ServiceTools returns those tools as configured, or an empty schema when there
+// are none. They are what [Base.SyncToolHandlers] registers handlers from when
+// the conversation advertises no tools, so a handler carried by a configured
+// tool needs no separate RegisterFunction call.
+//
+// A service implementing it must follow the same preference wherever it settles
+// the tools a session carries: the conversation's own tools when it advertises
+// any, and the configured ones otherwise.
+type ServiceToolsHolder interface {
+	ServiceTools() frames.ToolsSchema
 }
 
 // forgetUnadvertisedRemovals stops holding a removal against a tool the toolset
