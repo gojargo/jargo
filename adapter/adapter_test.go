@@ -113,3 +113,39 @@ func TestConversionErrorCarriesItsCause(t *testing.T) {
 type testError struct{}
 
 func (testError) Error() string { return "boom" }
+
+// TestRealtimeSessionTools checks the toolset a realtime session settles on:
+// the conversation's own tools win over the service's configured ones, the
+// configured ones stand in when the conversation advertises none, and the
+// built-in tools ride along either way, alone when there is neither.
+func TestRealtimeSessionTools(t *testing.T) {
+	var b adapter.Base
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "delegate"}})
+	fromContext := frames.ToolsSchema{Standard: []frames.Tool{{Name: "from_context"}}}
+	service := frames.ToolsSchema{Standard: []frames.Tool{{Name: "sample"}}}
+
+	wantNames(t, b.RealtimeSessionTools(fromContext, service).Standard, "from_context", "delegate")
+	wantNames(t, b.RealtimeSessionTools(frames.ToolsSchema{}, service).Standard, "sample", "delegate")
+	wantNames(t, b.RealtimeSessionTools(frames.ToolsSchema{}, frames.ToolsSchema{}).Standard, "delegate")
+
+	var bare adapter.Base
+	if got := bare.RealtimeSessionTools(frames.ToolsSchema{}, frames.ToolsSchema{}); !got.Empty() {
+		t.Errorf("tools = %v, want none", got)
+	}
+}
+
+// TestRealtimeSessionToolsCountsCustomToolsAsTheConversations checks a
+// conversation advertising only tools in a provider's own format still
+// advertises tools, so the configured ones are not used.
+func TestRealtimeSessionToolsCountsCustomToolsAsTheConversations(t *testing.T) {
+	var b adapter.Base
+	custom := frames.ToolsSchema{Custom: map[frames.AdapterType][]any{
+		frames.AdapterTypeGemini: {map[string]any{"google_search": map[string]any{}}},
+	}}
+	service := frames.ToolsSchema{Standard: []frames.Tool{{Name: "sample"}}}
+
+	got := b.RealtimeSessionTools(custom, service)
+	if len(got.Standard) != 0 || len(got.CustomFor(frames.AdapterTypeGemini)) != 1 {
+		t.Errorf("tools = %+v, want the conversation's custom tool alone", got)
+	}
+}

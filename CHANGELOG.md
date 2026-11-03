@@ -23,6 +23,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   ones included, takes precedence. `frames.ToolsSchema.Empty` reports a
   toolset advertising nothing.
 
+- **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
+  session carries: the conversation's own tools when it advertises any, else
+  the service's configured ones, with the built-in tools riding along.
+
 - **Every transport reports its clients through events.** The WebRTC
   transport raises `transport.EventClientConnected` when the peer connection
   is established (again after a restart) and `transport.EventClientDisconnected`

@@ -239,6 +239,24 @@ func (b *Base) WithBuiltins(schema frames.ToolsSchema) frames.ToolsSchema {
 	return out
 }
 
+// RealtimeSessionTools returns the toolset a realtime session carries: the
+// conversation's own tools when it advertises any, and otherwise the tools the
+// service was configured with. The built-in tools ride along with whichever set
+// is in use, and are the set when there is neither. An adapter renders the
+// result in its provider's format; an empty schema means the session carries no
+// tools at all.
+//
+// A realtime session takes its tools once, at setup or on a session update,
+// rather than on every request, so the service settles them here instead of
+// reading them from each conversation the way a request-based service does.
+func (b *Base) RealtimeSessionTools(contextTools, serviceTools frames.ToolsSchema) frames.ToolsSchema {
+	own := contextTools
+	if own.Empty() {
+		own = serviceTools
+	}
+	return b.WithBuiltins(own)
+}
+
 // CustomToolsFor reads the custom tools written for one format back as the tool
 // type that adapter defines, reporting a conversion failure for anything else.
 func CustomToolsFor[T any](schema frames.ToolsSchema, t frames.AdapterType) ([]T, error) {
