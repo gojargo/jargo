@@ -105,6 +105,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   finishes or is interrupted, or for thirty seconds at most, and then
   processed.
 
+- **Gemini Live traces its tool calls and accounts for every token.** The
+  session's spans are its setup, recorded once the server acknowledges it with
+  the effective instruction and the language, each completed turn with the
+  turn's output and usage, each tool call (`llm_tool_call`) and tool result
+  (`llm_tool_result`), and the user's speech as an `stt` span. Usage counts
+  the tool results fed back to the model as input and the reasoning as output,
+  computes the total, and leaves the cache count unreported when nothing was
+  read from the cache.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

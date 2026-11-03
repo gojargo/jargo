@@ -52,7 +52,7 @@ func TestAnEndFrameWaitsForTheTurnToFinish(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	s.handleTurnComplete(t.Context())
+	s.handleTurnComplete(t.Context(), nil)
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

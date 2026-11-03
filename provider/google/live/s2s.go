@@ -97,6 +97,12 @@ type Service struct {
 	// botText is the text the model has answered with so far, in the text
 	// modality; a response with none was spoken. Guarded by mu.
 	botText string
+	// spokenText is the transcript of what the model has said so far in the
+	// turn, which the turn's span reports. Guarded by mu.
+	spokenText string
+	// heldMessage is the message that completed a held turn, which closes it
+	// when the hold ends. Guarded by mu.
+	heldMessage *serverMessage
 	// userTranscript holds the user's words until they make up a sentence, or
 	// go quiet for transcriptFlushAfter. Guarded by mu.
 	userTranscript string
@@ -359,7 +365,6 @@ func (s *Service) connect(ctx context.Context) error {
 	s.cancel = cancel
 	s.mu.Unlock()
 
-	s.traceSetup(ctx)
 	setup, err := s.setup()
 	if err != nil {
 		cancel()
@@ -652,6 +657,7 @@ func (s *Service) inferenceOnContextInitialization() bool {
 // seeded again, so the new session has what the old one had before it takes
 // input. Otherwise the conversation has yet to arrive, and seeding waits for it.
 func (s *Service) handleSessionReady(ctx context.Context) {
+	s.traceSetup(ctx)
 	s.mu.Lock()
 	s.ready.Store(true)
 	s.connectedAt = time.Now()
@@ -1059,12 +1065,14 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 // result; it is told to stay silent otherwise, so the result is context it can
 // draw on if the conversation turns that way.
 func (s *Service) sendToolResultAs(ctx context.Context, toolCallID, name, result string, final, spoken bool) {
+	payload := geminiadapter.FunctionResponseDict(result)
+	s.traceToolResult(ctx, toolCallID, name, payload)
 	slog.DebugContext(ctx, "sending a tool result to the live session",
 		"service", s.Name(), "tool_call_id", toolCallID, "function", name)
 	response := map[string]any{
 		"id":       toolCallID,
 		"name":     name,
-		"response": geminiadapter.FunctionResponseDict(result),
+		"response": payload,
 	}
 	// Pair the non-blocking declaration on an asynchronous tool with a hint on
 	// its result. WHEN_IDLE has the model finish whatever it is saying before it
@@ -1165,6 +1173,7 @@ func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
 	if tc == nil || len(tc.FunctionCalls) == 0 {
 		return
 	}
+	s.traceToolCall(ctx, tc.FunctionCalls)
 	s.mu.Lock()
 	convo := s.convo
 	s.mu.Unlock()
@@ -1377,10 +1386,14 @@ type functionCall struct {
 // down by modality (TEXT vs AUDIO), which is how a native-audio model exposes
 // how many of its billed tokens were speech.
 type usageMetadata struct {
-	PromptTokenCount        int64                `json:"promptTokenCount"`        //nolint:tagliatelle // Gemini wire field
-	ResponseTokenCount      int64                `json:"responseTokenCount"`      //nolint:tagliatelle // Gemini wire field
-	TotalTokenCount         int64                `json:"totalTokenCount"`         //nolint:tagliatelle // Gemini wire field
-	CachedContentTokenCount int64                `json:"cachedContentTokenCount"` //nolint:tagliatelle // Gemini wire field
+	PromptTokenCount   int64 `json:"promptTokenCount"`   //nolint:tagliatelle // Gemini wire field
+	ResponseTokenCount int64 `json:"responseTokenCount"` //nolint:tagliatelle // Gemini wire field
+	TotalTokenCount    int64 `json:"totalTokenCount"`    //nolint:tagliatelle // Gemini wire field
+	// ToolUsePromptTokenCount is the tool results fed back to the model, which
+	// are input like the prompt.
+	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount"` //nolint:tagliatelle // Gemini wire field
+	// CachedContentTokenCount is absent when nothing was read from the cache.
+	CachedContentTokenCount *int64               `json:"cachedContentTokenCount"` //nolint:tagliatelle // Gemini wire field
 	PromptTokensDetails     []modalityTokenCount `json:"promptTokensDetails"`     //nolint:tagliatelle // Gemini wire field
 	ResponseTokensDetails   []modalityTokenCount `json:"responseTokensDetails"`   //nolint:tagliatelle // Gemini wire field
 	// CacheTokensDetails splits the cached-content count by modality. Cached
@@ -1401,15 +1414,21 @@ type modalityTokenCount struct {
 // tokenUsage converts the wire accounting into the framework's usage shape,
 // folding the per-modality detail lists into the audio and text breakdowns.
 func (u usageMetadata) tokenUsage() frames.LLMTokenUsage {
-	usage := frames.LLMTokenUsage{
-		PromptTokens:     u.PromptTokenCount,
-		CompletionTokens: u.ResponseTokenCount,
-		TotalTokens:      u.TotalTokenCount,
-		CacheReadTokens:  new(u.CachedContentTokenCount),
-		ReasoningTokens:  u.ThoughtsTokenCount,
+	// Gemini counts the tool results fed back to the model apart from the
+	// prompt, and the reasoning apart from the response, but they are input and
+	// output too. Its total sometimes leaves the reasoning out, so the total is
+	// computed.
+	prompt := u.PromptTokenCount + u.ToolUsePromptTokenCount
+	completion := u.ResponseTokenCount
+	if u.ThoughtsTokenCount != nil {
+		completion += *u.ThoughtsTokenCount
 	}
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage := frames.LLMTokenUsage{
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		TotalTokens:      prompt + completion,
+		CacheReadTokens:  u.CachedContentTokenCount,
+		ReasoningTokens:  u.ThoughtsTokenCount,
 	}
 	// A modality with no tokens is left out of the breakdown entirely, and the
 	// breakdown itself is absent when the model reports none, so a modality that
@@ -1577,25 +1596,23 @@ func (s *Service) handleServerContent(ctx context.Context, msg serverMessage, id
 	if statusKnown && !idle {
 		// The model is reasoning in the background, so this closes one chunk of
 		// output and not the reply.
-		s.holdTurn(ctx)
+		s.holdTurn(ctx, &msg)
 	} else {
 		// This one ends the reply, so it stands in for anything still held.
 		s.discardHeldTurn()
-		s.handleTurnComplete(ctx)
+		s.handleTurnComplete(ctx, &msg)
 	}
 	if msg.UsageMetadata != nil {
 		s.handleUsage(ctx, msg)
 	}
 }
 
-// handleUsage reports the accounting that arrives with the turn it belongs to,
-// against a span covering that turn.
+// handleUsage reports the accounting that arrives with the turn it belongs to.
+// The turn's span records it too, from the message that completed the turn.
 func (s *Service) handleUsage(ctx context.Context, msg serverMessage) {
-	spanCtx, end := s.traceResponse(ctx, msg)
 	if s.UsageMetricsEnabled() {
-		_ = s.PushTokenUsage(spanCtx, msg.UsageMetadata.tokenUsage())
+		_ = s.PushTokenUsage(ctx, msg.UsageMetadata.tokenUsage())
 	}
-	end()
 }
 
 // handleInterruption drops what the interruption makes moot: a held turn, a
@@ -1691,10 +1708,14 @@ func (s *Service) handleModelTurn(ctx context.Context, parts []part) {
 
 // handleTurnComplete closes the model's response: a spoken one with a
 // TTSStoppedFrame as well.
-func (s *Service) handleTurnComplete(ctx context.Context) {
+func (s *Service) handleTurnComplete(ctx context.Context, msg *serverMessage) {
 	s.mu.Lock()
-	text := s.botText
-	s.botText = ""
+	text, spoken := s.botText, s.spokenText
+	s.botText, s.spokenText = "", ""
+	s.mu.Unlock()
+	end := s.traceResponse(ctx, msg, text, spoken)
+	defer end()
+	s.mu.Lock()
 	stopped := s.setBotRespondingLocked(false)
 	s.mu.Unlock()
 	if !stopped {
@@ -1811,6 +1832,7 @@ func (s *Service) stopTranscriptFlushLocked() {
 // pushUserTranscript sends the user's words upstream, where the user aggregator
 // is: everything downstream of this service is the reply to them.
 func (s *Service) pushUserTranscript(ctx context.Context, text string) {
+	s.traceUserTranscript(ctx, text)
 	_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(text, "", frames.NowTimestamp()), processor.Upstream)
 }
 
@@ -1823,6 +1845,9 @@ func (s *Service) handleOutputTranscription(ctx context.Context, text string) {
 	if text == "" {
 		return
 	}
+	s.mu.Lock()
+	s.spokenText += text
+	s.mu.Unlock()
 	s.startResponse(ctx, true)
 	llmText := frames.NewLLMTextFrame(text)
 	llmText.AppendToContext = false
@@ -1842,9 +1867,10 @@ const heldTurnTimeout = 30 * time.Second
 
 // holdTurn keeps the bot's turn open past a completed generation, because the
 // model is still reasoning in the background and has more to say.
-func (s *Service) holdTurn(ctx context.Context) {
+func (s *Service) holdTurn(ctx context.Context, msg *serverMessage) {
 	s.mu.Lock()
 	s.turnHeld = true
+	s.heldMessage = msg
 	s.mu.Unlock()
 	s.restartHeldTurnWatchdog(ctx)
 	slog.DebugContext(ctx, "holding the bot's turn open while the model is still working",
@@ -1881,14 +1907,14 @@ func (s *Service) stopHeldTurnWatchdogLocked() {
 // fires closes the turn once between them.
 func (s *Service) completeHeldTurn(ctx context.Context) {
 	s.mu.Lock()
-	held := s.turnHeld
-	s.turnHeld = false
+	held, msg := s.turnHeld, s.heldMessage
+	s.turnHeld, s.heldMessage = false, nil
 	s.stopHeldTurnWatchdogLocked()
 	s.mu.Unlock()
 	if !held {
 		return
 	}
-	s.handleTurnComplete(ctx)
+	s.handleTurnComplete(ctx, msg)
 }
 
 // discardHeldTurn drops a held turn without closing it, for an interruption,
@@ -1897,6 +1923,7 @@ func (s *Service) discardHeldTurn() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.turnHeld = false
+	s.heldMessage = nil
 	s.stopHeldTurnWatchdogLocked()
 }
 

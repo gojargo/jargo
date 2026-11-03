@@ -65,3 +65,31 @@ func TestUsageMetadataTotalFallback(t *testing.T) {
 		t.Fatalf("TotalTokens = %d, want 11", got)
 	}
 }
+
+// TestUsageCountsToolResultsAndReasoning covers what Gemini counts apart from
+// the prompt and the response: the tool results fed back to the model are input
+// and the reasoning is output, and the total is computed rather than taken,
+// since the reported one sometimes leaves the reasoning out. Nothing read from
+// the cache leaves the cache count unreported rather than zero. (Not a port of
+// an upstream test: upstream's covering test runs against the live API.)
+func TestUsageCountsToolResultsAndReasoning(t *testing.T) {
+	raw := `{"usageMetadata": {
+		"promptTokenCount": 100, "toolUsePromptTokenCount": 20,
+		"responseTokenCount": 40, "thoughtsTokenCount": 15,
+		"totalTokenCount": 160}}`
+	var msg serverMessage
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := msg.UsageMetadata.tokenUsage()
+	if got.PromptTokens != 120 || got.CompletionTokens != 55 || got.TotalTokens != 175 {
+		t.Errorf("usage = %d prompt, %d completion, %d total, want 120, 55, 175",
+			got.PromptTokens, got.CompletionTokens, got.TotalTokens)
+	}
+	if got.ReasoningTokens == nil || *got.ReasoningTokens != 15 {
+		t.Errorf("ReasoningTokens = %v, want 15", got.ReasoningTokens)
+	}
+	if got.CacheReadTokens != nil {
+		t.Errorf("CacheReadTokens = %v, want unreported", *got.CacheReadTokens)
+	}
+}
