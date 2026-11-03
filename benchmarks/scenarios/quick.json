@@ -1,0 +1,38 @@
+{
+  "name": "quick",
+  "description": "A short pass over every kind, sized for a laptop: a few seconds a sample on either side.",
+  "benchmarks": [
+    {
+      "name": "PlumbingLatency",
+      "kind": "latency",
+      "depths": [1, 4, 16, 64],
+      "warmup": 100,
+      "frames": 2000,
+      "budget_seconds": 60
+    },
+    {
+      "name": "PlumbingThroughput",
+      "kind": "throughput",
+      "depths": [1, 4, 16, 64],
+      "warmup": 100,
+      "frames": 5000,
+      "budget_seconds": 60
+    },
+    {
+      "name": "Startup",
+      "kind": "startup",
+      "depths": [1, 4, 16, 64],
+      "repeats": 20,
+      "budget_seconds": 60
+    },
+    {
+      "name": "Sessions",
+      "kind": "sessions",
+      "depth": 4,
+      "sessions": [1, 10, 100],
+      "warmup": 5,
+      "rounds": 50,
+      "budget_seconds": 120
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "full",
+  "description": "The CI profile: larger samples, and a thousand sessions at once. Too heavy for a laptop that is also in use.",
+  "benchmarks": [
+    {
+      "name": "PlumbingLatency",
+      "kind": "latency",
+      "depths": [1, 4, 16, 64],
+      "warmup": 500,
+      "frames": 5000,
+      "budget_seconds": 120
+    },
+    {
+      "name": "PlumbingThroughput",
+      "kind": "throughput",
+      "depths": [1, 4, 16, 64],
+      "warmup": 500,
+      "frames": 10000,
+      "budget_seconds": 120
+    },
+    {
+      "name": "Startup",
+      "kind": "startup",
+      "depths": [1, 4, 16, 64],
+      "repeats": 50,
+      "budget_seconds": 120
+    },
+    {
+      "name": "Sessions",
+      "kind": "sessions",
+      "depth": 4,
+      "sessions": [1, 10, 100, 1000],
+      "warmup": 10,
+      "rounds": 100,
+      "budget_seconds": 300
+    }
+  ]
+}
