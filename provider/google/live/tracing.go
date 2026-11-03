@@ -72,7 +72,7 @@ func (s *Service) traceResponse(ctx context.Context, msg serverMessage) (context
 			// native-audio turn has no text output otherwise.
 			attrs.TextOutput = sc.OutputTranscription.Text
 		}
-		if sc.GenerationComplete {
+		if sc.TurnComplete {
 			attrs.Extra = map[string]any{"turn_complete": true}
 		}
 	}

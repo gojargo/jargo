@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsutil"
+	textutil "github.com/gojargo/jargo/utils/text"
 	"github.com/google/uuid"
 )
 
@@ -44,7 +46,6 @@ type Service struct {
 	writeMu   sync.Mutex
 	wg        sync.WaitGroup
 	ready     atomic.Bool
-	speaking  bool
 	connector Connector
 
 	// convo is the conversation this session is part of, as the pipeline last
@@ -89,6 +90,20 @@ type Service struct {
 	// to answer, so the user's first turn has to complete one: otherwise the
 	// model ignores what it was seeded with. Guarded by mu.
 	needsInitialTurnComplete bool
+
+	// botResponding says the model is answering: its response has been opened
+	// downstream and not yet closed. Guarded by mu.
+	botResponding bool
+	// botText is the text the model has answered with so far, in the text
+	// modality; a response with none was spoken. Guarded by mu.
+	botText string
+	// userTranscript holds the user's words until they make up a sentence, or
+	// go quiet for transcriptFlushAfter. Guarded by mu.
+	userTranscript string
+	// transcriptFlush flushes userTranscript once the words stop. Guarded by mu.
+	transcriptFlush *time.Timer
+	// warnedMimeType keeps the report of audio without a sample rate to one.
+	warnedMimeType sync.Once
 }
 
 // Connector customizes how the Live session is addressed and authorized, so a
@@ -189,6 +204,11 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		s.sendAudio(audio.Audio, audio.SampleRate)
 		return nil
 	}
+	if _, ok := f.(*frames.InterruptionFrame); ok {
+		// Before the interruption travels on, so whatever closes the response
+		// in progress reaches the processors after this one ahead of it.
+		s.handleInterruption(ctx)
+	}
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -197,14 +217,6 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.connect(ctx); err != nil {
 			s.PushError(ctx, "gemini live connect failed", err, true)
 		}
-		return nil
-	case *frames.InterruptionFrame:
-		// The interruption ends the turn, so a held one is moot, and so is a
-		// reply owed for appended content: the user's turn makes one.
-		s.discardHeldTurn()
-		s.mu.Lock()
-		s.contentAwaitingResponse = false
-		s.mu.Unlock()
 		return nil
 	case *frames.LLMContextFrame:
 		// The conversation the session is part of: the toolset it advertises, and
@@ -1050,6 +1062,7 @@ func (s *Service) disconnect() {
 	conn, cancel := s.conn, s.cancel
 	s.conn, s.cancel, s.connCtx = nil, nil, nil
 	s.ready.Store(false)
+	s.stopTranscriptFlushLocked()
 	// What was sent to the closed session is forgotten with it.
 	s.sentResults = map[string]bool{}
 	s.toolNames = map[string]string{}
@@ -1162,7 +1175,7 @@ type serverContent struct {
 	InputTranscription  *textPayload `json:"inputTranscription"`  //nolint:tagliatelle // Gemini wire field
 	OutputTranscription *textPayload `json:"outputTranscription"` //nolint:tagliatelle // Gemini wire field
 	Interrupted         bool         `json:"interrupted"`
-	GenerationComplete  bool         `json:"generationComplete"` //nolint:tagliatelle // Gemini wire field
+	TurnComplete        bool         `json:"turnComplete"` //nolint:tagliatelle // Gemini wire field
 	// InteractionStatus says whether the session is still working. The thinking
 	// models report it, and nothing else does.
 	InteractionStatus string `json:"interactionStatus"` //nolint:tagliatelle // Gemini wire field
@@ -1188,7 +1201,9 @@ func (sc *serverContent) interactionIdle() (idle, known bool) {
 }
 
 type part struct {
-	Text       string `json:"text"`
+	Text string `json:"text"`
+	// Thought marks text that is the model's reasoning rather than its answer.
+	Thought    bool `json:"thought"`
 	InlineData *struct {
 		MimeType string `json:"mimeType"` //nolint:tagliatelle // Gemini wire field
 		Data     string `json:"data"`
@@ -1220,83 +1235,273 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 
 // handle maps a server message onto downstream pipeline frames.
 func (s *Service) handle(ctx context.Context, msg serverMessage) {
-	// Any server message while a turn is held is the session proving it is still
-	// there, so the watch on it measures silence and nothing else.
-	s.restartHeldTurnWatchdog(ctx)
-	idle, statusKnown := msg.ServerContent.interactionIdle()
-
 	if msg.SetupComplete != nil {
 		s.handleSessionReady(ctx)
 	}
-	if msg.UsageMetadata != nil {
-		// The accounting arrives with the turn it belongs to, so the span
-		// covering that turn is opened here and the usage recorded against it.
-		spanCtx, end := s.traceResponse(ctx, msg)
-		if s.UsageMetricsEnabled() {
-			_ = s.PushTokenUsage(spanCtx, msg.UsageMetadata.tokenUsage())
-		}
-		end()
+	idle, statusKnown := msg.ServerContent.interactionIdle()
+	// Any server message while a turn is held is the session proving it is still
+	// there, so the watch on it measures silence and nothing else.
+	s.restartHeldTurnWatchdog(ctx)
+	if msg.ServerContent != nil {
+		s.handleServerContent(ctx, msg, idle, statusKnown)
 	}
 	if msg.ToolCall != nil {
 		s.runToolCalls(ctx, msg.ToolCall)
 	}
-	if sc := msg.ServerContent; sc != nil {
-		s.handleServerContent(ctx, sc, idle, statusKnown)
+	// A held turn is closed only once any tool call bundled with the message is
+	// on its way, so the turn ends with the message fully taken in.
+	if statusKnown && idle {
+		s.completeHeldTurn(ctx)
 	}
 }
 
-// handleServerContent turns one message's server content into frames: the
-// barge-in it reports, the words either side spoke, the audio the model
-// produced, and the end of its turn.
+// handleServerContent takes the content of one message. Its fields are not
+// exclusive: a 3.x model can bundle content and the end of its turn in one, so
+// the content is taken before the turn is closed.
 //
 // idle and statusKnown are what the model said about whether it has finished
-// working, which is what decides whether a completed generation ends the turn.
-func (s *Service) handleServerContent(
-	ctx context.Context, sc *serverContent, idle, statusKnown bool,
-) {
+// working, which decides whether a completed turn ends the reply.
+func (s *Service) handleServerContent(ctx context.Context, msg serverMessage, idle, statusKnown bool) {
+	sc := msg.ServerContent
 	if sc.Interrupted {
-		// The interruption has ended the turn, so a held one is moot.
-		s.discardHeldTurn()
-		// The bot was cut off, so it gives the floor up and the pipeline is
-		// interrupted. No user-speaking frame goes with it: this API reports an
-		// interruption but never a turn starting or ending, so a start invented
-		// here would have no stop to match it, and everything keyed off those
-		// frames (turn tracking, the idle watch, mute strategies) would be left
-		// believing the user is still speaking. A pipeline that needs turn
-		// boundaries runs its own detection alongside this service.
-		s.setSpeaking(ctx, false)
+		// The bot was cut off, so the pipeline is interrupted. No user-speaking
+		// frame goes with it: this API reports an interruption but never a turn
+		// starting or ending, so a start invented here would have no stop to
+		// match it. A pipeline that needs turn boundaries runs its own detection
+		// alongside this service.
+		slog.DebugContext(ctx, "the model reports an interruption", "service", s.Name())
+		// The broadcast does not come back through this service, so it handles
+		// the interruption itself, first, as it would one arriving: whatever
+		// closes the response in progress goes on ahead of the interruption.
+		s.handleInterruption(ctx)
 		// Broadcast, not pushed on: the aggregators on either side of this
 		// service both act on an interruption, and the one keeping the user's
 		// turn sits upstream of it.
 		_ = s.BroadcastInterruption(ctx)
 	}
-	if sc.InputTranscription != nil && sc.InputTranscription.Text != "" {
-		// The user's words go upstream, where the user aggregator is: everything
-		// downstream of this service is the reply to them.
-		_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(sc.InputTranscription.Text, "", ""), processor.Upstream)
-	}
-	if sc.OutputTranscription != nil && sc.OutputTranscription.Text != "" {
-		_ = s.PushFrame(ctx, frames.NewLLMTextFrame(sc.OutputTranscription.Text), processor.Downstream)
-	}
 	if sc.ModelTurn != nil {
-		for _, p := range sc.ModelTurn.Parts {
-			s.handlePart(ctx, p)
-		}
+		s.handleModelTurn(ctx, sc.ModelTurn.Parts)
 	}
-	if sc.GenerationComplete {
-		if statusKnown && !idle {
-			// The model is reasoning in the background between chunks of output,
-			// so this completed generation closes one chunk and not the turn.
-			s.holdTurn(ctx)
+	if sc.InputTranscription != nil {
+		s.handleInputTranscription(ctx, sc.InputTranscription.Text)
+	}
+	if sc.OutputTranscription != nil {
+		s.handleOutputTranscription(ctx, sc.OutputTranscription.Text)
+	}
+	if !sc.TurnComplete {
+		return
+	}
+	if msg.UsageMetadata == nil {
+		slog.WarnContext(ctx, "the turn completed without usage metadata", "service", s.Name())
+	}
+	if statusKnown && !idle {
+		// The model is reasoning in the background, so this closes one chunk of
+		// output and not the reply.
+		s.holdTurn(ctx)
+	} else {
+		// This one ends the reply, so it stands in for anything still held.
+		s.discardHeldTurn()
+		s.handleTurnComplete(ctx)
+	}
+	if msg.UsageMetadata != nil {
+		s.handleUsage(ctx, msg)
+	}
+}
+
+// handleUsage reports the accounting that arrives with the turn it belongs to,
+// against a span covering that turn.
+func (s *Service) handleUsage(ctx context.Context, msg serverMessage) {
+	spanCtx, end := s.traceResponse(ctx, msg)
+	if s.UsageMetricsEnabled() {
+		_ = s.PushTokenUsage(spanCtx, msg.UsageMetadata.tokenUsage())
+	}
+	end()
+}
+
+// handleInterruption drops what the interruption makes moot: a held turn, a
+// reply owed for appended content, which the user's turn makes one of its own,
+// and the response in progress. No response end goes with it: the
+// interruption already tells the assistant aggregator the response is over.
+func (s *Service) handleInterruption(ctx context.Context) {
+	s.discardHeldTurn()
+	s.mu.Lock()
+	s.contentAwaitingResponse = false
+	stopped := s.setBotRespondingLocked(false)
+	s.mu.Unlock()
+	if stopped && s.live.Modalities.Or(ModalityAudio) == ModalityAudio {
+		_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+	}
+}
+
+// setBotRespondingLocked records whether the model is answering and reports
+// whether that changed. Call it with mu held.
+func (s *Service) setBotRespondingLocked(responding bool) bool {
+	if s.botResponding == responding {
+		return false
+	}
+	s.botResponding = responding
+	return true
+}
+
+// startResponse opens the model's response downstream if it is not open yet:
+// with a TTSStartedFrame when it is spoken, so what follows reaches the
+// assistant aggregator as the bot's speech.
+func (s *Service) startResponse(ctx context.Context, spoken bool) {
+	s.mu.Lock()
+	started := s.setBotRespondingLocked(true)
+	s.mu.Unlock()
+	if !started {
+		return
+	}
+	if spoken {
+		_ = s.PushFrame(ctx, frames.NewTTSStartedFrame(), processor.Downstream)
+	}
+	_ = s.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
+}
+
+// handleModelTurn takes the first part of what the model produced: its text, in
+// the text modality, as the response or as a thought, and its audio.
+func (s *Service) handleModelTurn(ctx context.Context, parts []part) {
+	if len(parts) == 0 {
+		return
+	}
+	p := parts[0]
+	s.StopTTFBMetrics()
+
+	if p.Text != "" {
+		s.startResponse(ctx, false)
+		if p.Thought {
+			// Thoughts arrive whole rather than in chunks, so each is bracketed.
+			_ = s.PushFrame(ctx, frames.NewLLMThoughtStartFrame(), processor.Downstream)
+			_ = s.PushFrame(ctx, frames.NewLLMThoughtTextFrame(p.Text), processor.Downstream)
+			_ = s.PushFrame(ctx, frames.NewLLMThoughtEndFrame(), processor.Downstream)
 		} else {
-			// This one ends the turn, so it stands in for anything still held.
-			s.discardHeldTurn()
-			s.setSpeaking(ctx, false)
+			s.mu.Lock()
+			s.botText += p.Text
+			s.mu.Unlock()
+			_ = s.PushFrame(ctx, frames.NewLLMTextFrame(p.Text), processor.Downstream)
 		}
 	}
-	if statusKnown && idle {
-		s.completeHeldTurn(ctx)
+
+	if p.InlineData == nil {
+		return
 	}
+	switch p.InlineData.MimeType {
+	case fmt.Sprintf("audio/pcm;rate=%d", outputSampleRate):
+	case "audio/pcm":
+		s.warnedMimeType.Do(func() {
+			slog.WarnContext(ctx, "audio carries no sample rate, assuming the output rate",
+				"service", s.Name(), "mime_type", p.InlineData.MimeType, "rate", outputSampleRate)
+		})
+	default:
+		slog.WarnContext(ctx, "unrecognized server content format",
+			"service", s.Name(), "mime_type", p.InlineData.MimeType)
+		return
+	}
+	pcm, err := base64.StdEncoding.DecodeString(p.InlineData.Data)
+	if err != nil || len(pcm) == 0 {
+		return
+	}
+	s.startResponse(ctx, true)
+	_ = s.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, outputSampleRate, 1), processor.Downstream)
+}
+
+// handleTurnComplete closes the model's response: a spoken one with a
+// TTSStoppedFrame as well.
+func (s *Service) handleTurnComplete(ctx context.Context) {
+	s.mu.Lock()
+	text := s.botText
+	s.botText = ""
+	stopped := s.setBotRespondingLocked(false)
+	s.mu.Unlock()
+	if !stopped {
+		return
+	}
+	if text == "" {
+		_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+	}
+	_ = s.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+}
+
+// transcriptFlushAfter is how long the user's words may go without completing a
+// sentence before they are sent on anyway.
+const transcriptFlushAfter = 500 * time.Millisecond
+
+// handleInputTranscription assembles the user's words into sentences. They
+// arrive as single words or short phrases, so they are held until a sentence
+// ends, and sent on unfinished if no more arrive for transcriptFlushAfter.
+func (s *Service) handleInputTranscription(ctx context.Context, text string) {
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	s.stopTranscriptFlushLocked()
+	// A sentence does not start with a space.
+	if s.userTranscript == "" {
+		text = strings.TrimLeft(text, " ")
+	}
+	s.userTranscript += text
+	var sentences []string
+	for {
+		end := textutil.MatchEndOfSentence(s.userTranscript, "")
+		if end == 0 {
+			break
+		}
+		sentences = append(sentences, s.userTranscript[:end])
+		s.userTranscript = s.userTranscript[end:]
+	}
+	if s.userTranscript != "" {
+		s.transcriptFlush = time.AfterFunc(transcriptFlushAfter, func() { s.flushUserTranscript(ctx) })
+	}
+	s.mu.Unlock()
+	for _, text := range sentences {
+		s.pushUserTranscript(ctx, text)
+	}
+}
+
+// flushUserTranscript sends on the user's words held without completing a
+// sentence, once they have stopped coming.
+func (s *Service) flushUserTranscript(ctx context.Context) {
+	s.mu.Lock()
+	text := s.userTranscript
+	s.userTranscript = ""
+	s.transcriptFlush = nil
+	s.mu.Unlock()
+	if text != "" {
+		s.pushUserTranscript(ctx, text)
+	}
+}
+
+// stopTranscriptFlushLocked stops the pending flush. Call it with mu held.
+func (s *Service) stopTranscriptFlushLocked() {
+	if s.transcriptFlush != nil {
+		s.transcriptFlush.Stop()
+		s.transcriptFlush = nil
+	}
+}
+
+// pushUserTranscript sends the user's words upstream, where the user aggregator
+// is: everything downstream of this service is the reply to them.
+func (s *Service) pushUserTranscript(ctx context.Context, text string) {
+	_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(text, "", frames.NowTimestamp()), processor.Upstream)
+}
+
+// handleOutputTranscription takes the words of the model's spoken answer. On
+// Vertex AI they arrive before the audio they transcribe, so they may open the
+// response. They go out as an LLMTextFrame, which RTVI reports as the bot's
+// text but which is kept out of the conversation, and as a TTSTextFrame, which
+// is what the assistant aggregator records the spoken answer from.
+func (s *Service) handleOutputTranscription(ctx context.Context, text string) {
+	if text == "" {
+		return
+	}
+	s.startResponse(ctx, true)
+	llmText := frames.NewLLMTextFrame(text)
+	llmText.AppendToContext = false
+	_ = s.PushFrame(ctx, llmText, processor.Downstream)
+	ttsText := frames.NewTTSTextFrame(text, frames.TextTypeSentence)
+	ttsText.IncludesInterFrameSpaces = true
+	_ = s.PushFrame(ctx, ttsText, processor.Downstream)
 }
 
 // heldTurnTimeout is how long the session may go quiet while the model still
@@ -1355,7 +1560,7 @@ func (s *Service) completeHeldTurn(ctx context.Context) {
 	if !held {
 		return
 	}
-	s.setSpeaking(ctx, false)
+	s.handleTurnComplete(ctx)
 }
 
 // discardHeldTurn drops a held turn without closing it, for an interruption,
@@ -1365,38 +1570,6 @@ func (s *Service) discardHeldTurn() {
 	defer s.mu.Unlock()
 	s.turnHeld = false
 	s.stopHeldTurnWatchdogLocked()
-}
-
-// handlePart emits the audio and any text carried by one model-turn part.
-func (s *Service) handlePart(ctx context.Context, p part) {
-	if p.Text != "" {
-		_ = s.PushFrame(ctx, frames.NewLLMTextFrame(p.Text), processor.Downstream)
-	}
-	if p.InlineData == nil {
-		return
-	}
-	pcm, err := base64.StdEncoding.DecodeString(p.InlineData.Data)
-	if err != nil || len(pcm) == 0 {
-		return
-	}
-	s.setSpeaking(ctx, true)
-	_ = s.PushFrame(ctx, frames.NewTTSAudioRawFrame(pcm, outputSampleRate, 1), processor.Downstream)
-}
-
-// setSpeaking emits a bot-speaking transition frame on a change of state.
-func (s *Service) setSpeaking(ctx context.Context, speaking bool) {
-	s.mu.Lock()
-	changed := s.speaking != speaking
-	s.speaking = speaking
-	s.mu.Unlock()
-	if !changed {
-		return
-	}
-	if speaking {
-		_ = s.PushFrame(ctx, frames.NewBotStartedSpeakingFrame(), processor.Downstream)
-	} else {
-		_ = s.PushFrame(ctx, frames.NewBotStoppedSpeakingFrame(), processor.Downstream)
-	}
 }
 
 // CanGenerateMetrics reports that this service times the conversation and reports

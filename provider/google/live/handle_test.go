@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
@@ -131,10 +132,13 @@ func TestHandleInterruptionEmitsNoUserSpeech(t *testing.T) {
 	s.handle(ctx, decode(t, `{"serverContent":{"interrupted":true}}`))
 
 	got := sink.names()
+	// The response in progress is closed ahead of the interruption, as it is
+	// when the interruption arrives from upstream.
 	want := []string{
-		"BotStartedSpeakingFrame",
+		"TTSStartedFrame",
+		"LLMFullResponseStartFrame",
 		"TTSAudioRawFrame",
-		"BotStoppedSpeakingFrame",
+		"TTSStoppedFrame",
 		"InterruptionFrame",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -147,9 +151,10 @@ func TestHandleInterruptionEmitsNoUserSpeech(t *testing.T) {
 	}
 }
 
-// TestHandlePartEmitsAudioAndText covers a model turn carrying both: the text is
-// forwarded as the model's own words, and the audio opens the bot's turn.
-func TestHandlePartEmitsAudioAndText(t *testing.T) {
+// TestHandleModelTurnTakesTheFirstPart covers a model turn carrying several
+// parts: only the first is taken, as upstream does. Text opens the response
+// without a TTS start, since text is not spoken.
+func TestHandleModelTurnTakesTheFirstPart(t *testing.T) {
 	s, sink := newTestService(t)
 
 	s.handle(context.Background(), decode(t, `{"serverContent":{"modelTurn":{"parts":[
@@ -158,9 +163,42 @@ func TestHandlePartEmitsAudioAndText(t *testing.T) {
 	]}}}`))
 
 	got := sink.names()
-	want := []string{"LLMTextFrame", "BotStartedSpeakingFrame", "TTSAudioRawFrame"}
+	want := []string{"LLMFullResponseStartFrame", "LLMTextFrame"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("frames = %v, want %v", got, want)
+	}
+}
+
+// TestAThoughtIsBracketed covers a part that is the model's reasoning: it
+// arrives whole, so it is sent between its own start and end.
+func TestAThoughtIsBracketed(t *testing.T) {
+	s, sink := newTestService(t)
+
+	s.handle(context.Background(), decode(t,
+		`{"serverContent":{"modelTurn":{"parts":[{"text":"hmm","thought":true}]}}}`))
+
+	got := sink.names()
+	want := []string{"LLMFullResponseStartFrame", "LLMThoughtStartFrame", "LLMThoughtTextFrame", "LLMThoughtEndFrame"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("frames = %v, want %v", got, want)
+	}
+}
+
+// TestAudioOfAnUnrecognizedFormatIsSkipped covers audio whose mime type is
+// neither PCM at the output rate nor PCM with no rate.
+func TestAudioOfAnUnrecognizedFormatIsSkipped(t *testing.T) {
+	s, sink := newTestService(t)
+
+	s.handle(context.Background(), decode(t, `{"serverContent":{"modelTurn":{"parts":[
+		{"inlineData":{"mimeType":"audio/mp3","data":"`+base64.StdEncoding.EncodeToString([]byte{0, 1})+`"}}]}}}`))
+	if got := sink.names(); len(got) != 0 {
+		t.Errorf("frames = %v, want none", got)
+	}
+
+	s.handle(context.Background(), decode(t, `{"serverContent":{"modelTurn":{"parts":[
+		{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"`+base64.StdEncoding.EncodeToString([]byte{0, 1})+`"}}]}}}`))
+	if got := sink.names(); !hasName(got, "TTSAudioRawFrame") {
+		t.Errorf("frames = %v, want the audio at the output rate", got)
 	}
 }
 
@@ -180,8 +218,10 @@ func TestHandlePartSkipsUnreadableAudio(t *testing.T) {
 }
 
 // TestHandleTranscriptionsGoBothWays covers the two transcripts the service
-// receives. What the user said becomes a transcription; what the model said
-// becomes the model's own text, since it is the reply rather than the request.
+// receives. What the user said becomes a transcription, sent once it makes a
+// sentence or the words stop; what the model said opens a spoken response and
+// is sent as text kept out of the conversation, and as the spoken words the
+// assistant aggregator records.
 func TestHandleTranscriptionsGoBothWays(t *testing.T) {
 	s, sink, source := newTestServiceBothWays(t)
 
@@ -189,15 +229,57 @@ func TestHandleTranscriptionsGoBothWays(t *testing.T) {
 		"inputTranscription":{"text":"what is the weather"},
 		"outputTranscription":{"text":"it is raining"}}}`))
 
-	// The model's own text is the reply, so it travels on.
-	if got, want := sink.names(), []string{"LLMTextFrame"}; !reflect.DeepEqual(got, want) {
+	want := []string{"TTSStartedFrame", "LLMFullResponseStartFrame", "LLMTextFrame", "TTSTextFrame"}
+	if got := sink.names(); !reflect.DeepEqual(got, want) {
 		t.Errorf("frames going on = %v, want %v", got, want)
 	}
-	// What the user said goes back towards the user aggregator. Pushed on it
-	// would reach the assistant aggregator instead, and the conversation would
-	// hold no record of what the user said.
+	for _, f := range sink.frames() {
+		switch fr := f.(type) {
+		case *frames.LLMTextFrame:
+			if fr.AppendToContext {
+				t.Error("the model's transcript as LLM text should be kept out of the conversation")
+			}
+		case *frames.TTSTextFrame:
+			if fr.TextType != frames.TextTypeSentence || !fr.IncludesInterFrameSpaces {
+				t.Errorf("TTS text = %+v, want a sentence carrying its own spaces", fr)
+			}
+		}
+	}
+	// What the user said goes back towards the user aggregator once the words
+	// stop. Pushed on it would reach the assistant aggregator instead, and the
+	// conversation would hold no record of what the user said.
+	if got := source.names(); len(got) != 0 {
+		t.Errorf("frames going back = %v, want none until the words stop", got)
+	}
+	time.Sleep(transcriptFlushAfter + 200*time.Millisecond)
 	if got, want := source.names(), []string{"TranscriptionFrame"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("frames going back = %v, want %v", got, want)
+	}
+}
+
+// TestTheUsersWordsAreSentBySentence covers the user's words arriving a few at
+// a time: each complete sentence is sent as soon as it ends, and what follows
+// waits for its own end.
+func TestTheUsersWordsAreSentBySentence(t *testing.T) {
+	s, _, source := newTestServiceBothWays(t)
+	ctx := context.Background()
+
+	for _, chunk := range []string{" Hello", " there.", " How are", " you?"} {
+		s.handle(ctx, decode(t, `{"serverContent":{"inputTranscription":{"text":"`+chunk+`"}}}`))
+	}
+
+	var got []string
+	for _, f := range source.frames() {
+		if tf, ok := f.(*frames.TranscriptionFrame); ok {
+			got = append(got, tf.Text)
+			if tf.Timestamp == "" {
+				t.Error("a transcription carries no timestamp")
+			}
+		}
+	}
+	want := []string{"Hello there.", "How are you?"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("transcriptions = %q, want %q", got, want)
 	}
 }
 
@@ -216,21 +298,39 @@ func TestHandleIgnoresEmptyTranscriptions(t *testing.T) {
 	}
 }
 
-// TestHandleGenerationCompleteClosesTheBotTurn covers the end of the reply: the
-// bot gives the floor up once the model has finished generating, and does so
-// once however many times the signal arrives.
-func TestHandleGenerationCompleteClosesTheBotTurn(t *testing.T) {
+// TestHandleTurnCompleteClosesTheResponse covers the end of the reply: a spoken
+// response is closed with its TTS stop and its end, once however many times the
+// signal arrives.
+func TestHandleTurnCompleteClosesTheResponse(t *testing.T) {
 	s, sink := newTestService(t)
 
 	ctx := context.Background()
 	s.handle(ctx, decode(t, audioMessage([]byte{1, 2})))
-	s.handle(ctx, decode(t, `{"serverContent":{"generationComplete":true}}`))
-	s.handle(ctx, decode(t, `{"serverContent":{"generationComplete":true}}`))
+	s.handle(ctx, decode(t, `{"serverContent":{"turnComplete":true}}`))
+	s.handle(ctx, decode(t, `{"serverContent":{"turnComplete":true}}`))
 
 	got := sink.names()
-	want := []string{"BotStartedSpeakingFrame", "TTSAudioRawFrame", "BotStoppedSpeakingFrame"}
+	want := []string{
+		"TTSStartedFrame", "LLMFullResponseStartFrame", "TTSAudioRawFrame",
+		"TTSStoppedFrame", "LLMFullResponseEndFrame",
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("frames = %v, want %v: the floor was given up more than once", got, want)
+		t.Errorf("frames = %v, want %v: the response was closed more than once", got, want)
+	}
+}
+
+// TestATextResponseClosesWithoutATTSStop covers the text modality: nothing was
+// spoken, so the response closes with its end alone.
+func TestATextResponseClosesWithoutATTSStop(t *testing.T) {
+	s, sink := newTestService(t)
+
+	ctx := context.Background()
+	s.handle(ctx, decode(t, `{"serverContent":{"modelTurn":{"parts":[{"text":"hi"}]}}}`))
+	s.handle(ctx, decode(t, `{"serverContent":{"turnComplete":true}}`))
+
+	want := []string{"LLMFullResponseStartFrame", "LLMTextFrame", "LLMFullResponseEndFrame"}
+	if got := sink.names(); !reflect.DeepEqual(got, want) {
+		t.Errorf("frames = %v, want %v", got, want)
 	}
 }
 
@@ -287,7 +387,7 @@ func TestBargeInIsBroadcast(t *testing.T) {
 	s, sink, source := newTestServiceBothWays(t)
 	ctx := context.Background()
 
-	s.setSpeaking(ctx, true)
+	s.startResponse(ctx, true)
 	s.handle(ctx, decode(t, `{"serverContent":{"interrupted":true}}`))
 
 	if !hasName(sink.names(), "InterruptionFrame") {

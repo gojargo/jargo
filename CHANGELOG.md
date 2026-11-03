@@ -67,6 +67,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   session to be ready rather than merely connected, and messages appended with
   no conversation are converted through the adapter.
 
+- **Gemini Live reports its responses the way a cascade does.** A response
+  opens with `LLMFullResponseStartFrame` (and `TTSStartedFrame` when spoken)
+  and closes with `LLMFullResponseEndFrame` (and `TTSStoppedFrame`) when the
+  model reports its turn complete; the output transport, not the service,
+  reports the bot speaking. The model's spoken words go out as an
+  `LLMTextFrame` kept out of the conversation and a `TTSTextFrame` the
+  assistant aggregator records; thoughts are bracketed in thought frames; the
+  user's words are sent by sentence, or once they stop for half a second, with
+  a timestamp. An interruption closes a spoken response with
+  `TTSStoppedFrame` ahead of the interruption. Only the first part of a model
+  turn is read, audio of an unrecognized format is skipped, usage is reported
+  with the completed turn, and the wait for the first answer is timed.
+  **Breaking:** the service no longer pushes `BotStartedSpeakingFrame` and
+  `BotStoppedSpeakingFrame`, and the end of a turn is read from
+  `turnComplete` rather than `generationComplete`.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.

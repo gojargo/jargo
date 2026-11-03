@@ -9,7 +9,7 @@ import (
 )
 
 // The thinking models reason in the background between chunks of output, so a
-// completed generation does not mean the turn is over. They say which it is with
+// completed turn does not mean the reply is over. They say which it is with
 // an interaction status, and the turn is held open until they report themselves
 // finished. A reply split across several assistant turns is what this prevents.
 
@@ -29,17 +29,20 @@ func speakingThen(t *testing.T, messages ...string) []string {
 // speaking is the frames of a bot turn that has begun and not ended.
 //
 //nolint:gochecknoglobals // fixed expectation
-var speaking = []string{"BotStartedSpeakingFrame", "TTSAudioRawFrame"}
+var speaking = []string{"TTSStartedFrame", "LLMFullResponseStartFrame", "TTSAudioRawFrame"}
 
 // stopped is speaking with the turn closed behind it.
 //
 //nolint:gochecknoglobals // fixed expectation
-var stopped = []string{"BotStartedSpeakingFrame", "TTSAudioRawFrame", "BotStoppedSpeakingFrame"}
+var stopped = []string{
+	"TTSStartedFrame", "LLMFullResponseStartFrame", "TTSAudioRawFrame",
+	"TTSStoppedFrame", "LLMFullResponseEndFrame",
+}
 
-// A generation that completes while the model is still working closes a chunk of
-// the reply, not the turn.
-func TestAGenerationCompletedWhileWorkingHoldsTheTurnOpen(t *testing.T) {
-	got := speakingThen(t, `{"serverContent":{"generationComplete":true,"interactionStatus":"IN_PROGRESS"}}`)
+// A turn that completes while the model is still working closes a chunk of the
+// reply, not the turn.
+func TestATurnCompletedWhileWorkingIsHeldOpen(t *testing.T) {
+	got := speakingThen(t, `{"serverContent":{"turnComplete":true,"interactionStatus":"IN_PROGRESS"}}`)
 	if !reflect.DeepEqual(got, speaking) {
 		t.Errorf("frames = %v, want the turn still open (%v)", got, speaking)
 	}
@@ -49,7 +52,7 @@ func TestAGenerationCompletedWhileWorkingHoldsTheTurnOpen(t *testing.T) {
 func TestReportingItselfFinishedClosesAHeldTurn(t *testing.T) {
 	for _, status := range []string{"IDLE", "REQUIRES_ACTION"} {
 		got := speakingThen(t,
-			`{"serverContent":{"generationComplete":true,"interactionStatus":"IN_PROGRESS"}}`,
+			`{"serverContent":{"turnComplete":true,"interactionStatus":"IN_PROGRESS"}}`,
 			`{"serverContent":{"interactionStatus":"`+status+`"}}`)
 		if !reflect.DeepEqual(got, stopped) {
 			t.Errorf("%s: frames = %v, want the turn closed (%v)", status, got, stopped)
@@ -57,9 +60,9 @@ func TestReportingItselfFinishedClosesAHeldTurn(t *testing.T) {
 	}
 }
 
-// A generation that completes with the model already finished needs no holding.
-func TestAGenerationCompletedWhileIdleClosesTheTurnAtOnce(t *testing.T) {
-	got := speakingThen(t, `{"serverContent":{"generationComplete":true,"interactionStatus":"IDLE"}}`)
+// A turn that completes with the model already finished needs no holding.
+func TestATurnCompletedWhileIdleClosesAtOnce(t *testing.T) {
+	got := speakingThen(t, `{"serverContent":{"turnComplete":true,"interactionStatus":"IDLE"}}`)
 	if !reflect.DeepEqual(got, stopped) {
 		t.Errorf("frames = %v, want the turn closed at once (%v)", got, stopped)
 	}
@@ -68,7 +71,7 @@ func TestAGenerationCompletedWhileIdleClosesTheTurnAtOnce(t *testing.T) {
 // The models that report no status keep the behavior they had, which is the
 // only behavior there was.
 func TestAModelThatReportsNoStatusClosesTheTurnAsBefore(t *testing.T) {
-	got := speakingThen(t, `{"serverContent":{"generationComplete":true}}`)
+	got := speakingThen(t, `{"serverContent":{"turnComplete":true}}`)
 	if !reflect.DeepEqual(got, stopped) {
 		t.Errorf("frames = %v, want the turn closed (%v)", got, stopped)
 	}
@@ -78,7 +81,7 @@ func TestAModelThatReportsNoStatusClosesTheTurnAsBefore(t *testing.T) {
 // still working.
 func TestAnUnknownStatusDoesNotHoldTheTurn(t *testing.T) {
 	got := speakingThen(t,
-		`{"serverContent":{"generationComplete":true,"interactionStatus":"INTERACTION_STATUS_UNSPECIFIED"}}`)
+		`{"serverContent":{"turnComplete":true,"interactionStatus":"INTERACTION_STATUS_UNSPECIFIED"}}`)
 	if !reflect.DeepEqual(got, stopped) {
 		t.Errorf("frames = %v, want the turn closed (%v)", got, stopped)
 	}
@@ -89,19 +92,19 @@ func TestAnUnknownStatusDoesNotHoldTheTurn(t *testing.T) {
 // speaking twice.
 func TestReportingItselfFinishedWithNoHeldTurnClosesNothing(t *testing.T) {
 	got := speakingThen(t,
-		`{"serverContent":{"generationComplete":true,"interactionStatus":"IDLE"}}`,
+		`{"serverContent":{"turnComplete":true,"interactionStatus":"IDLE"}}`,
 		`{"serverContent":{"interactionStatus":"IDLE"}}`)
 	if !reflect.DeepEqual(got, stopped) {
 		t.Errorf("frames = %v, want the turn closed once (%v)", got, stopped)
 	}
 }
 
-// A generation that ends the turn stands in for one still held, and the turn is
-// closed once between them.
-func TestAFinishedGenerationSupersedesAHeldTurn(t *testing.T) {
+// A completed turn that ends the reply stands in for one still held, and the
+// turn is closed once between them.
+func TestAFinishedTurnSupersedesAHeldOne(t *testing.T) {
 	got := speakingThen(t,
-		`{"serverContent":{"generationComplete":true,"interactionStatus":"IN_PROGRESS"}}`,
-		`{"serverContent":{"generationComplete":true,"interactionStatus":"REQUIRES_ACTION"}}`)
+		`{"serverContent":{"turnComplete":true,"interactionStatus":"IN_PROGRESS"}}`,
+		`{"serverContent":{"turnComplete":true,"interactionStatus":"REQUIRES_ACTION"}}`)
 	if !reflect.DeepEqual(got, stopped) {
 		t.Errorf("frames = %v, want the turn closed exactly once (%v)", got, stopped)
 	}
@@ -113,7 +116,7 @@ func TestAnInterruptionDropsAHeldTurn(t *testing.T) {
 	s, sink := newTestService(t)
 	ctx := context.Background()
 	s.handle(ctx, decode(t, audioMessage([]byte{1, 2})))
-	s.handle(ctx, decode(t, `{"serverContent":{"generationComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
+	s.handle(ctx, decode(t, `{"serverContent":{"turnComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
 	s.handle(ctx, decode(t, `{"serverContent":{"interrupted":true}}`))
 	before := len(sink.names())
 
@@ -131,7 +134,7 @@ func TestAQuietSessionEndsAHeldTurnAnyway(t *testing.T) {
 	s, sink := newTestService(t)
 	ctx := context.Background()
 	s.handle(ctx, decode(t, audioMessage([]byte{1, 2})))
-	s.handle(ctx, decode(t, `{"serverContent":{"generationComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
+	s.handle(ctx, decode(t, `{"serverContent":{"turnComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
 
 	// Bring the watch forward rather than waiting out its own timeout.
 	s.mu.Lock()
@@ -159,7 +162,7 @@ func TestAStreamingReplyKeepsAHeldTurnOpen(t *testing.T) {
 	s, sink := newTestService(t)
 	ctx := context.Background()
 	s.handle(ctx, decode(t, audioMessage([]byte{1, 2})))
-	s.handle(ctx, decode(t, `{"serverContent":{"generationComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
+	s.handle(ctx, decode(t, `{"serverContent":{"turnComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
 
 	s.mu.Lock()
 	first := s.heldTurnWatchdog
@@ -173,7 +176,7 @@ func TestAStreamingReplyKeepsAHeldTurnOpen(t *testing.T) {
 	if second == nil || second == first {
 		t.Error("a message arriving did not restart the watch, so a long reply would be cut short")
 	}
-	if got := sink.names(); slices.Contains(got, "BotStoppedSpeakingFrame") {
+	if got := sink.names(); slices.Contains(got, "TTSStoppedFrame") {
 		t.Errorf("frames = %v, want the turn still held", got)
 	}
 }
@@ -184,7 +187,7 @@ func TestDisconnectDropsAHeldTurn(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	s.handle(ctx, decode(t, audioMessage([]byte{1, 2})))
-	s.handle(ctx, decode(t, `{"serverContent":{"generationComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
+	s.handle(ctx, decode(t, `{"serverContent":{"turnComplete":true,"interactionStatus":"IN_PROGRESS"}}`))
 
 	s.disconnect()
 
