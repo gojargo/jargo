@@ -38,16 +38,3 @@ func TestResponseSpanRecordsTurn(t *testing.T) {
 		t.Errorf("function calls = %v, want the two the model asked for in order", calls)
 	}
 }
-
-// TestTruncateKeepsUTF8 checks that cutting a long instruction leaves valid
-// text: the cut is made on a rune boundary, not mid-character.
-func TestTruncateKeepsUTF8(t *testing.T) {
-	// "é" is two bytes, so a cut at an odd offset would split it.
-	s := "ééééé"
-	for n := range len(s) + 2 {
-		got := truncate(s, n)
-		if !json.Valid([]byte(`"` + got + `"`)) {
-			t.Fatalf("truncate(%q, %d) = %q, which is not valid UTF-8", s, n, got)
-		}
-	}
-}

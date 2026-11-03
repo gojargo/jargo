@@ -43,6 +43,12 @@ func (r *sentEvents) sessionUpdates() []events.SessionUpdateEvent {
 // events captured rather than sent.
 func offlineService(t *testing.T, cfg Config) (*Service, *sentEvents) {
 	t.Helper()
+	return offlineServiceWith(t, cfg, processor.Setup{Clock: clock.NewSystem()})
+}
+
+// offlineServiceWith is offlineService, set up with setup.
+func offlineServiceWith(t *testing.T, cfg Config, setup processor.Setup) (*Service, *sentEvents) {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
@@ -60,7 +66,7 @@ func offlineService(t *testing.T, cfg Config) (*Service, *sentEvents) {
 	cfg.BaseURL = "ws" + strings.TrimPrefix(srv.URL, "http")
 	s := New(cfg)
 	ctx := context.Background()
-	if err := s.Setup(ctx, processor.Setup{Clock: clock.NewSystem()}); err != nil {
+	if err := s.Setup(ctx, setup); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Cleanup(ctx) })

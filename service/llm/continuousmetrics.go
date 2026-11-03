@@ -41,6 +41,21 @@ func (b *Base) ReportTTFBMetrics(ctx context.Context) {
 	_ = b.PushFrame(ctx, frames.NewMetricsFrame(data), processor.Downstream)
 }
 
+// CurrentTTFB is the time to first byte of the response being timed: the one
+// measured, else the time since the clock started while it is still running.
+// It reports false when the clock was never started.
+func (b *Base) CurrentTTFB() (time.Duration, bool) {
+	b.ttfbMu.Lock()
+	defer b.ttfbMu.Unlock()
+	if b.hasTTFB {
+		return b.ttfb, true
+	}
+	if !b.ttfbStart.IsZero() {
+		return time.Since(b.ttfbStart), true
+	}
+	return 0, false
+}
+
 // StartProcessingMetrics starts the processing clock of a service generating
 // continuously, which calls it when it starts on a response.
 func (b *Base) StartProcessingMetrics() {

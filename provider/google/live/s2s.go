@@ -24,7 +24,9 @@ import (
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
+	"github.com/gojargo/jargo/telemetry/tracing"
 	textutil "github.com/gojargo/jargo/utils/text"
 	"github.com/google/uuid"
 )
@@ -262,6 +264,12 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
 	s.SetModel(cfg.Model)
 	s.audioPaused.Store(cfg.StartAudioPaused)
+	// The user's speech, as the session transcribes it, is traced like a
+	// transcription service's.
+	stt.TraceTranscripts(s.Base.Base.Base, func() tracing.STTAttributes {
+		given, _ := settings.Given(s.live)
+		return tracing.STTAttributes{Service: s.TypeName(), Model: s.model(), Settings: given}
+	})
 	return s
 }
 
@@ -1964,7 +1972,6 @@ func (s *Service) stopTranscriptFlushLocked() {
 // pushUserTranscript sends the user's words upstream, where the user aggregator
 // is: everything downstream of this service is the reply to them.
 func (s *Service) pushUserTranscript(ctx context.Context, text string) {
-	s.traceUserTranscript(ctx, text)
 	_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(text, "", frames.NowTimestamp()), processor.Upstream)
 }
 

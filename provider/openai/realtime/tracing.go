@@ -4,53 +4,58 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/telemetry/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // The Realtime API is a session rather than a request answered by a reply: the
 // model holds the conversation itself and generates continuously. The spans here
-// follow that shape, covering the operations the session performs.
-//
-// The model keeps the conversation server-side, so this service never sends it a
-// message list and there is nothing for a request span to carry. What it does
-// send is configuration, at the start and again whenever the toolset changes,
-// and that is what the setup span records.
+// follow that shape, covering the operations the session performs: its setup,
+// each response asked for, each response completed, and the user's speech as
+// the session transcribed it.
 
-// instructionLimit is how much of the session instructions a span carries. They
-// can run to many thousands of characters, and a span is a report on the session
-// rather than a copy of what was sent to it.
-const instructionLimit = 500
-
-// traceSetup records a session configuration message: the properties the session
-// was given and the tools it advertises. It covers the configuration rather than
-// the connection, and closes once the message has been built.
-func (s *Service) traceSetup(ctx context.Context, session events.SessionProperties) {
+// traceSetup records the session being configured, once the server reports it
+// created. What it records is the conversation's own toolset, when there is a
+// conversation advertising one; the session's properties are not recorded.
+func (s *Service) traceSetup(ctx context.Context) {
 	_, span := s.StartSpan(ctx, "llm_setup")
 	defer span.End()
-
-	var properties map[string]any
-	if raw, err := json.Marshal(session); err == nil {
-		_ = json.Unmarshal(raw, &properties)
-	}
-	if text, ok := properties["instructions"].(string); ok {
-		properties["instructions"] = truncate(text, instructionLimit)
-	}
-
-	attrs := tracing.OpenAIRealtimeAttributes{
-		Model:             s.model(),
-		Operation:         "llm_setup",
-		SessionProperties: properties,
-	}
-	if tools := session.WireTools; len(tools) > 0 {
-		attrs.Tools = toolNamesOf(tools)
-		if data, err := json.Marshal(tools); err == nil {
-			attrs.ToolsSerialized = string(data)
+	attrs := tracing.OpenAIRealtimeAttributes{Model: s.model(), Operation: "llm_setup"}
+	s.mu.Lock()
+	convo := s.convo
+	s.mu.Unlock()
+	if convo != nil {
+		if schema := convo.ToolsSchema(); !schema.Empty() {
+			tools := s.adapter.ToProviderToolsFormat(schema)
+			attrs.Tools = toolNamesOf(tools)
+			if data, err := json.Marshal(tools); err == nil {
+				attrs.ToolsSerialized = string(data)
+			}
 		}
 	}
 	tracing.SetOpenAIRealtimeAttributes(span, attrs)
+}
+
+// traceRequest records a response being asked for, with the conversation as it
+// stands, and returns a context carrying the span and the function that ends
+// it.
+func (s *Service) traceRequest(ctx context.Context) (context.Context, func()) {
+	spanCtx, span := s.StartSpan(ctx, "llm_request")
+	attrs := tracing.OpenAIRealtimeAttributes{Model: s.model(), Operation: "llm_request"}
+	s.mu.Lock()
+	convo := s.convo
+	s.mu.Unlock()
+	if convo != nil {
+		if msgs := s.adapter.MessagesForLogging(convo); len(msgs) > 0 {
+			if data, err := json.Marshal(msgs); err == nil {
+				attrs.ContextMessages = string(data)
+			}
+		}
+	}
+	tracing.SetOpenAIRealtimeAttributes(span, attrs)
+	return spanCtx, func() { span.End() }
 }
 
 // toolNamesOf reads the name out of each tool the session advertises, one entry
@@ -80,6 +85,11 @@ func (s *Service) traceResponse(ctx context.Context, r *events.Response) (contex
 		attrs.Extra = responseAttrs(r)
 	}
 	tracing.SetOpenAIRealtimeAttributes(span, attrs)
+	// The time to first byte of the response being reported, read as it is
+	// reported.
+	if ttfb, ok := s.CurrentTTFB(); ok {
+		span.SetAttributes(attribute.Float64("metrics.ttfb", ttfb.Seconds()))
+	}
 	return spanCtx, func() { span.End() }
 }
 
@@ -132,16 +142,4 @@ func functionCallNames(output []events.ConversationItem) []string {
 		}
 	}
 	return names
-}
-
-// truncate shortens s to at most n bytes, marking that it was cut. The cut is
-// made on a rune boundary so the result stays valid UTF-8.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n] + "..."
 }

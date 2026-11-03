@@ -24,7 +24,10 @@ import (
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
+	"github.com/gojargo/jargo/telemetry/tracing"
 )
 
 // Service is the Realtime speech-to-speech processor.
@@ -203,6 +206,12 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	s.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
 	s.audioPaused.Store(cfg.StartAudioPaused)
+	// The user's speech, as the session transcribes it, is traced like a
+	// transcription service's.
+	stt.TraceTranscripts(s.Base.Base.Base, func() tracing.STTAttributes {
+		given, _ := settings.Given(s.live)
+		return tracing.STTAttributes{Service: s.TypeName(), Model: s.model(), Settings: given}
+	})
 	s.Events().Register(EventConversationItemCreated, false)
 	s.Events().Register(EventConversationItemUpdated, false)
 	return s
@@ -587,6 +596,8 @@ func (s *Service) handleFunctionCallCancel(ctx context.Context, f *frames.Functi
 // session with the conversation, and configures it again now that the
 // conversation's instruction and tools are known.
 func (s *Service) createResponse(ctx context.Context) {
+	ctx, end := s.traceRequest(ctx)
+	defer end()
 	s.mu.Lock()
 	if !s.sessionReady {
 		s.runWhenReady = true
@@ -946,7 +957,7 @@ func (s *Service) handleEvent(ctx context.Context, ev *events.ServerEvent) bool 
 		return false
 	case ev.Type == "session.created":
 		// The session exists, so it is configured now.
-		s.traceSetup(ctx, s.sessionProperties())
+		s.traceSetup(ctx)
 		s.sendSessionUpdate(ctx)
 	case ev.Type == "session.updated":
 		s.mu.Lock()

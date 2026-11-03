@@ -12,8 +12,8 @@ import (
 // The Live API is a session rather than a request answered by a reply: the model
 // generates continuously and reports what it did as it goes. The spans here
 // follow that shape, covering the operations the session performs: its setup,
-// each completed turn, each tool call and tool result, and the user's speech as
-// the model transcribed it.
+// each completed turn, and each tool call and tool result. The user's speech as
+// the model transcribed it is traced from the transcripts the service pushes.
 
 // instructionLimit is how much of the system instruction a span carries. An
 // instruction can run to many thousands of characters, and a span is a report on
@@ -174,21 +174,6 @@ func toolResultAttrs(toolCallID, name string, result any) map[string]any {
 		extra["tool.result_status"] = "completed"
 	}
 	return extra
-}
-
-// traceUserTranscript records the user's speech as the model transcribed it, as
-// a transcription service's segment would be.
-func (s *Service) traceUserTranscript(ctx context.Context, text string) {
-	_, span := s.StartSpan(ctx, "stt")
-	defer span.End()
-	final := true
-	tracing.SetSTTAttributes(span, tracing.STTAttributes{
-		Service:    s.Name(),
-		Model:      s.model(),
-		Transcript: text,
-		Final:      &final,
-		Language:   string(s.live.Language.Or("")),
-	})
 }
 
 // truncate shortens s to at most n bytes, marking that it was cut. The cut is

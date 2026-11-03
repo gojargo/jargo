@@ -376,6 +376,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and be paused with `SetAudioInputPaused`; Azure Realtime takes both options.
   **Breaking:** input audio travels on down the pipeline after it is sent.
 
+- **Speech-to-speech services trace like the rest of the pipeline.** OpenAI
+  Realtime and Gemini Live trace the user's speech, as the session transcribed
+  it, with the segment spans a transcription service records: anchored where
+  the speech began, carrying the transcript and any time to first byte, and
+  closed with the user's turn. `stt.TraceTranscripts` attaches the same spans
+  to any service from the frames it pushes. OpenAI Realtime also records an
+  `llm_request` span, carrying the conversation, each time it asks for a
+  response, and the time to first byte on its `llm_response` span; its
+  `llm_setup` span records the conversation's tools rather than the session's
+  properties. `llm.Base.CurrentTTFB` reads the time to first byte of the
+  response being timed.
+
 - **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
   takes the v1 `BaseURL` and names the deployment with `Model`, and can
   authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.

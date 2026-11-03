@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	"go.opentelemetry.io/otel"
@@ -106,5 +107,31 @@ func TestNonDictResultOmitsResultAttribute(t *testing.T) {
 	}
 	if _, ok := attrs["tool.result_status"]; ok {
 		t.Error("a result that is not an object was given a status")
+	}
+}
+
+// (Not a port of an upstream test.) The user's speech as the session
+// transcribed it is traced as a transcription segment, closed with the user's
+// turn.
+func TestUserTranscriptIsTracedAsSTT(t *testing.T) {
+	s, rec := tracedService(t)
+	ctx := context.Background()
+	s.pushUserTranscript(ctx, "hi there")
+	if err := s.PushFrame(ctx, frames.NewUserStoppedSpeakingFrame(), processor.Downstream); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	var got map[string]string
+	for _, sp := range rec.Ended() {
+		if sp.Name() != "stt" {
+			continue
+		}
+		got = map[string]string{}
+		for _, kv := range sp.Attributes() {
+			got[string(kv.Key)] = kv.Value.String()
+		}
+	}
+	if got["transcript"] != "hi there" || got["gen_ai.request.model"] != "gemini-live-test" ||
+		got["stt.incomplete"] != "true" {
+		t.Errorf("stt span = %v, want the user's transcript", got)
 	}
 }
