@@ -39,6 +39,11 @@ const (
 	keyType          = "type"
 	keyAudio         = "audio"
 	msgSessionUpdate = "session.update"
+	// The pre-roll windows, in seconds: the margin added to the start delay of
+	// the pipeline's voice activity detection, and the window used until that
+	// is known.
+	prerollMarginSecs  = 0.3
+	defaultPrerollSecs = 0.5
 	// roleAssistant is the role of the model's messages.
 	roleAssistant = "assistant"
 )
@@ -77,6 +82,16 @@ type Config struct {
 	// configured. The model and instructions are kept in step with the fields
 	// above, which win.
 	SessionProperties events.SessionProperties
+	// StartAudioPaused starts the service with user audio paused; see
+	// Service.SetAudioInputPaused.
+	StartAudioPaused bool
+	// UserAudioPrerollSecs pins how much recent user audio is kept, while the
+	// server's turn detection is off, to put back after an interruption clears
+	// the input buffer, so the speech that started the turn is not lost. Nil
+	// sizes it from the start delay of the pipeline's voice activity detection
+	// plus a margin, and uses half a second until that is known. Pin it for a
+	// turn-start strategy that is not driven by voice activity.
+	UserAudioPrerollSecs *float64 `validate:"omitempty,min=0"`
 }
 
 // Validate reports whether the configuration is usable.

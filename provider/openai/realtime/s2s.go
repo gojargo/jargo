@@ -59,6 +59,15 @@ type Service struct {
 	// addedManually are the items this service put into the conversation,
 	// whose echo from the server is not the model's doing. Guarded by mu.
 	addedManually map[string]bool
+	// audioPaused stops user audio reaching the session.
+	audioPaused atomic.Bool
+	// preroll holds the most recent user audio at the session's rate, while the
+	// server's turn detection is off, to put back after an interruption clears
+	// the input buffer. prerollSecs is how much it holds, and prerollPinned says
+	// Config.UserAudioPrerollSecs set it. Guarded by mu.
+	preroll       []byte
+	prerollSecs   float64
+	prerollPinned bool
 	// assistantResponding says an assistant message is being produced, which an
 	// interruption closes. Guarded by mu.
 	assistantResponding bool
@@ -170,7 +179,13 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
+	prerollSecs := defaultPrerollSecs
+	if cfg.UserAudioPrerollSecs != nil {
+		prerollSecs = *cfg.UserAudioPrerollSecs
+	}
 	s := &Service{
+		prerollSecs:            prerollSecs,
+		prerollPinned:          cfg.UserAudioPrerollSecs != nil,
 		cfg:                    cfg,
 		live:                   newSettings(cfg),
 		connector:              conn,
@@ -187,6 +202,7 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
 	s.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
+	s.audioPaused.Store(cfg.StartAudioPaused)
 	s.Events().Register(EventConversationItemCreated, false)
 	s.Events().Register(EventConversationItemUpdated, false)
 	return s
@@ -207,13 +223,15 @@ func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error 
 func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if in, ok := f.(frames.InputAudioFrame); ok && dir == processor.Downstream {
 		audio := in.AudioData()
-		// The model consumes the audio, so it does not travel on. Only the
-		// processor bookkeeping runs: the LLM base would forward it.
+		// Only the processor bookkeeping runs here: the LLM base would forward
+		// the frame ahead of the audio being sent.
 		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		s.sendAudio(ctx, *audio)
-		return nil
+		if !s.audioPaused.Load() {
+			s.sendAudio(ctx, *audio)
+		}
+		return s.PushFrame(ctx, f, dir)
 	}
 	if _, ok := f.(*frames.InterruptionFrame); ok {
 		// Before the interruption travels on, so what closes the response in
@@ -224,6 +242,12 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		return err
 	}
 	switch fr := f.(type) {
+	case *frames.UserStoppedSpeakingFrame:
+		s.handleUserStoppedSpeaking(ctx)
+		return nil
+	case *frames.SpeechControlParamsFrame:
+		s.handleSpeechControlParams(fr)
+		return nil
 	case *frames.BotStoppedSpeakingFrame:
 		// The audio has played out, so there is no longer an item an
 		// interruption would cut back.
@@ -694,7 +718,72 @@ func (s *Service) sendAudio(ctx context.Context, audio frames.AudioRawData) {
 		return
 	}
 	s.sendEvent(ctx, events.NewInputAudioBufferAppendEvent(base64.StdEncoding.EncodeToString(pcm)))
+
+	// With the server's turn detection off, the most recent audio is kept, so
+	// an interruption that clears the input buffer can put back the speech that
+	// started the user's turn. The server's own detection never clears it.
+	if !s.turnDetectionDisabled() {
+		return
+	}
+	channels := max(audio.NumChannels, 1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keep := int(float64(sampleRate*channels*2) * s.prerollSecs)
+	s.preroll = append(s.preroll, pcm...)
+	if len(s.preroll) > keep {
+		s.preroll = s.preroll[len(s.preroll)-keep:]
+	}
 }
+
+// turnDetectionDisabled reports whether the server's turn detection is off, so
+// the pipeline's own turn detection drives the session.
+func (s *Service) turnDetectionDisabled() bool {
+	return s.sessionProperties().TurnDetectionDisabled()
+}
+
+// replayPreroll appends the audio kept before the turn to the input buffer
+// again, right after a clear, so the speech that started the turn survives it.
+// The audio is kept: it is a rolling window, and a later interruption can put
+// it back again.
+func (s *Service) replayPreroll(ctx context.Context) {
+	s.mu.Lock()
+	pcm := append([]byte(nil), s.preroll...)
+	s.mu.Unlock()
+	if len(pcm) == 0 {
+		return
+	}
+	s.sendEvent(ctx, events.NewInputAudioBufferAppendEvent(base64.StdEncoding.EncodeToString(pcm)))
+}
+
+// handleUserStoppedSpeaking commits the user's turn and asks for a response,
+// when the pipeline's own turn detection drives the session.
+func (s *Service) handleUserStoppedSpeaking(ctx context.Context) {
+	if !s.turnDetectionDisabled() {
+		return
+	}
+	s.sendEvent(ctx, events.NewInputAudioBufferCommitEvent())
+	s.sendEvent(ctx, events.NewResponseCreateEvent(nil))
+}
+
+// handleSpeechControlParams sizes the pre-roll from the start delay of the
+// pipeline's voice activity detection, which is the speech its turn detection
+// takes in before confirming a turn, plus a margin. A pre-roll pinned in the
+// Config is left as it is. It is harmless with the server's detection on: the
+// pre-roll is then not kept.
+func (s *Service) handleSpeechControlParams(f *frames.SpeechControlParamsFrame) {
+	if f.VADParams == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prerollPinned {
+		return
+	}
+	s.prerollSecs = f.VADParams.StartSecs + prerollMarginSecs
+}
+
+// SetAudioInputPaused stops, or resumes, user audio reaching the session.
+func (s *Service) SetAudioInputPaused(paused bool) { s.audioPaused.Store(paused) }
 
 // toSessionRate converts input audio to the session's rate.
 func (s *Service) toSessionRate(audio frames.AudioRawData) []byte {
@@ -1037,6 +1126,14 @@ func (s *Service) handleResponseDone(ctx context.Context, ev *events.ServerEvent
 // heard, the response's timing ends, a response owed behind it is dropped (the
 // user's turn makes one of its own), and a response in progress is closed.
 func (s *Service) handleInterruption(ctx context.Context) {
+	if s.turnDetectionDisabled() {
+		// The pipeline detected the turn, so the session is told: what it has
+		// buffered is cleared, the speech that started the turn is put back, and
+		// the response is canceled.
+		s.sendEvent(ctx, events.NewInputAudioBufferClearEvent())
+		s.replayPreroll(ctx)
+		s.sendEvent(ctx, events.NewResponseCancelEvent())
+	}
 	s.truncateAudioResponse(ctx)
 	s.StopAllMetrics(ctx)
 	s.mu.Lock()
@@ -1242,10 +1339,15 @@ func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
 	f := frames.NewLLMServiceMetadataFrame(s.Name())
 	f.Realtime = true
-	// The session detects the turns and proposes each boundary; the strategies
-	// resolve a proposal into the turn frames and the interruption. Without them
-	// a proposal reaches nothing and no turn is ever opened or closed.
-	f.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
+	// With its turn detection on, the session detects the turns and proposes
+	// each boundary; the strategies resolve a proposal into the turn frames and
+	// the interruption. With it off, the server reports no turns, so there is
+	// nothing for them to resolve.
+	emitsTurnFrames := !s.turnDetectionDisabled()
+	s.WarnIfRealtimeServiceEmitsNoTurnFrames(emitsTurnFrames)
+	if emitsTurnFrames {
+		f.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
+	}
 	return f
 }
 

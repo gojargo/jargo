@@ -48,6 +48,10 @@ type Config struct {
 	// SessionProperties configure the session; see the OpenAI Realtime
 	// service's Config.
 	SessionProperties events.SessionProperties
+	// StartAudioPaused and UserAudioPrerollSecs are the OpenAI Realtime
+	// service's; see its Config.
+	StartAudioPaused     bool
+	UserAudioPrerollSecs *float64 `validate:"omitempty,min=0"`
 }
 
 // Validate reports whether the configuration is usable.
@@ -64,9 +68,11 @@ func New(cfg Config) *openairealtime.Service {
 	}
 	conn := &connector{baseURL: cfg.BaseURL, apiKey: cfg.APIKey, tokenProvider: cfg.TokenProvider}
 	svc := openairealtime.NewWithConnector("AzureRealtime", conn, openairealtime.Config{
-		Model:             cfg.Model,
-		Instructions:      cfg.Instructions,
-		SessionProperties: cfg.SessionProperties,
+		Model:                cfg.Model,
+		Instructions:         cfg.Instructions,
+		SessionProperties:    cfg.SessionProperties,
+		StartAudioPaused:     cfg.StartAudioPaused,
+		UserAudioPrerollSecs: cfg.UserAudioPrerollSecs,
 	})
 	conn.model = svc.Model()
 	return svc

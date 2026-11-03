@@ -365,6 +365,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the service no longer pushes `BotStartedSpeakingFrame` and
   `BotStoppedSpeakingFrame`.
 
+- **OpenAI Realtime follows the pipeline's turns when the server's are off.**
+  With turn detection turned off in the session properties, the user's
+  stopping commits the input buffer and asks for a response, and an
+  interruption clears the buffer, puts back the speech that started the turn
+  (a rolling pre-roll sized from the voice activity start delay plus 0.3 s, or
+  pinned with `Config.UserAudioPrerollSecs`) and cancels the response. The
+  service then recommends no turn strategies, and warns that the pipeline must
+  detect turns itself. User audio can start paused (`Config.StartAudioPaused`)
+  and be paused with `SetAudioInputPaused`; Azure Realtime takes both options.
+  **Breaking:** input audio travels on down the pipeline after it is sent.
+
 - **Azure Realtime moves to Azure's v1 API surface.** `azure/realtime.Config`
   takes the v1 `BaseURL` and names the deployment with `Model`, and can
   authorize with a Microsoft Entra ID `TokenProvider` instead of the API key.

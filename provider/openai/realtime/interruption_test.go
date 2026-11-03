@@ -261,24 +261,19 @@ func TestFramesTravelOnce(t *testing.T) {
 	}
 }
 
-// TestInputAudioIsConsumed checks the audio the model is listening to does not
-// travel on down the pipeline, where the output transport would play it back.
-func TestInputAudioIsConsumed(t *testing.T) {
+// TestInputAudioTravelsOn checks the audio the model is listening to is sent to
+// the session and also travels on down the pipeline, as every frame does.
+func TestInputAudioTravelsOn(t *testing.T) {
 	srv := newScriptedRealtime(t, nil)
 	task, done, collected := runRealtime(t, srv.wsURL())
 	srv.awaitMessage(t, "session.update")
 
 	task.QueueFrame(frames.NewInputAudioRawFrame([]byte{1, 2}, 24000, 1))
 	srv.awaitMessage(t, "input_audio_buffer.append")
+	waitForFrame[*frames.InputAudioRawFrame](t, collected)
 
 	task.StopWhenDone()
 	<-done
-
-	for _, f := range collected() {
-		if _, ok := f.(*frames.InputAudioRawFrame); ok {
-			t.Error("input audio traveled past the service that consumed it")
-		}
-	}
 }
 
 // waitForFrame blocks until a frame of type T has been collected.
