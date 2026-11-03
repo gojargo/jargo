@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
@@ -392,6 +393,9 @@ type Base struct {
 	// continuousGeneration says the service generates on its own rather than
 	// being run by a conversation arriving. See WithContinuousGeneration.
 	continuousGeneration bool
+	// warnedNoTurnFrames keeps the report that a realtime service emits no turn
+	// frames to one.
+	warnedNoTurnFrames atomic.Bool
 	// cancelTools names the cancel tools currently registered, so each is added
 	// and withdrawn exactly once and a call of one is recognized as internal.
 	// Guarded by handlersMu.

@@ -111,3 +111,23 @@ func (b *Base) composeSystemInstruction() {
 		slog.Debug("composed system instruction", "service", b.Name(), "chars", len(composed))
 	}
 }
+
+// WarnIfRealtimeServiceEmitsNoTurnFrames reports, once, that a realtime service
+// emits no turn frames of its own. A realtime service calls it where it settles
+// whether its turns are provider-driven, which is when it describes itself.
+//
+// Processors that expect UserStartedSpeakingFrame and UserStoppedSpeakingFrame
+// (RTVI, say) then need local voice activity or turn detection in the user
+// aggregator, and the turns it detects are approximate unless it also drives
+// the service's turns.
+func (b *Base) WarnIfRealtimeServiceEmitsNoTurnFrames(emitsTurnFrames bool) {
+	if emitsTurnFrames || !b.warnedNoTurnFrames.CompareAndSwap(false, true) {
+		return
+	}
+	slog.Warn("this service is not emitting turn frames (UserStartedSpeakingFrame, "+
+		"UserStoppedSpeakingFrame): it either does not support them or is not configured to emit them. "+
+		"Other processors in the pipeline, such as RTVI, may expect turn frames; local voice activity or "+
+		"turn detection can be enabled on the user aggregator. Local turns may not align with the turns "+
+		"the server decides, so treat them as approximate unless local detection also drives the "+
+		"service's turns.", "service", b.Name())
+}

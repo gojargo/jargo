@@ -2073,6 +2073,8 @@ func (s *Service) CanGenerateMetrics() bool { return true }
 // the answer starts rather than when the turn ends, because the transcript for
 // what the user said arrives late.
 func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
+	// The API reports an interruption but no turn starting or ending.
+	s.WarnIfRealtimeServiceEmitsNoTurnFrames(false)
 	f := frames.NewLLMServiceMetadataFrame(s.Name())
 	f.Realtime = true
 	return f

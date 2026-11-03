@@ -129,6 +129,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   input audio and the conversation frame changed how they travel past the
   service.
 
+- **`llm.Base.WarnIfRealtimeServiceEmitsNoTurnFrames`** reports, once, that
+  a realtime service emits no turn frames of its own, so processors expecting
+  them need local turn detection. Gemini Live reports it when it describes
+  itself.
+
 - **`adapter.Base.RealtimeSessionTools`** settles the toolset a realtime
   session carries: the conversation's own tools when it advertises any, else
   the service's configured ones, with the built-in tools riding along.
