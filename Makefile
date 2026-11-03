@@ -149,6 +149,24 @@ bench-check: ## Vet and build the benchmark suite against the library in the tre
 	$(GO) -C $(BENCH_DIR) vet ./...
 	$(GO) -C $(BENCH_DIR) build ./...
 
+# The Python side's lock is resolved inside the image it is installed in, so it
+# holds the wheels Python 3.12 on Linux actually takes. The image is read from
+# the Dockerfile, which Dependabot keeps current, rather than pinned twice.
+# These caps keep the resolve off the cores a benchmark may be using.
+BENCH_CPUSET ?= 2,3
+BENCH_MEM ?= 1g
+PIP_TOOLS_VERSION ?= 7.6.2
+BENCH_PYTHON_IMAGE = $(shell sed -n 's/^FROM \(python:[^ ]*\).*/\1/p' $(BENCH_DIR)/pipecat/Dockerfile)
+
+.PHONY: bench-lock
+bench-lock: ## Re-resolve the Python side's hashed requirements from requirements.in
+	docker run --rm --cpuset-cpus=$(BENCH_CPUSET) --memory=$(BENCH_MEM) \
+		-u "$$(id -u):$$(id -g)" -e HOME=/tmp \
+		-v "$(CURDIR)/$(BENCH_DIR)/pipecat:/lock" -w /lock $(BENCH_PYTHON_IMAGE) \
+		sh -c 'pip install --quiet --user pip-tools==$(PIP_TOOLS_VERSION) && \
+			python -m piptools compile --quiet --generate-hashes --allow-unsafe \
+			--strip-extras --output-file requirements.txt requirements.in'
+
 ##@ Generate
 
 .PHONY: tools-proto

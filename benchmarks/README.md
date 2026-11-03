@@ -40,6 +40,9 @@ are skipped, so a run ends rather than hangs.
 | `internal/run` | One implementation per kind, on jargo's public API. |
 | `cmd/jbench` | Runs a scenario and prints Go benchmark format. |
 | `bench_test.go` | The same kinds as `testing.B` benchmarks, for jargo-only regressions. |
+| `pipecat/bench.py` | The same kinds against Pipecat, printing the same format. |
+| `pipecat/Dockerfile` | Python 3.12 with the locked Pipecat release, by digest. |
+| `pipecat/requirements.in`, `requirements.txt` | The pinned `pipecat-ai` release, and its lock with every package's hashes. |
 | `out/` | Results of local runs. Ignored by git: numbers are never committed. |
 
 ## Running jargo's side
@@ -55,6 +58,25 @@ go -C benchmarks test -run '^$' -bench . -count 6 ./...
 The config lines that open jbench's output say what was measured:
 `framework`, `framework_version` (the jargo revision), `runtime`, the machine,
 and the scenario.
+
+## Running Pipecat's side
+
+The Python side runs in its image, never on the host:
+
+```sh
+docker build -f benchmarks/pipecat/Dockerfile -t jargo-bench-pipecat:local benchmarks/pipecat
+docker run --rm --cpuset-cpus=2,3 --memory=1g \
+  -v "$PWD/benchmarks/scenarios:/scenarios:ro" jargo-bench-pipecat:local \
+  run -count 6 /scenarios/quick.json
+```
+
+`bench.py` mirrors `internal/run` kind for kind, and the two have to be kept in
+step: a change to how one side measures is a change to both. It uses nothing
+beyond the standard library and `pipecat-ai`.
+
+To move to a new Pipecat release, change the pin in `pipecat/requirements.in`
+and run `make bench-lock`, which re-resolves `requirements.txt` with hashes
+inside the same Python image.
 
 ## Checking it still builds
 

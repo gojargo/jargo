@@ -165,7 +165,9 @@ func Startup(ctx context.Context, depth, repeats int) (Result, error) {
 // rounds, and rounds timed rounds, each sending one frame into every pipeline
 // and waiting for all of them to come out. The resident memory gained from
 // before the first was built to after the last round is reported per session as
-// B/session, having first handed freed memory back to the system.
+// B/session. Freed memory is handed back to the system before both readings, so
+// what is counted is what the running sessions hold, not garbage not yet
+// collected.
 func Sessions(ctx context.Context, depth, count, warmup, rounds int) (Result, error) {
 	releaseMemory()
 	before, haveMemory := residentBytes()
@@ -211,6 +213,7 @@ func Sessions(ctx context.Context, depth, count, warmup, rounds int) (Result, er
 	}
 	elapsed := time.Since(start)
 
+	releaseMemory()
 	after, _ := residentBytes()
 	if err := StopAll(ctx, group); err != nil {
 		return Result{}, err

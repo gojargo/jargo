@@ -1,0 +1,8 @@
+# The framework the comparison measures, pinned to one release so a result
+# names exactly what it ran. Bump it deliberately, then regenerate the lock:
+#
+#   make bench-lock
+#
+# which runs pip-compile --generate-hashes in the same image the benchmark runs
+# in, so requirements.txt resolves for Python 3.12 on Linux.
+pipecat-ai==1.15.0
