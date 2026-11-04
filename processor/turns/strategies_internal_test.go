@@ -268,6 +268,31 @@ func TestMinWordsStartTurnStartedClearsBotSpeaking(t *testing.T) {
 	}
 }
 
+// Each Chinese or Japanese character is a word, those languages having no spaces
+// between words.
+func TestMinWordsStartBotSpeakingCJKCountsEachCharacter(t *testing.T) {
+	s := NewMinWordsStart(MinWordsStartConfig{MinWords: 3})
+	spy := attachStart(s)
+
+	spy.send(s, frames.NewBotStartedSpeakingFrame())
+	spy.send(s, transcript("你好"))
+	if spy.starts() != 0 {
+		t.Fatal("two characters interrupted the bot with MinWords=3")
+	}
+
+	spy.send(s, transcript("等一下，这辆车的价格是多少？"))
+	if spy.starts() != 1 {
+		t.Fatalf("starts = %d, want 1", spy.starts())
+	}
+
+	s.TurnStarted()
+	spy.send(s, frames.NewBotStartedSpeakingFrame())
+	spy.send(s, transcript("こんにちは"))
+	if spy.starts() != 2 {
+		t.Errorf("starts = %d, want 2", spy.starts())
+	}
+}
+
 func TestMinWordsStartInterim(t *testing.T) {
 	t.Run("counted by default", func(t *testing.T) {
 		s := NewMinWordsStart(MinWordsStartConfig{MinWords: 2})

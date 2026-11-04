@@ -15,6 +15,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`text.CountSpokenWords`** counts the spoken words in a transcript:
+  whitespace-separated tokens, with each Chinese or Japanese character counted
+  as a word of its own.
+
 - **`text.CompilePhrasePattern`** compiles the pattern that finds a spoken
   phrase in a transcript: case-insensitive, any whitespace between its words,
   on Unicode word boundaries except next to scripts written without spaces.
@@ -549,6 +553,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   directly and leave reconnecting to the receive loop.
 
 ### Fixed
+
+- The min-words start strategy counts each Chinese or Japanese character as a
+  word. Those languages have no spaces between words, so a whole sentence
+  counted as one word and could never reach the threshold for interrupting
+  the bot.
 
 - The LiveKit transport no longer reads and decodes a participant's audio
   track when audio input is off. Nothing took the audio, which was decoded and

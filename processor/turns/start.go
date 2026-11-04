@@ -83,6 +83,10 @@ type MinWordsStartConfig struct {
 
 // MinWordsStart opens a turn only once enough words are heard, raising the bar
 // for interrupting the bot.
+//
+// A word is a whitespace-separated token. Chinese and Japanese text has no
+// spaces between words, so each of those characters counts as a word (see
+// text.CountSpokenWords).
 type MinWordsStart struct {
 	StartStrategyBase
 	minWords    int
@@ -120,12 +124,12 @@ func (s *MinWordsStart) Process(f frames.Frame) ProcessFrameResult {
 	return Continue
 }
 
-func (s *MinWordsStart) check(text string) {
+func (s *MinWordsStart) check(transcript string) {
 	threshold := 1
 	if s.botSpeaking {
 		threshold = s.minWords
 	}
-	if len(strings.Fields(text)) >= threshold {
+	if text.CountSpokenWords(transcript) >= threshold {
 		s.ReportStarted()
 		return
 	}
