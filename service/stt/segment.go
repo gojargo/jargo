@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service"
@@ -61,11 +62,9 @@ type SegmentService struct {
 	trailingSilence time.Duration
 
 	mu sync.Mutex
-	// buf is the audio of the segment being gathered. While the user is not
-	// speaking it holds at most a second, preRoll bytes.
-	buf      []byte
-	preRoll  int
-	speaking bool
+	// speech is the audio of the segment being gathered, with the second of
+	// audio before it.
+	speech *audio.SpeechSegmentBuffer
 
 	// segmentCount numbers the user's speech segments, so a transcript can tell
 	// whether its segment is still the latest; transcribingSegment is the number
@@ -102,6 +101,7 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 	s := &SegmentService{
 		tr: tr, cfgRate: sampleRate, trailingSilence: DefaultTrailingSilence,
 		queued: make(chan struct{}, 1),
+		speech: audio.NewSpeechSegmentBuffer(audio.DefaultPreSpeech, 0),
 	}
 	if d, ok := tr.(Describer); ok {
 		s.model = d.Metadata().Model
@@ -211,8 +211,9 @@ func (s *SegmentService) Setup(ctx context.Context, st processor.Setup) error {
 	if s.sampleRate == 0 {
 		s.sampleRate = st.AudioInSampleRate
 	}
-	// One second of 16-bit mono audio.
-	s.preRoll = s.sampleRate * 2
+	s.mu.Lock()
+	s.speech.SetSampleRate(s.sampleRate)
+	s.mu.Unlock()
 	return nil
 }
 
@@ -250,7 +251,7 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 		s.ttfb.speechStarted()
 		s.tracer.speechStarted(fr.SpeechStart())
 		s.mu.Lock()
-		s.speaking = true
+		s.speech.Start()
 		s.segmentCount++
 		s.mu.Unlock()
 		return s.PushFrame(ctx, f, dir)
@@ -274,14 +275,11 @@ func (s *SegmentService) ProcessFrame(ctx context.Context, f frames.Frame, dir p
 // speaking the buffer keeps growing; while they are not, only the last second
 // is kept, to cover the delay between the speech starting and the VAD
 // reporting it. The transcripts after it are attributed to userID.
-func (s *SegmentService) bufferAudio(audio []byte, userID string) {
+func (s *SegmentService) bufferAudio(pcm []byte, userID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.userID = userID
-	s.buf = append(s.buf, audio...)
-	if !s.speaking && len(s.buf) > s.preRoll {
-		s.buf = append([]byte(nil), s.buf[len(s.buf)-s.preRoll:]...)
-	}
+	s.speech.Append(pcm)
 }
 
 // endSegment closes the segment the VAD just ended and queues it, padded with
@@ -289,20 +287,18 @@ func (s *SegmentService) bufferAudio(audio []byte, userID string) {
 func (s *SegmentService) endSegment() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.speaking = false
-	audio := s.buf
-	s.buf = nil
+	segment := s.speech.Stop()
 	// A service that can no longer work cannot transcribe this segment. The
 	// buffered audio is released above rather than growing for the rest of the
 	// session.
 	if !s.Usable() {
 		return
 	}
-	audio = append(audio, silence(s.trailingSilence, s.sampleRate)...)
-	if len(audio) == 0 {
+	segment = append(segment, silence(s.trailingSilence, s.sampleRate)...)
+	if len(segment) == 0 {
 		return
 	}
-	s.queue = append(s.queue, queuedSegment{audio: audio, number: s.segmentCount})
+	s.queue = append(s.queue, queuedSegment{audio: segment, number: s.segmentCount})
 	select {
 	case s.queued <- struct{}{}:
 	default:

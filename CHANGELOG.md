@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`audio.SpeechSegmentBuffer`** keeps one stretch of speech with the audio
+  just before it: between segments only the last `PreSpeech` of audio (a
+  second by default), which holds the start of the speech the VAD reports
+  late, and from `Start` to `Stop` everything, or the last `Max` of it. The
+  segmented STT service now buffers its segments with it.
+
 - **`text.CountSpokenWords`** counts the spoken words in a transcript:
   whitespace-separated tokens, with each Chinese or Japanese character counted
   as a word of its own.

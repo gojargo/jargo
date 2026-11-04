@@ -187,6 +187,39 @@ func TestSegmentServiceTranscribesBufferedSpeech(t *testing.T) {
 	}
 }
 
+// A segment starts with the last second of audio before the VAD reported
+// speech, which holds the start of the speech the VAD reported late.
+func TestSegmentStartsWithTheLastSecondBeforeSpeech(t *testing.T) {
+	const rate = 16000
+	tr := &fakeTranscriber{got: make(chan []byte, 1)}
+	svc := stt.NewSegment("FakeSegmentSTT", tr, rate)
+	svc.SetTrailingSilence(0)
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	earlier := bytes.Repeat([]byte{1}, rate*2*2)
+	lastSecond := bytes.Repeat([]byte{2}, rate*2)
+	pcm := []byte{3, 4, 5, 6}
+	task.QueueFrame(frames.NewInputAudioRawFrame(earlier, rate, 1))
+	task.QueueFrame(frames.NewInputAudioRawFrame(lastSecond, rate, 1))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0, time.Time{}))
+	task.QueueFrame(frames.NewInputAudioRawFrame(pcm, rate, 1))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0, time.Time{}))
+
+	select {
+	case got := <-tr.got:
+		if want := append(append([]byte(nil), lastSecond...), pcm...); !bytes.Equal(got, want) {
+			t.Fatalf("transcriber got %d bytes, want the last second before speech and the speech, %d",
+				len(got), len(want))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("segment service did not call the transcriber")
+	}
+	task.StopWhenDone()
+	<-runDone
+}
+
 // TestStreamServiceReportsAudioUsage checks that the audio streamed to the
 // provider is reported as usage. Streaming STT is billed on connection time, so
 // silence counts too, and the whole connection is measured rather than the
