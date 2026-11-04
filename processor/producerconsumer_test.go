@@ -294,3 +294,30 @@ func TestConsumerCanPushUpstream(t *testing.T) {
 		t.Fatalf("got %d text frames downstream, want the consumed one sent upstream", n)
 	}
 }
+
+// Cleanup stops the processor's watching along with everything else of it, so
+// nothing of it runs on once the pipeline has ended.
+func TestIdleProcessorCleanupLeavesNothingRunning(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	idle := processor.NewIdleFrameProcessor("Idle", 50*time.Millisecond,
+		func(*processor.IdleFrameProcessor) {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+		})
+
+	collectDownstream(t, []processor.Processor{idle}, func(task *pipeline.Worker) {
+		task.QueueFrame(frames.NewTextFrame("hello"))
+	})
+	mu.Lock()
+	ended := calls
+	mu.Unlock()
+
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != ended {
+		t.Errorf("the callback ran %d times after the pipeline ended", calls-ended)
+	}
+}
