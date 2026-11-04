@@ -616,6 +616,46 @@ func TestIdleWaitForUserDoesNotArmWhileBusy(t *testing.T) {
 	}
 }
 
+// An async tool's intermediate result does not settle the call. An async
+// function call (CancelOnInterruption false) can report progress with
+// non-final results while it keeps running. The bot may speak each update and
+// stop again, but the user is still waiting on the tool, so the idle timer must
+// stay off until the final result arrives.
+func TestIdleIntermediateResultKeepsFunctionCallInProgress(t *testing.T) {
+	h := newIdleHarness(t, idleTimeout)
+
+	// Async tool starts; bot acknowledges it and stops speaking.
+	h.send(frames.NewFunctionCallsStartedFrame([]frames.ToolCall{{ID: "123", Name: "test"}}),
+		frames.NewBotStartedSpeakingFrame(), frames.NewBotStoppedSpeakingFrame())
+
+	// Tool reports progress while still running; bot speaks the update.
+	notFinal := false
+	update := frames.NewFunctionCallResultFrame("123", "test", nil, "halfway")
+	update.Properties = &frames.FunctionCallResultProperties{IsFinal: &notFinal}
+	h.send(update)
+	if !h.ctrl.FunctionCallsInProgress() {
+		t.Fatal("an intermediate result settled the function call")
+	}
+	h.send(frames.NewBotStartedSpeakingFrame(), frames.NewBotStoppedSpeakingFrame())
+
+	// Wait longer than the timeout: it must not fire while the tool runs.
+	if h.waitFired(3 * idleTimeout) {
+		t.Fatal("idle fired while the tool was still running")
+	}
+
+	// Final result settles the call; bot speaks it.
+	h.send(frames.NewFunctionCallResultFrame("123", "test", nil, "done"))
+	if h.ctrl.FunctionCallsInProgress() {
+		t.Fatal("the final result did not settle the function call")
+	}
+	h.send(frames.NewBotStartedSpeakingFrame(), frames.NewBotStoppedSpeakingFrame())
+
+	// Now the timer starts and fires.
+	if !h.waitFired(2 * time.Second) {
+		t.Error("idle did not fire after the final result")
+	}
+}
+
 // WaitingForUser follows the bot finishing and the user speaking.
 func TestIdleWaitingForUser(t *testing.T) {
 	h := newIdleHarness(t, idleTimeout)

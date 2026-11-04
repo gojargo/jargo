@@ -546,6 +546,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The user idle controller no longer counts an asynchronous tool's
+  intermediate result as settling the call. Only the final result does, so the
+  idle timer stays off while the tool keeps reporting progress, instead of
+  firing on the user who is still waiting on it.
+
 - The OpenAI Realtime transcription service (`realtime.NewSTT`) resamples the
   pipeline's input audio to the 24 kHz its session is configured for. It sent
   the audio at the transport's rate labeled as 24 kHz, so a transport at the

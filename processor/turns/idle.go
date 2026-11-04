@@ -138,7 +138,13 @@ func (c *UserIdleController) Process(f frames.Frame) {
 		c.waitingForUser = false
 		c.functionCalls += len(fr.Calls)
 		c.cancelTimer()
-	case *frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame:
+	case *frames.FunctionCallResultFrame:
+		// An async tool can report progress with intermediate results while it
+		// keeps running; only its final result settles the call.
+		if fr.Properties.Final() && c.functionCalls > 0 {
+			c.functionCalls--
+		}
+	case *frames.FunctionCallCancelFrame:
 		if c.functionCalls > 0 {
 			c.functionCalls--
 		}
