@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/provider/openai/realtime/events"
 )
 
 // TestSTTConfigValidate pins which fields the provider requires.
@@ -33,22 +35,105 @@ func TestNewSTT(t *testing.T) {
 	providertest.Service(t, "OpenAIRealtimeSTT", NewSTT(STTConfig{APIKey: "k"}))
 }
 
-// TestSTTMetadata checks the service reports that it detects turns itself.
-func TestSTTMetadata(t *testing.T) {
-	c := &sttConnector{cfg: STTConfig{APIKey: "k", Model: defaultSTTModel}}
-	got, ok := c.Metadata().UserTurnStrategies.(turns.UserTurnStrategies)
-	if !ok {
+// TestSTTShouldInterruptRidesOnRecommendedStrategies checks ShouldInterrupt
+// configures the strategies the service recommends; the service never
+// broadcasts the interruption itself.
+func TestSTTShouldInterruptRidesOnRecommendedStrategies(t *testing.T) {
+	for _, shouldInterrupt := range []bool{true, false} {
+		c := &sttConnector{cfg: STTConfig{
+			APIKey:          "k",
+			Model:           "gpt-transcribe",
+			TurnDetection:   &events.TurnDetection{Type: events.TurnDetectionServerVAD},
+			ShouldInterrupt: new(shouldInterrupt),
+		}}
+		got, ok := c.Metadata().UserTurnStrategies.(turns.UserTurnStrategies)
+		if !ok {
+			t.Fatalf("UserTurnStrategies = %T, want external turn strategies", c.Metadata().UserTurnStrategies)
+		}
+		enabled, external := got.ExternalInterruptions()
+		if !external {
+			t.Error("the recommended strategies are not the external ones")
+		}
+		if enabled != shouldInterrupt {
+			t.Errorf("interruptions enabled = %v, want %v", enabled, shouldInterrupt)
+		}
+	}
+}
+
+// TestSTTServerDefaultsRecommendStrategies checks an empty turn detection, which
+// leaves the session's own default standing, gets the recommendation: that
+// default detects turns, just as an explicit configuration does.
+func TestSTTServerDefaultsRecommendStrategies(t *testing.T) {
+	c := &sttConnector{cfg: STTConfig{APIKey: "k", TurnDetection: &events.TurnDetection{}}}
+	if _, ok := c.Metadata().UserTurnStrategies.(turns.UserTurnStrategies); !ok {
 		t.Fatalf("UserTurnStrategies = %T, want external turn strategies", c.Metadata().UserTurnStrategies)
 	}
-	if _, external := got.ExternalInterruptions(); !external {
-		t.Error("the recommended strategies are not the external ones")
+}
+
+// TestSTTLocalVADModeRecommendsNoStrategies checks that with turn detection off,
+// the default, the service recommends nothing: the server reports no
+// boundaries to propose.
+func TestSTTLocalVADModeRecommendsNoStrategies(t *testing.T) {
+	for _, td := range []*events.TurnDetection{nil, events.NoTurnDetection()} {
+		c := &sttConnector{cfg: STTConfig{APIKey: "k", Model: defaultSTTModel, TurnDetection: td}}
+		if got := c.Metadata().UserTurnStrategies; got != nil {
+			t.Errorf("TurnDetection %v: UserTurnStrategies = %v, want none", td, got)
+		}
 	}
+}
+
+// sessionInput renders a session update to JSON, as it goes on the wire, and
+// returns its audio input configuration.
+func sessionInput(t *testing.T, c *sttConnector) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(c.sessionUpdate())
+	if err != nil {
+		t.Fatalf("marshal session update: %v", err)
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(b, &msg); err != nil {
+		t.Fatalf("unmarshal session update: %v", err)
+	}
+	session, _ := msg["session"].(map[string]any)
+	audio, _ := session[keyAudio].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	return input
 }
 
 // TestSTTSessionUpdate checks the transcription session configuration: the
 // session type, the audio format, and the server-side turn detection that
 // delimits each utterance.
 func TestSTTSessionUpdate(t *testing.T) {
+	t.Run("turn detection", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			td      *events.TurnDetection
+			present bool
+			want    any
+		}{
+			{"off by default", nil, true, nil},
+			{"turned off", events.NoTurnDetection(), true, nil},
+			{"session default", &events.TurnDetection{}, false, nil},
+			{
+				"configured",
+				&events.TurnDetection{Type: events.TurnDetectionServerVAD, SilenceDurationMs: new(700)},
+				true,
+				map[string]any{"type": "server_vad", "silence_duration_ms": float64(700)},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				input := sessionInput(t, &sttConnector{cfg: STTConfig{APIKey: "k", TurnDetection: tc.td}})
+				got, present := input["turn_detection"]
+				if present != tc.present {
+					t.Fatalf("turn_detection present = %v, want %v", present, tc.present)
+				}
+				if !reflect.DeepEqual(got, tc.want) {
+					t.Errorf("turn_detection = %v, want %v", got, tc.want)
+				}
+			})
+		}
+	})
+
 	t.Run("defaults", func(t *testing.T) {
 		c := &sttConnector{cfg: STTConfig{APIKey: "k", Model: defaultSTTModel}}
 		msg := c.sessionUpdate()
@@ -79,9 +164,8 @@ func TestSTTSessionUpdate(t *testing.T) {
 		if _, ok := transcription["delay"]; ok {
 			t.Error("delay is present when unset, want it omitted")
 		}
-		turn, _ := input["turn_detection"].(map[string]any)
-		if turn[keyType] != "server_vad" {
-			t.Errorf("turn_detection = %v, want server_vad", turn)
+		if turn, ok := input["turn_detection"]; !ok || turn != nil {
+			t.Errorf("turn_detection = %v (present %v), want null so the local VAD delimits", turn, ok)
 		}
 		if _, ok := input["noise_reduction"]; ok {
 			t.Error("noise_reduction is present when unset, want it omitted")
@@ -96,7 +180,6 @@ func TestSTTSessionUpdate(t *testing.T) {
 			Prompt:         "product names",
 			Delay:          "minimal",
 			NoiseReduction: "far_field",
-			SilenceMS:      700,
 		}}
 		session, _ := c.sessionUpdate()["session"].(map[string]any)
 		audio, _ := session[keyAudio].(map[string]any)
@@ -111,10 +194,6 @@ func TestSTTSessionUpdate(t *testing.T) {
 		}
 		if transcription["delay"] != "minimal" {
 			t.Errorf("delay = %v, want the configured wait", transcription["delay"])
-		}
-		turn, _ := input["turn_detection"].(map[string]any)
-		if turn["silence_duration_ms"] != 700 {
-			t.Errorf("silence_duration_ms = %v, want 700", turn["silence_duration_ms"])
 		}
 		nr, _ := input["noise_reduction"].(map[string]any)
 		if nr[keyType] != "far_field" {
@@ -333,5 +412,90 @@ func TestSTTResamplesInput(t *testing.T) {
 	}
 	if got > want {
 		t.Errorf("received %d bytes of audio, want at most %d", got, want)
+	}
+}
+
+// TestSTTFinalizeCommitsInLocalVADMode checks the local VAD's stop commits the
+// audio buffer when the server-side VAD is off, and does nothing when it is on,
+// since the server then commits the buffer itself.
+func TestSTTFinalizeCommitsInLocalVADMode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		td     *events.TurnDetection
+		commit bool
+	}{
+		{"local VAD", nil, true},
+		{"server VAD", &events.TurnDetection{Type: events.TurnDetectionServerVAD}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint, sent, _ := sttServer(t, nil)
+			conn := &sttConnector{cfg: STTConfig{APIKey: "k", BaseURL: endpoint, TurnDetection: tc.td}}
+			stream, err := conn.Connect(context.Background(), sttSampleRate)
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+			defer func() { _ = stream.Close() }()
+			<-sent // the session configuration
+
+			fin, ok := stream.(interface{ Finalize() error })
+			if !ok {
+				t.Fatal("the stream does not implement stt.Finalizer")
+			}
+			if err := fin.Finalize(); err != nil {
+				t.Fatalf("Finalize: %v", err)
+			}
+			// Audio after the finalize marks where the stream is by then.
+			if err := stream.Send([]byte{1, 2}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			first := <-sent
+			if committed := first[keyType] == "input_audio_buffer.commit"; committed != tc.commit {
+				t.Errorf("first message after Finalize = %v, want commit %v", first[keyType], tc.commit)
+			}
+		})
+	}
+}
+
+// TestSTTEndOfTurnFollowsTheMode checks a completed transcript ends the turn
+// only when the server-side VAD delimited it; with the local VAD the
+// pipeline's turn strategies decide.
+func TestSTTEndOfTurnFollowsTheMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		td   *events.TurnDetection
+		eot  bool
+	}{
+		{"local VAD", nil, false},
+		{"server VAD", &events.TurnDetection{Type: events.TurnDetectionServerVAD}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint, _, _ := sttServer(t, []map[string]any{
+				{"type": sttEventCompleted, "transcript": "Hello."},
+			})
+			conn := &sttConnector{cfg: STTConfig{APIKey: "k", BaseURL: endpoint, TurnDetection: tc.td}}
+			stream, err := conn.Connect(context.Background(), sttSampleRate)
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+			defer func() { _ = stream.Close() }()
+			res, err := stream.Recv()
+			if err != nil {
+				t.Fatalf("Recv: %v", err)
+			}
+			if len(res) != 1 || !res[0].Final || res[0].EndOfTurn != tc.eot {
+				t.Errorf("result = %+v, want final with EndOfTurn %v", res, tc.eot)
+			}
+		})
+	}
+}
+
+// TestNewSTTOmitsUnsupportedPrompt checks a prompt is dropped for the default
+// model, which rejects it, and kept for a model that takes one.
+func TestNewSTTOmitsUnsupportedPrompt(t *testing.T) {
+	if got := omitUnsupportedPrompt(STTConfig{Model: defaultSTTModel, Prompt: "names"}); got.Prompt != "" {
+		t.Errorf("prompt = %q for %s, want it omitted", got.Prompt, defaultSTTModel)
+	}
+	if got := omitUnsupportedPrompt(STTConfig{Model: "gpt-transcribe", Prompt: "names"}); got.Prompt != "names" {
+		t.Errorf("prompt = %q for gpt-transcribe, want it kept", got.Prompt)
 	}
 }

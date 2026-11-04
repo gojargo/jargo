@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
 )
@@ -58,7 +60,8 @@ type STTConfig struct {
 	// decide.
 	Language language.Language
 	// Prompt guides the transcription style or supplies keyword hints; empty
-	// sends none. The default streaming model does not support it.
+	// sends none. The default streaming model does not support it, so with that
+	// model it is dropped with a warning.
 	Prompt string
 	// NoiseReduction filters the input audio: "near_field" for a close
 	// microphone, "far_field" for a distant one. Empty disables it.
@@ -68,9 +71,25 @@ type STTConfig struct {
 	// "xhigh". Empty leaves the field off. Only gpt-realtime-whisper, the default
 	// model, honors it.
 	Delay string `validate:"omitempty,oneof=minimal low medium high xhigh"`
-	// SilenceMS is how long the server waits through silence before ending an
-	// utterance; 0 uses the server default.
-	SilenceMS int `validate:"omitempty,min=0"`
+	// TurnDetection is the server-side VAD configuration. Nil, the default,
+	// turns it off and relies on a local VAD in the pipeline: when the VAD
+	// reports the user stopped, the service commits the audio buffer so the
+	// server transcribes the finished segment. A configuration turns it on, at
+	// minimum &events.TurnDetection{Type: events.TurnDetectionServerVAD}; the
+	// server then delimits each utterance, the service proposes those turn
+	// boundaries, and it recommends the external user turn strategies that
+	// resolve them, so no separate VAD should run in the pipeline. An empty
+	// &events.TurnDetection{} leaves the field off the session, keeping the
+	// session's own default, which detects turns. Server-side detection needs a
+	// model that supports it: gpt-transcribe does, the default
+	// gpt-realtime-whisper does not.
+	TurnDetection *events.TurnDetection
+	// ShouldInterrupt barges in when the server-side VAD hears the user speak;
+	// nil enables it. It only applies with TurnDetection on, and is passed along
+	// to the user turn strategies this service recommends, which own the
+	// interruption; strategies the application configures itself override the
+	// recommendation and this setting with it.
+	ShouldInterrupt *bool
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; 0 uses stt.OpenAIRealtimeTTFSP99.
@@ -80,9 +99,11 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
-// NewSTT builds an OpenAI Realtime transcription service. The server detects
-// utterance boundaries itself, so the pipeline does not need its own end-of-turn
-// detection and the service recommends external turn strategies.
+// NewSTT builds an OpenAI Realtime transcription service. By default the
+// pipeline's local VAD delimits each utterance and the service commits the
+// audio for it when the VAD reports the user stopped; with
+// STTConfig.TurnDetection set the server detects the turns instead. See
+// STTConfig.TurnDetection.
 //
 // The Realtime API exchanges 24 kHz audio, which is what the session is
 // configured for. The service resamples the pipeline's input audio to it, so
@@ -94,20 +115,46 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = defaultSTTModel
 	}
+	cfg = omitUnsupportedPrompt(cfg)
 	return stt.NewStream("OpenAIRealtimeSTT", &sttConnector{cfg: cfg}, 0)
+}
+
+// omitUnsupportedPrompt drops a prompt the configured model does not accept.
+func omitUnsupportedPrompt(cfg STTConfig) STTConfig {
+	if cfg.Model == defaultSTTModel && cfg.Prompt != "" {
+		slog.Warn("openai realtime stt: the model does not support a prompt; omitting it from the session",
+			"model", cfg.Model)
+		cfg.Prompt = ""
+	}
+	return cfg
+}
+
+// serverVAD reports whether the server detects the turns: any turn detection
+// configuration that does not turn it off, including the session's own default.
+func (c STTConfig) serverVAD() bool {
+	return c.TurnDetection != nil && !c.TurnDetection.Disabled
 }
 
 type sttConnector struct {
 	cfg STTConfig
 }
 
-// Metadata tells downstream processors the session detects turns itself.
+// Metadata recommends the external turn strategies when the server-side VAD
+// drives the turns: the server detects the speech boundaries and the service
+// proposes turns from them, so the user aggregator resolves those rather than
+// running its own detection. With the server-side VAD off the server reports no
+// boundaries, and the pipeline's defaults are left in place.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{
-		UserTurnStrategies: turns.ExternalStrategies(turns.ExternalStrategiesConfig{}),
-		TTFSP99:            cmp.Or(c.cfg.TTFSP99, stt.OpenAIRealtimeTTFSP99),
-		Model:              c.cfg.Model,
+	md := stt.Metadata{
+		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.OpenAIRealtimeTTFSP99),
+		Model:   c.cfg.Model,
 	}
+	if c.cfg.serverVAD() {
+		md.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{
+			EnableInterruptions: c.cfg.ShouldInterrupt,
+		})
+	}
+	return md
 }
 
 // Connect opens a transcription session and configures it. Audio is resampled
@@ -141,7 +188,9 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 		_ = conn.Close(websocket.StatusInternalError, "session update failed")
 		return nil, err
 	}
-	return &sttStream{conn: conn, ctx: ctx, lang: c.cfg.Language.BaseCode(), rs: rs}, nil
+	return &sttStream{
+		conn: conn, ctx: ctx, lang: c.cfg.Language.BaseCode(), rs: rs, serverVAD: c.cfg.serverVAD(),
+	}, nil
 }
 
 // sessionUpdate configures the transcription session: the audio format, the
@@ -158,16 +207,18 @@ func (c *sttConnector) sessionUpdate() map[string]any {
 		transcription["delay"] = c.cfg.Delay
 	}
 
-	turnDetection := map[string]any{keyType: "server_vad"}
-	if c.cfg.SilenceMS > 0 {
-		turnDetection["silence_duration_ms"] = c.cfg.SilenceMS
-	}
-
 	input := map[string]any{
-		"format":         map[string]any{keyType: "audio/pcm", "rate": sttSampleRate},
-		"transcription":  transcription,
-		"turn_detection": turnDetection,
+		"format":        map[string]any{keyType: "audio/pcm", "rate": sttSampleRate},
+		"transcription": transcription,
 	}
+	switch td := c.cfg.TurnDetection; {
+	case td == nil || td.Disabled:
+		// Off: sent as null, so the local VAD delimits the utterances.
+		input["turn_detection"] = nil
+	case *td != (events.TurnDetection{}):
+		input["turn_detection"] = td
+	}
+	// An empty configuration leaves the field off, keeping the session default.
 	if c.cfg.NoiseReduction != "" {
 		input["noise_reduction"] = map[string]any{keyType: c.cfg.NoiseReduction}
 	}
@@ -186,6 +237,9 @@ type sttStream struct {
 	ctx  context.Context
 	// lang is the configured language echoed on results, or "".
 	lang string
+	// serverVAD reports whether the server delimits the utterances. When it
+	// does not, the service commits the audio buffer on the local VAD's stop.
+	serverVAD bool
 	// rs converts the pipeline's audio to the 24 kHz the session takes; it
 	// passes the audio through when the pipeline already runs at that rate.
 	// writeMu guards it.
@@ -231,12 +285,13 @@ func (s *sttStream) Send(audio []byte) error {
 }
 
 // Recv reads the next transcript. A delta is the utterance so far; the completed
-// event finalizes it and ends the turn, since the server's own VAD delimited it.
+// event finalizes it. With the server-side VAD on it also ends the turn, since
+// that VAD delimited it; with it off the pipeline's turn strategies decide.
 //
-// That VAD also reports where the speech begins and ends, and those boundaries
-// are carried on the results as proposals for the pipeline's turn strategies to
-// resolve. The server sends the stop ahead of the transcript it belongs to, so
-// the strategy resolving it waits for the text.
+// The server-side VAD also reports where the speech begins and ends, and those
+// boundaries are carried on the results as proposals for the pipeline's turn
+// strategies to resolve. The server sends the stop ahead of the transcript it
+// belongs to, so the strategy resolving it waits for the text.
 func (s *sttStream) Recv() ([]stt.Result, error) {
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -259,7 +314,7 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			if m.Transcript == "" {
 				continue
 			}
-			return []stt.Result{{Text: m.Transcript, Final: true, EndOfTurn: true, Language: s.lang}}, nil
+			return []stt.Result{{Text: m.Transcript, Final: true, EndOfTurn: s.serverVAD, Language: s.lang}}, nil
 		case sttEventSpeechStarted:
 			return []stt.Result{{Speech: stt.SpeechStarted}}, nil
 		case sttEventSpeechStopped:
@@ -269,6 +324,22 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			return nil, fmt.Errorf("%w: %s", errServer, m.Error.Message)
 		}
 	}
+}
+
+// Finalize commits the audio buffer when the local VAD reports the user
+// stopped, so the server transcribes the finished segment. With the server-side
+// VAD on, the server commits the buffer itself and this does nothing.
+func (s *sttStream) Finalize() error {
+	if s.serverVAD {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{keyType: "input_audio_buffer.commit"})
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(s.ctx, websocket.MessageText, payload)
 }
 
 // Close tears the session down and releases the resampler.

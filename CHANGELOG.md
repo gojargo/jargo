@@ -331,6 +331,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Breaking: OpenAI Realtime transcription takes turns from the local VAD by
+  default.** `realtime.NewSTT` turns the server-side VAD off unless
+  `STTConfig.TurnDetection` configures it, and commits the audio buffer when
+  the pipeline's VAD reports the user stopped, so the server transcribes the
+  finished segment. The default model, `gpt-realtime-whisper`, does not support
+  server-side detection. Set `TurnDetection` (for example
+  `&events.TurnDetection{Type: events.TurnDetectionServerVAD}`, with a model such
+  as `gpt-transcribe`) to have the server delimit the turns; the service then
+  recommends the external turn strategies, with interruptions following the new
+  `ShouldInterrupt`. An empty `&events.TurnDetection{}` keeps the session's own
+  default. `STTConfig.SilenceMS` is removed: set
+  `TurnDetection.SilenceDurationMs` instead. A prompt is dropped, with a
+  warning, for the default model, which rejects it.
+
 - **OpenAI Realtime speaks the GA protocol and holds runtime settings.** The
   service no longer sends the beta header; it configures the session once the
   server reports it created, from `realtime.Settings`, whose
