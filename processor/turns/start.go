@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // wakePhraseDefaultTimeout is how long a wake-phrase session stays awake without
@@ -209,21 +210,17 @@ func NewWakePhraseStart(cfg WakePhraseStartConfig) *WakePhraseStart {
 }
 
 // compileWakePatterns builds a case-insensitive, whitespace-flexible regex per
-// phrase, alongside the phrases themselves so a match can name the one it hit.
+// phrase (see text.CompilePhrasePattern), alongside the phrases themselves so a
+// match can name the one it hit.
 func compileWakePatterns(phrases []string) ([]string, []*regexp.Regexp) {
 	var kept []string
 	var out []*regexp.Regexp
 	for _, p := range phrases {
-		words := strings.Fields(p)
-		if len(words) == 0 {
+		if len(strings.Fields(p)) == 0 {
 			continue
 		}
-		quoted := make([]string, len(words))
-		for i, w := range words {
-			quoted[i] = regexp.QuoteMeta(w)
-		}
 		kept = append(kept, p)
-		out = append(out, regexp.MustCompile(`(?i)\b`+strings.Join(quoted, `\s*`)+`\b`))
+		out = append(out, text.CompilePhrasePattern(p))
 	}
 	return kept, out
 }

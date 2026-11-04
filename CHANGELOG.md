@@ -15,6 +15,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`text.CompilePhrasePattern`** compiles the pattern that finds a spoken
+  phrase in a transcript: case-insensitive, any whitespace between its words,
+  on Unicode word boundaries except next to scripts written without spaces.
+
 - **The OpenAI Realtime API's messages as types.** A new
   `provider/openai/realtime/events` package holds the session's properties
   (`SessionProperties`: audio formats, transcription, server or semantic turn
@@ -545,6 +549,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   directly and leave reconnecting to the receive loop.
 
 ### Fixed
+
+- A wake phrase is now found in Chinese, Japanese and Thai transcripts, which
+  have no spaces between words: "小助手" wakes on "你好小助手帮我订一张机票".
+  The phrase's word boundaries are also Unicode ones now, so a phrase in any
+  script, or one ending in an accented letter ("café"), matches, and its words
+  may be separated by Unicode whitespace. Before, the boundaries were ASCII
+  only and such a phrase never matched.
 
 - The user idle controller no longer counts an asynchronous tool's
   intermediate result as settling the call. Only the final result does, so the

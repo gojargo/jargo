@@ -179,3 +179,33 @@ func TestWakeOnlyEnoughWordsInterruptTheBotOnceAwake(t *testing.T) {
 		t.Fatalf("starts = %d, want 2", n)
 	}
 }
+
+// A wake phrase in a script written without spaces is found with the request
+// that follows it, and inside a sentence, where no word boundary sets it off.
+
+func TestWakeChinesePhraseFollowedByRequest(t *testing.T) {
+	s := NewWakePhraseStart(WakePhraseStartConfig{Phrases: []string{"小助手"}})
+	h := newWakeHarness(t, StrategyModeDefault, s)
+
+	if got := s.Process(transcript("小助手，今天天气怎么样？")); got != Stop {
+		t.Errorf("Process = %v, want Stop", got)
+	}
+	h.c.Locked(func() {
+		if !s.awake {
+			t.Error("not awake after the wake phrase")
+		}
+	})
+}
+
+func TestWakeChinesePhraseInsideSentence(t *testing.T) {
+	s := NewWakePhraseStart(WakePhraseStartConfig{Phrases: []string{"小助手"}})
+	h := newWakeHarness(t, StrategyModeDefault, s)
+
+	h.transcribe("你好小助手帮我订一张机票")
+
+	h.c.Locked(func() {
+		if !s.awake {
+			t.Error("not awake after the wake phrase")
+		}
+	})
+}
