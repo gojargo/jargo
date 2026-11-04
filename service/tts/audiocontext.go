@@ -1048,6 +1048,9 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 	// Whether any audio arrived for this context at all, which is what says the
 	// provider actually spoke rather than accepting the request in silence.
 	receivedAudio := false
+	// TTSTextFrames, and any frames queued behind them that arrived before audio,
+	// are held until the audio confirms that the text was actually spoken.
+	var held []frames.Frame
 	for {
 		it, ok, timedOut := c.get(ctx, b.stopFrameTimeout)
 		if timedOut {
@@ -1066,6 +1069,10 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 			b.pushWord(ctx, c, contextID, it)
 			continue
 		}
+		if shouldHoldFrame(it.frame, receivedAudio, held) {
+			held = append(held, it.frame)
+			continue
+		}
 		switch fr := it.frame.(type) {
 		case *frames.TTSStartedFrame:
 			shouldPushStop = true
@@ -1079,18 +1086,26 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 			receivedAudio = true
 			c.observe(fr.Audio)
 			waiting := c.startWordTimestamps(b.now(), b.lastWordPTS())
+			b.pushHeldFrames(ctx, held)
+			held = nil
 			_ = b.PushFrame(ctx, it.frame, processor.Downstream)
 			for _, w := range waiting {
 				b.pushWord(ctx, c, contextID, w)
 			}
 			continue
 		case *frames.TTSStoppedFrame:
-			b.applyForceComplete(ctx, contextID)
+			// Checking if we have any remaining spoken slots before pushing the
+			// stop frame.
+			b.releaseHeldFramesWithoutAudio(ctx, contextID, held)
+			held = nil
+			b.applyForceComplete(ctx, contextID, receivedAudio)
 			shouldPushStop = false
 		}
 		_ = b.PushFrame(ctx, it.frame, processor.Downstream)
 	}
-	b.applyForceComplete(ctx, contextID)
+	// Words the provider never timed come before the stop frame.
+	b.releaseHeldFramesWithoutAudio(ctx, contextID, held)
+	b.applyForceComplete(ctx, contextID, receivedAudio)
 	if shouldPushStop {
 		stopped := frames.NewTTSStoppedFrame()
 		stopped.ContextID = contextID
@@ -1245,7 +1260,52 @@ func (b *Base) setLastWordPTS(pts time.Duration) {
 
 // applyForceComplete closes out a context whose audio has ended, emitting the
 // text of any sentence the provider never finished reporting words for and
-// releasing the frames that were waiting behind it.
-func (b *Base) applyForceComplete(ctx context.Context, contextID string) {
-	b.pushWordFrames(ctx, b.sequencer.ForceComplete(contextID, int64(b.lastWordPTS())))
+// releasing the frames that were waiting behind it. receivedAudio is whether any
+// audio arrived for the context: without audio nothing was spoken, so the
+// remaining text is dropped.
+func (b *Base) applyForceComplete(ctx context.Context, contextID string, receivedAudio bool) {
+	b.pushWordFrames(ctx, b.sequencer.ForceComplete(contextID, int64(b.lastWordPTS()), receivedAudio))
+}
+
+// shouldHoldFrame reports whether a frame waits for the context's first audio
+// before being pushed.
+//
+// Spoken text is queued as soon as it is sent for synthesis, often before its
+// audio, and only belongs in the context once audio shows it was spoken. Frames
+// queued behind it wait too, so they keep their order.
+func shouldHoldFrame(f frames.Frame, receivedAudio bool, held []frames.Frame) bool {
+	if receivedAudio {
+		return false
+	}
+	switch f.(type) {
+	case *frames.TTSAudioRawFrame, *frames.TTSStoppedFrame, *frames.ErrorFrame:
+		return false
+	case *frames.TTSTextFrame:
+		return true
+	}
+	return len(held) > 0
+}
+
+// pushHeldFrames pushes the frames held back until the context's first audio.
+func (b *Base) pushHeldFrames(ctx context.Context, held []frames.Frame) {
+	for _, f := range held {
+		_ = b.PushFrame(ctx, f, processor.Downstream)
+	}
+}
+
+// releaseHeldFramesWithoutAudio drops the held spoken text of a context that
+// produced no audio, and pushes the rest.
+func (b *Base) releaseHeldFramesWithoutAudio(ctx context.Context, contextID string, held []frames.Frame) {
+	var dropped strings.Builder
+	for _, f := range held {
+		if tf, ok := f.(*frames.TTSTextFrame); ok {
+			dropped.WriteString(tf.Text)
+			continue
+		}
+		_ = b.PushFrame(ctx, f, processor.Downstream)
+	}
+	if dropped.Len() > 0 {
+		slog.WarnContext(ctx, "audio context produced no audio, not adding its text to the context",
+			"service", b.Name(), "context", contextID, "text", dropped.String())
+	}
 }

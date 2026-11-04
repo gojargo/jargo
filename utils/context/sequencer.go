@@ -349,7 +349,13 @@ func (s *AggregatedFrameSequencer) flushLocked(lastWordPTS int64) []frames.Frame
 // that carries the view to the end of it, and is marked complete; slots of other
 // contexts still in flight are left to their own words. The context is then
 // forgotten, so any word arriving later is stale.
-func (s *AggregatedFrameSequencer) forceCompleteLocked(contextID string, lastWordPTS int64) []frames.Frame {
+//
+// emitRemaining is whether to emit the remaining unspoken text. It is false when
+// the context produced no audio, so none of its text was spoken: the slots are
+// completed without emitting their text.
+func (s *AggregatedFrameSequencer) forceCompleteLocked(
+	contextID string, lastWordPTS int64, emitRemaining bool,
+) []frames.Frame {
 	var out []frames.Frame
 	if s.streamingMode {
 		s.discardBufferedWords(contextID)
@@ -359,31 +365,7 @@ func (s *AggregatedFrameSequencer) forceCompleteLocked(contextID string, lastWor
 			continue
 		}
 		if slot.tracker != nil {
-			remaining := slot.tracker.RemainingTTSText(true)
-			rawRemaining, hasRaw := slot.tracker.RemainingRawTextOnly()
-			// The words left, not the markup the service was sent for its tags,
-			// are what the LLM's text has to hold, read without its own tags.
-			remainingWords := strings.Join(strings.Fields(stripCompleteMarkup(remaining)), " ")
-			llmWords := rawRemaining
-			if s.llmMarkup != nil {
-				llmWords = stripLLMMarkup(llmWords, s.llmMarkup)
-			}
-			llmWords = strings.Join(strings.Fields(llmWords), " ")
-			if hasRaw && rawRemaining != "" && remainingWords != "" && !contains(llmWords, remainingWords) {
-				slog.Warn("sequencer force-complete: remaining texts disagree, discarding the original",
-					"sequencer", s.name, "raw", rawRemaining, "text", remaining)
-				rawRemaining = ""
-			}
-			// A slot that is only tags, such as a sound, has LLM text and nothing
-			// left to say.
-			if remaining != "" || rawRemaining != "" {
-				out = append(out, s.buildWordFrame(remaining, lastWordPTS, slot.contextID,
-					slot.frame.ID(), rawRemaining, false, slot.includesInterFrame))
-				// That frame carries the rest of the text, so the progress view has
-				// to reach the end alongside it.
-				slot.tracker.TakeRemainingAsSpoken()
-				out = append(out, s.buildProgressFrame(slot, lastWordPTS))
-			}
+			out = append(out, s.forceCompleteSlotLocked(slot, lastWordPTS, emitRemaining)...)
 		}
 		slot.complete = true
 	}
@@ -391,6 +373,46 @@ func (s *AggregatedFrameSequencer) forceCompleteLocked(contextID string, lastWor
 	delete(s.contextAppend, contextID)
 	delete(s.streaming, contextID)
 	return out
+}
+
+// forceCompleteSlotLocked returns the frames that close out one incomplete
+// spoken slot: its remaining unspoken text, paired with the progress frame that
+// carries the view to the end of it, or nothing when emitRemaining is false
+// and there is text left to drop. See forceCompleteLocked.
+func (s *AggregatedFrameSequencer) forceCompleteSlotLocked(
+	slot *aggregatedFrameSlot, lastWordPTS int64, emitRemaining bool,
+) []frames.Frame {
+	remaining := slot.tracker.RemainingTTSText(true)
+	rawRemaining, hasRaw := slot.tracker.RemainingRawTextOnly()
+	// The words left, not the markup the service was sent for its tags, are
+	// what the LLM's text has to hold, read without its own tags.
+	remainingWords := strings.Join(strings.Fields(stripCompleteMarkup(remaining)), " ")
+	llmWords := rawRemaining
+	if s.llmMarkup != nil {
+		llmWords = stripLLMMarkup(llmWords, s.llmMarkup)
+	}
+	llmWords = strings.Join(strings.Fields(llmWords), " ")
+	if hasRaw && rawRemaining != "" && remainingWords != "" && !contains(llmWords, remainingWords) {
+		slog.Warn("sequencer force-complete: remaining texts disagree, discarding the original",
+			"sequencer", s.name, "raw", rawRemaining, "text", remaining)
+		rawRemaining = ""
+	}
+	if remaining != "" && !emitRemaining {
+		slog.Warn("sequencer: context produced no audio, dropping unspoken text",
+			"sequencer", s.name, "context", slot.contextID, "text", remaining)
+		return nil
+	}
+	// A slot that is only tags, such as a sound, has LLM text and nothing left
+	// to say.
+	if remaining == "" && rawRemaining == "" {
+		return nil
+	}
+	word := s.buildWordFrame(remaining, lastWordPTS, slot.contextID,
+		slot.frame.ID(), rawRemaining, false, slot.includesInterFrame)
+	// That frame carries the rest of the text, so the progress view has to reach
+	// the end alongside it.
+	slot.tracker.TakeRemainingAsSpoken()
+	return []frames.Frame{word, s.buildProgressFrame(slot, lastWordPTS)}
 }
 
 // Clear drops the slots and context state, for an interruption, except those of
@@ -654,8 +676,10 @@ func (s *AggregatedFrameSequencer) Flush(lastWordPTS int64) []frames.Frame {
 
 // ForceComplete completes a context's outstanding slots. See
 // forceCompleteLocked.
-func (s *AggregatedFrameSequencer) ForceComplete(contextID string, lastWordPTS int64) []frames.Frame {
+func (s *AggregatedFrameSequencer) ForceComplete(
+	contextID string, lastWordPTS int64, emitRemaining bool,
+) []frames.Frame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.forceCompleteLocked(contextID, lastWordPTS)
+	return s.forceCompleteLocked(contextID, lastWordPTS, emitRemaining)
 }

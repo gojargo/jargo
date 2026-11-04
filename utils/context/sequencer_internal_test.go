@@ -44,7 +44,7 @@ func TestBufferedWordIsDroppedAtContextEnd(t *testing.T) {
 		t.Fatalf("buffered = %v, want the mark held back", got)
 	}
 
-	for _, f := range s.ForceComplete("ctx1", 30) {
+	for _, f := range s.ForceComplete("ctx1", 30, true) {
 		if w, ok := f.(*frames.TTSTextFrame); ok {
 			t.Errorf("force-complete emitted %q, want nothing: the slot was already spoken", w.Text)
 		}
@@ -63,7 +63,7 @@ func TestBufferedWordForAnotherContextIsLeftAlone(t *testing.T) {
 	}
 	s.buffered[0].contextID = "ctx2"
 
-	s.ForceComplete("ctx1", 30)
+	s.ForceComplete("ctx1", 30, true)
 	if got := bufferedWords(s); len(got) != 1 || got[0] != "。" {
 		t.Errorf("buffered = %v, want the other context's word left for its own turn", got)
 	}

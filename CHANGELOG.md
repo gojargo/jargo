@@ -345,6 +345,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Breaking:** `AggregatedFrameSequencer.ForceComplete` takes a third
+  argument, `emitRemaining`. Pass `true` for the behavior it had; `false`, for
+  a context that produced no audio, completes its slots without emitting their
+  unspoken text.
+
 - The Anthropic service sends Claude Haiku 5.5 `effort: "low"` by default
   instead of `thinking: disabled`, when neither `Thinking` nor `Effort` is
   set. With thinking disabled, Haiku 5.5 speaks its reasoning before a tool
@@ -578,6 +583,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   directly and leave reconnecting to the receive loop.
 
 ### Fixed
+
+- A TTS context that produces no audio no longer adds its text to the
+  conversation. Nothing of it was spoken, so the bot's turn no longer records
+  words the user never heard. The base holds a context's spoken text, and the
+  frames queued behind it, until the first audio arrives, then pushes them
+  ahead of it in order; when the context ends without audio, the held text is
+  dropped with a warning and the other held frames go on.
 
 - The min-words start strategy counts each Chinese or Japanese character as a
   word. Those languages have no spaces between words, so a whole sentence

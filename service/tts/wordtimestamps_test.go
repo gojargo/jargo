@@ -298,11 +298,23 @@ func TestWordTimestampsCarryPresentationTimestamps(t *testing.T) {
 // asyncSynth answers on its own receive loop rather than inline: RunTTS returns
 // having yielded nothing, and the audio reaches the context later. Realtime
 // WebSocket providers work this way.
-type asyncSynth struct{ rate int }
+type asyncSynth struct {
+	rate int
+	host tts.AudioContextHost
+}
 
 func (s *asyncSynth) SampleRate() int { return s.rate }
 
-func (s *asyncSynth) RunTTS(_ context.Context, _, _ string, _ func(f frames.Frame) error) error {
+func (s *asyncSynth) SetAudioContextHost(h tts.AudioContextHost) { s.host = h }
+
+func (s *asyncSynth) RunTTS(_ context.Context, _, contextID string, _ func(f frames.Frame) error) error {
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		f := frames.NewTTSAudioRawFrame(make([]byte, 4800), s.rate, 1)
+		f.ContextID = contextID
+		s.host.AppendToAudioContext(contextID, f)
+		s.host.RemoveAudioContext(contextID)
+	}()
 	return nil
 }
 

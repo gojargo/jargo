@@ -77,7 +77,7 @@ func TestSequencerForceCompleteEmitsRemainder(t *testing.T) {
 	s.RegisterSpoken(frame, "c1", "One two three.", true, true, false, "")
 	s.ProcessWord("One", 100, "c1", false)
 
-	got := texts(s.ForceComplete("c1", 200))
+	got := texts(s.ForceComplete("c1", 200, true))
 	if len(got) == 0 || got[0] != "word:two three." {
 		t.Fatalf("frames = %v, want the unspoken remainder", got)
 	}
@@ -98,7 +98,7 @@ func TestSequencerForceCompletePairsRemainderWithProgress(t *testing.T) {
 
 	var words []*frames.TTSTextFrame
 	var progress []*frames.AggregatedTextProgressFrame
-	for _, f := range s.ForceComplete("c1", 200) {
+	for _, f := range s.ForceComplete("c1", 200, true) {
 		switch fr := f.(type) {
 		case *frames.TTSTextFrame:
 			words = append(words, fr)
@@ -670,9 +670,9 @@ func TestForceComplete(t *testing.T) {
 		seq := seqWithSpoken(t, "hello world", "ctx1", true)
 		seq.ProcessWord("hello", 10, "ctx1", false) // "world" never arrives
 
-		got := wordFrames(seq.ForceComplete("ctx1", 50))
+		got := wordFrames(seq.ForceComplete("ctx1", 50, true))
 		if len(got) != 1 || got[0].Text != "world" {
-			t.Fatalf("got %v, want the unspoken remainder", texts(seq.ForceComplete("ctx1", 50)))
+			t.Fatalf("got %v, want the unspoken remainder", texts(seq.ForceComplete("ctx1", 50, true)))
 		}
 		if pts, has := got[0].PTS(); !has || pts != 50 {
 			t.Fatalf("emitted at %d (set=%v), want the last word's moment, 50", pts, has)
@@ -685,7 +685,7 @@ func TestForceComplete(t *testing.T) {
 		seq.RegisterSpoken(segment, "ctx1", "hello world", true, true, false, "")
 		seq.ProcessWord("hello", 10, "ctx1", false)
 
-		got := wordFrames(seq.ForceComplete("ctx1", 50))
+		got := wordFrames(seq.ForceComplete("ctx1", 50, true))
 		if len(got) != 1 || got[0].SegmentID != segment.ID() {
 			t.Fatalf("got %+v, want the remainder of segment %d", got, segment.ID())
 		}
@@ -693,7 +693,7 @@ func TestForceComplete(t *testing.T) {
 
 	t.Run("with nothing spoken at all, the whole unit is emitted", func(t *testing.T) {
 		seq := seqWithSpoken(t, "hello world", "ctx1", true)
-		got := wordFrames(seq.ForceComplete("ctx1", 0))
+		got := wordFrames(seq.ForceComplete("ctx1", 0, true))
 		if len(got) != 1 || got[0].Text != "hello world" {
 			t.Fatal("the whole unit was not emitted")
 		}
@@ -702,7 +702,7 @@ func TestForceComplete(t *testing.T) {
 	t.Run("a unit already said emits nothing", func(t *testing.T) {
 		seq := seqWithSpoken(t, "hi", "ctx1", true)
 		seq.ProcessWord("hi", 5, "ctx1", false)
-		if out := seq.ForceComplete("ctx1", 10); len(out) != 0 {
+		if out := seq.ForceComplete("ctx1", 10, true); len(out) != 0 {
 			t.Fatalf("got %v, want nothing: the unit had been said in full", texts(out))
 		}
 	})
@@ -712,7 +712,7 @@ func TestForceComplete(t *testing.T) {
 		skipped := skippedFrame("code")
 		seq.RegisterSkipped(skipped, "ctx2", "")
 
-		out := seq.ForceComplete("ctx1", 20)
+		out := seq.ForceComplete("ctx1", 20, true)
 		if !contains(out, skipped) {
 			t.Fatal("the held frame was not released")
 		}
@@ -728,7 +728,7 @@ func TestForceComplete(t *testing.T) {
 		seq.RegisterSpoken(frame, "ctx1", "4111 1111", true, true, false, "")
 		seq.ProcessWord("4111", 10, "ctx1", false) // "1111" never arrives
 
-		got := wordFrames(seq.ForceComplete("ctx1", 20))
+		got := wordFrames(seq.ForceComplete("ctx1", 20, true))
 		if len(got) == 0 || got[0].Text != "1111" {
 			t.Fatal("the unspoken remainder was not emitted")
 		}
@@ -743,7 +743,7 @@ func TestForceComplete(t *testing.T) {
 		frame.RawText = "xyz"
 		seq.RegisterSpoken(frame, "ctx1", "abc", true, true, false, "")
 
-		got := wordFrames(seq.ForceComplete("ctx1", 0))
+		got := wordFrames(seq.ForceComplete("ctx1", 0, true))
 		if len(got) != 1 || got[0].Text != "abc" {
 			t.Fatal("the unit was not emitted")
 		}
@@ -759,7 +759,7 @@ func TestForceComplete(t *testing.T) {
 		skipped := skippedFrame("code")
 		seq.RegisterSkipped(skipped, "ctx2", "")
 
-		out := seq.ForceComplete("ctx1", 0)
+		out := seq.ForceComplete("ctx1", 0, true)
 		if got := wordFrames(out); len(got) != 0 {
 			t.Fatalf("got %v, want no words: this unit was never tracked word by word", texts(out))
 		}
@@ -773,12 +773,12 @@ func TestForceComplete(t *testing.T) {
 		seq.RegisterSpoken(spokenFrame("hello"), "ctx1", "hello", true, true, false, "")
 		seq.RegisterSpoken(spokenFrame("world"), "ctx2", "world", true, true, false, "")
 
-		first := wordFrames(seq.ForceComplete("ctx1", 0))
+		first := wordFrames(seq.ForceComplete("ctx1", 0, true))
 		if len(first) != 1 || first[0].Text != "hello" {
 			t.Fatal("closing one context out did not emit its own text alone")
 		}
 		// The other is still in flight and closes out on its own afterwards.
-		second := wordFrames(seq.ForceComplete("ctx2", 10))
+		second := wordFrames(seq.ForceComplete("ctx2", 10, true))
 		if len(second) != 1 || second[0].Text != "world" {
 			t.Fatal("the other context was left unable to close itself out")
 		}
@@ -788,7 +788,7 @@ func TestForceComplete(t *testing.T) {
 		// Some providers deliver timings seconds late. Emitting one now would
 		// interleave it into the turn being spoken.
 		seq := seqWithSpoken(t, "hello", "ctx1", true)
-		seq.ForceComplete("ctx1", 0)
+		seq.ForceComplete("ctx1", 0, true)
 		if out := seq.ProcessWord("hello", 5, "ctx1", false); len(out) != 0 {
 			t.Fatalf("got %v, want nothing: the context is closed", texts(out))
 		}
@@ -798,12 +798,43 @@ func TestForceComplete(t *testing.T) {
 		// The service closes a context out on its stop frame and again when its
 		// audio has drained.
 		seq := seqWithSpoken(t, "hello", "ctx1", true)
-		first := wordFrames(seq.ForceComplete("ctx1", 0))
+		first := wordFrames(seq.ForceComplete("ctx1", 0, true))
 		if len(first) != 1 || first[0].Text != "hello" {
 			t.Fatal("the first close did not emit the unspoken text")
 		}
-		if out := seq.ForceComplete("ctx1", 10); len(out) != 0 {
+		if out := seq.ForceComplete("ctx1", 10, true); len(out) != 0 {
 			t.Fatalf("got %v, want nothing the second time", texts(out))
+		}
+	})
+}
+
+// A context that produced no audio said none of its text, so force-completing it
+// drops what was left rather than emitting it, and still releases what waited
+// behind it.
+func TestForceCompleteWithoutAudio(t *testing.T) {
+	t.Run("without audio the remaining text is dropped", func(t *testing.T) {
+		seq := seqWithSpoken(t, "hello world", "ctx1", true)
+
+		if out := seq.ForceComplete("ctx1", 0, false); len(out) != 0 {
+			t.Fatalf("got %v, want nothing: no audio, so none of it was spoken", texts(out))
+		}
+		// The slot is complete, so a word arriving afterwards emits nothing.
+		if out := seq.ProcessWord("hello", 10, "ctx1", false); len(out) != 0 {
+			t.Fatalf("a late word emitted %v", texts(out))
+		}
+	})
+
+	t.Run("without audio what waited behind it is still released", func(t *testing.T) {
+		seq := seqWithSpoken(t, "hello", "ctx1", true)
+		skipped := skippedFrame("code")
+		seq.RegisterSkipped(skipped, "ctx2", "")
+
+		out := seq.ForceComplete("ctx1", 20, false)
+		if len(out) != 1 || out[0] != frames.Frame(skipped) {
+			t.Fatalf("got %v, want only the held frame", out)
+		}
+		if !skipped.AppendToContext {
+			t.Fatal("the released frame says it does not belong in the conversation")
 		}
 	})
 }
@@ -1179,7 +1210,7 @@ func TestCJKSpacingReachesTheFrames(t *testing.T) {
 
 		seq.ProcessWord("どんなことでも気", 100, "ctx1", true)
 		// The rest is never reported, so the unit is closed out with what is left.
-		got := wordFrames(seq.ForceComplete("ctx1", 200))
+		got := wordFrames(seq.ForceComplete("ctx1", 200, true))
 		if len(got) != 1 {
 			t.Fatalf("got %d frames, want the unspoken remainder", len(got))
 		}

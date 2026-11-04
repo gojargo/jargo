@@ -192,7 +192,7 @@ func (b *Base) endTagsOnlyReply(ctx context.Context, contextID string) {
 	if !known {
 		return
 	}
-	b.applyForceComplete(ctx, contextID)
+	b.applyForceComplete(ctx, contextID, false)
 	b.deleteTTSContext(contextID)
 }
 
