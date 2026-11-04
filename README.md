@@ -36,23 +36,7 @@ binary. For that, Go is a better fit: one static binary to deploy, low and
 predictable memory, fast startup, and real concurrency for many simultaneous
 sessions without a GIL. The heavy numerics stay where they belong (the ONNX
 Runtime, the remote services), so giving up Python costs little here. See the
-[benchmarks](docs/benchmarks.md) for the honest performance picture.
-
-### In numbers
-
-1,000 concurrent sessions served on 3 CPUs: one jargo process, against one
-Pipecat 1.15 process per CPU (the GIL holds each to one core).
-
-| | jargo | Pipecat |
-|---|---|---|
-| Memory, idle | 8.6 MiB | 162 MiB |
-| Memory, 1,000 sessions | 124 MiB | 357 MiB |
-| Throughput | 96k frames/s | 10.8k frames/s |
-| Startup per session | 0.12 ms | 1.08 ms |
-
-Medians of 6 runs on a GitHub-hosted runner (AMD EPYC 7763), every difference
-significant. This is framework overhead only: provider round trips dominate what
-a caller hears, and cost the same on both. [Method](docs/benchmarks.md).
+[benchmarks](#benchmarks) for the honest performance picture.
 
 ## Features
 
@@ -172,6 +156,22 @@ Both libraries are loaded at run time through
 time. Point jargo at them with `JARGO_ONNXRUNTIME_LIB` and `JARGO_RNNOISE_LIB`, or
 leave them on the loader's default search path. The
 [base images](docs/deploy/docker.md) bundle all of them.
+
+## Benchmarks
+
+1,000 concurrent sessions served on 3 CPUs: one jargo process, against one
+Pipecat 1.15 process per CPU (the GIL holds each to one core).
+
+| | jargo | Pipecat |
+|---|---|---|
+| Memory, idle | 8.6 MiB | 162 MiB |
+| Memory, 1,000 sessions | 124 MiB | 357 MiB |
+| Throughput | 96k frames/s | 10.8k frames/s |
+| Startup per session | 0.12 ms | 1.08 ms |
+
+Medians of 6 runs on a GitHub-hosted runner (AMD EPYC 7763), every difference
+significant. This is framework overhead only: provider round trips dominate what
+a caller hears, and cost the same on both. [Method](docs/benchmarks.md).
 
 ## License & attribution
 
