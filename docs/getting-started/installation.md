@@ -67,7 +67,7 @@ if filter, err := rnnoise.New(); err == nil {
 ```
 
 `rnnoise.New` returns an error when the library is missing, which is the
-idiomatic way to make denoising optional. See `examples/voice/openai`.
+idiomatic way to make denoising optional.
 
 ## No cgo
 

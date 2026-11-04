@@ -6,8 +6,9 @@ weight: 3
 # Your first bot
 
 The complete voice agent is about fifteen lines. This page builds it up one piece
-at a time, explaining each. The finished result is
-[`examples/voice/openai`](../../examples/voice/openai).
+at a time, explaining each. For a complete program to run, see
+[`examples/getting-started/06-voice-agent`](../../examples/getting-started/06-voice-agent),
+which builds the same agent on the dev runner.
 
 ## 1. The services
 

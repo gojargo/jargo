@@ -15,9 +15,7 @@ two nouns.
 
 ## The shape of a bot
 
-Here is a complete voice agent: the pipeline from
-[`examples/voice/openai`](https://github.com/gojargo/jargo/tree/main/examples/voice/openai),
-which is the reference wiring:
+Here is a complete voice agent, the reference wiring:
 
 ```mermaid
 flowchart LR

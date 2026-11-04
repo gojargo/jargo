@@ -5,8 +5,9 @@ file's doc comment lists the API keys it reads and how to drive it.
 
 Turn-taking (Silero VAD and Smart Turn) needs the ONNX Runtime; see
 [Installation](../docs/getting-started/installation.md). The getting-started
-voice agents (06, 06a, 07) do not start without it. The other voice examples
-still run, on STT endpointing, and lose barge-in.
+voice agents (06, 06a, 07) and the `voice`, `function-calling` and `transports`
+examples do not start without it. `voicebot`, `flows` and `twiliobot` still run,
+on STT endpointing, and lose barge-in.
 
 ## Getting started
 
@@ -26,6 +27,54 @@ Each step adds one idea to the one before. The bots run on the
 The numbering follows the getting-started series these are ported from. Steps
 03 to 05 show images and video, which jargo's transports do not carry, so they
 are not here.
+
+## Voice
+
+The voice agent on each provider's services, wired explicitly: speech-to-text, an
+LLM and text-to-speech, with the user aggregator detecting speech through Silero
+VAD. They need the ONNX Runtime, like the getting-started voice agents.
+
+| Example | Services |
+| --- | --- |
+| [`voice-assemblyai`](voice/voice-assemblyai) | AssemblyAI speech-to-text and text-to-speech, with an OpenAI LLM. |
+| [`voice-asyncai`](voice/voice-asyncai) | Deepgram speech-to-text, an OpenAI LLM and Async text-to-speech. |
+| [`voice-aws`](voice/voice-aws) | AWS Transcribe speech-to-text, Claude on AWS Bedrock and AWS Polly text-to-speech. |
+| [`voice-azure-http`](voice/voice-azure-http) | Azure speech-to-text, Azure OpenAI and Azure text-to-speech over HTTP. |
+| [`voice-camb`](voice/voice-camb) | Deepgram speech-to-text, an OpenAI LLM and Camb AI text-to-speech. |
+| [`voice-cartesia`](voice/voice-cartesia) | Cartesia speech-to-text and text- to-speech, with an OpenAI LLM. |
+| [`voice-cartesia-http`](voice/voice-cartesia-http) | Cartesia speech-to-text, an OpenAI LLM and Cartesia text-to-speech over HTTP. |
+| [`voice-deepgram-flux`](voice/voice-deepgram-flux) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM. |
+| [`voice-deepgram-http`](voice/voice-deepgram-http) | Deepgram speech-to-text and text-to-speech (over HTTP), with an OpenAI LLM. |
+| [`voice-elevenlabs`](voice/voice-elevenlabs) | ElevenLabs realtime speech-to- text and streaming text-to-speech, with an OpenAI LLM. |
+| [`voice-elevenlabs-http`](voice/voice-elevenlabs-http) | ElevenLabs speech-to-text and text-to-speech over HTTP, with an OpenAI LLM. |
+| [`voice-fal`](voice/voice-fal) | Fal speech-to-text, an OpenAI LLM and Cartesia text-to-speech. |
+| [`voice-fish`](voice/voice-fish) | Deepgram speech-to-text, an OpenAI LLM and Fish Audio text-to-speech. |
+| [`voice-gladia`](voice/voice-gladia) | Gladia speech-to-text, an OpenAI LLM and Cartesia text-to-speech. |
+| [`voice-gladia-vad`](voice/voice-gladia-vad) | Gladia (with its own voice activity detection) speech-to-text, an OpenAI LLM and Cartesia text-to- speech. |
+| [`voice-gradium`](voice/voice-gradium) | Gradium speech-to-text and text-to- speech, with an OpenAI LLM. |
+| [`voice-groq`](voice/voice-groq) | Groq speech-to-text, LLM and text-to- speech. |
+| [`voice-hume`](voice/voice-hume) | Deepgram speech-to-text, an OpenAI LLM and Hume text-to-speech. |
+| [`voice-inworld-http`](voice/voice-inworld-http) | Deepgram speech-to-text, an OpenAI LLM and Inworld (over HTTP) text-to-speech. |
+| [`voice-kokoro`](voice/voice-kokoro) | Deepgram speech-to-text, an OpenAI LLM and Kokoro text-to-speech. |
+| [`voice-minimax`](voice/voice-minimax) | Deepgram speech-to-text, an OpenAI LLM and MiniMax text-to-speech. |
+| [`voice-mistral`](voice/voice-mistral) | Mistral speech-to-text and text-to- speech, with an OpenAI LLM. |
+| [`voice-neuphonic`](voice/voice-neuphonic) | Deepgram speech-to-text, an OpenAI LLM and Neuphonic text-to-speech. |
+| [`voice-nvidia`](voice/voice-nvidia) | NVIDIA speech-to-text, LLM and text- to-speech. |
+| [`voice-nvidia-segmented`](voice/voice-nvidia-segmented) | NVIDIA speech-to-text (transcribing each utterance once it ends), LLM and text-to-speech. |
+| [`voice-openai`](voice/voice-openai) | OpenAI's realtime transcription, LLM and text-to-speech. |
+| [`voice-openai-http`](voice/voice-openai-http) | OpenAI transcription, LLM and text-to-speech, transcribing over HTTP. |
+| [`voice-openai-responses`](voice/voice-openai-responses) | Deepgram speech-to-text, OpenAI's Responses API and Cartesia text-to-speech. |
+| [`voice-openai-responses-http`](voice/voice-openai-responses-http) | Deepgram speech-to- text, OpenAI's Responses API over HTTP and Cartesia text-to-speech. |
+| [`voice-piper`](voice/voice-piper) | Deepgram speech-to-text, an OpenAI LLM and Piper text-to-speech. |
+| [`voice-pockettts`](voice/voice-pockettts) | Deepgram speech-to-text, an OpenAI LLM and Pocket TTS text-to-speech. |
+| [`voice-resemble`](voice/voice-resemble) | Deepgram speech-to-text, an OpenAI LLM and Resemble AI text-to-speech. |
+| [`voice-rime-http`](voice/voice-rime-http) | Deepgram speech-to-text, an OpenAI LLM and Rime (over HTTP) text-to-speech. |
+| [`voice-sarvam`](voice/voice-sarvam) | Sarvam speech-to-text, LLM and text- to-speech. |
+| [`voice-soniox`](voice/voice-soniox) | Soniox speech-to-text and text-to- speech, with an OpenAI LLM. |
+| [`voice-together`](voice/voice-together) | Together AI speech-to-text, LLM and text-to-speech. |
+| [`voice-xai`](voice/voice-xai) | XAI speech-to-text, Grok and xAI text- to-speech. |
+| [`voice-xai-http`](voice/voice-xai-http) | Deepgram speech-to-text, Grok and xAI text-to-speech over HTTP. |
+| [`voice-xtts`](voice/voice-xtts) | Deepgram speech-to-text, an OpenAI LLM and XTTS text-to-speech. |
 
 ## Function calling
 
@@ -101,11 +150,10 @@ too, for the user aggregator's default turn strategies.
 | --- | --- |
 | [`voicebot`](voicebot) | The full agent: Deepgram, Anthropic and ElevenLabs over WebRTC, with turn-taking, barge-in, RTVI, optional mem0 memory and OpenTelemetry tracing. Serves its own page at <http://localhost:8080>. |
 | [`flows`](flows) | A structured coffee order driven by the `flows` package: tool calls move the conversation from node to node. |
-| [`voice/<provider>`](voice) | One backend per provider, each wiring its STT, LLM and TTS explicitly. |
 
-The `voice/<provider>` backends and `flows` expose only the WebRTC `POST /offer`
-endpoint. Drive them from a browser client such as the `nextjs-voicebot` example
-in [jargo-client-react](https://github.com/gojargo/jargo-client-react), with
+`flows` exposes only the WebRTC `POST /offer` endpoint. Drive it from a browser
+client such as the `nextjs-voicebot` example in
+[jargo-client-react](https://github.com/gojargo/jargo-client-react), with
 `NEXT_PUBLIC_JARGO_URL=http://localhost:8080`.
 
 ## Telephony

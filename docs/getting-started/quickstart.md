@@ -10,9 +10,9 @@ The example bots live in [`examples/`](../../examples):
 - **echo**: speak into the browser, hear yourself back. No API keys.
 - **voicebot**: the full voice agent. STT → LLM → TTS with turn-taking and
   barge-in, plus long-term memory and tracing.
-- **voice/**: one headless backend per provider, each wiring its STT/LLM/TTS
-  explicitly in Go and exposing only the WebRTC `/offer` endpoint
-  (`go run ./examples/voice/<provider>`); drive it from a browser client.
+- **voice/**: the voice agent on each provider's STT, LLM and TTS, wired
+  explicitly in Go on the dev runner (`go run ./examples/voice/voice-<provider>`),
+  with a browser client at <http://localhost:7860>.
 
 Run them with Docker (no host setup) or with a local Go toolchain.
 
@@ -72,16 +72,13 @@ different provider, run one of the per-provider examples under
 provider wired explicitly in Go:
 
 ```sh
-go run ./examples/voice/cartesia     # Deepgram STT, Anthropic LLM, Cartesia TTS
-go run ./examples/voice/openai       # OpenAI STT + LLM + TTS
-go run ./examples/voice/groq         # Groq STT + LLM, ElevenLabs TTS
+go run ./examples/voice/voice-cartesia   # Cartesia STT + TTS, OpenAI LLM
+go run ./examples/voice/voice-openai     # OpenAI STT + LLM + TTS
+go run ./examples/voice/voice-groq       # Groq STT + LLM + TTS
 ```
 
-These are **headless backends**: they expose the WebRTC `/offer` endpoint and no
-web UI. Point a browser client at `http://localhost:8080`, such as the `nextjs-voicebot`
-example in [jargo-client-react](https://github.com/gojargo/jargo-client-react),
-with `NEXT_PUBLIC_JARGO_URL=http://localhost:8080`. Each example's doc comment
-lists the API keys it needs.
+Each runs on the dev runner: open <http://localhost:7860> and connect. Each
+example's doc comment lists the API keys it needs.
 
 ## Next
 

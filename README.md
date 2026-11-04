@@ -84,8 +84,9 @@ task := pipeline.NewWorker(pipeline.New(
 task.Run(ctx)
 ```
 
-[`examples/voice/openai`](examples/voice/openai) is that pipeline as a complete
-server (WebRTC signaling, VAD/turn-taking, barge-in).
+[`examples/getting-started/06-voice-agent`](examples/getting-started/06-voice-agent)
+is a complete voice agent on the dev runner (WebRTC signaling, a browser client,
+VAD and turn-taking, barge-in).
 
 **Run it in Docker**: build on the `gojargo/jargo-build` base and ship on the
 distroless `gojargo/jargo` runtime (it bundles the ONNX Runtime), then:
@@ -114,11 +115,10 @@ The others:
 - **echo**: hear yourself back, no API keys.
 - **voicebot**: the full voice agent (STT → LLM → TTS over WebRTC) with
   turn-taking, long-term memory, and tracing.
-- **voice/**: one headless backend per provider, each wiring its STT/LLM/TTS
-  explicitly and exposing the WebRTC `/offer` endpoint (no web UI). Run with
-  `go run ./examples/voice/<provider>` (e.g. `deepgram`, `cartesia`, `openai`)
-  and drive it from a browser client, the `nextjs-voicebot` in
-  [jargo-client-react](https://github.com/gojargo/jargo-client-react).
+- **voice/**: the voice agent on each provider's STT, LLM and TTS, wired
+  explicitly on the dev runner. Run with `go run ./examples/voice/voice-<provider>`
+  (e.g. `voice-deepgram-flux`, `voice-cartesia`, `voice-openai`) and open
+  <http://localhost:7860>.
 - **twiliobot**: a phone agent over Twilio Media Streams, with the idle watchdog.
 
 The fastest way to try them (locally or with Docker) is the

@@ -160,18 +160,12 @@ enough audio has arrived to measure.
 ## Clients
 
 For the browser, use the client packages in
-[jargo-client-react](https://github.com/gojargo/jargo-client-react). The
-`nextjs-voicebot` example there talks to any of the `examples/voice/<provider>`
-backends:
+[jargo-client-react](https://github.com/gojargo/jargo-client-react).
 
-```sh
-go run ./examples/voice/openai                        # backend on :8080
-NEXT_PUBLIC_JARGO_URL=http://localhost:8080 npm run dev   # client
-```
-
-The per-provider examples are **headless**: they expose the `/offer` endpoint and
-no UI, so a client is required. `examples/echo` and `examples/voicebot` serve
-their own minimal page and need nothing extra.
+The examples on the dev runner (`examples/getting-started`, `examples/voice` and
+the others built on the `runner` package) serve a prebuilt browser client at
+<http://localhost:7860>, so they need nothing extra. `examples/echo` and
+`examples/voicebot` serve their own minimal page.
 
 ## Without RTVI
 

@@ -8,7 +8,7 @@
 //
 // The provider stack is fixed here so the example can focus on those advanced
 // features. To see other STT/LLM/TTS providers wired explicitly (one provider
-// per file), look at examples/voice (e.g. `go run ./examples/voice/cartesia`).
+// per file), look at examples/voice (e.g. `go run ./examples/voice/voice-cartesia`).
 //
 // Set DEEPGRAM_API_KEY, ANTHROPIC_API_KEY and ELEVENLABS_API_KEY, then run it,
 // open http://localhost:8080, click start, and allow the mic. Long-term memory
