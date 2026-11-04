@@ -51,8 +51,9 @@ type Config struct {
 	TopP        *float64
 	TopK        *int64
 	// Thinking configures thinking. If neither this nor Effort is set, the
-	// service sends the lowest thinking setting Anthropic documents for the
-	// model, for the fastest responses, and logs what it sent. Models it does
+	// service sends a low-latency thinking default for the model (its lowest
+	// documented setting, unless that makes the model speak its reasoning) and
+	// logs what it sent. Models it does
 	// not list run at Anthropic's default.
 	Thinking *ThinkingConfig `validate:"omitempty"`
 	// Effort is how much the model spends on its response, thinking included:
@@ -102,18 +103,21 @@ const (
 	effortLow            = "low"
 )
 
-// thinkingDefault is the request fields a model's lowest thinking setting is
-// sent as: a thinking type, or, on a model whose thinking cannot be turned off,
-// an effort.
+// thinkingDefault is the request fields a model's thinking default is sent as:
+// a thinking type, or an effort, on a model whose thinking cannot be turned off
+// or that speaks its reasoning with thinking off.
 type thinkingDefault struct {
 	thinking string
 	effort   string
 }
 
-// thinkingDefaults is the lowest thinking setting Anthropic documents for each
-// model, sent when the caller configures neither Thinking nor Effort, keyed by
-// model name. "between_tools" is Sonnet 5.5's lowest setting, and "disabled"
-// is already the default on the Claude 4 models.
+// thinkingDefaults is the request fields sent when the caller sets neither
+// Thinking nor Effort, keyed by model name. Each is the model's lowest
+// documented setting, for the fastest responses, unless that setting makes the
+// model speak its reasoning: Haiku 5.5 with thinking disabled narrates its
+// decisions before tool calls, so it gets low effort. "between_tools" is Sonnet
+// 5.5's lowest setting, and "disabled" is already the default on the Claude 4
+// models.
 //
 //nolint:gochecknoglobals // a lookup table
 var thinkingDefaults = map[string]thinkingDefault{
@@ -123,7 +127,7 @@ var thinkingDefaults = map[string]thinkingDefault{
 	"claude-opus-5":     {thinking: thinkingDisabled},
 	"claude-sonnet-5-5": {thinking: thinkingBetweenTools},
 	"claude-sonnet-5":   {thinking: thinkingDisabled},
-	"claude-haiku-5-5":  {thinking: thinkingDisabled},
+	"claude-haiku-5-5":  {effort: effortLow},
 	"claude-opus-4-8":   {thinking: thinkingDisabled},
 	"claude-opus-4-7":   {thinking: thinkingDisabled},
 	"claude-opus-4-6":   {thinking: thinkingDisabled},

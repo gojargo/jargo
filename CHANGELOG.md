@@ -345,6 +345,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- The Anthropic service sends Claude Haiku 5.5 `effort: "low"` by default
+  instead of `thinking: disabled`, when neither `Thinking` nor `Effort` is
+  set. With thinking disabled, Haiku 5.5 speaks its reasoning before a tool
+  call. Low effort adds about 0.1 s to a turn with a clear answer and about
+  0.6 s to one where the model has to decide what to do. The log line for a
+  thinking default now calls it jargo's low-latency default rather than the
+  model's lowest setting.
+
 - `elevenlabs.NewRealtimeTTS` now holds incoming frames after a turn until
   its audio has played, as a service synthesizing turn by turn does. The new
   `RealtimeTTSConfig.PauseFrameProcessing` turns that off (it is on when nil),

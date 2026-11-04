@@ -33,7 +33,7 @@ func (b *Base) SetUseProviderThinkingDefault(on bool) {
 // ReportThinkingDefault reports, once per model, the thinking default a service
 // sends a model whose request configures no thinking of its own.
 //
-// Services that send each model its lowest thinking setting call it whenever
+// Services that send each model a low-latency thinking default call it whenever
 // they apply that default, or find they have none for the model, or send none
 // because UseProviderThinkingDefault is set. The first request for each model
 // logs the setting sent, or that the model runs at the provider's default:
@@ -63,7 +63,7 @@ func (b *Base) ReportThinkingDefault(model, setting string, canThink bool, provi
 				"service", b.Name(), "model", model, "provider", provider, "configure", configure)
 		}
 	case setting != "":
-		slog.Info("sending the model its lowest thinking setting, for the fastest responses; "+
+		slog.Info("sending the model jargo's low-latency thinking default for it; "+
 			"if the bot needs multistep reasoning, configure it",
 			"service", b.Name(), "model", model, "setting", setting, "configure", configure)
 	case canThink:

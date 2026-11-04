@@ -153,13 +153,22 @@ func obj(kv ...any) map[string]any {
 // the lowest setting wherever a model allows it.
 func TestModelsThatAllowItGetThinkingDisabled(t *testing.T) {
 	for _, model := range []string{
-		"claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5",
+		"claude-opus-5", "claude-sonnet-5",
 		"claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5",
 	} {
 		want := obj("thinking", obj("type", "disabled"))
 		if got := thinkingFields(appliedDefault(t, model)); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %v, want %v", model, got, want)
 		}
+	}
+}
+
+// TestHaiku55GetsLowEffort checks that Haiku 5.5, which speaks its reasoning
+// with thinking disabled, gets low effort.
+func TestHaiku55GetsLowEffort(t *testing.T) {
+	want := obj("output_config", obj("effort", "low"))
+	if got := thinkingFields(appliedDefault(t, "claude-haiku-5-5")); !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 

@@ -190,8 +190,8 @@ func extraConfiguresThinking(extra map[string]any) bool {
 	return ok
 }
 
-// applyThinkingDefault sends the model its lowest thinking setting when no
-// reasoning is configured.
+// applyThinkingDefault sends the model its thinking default when no reasoning
+// is configured.
 //
 // It applies the model's entry in thinkingDefaults, if it has one. A request
 // that already sets thinking or an effort, from the config or from Extra, is
