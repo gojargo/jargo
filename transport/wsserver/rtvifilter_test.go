@@ -117,3 +117,50 @@ func TestNonRTVIMessagesStillReachATelephonyWire(t *testing.T) {
 	}
 	t.Fatal("the provider's own control message never reached the wire")
 }
+
+// messageFrames are both kinds of outgoing message frame carrying message.
+func messageFrames(message any) []frames.Frame {
+	return []frames.Frame{
+		frames.NewOutputTransportMessageFrame(message),
+		frames.NewOutputTransportMessageUrgentFrame(message),
+	}
+}
+
+func TestShouldIgnoreFrameIgnoresAnRTVIMessage(t *testing.T) {
+	var s wsserver.BaseSerializer
+	for _, f := range messageFrames(map[string]any{"label": rtvi.MessageLabel}) {
+		if !s.ShouldIgnoreFrame(f) {
+			t.Errorf("%T carrying an RTVI message was kept", f)
+		}
+	}
+}
+
+func TestShouldIgnoreFrameKeepsOtherMessages(t *testing.T) {
+	var s wsserver.BaseSerializer
+	if s.ShouldIgnoreFrame(frames.NewOutputTransportMessageFrame(map[string]any{"label": "something-else"})) {
+		t.Error("a message that is not RTVI was ignored")
+	}
+	if s.ShouldIgnoreFrame(frames.NewTextFrame("hello")) {
+		t.Error("a frame that is not a transport message was ignored")
+	}
+}
+
+// A message can be anything, so one that is not an object is kept, and asking
+// about it must not panic.
+func TestShouldIgnoreFrameKeepsAMessageThatIsNotAnObject(t *testing.T) {
+	var s wsserver.BaseSerializer
+	for _, payload := range []any{[]any{}, []any{"a"}, "str", 123, 1.5, true, nil, [2]int{1, 2}, struct{}{}} {
+		for _, f := range messageFrames(payload) {
+			if s.ShouldIgnoreFrame(f) {
+				t.Errorf("%T carrying %#v was ignored", f, payload)
+			}
+		}
+	}
+}
+
+func TestShouldIgnoreFrameKeepsRTVIMessagesWhenAskedTo(t *testing.T) {
+	s := wsserver.BaseSerializer{KeepRTVIMessages: true}
+	if s.ShouldIgnoreFrame(frames.NewOutputTransportMessageFrame(map[string]any{"label": rtvi.MessageLabel})) {
+		t.Error("an RTVI message was ignored with KeepRTVIMessages on")
+	}
+}
