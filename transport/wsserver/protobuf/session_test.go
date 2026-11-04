@@ -218,3 +218,33 @@ func TestAClientMessageReachesThePipeline(t *testing.T) {
 	}
 	t.Fatal("the client's message never reached the pipeline")
 }
+
+// A malformed message from the client is skipped: the frames after it still
+// reach the pipeline.
+func TestReceivingContinuesAfterAMalformedMessage(t *testing.T) {
+	s := connect(t)
+
+	if err := s.client.Write(t.Context(), websocket.MessageBinary, []byte{0x80}); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+	s.send(t, frames.NewTextFrame("Still connected"))
+	s.send(t, frames.NewOutputAudioRawFrame(make([]byte, 320), sessionRate, 1))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var text, audio bool
+		for _, f := range s.tap.frames() {
+			switch f := f.(type) {
+			case *frames.TextFrame:
+				text = text || f.Text == "Still connected"
+			case *frames.InputAudioRawFrame:
+				audio = true
+			}
+		}
+		if text && audio {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("the frames after a malformed message never reached the pipeline")
+}

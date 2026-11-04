@@ -154,3 +154,19 @@ func TestDeserializeRejectsAFrameItCannotRead(t *testing.T) {
 
 // serializerContract is the compile-time check that this is a usable serializer.
 var _ wsserver.Serializer = (*protobuf.Serializer)(nil)
+
+// A malformed message decodes to nothing, and the next one decodes as usual.
+func TestMalformedMessageDoesNotPreventNextFrame(t *testing.T) {
+	s := protobuf.New()
+	for _, data := range [][]byte{{0x80}, {0x0a, 0x05, 'x'}, {0x00}} {
+		f, err := s.Deserialize(data)
+		if err == nil || f != nil {
+			t.Errorf("Deserialize(%x) = %v, %v; want an error and no frame", data, f, err)
+		}
+
+		got := roundtrip(t, s, frames.NewTextFrame("Still connected"))
+		if tf, ok := got.(*frames.TextFrame); !ok || tf.Text != "Still connected" {
+			t.Errorf("after %x: got %#v, want the text frame", data, got)
+		}
+	}
+}
