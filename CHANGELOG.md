@@ -532,6 +532,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The OpenAI Realtime transcription service (`realtime.NewSTT`) resamples the
+  pipeline's input audio to the 24 kHz its session is configured for. It sent
+  the audio at the transport's rate labeled as 24 kHz, so a transport at the
+  default 16 kHz input rate gave it audio it misread.
+
 - A continuously generating LLM service can report its timing. `llm.Base`
   gains `ReportTTFBMetrics`, `StartProcessingMetrics`,
   `StopProcessingMetrics` and `StopAllMetrics`, which report each measurement

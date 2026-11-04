@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/providertest"
@@ -289,5 +290,48 @@ func TestSTTServerError(t *testing.T) {
 		t.Fatal("Recv() = nil error, want the server error surfaced")
 	} else if !strings.Contains(err.Error(), "invalid model") {
 		t.Errorf("error = %v, want it to carry the server message", err)
+	}
+}
+
+// TestSTTResamplesInput checks audio at the pipeline's rate is resampled to the
+// 24 kHz the session is configured for before it is appended, so a transport
+// running at 16 kHz is not sent audio labeled with the wrong rate.
+func TestSTTResamplesInput(t *testing.T) {
+	endpoint, sent, _ := sttServer(t, nil)
+	conn := &sttConnector{cfg: STTConfig{APIKey: "k", BaseURL: endpoint, Model: defaultSTTModel}}
+	stream, err := conn.Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+	<-sent // the session configuration
+
+	// 200 ms of 16 kHz mono PCM, in 20 ms chunks.
+	const chunks, chunkBytes = 10, 640
+	for range chunks {
+		if err := stream.Send(make([]byte, chunkBytes)); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+	}
+
+	// The same 200 ms at 24 kHz is 9600 bytes; the resampler may hold back a
+	// few samples of its filter delay.
+	const want = chunks * chunkBytes * 3 / 2
+	got := 0
+	for got < want*9/10 {
+		select {
+		case msg := <-sent:
+			b64, _ := msg[keyAudio].(string)
+			pcm, derr := base64.StdEncoding.DecodeString(b64)
+			if derr != nil {
+				t.Fatalf("decode audio: %v", derr)
+			}
+			got += len(pcm)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("received %d bytes of audio, want about %d", got, want)
+		}
+	}
+	if got > want {
+		t.Errorf("received %d bytes of audio, want at most %d", got, want)
 	}
 }
