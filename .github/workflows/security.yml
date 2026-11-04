@@ -60,7 +60,7 @@ jobs:
       # (action pinning, overbroad permissions, curl|bash, risky triggers). It
       # uploads its SARIF to the Security tab itself (upload-sarif defaults true).
       - name: Plumber pipeline scan
-        uses: getplumber/plumber@ace0b096144d1f7af8290f4d63349a5a0cd5c889 # v0.7.14
+        uses: getplumber/plumber@2342834dc0b67d2c87a33ac86789e481ad869402 # v0.7.17
         with:
           # Gate below the action's default of 100 so CI stays green while the
           # findings still surface in the Security tab. Raise it as the pipelines
