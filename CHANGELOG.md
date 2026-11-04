@@ -339,6 +339,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `elevenlabs.NewRealtimeTTS` now holds incoming frames after a turn until
+  its audio has played, as a service synthesizing turn by turn does. The new
+  `RealtimeTTSConfig.PauseFrameProcessing` turns that off (it is on when nil),
+  letting contexts synthesize concurrently on the one connection while still
+  playing in order.
+
 - `elevenlabs.NewRealtimeTTS` warns when given an Eleven v3 or v4 model,
   which the multi-stream WebSocket endpoint does not serve: the handshake is
   refused with a 400 that leaves the service unusable. The warning points to

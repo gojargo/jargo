@@ -92,6 +92,11 @@ type RealtimeTTSConfig struct {
 	// assistant context record what was actually spoken before an interruption.
 	// ElevenLabs times every character, so the words are assembled from those.
 	WordTimestamps bool
+	// PauseFrameProcessing holds incoming frames after a turn until its audio
+	// has played; nil leaves it on. With it off, contexts synthesize
+	// concurrently on the one connection (two speak frames pushed at once, or
+	// back-to-back turns) and still play in order.
+	PauseFrameProcessing *bool
 }
 
 // Validate reports whether the configuration is usable.
@@ -118,6 +123,9 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 		// caller turns it off.
 		c.AutoMode = new(true)
 	}
+	if c.PauseFrameProcessing == nil {
+		c.PauseFrameProcessing = new(true)
+	}
 	return c
 }
 
@@ -135,12 +143,16 @@ func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
 		slog.Warn("elevenlabs: this is an Eleven v3/v4 model, which the text-to-speech WebSocket "+
 			"endpoint does not serve; use NewTTS for HTTP streaming", "model", model)
 	}
+	var b *tts.Base
 	if cfg.WordTimestamps {
 		// Only the timestamp-aware type implements tts.WordTimestamps, so the
 		// base takes the word-aligned path solely when timings were requested.
-		return tts.New("ElevenLabsRealtimeTTS", &timedRealtimeSynthesizer{realtimeSynthesizer: s})
+		b = tts.New("ElevenLabsRealtimeTTS", &timedRealtimeSynthesizer{realtimeSynthesizer: s})
+	} else {
+		b = tts.New("ElevenLabsRealtimeTTS", s)
 	}
-	return tts.New("ElevenLabsRealtimeTTS", s)
+	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: *s.cfg.PauseFrameProcessing})
+	return b
 }
 
 // realtimeSynthesizer streams over one held-open connection, with one synthesis

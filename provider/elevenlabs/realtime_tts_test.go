@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -722,5 +723,132 @@ func TestRealtimeTTSWarnsOnV3V4Models(t *testing.T) {
 func TestRealtimeTTSAcceptsFlashModelsWithoutAWarning(t *testing.T) {
 	if logged := realtimeWarnings(t, "eleven_flash_v2_5"); strings.Contains(logged, "v3/v4") {
 		t.Errorf("logged %q, want no v3/v4 warning", logged)
+	}
+}
+
+// Holding frames per turn is the default; turning it off lets contexts overlap.
+func TestRealtimeTTSPauseFrameProcessingIsConfigurable(t *testing.T) {
+	if got := (RealtimeTTSConfig{}).withDefaults().PauseFrameProcessing; got == nil || !*got {
+		t.Errorf("PauseFrameProcessing = %v, want on by default", got)
+	}
+	cfg := RealtimeTTSConfig{PauseFrameProcessing: new(false)}.withDefaults()
+	if *cfg.PauseFrameProcessing {
+		t.Error("PauseFrameProcessing turned off came back on")
+	}
+}
+
+// alignmentChunk times each character of text 100 ms after the last, each
+// lasting 100 ms.
+func alignmentChunk(text string) *charAlignment {
+	a := &charAlignment{}
+	for i, r := range []rune(text) {
+		a.Chars = append(a.Chars, string(r))
+		a.CharStartTimesMs = append(a.CharStartTimesMs, float64(i*100))
+		a.CharDurationsMs = append(a.CharDurationsMs, 100)
+	}
+	return a
+}
+
+// contextWord is a word reported for a context, at an offset.
+type contextWord struct {
+	context string
+	word    string
+	offset  float64
+}
+
+// wordsHost records the words reported for each context.
+type wordsHost struct {
+	fakeHost
+	mu    sync.Mutex
+	words []contextWord
+}
+
+func (h *wordsHost) AddWordTimestamps(contextID string, words []uctx.WordTiming, _ tts.WordTimingOptions) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, w := range words {
+		h.words = append(h.words, contextWord{contextID, w.Word, w.Offset})
+	}
+}
+
+func (h *wordsHost) reported() []contextWord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]contextWord(nil), h.words...)
+}
+
+// Alignment for concurrent contexts arrives interleaved on one connection; a
+// word split across one context's chunks must not pick up another context's
+// characters or clock.
+func TestRealtimeTTSInterleavedContextsAlignWordsIndependently(t *testing.T) {
+	s := &realtimeSynthesizer{cfg: RealtimeTTSConfig{APIKey: "k", WordTimestamps: true}.withDefaults()}
+	host := &wordsHost{}
+	s.SetAudioContextHost(host)
+	s.states = map[string]*contextState{"ctx-1": {}, "ctx-2": {}}
+
+	for _, m := range []struct{ context, text string }{
+		{"ctx-1", "Hello wor"},
+		{"ctx-2", "Good mor"},
+		{"ctx-1", "ld "},
+		{"ctx-2", "ning "},
+	} {
+		if err := s.dispatch(&realtimeTTSMessage{ContextID: m.context, Alignment: alignmentChunk(m.text)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// "world" starts at "wor" in ctx-1's first chunk; "morning" at "mor" in
+	// ctx-2's.
+	want := []contextWord{
+		{"ctx-1", "Hello", 0},
+		{"ctx-2", "Good", 0},
+		{"ctx-1", "world", 0.6},
+		{"ctx-2", "morning", 0.5},
+	}
+	got := host.reported()
+	if len(got) != len(want) {
+		t.Fatalf("words = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].context != want[i].context || got[i].word != want[i].word ||
+			math.Abs(got[i].offset-want[i].offset) > 1e-9 {
+			t.Fatalf("words = %v, want %v", got, want)
+		}
+	}
+}
+
+// Alignment the server sends after an interruption must not bring back the
+// context's state, which nothing would remove again.
+func TestRealtimeTTSInterruptedContextLateAlignmentIsIgnored(t *testing.T) {
+	s := &realtimeSynthesizer{cfg: RealtimeTTSConfig{APIKey: "k", WordTimestamps: true}.withDefaults()}
+	host := &wordsHost{}
+	s.SetAudioContextHost(host)
+	s.states = map[string]*contextState{"ctx-1": {}}
+
+	if err := s.dispatch(&realtimeTTSMessage{ContextID: "ctx-1", Alignment: alignmentChunk("Hello ")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The bot is interrupted: the context goes away along with its state.
+	s.OnAudioContextInterrupted(context.Background(), "ctx-1")
+
+	for _, m := range []*realtimeTTSMessage{
+		{ContextID: "ctx-1", Alignment: alignmentChunk("there wor")},
+		{ContextID: "ctx-1", Alignment: alignmentChunk("ld ")},
+		{ContextID: "ctx-1", IsFinal: true},
+	} {
+		if err := s.dispatch(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s.mu.Lock()
+	_, recreated := s.states["ctx-1"]
+	s.mu.Unlock()
+	if recreated {
+		t.Error("late alignment re-created the context's state")
+	}
+	if got := host.reported(); len(got) != 1 || got[0].word != "Hello" {
+		t.Errorf("words = %v, want only Hello", got)
 	}
 }
