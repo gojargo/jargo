@@ -6,6 +6,10 @@ benchstat can set the two side by side:
 
     python bench.py run [-count N] [-run REGEXP] scenarios/quick.json
 
+A deployment benchmark starts `bench.py serve` processes of its own, one per
+CPU, which hold the sessions and are driven over their standard input and
+output in the protocol of benchmarks/internal/run/deploy.go.
+
 Every kind mirrors benchmarks/internal/run: a chain of pass-through processors
 in a PipelineWorker held by a WorkerRunner, frames seen arriving through
 on_frame_reached_downstream, and the worker configured as on the Go side (no
@@ -43,7 +47,7 @@ from pipecat.workers.runner import WorkerRunner  # noqa: E402
 
 STOP_GRACE = 10.0  # seconds a session told to stop is waited for
 TEXT = "x"  # the payload of every frame, as on the Go side
-KINDS = ("latency", "throughput", "startup", "sessions")
+KINDS = ("latency", "throughput", "startup", "sessions", "deployment")
 FIELDS = {"name", "kind", "depths", "depth", "sessions", "warmup", "frames",
           "rounds", "repeats", "budget_seconds"}
 NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
@@ -260,14 +264,159 @@ async def sessions(depth, count, warmup, rounds, group):
     return rounds, metrics
 
 
+async def send_round(group, arrived):
+    """Send one frame into every session of group and wait for all of them."""
+    for s in group:
+        await s.send(TextFrame(text=TEXT))
+    for _ in group:
+        await arrived.get()
+
+
+async def serve():
+    """A serving process of a deployment: holds the sessions the coordinator
+    asks for, on commands read from standard input, one answer per line on
+    standard output. The protocol is benchmarks/internal/run/deploy.go's."""
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
+    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+
+    def answer(line):
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+    release_memory()
+    answer("ready")
+    group, arrived = [], asyncio.Queue()
+    try:
+        while line := await reader.readline():
+            fields = line.decode().split()
+            if not fields:
+                continue
+            command = fields[0]
+            if command == "start":
+                n, depth = int(fields[1]), int(fields[2])
+                group.extend(Session(depth, arrived) for _ in range(n))
+                for s in group:
+                    await s.start()
+                for s in group:
+                    await s.wait_started()
+                answer("started")
+            elif command == "round":
+                await send_round(group, arrived)
+                answer("done")
+            elif command == "settle":
+                release_memory()
+                answer("settled")
+            elif command == "stop":
+                await asyncio.gather(*(s.stop() for s in group))
+                answer("stopped")
+                return
+            else:
+                raise ValueError(f"unknown command {command!r}")
+    except Exception as exc:  # noqa: BLE001
+        answer(f"error {exc!r}")
+        await abandon(group)
+        raise
+
+
+def proportional_bytes(pid):
+    """A process's proportional set size, from /proc/<pid>/smaps_rollup."""
+    with open(f"/proc/{pid}/smaps_rollup") as f:
+        for line in f:
+            if line.startswith("Pss:"):
+                return int(line.split()[1]) * 1024
+    raise RuntimeError("no Pss line in smaps_rollup")
+
+
+class Server:
+    """A serving process as the coordinator sees it."""
+
+    def __init__(self, proc):
+        self.proc = proc
+
+    async def call(self, command, want):
+        if command:
+            self.proc.stdin.write((command + "\n").encode())
+            await self.proc.stdin.drain()
+        line = (await self.proc.stdout.readline()).decode().strip()
+        if line.startswith("error "):
+            raise RuntimeError(f"server failed: {line[6:]}")
+        if line != want:
+            raise RuntimeError(f"deployment protocol: got {line!r}, want {want!r}")
+
+
+async def deployment(depth, count, warmup, rounds, servers):
+    """Serve count sessions the way Pipecat is deployed to use every CPU it is
+    given: a process per CPU, since the global interpreter lock holds each to
+    one core. Mirrors run.Deployment: the same metrics, read the same way, with
+    the coordinator (this process) not counted."""
+    processes = len(os.sched_getaffinity(0))
+    for _ in range(processes):
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-I", os.path.abspath(__file__), "serve",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+        servers.append(Server(proc))
+
+    async def every(make):
+        await asyncio.gather(*(s.call(*make(i)) for i, s in enumerate(servers)))
+
+    def pss():
+        return sum(proportional_bytes(s.proc.pid) for s in servers)
+
+    await every(lambda i: ("", "ready"))
+    baseline = pss()
+
+    def share(i):
+        return count // processes + (1 if i < count % processes else 0)
+
+    start = time.perf_counter_ns()
+    await every(lambda i: (f"start {share(i)} {depth}", "started"))
+    started = time.perf_counter_ns() - start
+
+    for _ in range(warmup):
+        await every(lambda i: ("round", "done"))
+    start = time.perf_counter_ns()
+    for _ in range(rounds):
+        await every(lambda i: ("round", "done"))
+    elapsed = time.perf_counter_ns() - start
+
+    await every(lambda i: ("settle", "settled"))
+    total = pss()
+    await every(lambda i: ("stop", "stopped"))
+    moved = rounds * count
+    return rounds, [
+        (elapsed / rounds, "ns/round"),
+        (elapsed / moved, "ns/frame"),
+        (moved / (elapsed / 1e9), "frames/s"),
+        (started / count, "startup-ns/session"),
+        (baseline, "baseline-B"),
+        (total, "B/deployment"),
+        ((total - baseline) / count, "B/session"),
+    ]
+
+
+async def stop_servers(servers, kill):
+    """Close the servers' input, kill them when told to, and reap them."""
+    for s in servers:
+        if s.proc.stdin and not s.proc.stdin.is_closing():
+            s.proc.stdin.close()
+        if kill and s.proc.returncode is None:
+            s.proc.kill()
+    await asyncio.gather(*(s.proc.wait() for s in servers), return_exceptions=True)
+
+
 async def sample(bench, size):
     """Take one sample within the benchmark's budget. Every session a kind
     starts goes into group, so the ones still running can be canceled when the
     budget runs out."""
-    group = []
+    group, servers, ok = [], [], False
     try:
         async with asyncio.timeout(bench["budget_seconds"]):
             kind, warmup = bench["kind"], bench.get("warmup", 0)
+            if kind == "deployment":
+                result = await deployment(bench["depth"], size, warmup, bench["rounds"], servers)
+                ok = True
+                return result
             if kind == "latency":
                 return await latency(size, warmup, bench["frames"], group)
             if kind == "throughput":
@@ -278,6 +427,10 @@ async def sample(bench, size):
     except TimeoutError:
         await abandon(group)
         raise BudgetExceeded from None
+    finally:
+        # A sample that failed may have left a server mid-command, so it is
+        # killed rather than waited for.
+        await stop_servers(servers, not ok)
 
 
 def validate(sc):
@@ -296,12 +449,13 @@ def validate(sc):
             raise ValueError(f"benchmark {name!r}: unknown kind {b.get('kind')!r}")
         if b.get("budget_seconds", 0) <= 0 or b.get("warmup", 0) < 0:
             raise ValueError(f"benchmark {name!r}: bad budget_seconds or warmup")
-        sizes = b.get("sessions" if b["kind"] == "sessions" else "depths") or []
+        multi = b["kind"] in ("sessions", "deployment")
+        sizes = b.get("sessions" if multi else "depths") or []
         if not sizes or min(sizes) < 1:
             raise ValueError(f"benchmark {name!r}: sizes must be a non-empty list of positive numbers")
         need = {"latency": "frames", "throughput": "frames", "startup": "repeats",
-                "sessions": "rounds"}[b["kind"]]
-        if b.get(need, 0) < 1 or (b["kind"] == "sessions" and b.get("depth", 0) < 1):
+                "sessions": "rounds", "deployment": "rounds"}[b["kind"]]
+        if b.get(need, 0) < 1 or (multi and b.get("depth", 0) < 1):
             raise ValueError(f"benchmark {name!r}: {need} (and depth for sessions) must be at least 1")
 
 
@@ -369,7 +523,8 @@ def config_lines(scenario_name):
 def units(sc, pattern):
     out = []
     for g, b in enumerate(sc["benchmarks"]):
-        label, sizes = ("sessions", b["sessions"]) if b["kind"] == "sessions" else ("depth", b["depths"])
+        multi = b["kind"] in ("sessions", "deployment")
+        label, sizes = ("sessions", b["sessions"]) if multi else ("depth", b["depths"])
         for i, n in enumerate(sizes):
             name = f"{b['name']}/{label}={n}"
             if pattern.search(name):
@@ -406,6 +561,9 @@ async def execute(sc, count, pattern):
 
 def main():
     parser = argparse.ArgumentParser(prog="bench.py")
+    if sys.argv[1:] == ["serve"]:
+        asyncio.run(serve())
+        return
     parser.add_argument("command", choices=["run"])
     parser.add_argument("-count", type=int, default=1, help="samples of each sub-benchmark")
     parser.add_argument("-run", default="", help="only sub-benchmarks whose full name matches")

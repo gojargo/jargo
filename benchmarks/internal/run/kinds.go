@@ -34,6 +34,9 @@ type Result struct {
 // unitFrame is the time one frame took, on average.
 const unitFrame = "ns/frame"
 
+// unitFramesPerSec is how many frames went through per second.
+const unitFramesPerSec = "frames/s"
+
 // Text is the frame payload. Every frame is built fresh, as a real pipeline's
 // would be, and both sides send the same one.
 const text = "x"
@@ -126,7 +129,7 @@ func Throughput(ctx context.Context, depth, warmup, frameCount int) (Result, err
 		Iterations: frameCount,
 		Metrics: []Metric{
 			{float64(elapsed.Nanoseconds()) / float64(frameCount), unitFrame},
-			{float64(frameCount) / elapsed.Seconds(), "frames/s"},
+			{float64(frameCount) / elapsed.Seconds(), unitFramesPerSec},
 		},
 	}, nil
 }
@@ -225,7 +228,7 @@ func Sessions(ctx context.Context, depth, count, warmup, rounds int) (Result, er
 		Metrics: []Metric{
 			{float64(elapsed.Nanoseconds()) / float64(rounds), "ns/round"},
 			{float64(elapsed.Nanoseconds()) / moved, unitFrame},
-			{moved / elapsed.Seconds(), "frames/s"},
+			{moved / elapsed.Seconds(), unitFramesPerSec},
 			{float64(startup.Nanoseconds()) / float64(count), "startup-ns/session"},
 		},
 	}

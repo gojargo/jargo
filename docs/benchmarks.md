@@ -36,6 +36,7 @@ arriving through the worker's reached-downstream event.
 | Throughput | chain depth 1, 4, 16, 64 | Open loop: every frame is queued at once, timed from the first queued to the last arrived. Reports time per frame and frames per second. |
 | Startup | chain depth 1, 4, 16, 64 | From asking a pipeline to run to its StartFrame reaching the end, when it is ready for frames. Building the pipeline beforehand is reported apart. |
 | Sessions | 1, 10, 100 sessions (and 1,000 in the full profile) | That many depth-4 pipelines at once: the startup per session, then rounds of one frame into every pipeline and all of them back out, and the resident memory each session holds. |
+| Deployment | 10, 100 sessions (100 and 1,000 in the full profile) | The same sessions served the way each framework is deployed to use every CPU it is given (see below): what the whole deployment holds idle and with every session running, the memory each session adds, and the frames all of them move. |
 
 Latency and throughput exclude starting the pipeline and a number of warm-up
 frames. Every sample has a time budget: one that runs past it is reported as
@@ -66,6 +67,33 @@ overwhelms one side ends with that fact recorded rather than hanging.
   its framework version and runtime, along with the CPU model, the CPUs it was
   allowed, their frequency governor, the kernel, the cgroup version and the
   memory limit.
+
+### Sessions and deployment
+
+The two answer different questions. Sessions runs every pipeline in the
+benchmark's own process, which is how the framework's per-session overhead is
+seen most directly. It leaves out two things a deployment pays for:
+
+- **Using every CPU.** A Go program uses every CPU it is given from one process.
+  A Python one is held to one core at a time by its global interpreter lock, so
+  in Sessions Pipecat runs on one of the CPUs while jargo runs on all of them,
+  and serving the same load on every CPU takes one Python process per CPU.
+- **The process itself.** Sessions reports the memory each session adds, not
+  what the process holds before the first one: the interpreter and Pipecat's
+  imports on one side, the Go runtime and the jargo library on the other. The
+  benchmark's process has also run the samples before it by then, and memory
+  they freed is reused, which makes a session look cheaper than it is in a fresh
+  process. Python's allocator keeps more of it than Go's does.
+
+Deployment measures that. The benchmark starts fresh serving processes, one for
+jargo and one per CPU for Pipecat, splits the sessions evenly between them, and
+drives them over their standard input and output (the protocol is in
+`benchmarks/internal/run/deploy.go`, and both sides speak it). Memory is each
+serving process's proportional set size, from `/proc/<pid>/smaps_rollup`, after
+it has handed its freed memory back to the system. Proportional means pages
+shared between processes, such as a shared library's, are split between them
+rather than counted once per process, so the total is what the deployment holds.
+The benchmark's own process is not counted on either side.
 
 What is not measured: the Python interpreter's own startup and import time, and
 anything a real service, transport or model would add.

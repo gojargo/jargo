@@ -26,6 +26,7 @@ silenced.
 | `throughput` | `depth=1,4,16,64` | Open loop: queue every frame at once, time from the first queued to the last arrived. Startup is excluded. Reports `ns/frame` and `frames/s`. |
 | `startup` | `depth=1,4,16,64` | From running a pipeline to its StartFrame reaching the end (`ns/start`), and building it beforehand (`build-ns/start`). |
 | `sessions` | `sessions=1,10,100` (and `1000` in the full profile) | Many depth-4 pipelines at once: startup per session, then rounds of one frame into every pipeline. Reports `ns/round`, `ns/frame`, `frames/s`, `startup-ns/session` and the resident memory per session (`B/session`). |
+| `deployment` | `sessions=10,100` (`100,1000` in the full profile) | The sessions served the way each framework is deployed to use every CPU: one jargo process, one Pipecat process per CPU. Fresh serving processes, driven by the benchmark over their standard input. Reports what `sessions` does for the whole deployment, plus the proportional memory of the serving processes idle (`baseline-B`) and with every session running (`B/deployment`), and the memory each session adds (`B/session`). |
 
 Every sample has a time budget. A sample that runs past it prints a
 `--- TIMEOUT` line instead of a result and the larger sizes of that benchmark

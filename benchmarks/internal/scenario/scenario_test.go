@@ -59,3 +59,20 @@ func TestParseValidatesKinds(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 }
+
+// A deployment is checked like sessions: a depth, session counts and rounds.
+func TestParseValidatesDeployment(t *testing.T) {
+	const ok = `{"name":"A","kind":"deployment","depth":4,"sessions":[10],"rounds":1,"budget_seconds":1}`
+	if _, err := scenario.Parse(doc(ok)); err != nil {
+		t.Fatalf("valid deployment rejected: %v", err)
+	}
+	for name, b := range map[string]string{
+		"no depth":    `{"name":"A","kind":"deployment","sessions":[10],"rounds":1,"budget_seconds":1}`,
+		"no sessions": `{"name":"A","kind":"deployment","depth":4,"rounds":1,"budget_seconds":1}`,
+		"no rounds":   `{"name":"A","kind":"deployment","depth":4,"sessions":[10],"budget_seconds":1}`,
+	} {
+		if _, err := scenario.Parse(doc(b)); !errors.Is(err, scenario.ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+		}
+	}
+}

@@ -4,6 +4,9 @@
 //
 //	jbench run [-count N] [-run regexp] [-framework-version V] scenarios/quick.json
 //
+// A deployment benchmark starts jbench serve processes of its own, which hold
+// the sessions and are driven over their standard input and output.
+//
 // The output opens with config lines (framework, framework_version, runtime,
 // the machine) and then holds one line per sample:
 //
@@ -38,7 +41,7 @@ var frameworkVersion string
 
 var (
 	// errUsage is returned for a command line jbench cannot make sense of.
-	errUsage = errors.New("usage: jbench run [-count N] [-run regexp] [-framework-version V] scenario.json")
+	errUsage = errors.New("usage: jbench run [-count N] [-run regexp] [-framework-version V] scenario.json | jbench serve")
 	// errFailed is returned when a sample failed for a reason other than its
 	// budget, once every other sample has been taken.
 	errFailed = errors.New("some benchmarks failed")
@@ -83,6 +86,10 @@ func parseArgs(args []string) (options, error) {
 }
 
 func runMain(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) == 1 && args[0] == "serve" {
+		slog.SetDefault(slog.New(slog.DiscardHandler))
+		return run.Serve(ctx, os.Stdin, out)
+	}
 	opts, err := parseArgs(args)
 	if err != nil {
 		return err
@@ -138,7 +145,7 @@ func units(sc *scenario.Scenario, filter *regexp.Regexp) []unit {
 	var list []unit
 	for g, b := range sc.Benchmarks {
 		label, sizes := "depth", b.Depths
-		if b.Kind == scenario.KindSessions {
+		if b.Kind == scenario.KindSessions || b.Kind == scenario.KindDeployment {
 			label, sizes = "sessions", b.Sessions
 		}
 		for i, n := range sizes {
@@ -202,6 +209,14 @@ func sample(ctx context.Context, u unit) (run.Result, error) {
 		return run.Startup(ctx, u.size, b.Repeats)
 	case scenario.KindSessions:
 		return run.Sessions(ctx, b.Depth, u.size, b.Warmup, b.Rounds)
+	case scenario.KindDeployment:
+		exe, err := os.Executable()
+		if err != nil {
+			return run.Result{}, err
+		}
+		// One process serves every session: a Go program uses every CPU it is
+		// given from one process.
+		return run.Deployment(ctx, []string{exe, "serve"}, 1, b.Depth, u.size, b.Warmup, b.Rounds)
 	default:
 		return run.Result{}, fmt.Errorf("%w: unknown kind %q", scenario.ErrInvalid, b.Kind)
 	}

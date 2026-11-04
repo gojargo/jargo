@@ -33,6 +33,15 @@
       "warmup": 10,
       "rounds": 100,
       "budget_seconds": 300
+    },
+    {
+      "name": "Deployment",
+      "kind": "deployment",
+      "depth": 4,
+      "sessions": [100, 1000],
+      "warmup": 10,
+      "rounds": 100,
+      "budget_seconds": 300
     }
   ]
 }

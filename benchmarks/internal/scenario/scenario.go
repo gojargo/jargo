@@ -32,6 +32,13 @@ const (
 	// KindSessions runs many pipelines at once and reports what each one costs:
 	// starting it, the memory it holds, and the frames all of them move.
 	KindSessions Kind = "sessions"
+	// KindDeployment serves many pipelines the way each framework is deployed to
+	// use every CPU it is given, and reports what the whole deployment costs:
+	// the memory of the serving processes idle and with every session running,
+	// the memory each session adds, and the frames all of them move. A Go
+	// program uses every CPU from one process; a Python one, held to a core by
+	// its global interpreter lock, needs a process per CPU.
+	KindDeployment Kind = "deployment"
 )
 
 // Scenario is one file of benchmarks, run in order.
@@ -55,7 +62,8 @@ type Benchmark struct {
 	// Depths are the numbers of pass-through processors in the chain, one
 	// sub-benchmark each. Used by latency, throughput and startup.
 	Depths []int `json:"depths,omitempty"`
-	// Depth is the chain depth of every pipeline. Used by sessions.
+	// Depth is the chain depth of every pipeline. Used by sessions and
+	// deployment.
 	Depth int `json:"depth,omitempty"`
 	// Sessions are the numbers of pipelines run at once, one sub-benchmark
 	// each. Used by sessions.
@@ -162,7 +170,7 @@ func (b *Benchmark) validate() error {
 		if b.Repeats < 1 {
 			return fmt.Errorf("%w: repeats must be at least 1", errField)
 		}
-	case KindSessions:
+	case KindSessions, KindDeployment:
 		if b.Depth < 1 {
 			return fmt.Errorf("%w: depth must be at least 1", errField)
 		}
