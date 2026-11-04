@@ -30,6 +30,11 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Codecov authenticates the upload with a GitHub OIDC token, so no
+      # CODECOV_TOKEN secret is needed.
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -47,12 +52,15 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+      # Pull requests from forks get no OIDC token; the action then uploads
+      # tokenless, which Codecov accepts for public repositories. Dependabot's
+      # pull requests run with a read-only token and cannot mint one either.
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        if: github.actor != 'dependabot[bot]'
         with:
           files: coverage.out
+          use_oidc: true
           fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   build:
     runs-on: ubuntu-latest
