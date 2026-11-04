@@ -146,11 +146,12 @@ linters:
       - linters:
           - forbidigo
         path: cmd
-      # The benchmark suite builds against the library in the tree beside it,
-      # which takes a local replace. It is the only module allowed one.
+      # The benchmark suite and the network buses build against the library in
+      # the tree around them, which takes a local replace. They are the only
+      # modules allowed one.
       - linters:
           - gomoddirectives
-        path: benchmarks/go\.mod
+        path: (benchmarks|bus/network/[^/]+)/go\.mod
       # The filter and mixer control frames are deliberately parallel families:
       # the same shape applied to a different subject. Collapsing them would
       # hide that symmetry rather than remove real duplication.

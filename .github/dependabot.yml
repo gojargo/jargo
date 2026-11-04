@@ -34,6 +34,15 @@ updates:
       benchmarks-go-modules:
         patterns: ["*"]
 
+  # Each network bus is a module of its own, with its own go.mod.
+  - package-ecosystem: gomod
+    directory: /bus/network/redis
+    schedule:
+      interval: weekly
+    groups:
+      redis-bus-go-modules:
+        patterns: ["*"]
+
   # The Python side of the comparison: requirements.txt is compiled from
   # requirements.in by pip-compile with hashes, which Dependabot regenerates.
   - package-ecosystem: pip

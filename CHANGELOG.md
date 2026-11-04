@@ -15,6 +15,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A worker bus over Redis pub/sub**, for workers running in different
+  processes: `redis.NewBus` in the new module
+  `github.com/gojargo/jargo/bus/network/redis`, a module of its own so only a
+  program that imports it depends on a Redis client. It publishes each
+  message, serialized (JSON by default), to a channel (`jargo:bus` by
+  default), and delivers what arrives on the channel to its local
+  subscribers; a local-only message never leaves the process. It subscribes
+  when the bus starts, failing the start if Redis cannot be reached, and
+  unsubscribes when it stops.
+
 - **A bus can have a connection of its own.** A concrete bus implementing
   `bus.Transport` (`StartTransport` and `StopTransport`) has it opened when
   the bus starts, once dispatch is running, and closed when it stops. The
