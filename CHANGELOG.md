@@ -550,6 +550,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The LiveKit transport no longer reads and decodes a participant's audio
+  track when audio input is off. Nothing took the audio, which was decoded and
+  dropped.
+
 - A wake phrase is now found in Chinese, Japanese and Thai transcripts, which
   have no spaces between words: "小助手" wakes on "你好小助手帮我订一张机票".
   The phrase's word boundaries are also Unicode ones now, so a phrase in any

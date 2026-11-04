@@ -182,7 +182,8 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	in.readWG.Go(func() { in.audioLoop(readCtx, audio) })
 
 	in.conn.OnAudioTrack(func(track *webrtc.TrackRemote, participant string) {
-		if readCtx.Err() != nil {
+		// Nothing would take the decoded audio without audio input.
+		if readCtx.Err() != nil || !in.Params().AudioInEnabled {
 			return
 		}
 		in.readTrack(readCtx, audio, track, participant)

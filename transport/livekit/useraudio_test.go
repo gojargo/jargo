@@ -360,3 +360,25 @@ func TestAParticipantWhoseAudioTrackIsGoneIsReleased(t *testing.T) {
 		t.Error("alice's resampler is still held after her track went")
 	}
 }
+
+// With audio input off, a subscribed track is not read: nothing would take the
+// audio decoded from it.
+func TestDisabledAudioInputDoesNotReadTheTrack(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioInEnabled = false
+	conn := &Connection{closed: make(chan struct{})}
+	in := newInput(conn, params, options{audioInUserTracks: true})
+	if err := in.StartReading(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = in.StopReading(context.Background()) })
+
+	// A nil track would crash a reader started on it.
+	conn.deliverAudioTrack(nil, "alice")
+
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if len(in.readers) != 0 {
+		t.Errorf("readers = %d, want none", len(in.readers))
+	}
+}
