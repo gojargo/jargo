@@ -1,9 +1,11 @@
 package elevenlabs
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -692,3 +694,33 @@ func (h *fakeHost) RotateTurnContext(context.Context) {}
 // RotateTurnContext is not exercised here: these providers keep no settings
 // that are fixed for the length of a context.
 func (h *offsetHost) RotateTurnContext(context.Context) {}
+
+// realtimeWarnings collects what building a realtime service with model logs at
+// warning level.
+func realtimeWarnings(t *testing.T, model string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+	NewRealtimeTTS(RealtimeTTSConfig{APIKey: "test-key", VoiceID: "test-voice", Model: model})
+	return buf.String()
+}
+
+// The multi-stream endpoint serves no v3/v4 model; the handshake rejects one
+// with a 400 that leaves the service unusable, so a clear warning with a
+// pointer to the service that does serve them beats it.
+func TestRealtimeTTSWarnsOnV3V4Models(t *testing.T) {
+	for _, model := range []string{"eleven_v3", "eleven_v4_turbo"} {
+		logged := realtimeWarnings(t, model)
+		if !strings.Contains(logged, model) || !strings.Contains(logged, "NewTTS") {
+			t.Errorf("%s: logged %q, want a warning naming the model and NewTTS", model, logged)
+		}
+	}
+}
+
+func TestRealtimeTTSAcceptsFlashModelsWithoutAWarning(t *testing.T) {
+	if logged := realtimeWarnings(t, "eleven_flash_v2_5"); strings.Contains(logged, "v3/v4") {
+		t.Errorf("logged %q, want no v3/v4 warning", logged)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,6 +127,14 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 // turn, so neither a sentence nor a turn pays for setup before its audio starts.
 func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
 	s := &realtimeSynthesizer{cfg: cfg.withDefaults()}
+	// The multi-stream endpoint serves no Eleven v3 or v4 model: the connection
+	// is rejected with a 400 at the handshake, which surfaces as an opaque error
+	// that leaves the service unusable. Say so up front, with a pointer to the
+	// service that does serve them.
+	if model := s.cfg.Model; strings.HasPrefix(model, "eleven_v3") || strings.HasPrefix(model, "eleven_v4") {
+		slog.Warn("elevenlabs: this is an Eleven v3/v4 model, which the text-to-speech WebSocket "+
+			"endpoint does not serve; use NewTTS for HTTP streaming", "model", model)
+	}
 	if cfg.WordTimestamps {
 		// Only the timestamp-aware type implements tts.WordTimestamps, so the
 		// base takes the word-aligned path solely when timings were requested.

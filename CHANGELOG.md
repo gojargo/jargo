@@ -339,6 +339,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `elevenlabs.NewRealtimeTTS` warns when given an Eleven v3 or v4 model,
+  which the multi-stream WebSocket endpoint does not serve: the handshake is
+  refused with a 400 that leaves the service unusable. The warning points to
+  `elevenlabs.NewTTS`, whose HTTP streaming serves them.
+
 - **Breaking: OpenAI Realtime transcription takes turns from the local VAD by
   default.** `realtime.NewSTT` turns the server-side VAD off unless
   `STTConfig.TurnDetection` configures it, and commits the audio buffer when
