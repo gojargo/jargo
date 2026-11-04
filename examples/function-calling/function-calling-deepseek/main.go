@@ -150,6 +150,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			EnableMetrics:      true,
 			EnableUsageMetrics: true,
 		},
+		IdleTimeout:             args.Base().PipelineIdleTimeout,
 		ProcessorUnusablePolicy: pipeline.UnusableEnd,
 	})
 
