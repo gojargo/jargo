@@ -537,7 +537,9 @@ func TestUrgentResponseHasSystemPriority(t *testing.T) {
 	urgent.To = "parent"
 	msgBus.Send(ctx, urgent)
 
-	msgBus.Start(ctx)
+	if err := msgBus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	defer msgBus.Stop()
 
 	eventually(t, "the messages are delivered", func() bool {

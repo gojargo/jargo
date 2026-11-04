@@ -86,7 +86,9 @@ func newBridgedWorker(t *testing.T, pipe processor.Processor, bridged []string) 
 	rec := &busRecorder{}
 	msgBus.Subscribe(rec)
 	w.Attach(t.Context(), registry.New(runner), msgBus.Bus)
-	msgBus.Start(t.Context())
+	if err := msgBus.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(msgBus.Stop)
 	return w, msgBus, rec
 }

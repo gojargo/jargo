@@ -39,7 +39,9 @@ func newSessionWorker(t *testing.T, cfg pipeline.WorkerConfig) (*pipeline.Worker
 	msgBus := bus.NewAsyncQueueBus()
 	reg := registry.New(runner)
 	w.Attach(t.Context(), reg, msgBus.Bus)
-	msgBus.Start(t.Context())
+	if err := msgBus.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(msgBus.Stop)
 	return w, msgBus
 }

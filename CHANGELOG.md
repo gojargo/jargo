@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A bus can have a connection of its own.** A concrete bus implementing
+  `bus.Transport` (`StartTransport` and `StopTransport`) has it opened when
+  the bus starts, once dispatch is running, and closed when it stops. The
+  runner starts and stops its bus the same way, so a networked bus handed to
+  it connects with it.
+
 - **`audio.SpeechSegmentBuffer`** keeps one stretch of speech with the audio
   just before it: between segments only the last `PreSpeech` of audio (a
   second by default), which holds the start of the speech the VAD reports
@@ -344,6 +350,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that embeds it.
 
 ### Changed
+
+- **Breaking:** `bus.Bus.Start` returns an error: the one its transport
+  failed to open with, in which case dispatch is stopped again. `Runner.Run`
+  returns it.
 
 - **Breaking:** `AggregatedFrameSequencer.ForceComplete` takes a third
   argument, `emitRemaining`. Pass `true` for the behavior it had; `false`, for

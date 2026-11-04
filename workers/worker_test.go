@@ -1663,7 +1663,9 @@ func TestTheGateOpensAndClosesWithTheWorker(t *testing.T) {
 func TestTheBusDropsWorkForAnInactiveWorker(t *testing.T) {
 	ctx := t.Context()
 	b := bus.NewAsyncQueueBus()
-	b.Start(ctx)
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(b.Stop)
 
 	w := newGatedWorker("gated", false)

@@ -51,6 +51,19 @@ type Publisher interface {
 	Publish(ctx context.Context, m Message)
 }
 
+// Transport is implemented by a concrete bus with a connection of its own to
+// open when the bus starts and close when it stops, which is what a networked
+// bus has. Bus.Start opens it once dispatch is running, and Bus.Stop closes it
+// once dispatch has ended.
+type Transport interface {
+	Publisher
+	// StartTransport connects and starts reading, handing each message that
+	// arrives to OnMessageReceived.
+	StartTransport(ctx context.Context) error
+	// StopTransport stops reading and disconnects.
+	StopTransport()
+}
+
 // subscription is one subscriber's state on the bus: the queue everything
 // arrives in, the queue the router hands data messages to, and the goroutines
 // draining them.
@@ -107,26 +120,50 @@ func (noPublisher) Publish(context.Context, Message) {}
 
 // Start begins dispatching to every subscriber registered so far. Messages sent
 // before it are queued, not lost, and are delivered once it runs.
-func (b *Bus) Start(ctx context.Context) {
+//
+// A bus with a Transport then opens it. If that fails, dispatch is stopped again
+// and the error returned.
+func (b *Bus) Start(ctx context.Context) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.running {
-		return
+		b.mu.Unlock()
+		return nil
 	}
 	b.running = true
 	b.runCtx, b.runCancel = context.WithCancel(ctx)
 	for _, sub := range b.subscriptions {
 		b.startDispatchLocked(sub)
 	}
+	b.mu.Unlock()
+
+	if t, ok := b.self.(Transport); ok {
+		if err := t.StartTransport(ctx); err != nil {
+			b.stopDispatch()
+			return err
+		}
+	}
+	return nil
 }
 
-// Stop ends dispatch and waits for the goroutines to return. Messages sent
-// afterwards are queued but not delivered until Start runs again.
+// Stop ends dispatch and waits for the goroutines to return, then closes the
+// bus's Transport, if it has one. Messages sent afterwards are queued but not
+// delivered until Start runs again.
 func (b *Bus) Stop() {
+	if !b.stopDispatch() {
+		return
+	}
+	if t, ok := b.self.(Transport); ok {
+		t.StopTransport()
+	}
+}
+
+// stopDispatch ends dispatch and waits for the goroutines to return, reporting
+// whether it was running.
+func (b *Bus) stopDispatch() bool {
 	b.mu.Lock()
 	if !b.running {
 		b.mu.Unlock()
-		return
+		return false
 	}
 	b.running = false
 	if b.runCancel != nil {
@@ -141,6 +178,7 @@ func (b *Bus) Stop() {
 	for _, sub := range subs {
 		sub.stop()
 	}
+	return true
 }
 
 // Subscribe registers a subscriber. It is idempotent: registering one already

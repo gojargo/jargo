@@ -31,7 +31,9 @@ func runContextWorker(t *testing.T, cfg llmworker.ContextConfig) *llmworker.Cont
 
 	w := llmworker.NewContext(cfg)
 	msgBus := bus.NewAsyncQueueBus()
-	msgBus.Start(ctx)
+	if err := msgBus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(msgBus.Stop)
 	w.Attach(ctx, registry.New("test-runner"), msgBus.Bus)
 

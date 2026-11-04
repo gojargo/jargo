@@ -42,7 +42,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		recorder: &recorder{name: "recorder"},
 	}
 	env.bus.Subscribe(env.recorder)
-	env.bus.Start(ctx)
+	if err := env.bus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(env.bus.Stop)
 	return env
 }

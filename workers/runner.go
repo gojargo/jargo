@@ -207,7 +207,10 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) error {
 	r.autoEnd = opts.AutoEnd == nil || *opts.AutoEnd
 	r.mu.Unlock()
 
-	stopSignals := r.setupSession(ctx)
+	stopSignals, err := r.setupSession(ctx)
+	if err != nil {
+		return err
+	}
 	defer stopSignals()
 
 	r.Call(ctx, EventRunnerReady, r)
@@ -329,19 +332,22 @@ func (r *Runner) OnBusMessage(ctx context.Context, m bus.Message) {
 
 // setupSession is the once-per-run setup: the signal handlers, the bus, and the
 // workers added so far. It returns the function that releases the signal
-// handlers.
-func (r *Runner) setupSession(ctx context.Context) func() {
+// handlers, or the error the bus failed to start with.
+func (r *Runner) setupSession(ctx context.Context) (func(), error) {
 	r.mu.Lock()
 	if r.started {
 		r.mu.Unlock()
-		return func() {}
+		return func() {}, nil
 	}
 	r.mu.Unlock()
 
 	stopSignals := r.setupSignals(ctx)
 
 	r.msgBus.Subscribe(r)
-	r.msgBus.Start(ctx)
+	if err := r.msgBus.Start(ctx); err != nil {
+		stopSignals()
+		return nil, fmt.Errorf("start the bus: %w", err)
+	}
 
 	r.mu.Lock()
 	entries := r.entriesLocked()
@@ -352,7 +358,7 @@ func (r *Runner) setupSession(ctx context.Context) func() {
 		r.startWorker(ctx, entry)
 	}
 
-	return stopSignals
+	return stopSignals, nil
 }
 
 // setupSignals cancels the runner on the signals it was asked to handle.

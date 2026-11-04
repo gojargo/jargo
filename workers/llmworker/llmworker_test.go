@@ -235,7 +235,9 @@ func newHarness(t *testing.T, holder **harness, defer_ *bool, build func(**harne
 	msgBus := bus.NewAsyncQueueBus()
 	rec := &busRecorder{}
 	msgBus.Subscribe(rec)
-	msgBus.Start(ctx)
+	if err := msgBus.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(msgBus.Stop)
 	w.Attach(ctx, registry.New("test-runner"), msgBus.Bus)
 

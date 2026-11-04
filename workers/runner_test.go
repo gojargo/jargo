@@ -24,7 +24,9 @@ func newTestRunner(t *testing.T) (*workers.Runner, *recorder) {
 	runner.Bus().Subscribe(rec)
 	// Started here rather than only by Run, so the tests that drive the runner
 	// without running it still see what it sends. Starting twice is a no-op.
-	runner.Bus().Start(t.Context())
+	if err := runner.Bus().Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(runner.Bus().Stop)
 	return runner, rec
 }

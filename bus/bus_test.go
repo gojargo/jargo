@@ -2,6 +2,7 @@ package bus_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -84,7 +85,7 @@ func TestSendDeliversToSubscriber(t *testing.T) {
 	b := bus.NewAsyncQueueBus()
 	sub := newCollector()
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	m := data("task_a")
@@ -102,7 +103,7 @@ func TestMultipleMessagesInOrder(t *testing.T) {
 	b := bus.NewAsyncQueueBus()
 	sub := newCollector()
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	var sent []string
@@ -125,7 +126,7 @@ func TestStartStopLifecycle(t *testing.T) {
 	b := bus.NewAsyncQueueBus()
 	sub := newCollector()
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 
 	b.Send(t.Context(), data("a"))
 	if !sub.awaitCount(1) {
@@ -145,7 +146,7 @@ func TestSubscribeCallsOnBusMessage(t *testing.T) {
 	b := bus.NewAsyncQueueBus()
 	sub := newCollector()
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	b.Send(t.Context(), data("runner"))
@@ -160,7 +161,7 @@ func TestMultipleSubscribersAreIndependent(t *testing.T) {
 	a, c := newCollector(), newCollector()
 	b.Subscribe(a)
 	b.Subscribe(c)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	b.Send(t.Context(), data("runner"))
@@ -175,7 +176,7 @@ func TestUnsubscribeStopsDelivery(t *testing.T) {
 	b := bus.NewAsyncQueueBus()
 	sub := newCollector()
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	b.Send(t.Context(), data("first"))
@@ -206,7 +207,7 @@ func TestSlowSubscriberDoesNotBlockOthers(t *testing.T) {
 	fast := newCollector()
 	b.Subscribe(slowSub{delay: 500 * time.Millisecond})
 	b.Subscribe(fast)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	start := time.Now()
@@ -232,7 +233,7 @@ func TestSystemMessagePreemptsDataMessages(t *testing.T) {
 	}
 	b.Send(t.Context(), cancel("runner"))
 
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	if !sub.awaitCount(6) {
@@ -256,7 +257,7 @@ func TestDataMessagesPreserveFIFOOrder(t *testing.T) {
 		b.Send(t.Context(), data(source))
 	}
 
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	if !sub.awaitCount(5) {
@@ -279,7 +280,7 @@ func TestSystemMessagesPreserveFIFOOrder(t *testing.T) {
 		b.Send(t.Context(), cancel(source))
 	}
 
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	if !sub.awaitCount(5) {
@@ -300,7 +301,7 @@ func TestMixedMessagesSystemFirst(t *testing.T) {
 	b.Send(t.Context(), data("d2"))
 	b.Send(t.Context(), cancel("s2"))
 
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	if !sub.awaitCount(4) {
@@ -323,7 +324,7 @@ func TestJobCancelIsSystemPriority(t *testing.T) {
 	jc.From, jc.To = "parent", "worker"
 	b.Send(t.Context(), jc)
 
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	if !sub.awaitCount(2) {
@@ -381,7 +382,7 @@ func TestDataDispatchSurvivesSubscriberPanic(t *testing.T) {
 	b := bus.NewAsyncQueueBus()
 	sub := newFailingSub()
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	b.Send(t.Context(), data("first"))
@@ -400,7 +401,7 @@ func TestRouterSurvivesSubscriberPanicOnSystemMessage(t *testing.T) {
 	b := bus.NewAsyncQueueBus()
 	sub := newFailingSub()
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	b.Send(t.Context(), cancel("first"))
@@ -421,7 +422,7 @@ func TestSubscribeIsIdempotent(t *testing.T) {
 	sub := newCollector()
 	b.Subscribe(sub)
 	b.Subscribe(sub)
-	b.Start(t.Context())
+	start(t, b)
 	defer b.Stop()
 
 	b.Send(t.Context(), data("a"))
@@ -441,7 +442,7 @@ func TestLocalMessageSkipsTheTransport(t *testing.T) {
 
 	sub := newCollector()
 	tb.Subscribe(sub)
-	tb.Start(t.Context())
+	start(t, tb)
 	defer tb.Stop()
 
 	local := &bus.WorkerLocalErrorMessage{Error: "boom"}
@@ -464,6 +465,19 @@ func TestLocalMessageSkipsTheTransport(t *testing.T) {
 	}
 }
 
+// starter is a bus that can be started.
+type starter interface {
+	Start(ctx context.Context) error
+}
+
+// start starts b, failing the test if it does not.
+func start(t *testing.T, b starter) {
+	t.Helper()
+	if err := b.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // transportBus is a bus with a transport of its own, for the local-message case.
 type transportBus struct {
 	*bus.Bus
@@ -476,3 +490,87 @@ func (t *transportBus) Publish(_ context.Context, m bus.Message) {
 }
 
 func equal(a, b []string) bool { return slices.Equal(a, b) }
+
+// connectedBus is a bus with a connection of its own, recording when it is
+// opened and closed, and delivering what it publishes back to itself.
+type connectedBus struct {
+	*bus.Bus
+	startErr error
+	mu       sync.Mutex
+	events   []string
+}
+
+func newConnectedBus(startErr error) *connectedBus {
+	b := &connectedBus{startErr: startErr}
+	b.Bus = bus.New(b)
+	return b
+}
+
+func (b *connectedBus) record(event string) {
+	b.mu.Lock()
+	b.events = append(b.events, event)
+	b.mu.Unlock()
+}
+
+func (b *connectedBus) recorded() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.events...)
+}
+
+func (b *connectedBus) Publish(_ context.Context, m bus.Message) { b.OnMessageReceived(m) }
+
+func (b *connectedBus) StartTransport(context.Context) error {
+	b.record("start")
+	return b.startErr
+}
+
+func (b *connectedBus) StopTransport() { b.record("stop") }
+
+// A bus with a transport opens it when it starts and closes it when it stops,
+// once each however often it is asked.
+func TestABusOpensAndClosesItsTransport(t *testing.T) {
+	b := newConnectedBus(nil)
+	sub := newCollector()
+	b.Subscribe(sub)
+
+	for range 2 {
+		if err := b.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.Send(t.Context(), data("a"))
+	if !sub.awaitCount(1) {
+		t.Fatal("nothing was delivered while the transport was open")
+	}
+	b.Stop()
+	b.Stop()
+
+	if got := b.recorded(); !slices.Equal(got, []string{"start", "stop"}) {
+		t.Errorf("transport events = %v, want it opened and closed once", got)
+	}
+}
+
+// errRefused is a transport refusing to open.
+var errRefused = errors.New("connection refused")
+
+// A transport that fails to open fails the start, and leaves the bus stopped:
+// nothing is dispatched, and stopping it does not close a transport never open.
+func TestATransportThatFailsToOpenFailsTheStart(t *testing.T) {
+	b := newConnectedBus(errRefused)
+	sub := newCollector()
+	b.Subscribe(sub)
+
+	if err := b.Start(t.Context()); !errors.Is(err, errRefused) {
+		t.Fatalf("Start = %v, want the transport's error", err)
+	}
+	b.Send(t.Context(), data("a"))
+	settle()
+	if got := len(sub.received()); got != 0 {
+		t.Errorf("the subscriber received %d messages from a bus that failed to start", got)
+	}
+	b.Stop()
+	if got := b.recorded(); !slices.Equal(got, []string{"start"}) {
+		t.Errorf("transport events = %v, want only the failed start", got)
+	}
+}
