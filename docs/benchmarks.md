@@ -20,7 +20,8 @@ process. Those are the numbers here.
 
 This page gives the method and how to run it. It deliberately quotes no results:
 numbers depend on the machine, and the ones that matter are the ones you measure
-on yours.
+on yours. The README shows one CI run of the deployment benchmark, with the
+machine it ran on.
 
 ## What is measured
 

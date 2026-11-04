@@ -38,6 +38,22 @@ sessions without a GIL. The heavy numerics stay where they belong (the ONNX
 Runtime, the remote services), so giving up Python costs little here. See the
 [benchmarks](docs/benchmarks.md) for the honest performance picture.
 
+### In numbers
+
+1,000 concurrent sessions served on 3 CPUs: one jargo process, against one
+Pipecat 1.15 process per CPU (the GIL holds each to one core).
+
+| | jargo | Pipecat |
+|---|---|---|
+| Memory, idle | 8.6 MiB | 162 MiB |
+| Memory, 1,000 sessions | 124 MiB | 357 MiB |
+| Throughput | 96k frames/s | 10.8k frames/s |
+| Startup per session | 0.12 ms | 1.08 ms |
+
+Medians of 6 runs on a GitHub-hosted runner (AMD EPYC 7763), every difference
+significant. This is framework overhead only: provider round trips dominate what
+a caller hears, and cost the same on both. [Method](docs/benchmarks.md).
+
 ## Features
 
 - **Transports**: WebRTC ([Pion](https://github.com/pion)), WebSockets, LiveKit and local audio.
