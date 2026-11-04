@@ -141,14 +141,17 @@ func (c *UserIdleController) Process(f frames.Frame) {
 	case *frames.FunctionCallResultFrame:
 		// An async tool can report progress with intermediate results while it
 		// keeps running; only its final result settles the call.
-		if fr.Properties.Final() && c.functionCalls > 0 {
-			c.functionCalls--
+		if fr.Properties.Final() {
+			c.settleFunctionCall()
 		}
 	case *frames.FunctionCallCancelFrame:
-		if c.functionCalls > 0 {
-			c.functionCalls--
-		}
+		c.settleFunctionCall()
 	}
+}
+
+// settleFunctionCall counts one function call as finished. Callers hold c.mu.
+func (c *UserIdleController) settleFunctionCall() {
+	c.functionCalls = max(0, c.functionCalls-1)
 }
 
 // WaitingForUser reports whether the bot has finished responding and is waiting
