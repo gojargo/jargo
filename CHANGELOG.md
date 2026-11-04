@@ -604,6 +604,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A processor inside a pipeline can no longer be handed the StartFrame while
+  it is still in its own `Setup`. A pipeline (and a parallel or sync parallel
+  one) let the StartFrame in before holding its processors, so it could pass
+  straight into one whose setup had not begun, which then read its state while
+  `Setup` was still writing it: a data race the tone reader, the tone tagger
+  and the user aggregator's turn strategies all hit. The processors are now
+  held first.
+
 - A TTS context that produces no audio no longer adds its text to the
   conversation. Nothing of it was spoken, so the bot's turn no longer records
   words the user never heard. The base holds a context's spoken text, and the

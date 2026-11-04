@@ -316,10 +316,9 @@ func (p *SyncParallelPipeline) Setup(ctx context.Context, s processor.Setup) err
 	if err := p.Base.Setup(ctx, s); err != nil {
 		return err
 	}
-	// This pipeline is set up, so let the StartFrame in: each of its
+	// This pipeline is set up, so the StartFrame is let in, once each of its
 	// processors holds it until its own setup is done.
-	p.SetupFinished()
-	setupProcessors(ctx, &p.setupTracker, branchProcessors(p.branches), s)
+	setupProcessors(ctx, &p.setupTracker, p.SetupFinished, branchProcessors(p.branches), s)
 	return nil
 }
 

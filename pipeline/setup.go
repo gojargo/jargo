@@ -75,19 +75,21 @@ func (t *setupTracker) settled(p processor.Processor) bool {
 // again: the processor is left half-built for the rest of the session, so it
 // loses its usability and a switcher can move off it before the pipeline starts.
 //
-// Call it right after the pipeline's own setup, once it has released itself
-// with SetupFinished. Each processor holds the StartFrame until its own setup
-// is done, so one slow processor does not block the ones ahead of it. The
-// processors are all held before any is set up, so the StartFrame cannot get
-// past one whose Setup has not begun yet. A processor whose setup was abandoned
-// (ctx ended) keeps holding it, so it never starts.
+// Call it right after the pipeline's own setup, with release, the pipeline's
+// SetupFinished, which lets the StartFrame in. Each processor holds the
+// StartFrame until its own setup is done, so one slow processor does not block
+// the ones ahead of it. The processors are all held before release runs, so the
+// StartFrame cannot get past one whose Setup has not begun yet: it can reach a
+// processor the moment the pipeline lets it in. A processor whose setup was
+// abandoned (ctx ended) keeps holding it, so it never starts.
 func setupProcessors(
-	ctx context.Context, t *setupTracker, procs []processor.Processor, s processor.Setup,
+	ctx context.Context, t *setupTracker, release func(), procs []processor.Processor, s processor.Setup,
 ) {
 	t.begin(procs)
 	for _, p := range procs {
 		p.SetupStarted()
 	}
+	release()
 
 	var wg sync.WaitGroup
 	for _, p := range procs {
