@@ -192,6 +192,12 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	model := anthropic.NewLLM(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
 	model.SetSystemInstruction(systemInstruction)
 
+	model.OnFunctionCallsCanceled(func(_ context.Context, calls []frames.ToolCall) {
+		for _, call := range calls {
+			slog.Info("Function call canceled", "function", call.Name, "tool_call_id", call.ID)
+		}
+	})
+
 	silero, err := vad.NewSilero()
 	if err != nil {
 		return err

@@ -35,11 +35,13 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | --- | --- | --- |
 | [`function-calling-anthropic`](function-calling/function-calling-anthropic) | Anthropic | Deepgram, Cartesia |
 | [`function-calling-anthropic-async`](function-calling/function-calling-anthropic-async) | Anthropic, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | Deepgram, Cartesia |
+| [`function-calling-anthropic-async-stream`](function-calling/function-calling-anthropic-async-stream) | Anthropic, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
 | [`function-calling-aws`](function-calling/function-calling-aws) | Claude on AWS Bedrock | AWS Transcribe, AWS Polly |
 | [`function-calling-azure`](function-calling/function-calling-azure) | Azure OpenAI | Deepgram, Cartesia |
 | [`function-calling-cerebras`](function-calling/function-calling-cerebras) | Cerebras | Deepgram, Cartesia |
 | [`function-calling-deepseek`](function-calling/function-calling-deepseek) | DeepSeek | Deepgram, Cartesia |
 | [`function-calling-fireworks`](function-calling/function-calling-fireworks) | Fireworks AI | Deepgram, Cartesia |
+| [`function-calling-google-async-stream`](function-calling/function-calling-google-async-stream) | Google Gemini, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
 | [`function-calling-google-vertex`](function-calling/function-calling-google-vertex) | Gemini on Google Vertex AI | Deepgram, ElevenLabs |
 | [`function-calling-grok`](function-calling/function-calling-grok) | xAI Grok | Deepgram, xAI |
 | [`function-calling-groq`](function-calling/function-calling-groq) | Groq | Groq, Cartesia |
@@ -50,7 +52,11 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-nvidia`](function-calling/function-calling-nvidia) | NVIDIA | Deepgram, Cartesia |
 | [`function-calling-ollama`](function-calling/function-calling-ollama) | A local Ollama model | Deepgram, Cartesia |
 | [`function-calling-openai`](function-calling/function-calling-openai) | OpenAI | OpenAI realtime transcription, OpenAI |
+| [`function-calling-openai-async`](function-calling/function-calling-openai-async) | OpenAI, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | OpenAI realtime transcription, OpenAI |
+| [`function-calling-openai-async-stream`](function-calling/function-calling-openai-async-stream) | OpenAI, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
 | [`function-calling-openai-responses`](function-calling/function-calling-openai-responses) | OpenAI Responses API | Deepgram, Cartesia |
+| [`function-calling-openai-responses-async`](function-calling/function-calling-openai-responses-async) | OpenAI Responses API, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | Deepgram, Cartesia |
+| [`function-calling-openai-responses-async-stream`](function-calling/function-calling-openai-responses-async-stream) | OpenAI Responses API, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
 | [`function-calling-openai-responses-http`](function-calling/function-calling-openai-responses-http) | OpenAI Responses API over HTTP | Deepgram, Cartesia |
 | [`function-calling-openrouter`](function-calling/function-calling-openrouter) | OpenRouter | Deepgram, Azure |
 | [`function-calling-perplexity`](function-calling/function-calling-perplexity) | Perplexity Agent API | Deepgram, Cartesia |
