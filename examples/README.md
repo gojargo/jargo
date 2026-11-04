@@ -30,17 +30,35 @@ are not here.
 ## Function calling
 
 The voice agent with tools the LLM calls, each tool carrying its own handler.
-Speech-to-text is Deepgram (Groq for the Groq one) and text-to-speech Cartesia.
 
-| Example | LLM |
-| --- | --- |
-| [`function-calling-anthropic`](function-calling/function-calling-anthropic) | Anthropic |
-| [`function-calling-anthropic-async`](function-calling/function-calling-anthropic-async) | Anthropic, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel |
-| [`function-calling-deepseek`](function-calling/function-calling-deepseek) | DeepSeek |
-| [`function-calling-groq`](function-calling/function-calling-groq) | Groq |
-| [`function-calling-mistral`](function-calling/function-calling-mistral) | Mistral |
-| [`function-calling-openai-responses`](function-calling/function-calling-openai-responses) | OpenAI Responses API |
-| [`function-calling-together`](function-calling/function-calling-together) | Together AI |
+| Example | LLM | Speech-to-text, text-to-speech |
+| --- | --- | --- |
+| [`function-calling-anthropic`](function-calling/function-calling-anthropic) | Anthropic | Deepgram, Cartesia |
+| [`function-calling-anthropic-async`](function-calling/function-calling-anthropic-async) | Anthropic, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | Deepgram, Cartesia |
+| [`function-calling-aws`](function-calling/function-calling-aws) | Claude on AWS Bedrock | AWS Transcribe, AWS Polly |
+| [`function-calling-azure`](function-calling/function-calling-azure) | Azure OpenAI | Deepgram, Cartesia |
+| [`function-calling-cerebras`](function-calling/function-calling-cerebras) | Cerebras | Deepgram, Cartesia |
+| [`function-calling-deepseek`](function-calling/function-calling-deepseek) | DeepSeek | Deepgram, Cartesia |
+| [`function-calling-fireworks`](function-calling/function-calling-fireworks) | Fireworks AI | Deepgram, Cartesia |
+| [`function-calling-google-vertex`](function-calling/function-calling-google-vertex) | Gemini on Google Vertex AI | Deepgram, ElevenLabs |
+| [`function-calling-grok`](function-calling/function-calling-grok) | xAI Grok | Deepgram, xAI |
+| [`function-calling-groq`](function-calling/function-calling-groq) | Groq | Groq, Cartesia |
+| [`function-calling-inception`](function-calling/function-calling-inception) | Inception | Deepgram, Cartesia |
+| [`function-calling-mistral`](function-calling/function-calling-mistral) | Mistral | Deepgram, Cartesia |
+| [`function-calling-nebius`](function-calling/function-calling-nebius) | Nebius | Deepgram, Cartesia |
+| [`function-calling-novita`](function-calling/function-calling-novita) | Novita AI | Deepgram, Cartesia |
+| [`function-calling-nvidia`](function-calling/function-calling-nvidia) | NVIDIA | Deepgram, Cartesia |
+| [`function-calling-ollama`](function-calling/function-calling-ollama) | A local Ollama model | Deepgram, Cartesia |
+| [`function-calling-openai`](function-calling/function-calling-openai) | OpenAI | OpenAI realtime transcription, OpenAI |
+| [`function-calling-openai-responses`](function-calling/function-calling-openai-responses) | OpenAI Responses API | Deepgram, Cartesia |
+| [`function-calling-openai-responses-http`](function-calling/function-calling-openai-responses-http) | OpenAI Responses API over HTTP | Deepgram, Cartesia |
+| [`function-calling-openrouter`](function-calling/function-calling-openrouter) | OpenRouter | Deepgram, Azure |
+| [`function-calling-perplexity`](function-calling/function-calling-perplexity) | Perplexity Agent API | Deepgram, Cartesia |
+| [`function-calling-qwen`](function-calling/function-calling-qwen) | Qwen | Deepgram, Cartesia |
+| [`function-calling-sambanova`](function-calling/function-calling-sambanova) | SambaNova | Deepgram, Cartesia |
+| [`function-calling-sarvam`](function-calling/function-calling-sarvam) | Sarvam AI | Sarvam, Sarvam |
+| [`function-calling-together`](function-calling/function-calling-together) | Together AI | Deepgram, Cartesia |
+| [`function-calling-missing-handler`](function-calling/function-calling-missing-handler) | OpenAI, with a tool deliberately left without a handler, to show how the LLM service recovers | Deepgram, Cartesia |
 
 ## Speech-to-speech
 
