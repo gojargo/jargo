@@ -43,6 +43,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-camb`](voice/voice-camb) | Deepgram speech-to-text, an OpenAI LLM and Camb AI text-to-speech. |
 | [`voice-cartesia`](voice/voice-cartesia) | Cartesia speech-to-text and text- to-speech, with an OpenAI LLM. |
 | [`voice-cartesia-http`](voice/voice-cartesia-http) | Cartesia speech-to-text, an OpenAI LLM and Cartesia text-to-speech over HTTP. |
+| [`voice-cartesia-turns`](voice/voice-cartesia-turns) | Cartesia speech-to-text that detects the turns itself, an OpenAI LLM and Cartesia text-to-speech. |
 | [`voice-deepgram-flux`](voice/voice-deepgram-flux) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM. |
 | [`voice-deepgram-http`](voice/voice-deepgram-http) | Deepgram speech-to-text and text-to-speech (over HTTP), with an OpenAI LLM. |
 | [`voice-elevenlabs`](voice/voice-elevenlabs) | ElevenLabs realtime speech-to- text and streaming text-to-speech, with an OpenAI LLM. |
@@ -65,6 +66,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-openai-http`](voice/voice-openai-http) | OpenAI transcription, LLM and text-to-speech, transcribing over HTTP. |
 | [`voice-openai-responses`](voice/voice-openai-responses) | Deepgram speech-to-text, OpenAI's Responses API and Cartesia text-to-speech. |
 | [`voice-openai-responses-http`](voice/voice-openai-responses-http) | Deepgram speech-to- text, OpenAI's Responses API over HTTP and Cartesia text-to-speech. |
+| [`voice-openai-turn-detection`](voice/voice-openai-turn-detection) | OpenAI's realtime transcription with the server's VAD driving turns, an OpenAI LLM and OpenAI text-to-speech. |
 | [`voice-piper`](voice/voice-piper) | Deepgram speech-to-text, an OpenAI LLM and Piper text-to-speech. |
 | [`voice-pockettts`](voice/voice-pockettts) | Deepgram speech-to-text, an OpenAI LLM and Pocket TTS text-to-speech. |
 | [`voice-resemble`](voice/voice-resemble) | Deepgram speech-to-text, an OpenAI LLM and Resemble AI text-to-speech. |
