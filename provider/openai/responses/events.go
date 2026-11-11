@@ -54,9 +54,32 @@ type event struct {
 	Arguments string `json:"arguments"`
 	// Response carries the response object on lifecycle events.
 	Response *responseObject `json:"response"`
-	// Message and Code describe a stream-level error.
+	// Message and Code describe a stream-level error as the HTTP stream sends
+	// it, at the top level of the event.
 	Message string `json:"message"`
 	Code    string `json:"code"`
+	// Error describes a stream-level error as the WebSocket sends it, nested
+	// under the event.
+	Error *struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	} `json:"error"`
+}
+
+// errorMessage is the message of an error event, in either of its shapes.
+func (ev event) errorMessage() string {
+	if ev.Error != nil && ev.Error.Message != "" {
+		return ev.Error.Message
+	}
+	return ev.Message
+}
+
+// errorCode is the code of an error event, in either of its shapes.
+func (ev event) errorCode() string {
+	if ev.Error != nil && ev.Error.Code != "" {
+		return ev.Error.Code
+	}
+	return ev.Code
 }
 
 // outputItem is an item the model produced: a message or a function call.
@@ -192,7 +215,7 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 		s.finish(ev)
 		return true, responseError(ev)
 	case evtError:
-		return true, fmt.Errorf("%w: %s", errServer, firstNonEmpty(ev.Message, ev.Code))
+		return true, fmt.Errorf("%w: %s", errServer, firstNonEmpty(ev.errorMessage(), ev.errorCode()))
 	}
 	return false, nil
 }

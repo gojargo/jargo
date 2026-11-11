@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
@@ -179,6 +180,11 @@ func TestStreamStateFailures(t *testing.T) {
 			`{"type":"error","message":"bad request"}`,
 			"bad request",
 		},
+		{
+			"stream error nested, as the WebSocket sends it",
+			modelNotFound,
+			"The model does not exist",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -297,7 +303,18 @@ type fakeResponsesWS struct {
 	turns []wsTurn
 	// types is the type of every message received, in order.
 	types []string
+	// dials is how many connections were opened.
+	dials int
 }
+
+// closeConnection, as the last event of a script, makes the fake server close
+// the connection once it has sent the rest.
+const closeConnection = "__close__"
+
+// modelNotFound is an error event as the WebSocket sends it, nested under the
+// event, with a message and a code.
+const modelNotFound = `{"type":"error","status":400,"error":{"type":"invalid_request_error",` +
+	`"code":"model_not_found","message":"The model does not exist"}}`
 
 // newFakeResponsesWS starts a server that answers the Nth request with the Nth
 // scripted event list.
@@ -311,6 +328,9 @@ func newFakeResponsesWS(t *testing.T, scripts [][]string) *fakeResponsesWS {
 		}
 		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
 		ctx := r.Context()
+		f.mu.Lock()
+		f.dials++
+		f.mu.Unlock()
 
 		for {
 			_, data, err := c.Read(ctx)
@@ -339,6 +359,9 @@ func newFakeResponsesWS(t *testing.T, scripts [][]string) *fakeResponsesWS {
 				return
 			}
 			for _, ev := range scripts[n] {
+				if ev == closeConnection {
+					return
+				}
 				if c.Write(ctx, websocket.MessageText, []byte(ev)) != nil {
 					return
 				}
@@ -347,6 +370,13 @@ func newFakeResponsesWS(t *testing.T, scripts [][]string) *fakeResponsesWS {
 	}))
 	t.Cleanup(f.Close)
 	return f
+}
+
+// dialed is how many connections the server has accepted.
+func (f *fakeResponsesWS) dialed() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.dials
 }
 
 // wsURL is the server's WebSocket address.
@@ -482,13 +512,22 @@ func TestWSFullContextWhenHistoryChanges(t *testing.T) {
 	}
 }
 
-// TestWSRetriesOnStaleConnection checks the two recoverable server errors drop
-// the connection and retry with the full context, rather than failing the turn.
+// TestWSRetriesOnStaleConnection checks the two recoverable server errors are
+// retried with the full context rather than failing the turn: a lost previous
+// response on the same connection, a spent connection on a fresh one. The
+// WebSocket nests the error under the event, which is the shape tested here.
 func TestWSRetriesOnStaleConnection(t *testing.T) {
-	for _, code := range []string{"previous_response_not_found", "connection_expired"} {
-		t.Run(code, func(t *testing.T) {
+	for _, c := range []struct {
+		code  string
+		dials int
+	}{
+		{"previous_response_not_found", 1},
+		{"websocket_connection_limit_reached", 2},
+	} {
+		t.Run(c.code, func(t *testing.T) {
 			srv := newFakeResponsesWS(t, [][]string{
-				{`{"type":"error","code":"` + code + `","message":"stale"}`},
+				{`{"type":"error","status":400,"error":{"type":"invalid_request_error",` +
+					`"code":"` + c.code + `","message":"stale"}}`},
 				{
 					`{"type":"response.created","response":{"id":"resp_2"}}`,
 					`{"type":"response.output_text.delta","delta":"recovered"}`,
@@ -512,7 +551,64 @@ func TestWSRetriesOnStaleConnection(t *testing.T) {
 			if text.String() != "recovered" {
 				t.Errorf("text = %q, want the retry's output", text.String())
 			}
+			if got := srv.dialed(); got != c.dials {
+				t.Errorf("connections opened = %d, want %d", got, c.dials)
+			}
 		})
+	}
+}
+
+// TestWSReconnectsAfterTheServerCloses checks a connection the server closed
+// after an error is not reused: the error reaches the caller with the server's
+// message, and the next turn opens a fresh connection and succeeds.
+func TestWSReconnectsAfterTheServerCloses(t *testing.T) {
+	srv := newFakeResponsesWS(t, [][]string{
+		{
+			modelNotFound,
+			closeConnection,
+		},
+		{
+			`{"type":"response.created","response":{"id":"resp_2"}}`,
+			`{"type":"response.output_text.delta","delta":"back"}`,
+			`{"type":"response.completed","response":{"id":"resp_2"}}`,
+		},
+	})
+
+	svc := NewLLM(Config{APIKey: "k", WSURL: srv.wsURL()})
+	t.Cleanup(svc.disconnect)
+
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	err := svc.Generate(context.Background(), convo, func(string) error { return nil })
+	if !errors.Is(err, errServer) || !strings.Contains(err.Error(), "The model does not exist") {
+		t.Fatalf("first turn = %v, want the server's error with its message", err)
+	}
+
+	// Let the close reach the client before the next turn, as it does between
+	// two turns of a call.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		svc.mu.Lock()
+		sess := svc.sess
+		svc.mu.Unlock()
+		if sess == nil || len(sess.events) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var text strings.Builder
+	if err := svc.Generate(context.Background(), convo, func(s string) error {
+		text.WriteString(s)
+		return nil
+	}); err != nil {
+		t.Fatalf("second turn: %v", err)
+	}
+	if text.String() != "back" {
+		t.Errorf("text = %q, want the second turn's output", text.String())
+	}
+	if got := srv.dialed(); got != 2 {
+		t.Errorf("connections opened = %d, want a fresh one for the second turn", got)
 	}
 }
 
@@ -526,7 +622,8 @@ func TestIsRecoverable(t *testing.T) {
 	}{
 		{"no error", nil, false},
 		{"previous response gone", errPreviousResponseGone, true},
-		{"connection expired", errConnectionExpired, true},
+		{"connection limit reached", errConnectionLimit, true},
+		{"connection closed", errConnectionClosed, true},
 		{"canceled", context.Canceled, false},
 		{"server error", errServer, false},
 	}
@@ -539,6 +636,16 @@ func TestIsRecoverable(t *testing.T) {
 	}
 }
 
+// decodeTestEvent decodes one event as it would arrive on the wire.
+func decodeTestEvent(t *testing.T, raw string) event {
+	t.Helper()
+	ev, ok := decodeEvent([]byte(raw))
+	if !ok {
+		t.Fatalf("event did not decode: %s", raw)
+	}
+	return ev
+}
+
 // TestClassifyStreamError checks only the two connection-scoped codes are
 // treated as recoverable; anything else flows on as a normal stream error.
 func TestClassifyStreamError(t *testing.T) {
@@ -546,9 +653,10 @@ func TestClassifyStreamError(t *testing.T) {
 	if !errors.Is(gone, errPreviousResponseGone) {
 		t.Errorf("previous_response_not_found = %v, want errPreviousResponseGone", gone)
 	}
-	expired := classifyStreamError(event{Type: evtError, Code: "connection_expired"})
-	if !errors.Is(expired, errConnectionExpired) {
-		t.Errorf("connection_expired = %v, want errConnectionExpired", expired)
+	limit := classifyStreamError(decodeTestEvent(t,
+		`{"type":"error","error":{"code":"websocket_connection_limit_reached","message":"limit"}}`))
+	if !errors.Is(limit, errConnectionLimit) {
+		t.Errorf("websocket_connection_limit_reached = %v, want errConnectionLimit", limit)
 	}
 	if err := classifyStreamError(event{Type: evtError, Code: "invalid_request"}); err != nil {
 		t.Errorf("invalid_request = %v, want nil so it flows on as a stream error", err)

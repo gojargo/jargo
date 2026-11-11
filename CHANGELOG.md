@@ -23,6 +23,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The OpenAI Responses WebSocket reads its errors, and survives a closed
+  connection.** An error event nests its message and code under `error`; the
+  service read them from the top level, as the HTTP stream sends them, so the
+  message came out empty and no code was ever recognized. Both shapes are read
+  now. A turn the server answers with `previous_response_not_found` is resent
+  with the full context on the same connection, and one answered with
+  `websocket_connection_limit_reached` on a fresh one; the `connection_expired`
+  and `session_expired` codes the service listened for instead are no longer
+  special. A connection the server closed (after an error, say) was kept and
+  written to on every later turn, each failing at once; a closed connection is
+  now dropped, and the turn retried on a fresh one with the full context.
 - **An LLM's time to first byte is reported when the first output arrives.**
   `llm.Base.StopTTFBMetrics` recorded it and left it for the processing time at
   the end of the generation, by which point the reply it started was already

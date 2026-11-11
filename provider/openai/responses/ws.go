@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -46,13 +47,15 @@ func endsResponse(eventType string) bool {
 //nolint:gochecknoglobals // sentinel error
 var errPreviousResponseGone = errors.New("openai responses: previous response not found")
 
-// errConnectionExpired reports that the connection hit the server's lifetime
-// limit. The turn retries on a fresh one.
+// errConnectionLimit reports that the connection hit the server's limit on how
+// long a connection may last. The turn retries on a fresh one.
 //
 //nolint:gochecknoglobals // sentinel error
-var errConnectionExpired = errors.New("openai responses: connection expired")
+var errConnectionLimit = errors.New("openai responses: connection limit reached")
 
-// errConnectionClosed reports that the connection ended mid-turn.
+// errConnectionClosed reports that the connection ended: the server closed it,
+// after an error or on its own, before or during the turn. The turn retries on a
+// fresh one.
 //
 //nolint:gochecknoglobals // sentinel error
 var errConnectionClosed = errors.New("openai responses: connection closed")
@@ -178,9 +181,11 @@ func (s *Service) Cleanup(ctx context.Context) error {
 	return s.Base.Cleanup(ctx)
 }
 
-// run drives one turn, retrying once when the connection turns out to be stale.
-// Both recoverable faults are properties of the connection rather than the
-// request, so the retry drops the continuation and resends the full context.
+// run drives one turn, retrying once when it hit a recoverable fault. Every one
+// of them loses what the server held for the conversation, so the retry drops
+// the continuation and resends the full context: on the same connection when
+// the server merely lost the previous response, on a fresh one when the
+// connection itself is gone or spent.
 func (s *Service) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
 	lane := s.chooseNextLane()
 	var err error
@@ -189,20 +194,33 @@ func (s *Service) run(ctx context.Context, convo *frames.LLMContext, sink llm.Si
 		if !isRecoverable(err) {
 			return err
 		}
-		slog.Debug("openai responses turn failed recoverably, retrying",
+		slog.Warn("openai responses turn failed recoverably, retrying with the full context",
 			"attempt", attempt+1, "err", err)
+		if errors.Is(err, errPreviousResponseGone) {
+			s.forgetContinuation()
+			continue
+		}
 		s.disconnect()
 	}
 	return err
 }
 
-// isRecoverable reports whether a failed turn is worth retrying on a fresh
-// connection. A canceled context is an interruption, not a fault.
+// isRecoverable reports whether a failed turn is worth retrying. A canceled
+// context is an interruption, not a fault.
 func isRecoverable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
-	return errors.Is(err, errPreviousResponseGone) || errors.Is(err, errConnectionExpired)
+	return errors.Is(err, errPreviousResponseGone) || errors.Is(err, errConnectionLimit) ||
+		errors.Is(err, errConnectionClosed)
+}
+
+// forgetContinuation drops what the previous turn left the server holding, so
+// the next request sends the full context.
+func (s *Service) forgetContinuation() {
+	s.mu.Lock()
+	s.cont = continuation{}
+	s.mu.Unlock()
 }
 
 // turn runs one exchange on a lane: it builds the request, sends it, and reads
@@ -240,7 +258,8 @@ func (s *Service) turn(
 	s.currentLane = lane
 	s.mu.Unlock()
 	if werr := sess.conn.Write(sess.ctx, websocket.MessageText, body); werr != nil {
-		return werr
+		// The server closed the connection since the last turn.
+		return fmt.Errorf("%w: %w", errConnectionClosed, werr)
 	}
 
 	state, err := s.readTurn(ctx, sess, sink, lane)
@@ -272,7 +291,7 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink, la
 				return state, errConnectionClosed
 			}
 			if m.err != nil {
-				return state, m.err
+				return state, fmt.Errorf("%w: %w", errConnectionClosed, m.err)
 			}
 			if !s.followLane(m.ev, lane) {
 				continue
@@ -373,11 +392,11 @@ func classifyStreamError(ev event) error {
 	if ev.Type != evtError {
 		return nil
 	}
-	switch ev.Code {
+	switch ev.errorCode() {
 	case "previous_response_not_found":
 		return errPreviousResponseGone
-	case "connection_expired", "session_expired":
-		return errConnectionExpired
+	case "websocket_connection_limit_reached":
+		return errConnectionLimit
 	}
 	return nil
 }
