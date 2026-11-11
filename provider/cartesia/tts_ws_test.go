@@ -17,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
 )
@@ -138,6 +139,9 @@ type ttsHost struct {
 	frames    []string
 	closed    bool
 	rotations int
+	errors    []*frames.ErrorFrame
+	pushed    []string
+	resets    int
 }
 
 func (h *ttsHost) AppendToAudioContext(_ string, f frames.Frame) {
@@ -182,6 +186,36 @@ func (h *ttsHost) AudioContextAvailable(string) bool {
 }
 
 func (h *ttsHost) ReplaceConnection() {}
+
+func (h *ttsHost) PushError(_ context.Context, msg string, err error, fatal bool, _ ...processor.ErrorOption) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ef := frames.NewErrorFrame(msg)
+	ef.Err, ef.Fatal = err, fatal
+	h.errors = append(h.errors, ef)
+}
+
+func (h *ttsHost) PushFrame(_ context.Context, f frames.Frame, _ processor.Direction) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := f.(*frames.TTSStoppedFrame); ok {
+		h.pushed = append(h.pushed, "stopped")
+	}
+	return nil
+}
+
+func (h *ttsHost) ResetActiveAudioContext() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.resets++
+}
+
+// pushedErrors is every error the provider reported through the host.
+func (h *ttsHost) pushedErrors() []*frames.ErrorFrame {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]*frames.ErrorFrame(nil), h.errors...)
+}
 
 // spokenWords is the timings reported so far.
 func (h *ttsHost) spokenWords() []uctx.WordTiming {
@@ -261,8 +295,6 @@ func TestConfigValidate(t *testing.T) {
 // identifies it in logs, metrics and traces.
 func TestNewServices(t *testing.T) {
 	providertest.Service(t, "CartesiaTTS", NewTTS(Config{APIKey: "k", VoiceID: testVoiceID}))
-	providertest.Service(t, "CartesiaTTS",
-		NewTTS(Config{APIKey: "k", VoiceID: testVoiceID, WordTimestamps: true}))
 	providertest.Service(t, "CartesiaSTT", NewSTT(STTConfig{APIKey: "k"}))
 }
 
@@ -336,12 +368,11 @@ func TestRunTTSRequestShape(t *testing.T) {
 		t.Errorf("output_format.sample_rate = %v, want %d", format["sample_rate"], defaultSampleRate)
 	}
 
-	// The plain path asks for no timestamps, so the base takes the unaligned
-	// route and nothing downstream waits on word timing.
-	for _, f := range []string{"add_timestamps", "use_normalized_timestamps"} {
-		if _, present := got[f]; present {
-			t.Errorf("%s was requested on the plain path: %v", f, got[f])
-		}
+	// Every request asks for timestamps against the text as written: the
+	// service is always word-aligned.
+	if got["add_timestamps"] != true || got["use_normalized_timestamps"] != false {
+		t.Errorf("add_timestamps = %v, use_normalized_timestamps = %v, want true and false",
+			got["add_timestamps"], got["use_normalized_timestamps"])
 	}
 }
 
@@ -505,15 +536,40 @@ func TestAudioForAClosedContextIsDropped(t *testing.T) {
 	}
 }
 
-// TestRunTTSServerError checks an error message from Cartesia closes the context
-// out rather than leaving the turn waiting on audio that is not coming.
+// TestRunTTSServerError checks an error message from Cartesia ends the turn's
+// speech at once rather than leaving it waiting on audio that is not coming,
+// reports the server's message through the service, and forgets the playing
+// context.
 func TestRunTTSServerError(t *testing.T) {
 	endpoint, _ := ttsServer(t, []map[string]any{{"type": "error", "message": "voice not found"}})
 
 	s := newSynthesizer(ttsConfig(endpoint))
-	host := speak(t, s, "hi")
-	if _, _, order, _ := host.snapshot(); len(order) == 0 || order[len(order)-1] != "stopped" {
-		t.Errorf("frames = %v, want the context closed out", order)
+	host := &ttsHost{}
+	s.SetAudioContextHost(host)
+	t.Cleanup(func() { _ = s.Close() })
+	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err != nil {
+		t.Fatalf("RunTTS: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(host.pushedErrors()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	pushed := host.pushedErrors()
+	if len(pushed) != 1 {
+		t.Fatalf("pushed %d errors, want 1", len(pushed))
+	}
+	if !strings.Contains(pushed[0].Error, "voice not found") || pushed[0].Fatal || pushed[0].Err != nil {
+		t.Errorf("pushed %q (fatal %v, err %v), want the server's message alone, not fatal",
+			pushed[0].Error, pushed[0].Fatal, pushed[0].Err)
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if len(host.pushed) != 1 || host.pushed[0] != "stopped" {
+		t.Errorf("pushed frames %v, want the stop pushed at once", host.pushed)
+	}
+	if host.resets != 1 {
+		t.Errorf("the playing context was reset %d times, want 1", host.resets)
 	}
 }
 
@@ -546,9 +602,7 @@ func TestRunTTSTimedRequestsTimestamps(t *testing.T) {
 		{"type": "done"},
 	})
 
-	cfg := ttsConfig(endpoint)
-	cfg.WordTimestamps = true
-	s := &timedSynthesizer{synthesizer: newSynthesizer(cfg)}
+	s := &timedSynthesizer{synthesizer: newSynthesizer(ttsConfig(endpoint))}
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
 	t.Cleanup(func() { _ = s.Close() })
@@ -576,26 +630,6 @@ func TestRunTTSTimedRequestsTimestamps(t *testing.T) {
 		if words[i] != want[i] {
 			t.Fatalf("word %d = %v, want %v", i, words[i], want[i])
 		}
-	}
-}
-
-// TestRunTTSTimedIgnoresTimestampsOnThePlainPath checks a service that did not
-// ask for timings does not report any, so the base stays off the word-aligned
-// path.
-func TestRunTTSTimedIgnoresTimestampsOnThePlainPath(t *testing.T) {
-	endpoint, _ := ttsServer(t, []map[string]any{
-		chunk([]byte{1, 2}),
-		{"type": "timestamps", "word_timestamps": map[string]any{
-			"words": []string{"Hello"},
-			"start": []float64{0.0},
-		}},
-		{"type": "done"},
-	})
-
-	s := newSynthesizer(ttsConfig(endpoint))
-	host := speak(t, s, "Hello")
-	if _, words, _, _ := host.snapshot(); len(words) != 0 {
-		t.Errorf("the plain path reported %v, want no word timings", words)
 	}
 }
 

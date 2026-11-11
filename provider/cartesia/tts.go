@@ -18,6 +18,7 @@ import (
 	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
 	uctx "github.com/gojargo/jargo/utils/context"
@@ -40,14 +41,10 @@ func NewTTS(cfg Config) *tts.Base {
 	cfg = ttsDefaults(cfg)
 
 	s := newSynthesizer(cfg)
-	var b *tts.Base
-	if cfg.WordTimestamps {
-		// Only the timestamp-aware type implements tts.WordTimestamps, so the base
-		// takes the word-aligned path solely when the caller opts in.
-		b = tts.New("CartesiaTTS", &timedSynthesizer{synthesizer: s})
-	} else {
-		b = tts.New("CartesiaTTS", s)
-	}
+	// Always word-aligned: Cartesia reports when each word is spoken, so the
+	// base emits each word's text as its audio plays and the conversation keeps
+	// only what was heard before an interruption.
+	b := tts.New("CartesiaTTS", &timedSynthesizer{synthesizer: s})
 	// Always hold off on a sentence boundary inside a spell tag. The tag is full
 	// of periods that end no sentence, and splitting it would hand Cartesia half
 	// a tag. The preferred way to use Cartesia's markup is to have a text
@@ -337,7 +334,8 @@ func (s *synthesizer) readMessages(ctx context.Context, conn *wsutil.Conn) {
 		if json.Unmarshal(data, &m) != nil {
 			continue
 		}
-		s.dispatch(&m)
+		m.raw = data
+		s.dispatch(ctx, &m)
 	}
 }
 
@@ -347,7 +345,7 @@ func (s *synthesizer) readMessages(ctx context.Context, conn *wsutil.Conn) {
 // abandons a turn mid-flight, and audio the server had already generated for it
 // arrives afterwards. Attributing by context id keeps that audio out of the next
 // turn, which is what the ids are for.
-func (s *synthesizer) dispatch(m *wsMessage) {
+func (s *synthesizer) dispatch(ctx context.Context, m *wsMessage) {
 	host := s.host
 	if host == nil || m.ContextID == "" || !host.AudioContextAvailable(m.ContextID) {
 		return
@@ -357,9 +355,6 @@ func (s *synthesizer) dispatch(m *wsMessage) {
 	case msgDone:
 		s.finishContext(m.ContextID, host)
 	case msgTimestamps:
-		if !s.cfg.WordTimestamps {
-			return
-		}
 		batch, opts := normalizeWordTimings(m.WordTimestamps, s.spacelessLanguage())
 		if len(batch) > 0 {
 			host.AddWordTimestamps(m.ContextID, batch, opts)
@@ -374,9 +369,16 @@ func (s *synthesizer) dispatch(m *wsMessage) {
 		f.ContextID = m.ContextID
 		host.AppendToAudioContext(m.ContextID, f)
 	case msgError:
-		slog.Error("cartesia tts reported an error",
-			"context", m.ContextID, "message", m.Message)
-		s.finishContext(m.ContextID, host)
+		// The turn's speech stops now rather than behind audio that is not
+		// coming, and the failure is reported through the service with the
+		// server's message as it was sent. There are no metrics to stop: they are
+		// taken per RunTTS call, which has returned by the time the server
+		// answers.
+		stopped := frames.NewTTSStoppedFrame()
+		stopped.ContextID = m.ContextID
+		_ = host.PushFrame(ctx, stopped, processor.Downstream)
+		host.PushError(ctx, "Error: "+string(m.raw), nil, false)
+		host.ResetActiveAudioContext()
 	case msgFlushDone:
 		// A boundary marker within a context, which Cartesia emits per submission
 		// when its own buffering is disabled. Each turn already has a context of
@@ -481,12 +483,10 @@ func (s *synthesizer) request(text, contextID string, more bool) map[string]any 
 			"sample_rate": s.cfg.SampleRate,
 		},
 	}
-	if s.cfg.WordTimestamps {
-		msg["add_timestamps"] = true
-		// The timings are matched against the text as it was written, so the
-		// normalized spelling of a number or an abbreviation would not match.
-		msg["use_normalized_timestamps"] = false
-	}
+	msg["add_timestamps"] = true
+	// The timings are matched against the text as it was written, so the
+	// normalized spelling of a number or an abbreviation would not match.
+	msg["use_normalized_timestamps"] = false
 	if s.cfg.MaxBufferDelayMs != nil {
 		msg["max_buffer_delay_ms"] = *s.cfg.MaxBufferDelayMs
 	}
@@ -526,6 +526,8 @@ type wsMessage struct {
 	Data           string         `json:"data"`
 	Message        string         `json:"message"`
 	WordTimestamps *wsWordTimings `json:"word_timestamps"`
+	// raw is the message as it arrived, which an error is reported with.
+	raw []byte
 }
 
 // wsWordTimings is the payload of a Cartesia "timestamps" message: parallel

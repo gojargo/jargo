@@ -88,12 +88,6 @@ type Config struct {
 	// buffering, and unset for tokens, which leaves Cartesia on its own 3000ms
 	// default.
 	MaxBufferDelayMs *int
-	// WordTimestamps requests per-word timestamps and drives the word-aligned
-	// text path: the TTS base emits a TTSTextFrame for each spoken word as its
-	// audio plays, mapped back to its original written form, so the assistant
-	// context records only what was actually spoken before an interruption. It is
-	// off by default; leaving it off keeps the service behaving exactly as before.
-	WordTimestamps bool
 }
 
 // Validate reports whether the configuration is usable.

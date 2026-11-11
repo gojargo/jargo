@@ -19,6 +19,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
 )
@@ -364,6 +365,12 @@ func (h *fakeHost) RemoveAudioContext(string) {
 func (h *fakeHost) AudioContextAvailable(string) bool { return !h.closed }
 
 func (h *fakeHost) ReplaceConnection() {}
+
+func (h *fakeHost) PushError(context.Context, string, error, bool, ...processor.ErrorOption) {}
+
+func (h *fakeHost) PushFrame(context.Context, frames.Frame, processor.Direction) error { return nil }
+
+func (h *fakeHost) ResetActiveAudioContext() {}
 
 func (h *fakeHost) snapshot() ([]byte, []string, []string, bool) {
 	h.mu.Lock()

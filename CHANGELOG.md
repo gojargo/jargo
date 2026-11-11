@@ -13,6 +13,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- **Cartesia TTS is always word-aligned.** Every request asks for word
+  timestamps against the text as written, and the service emits each word's
+  `TTSTextFrame` as its audio plays, so the conversation records only what was
+  heard before an interruption. **Breaking:** `cartesia.Config.WordTimestamps`
+  is gone; there is no unaligned mode left to choose.
+
+### Fixed
+
+- **A Cartesia error message is reported, not only logged.** The turn's speech
+  stops at once with a `TTSStoppedFrame` pushed outside the audio queue, the
+  server's message is pushed as an error from the service (category unknown,
+  as for any error carrying no cause), and the playing context is forgotten.
+  `tts.AudioContextHost` gains `PushFrame`, `PushError` and
+  `ResetActiveAudioContext` for a provider's receive loop to do so;
+  `tts.Base.ResetActiveAudioContext` is new.
+- **Pocket TTS no longer pauses after every sentence.** `pocket-tts serve`
+  appends 200 ms of silence to each response, after the last generated sample.
+  The provider now drops it, so a sentence ends where the model ended it and
+  the bot's turn is not reported that much late. Silence inside the speech, and
+  any trailing silence longer than the padding, still goes out.
+
 ## [0.4.0] - 2026-11-05
 
 ### Added

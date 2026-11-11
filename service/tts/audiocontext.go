@@ -52,6 +52,18 @@ type AudioContextHost interface {
 	// to a new context ID, for a provider replacing its connection. See
 	// Base.ReplaceConnection.
 	ReplaceConnection()
+	// PushFrame pushes a frame from the service itself, outside any context's
+	// queue: for a provider whose receive loop has to say something now rather
+	// than after the audio already queued.
+	PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error
+	// PushError reports a failure the provider learned of on its own receive
+	// loop, where no RunTTS call is waiting to return it: an error message the
+	// server sends about a context, say. It is the service's own PushError, so
+	// the error is categorized and reaches a service switcher like any other.
+	PushError(ctx context.Context, msg string, err error, fatal bool, opts ...processor.ErrorOption)
+	// ResetActiveAudioContext forgets which context is playing. See
+	// Base.ResetActiveAudioContext.
+	ResetActiveAudioContext()
 }
 
 // ContextSynthesizer is an optional interface a Synthesizer implements when its
@@ -480,6 +492,11 @@ func (b *Base) uninterruptibleContexts() []string {
 	}
 	return out
 }
+
+// ResetActiveAudioContext forgets which context is playing, for a provider
+// whose server has failed the context: nothing is reported as playing until the
+// drain goroutine starts the next one.
+func (b *Base) ResetActiveAudioContext() { b.setPlayingContextID("") }
 
 // playingContextID is the context the drain goroutine is playing, or "" when it
 // is between contexts.
