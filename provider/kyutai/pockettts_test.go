@@ -337,3 +337,69 @@ func TestNewTTSDefaults(t *testing.T) {
 		t.Errorf("base URL = %q, want the trailing slash gone", s.cfg.BaseURL)
 	}
 }
+
+// TestRunTTSDropsTheServerPadding checks the silence the server appends after
+// the last generated sample never reaches the pipeline, so a sentence ends where
+// the model ended it.
+func TestRunTTSDropsTheServerPadding(t *testing.T) {
+	speech := bytes.Repeat([]byte{7, 8}, 100)
+	padding := make([]byte, 24000*2/5) // the server's 200 ms at 24 kHz
+	srv, _ := serveAudio(t, 24000, [][]byte{speech, padding[:1000], padding[1000:]}, nil)
+
+	s := &pocketSynthesizer{cfg: PocketTTSConfig{BaseURL: srv.URL, SampleRate: 24000}, http: srv.Client()}
+	var audio []byte
+	for _, f := range collect(t, s) {
+		audio = append(audio, f.Audio...)
+	}
+	if !bytes.Equal(audio, speech) {
+		t.Errorf("emitted %d bytes, want the %d of speech without the padding", len(audio), len(speech))
+	}
+}
+
+func TestPaddingTrimmer(t *testing.T) {
+	const rate = 100 // padding = 40 bytes
+	zeros := func(n int) []byte { return make([]byte, n) }
+	cat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+
+	for name, tc := range map[string]struct {
+		chunks [][]byte
+		want   []byte
+	}{
+		"silence inside the speech is kept": {
+			chunks: [][]byte{{1, 2}, zeros(10), {3, 4}, zeros(40)},
+			want:   cat([]byte{1, 2}, zeros(10), []byte{3, 4}),
+		},
+		"a pause longer than the padding keeps what cannot be padding": {
+			chunks: [][]byte{{1, 2}, zeros(100)},
+			want:   cat([]byte{1, 2}, zeros(60)),
+		},
+		"a last sample with a zero high byte stays whole": {
+			chunks: [][]byte{{1, 2, 5}, zeros(41)},
+			want:   []byte{1, 2, 5, 0},
+		},
+		"padding split across chunks": {
+			chunks: [][]byte{cat([]byte{1, 2}, zeros(20)), zeros(20)},
+			want:   []byte{1, 2},
+		},
+		"no padding at all": {
+			chunks: [][]byte{{1, 2, 3, 4}},
+			want:   []byte{1, 2, 3, 4},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []byte
+			p := newPaddingTrimmer(func(pcm []byte) error { got = append(got, pcm...); return nil }, rate)
+			for _, c := range tc.chunks {
+				if err := p.write(c); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.close(); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

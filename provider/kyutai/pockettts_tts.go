@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
@@ -68,7 +70,75 @@ func (s *pocketSynthesizer) RunTTS(ctx context.Context, text, _ string, yield fu
 		slog.Warn("pocket-tts server generated at a different rate than configured",
 			"server", rate, "configured", s.cfg.SampleRate)
 	}
-	return streamWAV(pcm, tts.PCMYielder(yield, rate))
+	trim := newPaddingTrimmer(tts.PCMYielder(yield, rate), rate)
+	if err := streamWAV(pcm, trim.write); err != nil {
+		return err
+	}
+	return trim.close()
+}
+
+// serverPadding is the silence `pocket-tts serve` appends to every response
+// after the last generated sample, "to ensure proper playback" of a file. In a
+// stream it is a pause after every sentence the model never produced, and the
+// bot's turn is reported over that much later.
+const serverPadding = 200 * time.Millisecond
+
+// paddingTrimmer passes audio on except the server's padding, so what reaches
+// the pipeline is what the model generated. It holds back trailing zero bytes,
+// up to the length of the padding, until either more audio follows (they were
+// part of the speech, and go out ahead of it) or the stream ends (they were the
+// padding, and are dropped).
+type paddingTrimmer struct {
+	emit func(pcm []byte) error
+	// held is the run of zero bytes at the end of what has arrived and not been
+	// passed on; max is the most of it that can be padding.
+	held, max int
+}
+
+func newPaddingTrimmer(emit func(pcm []byte) error, rate int) *paddingTrimmer {
+	return &paddingTrimmer{emit: emit, max: int(int64(rate) * 2 * int64(serverPadding) / int64(time.Second))}
+}
+
+// write takes the next chunk of the stream.
+func (p *paddingTrimmer) write(chunk []byte) error {
+	last := lastNonZero(chunk)
+	if last < 0 {
+		p.held += len(chunk)
+		return p.release(p.held - p.max)
+	}
+	if err := p.release(p.held); err != nil {
+		return err
+	}
+	if err := p.emit(chunk[:last+1]); err != nil {
+		return err
+	}
+	p.held = len(chunk) - last - 1
+	return p.release(p.held - p.max)
+}
+
+// close ends the stream, dropping the padding. An odd run of zeros ends on the
+// high byte of the last sample, which goes out so the samples stay whole.
+func (p *paddingTrimmer) close() error {
+	return p.release(p.held % 2)
+}
+
+// release passes n of the held zero bytes on.
+func (p *paddingTrimmer) release(n int) error {
+	if n <= 0 {
+		return nil
+	}
+	p.held -= n
+	return p.emit(make([]byte, n))
+}
+
+// lastNonZero is the index of the last byte of b that is not zero, or -1.
+func lastNonZero(b []byte) int {
+	for i, v := range slices.Backward(b) {
+		if v != 0 {
+			return i
+		}
+	}
+	return -1
 }
 
 // requestBody builds the multipart form the server expects: the text to speak,
