@@ -23,6 +23,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An LLM's time to first byte is reported when the first output arrives.**
+  `llm.Base.StopTTFBMetrics` recorded it and left it for the processing time at
+  the end of the generation, by which point the reply it started was already
+  being spoken. A latency breakdown places the model's first token by that
+  measurement, so it could not account for the model at all and charged its
+  time to the pipeline. It now goes out at once, on its own `MetricsFrame`; the
+  frame at the end carries the processing time and the time to first answer
+  token. **Breaking:** `StopTTFBMetrics` takes the context.
 - **A Cartesia error message is reported, not only logged.** The turn's speech
   stops at once with a `TTSStoppedFrame` pushed outside the audio queue, the
   server's message is pushed as an error from the service (category unknown,

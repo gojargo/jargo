@@ -730,16 +730,15 @@ func (b *Base) StartTTFBMetrics() {
 // none, so the event announcing the call counts, and the turn reports a TTFB
 // rather than none at all.
 //
+// The measurement is reported at once, rather than with the processing time at
+// the end of the generation, so whatever watches the pipeline sees the first
+// output land when it does: a latency breakdown places the model's first token
+// by it, while the reply it starts is still being spoken.
+//
 // Only the first call in a generation counts, so a service may call it on every
 // chunk it reads.
-func (b *Base) StopTTFBMetrics() {
-	b.ttfbMu.Lock()
-	defer b.ttfbMu.Unlock()
-	if b.hasTTFB || b.ttfbStart.IsZero() {
-		return
-	}
-	b.ttfb = time.Since(b.ttfbStart)
-	b.hasTTFB = true
+func (b *Base) StopTTFBMetrics(ctx context.Context) {
+	b.ReportTTFBMetrics(ctx)
 }
 
 // StopTTFATMetrics records time to the first answer token. A service calls it
@@ -795,25 +794,19 @@ func (b *Base) ttfbMetrics() (time.Duration, bool) {
 	return b.ttfb, b.hasTTFB
 }
 
-// emitTiming records the generation's time-to-first-byte and processing time to
-// the span and to OpenTelemetry (always) and, when in-band metrics are enabled,
-// downstream as a MetricsFrame for the RTVI client.
-func (b *Base) emitTiming(ctx context.Context, span trace.Span, processing time.Duration) {
+// emitTiming records the generation's processing time to OpenTelemetry (always)
+// and, when in-band metrics are enabled, downstream as a MetricsFrame for the RTVI
+// client, with the time to first answer token. The time to first byte is not
+// among them: StopTTFBMetrics reported it when the first output arrived.
+func (b *Base) emitTiming(ctx context.Context, _ trace.Span, processing time.Duration) {
 	ttfb, hadTTFB := b.ttfbMetrics()
 	model := b.modelName()
 	metrics.RecordProcessing(ctx, "llm", b.TypeName(), model, processing.Seconds())
-	if hadTTFB {
-		span.SetAttributes(attribute.Float64("metrics.ttfb", ttfb.Seconds()))
-		metrics.RecordTTFB(ctx, "llm", b.TypeName(), model, ttfb.Seconds())
-	}
 	if !b.MetricsEnabled() {
 		return
 	}
 	base := frames.BaseMetricsData{Processor: b.Name(), Model: model}
 	data := []frames.MetricsData{frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing}}
-	if hadTTFB {
-		data = append(data, frames.TTFBMetricsData{BaseMetricsData: base, Value: ttfb})
-	}
 	if ttfat, hadTTFAT := b.ttfatMetrics(); hadTTFAT && hadTTFB {
 		data = append(data, frames.TTFATMetricsData{
 			BaseMetricsData: base,

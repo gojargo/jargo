@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -18,12 +19,15 @@ type timingGen struct {
 	*llm.Base
 }
 
-func (g *timingGen) Generate(_ context.Context, _ *frames.LLMContext, emit llm.Emit) error {
+func (g *timingGen) Generate(ctx context.Context, _ *frames.LLMContext, emit llm.Emit) error {
 	g.StartTTFBMetrics()
-	g.StopTTFBMetrics()
+	g.StopTTFBMetrics(ctx)
 	return emit("hello")
 }
 
+// TestEmitsTimingMetricsWhenEnabled checks the time to first byte is reported
+// on its own as the first output arrives, ahead of the reply, and the processing
+// time when the generation ends, without the first byte again.
 func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 	gen := &timingGen{}
 	svc := llm.New("FakeLLM", gen)
@@ -33,7 +37,9 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 	// The zeroed frames the task sends when the pipeline is ready would arrive
 	// first and are not what this is measuring.
 	noInitial := false
-	mfCh := make(chan *frames.MetricsFrame, 4)
+	var mu sync.Mutex
+	var order []string
+	done := make(chan struct{}, 1)
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params: pipeline.Params{
@@ -42,17 +48,26 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 		},
 	})
 	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
-		mf, ok := f.(*frames.MetricsFrame)
-		if !ok {
-			return
-		}
-		for _, d := range mf.Data {
-			if _, ok := d.(frames.ProcessingMetricsData); ok {
-				select {
-				case mfCh <- mf:
-				default:
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.LLMTextFrame:
+			order = append(order, "text")
+		case *frames.MetricsFrame:
+			for _, d := range fr.Data {
+				switch m := d.(type) {
+				case frames.TTFBMetricsData:
+					if m.Model != "m1" {
+						t.Errorf("model = %q, want m1", m.Model)
+					}
+					order = append(order, "ttfb")
+				case frames.ProcessingMetricsData:
+					order = append(order, "processing")
+					select {
+					case done <- struct{}{}:
+					default:
+					}
 				}
-				return
 			}
 		}
 	})
@@ -64,25 +79,19 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 	task.QueueFrame(frames.NewLLMContextFrame(convo))
 
 	select {
-	case mf := <-mfCh:
-		var sawTTFB bool
-		for _, d := range mf.Data {
-			if ttfb, ok := d.(frames.TTFBMetricsData); ok {
-				sawTTFB = true
-				if ttfb.Model != "m1" {
-					t.Fatalf("model = %q, want m1", ttfb.Model)
-				}
-			}
-		}
-		if !sawTTFB {
-			t.Fatal("TTFB not reported on the timing MetricsFrame")
-		}
+	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("no timing MetricsFrame emitted")
 	}
-
 	task.StopWhenDone()
 	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"ttfb", "text", "processing"}
+	if !slices.Equal(order, want) {
+		t.Errorf("frames in the order %v, want %v: the first byte reported as it arrives, once", order, want)
+	}
 }
 
 func TestNoMetricsFrameWhenDisabled(t *testing.T) {
@@ -132,10 +141,10 @@ type thinkingGen struct {
 	*llm.Base
 }
 
-func (g *thinkingGen) Generate(_ context.Context, _ *frames.LLMContext, emit llm.Emit) error {
+func (g *thinkingGen) Generate(ctx context.Context, _ *frames.LLMContext, emit llm.Emit) error {
 	g.StartTTFBMetrics()
 	// The model's first output, which is not yet the answer.
-	g.StopTTFBMetrics()
+	g.StopTTFBMetrics(ctx)
 	time.Sleep(20 * time.Millisecond)
 	return emit("hello")
 }
@@ -223,9 +232,9 @@ type realtimeGen struct {
 	*llm.Base
 }
 
-func (g *realtimeGen) Generate(_ context.Context, _ *frames.LLMContext, emit llm.Emit) error {
+func (g *realtimeGen) Generate(ctx context.Context, _ *frames.LLMContext, emit llm.Emit) error {
 	g.StartTTFBMetrics()
-	g.StopTTFBMetrics()
+	g.StopTTFBMetrics(ctx)
 	time.Sleep(20 * time.Millisecond)
 	return emit("hello")
 }

@@ -158,7 +158,7 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 	}
 
 	state := newStreamState(sink)
-	scanErr := s.consume(resp.Body, state)
+	scanErr := s.consume(ctx, resp.Body, state)
 	if scanErr != nil && !errors.Is(scanErr, errStreamDone) {
 		return scanErr
 	}
@@ -168,14 +168,14 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 
 // consume feeds a response's event stream to the state machine, through the
 // variant's filter when it has one.
-func (s *HTTPService) consume(r io.Reader, state *streamState) error {
+func (s *HTTPService) consume(ctx context.Context, r io.Reader, state *streamState) error {
 	handle := func(data []byte) error {
 		ev, ok := decodeEvent(data)
 		if !ok {
 			return nil // skip a malformed event rather than ending the turn
 		}
 		if carriesModelOutput(ev) {
-			s.StopTTFBMetrics()
+			s.StopTTFBMetrics(ctx)
 		}
 		done, err := state.handle(ev)
 		if err != nil {

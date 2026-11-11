@@ -254,7 +254,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 	for stream.Next() {
 		event := stream.Current()
 		if carriesModelOutput(event) {
-			s.StopTTFBMetrics()
+			s.StopTTFBMetrics(ctx)
 		}
 		if report {
 			if err := acc.Accumulate(event); err != nil {
@@ -374,7 +374,7 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 	for stream.Next() {
 		event := stream.Current()
 		if carriesModelOutput(event) {
-			s.StopTTFBMetrics()
+			s.StopTTFBMetrics(ctx)
 		}
 		if err := acc.Accumulate(event); err != nil {
 			return err

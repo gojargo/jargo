@@ -278,7 +278,7 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink, la
 				continue
 			}
 			if carriesModelOutput(m.ev) {
-				s.StopTTFBMetrics()
+				s.StopTTFBMetrics(ctx)
 			}
 			if cerr := classifyStreamError(m.ev); cerr != nil {
 				return state, cerr

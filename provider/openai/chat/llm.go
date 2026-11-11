@@ -416,7 +416,7 @@ func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink)
 			// The chunk carrying the counts has no choices of its own, so TTFB
 			// ends at the first chunk that holds model output.
 			if len(chunk.Choices) > 0 {
-				s.StopTTFBMetrics()
+				s.StopTTFBMetrics(ctx)
 				return c.add(chunk.Choices[0].Delta, sink)
 			}
 		}

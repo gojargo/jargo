@@ -614,7 +614,7 @@ func (s *Service) streamAttempt(
 		}
 		// A leading chunk can carry usage metadata and no candidates, so TTFB
 		// ends at the first chunk that holds model output.
-		s.StopTTFBMetrics()
+		s.StopTTFBMetrics(ctx)
 		return onChunk(chunk)
 	})
 	if err != nil {
