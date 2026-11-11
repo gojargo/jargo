@@ -96,14 +96,27 @@ type Service struct {
 	wg          sync.WaitGroup
 }
 
-// wsCreate is the client message that starts a turn. The request travels
-// pre-encoded so the configured extra fields are merged into it, not around it.
-type wsCreate struct {
-	Type string `json:"type"`
-	// StreamID is the lane the response goes on, which each of its events
-	// names.
-	StreamID string          `json:"stream_id"`
-	Response json.RawMessage `json:"response"`
+// createMessage is the client message that starts a turn: the request's own
+// fields at the top level, beside the message type and the lane the response
+// goes on. A WebSocket response always streams, so the request's stream field
+// is left out.
+func createMessage(request []byte, lane string) ([]byte, error) {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(request, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "stream")
+	msgType, err := json.Marshal("response.create")
+	if err != nil {
+		return nil, err
+	}
+	fields["type"] = msgType
+	streamID, err := json.Marshal(lane)
+	if err != nil {
+		return nil, err
+	}
+	fields["stream_id"] = streamID
+	return json.Marshal(fields)
 }
 
 // continuation records what the previous turn sent and what came back, which is
@@ -245,7 +258,7 @@ func (s *Service) turn(
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(wsCreate{Type: "response.create", StreamID: lane, Response: inner})
+	body, err := createMessage(inner, lane)
 	if err != nil {
 		return err
 	}

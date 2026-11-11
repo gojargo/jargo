@@ -337,22 +337,24 @@ func newFakeResponsesWS(t *testing.T, scripts [][]string) *fakeResponsesWS {
 			if err != nil {
 				return
 			}
-			var msg struct {
-				Type     string         `json:"type"`
-				StreamID string         `json:"stream_id"`
-				Response map[string]any `json:"response"`
-			}
+			// The request's fields travel at the top level of the message,
+			// beside its type and lane.
+			var msg map[string]any
 			if json.Unmarshal(data, &msg) != nil {
 				continue
 			}
+			msgType, _ := msg["type"].(string)
+			streamID, _ := msg["stream_id"].(string)
 			f.mu.Lock()
-			f.types = append(f.types, msg.Type)
-			if msg.Type != "response.create" {
+			f.types = append(f.types, msgType)
+			if msgType != "response.create" {
 				f.mu.Unlock()
 				continue
 			}
+			delete(msg, "type")
+			delete(msg, "stream_id")
 			n := len(f.turns)
-			f.turns = append(f.turns, wsTurn{request: msg.Response, streamID: msg.StreamID})
+			f.turns = append(f.turns, wsTurn{request: msg, streamID: streamID})
 			f.mu.Unlock()
 
 			if n >= len(scripts) {
@@ -663,5 +665,30 @@ func TestClassifyStreamError(t *testing.T) {
 	}
 	if err := classifyStreamError(event{Type: evtTextDelta}); err != nil {
 		t.Errorf("non-error event = %v, want nil", err)
+	}
+}
+
+// TestCreateMessageCarriesTheRequestAtTheTopLevel pins the shape of the message
+// that starts a turn: the request's fields beside the type and the lane, never
+// nested, and without the HTTP stream flag the WebSocket does not take.
+func TestCreateMessageCarriesTheRequestAtTheTopLevel(t *testing.T) {
+	msg, err := createMessage([]byte(`{"model":"m","input":[],"stream":true,"store":false}`), "lane-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(msg, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["type"] != "response.create" || got["stream_id"] != "lane-3" || got["model"] != "m" {
+		t.Errorf("message = %v, want the type, the lane and the model side by side", got)
+	}
+	for _, f := range []string{"response", "stream"} {
+		if _, present := got[f]; present {
+			t.Errorf("message carries %q: %v", f, got)
+		}
+	}
+	if _, present := got["input"]; !present {
+		t.Errorf("message lost the input: %v", got)
 	}
 }

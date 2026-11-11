@@ -23,6 +23,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The OpenAI Responses WebSocket sends its requests the way the API takes
+  them.** A `response.create` message carries the request's fields at its top
+  level, beside its type and lane; the service nested them under `response`,
+  and the API refused every turn for a missing `model`. The `stream` flag,
+  which only the HTTP API takes, is left out.
 - **The OpenAI Responses WebSocket reads its errors, and survives a closed
   connection.** An error event nests its message and code under `error`; the
   service read them from the top level, as the HTTP stream sends them, so the
