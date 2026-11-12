@@ -88,6 +88,14 @@ type STTConfig struct {
 	// families honor them, so changing them while the pipeline runs reopens the
 	// session.
 	Keyterm []string
+	// MinVolume is the volume, between 0 and 1, below which audio counts as
+	// silence for Cartesia's own finalization of a transcript; nil leaves it
+	// to Cartesia. Only ink-whisper models honor it.
+	MinVolume *float64
+	// MaxSilenceDurationSecs is how many seconds of silence Cartesia waits
+	// before finalizing a transcript on its own; nil leaves it to Cartesia.
+	// Only ink-whisper models honor it.
+	MaxSilenceDurationSecs *float64
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; 0 uses stt.CartesiaTTFSP99.
@@ -155,6 +163,12 @@ type STTSettings struct {
 	// connection, and only the ink-2 and ink-preview model families honor
 	// them.
 	Keyterm settings.Opt[[]string] `settings:"keyterm"`
+	// MinVolume is the volume below which audio counts as silence for
+	// Cartesia's own finalization. Only ink-whisper models honor it.
+	MinVolume settings.Opt[float64] `settings:"min_volume"`
+	// MaxSilenceDurationSecs is how many seconds of silence Cartesia waits
+	// before finalizing on its own. Only ink-whisper models honor it.
+	MaxSilenceDurationSecs settings.Opt[float64] `settings:"max_silence_duration_secs"`
 }
 
 // newSTTSettings is the starting state, taken from what the service was built
@@ -165,6 +179,12 @@ func newSTTSettings(cfg STTConfig) *STTSettings {
 	s.Language = settings.Set(cartesiaSTTLanguage(cfg.Language))
 	if len(cfg.Keyterm) > 0 {
 		s.Keyterm = settings.Set(cfg.Keyterm)
+	}
+	if cfg.MinVolume != nil {
+		s.MinVolume = settings.Set(*cfg.MinVolume)
+	}
+	if cfg.MaxSilenceDurationSecs != nil {
+		s.MaxSilenceDurationSecs = settings.Set(*cfg.MaxSilenceDurationSecs)
 	}
 	return s
 }
@@ -237,7 +257,47 @@ func (c *sttConnector) endpoint(sampleRate int) string {
 	for _, term := range keytermsFor(model, c.live.Keyterm.Or(nil)) {
 		q.Add("keyterm", term)
 	}
+	c.addFinalization(q, model)
 	return c.cfg.URL + "?" + encodeQuery(q)
+}
+
+// finalizationModelPrefix names the model family that honors the finalization
+// settings.
+const finalizationModelPrefix = "ink-whisper"
+
+// addFinalization adds the settings tuning Cartesia's own finalization of a
+// transcript, when any is set, for a model that honors them. Another model
+// would not, so they are left out with a warning.
+func (c *sttConnector) addFinalization(q url.Values, model string) {
+	var names []string
+	set := map[string]float64{}
+	if v, ok := c.live.MinVolume.Value(); ok {
+		names, set["min_volume"] = append(names, "min_volume"), v
+	}
+	if v, ok := c.live.MaxSilenceDurationSecs.Value(); ok {
+		names, set["max_silence_duration_secs"] = append(names, "max_silence_duration_secs"), v
+	}
+	if len(names) == 0 {
+		return
+	}
+	if !strings.HasPrefix(model, finalizationModelPrefix) {
+		slog.Warn("these settings are only supported on "+finalizationModelPrefix+" models; ignoring them",
+			"settings", strings.Join(names, ", "), "model", model)
+		return
+	}
+	for _, name := range names {
+		q.Set(name, pythonFloat(set[name]))
+	}
+}
+
+// pythonFloat formats a float the way Cartesia's documented examples are
+// written, a whole number keeping its ".0".
+func pythonFloat(v float64) string {
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s
 }
 
 // keytermsFor is the keyterms to send with a session on the given model: none

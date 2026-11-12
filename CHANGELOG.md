@@ -782,6 +782,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   change to anything else is kept but warned about, as the server loads its
   model once.
 
+- **Cartesia STT can tune Cartesia's own finalization.** `STTConfig` gains
+  `MinVolume` and `MaxSilenceDurationSecs`, and the STT settings
+  `min_volume` and `max_silence_duration_secs`: the volume below which audio
+  counts as silence, and the silence after which Cartesia finalizes a
+  transcript on its own. They are sent to ink-whisper models only, and left
+  out with a warning for another; a change reopens the session.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

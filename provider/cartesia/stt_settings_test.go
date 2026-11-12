@@ -226,3 +226,35 @@ func TestTurnsKeytermChangeReopensAndTheRestIsReported(t *testing.T) {
 		t.Error("a model change asked for a new session, but it cannot take effect")
 	}
 }
+
+// Ported from upstream (test_cartesia_connect_websocket_url_includes_finalization_settings
+// and ..._omits_finalization_settings_when_not_set). The settings tuning
+// Cartesia's own finalization go on the endpoint of an ink-whisper model when
+// set, and not otherwise.
+func TestFinalizationSettingsReachAnInkWhisperEndpoint(t *testing.T) {
+	t.Parallel()
+
+	cfg := sttConfig()
+	cfg.Model = "ink-whisper"
+	if q := queryOf(t, newSTTConnector(cfg).endpoint(16000)); q.Has("min_volume") || q.Has("max_silence_duration_secs") {
+		t.Errorf("query %v carries finalization settings none were set for", q)
+	}
+	cfg.MinVolume, cfg.MaxSilenceDurationSecs = new(0.1), new(2.5)
+	q := queryOf(t, newSTTConnector(cfg).endpoint(16000))
+	if q.Get("min_volume") != "0.1" || q.Get("max_silence_duration_secs") != "2.5" {
+		t.Errorf("query %v, want min_volume 0.1 and max_silence_duration_secs 2.5", q)
+	}
+}
+
+// Ported from upstream (test_cartesia_connect_websocket_url_omits_finalization_for_non_ink_whisper_model).
+func TestFinalizationSettingsAreLeftOffAnotherModel(t *testing.T) {
+	t.Parallel()
+
+	cfg := sttConfig()
+	cfg.Model = "ink-2"
+	cfg.MinVolume = new(0.1)
+	q := queryOf(t, newSTTConnector(cfg).endpoint(16000))
+	if q.Get("model") != "ink-2" || q.Has("min_volume") {
+		t.Errorf("query %v, want model ink-2 and no min_volume", q)
+	}
+}
