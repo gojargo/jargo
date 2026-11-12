@@ -317,6 +317,42 @@ func pionOffer(t *testing.T) (*webrtc.PeerConnection, webrtc.SessionDescription)
 	return pc, *pc.LocalDescription()
 }
 
+// TestSessionProxyFallsBackToTheStartBody checks request data that carries
+// nothing (an empty object, null) does not replace the body /start registered,
+// under either spelling, and that data which does carry something wins.
+func TestSessionProxyFallsBackToTheStartBody(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{"request_data empty object", map[string]any{"request_data": map[string]any{}}, `{"user":"ada"}`},
+		{"request_data null", map[string]any{"request_data": nil}, `{"user":"ada"}`},
+		{"requestData empty object", map[string]any{"requestData": map[string]any{}}, `{"user":"ada"}`},
+		{
+			"request_data null, requestData set",
+			map[string]any{"request_data": nil, "requestData": map[string]any{"x": 1}}, `{"x":1}`,
+		},
+		{"request_data set", map[string]any{"request_data": map[string]any{"y": 2}}, `{"y":2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := newTestRunner(t, &Args{})
+			sessionID := str(tr.start(t, map[string]any{"body": map[string]any{"user": "ada"}}), "sessionId")
+			_, offer := pionOffer(t)
+			req := map[string]any{"sdp": offer.SDP, "type": "offer"}
+			for k, v := range tc.extra {
+				req[k] = v
+			}
+			if status, _ := tr.do(t, http.MethodPost, "/sessions/"+sessionID+"/api/offer", req); status != http.StatusOK {
+				t.Fatalf("offer = %d", status)
+			}
+			if got := string(tr.waitSession(t).Base().Body); got != tc.want {
+				t.Errorf("bot body = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestStartThenOfferThroughTheSessionProxy covers the browser flow: /start
 // registers a session, the offer goes through /sessions/{id}/api/offer, the bot
 // starts on the connection with the body /start carried, and trickled

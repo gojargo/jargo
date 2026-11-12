@@ -108,6 +108,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The session proxy keeps the `/start` body when the offer carries none.**
+  An offer through `/sessions/{id}/api/offer` whose `request_data` (or
+  `requestData`) was an empty object or null replaced the body `/start`
+  registered, so the bot lost it. Request data that carries nothing now falls
+  through to the other spelling, then to the `/start` body.
+
 - **A runner session with no body reaches the bot with none.** The dev
   runner turned a missing body into `{}`, so a bot could not tell "no body"
   from an empty object. `RunnerArguments.Body` is now nil when none was given.

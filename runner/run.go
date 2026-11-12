@@ -380,6 +380,47 @@ func writeDetail(w http.ResponseWriter, status int, detail string) {
 // decodeBody decodes a JSON request body into v. A body that does not decode
 // is logged with the raw body, which is what makes a malformed payload from any
 // client debuggable, and answered with 422.
+// firstNonEmptyJSON returns the first value that carries something: one that is
+// not absent, null, false, zero, an empty string, an empty object or an empty
+// list. It returns nil when none does.
+func firstNonEmptyJSON(values ...json.RawMessage) json.RawMessage {
+	for _, raw := range values {
+		if len(raw) == 0 {
+			continue
+		}
+		var v any
+		if json.Unmarshal(raw, &v) != nil {
+			continue
+		}
+		switch t := v.(type) {
+		case nil:
+			continue
+		case bool:
+			if !t {
+				continue
+			}
+		case float64:
+			if t == 0 {
+				continue
+			}
+		case string:
+			if t == "" {
+				continue
+			}
+		case map[string]any:
+			if len(t) == 0 {
+				continue
+			}
+		case []any:
+			if len(t) == 0 {
+				continue
+			}
+		}
+		return raw
+	}
+	return nil
+}
+
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	body, err := io.ReadAll(r.Body)
 	if err == nil {
@@ -634,9 +675,14 @@ func (s *server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Invalid WebRTC request", http.StatusBadRequest)
 				return
 			}
-			if len(req.RequestData) == 0 {
-				req.RequestData = activeSession
+			// The client's own data, under either spelling, unless it carries
+			// nothing, in which case the body the session was started with.
+			var given struct {
+				Snake json.RawMessage `json:"request_data"`
+				Camel json.RawMessage `json:"requestData"` //nolint:tagliatelle // accepted from clients
 			}
+			_ = json.Unmarshal(body, &given)
+			req.RequestData = firstNonEmptyJSON(given.Snake, given.Camel, activeSession)
 			s.offer(w, req, sessionID)
 			return
 		case http.MethodPatch:
