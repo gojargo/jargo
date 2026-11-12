@@ -128,7 +128,7 @@ func TestClientReadyReportsAnUnreadableVersion(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			c := newClient(t)
 			_, complaint := clientReady(t, c, version)
-			if !strings.Contains(complaint, "invalid client version format") ||
+			if !strings.Contains(complaint, "Invalid client version format") ||
 				!strings.Contains(complaint, version) {
 				t.Errorf("a %q client was told %q, want an invalid-format complaint naming it",
 					version, complaint)

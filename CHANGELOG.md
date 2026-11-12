@@ -700,6 +700,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `send-text` with empty content is now passed on, as one with any other
   content is.
 
+- **RTVI error texts are the protocol's.** The error messages the RTVI
+  processor sends started in lowercase ("invalid client version format",
+  "unsupported type", "invalid message", ...), so a client matching the
+  documented text missed them. They are capitalized as documented. A
+  raw-audio chunk that does not decode is now logged rather than answered,
+  as a streaming client waits on no reply.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

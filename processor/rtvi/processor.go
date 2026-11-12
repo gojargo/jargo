@@ -826,7 +826,7 @@ func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransport
 		// part of what could not be read, so this is the general error rather
 		// than a response to a particular request.
 		slog.Warn("invalid RTVI message", "err", err)
-		return p.send(ctx, Error("invalid RTVI transport message: "+err.Error(), false))
+		return p.send(ctx, Error("Invalid RTVI transport message: "+err.Error(), false))
 	}
 	// A transport that knows who sent the message, such as LiveKit, says so on
 	// the frame.
@@ -859,7 +859,7 @@ func (p *Processor) handleMessage(ctx context.Context, in Incoming, userID strin
 		return p.handleRawAudio(ctx, in)
 	default:
 		slog.Debug("unhandled RTVI message", "type", in.Type)
-		return p.send(ctx, ErrorResponse(in.ID, "unsupported type "+in.Type))
+		return p.send(ctx, ErrorResponse(in.ID, "Unsupported type "+in.Type))
 	}
 }
 
@@ -885,7 +885,7 @@ func (p *Processor) handleClientMessage(ctx context.Context, in Incoming) error 
 	d, err := ParseRawClientMessageData(in.Data)
 	if err != nil {
 		slog.Warn("invalid RTVI client-message", "err", err)
-		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+		return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
 	}
 	f := NewClientMessageFrame(in.ID, d.T, d.D)
 	if err := p.PushFrame(ctx, f, processor.Downstream); err != nil {
@@ -906,7 +906,7 @@ func (p *Processor) handleFunctionCallResult(ctx context.Context, in Incoming) e
 	d, err := ParseFunctionCallResultData(in.Data)
 	if err != nil {
 		slog.Warn("invalid RTVI llm-function-call-result", "err", err)
-		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+		return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
 	}
 	f := frames.NewFunctionCallResultFrame(d.ToolCallID, d.FunctionName, d.Arguments, d.ResultText())
 	return p.PushFrame(ctx, f, processor.Downstream)
@@ -921,13 +921,15 @@ func (p *Processor) handleRawAudio(ctx context.Context, in Incoming) error {
 	d, err := ParseRawAudioData(in.Data)
 	if err != nil {
 		slog.Warn("invalid RTVI raw-audio", "err", err)
-		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+		return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
 	}
 	for _, chunk := range d.Chunks() {
 		pcm, err := base64.StdEncoding.DecodeString(chunk)
 		if err != nil {
-			slog.Warn("invalid RTVI raw-audio chunk", "err", err)
-			return p.send(ctx, ErrorResponse(in.ID, "invalid audio: "+err.Error()))
+			// Logged, and the rest of the batch dropped, but not answered: the
+			// client streams audio and is waiting on no reply.
+			slog.Error("error processing an RTVI audio buffer", "err", err)
+			return nil
 		}
 		f := frames.NewInputAudioRawFrame(pcm, d.SampleRate, d.NumChannels)
 		if err := p.PushFrame(ctx, f, processor.Downstream); err != nil {
@@ -1011,11 +1013,11 @@ func (p *Processor) capabilities() *capabilities.BotCapabilities {
 func (p *Processor) negotiate(declared string) ([3]int, string) {
 	const mayNotWork = " Compatibility issues may occur."
 	if declared == "" {
-		return [3]int{}, "client version unknown." + mayNotWork
+		return [3]int{}, "Client version unknown." + mayNotWork
 	}
 	version, ok := parseProtocolVersion(declared)
 	if !ok {
-		return [3]int{}, "invalid client version format (" + declared + ")." + mayNotWork
+		return [3]int{}, "Invalid client version format (" + declared + ")." + mayNotWork
 	}
 	switch version[0] {
 	case protocolMajor(), LegacySupportedMajor:
@@ -1066,7 +1068,7 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming, userID stri
 	d, err := ParseSendTextData(in.Data)
 	if err != nil {
 		slog.Warn("invalid RTVI send-text", "err", err)
-		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+		return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
 	}
 	if d.RunImmediately() {
 		if err := p.interruptAndSettle(ctx); err != nil {
@@ -1118,7 +1120,7 @@ func (p *Processor) handleDTMF(ctx context.Context, in Incoming) error {
 	d, err := ParseDTMFData(in.Data)
 	if err != nil {
 		slog.Warn("invalid RTVI dtmf", "err", err)
-		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
+		return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
 	}
 	for _, button := range d.Buttons {
 		if err := p.PushFrame(ctx, frames.NewInputDTMFFrame(frames.KeypadEntry(button)), processor.Downstream); err != nil {
