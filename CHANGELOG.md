@@ -49,6 +49,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`deepgram.NewFluxTTS` keeps one connection for the call instead of
+  dialing one per sentence.** Flux holds acoustic state across turns on a
+  connection, so prosody and pacing now stay consistent through the
+  conversation. The service connects when the pipeline starts, streams each
+  token or sentence as a `Speak` on the open connection, ends the turn with a
+  `Flush`, and plays the audio as the receive loop reads it. A lost
+  connection is restored with backoff, and after three failed redials a
+  permanent error makes the service unusable so a service switcher moves off
+  it; a handshake Deepgram refuses for a bad setting is permanent at once. An
+  interruption sends an `Interrupt` and keeps the connection. The new
+  `FluxTTSConfig.Websocket` field configures the reconnection and the
+  timeouts, and the new `Speed`, `Expressivity` and `NormalizeVolume` fields
+  set Flux's voice controls. The service now takes settings updates
+  (`FluxTTSSettings`): a new speed is applied to the open connection with a
+  `Configure`, and a rejected one is pushed as a non-fatal error; any other
+  change reconnects. A voice change relabels the model the synthesis is
+  reported against. The default voice is now `flux-heather-en`, and frame
+  handling pauses while a turn's audio is generated, since Flux's audio names
+  no turn.
+
 - **`asyncai.NewTTS` holds one connection for the call instead of dialing one
   per sentence.** It used to open a connection for each sentence, send the
   init message and the text, and wait for that sentence's audio before the
