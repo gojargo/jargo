@@ -55,6 +55,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`sarvam.NewTTS` holds one connection for the call instead of dialing one
+  per sentence, and defaults to bulbul:v3.** It used to open a connection for
+  each sentence, send the config, the text and a flush, and wait for that
+  sentence's audio before the next one could go out. It now opens one session
+  when the pipeline starts, sends each sentence and returns, flushes when the
+  turn's text is complete, and labels the audio that arrives with the context
+  playing, since Sarvam's messages name no request; the final event ends that
+  context at once. An interruption while the bot speaks resets the
+  connection, and incoming frames are held after a turn until its audio has
+  played. The connection runs on `tts.Websocket`: a lost connection is
+  restored with backoff, and after three failed redials the service reports a
+  permanent error, so it becomes unusable and a service switcher moves off it.
+  A ping every twenty seconds keeps the connection open through silences. The
+  new `TTSConfig.Websocket` field configures the reconnection and the
+  timeouts. An unset `TTSConfig.Model` now means bulbul:v3 (its default
+  speaker is "shubh" and its rate 24 kHz) rather than bulbul:v2, which Sarvam's
+  API rejects, and bulbul:v4-flash is supported. The settings can now change
+  while the pipeline runs (`sarvam.TTSSettings`, which also takes Sarvam's
+  own names `speaker` and `target_language_code`): a new model reconnects and
+  moves to that model's default speaker unless the update names a voice, a
+  model Sarvam does not offer is refused with a warning, and any other change
+  is sent to the live session as a new config message.
+
 - **`gradium.NewTTS` keeps one connection for the call instead of dialing one
   per sentence.** It connects when the pipeline starts and speaks each turn
   as a request of its own on the open connection, named by the turn's
