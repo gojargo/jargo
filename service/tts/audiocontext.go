@@ -144,6 +144,9 @@ type ctxItem struct {
 	isWord             bool
 	keepalive          bool
 	end                bool
+	// sequenced marks a frame the sequencer returned, queued here so it goes
+	// out in order with the context's audio and words.
+	sequenced bool
 }
 
 // audioContext is one context's queue of audio, in the order the provider
@@ -157,6 +160,9 @@ type audioContext struct {
 	mu     sync.Mutex
 	items  []ctxItem
 	notify chan struct{}
+	// sequencedQueued counts the frames the sequencer returned that are still
+	// queued, so a word processed meanwhile goes out behind them.
+	sequencedQueued int
 
 	// seq is the context's place in creation order.
 	seq uint64
@@ -270,6 +276,9 @@ func (c *audioContext) spoken() string {
 func (c *audioContext) push(it ctxItem) {
 	c.mu.Lock()
 	c.items = append(c.items, it)
+	if it.sequenced {
+		c.sequencedQueued++
+	}
 	c.mu.Unlock()
 	select {
 	case c.notify <- struct{}{}:
@@ -1098,6 +1107,9 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 		if it.keepalive {
 			continue
 		}
+		if it.sequenced {
+			b.sequencedItemPushed(c, it)
+		}
 		if it.end {
 			break
 		}
@@ -1302,8 +1314,60 @@ func (b *Base) pushWord(ctx context.Context, c *audioContext, contextID string, 
 		c.holdWord(it)
 		return
 	}
-	b.pushWordFrames(ctx,
-		b.sequencer.ProcessWord(it.word, int64(pts), contextID, it.includesInterFrame))
+	out := b.sequencer.ProcessWord(it.word, int64(pts), contextID, it.includesInterFrame)
+	// The sequencer may have replayed earlier words when it promoted a sentence,
+	// and queued them here. This word comes after them, so it goes out behind
+	// them rather than ahead.
+	if len(out) > 0 && c.queueAfterSequenced(out) {
+		return
+	}
+	b.pushWordFrames(ctx, out)
+}
+
+// queueAfterSequenced queues frames right behind the last frame the sequencer
+// returned that is still waiting, and reports whether there was one. Behind it
+// rather than at the back, so they still go out ahead of whatever was queued
+// after it, the end of the context included.
+func (c *audioContext) queueAfterSequenced(fs []frames.Frame) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sequencedQueued == 0 {
+		return false
+	}
+	at := len(c.items)
+	for i, it := range slices.Backward(c.items) {
+		if it.sequenced {
+			at = i + 1
+			break
+		}
+	}
+	added := make([]ctxItem, 0, len(fs))
+	for _, f := range fs {
+		added = append(added, ctxItem{frame: f, sequenced: true})
+	}
+	c.items = slices.Insert(c.items, at, added...)
+	c.sequencedQueued += len(added)
+	return true
+}
+
+// sequencedItemPushed records that the drain loop is pushing a frame the
+// sequencer returned. A word queued this way is a word spoken all the same, so
+// the next context times its words after it.
+func (b *Base) sequencedItemPushed(c *audioContext, it ctxItem) {
+	c.sequencedPushed()
+	if w, ok := it.frame.(*frames.TTSTextFrame); ok {
+		if pts, has := w.PTS(); has {
+			b.setLastWordPTS(time.Duration(pts))
+		}
+	}
+}
+
+// sequencedPushed records that the drain loop pushed a frame the sequencer
+// returned.
+func (c *audioContext) sequencedPushed() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sequencedQueued--
 }
 
 // pushSequencerFrames emits what the sequencer returned for text registered on a
@@ -1317,8 +1381,9 @@ func (b *Base) pushWord(ctx context.Context, c *audioContext, contextID string, 
 // are pushed directly.
 func (b *Base) pushSequencerFrames(ctx context.Context, out []frames.Frame, contextID string) {
 	for _, f := range out {
-		if contextID != "" && b.AudioContextAvailable(contextID) {
-			b.AppendToAudioContext(contextID, f)
+		if c := b.audioContextFor(contextID); contextID != "" && c != nil {
+			stampContextID(f, contextID)
+			c.push(ctxItem{frame: f, sequenced: true})
 			continue
 		}
 		_ = b.PushFrame(ctx, f, processor.Downstream)

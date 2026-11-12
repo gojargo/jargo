@@ -352,6 +352,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   went out through the clock queue: a client could get progress for a segment
   it had not been told about. The announcement is now stamped with the baseline
   its first word is timed from.
+- **Token mode with inline word timings records the reply in order.** When a
+  sentence was promoted, the words the sequencer had buffered for it were queued
+  on the audio context while the drain loop could already emit a later word
+  against the promoted sentence, so the reply was intermittently recorded out
+  of order ("fine. It's"). A word processed while promoted words are still
+  queued now goes out right behind them.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

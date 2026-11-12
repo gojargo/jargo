@@ -480,12 +480,6 @@ func TestAUnitThatIsOnlyTagsReachesTheContext(t *testing.T) {
 			{frames.TextTypeSentence, []string{"It's fine. Bye. <<calm>>"}},
 		} {
 			t.Run(svc.name+"/"+string(tt.mode)+"/"+strings.Join(tt.chunks, ""), func(t *testing.T) {
-				if svc.name == "word timestamps" && tt.mode == frames.TextTypeToken {
-					// Streaming tokens to a provider that times its words inline,
-					// a word can be emitted ahead of the sentence promoted for it at
-					// the end of the response, with or without expression tags.
-					t.Skip("token mode with inline word timestamps can reorder the words of the last sentence")
-				}
 				got := contextAfter(t, newBase(svc.new(), tt.mode), response(tt.chunks...))
 				if want := strings.Join(tt.chunks, ""); got != want {
 					t.Fatalf("context = %q, want %q", got, want)
