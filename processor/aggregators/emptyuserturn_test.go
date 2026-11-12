@@ -254,6 +254,17 @@ func TestEmptyTurnConsecutiveRecoveriesAreBounded(t *testing.T) {
 	wantDeveloper(t, convo, interruptedPrompt, interruptedPrompt)
 }
 
+// TestEmptyTurnZeroRecoveriesAnswersNone checks zero recoveries in a row is a
+// setting of its own, answering no empty turn, rather than standing for the
+// default of one.
+func TestEmptyTurnZeroRecoveriesAnswersNone(t *testing.T) {
+	cfg := withPrompts("")
+	cfg.MaxConsecutiveRecoveries = new(0)
+	convo, inferences := runEmptyTurn(t, join(botSpeaking(), emptyTurn()), emptyTurnConfig(cfg, 0))
+	wantDeveloper(t, convo)
+	wantInferences(t, inferences, 1)
+}
+
 func TestEmptyTurnFunctionCallInProgressNotRecovered(t *testing.T) {
 	// The function call's result will run the LLM on its own.
 	convo, inferences := runEmptyTurn(t, join(

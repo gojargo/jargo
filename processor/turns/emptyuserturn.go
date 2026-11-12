@@ -41,10 +41,10 @@ type EmptyUserTurnConfig struct {
 	// IdlePrompt is the developer message for an empty turn while the bot was
 	// idle. Empty, the default, leaves such turns unanswered.
 	IdlePrompt string
-	// MaxConsecutiveRecoveries is how many empty turns in a row are answered;
-	// zero uses 1. Further ones are left unanswered until the user says
-	// something that is transcribed.
-	MaxConsecutiveRecoveries int `validate:"min=0"`
+	// MaxConsecutiveRecoveries is how many empty turns in a row are answered.
+	// Nil uses 1, and zero answers none. Further ones are left unanswered until
+	// the user says something that is transcribed.
+	MaxConsecutiveRecoveries *int `validate:"omitnil,min=0"`
 }
 
 // interruptedPrompt is the prompt for an empty turn that interrupted the bot,
@@ -67,8 +67,8 @@ func (c EmptyUserTurnConfig) Prompt(interrupted bool) string {
 
 // MaxRecoveries is how many empty turns in a row are answered.
 func (c EmptyUserTurnConfig) MaxRecoveries() int {
-	if c.MaxConsecutiveRecoveries <= 0 {
+	if c.MaxConsecutiveRecoveries == nil {
 		return defaultMaxConsecutiveEmptyUserTurnRecoveries
 	}
-	return c.MaxConsecutiveRecoveries
+	return max(*c.MaxConsecutiveRecoveries, 0)
 }

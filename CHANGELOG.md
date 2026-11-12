@@ -39,6 +39,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   decisions are all required turned the user's stopped frame off for every
   turn. They are now `*bool`, nil meaning on. **Breaking:** set them with
   `new(true)` or `new(false)`.
+- **`EmptyUserTurnConfig.MaxConsecutiveRecoveries` is a pointer.** Zero
+  stood for the default of one, so answering no empty turn at all could not be
+  asked for. Nil now means one, and zero answers none. **Breaking:** set it
+  with `new(n)`.
 
 ### Fixed
 
