@@ -53,6 +53,22 @@ func ExpressionInstructions(
 	return strings.Join(parts, "\n\n")
 }
 
+// PerceptionTurnCompletionInstructions tells an LLM that decides when the
+// user's turn is complete that a reading of how the user spoke does not decide
+// it. It goes after the turn completion instructions, given the markers for a
+// complete turn, a turn cut off mid-sentence, and a user who needs time to
+// think. Without it, a reading can change the marker: a hesitant user's cut-off
+// words get the long wait, and words that have not answered the LLM get an
+// answer.
+func PerceptionTurnCompletionInstructions(complete, short, long string) string {
+	return "When you choose the turn completion marker, decide it from the user's words alone. " +
+		"The RCS reading in parentheses at the start of their message says how they sounded, " +
+		"not whether they finished: a user who sounds hesitant or unsure still gets " + short + " " +
+		"when their words are cut off. A reading never changes the marker the words would get " +
+		"on their own: it doesn't make a hesitant user's cut-off words " + long + ", and it doesn't " +
+		"make words that haven't answered you " + complete + "."
+}
+
 // ExpressionPolicyWarning tells what an expression policy asks for that a TTS
 // service cannot perform.
 //

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -73,6 +74,7 @@ func (b *Base) composeSystemInstruction() {
 	if expression := b.expressionInstructionsLocked(); expression != "" {
 		parts = append(parts, expression)
 	}
+	perceives := b.expression.perception != nil && len(b.expression.perception.Signals) > 0
 	b.systemMu.Unlock()
 
 	// The marker protocol is composed on rather than appended, so turning the
@@ -80,6 +82,11 @@ func (b *Base) composeSystemInstruction() {
 	b.turnCompletion.mu.Lock()
 	if b.turnCompletion.enabled {
 		parts = append(parts, b.turnCompletion.config.CompletionInstructions())
+		// With perception taught, a reading of how the user sounded is not to
+		// decide the marker.
+		if perceives {
+			parts = append(parts, expressive.PerceptionTurnCompletionInstructions(b.turnCompletion.config.Markers()))
+		}
 	}
 	b.turnCompletion.mu.Unlock()
 

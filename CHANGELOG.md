@@ -528,6 +528,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   order. `OnSwitch` attaches to it. **Breaking:** `SwitcherStrategy` loses
   `OnServiceSwitched` and gains `Events`.
 
+- **Turn completion with perception says a reading does not decide the
+  marker.** With expressive perception taught and incomplete user turns
+  filtered, the system instruction lacked the note telling the model to
+  choose the turn completion marker from the user's words alone, so a
+  hesitant-sounding user's cut-off words could get the long wait, and words
+  that had not answered the model an answer. The note now follows the turn
+  completion instructions whenever perception signals are taught, and is
+  `expressive.PerceptionTurnCompletionInstructions`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

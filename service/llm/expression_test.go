@@ -386,3 +386,29 @@ func TestEveryLLMInASwitcherLearnsOfTheTagger(t *testing.T) {
 	checkInstruction(t, first, "APP")
 	checkInstruction(t, second, "APP")
 }
+
+// TestTurnCompletionWithPerceptionSaysAReadingDoesNotDecideTheMarker checks
+// that, with perception taught and incomplete turns filtered, the turn
+// completion instructions are followed by the note that a reading of how the
+// user sounded does not decide the marker.
+func TestTurnCompletionWithPerceptionSaysAReadingDoesNotDecideTheMarker(t *testing.T) {
+	svc := appLLM("llm")
+	svc.SetFilterIncompleteUserTurns(true)
+	runWith(t, svc, expressiveParams(nil), []frames.Frame{perceptionMetadata()}, nil)
+
+	perception := tone()
+	config := svc.UserTurnCompletionConfig()
+	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(nil, nil, &perception)+
+		"\n\n"+config.CompletionInstructions()+
+		"\n\n"+expressive.PerceptionTurnCompletionInstructions(config.Markers()))
+}
+
+// TestTurnCompletionWithoutPerceptionHasNoReadingNote checks the note is left
+// out when nothing teaches perception.
+func TestTurnCompletionWithoutPerceptionHasNoReadingNote(t *testing.T) {
+	svc := appLLM("llm")
+	svc.SetFilterIncompleteUserTurns(true)
+	if strings.Contains(svc.SystemInstruction(), "from the user's words alone") {
+		t.Error("the reading note was composed in with no perception taught")
+	}
+}

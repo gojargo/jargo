@@ -320,3 +320,18 @@ func TestADeveloperLineWithAPresetsTextIsKeptForPerceptionWithoutTags(t *testing
 		t.Errorf("the instruction does not end with the developer's line:\n%s", instructions)
 	}
 }
+
+// TestPerceptionTurnCompletionInstructionsNameTheMarkers checks the note names
+// each marker where it applies.
+func TestPerceptionTurnCompletionInstructionsNameTheMarkers(t *testing.T) {
+	got := expressive.PerceptionTurnCompletionInstructions("C", "S", "L")
+	want := "When you choose the turn completion marker, decide it from the user's words alone. " +
+		"The RCS reading in parentheses at the start of their message says how they sounded, " +
+		"not whether they finished: a user who sounds hesitant or unsure still gets S " +
+		"when their words are cut off. A reading never changes the marker the words would get " +
+		"on their own: it doesn't make a hesitant user's cut-off words L, and it doesn't " +
+		"make words that haven't answered you C."
+	if got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
