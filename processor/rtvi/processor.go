@@ -1066,10 +1066,7 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming, userID stri
 	d, err := ParseSendTextData(in.Data)
 	if err != nil {
 		slog.Warn("invalid RTVI send-text", "err", err)
-		return nil
-	}
-	if d.Content == "" {
-		return nil
+		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
 	}
 	if d.RunImmediately() {
 		if err := p.interruptAndSettle(ctx); err != nil {
@@ -1116,18 +1113,15 @@ func (p *Processor) handleSendText(ctx context.Context, in Incoming, userID stri
 // arriving from the client, so it travels the way the rest of it does, reaching
 // the input transport and the DTMF handling behind it.
 func (p *Processor) handleDTMF(ctx context.Context, in Incoming) error {
-	var d DTMFData
-	if err := json.Unmarshal(in.Data, &d); err != nil {
+	// Validated whole before any key is pushed, so a batch holding a bad key
+	// pushes none of them.
+	d, err := ParseDTMFData(in.Data)
+	if err != nil {
 		slog.Warn("invalid RTVI dtmf", "err", err)
-		return nil
+		return p.send(ctx, ErrorResponse(in.ID, "invalid message: "+err.Error()))
 	}
 	for _, button := range d.Buttons {
-		key := frames.KeypadEntry(button)
-		if !key.Valid() {
-			slog.Warn("ignoring invalid DTMF key", "key", button)
-			continue
-		}
-		if err := p.PushFrame(ctx, frames.NewInputDTMFFrame(key), processor.Downstream); err != nil {
+		if err := p.PushFrame(ctx, frames.NewInputDTMFFrame(frames.KeypadEntry(button)), processor.Downstream); err != nil {
 			return err
 		}
 	}

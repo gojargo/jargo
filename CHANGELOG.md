@@ -689,6 +689,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   dropped. The RTVI processor, at the head of the pipeline, now reports each
   error that reaches it, and only those.
 
+- **RTVI answers an invalid dtmf or send-text with an error.** A `dtmf`
+  message whose data did not decode, held no key, used the old `button`
+  field or held an invalid key was only logged, and a batch holding a bad key
+  still pushed the good ones; A to D were taken as keys; and a `send-text`
+  that did not decode, or had no content, was dropped in silence, leaving a
+  client waiting on its acknowledgement. Each is now answered with an
+  `error-response`, and a `dtmf` batch is validated whole, so nothing of an
+  invalid one is pushed. The keys taken are 0 to 9, `*` and `#`. A
+  `send-text` with empty content is now passed on, as one with any other
+  content is.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

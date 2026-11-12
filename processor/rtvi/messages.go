@@ -11,6 +11,9 @@ package rtvi
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline/capabilities"
@@ -137,10 +140,46 @@ func (d SendTextData) AudioResponse() bool {
 }
 
 // ParseSendTextData decodes the data payload of a send-text message.
+//
+// The content is required, though it may be empty.
 func ParseSendTextData(raw json.RawMessage) (SendTextData, error) {
+	var present struct {
+		Content *string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &present); err != nil {
+		return SendTextData{}, err
+	}
+	if present.Content == nil {
+		return SendTextData{}, errNoContent
+	}
 	var d SendTextData
 	err := json.Unmarshal(raw, &d)
 	return d, err
+}
+
+// The ways a client message's data fails validation.
+var (
+	errNoContent = errors.New("content: field required")
+	errNoButtons = errors.New("buttons: at least one key required")
+	errBadButton = errors.New("buttons: a key is one of 0-9, * and #")
+)
+
+// ParseDTMFData decodes the data payload of a dtmf message: one key or more,
+// each one of 0 to 9, * and #.
+func ParseDTMFData(raw json.RawMessage) (DTMFData, error) {
+	var d DTMFData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return DTMFData{}, err
+	}
+	if len(d.Buttons) == 0 {
+		return DTMFData{}, errNoButtons
+	}
+	for _, b := range d.Buttons {
+		if len(b) != 1 || !strings.ContainsAny(b, "0123456789*#") {
+			return DTMFData{}, fmt.Errorf("%w, got %q", errBadButton, b)
+		}
+	}
+	return d, nil
 }
 
 // AboutClientData describes the client an RTVI session is with: which client
