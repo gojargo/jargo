@@ -335,6 +335,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
+- **`github.com/klauspost/compress` is at v1.20.2**, for GO-2026-6865 (a
+  panic on crafted input), reached through the LiveKit SDK.
+
 - **`golang.org/x/net` is at v0.62.0** in the library, the Redis bus and the
   benchmarks, for CVE-2026-78661 and CVE-2026-97045.
 
