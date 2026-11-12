@@ -333,6 +333,10 @@ type Base struct {
 	// beside the latest request's text.
 	exprMu       sync.Mutex
 	exprSettings map[string]any
+
+	// websocket is the connection lifecycle of a service that speaks over a
+	// WebSocket held open for the call, nil for any other. See websocket.go.
+	websocket *Websocket
 }
 
 // model is the identifier the synthesis is measured and priced against.
@@ -371,6 +375,9 @@ func (b *Base) Cleanup(ctx context.Context) error {
 	b.stopAudioContexts()
 	if c, ok := b.syn.(Closer); ok {
 		_ = c.Close()
+	}
+	if b.websocket != nil {
+		b.websocket.disconnect(context.WithoutCancel(ctx))
 	}
 	return b.Base.Cleanup(ctx)
 }
@@ -640,6 +647,18 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 
 // ProcessFrame aggregates text into sentences and synthesizes them.
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := b.processFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if b.websocket != nil {
+		b.websocket.trackFrame(f)
+	}
+	return nil
+}
+
+// processFrame is ProcessFrame without what a websocket service follows of the
+// frames once they are processed.
+func (b *Base) processFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -695,11 +714,23 @@ func (b *Base) processControlFrame(ctx context.Context, f frames.Frame, dir proc
 		// An interruption stops every clock this service is running, this one
 		// included: what it was measuring will never finish.
 		b.stopTextAggregationMetrics(ctx)
+		reconnect := b.websocket != nil && b.websocket.beginInterruption()
 		b.handleInterruption(ctx)
+		if reconnect {
+			// The provider is still generating the speech cut off, and only a
+			// fresh connection is sure to carry none of it.
+			b.websocket.resetConnection(context.WithoutCancel(ctx))
+		}
 		return b.PushFrame(ctx, f, dir)
 	case *frames.CancelFrame:
 		b.handleInterruption(ctx)
 		b.stopAudioContexts()
+		if b.websocket != nil {
+			// The receive loop runs apart from the audio contexts, so stopping
+			// them halts the output but not the reading: the prompt teardown
+			// is closing the connection.
+			b.websocket.disconnect(context.WithoutCancel(ctx))
+		}
 		return b.PushFrame(ctx, f, dir)
 	case *frames.StartFrame:
 		return b.handleStart(ctx, f, dir)
@@ -933,6 +964,9 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 		// anything queued behind it, reaches the output before the frame that
 		// stops the pipeline rather than being cut off by it.
 		b.drainAudioContexts()
+		if b.websocket != nil {
+			b.websocket.disconnect(context.WithoutCancel(ctx))
+		}
 	}
 	if err := b.flush(ctx); err != nil {
 		return err
@@ -1256,6 +1290,9 @@ func (b *Base) wordPath() bool {
 // more than one place that builds one, the base's own and a provider's, and
 // every one of them passes through here.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if b.websocket != nil {
+		b.websocket.trackPush(f)
+	}
 	b.applyContextInterruptible(f)
 	if stopped, ok := f.(*frames.TTSStoppedFrame); ok {
 		b.reportUnreportedExpression(ctx, stopped, dir)
@@ -1472,6 +1509,11 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 func (b *Base) reportsProcessingMetrics() bool {
 	if p, ok := b.syn.(ProcessingMetricsSupporter); ok {
 		return p.SupportsProcessingMetrics()
+	}
+	if b.websocket != nil {
+		// The text is sent and the call returns; the audio arrives on the
+		// receive loop, so there is no synthesis inside the measured window.
+		return false
 	}
 	_, handsOff := b.syn.(ContextSynthesizer)
 	return !handsOff

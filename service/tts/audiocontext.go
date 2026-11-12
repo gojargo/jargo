@@ -531,10 +531,62 @@ func (b *Base) uninterruptibleContexts() []string {
 	return out
 }
 
+// onlyUninterruptibleAudioContextsOpen reports whether there are open contexts
+// the service recorded, and all of them are uninterruptible speech.
+func (b *Base) onlyUninterruptibleAudioContextsOpen() bool {
+	open := b.openAudioContexts()
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	known := 0
+	for _, id := range open {
+		c, ok := b.ttsContexts[id]
+		if !ok {
+			continue
+		}
+		if c.interruptible {
+			return false
+		}
+		known++
+	}
+	return known > 0
+}
+
 // ResetActiveAudioContext forgets which context is playing, for a provider
 // whose server has failed the context: nothing is reported as playing until the
 // drain goroutine starts the next one.
 func (b *Base) ResetActiveAudioContext() { b.setPlayingContextID("") }
+
+// AudioContextIDs lists the open contexts, in the order they were created.
+func (b *Base) AudioContextIDs() []string { return b.openAudioContexts() }
+
+// HasActiveAudioContext reports whether a context is playing and still open.
+func (b *Base) HasActiveAudioContext() bool {
+	id := b.playingContextID()
+	return id != "" && b.AudioContextAvailable(id)
+}
+
+// ActiveAudioContextID is the context playing, or the turn's context when none
+// is: between contexts, and at the start of a turn before playback has taken
+// up the context just opened. It is for a provider whose messages do not name
+// the context they belong to, which labels its audio with this instead. It is
+// "" when there is neither.
+func (b *Base) ActiveAudioContextID() string {
+	if id := b.playingContextID(); id != "" {
+		return id
+	}
+	return b.turnContextID()
+}
+
+// RemoveActiveAudioContext closes the context playing, if any, once the audio
+// queued for it has been pushed, and forgets it is playing.
+func (b *Base) RemoveActiveAudioContext() {
+	id := b.playingContextID()
+	if id == "" {
+		return
+	}
+	b.RemoveAudioContext(id)
+	b.ResetActiveAudioContext()
+}
 
 // playingContextID is the context the drain goroutine is playing, or "" when it
 // is between contexts.

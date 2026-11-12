@@ -13,6 +13,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **`tts.Websocket` is the base of every TTS service that speaks over a
+  WebSocket held open for the call.** A service builds it with
+  `tts.NewWebsocket` (or `tts.NewInterruptibleWebsocket`) from its
+  `wsservice.Options`, and writes its `Connect` and `Disconnect` from the
+  base's steps. The base runs the receive loop, which restores a lost
+  connection with backoff and gives up after three failed redials, or three
+  connections in a row that die the moment they are made, reporting a
+  permanent error so the service becomes unusable and a service switcher moves
+  off it. Every error is reported as a connection error, raising
+  `on_connection_error`. Replacing or closing the connection ends its open
+  audio contexts (the audio already received still plays, and the rest of a
+  turn moves to a new context), the service disconnects when the pipeline
+  ends, is canceled or is torn down, it runs the provider's keepalive, and it
+  reports no processing metric. The interruptible variant, for a provider
+  that cannot drop one request's audio, resets the connection on an
+  interruption while the bot is speaking or its synthesis has started, unless
+  only uninterruptible speech is still open.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added
