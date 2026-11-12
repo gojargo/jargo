@@ -130,6 +130,17 @@ func (s *mediaSender) start(ctx context.Context) {
 	s.clockQ.start(ctx)
 }
 
+// drainClock waits for the frames held for their presentation timestamp to go
+// out, for an ending stream. See clockQueue.drain.
+func (s *mediaSender) drainClock(ctx context.Context) {
+	s.lifeMu.Lock()
+	q := s.clockQ
+	s.lifeMu.Unlock()
+	if q != nil {
+		q.drain(ctx)
+	}
+}
+
 // stop tears the sender down.
 func (s *mediaSender) stop(ctx context.Context) {
 	s.botStoppedSpeaking(ctx)

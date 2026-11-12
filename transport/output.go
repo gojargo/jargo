@@ -249,7 +249,14 @@ func (bo *BaseOutput) ProcessFrame(ctx context.Context, f frames.Frame, dir proc
 		// can queue audio for a stream that cannot carry it yet.
 		return bo.PushFrame(ctx, frames.NewOutputTransportReadyFrame(), processor.Upstream)
 	case *frames.EndFrame:
-		bo.eachSender(func(s *mediaSender) { s.drainAudio(ctx) })
+		// A graceful end delivers what is still due first: the audio queued, and
+		// the frames held for their timestamp, each at its time, so the last
+		// words of a goodbye reach the conversation and the transcripts ahead
+		// of the end.
+		bo.eachSender(func(s *mediaSender) {
+			s.drainAudio(ctx)
+			s.drainClock(ctx)
+		})
 		bo.stopStreaming(ctx)
 		return bo.PushFrame(ctx, f, dir)
 	case *frames.CancelFrame:

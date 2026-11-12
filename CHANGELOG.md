@@ -86,6 +86,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An EndFrame no longer drops the frames waiting on their timestamp.** The
+  output transport drained its audio on a graceful end but threw away the
+  frames held for their presentation timestamp (word frames, say), so the last
+  words of a goodbye were missing from the conversation and the transcripts.
+  They now go out at their time, ahead of the EndFrame.
+
 - **A settings update reaches the Gemini request.** An `LLMUpdateSettingsFrame`
   changing the model, the token bound, the sampling controls, thinking, the
   safety filters or an unmodeled field was stored but never sent: requests

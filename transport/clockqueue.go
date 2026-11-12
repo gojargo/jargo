@@ -59,13 +59,15 @@ type clockQueue struct {
 	heap   timedHeap
 	seq    uint64
 	notify chan struct{}
+	// delivered is signaled each time a frame goes out, for drain to look again.
+	delivered chan struct{}
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
 func newClockQueue(out *BaseOutput) *clockQueue {
-	return &clockQueue{out: out, notify: make(chan struct{}, 1)}
+	return &clockQueue{out: out, notify: make(chan struct{}, 1), delivered: make(chan struct{}, 1)}
 }
 
 // start brings the delivery goroutine up.
@@ -89,6 +91,26 @@ func (q *clockQueue) stop() {
 	q.mu.Lock()
 	q.heap = nil
 	q.mu.Unlock()
+}
+
+// drain waits for every frame waiting to be delivered at its timestamp, for an
+// ending stream: what the pipeline produced before it ended still goes out, at
+// the time it was due, ahead of the end. It returns early if ctx ends or the
+// delivery goroutine is not running.
+func (q *clockQueue) drain(ctx context.Context) {
+	for {
+		q.mu.Lock()
+		empty := len(q.heap) == 0
+		q.mu.Unlock()
+		if empty || q.cancel == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-q.delivered:
+		}
+	}
 }
 
 // reset drops every interruptible frame waiting, keeping the uninterruptible
@@ -179,6 +201,10 @@ func (q *clockQueue) run(ctx context.Context) {
 		}
 		if due, taken := q.take(it.seq); taken {
 			_ = q.out.PushFrame(ctx, due.frame, processor.Downstream)
+			select {
+			case q.delivered <- struct{}{}:
+			default:
+			}
 		}
 	}
 }

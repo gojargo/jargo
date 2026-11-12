@@ -620,6 +620,56 @@ func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
 	}
 }
 
+// TestBaseOutputEndFrameDeliversPendingTimedFrames checks a frame still waiting
+// on its presentation timestamp when the pipeline ends goes out at its time,
+// ahead of the EndFrame, rather than being dropped: the last words of a goodbye
+// reach the conversation and the transcripts.
+func TestBaseOutputEndFrameDeliversPendingTimedFrames(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 16000
+	params.AudioOutEndSilenceSecs = 0
+	o := newPacedOutput(params)
+
+	var mu sync.Mutex
+	var order []string
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.TTSTextFrame:
+			order = append(order, "text:"+fr.Text)
+		case *frames.EndFrame:
+			order = append(order, "end")
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	// The word is queued once the clock runs, timed a little ahead of now.
+	deadline := time.Now().Add(3 * time.Second)
+	for o.Clock() == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	word := frames.NewTTSTextFrame("goodbye", frames.TextTypeWord)
+	word.SetPTS(int64(o.Clock().Time() + 300*time.Millisecond))
+	task.QueueFrame(word)
+	task.StopWhenDone()
+
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipeline did not end")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"text:goodbye", "end"}; !slices.Equal(order, want) {
+		t.Errorf("downstream = %v, want %v", order, want)
+	}
+}
+
 // TestBaseOutputFlushesTailOnTurnEnd is the regression test for the turn-end
 // cutoff: audio that does not fill a whole chunk must still play out when the
 // bot's turn ends, padded to a full chunk so downstream whole-frame encoders
