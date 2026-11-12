@@ -108,6 +108,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Resemble AI TTS no longer pauses two seconds between sentences.** Each
+  sentence closed its socket and waited the full close timeout for an
+  acknowledgment Resemble AI never sends. `wsutil.Conn.SetCloseTimeout` now
+  takes zero to mean "send the close and do not wait" (a negative value is
+  still ignored), and the Resemble AI service uses it.
+
 - **The Twilio hang-up can authenticate with an API key.** `twilio.Config`
   gains `APIKeySID` and `APIKeySecret`, which authorize the REST hang-up in
   place of `AuthToken` (the account stays in the URL); exactly one of the two

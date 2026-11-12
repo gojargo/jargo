@@ -195,9 +195,11 @@ func (c *Conn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetCloseTimeout sets how long Close waits for the peer to answer. Raise it for
-// a peer that needs longer to close gracefully.
+// a peer that needs longer to close gracefully; zero sends the close and does
+// not wait at all, for a peer that never acknowledges it. A negative value is
+// ignored.
 func (c *Conn) SetCloseTimeout(d time.Duration) {
-	if d > 0 {
+	if d >= 0 {
 		c.closeTimeout = d
 	}
 }

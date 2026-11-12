@@ -51,6 +51,9 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	if err != nil {
 		return err
 	}
+	// Resemble AI never acknowledges the closing handshake, so it is not waited
+	// for: waiting would hold the next sentence back by the whole timeout.
+	conn.SetCloseTimeout(0)
 	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 
 	if err := s.request(ctx, conn, text); err != nil {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
@@ -74,4 +75,42 @@ func runPCM(s tts.Synthesizer, ctx context.Context, text string, emit func(pcm [
 		}
 		return nil
 	})
+}
+
+// A sentence's synthesis ends at the server's audio_end, not after a wait for a
+// close acknowledgment Resemble AI never sends: waiting would hold the next
+// sentence back by the whole close timeout.
+func TestUnacknowledgedCloseDoesNotDelay(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		ctx := r.Context()
+		if _, _, err := c.Read(ctx); err != nil {
+			return
+		}
+		audio, _ := json.Marshal(map[string]any{
+			"type": "audio", "audio_content": base64.StdEncoding.EncodeToString(make([]byte, 64)),
+		})
+		_ = c.Write(ctx, websocket.MessageText, audio)
+		end, _ := json.Marshal(map[string]any{"type": "audio_end"})
+		_ = c.Write(ctx, websocket.MessageText, end)
+		// Deaf from here: the client's close frame is never answered.
+		<-ctx.Done()
+	}))
+	defer srv.Close()
+
+	syn := &synthesizer{cfg: Config{
+		APIKey: "k", Voice: "v", URL: wsURL(srv.URL),
+		SampleRate: defaultSampleRate, Precision: defaultPrecision,
+	}}
+	start := time.Now()
+	if err := runPCM(syn, context.Background(), "hello", func([]byte) error { return nil }); err != nil {
+		t.Fatalf("RunTTS: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("RunTTS took %v, want it to return without waiting on the close", elapsed)
+	}
 }

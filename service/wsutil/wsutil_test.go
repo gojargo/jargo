@@ -206,9 +206,9 @@ func TestCloseReturnsAsSoonAsThePeerAnswers(t *testing.T) {
 	}
 }
 
-// SetCloseTimeout ignores a non-positive value, so a caller cannot turn the
-// bound into an immediate give-up by mistake.
-func TestSetCloseTimeoutIgnoresNonPositive(t *testing.T) {
+// SetCloseTimeout ignores a negative value, so a caller cannot turn the bound
+// into nonsense by mistake.
+func TestSetCloseTimeoutIgnoresANegativeValue(t *testing.T) {
 	srv := deafServer(t)
 
 	conn, err := wsutil.Dial(t.Context(), wsURL(srv), nil, 0)
@@ -217,12 +217,30 @@ func TestSetCloseTimeoutIgnoresNonPositive(t *testing.T) {
 	}
 	const timeout = 150 * time.Millisecond
 	conn.SetCloseTimeout(timeout)
-	conn.SetCloseTimeout(0) // ignored: the timeout above still stands
+	conn.SetCloseTimeout(-time.Second) // ignored: the timeout above still stands
 
 	start := time.Now()
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 	if elapsed := time.Since(start); elapsed < timeout {
-		t.Errorf("Close returned after %v, so a zero timeout replaced the one set", elapsed)
+		t.Errorf("Close returned after %v, so a negative timeout replaced the one set", elapsed)
+	}
+}
+
+// A zero close timeout sends the close and does not wait for a peer that never
+// acknowledges it.
+func TestZeroCloseTimeoutDoesNotWait(t *testing.T) {
+	srv := deafServer(t)
+
+	conn, err := wsutil.Dial(t.Context(), wsURL(srv), nil, 0)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	conn.SetCloseTimeout(0)
+
+	start := time.Now()
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Errorf("Close took %v with a zero timeout, want no wait", elapsed)
 	}
 }
 
