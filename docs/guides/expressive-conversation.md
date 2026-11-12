@@ -192,6 +192,12 @@ Each final transcription is read with the bot's reply before it, and gets two
 signals: `emotion`, its two likeliest labels with their confidences (`neutral`,
 `happy`, `amused`, `angry`, `sad`, `afraid`, `surprised`, `disgusted`,
 `contemptuous`), and `sarcasm`, the chance the turn is sarcastic, from 0 to 1.
+The reader is a `perception.Reader` whose one source is a `reader.ToneSource`
+asking the `classifier/tone` classifier: the transcription waits for its
+reading up to `Config.Timeout` (0.5 s by default), the reading is broadcast in
+a `frames.PerceptionFrame` and added to the one the transcription carries.
+Build a `reader.ToneSource` with `reader.NewSource` to read tone beside other
+classifiers in one `perception.Reader`.
 
 The model loads while the pipeline is set up, once a process, and every reader
 shares it. The first load downloads it from Hugging Face into its cache
@@ -203,8 +209,8 @@ huggingface-cli download pipecat-ai/tone-models --revision reader-rc2 --include 
 ```
 
 `Config.ModelDir` loads a folder of your own instead, laid out as a release's
-`reader` folder, and `Config.Precision` picks the weights (`reader.FP16`, the
-default, or `reader.FP32`). The model runs through the ONNX Runtime (see
+`reader` folder, and `Config.Precision` picks the weights (`tone.FP16`, the
+default, or `tone.FP32`). The model runs through the ONNX Runtime (see
 [Installation](../getting-started/installation.md#runtime-libraries)). A model that cannot be loaded is reported as an error
 that leaves the reader unusable, and transcriptions pass through unread.
 

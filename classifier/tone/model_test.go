@@ -1,4 +1,4 @@
-package reader_test
+package tone_test
 
 import (
 	"encoding/json"
@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gojargo/jargo/classifier/tone"
 	"github.com/gojargo/jargo/internal/onnxrt"
-	"github.com/gojargo/jargo/processor/tone/reader"
 )
 
 // referenceTags is the reader's tags as the reference implementation, in
@@ -34,7 +34,7 @@ type referenceTags struct {
 	} `json:"backchannel"`
 }
 
-func asReference(t reader.Tags) referenceTags {
+func asReference(t tone.Tags) referenceTags {
 	var r referenceTags
 	r.Emotion.Label, r.Emotion.Intensity, r.Emotion.Confidence = t.Emotion.Label, t.Emotion.Intensity, t.Emotion.Confidence
 	r.Emotion.Probabilities = map[string]float64{}
@@ -63,7 +63,7 @@ func TestTheModelReadsAsTheReferenceDoes(t *testing.T) {
 	if !onnxrt.Available() {
 		t.Skip("ONNX runtime not configured; set JARGO_ONNXRUNTIME_LIB")
 	}
-	for _, precision := range []reader.Precision{reader.FP16, reader.FP32} {
+	for _, precision := range []tone.Precision{tone.FP16, tone.FP32} {
 		t.Run(string(precision), func(t *testing.T) {
 			raw, err := os.ReadFile("testdata/reference_" + string(precision) + ".json")
 			if err != nil {
@@ -77,7 +77,7 @@ func TestTheModelReadsAsTheReferenceDoes(t *testing.T) {
 			if err := json.Unmarshal(raw, &cases); err != nil {
 				t.Fatal(err)
 			}
-			m, err := reader.LoadModel(dir, precision, 1)
+			m, err := tone.LoadModel(dir, precision, 1)
 			if err != nil {
 				t.Fatal(err)
 			}

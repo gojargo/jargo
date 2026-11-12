@@ -1,4 +1,4 @@
-package reader
+package tone
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 const (
 	// Repo is the Hugging Face repository the tone models are released in.
 	Repo = "pipecat-ai/tone-models"
-	// Revision is the reader's release the reader downloads by default.
+	// Revision is the reader model's release downloaded by default.
 	Revision = "reader-rc2"
 
 	folder = "reader"
@@ -38,9 +38,9 @@ const (
 var modelFiles = map[Precision]string{FP16: "model_fp16.onnx", FP32: "model.opt.onnx"}
 
 // ErrPrecision is returned for a precision the model is not released in.
-var ErrPrecision = errors.New("reader: unknown precision")
+var ErrPrecision = errors.New("tone: unknown precision")
 
-// modelConfig is the part of the model's config.json the reader reads.
+// modelConfig is the part of the model's config.json the classifier reads.
 type modelConfig struct {
 	MaxLen      int      `json:"max_len"`
 	Outputs     []string `json:"outputs"`
@@ -61,7 +61,7 @@ type platt struct {
 	B float64 `json:"b"`
 }
 
-// Model is the reader's model, on the CPU.
+// Model is the tone reader model, on the CPU.
 type Model struct {
 	config             modelConfig
 	tokenizer          *tokenizers.Tokenizer
@@ -82,26 +82,26 @@ func LoadModel(dir string, precision Precision, threads int) (*Model, error) {
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "config.json")) //nolint:gosec // the model's own folder
 	if err != nil {
-		return nil, fmt.Errorf("reader: %w", err)
+		return nil, fmt.Errorf("tone: %w", err)
 	}
 	m := &Model{emotionTemperature: 1, moveTemperature: 1, sarcasmThreshold: 0.5}
 	if err = json.Unmarshal(raw, &m.config); err != nil {
-		return nil, fmt.Errorf("reader: config.json: %w", err)
+		return nil, fmt.Errorf("tone: config.json: %w", err)
 	}
 	if m.tokenizer, err = tokenizers.FromFile(filepath.Join(dir, "tokenizer.json")); err != nil {
-		return nil, fmt.Errorf("reader: %w", err)
+		return nil, fmt.Errorf("tone: %w", err)
 	}
 	// Truncated at the model's length, from the end, as the tokenizer's
 	// defaults do.
 	m.truncation = &tokenizers.Truncation{MaxLength: m.config.MaxLen}
 	weights, err := os.ReadFile(filepath.Join(dir, file)) //nolint:gosec // the model's own folder
 	if err != nil {
-		return nil, fmt.Errorf("reader: %w", err)
+		return nil, fmt.Errorf("tone: %w", err)
 	}
 	m.session, err = onnxrt.NewWithOptions(weights, []string{"input_ids", "attention_mask"}, m.config.Outputs,
 		onnxrt.Options{IntraOpThreads: threads})
 	if err != nil {
-		return nil, fmt.Errorf("reader: %w", err)
+		return nil, fmt.Errorf("tone: %w", err)
 	}
 	if c := m.config.Calibration; c != nil {
 		if c.EmotionTemperature != nil {
@@ -135,7 +135,7 @@ func DownloadModel(
 		CacheDir: cacheDir,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("reader: %w", err)
+		return nil, fmt.Errorf("tone: %w", err)
 	}
 	return LoadModel(filepath.Join(root, folder), precision, threads)
 }
@@ -148,6 +148,9 @@ var download = hfhub.Download
 
 // Emotions is the emotions the model reads.
 func (m *Model) Emotions() []string { return m.config.Emotions }
+
+// Moves is the moves the model reads.
+func (m *Model) Moves() []string { return m.config.Moves }
 
 // Probability is one label's probability.
 type Probability struct {
@@ -201,12 +204,12 @@ func (m *Model) Tag(text, previous string) (Tags, error) {
 	}
 	enc, err := m.tokenizer.Encode(rendered, m.truncation)
 	if err != nil {
-		return Tags{}, fmt.Errorf("reader: %w", err)
+		return Tags{}, fmt.Errorf("tone: %w", err)
 	}
 	shape := []int64{1, int64(len(enc.IDs))}
 	results, err := m.session.Run([]onnxrt.Tensor{onnxrt.Int64(shape, enc.IDs), onnxrt.Int64(shape, enc.AttentionMask)})
 	if err != nil {
-		return Tags{}, fmt.Errorf("reader: %w", err)
+		return Tags{}, fmt.Errorf("tone: %w", err)
 	}
 	outputs := make(map[string][]float32, len(results))
 	for i, r := range results {

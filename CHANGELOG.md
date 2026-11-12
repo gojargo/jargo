@@ -15,6 +15,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`classifier/tone` answers the tone reader model's questions.** A
+  `tone.Classifier` loads the model in `Setup` (once a process, shared by
+  every classifier) and answers its own four questions, from `Questions`: the
+  turn's `emotion` and `move` as choices with the model's options, and
+  `sarcasm` and `backchannel` as yes/no questions. The state is the turn's
+  text, or a map with `user` and optionally `assistant`. Any other question or
+  state is refused before the model reads the turn.
+
 - **`processor/perception` reads each user turn by asking classifiers.** A
   `perception.Reader` goes between the STT service and the user aggregator
   and asks each of its sources (a classifier with its questions, each named
@@ -73,6 +81,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   chunk of a stream is no longer short and the filter's tail is a few
   milliseconds of delayed audio; `Quality` and `ResampleQuality` are
   deprecated and have no effect.
+- **The tone reader is a perception reader with one tone source.**
+  `reader.New` builds a `perception.Reader` whose one source is a
+  `reader.ToneSource` asking the `classifier/tone` classifier, so the tone
+  read now waits at most `Config.Timeout` (0.5 s by default) before the
+  transcription passes on unread, broadcasts every reading in a
+  `PerceptionFrame` (late or not), pushes the classifier's metrics when
+  metrics are on, adds its reading to the one a transcription already carries
+  instead of overwriting it (a failed read no longer erases it), and declares
+  the signals declared before it together with its own. `reader.NewSource`
+  puts tone beside other classifiers in one reader. **Breaking:**
+  `reader.Reader` is now `perception.Reader`; the model and its loaders
+  (`Model`, `LoadModel`, `DownloadModel`, `Tags`, `Precision`, `FP16`,
+  `FP32`, `Repo`, `Revision`, `ErrPrecision`) moved to `classifier/tone`.
+
 - **Classifier questions can come with images, clips of audio and files.**
   `Ask`, `YesNo`, `Choice` and `Score` take inputs after the questions:
   `classifier.Image` (PNG, JPEG or WebP, its type read from the bytes when not
