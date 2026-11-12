@@ -15,6 +15,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The telephony codec takes a wire rate per direction.** `AudioConfig`
+  gains `WireInSampleRate` and `WireOutSampleRate`, which win over
+  `WireSampleRate` for their direction, so a stream received at one rate can
+  be played at another (Plivo's `playAudio` announces the outbound rate).
+  **Breaking:** `Codec.WireSampleRate` is replaced by `WireInSampleRate` and
+  `WireOutSampleRate`.
+
 - **The DTMF keypad is the telephone's twelve keys.** `frames.KeypadEntry`
   accepted A to D besides 0 to 9, `*` and `#`, so RTVI, LiveKit and the tone
   generator took them, and the Twilio, Telnyx, Plivo and Exotel serializers

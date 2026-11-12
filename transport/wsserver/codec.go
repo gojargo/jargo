@@ -32,8 +32,16 @@ const (
 // PCM a pipeline carries. Its zero value is the right one for a telephony
 // provider: 8 kHz on the wire, the pipeline's own rate on the inside.
 type AudioConfig struct {
-	// WireSampleRate is the rate the provider streams at; 0 uses 8 kHz.
+	// WireSampleRate is the rate the provider streams at, both ways; 0 uses
+	// 8 kHz.
 	WireSampleRate int
+	// WireInSampleRate is the rate of the audio received on the wire, for a
+	// provider that streams the two directions at different rates; 0 uses
+	// WireSampleRate.
+	WireInSampleRate int
+	// WireOutSampleRate is the rate of the audio sent on the wire; 0 uses
+	// WireSampleRate.
+	WireOutSampleRate int
 	// SampleRate overrides the pipeline rate the audio is converted to and from;
 	// 0 uses the rate the StartFrame carries, which is what a pipeline should
 	// normally decide.
@@ -60,8 +68,10 @@ type AudioConfig struct {
 type Codec struct {
 	cfg AudioConfig
 
-	wireRate int
-	inRate   int
+	// wireInRate and wireOutRate are the wire's rates in each direction.
+	wireInRate  int
+	wireOutRate int
+	inRate      int
 
 	in *resample.Resampler
 	// out is built on the first frame sent, once the rate that audio actually
@@ -78,9 +88,17 @@ func NewCodec(cfg AudioConfig) *Codec {
 // Setup takes the rates from the pipeline's configuration and builds the inbound
 // resampler. A serializer calls it from its own Setup.
 func (c *Codec) Setup(s processor.Setup) error {
-	c.wireRate = c.cfg.WireSampleRate
-	if c.wireRate <= 0 {
-		c.wireRate = DefaultWireSampleRate
+	wire := c.cfg.WireSampleRate
+	if wire <= 0 {
+		wire = DefaultWireSampleRate
+	}
+	c.wireInRate = c.cfg.WireInSampleRate
+	if c.wireInRate <= 0 {
+		c.wireInRate = wire
+	}
+	c.wireOutRate = c.cfg.WireOutSampleRate
+	if c.wireOutRate <= 0 {
+		c.wireOutRate = wire
 	}
 
 	c.inRate = c.cfg.SampleRate
@@ -88,11 +106,11 @@ func (c *Codec) Setup(s processor.Setup) error {
 		c.inRate = s.AudioInSampleRate
 	}
 	if c.inRate <= 0 {
-		c.inRate = c.wireRate
+		c.inRate = c.wireInRate
 	}
 
 	c.closeIn()
-	r, err := c.newResampler(c.wireRate, c.inRate)
+	r, err := c.newResampler(c.wireInRate, c.inRate)
 	if err != nil {
 		return err
 	}
@@ -107,8 +125,11 @@ func (c *Codec) newResampler(from, to int) (*resample.Resampler, error) {
 	})
 }
 
-// WireSampleRate is the rate the provider streams at.
-func (c *Codec) WireSampleRate() int { return c.wireRate }
+// WireInSampleRate is the rate of the audio received on the wire.
+func (c *Codec) WireInSampleRate() int { return c.wireInRate }
+
+// WireOutSampleRate is the rate of the audio sent on the wire.
+func (c *Codec) WireOutSampleRate() int { return c.wireOutRate }
 
 // SampleRate is the pipeline rate incoming audio is converted to, and the rate
 // the frames the Codec produces are tagged with.
@@ -167,10 +188,10 @@ func (c *Codec) outputResampler(frameRate int) *resample.Resampler {
 	}
 	c.closeOut()
 
-	r, err := c.newResampler(frameRate, c.wireRate)
+	r, err := c.newResampler(frameRate, c.wireOutRate)
 	if err != nil {
 		slog.Error("wsserver: create outbound resampler",
-			"from", frameRate, "to", c.wireRate, "err", err)
+			"from", frameRate, "to", c.wireOutRate, "err", err)
 		return nil
 	}
 	c.out, c.outRate = r, frameRate

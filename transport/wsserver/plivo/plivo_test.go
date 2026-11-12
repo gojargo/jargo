@@ -96,6 +96,34 @@ func TestSerializeAudioDroppedBeforeStart(t *testing.T) {
 	}
 }
 
+// The two directions can run at different wire rates, and a rate given for one
+// direction wins over the one given for both: here the stream is received at
+// 8 kHz and played at 16 kHz, which playAudio announces.
+func TestWireRatesPerDirection(t *testing.T) {
+	s := ready(t, Config{Audio: wsserver.AudioConfig{WireSampleRate: 8000, WireOutSampleRate: 16000}}, 16000)
+	if in, out := s.codec.WireInSampleRate(), s.codec.WireOutSampleRate(); in != 8000 || out != 16000 {
+		t.Fatalf("wire rates = %d in, %d out, want 8000 and 16000", in, out)
+	}
+	if _, err := s.Deserialize([]byte(`{"event":"start","start":{"streamId":"stream-1"}}`)); err != nil {
+		t.Fatalf("deserialize start: %v", err)
+	}
+	pcm := make([]byte, 640) // 20 ms at 16 kHz
+	msg, err := serialized(s.Serialize(frames.NewTTSAudioRawFrame(pcm, 16000, 1)))
+	if err != nil {
+		t.Fatalf("serialize audio: %v", err)
+	}
+	var out playAudio
+	if err := json.Unmarshal(msg, &out); err != nil {
+		t.Fatalf("unmarshal playAudio: %v", err)
+	}
+	if out.Media.SampleRate != 16000 {
+		t.Errorf("playAudio announces %d Hz, want the outbound wire rate 16000", out.Media.SampleRate)
+	}
+	if raw, _ := base64.StdEncoding.DecodeString(out.Media.Payload); len(raw) != 320 {
+		t.Errorf("payload = %d bytes, want 320: 20 ms at 16 kHz, not converted down", len(raw))
+	}
+}
+
 func TestSerializeAudioAfterStart(t *testing.T) {
 	s := ready(t, Config{}, wireRate)
 	if _, err := s.Deserialize([]byte(`{"event":"start","start":{"streamId":"stream-1"}}`)); err != nil {
@@ -150,7 +178,7 @@ func TestSetupTakesThePipelineRate(t *testing.T) {
 		if got := s.codec.SampleRate(); got != rate {
 			t.Errorf("pipeline rate = %d, want %d", got, rate)
 		}
-		if got := s.codec.WireSampleRate(); got != wireRate {
+		if got := s.codec.WireOutSampleRate(); got != wireRate {
 			t.Errorf("wire rate = %d, want %d", got, wireRate)
 		}
 	}

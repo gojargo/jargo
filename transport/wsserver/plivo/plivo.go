@@ -197,7 +197,7 @@ func (s *Serializer) media(a *frames.AudioRawData) (wsserver.Message, error) {
 	out := playAudio{Event: "playAudio", StreamID: id}
 	out.Media.ContentType = "audio/x-mulaw"
 	// The rate the payload is at, which is the wire's, not the pipeline's.
-	out.Media.SampleRate = s.codec.WireSampleRate()
+	out.Media.SampleRate = s.codec.WireOutSampleRate()
 	out.Media.Payload = base64.StdEncoding.EncodeToString(ulaw)
 	return wsserver.TextMessage(json.Marshal(out))
 }

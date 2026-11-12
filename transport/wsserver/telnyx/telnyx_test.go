@@ -124,7 +124,7 @@ func TestSetupTakesThePipelineRate(t *testing.T) {
 		if got := s.codec.SampleRate(); got != rate {
 			t.Errorf("pipeline rate = %d, want %d", got, rate)
 		}
-		if got := s.codec.WireSampleRate(); got != wireRate {
+		if got := s.codec.WireOutSampleRate(); got != wireRate {
 			t.Errorf("wire rate = %d, want %d", got, wireRate)
 		}
 	}
