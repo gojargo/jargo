@@ -103,7 +103,7 @@ func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{}
 	}
-	s := &httpSynthesizer{cfg: cfg}
+	s := newHTTPSynthesizer(cfg)
 	b := tts.New("CartesiaHTTPTTS", s)
 	s.expressionSettings = b.ExpressionSettings
 	return b
@@ -111,9 +111,35 @@ func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
 
 type httpSynthesizer struct {
 	cfg HTTPTTSConfig
+	// live is what a caller may change while the pipeline runs. It is seeded
+	// from cfg, and is what every request is built from.
+	live *TTSSettings
 	// expressionSettings is what the service's expression adapter asks to send
 	// with the request being synthesized, in an expressive conversation.
 	expressionSettings func() map[string]any
+}
+
+// newHTTPSynthesizer builds the synthesizer with its settings seeded from cfg.
+func newHTTPSynthesizer(cfg HTTPTTSConfig) *httpSynthesizer {
+	return &httpSynthesizer{cfg: cfg, live: newTTSSettings(Config{
+		Model:               cfg.Model,
+		VoiceID:             cfg.VoiceID,
+		Language:            cfg.Language,
+		GenerationConfig:    cfg.GenerationConfig,
+		PronunciationDictID: cfg.PronunciationDictID,
+		Accent:              cfg.Accent,
+	})}
+}
+
+// Settings is the configuration a caller may change while the pipeline runs,
+// implementing tts.SettingsHolder. Each request is built from it, so a change
+// applies from the next sentence on.
+func (s *httpSynthesizer) Settings() any { return s.live }
+
+// ServiceLanguage names a language the way Cartesia does, implementing
+// tts.LanguageNamer.
+func (s *httpSynthesizer) ServiceLanguage(l language.Language) string {
+	return cartesiaLanguage(l)
 }
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: Cartesia's
@@ -127,7 +153,7 @@ func (s *httpSynthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // Metadata reports the Cartesia model and voice synthesis is billed against.
 func (s *httpSynthesizer) Metadata() tts.Metadata {
-	return tts.Metadata{Model: s.cfg.Model, VoiceID: s.cfg.VoiceID}
+	return tts.Metadata{Model: s.live.Model.Or(s.cfg.Model), VoiceID: s.live.Voice.Or(s.cfg.VoiceID)}
 }
 
 // RunTTS asks for the whole synthesis and streams the audio it answers with. The
@@ -187,26 +213,34 @@ func (s *httpSynthesizer) RunTTS(
 // payload is the synthesis request Cartesia takes.
 func (s *httpSynthesizer) payload(text string) map[string]any {
 	msg := map[string]any{
-		"model_id":      s.cfg.Model,
+		"model_id":      s.live.Model.Or(s.cfg.Model),
 		fieldTranscript: text,
-		"voice":         map[string]any{"mode": "id", "id": s.cfg.VoiceID},
+		"voice":         map[string]any{"mode": "id", "id": s.live.Voice.Or(s.cfg.VoiceID)},
 		"output_format": map[string]any{
 			"container":   s.cfg.Container,
 			"encoding":    s.cfg.Encoding,
 			"sample_rate": s.cfg.SampleRate,
 		},
 	}
-	if lang := cartesiaLanguage(s.cfg.Language); lang != "" {
+	if lang := s.live.Language.Or(cartesiaLanguage(s.cfg.Language)); lang != "" {
 		msg["language"] = lang
 	}
-	if gen := generationConfig(s.cfg.GenerationConfig, expression(s.expressionSettings)); gen != nil {
+	if gen := generationConfig(
+		s.live.GenerationConfig.Or(s.cfg.GenerationConfig), expression(s.expressionSettings)); gen != nil {
 		msg["generation_config"] = gen
 	}
-	if s.cfg.PronunciationDictID != "" {
-		msg["pronunciation_dict_id"] = s.cfg.PronunciationDictID
+	if dict := s.live.PronunciationDictID.Or(s.cfg.PronunciationDictID); dict != "" {
+		msg["pronunciation_dict_id"] = dict
 	}
-	if s.cfg.Accent != "" {
-		msg["accent"] = s.cfg.Accent
+	if accent := s.live.Accent.Or(s.cfg.Accent); accent != "" {
+		msg["accent"] = accent
 	}
 	return msg
 }
+
+// Compile-time checks that the HTTP synthesizer takes settings the way the base
+// applies them.
+var (
+	_ tts.SettingsHolder = (*httpSynthesizer)(nil)
+	_ tts.LanguageNamer  = (*httpSynthesizer)(nil)
+)

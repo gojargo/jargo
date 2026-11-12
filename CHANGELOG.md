@@ -142,6 +142,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   ("？") became a word of its own and reached the conversation twice. Each
   character now keeps its own time, and a punctuation mark is merged into the
   character before it.
+- **Cartesia HTTP TTS takes runtime settings updates.** The HTTP service had
+  no updatable settings, so a `TTSUpdateSettingsFrame` changing the voice, the
+  model, the language, the generation config, the pronunciation dictionary or
+  the accent was logged and ignored. It now holds the same settings as the
+  WebSocket service, and each request is built from them.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

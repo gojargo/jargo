@@ -12,6 +12,8 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/service/tts"
 )
 
 // httpTTSRequest is what the fake synthesis endpoint saw.
@@ -101,7 +103,7 @@ func TestHTTPTTSRequestShape(t *testing.T) {
 	want := []byte{0x11, 0x22, 0x33, 0x44}
 	base, seen := httpTTSServer(t, http.StatusOK, want)
 
-	s := &httpSynthesizer{cfg: httpTTSConfig(base)}
+	s := newHTTPSynthesizer(httpTTSConfig(base))
 	if got := collectHTTP(t, s, "hello there"); !slices.Equal(got, want) {
 		t.Errorf("PCM = % x, want % x", got, want)
 	}
@@ -154,7 +156,7 @@ func TestHTTPTTSOptionalFields(t *testing.T) {
 	cfg.GenerationConfig = &GenerationConfig{Speed: &speed, Emotion: "excited"}
 	cfg.PronunciationDictID = "dict-1"
 	cfg.Accent = "british"
-	collectHTTP(t, &httpSynthesizer{cfg: cfg}, "hi")
+	collectHTTP(t, newHTTPSynthesizer(cfg), "hi")
 
 	got := seen()
 	if got.body["language"] != "fr" {
@@ -176,7 +178,7 @@ func TestHTTPTTSOptionalFields(t *testing.T) {
 // and what the service said about it.
 func TestHTTPTTSReportsAFailure(t *testing.T) {
 	base, _ := httpTTSServer(t, http.StatusUnauthorized, []byte("invalid api key"))
-	s := &httpSynthesizer{cfg: httpTTSConfig(base)}
+	s := newHTTPSynthesizer(httpTTSConfig(base))
 
 	err := s.RunTTS(context.Background(), "hi", "", func(frames.Frame) error { return nil })
 	if err == nil {
@@ -184,5 +186,33 @@ func TestHTTPTTSReportsAFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid api key") {
 		t.Errorf("error = %v, want it to carry what the service said", err)
+	}
+}
+
+// TestHTTPTTSSettingsReachTheRequest checks a changed setting goes out on the
+// next synthesis rather than the value the service was built with, as it does
+// on the WebSocket service.
+func TestHTTPTTSSettingsReachTheRequest(t *testing.T) {
+	base, seen := httpTTSServer(t, http.StatusOK, []byte{1, 2})
+	s := newHTTPSynthesizer(httpTTSConfig(base))
+	if _, ok := any(s).(tts.SettingsHolder); !ok {
+		t.Fatal("the HTTP synthesizer holds no settings for an update to change")
+	}
+	s.live.Voice = settings.Set("voice-2")
+	s.live.Model = settings.Set("sonic-3.5")
+	s.live.Language = settings.Set(s.ServiceLanguage(language.GermanCH))
+	s.live.Accent = settings.Set("british")
+
+	collectHTTP(t, s, "hallo")
+
+	got := seen().body
+	if voice, _ := got["voice"].(map[string]any); voice["id"] != "voice-2" {
+		t.Errorf("voice = %v, want the updated one", got["voice"])
+	}
+	if got["model_id"] != "sonic-3.5" || got["language"] != "de" || got["accent"] != "british" {
+		t.Errorf("request = %v, want the updated model, language and accent", got)
+	}
+	if m := s.Metadata(); m.Model != "sonic-3.5" || m.VoiceID != "voice-2" {
+		t.Errorf("Metadata() = %+v, want the updated model and voice", m)
 	}
 }
