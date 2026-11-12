@@ -211,6 +211,12 @@ type streamState struct {
 	output    []responseOutput
 }
 
+// startsFunctionCall reports whether an event announces a function call, the
+// answer of a turn that calls a tool instead of replying in text.
+func startsFunctionCall(ev event) bool {
+	return ev.Type == evtItemAdded && ev.Item != nil && ev.Item.Type == itemFuncCall
+}
+
 // newStreamState builds a state machine feeding sink.
 //
 // errorPrefix names where a stream-level error event came from, in the message

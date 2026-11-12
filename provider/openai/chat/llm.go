@@ -472,6 +472,12 @@ func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink)
 		}
 		s.StopTTFBMetrics(ctx)
 		delta := chunk.Choices[0].Delta
+		if len(delta.ToolCalls) > 0 {
+			// A turn that only calls tools produces no answer text, so the call
+			// itself is what the caller gets and TTFAT ends here rather than
+			// going unmeasured.
+			s.StopTTFATMetrics(ctx)
+		}
 		if filter != nil {
 			if err := filterDelta(ctx, filter, &delta); err != nil {
 				return err

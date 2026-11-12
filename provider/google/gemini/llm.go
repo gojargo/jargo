@@ -467,6 +467,10 @@ func (r *responseStream) part(p genPart) error {
 			return err
 		}
 	case p.FunctionCall != nil:
+		// A turn that only calls tools produces no answer text, so the call
+		// itself is what the caller gets and TTFAT ends here rather than going
+		// unmeasured.
+		r.s.StopTTFATMetrics(r.ctx)
 		callID = p.FunctionCall.ID
 		if callID == "" {
 			callID = uuid.NewString()

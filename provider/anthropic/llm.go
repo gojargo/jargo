@@ -357,6 +357,19 @@ func carriesModelOutput(event sdk.MessageStreamEventUnion) bool {
 	}
 }
 
+// timeEvent ends the TTFB at the first event carrying model output, and the
+// TTFAT at a tool call's start: a turn that only calls tools produces no answer
+// text, so the call itself is what the caller gets and TTFAT ends there rather
+// than going unmeasured.
+func (s *Service) timeEvent(ctx context.Context, event sdk.MessageStreamEventUnion) {
+	if carriesModelOutput(event) {
+		s.StopTTFBMetrics(ctx)
+	}
+	if start, ok := event.AsAny().(sdk.ContentBlockStartEvent); ok && start.ContentBlock.Type == "tool_use" {
+		s.StopTTFATMetrics(ctx)
+	}
+}
+
 // GenerateWithTools streams a response that may request tool calls. It emits
 // text deltas to the sink as they arrive and, once the turn completes, reports
 // each tool-use block the model produced. The conversation's tools are sent on
@@ -373,9 +386,7 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 	stream := s.client.Messages.NewStreaming(ctx, params, s.requestOpts()...)
 	for stream.Next() {
 		event := stream.Current()
-		if carriesModelOutput(event) {
-			s.StopTTFBMetrics(ctx)
-		}
+		s.timeEvent(ctx, event)
 		if err := acc.Accumulate(event); err != nil {
 			return err
 		}

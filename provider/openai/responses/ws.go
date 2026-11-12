@@ -404,6 +404,12 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink, la
 			if carriesModelOutput(m.ev) {
 				s.StopTTFBMetrics(ctx)
 			}
+			if startsFunctionCall(m.ev) {
+				// A turn that only calls tools produces no answer text, so the
+				// call itself is what the caller gets and TTFAT ends here rather
+				// than going unmeasured.
+				s.StopTTFATMetrics(ctx)
+			}
 			if cerr := classifyStreamError(m.ev); cerr != nil {
 				return state, cerr
 			}

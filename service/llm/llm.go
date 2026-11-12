@@ -1501,9 +1501,6 @@ func (b *Base) announceFunctionCalls(
 	}
 
 	if visible := b.userVisibleCalls(calls); len(visible) > 0 {
-		// A turn answering with a tool call rather than text answers here, so
-		// this is where its measurement to the first answer token ends.
-		b.StopTTFATMetrics(ctx)
 		b.eventsMu.RLock()
 		started := b.onStarted
 		b.eventsMu.RUnlock()

@@ -426,6 +426,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and a response cut off before its answer token leaves nothing for the next.
   **Breaking:** `llm.Base.StopTTFATMetrics` takes a context.
 
+- **A tool-only turn ends its TTFAT at the call.** A turn that answers with
+  a tool call instead of text ended its time to the first answer token once
+  the stream was over, after the call's arguments and any trailing chunks had
+  streamed, and only for a call the application could see. The OpenAI chat,
+  OpenAI Responses, Gemini and Anthropic services now end it where the call
+  starts in the stream, whatever the call, and text that comes before a call
+  still ends it first.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -183,6 +183,12 @@ func (s *HTTPService) consume(ctx context.Context, r io.Reader, state *streamSta
 		if carriesModelOutput(ev) {
 			s.StopTTFBMetrics(ctx)
 		}
+		if startsFunctionCall(ev) {
+			// A turn that only calls tools produces no answer text, so the call
+			// itself is what the caller gets and TTFAT ends here rather than
+			// going unmeasured.
+			s.StopTTFATMetrics(ctx)
+		}
 		done, err := state.handle(ev)
 		if err != nil {
 			return err
