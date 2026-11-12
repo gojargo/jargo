@@ -192,6 +192,82 @@ func (f *BaseFrame) SetInterruptible(interruptible bool) {
 
 func (f *BaseFrame) isFrame() {}
 
+// BaseState is the state every frame carries beside its own fields, in a form
+// that can be copied out and set back: what a serializer carries so that a
+// frame crossing a process boundary arrives as itself, with its id, name,
+// timestamp, metadata and transport routing.
+type BaseState struct {
+	// ID is the frame's id.
+	ID uint64
+	// TypeName is the type part of the frame's name.
+	TypeName string
+	// PTS is the presentation timestamp, nil when none is set.
+	PTS *int64
+	// BroadcastSiblingID is the id of the frame broadcast alongside it, nil
+	// when it was not broadcast.
+	BroadcastSiblingID *uint64
+	// Metadata is the frame's metadata, nil when it carries none.
+	Metadata map[string]any
+	// TransportSource names the transport the frame came from.
+	TransportSource string
+	// TransportDestination names the transport the frame is bound for.
+	TransportDestination string
+	// Interruptible is the frame's own interruptibility, nil when it is left to
+	// its type's default.
+	Interruptible *bool
+}
+
+// State copies the frame's base state out.
+func (f *BaseFrame) State() BaseState {
+	s := BaseState{
+		ID:                   f.id,
+		TypeName:             f.typeName,
+		TransportSource:      f.transportSource,
+		TransportDestination: f.transportDest,
+	}
+	if f.hasPTS {
+		s.PTS = new(f.pts)
+	}
+	if f.broadcastSiblingID != nil {
+		s.BroadcastSiblingID = new(*f.broadcastSiblingID)
+	}
+	if len(f.metadata) > 0 {
+		s.Metadata = f.metadata
+	}
+	switch f.interruptible {
+	case interruptibleSet:
+		s.Interruptible = new(true)
+	case uninterruptibleSet:
+		s.Interruptible = new(false)
+	case interruptibleDefault:
+	}
+	return s
+}
+
+// SetState sets the frame's base state back from s, replacing what it held:
+// the counterpart of State, for a frame rebuilt from what was carried.
+func (f *BaseFrame) SetState(s BaseState) {
+	f.id = s.ID
+	if s.TypeName != "" {
+		f.typeName = s.TypeName
+	}
+	f.pts, f.hasPTS = 0, false
+	if s.PTS != nil {
+		f.SetPTS(*s.PTS)
+	}
+	f.broadcastSiblingID = nil
+	if s.BroadcastSiblingID != nil {
+		f.SetBroadcastSiblingID(*s.BroadcastSiblingID)
+	}
+	f.metadata = s.Metadata
+	f.transportSource = s.TransportSource
+	f.transportDest = s.TransportDestination
+	f.interruptible = interruptibleDefault
+	if s.Interruptible != nil {
+		f.SetInterruptible(*s.Interruptible)
+	}
+}
+
 // Interruptible reports whether an interruption may drop f from a processor's
 // queue or cancel its processing. SetInterruptible decides it when it was
 // called on f; otherwise it is true unless f's type is Uninterruptible. It is

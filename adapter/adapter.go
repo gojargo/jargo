@@ -14,6 +14,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -133,8 +134,16 @@ func CreateLLMSpecificMessage(a Identifier, native any) frames.Message {
 // provider's adapter defines, reporting a conversion failure when it holds
 // something else. An adapter calls it on a message it has already established
 // is its own.
+//
+// A native message held as plain data, an object decoded from JSON as one that
+// crossed a process boundary arrives, is read as T by way of its JSON form.
 func NativeMessage[T any](m frames.Message) (T, error) {
 	native, ok := m.Native.(T)
+	if plain, isPlain := m.Native.(map[string]any); !ok && isPlain {
+		if encoded, err := json.Marshal(plain); err == nil {
+			ok = json.Unmarshal(encoded, &native) == nil
+		}
+	}
 	if !ok {
 		var want T
 		return want, &ConversionError{Cause: &nativeTypeError{

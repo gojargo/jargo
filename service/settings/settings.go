@@ -20,8 +20,10 @@
 package settings
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -110,6 +112,15 @@ func (o *Opt[T]) SetAny(v any) error {
 	case rv.Type() == want:
 	case rv.Type().ConvertibleTo(want) && exactConversion(rv, want):
 		rv = rv.Convert(want)
+	case isPlainData(v) && !isPlainDataType(want):
+		// A structured setting that arrived as plain data, an object decoded
+		// from JSON say, is read as the type the field holds.
+		decoded, err := decodePlain[T](v)
+		if err != nil {
+			return fmt.Errorf("%w: cannot use %T as %s: %w", ErrType, v, want, err)
+		}
+		o.given, o.value = true, &decoded
+		return nil
 	default:
 		return fmt.Errorf("%w: cannot use %T as %s", ErrType, v, want)
 	}
@@ -119,6 +130,45 @@ func (o *Opt[T]) SetAny(v any) error {
 	}
 	o.given, o.value = true, &val
 	return nil
+}
+
+// isPlainData reports whether v is an object or a list as decoded JSON holds it.
+func isPlainData(v any) bool {
+	switch v.(type) {
+	case map[string]any, []any:
+		return true
+	default:
+		return false
+	}
+}
+
+// isPlainDataType reports whether t is itself an untyped object or list, which
+// plain data is already stored as rather than decoded into.
+func isPlainDataType(t reflect.Type) bool {
+	return t.Kind() == reflect.Interface || t == reflect.TypeFor[map[string]any]() || t == reflect.TypeFor[[]any]()
+}
+
+// decodePlain reads plain data as T by way of its JSON form.
+func decodePlain[T any](v any) (T, error) {
+	var out T
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return out, err
+	}
+	err = json.Unmarshal(encoded, &out)
+	return out, err
+}
+
+// IsSettings reports whether v is a pointer to a settings value: a struct
+// declaring at least one setting.
+func IsSettings(v any) bool {
+	rv, err := settingsValue(v)
+	if err != nil {
+		return false
+	}
+	found := false
+	eachField(rv, func(string, reflect.Value, []int) { found = true })
+	return found
 }
 
 // String implements fmt.Stringer.
@@ -285,18 +335,26 @@ type STT struct {
 // Resolve turns an update into a delta of the store's own type: the typed one
 // the update carries, or one built from the plain names and values it carries
 // instead. It reports false when the update asks for nothing at all.
+//
+// A delta given as plain names and values rather than as a settings value, as
+// one that crossed a process boundary in a type the far end did not know
+// arrives, is read like the plain settings it is.
 func Resolve(f *frames.ServiceUpdateSettingsFrame, store any) (delta any, ok bool, err error) {
-	if f.Delta != nil {
+	values := f.Settings
+	if plain, isMap := f.Delta.(map[string]any); isMap {
+		values = maps.Clone(plain)
+		maps.Copy(values, f.Settings)
+	} else if f.Delta != nil {
 		return f.Delta, true, nil
 	}
-	if len(f.Settings) == 0 {
+	if len(values) == 0 {
 		return nil, false, nil
 	}
 	built, err := NewDelta(store)
 	if err != nil {
 		return nil, false, err
 	}
-	if err := FromMap(built, f.Settings); err != nil {
+	if err := FromMap(built, values); err != nil {
 		return nil, false, err
 	}
 	return built, true, nil

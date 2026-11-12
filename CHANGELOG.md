@@ -86,6 +86,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A frame crosses a network bus whole.** The JSON bus serializer carried
+  only a frame's own exported fields, so every frame arriving from Redis had
+  id 0, no name, no timestamp, no metadata and no transport routing (a
+  `ParallelPipeline` on the far side then dropped all but the first, as
+  duplicates); a typed settings update arrived as an empty shell that could
+  not be applied; a VAD frame failed the whole message on its timestamp; a
+  provider-native message arrived keyed by Go field names; and a whole number
+  in a payload arrived as a float64. Now a frame's base state crosses with it
+  (`frames.BaseState`, `BaseFrame.State` and `SetState`); a settings delta
+  crosses as the fields it gives, typed when it is one of the shared settings
+  types and as plain settings otherwise (`settings.Resolve` reads a map
+  delta); a struct with no wire name crosses in its JSON form, so a time or a
+  native message survives and `adapter.NativeMessage` reads one held as plain
+  data; a whole number arrives as an int; and a nested value of an unknown type
+  or a field that cannot be read back is left out with a warning instead of
+  losing the message.
+
 - **An EndFrame no longer drops the frames waiting on their timestamp.** The
   output transport drained its audio on a graceful end but threw away the
   frames held for their presentation timestamp (word frames, say), so the last

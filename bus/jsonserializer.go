@@ -1,6 +1,8 @@
 package bus
 
 import (
+	"bytes"
+	"encoding"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -8,8 +10,18 @@ import (
 	"log/slog"
 	"maps"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync"
+
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/settings"
 )
+
+// baseKey is the field a frame's base state crosses under: its id, name,
+// timestamp, metadata and transport routing. No frame can have a field of that
+// name, since Base is the method every frame has.
+const baseKey = "Base"
 
 // ErrUnknownType reports a wire name this process has no type registered for,
 // which is what a peer carrying something this one does not know looks like.
@@ -81,9 +93,16 @@ func (s *JSONSerializer) Serialize(m Message) ([]byte, error) {
 
 // Deserialize reconstructs the message those bytes carried.
 func (s *JSONSerializer) Deserialize(data []byte) (Message, error) {
-	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
+	raw, err := decodeJSON(data)
+	if err != nil {
 		return nil, err
+	}
+	if top, ok := raw.(map[string]any); ok {
+		if name, tagged := top[typeKey].(string); tagged && name != bytesTypeName {
+			if _, known := s.types.New(name); !known {
+				return nil, fmt.Errorf("%w: %q", ErrUnknownType, name)
+			}
+		}
 	}
 	v, err := s.deserializeValue(raw)
 	if err != nil {
@@ -136,6 +155,14 @@ func (s *JSONSerializer) serializeValue(v any) (any, error) {
 		}, nil
 	}
 
+	// A settings value crosses as the fields it gives, a cleared one as null, so
+	// an update arrives saying what it said: a field it left alone stays
+	// alone. One of a type the far end may not know crosses untagged, and
+	// arrives as the plain settings it is.
+	if settings.IsSettings(v) {
+		return s.serializeSettings(v)
+	}
+
 	if adapter, ok := s.adapterFor(rv.Type()); ok {
 		name, known := s.types.NameOf(v)
 		if !known {
@@ -149,7 +176,7 @@ func (s *JSONSerializer) serializeValue(v any) (any, error) {
 	}
 
 	if name, known := s.types.NameOf(v); known {
-		fields, err := s.serializeStruct(rv)
+		fields, err := s.serializeNamed(v, rv)
 		if err != nil {
 			return nil, err
 		}
@@ -157,6 +184,24 @@ func (s *JSONSerializer) serializeValue(v any) (any, error) {
 	}
 
 	return s.serializeUntagged(rv)
+}
+
+// serializeNamed writes the fields of a value of a registered type. A frame
+// carries its base state too, so it arrives as itself rather than as a fresh
+// frame with the same fields.
+func (s *JSONSerializer) serializeNamed(v any, rv reflect.Value) (map[string]any, error) {
+	fields, err := s.serializeStruct(rv)
+	if err != nil {
+		return nil, err
+	}
+	if f, isFrame := v.(frames.Frame); isFrame {
+		state, err := s.serializeValue(frameState(f.Base().State()))
+		if err != nil {
+			return nil, err
+		}
+		fields[baseKey] = state
+	}
+	return fields, nil
 }
 
 // serializeUntagged writes a value that needs no name of its own: JSON already
@@ -189,7 +234,7 @@ func (s *JSONSerializer) serializeUntagged(rv reflect.Value) (any, error) {
 		}
 		return out, nil
 	case reflect.Struct:
-		return s.serializeStruct(rv)
+		return s.serializePlainStruct(rv)
 	case reflect.Func, reflect.Chan, reflect.UnsafePointer:
 		// Nothing the far end could call, so it is left out rather than failing
 		// the message it was a field of.
@@ -264,6 +309,8 @@ func (s *JSONSerializer) deserializeValue(v any) (any, error) {
 	switch t := v.(type) {
 	case nil, string, bool, float64:
 		return v, nil
+	case json.Number:
+		return number(t), nil
 	case []any:
 		out := make([]any, len(t))
 		for i, el := range t {
@@ -305,7 +352,26 @@ func (s *JSONSerializer) deserializeTagged(name string, data any) (any, error) {
 
 	built, known := s.types.New(name)
 	if !known {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownType, name)
+		// Something nested the far end carried and this process has no type
+		// for is left out, rather than losing the message it sat in.
+		slog.Warn("bus: a value of a type this process does not know is being left out", "type", name)
+		return nil, nil //nolint:nilnil // a value that cannot be rebuilt is dropped, not an error
+	}
+
+	if settings.IsSettings(built) {
+		values, _ := data.(map[string]any)
+		decoded := make(map[string]any, len(values))
+		for k, raw := range values {
+			d, err := s.deserializeValue(raw)
+			if err != nil {
+				return nil, err
+			}
+			decoded[k] = d
+		}
+		if err := settings.FromMap(built, decoded); err != nil {
+			return nil, err
+		}
+		return built, nil
 	}
 
 	if adapter, ok := s.adapterFor(reflect.TypeOf(built)); ok {
@@ -320,7 +386,28 @@ func (s *JSONSerializer) deserializeTagged(name string, data any) (any, error) {
 	if err := s.fillStruct(reflect.ValueOf(built).Elem(), fields); err != nil {
 		return nil, err
 	}
+	if f, isFrame := built.(frames.Frame); isFrame {
+		if err := s.restoreState(f, fields[baseKey]); err != nil {
+			return nil, err
+		}
+	}
 	return built, nil
+}
+
+// restoreState sets a frame's base state back from what was carried for it,
+// if anything was.
+func (s *JSONSerializer) restoreState(f frames.Frame, raw any) error {
+	if raw == nil {
+		return nil
+	}
+	state, err := s.deserializeValue(raw)
+	if err != nil {
+		return err
+	}
+	if m, ok := state.(map[string]any); ok {
+		f.Base().SetState(frameStateFrom(m))
+	}
+	return nil
 }
 
 // fillStruct writes the fields a wire object carried into the value built for
@@ -346,8 +433,11 @@ func (s *JSONSerializer) fillStruct(rv reflect.Value, fields map[string]any) err
 		if !present {
 			continue
 		}
+		// A field that cannot be filled is left out rather than losing the
+		// message: the rest of what it carried is still worth delivering.
 		if err := s.assign(fv, raw); err != nil {
-			return fmt.Errorf("bus: %s.%s: %w", rt.Name(), f.Name, err)
+			slog.Warn("bus: a field could not be read back and is being left out",
+				"type", rt.Name(), "field", f.Name, "err", err)
 		}
 	}
 	return nil
@@ -402,4 +492,241 @@ func reencode[T any](v any) (T, error) {
 		return out, fmt.Errorf("cannot read a %T back as %T: %w", v, out, err)
 	}
 	return out, nil
+}
+
+// decodeJSON reads JSON keeping its numbers exact, so a whole number arrives as
+// an integer, as it was sent, rather than as a float.
+func decodeJSON(data []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// number turns a JSON number into the Go value it reads as: an int when it is
+// whole, a uint64 past the range of an int, and a float64 otherwise.
+func number(n json.Number) any {
+	if i, err := strconv.ParseInt(string(n), 10, 64); err == nil {
+		return int(i)
+	}
+	if u, err := strconv.ParseUint(string(n), 10, 64); err == nil {
+		return u
+	}
+	f, _ := n.Float64()
+	return f
+}
+
+// normalizeNumbers walks plain decoded JSON turning each json.Number into the
+// Go value it reads as.
+func normalizeNumbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		return number(t)
+	case []any:
+		for i, el := range t {
+			t[i] = normalizeNumbers(el)
+		}
+		return t
+	case map[string]any:
+		for k, el := range t {
+			t[k] = normalizeNumbers(el)
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+// serializeSettings writes a settings value as the fields it gives, tagged with
+// its name when it has one.
+func (s *JSONSerializer) serializeSettings(v any) (any, error) {
+	given, err := settings.Given(v)
+	if err != nil {
+		return nil, err
+	}
+	data := make(map[string]any, len(given))
+	for k, val := range given {
+		el, err := s.serializeValue(val)
+		if err != nil {
+			return nil, err
+		}
+		data[k] = el
+	}
+	if name, known := s.types.NameOf(v); known {
+		return map[string]any{typeKey: name, dataKey: data}, nil
+	}
+	return data, nil
+}
+
+// serializePlainStruct writes a struct that has no name of its own on the
+// wire, the way encoding/json would, so the far end reads it back into its
+// type, or holds it as the object it would have decoded from JSON. A type that
+// writes its own JSON (a time, say) is written that way; any other has its
+// exported fields walked under their JSON names, so a value nested in it that
+// needs a name of its own still gets one.
+func (s *JSONSerializer) serializePlainStruct(rv reflect.Value) (any, error) {
+	if writesOwnJSON(rv.Type()) || !hasExportedField(rv.Type()) {
+		return marshalPlain(rv)
+	}
+	out := map[string]any{}
+	rt := rv.Type()
+	for i := range rt.NumField() {
+		f := rt.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, omit := jsonName(f)
+		if omit {
+			continue
+		}
+		fv := rv.Field(i)
+		if f.Anonymous && fv.Kind() == reflect.Struct && name == "" {
+			nested, err := s.serializePlainStruct(fv)
+			if err != nil {
+				return nil, err
+			}
+			if m, ok := nested.(map[string]any); ok {
+				maps.Copy(out, m)
+			}
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		if fv.IsZero() {
+			continue
+		}
+		el, err := s.serializeValue(fv.Interface())
+		if err != nil {
+			return nil, err
+		}
+		if el == nil {
+			continue
+		}
+		out[name] = el
+	}
+	return out, nil
+}
+
+// marshalPlain writes a value through encoding/json and reads it back as the
+// plain object, list or scalar it encodes to.
+func marshalPlain(rv reflect.Value) (any, error) {
+	ptr := reflect.New(rv.Type())
+	ptr.Elem().Set(rv)
+	encoded, err := json.Marshal(ptr.Interface())
+	if err != nil {
+		slog.Warn("bus: a value could not be serialized and is being left out",
+			"type", rv.Type().String(), "err", err)
+		return nil, nil //nolint:nilnil // a field that cannot cross is dropped, not an error
+	}
+	decoded, err := decodeJSON(encoded)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeNumbers(decoded), nil
+}
+
+// jsonName is the name encoding/json writes a field under, empty when its tag
+// names none, and whether the tag leaves it out altogether.
+func jsonName(f reflect.StructField) (string, bool) {
+	tag := f.Tag.Get("json")
+	if tag == "-" {
+		return "", true
+	}
+	name, _, _ := strings.Cut(tag, ",")
+	return name, false
+}
+
+// writesOwnJSON reports whether a type marshals itself.
+func writesOwnJSON(t reflect.Type) bool {
+	ptr := reflect.PointerTo(t)
+	for _, iface := range []reflect.Type{
+		reflect.TypeFor[json.Marshaler](), reflect.TypeFor[encoding.TextMarshaler](),
+	} {
+		if t.Implements(iface) || ptr.Implements(iface) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasExportedField reports whether a struct type has a field encoding/json
+// could see.
+func hasExportedField(t reflect.Type) bool {
+	for f := range t.Fields() {
+		if f.IsExported() {
+			return true
+		}
+	}
+	return false
+}
+
+// frameState lays a frame's base state out as plain fields, leaving out what
+// it does not carry.
+func frameState(st frames.BaseState) map[string]any {
+	m := map[string]any{"ID": st.ID, "TypeName": st.TypeName}
+	if st.PTS != nil {
+		m["PTS"] = *st.PTS
+	}
+	if st.BroadcastSiblingID != nil {
+		m["BroadcastSiblingID"] = *st.BroadcastSiblingID
+	}
+	if len(st.Metadata) > 0 {
+		m["Metadata"] = st.Metadata
+	}
+	if st.TransportSource != "" {
+		m["TransportSource"] = st.TransportSource
+	}
+	if st.TransportDestination != "" {
+		m["TransportDestination"] = st.TransportDestination
+	}
+	if st.Interruptible != nil {
+		m["Interruptible"] = *st.Interruptible
+	}
+	return m
+}
+
+// frameStateFrom reads a frame's base state back from the plain fields
+// frameState wrote.
+func frameStateFrom(m map[string]any) frames.BaseState {
+	var st frames.BaseState
+	if id, ok := asUint64(m["ID"]); ok {
+		st.ID = id
+	}
+	st.TypeName, _ = m["TypeName"].(string)
+	if pts, ok := asUint64(m["PTS"]); ok {
+		st.PTS = new(int64(pts)) //nolint:gosec // carried from an int64
+	} else if pts, ok := m["PTS"].(int); ok {
+		st.PTS = new(int64(pts))
+	}
+	if sib, ok := asUint64(m["BroadcastSiblingID"]); ok {
+		st.BroadcastSiblingID = &sib
+	}
+	if md, ok := m["Metadata"].(map[string]any); ok {
+		st.Metadata = md
+	}
+	st.TransportSource, _ = m["TransportSource"].(string)
+	st.TransportDestination, _ = m["TransportDestination"].(string)
+	if in, ok := m["Interruptible"].(bool); ok {
+		st.Interruptible = &in
+	}
+	return st
+}
+
+// asUint64 reads a non-negative whole number back from what JSON decoding gave.
+func asUint64(v any) (uint64, bool) {
+	switch n := v.(type) {
+	case int:
+		if n < 0 {
+			return 0, false
+		}
+		return uint64(n), true
+	case uint64:
+		return n, true
+	default:
+		return 0, false
+	}
 }

@@ -1,6 +1,9 @@
 package bus
 
-import "github.com/gojargo/jargo/frames"
+import (
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/settings"
+)
 
 // Types is the registry every built-in bus message and frame is registered
 // in, and the one a serializer uses unless it is given another.
@@ -21,6 +24,12 @@ func init() {
 	// than by their fields.
 	Types.Register("LLMContext", &frames.LLMContext{})
 	Types.Register("ToolsSchema", &frames.ToolsSchema{})
+
+	// The settings an update frame carries, which cross as the fields they
+	// give.
+	Types.Register("LLMSettings", &settings.LLM{})
+	Types.Register("STTSettings", &settings.STT{})
+	Types.Register("TTSSettings", &settings.TTS{})
 
 	// The bus's own messages.
 	Types.Register("FrameMessage", &FrameMessage{})
