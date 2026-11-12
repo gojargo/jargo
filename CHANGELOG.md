@@ -795,6 +795,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   locale code read whatever is spoken, or "off" for text already spelled out.
   It is sent with each request when set.
 
+- **Cartesia Turns can tune and anticipate the end of a turn.**
+  `TurnsSTTConfig` gains `TurnStartThreshold`, `TurnEagerEndThreshold`,
+  `TurnEndThreshold` and `TurnEndTimeoutMs`, and the matching settings, sent
+  to the server when set; a change to any of them reopens the session. With
+  the new `EnableEagerEndOfTurn` the service answers the server's predicted
+  end of a turn with an `EagerTranscriptionFrame`, withdraws it with a
+  `UserTurnResponseCancelFrame` when the user resumes, and recommends the
+  eager turn strategies. A predicted end of turn is no longer also pushed as
+  an interim transcription by any streaming STT service, Deepgram Flux
+  included: its text is the prediction's, not a transcript.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -1364,6 +1364,12 @@ func (s *StreamService) EagerEndOfTurnPending() bool { return s.eagerPending }
 // emitTranscript pushes the text a result carries, and settles the finalize it
 // answers.
 func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
+	// A predicted end of turn carries the text it predicts on, which is the
+	// prediction's, not a transcript: it goes out as the eager frame, when eager
+	// end of turn is on, and as nothing otherwise.
+	if r.EagerEndOfTurn {
+		return
+	}
 	// Taken before the text is, since a provider with nothing left to say still
 	// answers the finalize it was asked for, and that answer is what says the
 	// transcript already sent closed the utterance.

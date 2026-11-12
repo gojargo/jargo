@@ -93,7 +93,8 @@ func turnsServer(t *testing.T, events []map[string]any) (endpoint string, query 
 // TestTurnsSTTRecv checks the turn lifecycle: an update is the running
 // transcript, the turn's end finalizes it, and the boundary-only events emit
 // nothing. An eager end is a prediction the server may retract, so it must not
-// finalize the turn.
+// finalize the turn: it is reported as a prediction, and a resume as its
+// withdrawal.
 func TestTurnsSTTRecv(t *testing.T) {
 	endpoint, query := turnsServer(t, []map[string]any{
 		{"type": "connected", "request_id": "r1"},
@@ -119,16 +120,22 @@ func TestTurnsSTTRecv(t *testing.T) {
 
 	// The turn boundaries the server detects are reported alongside the text, as
 	// proposals for the pipeline's turn strategies to resolve.
+	// The eager end and the resume are reported as a prediction and its
+	// withdrawal, which the service answers only with eager end of turn on.
 	want := []struct {
 		text      string
 		final     bool
 		endOfTurn bool
 		speech    stt.SpeechState
+		eager     bool
+		withdrawn bool
 	}{
-		{"", false, false, stt.SpeechStarted},
-		{"hello", false, false, stt.SpeechUnknown},
-		{"hello there friend", false, false, stt.SpeechUnknown},
-		{"hello there friend", true, true, stt.SpeechStopped},
+		{"", false, false, stt.SpeechStarted, false, false},
+		{"hello", false, false, stt.SpeechUnknown, false, false},
+		{"hello there", false, false, stt.SpeechUnknown, true, false},
+		{"", false, false, stt.SpeechUnknown, false, true},
+		{"hello there friend", false, false, stt.SpeechUnknown, false, false},
+		{"hello there friend", true, true, stt.SpeechStopped, false, false},
 	}
 	for i, w := range want {
 		res, rerr := stream.Recv()
@@ -138,10 +145,11 @@ func TestTurnsSTTRecv(t *testing.T) {
 		if len(res) != 1 {
 			t.Fatalf("Recv %d returned %d results, want 1", i, len(res))
 		}
-		if res[0].Text != w.text || res[0].Final != w.final || res[0].EndOfTurn != w.endOfTurn ||
-			res[0].Speech != w.speech {
-			t.Errorf("result %d = %+v, want text %q final=%v endOfTurn=%v speech=%v",
-				i, res[0], w.text, w.final, w.endOfTurn, w.speech)
+		r := res[0]
+		if r.Text != w.text || r.Final != w.final || r.EndOfTurn != w.endOfTurn || r.Speech != w.speech ||
+			r.EagerEndOfTurn != w.eager || r.EagerEndOfTurnWithdrawn != w.withdrawn {
+			t.Errorf("result %d = %+v, want text %q final=%v endOfTurn=%v speech=%v eager=%v withdrawn=%v",
+				i, r, w.text, w.final, w.endOfTurn, w.speech, w.eager, w.withdrawn)
 		}
 	}
 
@@ -387,9 +395,9 @@ func TestTurnsSTTReportsTheTurnEvents(t *testing.T) {
 	}
 	defer func() { _ = stream.Close() }()
 
-	// Three results carry text or a boundary; the eager end and the resume reach
-	// the listeners without producing one.
-	for range 3 {
+	// Five results: the start, the update, the eager end and its withdrawal,
+	// and the end.
+	for range 5 {
 		if _, err := stream.Recv(); err != nil {
 			t.Fatalf("Recv: %v", err)
 		}

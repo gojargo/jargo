@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,6 +84,23 @@ type TurnsSTTConfig struct {
 	// binds them to a connection, so changing them while the pipeline runs
 	// reopens the session.
 	Keyterm []string
+	// TurnStartThreshold, TurnEagerEndThreshold and TurnEndThreshold tune the
+	// server's turn detection: how sure it must be that a turn started, is
+	// predicted to have ended, and ended. TurnEndTimeoutMs is how many
+	// milliseconds after the user stops speaking it ends the turn, between 640
+	// and 11200. Nil leaves each to Cartesia, whose turn end timeout is 5600.
+	// They are bound to a connection, so changing one while the pipeline runs
+	// reopens the session.
+	TurnStartThreshold    *float64
+	TurnEagerEndThreshold *float64
+	TurnEndThreshold      *float64
+	TurnEndTimeoutMs      *int
+	// EnableEagerEndOfTurn answers the server's predicted end of a turn, its
+	// turn.eager_end, with an EagerTranscriptionFrame, and withdraws it with a
+	// UserTurnResponseCancelFrame when the user resumes. The service then
+	// recommends the eager turn strategies, which generate a response ahead of
+	// the committed end of turn. Off by default.
+	EnableEagerEndOfTurn bool
 	// WatchdogMinTimeout is the shortest gap in the audio the server is left to
 	// sit through mid-turn before silence is submitted. The server decides the
 	// end of a turn from the audio it is fed, so a turn it has opened never ends
@@ -155,6 +173,20 @@ type TurnsSTTSettings struct {
 	// Keyterm biases transcription towards the given terms or phrases, sent as
 	// repeated keyterm query parameters.
 	Keyterm settings.Opt[[]string] `settings:"keyterm"`
+	// The turn detection thresholds and timeout, as TurnsSTTConfig describes
+	// them.
+	TurnStartThreshold    settings.Opt[float64] `settings:"turn_start_threshold"`
+	TurnEagerEndThreshold settings.Opt[float64] `settings:"turn_eager_end_threshold"`
+	TurnEndThreshold      settings.Opt[float64] `settings:"turn_end_threshold"`
+	TurnEndTimeoutMs      settings.Opt[int]     `settings:"turn_end_timeout_ms"`
+}
+
+// turnDetectionFields are the turn detection settings, named as Cartesia
+// documents them, in the order they are sent. Each is bound to a connection.
+//
+//nolint:gochecknoglobals // a fixed list
+var turnDetectionFields = []string{
+	"turn_start_threshold", "turn_eager_end_threshold", "turn_end_threshold", "turn_end_timeout_ms",
 }
 
 // newTurnsConnector builds the connector with its settings seeded, which is the
@@ -171,7 +203,35 @@ func newTurnsSettings(cfg TurnsSTTConfig) *TurnsSTTSettings {
 	if len(cfg.Keyterm) > 0 {
 		s.Keyterm = settings.Set(cfg.Keyterm)
 	}
+	setIf(&s.TurnStartThreshold, cfg.TurnStartThreshold)
+	setIf(&s.TurnEagerEndThreshold, cfg.TurnEagerEndThreshold)
+	setIf(&s.TurnEndThreshold, cfg.TurnEndThreshold)
+	setIf(&s.TurnEndTimeoutMs, cfg.TurnEndTimeoutMs)
 	return s
+}
+
+// setIf gives a setting the value v points to, when it points to one.
+func setIf[T any](o *settings.Opt[T], v *T) {
+	if v != nil {
+		*o = settings.Set(*v)
+	}
+}
+
+// turnDetectionQuery adds the turn detection settings that are set to q.
+func (c *turnsConnector) turnDetectionQuery(q url.Values) {
+	floats := map[string]settings.Opt[float64]{
+		"turn_start_threshold":     c.live.TurnStartThreshold,
+		"turn_eager_end_threshold": c.live.TurnEagerEndThreshold,
+		"turn_end_threshold":       c.live.TurnEndThreshold,
+	}
+	for _, name := range turnDetectionFields {
+		if v, ok := floats[name].Value(); ok {
+			q.Set(name, pythonFloat(v))
+		}
+	}
+	if ms, ok := c.live.TurnEndTimeoutMs.Value(); ok {
+		q.Set("turn_end_timeout_ms", strconv.Itoa(ms))
+	}
 }
 
 // Settings is the configuration a caller may change while the pipeline runs.
@@ -183,23 +243,34 @@ func (c *turnsConnector) Settings() any { return c.live }
 // the session cannot be changed on one already running, and a caller who asked
 // should hear that rather than assume it took effect.
 func (c *turnsConnector) UpdateSettings(_ context.Context, changed settings.Changed) (bool, error) {
-	if rest := changed.Except("keyterm"); len(rest) > 0 {
+	bound := append([]string{"keyterm"}, turnDetectionFields...)
+	if rest := changed.Except(bound...); len(rest) > 0 {
 		slog.Warn("runtime settings update is not supported by this service",
 			"service", "CartesiaTurnsSTT", "fields", strings.Join(rest, ", "))
 	}
-	return changed.Has("keyterm"), nil
+	return slices.ContainsFunc(bound, changed.Has), nil
 }
+
+// EagerEndOfTurn implements stt.EagerEndOfTurner: whether the server's
+// predicted end of a turn is answered.
+func (c *turnsConnector) EagerEndOfTurn() bool { return c.cfg.EnableEagerEndOfTurn }
 
 // Metadata tells downstream processors the service detects turns itself, so the
 // user aggregator adopts external turn strategies rather than running its own.
+//
+// With eager end of turn on it recommends the eager strategies instead, which
+// answer the server's predicted end of a turn while the turn is still open.
 func (c *turnsConnector) Metadata() stt.Metadata {
 	noTTFS := false
+	external := turns.ExternalStrategiesConfig{EnableInterruptions: c.cfg.ShouldInterrupt}
+	strategies := turns.ExternalStrategies(external)
+	if c.EagerEndOfTurn() {
+		strategies = turns.EagerStrategies(turns.EagerStrategiesConfig{ExternalStrategiesConfig: external})
+	}
 	return stt.Metadata{
-		UserTurnStrategies: turns.ExternalStrategies(turns.ExternalStrategiesConfig{
-			EnableInterruptions: c.cfg.ShouldInterrupt,
-		}),
-		SupportsTTFS: &noTTFS,
-		Model:        c.live.Model.Or(c.cfg.Model),
+		UserTurnStrategies: strategies,
+		SupportsTTFS:       &noTTFS,
+		Model:              c.live.Model.Or(c.cfg.Model),
 	}
 }
 
@@ -220,6 +291,7 @@ func (c *turnsConnector) Connect(ctx context.Context, sampleRate int) (stt.Strea
 	q.Set("model", c.live.Model.Or(c.cfg.Model))
 	q.Set("encoding", defaultSTTEncoding)
 	q.Set("sample_rate", strconv.Itoa(sampleRate))
+	c.turnDetectionQuery(q)
 	// The turn-detecting service honors keyterms on every model it serves, so
 	// they go out without the model check the transcription service makes.
 	for _, term := range prepareKeyterms(c.live.Keyterm.Or(nil)) {
@@ -438,16 +510,17 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 				Text: m.Transcript, Final: true, EndOfTurn: true, Speech: stt.SpeechStopped, Language: turnsLanguage,
 			}}, nil
 		case turnsEagerEnd:
-			// A prediction the server may retract, so it opens no boundary here.
-			// It is reported for an application that wants to act on it early.
+			// A prediction the server may retract, so it opens no boundary
+			// here. It is answered when eager end of turn is on, which the
+			// service decides, and reported to an application that wants it.
 			call(s.cfg.OnTurnEagerEnd, m.Transcript)
-			continue
+			return []stt.Result{{Text: m.Transcript, EagerEndOfTurn: true, Language: turnsLanguage}}, nil
 		case turnsResume:
 			// The eager end above, retracted.
 			if s.cfg.OnTurnResume != nil {
 				s.cfg.OnTurnResume()
 			}
-			continue
+			return []stt.Result{{EagerEndOfTurnWithdrawn: true}}, nil
 		case turnsError:
 			// Reported, and the session carries on: an error on a confirmed
 			// session is the server's to recover from, and the connection is
