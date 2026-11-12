@@ -616,6 +616,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   likeliest first, signals in the order first read. The merge is
   `expressive.MergePerception`.
 
+- **RNNoise starts afresh when filtering is switched back on.** At a
+  transport rate other than 48 kHz, switching the RNNoise filter off and on
+  again resumed the conversion to and from 48 kHz with the tail its
+  resamplers held from before, so a few milliseconds of stale audio were
+  spliced ahead of the new. Switching it back on now discards that tail.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

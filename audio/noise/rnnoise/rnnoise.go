@@ -171,14 +171,29 @@ func (f *filter) Stop(context.Context) error {
 
 // ProcessFrame applies a runtime control frame. A FilterEnableFrame switches
 // denoising on or off, leaving the RNNoise state in place so it can be switched
-// back without reloading.
+// back without reloading. Switching it back on discards the audio the
+// resamplers held from before it was switched off: the audio since went through
+// unconverted, so what they held would be spliced in stale.
 func (f *filter) ProcessFrame(_ context.Context, fr frames.FilterControlFrame) error {
 	if enable, ok := fr.(*frames.FilterEnableFrame); ok {
 		f.mu.Lock()
+		if enable.Enable && !f.filtering {
+			f.resetResamplersLocked()
+		}
 		f.filtering = enable.Enable
 		f.mu.Unlock()
 	}
 	return nil
+}
+
+// resetResamplersLocked discards the audio the resamplers hold. The caller
+// holds f.mu.
+func (f *filter) resetResamplersLocked() {
+	for _, r := range []*resample.Resampler{f.up, f.down} {
+		if r != nil {
+			r.Clear()
+		}
+	}
 }
 
 // Filter denoises pcm. It resamples to 48 kHz, processes every complete 480-sample
