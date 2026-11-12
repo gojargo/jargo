@@ -18,9 +18,11 @@ import (
 	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // maxTurnAttempts bounds how many times a turn is retried after a recoverable
@@ -699,3 +701,7 @@ func (s *Service) reportUsage(ctx context.Context, state *streamState) {
 	}
 	_ = s.PushTokenUsage(ctx, state.usage.tokenUsage())
 }
+
+// ClassifyError implements processor.ErrorClassifier, for the one-shot
+// inferences this service answers over HTTP.
+func (s *Service) ClassifyError(err error) errs.Category { return apierror.Classify(err) }

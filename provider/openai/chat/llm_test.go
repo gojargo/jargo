@@ -545,3 +545,45 @@ func TestEncodeBodyWithoutExtra(t *testing.T) {
 		t.Errorf("body = %v, want the modeled fields", got)
 	}
 }
+
+// TestContentFilterKeepsTheLLMUsable checks a request a content filter refused
+// is classified as content the provider refused, which leaves the service
+// usable for the next turn, while any other 400 is the permanent invalid request
+// its status says.
+func TestContentFilterKeepsTheLLMUsable(t *testing.T) {
+	cases := []struct {
+		name, body string
+		want       errs.Category
+	}{
+		{
+			"content filter",
+			`{"error":{"message":"The response was filtered","param":"prompt","code":"content_filter","status":400}}`,
+			errs.ContentFiltered,
+		},
+		{
+			"other bad request",
+			`{"error":{"message":"Invalid value","type":"invalid_request_error","code":"invalid_value"}}`,
+			errs.InvalidRequest,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(c.body))
+			}))
+			defer srv.Close()
+			svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
+			err := svc.Generate(t.Context(), frames.NewLLMContext(""), func(string) error { return nil })
+			ef := frames.NewErrorFrame(err.Error())
+			ef.Err = err
+			svc.PushErrorFrame(t.Context(), ef, false)
+			if ef.Category != c.want {
+				t.Errorf("error frame category = %q, want %q", ef.Category, c.want)
+			}
+			if usable := svc.Usable(); usable != (c.want == errs.ContentFiltered) {
+				t.Errorf("Usable = %v after a %s", usable, c.name)
+			}
+		})
+	}
+}

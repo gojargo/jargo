@@ -18,6 +18,7 @@ import (
 	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
 	"github.com/gojargo/jargo/service/llm"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -399,8 +400,7 @@ func (s *LLMService) generate(ctx context.Context, reqBody chatRequest, sink llm
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return apierror.FromResponse(resp, errStatus)
 	}
 	return s.consume(ctx, resp.Body, sink)
 }
@@ -623,8 +623,7 @@ func (s *LLMService) RunInference(
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return "", apierror.FromResponse(resp, errStatus)
 	}
 	var completion struct {
 		Choices []struct {
@@ -683,3 +682,8 @@ func (s *LLMService) SupportsResponseSchema() bool { return !s.noResponseSchema 
 func (s *LLMService) ModelSupportsResponseSchema(model string) bool {
 	return openai.ModelSupportsResponseSchema(model)
 }
+
+// ClassifyError implements processor.ErrorClassifier: a content filter's
+// refusal is content the provider refused, not the permanent invalid request
+// its status says.
+func (s *LLMService) ClassifyError(err error) errs.Category { return apierror.Classify(err) }

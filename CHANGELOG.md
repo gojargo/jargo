@@ -155,6 +155,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (unfinalized) and a proposed stop, and speech after the drop is a turn of its
   own. A stream that keeps state for a session implements the new
   `stt.SessionEnder` to close it when the session ends on its own.
+- **A content filter's refusal no longer writes off an OpenAI LLM.** A request
+  OpenAI, Azure OpenAI or a moderation proxy refused with a 400 whose code is
+  `content_filter` was classified as a permanent invalid request, so the LLM was
+  marked unusable for the rest of the session: a switcher failed over, and an
+  end-on-unusable policy ended the call. The new `errors.ContentFiltered`
+  category, which is not permanent, now covers it, and the OpenAI chat and
+  Responses services classify their refusals by the error code the body names.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

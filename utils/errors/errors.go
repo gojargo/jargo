@@ -47,6 +47,10 @@ const (
 	// service on behalf of code it invoked (a tool handler, say) whose failures
 	// say nothing about the service's own health.
 	Application Category = "application"
+	// ContentFiltered means the provider's content policy rejected the
+	// request's content. The failure is about that content, not the service's
+	// health, but no response is coming for the request.
+	ContentFiltered Category = "content_filtered"
 )
 
 // IsPermanent reports whether the failure will keep recurring until something
@@ -59,7 +63,7 @@ func (c Category) IsPermanent() bool {
 	switch c {
 	case Authentication, Authorization, InvalidRequest:
 		return true
-	case Unset, Unknown, RateLimit, Quota, Connectivity, Server, Application:
+	case Unset, Unknown, RateLimit, Quota, Connectivity, Server, Application, ContentFiltered:
 		return false
 	default:
 		return false

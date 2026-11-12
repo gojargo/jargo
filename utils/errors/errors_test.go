@@ -174,7 +174,7 @@ func TestPermanentCategories(t *testing.T) {
 	}
 	for _, c := range []errs.Category{
 		errs.Unset, errs.Unknown, errs.RateLimit, errs.Quota,
-		errs.Connectivity, errs.Server, errs.Application,
+		errs.Connectivity, errs.Server, errs.Application, errs.ContentFiltered,
 	} {
 		if c.IsPermanent() {
 			t.Errorf("%q should not be permanent", c)
