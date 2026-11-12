@@ -1,7 +1,6 @@
 package responses
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -153,15 +152,8 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/responses", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
-
 	s.StartTTFBMetrics()
-	resp, err := s.http.Do(req)
+	resp, err := s.cfg.post(ctx, s.http, body)
 	if err != nil {
 		return llm.AsCompletionTimeout(ctx, err)
 	}

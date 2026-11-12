@@ -97,6 +97,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   retrying with a permanent error (so a service switcher can fail over), and a
   failed connect is reported when it happens. A connection Cartesia closes
   gracefully after its idle timeout is still dialed again at once.
+- **The OpenAI chat and Responses HTTP services retry a request that may
+  succeed next time.** A rate limit, a server error or a dropped connection
+  ended the turn on the first attempt. Requests are now sent again up to twice,
+  as OpenAI's SDK clients do: on a 408, 409, 429 or 5xx (or whatever the
+  server's `x-should-retry` header says) and on a request that could not be
+  sent, after the wait the server asks for in `Retry-After` when it is under a
+  minute, or else a backoff from 0.5 seconds up to 8. Every OpenAI-compatible
+  chat endpoint gets the same.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

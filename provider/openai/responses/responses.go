@@ -30,6 +30,7 @@ import (
 	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
 	"github.com/gojargo/jargo/service/llm"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
@@ -412,16 +413,7 @@ func runInference(
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, cfg.BaseURL+"/responses", bytes.NewReader(raw),
-	)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-
-	resp, err := client.Do(req)
+	resp, err := cfg.post(ctx, client, raw)
 	if err != nil {
 		return "", llm.AsCompletionTimeout(ctx, err)
 	}
@@ -450,6 +442,23 @@ func runInference(
 		}
 	}
 	return out.String(), nil
+}
+
+// post sends a request body to the Responses endpoint over HTTP. A request that
+// fails for a reason that may not repeat is sent again, as OpenAI's SDK client
+// does.
+func (c Config) post(ctx context.Context, client *http.Client, body []byte) (*http.Response, error) {
+	return sdkretry.Do(ctx, client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(
+			ctx, http.MethodPost, c.BaseURL+"/responses", bytes.NewReader(body),
+		)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		return req, nil
+	})
 }
 
 // encodeBody marshals the request, merging any extra fields over the modeled

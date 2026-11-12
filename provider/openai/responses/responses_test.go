@@ -256,3 +256,37 @@ func TestNewRequestOmitsUnset(t *testing.T) {
 		t.Errorf("stream = %v, want true", m["stream"])
 	}
 }
+
+// TestHTTPRetriesARateLimitedTurn checks a turn the API refuses for now (a rate
+// limit, asking to wait a moment) is sent again rather than lost.
+func TestHTTPRetriesARateLimitedTurn(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Retry-After-Ms", "10")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, ev := range []string{
+			`{"type":"response.created","response":{"id":"resp_1"}}`,
+			`{"type":"response.output_text.delta","delta":"hi"}`,
+			`{"type":"response.completed","response":{"id":"resp_1"}}`,
+		} {
+			_, _ = w.Write([]byte("data: " + ev + "\n\n"))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	svc := NewHTTPLLM(Config{APIKey: "k", BaseURL: srv.URL})
+	svc.http = srv.Client()
+
+	var text string
+	err := svc.Generate(context.Background(), userConvo("hi"), func(s string) error {
+		text += s
+		return nil
+	})
+	if err != nil || text != "hi" || requests != 2 {
+		t.Errorf("turn = (%q, %v) after %d requests, want hi after a retry", text, err, requests)
+	}
+}

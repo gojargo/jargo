@@ -18,6 +18,7 @@ import (
 	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
 	"github.com/gojargo/jargo/service/llm"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
@@ -473,17 +474,19 @@ func (s *LLMService) sendOnce(ctx context.Context, body []byte, bound time.Durat
 		expired = time.AfterFunc(bound, cancel)
 	}
 
-	req, err := http.NewRequestWithContext(
-		attemptCtx, http.MethodPost, s.shaper.Endpoint(s.cfg.BaseURL), bytes.NewReader(body),
-	)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	s.shaper.Authorize(req, s.cfg.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.http.Do(req)
+	// A request that fails for a reason that may not repeat is sent again, as
+	// OpenAI's SDK client does.
+	resp, err := sdkretry.Do(attemptCtx, s.http, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(
+			attemptCtx, http.MethodPost, s.shaper.Endpoint(s.cfg.BaseURL), bytes.NewReader(body),
+		)
+		if err != nil {
+			return nil, err
+		}
+		s.shaper.Authorize(req, s.cfg.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		cancel()
 		// The parent still being live is what says the bound expired rather than

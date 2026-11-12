@@ -467,3 +467,27 @@ func TestRunInferenceBoundOnAnEndpointWithoutMaxCompletionTokens(t *testing.T) {
 		t.Errorf("max_completion_tokens = %v, want it left off", body["max_completion_tokens"])
 	}
 }
+
+// TestRetriesAServerErrorAsTheSDKDoes checks a completion the endpoint fails
+// with a server error is sent again rather than lost.
+func TestRetriesAServerErrorAsTheSDKDoes(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Retry-After-Ms", "10")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hi")
+	got, err := svc.RunInference(t.Context(), convo, llm.InferenceOptions{})
+	if err != nil || got != "ok" || requests != 2 {
+		t.Errorf("answer = (%q, %v) after %d requests, want ok after a retry", got, err, requests)
+	}
+}
