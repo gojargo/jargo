@@ -98,6 +98,9 @@ type Websocket struct {
 	// interruptible says the service resets its connection on an interruption
 	// while the bot is speaking. See NewInterruptibleWebsocket.
 	interruptible bool
+	// keepsContexts says replacing or closing the connection leaves the open
+	// audio contexts alone. See NewWebsocketConnection.
+	keepsContexts bool
 
 	mu sync.Mutex
 	// receiveStop ends the receive loop, and receiveDone is closed once it has
@@ -143,6 +146,18 @@ func NewInterruptibleWebsocket(b *Base, svc WebsocketService, opts wsservice.Opt
 	return w
 }
 
+// NewWebsocketConnection builds the connection lifecycle of a TTS service that
+// holds a websocket open for the call but keeps no provider state per audio
+// context: the connection carries one session, and the audio it delivers is
+// labeled with the context playing. Everything else is as NewWebsocket, but
+// replacing or closing the connection leaves the open audio contexts alone, to
+// end as they would on their own.
+func NewWebsocketConnection(b *Base, svc WebsocketService, opts wsservice.Options) *Websocket {
+	w := NewWebsocket(b, svc, opts)
+	w.keepsContexts = true
+	return w
+}
+
 // Options are the websocket options the service was configured with.
 func (w *Websocket) Options() wsservice.Options { return w.opts }
 
@@ -160,10 +175,11 @@ func (w *Websocket) Connect() {
 	w.ws.Connect()
 }
 
-// Disconnect ends the audio contexts of the connection about to be closed and
-// marks the disconnect as deliberate, so the receive loop ending is read as the
-// shutdown it is rather than as a connection to restore. A service calls it
-// first thing in its own Disconnect, before closing the socket.
+// Disconnect ends the audio contexts of the connection about to be closed
+// (unless the service keeps none, see NewWebsocketConnection) and marks the
+// disconnect as deliberate, so the receive loop ending is read as the shutdown
+// it is rather than as a connection to restore. A service calls it first thing
+// in its own Disconnect, before closing the socket.
 func (w *Websocket) Disconnect() {
 	w.closeConnectionContexts()
 	w.ws.Disconnect()
@@ -180,6 +196,9 @@ func (w *Websocket) Disconnect() {
 // the text at hand, does not come through here, so the context it sends to
 // stays open.
 func (w *Websocket) closeConnectionContexts() {
+	if w.keepsContexts {
+		return
+	}
 	w.tts.ReplaceConnection()
 }
 

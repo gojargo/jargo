@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`tts.NewWebsocketConnection` is the websocket base for a provider whose
+  connection keeps no state per audio context.** It is `tts.NewWebsocket` in
+  every way (receive loop, reconnects, connection errors, disconnecting at the
+  end of the pipeline, no processing metric), except that replacing or
+  closing the connection leaves the open audio contexts alone.
+
 - **`tts.Websocket` is the base of every TTS service that speaks over a
   WebSocket held open for the call.** A service builds it with
   `tts.NewWebsocket` (or `tts.NewInterruptibleWebsocket`) from its

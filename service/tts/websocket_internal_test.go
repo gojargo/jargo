@@ -734,3 +734,23 @@ func (s *wsSynth) reconnectsWithDials() []string {
 	defer s.mu.Unlock()
 	return slices.Clone(s.calls)
 }
+
+// TestAConnectionWithoutContextStateLeavesTheContextsAlone checks a service
+// whose connection keeps no state per context continues the turn on the same
+// context when the connection is replaced.
+func TestAConnectionWithoutContextStateLeavesTheContextsAlone(t *testing.T) {
+	syn := newWSSynth()
+	syn.reconnectAfter = 1
+	b := New("WebsocketTTS", syn)
+	b.stopFrameTimeout = 300 * time.Millisecond
+	syn.ws = NewWebsocketConnection(b, syn, wsservice.Options{})
+	down := speakTwoSentences(t, b)
+
+	audio := audioBySentence(down)
+	if len(audio) != 2 || audio[1] == nil || audio[2] == nil {
+		t.Fatalf("audio by sentence = %v, want sentences 1 and 2", audio)
+	}
+	if audio[1][0].ContextID != audio[2][0].ContextID {
+		t.Errorf("contexts = %q, %q, want the same one", audio[1][0].ContextID, audio[2][0].ContextID)
+	}
+}
