@@ -1,9 +1,11 @@
 package cartesia
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/gojargo/jargo/service/tts"
+	uctx "github.com/gojargo/jargo/utils/context"
 )
 
 // timedSynthesizer must satisfy tts.WordTimestamps so the base takes the
@@ -53,27 +55,68 @@ func TestEmitWordTimingsStripsMarkupAndKeepsTokens(t *testing.T) {
 	}
 }
 
-// A language written without spaces has its characters reported separately but
-// grouped into one message. The message is the unit a reader recognizes, so it
-// is joined into one token at the offset of its first character, and it says it
-// carries its own spacing so nothing adds any.
-func TestEmitWordTimingsJoinsASpacelessMessage(t *testing.T) {
-	in := &wsWordTimings{
-		Words: []string{"こ", "ん", "に", "ち", "は", "。"},
-		Start: []float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+// A language written without spaces is reported one character at a time, and
+// each character keeps its own start: one entry in is one token out. The base
+// is asked to merge punctuation into the character before it, and told the
+// tokens carry their own spacing.
+func TestEmitWordTimingsKeepsOneEntryPerCharacter(t *testing.T) {
+	cases := []struct {
+		name  string
+		words []string
+		start []float64
+	}{
+		{"Japanese", []string{"こ", "ん", "に", "ち", "は", "。"}, []float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5}},
+		{"Chinese", []string{"你", "好", "。"}, []float64{0.0, 0.1, 0.2}},
 	}
-	got, asked := normalizeWordTimings(in, true)
-	if len(got) != 1 {
-		t.Fatalf("got %d tokens, want the message joined into one", len(got))
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, asked := normalizeWordTimings(&wsWordTimings{Words: c.words, Start: c.start}, true)
+			if len(got) != len(c.words) {
+				t.Fatalf("got %v, want one token per character", got)
+			}
+			for i, w := range got {
+				if w.Word != c.words[i] || w.Offset != c.start[i] {
+					t.Errorf("token %d = %v, want %q at %v", i, w, c.words[i], c.start[i])
+				}
+			}
+			if !asked.IncludesInterFrameSpaces || !asked.PreMergeTokens {
+				t.Errorf("options = %+v, want the tokens merged and carrying their own spacing", asked)
+			}
+		})
 	}
-	if got[0].Word != "こんにちは。" {
-		t.Fatalf("token = %q, want the whole message", got[0].Word)
+}
+
+// A spaced language keeps its words as reported, a Latin word beside a Korean
+// one included, and nothing is merged.
+func TestEmitWordTimingsKeepsKoreanWords(t *testing.T) {
+	got, asked := normalizeWordTimings(&wsWordTimings{
+		Words: []string{"AI", "어시스턴트입니다."}, Start: []float64{3.7026982, 4.1999383},
+	}, false)
+	if len(got) != 2 || got[0].Word != "AI" || got[1].Word != "어시스턴트입니다." ||
+		got[1].Offset != 4.1999383 {
+		t.Errorf("got %v, want both words as reported", got)
 	}
-	if got[0].Offset != 0.0 {
-		t.Fatalf("offset = %v, want the first character's, 0", got[0].Offset)
+	if asked.PreMergeTokens || asked.IncludesInterFrameSpaces {
+		t.Errorf("options = %+v, want none for a spaced language", asked)
 	}
-	if !asked.IncludesInterFrameSpaces {
-		t.Error("the message was reported as needing spacing supplied around it")
+}
+
+// Merged as the base merges them, a sentence's final mark attaches to the
+// character before it, and one that opens the next message is dropped rather
+// than reported as a word of its own.
+func TestJapaneseMarksAttachToThePrecedingCharacter(t *testing.T) {
+	var words []string
+	for _, batch := range [][]string{{"で", "す", "。"}, {"歯", "科"}} {
+		got, opts := normalizeWordTimings(&wsWordTimings{Words: batch, Start: make([]float64, len(batch))}, true)
+		if opts.PreMergeTokens {
+			got = uctx.MergePunctTokens(got)
+		}
+		for _, w := range got {
+			words = append(words, w.Word)
+		}
+	}
+	if want := []string{"で", "す。", "歯", "科"}; !slices.Equal(words, want) {
+		t.Errorf("words = %q, want %q", words, want)
 	}
 }
 

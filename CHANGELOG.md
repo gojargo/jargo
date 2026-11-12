@@ -134,7 +134,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   ("es-MX", "en-GB", "pt-BR"), sends Norwegian Bokmal as "no" and Filipino as
   "tl", and falls back to the base code only for a locale Cartesia does not
   list. Chinese and Japanese are recognized by their base code, so a regional
-  "ja-JP" still gets word timings per message.
+  "ja-JP" still has its word timings handled as Japanese.
+- **Cartesia TTS times each Chinese and Japanese character on its own.** A
+  timestamps message was joined into one token at the time of its first
+  character, so word progress moved a message at a time, an interruption kept
+  characters that were never played, and a sentence's final mark arriving alone
+  ("？") became a word of its own and reached the conversation twice. Each
+  character now keeps its own time, and a punctuation mark is merged into the
+  character before it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

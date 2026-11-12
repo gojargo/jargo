@@ -229,8 +229,7 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // spacelessLanguage reports whether the configured language is written without
 // spaces between words. Chinese and Japanese are, and this provider reports
-// their characters separately but grouped into one message, which is what makes
-// the message rather than the character the unit worth reporting.
+// their characters one at a time, with each punctuation mark on its own.
 func (s *synthesizer) spacelessLanguage() bool {
 	code := s.live.Language.Or(cartesiaLanguage(s.cfg.Language))
 	base, _, _ := strings.Cut(code, "-")
@@ -832,34 +831,22 @@ func alnumAt(text string, i int) bool {
 
 func isAlnum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 
-// normalizeWordTimings turns one batch of reported timings into the tokens the
-// base tracks words with.
+// normalizeWordTimings turns one timestamps message into the tokens to report:
+// each entry keeps its own start, with Cartesia's markup taken off and an
+// entry left empty by that dropped, so one entry in is at most one token out,
+// whatever the language.
 //
-// The markup this provider was given comes back in the tokens it reports, and
-// has to come off before anything downstream tries to match them against the
-// text. A language written without spaces between words has its characters
-// reported separately but grouped into one message, so the message is joined
-// into a single token at the offset of its first character: that is the unit a
-// reader of the language recognizes, where the characters alone are not.
+// Cartesia reports Chinese and Japanese one character at a time, with each
+// punctuation mark as a token of its own. For those the base is asked to merge
+// a mark into the character before it ("す", "。" read "す。"), and told the
+// tokens carry their own spacing.
 func normalizeWordTimings(
 	wt *wsWordTimings, spaceless bool,
 ) ([]uctx.WordTiming, tts.WordTimingOptions) {
-	opts := tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless}
+	opts := tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless, PreMergeTokens: spaceless}
 	if wt == nil {
 		return nil, opts
 	}
-
-	if spaceless {
-		var combined strings.Builder
-		for _, w := range wt.Words {
-			combined.WriteString(stripCartesiaTags(w))
-		}
-		if combined.Len() == 0 || len(wt.Start) == 0 {
-			return nil, opts
-		}
-		return []uctx.WordTiming{{Word: combined.String(), Offset: wt.Start[0]}}, opts
-	}
-
 	batch := make([]uctx.WordTiming, 0, len(wt.Words))
 	for i, w := range wt.Words {
 		cleaned := stripCartesiaTags(w)
