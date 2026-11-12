@@ -218,7 +218,7 @@ func (s *Summarizer) requestSummarization(ctx context.Context, override *frames.
 	slog.Debug("requesting a conversation summary", "request_id", requestID)
 
 	request := frames.NewLLMContextSummaryRequestFrame(requestID, s.context)
-	request.MinMessagesToKeep = cfg.MinMessagesAfterSummary
+	request.MinMessagesToKeep = *cfg.MinMessagesAfterSummary
 	request.TargetContextTokens = cfg.TargetContextTokens
 	request.SummarizationPrompt = cfg.SummaryPrompt()
 	request.SummarizationTimeout = cfg.SummarizationTimeout
@@ -297,7 +297,7 @@ func (s *Summarizer) validateSummaryContext(lastSummarizedIndex int) bool {
 	if lastSummarizedIndex >= len(messages) {
 		return false
 	}
-	minKeep := s.autoConfig.SummaryConfig.MinMessagesAfterSummary
+	minKeep := *s.autoConfig.SummaryConfig.MinMessagesAfterSummary
 	remaining := len(messages) - 1 - lastSummarizedIndex
 	return remaining >= minKeep
 }

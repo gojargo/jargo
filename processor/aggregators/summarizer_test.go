@@ -136,7 +136,7 @@ func TestSummaryResultIsApplied(t *testing.T) {
 	convo := summarizerFixture()
 	cfg := frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
-		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: 2},
+		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: new(2)},
 	}
 	s := aggregators.NewSummarizer(convo, cfg, true)
 	defer s.Cleanup(t.Context())
@@ -197,7 +197,7 @@ func TestStaleSummaryResultIsIgnored(t *testing.T) {
 	convo := summarizerFixture()
 	cfg := frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
-		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: 2},
+		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: new(2)},
 	}
 	s := aggregators.NewSummarizer(convo, cfg, true)
 	defer s.Cleanup(t.Context())
@@ -256,7 +256,7 @@ func TestManualSummarizationWithConfigOverride(t *testing.T) {
 		MaxContextTokens: new(100000),
 		SummaryConfig: frames.SummaryConfig{
 			TargetContextTokens:     6000,
-			MinMessagesAfterSummary: 4,
+			MinMessagesAfterSummary: new(4),
 		},
 	}
 	s := aggregators.NewSummarizer(convo, cfg, true)
@@ -266,7 +266,7 @@ func TestManualSummarizationWithConfigOverride(t *testing.T) {
 	addUserMessages(convo, 5, "Message")
 
 	f := frames.NewLLMSummarizeContextFrame()
-	f.Config = &frames.SummaryConfig{TargetContextTokens: 500, MinMessagesAfterSummary: 1}
+	f.Config = &frames.SummaryConfig{TargetContextTokens: 500, MinMessagesAfterSummary: new(1)}
 	s.ProcessFrame(t.Context(), f)
 
 	if len(*got) != 1 {
@@ -304,7 +304,7 @@ func TestSummaryMessageRoleIsUser(t *testing.T) {
 	convo := summarizerFixture()
 	cfg := frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
-		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: 2},
+		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: new(2)},
 	}
 	s := aggregators.NewSummarizer(convo, cfg, true)
 	defer s.Cleanup(t.Context())
@@ -330,7 +330,7 @@ func TestSummaryMessageDefaultTemplate(t *testing.T) {
 	convo := summarizerFixture()
 	cfg := frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
-		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: 2},
+		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: new(2)},
 	}
 	s := aggregators.NewSummarizer(convo, cfg, true)
 	defer s.Cleanup(t.Context())
@@ -355,7 +355,7 @@ func TestSummaryMessageCustomTemplate(t *testing.T) {
 	cfg := frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
 		SummaryConfig: frames.SummaryConfig{
-			MinMessagesAfterSummary: 2,
+			MinMessagesAfterSummary: new(2),
 			SummaryMessageTemplate:  "<summary>{summary}</summary>",
 		},
 	}
@@ -381,7 +381,7 @@ func TestOnSummaryAppliedEvent(t *testing.T) {
 	convo := summarizerFixture()
 	cfg := frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
-		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: 2},
+		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: new(2)},
 	}
 	s := aggregators.NewSummarizer(convo, cfg, true)
 	defer s.Cleanup(t.Context())
@@ -421,7 +421,7 @@ func TestOnSummaryAppliedNotFiredOnError(t *testing.T) {
 	convo := summarizerFixture()
 	cfg := frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
-		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: 2},
+		SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: new(2)},
 	}
 	s := aggregators.NewSummarizer(convo, cfg, true)
 	defer s.Cleanup(t.Context())

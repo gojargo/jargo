@@ -12,14 +12,27 @@ func TestSummaryConfigDefaults(t *testing.T) {
 	if c.TargetContextTokens != 6000 {
 		t.Errorf("TargetContextTokens = %d, want 6000", c.TargetContextTokens)
 	}
-	if c.MinMessagesAfterSummary != 4 {
-		t.Errorf("MinMessagesAfterSummary = %d, want 4", c.MinMessagesAfterSummary)
+	if c.MinMessagesAfterSummary == nil || *c.MinMessagesAfterSummary != 4 {
+		t.Errorf("MinMessagesAfterSummary = %v, want 4", c.MinMessagesAfterSummary)
 	}
 	if c.SummaryMessageTemplate != DefaultSummaryMessageTemplate {
 		t.Errorf("SummaryMessageTemplate = %q", c.SummaryMessageTemplate)
 	}
 	if c.SummarizationTimeout != DefaultSummarizationTimeout {
 		t.Errorf("SummarizationTimeout = %v, want %v", c.SummarizationTimeout, DefaultSummarizationTimeout)
+	}
+}
+
+// TestSummaryConfigKeepsAnExplicitZero checks zero messages kept is a setting
+// of its own, summarizing everything after the system prompt, rather than
+// standing for the default, and that a negative count is rejected.
+func TestSummaryConfigKeepsAnExplicitZero(t *testing.T) {
+	c := SummaryConfig{MinMessagesAfterSummary: new(0)}.WithDefaults()
+	if c.MinMessagesAfterSummary == nil || *c.MinMessagesAfterSummary != 0 {
+		t.Errorf("MinMessagesAfterSummary = %v, want the 0 asked for", c.MinMessagesAfterSummary)
+	}
+	if err := (SummaryConfig{MinMessagesAfterSummary: new(-1)}).Validate(); err == nil {
+		t.Error("Validate accepted a negative count of messages to keep")
 	}
 }
 

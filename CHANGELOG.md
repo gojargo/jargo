@@ -26,6 +26,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   message, and a message tagged for Responses alone was never read.
   **Breaking:** a provider-specific message written for the Responses services
   must now be tagged `openai_responses`.
+- **`SummaryConfig.MinMessagesAfterSummary` is a pointer.** Zero stood for the
+  default of four, so keeping no message after a summary could not be asked
+  for. Nil now means the default, and zero summarizes every message after the
+  system prompt. **Breaking:** set it with `new(n)`.
 
 ### Fixed
 

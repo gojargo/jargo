@@ -97,7 +97,7 @@ func dedicatedConfig(inf llm.Inferencer) frames.AutoSummarizationConfig {
 	return frames.AutoSummarizationConfig{
 		MaxContextTokens: new(50),
 		SummaryConfig: frames.SummaryConfig{
-			MinMessagesAfterSummary: 2,
+			MinMessagesAfterSummary: new(2),
 			LLM:                     inf,
 		},
 	}

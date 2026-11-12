@@ -49,8 +49,9 @@ type SummaryConfig struct {
 	TargetContextTokens int
 	// MinMessagesAfterSummary is how many of the most recent messages are kept
 	// out of the summary, so the immediate conversational context survives
-	// compression verbatim. Zero uses 4; a negative value is rejected.
-	MinMessagesAfterSummary int
+	// compression verbatim. Nil uses 4, and zero summarizes every message after
+	// the system prompt; a negative value is rejected.
+	MinMessagesAfterSummary *int
 	// SummarizationPrompt tells the model how to summarize. Empty uses
 	// DefaultSummarizationPrompt.
 	SummarizationPrompt string
@@ -92,8 +93,8 @@ func (c SummaryConfig) WithDefaults() SummaryConfig {
 	if c.TargetContextTokens == 0 {
 		c.TargetContextTokens = defaultTargetContextTokens
 	}
-	if c.MinMessagesAfterSummary == 0 {
-		c.MinMessagesAfterSummary = defaultMinMessagesAfterSummary
+	if c.MinMessagesAfterSummary == nil {
+		c.MinMessagesAfterSummary = new(defaultMinMessagesAfterSummary)
 	}
 	if c.SummaryMessageTemplate == "" {
 		c.SummaryMessageTemplate = DefaultSummaryMessageTemplate
@@ -124,7 +125,7 @@ func (c SummaryConfig) Validate() error {
 	if c.TargetContextTokens < 0 {
 		return ErrTargetContextTokens
 	}
-	if c.MinMessagesAfterSummary < 0 {
+	if c.MinMessagesAfterSummary != nil && *c.MinMessagesAfterSummary < 0 {
 		return ErrMinMessagesAfterSummary
 	}
 	return nil
