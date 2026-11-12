@@ -262,10 +262,10 @@ type ObserverParams struct {
 	// protocol 2.2.0 or later. Off by default.
 	TTSRawTextEnabled bool
 	// AudioLevelPeriod is how often an audio level is reported while it is
-	// enabled; zero defaults to 150 ms. Audio arrives far more often than a
-	// meter can usefully be redrawn, and measuring loudness is not free, so the
-	// level is reported on a period rather than per frame.
-	AudioLevelPeriod time.Duration
+	// enabled. Nil uses 150 ms, and zero reports every audio frame. Audio
+	// arrives far more often than a meter can usefully be redrawn, and measuring
+	// loudness is not free, so the level is reported on a period by default.
+	AudioLevelPeriod *time.Duration
 }
 
 // defaultAudioLevelPeriod is how often an audio level is reported when
@@ -274,10 +274,10 @@ const defaultAudioLevelPeriod = 150 * time.Millisecond
 
 // audioLevelPeriod is the configured reporting period, or the default.
 func (p ObserverParams) audioLevelPeriod() time.Duration {
-	if p.AudioLevelPeriod <= 0 {
+	if p.AudioLevelPeriod == nil {
 		return defaultAudioLevelPeriod
 	}
-	return p.AudioLevelPeriod
+	return max(*p.AudioLevelPeriod, 0)
 }
 
 // DefaultObserverParams is the configuration NewObserver uses: function-call
@@ -285,7 +285,7 @@ func (p ObserverParams) audioLevelPeriod() time.Duration {
 func DefaultObserverParams() ObserverParams {
 	return ObserverParams{
 		FunctionCallReportLevel: map[string]FunctionCallReportLevel{"*": ReportNone},
-		AudioLevelPeriod:        defaultAudioLevelPeriod,
+		AudioLevelPeriod:        new(defaultAudioLevelPeriod),
 	}
 }
 

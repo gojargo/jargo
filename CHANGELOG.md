@@ -49,6 +49,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   were never flushed. The timeout now defaults to two seconds (a negative value
   turns it off) and the prefix to "DTMF: ". **Breaking:** `Prefix` is a
   `*string`; point it at "" for none.
+- **RTVI `AudioLevelPeriod` is a pointer.** Zero stood for the default of
+  150 ms, so a level per audio frame could not be asked for. Nil now means
+  150 ms, and zero reports every audio frame. **Breaking:** set it with
+  `new(d)`.
 
 ### Fixed
 

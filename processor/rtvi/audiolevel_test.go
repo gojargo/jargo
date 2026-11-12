@@ -76,7 +76,7 @@ func TestUserAudioLevelReported(t *testing.T) {
 	params := rtvi.DefaultObserverParams()
 	params.UserAudioLevelEnabled = true
 	// Report every frame, so the levels follow the window filling.
-	params.AudioLevelPeriod = time.Nanosecond
+	params.AudioLevelPeriod = new(time.Duration(0))
 
 	// Five 100 ms chunks: the window fills on the fourth.
 	chunk := levelAudio(100, rate, 8000)
@@ -120,7 +120,7 @@ func TestBotAudioLevelReported(t *testing.T) {
 	const rate = 16000
 	params := rtvi.DefaultObserverParams()
 	params.BotAudioLevelEnabled = true
-	params.AudioLevelPeriod = time.Nanosecond
+	params.AudioLevelPeriod = new(time.Duration(0))
 
 	// A full window in one chunk, so the level is measurable straight away.
 	full := levelAudio(400, rate, 8000)
@@ -146,7 +146,7 @@ func TestAudioLevelPeriodRateLimits(t *testing.T) {
 	const rate = 16000
 	params := rtvi.DefaultObserverParams()
 	params.UserAudioLevelEnabled = true
-	params.AudioLevelPeriod = time.Hour // nothing after the first is ever due
+	params.AudioLevelPeriod = new(time.Hour) // nothing after the first is ever due
 
 	chunk := levelAudio(100, rate, 8000)
 	queue := make([]frames.Frame, 0, 6)
