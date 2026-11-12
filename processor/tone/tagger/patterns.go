@@ -3,7 +3,7 @@ package tagger
 import (
 	"unicode"
 
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
+	"github.com/gojargo/jargo/internal/pytext"
 )
 
 // The model was trained on hints found with patterns written for Python's re
@@ -14,7 +14,7 @@ import (
 // pattern it follows.
 
 // isWord is \w: a letter, a number or an underscore.
-func isWord(r rune) bool { return r == '_' || shared.IsAlnum(r) }
+func isWord(r rune) bool { return r == '_' || pytext.IsAlnum(r) }
 
 // isDigit is \d: a decimal digit of any script.
 func isDigit(r rune) bool { return unicode.IsDigit(r) }

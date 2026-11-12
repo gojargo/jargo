@@ -1,23 +1,23 @@
-package shared_test
+package pytext_test
 
 import (
 	"slices"
 	"testing"
 
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
+	"github.com/gojargo/jargo/internal/pytext"
 )
 
 func TestStringRulesFollowPython(t *testing.T) {
 	// Python: "\x1c a 　b\x1f".strip() == "a 　b"; .split() == ["a", "b"].
-	if got := shared.Strip("\x1c a 　b\x1f"); got != "a 　b" {
+	if got := pytext.Strip("\x1c a 　b\x1f"); got != "a 　b" {
 		t.Errorf("Strip = %q", got)
 	}
-	if got := shared.Fields("\x1c a 　b\x1f"); !slices.Equal(got, []string{"a", "b"}) {
+	if got := pytext.Fields("\x1c a 　b\x1f"); !slices.Equal(got, []string{"a", "b"}) {
 		t.Errorf("Fields = %q", got)
 	}
 	// Python: "²".isalnum(), "٣".isalnum() and "一".isalnum() are True, "_" is not.
 	for r, want := range map[rune]bool{'²': true, '٣': true, '一': true, '_': false, 'é': true} {
-		if shared.IsAlnum(r) != want {
+		if pytext.IsAlnum(r) != want {
 			t.Errorf("IsAlnum(%q) = %v, want %v", r, !want, want)
 		}
 	}
@@ -38,7 +38,7 @@ func TestRoundFollowsPython(t *testing.T) {
 		{0.71, 2, 0.71},
 		{0.99999, 4, 1},
 	} {
-		if got := shared.Round(c.x, c.digits); got != c.want {
+		if got := pytext.Round(c.x, c.digits); got != c.want {
 			t.Errorf("Round(%v, %d) = %v, want %v", c.x, c.digits, got, c.want)
 		}
 	}

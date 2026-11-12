@@ -1,6 +1,6 @@
-// Package shared keeps the tone models loaded once a process, so every
-// processor using the same model and settings shares one.
-package shared
+// Package modelcache keeps models loaded once a process, so every
+// owner using the same model and settings shares one.
+package modelcache
 
 import "sync"
 

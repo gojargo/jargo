@@ -15,9 +15,9 @@ import (
 	"github.com/gojargo/jargo/adapter/tts/elevenlabs"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/modelcache"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
 	"github.com/gojargo/jargo/processor/tone/internal/tonetest"
 )
 
@@ -100,7 +100,7 @@ func standIn(
 	t.Helper()
 	oldModels, oldDownload, oldLoad := models, downloadRelease, loadDir
 	t.Cleanup(func() { models, downloadRelease, loadDir = oldModels, oldDownload, oldLoad })
-	models = &shared.Cache[modelKey, model]{}
+	models = &modelcache.Cache[modelKey, model]{}
 	downloadRelease = func(_ context.Context, size Size, revision string, threads int, _ string) (model, error) {
 		return download(size, revision, threads)
 	}
@@ -113,7 +113,7 @@ func standIn(
 }
 
 // unshared makes the next tagger load its own model.
-func unshared() { models = &shared.Cache[modelKey, model]{} }
+func unshared() { models = &modelcache.Cache[modelKey, model]{} }
 
 // tagger is a tagger whose model downloads as m.
 func tagger(t *testing.T, m model) *Tagger {

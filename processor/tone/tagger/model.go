@@ -14,8 +14,8 @@ import (
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/internal/hfhub"
 	"github.com/gojargo/jargo/internal/onnxrt"
+	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/internal/tokenizers"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
 )
 
 const (
@@ -330,8 +330,8 @@ func (m *Model) decode(h heads, offsets []offset, sentence string, space LabelSp
 // [null, shift]].
 func (m *Model) shifts(sentence string) (map[string]float64, error) {
 	words := 0
-	for _, token := range shared.Fields(sentence) {
-		if slices.ContainsFunc([]rune(token), shared.IsAlnum) {
+	for _, token := range pytext.Fields(sentence) {
+		if slices.ContainsFunc([]rune(token), pytext.IsAlnum) {
 			words++
 		}
 	}
@@ -563,19 +563,19 @@ func wholeWords(r [2]int, sentence []rune) ([2]int, bool, error) {
 		return [2]int{}, false, errOffset
 	}
 	// A subword token's offsets can include the space before it.
-	for a < b && shared.IsSpace(sentence[a]) {
+	for a < b && pytext.IsSpace(sentence[a]) {
 		a++
 	}
-	for b > a && shared.IsSpace(sentence[b-1]) {
+	for b > a && pytext.IsSpace(sentence[b-1]) {
 		b--
 	}
 	if a == b {
 		return [2]int{}, false, nil
 	}
-	for a > 0 && shared.IsAlnum(sentence[a-1]) {
+	for a > 0 && pytext.IsAlnum(sentence[a-1]) {
 		a--
 	}
-	for b < len(sentence) && shared.IsAlnum(sentence[b]) {
+	for b < len(sentence) && pytext.IsAlnum(sentence[b]) {
 		b++
 	}
 	return [2]int{a, b}, true, nil

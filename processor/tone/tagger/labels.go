@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/expressive"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
+	"github.com/gojargo/jargo/internal/pytext"
 )
 
 // The tagger labels with expressive.CoreDelivery and expressive.CoreSounds,
@@ -182,7 +182,7 @@ func newReplyRenderer(space LabelSpace) *replyRenderer { return &replyRenderer{s
 // Labels the space does not hold, or that would overlap or cut a word, are
 // dropped, so the tags always speak exactly the sentence's words.
 func (r *replyRenderer) render(sentence string, labels SentenceLabels) string {
-	text := []rune(shared.Strip(sentence))
+	text := []rune(pytext.Strip(sentence))
 	if len(text) == 0 {
 		return ""
 	}
@@ -314,12 +314,12 @@ func keep(sentence []rune, labels SentenceLabels, space LabelSpace) SentenceLabe
 // either end.
 func words(text []rune, start, end int) bool {
 	return start >= 0 && start < end && end <= len(text) &&
-		!shared.IsSpace(text[start]) && !shared.IsSpace(text[end-1]) &&
+		!pytext.IsSpace(text[start]) && !pytext.IsSpace(text[end-1]) &&
 		wordBoundary(text, start) && wordBoundary(text, end)
 }
 
 func wordBoundary(text []rune, at int) bool {
-	return at == 0 || at == len(text) || !shared.IsAlnum(text[at-1]) || !shared.IsAlnum(text[at])
+	return at == 0 || at == len(text) || !pytext.IsAlnum(text[at-1]) || !pytext.IsAlnum(text[at])
 }
 
 func overlaps(taken [][2]int, start, end int) bool {

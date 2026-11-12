@@ -15,6 +15,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **`processor/perception` reads each user turn by asking classifiers.** A
+  `perception.Reader` goes between the STT service and the user aggregator
+  and asks each of its sources (a classifier with its questions, each named
+  after the signal it reports) about every final transcription, writing their
+  answers as one reading in the sources' order. A text classifier reads the
+  transcription with the bot's reply before it; one that hears gets a clip of
+  the user's speech each time they stop, topped up with earlier speech since
+  the bot last spoke, and the transcriptions of that speech wait for it. Each
+  source's answers are waited for up to its timeout (0.5 s for text, 2 s for
+  audio by default), a late or failed source leaves its signals out, every
+  reading is broadcast in a `PerceptionFrame` as soon as it is made, the
+  classifiers' metrics are pushed when metrics are on, a reading is merged
+  into the one the transcription carries (or replaces it with
+  `ReplacePerception`), and the signals declared before the reader are
+  declared again with its own.
+
 - **A perception reading is broadcast in a `PerceptionFrame`.** The new
   system frame carries a reading of how the user spoke as soon as a producer
   has one, whether or not a transcription is there to carry it yet, so

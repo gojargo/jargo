@@ -1,4 +1,6 @@
-package shared
+// Package pytext holds the string and rounding rules the tone models' inputs
+// were written by, which differ from Go's at the edges.
+package pytext
 
 import (
 	"math"

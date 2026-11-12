@@ -11,8 +11,8 @@ import (
 
 	"github.com/gojargo/jargo/internal/hfhub"
 	"github.com/gojargo/jargo/internal/onnxrt"
+	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/internal/tokenizers"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
 )
 
 const (
@@ -195,8 +195,8 @@ type BackchannelTag struct {
 
 // Tag reads one turn, with the turn before it when there is one.
 func (m *Model) Tag(text, previous string) (Tags, error) {
-	rendered := `"` + shared.Strip(text) + `"`
-	if p := shared.Strip(previous); p != "" {
+	rendered := `"` + pytext.Strip(text) + `"`
+	if p := pytext.Strip(previous); p != "" {
 		rendered += ` Before: "` + p + `"`
 	}
 	enc, err := m.tokenizer.Encode(rendered, m.truncation)
@@ -226,21 +226,21 @@ func (m *Model) Tag(text, previous string) (Tags, error) {
 		Emotion: EmotionTag{
 			Label:         emotion,
 			Intensity:     intensity,
-			Confidence:    shared.Round(emotions[argmax(emotions)], 4),
+			Confidence:    pytext.Round(emotions[argmax(emotions)], 4),
 			Probabilities: probabilities(m.config.Emotions, emotions),
 		},
 		Move: MoveTag{
 			Label:         m.config.Moves[argmax(moves)],
-			Confidence:    shared.Round(moves[argmax(moves)], 4),
+			Confidence:    pytext.Round(moves[argmax(moves)], 4),
 			Probabilities: probabilities(m.config.Moves, moves),
 		},
 		Sarcasm: SarcasmTag{
 			Sarcastic:   rawSarcasm >= m.sarcasmThreshold,
-			Probability: shared.Round(calibrated(rawSarcasm, m.sarcasmCurve), 4),
+			Probability: pytext.Round(calibrated(rawSarcasm, m.sarcasmCurve), 4),
 		},
 		Backchannel: BackchannelTag{
 			IsBackchannel: backchannel >= 0.5,
-			Probability:   shared.Round(backchannel, 4),
+			Probability:   pytext.Round(backchannel, 4),
 		},
 	}, nil
 }
@@ -279,7 +279,7 @@ func argmax(values []float64) int {
 func probabilities(labels []string, probs []float64) []Probability {
 	out := make([]Probability, 0, min(len(labels), len(probs)))
 	for i := range min(len(labels), len(probs)) {
-		out = append(out, Probability{Label: labels[i], Probability: shared.Round(probs[i], 4)})
+		out = append(out, Probability{Label: labels[i], Probability: pytext.Round(probs[i], 4)})
 	}
 	return out
 }

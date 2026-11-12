@@ -27,11 +27,12 @@ import (
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/expressive/formatter"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/modelcache"
+	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/utils/text"
 )
@@ -88,7 +89,7 @@ type modelKey struct {
 
 //nolint:gochecknoglobals // the models are loaded once a process and shared
 var (
-	models = &shared.Cache[modelKey, model]{}
+	models = &modelcache.Cache[modelKey, model]{}
 	// loadDir and downloadRelease open the model. Variables so tests can stand
 	// a model in.
 	loadDir = func(dir string, threads int) (model, error) {
@@ -335,7 +336,7 @@ func (t *Tagger) tag(ctx context.Context, sentence string, _ frames.TextType) (s
 		return sentence, nil
 	}
 	// The labels are offsets into the sentence as the model reads it.
-	plain := strings.Join(shared.Fields(sentence), " ")
+	plain := strings.Join(pytext.Fields(sentence), " ")
 	earlier := slices.Clone(t.sentences)
 	t.sentences = append(t.sentences, plain)
 	started := time.Now()

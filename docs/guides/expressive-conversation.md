@@ -131,6 +131,46 @@ and clients in the `perception` field of the transcription's `user-input`
 message (see [RTVI](rtvi.md)), which waits for a producer after the STT to read
 it.
 
+### Reading turns with classifiers
+
+`processor/perception` is a perception producer that asks
+[classifiers](../../classifier) about each turn. Each `perception.Source` is a
+classifier with the questions it is asked, each question named after the
+signal it reports: a choice reports its likeliest options (two by default,
+`Question.MaxLabels`), a yes/no question its probability and a score its
+position on the scale.
+
+```go
+frustration, err := perception.NewSource(perception.SourceConfig{
+	Classifier: judge, // a classifier.Classifier, such as classifier/llm or classifier/jev
+	Questions: []perception.NamedQuestion{{
+		Name: "frustration",
+		Question: perception.Question{
+			Question:    classifier.YesNoQuestion{Instructions: "Is the user frustrated?"},
+			Description: "The chance the user is frustrated, from 0 to 1.",
+		},
+	}},
+})
+if err != nil {
+	return err
+}
+reader, err := perception.New(perception.Config{Sources: []perception.Source{frustration}})
+```
+
+The reader goes between the STT service and the user aggregator. A text
+classifier reads each final transcription with the bot's reply before it, and
+the transcription waits for its answers up to the source's timeout (0.5 s by
+default). A classifier that hears (its `SupportsAudio`) is given a clip of the
+user's speech each time they stop, and the transcriptions of that speech wait
+for its answers up to the timeout after the user stopped (2 s by default); the
+reader adds that wait to the STT latency it passes on, so the turn's stop
+strategies wait for it. The sources of one reader are asked at once and write
+one reading, in their order. A late or failed source leaves its signals out,
+and every reading is also broadcast in a `frames.PerceptionFrame` as soon as it
+is made, late or not. A reading is added to the one a transcription already
+carries (`Config.ReplacePerception` replaces it instead), and the signals
+declared before the reader are declared again with its own.
+
 ### The tone reader
 
 `processor/tone/reader` is a perception producer that reads how each user

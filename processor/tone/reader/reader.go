@@ -19,9 +19,10 @@ import (
 
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/modelcache"
+	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
 )
 
 const (
@@ -66,7 +67,7 @@ type modelKey struct {
 
 //nolint:gochecknoglobals // the models are loaded once a process and shared
 var (
-	models = &shared.Cache[modelKey, model]{}
+	models = &modelcache.Cache[modelKey, model]{}
 	// loadDir and downloadRelease open the model. Variables so tests can stand
 	// a model in.
 	loadDir = func(dir string, precision Precision, threads int) (model, error) {
@@ -167,7 +168,7 @@ func (r *Reader) ProcessFrame(ctx context.Context, f frames.Frame, dir processor
 		}
 		return nil
 	case *frames.TranscriptionFrame:
-		if shared.Strip(fr.Text) != "" && r.model != nil {
+		if pytext.Strip(fr.Text) != "" && r.model != nil {
 			fr.Perception = r.read(ctx, fr.Text)
 		}
 	case *frames.LLMContextAssistantTurnFrame:
@@ -197,7 +198,7 @@ func (r *Reader) read(ctx context.Context, text string) []expressive.PerceptionS
 	for _, p := range likeliest[:min(2, len(likeliest))] {
 		labels = append(labels, expressive.PerceptionLabel{Label: p.Label, Confidence: p.Probability})
 	}
-	sarcasm := shared.Round(tags.Sarcasm.Probability, 2)
+	sarcasm := pytext.Round(tags.Sarcasm.Probability, 2)
 	return []expressive.PerceptionSignal{
 		{Name: "emotion", Labels: labels},
 		{Name: "sarcasm", Value: &sarcasm},

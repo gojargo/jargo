@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gojargo/jargo/expressive"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
+	"github.com/gojargo/jargo/internal/pytext"
 )
 
 // What the tagger model reads: the call so far, as the text it was trained on.
@@ -165,7 +165,7 @@ func fold(heard []expressive.PerceptionSignal) []expressive.PerceptionSignal {
 			tones[i].Confidence += l.Confidence
 		}
 		for i := range tones {
-			tones[i].Confidence = shared.Round(min(tones[i].Confidence, 1.0), 2)
+			tones[i].Confidence = pytext.Round(min(tones[i].Confidence, 1.0), 2)
 		}
 		slices.SortStableFunc(tones, func(a, b expressive.PerceptionLabel) int {
 			return cmp.Compare(b.Confidence, a.Confidence)

@@ -12,8 +12,8 @@ import (
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/hfhub"
+	"github.com/gojargo/jargo/internal/modelcache"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/processor/tone/internal/shared"
 	"github.com/gojargo/jargo/processor/tone/internal/tonetest"
 )
 
@@ -73,7 +73,7 @@ func standIn(
 	t.Helper()
 	oldModels, oldDownload, oldLoad := models, downloadRelease, loadDir
 	t.Cleanup(func() { models, downloadRelease, loadDir = oldModels, oldDownload, oldLoad })
-	models = &shared.Cache[modelKey, model]{}
+	models = &modelcache.Cache[modelKey, model]{}
 	downloadRelease = func(_ context.Context, revision string, precision Precision, _ int, _ string) (model, error) {
 		return download(revision, precision)
 	}
