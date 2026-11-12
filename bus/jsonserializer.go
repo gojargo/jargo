@@ -509,8 +509,8 @@ func decodeJSON(data []byte) (any, error) {
 // number turns a JSON number into the Go value it reads as: an int when it is
 // whole, a uint64 past the range of an int, and a float64 otherwise.
 func number(n json.Number) any {
-	if i, err := strconv.ParseInt(string(n), 10, 64); err == nil {
-		return int(i)
+	if i, err := strconv.Atoi(string(n)); err == nil {
+		return i
 	}
 	if u, err := strconv.ParseUint(string(n), 10, 64); err == nil {
 		return u

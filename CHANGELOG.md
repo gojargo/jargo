@@ -55,6 +55,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The bus reads a whole number too large for an `int` without cutting it
+  short.** On a platform where `int` is 32 bits, a whole number past its
+  range came out of the JSON serializer truncated. It now comes out as a
+  `uint64` or `float64`, as it already did past the range of a 64-bit `int`.
+
 - **An observer hears that the pipeline started before the frames queued
   behind the StartFrame.** The worker released those frames as soon as the
   StartFrame reached the sink, and only then queued the start for the
