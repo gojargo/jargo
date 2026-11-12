@@ -142,6 +142,7 @@ func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 	case frames.OutputAudioFrame:
 		return s.media(fr.AudioData())
 	case *frames.InterruptionFrame:
+		s.codec.ResetOut()
 		return wsserver.TextMessage(json.Marshal(event{Event: "clear"}))
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.hangup()

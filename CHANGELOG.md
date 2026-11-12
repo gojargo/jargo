@@ -93,6 +93,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The telephony serializers drop a cut-off reply's tail on an
+  interruption.** Twilio, Telnyx, Plivo and Exotel answered an interruption
+  with their clear message but kept the cut-off reply's last samples in the
+  outgoing resampler, so the next thing said started with a loud fragment of
+  it. They now discard it (`wsserver.Codec.ResetOut`).
+
 - **A WebSocket server session ends with a normal close.** Closing a
   `wsserver` session took the connection down before the close frame could be
   written, so a browser or SDK client saw an abnormal closure (1006), which it

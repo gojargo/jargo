@@ -144,6 +144,15 @@ func (c *Codec) Encode(pcm []byte, frameRate int, enc Encoding) []byte {
 	}
 }
 
+// ResetOut discards the audio the outgoing resampler still holds, for a reply
+// that was cut off: its tail must not be heard at the start of what is sent
+// next. A serializer calls it on an interruption.
+func (c *Codec) ResetOut() {
+	if c.out != nil {
+		c.out.Clear()
+	}
+}
+
 // outputResampler returns the resampler converting frameRate to the wire rate,
 // building it the first time and again if the rate changes. The rate is taken
 // from the audio rather than from the StartFrame because that is what the
