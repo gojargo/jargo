@@ -670,6 +670,59 @@ func TestBaseOutputEndFrameDeliversPendingTimedFrames(t *testing.T) {
 	}
 }
 
+// TestBaseOutputCancelDoesNotReportBotStopped checks canceling the pipeline
+// while the bot is speaking reports no BotStoppedSpeakingFrame: the session is
+// ending, not the bot's turn.
+func TestBaseOutputCancelDoesNotReportBotStopped(t *testing.T) {
+	params := transport.DefaultParams()
+	params.AudioOutSampleRate = 16000
+	o := newPacedOutput(params)
+
+	var mu sync.Mutex
+	var started, stopped int
+	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.(type) {
+		case *frames.BotStartedSpeakingFrame:
+			started++
+		case *frames.BotStoppedSpeakingFrame:
+			stopped++
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewTTSAudioRawFrame(make([]byte, 16000*2), 16000, 1))
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		s := started
+		mu.Unlock()
+		if s > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	task.Cancel(context.Background(), "")
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipeline did not end")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if started == 0 {
+		t.Fatal("the bot never started speaking")
+	}
+	if stopped != 0 {
+		t.Errorf("a cancel reported %d BotStoppedSpeakingFrames, want none", stopped)
+	}
+}
+
 // TestBaseOutputFlushesTailOnTurnEnd is the regression test for the turn-end
 // cutoff: audio that does not fill a whole chunk must still play out when the
 // bot's turn ends, padded to a full chunk so downstream whole-frame encoders

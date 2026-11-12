@@ -108,6 +108,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Ending or canceling a session reports no bot stop.** The output transport
+  broadcast a `BotStoppedSpeakingFrame` when an `EndFrame` or `CancelFrame`
+  stopped it while the bot held the floor, which RTVI clients, turn tracking
+  and observers took for the end of a turn. The session ending now reports
+  nothing of the kind.
+
 - **A second Ctrl+C ends the dev runner.** The runner kept every further
   interrupt to itself while it waited, with no bound, for its sessions to
   end, so a session that would not wind down needed a kill. The first

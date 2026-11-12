@@ -141,9 +141,14 @@ func (s *mediaSender) drainClock(ctx context.Context) {
 	}
 }
 
-// stop tears the sender down.
+// stop tears the sender down. A bot still holding the floor is not reported as
+// stopping: the session is ending, not the bot's turn, and nothing downstream
+// is left to act on it.
 func (s *mediaSender) stop(ctx context.Context) {
-	s.botStoppedSpeaking(ctx)
+	s.botMu.Lock()
+	s.botSpeaking = false
+	s.ttsAudioReceived = false
+	s.botMu.Unlock()
 
 	s.lifeMu.Lock()
 	defer s.lifeMu.Unlock()
