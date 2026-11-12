@@ -14,6 +14,7 @@ package responses
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gojargo/jargo/adapter"
 	responsesadapter "github.com/gojargo/jargo/adapter/responses"
@@ -113,6 +115,14 @@ type Config struct {
 	// default. The WebSocket service's incremental-context optimization does not
 	// need it: that uses a connection-local cache rather than stored state.
 	Store bool
+	// RetryOnTimeout re-issues a request once when its first attempt produces
+	// no output within RetryTimeout: over HTTP the request is asked again, and
+	// over the WebSocket the connection is replaced and the full context sent
+	// again. The retry waits as long as it takes. Off by default.
+	RetryOnTimeout bool
+	// RetryTimeout is how long the first attempt may go without output before
+	// RetryOnTimeout re-issues it; zero uses 5 seconds.
+	RetryTimeout time.Duration
 	// Extra sets arbitrary additional request fields not modeled above, applied
 	// to every request. They override the modeled fields on conflict.
 	Extra map[string]any
@@ -442,17 +452,31 @@ func runInference(
 // fails for a reason that may not repeat is sent again, as OpenAI's SDK client
 // does.
 func (c Config) post(ctx context.Context, client *http.Client, body []byte) (*http.Response, error) {
-	return sdkretry.Do(ctx, client, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(
-			ctx, http.MethodPost, c.BaseURL+"/responses", bytes.NewReader(body),
-		)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		return req, nil
-	})
+	return sdkretry.DoRetryingOnTimeout(ctx, client, c.RetryOnTimeout, c.retryTimeout(),
+		func(attemptCtx context.Context) (*http.Request, error) {
+			req, err := http.NewRequestWithContext(
+				attemptCtx, http.MethodPost, c.BaseURL+"/responses", bytes.NewReader(body),
+			)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+c.APIKey)
+			return req, nil
+		})
+}
+
+// defaultRetryTimeout is how long a first attempt may go without output when
+// RetryOnTimeout is set and RetryTimeout is not.
+const defaultRetryTimeout = 5 * time.Second
+
+// retryTimeout is the bound on a first attempt RetryOnTimeout applies, or zero
+// when the request is not retried.
+func (c Config) retryTimeout() time.Duration {
+	if !c.RetryOnTimeout {
+		return 0
+	}
+	return cmp.Or(c.RetryTimeout, defaultRetryTimeout)
 }
 
 // encodeBody marshals the request, merging any extra fields over the modeled

@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"maps"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -546,70 +543,18 @@ func filterDelta(ctx context.Context, filter StreamFilter, delta *chatDelta) err
 // to give up on an attempt that has stalled, not on one that is answering
 // slowly.
 func (s *LLMService) send(ctx context.Context, body []byte) (*http.Response, error) {
-	if !s.cfg.RetryOnTimeout {
-		return s.sendOnce(ctx, body, 0)
-	}
-	resp, err := s.sendOnce(ctx, body, s.cfg.RetryTimeout)
-	if err == nil || !errors.Is(err, llm.ErrCompletionTimeout) || ctx.Err() != nil {
-		return resp, err
-	}
-	slog.DebugContext(ctx, "retrying the completion the endpoint did not start in time",
-		"service", s.Name(), "waited", s.cfg.RetryTimeout)
-	return s.sendOnce(ctx, body, 0)
-}
-
-// sendOnce makes one attempt. A non-zero bound applies to the wait for the
-// response only: once the response has started the bound is lifted, so a long
-// completion is never cut off part way. A timeout is reported as one, which is
-// what a switcher fails over on.
-func (s *LLMService) sendOnce(ctx context.Context, body []byte, bound time.Duration) (*http.Response, error) {
-	attemptCtx, cancel := context.WithCancel(ctx)
-	var expired *time.Timer
-	if bound > 0 {
-		expired = time.AfterFunc(bound, cancel)
-	}
-
-	// A request that fails for a reason that may not repeat is sent again, as
-	// OpenAI's SDK client does.
-	resp, err := sdkretry.Do(attemptCtx, s.http, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(
-			attemptCtx, http.MethodPost, s.shaper.Endpoint(s.cfg.BaseURL), bytes.NewReader(body),
-		)
-		if err != nil {
-			return nil, err
-		}
-		s.shaper.Authorize(req, s.cfg.APIKey)
-		req.Header.Set("Content-Type", "application/json")
-		return req, nil
-	})
-	if err != nil {
-		cancel()
-		// The parent still being live is what says the bound expired rather than
-		// the turn being interrupted.
-		if ctx.Err() == nil && (attemptCtx.Err() != nil || os.IsTimeout(err)) {
-			return nil, fmt.Errorf("%w: %w", llm.ErrCompletionTimeout, err)
-		}
-		return nil, err
-	}
-	if expired != nil {
-		expired.Stop()
-	}
-	// The body is read after this returns, so the attempt is released when the
-	// caller closes it rather than here.
-	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
-	return resp, nil
-}
-
-// cancelOnClose releases an attempt's context once its body is closed.
-type cancelOnClose struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-}
-
-func (c cancelOnClose) Close() error {
-	err := c.ReadCloser.Close()
-	c.cancel()
-	return err
+	return sdkretry.DoRetryingOnTimeout(ctx, s.http, s.cfg.RetryOnTimeout, s.cfg.RetryTimeout,
+		func(attemptCtx context.Context) (*http.Request, error) {
+			req, err := http.NewRequestWithContext(
+				attemptCtx, http.MethodPost, s.shaper.Endpoint(s.cfg.BaseURL), bytes.NewReader(body),
+			)
+			if err != nil {
+				return nil, err
+			}
+			s.shaper.Authorize(req, s.cfg.APIKey)
+			req.Header.Set("Content-Type", "application/json")
+			return req, nil
+		})
 }
 
 // toolAccumulator coalesces the streamed fragments of one tool call.

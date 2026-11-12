@@ -8,13 +8,18 @@ package sdkretry
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
+
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // The SDK's defaults: how many times a request is sent again, and the bounds of
@@ -129,4 +134,65 @@ func sleep(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-timer.C:
 	}
+}
+
+// DoWithin is Do with the wait for the response bounded: a request that has
+// not answered within bound is given up on, and the error it returns wraps
+// llm.ErrCompletionTimeout. A zero bound waits as long as Do does. Once the
+// response has started the bound is lifted, so a long answer is never cut off
+// part way; the attempt is released when the caller closes the body.
+func DoWithin(
+	ctx context.Context, client *http.Client, bound time.Duration, newRequest func(context.Context) (*http.Request, error),
+) (*http.Response, error) {
+	attemptCtx, cancel := context.WithCancel(ctx)
+	var expired *time.Timer
+	if bound > 0 {
+		expired = time.AfterFunc(bound, cancel)
+	}
+	resp, err := Do(attemptCtx, client, func() (*http.Request, error) { return newRequest(attemptCtx) })
+	if err != nil {
+		cancel()
+		// The parent still being live is what says the bound expired rather than
+		// the turn being interrupted.
+		if ctx.Err() == nil && (attemptCtx.Err() != nil || os.IsTimeout(err)) {
+			return nil, fmt.Errorf("%w: %w", llm.ErrCompletionTimeout, err)
+		}
+		return nil, err
+	}
+	if expired != nil {
+		expired.Stop()
+	}
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// DoRetryingOnTimeout makes the request with its first attempt bounded by
+// bound and, when that attempt timed out, makes it once more with no bound:
+// the point is to give up on an attempt that has stalled, not on one that is
+// answering slowly. With retry false it makes one unbounded attempt.
+func DoRetryingOnTimeout(
+	ctx context.Context, client *http.Client, retry bool, bound time.Duration,
+	newRequest func(context.Context) (*http.Request, error),
+) (*http.Response, error) {
+	if !retry {
+		return DoWithin(ctx, client, 0, newRequest)
+	}
+	resp, err := DoWithin(ctx, client, bound, newRequest)
+	if err == nil || !errors.Is(err, llm.ErrCompletionTimeout) || ctx.Err() != nil {
+		return resp, err
+	}
+	slog.DebugContext(ctx, "retrying the request the endpoint did not start answering in time", "waited", bound)
+	return DoWithin(ctx, client, 0, newRequest)
+}
+
+// cancelOnClose releases an attempt's context once its body is closed.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }

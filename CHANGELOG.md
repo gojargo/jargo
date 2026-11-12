@@ -743,6 +743,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   configuration set none, so they reasoned less than at the provider's
   default. Of the o-series, only o3 and o3-pro now get a default effort.
 
+- **The OpenAI Responses services can retry a request that stalls.**
+  `responses.Config` gains `RetryOnTimeout` and `RetryTimeout` (5 seconds by
+  default), as the chat service has: a first attempt that produces no output
+  in time is re-issued once, and the retry waits as long as it takes. Over
+  HTTP the request is asked again; over the WebSocket a response that has
+  produced nothing past `response.created` is abandoned with its connection,
+  and the turn retried on a new one with the full context. A response that
+  has started producing output is never abandoned. The bounded attempt the
+  two OpenAI services share now lives in one place.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/adapter"
@@ -29,6 +30,12 @@ import (
 // connection failure. Two is enough: the retry reconnects and sends the full
 // context, which cannot hit the same fault again.
 const maxTurnAttempts = 2
+
+// errResponseTimeout reports a response that produced no output within the
+// time RetryOnTimeout allows its first attempt.
+//
+//nolint:gochecknoglobals // sentinel error
+var errResponseTimeout = errors.New("openai responses: no output in time")
 
 // laneCount is how many lanes the service's responses go on. A connection runs
 // at most this many responses at once, abandoned ones included.
@@ -279,13 +286,21 @@ func (s *Service) Connected() bool {
 func (s *Service) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
 	lane := s.chooseNextLane()
 	var err error
+	// Only the first attempt is bounded: the retry waits as long as it takes.
+	outputTimeout := s.cfg.retryTimeout()
 	for attempt := range maxTurnAttempts {
-		err = s.turn(ctx, convo, sink, withTools, lane)
+		err = s.turn(ctx, convo, sink, withTools, lane, outputTimeout)
+		outputTimeout = 0
 		if !isRecoverable(err) {
 			return err
 		}
 		slog.Warn("openai responses turn failed recoverably, retrying with the full context",
 			"attempt", attempt+1, "err", err)
+		if errors.Is(err, errResponseTimeout) {
+			// Dropping the connection also ends the response that produced
+			// nothing, so the retry starts on a clean socket.
+			s.forgetContinuation()
+		}
 		if errors.Is(err, errPreviousResponseGone) {
 			s.forgetContinuation()
 			continue
@@ -307,7 +322,7 @@ func isRecoverable(err error) bool {
 		return false
 	}
 	return errors.Is(err, errPreviousResponseGone) || errors.Is(err, errConnectionLimit) ||
-		errors.Is(err, errConnectionClosed)
+		errors.Is(err, errConnectionClosed) || errors.Is(err, errResponseTimeout)
 }
 
 // forgetContinuation drops what the previous turn left the server holding, so
@@ -322,6 +337,7 @@ func (s *Service) forgetContinuation() {
 // events until the response ends.
 func (s *Service) turn(
 	ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool, lane string,
+	outputTimeout time.Duration,
 ) error {
 	if err := s.ws.EnsureConnected(ctx); err != nil {
 		return err
@@ -365,7 +381,7 @@ func (s *Service) turn(
 		return fmt.Errorf("%w: %w", errConnectionClosed, werr)
 	}
 
-	state, err := s.readTurn(ctx, sess, sink, lane)
+	state, err := s.readTurn(ctx, sess, sink, lane, outputTimeout)
 	if err != nil {
 		if ctx.Err() != nil {
 			// An interruption. The response drains from its lane, and the next
@@ -392,12 +408,27 @@ func (s *Service) turn(
 // readTurn consumes the events of the response on lane until it ends. It
 // watches the turn's context rather than passing it to the socket, so an
 // interruption leaves the connection open for the next turn.
-func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink, lane string) (*streamState, error) {
+//
+// A non-zero outputTimeout bounds the wait for the response to get under way:
+// with nothing past response.created by then it reports errResponseTimeout.
+// Once the response is under way the wait is unbounded, since its output is
+// already on its way and re-issuing it would repeat it.
+func (s *Service) readTurn(
+	ctx context.Context, sess *session, sink llm.Sink, lane string, outputTimeout time.Duration,
+) (*streamState, error) {
 	state := newStreamState(sink, "WebSocket API error")
+	var deadline <-chan time.Time
+	if outputTimeout > 0 {
+		timer := time.NewTimer(outputTimeout)
+		defer timer.Stop()
+		deadline = timer.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return state, ctx.Err()
+		case <-deadline:
+			return state, fmt.Errorf("%w: no output within %s", errResponseTimeout, outputTimeout)
 		case m, ok := <-sess.events:
 			if !ok {
 				return state, errConnectionClosed
@@ -408,27 +439,35 @@ func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink, la
 			if !s.followLane(m.ev, lane) {
 				continue
 			}
-			if carriesModelOutput(m.ev) {
-				s.StopTTFBMetrics(ctx)
+			if m.ev.Type != evtCreated {
+				// The response is under way, so the window for abandoning and
+				// re-issuing it has closed.
+				deadline = nil
 			}
-			if startsFunctionCall(m.ev) {
-				// A turn that only calls tools produces no answer text, so the
-				// call itself is what the caller gets and TTFAT ends here rather
-				// than going unmeasured.
-				s.StopTTFATMetrics(ctx)
-			}
-			if cerr := classifyStreamError(m.ev); cerr != nil {
-				return state, cerr
-			}
-			done, err := state.handle(m.ev)
-			if err != nil {
+			if done, err := s.turnEvent(ctx, state, m.ev); err != nil || done {
 				return state, err
-			}
-			if done {
-				return state, nil
 			}
 		}
 	}
+}
+
+// turnEvent folds one event of the response in: the metrics it ends, then the
+// state machine. It reports done when the turn has ended, and an error when the
+// response failed.
+func (s *Service) turnEvent(ctx context.Context, state *streamState, ev event) (bool, error) {
+	if carriesModelOutput(ev) {
+		s.StopTTFBMetrics(ctx)
+	}
+	if startsFunctionCall(ev) {
+		// A turn that only calls tools produces no answer text, so the call
+		// itself is what the caller gets and TTFAT ends here rather than going
+		// unmeasured.
+		s.StopTTFATMetrics(ctx)
+	}
+	if cerr := classifyStreamError(ev); cerr != nil {
+		return true, cerr
+	}
+	return state.handle(ev)
 }
 
 // chooseNextLane chooses the lane for the next response.

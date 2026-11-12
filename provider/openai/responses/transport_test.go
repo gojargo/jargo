@@ -401,6 +401,10 @@ type fakeResponsesWS struct {
 // the connection once it has sent the rest.
 const closeConnection = "__close__"
 
+// pausePrefix starts a scripted entry that holds the script back for the
+// duration after it, "__pause__150ms" say, rather than sending an event.
+const pausePrefix = "__pause__"
+
 // modelNotFound is an error event as the WebSocket sends it, nested under the
 // event, with a message and a code.
 const modelNotFound = `{"type":"error","status":400,"error":{"type":"invalid_request_error",` +
@@ -453,6 +457,11 @@ func newFakeResponsesWS(t *testing.T, scripts [][]string) *fakeResponsesWS {
 			for _, ev := range scripts[n] {
 				if ev == closeConnection {
 					return
+				}
+				if d, ok := strings.CutPrefix(ev, pausePrefix); ok {
+					pause, _ := time.ParseDuration(d)
+					time.Sleep(pause)
+					continue
 				}
 				if c.Write(ctx, websocket.MessageText, []byte(ev)) != nil {
 					return
