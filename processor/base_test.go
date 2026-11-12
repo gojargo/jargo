@@ -39,6 +39,8 @@ func (f *flusher) TrackFlushProbe(*frames.PipelineFlushFrame) {}
 // flushing goes.
 func (f *flusher) TurnTracker() processor.TurnTracker { return nil }
 
+func (f *flusher) AppResources() any { return nil }
+
 func (f *flusher) Capabilities() capabilities.BotCapabilities { return capabilities.BotCapabilities{} }
 
 func (f *flusher) count() int {

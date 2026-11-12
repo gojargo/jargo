@@ -511,6 +511,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   hand-registered handler without a word. It still does, and now warns, once
   per tool, that the registration is unnecessary.
 
+- **`WorkerConfig.AppResources` reaches tool handlers and processors.** The
+  resources an application shares across a session were accepted and then
+  dropped: nothing could read them. A tool handler now gets them as
+  `FunctionCallParams.AppResources`, with the worker running the call as
+  `FunctionCallParams.PipelineWorker`, and a processor through
+  `Running().AppResources()`; `pipeline.Worker.AppResources` returns them.
+  **Breaking:** `processor.Running` gains `AppResources`, so a custom
+  implementation has to add it.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

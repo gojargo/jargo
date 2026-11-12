@@ -115,7 +115,8 @@ type WorkerConfig struct {
 	Clock clock.Clock
 	// AppResources is whatever the application wants to share across a session,
 	// a database handle or an HTTP client say. It is passed by reference and
-	// never read by the framework; a processor reaches it through its setup.
+	// never read by the framework. A processor reaches it through its setup's
+	// Running, and a tool handler through FunctionCallParams.AppResources.
 	AppResources any
 	// CancelTimeout bounds the wait for a CancelFrame to travel the pipeline;
 	// zero defaults to 20 seconds. Canceling is what a caller reaches for when
@@ -842,6 +843,10 @@ func (t *Worker) flushReports(flushID uint64) int {
 	defer t.flushMu.Unlock()
 	return t.flushProgress[flushID]
 }
+
+// AppResources implements processor.Running: what the application shares
+// across the session, as WorkerConfig.AppResources gave it.
+func (t *Worker) AppResources() any { return t.cfg.AppResources }
 
 // TrackFlushProbe records a probe from another worker that this pipeline is
 // answering, so progress is reported back to whoever is waiting on it.

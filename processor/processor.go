@@ -78,6 +78,10 @@ type Running interface {
 	// pipeline's transports and parameters, for a client to configure itself
 	// by.
 	Capabilities() capabilities.BotCapabilities
+	// AppResources is what the application shares across the session through
+	// the worker's configuration, a database handle or an HTTP client say,
+	// passed by reference. The framework never reads it.
+	AppResources() any
 }
 
 // TurnTracker reports where the conversation's turns end.

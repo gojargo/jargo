@@ -161,6 +161,12 @@ type FunctionCallParams struct {
 	LLM *Base
 	// Context is the conversation the call was made in.
 	Context *frames.LLMContext
+	// PipelineWorker is the worker running the pipeline the call was made in,
+	// or nil when the service is not running in one.
+	PipelineWorker processor.Running
+	// AppResources is what the application shares across the session, as the
+	// worker's configuration gave it: the same value, passed by reference.
+	AppResources any
 	// Result delivers what the call produced. A handler that returns without
 	// calling it reports nothing, and the call is left showing as in progress
 	// until it is canceled.
@@ -1653,6 +1659,10 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		LLM:          b,
 		Context:      call.convo,
 		Result:       report,
+	}
+	if running := b.Running(); running != nil {
+		params.PipelineWorker = running
+		params.AppResources = running.AppResources()
 	}
 	if err := callHandler(ctx, item.handler, params); err != nil {
 		if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
