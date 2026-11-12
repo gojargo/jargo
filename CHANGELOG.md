@@ -55,6 +55,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`together.NewTTS` keeps one connection for the call instead of dialing
+  one per sentence.** It used to open a connection for each sentence, pin the
+  voice, send the text and wait for that sentence's audio before the next one
+  could go out. It now connects when the pipeline starts and pins the voice on
+  the session once; each sentence is appended to the text buffer and
+  committed on the open connection, and the call returns. The audio that
+  arrives is labeled with the context playing, since Together's events name
+  no request, and the done event ends that context at once. A failed
+  synthesis is reported and stops the context's speech without dropping the
+  connection, while an error event is reported and has the connection opened
+  again. An interruption clears the text Together is still holding, and
+  frame handling pauses while a turn's audio is generated. The connection
+  runs on `tts.Websocket`: a lost connection is restored with backoff, and
+  after three failed redials the service reports a permanent error, so it
+  becomes unusable and a service switcher moves off it. The new
+  `TTSConfig.Websocket` field configures the reconnection and the timeouts,
+  and `TTSConfig.ExtraParams` sends model-specific options such as
+  `pronunciation_dict` with the session. The model, the voice, the language,
+  the partial length and the extra options can now be changed while the
+  pipeline runs (`together.TTSSettings`); any change reconnects.
+
 - **`resembleai.NewTTS` holds one connection for the call instead of dialing
   one per sentence.** It used to open a connection for each sentence, send the
   request with a fixed id, and wait for that sentence's audio before the next

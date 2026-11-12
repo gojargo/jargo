@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/settings"
 )
 
 // Tests for the TTS endpoint. Together reads the model, the voice and the
@@ -17,7 +18,7 @@ import (
 func endpointQuery(t *testing.T, cfg TTSConfig) url.Values {
 	t.Helper()
 	cfg.APIKey = "test-key"
-	u, err := url.Parse((&synthesizer{cfg: cfg.withTTSDefaults()}).endpoint())
+	u, err := url.Parse(newSynthesizer(cfg).buildWebsocketURL())
 	if err != nil {
 		t.Fatalf("parsing the endpoint: %v", err)
 	}
@@ -47,8 +48,7 @@ func TestEndpointSendsDefaultLanguage(t *testing.T) {
 // unescaped, the server reads it as a space and rejects the voice. The model's
 // `/` stays as it is.
 func TestEndpointEscapesBlendedVoice(t *testing.T) {
-	cfg := TTSConfig{APIKey: "test-key", Voice: "af_bella(2)+af_heart(1)"}
-	endpoint := (&synthesizer{cfg: cfg.withTTSDefaults()}).endpoint()
+	endpoint := newSynthesizer(TTSConfig{APIKey: "test-key", Voice: "af_bella(2)+af_heart(1)"}).buildWebsocketURL()
 
 	if !strings.Contains(endpoint, "voice=af_bella%282%29%2Baf_heart%281%29") {
 		t.Errorf("endpoint = %q, want the blended voice escaped", endpoint)
@@ -80,15 +80,44 @@ func TestEndpointResolvesLanguage(t *testing.T) {
 	}
 }
 
-// TestEndpointOmitsAnEmptyLanguage checks a synthesizer holding no language
-// sends none, leaving Together on its own default.
+// TestEndpointOmitsAnEmptyLanguage checks settings holding no language send
+// none, leaving Together on its own default.
 func TestEndpointOmitsAnEmptyLanguage(t *testing.T) {
-	cfg := TTSConfig{APIKey: "test-key", Model: defaultTTSModel, Voice: defaultTTSVoice}
-	u, err := url.Parse((&synthesizer{cfg: cfg}).endpoint())
+	s := newSynthesizer(TTSConfig{APIKey: "test-key"})
+	cleared := &TTSSettings{}
+	cleared.Language = settings.Cleared[string]()
+	if _, err := settings.Apply(s.live, cleared); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(s.buildWebsocketURL())
 	if err != nil {
 		t.Fatalf("parsing the endpoint: %v", err)
 	}
 	if u.Query().Has("language") {
 		t.Errorf("endpoint = %q, want no language", u)
+	}
+}
+
+// TestEndpointSendsMaxPartialLength checks the optional cap reaches the
+// endpoint as a query parameter when it is configured.
+func TestEndpointSendsMaxPartialLength(t *testing.T) {
+	partial := 120
+	if got := endpointQuery(t, TTSConfig{MaxPartialLength: &partial}).Get("max_partial_length"); got != "120" {
+		t.Errorf("max_partial_length = %q, want 120", got)
+	}
+}
+
+// TestServiceLanguage checks a neutral language given in a settings update is
+// named the way Together names it.
+func TestServiceLanguage(t *testing.T) {
+	s := newSynthesizer(TTSConfig{APIKey: "test-key"})
+	for in, want := range map[language.Language]string{
+		language.French:    "fr",
+		language.EnglishUS: "en",
+		language.ChineseHK: "zh-hk",
+	} {
+		if got := s.ServiceLanguage(in); got != want {
+			t.Errorf("ServiceLanguage(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
