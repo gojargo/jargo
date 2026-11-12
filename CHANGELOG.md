@@ -232,6 +232,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   exact message type, so naming `bus.BaseDataMessage` forwarded nothing but a
   bare base message. A message now crosses when its type is one named or embeds
   it.
+- **Frame type filters select the types built on the ones they name.**
+  `pipeline.FrameTypes` (the worker's reached filters and its idle frames) and
+  the debug log observer's frame filters matched only the exact type, so naming
+  `TextFrame` missed LLM tokens and transcriptions. Both now select a frame
+  whose type is one named or embeds it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

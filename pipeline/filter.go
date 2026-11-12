@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/embeds"
 )
 
 // FrameFilter reports whether a frame is one the caller asked to hear about. It
@@ -14,25 +15,30 @@ import (
 // never called. Say what you want to see.
 type FrameFilter func(frames.Frame) bool
 
-// FrameTypes returns a FrameFilter selecting frames of the same concrete type as
-// one of the exemplars. An exemplar is read for its type alone and never enters
-// a pipeline, so an empty literal is enough:
+// FrameTypes returns a FrameFilter selecting frames of the type of one of the
+// exemplars, or of a type built on it. An exemplar is read for its type alone
+// and never enters a pipeline, so an empty literal is enough:
 //
 //	pipeline.FrameTypes(&frames.TTSStoppedFrame{}, &frames.BotStoppedSpeakingFrame{})
 //
-// Matching is by exact type. A filter naming a frame that other frames embed
-// does not select those others, and neither does one naming an interface. Write
-// the predicate directly for either:
+// A frame whose type embeds an exemplar's is selected too: naming TextFrame
+// selects LLM tokens and transcriptions. A filter cannot name an interface;
+// write the predicate directly for that:
 //
 //	func(f frames.Frame) bool { _, ok := f.(frames.SystemFrame); return ok }
 func FrameTypes(exemplars ...frames.Frame) FrameFilter {
-	want := make(map[reflect.Type]struct{}, len(exemplars))
+	want := make([]reflect.Type, 0, len(exemplars))
 	for _, f := range exemplars {
-		want[reflect.TypeOf(f)] = struct{}{}
+		want = append(want, reflect.TypeOf(f))
 	}
 	return func(f frames.Frame) bool {
-		_, ok := want[reflect.TypeOf(f)]
-		return ok
+		got := reflect.TypeOf(f)
+		for _, w := range want {
+			if embeds.Is(got, w) {
+				return true
+			}
+		}
+		return false
 	}
 }
 

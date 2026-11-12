@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/embeds"
 	"github.com/gojargo/jargo/processor"
 )
 
@@ -49,7 +50,8 @@ const (
 // processor.
 type DebugFrameFilter struct {
 	// Frame is an instance of the frame type to log; its type is what is
-	// matched, not its contents.
+	// matched, not its contents. A frame of a type built on it is logged too:
+	// TextFrame takes in LLM tokens and transcriptions.
 	Frame frames.Frame
 	// Match, when set, logs the frame only where the processor at Endpoint
 	// satisfies it. Leave it nil to log the frame wherever it travels.
@@ -121,9 +123,9 @@ func (o *DebugLog) shouldLog(data processor.FramePushed) bool {
 	if len(o.filters) == 0 {
 		return true
 	}
-	want := reflect.TypeOf(data.Frame)
+	got := reflect.TypeOf(data.Frame)
 	for _, f := range o.filters {
-		if reflect.TypeOf(f.Frame) != want {
+		if !embeds.Is(got, reflect.TypeOf(f.Frame)) {
 			continue
 		}
 		if f.Match == nil {

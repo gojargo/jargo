@@ -141,6 +141,22 @@ func TestDebugLogNarrowsToTheFramesAskedFor(t *testing.T) {
 	}
 }
 
+// TestDebugLogFilterTakesInTypesBuiltOnIt checks a filter naming a frame type
+// logs the frames whose types embed it too: TextFrame takes in an LLM token.
+func TestDebugLogFilterTakesInTypesBuiltOnIt(t *testing.T) {
+	var buf bytes.Buffer
+	o := observers.NewDebugLog(observers.DebugLogConfig{
+		Logger: debugLog(&buf),
+		Frames: []observers.DebugFrameFilter{{Frame: &frames.TextFrame{}}},
+	})
+
+	src, dst := newPlain("Src"), newPlain("Dst")
+	handover(o, src, dst, frames.NewLLMTextFrame("token"), processor.Downstream)
+	if got := buf.String(); !strings.Contains(got, "LLMTextFrame") {
+		t.Errorf("logged %q, want the LLM token a TextFrame filter takes in", got)
+	}
+}
+
 // TestDebugLogNarrowsToOneEndOfTheHandover covers the other half of the filter:
 // the same frame type is interesting at one point in the pipeline and noise
 // everywhere else.

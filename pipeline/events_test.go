@@ -971,3 +971,19 @@ func TestProviderTurnFramesKeepThePipelineAlive(t *testing.T) {
 	task.StopWhenDone()
 	waitDone(t, done)
 }
+
+// TestFrameTypesSelectsTypesBuiltOnAnExemplar checks a filter naming a frame
+// type selects the frames whose types embed it too, and not unrelated ones.
+func TestFrameTypesSelectsTypesBuiltOnAnExemplar(t *testing.T) {
+	filter := pipeline.FrameTypes(&frames.TextFrame{})
+	for _, f := range []frames.Frame{
+		frames.NewTextFrame("a"), frames.NewLLMTextFrame("a"), frames.NewTranscriptionFrame("a", "u", "now"),
+	} {
+		if !filter(f) {
+			t.Errorf("FrameTypes(TextFrame) does not select %T", f)
+		}
+	}
+	if filter(frames.NewEndFrame()) {
+		t.Error("FrameTypes(TextFrame) selected an EndFrame")
+	}
+}
