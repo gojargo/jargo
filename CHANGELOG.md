@@ -108,6 +108,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The WebRTC transport sends every application message as JSON.** A string
+  message went over the data channel raw, which a client that parses every
+  message (as the RTVI web client does) failed on. It is now sent as a JSON
+  string, like every other message.
+
 - **Ending or canceling a session reports no bot stop.** The output transport
   broadcast a `BotStoppedSpeakingFrame` when an `EndFrame` or `CancelFrame`
   stopped it while the bot held the floor, which RTVI clients, turn tracking
