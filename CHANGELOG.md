@@ -656,6 +656,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   as a panic already was, and the processor stays usable. Its text starts
   "Error processing frame", capitalized.
 
+- **A recording's replies start clean.** When the pipeline's audio is at
+  another rate than the recording's, the audio buffer resamples it, and its
+  resamplers kept the tail of the audio before a pause: each bot reply in the
+  recording started with the last milliseconds of the previous one, and user
+  audio after a mute with audio from before it. The resamplers now start
+  afresh at each bot reply, at each unmute and at each recording start.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

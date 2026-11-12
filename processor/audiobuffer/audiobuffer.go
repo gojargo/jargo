@@ -237,6 +237,9 @@ func (p *Processor) startRecording() {
 	}
 	p.recording = true
 	p.resetRecording(true)
+	// A recording starts its tracks clean rather than with the end of the
+	// audio converted before it.
+	p.resetResamplersLocked(true, true)
 	p.mu.Unlock()
 	if p.cfg.OnRecordingStarted != nil {
 		p.cfg.OnRecordingStarted()
@@ -278,8 +281,15 @@ func (p *Processor) record(f frames.Frame) {
 		p.userSpeaking = false
 	case *frames.BotStartedSpeakingFrame:
 		p.botSpeaking = true
+		// No bot audio arrives between replies, so each reply starts the
+		// resampler clean instead of with the end of the previous one.
+		p.resetResamplersLocked(false, true)
 	case *frames.BotStoppedSpeakingFrame:
 		p.botSpeaking = false
+	case *frames.UserMuteStoppedFrame:
+		// Likewise for user audio, which does not arrive while the user is
+		// muted.
+		p.resetResamplersLocked(true, false)
 	}
 
 	audio, rate, ch, kind := classify(f)
@@ -557,6 +567,17 @@ func (p *Processor) fillSilenceGap(buf []byte, last *time.Time, now time.Time, f
 		}
 	}
 	return buf
+}
+
+// resetResamplersLocked discards the audio the input and output resamplers
+// hold, as asked. The caller holds p.mu.
+func (p *Processor) resetResamplersLocked(input, output bool) {
+	if input && p.inRes != nil {
+		p.inRes.Clear()
+	}
+	if output && p.outRes != nil {
+		p.outRes.Clear()
+	}
 }
 
 func (p *Processor) resampleInput(audio []byte, rate, channels int) []byte {
