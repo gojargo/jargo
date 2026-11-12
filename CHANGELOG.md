@@ -770,6 +770,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   interim and final transcript now says English, the language it
   transcribes.
 
+- **Cartesia Turns reports a failed audio send.** A send of audio the
+  Cartesia Turns STT session refused was only logged. It is now pushed as a
+  non-fatal error too, as the plain Cartesia STT still only logs it. A
+  streaming STT provider asks for this by implementing the new
+  `stt.SendErrorReporter`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

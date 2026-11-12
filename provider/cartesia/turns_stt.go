@@ -273,6 +273,12 @@ type turnsStream struct {
 	turnText string
 }
 
+// SendErrorMessage implements stt.SendErrorReporter: a failed send of audio is
+// reported as an error, not only logged.
+func (s *turnsStream) SendErrorMessage(err error) string {
+	return "Cartesia Ink-2 ASR send error: " + err.Error()
+}
+
 // turnsLanguage is the language every Turns transcript is stamped with: the
 // endpoint transcribes English.
 const turnsLanguage = "en"

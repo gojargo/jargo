@@ -1038,7 +1038,18 @@ func (s *StreamService) send(audio []byte) {
 		s.mu.Lock()
 		s.sendFailed = true
 		s.mu.Unlock()
+		// A provider that reports a failed send has it pushed as an error too.
+		if r, ok := stream.(SendErrorReporter); ok {
+			s.PushError(context.Background(), r.SendErrorMessage(err), err, false)
+		}
 	}
+}
+
+// SendErrorReporter is an optional interface a Stream implements when a failed
+// send of audio is to be reported upstream as a non-fatal error, rather than
+// only logged. SendErrorMessage is the error's message.
+type SendErrorReporter interface {
+	SendErrorMessage(err error) string
 }
 
 // speechStarted tells the session a new utterance has begun, for a provider that
