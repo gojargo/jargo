@@ -17,15 +17,27 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// AggregatorConfig configures a DTMF Aggregator.
+// DefaultTimeout is how long the aggregator waits after the last key before it
+// flushes the digits collected without a terminator.
+const DefaultTimeout = 2 * time.Second
+
+// DefaultPrefix is what the emitted transcription starts with, so the model
+// can tell a keypad entry from something the user said.
+const DefaultPrefix = "DTMF: "
+
+// AggregatorConfig configures a DTMF Aggregator. The zero value is the
+// defaults: '#' ends an entry, two idle seconds flush one without it, and the
+// transcription starts "DTMF: ".
 type AggregatorConfig struct {
 	// Terminator is the key that flushes the collected digits; empty uses '#'.
 	Terminator frames.KeypadEntry
 	// Timeout flushes the collected digits after this idle period even without a
-	// terminator; 0 disables the timeout (flush on the terminator only).
+	// terminator. Zero uses DefaultTimeout; a negative value turns the timeout
+	// off, so only the terminator flushes.
 	Timeout time.Duration
-	// Prefix is prepended to the emitted transcription, e.g. "User pressed: ".
-	Prefix string
+	// Prefix is prepended to the emitted transcription. Nil uses DefaultPrefix;
+	// point it at "" for none.
+	Prefix *string
 }
 
 // Aggregator collects the DTMF keys received from the transport into a string
@@ -45,6 +57,12 @@ type Aggregator struct {
 func NewAggregator(cfg AggregatorConfig) *Aggregator {
 	if cfg.Terminator == "" {
 		cfg.Terminator = frames.KeypadPound
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = DefaultTimeout
+	}
+	if cfg.Prefix == nil {
+		cfg.Prefix = new(DefaultPrefix)
 	}
 	a := &Aggregator{cfg: cfg}
 	a.Base = processor.New("DTMFAggregator", a)
@@ -119,7 +137,7 @@ func (a *Aggregator) emit(ctx context.Context, text string) {
 	if text == "" {
 		return
 	}
-	tf := frames.NewTranscriptionFrame(a.cfg.Prefix+text, "", frames.NowTimestamp())
+	tf := frames.NewTranscriptionFrame(*a.cfg.Prefix+text, "", frames.NowTimestamp())
 	tf.Finalized = true
 	_ = a.PushFrame(ctx, tf, processor.Downstream)
 }

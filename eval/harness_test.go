@@ -128,7 +128,7 @@ func buildFakeBot(in, out processor.Processor) *pipeline.Worker {
 func buildDTMFBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test system"))
 	rtviProc := rtvi.NewProcessor()
-	keys := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: "DTMF: "})
+	keys := dtmf.NewAggregator(dtmf.AggregatorConfig{})
 	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, keys, agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.WorkerConfig{

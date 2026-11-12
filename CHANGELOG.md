@@ -43,6 +43,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   stood for the default of one, so answering no empty turn at all could not be
   asked for. Nil now means one, and zero answers none. **Breaking:** set it
   with `new(n)`.
+- **The DTMF aggregator's zero config is the defaults.** A zero
+  `AggregatorConfig` had no prefix and no idle timeout, so the model read an
+  entry with no hint it came from the keypad, and digits entered without `#`
+  were never flushed. The timeout now defaults to two seconds (a negative value
+  turns it off) and the prefix to "DTMF: ". **Breaking:** `Prefix` is a
+  `*string`; point it at "" for none.
 
 ### Fixed
 
