@@ -250,8 +250,13 @@ func TestStreamsEvents(t *testing.T) {
 	// frames: the events do not map one to one onto what reaches the pipeline,
 	// so a count is reached while the end of the response is still in flight.
 	// response.done is the last event the server sends, and the bot-stopped
-	// frame is what it produces.
-	waitFor(t, func() bool { return hasFrame[*frames.BotStoppedSpeakingFrame](collected()) })
+	// frame is what it produces. The user starting to speak stops the bot too,
+	// earlier in the script, so the completed transcript that comes after it is
+	// waited for as well.
+	waitFor(t, func() bool {
+		fs := collected()
+		return hasFrame[*frames.BotStoppedSpeakingFrame](fs) && hasFrame[*frames.TranscriptionFrame](fs)
+	})
 
 	var (
 		gotAudio                   []byte
