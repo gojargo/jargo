@@ -106,7 +106,7 @@ func (c *Classifier) Cleanup(ctx context.Context) error {
 // AskQuestions implements classifier.Asker, answering the questions in one
 // request.
 func (c *Classifier) AskQuestions(
-	ctx context.Context, state any, questions []classifier.Named[classifier.Question],
+	ctx context.Context, state any, questions []classifier.Named[classifier.Question], _ []classifier.Input,
 ) (map[string]classifier.Result, *frames.LLMTokenUsage, error) {
 	jevQuestions := make([]NamedQuestion, 0, len(questions))
 	for _, q := range questions {

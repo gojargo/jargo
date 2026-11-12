@@ -47,6 +47,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   chunk of a stream is no longer short and the filter's tail is a few
   milliseconds of delayed audio; `Quality` and `ResampleQuality` are
   deprecated and have no effect.
+- **Classifier questions can come with images, clips of audio and files.**
+  `Ask`, `YesNo`, `Choice` and `Score` take inputs after the questions:
+  `classifier.Image` (PNG, JPEG or WebP, its type read from the bytes when not
+  given, or built from raw pixels with `ImageFromFrame`), `classifier.Audio`
+  (16-bit mono PCM) and `classifier.File` (bytes or a URL). A classifier says
+  what it takes through `Capabilities` (`SupportsImages`, `SupportsAudio`,
+  `MinAudio`, `MaxAudio`, `PreferredAudio`, `AudioSampleRate`, `FileTypes`),
+  whose defaults `classifier.Base` provides, and refuses the rest before it
+  is asked: an image it cannot see, a file of a type it does not take, a clip
+  it cannot hear or of a length outside its bounds. A clip is resampled to
+  the classifier's rate. **Breaking:** `Asker.AskQuestions` takes the checked
+  inputs as a fourth argument, and `Classifier` gains the `Capabilities`
+  methods.
 
 - **The telephony codec takes a wire rate per direction.** `AudioConfig`
   gains `WireInSampleRate` and `WireOutSampleRate`, which win over

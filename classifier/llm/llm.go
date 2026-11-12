@@ -110,7 +110,7 @@ func (c *Classifier) Model() string {
 // AskQuestions implements classifier.Asker, answering the questions in one LLM
 // call. The call reports no token usage.
 func (c *Classifier) AskQuestions(
-	ctx context.Context, state any, questions []classifier.Named[classifier.Question],
+	ctx context.Context, state any, questions []classifier.Named[classifier.Question], _ []classifier.Input,
 ) (map[string]classifier.Result, *frames.LLMTokenUsage, error) {
 	prompt, err := c.render(state, questions)
 	if err != nil {

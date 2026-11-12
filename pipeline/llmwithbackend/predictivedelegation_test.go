@@ -108,7 +108,7 @@ func newScriptedClassifier(after time.Duration, fail bool, yes ...string) *scrip
 func (c *scriptedClassifier) Model() string { return "scripted" }
 
 func (c *scriptedClassifier) AskQuestions(
-	ctx context.Context, state any, questions []classifier.Named[classifier.Question],
+	ctx context.Context, state any, questions []classifier.Named[classifier.Question], _ []classifier.Input,
 ) (map[string]classifier.Result, *frames.LLMTokenUsage, error) {
 	s, _ := state.(classifierState)
 	c.mu.Lock()

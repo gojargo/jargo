@@ -26,7 +26,7 @@ type fakeAsker struct {
 }
 
 func (a *fakeAsker) AskQuestions(
-	ctx context.Context, state any, questions []classifier.Named[classifier.Question],
+	ctx context.Context, state any, questions []classifier.Named[classifier.Question], _ []classifier.Input,
 ) (map[string]classifier.Result, *frames.LLMTokenUsage, error) {
 	a.mu.Lock()
 	asked, _ := state.(map[string]string)

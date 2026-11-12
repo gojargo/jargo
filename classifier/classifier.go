@@ -5,7 +5,9 @@
 // question is a [YesNoQuestion], a [ChoiceQuestion] or a [ScoreQuestion].
 // Questions are asked by name, several about one state at once: Ask takes any
 // mix of kinds, and YesNo, Choice and Score take questions of one kind and
-// return typed results.
+// return typed results. Questions can come with inputs alongside the state, of
+// the kinds the classifier takes: images ([Image]), clips of audio ([Audio])
+// and files such as PDFs or videos ([File]).
 //
 // The state a question is about is plain text, or structured data such as a
 // transcript with speaker labels or a trimmed screen snapshot: a string, or a
@@ -22,9 +24,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync/atomic"
 	"time"
 
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/utils/events"
 )
@@ -184,16 +188,54 @@ type Asker interface {
 	// its question calls for. usage is nil when the call's tokens are unknown.
 	// It answers or fails within a bound of its own, so a caller waiting on it
 	// is never left hanging, and its errors wrap ErrClassifier.
+	//
+	// inputs holds only the kinds the classifier takes, in the order they were
+	// given, each clip of an accepted length and at its AudioSampleRate. It is
+	// empty, never nil, when the questions came with none.
 	AskQuestions(
-		ctx context.Context, state any, questions []Named[Question],
+		ctx context.Context, state any, questions []Named[Question], inputs []Input,
 	) (results map[string]Result, usage *frames.LLMTokenUsage, err error)
 	// Model is the model that answers, named in the metrics, or "".
 	Model() string
 }
 
+// Capabilities is what a classifier says about the inputs it takes. Base
+// implements each with its default; a classifier that takes more overrides the
+// ones that differ, and Base reads them through the classifier it was given.
+type Capabilities interface {
+	// SupportsImages reports whether questions can come with images. False by
+	// default.
+	SupportsImages() bool
+	// SupportsAudio reports whether questions can come with a clip of audio.
+	// False by default.
+	SupportsAudio() bool
+	// MinAudio is the shortest clip the classifier accepts. Zero by default.
+	MinAudio() time.Duration
+	// MaxAudio is the longest clip the classifier accepts, or zero for no
+	// limit, the default.
+	MaxAudio() time.Duration
+	// PreferredAudio is how long a clip the classifier answers best: its
+	// MinAudio by default.
+	PreferredAudio() time.Duration
+	// AudioSampleRate is the sample rate clips are resampled to, or zero to keep
+	// their own, the default.
+	AudioSampleRate() int
+	// FileTypes is the MIME types of the files questions can come with; none by
+	// default.
+	FileTypes() []string
+}
+
 // Classifier answers typed questions about a state. Base implements everything
 // but Model, which the classifier embedding it provides.
+//
+// Questions can come with inputs: images, clips of audio and files. A
+// classifier says which it takes through its Capabilities and refuses the
+// rest. One that hears declares the clips it accepts: from MinAudio to MaxAudio
+// long, resampled to AudioSampleRate before AskQuestions gets them. A clip of
+// another length is refused. It also says how long a clip it answers best, in
+// PreferredAudio.
 type Classifier interface {
+	Capabilities
 	// Name is the classifier's name, which its metrics are reported under.
 	Name() string
 	// Model is the model that answers, named in the metrics, or "".
@@ -204,14 +246,21 @@ type Classifier interface {
 	Setup(ctx context.Context) error
 	// Cleanup releases what the classifier holds.
 	Cleanup(ctx context.Context) error
-	// Ask answers several questions of any kinds about one state.
-	Ask(ctx context.Context, state any, questions []Named[Question]) (map[string]Result, error)
+	// Ask answers several questions of any kinds about one state, with the
+	// inputs that come with it.
+	Ask(ctx context.Context, state any, questions []Named[Question], inputs ...Input) (map[string]Result, error)
 	// YesNo asks whether the state meets each condition.
-	YesNo(ctx context.Context, state any, questions []Named[YesNoQuestion]) (map[string]YesNoResult, error)
+	YesNo(
+		ctx context.Context, state any, questions []Named[YesNoQuestion], inputs ...Input,
+	) (map[string]YesNoResult, error)
 	// Choice asks which option fits the state, for each question.
-	Choice(ctx context.Context, state any, questions []Named[ChoiceQuestion]) (map[string]ChoiceResult, error)
+	Choice(
+		ctx context.Context, state any, questions []Named[ChoiceQuestion], inputs ...Input,
+	) (map[string]ChoiceResult, error)
 	// Score asks where the state falls on each scale.
-	Score(ctx context.Context, state any, questions []Named[ScoreQuestion]) (map[string]ScoreResult, error)
+	Score(
+		ctx context.Context, state any, questions []Named[ScoreQuestion], inputs ...Input,
+	) (map[string]ScoreResult, error)
 }
 
 // nameCounter numbers classifiers that were not given a name.
@@ -265,18 +314,70 @@ func (b *Base) Cleanup(ctx context.Context) error {
 	return nil
 }
 
+// SupportsImages reports whether questions can come with images: not by
+// default.
+func (b *Base) SupportsImages() bool { return false }
+
+// SupportsAudio reports whether questions can come with a clip of audio: not by
+// default.
+func (b *Base) SupportsAudio() bool { return false }
+
+// MinAudio is the shortest clip the classifier accepts: zero by default.
+func (b *Base) MinAudio() time.Duration { return 0 }
+
+// MaxAudio is the longest clip the classifier accepts, or zero for no limit,
+// the default.
+func (b *Base) MaxAudio() time.Duration { return 0 }
+
+// PreferredAudio is how long a clip the classifier answers best: its shortest
+// by default.
+func (b *Base) PreferredAudio() time.Duration { return b.capabilities().MinAudio() }
+
+// AudioSampleRate is the sample rate clips are resampled to, or zero to keep
+// their own, the default.
+func (b *Base) AudioSampleRate() int { return 0 }
+
+// FileTypes is the MIME types of the files questions can come with: none by
+// default.
+func (b *Base) FileTypes() []string { return nil }
+
+// capabilities is what the classifier says about its inputs: its own where it
+// overrides the defaults, the base's where it does not.
+func (b *Base) capabilities() Capabilities {
+	if c, ok := b.asker.(Capabilities); ok {
+		return c
+	}
+	return b
+}
+
 // Ask answers several questions about one state, one result per name, each of
-// the type its question calls for. It fails with an error wrapping
-// ErrClassifier when the answers could not be produced, or not in time.
-func (b *Base) Ask(ctx context.Context, state any, questions []Named[Question]) (map[string]Result, error) {
+// the type its question calls for. inputs are the images, clips of audio and
+// files that come with the state, of the kinds the classifier takes.
+//
+// It fails with an error wrapping ErrClassifier when the answers could not be
+// produced, or not in time: every classifier answers or fails within a bound of
+// its own, so a caller waiting on it is never left hanging. Also when an input
+// is of a kind the classifier does not take, or a clip of a length it does not
+// accept.
+func (b *Base) Ask(
+	ctx context.Context, state any, questions []Named[Question], inputs ...Input,
+) (map[string]Result, error) {
 	for _, q := range questions {
 		if s, ok := q.Question.(ScoreQuestion); ok && len(s.Levels) < 2 {
 			return nil, fmt.Errorf("%w: %q has %d levels, want at least two",
 				ErrInvalidQuestion, q.Name, len(s.Levels))
 		}
 	}
+	checked := make([]Input, 0, len(inputs))
+	for _, input := range inputs {
+		c, err := b.check(input)
+		if err != nil {
+			return nil, err
+		}
+		checked = append(checked, c)
+	}
 	started := time.Now()
-	results, usage, err := b.asker.AskQuestions(ctx, state, questions)
+	results, usage, err := b.asker.AskQuestions(ctx, state, questions, checked)
 	if err != nil {
 		return nil, err
 	}
@@ -287,9 +388,9 @@ func (b *Base) Ask(ctx context.Context, state any, questions []Named[Question]) 
 // YesNo asks whether the state meets each condition, and returns how likely each
 // answer is yes, by the same names.
 func (b *Base) YesNo(
-	ctx context.Context, state any, questions []Named[YesNoQuestion],
+	ctx context.Context, state any, questions []Named[YesNoQuestion], inputs ...Input,
 ) (map[string]YesNoResult, error) {
-	results, err := b.Ask(ctx, state, widen(questions))
+	results, err := b.Ask(ctx, state, widen(questions), inputs...)
 	if err != nil {
 		return nil, err
 	}
@@ -299,9 +400,9 @@ func (b *Base) YesNo(
 // Choice asks which option fits the state, for each question, and returns the
 // option that fits and how likely each one is, by the same names.
 func (b *Base) Choice(
-	ctx context.Context, state any, questions []Named[ChoiceQuestion],
+	ctx context.Context, state any, questions []Named[ChoiceQuestion], inputs ...Input,
 ) (map[string]ChoiceResult, error) {
-	results, err := b.Ask(ctx, state, widen(questions))
+	results, err := b.Ask(ctx, state, widen(questions), inputs...)
 	if err != nil {
 		return nil, err
 	}
@@ -311,13 +412,57 @@ func (b *Base) Choice(
 // Score asks where the state falls on each scale, and returns the position on
 // each scale and how likely each level is, by the same names.
 func (b *Base) Score(
-	ctx context.Context, state any, questions []Named[ScoreQuestion],
+	ctx context.Context, state any, questions []Named[ScoreQuestion], inputs ...Input,
 ) (map[string]ScoreResult, error) {
-	results, err := b.Ask(ctx, state, widen(questions))
+	results, err := b.Ask(ctx, state, widen(questions), inputs...)
 	if err != nil {
 		return nil, err
 	}
 	return typed[ScoreResult](results)
+}
+
+// check is the input as AskQuestions gets it, or an error wrapping
+// ErrClassifier if the classifier does not take it.
+func (b *Base) check(input Input) (Input, error) {
+	caps := b.capabilities()
+	switch in := input.(type) {
+	case Audio:
+		return b.clip(caps, in)
+	case Image:
+		if !caps.SupportsImages() {
+			return nil, fmt.Errorf("%w: %s cannot see images", ErrClassifier, b.name)
+		}
+	case File:
+		if !slices.Contains(caps.FileTypes(), in.ContentType) {
+			return nil, fmt.Errorf("%w: %s doesn't take %s files", ErrClassifier, b.name, in.ContentType)
+		}
+	}
+	return input, nil
+}
+
+// clip is the clip at the classifier's AudioSampleRate, or an error wrapping
+// ErrClassifier if the classifier does not accept it.
+func (b *Base) clip(caps Capabilities, audio Audio) (Audio, error) {
+	if !caps.SupportsAudio() {
+		return Audio{}, fmt.Errorf("%w: %s cannot hear audio", ErrClassifier, b.name)
+	}
+	duration := audio.seconds()
+	if least := caps.MinAudio().Seconds(); duration < least {
+		return Audio{}, fmt.Errorf("%w: %s needs at least %gs of audio, got %.2fs",
+			ErrClassifier, b.name, least, duration)
+	}
+	if most := caps.MaxAudio().Seconds(); most > 0 && duration > most {
+		return Audio{}, fmt.Errorf("%w: %s takes at most %gs of audio, got %.2fs",
+			ErrClassifier, b.name, most, duration)
+	}
+	if rate := caps.AudioSampleRate(); rate > 0 && audio.SampleRate != rate {
+		resampled, err := resample.Resample(audio.Audio, audio.SampleRate, rate, 1)
+		if err != nil {
+			return Audio{}, fmt.Errorf("%w: %s couldn't resample the clip: %w", ErrClassifier, b.name, err)
+		}
+		audio = Audio{Audio: resampled, SampleRate: rate}
+	}
+	return audio, nil
 }
 
 // metrics is what a call reports: the time it took and, when known, the tokens

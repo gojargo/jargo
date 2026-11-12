@@ -69,7 +69,7 @@ func (c *fakeClassifier) Cleanup(ctx context.Context) error {
 }
 
 func (c *fakeClassifier) AskQuestions(
-	_ context.Context, state any, questions []classifier.Named[classifier.Question],
+	_ context.Context, state any, questions []classifier.Named[classifier.Question], _ []classifier.Input,
 ) (map[string]classifier.Result, *frames.LLMTokenUsage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

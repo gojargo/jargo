@@ -49,7 +49,7 @@ func newFakeClassifier(answers ...any) *fakeClassifier {
 func (c *fakeClassifier) Model() string { return "" }
 
 func (c *fakeClassifier) AskQuestions(
-	_ context.Context, state any, questions []classifier.Named[classifier.Question],
+	_ context.Context, state any, questions []classifier.Named[classifier.Question], _ []classifier.Input,
 ) (map[string]classifier.Result, *frames.LLMTokenUsage, error) {
 	encoded, err := json.Marshal(state)
 	if err != nil {
