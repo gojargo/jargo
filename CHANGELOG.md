@@ -557,6 +557,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bulleted with them was reported differently from what the conversation
   recorded. Only the markers that came as `LLMMarkerFrame`s are stripped now.
 
+- **Explicit realtime mode applies to the default turn strategies.** With
+  `WithRealtimeServiceMode(true)` and no start strategies configured, the
+  realtime mode was applied before the default chains were filled in, so the
+  transcription start strategy it drops was put back afterwards: a late
+  transcript opened a user turn and interrupted the realtime service's own
+  answer, and the default stop strategy kept waiting for transcripts. The
+  defaults are now filled in first, so the mode applies to them. A service
+  announcing itself as realtime was already handled. `turns.UserTurnStrategies`
+  gains `FillDefaults`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

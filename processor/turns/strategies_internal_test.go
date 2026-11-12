@@ -1067,7 +1067,7 @@ func TestDefaultStrategyChains(t *testing.T) {
 	t.Run("fillDefaults only fills empty chains", func(t *testing.T) {
 		custom := NewExternalStart(ExternalStartConfig{})
 		s := UserTurnStrategies{Start: []StartStrategy{custom}}
-		s.fillDefaults()
+		s.FillDefaults()
 		if len(s.Start) != 1 || s.Start[0] != custom {
 			t.Error("a provided start chain must be left alone")
 		}

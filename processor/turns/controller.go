@@ -141,7 +141,7 @@ func NewUserTurnControllerWithParams(
 	if stopTimeout == 0 {
 		stopTimeout = defaultStopTimeout
 	}
-	strategies.fillDefaults()
+	strategies.FillDefaults()
 	return &UserTurnController{
 		strategies:     strategies,
 		stopStrategies: stopStrategiesOf(strategies),
@@ -218,7 +218,7 @@ func (c *UserTurnController) StrategiesParams() UserTurnStrategiesParams {
 // Empty chains fall back to the defaults, as they do at construction.
 func (c *UserTurnController) UpdateStrategies(strategies UserTurnStrategies) error {
 	c.cleanupStrategies()
-	strategies.fillDefaults()
+	strategies.FillDefaults()
 	c.mu.Lock()
 	c.strategies = strategies
 	c.stopStrategies = stopStrategiesOf(strategies)

@@ -200,3 +200,33 @@ func TestRealtimeCommitsWhatIsLeftAtSessionEnd(t *testing.T) {
 		t.Errorf("user message = %q, want what was said last", msgs[0].Text)
 	}
 }
+
+// Ported from upstream (test_realtime_strategy_mutations_with_defaults). With
+// the mode asked for outright, it applies to the default start chain too: a
+// transcript opens no turn, and so cannot interrupt the answer a realtime
+// service is giving, though no service has announced itself.
+func TestExplicitRealtimeModeTranscriptOpensNoTurn(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo, speechTimeoutTurns(), aggregators.WithRealtimeServiceMode(true))
+	started := make(chan struct{}, 1)
+	pair.User().Events().Add(aggregators.EventUserTurnStarted, func(context.Context, any, ...any) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+	})
+	task := pipeline.NewWorker(pipeline.New(pair.User(), pair.Assistant()), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	defer func() {
+		task.Cancel(context.Background(), "")
+		<-runDone
+	}()
+
+	task.QueueFrame(frames.NewTranscriptionFrame("Hello!", "user", frames.NowTimestamp()))
+	select {
+	case <-started:
+		t.Error("a transcript opened a user turn in realtime mode")
+	case <-time.After(300 * time.Millisecond):
+	}
+}

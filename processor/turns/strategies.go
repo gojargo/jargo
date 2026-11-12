@@ -142,9 +142,11 @@ func (s UserTurnStrategies) ExternalInterruptions() (enabled, isExternal bool) {
 	return *s.external, true
 }
 
-// fillDefaults populates empty chains with the defaults: VAD and transcription
-// to start, the Smart Turn v3 model to stop.
-func (s *UserTurnStrategies) fillDefaults() {
+// FillDefaults populates empty chains with the defaults: VAD and transcription
+// to start, the Smart Turn v3 model to stop. An empty chain means the default
+// one, so filling it in is what lets a change to the chains, the realtime
+// service mode's say, apply to the defaults too.
+func (s *UserTurnStrategies) FillDefaults() {
 	if len(s.Start) == 0 {
 		s.Start = DefaultStartStrategies()
 	}

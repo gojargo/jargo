@@ -487,6 +487,10 @@ func newUser(
 	// services, the mutation waits for the one that announces itself, which is
 	// also where it is applied on top of any strategies a service recommends.
 	if realtime != nil && *realtime {
+		// The mode applies to the default chains as much as to configured ones,
+		// so the defaults are filled in first: left empty, they would be filled
+		// in later with the transcription start the mode drops.
+		strategies.FillDefaults()
 		u.mutateForRealtime(&strategies)
 		u.disableEmptyUserTurnRecovery()
 	}
