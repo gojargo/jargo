@@ -2,6 +2,7 @@ package dtmf_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -117,5 +118,18 @@ func TestAggregatorKeepsTheTerminator(t *testing.T) {
 		frames.KeypadOne, frames.KeypadTwo, frames.KeypadStar, 50*time.Millisecond, frames.KeypadStar)
 	if got := r.gotTexts(); len(got) != 2 || got[0] != "DTMF: 12*" || got[1] != "DTMF: *" {
 		t.Errorf("transcriptions = %q, want the terminator kept in each entry", got)
+	}
+}
+
+// TestAggregatorInterruptsOnTheFirstKey checks the first key of an entry
+// interrupts the bot, and the keys after it do not.
+func TestAggregatorInterruptsOnTheFirstKey(t *testing.T) {
+	r := runKeys(t, dtmf.AggregatorConfig{}, true,
+		frames.KeypadOne, frames.KeypadTwo, frames.KeypadPound)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	want := []string{"key", "interruption", "key", "key", "text"}
+	if !slices.Equal(r.names, want) {
+		t.Errorf("frames = %v, want %v", r.names, want)
 	}
 }

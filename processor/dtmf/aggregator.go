@@ -96,17 +96,27 @@ func (a *Aggregator) Cleanup(ctx context.Context) error {
 // The terminator is part of the entry: it is what the caller pressed.
 func (a *Aggregator) handle(ctx context.Context, button frames.KeypadEntry) {
 	a.mu.Lock()
+	first := a.buf.Len() == 0
 	a.buf.WriteString(string(button))
-	if button == a.cfg.Terminator {
-		text := a.buf.String()
-		a.buf.Reset()
-		a.stopTimer()
+	a.mu.Unlock()
+
+	if first {
+		// A caller keying in an entry is taking the turn, so the bot stops
+		// talking, as it does when the caller speaks.
+		_ = a.BroadcastInterruption(ctx)
+	}
+
+	a.mu.Lock()
+	if button != a.cfg.Terminator {
+		a.armTimer(ctx)
 		a.mu.Unlock()
-		a.emit(ctx, text)
 		return
 	}
-	a.armTimer(ctx)
+	text := a.buf.String()
+	a.buf.Reset()
+	a.stopTimer()
 	a.mu.Unlock()
+	a.emit(ctx, text)
 }
 
 // armTimer restarts the idle-flush timer when a timeout is configured. It runs

@@ -273,6 +273,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   dropped from the text ("DTMF: 123#" came out as "DTMF: 123"), and a lone
   terminator emitted nothing. It is now part of the entry, as the caller pressed
   it.
+- **A caller keying in a DTMF entry interrupts the bot.** The aggregator only
+  collected the keys, so the bot kept talking over a caller entering digits. The
+  first key of an entry now broadcasts an interruption, as speech does.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
