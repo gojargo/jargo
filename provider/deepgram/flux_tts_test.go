@@ -71,16 +71,18 @@ func newFluxTTSServer(t *testing.T, opts fluxTTSServerOptions) (*fluxTTSServer, 
 }
 
 func (f *fluxTTSServer) serve(w http.ResponseWriter, r *http.Request) {
-	c, err := websocket.Accept(w, r, nil)
-	if err != nil {
-		return
-	}
-	defer func() { _ = c.CloseNow() }()
+	// Counted before the handshake is answered, so a dial that has returned
+	// is always counted.
 	f.mu.Lock()
 	f.dials++
 	f.queries = append(f.queries, r.URL.Query())
 	f.auth = r.Header.Get("Authorization")
 	f.mu.Unlock()
+	c, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer func() { _ = c.CloseNow() }()
 	ctx := r.Context()
 	send := func(m map[string]any) bool { return c.Write(ctx, websocket.MessageText, mustJSON(m)) == nil }
 
