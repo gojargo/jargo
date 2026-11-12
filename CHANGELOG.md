@@ -108,6 +108,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A second Ctrl+C ends the dev runner.** The runner kept every further
+  interrupt to itself while it waited, with no bound, for its sessions to
+  end, so a session that would not wind down needed a kill. The first
+  interrupt still shuts down gracefully; a second one now ends the process.
+
 - **The runner's downloads refuse an absolute path as forbidden.** `GET
   /files/%2Fetc%2Fpasswd` answered 404; an absolute path is now refused as
   leaving the downloads folder, with 403.

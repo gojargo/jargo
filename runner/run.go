@@ -1452,7 +1452,11 @@ func Run(ctx context.Context, fs *flag.FlagSet, arguments []string, bot Bot) err
 		return err
 	case <-ctx.Done():
 	}
-	slog.Info("runner: shutting down")
+	// The first interrupt starts a graceful shutdown. Signals go back to their
+	// default handling now, so a second interrupt ends the process at once,
+	// whatever a session that will not wind down is waiting on.
+	stop()
+	slog.Info("runner: shutting down, waiting for the sessions to end (press Ctrl+C again to force quit)")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
