@@ -673,6 +673,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   status comes from the report itself. **Breaking:** `BotOutputTransform`
   returns a `BotOutputTransformResult` rather than a `BotOutputText`.
 
+- **RTVI sends a tool call's result as a value.** At the full report level,
+  `llm-function-call-stopped` carried the result as a JSON string, so a
+  client reading `result.temp` got nothing, and an empty result was left out.
+  A result holding JSON is now sent as that value, an object, a number or
+  `false` say, and any other text as a string, an empty one included; only a
+  canceled call, which has none, leaves it out. **Breaking:**
+  `rtvi.LLMFunctionCallStoppedData.Result` is an `any`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

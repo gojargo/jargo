@@ -2,6 +2,7 @@ package rtvi
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,31 @@ func TestAllMetricTypesAccumulateIntoOneMessage(t *testing.T) {
 	}
 	if v := firstEntry(t, d, "characters")["value"]; v != 42.0 {
 		t.Errorf("characters value = %v, want 42", v)
+	}
+}
+
+// Ported from upstream (test_full_level_reports_a_falsy_result_as_returned). At
+// the full report level, a result is sent as the value it is, a falsy one
+// included: only a result not reported is left out.
+func TestFullLevelReportsAFalsyResultAsReturned(t *testing.T) {
+	for result, want := range map[string]string{
+		`{}`:    `"result":{}`,
+		`[]`:    `"result":[]`,
+		`0`:     `"result":0`,
+		`false`: `"result":false`,
+		``:      `"result":""`,
+		`sunny`: `"result":"sunny"`,
+	} {
+		raw, err := json.Marshal(LLMFunctionCallStopped("search", "call_1", result, false, ReportFull).Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("result %q sent as %s, want %s", result, raw, want)
+		}
+	}
+	raw, _ := json.Marshal(LLMFunctionCallStopped("search", "call_1", "", true, ReportFull).Data)
+	if strings.Contains(string(raw), `"result"`) {
+		t.Errorf("a canceled call sent %s, want no result", raw)
 	}
 }

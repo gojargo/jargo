@@ -3,6 +3,7 @@ package rtvi
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -73,8 +74,13 @@ func TestAnExternalCallIsReportedLikeThePipelinesOwn(t *testing.T) {
 	if d := dataOf[LLMFunctionCallData](t, sent[1]); string(d.Arguments) != `{"location":"Seattle"}` {
 		t.Errorf("in progress carries %s, want the arguments", d.Arguments)
 	}
-	if d := dataOf[LLMFunctionCallStoppedData](t, sent[2]); d.Result != `{"temp":62}` {
-		t.Errorf("stopped carries %q, want the result", d.Result)
+	// The result goes as the value it holds, an object here, not as a string.
+	raw, err := json.Marshal(dataOf[LLMFunctionCallStoppedData](t, sent[2]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"result":{"temp":62}`) {
+		t.Errorf("stopped carries %s, want the result as an object", raw)
 	}
 }
 

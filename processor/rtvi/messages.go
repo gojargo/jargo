@@ -541,7 +541,11 @@ type LLMFunctionCallStoppedData struct {
 	// wire name keeps the protocol's spelling, which the clients already send.
 	Canceled     bool   `json:"cancelled"` //nolint:misspell // the protocol spells it this way
 	FunctionName string `json:"function_name,omitempty"`
-	Result       string `json:"result,omitempty"`
+	// Result is what the call returned, as a value: the JSON it holds when it
+	// is JSON, an object or a number say, and the text as a string otherwise,
+	// an empty one included. It is nil, and left out, only when it is not
+	// reported.
+	Result any `json:"result,omitempty"`
 }
 
 // LLMFunctionCallStopped builds a llm-function-call-stopped message carrying as
@@ -554,9 +558,18 @@ func LLMFunctionCallStopped(
 		d.FunctionName = name
 	}
 	if level == ReportFull && !canceled {
-		d.Result = result
+		d.Result = resultValue(result)
 	}
 	return newMessage(TypeLLMFunctionCallStop, "", d)
+}
+
+// resultValue is a call's result as the value a client reads: the JSON the
+// result holds, or the text itself when it holds none.
+func resultValue(result string) any {
+	if json.Valid([]byte(result)) {
+		return json.RawMessage(result)
+	}
+	return result
 }
 
 // DTMFData is the payload of a dtmf message: the keypad keys the client

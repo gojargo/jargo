@@ -279,7 +279,7 @@ func TestObserverReportsTheWholeCallLifecycle(t *testing.T) {
 		t.Fatalf("a completed call should report its result: %+v", msgs[3].Data)
 	}
 	canceled, ok := msgs[4].Data.(rtvi.LLMFunctionCallStoppedData)
-	if !ok || !canceled.Canceled || canceled.Result != "" {
+	if !ok || !canceled.Canceled || canceled.Result != nil {
 		t.Fatalf("a canceled call should report no result: %+v", msgs[4].Data)
 	}
 }
@@ -361,7 +361,7 @@ func TestObserverIntermediateResultLeavesTheCallRunning(t *testing.T) {
 	}
 	want := []string{
 		rtvi.TypeLLMFunctionCallStop +
-			` {"tool_call_id":"call_1","cancelled":false,"function_name":"get_weather","result":"64"}`,
+			` {"tool_call_id":"call_1","cancelled":false,"function_name":"get_weather","result":64}`,
 		rtvi.TypeLLMFunctionCallStop + ` {"tool_call_id":"call_2","cancelled":true,"function_name":"get_weather"}`,
 	}
 	// System frames can overtake the others, so the order of the messages is
