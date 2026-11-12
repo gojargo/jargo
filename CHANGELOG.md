@@ -480,6 +480,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the pipeline stops. `stt.StreamService.EmitSTTUsageMetrics` makes the
   report.
 
+- **The context size estimate counts tool results.** The estimate behind
+  the summarization token threshold counted a tool result's overhead and not
+  its content, so a conversation full of large tool results (search hits,
+  rows from a database) was summarized late or never and outgrew the model's
+  window. A result now costs what the tool message it becomes does: its
+  content, its structure and its addressing to the call, each result on its
+  own. Text is measured in characters rather than bytes, so text outside
+  ASCII no longer counts several times over.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -1,6 +1,7 @@
 package context
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -490,5 +491,41 @@ func TestFunctionCallTrackingSkipsLLMSpecificMessages(t *testing.T) {
 	}
 	if got.LastSummarizedIndex != 5 {
 		t.Errorf("LastSummarizedIndex = %d, want 5", got.LastSummarizedIndex)
+	}
+}
+
+// TestEstimateContextTokensCountsToolResultContent checks a tool result is
+// counted as upstream counts its tool message: the structure, the content, and
+// the addressing to the call it answers.
+func TestEstimateContextTokensCountsToolResultContent(t *testing.T) {
+	big := strings.Repeat("x", 4000)
+	c := contextOf(
+		userMsg("Hello"),
+		toolCallMsg(frames.ToolCall{ID: "call_1", Name: "fn_call_1", Args: []byte("{}")}),
+		toolResultMsg("call_1", big),
+	)
+	// user 10+1; assistant 10+len("fn_call_1{}")/4; tool 10+1000+10.
+	want := (10 + 1) + (10 + 11/4) + (10 + 1000 + 10)
+	if got := EstimateContextTokens(c); got != want {
+		t.Errorf("EstimateContextTokens = %d, want %d", got, want)
+	}
+}
+
+// TestEstimateContextTokensCountsEachToolResultAsAMessage checks a message
+// carrying several results costs what the tool messages it stands for do.
+func TestEstimateContextTokensCountsEachToolResultAsAMessage(t *testing.T) {
+	c := contextOf(frames.Message{Role: frames.RoleUser, ToolResults: []frames.ToolResult{
+		{ID: "a", Content: "1234"}, {ID: "b", Content: "5678"},
+	}})
+	if got, want := EstimateContextTokens(c), 2*(10+1+10); got != want {
+		t.Errorf("EstimateContextTokens = %d, want %d", got, want)
+	}
+}
+
+// TestEstimateTokensCountsCharacters checks text is measured in characters, as
+// upstream measures it, rather than in the bytes its encoding takes.
+func TestEstimateTokensCountsCharacters(t *testing.T) {
+	if got := EstimateTokens("éééééééé"); got != 2 {
+		t.Errorf("EstimateTokens = %d, want 2: eight characters", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -29,12 +30,13 @@ type MessagesToSummarize struct {
 }
 
 // EstimateTokens estimates how many tokens text is, by the four-characters-per-
-// token heuristic.
+// token heuristic. Characters, not bytes: text outside ASCII would otherwise
+// count several times over.
 func EstimateTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	return len(text) / charsPerToken
+	return utf8.RuneCountInString(text) / charsPerToken
 }
 
 // EstimateContextTokens estimates the size of a conversation: every message's
@@ -60,10 +62,15 @@ func estimateMessagesTokens(messages []frames.Message) int {
 		for _, tc := range m.ToolCalls {
 			total += EstimateTokens(tc.Name + string(tc.Args))
 		}
-		// A tool result is addressed to the call it answers, and that
-		// addressing costs the same structural overhead as a message's role.
-		for range m.ToolResults {
-			total += tokenOverheadPerMessage
+		// Each tool result goes to the model as a message of its own: its role
+		// and structure, its content, and the addressing to the call it answers,
+		// which costs the same overhead again. The message's own overhead,
+		// counted above, stands for the first result's.
+		if n := len(m.ToolResults); n > 1 {
+			total += (n - 1) * tokenOverheadPerMessage
+		}
+		for _, r := range m.ToolResults {
+			total += EstimateTokens(r.Content) + tokenOverheadPerMessage
 		}
 	}
 	return total
