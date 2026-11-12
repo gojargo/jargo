@@ -61,8 +61,11 @@ type Service struct {
 	// adapter converts the conversation into the request Gemini takes.
 	adapter geminiadapter.Adapter
 	cfg     Config
-	http    *http.Client
-	shaper  RequestShaper
+	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
+	// It is seeded from cfg, and is what every request is built from.
+	live   *LLMSettings
+	http   *http.Client
+	shaper RequestShaper
 }
 
 // NewLLM builds a Gemini LLM service.
@@ -80,7 +83,7 @@ func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *Service {
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultMaxTokens
 	}
-	s := &Service{cfg: cfg, http: &http.Client{}, shaper: shaper}
+	s := &Service{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, shaper: shaper}
 	s.Base = llm.New(name, s)
 	s.Base.SetModel(cfg.Model)
 	s.warnIfThinkingBudgetIgnored()
@@ -132,11 +135,12 @@ type genChunk struct {
 
 // Generate streams a Gemini completion, emitting each text delta.
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
-	body, err := s.requestBody(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, false)
+	cfg := s.requestConfig()
+	body, err := s.requestBodyFor(cfg, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, false)
 	if err != nil {
 		return err
 	}
-	req, err := s.newRequest(ctx, body)
+	req, err := s.newRequestTo(ctx, cfg.Model, body, true)
 	if err != nil {
 		return err
 	}
@@ -154,22 +158,23 @@ func (s *Service) RunInference(
 	if instruction == "" {
 		instruction = s.SystemInstruction()
 	}
-	body, err := s.requestBody(convo, adapter.Options{SystemInstruction: instruction}, true)
+	cfg := s.requestConfig()
+	body, err := s.requestBodyFor(cfg, convo, adapter.Options{SystemInstruction: instruction}, true)
 	if err != nil {
 		return "", err
 	}
 	if opts.MaxTokens > 0 {
-		if cfg, ok := body["generationConfig"].(map[string]any); ok {
-			cfg["maxOutputTokens"] = opts.MaxTokens
+		if g, ok := body["generationConfig"].(map[string]any); ok {
+			g["maxOutputTokens"] = opts.MaxTokens
 		}
 	}
 	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
-		if cfg, ok := body["generationConfig"].(map[string]any); ok {
-			cfg["responseMimeType"] = "application/json"
-			cfg["responseJsonSchema"] = schema
+		if g, ok := body["generationConfig"].(map[string]any); ok {
+			g["responseMimeType"] = "application/json"
+			g["responseJsonSchema"] = schema
 		}
 	}
-	req, err := s.newRequestTo(ctx, body, false)
+	req, err := s.newRequestTo(ctx, cfg.Model, body, false)
 	if err != nil {
 		return "", err
 	}
@@ -219,28 +224,32 @@ func (s *Service) ModelSupportsResponseSchema(model string) bool {
 	return major > 2 || (major == 2 && minor >= 5)
 }
 
-// genConfig builds the generationConfig block from the configured controls.
-func (s *Service) genConfig() map[string]any {
-	g := map[string]any{"maxOutputTokens": s.cfg.MaxTokens}
-	if s.cfg.Temperature != nil {
-		g["temperature"] = *s.cfg.Temperature
+// genConfig builds the generationConfig block from the settings as they
+// stand.
+func (s *Service) genConfig() map[string]any { return s.genConfigFor(s.requestConfig()) }
+
+// genConfigFor builds the generationConfig block from cfg's controls.
+func (s *Service) genConfigFor(cfg Config) map[string]any {
+	g := map[string]any{"maxOutputTokens": cfg.MaxTokens}
+	if cfg.Temperature != nil {
+		g["temperature"] = *cfg.Temperature
 	}
-	if s.cfg.TopP != nil {
-		g["topP"] = *s.cfg.TopP
+	if cfg.TopP != nil {
+		g["topP"] = *cfg.TopP
 	}
-	if s.cfg.TopK != nil {
-		g["topK"] = *s.cfg.TopK
+	if cfg.TopK != nil {
+		g["topK"] = *cfg.TopK
 	}
-	if s.cfg.Seed != nil {
-		g["seed"] = *s.cfg.Seed
+	if cfg.Seed != nil {
+		g["seed"] = *cfg.Seed
 	}
-	if t := thinkingParams(s.cfg.Thinking); t != nil {
+	if t := thinkingParams(cfg.Thinking); t != nil {
 		g[keyThinkingConfig] = t
 	}
-	maps.Copy(g, s.cfg.Extra)
+	maps.Copy(g, cfg.Extra)
 	// Applied last, so a thinking configuration set explicitly, or through
 	// Extra, wins over the low-latency default.
-	s.applyThinkingDefault(g)
+	s.applyThinkingDefault(g, cfg.Model)
 	return g
 }
 
@@ -279,18 +288,18 @@ func ThinkingParams(t *ThinkingConfig) map[string]any {
 // left as it is, and so is every one when UseProviderThinkingDefault is set. The
 // first request for each model logs the setting sent, or that the model runs at
 // Google's default, warning for an unlisted model that can think.
-func (s *Service) applyThinkingDefault(g map[string]any) {
+func (s *Service) applyThinkingDefault(g map[string]any, model string) {
 	if _, set := g[keyThinkingConfig]; set {
 		return
 	}
-	name := modelName(s.cfg.Model)
+	name := modelName(model)
 	var setting string
 	if d, ok := thinkingDefaults[name]; ok && !s.UseProviderThinkingDefault() {
 		thinking := maps.Clone(d)
 		g[keyThinkingConfig] = thinking
 		setting = keyThinkingConfig + "=" + thinkingSetting(thinking)
 	}
-	s.ReportThinkingDefault(s.cfg.Model, setting, canThink(name), "Google", "Thinking in the service's Config")
+	s.ReportThinkingDefault(model, setting, canThink(name), "Google", "Thinking in the service's Config")
 }
 
 // thinkingSetting renders a thinking default as the JSON it is sent as, for the
@@ -332,7 +341,7 @@ func (s *Service) handleFinishReason(reason string) {
 		return
 	}
 	slog.Warn("the model stopped before it had finished answering",
-		"service", s.Name(), "model", s.cfg.Model, "reason", reason)
+		"service", s.Name(), "model", s.Model(), "reason", reason)
 }
 
 // prefillSupportedPatterns lists the models that accept a request whose
@@ -362,24 +371,32 @@ func supportsPrefill(model string) bool {
 	return false
 }
 
-// requestBody builds the generateContent body, optionally advertising tools.
+// requestBody builds the generateContent body from the settings as they stand,
+// optionally advertising tools.
 func (s *Service) requestBody(
 	convo *frames.LLMContext, opts adapter.Options, withTools bool,
+) (map[string]any, error) {
+	return s.requestBodyFor(s.requestConfig(), convo, opts, withTools)
+}
+
+// requestBodyFor builds the generateContent body from cfg.
+func (s *Service) requestBodyFor(
+	cfg Config, convo *frames.LLMContext, opts adapter.Options, withTools bool,
 ) (map[string]any, error) {
 	// A model that cannot continue a trailing model turn rejects the request
 	// carrying one, which is what an assistant message last in the conversation
 	// converts to: filler spoken while a tool ran, say.
-	opts.EnsureLastMessageIsUser = !supportsPrefill(s.cfg.Model)
+	opts.EnsureLastMessageIsUser = !supportsPrefill(cfg.Model)
 	p, err := s.adapter.LLMInvocationParams(convo, opts)
 	if err != nil {
 		return nil, err
 	}
 	body := map[string]any{
 		"contents":         p.Contents,
-		"generationConfig": s.genConfig(),
+		"generationConfig": s.genConfigFor(cfg),
 	}
-	if len(s.cfg.SafetySettings) > 0 {
-		body["safetySettings"] = s.cfg.SafetySettings
+	if len(cfg.SafetySettings) > 0 {
+		body["safetySettings"] = cfg.SafetySettings
 	}
 	if p.SystemInstruction != "" {
 		body["systemInstruction"] = map[string]any{
@@ -392,21 +409,17 @@ func (s *Service) requestBody(
 	return body, nil
 }
 
-// newRequest marshals reqBody and builds the streaming generateContent request.
-func (s *Service) newRequest(ctx context.Context, reqBody map[string]any) (*http.Request, error) {
-	return s.newRequestTo(ctx, reqBody, true)
-}
-
-// newRequestTo marshals reqBody and builds the request, streaming or not.
+// newRequestTo marshals reqBody and builds the request to model, streaming or
+// not.
 func (s *Service) newRequestTo(
-	ctx context.Context, reqBody map[string]any, stream bool,
+	ctx context.Context, model string, reqBody map[string]any, stream bool,
 ) (*http.Request, error) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, s.shaper.Endpoint(s.cfg.Model, stream), bytes.NewReader(body),
+		ctx, http.MethodPost, s.shaper.Endpoint(model, stream), bytes.NewReader(body),
 	)
 	if err != nil {
 		return nil, err
@@ -552,7 +565,7 @@ func (s *Service) streamChunks(req *http.Request, onChunk func(genChunk) error) 
 			return err
 		}
 		slog.DebugContext(req.Context(), "re-issuing a generation that never began",
-			"service", s.Name(), "model", s.cfg.Model)
+			"service", s.Name(), "model", s.Model())
 	}
 	_, err := s.streamAttempt(req, s.cfg.streamIdleTimeout(), onChunk)
 	return err
@@ -673,11 +686,12 @@ func cloneRequest(req *http.Request) (*http.Request, error) {
 // conversation's tools are sent on the request, and any tool turns already in
 // the context are replayed as functionCall / functionResponse parts.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	body, err := s.requestBody(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, true)
+	cfg := s.requestConfig()
+	body, err := s.requestBodyFor(cfg, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, true)
 	if err != nil {
 		return err
 	}
-	req, err := s.newRequest(ctx, body)
+	req, err := s.newRequestTo(ctx, cfg.Model, body, true)
 	if err != nil {
 		return err
 	}

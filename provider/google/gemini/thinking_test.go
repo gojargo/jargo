@@ -14,6 +14,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
 )
 
 // thinkingOf returns the thinking configuration the request carried, and
@@ -100,7 +101,7 @@ func logLines(t *testing.T, models ...string) []string {
 	logged := infoLogs(t)
 	s := NewLLM(Config{APIKey: "k", Model: models[0]})
 	for _, model := range models {
-		s.cfg.Model = model
+		s.live.Model = settings.Set(model)
 		s.genConfig()
 		s.genConfig()
 	}

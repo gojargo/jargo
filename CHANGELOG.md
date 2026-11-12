@@ -86,6 +86,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A settings update reaches the Gemini request.** An `LLMUpdateSettingsFrame`
+  changing the model, the token bound, the sampling controls, thinking, the
+  safety filters or an unmodeled field was stored but never sent: requests
+  were built from the `Config` the service started with, and addressed to its
+  model. The Gemini service (and the Vertex one built on it) now keeps its
+  settings as `gemini.LLMSettings`, seeded from the config, and builds and
+  addresses each request from them.
+
 - **A settings update reaches the Anthropic request.** An
   `LLMUpdateSettingsFrame` changing the model, the token bound, the sampling
   controls, prompt caching, thinking, the effort or an unmodeled field was
