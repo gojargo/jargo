@@ -201,7 +201,7 @@ func TestMarkdownFilterKeepsMarkersThatStartNoList(t *testing.T) {
 	cases := map[string]string{
 		"Options:\n1. Take the train.\n2. Drive.": "Options:\n1. Take the train.\n2. Drive.",
 		"Options:\n- Coffee\n- Tea":               "Options:\n- Coffee\n- Tea",
-		"1) Take the train.":                       "1) Take the train.",
+		"1) Take the train.":                      "1) Take the train.",
 	}
 	for in, want := range cases {
 		if got := newTestMarkdownFilter().Filter(in); got != want {
