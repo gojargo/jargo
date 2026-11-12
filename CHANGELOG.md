@@ -108,6 +108,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The Markdown filter reads as the text was written.** A double quote
+  reached the synthesizer as `&quot;`. With tables filtered, a table whose
+  delimiter row had five or more dashes was read out, because the
+  repeated-sequence rule flattened the row first; the row is now left alone,
+  so the table is dropped. A list marker the conversion took as a list where
+  the text continues a paragraph (`Options:\n1. Train`), or one closed with a
+  parenthesis (`1) Train`), lost its number; such markers are now kept.
+
 - **Resemble AI TTS no longer pauses two seconds between sentences.** Each
   sentence closed its socket and waited the full close timeout for an
   acknowledgment Resemble AI never sends. `wsutil.Conn.SetCloseTimeout` now

@@ -170,23 +170,43 @@ func TestMarkdownFilterInlineCode(t *testing.T) {
 	}
 }
 
+// test_simple_table_removal: with the default rules and tables filtered, a
+// table goes whatever the length of its delimiter row, which the repeated
+// sequence rule leaves alone.
 func TestMarkdownFilterRemovesTables(t *testing.T) {
 	opts := DefaultMarkdownFilterOptions()
 	opts.FilterTables = true
-	// A short delimiter row survives the repeated-sequence rule and is parsed.
-	input := "| Column 1 | Column 2 |\n|---|---|\n| Cell 1   | Cell 2   |"
-	if got := NewMarkdownFilter(opts).Filter(input); strings.TrimSpace(got) != "" {
-		t.Errorf("Filter() = %q, want empty", got)
+	for _, input := range []string{
+		"| Column 1 | Column 2 |\n|----------|----------|\n| Cell 1   | Cell 2   |",
+		"| Column 1 | Column 2 |\n|---|---|\n| Cell 1   | Cell 2   |",
+		"| A | B |\n|:---------|---------:|\n| 1 | 2 |",
+	} {
+		if got := NewMarkdownFilter(opts).Filter(input); strings.TrimSpace(got) != "" {
+			t.Errorf("Filter(%q) = %q, want empty", input, got)
+		}
 	}
+}
 
-	// A delimiter row of five or more dashes is flattened by the repeated-sequence
-	// rule before the text is parsed, and the renderer will not take a table
-	// without a well-formed delimiter row. Turning that rule off leaves the row
-	// intact and the table is dropped as it should be.
-	long := "| Column 1 | Column 2 |\n|----------|----------|\n| Cell 1   | Cell 2   |"
-	opts.FilterRepeatedSequences = false
-	if got := NewMarkdownFilter(opts).Filter(long); strings.TrimSpace(got) != "" {
-		t.Errorf("Filter() with repeated sequences off = %q, want empty", got)
+// A double quote is spoken as itself, not as the entity the conversion writes.
+func TestMarkdownFilterKeepsDoubleQuotes(t *testing.T) {
+	in := `She said "hello" to me.`
+	if got := newTestMarkdownFilter().Filter(in); got != in {
+		t.Errorf("Filter(%q) = %q, want it unchanged", in, got)
+	}
+}
+
+// A list only starts a block: markers on lines continuing a paragraph, and an
+// ordered marker closed with a parenthesis, are text and keep their numbers.
+func TestMarkdownFilterKeepsMarkersThatStartNoList(t *testing.T) {
+	cases := map[string]string{
+		"Options:\n1. Take the train.\n2. Drive.": "Options:\n1. Take the train.\n2. Drive.",
+		"Options:\n- Coffee\n- Tea":               "Options:\n- Coffee\n- Tea",
+		"1) Take the train.":                       "1) Take the train.",
+	}
+	for in, want := range cases {
+		if got := newTestMarkdownFilter().Filter(in); got != want {
+			t.Errorf("Filter(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

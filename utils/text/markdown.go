@@ -33,11 +33,6 @@ type MarkdownFilterOptions struct {
 	FilterCode bool
 	// FilterTables drops table contents. It also turns on table parsing, without
 	// which a table is only ever a run of pipes and dashes.
-	//
-	// Pair it with FilterRepeatedSequences off. That rule runs first and flattens
-	// a delimiter row of five or more dashes ("|--------|") to bare pipes, and a
-	// table is not recognized without a well-formed delimiter row. A short row
-	// ("|---|") is under the threshold and comes through either way.
 	FilterTables bool
 	// FilterRepeatedSequences drops a run of five or more of the same character,
 	// the shape of an ASCII rule or a keyboard smash rather than of speech.
@@ -163,6 +158,13 @@ var (
 	mdTable             = regexp.MustCompile(`(?is)<table>.*?</table>`)
 	mdTableStart        = regexp.MustCompile(`(?is)<table>.*`)
 	mdTableEnd          = regexp.MustCompile(`(?is).*</table>`)
+	// mdDelimiterRow is a table's delimiter row: cells of dashes, optionally
+	// aligned with colons, between pipes.
+	mdDelimiterRow = regexp.MustCompile(`^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$`)
+	// mdParenMarker is an ordered list marker closed with a parenthesis.
+	mdParenMarker = regexp.MustCompile(`^(\s*\d+)\)`)
+	// mdListMarker is the marker of a list item, ordered or bulleted.
+	mdListMarker = regexp.MustCompile(`^(\s*)(\d+\.|[-*+])(\s)`)
 )
 
 // Filter converts one chunk of Markdown into the plain text to speak.
@@ -188,7 +190,7 @@ func (f *MarkdownFilter) Filter(text string) string {
 	out = stripInlineCode(out)
 
 	if f.opts.FilterRepeatedSequences {
-		out = dropRepeatedRuns(out)
+		out = f.dropRepeatedRunsKeepingTables(out)
 	}
 
 	// Numbered list items keep their number, behind a marker that survives the
@@ -203,6 +205,8 @@ func (f *MarkdownFilter) Filter(text string) string {
 
 	// A marker in front of a table row would stop the row being recognized.
 	out = mdMarkedPipe.ReplaceAllString(out, "| ")
+
+	out = escapeUnlistedMarkers(out)
 
 	var buf bytes.Buffer
 	if err := f.md.Convert([]byte(out), &buf); err != nil {
@@ -229,6 +233,7 @@ func (f *MarkdownFilter) Filter(text string) string {
 		"&lt;", "<",
 		"&gt;", ">",
 		"&amp;", "&",
+		"&quot;", `"`,
 	).Replace(out)
 
 	// Emphasis markers the conversion left behind, either side of a word.
@@ -274,6 +279,49 @@ func stripInlineCode(text string) string {
 	}
 	b.WriteString(text[pos:])
 	return b.String()
+}
+
+// dropRepeatedRunsKeepingTables drops repeated runs from every line but a
+// table's delimiter row while tables are filtered. Flattened to bare pipes, the
+// row would no longer mark a table, and the table would be read out instead of
+// dropped.
+func (f *MarkdownFilter) dropRepeatedRunsKeepingTables(text string) string {
+	if !f.opts.FilterTables {
+		return dropRepeatedRuns(text)
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if !mdDelimiterRow.MatchString(line) {
+			lines[i] = dropRepeatedRuns(line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// escapeUnlistedMarkers escapes the list markers the conversion would take as
+// a list where the text is meant to read as written: an ordered marker closed
+// with a parenthesis ("1)"), and any marker on a line that continues the line
+// before it, since a list does not interrupt a paragraph. Escaped, the marker
+// is rendered as the text it is and spoken.
+func escapeUnlistedMarkers(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		line = mdParenMarker.ReplaceAllString(line, `$1\)`)
+		if i > 0 && strings.Trim(lines[i-1], " \t§") != "" {
+			line = mdListMarker.ReplaceAllStringFunc(line, func(m string) string {
+				sub := mdListMarker.FindStringSubmatch(m)
+				marker := sub[2]
+				if strings.HasSuffix(marker, ".") {
+					marker = marker[:len(marker)-1] + `\.`
+				} else {
+					marker = `\` + marker
+				}
+				return sub[1] + marker + sub[3]
+			})
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
 }
 
 // dropRepeatedRuns removes a run of five or more of the same non-whitespace
