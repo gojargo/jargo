@@ -49,6 +49,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`neuphonic.NewTTS` holds one connection for the call instead of dialing
+  one per sentence.** It used to open a connection for each sentence, send the
+  text and wait for that sentence's audio before the next one could go out.
+  It now connects when the pipeline starts, sends each sentence with its
+  `<STOP>` marker and returns, and labels the audio that arrives with the
+  context playing, since Neuphonic's messages name no request. An interruption
+  while the bot speaks resets the connection, so audio still coming for the
+  reply cut off is never played as the next one, and incoming frames are held
+  after a turn until its audio has played. The connection runs on
+  `tts.Websocket`: a lost connection is restored with backoff, and after three
+  failed redials the service reports a permanent error, so it becomes unusable
+  and a service switcher moves off it. An empty text every ten seconds keeps
+  the connection open through silences. The new `Config.Websocket` field
+  configures the reconnection and the timeouts, and `Config.Temperature` and
+  `Config.IPAKey` reach Neuphonic's `temperature` and `ipa_key`. The voice,
+  the language, the speed, the temperature and the IPA key can now be changed
+  while the pipeline runs (`neuphonic.TTSSettings`); each change reconnects.
+
 - **`deepgram.NewFluxTTS` keeps one connection for the call instead of
   dialing one per sentence.** Flux holds acoustic state across turns on a
   connection, so prosody and pacing now stay consistent through the
