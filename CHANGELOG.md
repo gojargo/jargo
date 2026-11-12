@@ -362,6 +362,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   with a diacritic (ã, õ, é) as not a vowel, so `StressBeforeVowels` moved the
   stress on to the next plain vowel: Cartesia's and Deepgram's pronunciations put
   it on the wrong syllable. The phone is now decomposed before it is checked.
+- **A supplementary ideograph counts as a word.** `CountSpokenWords` knew only
+  the basic-plane Chinese and Japanese blocks, so a rare ideograph from
+  Extensions B to J was read as an ordinary letter and a run of them as one
+  word, and a speaker using them needed more speech to start a turn. Those
+  blocks are now counted a character at a time too.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
