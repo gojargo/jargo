@@ -55,6 +55,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`grok.NewTTS` keeps one connection for the call instead of dialing one
+  per sentence.** It used to open a session for each sentence, send the text
+  and close the utterance on it, and wait for that sentence's audio before the
+  next one could go out. It now connects when the pipeline starts and streams
+  the sentences of a turn into one utterance on the open connection, each
+  ending in a space so they do not run together, and closes the utterance
+  when the turn's text is complete. The audio and the word timings that
+  arrive are labeled with the context playing, since xAI's messages name no
+  request. An interruption clears the utterance without reconnecting. A
+  server error now ends the context playing and is reported while the
+  connection stays up, and a timing payload whose characters and times do
+  not pair up is logged and skipped instead of failing the sentence. A send
+  that fails stops the context's speech and resets the connection. The
+  connection runs on `tts.Websocket`: a lost connection is restored with
+  backoff, and after three failed redials the service reports a permanent
+  error, so it becomes unusable and a service switcher moves off it. The new
+  `TTSConfig.Websocket` field configures the reconnection and the timeouts.
+  The voice, the language, the speed, the latency level, text normalization
+  and the timings can now be changed while the pipeline runs
+  (`grok.WebsocketTTSSettings`); any change reconnects. Both xAI TTS services
+  now name the languages xAI lists by region (`ar-SA` and `ar-AE` included),
+  and a regional variant xAI does not list resolves through its base
+  language, so `es-US` is sent as `es-ES` rather than `es`.
+
 - **`together.NewTTS` keeps one connection for the call instead of dialing
   one per sentence.** It used to open a connection for each sentence, pin the
   voice, send the text and wait for that sentence's audio before the next one
