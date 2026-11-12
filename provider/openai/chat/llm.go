@@ -48,6 +48,15 @@ type LLMConfig struct {
 	APIKey string
 	// BaseURL overrides the API base (e.g. an OpenAI-compatible endpoint).
 	BaseURL string
+	// Organization is the OpenAI organization the requests are billed to, sent
+	// as the OpenAI-Organization header; empty sends none.
+	Organization string
+	// Project is the OpenAI project the requests belong to, sent as the
+	// OpenAI-Project header; empty sends none.
+	Project string
+	// DefaultHeaders are additional HTTP headers sent with every request. They
+	// are applied last, so they override any header the service sets.
+	DefaultHeaders map[string]string
 	// Model is the model id; empty uses the provider default.
 	Model string
 	// MaxTokens caps the response length; 0 omits it, leaving the API default.
@@ -553,6 +562,15 @@ func (s *LLMService) send(ctx context.Context, body []byte) (*http.Response, err
 			}
 			s.shaper.Authorize(req, s.cfg.APIKey)
 			req.Header.Set("Content-Type", "application/json")
+			if s.cfg.Organization != "" {
+				req.Header.Set("OpenAI-Organization", s.cfg.Organization)
+			}
+			if s.cfg.Project != "" {
+				req.Header.Set("OpenAI-Project", s.cfg.Project)
+			}
+			for k, v := range s.cfg.DefaultHeaders {
+				req.Header.Set(k, v)
+			}
 			return req, nil
 		})
 }

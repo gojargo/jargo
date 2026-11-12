@@ -503,6 +503,33 @@ func (s *shaper) Authorize(req *http.Request, apiKey string) {
 	req.Header.Set("api-key", apiKey)
 }
 
+// TestGenerateSendsTheClientHeaders checks the organization, the project and
+// the default headers reach the request, the default headers applied last so
+// they override what the service sets, and that none is sent unset.
+func TestGenerateSendsTheClientHeaders(t *testing.T) {
+	srv := newLLMServer(t, sse(contentChunk("hi")))
+	generate(t, srv, LLMConfig{
+		APIKey: "k", Organization: "org-1", Project: "proj-1",
+		DefaultHeaders: map[string]string{"X-Custom": "yes", "Content-Type": "application/x-test"},
+	})
+	for k, want := range map[string]string{
+		"OpenAI-Organization": "org-1", "OpenAI-Project": "proj-1",
+		"X-Custom": "yes", "Content-Type": "application/x-test",
+	} {
+		if v := srv.header.Get(k); v != want {
+			t.Errorf("%s = %q, want %q", k, v, want)
+		}
+	}
+
+	srv = newLLMServer(t, sse(contentChunk("hi")))
+	generate(t, srv, LLMConfig{APIKey: "k"})
+	for _, k := range []string{"OpenAI-Organization", "OpenAI-Project"} {
+		if _, ok := srv.header[k]; ok {
+			t.Errorf("%s was sent for an unset config: %q", k, srv.header.Get(k))
+		}
+	}
+}
+
 // TestCompatShaperUsedForURLAndAuth checks a custom shaper decides both the URL
 // and the authorization, so a non-OpenAI URL layout reuses this implementation
 // whole.

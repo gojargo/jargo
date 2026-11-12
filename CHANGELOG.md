@@ -86,6 +86,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The OpenAI chat LLM takes the OpenAI client's headers.** `chat.LLMConfig`
+  gains `Organization`, `Project` and `DefaultHeaders`, sent with every
+  request (as `OpenAI-Organization`, `OpenAI-Project`, and the headers as
+  given, applied last), for the OpenAI service and every OpenAI-compatible one
+  built on it.
+
 - **The OpenAI Responses services take the OpenAI client's headers.**
   `responses.Config` gains `Organization`, `Project` and `DefaultHeaders`,
   sent with every HTTP request (as `OpenAI-Organization`, `OpenAI-Project`,
