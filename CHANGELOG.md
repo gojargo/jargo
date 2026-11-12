@@ -55,6 +55,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`soniox.NewTTS` holds one connection for the call instead of dialing one
+  per sentence.** It used to open a connection for each sentence, open a
+  stream on it, send the text and close the stream, and wait for that
+  sentence's audio before the next one could go out. It now opens one
+  connection when the pipeline starts and speaks each turn on a stream of its
+  own, named by the turn's audio context: the stream is opened as the turn
+  starts, each sentence is sent to it and the call returns, and it is closed
+  once the turn's text is complete. Soniox tags its audio and timings with the
+  stream, so the receive loop hands them to the right context, and audio still
+  arriving for a turn the user cut off is dropped while its stream is
+  canceled. A stream's error is reported with a category taken from Soniox's
+  error code and ends that stream alone. The connection runs on
+  `tts.Websocket`: a lost connection is restored with backoff, and after three
+  failed redials the service reports a permanent error, so it becomes unusable
+  and a service switcher moves off it. A keepalive every twenty seconds keeps
+  the connection open through silences. The new `TTSConfig.Websocket` field
+  configures the reconnection and the timeouts, and `TTSConfig` also gains
+  `AudioFormat`, `ReduceSilence` and `TextAggregation` (to stream the turn's
+  text as it is generated). An unset `TTSConfig.Language` now means English
+  rather than leaving the language to Soniox, and Norwegian Bokmal is sent as
+  Norwegian. The voice, the model, the language, the speed, the silence
+  reduction and the client reference id can change while the pipeline runs
+  (`soniox.TTSSettings`): the turn's stream is closed out and the rest of the
+  turn opens a new one with the new values, on the same connection.
+
 - **`grok.NewTTS` keeps one connection for the call instead of dialing one
   per sentence.** It used to open a session for each sentence, send the text
   and close the utterance on it, and wait for that sentence's audio before the

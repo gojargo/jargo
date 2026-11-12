@@ -5,9 +5,11 @@
 // signals end-of-turn with a special "<end>" token; the service surfaces
 // provisional text as interims and the finalized utterance with EndOfTurn set.
 //
-// Text-to-speech (NewTTS) opens a synthesis stream per sentence, sends the text,
-// and streams the audio chunks downstream as Soniox generates them, reporting
-// per-word timing from the character timestamps it returns.
+// Text-to-speech (NewTTS) holds one connection open for the call and speaks
+// each turn on a stream of its own on it, sending the turn's sentences to the
+// stream as they are ready and streaming the audio chunks downstream as Soniox
+// generates them, reporting per-word timing from the character timestamps it
+// returns.
 package soniox
 
 import (

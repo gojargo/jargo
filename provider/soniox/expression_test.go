@@ -7,8 +7,6 @@ import (
 
 	ttsadapter "github.com/gojargo/jargo/adapter/tts"
 	ttssoniox "github.com/gojargo/jargo/adapter/tts/soniox"
-	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
 )
 
 func TestExpressionAdapterFollowsTheModel(t *testing.T) {
@@ -19,7 +17,7 @@ func TestExpressionAdapterFollowsTheModel(t *testing.T) {
 		{"tts-rt-v2", ttssoniox.SonioxExpressionAdapter{}},
 		{"tts-rt-v1", ttsadapter.BaseExpressionAdapter{}},
 	} {
-		s := &ttsSynthesizer{cfg: TTSConfig{Model: tt.model}}
+		s := newTTSSynthesizer(TTSConfig{APIKey: "k", Model: tt.model})
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {
 			t.Errorf("%s: adapter %T, want %T", tt.model, got, tt.adapter)
 		}
@@ -29,21 +27,10 @@ func TestExpressionAdapterFollowsTheModel(t *testing.T) {
 // wordsOf reports text as Soniox times it, a character at a time.
 func wordsOf(t *testing.T, text string) []string {
 	t.Helper()
-	s := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k"}.withTTSDefaults()}
-	timings := &ttsTimings{}
-	for i, r := range text {
-		timings.Characters = append(timings.Characters, string(r))
-		timings.Starts = append(timings.Starts, float64(i)/10)
-	}
+	s := newTTSSynthesizer(TTSConfig{APIKey: "k"})
 	var words []string
-	if err := s.reportWords(&uctx.CharAccumulator{}, timings,
-		func(ws []uctx.WordTiming, _ tts.WordTimingOptions) error {
-			for _, w := range ws {
-				words = append(words, w.Word)
-			}
-			return nil
-		}); err != nil {
-		t.Fatal(err)
+	for _, w := range s.toWordTimes("s1", timings(text, 0)) {
+		words = append(words, w.Word)
 	}
 	return words
 }

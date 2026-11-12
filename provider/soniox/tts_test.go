@@ -1,20 +1,13 @@
 package soniox
 
 import (
-	"context"
-	"encoding/base64"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
+	"slices"
 	"testing"
 
-	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
-	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // TestTTSConfigValidate pins which TTSConfig fields the provider requires and
@@ -40,59 +33,84 @@ func TestNewTTS(t *testing.T) {
 	providertest.Service(t, "SonioxTTS", NewTTS(TTSConfig{APIKey: "k"}))
 }
 
-// TestTTSConfigMessage checks the stream configuration Soniox expects.
+// TestTTSConfigMessage checks the configuration that opens a stream.
 func TestTTSConfigMessage(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
-		s := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k"}.withTTSDefaults()}
-		cfg := s.config(true)
+		s := newTTSSynthesizer(TTSConfig{APIKey: "k"})
+		cfg := s.buildConfigMsg("ctx-1")
 
 		want := map[string]any{
-			keyStreamID:         ttsStreamID,
+			keyStreamID:         "ctx-1",
 			"model":             defaultTTSModel,
 			"voice":             defaultVoice,
-			"audio_format":      ttsAudioFormat,
+			"language":          "en",
+			"audio_format":      defaultTTSAudioFormat,
 			"sample_rate":       defaultTTSSampleRate,
 			"return_timestamps": true,
+		}
+		if len(cfg) != len(want) {
+			t.Errorf("config = %v, want exactly %v", cfg, want)
 		}
 		for key, val := range want {
 			if cfg[key] != val {
 				t.Errorf("%s = %v, want %v", key, cfg[key], val)
 			}
 		}
-		for _, key := range []string{"language", "speed", "client_reference_id"} {
-			if _, ok := cfg[key]; ok {
-				t.Errorf("%s = %v, want it omitted when unset", key, cfg[key])
-			}
-		}
 	})
 
 	t.Run("optional settings", func(t *testing.T) {
-		speed := 1.1
-		s := &ttsSynthesizer{cfg: TTSConfig{
+		speed, reduce, off := 1.1, true, false
+		s := newTTSSynthesizer(TTSConfig{
 			APIKey:            "k",
 			Voice:             "9f2b0c1e",
 			Language:          language.FrenchCA,
 			Speed:             &speed,
+			ReduceSilence:     &reduce,
 			ClientReferenceID: "call-7",
-		}.withTTSDefaults()}
-		cfg := s.config(false)
+			WordTimestamps:    &off,
+		})
+		cfg := s.buildConfigMsg("ctx-1")
 
-		if cfg["language"] != "fr" {
-			t.Errorf("language = %v, want the base code fr", cfg["language"])
-		}
-		if cfg["speed"] != speed {
-			t.Errorf("speed = %v, want %v", cfg["speed"], speed)
-		}
-		if cfg["voice"] != "9f2b0c1e" {
-			t.Errorf("voice = %v, want the cloned-voice id", cfg["voice"])
-		}
-		if cfg["return_timestamps"] != false {
-			t.Errorf("return_timestamps = %v, want false", cfg["return_timestamps"])
-		}
-		if cfg["client_reference_id"] != "call-7" {
-			t.Errorf("client_reference_id = %v, want call-7", cfg["client_reference_id"])
+		for key, val := range map[string]any{
+			"language":            "fr",
+			"speed":               speed,
+			"reduce_silence":      true,
+			"voice":               "9f2b0c1e",
+			"return_timestamps":   false,
+			"client_reference_id": "call-7",
+		} {
+			if cfg[key] != val {
+				t.Errorf("%s = %v, want %v", key, cfg[key], val)
+			}
 		}
 	})
+
+	t.Run("a format that is not PCM", func(t *testing.T) {
+		s := newTTSSynthesizer(TTSConfig{APIKey: "k", AudioFormat: "mp3"})
+		cfg := s.buildConfigMsg("ctx-1")
+		if cfg["audio_format"] != "mp3" {
+			t.Errorf("audio_format = %v, want mp3", cfg["audio_format"])
+		}
+		if _, ok := cfg["sample_rate"]; ok {
+			t.Error("sample_rate was sent with a format that is not raw PCM")
+		}
+	})
+}
+
+// TestSonioxTTSLanguage checks the codes Soniox takes: the base code, with
+// Norwegian Bokmal sent as Norwegian.
+func TestSonioxTTSLanguage(t *testing.T) {
+	for in, want := range map[language.Language]string{
+		language.NorwegianBokmal:   "no",
+		language.NorwegianBokmalNO: "no",
+		language.FrenchCA:          "fr",
+		language.ChineseCN:         "zh",
+		language.English:           "en",
+	} {
+		if got := sonioxTTSLanguage(in); got != want {
+			t.Errorf("sonioxTTSLanguage(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 // TestSpacelessLanguage checks which languages get per-character word timings.
@@ -106,236 +124,17 @@ func TestSpacelessLanguage(t *testing.T) {
 		"":                 false,
 	}
 	for lang, want := range cases {
-		s := &ttsSynthesizer{cfg: TTSConfig{Language: lang}}
+		s := newTTSSynthesizer(TTSConfig{Language: lang})
 		if got := s.spacelessLanguage(); got != want {
 			t.Errorf("spacelessLanguage(%q) = %v, want %v", lang, got, want)
 		}
 	}
 }
 
-// ttsServer starts a fake Soniox endpoint that records the client's messages
-// and replies with a scripted sequence.
-// authMessage keys the message the fake server reports the handshake's
-// Authorization header in.
-const authMessage = "authorization header"
-
-func ttsServer(t *testing.T, events []map[string]any) (endpoint string, sent <-chan map[string]any) {
-	t.Helper()
-	messages := make(chan map[string]any, 8)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
-		ctx := r.Context()
-		// The handshake's Authorization header is reported as a message of its
-		// own, ahead of what the client sends.
-		messages <- map[string]any{authMessage: r.Header.Get("Authorization")}
-
-		// The client sends the config, the text, and the end marker before any
-		// audio comes back.
-		for range 3 {
-			_, data, err := c.Read(ctx)
-			if err != nil {
-				return
-			}
-			var msg map[string]any
-			if json.Unmarshal(data, &msg) == nil {
-				messages <- msg
-			}
-		}
-		for _, ev := range events {
-			b, _ := json.Marshal(ev)
-			if c.Write(ctx, websocket.MessageText, b) != nil {
-				return
-			}
-		}
-		// Keep reading so the library can answer the close handshake.
-		for {
-			if _, _, err := c.Read(ctx); err != nil {
-				return
-			}
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	return "ws" + strings.TrimPrefix(srv.URL, "http"), messages
-}
-
-// audioEvent builds a synthesis message carrying pcm and optional timings.
-func audioEvent(pcm []byte, chars []string, starts []float64) map[string]any {
-	ev := map[string]any{}
-	if len(pcm) > 0 {
-		ev["audio"] = base64.StdEncoding.EncodeToString(pcm)
-	}
-	if chars != nil {
-		ev["timestamps"] = map[string]any{
-			"characters":                    chars,
-			"character_start_times_seconds": starts,
-		}
-	}
-	return ev
-}
-
-// TestTTSSynthesize checks the messages the service sends and the audio it
-// emits.
-func TestTTSSynthesize(t *testing.T) {
-	endpoint, sent := ttsServer(t, []map[string]any{
-		audioEvent([]byte{1, 2, 3, 4}, nil, nil),
-		audioEvent([]byte{5, 6}, nil, nil),
-		{"terminated": true},
-	})
-
-	s := &ttsSynthesizer{cfg: TTSConfig{APIKey: "test-key", URL: endpoint}.withTTSDefaults()}
-	var got []byte
-	if err := runPCM(s, context.Background(), "hello there", func(pcm []byte) error {
-		got = append(got, pcm...)
-		return nil
-	}); err != nil {
-		t.Fatalf("Synthesize: %v", err)
-	}
-
-	if string(got) != "\x01\x02\x03\x04\x05\x06" {
-		t.Errorf("emitted %q, want the concatenated PCM chunks", got)
-	}
-
-	if auth := <-sent; auth[authMessage] != "Bearer test-key" {
-		t.Errorf("Authorization = %v, want the Bearer key", auth[authMessage])
-	}
-	cfg := <-sent
-	if _, ok := cfg["api_key"]; ok {
-		t.Errorf("config api_key = %v, want the key only in the header", cfg["api_key"])
-	}
-	if cfg["stream_id"] != ttsStreamID {
-		t.Errorf("config stream_id = %v, want %q", cfg["stream_id"], ttsStreamID)
-	}
-
-	text := <-sent
-	if text["text"] != "hello there" || text["text_end"] != false {
-		t.Errorf("text message = %v, want the sentence with text_end false", text)
-	}
-	end := <-sent
-	if end["text"] != "" || end["text_end"] != true {
-		t.Errorf("end message = %v, want an empty text with text_end true", end)
-	}
-}
-
-// TestTTSSynthesizeTimed checks per-character timings are assembled into words,
-// including a word split across two payloads and a trailing word closed only by
-// the stream terminating.
-func TestTTSSynthesizeTimed(t *testing.T) {
-	endpoint, _ := ttsServer(t, []map[string]any{
-		// "hi the" arrives first, leaving "the" carried over mid-word.
-		audioEvent([]byte{1, 2},
-			[]string{"h", "i", " ", "t", "h", "e"},
-			[]float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5}),
-		// "re, pal" completes "there," then leaves "pal" unterminated.
-		audioEvent(nil,
-			[]string{"r", "e", ",", " ", "p", "a", "l"},
-			[]float64{0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2}),
-		{"terminated": true},
-	})
-
-	s := &timedTTSSynthesizer{ttsSynthesizer: &ttsSynthesizer{
-		cfg: TTSConfig{APIKey: "k", URL: endpoint}.withTTSDefaults(),
-	}}
-
-	type timed struct {
-		text   string
-		offset float64
-	}
-	var words []timed
-	if err := runPCMTimed(s, context.Background(), "hi there, pal",
-		func([]byte) error { return nil },
-		func(text string, offset float64) error {
-			words = append(words, timed{text, offset})
-			return nil
-		}); err != nil {
-		t.Fatalf("SynthesizeTimed: %v", err)
-	}
-
-	want := []timed{{"hi", 0.0}, {"there,", 0.3}, {"pal", 1.0}}
-	if len(words) != len(want) {
-		t.Fatalf("words = %+v, want %+v", words, want)
-	}
-	for i, w := range want {
-		if words[i] != w {
-			t.Errorf("word %d = %+v, want %+v", i, words[i], w)
-		}
-	}
-}
-
-// TestTTSSynthesizeTimedSpaceless checks a language written without spaces
-// reports each character as its own word, since there is no boundary to split
-// on. Punctuation carries no timing of its own and is dropped.
-func TestTTSSynthesizeTimedSpaceless(t *testing.T) {
-	endpoint, _ := ttsServer(t, []map[string]any{
-		audioEvent(nil, []string{"你", "好", "。"}, []float64{0.0, 0.2, 0.4}),
-		{"terminated": true},
-	})
-
-	s := &timedTTSSynthesizer{ttsSynthesizer: &ttsSynthesizer{
-		cfg: TTSConfig{APIKey: "k", URL: endpoint, Language: language.ChineseCN}.withTTSDefaults(),
-	}}
-
-	var words []string
-	if err := runPCMTimed(s, context.Background(), "你好。",
-		func([]byte) error { return nil },
-		func(text string, _ float64) error {
-			words = append(words, text)
-			return nil
-		}); err != nil {
-		t.Fatalf("SynthesizeTimed: %v", err)
-	}
-
-	if len(words) != 2 || words[0] != "你" || words[1] != "好" {
-		t.Errorf("words = %q, want one per character with punctuation dropped", words)
-	}
-}
-
-// TestTTSServerError surfaces a stream failure to the caller.
-func TestTTSServerError(t *testing.T) {
-	endpoint, _ := ttsServer(t, []map[string]any{
-		{"error_code": 400, "error_type": "invalid_request", "error_message": "unknown voice"},
-	})
-
-	s := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k", URL: endpoint}.withTTSDefaults()}
-	err := runPCM(s, context.Background(), "hello", func([]byte) error { return nil })
-	if err == nil {
-		t.Fatal("Synthesize() = nil error, want the server error surfaced")
-	}
-	if !strings.Contains(err.Error(), "unknown voice") || !strings.Contains(err.Error(), "invalid_request") {
-		t.Errorf("error = %v, want it to carry the server type and message", err)
-	}
-}
-
-// TestTTSTimingLengthMismatch checks a malformed timing payload fails loudly
-// rather than silently misaligning every word after it.
-func TestTTSTimingLengthMismatch(t *testing.T) {
-	endpoint, _ := ttsServer(t, []map[string]any{
-		audioEvent(nil, []string{"h", "i"}, []float64{0.0}),
-	})
-
-	s := &timedTTSSynthesizer{ttsSynthesizer: &ttsSynthesizer{
-		cfg: TTSConfig{APIKey: "k", URL: endpoint}.withTTSDefaults(),
-	}}
-	err := runPCMTimed(s, context.Background(), "hi",
-		func([]byte) error { return nil },
-		func(string, float64) error { return nil })
-	if err == nil {
-		t.Fatal("SynthesizeTimed() = nil error, want the length mismatch reported")
-	}
-	if !strings.Contains(err.Error(), "timing length mismatch") {
-		t.Errorf("error = %v, want it to name the mismatch", err)
-	}
-}
-
 // TestTTSSynthesizerDescription checks the rate it emits and the model and
 // voice the synthesis is billed against.
 func TestTTSSynthesizerDescription(t *testing.T) {
-	s := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k", SampleRate: 16000}.withTTSDefaults()}
+	s := newTTSSynthesizer(TTSConfig{APIKey: "k", SampleRate: 16000})
 	if got := s.SampleRate(); got != 16000 {
 		t.Errorf("SampleRate() = %d, want 16000", got)
 	}
@@ -357,78 +156,138 @@ func TestNewTTSWordTimestampPath(t *testing.T) {
 	}
 }
 
-// runPCM drives a synthesizer the way the base does, handing back the raw audio
-// it yields.
-func runPCM(s tts.Synthesizer, ctx context.Context, text string, emit func(pcm []byte) error) error {
-	return s.RunTTS(ctx, text, "", func(f frames.Frame) error {
-		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
-			return emit(af.Audio)
-		}
-		return nil
-	})
+// timings is text as Soniox times it, a character every tenth of a second from
+// start.
+func timings(s string, start float64) *ttsTimings {
+	t := &ttsTimings{}
+	for i, r := range []rune(s) {
+		t.Characters = append(t.Characters, string(r))
+		t.Starts = append(t.Starts, float64(int((start+float64(i)*0.1)*10+0.5))/10)
+	}
+	return t
 }
 
-// runPCMTimed drives a word-timestamp synthesizer the way the base does, handing
-// back the raw audio it yields.
-func runPCMTimed(s tts.WordTimestamps, ctx context.Context, text string,
-	emit func(pcm []byte) error, word func(text string, offset float64) error,
-) error {
-	return s.RunTTSTimed(ctx, text, "", func(f frames.Frame) error {
-		if af, ok := f.(*frames.TTSAudioRawFrame); ok {
-			return emit(af.Audio)
-		}
-		return nil
-	}, func(words []uctx.WordTiming, _ tts.WordTimingOptions) error {
-		for _, w := range words {
-			if err := word(w.Word, w.Offset); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+func synthIn(lang language.Language) *ttsSynthesizer {
+	return newTTSSynthesizer(TTSConfig{APIKey: "k", Language: lang})
 }
 
-// A language written without spaces reports its timings per character, so each
-// token already reads as continuous text. The tokens have to say so, or every
-// consumer joining them puts a space between characters that belong to one word.
-func TestTTSTimedSpacelessTokensCarryTheirOwnSpacing(t *testing.T) {
+func TestToWordTimesAssemblesWords(t *testing.T) {
+	s := synthIn(language.English)
+	want := []uctx.WordTiming{{Word: "Hi", Offset: 0}, {Word: "world.", Offset: 0.3}}
+	if got := s.toWordTimes("s1", timings("Hi world. ", 0)); !slices.Equal(got, want) {
+		t.Errorf("words = %v, want %v", got, want)
+	}
+}
+
+func TestToWordTimesCarriesAPartialWordAcrossMessages(t *testing.T) {
+	s := synthIn(language.English)
+	if got := s.toWordTimes("s1", timings("Hel", 0)); len(got) != 0 {
+		t.Errorf("words = %v, want none before the word ends", got)
+	}
+	want := []uctx.WordTiming{{Word: "Hello", Offset: 0}, {Word: "you", Offset: 0.6}}
+	if got := s.toWordTimes("s1", timings("lo you ", 0.3)); !slices.Equal(got, want) {
+		t.Errorf("words = %v, want %v", got, want)
+	}
+}
+
+// The last word has no space to end it, so it waits for the stream to
+// terminate.
+func TestToWordTimesBuffersTheFinalWord(t *testing.T) {
+	s := synthIn(language.English)
+	want := []uctx.WordTiming{{Word: "Hi", Offset: 0}}
+	if got := s.toWordTimes("s1", timings("Hi you", 0)); !slices.Equal(got, want) {
+		t.Errorf("words = %v, want %v", got, want)
+	}
+	if p := s.partials["s1"]; p != (partialWord{word: "you", start: 0.3}) {
+		t.Errorf("partial = %+v, want you at 0.3", p)
+	}
+}
+
+func TestToWordTimesKeepsStreamsApart(t *testing.T) {
+	s := synthIn(language.English)
+	s.toWordTimes("s1", timings("Hel", 0))
+	s.toWordTimes("s2", timings("wor", 1.0))
+	if p := s.partials["s1"]; p != (partialWord{word: "Hel", start: 0}) {
+		t.Errorf("s1 partial = %+v", p)
+	}
+	if p := s.partials["s2"]; p != (partialWord{word: "wor", start: 1.0}) {
+		t.Errorf("s2 partial = %+v", p)
+	}
+	if got := s.toWordTimes("s1", timings("lo ", 0.3)); !slices.Equal(got, []uctx.WordTiming{{Word: "Hello", Offset: 0}}) {
+		t.Errorf("s1 words = %v", got)
+	}
+	got := s.toWordTimes("s2", timings("ld ", 1.3))
+	if !slices.Equal(got, []uctx.WordTiming{{Word: "world", Offset: 1.0}}) {
+		t.Errorf("s2 words = %v", got)
+	}
+}
+
+func TestToWordTimesMismatchYieldsNothing(t *testing.T) {
+	s := synthIn(language.English)
+	got := s.toWordTimes("s1", &ttsTimings{Characters: []string{"H", "i"}, Starts: []float64{0}})
+	if len(got) != 0 {
+		t.Errorf("words = %v, want none", got)
+	}
+	if _, ok := s.partials["s1"]; ok {
+		t.Error("a mismatched message left a partial word")
+	}
+}
+
+func TestToWordTimesSpacelessLanguagesPerCharacter(t *testing.T) {
 	for _, tc := range []struct {
-		name string
 		lang language.Language
-		want bool
+		text string
+		want []uctx.WordTiming
 	}{
-		{"a language written without spaces", language.ChineseCN, true},
-		{"a language written with them", language.English, false},
+		{language.Japanese, "こんにちは、私", []uctx.WordTiming{
+			{Word: "こ", Offset: 0},
+			{Word: "ん", Offset: 0.1},
+			{Word: "に", Offset: 0.2},
+			{Word: "ち", Offset: 0.3},
+			{Word: "は", Offset: 0.4},
+			{Word: "私", Offset: 0.6},
+		}},
+		{language.Chinese, "你好，世界。", []uctx.WordTiming{
+			{Word: "你", Offset: 0}, {Word: "好", Offset: 0.1}, {Word: "世", Offset: 0.3}, {Word: "界", Offset: 0.4},
+		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			endpoint, _ := ttsServer(t, []map[string]any{
-				audioEvent(nil, []string{"你", "好"}, []float64{0.0, 0.2}),
-				{"terminated": true},
-			})
-			s := &timedTTSSynthesizer{ttsSynthesizer: &ttsSynthesizer{
-				cfg: TTSConfig{APIKey: "k", URL: endpoint, Language: tc.lang}.withTTSDefaults(),
-			}}
+		s := synthIn(tc.lang)
+		if got := s.toWordTimes("s1", timings(tc.text, 0)); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: words = %v, want %v", tc.lang, got, tc.want)
+		}
+		if _, ok := s.partials["s1"]; ok {
+			t.Errorf("%s: a partial word was kept", tc.lang)
+		}
+	}
+}
 
-			var got []bool
-			err := s.RunTTSTimed(context.Background(), "你好", "",
-				func(frames.Frame) error { return nil },
-				func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
-					for range words {
-						got = append(got, opts.IncludesInterFrameSpaces)
-					}
-					return nil
-				})
-			if err != nil {
-				t.Fatalf("RunTTSTimed: %v", err)
-			}
-			if len(got) == 0 {
-				t.Fatal("no word timings were reported")
-			}
-			for i, carries := range got {
-				if carries != tc.want {
-					t.Fatalf("token %d says it carries its own spacing = %v, want %v", i, carries, tc.want)
-				}
-			}
-		})
+// Japanese tokens carry their own spacing, so joining them adds none.
+func TestSpacelessTokensConcatenateWithoutSpaces(t *testing.T) {
+	s := synthIn(language.Japanese)
+	var parts []text.Part
+	for _, w := range s.toWordTimes("s1", timings("こんにちは、私", 0)) {
+		parts = append(parts, text.Part{Text: w.Word, IncludesInterPartSpaces: s.spacelessLanguage()})
+	}
+	if got := text.Concatenate(parts); got != "こんにちは私" {
+		t.Errorf("joined = %q, want the characters with nothing between them", got)
+	}
+}
+
+// The punctuation the per-character tokens leave out is recovered by the word
+// tracker, which matches on the alphanumerics and commits spans of the
+// original text.
+func TestSpacelessPunctuationRecoveredByTheWordTracker(t *testing.T) {
+	const sentence = "こんにちは、私はAIです。"
+	s := synthIn(language.Japanese)
+	tracker := uctx.NewWordCompletionTracker(sentence, "", "")
+	complete := false
+	for _, w := range s.toWordTimes("s1", timings(sentence, 0)) {
+		complete = tracker.AddWord(w.Word)
+	}
+	if !complete {
+		t.Error("the tracker did not complete on the tokens")
+	}
+	if got := tracker.AccumulatedUserFacingText(); got != sentence {
+		t.Errorf("accumulated = %q, want %q", got, sentence)
 	}
 }
