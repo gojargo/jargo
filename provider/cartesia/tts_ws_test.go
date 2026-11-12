@@ -19,9 +19,11 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // session is what the fake synthesis endpoint saw: the headers it was dialed
@@ -30,6 +32,15 @@ type session struct {
 	mu       sync.Mutex
 	header   http.Header
 	requests []map[string]any
+	// dials counts the connections opened, and open the ones still open.
+	dials, open int
+}
+
+// connections is how many connections were opened, and how many are open.
+func (s *session) connections() (dials, open int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dials, s.open
 }
 
 func (s *session) record(m map[string]any) {
@@ -86,6 +97,15 @@ func ttsServer(t *testing.T, reply []map[string]any) (endpoint string, got *sess
 		if err != nil {
 			return
 		}
+		got.mu.Lock()
+		got.dials++
+		got.open++
+		got.mu.Unlock()
+		defer func() {
+			got.mu.Lock()
+			got.open--
+			got.mu.Unlock()
+		}()
 		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
 		ctx := r.Context()
 
@@ -255,7 +275,7 @@ func speak(t *testing.T, s *synthesizer, text string) *ttsHost {
 	t.Helper()
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 	if err := s.RunTTS(t.Context(), text, "c1", nil); err != nil {
 		t.Fatalf("RunTTS: %v", err)
 	}
@@ -456,7 +476,7 @@ func TestRunTTSSharesOneConnection(t *testing.T) {
 	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 
 	for _, sentence := range []string{"one.", "two.", "three."} {
 		if err := s.RunTTS(t.Context(), sentence, "c1", nil); err != nil {
@@ -482,7 +502,7 @@ func TestFlushAudioClosesTheTurn(t *testing.T) {
 	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 
 	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err != nil {
 		t.Fatalf("RunTTS: %v", err)
@@ -511,7 +531,7 @@ func TestInterruptionCancelsTheContext(t *testing.T) {
 	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 
 	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err != nil {
 		t.Fatalf("RunTTS: %v", err)
@@ -536,7 +556,7 @@ func TestAudioForAClosedContextIsDropped(t *testing.T) {
 	host := &ttsHost{}
 	host.RemoveAudioContext("c1") // the context is gone before any audio lands
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 
 	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err != nil {
 		t.Fatalf("RunTTS: %v", err)
@@ -557,7 +577,7 @@ func TestRunTTSServerError(t *testing.T) {
 	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err != nil {
 		t.Fatalf("RunTTS: %v", err)
 	}
@@ -593,7 +613,7 @@ func TestUnknownMessageTypeIsReported(t *testing.T) {
 	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err != nil {
 		t.Fatalf("RunTTS: %v", err)
 	}
@@ -623,16 +643,16 @@ func TestRunTTSDialError(t *testing.T) {
 	}
 }
 
-// TestRunTTSFailedSendKeepsTheContext checks a sentence that cannot be sent
-// stops its speech through the context but leaves the context open, so the
-// turn's later sentences still have somewhere to land once the connection is
-// dialed again.
-func TestRunTTSFailedSendKeepsTheContext(t *testing.T) {
-	endpoint, _ := ttsServer(t, []map[string]any{{"type": "done"}})
+// TestRunTTSFailedSendReconnects checks a sentence that cannot be sent stops
+// its speech through the context, reports the failure, and has the connection
+// dropped and dialed again. Dropping it ends the connection's contexts, which
+// the base does and its own tests cover.
+func TestRunTTSFailedSendReconnects(t *testing.T) {
+	endpoint, seen := ttsServer(t, []map[string]any{{"type": "done"}})
 	s := newSynthesizer(ttsConfig(endpoint))
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 	// Dialed with no receive loop, so nothing notices the close and redials
 	// before the send: the send is what finds the connection dead.
 	if err := s.ConnectWebsocket(t.Context()); err != nil {
@@ -653,15 +673,21 @@ func TestRunTTSFailedSendKeepsTheContext(t *testing.T) {
 	if err := s.RunTTS(t.Context(), "hi", "c1", yield); err == nil {
 		t.Fatal("RunTTS on a dead connection = nil, want the send error")
 	}
-	_, _, seen, closed := host.snapshot()
-	if !slices.Equal(seen, []string{"stopped"}) {
-		t.Errorf("context frames = %v, want the speech stopped", seen)
+	host.mu.Lock()
+	order := slices.Clone(host.frames)
+	host.mu.Unlock()
+	if !slices.Equal(order, []string{"stopped"}) {
+		t.Errorf("context frames = %v, want the speech stopped", order)
 	}
-	if closed {
-		t.Error("the context was removed, want it kept for the turn's later sentences")
-	}
-	if !s.Connected() {
+	if !s.Connected() || !s.ws.ReceiveTaskRunning() {
 		t.Error("the connection was not dialed again after the failed send")
+	}
+	// The connection works again: the next sentence goes out on it.
+	if err := s.RunTTS(t.Context(), "again", "c2", yield); err != nil {
+		t.Fatalf("RunTTS after the redial: %v", err)
+	}
+	if reqs := seen.await(t, 1); reqs[0][fieldTranscript] != "again" {
+		t.Errorf("the endpoint saw %v, want the next sentence", reqs[0])
 	}
 }
 
@@ -682,7 +708,7 @@ func TestRunTTSTimedRequestsTimestamps(t *testing.T) {
 	s := &timedSynthesizer{synthesizer: newSynthesizer(ttsConfig(endpoint))}
 	host := &ttsHost{}
 	s.SetAudioContextHost(host)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { s.Disconnect(context.Background()) })
 
 	if err := s.RunTTSTimed(t.Context(), "Hello world", "c1", nil, nil); err != nil {
 		t.Fatalf("RunTTSTimed: %v", err)
@@ -822,8 +848,12 @@ func TestRunTTSSendsMaxBufferDelay(t *testing.T) {
 		t.Errorf("max_buffer_delay_ms = %v, want 0", got["max_buffer_delay_ms"])
 	}
 
+	// Streaming tokens with no window chosen leaves it unset, so the request
+	// goes without one.
 	endpoint, seen = ttsServer(t, []map[string]any{{"type": "done"}})
-	speak(t, newSynthesizer(ttsConfig(endpoint)), "hi")
+	cfg = ttsConfig(endpoint)
+	cfg.TextAggregation = frames.TextTypeToken
+	speak(t, newSynthesizer(cfg), "hi")
 	if _, present := seen.first()["max_buffer_delay_ms"]; present {
 		t.Error("max_buffer_delay_ms was sent with no window configured")
 	}
@@ -874,31 +904,50 @@ func (h *ttsHost) rotated() int {
 	return h.rotations
 }
 
-// recordingService records what the synthesizer reports to its service, and
-// becomes unusable on a permanent error as the service does.
-type recordingService struct {
-	mu        sync.Mutex
-	errors    []string
-	permanent bool
+// connectionErrors records the connection errors a service raises.
+type connectionErrors struct {
+	mu   sync.Mutex
+	msgs []string
 }
 
-func (r *recordingService) PushError(_ context.Context, msg string, _ error, _ bool, _ ...processor.ErrorOption) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.errors = append(r.errors, msg)
+// recordConnectionErrors starts recording the connection errors b raises.
+func recordConnectionErrors(b *tts.Base) *connectionErrors {
+	r := &connectionErrors{}
+	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.msgs = append(r.msgs, msg)
+	})
+	return r
 }
 
-func (r *recordingService) ReportConnectionError(_ context.Context, ef *frames.ErrorFrame, force bool) {
+// all is every connection error raised so far.
+func (r *connectionErrors) all() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.errors = append(r.errors, ef.Error)
-	r.permanent = r.permanent || force
+	return slices.Clone(r.msgs)
 }
 
-func (r *recordingService) Usable() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return !r.permanent
+// await waits for n connection errors to have been raised, and returns them.
+// The event's handlers run on their own goroutines, after the report.
+func (r *connectionErrors) await(t *testing.T, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(r.all()) < n && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	return r.all()
+}
+
+// fastReconnect is a config pointed at endpoint whose redials wait a
+// millisecond, so a test sees the reconnection give up without waiting the
+// production backoff out.
+func fastReconnect(endpoint string) Config {
+	cfg := ttsConfig(endpoint)
+	cfg.Websocket = wsservice.Options{
+		ReconnectBackoffMinWait: time.Millisecond, ReconnectBackoffMaxWait: time.Millisecond,
+	}
+	return cfg
 }
 
 // TestQuickFailuresGiveUpAndReport checks a server that accepts the handshake
@@ -920,17 +969,12 @@ func TestQuickFailuresGiveUpAndReport(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := newSynthesizer(ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http")))
-	s.ws = wsservice.New(s, wsservice.Config{
-		ReconnectBackoffMinWait: time.Millisecond, ReconnectBackoffMaxWait: time.Millisecond,
-	})
-	rec := &recordingService{}
-	s.svc = rec
-	s.SetAudioContextHost(&ttsHost{})
+	b, s := newTTS(fastReconnect("ws" + strings.TrimPrefix(srv.URL, "http")))
+	reported := recordConnectionErrors(b)
 
 	s.Start(t.Context())
 	time.Sleep(300 * time.Millisecond)
-	s.disconnect(t.Context())
+	s.Disconnect(t.Context())
 
 	mu.Lock()
 	n := dials
@@ -938,10 +982,11 @@ func TestQuickFailuresGiveUpAndReport(t *testing.T) {
 	if n > 4 {
 		t.Errorf("dialed %d times, want the redialing to stop after a few quick failures", n)
 	}
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	if !rec.permanent {
-		t.Errorf("reported %q, want a permanent error once the redialing stopped", rec.errors)
+	if b.Usable() {
+		t.Errorf("reported %q, want a permanent error once the redialing stopped", reported.all())
+	}
+	if len(reported.await(t, 1)) == 0 {
+		t.Error("giving up raised no connection error")
 	}
 }
 
@@ -953,16 +998,21 @@ func TestStartReportsAFailedConnect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := newSynthesizer(ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http")))
-	rec := &recordingService{}
-	s.svc = rec
+	b, s := newTTS(ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http")))
+	reported := recordConnectionErrors(b)
 	s.Start(t.Context())
-	defer s.disconnect(t.Context())
+	defer s.Disconnect(t.Context())
 
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	if len(rec.errors) != 1 {
-		t.Errorf("reported %q, want the failed connect reported once", rec.errors)
+	if got := reported.await(t, 1); len(got) != 1 {
+		t.Errorf("reported %q, want the failed connect reported once", got)
+	}
+	// Given a moment, so a second report would have been raised by now.
+	time.Sleep(50 * time.Millisecond)
+	if got := reported.all(); len(got) != 1 {
+		t.Errorf("reported %q, want the failed connect reported once", got)
+	}
+	if s.ws.ReceiveTaskRunning() {
+		t.Error("a receive loop runs with no connection to read")
 	}
 }
 
@@ -990,5 +1040,97 @@ func TestRequestsSendTheMappedLanguage(t *testing.T) {
 		if got := httpSeen().body["language"]; got != want {
 			t.Errorf("%s over HTTP: language = %v, want %q", in, got, want)
 		}
+	}
+}
+
+// TestOneConnectionForTheCall checks the service connects when the pipeline
+// starts, speaks every turn over that one connection rather than dialing per
+// sentence, and closes it when the pipeline ends.
+func TestOneConnectionForTheCall(t *testing.T) {
+	endpoint, seen := ttsServer(t, []map[string]any{chunk([]byte{1, 2}), {"type": "done"}})
+	task := pipeline.NewWorker(pipeline.New(NewTTS(ttsConfig(endpoint))), pipeline.WorkerConfig{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	for _, text := range []string{"The first turn.", "The second turn."} {
+		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
+		task.QueueFrame(frames.NewLLMTextFrame(text))
+		task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+	}
+	task.StopWhenDone()
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the task did not finish")
+	}
+
+	var spoken []string
+	for _, r := range seen.all() {
+		if text, _ := r[fieldTranscript].(string); text != "" {
+			spoken = append(spoken, text)
+		}
+	}
+	if !slices.Equal(spoken, []string{"The first turn.", "The second turn."}) {
+		t.Errorf("the endpoint was sent %q, want both turns", spoken)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	dials, open := seen.connections()
+	for open != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+		dials, open = seen.connections()
+	}
+	if dials != 1 {
+		t.Errorf("dialed %d times, want one connection for the call", dials)
+	}
+	if open != 0 {
+		t.Error("the connection was left open after the pipeline ended")
+	}
+}
+
+// TestAGracefulCloseIsDialedAgainAtOnce checks a connection the server closes
+// gracefully, as Cartesia does once one has been idle for five minutes, is
+// dialed again at once rather than after a backoff, and is not reported: it
+// is not a failure.
+func TestAGracefulCloseIsDialedAgainAtOnce(t *testing.T) {
+	var mu sync.Mutex
+	dials := 0
+	dialed := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return dials
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		dials++
+		n := dials
+		mu.Unlock()
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		if n == 1 {
+			_ = c.Close(websocket.StatusNormalClosure, "idle")
+			return
+		}
+		_, _, _ = c.Read(r.Context())
+	}))
+	defer srv.Close()
+
+	b, s := newTTS(ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http")))
+	reported := recordConnectionErrors(b)
+	s.Start(t.Context())
+	defer s.Disconnect(context.Background())
+
+	// Well inside the shortest backoff, so a redial in time is the immediate one.
+	deadline := time.Now().Add(time.Second)
+	for (dialed() < 2 || !s.Connected()) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := dialed(); n != 2 || !s.Connected() {
+		t.Fatalf("dialed %d times, connected %v, want the connection dialed again at once", n, s.Connected())
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := reported.all(); len(got) != 0 || !b.Usable() {
+		t.Errorf("reported %q, usable %v, want a graceful close neither reported nor held against the service",
+			got, b.Usable())
 	}
 }

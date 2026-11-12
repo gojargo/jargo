@@ -39,6 +39,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   interruption while the bot is speaking or its synthesis has started, unless
   only uninterruptible speech is still open.
 
+### Fixed
+
+- **The Cartesia TTS service runs on the websocket TTS base.** It still holds
+  one connection open for the call, and the base now owns its receive loop,
+  reconnects and error reports, and closes it when the pipeline ends or is
+  canceled, not only when the service is torn down. A sentence that cannot be
+  sent, for want of a connection or on a failed send, stops its speech and
+  has the connection dropped and dialed again; dropping it ends its open
+  contexts, so the rest of the turn goes out under a new one. A connection
+  Cartesia closes gracefully after five idle minutes is still dialed again at
+  once, and now leaves the open contexts alone. Closing the connection, and an
+  error message from Cartesia, report what the service was timing as far as
+  it got.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

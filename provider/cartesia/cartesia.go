@@ -1,6 +1,7 @@
 // Package cartesia is a streaming text-to-speech service backed by Cartesia's
-// TTS WebSocket. For each sentence it opens a connection, sends the transcript,
-// and streams the raw PCM audio chunks downstream.
+// TTS WebSocket. It holds one connection open for the call, sends each
+// sentence on the turn's context, and streams the raw PCM audio chunks
+// downstream as they arrive.
 package cartesia
 
 import (
@@ -34,9 +35,6 @@ const (
 	// into a context the user interrupted. It runs off the session context, which
 	// an interruption may already have canceled.
 	cancelWriteTimeout = 2 * time.Second
-	// receiveStopTimeout bounds how long a disconnect waits for the receive
-	// loop to stop.
-	receiveStopTimeout = 2 * time.Second
 
 	// fieldTranscript is what Cartesia calls the text in both directions: the
 	// text to speak on a synthesis request, and the text heard on a transcript.
