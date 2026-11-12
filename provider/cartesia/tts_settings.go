@@ -25,6 +25,9 @@ type TTSSettings struct {
 	GenerationConfig settings.Opt[*GenerationConfig] `settings:"generation_config"`
 	// PronunciationDictID applies a custom pronunciation dictionary.
 	PronunciationDictID settings.Opt[string] `settings:"pronunciation_dict_id"`
+	// Normalization is how Cartesia reads numbers, dates and phone numbers:
+	// "auto", a language or locale code, or "off".
+	Normalization settings.Opt[string] `settings:"normalization"`
 	// Accent is the accent a multilingual voice speaks the language with.
 	Accent settings.Opt[string] `settings:"accent"`
 }
@@ -43,6 +46,9 @@ func newTTSSettings(cfg Config) *TTSSettings {
 	}
 	if cfg.PronunciationDictID != "" {
 		s.PronunciationDictID = settings.Set(cfg.PronunciationDictID)
+	}
+	if cfg.Normalization != "" {
+		s.Normalization = settings.Set(cfg.Normalization)
 	}
 	if cfg.Accent != "" {
 		s.Accent = settings.Set(cfg.Accent)

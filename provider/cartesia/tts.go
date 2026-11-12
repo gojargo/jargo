@@ -604,6 +604,9 @@ func (s *synthesizer) request(text, contextID string, more bool) map[string]any 
 	if dict := s.live.PronunciationDictID.Or(s.cfg.PronunciationDictID); dict != "" {
 		msg["pronunciation_dict_id"] = dict
 	}
+	if norm := s.live.Normalization.Or(s.cfg.Normalization); norm != "" {
+		msg["normalization"] = norm
+	}
 	if accent := s.live.Accent.Or(s.cfg.Accent); accent != "" {
 		msg["accent"] = accent
 	}

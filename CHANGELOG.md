@@ -789,6 +789,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transcript on its own. They are sent to ink-whisper models only, and left
   out with a warning for another; a change reopens the session.
 
+- **Cartesia TTS takes a normalization.** The WebSocket and HTTP Cartesia
+  TTS configs gain `Normalization`, and their settings `normalization`: how
+  Cartesia reads numbers, dates and phone numbers, "auto", a language or
+  locale code read whatever is spoken, or "off" for text already spelled out.
+  It is sent with each request when set.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

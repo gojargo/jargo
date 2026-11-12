@@ -66,6 +66,12 @@ type HTTPTTSConfig struct {
 	GenerationConfig *GenerationConfig
 	// PronunciationDictID applies a custom pronunciation dictionary; empty omits it.
 	PronunciationDictID string
+	// Normalization is how Cartesia reads numbers, dates and phone numbers:
+	// "auto", its default, follows the request's language; a language or locale
+	// code, "en-GB" say, reads them in that convention whatever is spoken; and
+	// "off" skips it, for text already spelled out, where digits and symbols
+	// left in come out garbled or not at all. Empty omits it.
+	Normalization string
 	// Accent is the accent a multilingual voice speaks the language with (for
 	// example "british"). It must be one the voice supports, as listed in the
 	// accents field of Cartesia's Get Voice response. Empty lets Cartesia pick
@@ -127,6 +133,7 @@ func newHTTPSynthesizer(cfg HTTPTTSConfig) *httpSynthesizer {
 		Language:            cfg.Language,
 		GenerationConfig:    cfg.GenerationConfig,
 		PronunciationDictID: cfg.PronunciationDictID,
+		Normalization:       cfg.Normalization,
 		Accent:              cfg.Accent,
 	})}
 }
@@ -232,6 +239,9 @@ func (s *httpSynthesizer) payload(text string) map[string]any {
 	}
 	if dict := s.live.PronunciationDictID.Or(s.cfg.PronunciationDictID); dict != "" {
 		msg["pronunciation_dict_id"] = dict
+	}
+	if norm := s.live.Normalization.Or(s.cfg.Normalization); norm != "" {
+		msg["normalization"] = norm
 	}
 	if accent := s.live.Accent.Or(s.cfg.Accent); accent != "" {
 		msg["accent"] = accent
