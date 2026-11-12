@@ -20,7 +20,10 @@ import (
 // HTTPService streams a Responses turn over one request.
 type HTTPService struct {
 	*llm.Base
-	cfg     Config
+	cfg Config
+	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
+	// It is seeded from cfg, and is what every request is built from.
+	live    *LLMSettings
 	http    *http.Client
 	variant HTTPVariant
 	// adapter converts each conversation into a request. It is held rather than
@@ -72,7 +75,7 @@ func NewHTTPVariantLLM(cfg Config, v HTTPVariant) *HTTPService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
-	s := &HTTPService{cfg: cfg, http: &http.Client{}, variant: v}
+	s := &HTTPService{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, variant: v}
 	s.Base = llm.New(v.Name, s)
 	s.Base.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
@@ -100,7 +103,10 @@ func (s *HTTPService) RunInference(
 	if opts.SystemInstruction == "" {
 		opts.SystemInstruction = s.SystemInstruction()
 	}
-	return runInference(ctx, s.cfg, &s.adapter, s.http, convo, opts, s.encode)
+	cfg := requestConfig(s.Base, s.cfg, s.live)
+	return runInference(ctx, cfg, &s.adapter, s.http, convo, opts, func(req request) ([]byte, error) {
+		return s.encode(cfg, req)
+	})
 }
 
 // LLMAdapter implements llm.AdapterHolder.
@@ -108,14 +114,14 @@ func (s *HTTPService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // encode renders a request for the wire: the thinking default, Extra over the
 // modeled fields, then the variant's edits.
-func (s *HTTPService) encode(req request) ([]byte, error) {
+func (s *HTTPService) encode(cfg Config, req request) ([]byte, error) {
 	if s.variant.ThinkingDefault == nil && s.variant.Request == nil {
-		return s.cfg.encode(req, s)
+		return cfg.encode(req, s)
 	}
 	if s.variant.ThinkingDefault == nil {
-		s.cfg.applyThinkingDefault(&req, s)
+		cfg.applyThinkingDefault(&req, s)
 	}
-	raw, err := encodeBody(req, s.cfg.Extra)
+	raw, err := encodeBody(req, cfg.Extra)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +130,7 @@ func (s *HTTPService) encode(req request) ([]byte, error) {
 		return nil, err
 	}
 	if s.variant.ThinkingDefault != nil {
-		s.variant.ThinkingDefault(body, s.cfg.Model, s)
+		s.variant.ThinkingDefault(body, cfg.Model, s)
 	}
 	if s.variant.Request != nil {
 		s.variant.Request(body)
@@ -143,13 +149,14 @@ func (s *HTTPService) ModelSupportsResponseSchema(model string) bool {
 
 // run issues one turn and feeds its event stream to the state machine.
 func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
-	reqBody, err := s.cfg.newRequest(
+	cfg := requestConfig(s.Base, s.cfg, s.live)
+	reqBody, err := cfg.newRequest(
 		&s.adapter, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools,
 	)
 	if err != nil {
 		return err
 	}
-	body, err := s.encode(reqBody)
+	body, err := s.encode(cfg, reqBody)
 	if err != nil {
 		return err
 	}

@@ -103,6 +103,9 @@ func (sess *session) live() bool {
 type Service struct {
 	*llm.Base
 	cfg Config
+	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
+	// It is seeded from cfg, and is what every request is built from.
+	live *LLMSettings
 	// adapter converts each conversation into a request. It is held rather than
 	// built per request, since it carries the tools the service implements
 	// itself.
@@ -183,7 +186,7 @@ func NewLLM(cfg Config) *Service {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	s := &Service{cfg: cfg, http: &http.Client{}}
+	s := &Service{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}}
 	s.Base = llm.New("OpenAIResponsesLLM", s)
 	s.Base.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
@@ -233,8 +236,9 @@ func (s *Service) RunInference(
 	if opts.SystemInstruction == "" {
 		opts.SystemInstruction = s.SystemInstruction()
 	}
-	return runInference(ctx, s.cfg, &s.adapter, s.http, convo, opts, func(req request) ([]byte, error) {
-		return s.cfg.encode(req, s)
+	cfg := requestConfig(s.Base, s.cfg, s.live)
+	return runInference(ctx, cfg, &s.adapter, s.http, convo, opts, func(req request) ([]byte, error) {
+		return cfg.encode(req, s)
 	})
 }
 
@@ -350,17 +354,18 @@ func (s *Service) turn(
 		return errConnectionClosed
 	}
 
-	req, err := s.cfg.newRequest(
+	cfg := requestConfig(s.Base, s.cfg, s.live)
+	req, err := cfg.newRequest(
 		&s.adapter, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools,
 	)
 	if err != nil {
 		return err
 	}
-	s.cfg.applyThinkingDefault(&req, s)
+	cfg.applyThinkingDefault(&req, s)
 	full := req.Input
 	sent := s.applyContinuation(&req)
 
-	inner, err := encodeBody(req, s.cfg.Extra)
+	inner, err := encodeBody(req, cfg.Extra)
 	if err != nil {
 		return err
 	}

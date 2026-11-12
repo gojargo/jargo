@@ -86,6 +86,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A settings update reaches the OpenAI Responses request.** An
+  `LLMUpdateSettingsFrame` changing the model, the temperature, the top-p, the
+  output bound (`max_completion_tokens`), the reasoning or an unmodeled field
+  was stored but never sent, over HTTP and WebSocket alike. Both services now
+  keep their settings as `responses.LLMSettings`, seeded from the config, and
+  build each request from them.
+
 - **A settings update reaches the OpenAI chat request.** An
   `LLMUpdateSettingsFrame` changing the model, the sampling controls, the
   token bounds or an unmodeled field was stored but never sent: every request
