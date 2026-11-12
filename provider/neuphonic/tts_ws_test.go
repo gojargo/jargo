@@ -272,6 +272,9 @@ func connectedSynth(t *testing.T, server *fakeServer, cfg Config) (*synthesizer,
 	if !s.Connected() {
 		t.Fatal("the service did not connect when it started")
 	}
+	// The server counts a connection once its handshake is done, which can
+	// trail the dial returning.
+	waitUntil(t, "the server never saw the connection", func() bool { return server.connections() == 1 })
 	t.Cleanup(func() { s.Disconnect(context.Background()) })
 	return s, host, svc
 }
@@ -473,9 +476,7 @@ func TestSettingsChangeReconnects(t *testing.T) {
 			s, _, _ := connectedSynth(t, server, Config{VoiceID: "v1"})
 
 			updateSettings(t, s, tc.delta)
-			if n := server.connections(); n != 2 {
-				t.Fatalf("%s must reconnect: the server saw %d connections", field, n)
-			}
+			waitUntil(t, field+" must reconnect", func() bool { return server.connections() == 2 })
 			if got := server.dial(1).query.Get(tc.param); got != tc.want {
 				t.Errorf("new connection %s = %q, want %q", tc.param, got, tc.want)
 			}
@@ -560,8 +561,11 @@ func TestFailedSendResetsTheConnection(t *testing.T) {
 	if stopped, ok := got[0].(*frames.TTSStoppedFrame); !ok || stopped.ContextID != "c1" {
 		t.Errorf("yielded %v, want the context's speech stopped", got[0])
 	}
-	if !s.Connected() || server.connections() != 2 {
-		t.Errorf("connected %v with %d connections, want a fresh one", s.Connected(), server.connections())
+	// The server counts a connection once its handshake is done, which can
+	// trail the dial returning.
+	waitUntil(t, "the connection was not reset", func() bool { return server.connections() == 2 })
+	if !s.Connected() {
+		t.Error("not connected after the reset")
 	}
 }
 
@@ -658,9 +662,9 @@ func TestHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newFakeServer(t, onText(audioMessage(make([]byte, 480))))
 	b := NewTTS(Config{APIKey: "k", URL: server.url, SampleRate: 24000})
 	r := runPipeline(t, b)
-	if n := server.connections(); n != 1 {
-		t.Fatalf("the server saw %d connections when the pipeline started, want 1", n)
-	}
+	waitUntil(t, "the server saw no connection when the pipeline started", func() bool {
+		return server.connections() == 1
+	})
 
 	r.task.QueueFrame(frames.NewTTSSpeakFrame("Hello there."))
 	r.waitFor(func(f frames.Frame) bool {

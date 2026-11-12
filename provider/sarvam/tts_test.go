@@ -600,8 +600,11 @@ func TestFailedSendResetsTheConnection(t *testing.T) {
 	if stopped, ok := got[0].(*frames.TTSStoppedFrame); !ok || stopped.ContextID != "c1" {
 		t.Errorf("yielded %v, want the context's speech stopped", got[0])
 	}
-	if !s.Connected() || server.connections() != 2 {
-		t.Errorf("connected %v with %d connections, want a fresh one", s.Connected(), server.connections())
+	// The server counts a connection once its handshake is done, which can
+	// trail the dial returning.
+	ttsWaitUntil(t, "the connection was not reset", func() bool { return server.connections() == 2 })
+	if !s.Connected() {
+		t.Error("not connected after the reset")
 	}
 }
 
@@ -697,6 +700,7 @@ func TestSwitchingToV4FlashReconnectsWithItsCapabilities(t *testing.T) {
 	s, _, _ := connectedSynth(t, server, TTSConfig{Model: "bulbul:v3"})
 
 	updateSettings(t, s, &TTSSettings{Model: settings.Set(v4Flash)})
+	config := server.nextConfig(t)
 
 	if n := server.connections(); n != 2 {
 		t.Fatalf("the server saw %d connections, want the switch to reconnect once", n)
@@ -711,7 +715,7 @@ func TestSwitchingToV4FlashReconnectsWithItsCapabilities(t *testing.T) {
 	if voice, _ := s.live.Voice.Value(); voice != "shubh_en_narration_gentle" {
 		t.Errorf("voice = %q, want the new model's default", voice)
 	}
-	if config := server.nextConfig(t); config["model"] != v4Flash || config["speaker"] != "shubh_en_narration_gentle" {
+	if config["model"] != v4Flash || config["speaker"] != "shubh_en_narration_gentle" {
 		t.Errorf("new session config = %v, want the new model and its default speaker", config)
 	}
 }
@@ -857,9 +861,9 @@ func TestHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newTTSFakeServer(t, onText(audioMessage(make([]byte, 480)), finalEvent()))
 	b := NewTTS(TTSConfig{APIKey: "k", URL: server.url})
 	r := runPipeline(t, b)
-	if n := server.connections(); n != 1 {
-		t.Fatalf("the server saw %d connections when the pipeline started, want 1", n)
-	}
+	ttsWaitUntil(t, "the server saw no connection when the pipeline started", func() bool {
+		return server.connections() == 1
+	})
 
 	r.task.QueueFrame(frames.NewTTSSpeakFrame("Hello there."))
 	r.waitFor(func(f frames.Frame) bool {
