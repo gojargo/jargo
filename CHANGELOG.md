@@ -218,6 +218,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   half of a sentence held when the user interrupted was joined to whatever was
   said next ("Let me check theOkay."). It is now dropped on an
   `InterruptionFrame`.
+- **`FrameIs` matches the frames built on the type it names.** A matcher from
+  `processor.FrameIs[*frames.TextFrame]()` matched only a plain `TextFrame`, so
+  a frame filter or an idle watcher keyed on it ignored LLM tokens,
+  transcriptions and every other frame that embeds `TextFrame`. It now matches
+  a frame of the type and any frame that embeds it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

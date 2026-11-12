@@ -2,8 +2,10 @@ package processor
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/embeds"
 	"github.com/gojargo/jargo/utils/notify"
 )
 
@@ -27,11 +29,18 @@ func NewFrameFilter(name string, allowed ...func(frames.Frame) bool) *FrameFilte
 	return f
 }
 
-// FrameIs builds a matcher for one frame type, for passing to NewFrameFilter.
+// FrameIs builds a matcher for one frame type, for passing to NewFrameFilter or
+// NewIdleFrameProcessor. It matches a frame of that type and a frame of any type
+// built on it: FrameIs[*frames.TextFrame] matches an LLM token and a
+// transcription too, since they embed TextFrame. An interface type matches
+// whatever implements it.
 func FrameIs[T frames.Frame]() func(frames.Frame) bool {
+	want := reflect.TypeFor[T]()
 	return func(f frames.Frame) bool {
-		_, ok := f.(T)
-		return ok
+		if _, ok := f.(T); ok {
+			return true
+		}
+		return want.Kind() == reflect.Pointer && embeds.Is(reflect.TypeOf(f), want)
 	}
 }
 

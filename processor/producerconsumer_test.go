@@ -321,3 +321,45 @@ func TestIdleProcessorCleanupLeavesNothingRunning(t *testing.T) {
 		t.Errorf("the callback ran %d times after the pipeline ended", calls-ended)
 	}
 }
+
+// TestFrameIsMatchesTypesBuiltOnIt checks a matcher for a frame type matches the
+// frames built on it too: watching TextFrame takes in an LLM token and a
+// transcription, which embed it, and not a frame that does not.
+func TestFrameIsMatchesTypesBuiltOnIt(t *testing.T) {
+	isText := processor.FrameIs[*frames.TextFrame]()
+	for _, f := range []frames.Frame{
+		frames.NewTextFrame("a"),
+		frames.NewLLMTextFrame("a"),
+		frames.NewTranscriptionFrame("a", "u", "now"),
+		frames.NewTTSTextFrame("a", frames.TextTypeWord),
+	} {
+		if !isText(f) {
+			t.Errorf("FrameIs[*TextFrame] does not match %T, which embeds TextFrame", f)
+		}
+	}
+	if isText(frames.NewEndFrame()) {
+		t.Error("FrameIs[*TextFrame] matched an EndFrame")
+	}
+	if !processor.FrameIs[frames.SystemFrame]()(frames.NewInterruptionFrame()) {
+		t.Error("FrameIs on an interface did not match a frame implementing it")
+	}
+}
+
+// TestIdleProcessorWatchingAParentTypeIsKeptBusyBySubtypes checks an idle
+// watcher on TextFrame is kept from firing by a stream of LLM tokens.
+func TestIdleProcessorWatchingAParentTypeIsKeptBusyBySubtypes(t *testing.T) {
+	fired := make(chan struct{}, 8)
+	idle := processor.NewIdleFrameProcessor("Idle", 150*time.Millisecond,
+		func(*processor.IdleFrameProcessor) { fired <- struct{}{} }, processor.FrameIs[*frames.TextFrame]())
+
+	collectDownstream(t, []processor.Processor{idle}, func(task *pipeline.Worker) {
+		for range 8 {
+			task.QueueFrame(frames.NewLLMTextFrame("token"))
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+
+	if n := len(fired); n != 0 {
+		t.Errorf("the idle callback ran %d times while LLM tokens kept arriving", n)
+	}
+}
