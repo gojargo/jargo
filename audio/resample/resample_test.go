@@ -335,8 +335,13 @@ func TestFlushPassesThroughNothingWhenRatesMatch(t *testing.T) {
 // length, as many samples at the output rate as it lasts, to the nearest one.
 func TestResampleKeepsTheClipLength(t *testing.T) {
 	for _, p := range [][2]int{
-		{24000, 8000}, {24000, 16000}, {48000, 16000}, {44100, 16000},
-		{8000, 16000}, {16000, 24000}, {16000, 44100},
+		{24000, 8000},
+		{24000, 16000},
+		{48000, 16000},
+		{44100, 16000},
+		{8000, 16000},
+		{16000, 24000},
+		{16000, 44100},
 	} {
 		in, out := p[0], p[1]
 		n := in/10 + 1
