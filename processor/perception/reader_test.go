@@ -1249,10 +1249,13 @@ func TestEachTranscriptionOfASpeechGetsItsOwnWordsReadingAndTheClips(t *testing.
 		source(t, words, nil, "tone"), source(t, newFakeAudioClassifier(), nil, "hesitation"),
 	}})
 
+	// The stop is a system frame and would overtake a transcription still
+	// queued, so the pause lets both be held before the user stops.
 	down, _ := run(t, r, pipeline.Params{},
 		vadStarted(), audioFrame(1, 2),
 		transcription("I already told you."),
 		transcription("Twice."),
+		50*time.Millisecond,
 		vadStopped())
 
 	// Each read runs on a goroutine of its own, so the two may ask in either
