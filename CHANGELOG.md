@@ -715,6 +715,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transport does not know the sender. **Breaking:**
   `rtvi.UserInputData.UserID` is a `*string`.
 
+- **A fatal error cancels with its reason.** The `CancelFrame` a fatal error
+  reaching the start of the pipeline queues carried no reason. It now says
+  "fatal error: " followed by the error, as every processor and
+  `EventPipelineFinished` see it.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

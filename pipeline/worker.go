@@ -1600,7 +1600,7 @@ func (t *Worker) sourcePush(ctx context.Context, f frames.Frame, _ processor.Dir
 		switch {
 		case ef.Fatal:
 			slog.Error("fatal error reached the start of the pipeline, canceling", "err", ef.Error)
-			t.cancelWithReason("")
+			t.cancelWithReason("fatal error: " + ef.Error)
 		case unusableSource(ef) != nil:
 			t.handleUnusableProcessor(ctx, unusableSource(ef))
 		default:
