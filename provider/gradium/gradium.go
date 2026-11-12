@@ -1,7 +1,8 @@
 // Package gradium provides Gradium's speech services: streaming text-to-speech
 // and real-time streaming speech-to-text, both over Gradium's WebSocket API.
-// The TTS side opens a session per sentence, sends the transcript, and streams
-// the raw PCM audio chunks downstream; the STT side streams 80 ms audio chunks
+// The TTS side holds one connection open for the call and speaks each turn as a
+// request of its own on it, streaming the raw PCM audio downstream with the
+// time each word is spoken; the STT side streams 80 ms audio chunks
 // and surfaces recognized text as interim and finalized transcriptions.
 package gradium
 

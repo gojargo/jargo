@@ -49,6 +49,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`gradium.NewTTS` keeps one connection for the call instead of dialing one
+  per sentence.** It connects when the pipeline starts and speaks each turn
+  as a request of its own on the open connection, named by the turn's
+  context, so audio still coming for a turn the user cut off is dropped
+  rather than played over the next one. Each turn's request is set up once
+  and ended with an `end_of_stream` when the turn's text is complete, so a
+  turn's sentences stream as one utterance. A lost connection is restored
+  with backoff, and after three failed redials a permanent error makes the
+  service unusable so a service switcher moves off it. The new
+  `TTSConfig.Websocket` field configures the reconnection and the timeouts.
+  The service now reports when each word is spoken, so the conversation
+  keeps only what was heard before an interruption, and takes settings
+  updates (`TTSSettings`): a new voice reconnects. Frame handling pauses
+  while a turn's audio is generated.
+
 - **`neuphonic.NewTTS` holds one connection for the call instead of dialing
   one per sentence.** It used to open a connection for each sentence, send the
   text and wait for that sentence's audio before the next one could go out.
