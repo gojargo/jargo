@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/expressive/spoken"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -1068,6 +1069,11 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 	// TTSTextFrames, and any frames queued behind them that arrived before audio,
 	// are held until the audio confirms that the text was actually spoken.
 	var held []frames.Frame
+	// One resampler converts all of the context's audio at a rate other than
+	// the service's, so it stays continuous across frames. A context cut off
+	// mid-play drops what it holds.
+	var rs contextResampler
+	defer rs.close()
 	for {
 		it, ok, timedOut := c.get(ctx, b.stopFrameTimeout)
 		if timedOut {
@@ -1098,6 +1104,7 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 			// a provider emits for itself.
 			fr.AppendToContext = b.appendsToContext(contextID)
 		case *frames.TTSAudioRawFrame:
+			b.resampleContextAudio(ctx, contextID, &rs, fr)
 			// The first chunk of audio is what the context's words are timed
 			// from: it is the point the audio starts being heard.
 			receivedAudio = true
@@ -1111,6 +1118,7 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 			}
 			continue
 		case *frames.TTSStoppedFrame:
+			b.pushResamplerTail(ctx, contextID, &rs)
 			// Checking if we have any remaining spoken slots before pushing the
 			// stop frame.
 			b.releaseHeldFramesWithoutAudio(ctx, contextID, held)
@@ -1120,6 +1128,7 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 		}
 		_ = b.PushFrame(ctx, it.frame, processor.Downstream)
 	}
+	b.pushResamplerTail(ctx, contextID, &rs)
 	// Words the provider never timed come before the stop frame.
 	b.releaseHeldFramesWithoutAudio(ctx, contextID, held)
 	b.applyForceComplete(ctx, contextID, receivedAudio)
@@ -1131,6 +1140,73 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 	b.finishAudioContext(ctx, c)
 	b.recordContextAudioOutcome(ctx, contextID, receivedAudio)
 	return true
+}
+
+// contextResampler converts a playing context's audio from the rate the
+// provider sent it at to the service's rate.
+type contextResampler struct {
+	// rate is the rate of the context's latest audio, and r the resampler
+	// converting it, nil while that rate is the service's.
+	rate     int
+	channels int
+	r        *resample.Resampler
+}
+
+// close releases the resampler, dropping whatever it still holds.
+func (rs *contextResampler) close() {
+	if rs.r != nil {
+		rs.r.Close()
+		rs.r = nil
+	}
+	rs.rate = 0
+}
+
+// resampleContextAudio converts an audio frame of the playing context to the
+// service's sample rate, in place. Audio at another rate than the context's
+// last, the service's included, first ends the audio the resampler was
+// converting, so the tail at the old rate goes out ahead of it.
+func (b *Base) resampleContextAudio(
+	ctx context.Context, contextID string, rs *contextResampler, f *frames.TTSAudioRawFrame,
+) {
+	want := b.syn.SampleRate()
+	if f.SampleRate != rs.rate {
+		b.pushResamplerTail(ctx, contextID, rs)
+		rs.rate = f.SampleRate
+		if f.SampleRate != want && f.SampleRate > 0 && want > 0 {
+			slog.Debug("resampling tts audio to the service rate",
+				"service", b.Name(), "from", f.SampleRate, "to", want)
+			r, err := resample.NewWithConfig(f.SampleRate, want, max(f.NumChannels, 1),
+				resample.Config{ClearAfter: resample.NeverClear})
+			if err != nil {
+				slog.Warn("cannot resample tts audio to the service rate",
+					"service", b.Name(), "from", f.SampleRate, "to", want, "err", err)
+			} else {
+				rs.r, rs.channels = r, max(f.NumChannels, 1)
+			}
+		}
+	}
+	if rs.r != nil {
+		f.Audio = rs.r.Process(f.Audio)
+		f.SampleRate = want
+	}
+}
+
+// pushResamplerTail pushes the audio the context's resampler still holds, and
+// drops the resampler.
+func (b *Base) pushResamplerTail(ctx context.Context, contextID string, rs *contextResampler) {
+	if rs.r == nil {
+		rs.rate = 0
+		return
+	}
+	audio := rs.r.Flush()
+	channels := rs.channels
+	rs.close()
+	if len(audio) == 0 {
+		return
+	}
+	tail := frames.NewTTSAudioRawFrame(audio, b.syn.SampleRate(), channels)
+	tail.ContextID = contextID
+	_ = b.PushFrame(ctx, tail, processor.Downstream)
 }
 
 // stampLLMResponseFrame sends the end of a model response after its words. The

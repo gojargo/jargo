@@ -324,6 +324,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   sentence of its own and recorded that way. The marker is now masked before
   the sentence rules run, in every language, while a number that ends a
   sentence still ends it.
+- **TTS audio comes out at the service's rate.** A provider that sent audio at
+  another rate than its service's (a pocket-tts server at 24 kHz behind a
+  service configured for 16 kHz, say) had it pushed downstream as it came, so
+  every processor after the TTS saw the provider's rate, and the time to first
+  audio was measured at the wrong rate. The TTS base now resamples each audio
+  context to the service rate with a resampler of its own, flushing what it
+  holds before the context's stop frame or on a rate change, and dropping it on
+  an interruption.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
