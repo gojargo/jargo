@@ -78,6 +78,16 @@ func (o Opt[T]) Or(alt T) T {
 	return alt
 }
 
+// Ptr is a copy of the value held, or nil when there is none. It is how a
+// setting reaches a request field that is omitted when unset.
+func (o Opt[T]) Ptr() *T {
+	if o.value == nil {
+		return nil
+	}
+	v := *o.value
+	return &v
+}
+
 // AsAny is the value held as an any, or nil when there is none.
 func (o Opt[T]) AsAny() any {
 	if o.value == nil {

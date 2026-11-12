@@ -86,6 +86,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A settings update reaches the OpenAI chat request.** An
+  `LLMUpdateSettingsFrame` changing the model, the sampling controls, the
+  token bounds or an unmodeled field was stored but never sent: every request
+  was built from the `LLMConfig` the service started with. The chat service
+  (and every OpenAI-compatible service built on it) now keeps its settings as
+  `chat.LLMSettings`, seeded from the config, and builds each request from
+  them; a cleared control is omitted again. The LLM base guards the settings
+  store with a lock and gains `ReadSettings` for a provider to read it whole,
+  and `settings.Opt` gains `Ptr`.
+
 - **The OpenAI chat LLM takes the OpenAI client's headers.** `chat.LLMConfig`
   gains `Organization`, `Project` and `DefaultHeaders`, sent with every
   request (as `OpenAI-Organization`, `OpenAI-Project`, and the headers as

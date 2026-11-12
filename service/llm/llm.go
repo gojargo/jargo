@@ -498,6 +498,9 @@ type Base struct {
 	// its own. A provider with settings of its own carries these fields inside
 	// them, so an update reaches whichever store the service actually has.
 	settings settings.LLM
+	// settingsMu guards the settings store, the base's or the provider's: an
+	// update is applied on the frame path while a generation reads them.
+	settingsMu sync.RWMutex
 
 	// skipTTSMu guards skipTTS, which an LLMConfigureOutputFrame sets from the
 	// frame path while a response is being pushed from the process goroutine.
@@ -894,7 +897,9 @@ func (b *Base) traceSystemInstruction(convo *frames.LLMContext) string {
 // traceParameters renders the service's settings as the generation parameters.
 // The system instruction is left out: it has an attribute of its own.
 func (b *Base) traceParameters() map[string]any {
+	b.settingsMu.RLock()
 	given, err := settings.Given(b.settingsStore())
+	b.settingsMu.RUnlock()
 	if err != nil {
 		return nil
 	}
@@ -1108,18 +1113,7 @@ func missingFunctionHandler(ctx context.Context, params FunctionCallParams) erro
 // act on what changed. There is no reconnection here: a generation is a request
 // of its own, so a provider reads its settings the next time it generates.
 func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFrame) {
-	store := b.settingsStore()
-
-	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
-	if err != nil {
-		b.PushError(ctx, "llm: settings update", err, false)
-		return
-	}
-	if !ok {
-		return
-	}
-
-	changed, err := settings.Apply(store, delta)
+	changed, err := b.applySettingsUpdate(f)
 	if err != nil {
 		b.PushError(ctx, "llm: settings update", err, false)
 		return
@@ -1134,13 +1128,13 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		// The model labels the tokens this service reports and is what they are
 		// priced against, so a model that changed mid-call has to relabel what
 		// follows.
-		name, _ := settings.Get(store, "model")
+		name := b.setting("model")
 		model, _ := name.(string)
 		b.SetModel(model)
 	}
 
 	if changed.Has("filter_incomplete_user_turns") {
-		on, _ := settings.Get(store, "filter_incomplete_user_turns")
+		on := b.setting("filter_incomplete_user_turns")
 		enabled, _ := on.(bool)
 		b.SetFilterIncompleteUserTurns(enabled)
 	}
@@ -1150,7 +1144,7 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 	// takes both. One sent while filtering is off is kept in the settings but
 	// not put in force.
 	if changed.Has("user_turn_completion_config") && b.FilterIncompleteUserTurns() {
-		v, _ := settings.Get(store, "user_turn_completion_config")
+		v := b.setting("user_turn_completion_config")
 		if cfg, ok := v.(UserTurnCompletionConfig); ok {
 			b.SetUserTurnCompletionConfig(cfg)
 		} else if v != nil {
@@ -1163,7 +1157,7 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		// The application replaced the base prompt, so it is re-read and the
 		// composed instruction rebuilt from it. Rebuilding rather than assigning is
 		// what keeps whatever was composed onto the prompt in place.
-		instruction, _ := settings.Get(store, "system_instruction")
+		instruction := b.setting("system_instruction")
 		text, _ := instruction.(string)
 		b.SetSystemInstruction(text)
 	}
@@ -1173,6 +1167,37 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 			b.PushError(ctx, "llm: settings update", err, false)
 		}
 	}
+}
+
+// applySettingsUpdate resolves an update against the settings and merges it in,
+// under the settings lock, reporting what changed. An update that names nothing
+// changes nothing.
+func (b *Base) applySettingsUpdate(f *frames.LLMUpdateSettingsFrame) (settings.Changed, error) {
+	b.settingsMu.Lock()
+	defer b.settingsMu.Unlock()
+	store := b.settingsStore()
+	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return settings.Apply(store, delta)
+}
+
+// setting reads one field of the settings under the settings lock.
+func (b *Base) setting(name string) any {
+	b.settingsMu.RLock()
+	defer b.settingsMu.RUnlock()
+	v, _ := settings.Get(b.settingsStore(), name)
+	return v
+}
+
+// ReadSettings runs fn while no settings update can be applied, so a provider
+// building a request reads its settings whole: an update arriving meanwhile
+// lands before or after the read, never in the middle of it.
+func (b *Base) ReadSettings(fn func()) {
+	b.settingsMu.RLock()
+	defer b.settingsMu.RUnlock()
+	fn()
 }
 
 // settingsStore returns the settings an update is applied to: the provider's

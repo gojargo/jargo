@@ -15,7 +15,7 @@ const settingUseProviderThinkingDefault = "use_provider_thinking_default"
 // the service would otherwise send it. It is the settings field of that name,
 // false when unset.
 func (b *Base) UseProviderThinkingDefault() bool {
-	v, _ := settings.Get(b.settingsStore(), settingUseProviderThinkingDefault)
+	v := b.setting(settingUseProviderThinkingDefault)
 	on, _ := v.(bool)
 	return on
 }
@@ -25,7 +25,10 @@ func (b *Base) UseProviderThinkingDefault() bool {
 // the reasoning its frontend hands off. Set it before the pipeline runs; once it
 // does, change it with an LLMUpdateSettingsFrame.
 func (b *Base) SetUseProviderThinkingDefault(on bool) {
-	if err := settings.SetNamed(b.settingsStore(), settingUseProviderThinkingDefault, on); err != nil {
+	b.settingsMu.Lock()
+	err := settings.SetNamed(b.settingsStore(), settingUseProviderThinkingDefault, on)
+	b.settingsMu.Unlock()
+	if err != nil {
 		slog.Error("setting use_provider_thinking_default failed", "service", b.Name(), "err", err)
 	}
 }

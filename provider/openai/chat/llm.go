@@ -114,7 +114,10 @@ func (defaultShaper) Authorize(req *http.Request, apiKey string) {
 // LLMService is a streaming OpenAI-compatible chat-completions LLM processor.
 type LLMService struct {
 	*llm.Base
-	cfg    LLMConfig
+	cfg LLMConfig
+	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
+	// It is seeded from cfg, and is what every request is built from.
+	live   *LLMSettings
 	http   *http.Client
 	shaper RequestShaper
 	// adapter converts the conversation into the request this endpoint takes.
@@ -249,6 +252,7 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 	}
 	s := &LLMService{
 		cfg:              cfg,
+		live:             newLLMSettings(cfg),
 		http:             &http.Client{},
 		shaper:           shaper,
 		adapter:          a,
@@ -293,6 +297,9 @@ type chatRequest struct {
 	Tools               []openai.Tool          `json:"tools,omitempty"`
 	ToolChoice          string                 `json:"tool_choice,omitempty"`
 	ResponseFormat      *openai.ResponseFormat `json:"response_format,omitempty"`
+	// extra are the settings' request fields the request does not model,
+	// merged over the modeled ones when it is encoded.
+	extra map[string]any
 }
 
 // streamOptions asks for the token counts to be reported on the stream. Without
@@ -411,31 +418,33 @@ func (s *LLMService) baseRequest(
 	if err != nil {
 		return chatRequest{}, err
 	}
-	maxCompletion := s.cfg.MaxCompletionTokens
+	live := s.liveSettings()
+	maxCompletion := live.MaxCompletionTokens.Ptr()
 	if s.noMaxCompletion {
 		maxCompletion = nil
 	}
 	return chatRequest{
-		Model:               s.cfg.Model,
+		Model:               live.Model.Or(""),
 		Messages:            p.Messages,
 		Tools:               p.Tools,
 		ToolChoice:          p.ToolChoice,
 		Stream:              true,
 		StreamOptions:       &streamOptions{IncludeUsage: true},
-		MaxTokens:           s.cfg.MaxTokens,
+		MaxTokens:           live.MaxTokens.Or(0),
 		MaxCompletionTokens: maxCompletion,
-		Temperature:         s.cfg.Temperature,
-		TopP:                s.cfg.TopP,
-		FrequencyPenalty:    s.cfg.FrequencyPenalty,
-		PresencePenalty:     s.cfg.PresencePenalty,
-		Seed:                s.cfg.Seed,
+		Temperature:         live.Temperature.Ptr(),
+		TopP:                live.TopP.Ptr(),
+		FrequencyPenalty:    live.FrequencyPenalty.Ptr(),
+		PresencePenalty:     live.PresencePenalty.Ptr(),
+		Seed:                live.Seed.Ptr(),
 		ServiceTier:         s.cfg.ServiceTier,
+		extra:               live.Extra,
 	}, nil
 }
 
 // generate sends one streaming request and feeds what comes back to sink.
 func (s *LLMService) generate(ctx context.Context, reqBody chatRequest, sink llm.Sink) error {
-	body, err := encodeBody(reqBody, s.cfg.Extra)
+	body, err := encodeBody(reqBody, reqBody.extra)
 	if err != nil {
 		return err
 	}
@@ -671,7 +680,7 @@ func (s *LLMService) RunInference(
 	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
 		reqBody.ResponseFormat = openai.JSONSchemaFormat(schema)
 	}
-	body, err := encodeBody(reqBody, s.cfg.Extra)
+	body, err := encodeBody(reqBody, reqBody.extra)
 	if err != nil {
 		return "", err
 	}
