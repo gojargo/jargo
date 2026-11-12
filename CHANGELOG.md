@@ -376,6 +376,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   timed, so a processor or observer between the TTS and the transport saw the
   words after the audio they lead. They now go out first, then the frames held
   for the audio, then the audio.
+- **The NVIDIA LLM keeps a model's reasoning out of the answer.** A model
+  served by NIM that reasons before answering had that reasoning spoken: a
+  leading `<think>...</think>` block in the answer text (DeepSeek-R1, some
+  Nemotron models) went to TTS as text, and the `reasoning_content` field
+  (Nemotron Nano models) was dropped. Both are now pushed as
+  `LLMThoughtStartFrame`, `LLMThoughtTextFrame` and `LLMThoughtEndFrame`, after
+  the TTFB is reported. Text held back while deciding whether the answer opens
+  with a thought is released when the stream completes and discarded when it
+  is cut short; a thought left open is ended either way. A service given no
+  API key, as a local NIM takes none, sends a placeholder rather than an empty
+  bearer token, and warns when that is the cloud endpoint. The parsing is
+  `text.TaggedLLMTextParser`, new in `utils/text`: it separates a tagged
+  thought at the start of streamed text from what follows, tags split across
+  chunks included. An OpenAI-compatible provider can intercept its stream the
+  same way through the new `chat.Compat.StreamFilter`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

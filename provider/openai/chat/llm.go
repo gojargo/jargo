@@ -118,6 +118,32 @@ type LLMService struct {
 	noResponseSchema bool
 	// noMaxCompletion leaves max_completion_tokens off every request.
 	noMaxCompletion bool
+	// newStreamFilter builds the filter each completion's stream goes through,
+	// or is nil when the stream is taken as it comes.
+	newStreamFilter func(*LLMService) StreamFilter
+}
+
+// StreamDelta is the part of a streamed delta a StreamFilter sees.
+type StreamDelta struct {
+	// Content is the answer text the delta carries. A filter may rewrite it,
+	// and what it leaves is what the service takes as the answer.
+	Content string
+	// ReasoningContent is the model's reasoning, for an endpoint that carries it
+	// in a field of its own: reasoning_content, or reasoning.
+	ReasoningContent string
+}
+
+// StreamFilter intercepts a completion's stream before the service reads it,
+// for an endpoint whose stream carries more than OpenAI's: a model that writes
+// its reasoning ahead of the answer, say, which a filter can push as thoughts
+// rather than let it be spoken. A filter lives for one completion.
+type StreamFilter interface {
+	// Delta sees each delta that holds model output, and may rewrite its
+	// content.
+	Delta(ctx context.Context, d *StreamDelta) error
+	// End sees the stream end, completed or cut short by an interruption or an
+	// error. text passes on answer text the filter held back.
+	End(ctx context.Context, completed bool, text func(string) error) error
 }
 
 // Validate reports whether the configuration is usable.
@@ -169,6 +195,9 @@ type Compat struct {
 	// field. The config's MaxCompletionTokens is not sent to it, and the bound an
 	// inference is given goes in max_tokens instead.
 	NoMaxCompletionTokens bool
+	// StreamFilter, when set, builds the filter each completion's stream goes
+	// through before the service reads it. It is called once per completion.
+	StreamFilter func(*LLMService) StreamFilter
 	// Adapter converts the conversation into the request this endpoint takes. It
 	// is for an endpoint that constrains the shape of a conversation beyond what
 	// OpenAI's schema says: such an adapter embeds the OpenAI one and rewrites
@@ -215,6 +244,7 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 		noDeveloperRole:  c.NoDeveloperRole,
 		noResponseSchema: c.NoResponseSchema,
 		noMaxCompletion:  c.NoMaxCompletionTokens,
+		newStreamFilter:  c.StreamFilter,
 	}
 	s.Base = llm.New(c.Name, s, c.Base...)
 	s.Base.SetModel(cfg.Model)
@@ -280,6 +310,10 @@ type toolCallDelta struct {
 type chatDelta struct {
 	Content   string          `json:"content"`
 	ToolCalls []toolCallDelta `json:"tool_calls"`
+	// ReasoningContent and Reasoning are the model's reasoning, which some
+	// endpoints stream apart from the answer, under one name or the other.
+	ReasoningContent string `json:"reasoning_content"`
+	Reasoning        string `json:"reasoning"`
 }
 
 // chatUsage is the token accounting a completion reports. It arrives on a chunk
@@ -415,25 +449,39 @@ func (s *LLMService) generate(ctx context.Context, reqBody chatRequest, sink llm
 // tokens were spent regardless.
 func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink) error {
 	c := &toolCoalescer{calls: map[int]*toolAccumulator{}}
+	var filter StreamFilter
+	if s.newStreamFilter != nil {
+		filter = s.newStreamFilter(s)
+	}
 	var usage *chatUsage
 	scanErr := llm.ScanSSE(body, func(data string) error {
 		var chunk chatChunk
-		if json.Unmarshal([]byte(data), &chunk) == nil {
-			if chunk.Usage != nil {
-				usage = chunk.Usage
-			}
-			if chunk.Model != "" {
-				s.SetFullModelName(chunk.Model)
-			}
-			// The chunk carrying the counts has no choices of its own, so TTFB
-			// ends at the first chunk that holds model output.
-			if len(chunk.Choices) > 0 {
-				s.StopTTFBMetrics(ctx)
-				return c.add(chunk.Choices[0].Delta, sink)
+		if json.Unmarshal([]byte(data), &chunk) != nil {
+			return nil //nolint:nilerr // An empty or malformed chunk is skipped.
+		}
+		if chunk.Usage != nil {
+			usage = chunk.Usage
+		}
+		if chunk.Model != "" {
+			s.SetFullModelName(chunk.Model)
+		}
+		// The chunk carrying the counts has no choices of its own, so TTFB ends
+		// at the first chunk that holds model output.
+		if len(chunk.Choices) == 0 {
+			return nil
+		}
+		s.StopTTFBMetrics(ctx)
+		delta := chunk.Choices[0].Delta
+		if filter != nil {
+			if err := filterDelta(ctx, filter, &delta); err != nil {
+				return err
 			}
 		}
-		return nil // Skip empty or malformed chunks.
+		return c.add(delta, sink)
 	})
+	if err := endFilter(ctx, filter, scanErr, sink); err != nil && scanErr == nil {
+		scanErr = err
+	}
 	if usage != nil && s.UsageMetricsEnabled() {
 		if err := s.PushTokenUsage(ctx, usage.tokenUsage()); err != nil {
 			return err
@@ -443,6 +491,31 @@ func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink)
 		return scanErr
 	}
 	return c.emit(sink)
+}
+
+// endFilter tells the stream filter, if any, the stream has ended. A stream cut
+// short still ends what the filter opened, so that ending must not depend on
+// the context that was canceled to cut it.
+func endFilter(ctx context.Context, filter StreamFilter, scanErr error, sink llm.Sink) error {
+	if filter == nil {
+		return nil
+	}
+	completed := scanErr == nil && ctx.Err() == nil
+	return filter.End(context.WithoutCancel(ctx), completed, sink.Text)
+}
+
+// filterDelta passes a delta through the stream filter, taking back the
+// content it leaves.
+func filterDelta(ctx context.Context, filter StreamFilter, delta *chatDelta) error {
+	d := StreamDelta{Content: delta.Content, ReasoningContent: delta.ReasoningContent}
+	if d.ReasoningContent == "" {
+		d.ReasoningContent = delta.Reasoning
+	}
+	if err := filter.Delta(ctx, &d); err != nil {
+		return err
+	}
+	delta.Content = d.Content
+	return nil
 }
 
 // send posts the encoded body to the chat-completions endpoint. A service built
