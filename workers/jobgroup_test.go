@@ -392,6 +392,41 @@ func TestJobGroupIteratesStreamEvents(t *testing.T) {
 	}
 }
 
+// streamedChunks is n stream chunks, for a worker streaming more than a reader
+// keeps up with.
+func streamedChunks(n int) []map[string]any {
+	chunks := make([]map[string]any, n)
+	for i := range chunks {
+		chunks[i] = map[string]any{"i": i}
+	}
+	return chunks
+}
+
+// A caller that reads slowly still sees every event the worker streamed,
+// ending with the stream's end: the events are queued for it, not dropped.
+func TestJobGroupSlowReaderSeesEveryStreamedEvent(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	env.setup(newStreamingWorker("worker", streamedChunks(200), map[string]any{"final": true}))
+
+	var types []string
+	if _, err := parent.JobGroup(env.ctx, []string{"worker"}, jobcontext.Request{}, func(g *jobcontext.Group) error {
+		for e := range g.Events() {
+			types = append(types, e.Type)
+			time.Sleep(time.Millisecond)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("job group: %v", err)
+	}
+	if len(types) != 202 || types[len(types)-1] != jobcontext.EventStreamEnd {
+		t.Errorf("caller saw %d events, want 202 ending with the stream's end", len(types))
+	}
+}
+
 func TestJobGroupIteratesMixedEvents(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
@@ -668,6 +703,30 @@ func TestJobStreamsData(t *testing.T) {
 	}
 	if want := (map[string]any{"ok": true}); !reflect.DeepEqual(job.Response(), want) {
 		t.Errorf("response = %v, want %v", job.Response(), want)
+	}
+}
+
+// The same through a single job.
+func TestJobSlowReaderSeesEveryStreamedEvent(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	parent := newStubWorker("parent")
+	env.setup(parent)
+	env.setup(newStreamingWorker("worker", streamedChunks(200), map[string]any{"ok": true}))
+
+	n := 0
+	if _, err := parent.Job(env.ctx, "worker", jobcontext.Request{}, func(j *jobcontext.Job) error {
+		for range j.Events() {
+			n++
+			time.Sleep(time.Millisecond)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("job: %v", err)
+	}
+	if n != 202 {
+		t.Errorf("caller saw %d events, want 202", n)
 	}
 }
 

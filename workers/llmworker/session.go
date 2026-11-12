@@ -88,10 +88,6 @@ func (s *BackendSession) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// The stream lives as long as the frontend does, and an output dropped for a
-	// reader that fell behind would be a result the user never hears.
-	group.KeepEvents()
-
 	waitCtx := ctx
 	if s.timeout > 0 {
 		var cancel context.CancelFunc

@@ -3,6 +3,7 @@ package jobcontext
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -125,31 +126,13 @@ type Job struct {
 	workerName string
 	group      *Group
 	events     chan Event
+	eventsOnce sync.Once
 }
 
 // newJob wraps a single-worker group, translating what that worker reports into
 // events with no worker name on them, since there is only the one.
 func newJob(workerName string, group *Group) *Job {
-	j := &Job{
-		workerName: workerName,
-		group:      group,
-		events:     make(chan Event, eventBuffer),
-	}
-	go j.forwardEvents()
-	return j
-}
-
-// forwardEvents copies the group's events onto the job's channel until the
-// group finishes. Like the group's own reporting it never blocks, so a caller
-// that is not watching cannot hold up the worker doing the job.
-func (j *Job) forwardEvents() {
-	defer close(j.events)
-	for e := range j.group.Events() {
-		select {
-		case j.events <- Event{Type: e.Type, Data: e.Data}:
-		default:
-		}
-	}
+	return &Job{workerName: workerName, group: group}
 }
 
 // JobID identifies the job.
@@ -164,6 +147,23 @@ func (j *Job) Response() map[string]any {
 	return r
 }
 
-// Events carries what the worker reports while the job runs. It is closed when
-// the job finishes, so ranging over it ends there.
-func (j *Job) Events() <-chan Event { return j.events }
+// Events carries what the worker reports while the job runs, every event in
+// the order it was reported. It is closed once the job has finished and every
+// event has been delivered, so ranging over it ends there. Range over it to
+// the end: the goroutine feeding it waits on a caller that stops reading early.
+func (j *Job) Events() <-chan Event {
+	j.eventsOnce.Do(func() {
+		j.events = make(chan Event)
+		go func() {
+			defer close(j.events)
+			for {
+				e, ok := j.group.NextEvent(context.Background())
+				if !ok {
+					return
+				}
+				j.events <- Event{Type: e.Type, Data: e.Data}
+			}
+		}()
+	})
+	return j.events
+}

@@ -54,10 +54,12 @@ var ErrGroup = errors.New("job group stopped before it finished")
 // Group tracks a set of workers asked to do a job together, and is what the
 // worker running the group writes results into as they arrive.
 //
-// Its events reach a caller over a channel that is closed when the group
-// finishes, so ranging over it ends exactly when the group does. Upstream marks
-// the end by queueing a sentinel; a closed channel is the same thing said in
-// Go, and it cannot be missed.
+// Every event a worker reports is queued until the caller takes it, however far
+// behind the caller falls, so none is lost. The caller takes them by ranging
+// over Events, a channel closed once the group has finished and every event
+// has been taken, or one at a time with NextEvent. Upstream marks the end by
+// queueing a sentinel; a closed channel is the same thing said in Go, and it
+// cannot be missed.
 //
 // It is safe for concurrent use.
 type Group struct {
@@ -76,13 +78,14 @@ type Group struct {
 	done      chan struct{}
 	closed    bool
 	err       error
-	events    chan GroupEvent
-	// keep reports whether the group keeps every event until NextEvent takes it,
-	// rather than dropping what overflows the channel. kept holds them, and
-	// arrived is signaled whenever one is added or the group finishes.
-	keep    bool
-	kept    []GroupEvent
+	// queued holds the events reported and not yet taken, and arrived is
+	// signaled whenever one is added or the group finishes.
+	queued  []GroupEvent
 	arrived chan struct{}
+	// events is the channel Events hands out, fed from the queue by a goroutine
+	// started the first time it is asked for.
+	events     chan GroupEvent
+	eventsOnce sync.Once
 	// stopTimeout calls off the group's timeout, and is nil when it is running
 	// without one.
 	stopTimeout func()
@@ -107,15 +110,9 @@ func NewGroup(jobID string, workerNames []string, cancelOnError bool) *Group {
 		CancelOnError: cancelOnError,
 		responses:     make(map[string]map[string]any),
 		done:          make(chan struct{}),
-		events:        make(chan GroupEvent, eventBuffer),
 		arrived:       make(chan struct{}, 1),
 	}
 }
-
-// eventBuffer is how many events may be waiting for a caller that is not
-// reading them. A caller need not read at all, so reporting must never block
-// the worker doing the job; past the buffer the oldest events are dropped.
-const eventBuffer = 64
 
 // SetTimeout records how to call off the group's timeout. The worker running
 // the group starts the timeout and hands the cancellation here, so completing
@@ -158,9 +155,26 @@ func (g *Group) IsDone() bool {
 // Done is closed when the group finishes.
 func (g *Group) Done() <-chan struct{} { return g.done }
 
-// Events carries what the workers report while the group runs. It is closed
-// when the group finishes, so ranging over it ends there.
-func (g *Group) Events() <-chan GroupEvent { return g.events }
+// Events carries what the workers report while the group runs, every event in
+// the order it was reported. It is closed once the group has finished and every
+// event has been delivered, so ranging over it ends there. Range over it to the
+// end: the goroutine feeding it waits on a caller that stops reading early.
+func (g *Group) Events() <-chan GroupEvent {
+	g.eventsOnce.Do(func() {
+		g.events = make(chan GroupEvent)
+		go func() {
+			defer close(g.events)
+			for {
+				e, ok := g.NextEvent(context.Background())
+				if !ok {
+					return
+				}
+				g.events <- e
+			}
+		}()
+	})
+	return g.events
+}
 
 // Wait blocks until the group finishes, or ctx ends. It reports ErrGroup when
 // the group was cut short, and the context's error when ctx ended first.
@@ -200,76 +214,34 @@ func (g *Group) SetResponse(workerName string, response map[string]any) {
 	g.responses[workerName] = response
 }
 
-// Report hands an event to whoever is watching the group. It never blocks: a
-// caller is free not to watch, and the worker doing the job must not be held up
-// by one that is not reading.
+// Report hands an event to whoever is watching the group. It never blocks: the
+// event is queued until the caller takes it, so the worker doing the job is not
+// held up by a caller that is slow to read, and none is lost to one.
 func (g *Group) Report(e GroupEvent) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
 		return
 	}
-	if g.keep {
-		g.kept = append(g.kept, e)
-		g.signalArrived()
-		return
-	}
-	select {
-	case g.events <- e:
-	default:
-	}
-}
-
-// KeepEvents has the group keep every event the workers report until NextEvent
-// takes it, however far behind the caller falls, rather than drop what overflows
-// the buffer. It is for a caller that cannot afford to miss one, such as a stream
-// a worker keeps open for as long as the caller lives. Events then come only
-// through NextEvent, starting with any already buffered.
-func (g *Group) KeepEvents() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.keep {
-		return
-	}
-	g.keep = true
-	for {
-		select {
-		case e, ok := <-g.events:
-			if !ok {
-				return
-			}
-			g.kept = append(g.kept, e)
-		default:
-			return
-		}
-	}
+	g.queued = append(g.queued, e)
+	g.signalArrived()
 }
 
 // NextEvent returns the next event a worker reported, waiting for one. It
-// reports false once the group has finished and every event it kept has been
-// taken, or when ctx ends first.
+// reports false once the group has finished and every event has been taken, or
+// when ctx ends first.
 func (g *Group) NextEvent(ctx context.Context) (GroupEvent, bool) {
 	for {
 		g.mu.Lock()
-		keep := g.keep
-		if keep && len(g.kept) > 0 {
-			e := g.kept[0]
-			g.kept[0] = GroupEvent{}
-			g.kept = g.kept[1:]
+		if len(g.queued) > 0 {
+			e := g.queued[0]
+			g.queued[0] = GroupEvent{}
+			g.queued = g.queued[1:]
 			g.mu.Unlock()
 			return e, true
 		}
 		finished := g.closed
 		g.mu.Unlock()
-
-		if !keep {
-			select {
-			case e, ok := <-g.events:
-				return e, ok
-			case <-ctx.Done():
-				return GroupEvent{}, false
-			}
-		}
 		if finished {
 			return GroupEvent{}, false
 		}
@@ -301,8 +273,8 @@ func (g *Group) Fail(reason string) {
 	g.finish(err)
 }
 
-// finish records how the group ended, once. Finishing closes the event channel,
-// which is what ends a caller ranging over it.
+// finish records how the group ended, once. The events still queued are
+// delivered first; the event channel closes once they have been.
 func (g *Group) finish(err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -311,7 +283,6 @@ func (g *Group) finish(err error) {
 	}
 	g.closed = true
 	g.err = err
-	close(g.events)
 	close(g.done)
 	g.signalArrived()
 }

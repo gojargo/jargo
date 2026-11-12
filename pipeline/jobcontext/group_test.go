@@ -183,14 +183,12 @@ func TestGroupWaitHonorsTheContext(t *testing.T) {
 // A group keeping its events loses none however far behind the caller falls,
 // keeps their order, starts with what was buffered before it was asked to, and
 // hands over what it kept even after it finished.
-func TestAGroupKeepingItsEventsLosesNone(t *testing.T) {
+func TestAGroupLosesNoEvent(t *testing.T) {
 	g := newGroup()
 	update := func(n int) jobcontext.GroupEvent {
 		return jobcontext.GroupEvent{Type: jobcontext.EventUpdate, Data: map[string]any{"n": n}}
 	}
-	g.Report(update(0))
-	g.KeepEvents()
-	for n := 1; n < 1000; n++ {
+	for n := range 1000 {
 		g.Report(update(n))
 	}
 	g.Complete()
@@ -212,7 +210,6 @@ func TestAGroupKeepingItsEventsLosesNone(t *testing.T) {
 // NextEvent waits for an event, and gives up when the caller's context ends.
 func TestNextEventWaitsAndHonorsTheContext(t *testing.T) {
 	g := newGroup()
-	g.KeepEvents()
 
 	go func() {
 		time.Sleep(20 * time.Millisecond)

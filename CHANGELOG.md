@@ -15,6 +15,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Job and job group events are never dropped.** A group kept 64 events for
+  a caller and dropped what came after, the stream's end included, unless the
+  caller had asked for `Group.KeepEvents`; a `Job` dropped the same way. Every
+  event is now queued until the caller takes it, through `Events` or
+  `NextEvent`, however far behind it falls. **Breaking:** `Group.KeepEvents`
+  is gone; every group now behaves as it did after it.
+
 - **Cartesia TTS is always word-aligned.** Every request asks for word
   timestamps against the text as written, and the service emits each word's
   `TTSTextFrame` as its audio plays, so the conversation records only what was
