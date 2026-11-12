@@ -110,6 +110,11 @@ func (s heldWordSynth) RunTTSTimed(
 	s.mu.Unlock()
 	s.wg.Go(func() {
 		<-s.release
+		// As for RunTTS: a request made after the release still answers over
+		// the network. Answering at once could report the words before the base
+		// has registered the text they belong to, and a word no text claims is
+		// dropped.
+		time.Sleep(10 * time.Millisecond)
 		s.deliver(host, contextID, []uctx.WordTiming{{Word: text, Offset: 0}})
 	})
 	return nil
