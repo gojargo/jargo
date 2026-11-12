@@ -108,6 +108,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A WhatsApp call reaches the bot whole.** The dev runner handed the bot
+  only the call's id and caller, so a runner serving several business numbers
+  could not tell which was called. `whatsapp.Call` gains `To`, `Event`,
+  `Timestamp`, `Direction` and `Raw` (the call as the webhook carried it), and
+  the runner passes the whole call as the session body.
+
 - **The session proxy keeps the `/start` body when the offer carries none.**
   An offer through `/sessions/{id}/api/offer` whose `request_data` (or
   `requestData`) was an empty object or null replaced the body `/start`

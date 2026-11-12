@@ -119,6 +119,16 @@ func TestWebhookConnectAcceptsCall(t *testing.T) {
 		if call.ID != "call-1" || call.From != "15551230000" {
 			t.Fatalf("unexpected call: %+v", call)
 		}
+		// The whole call reaches the application, which business number was
+		// called among it.
+		if call.To != "15550009999" || call.Event != "connect" || call.Timestamp != "1700000000" ||
+			call.Direction != "USER_INITIATED" {
+			t.Errorf("call = %+v, want its to, event, timestamp and direction", call)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(call.Raw, &raw); err != nil || raw["to"] != "15550009999" || raw["session"] == nil {
+			t.Errorf("raw call = %s, want the call as the webhook carried it", call.Raw)
+		}
 		if call.Connection == nil {
 			t.Fatal("nil connection")
 		}
@@ -263,10 +273,13 @@ func connectBody(callID, from, sdp string) []byte {
 				"field": "calls",
 				"value": map[string]any{
 					"calls": []map[string]any{{
-						"id":      callID,
-						"from":    from,
-						"event":   "connect",
-						"session": map[string]any{"sdp": sdp, "sdp_type": "offer"},
+						"id":        callID,
+						"from":      from,
+						"to":        "15550009999",
+						"event":     "connect",
+						"timestamp": "1700000000",
+						"direction": "USER_INITIATED",
+						"session":   map[string]any{"sdp": sdp, "sdp_type": "offer"},
 					}},
 				},
 			}},

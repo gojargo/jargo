@@ -52,8 +52,23 @@ func (c Config) Validate() error { return validate.Struct(c) }
 // Call is an accepted WhatsApp call whose media is ready to bridge. Wrap
 // Connection with rtc.NewTransport to build the pipeline.
 type Call struct {
-	ID         string
-	From       string
+	// ID identifies the call.
+	ID string
+	// From is the caller's number.
+	From string
+	// To is the business number that was called.
+	To string
+	// Event is what the webhook reported, "connect" for an incoming call.
+	Event string
+	// Timestamp is when the call was made, as the webhook gave it.
+	Timestamp string
+	// Direction is "USER_INITIATED" or "BUSINESS_INITIATED" when the webhook
+	// says, and empty otherwise.
+	Direction string
+	// Raw is the call object exactly as the webhook carried it, its session
+	// included.
+	Raw json.RawMessage
+	// Connection carries the call's media.
 	Connection *rtc.Connection
 
 	client *Client
@@ -147,10 +162,15 @@ func (c *Client) webhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	for _, entry := range req.Entry {
 		for _, change := range entry.Changes {
-			for _, call := range change.Value.Calls {
+			for _, raw := range change.Value.Calls {
+				var call webhookCall
+				if err := json.Unmarshal(raw, &call); err != nil {
+					slog.Warn("whatsapp: ignoring a call the webhook carried that could not be read", "err", err)
+					continue
+				}
 				switch call.Event {
 				case "connect":
-					go c.handleConnect(call)
+					go c.handleConnect(call, raw)
 				case actionTerminate:
 					c.handleTerminate(call.ID)
 				}
@@ -173,7 +193,7 @@ func (c *Client) validSignature(body []byte, header string) bool {
 }
 
 // handleConnect answers the offer, accepts the call, and invokes OnCall.
-func (c *Client) handleConnect(call webhookCall) {
+func (c *Client) handleConnect(call webhookCall, raw json.RawMessage) {
 	ctx := context.Background()
 	conn, err := rtc.NewConnection(rtc.WithICEServers(c.cfg.ICEServers...))
 	if err != nil {
@@ -203,7 +223,11 @@ func (c *Client) handleConnect(call webhookCall) {
 
 	c.store(call.ID, conn)
 	if c.onCall != nil {
-		c.onCall(&Call{ID: call.ID, From: call.From, Connection: conn, client: c})
+		c.onCall(&Call{
+			ID: call.ID, From: call.From, To: call.To, Event: call.Event,
+			Timestamp: call.Timestamp, Direction: call.Direction, Raw: raw,
+			Connection: conn, client: c,
+		})
 	}
 }
 
@@ -282,18 +306,21 @@ type webhookRequest struct {
 		Changes []struct {
 			Field string `json:"field"`
 			Value struct {
-				Calls []webhookCall `json:"calls"`
+				Calls []json.RawMessage `json:"calls"`
 			} `json:"value"`
 		} `json:"changes"`
 	} `json:"entry"`
 }
 
 type webhookCall struct {
-	ID      string `json:"id"`
-	From    string `json:"from"`
-	Event   string `json:"event"`
-	Status  string `json:"status,omitempty"`
-	Session struct {
+	ID        string `json:"id"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Event     string `json:"event"`
+	Timestamp string `json:"timestamp"`
+	Direction string `json:"direction,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Session   struct {
 		SDP     string `json:"sdp"`
 		SDPType string `json:"sdp_type"`
 	} `json:"session"`

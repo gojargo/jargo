@@ -1020,8 +1020,9 @@ func (s *server) setupWhatsAppRoutes(mux *http.ServeMux) {
 		return
 	}
 	client.OnCall(func(call *whatsapp.Call) {
-		// The call's metadata goes to the bot as its body.
-		body, _ := json.Marshal(map[string]any{"id": call.ID, "from": call.From})
+		// The whole call goes to the bot as its body: who called, which
+		// business number, when, and its session.
+		body := call.Raw
 		args := &WebRTCRunnerArguments{
 			RunnerArguments:  newRunnerArguments(body, uuid.NewString()),
 			WebRTCConnection: call.Connection,
