@@ -1,10 +1,12 @@
 // Package asyncai is a streaming text-to-speech service backed by Async's TTS
-// WebSocket. For each sentence it opens a connection, sends an init message and
-// the transcript, and streams the raw PCM audio chunks downstream.
+// WebSocket. It holds one connection open for the call: the session is opened
+// with an init message when the pipeline starts, each sentence is sent on the
+// context it belongs to, and the raw PCM audio streams back on that context.
 package asyncai
 
 import (
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/service/wsservice"
 )
 
 const (
@@ -33,6 +35,9 @@ type Config struct {
 	Language string
 	// SampleRate is the PCM rate requested and emitted downstream; 0 uses 24 kHz.
 	SampleRate int
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.

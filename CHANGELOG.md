@@ -49,6 +49,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`asyncai.NewTTS` holds one connection for the call instead of dialing one
+  per sentence.** It used to open a connection for each sentence, send the
+  init message and the text, and wait for that sentence's audio before the
+  next one could go out. It now opens one session when the pipeline starts,
+  sends each sentence on its own context and returns, and the audio arrives
+  labeled with that context. A context is closed on the server once it is
+  interrupted or has played. The connection runs on `tts.Websocket`: a lost
+  connection is restored with backoff, and after three failed redials the
+  service reports a permanent error, so it becomes unusable and a service
+  switcher moves off it. A blank transcript keeps the connection open between
+  turns. The new `Config.Websocket` field configures the reconnection and the
+  timeouts. The voice, the model and the language can now be changed while
+  the pipeline runs (each change starts a new session), and the service holds
+  incoming frames after a turn until its audio has played.
+
 - **`elevenlabs.NewRealtimeTTS` keeps its connection through a drop, and says
   so when it cannot.** It used to drop the connection on any read error and
   redial on the next sentence, with no backoff, no limit and nothing
