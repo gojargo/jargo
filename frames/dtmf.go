@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// KeypadEntry is a single DTMF keypad key: the digits 0-9, the symbols * and #,
-// and the letters A-D.
+// KeypadEntry is a single DTMF keypad key: the digits 0-9 and the symbols * and
+// #, the twelve keys of a telephone keypad.
 type KeypadEntry string
 
 // The DTMF keypad entries.
@@ -23,10 +23,6 @@ const (
 	KeypadNine  KeypadEntry = "9"
 	KeypadStar  KeypadEntry = "*"
 	KeypadPound KeypadEntry = "#"
-	KeypadA     KeypadEntry = "A"
-	KeypadB     KeypadEntry = "B"
-	KeypadC     KeypadEntry = "C"
-	KeypadD     KeypadEntry = "D"
 )
 
 // Valid reports whether e is one of the keypad entries. A transport reading a
@@ -35,7 +31,7 @@ func (e KeypadEntry) Valid() bool {
 	switch e {
 	case KeypadZero, KeypadOne, KeypadTwo, KeypadThree, KeypadFour, KeypadFive,
 		KeypadSix, KeypadSeven, KeypadEight, KeypadNine,
-		KeypadStar, KeypadPound, KeypadA, KeypadB, KeypadC, KeypadD:
+		KeypadStar, KeypadPound:
 		return true
 	default:
 		return false

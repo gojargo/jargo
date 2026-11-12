@@ -44,23 +44,22 @@ const toneOn = 300 * time.Millisecond
 type tonePair struct{ low, high float64 }
 
 // pairs maps each key to the two frequencies that name it. The four rows are
-// 697, 770, 852 and 941 Hz; the four columns are 1209, 1336, 1477 and 1633 Hz.
-// The fourth column (A to D) is not on a consumer keypad but is part of the
-// signaling standard.
+// 697, 770, 852 and 941 Hz; the three columns of a telephone keypad are 1209,
+// 1336 and 1477 Hz.
 //
 //nolint:gochecknoglobals // read-only table
 var pairs = map[frames.KeypadEntry]tonePair{
 	frames.KeypadOne: {697, 1209}, frames.KeypadTwo: {697, 1336},
-	frames.KeypadThree: {697, 1477}, frames.KeypadA: {697, 1633},
+	frames.KeypadThree: {697, 1477},
 
 	frames.KeypadFour: {770, 1209}, frames.KeypadFive: {770, 1336},
-	frames.KeypadSix: {770, 1477}, frames.KeypadB: {770, 1633},
+	frames.KeypadSix: {770, 1477},
 
 	frames.KeypadSeven: {852, 1209}, frames.KeypadEight: {852, 1336},
-	frames.KeypadNine: {852, 1477}, frames.KeypadC: {852, 1633},
+	frames.KeypadNine: {852, 1477},
 
 	frames.KeypadStar: {941, 1209}, frames.KeypadZero: {941, 1336},
-	frames.KeypadPound: {941, 1477}, frames.KeypadD: {941, 1633},
+	frames.KeypadPound: {941, 1477},
 }
 
 // amplitude is how loud each of the two tones is, as a fraction of full scale.

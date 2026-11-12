@@ -15,6 +15,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **The DTMF keypad is the telephone's twelve keys.** `frames.KeypadEntry`
+  accepted A to D besides 0 to 9, `*` and `#`, so RTVI, LiveKit and the tone
+  generator took them, and the Twilio, Telnyx, Plivo and Exotel serializers
+  pushed any digit they were sent (`"x"`, `"12"`) as a keypress the DTMF
+  aggregator then typed into the conversation. A to D are gone, and the
+  serializers drop a digit that is not a keypad key. **Breaking:**
+  `frames.KeypadA` to `frames.KeypadD` are removed.
+
 - **Job and job group events are never dropped.** A group kept 64 events for
   a caller and dropped what came after, the stream's end included, unless the
   caller had asked for `Group.KeepEvents`; a `Job` dropped the same way. Every

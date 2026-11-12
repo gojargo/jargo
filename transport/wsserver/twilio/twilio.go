@@ -224,10 +224,14 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 		s.mu.Unlock()
 		return nil, nil //nolint:nilnil // handshake message carries no frame
 	case "dtmf":
-		if m.DTMF.Digit == "" {
-			return nil, nil //nolint:nilnil // empty keypress
+		// Only a key on the keypad is a keypress: anything else the provider
+		// sends is dropped rather than typed into the conversation.
+		key := frames.KeypadEntry(m.DTMF.Digit)
+		if !key.Valid() {
+			slog.Warn("wsserver: ignoring a DTMF digit that is not a keypad key", "digit", m.DTMF.Digit)
+			return nil, nil //nolint:nilnil // not a keypress
 		}
-		return frames.NewInputDTMFFrame(frames.KeypadEntry(m.DTMF.Digit)), nil
+		return frames.NewInputDTMFFrame(key), nil
 	default: // connected, mark, stop
 		return nil, nil //nolint:nilnil // message carries no frame
 	}

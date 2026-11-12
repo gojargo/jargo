@@ -67,7 +67,6 @@ func TestToneCarriesBothFrequencies(t *testing.T) {
 		frames.KeypadZero:  {941, 1336},
 		frames.KeypadStar:  {941, 1209},
 		frames.KeypadPound: {941, 1477},
-		frames.KeypadD:     {941, 1633},
 	}
 	for button, want := range cases {
 		pcm, err := dtmf.Tone(button, sampleRate)
@@ -172,8 +171,8 @@ func TestUnknownKey(t *testing.T) {
 	if _, err := dtmf.Tone(frames.KeypadOne, 0); err == nil {
 		t.Error("Tone at rate 0 = nil, want an error")
 	}
-	if !dtmf.Key(frames.KeypadA) {
-		t.Error("Key(A) = false: A to D are part of the signaling standard")
+	if dtmf.Key(frames.KeypadEntry("A")) {
+		t.Error("Key(A) = true, want false: a telephone keypad has twelve keys")
 	}
 	if dtmf.Key(frames.KeypadEntry("X")) {
 		t.Error("Key(X) = true, want false")
