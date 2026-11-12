@@ -85,6 +85,68 @@ func TestGenerationEmitsSpan(t *testing.T) {
 	}
 }
 
+// llmSpanAttrs runs one traced generation over convo and returns the
+// attributes of the LLM span it recorded.
+func llmSpanAttrs(t *testing.T, convo *frames.LLMContext) map[string]string {
+	t.Helper()
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prev)
+
+	svc := llm.New("FakeLLM", &fakeGen{deltas: []string{"Hi"}})
+	done := make(chan struct{}, 1)
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		EnableTracing:           true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("llm did not complete")
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	for _, s := range rec.Ended() {
+		if s.Name() == "llm" {
+			attrs := map[string]string{}
+			for _, kv := range s.Attributes() {
+				attrs[string(kv.Key)] = kv.Value.String()
+			}
+			return attrs
+		}
+	}
+	t.Fatalf("no llm span recorded; got %d spans", len(rec.Ended()))
+	return nil
+}
+
+// test_falls_back_to_context_system_message: with no instruction of the
+// service's own and no system field, a system message at the head of the
+// conversation's messages is what the span names.
+func TestTraceFallsBackToContextSystemMessage(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.SetMessages([]frames.Message{
+		{Role: frames.RoleSystem, Text: "from context"},
+		{Role: frames.RoleUser, Text: "x"},
+	})
+	if got := llmSpanAttrs(t, convo)["gen_ai.system_instructions"]; got != "from context" {
+		t.Errorf("gen_ai.system_instructions = %q, want the leading system message", got)
+	}
+}
+
 // TestUntracedPipelineEmitsNoSpan checks that a pipeline which was not asked to
 // trace raises no service spans, even with a TracerProvider installed for the
 // application's own tracing. Without the check they would be exported as orphans,

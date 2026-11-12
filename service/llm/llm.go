@@ -887,11 +887,21 @@ func traceOutput(span trace.Span, text string) {
 // service's composed instruction, and the conversation's own system prompt when
 // the service has none of its own. The service's takes priority because that is
 // what it sends.
+//
+// A conversation's own prompt is its system field or, failing that, a system
+// message at the head of its messages, where a conversation set message by
+// message carries it.
 func (b *Base) traceSystemInstruction(convo *frames.LLMContext) string {
 	if s := b.SystemInstruction(); s != "" {
 		return s
 	}
-	return convo.System()
+	if s := convo.System(); s != "" {
+		return s
+	}
+	if msgs := convo.Messages(); len(msgs) > 0 && msgs[0].Role == frames.RoleSystem && !msgs[0].IsLLMSpecific() {
+		return msgs[0].Text
+	}
+	return ""
 }
 
 // traceParameters renders the service's settings as the generation parameters.

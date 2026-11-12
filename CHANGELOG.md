@@ -108,6 +108,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An LLM trace names a system prompt carried as the first message.** With no
+  instruction of the service's own, the span's `gen_ai.system_instructions`
+  read only the conversation's system field, so a conversation set message by
+  message, with its system prompt as the first message, was traced with none.
+  That message is now read as well.
+
 - **Job cancel reasons name the worker in single quotes.** A group called off
   because a worker stopped or errored carried `worker "w1" stopped`; it now
   carries `worker 'w1' stopped`, the text a peer on the bus matches.
