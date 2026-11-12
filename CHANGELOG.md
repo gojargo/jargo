@@ -681,6 +681,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   canceled call, which has none, leaves it out. **Breaking:**
   `rtvi.LLMFunctionCallStoppedData.Result` is an `any`.
 
+- **RTVI reports the errors that reach the head of the pipeline.** The RTVI
+  observer sent the client an error message for every `ErrorFrame` on its
+  first push, wherever it was pushed: an error a `ServiceSwitcher` absorbed
+  by failing over still showed the client a failure, a service failing with
+  no backup left was reported twice, and an error from an ignored source was
+  dropped. The RTVI processor, at the head of the pipeline, now reports each
+  error that reaches it, and only those.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -138,6 +138,16 @@ func (p *Processor) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 	if fr, ok := f.(*frames.InputTransportMessageFrame); ok {
 		return p.handleIncoming(ctx, fr)
 	}
+	// An error is reported to the client as it reaches the processor, at the
+	// head of the pipeline: an error something on its way absorbed, a switcher
+	// failing over from the service that raised it say, never gets here. It is
+	// not a category a client turns off: it is what explains a conversation
+	// that stopped working.
+	if fr, ok := f.(*frames.ErrorFrame); ok {
+		if err := p.send(ctx, Error(fr.Error, fr.Fatal)); err != nil {
+			return err
+		}
+	}
 	// Whatever configures the LLM's output is followed, so a turn asking for a
 	// different setting knows what to put back after it.
 	if fr, ok := f.(*frames.LLMConfigureOutputFrame); ok {
@@ -403,10 +413,6 @@ func (o *Observer) userMessageFor(f frames.Frame) (Message, bool) {
 			return Message{}, false
 		}
 		return o.gated(UserLLMText(text), userLLMOf)
-	case *frames.ErrorFrame:
-		// An error is not a category a client turns off: it is what explains a
-		// conversation that stopped working.
-		return Error(fr.Error, fr.Fatal), true
 	case *frames.MetricsFrame:
 		return o.gated(metricsMessage(fr), metricsOf)
 	default:
