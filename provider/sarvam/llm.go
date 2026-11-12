@@ -14,5 +14,7 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		BaseURL:         llmBaseURL,
 		DefaultModel:    defaultLLMModel,
 		NoDeveloperRole: true,
+		// The endpoint has no max_completion_tokens field.
+		NoMaxCompletionTokens: true,
 	}, cfg)
 }

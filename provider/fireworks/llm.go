@@ -8,5 +8,7 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		Name:         "FireworksLLM",
 		BaseURL:      baseURL,
 		DefaultModel: defaultModel,
+		// Fireworks has no max_completion_tokens field.
+		NoMaxCompletionTokens: true,
 	}, cfg)
 }

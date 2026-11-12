@@ -366,8 +366,12 @@ func TestRunInferenceAnswersOnce(t *testing.T) {
 	if _, ok := body["stream_options"]; ok {
 		t.Errorf("body asks for streamed usage on a request that does not stream: %v", body)
 	}
-	if body["max_tokens"] != float64(64) {
-		t.Errorf("max_tokens = %v, want the bound this inference was given", body["max_tokens"])
+	if body["max_completion_tokens"] != float64(64) {
+		t.Errorf("max_completion_tokens = %v, want the bound this inference was given",
+			body["max_completion_tokens"])
+	}
+	if _, ok := body["max_tokens"]; ok {
+		t.Errorf("max_tokens = %v, want the bound sent in max_completion_tokens alone", body["max_tokens"])
 	}
 	msgs := messagesOf(t, body)
 	if len(msgs) != 3 {
@@ -431,5 +435,35 @@ func TestRunInferenceSendsTheServiceInstructionAndTools(t *testing.T) {
 	}
 	if tools, _ := body["tools"].([]any); len(tools) != 1 {
 		t.Errorf("tools = %v, want the conversation's tool", body["tools"])
+	}
+}
+
+// TestRunInferenceBoundOnAnEndpointWithoutMaxCompletionTokens checks an endpoint
+// with no max_completion_tokens field is given an inference's bound in
+// max_tokens, and never sent the field, even when the config sets it.
+func TestRunInferenceBoundOnAnEndpointWithoutMaxCompletionTokens(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	limit := 500
+	svc := NewCompatLLM(Compat{Name: "CompatLLM", NoMaxCompletionTokens: true},
+		LLMConfig{APIKey: "k", BaseURL: srv.URL, Model: "m", MaxCompletionTokens: &limit})
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hi")
+
+	if _, err := svc.RunInference(t.Context(), convo, llm.InferenceOptions{MaxTokens: 64}); err != nil {
+		t.Fatalf("RunInference: %v", err)
+	}
+	if body["max_tokens"] != float64(64) {
+		t.Errorf("max_tokens = %v, want the bound this inference was given", body["max_tokens"])
+	}
+	if _, ok := body["max_completion_tokens"]; ok {
+		t.Errorf("max_completion_tokens = %v, want it left off", body["max_completion_tokens"])
 	}
 }

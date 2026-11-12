@@ -33,8 +33,10 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		BaseURL:         baseURL,
 		DefaultModel:    defaultModel,
 		NoDeveloperRole: true,
-		Adapter:         &mistraladapter.Adapter{},
-		Base:            []llm.Option{llm.WithFunctionCallFilter(dropAnsweredCalls)},
+		// The endpoint has no max_completion_tokens field.
+		NoMaxCompletionTokens: true,
+		Adapter:               &mistraladapter.Adapter{},
+		Base:                  []llm.Option{llm.WithFunctionCallFilter(dropAnsweredCalls)},
 	}, cfg)
 }
 

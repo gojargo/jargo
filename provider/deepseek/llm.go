@@ -40,7 +40,6 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 	compat := cfg.LLMConfig
 	// DeepSeek doesn't support these OpenAI parameters.
 	compat.Seed = nil
-	compat.MaxCompletionTokens = nil
 	compat.ServiceTier = ""
 
 	thinking := cfg.Thinking
@@ -52,10 +51,11 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 	}
 
 	return chat.NewCompatLLM(chat.Compat{
-		Name:            "DeepSeekLLM",
-		BaseURL:         baseURL,
-		DefaultModel:    defaultModel,
-		NoDeveloperRole: true,
+		Name:                  "DeepSeekLLM",
+		BaseURL:               baseURL,
+		DefaultModel:          defaultModel,
+		NoDeveloperRole:       true,
+		NoMaxCompletionTokens: true,
 		// DeepSeek's chat API has no JSON schema response format.
 		NoResponseSchema: true,
 		// Supplies the reasoning_content DeepSeek requires on assistant

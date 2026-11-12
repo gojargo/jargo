@@ -114,6 +114,8 @@ type LLMService struct {
 	// How this endpoint departs from OpenAI's own API, fixed at construction.
 	noDeveloperRole  bool
 	noResponseSchema bool
+	// noMaxCompletion leaves max_completion_tokens off every request.
+	noMaxCompletion bool
 }
 
 // Validate reports whether the configuration is usable.
@@ -161,6 +163,10 @@ type Compat struct {
 	// NoResponseSchema marks an endpoint whose API has no way to hold a reply to
 	// a JSON schema, so an inference given one runs without it.
 	NoResponseSchema bool
+	// NoMaxCompletionTokens marks an endpoint without the max_completion_tokens
+	// field. The config's MaxCompletionTokens is not sent to it, and the bound an
+	// inference is given goes in max_tokens instead.
+	NoMaxCompletionTokens bool
 	// Adapter converts the conversation into the request this endpoint takes. It
 	// is for an endpoint that constrains the shape of a conversation beyond what
 	// OpenAI's schema says: such an adapter embeds the OpenAI one and rewrites
@@ -206,6 +212,7 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 		adapter:          a,
 		noDeveloperRole:  c.NoDeveloperRole,
 		noResponseSchema: c.NoResponseSchema,
+		noMaxCompletion:  c.NoMaxCompletionTokens,
 	}
 	s.Base = llm.New(c.Name, s, c.Base...)
 	s.Base.SetModel(cfg.Model)
@@ -356,6 +363,10 @@ func (s *LLMService) baseRequest(
 	if err != nil {
 		return chatRequest{}, err
 	}
+	maxCompletion := s.cfg.MaxCompletionTokens
+	if s.noMaxCompletion {
+		maxCompletion = nil
+	}
 	return chatRequest{
 		Model:               s.cfg.Model,
 		Messages:            p.Messages,
@@ -364,7 +375,7 @@ func (s *LLMService) baseRequest(
 		Stream:              true,
 		StreamOptions:       &streamOptions{IncludeUsage: true},
 		MaxTokens:           s.cfg.MaxTokens,
-		MaxCompletionTokens: s.cfg.MaxCompletionTokens,
+		MaxCompletionTokens: maxCompletion,
 		Temperature:         s.cfg.Temperature,
 		TopP:                s.cfg.TopP,
 		FrequencyPenalty:    s.cfg.FrequencyPenalty,
@@ -587,12 +598,13 @@ func (s *LLMService) RunInference(
 	reqBody.Stream = false
 	reqBody.StreamOptions = nil
 	if opts.MaxTokens > 0 {
-		// Whichever bound this service states is the one to override; a model
-		// that reads only one of the two is told through the field it reads.
-		if reqBody.MaxCompletionTokens != nil {
-			reqBody.MaxCompletionTokens = &opts.MaxTokens
-		} else {
+		// max_completion_tokens is the bound OpenAI's reasoning models read, and
+		// the only one they accept, so it carries the override wherever the
+		// endpoint has the field.
+		if s.noMaxCompletion {
 			reqBody.MaxTokens = opts.MaxTokens
+		} else {
+			reqBody.MaxCompletionTokens = &opts.MaxTokens
 		}
 	}
 	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {

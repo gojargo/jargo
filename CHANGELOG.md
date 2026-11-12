@@ -46,6 +46,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   holding a tool exchange, and sent no system instruction when the call gave
   none. It now sends the tools, and the service's own system instruction when
   the call gives none.
+- **An OpenAI chat inference bounds its reply through
+  `max_completion_tokens`.** A `RunInference` bound on a service with no
+  `MaxCompletionTokens` configured went out as `max_tokens`, which OpenAI's
+  reasoning models refuse, so context summarization failed on them. The
+  DeepSeek, Mistral, Perplexity, Sarvam and Fireworks endpoints, which have no
+  such field, still take `max_tokens`, and are never sent
+  `max_completion_tokens` (the new `chat.Compat.NoMaxCompletionTokens`).
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
