@@ -427,7 +427,7 @@ func (s *httpTTSSynthesizer) RunTTS(ctx context.Context, text, _ string, yield f
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	return tts.StreamResponse(s.http, req, emit)
+	return tts.StreamSpeech(s.http, req, text, emit)
 }
 
 // firstNonEmpty returns the first non-empty string, or "" when both are empty.

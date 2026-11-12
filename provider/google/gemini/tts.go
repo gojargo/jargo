@@ -90,6 +90,8 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Reported as the request is made, ahead of any answer.
+	tts.StartUsageMetrics(ctx, text)
 	pcm, err := s.fetchPCM(req)
 	if err != nil {
 		return err

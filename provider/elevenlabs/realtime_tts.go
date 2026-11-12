@@ -592,7 +592,11 @@ func (s *realtimeSynthesizer) RunTTS(
 	if err != nil {
 		return err
 	}
-	return s.sendText(ctx, conn, contextID, text)
+	if err := s.sendText(ctx, conn, contextID, text); err != nil {
+		return err
+	}
+	tts.StartUsageMetrics(ctx, text)
+	return nil
 }
 
 // openContext dials if needed and sends the context's opening message the first

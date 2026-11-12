@@ -162,6 +162,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	if err := s.request(ctx, conn, text); err != nil {
 		return err
 	}
+	tts.StartUsageMetrics(ctx, text)
 	return s.receive(ctx, conn, emit)
 }
 

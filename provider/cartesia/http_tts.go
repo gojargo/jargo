@@ -190,6 +190,7 @@ func (s *httpSynthesizer) RunTTS(
 		return errs.NewHTTPStatusError(resp.StatusCode,
 			fmt.Errorf("%w %d: %s", errHTTPTTSStatus, resp.StatusCode, msg))
 	}
+	tts.StartUsageMetrics(ctx, text)
 
 	// Read in chunks rather than all at once: the audio is raw PCM, so a partial
 	// read is playable as it stands.

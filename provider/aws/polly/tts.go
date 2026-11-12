@@ -69,6 +69,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 		return err
 	}
 	defer func() { _ = out.AudioStream.Close() }()
+	tts.StartUsageMetrics(ctx, text)
 
 	buf := make([]byte, readChunk)
 	for {

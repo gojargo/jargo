@@ -243,6 +243,7 @@ func (s *synthesizer) synthesize(
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errTTSStatus, resp.StatusCode, msg))
 	}
+	tts.StartUsageMetrics(ctx, text)
 	return s.stream(resp.Body, text, tts.PCMYielder(yield, s.SampleRate()), word)
 }
 

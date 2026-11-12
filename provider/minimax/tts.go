@@ -85,6 +85,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
+	tts.StartUsageMetrics(ctx, text)
 	return scanSSE(resp.Body, func(data []byte) error {
 		var chunk t2aChunk
 		_ = json.Unmarshal(data, &chunk) // a non-audio event leaves Audio empty

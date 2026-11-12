@@ -180,6 +180,7 @@ func (s *fluxSynth) RunTTS(ctx context.Context, text, _ string, yield func(f fra
 	if err := conn.Write(ctx, websocket.MessageText, speak); err != nil {
 		return fmt.Errorf("deepgram flux tts: speak: %w", err)
 	}
+	tts.StartUsageMetrics(ctx, text)
 	// Flush ends the turn so the server renders all remaining audio and then
 	// sends SpeechMetadata.
 	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"Flush"}`)); err != nil {

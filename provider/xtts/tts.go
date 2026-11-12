@@ -71,7 +71,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return tts.StreamResponse(s.http, req, emit)
+	return tts.StreamSpeech(s.http, req, text, emit)
 }
 
 // lookupSpeaker returns the configured studio speaker's embeddings, fetching and

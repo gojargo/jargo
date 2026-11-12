@@ -524,6 +524,7 @@ func (s *synthesizer) RunTTS(
 	// the turn is what closes it.
 	err := s.write(ctx, conn, s.request(text, contextID, true))
 	if err == nil {
+		tts.StartUsageMetrics(ctx, text)
 		return nil
 	}
 

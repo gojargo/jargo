@@ -207,6 +207,7 @@ func (s *ttsSynthesizer) run(
 	if err := s.request(ctx, conn, text, withTimestamps); err != nil {
 		return err
 	}
+	tts.StartUsageMetrics(ctx, text)
 	return s.receive(ctx, conn, emit, word)
 }
 

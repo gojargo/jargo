@@ -68,7 +68,7 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	return tts.StreamResponse(s.http, req, emit)
+	return tts.StreamSpeech(s.http, req, text, emit)
 }
 
 // endpoint builds the generate URL for the configured voice and output format.

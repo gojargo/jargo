@@ -283,6 +283,7 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 	if err := stream.CloseSend(); err != nil {
 		return err
 	}
+	tts.StartUsageMetrics(ctx, text)
 
 	for {
 		resp, err := stream.Recv()

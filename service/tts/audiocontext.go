@@ -1167,7 +1167,7 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 		stopped.ContextID = contextID
 		_ = b.PushFrame(ctx, stopped, processor.Downstream)
 	}
-	b.finishAudioContext(ctx, c)
+	b.finishAudioContext(c)
 	b.recordContextAudioOutcome(ctx, contextID, receivedAudio)
 	return true
 }
@@ -1285,7 +1285,7 @@ func (b *Base) stampLLMResponseFrame(f frames.Frame) {
 }
 
 // finishAudioContext records what the context cost and closes its span.
-func (b *Base) finishAudioContext(ctx context.Context, c *audioContext) {
+func (b *Base) finishAudioContext(c *audioContext) {
 	chars, meter := c.measurement()
 	attrs := tracing.TTSAttributes{
 		Service:        b.TypeName(),
@@ -1306,7 +1306,6 @@ func (b *Base) finishAudioContext(ctx context.Context, c *audioContext) {
 	}
 	tracing.SetTTSAttributes(c.span, attrs)
 	tracing.SetTTSUsage(c.spanCtx, b.meta.Model, chars)
-	b.emitTiming(ctx, chars)
 	c.span.End()
 }
 

@@ -40,6 +40,8 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	}
 	req.Header.Set("X-Hume-Api-Key", s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
+	// Reported as the request is made, ahead of any answer.
+	tts.StartUsageMetrics(ctx, text)
 	return tts.StreamResponse(s.http, req, emit)
 }
 

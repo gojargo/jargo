@@ -20,6 +20,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `TTSTextFrame` as its audio plays, so the conversation records only what was
   heard before an interruption. **Breaking:** `cartesia.Config.WordTimestamps`
   is gone; there is no unaligned mode left to choose.
+- **A TTS provider reports its own usage.** The TTS base no longer counts
+  the characters of an audio context when it finishes. A provider calls
+  `tts.StartUsageMetrics(ctx, text)` from `RunTTS`, with the context it was
+  given, once the text is sent; an HTTP provider streaming its answer through
+  `tts.StreamSpeech` has it done once the request is accepted. **Breaking:** a
+  custom `Synthesizer` reports no usage until it makes that call.
 - **OpenAI Responses messages are tagged `openai_responses`.** The Responses
   adapter answered to `openai`, the chat-completions adapter's id, so a
   conversation shared by both services failed every Responses turn on a chat
@@ -401,6 +407,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   histograms see them when they happen, interrupted replies included. The
   onset is scanned at the audio frame's own sample rate and channel count.
   The character usage is still reported when the context finishes.
+
+- **TTS usage follows the usage-metrics switch, once per sentence sent.**
+  A TTS service reported its character usage only with `EnableMetrics` on,
+  whatever `EnableUsageMetrics` said, and once per audio context, which is
+  the whole reply. It is now reported when `EnableUsageMetrics` is on, for each
+  sentence as the provider sends it, so text that never reached the provider
+  is not counted. Streaming tokens, the reply's whole text is reported once,
+  when it ends, and an interruption discards what had gathered. The Groq TTS
+  reports none.
 
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements

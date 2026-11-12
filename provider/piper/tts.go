@@ -48,6 +48,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
+	tts.StartUsageMetrics(ctx, text)
 
 	wav, err := io.ReadAll(resp.Body)
 	if err != nil {

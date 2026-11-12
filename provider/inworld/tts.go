@@ -112,7 +112,12 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
-	return stream(resp.Body, emit)
+	if err := stream(resp.Body, emit); err != nil {
+		return err
+	}
+	// Reported once the whole answer is in.
+	tts.StartUsageMetrics(ctx, text)
+	return nil
 }
 
 // streamMessage is the subset of an Inworld streaming line we read.

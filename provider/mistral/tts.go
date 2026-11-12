@@ -106,6 +106,8 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	// Reported as the request is made, ahead of any answer.
+	tts.StartUsageMetrics(ctx, text)
 
 	resp, err := s.http.Do(req) //nolint:gosec // request target is the service's configured endpoint
 	if err != nil {

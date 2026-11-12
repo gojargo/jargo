@@ -319,6 +319,8 @@ type Base struct {
 	// tokens carries the whitespace bookkeeping a streamed token needs. See
 	// textaggregation.go.
 	tokens tokenSpacing
+	// streamed gathers a reply spoken token by token, for its usage.
+	streamed streamedText
 
 	// metaMu guards meta, which the model labeling the metrics is read from
 	// and which a settings update can change while a turn is being measured.
@@ -944,6 +946,7 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 	b.pushSequencerFrames(ctx, b.sequencer.Finalize(b.turnContextID()), b.turnContextID())
 	b.endTagsOnlyReply(ctx, b.turnContextID())
 	b.holdFramesWhileAudioContextsOpen()
+	b.reportStreamedUsage(ctx)
 	// The turn's context is done, so the whitespace opening the next one is its
 	// own to drop again.
 	b.setSentNonWhitespace(false)
@@ -1052,6 +1055,7 @@ func (b *Base) onTurnContextCompleted(ctx context.Context) {
 // nobody is listening to.
 func (b *Base) handleInterruption(ctx context.Context) {
 	b.setSentNonWhitespace(false)
+	b.streamed.take()
 	b.setLLMResponding(false)
 	if b.aggregator != nil {
 		b.aggregator.HandleInterruption()
@@ -1426,6 +1430,11 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 		return nil
 	}
 
+	// Streaming tokens, the reply's usage is reported once, when it ends.
+	if streaming {
+		b.streamed.add(original)
+	}
+
 	// The unit's processing time, for a provider whose RunTTS synthesizes before
 	// it returns. A token is the wrong unit to report one against: that would be
 	// a metric per token, for work that spans a sentence.
@@ -1599,9 +1608,9 @@ func (b *Base) runTTS(
 			b.AddWordTimestamps(contextID, words, opts)
 			return nil
 		}
-		err = wt.RunTTSTimed(ctx, prepared, contextID, yield, word)
+		err = wt.RunTTSTimed(withUsageReporter(ctx, b), prepared, contextID, yield, word)
 	} else {
-		err = b.syn.RunTTS(ctx, prepared, contextID, yield)
+		err = b.syn.RunTTS(withUsageReporter(ctx, b), prepared, contextID, yield)
 	}
 	if err != nil && ctx.Err() == nil {
 		c.span.RecordError(err)
@@ -1673,20 +1682,6 @@ func (b *Base) pushSpokenText(
 	// The text frame is queued, so the slot is complete and whatever was held
 	// behind it (a code block, say) can follow it, in order.
 	b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot(), contextID)
-}
-
-// emitTiming records the character count of an audio context to OpenTelemetry
-// (always) and, when in-band metrics are enabled, downstream as a MetricsFrame
-// for the RTVI client. The time to first byte and to the first audible sample
-// are not among them: they were reported as the context's audio arrived.
-func (b *Base) emitTiming(ctx context.Context, chars int) {
-	metrics.RecordTTSCharacters(ctx, b.TypeName(), b.model(), int64(chars))
-	if !b.MetricsEnabled() {
-		return
-	}
-	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.model()}
-	_ = b.PushFrame(ctx, frames.NewMetricsFrame(frames.TTSUsageMetricsData{BaseMetricsData: base, Value: chars}),
-		processor.Downstream)
 }
 
 // reportTTFB reports a context's time to first byte, on its first audio, and
@@ -1805,6 +1800,17 @@ func (m *ttfaMeter) processTTFA(pcm []byte, rate, channels int) bool {
 // chunks. It is the shared body-reading loop for HTTP TTS providers. Pair it
 // with PCMYielder to turn the chunks into frames.
 func StreamResponse(client *http.Client, req *http.Request, emit func(pcm []byte) error) error {
+	return streamResponse(client, req, nil, emit)
+}
+
+// StreamSpeech is StreamResponse for a request synthesizing text: once the
+// provider accepts the request, text is reported as usage (see
+// StartUsageMetrics), through the context req was built with.
+func StreamSpeech(client *http.Client, req *http.Request, text string, emit func(pcm []byte) error) error {
+	return streamResponse(client, req, &text, emit)
+}
+
+func streamResponse(client *http.Client, req *http.Request, text *string, emit func(pcm []byte) error) error {
 	resp, err := client.Do(req) //nolint:gosec // request target is the service's configured endpoint
 	if err != nil {
 		return err
@@ -1813,6 +1819,9 @@ func StreamResponse(client *http.Client, req *http.Request, emit func(pcm []byte
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+	}
+	if text != nil {
+		StartUsageMetrics(req.Context(), *text)
 	}
 	buf := make([]byte, readChunk)
 	for {

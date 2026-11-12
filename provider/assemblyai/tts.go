@@ -902,6 +902,7 @@ func (s *synthesizer) RunTTS(
 		s.connect(ctx)
 		return fmt.Errorf("assemblyai tts: %w", err)
 	}
+	tts.StartUsageMetrics(ctx, text)
 	return nil
 }
 

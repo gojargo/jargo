@@ -296,6 +296,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	if err := s.writeJSON(ctx, conn, map[string]any{msgType: "text", msgData: map[string]any{"text": text}}); err != nil {
 		return err
 	}
+	tts.StartUsageMetrics(ctx, text)
 	if err := s.writeJSON(ctx, conn, map[string]any{msgType: "flush"}); err != nil {
 		return err
 	}

@@ -51,6 +51,8 @@ func (s *pocketSynthesizer) RunTTS(ctx context.Context, text, _ string, yield fu
 		return err
 	}
 	req.Header.Set("Content-Type", contentType)
+	// Reported as the request is made, ahead of any answer.
+	tts.StartUsageMetrics(ctx, text)
 
 	resp, err := s.http.Do(req) //nolint:gosec // request target is the configured local endpoint
 	if err != nil {

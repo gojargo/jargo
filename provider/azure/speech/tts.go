@@ -59,7 +59,7 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 	req.Header.Set("Content-Type", "application/ssml+xml")
 	req.Header.Set("X-Microsoft-OutputFormat", outputFormat(s.cfg.SampleRate))
 	req.Header.Set("User-Agent", ttsUserAgent)
-	return tts.StreamResponse(s.http, req, emit)
+	return tts.StreamSpeech(s.http, req, text, emit)
 }
 
 func (s *ttsSynthesizer) endpoint() string {

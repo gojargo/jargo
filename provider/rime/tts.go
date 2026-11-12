@@ -101,5 +101,5 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "audio/pcm")
-	return tts.StreamResponse(s.http, req, emit)
+	return tts.StreamSpeech(s.http, req, text, emit)
 }
