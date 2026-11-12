@@ -793,11 +793,9 @@ func findTranscription(fs []frames.Frame) *frames.TranscriptionFrame {
 // during teardown fails here instead of merely running slowly.
 const teardownBudget = time.Second
 
-// TestTeardownIsPromptWhenPeerIsSilent checks ending a call does not wait on the
-// close handshake. Stopping the read cancels its context, and the WebSocket
-// library closes the connection itself when a read fails, so the deferred Close
-// finds the socket already closed and returns immediately rather than sending a
-// close frame and waiting for a reply that a silent peer will never send.
+// TestTeardownIsPromptWhenPeerIsSilent checks ending a call waits on the close
+// handshake for no longer than the close timeout: the close frame is sent, and a
+// peer that never answers it is not waited on for the library's five seconds.
 func TestTeardownIsPromptWhenPeerIsSilent(t *testing.T) {
 	c := dial(t, &testSerializer{}, params())
 	c.ready(t)
@@ -808,6 +806,55 @@ func TestTeardownIsPromptWhenPeerIsSilent(t *testing.T) {
 
 	if elapsed := time.Since(start); elapsed > teardownBudget {
 		t.Errorf("teardown took %v, want under %v; the close handshake is being waited on", elapsed, teardownBudget)
+	}
+}
+
+// TestClientSeesANormalClose checks a session the pipeline ends is closed with
+// a close frame, so a client sees a normal closure (1000) rather than the
+// connection dropping (1006), which client SDKs take for a lost connection.
+func TestClientSeesANormalClose(t *testing.T) {
+	c := dial(t, &testSerializer{}, params())
+	c.ready(t)
+
+	// The client reads, as a browser does, so it answers the close.
+	c.client.SetReadLimit(-1)
+	closed := make(chan error, 1)
+	go func() {
+		for {
+			if _, _, err := c.client.Read(context.Background()); err != nil {
+				closed <- err
+				return
+			}
+		}
+	}()
+	start := time.Now()
+	c.shutdown(t)
+	if elapsed := time.Since(start); elapsed > teardownBudget {
+		t.Errorf("teardown took %v with a client answering the close, want under %v", elapsed, teardownBudget)
+	}
+
+	select {
+	case err := <-closed:
+		if got := websocket.CloseStatus(err); got != websocket.StatusNormalClosure {
+			t.Errorf("the client saw %v (status %d), want a normal closure", err, got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the client never saw the session close")
+	}
+}
+
+// TestCloseTimeoutBoundsTheHandshake checks the configured close timeout is the
+// bound on waiting for a silent client: zero does not wait at all.
+func TestCloseTimeoutBoundsTheHandshake(t *testing.T) {
+	p := params()
+	p.CloseTimeout = new(time.Duration(0))
+	c := dial(t, &testSerializer{}, p)
+	c.ready(t)
+
+	start := time.Now()
+	c.shutdown(t)
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Errorf("teardown took %v with no close wait, want it prompt", elapsed)
 	}
 }
 

@@ -137,7 +137,18 @@ type Params struct {
 	// long is the endpoint's call, and it usually wants to say something before
 	// ending the pipeline rather than cutting the caller off mid-sentence.
 	SessionTimeout time.Duration
+
+	// CloseTimeout bounds how long closing a session waits for the client to
+	// answer the close handshake. The close frame is sent first, so a client
+	// sees the session end normally; a dead or half-closed peer then holds the
+	// shutdown up for no longer than this. Nil waits half a second, and zero
+	// does not wait.
+	CloseTimeout *time.Duration
 }
+
+// defaultCloseTimeout is how long closing a session waits for the client's
+// half of the close handshake, when Params.CloseTimeout is nil.
+const defaultCloseTimeout = 500 * time.Millisecond
 
 // DefaultParams returns the transport defaults, with the origins
 // security.AllowedOriginsEnv names and no restriction when it is unset.
@@ -184,7 +195,10 @@ func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params Param
 // such as the stream to address audio to, so they must not be lost.
 func NewTransport(c *websocket.Conn, ser Serializer, params Params, pending ...[]byte) *Transport {
 	c.SetReadLimit(readLimit)
-	sess := &Session{conn: c, done: make(chan struct{}), pending: pending}
+	sess := &Session{conn: c, done: make(chan struct{}), pending: pending, closeTimeout: defaultCloseTimeout}
+	if params.CloseTimeout != nil {
+		sess.closeTimeout = *params.CloseTimeout
+	}
 	return &Transport{
 		sess: sess,
 		in:   newInput(sess, ser, params),
@@ -238,6 +252,9 @@ type Session struct {
 	// when the input stops: canceling a read closes the connection underneath,
 	// and the output may still have audio to send.
 	stopRead func()
+	// closeTimeout bounds the wait for the client's half of the close
+	// handshake.
+	closeTimeout time.Duration
 }
 
 func (s *Session) read(ctx context.Context) ([]byte, error) {
@@ -349,18 +366,32 @@ func (s *Session) signalDone() {
 	s.doneOnce.Do(func() { close(s.done) })
 }
 
-// Close ends the read loop, closes the socket and signals Done. It is
-// idempotent.
+// Close sends the client a normal close, ends the read loop, takes the socket
+// down and signals Done. It is idempotent.
 //
-// Ending the read is what actually takes the connection down: canceling a read
-// closes it underneath, so the close handshake that follows finds it closed and
-// returns at once rather than waiting five seconds for a peer that may be gone.
-// That is what keeps teardown prompt on a frame-processing goroutine.
+// The close frame goes out first, so the client sees the session end normally
+// (1000) rather than the connection drop. The wait for the client's answer is
+// bounded by the close timeout: a peer that has gone holds a frame-processing
+// goroutine up for no longer than that, rather than for the library's own five
+// seconds. Whatever is left is then torn down.
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
-		s.endRead()
 		s.signalDone()
-		_ = s.conn.Close(websocket.StatusNormalClosure, "")
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			_ = s.conn.Close(websocket.StatusNormalClosure, "")
+		}()
+		timer := time.NewTimer(s.closeTimeout)
+		select {
+		case <-closed:
+		case <-timer.C:
+			slog.Debug("wsserver: the client did not answer the close in time; closing anyway",
+				"timeout", s.closeTimeout)
+		}
+		timer.Stop()
+		s.endRead()
+		_ = s.conn.CloseNow()
 	})
 }
 

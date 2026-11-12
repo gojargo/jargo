@@ -93,6 +93,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A WebSocket server session ends with a normal close.** Closing a
+  `wsserver` session took the connection down before the close frame could be
+  written, so a browser or SDK client saw an abnormal closure (1006), which it
+  takes for a dropped connection. The close frame is now sent first and the
+  client's answer waited for up to `Params.CloseTimeout` (nil: half a second;
+  zero: no wait), so a dead peer still cannot hold the shutdown up.
+
 - **The LiveKit transport behaves as a LiveKit agent does.** Application
   messages are published reliably (they were lossy, so RTVI messages could be
   lost or reordered). The bot's audio track is published as `jargo-audio`,
