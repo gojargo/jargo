@@ -55,6 +55,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`resembleai.NewTTS` holds one connection for the call instead of dialing
+  one per sentence.** It used to open a connection for each sentence, send the
+  request with a fixed id, and wait for that sentence's audio before the next
+  one could go out. It now opens one connection when the pipeline starts and
+  sends each sentence as a request of its own, numbered, and returns; the
+  receive loop hands the audio to the context of the request it names, so each
+  sentence is spoken on an audio context of its own, which Resemble AI's
+  `audio_end` ends. A request's audio is held until about a second of it has
+  arrived (or the request ends), which absorbs the gaps Resemble AI leaves
+  between its bursts, then passed on in even-sized chunks, and the tail is
+  trimmed to whole 16-bit samples. An error message is reported and stops that
+  request's speech; rejected credentials (401 or 403) close the connection and
+  open a new one. The connection runs on `tts.Websocket`: a lost connection is
+  restored with backoff, and after three failed redials the service reports a
+  permanent error, so it becomes unusable and a service switcher moves off it.
+  The new `Config.Websocket` field configures the reconnection and the
+  timeouts; its close timeout defaults to not waiting, since Resemble AI never
+  acknowledges a close. `Config` also gains `OutputFormat` (`"wav"` by default,
+  or `"mp3"`) and `ApplyCustomPronunciations`, and the voice and the custom
+  pronunciations can change while the pipeline runs (`resembleai.TTSSettings`),
+  taking effect from the next sentence on the same connection.
+
 - **`smallest.NewTTS` holds one connection for the call instead of dialing
   one per sentence, and speaks a turn as one generation.** It used to open a
   connection for each sentence, send the request and wait for that sentence's
