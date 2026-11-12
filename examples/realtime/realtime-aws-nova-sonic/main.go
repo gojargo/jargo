@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"os"
 	"time"
 
@@ -37,9 +36,9 @@ func getCurrentWeather(ctx context.Context, params llm.FunctionCallParams) error
 		Format   string `json:"format"`
 	}
 	_ = json.Unmarshal(params.Arguments, &args)
-	temperature := 15 + rand.IntN(16) //nolint:gosec // a made-up reading
+	temperature := 24
 	if args.Format == "fahrenheit" {
-		temperature = 60 + rand.IntN(26) //nolint:gosec // a made-up reading
+		temperature = 75
 	}
 	result, err := json.Marshal(map[string]any{
 		"conditions":  "nice",
