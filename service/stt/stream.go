@@ -190,6 +190,16 @@ type TurnWatchdoger interface {
 	TurnWatchdog() TurnWatchdogOptions
 }
 
+// SessionEnder is an optional interface a Stream implements when something it
+// reports lives in one session, so a session that ends without the service
+// asking leaves it open: a turn the provider started and never got to end, say.
+// EndSession is called once such a session has ended, and returns the results
+// that close what it left open. It is not called for a session the service
+// closed itself.
+type SessionEnder interface {
+	EndSession() []Result
+}
+
 // Drainer is an optional interface a Stream implements when the provider is told
 // the session is ending and answers with results it was still holding. Drain
 // sends that request and returns how long the results already on their way
@@ -825,6 +835,11 @@ func (s *StreamService) ReceiveMessages(ctx context.Context) error {
 	for {
 		results, err := stream.Recv()
 		if err != nil {
+			if ender, ok := stream.(SessionEnder); ok && !s.ws.Disconnecting() {
+				for _, r := range ender.EndSession() {
+					s.emit(ctx, r)
+				}
+			}
 			return err
 		}
 		for _, r := range results {

@@ -147,6 +147,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   model, the language, the generation config, the pronunciation dictionary or
   the accent was logged and ignored. It now holds the same settings as the
   WebSocket service, and each request is built from them.
+- **A Cartesia Turns STT turn cut short by a dropped connection ends at the
+  drop.** A turn open when the connection dropped was never ended: what was
+  transcribed of it was lost, no stop was proposed, and the next turn on the new
+  connection proposed no start, so it neither interrupted the bot nor opened a
+  user turn. The turn now ends at the drop, with its transcript so far
+  (unfinalized) and a proposed stop, and speech after the drop is a turn of its
+  own. A stream that keeps state for a session implements the new
+  `stt.SessionEnder` to close it when the session ends on its own.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

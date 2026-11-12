@@ -265,6 +265,27 @@ type turnsStream struct {
 	// confirmed records that the server has confirmed the session. Read loop
 	// only.
 	confirmed bool
+	// inTurn records that the server started a turn it has not ended, and
+	// turnText is what it has transcribed of that turn so far. A turn lives in
+	// one session, so these are what close it when the session ends first.
+	// Read loop only.
+	inTurn   bool
+	turnText string
+}
+
+// EndSession ends a turn the session was cut off in the middle of,
+// implementing stt.SessionEnder. The transcript received so far is reported
+// as the turn's transcription, since the server never got to commit it, and the
+// turn's end is proposed. If the user carries on talking on a new session, what
+// follows is transcribed as a turn of its own.
+func (s *turnsStream) EndSession() []stt.Result {
+	if !s.inTurn {
+		return nil
+	}
+	slog.Debug("cartesia turns stt connection closed mid-turn, ending the turn")
+	text := s.turnText
+	s.inTurn, s.turnText = false, ""
+	return []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped}}
 }
 
 // awaitConnected handles messages until the server confirms the session.
@@ -391,12 +412,15 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 			if m.Transcript == "" {
 				continue
 			}
+			s.turnText = m.Transcript
 			return []stt.Result{{Text: m.Transcript, Final: false}}, nil
 		case turnsStart:
 			call(s.cfg.OnTurnStart, m.Transcript)
+			s.inTurn, s.turnText = true, m.Transcript
 			return []stt.Result{{Speech: stt.SpeechStarted}}, nil
 		case turnsEnd:
 			call(s.cfg.OnTurnEnd, m.Transcript)
+			s.inTurn, s.turnText = false, ""
 			if m.Transcript == "" {
 				return []stt.Result{{Speech: stt.SpeechStopped}}, nil
 			}
