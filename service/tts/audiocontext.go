@@ -190,6 +190,9 @@ type audioContext struct {
 	// pendingWords holds words that arrived before any audio did, so there was
 	// no baseline yet to time them against.
 	pendingWords []ctxItem
+	// ended is set once the context's end is queued: it still plays out what it
+	// holds, but no more audio is coming for it.
+	ended bool
 }
 
 func newAudioContext(report bool, spanCtx context.Context, span trace.Span) *audioContext {
@@ -294,6 +297,9 @@ func (c *audioContext) spoken() string {
 func (c *audioContext) push(it ctxItem) {
 	c.mu.Lock()
 	c.items = append(c.items, it)
+	if it.end {
+		c.ended = true
+	}
 	if it.sequenced {
 		c.sequencedQueued++
 	}
@@ -568,16 +574,48 @@ func (b *Base) HasActiveAudioContext() bool {
 	return id != "" && b.AudioContextAvailable(id)
 }
 
-// ActiveAudioContextID is the context playing, or the turn's context when none
-// is: between contexts, and at the start of a turn before playback has taken
-// up the context just opened. It is for a provider whose messages do not name
-// the context they belong to, which labels its audio with this instead. It is
-// "" when there is neither.
+// ActiveAudioContextID is the context the provider's audio belongs to now: the
+// one playing, or the turn's context when none is, between contexts and at the
+// start of a turn. It is for a provider whose messages do not name the context
+// they belong to, which labels its audio with this instead. It is "" when there
+// is none.
+//
+// Playback takes contexts up on a goroutine of its own, which may run late. So
+// the context playing counts only while more audio is still coming for it, and
+// otherwise the oldest open context still taking audio stands in for it, which
+// is where playback is headed. Without that, audio arriving before playback
+// had caught up would be labeled with a context already ended, or with none
+// once a fixed utterance had put the turn's context back, and be dropped. The
+// rule is jargo's own: with a single event loop, playback always catches up
+// before a reply can be read, and the playing context or else the turn's is
+// enough.
 func (b *Base) ActiveAudioContextID() string {
-	if id := b.playingContextID(); id != "" {
-		return id
+	b.audioCtxMu.Lock()
+	playing, turn := b.playingContext, b.turnContext
+	b.audioCtxMu.Unlock()
+	if playing != "" && b.takesAudio(playing) {
+		return playing
 	}
-	return b.turnContextID()
+	for _, id := range b.openAudioContexts() {
+		if b.takesAudio(id) {
+			return id
+		}
+	}
+	if turn != "" {
+		return turn
+	}
+	return playing
+}
+
+// takesAudio reports whether the context is open and its end not yet queued.
+func (b *Base) takesAudio(contextID string) bool {
+	c := b.audioContextFor(contextID)
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.ended
 }
 
 // RemoveActiveAudioContext closes the context playing, if any, once the audio

@@ -55,6 +55,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Audio a provider sends without naming its context is no longer dropped
+  when playback runs late.** Such audio is labeled with the active audio
+  context, which counted the context playback was on even after the provider
+  had ended it, and was empty between a fixed utterance and playback taking
+  its context up. On a loaded machine a reply arriving in that window was
+  labeled with a finished context, or none, and lost (seen with Grok, Neuphonic
+  and Sarvam). `ActiveAudioContextID` now skips a context whose end is queued
+  and falls to the oldest open context still taking audio, then the turn's.
+
 - **The runner refuses a session that arrives once shutdown is waiting for
   the running ones.** A WebSocket connection accepted during shutdown counted
   its session while the wait was under way, a race on the wait group; its
