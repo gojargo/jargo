@@ -194,6 +194,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   serving. A panic is now that session's failure alone: it is logged with its
   stack, the session is forgotten, and the runner keeps serving. A WebSocket
   session's socket is now closed however its bot ends.
+- **An LLM worker runs no idle timeout unless asked to.** Every LLM worker
+  (`llmworker.New`, `NewContext`, `NewBackend`) inherited the pipeline's
+  five-minute idle timeout, but the frames that tell a pipeline it is busy never
+  reach a worker waiting its turn or running a backend. Five minutes into a
+  call, an `LLMWithBackend` session or a waiting handoff agent canceled itself
+  and the runner with it. An LLM worker now runs no idle detection unless its
+  `WorkerConfig` sets an `IdleTimeout`.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

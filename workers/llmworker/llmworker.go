@@ -114,6 +114,13 @@ func New(cfg Config) *Worker {
 		wc.Active = &inactive
 	}
 	wc.Bridged = cfg.Bridged
+	// No idle detection unless the caller asked for it. The frames that tell a
+	// pipeline it is busy (speech, transcriptions) never reach a worker that is
+	// waiting its turn or running a backend, so one would be canceled, and the
+	// runner with it, five minutes into a call that is still going.
+	if wc.IdleTimeout == 0 {
+		wc.IdleTimeout = -1
+	}
 	// Metrics are on unless the caller turned them on itself: a worker running a
 	// model is where the cost and the latency are, and both are worth having by
 	// default.

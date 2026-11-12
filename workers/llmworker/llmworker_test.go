@@ -703,3 +703,29 @@ func TestActivationOverTheBusReachesTheWorker(t *testing.T) {
 		t.Error("the model was never told which tools it may call")
 	}
 }
+
+// idleTimeoutOf reads the idle timeout a worker's pipeline runs with.
+func idleTimeoutOf(w *llmworker.Worker) time.Duration {
+	cfg := reflect.ValueOf(w.Worker).Elem().FieldByName("cfg")
+	return time.Duration(cfg.FieldByName("IdleTimeout").Int())
+}
+
+// TestAnLLMWorkerHasNoIdleTimeout checks an LLM worker built with no idle
+// timeout of its own runs none: the frames that tell a pipeline it is busy never
+// reach a worker waiting its turn or running a backend, so the pipeline default
+// would cancel it, and the runner with it, partway through a call. One the
+// caller asked for is kept.
+func TestAnLLMWorkerHasNoIdleTimeout(t *testing.T) {
+	w := llmworker.New(llmworker.Config{Name: "agent", LLM: newRecordingLLM()})
+	if d := idleTimeoutOf(w); d > 0 {
+		t.Errorf("idle timeout = %s, want none", d)
+	}
+
+	asked := llmworker.New(llmworker.Config{
+		Name: "agent", LLM: newRecordingLLM(),
+		WorkerConfig: pipeline.WorkerConfig{IdleTimeout: time.Minute},
+	})
+	if d := idleTimeoutOf(asked); d != time.Minute {
+		t.Errorf("idle timeout = %s, want the minute asked for", d)
+	}
+}
