@@ -112,8 +112,10 @@ func TestBatchKeepsTheWholeSignal(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer r.Close()
-	if got := len(r.Process(in)) / 2; got >= want {
-		t.Errorf("a single Process call was expected to hold the filter delay back, got %d frames", got)
+	// A stream keeps pace instead: one call returns exactly what its input
+	// amounts to, and the filter's delay waits for Flush.
+	if got := len(r.Process(in)) / 2; got != want {
+		t.Errorf("a single Process call returned %d frames, want %d", got, want)
 	}
 }
 
@@ -291,12 +293,14 @@ func TestFlushEmitsTheTailTheFilterHolds(t *testing.T) {
 		t.Fatal("Flush emitted nothing, so the filter tail is being dropped")
 	}
 
-	// Flushing recovers what the filter was holding, so the stream converts to
-	// the frame count the ratio implies rather than falling short of it.
+	// The stream kept pace, and the flush adds the filter's delay at the output
+	// rate on top.
 	want := frames * outRate / inRate
-	got := (len(out) + len(tail)) / 2
-	if got < want-1 || got > want+1 {
-		t.Errorf("flushed stream is %d frames, want %d", got, want)
+	if got := len(out) / 2; got != want {
+		t.Errorf("the stream returned %d frames, want %d", got, want)
+	}
+	if got, delay := len(tail)/2, r.Delay()*outRate/inRate; got < delay || got > delay+1 {
+		t.Errorf("the flush returned %d frames, want the filter's delay of %d", got, delay)
 	}
 }
 

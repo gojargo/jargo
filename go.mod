@@ -15,7 +15,6 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/ebitengine/purego v0.11.2
 	github.com/go-playground/validator/v10 v10.30.5
-	github.com/gojargo/go-resample v1.0.1
 	github.com/gojargo/jargo-web/prebuilt v1.3.0
 	github.com/google/uuid v1.6.0
 	github.com/jfreymuth/pulse v0.1.3

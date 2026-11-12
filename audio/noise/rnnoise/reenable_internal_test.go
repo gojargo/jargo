@@ -25,7 +25,7 @@ func sine(n, rate int) []byte {
 // switched off is not spliced into the new audio. It needs no denoiser, only
 // the resamplers around it.
 func TestReenablingDiscardsWhatTheResamplersHeld(t *testing.T) {
-	cfg := resample.Config{Quality: resampleQuality}
+	cfg := resample.Config{}
 	newResampler := func(from, to int) *resample.Resampler {
 		r, err := resample.NewWithConfig(from, to, 1, cfg)
 		if err != nil {

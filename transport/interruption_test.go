@@ -365,8 +365,10 @@ func TestBaseOutputInterruptionDoesNotReplayAbortedAudio(t *testing.T) {
 	task.QueueFrame(frames.NewInterruptionFrame())
 	drainWrites(t, o, 200*time.Millisecond)
 
-	// The next turn is entirely negative, so anything positive in it is left
-	// over from the turn that was cut short.
+	// The next turn is entirely negative, so anything clearly positive in it is
+	// left over from the turn that was cut short, whose level is 8000. The
+	// filter rings either side of a step, by up to about a tenth of it, so a
+	// sample that far above zero is the conversion, not the old turn.
 	queue(constant(-8000, 8000))
 	task.QueueFrame(frames.NewTTSStoppedFrame())
 	after := drainStream(t, o, 300*time.Millisecond)
@@ -375,7 +377,7 @@ func TestBaseOutputInterruptionDoesNotReplayAbortedAudio(t *testing.T) {
 		t.Fatal("nothing was written for the next turn")
 	}
 	for i := 0; i+1 < len(after); i += 2 {
-		if s := int16(binary.LittleEndian.Uint16(after[i:])); s > 0 {
+		if s := int16(binary.LittleEndian.Uint16(after[i:])); s > 2000 {
 			t.Fatalf("sample %d of the next turn is %d: audio from the interrupted turn was replayed", i/2, s)
 		}
 	}

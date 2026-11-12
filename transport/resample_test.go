@@ -205,16 +205,19 @@ func TestBaseOutputKeepsSpeechIntactAcrossAPauseBetweenChunks(t *testing.T) {
 	got := drainStream(t, o, 300*time.Millisecond)
 
 	// Every stream starts by filling the filter, so the level ramps up once at
-	// the very beginning. That is the conversion working, not audio lost, so the
-	// first chunk is skipped and everything after it has to hold the level.
+	// the very beginning, and the flush at its end runs silence through the
+	// filter, so it ramps down once at the very end. That is the conversion
+	// working, not audio lost, so the first and last chunks are skipped and
+	// everything between has to hold the level.
 	const (
 		skipFirstChunk = 1920
+		skipLastChunk  = 1920
 		level          = 16384
 	)
-	if len(got) <= skipFirstChunk {
+	if len(got) <= skipFirstChunk+skipLastChunk {
 		t.Fatalf("wrote only %d bytes for %d bytes of audio", len(got), 3*chunkBytes)
 	}
-	if quietest := minLevel(got, skipFirstChunk); quietest < level/2 {
+	if quietest := minLevel(got[:len(got)-skipLastChunk], skipFirstChunk); quietest < level/2 {
 		t.Errorf("the tone drops to %d after the first chunk, want no lower than %d: "+
 			"a pause between chunks was read as the end of the stream", quietest, level/2)
 	}

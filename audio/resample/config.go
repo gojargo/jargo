@@ -2,12 +2,11 @@ package resample
 
 import "time"
 
-// Quality selects the conversion filter, trading audio quality against CPU cost.
-// The zero value is the highest quality, which is what a pipeline gets unless it
-// asks for something cheaper.
+// Quality named a conversion filter, trading audio quality against CPU cost.
 //
-// The names are the five standard SoX Resampler recipes, mapped onto the
-// converters the pure-Go library offers (see converterFor).
+// Deprecated: every conversion now runs the one windowed-sinc filter, flat to
+// 90% of the band with about 90 dB of aliasing rejection, so a Quality has no
+// effect. It will be removed in a future release.
 type Quality int
 
 const (
@@ -58,7 +57,9 @@ const NeverClear = -1 * time.Nanosecond
 
 // Config configures a Resampler.
 type Config struct {
-	// Quality selects the conversion filter; the zero value is QualityVHQ.
+	// Quality has no effect.
+	//
+	// Deprecated: every conversion runs the same filter.
 	Quality Quality
 	// ClearAfter is how long the resampler may sit idle before its filter
 	// history is discarded. A resampler carries the tail of the audio it last

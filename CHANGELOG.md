@@ -15,6 +15,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Resampling keeps pace with its input.** A `resample.Resampler` held its
+  filter delay back, so the first chunk of every stream came out short (280
+  samples instead of 320 for 40 ms of 24 kHz to 8 kHz) and the tail waited for
+  a `Flush` that many paths never call. Every conversion now runs one pure-Go
+  polyphase windowed-sinc filter, flat to 90% of the lower rate's band with
+  about 90 dB of aliasing and image rejection: a stream returns exactly the
+  audio each chunk amounts to at the output rate, delaying the audio by a few
+  milliseconds that `Flush` emits (`Resampler.Delay` says how many), and
+  `Resample` keeps a clip lined up with its input and at its length. Filters
+  are shared between the streams of a pair of rates, and conversions run
+  about 1.4 to 5 times faster than the previous default converter. The
+  `github.com/gojargo/go-resample` dependency is gone. **Breaking:** the first
+  chunk of a stream is no longer short and the filter's tail is a few
+  milliseconds of delayed audio; `Quality` and `ResampleQuality` are
+  deprecated and have no effect.
+
 - **The telephony codec takes a wire rate per direction.** `AudioConfig`
   gains `WireInSampleRate` and `WireOutSampleRate`, which win over
   `WireSampleRate` for their direction, so a stream received at one rate can

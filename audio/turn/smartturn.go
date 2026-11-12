@@ -308,13 +308,6 @@ func lastNSamples(audio []float32, n int) []float32 {
 	return out
 }
 
-// modelResampleQuality is the conversion quality used to reach the model rate.
-// A shorter filter than the pipeline default is enough here: the difference
-// between the two sits well below the noise floor of the log-mel features the
-// model reads, so it cannot move a prediction, and this runs at the end of every
-// user turn.
-const modelResampleQuality = resample.QualityHQ
-
 // resampleToModelRate converts audio to the 16 kHz the model expects, through
 // the pipeline's own converter, a sinc polyphase filter. It is used only when a
 // non-16 kHz turn stream is configured;
@@ -345,7 +338,7 @@ func resampleToModelRate(audio []float32, inRate int) ([]float32, error) {
 		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(f32ToS16(s)))
 	}
 
-	out, err := resample.ResampleQuality(pcm, inRate, melSR, 1, modelResampleQuality)
+	out, err := resample.Resample(pcm, inRate, melSR, 1)
 	if err != nil {
 		return nil, fmt.Errorf("turn: resample %d Hz to %d Hz: %w", inRate, melSR, err)
 	}

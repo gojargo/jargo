@@ -29,13 +29,6 @@ import (
 // not one the analyzer accepts (Silero also runs natively at 8 kHz).
 const analyzerSampleRate = 16000
 
-// resampleQuality is the conversion quality on the way to the detector. It is a
-// step below the pipeline default, deliberately: a longer filter buys accuracy
-// no detector can use, and pays for it in the audio it holds back, which here is
-// delay before the detector hears that the user has started speaking. That delay
-// is the barge-in delay.
-const resampleQuality = resample.QualityHQ
-
 // DefaultAudioIdleTimeout is how long the audio can stop arriving mid-speech
 // before the user is taken to have stopped.
 const DefaultAudioIdleTimeout = time.Second
@@ -368,8 +361,7 @@ func (c *Controller) toAnalyzerRate(f *frames.AudioRawData) []byte {
 			c.resampler.Close()
 			c.resampler = nil
 		}
-		r, err := resample.NewWithConfig(f.SampleRate, c.analyzerRate, 1,
-			resample.Config{Quality: resampleQuality})
+		r, err := resample.New(f.SampleRate, c.analyzerRate, 1)
 		if err != nil {
 			slog.Error("vad: create resampler",
 				"from", f.SampleRate, "to", c.analyzerRate, "err", err)

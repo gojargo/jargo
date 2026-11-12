@@ -1,54 +1,54 @@
 package resample
 
 import (
-	"encoding/binary"
 	"fmt"
-	"math"
-
-	gore "github.com/gojargo/go-resample"
+	"sync"
 )
 
-// converterFor maps a Quality recipe onto the closest converter the underlying
-// library offers. The recipes are the five SoX Resampler names and the library
-// does not have the same five steps, so the ends of the scale line up and the
-// middle is approximate: VHQ and HQ are the two widest sinc filters, QQ is the
-// trivial interpolator, and the rest sit between.
-func converterFor(q Quality) gore.Converter {
-	switch q {
-	case QualityVHQ:
-		return gore.SincBestQuality
-	case QualityHQ:
-		return gore.SincMediumQuality
-	case QualityMQ, QualityLQ:
-		return gore.SincFastest
-	case QualityQQ:
-		return gore.Linear
-	default:
-		return gore.SincBestQuality
+// filters holds the filter of every pair of rates in use, shared by every
+// stream between them: a filter is fixed once made, and designing one is the
+// costly part of opening a stream.
+//
+//nolint:gochecknoglobals // a process-wide cache of immutable filters
+var filters sync.Map
+
+// filterFor returns the shared filter between two rates.
+func filterFor(inRate, outRate int) (*sincFilter, error) {
+	key := [2]int{inRate, outRate}
+	if f, ok := filters.Load(key); ok {
+		return f.(*sincFilter), nil //nolint:forcetypeassert // only filters are stored
 	}
+	f, err := newSincFilter(inRate, outRate)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := filters.LoadOrStore(key, f)
+	return actual.(*sincFilter), nil //nolint:forcetypeassert // only filters are stored
 }
 
 // Resampler converts a stream of interleaved S16LE PCM from one sample rate to
-// another using the pure-Go github.com/gojargo/go-resample converter (no cgo).
+// another with a polyphase windowed-sinc filter that keeps the lower rate's band
+// flat to 90% of its Nyquist frequency and attenuates aliasing and images by
+// about 90 dB.
+//
+// Its output keeps pace with its input: every call returns exactly the audio its
+// input amounts to at the output rate, so equal input chunks come out as equal
+// output chunks, the first one included. The filter delays the audio by a few
+// milliseconds instead of holding output back; Flush emits those milliseconds
+// where a stream ends, and Clear drops them where a stream is abandoned.
+//
 // Create one per audio stream with New; it is not safe for concurrent use.
-// Close releases it; the pure-Go converter holds no native resource, so it is a
-// no-op, but callers should still call it so the contract stays honest.
 type Resampler struct {
 	inRate   int
 	outRate  int
 	channels int
-	ratio    float64
-	r        *gore.Resampler // nil when inRate == outRate (passthrough)
+	s        *sincStream // nil when inRate == outRate (passthrough)
 
 	idle idleClock
-
-	inF  []float32 // reused S16LE->float32 decode scratch
-	outF []float32 // reused resampler output scratch
 }
 
-// New returns a Resampler from inRate to outRate for the given channel count,
-// at the default quality and idle window. When inRate equals outRate the
-// Resampler passes audio through unchanged and allocates no converter.
+// New returns a Resampler from inRate to outRate for the given channel count.
+// When inRate equals outRate the Resampler passes audio through unchanged.
 func New(inRate, outRate, channels int) (*Resampler, error) {
 	return NewWithConfig(inRate, outRate, channels, Config{})
 }
@@ -62,194 +62,85 @@ func NewWithConfig(inRate, outRate, channels int, cfg Config) (*Resampler, error
 	if inRate == outRate {
 		return r, nil
 	}
-	conv, err := gore.New(converterFor(cfg.Quality), channels)
+	f, err := filterFor(inRate, outRate)
 	if err != nil {
 		return nil, fmt.Errorf("resample: new %d->%d ch=%d: %w", inRate, outRate, channels, err)
 	}
-	r.r = conv
-	r.ratio = float64(outRate) / float64(inRate)
+	r.s = newSincStream(f, channels)
 	return r, nil
 }
 
-// Clear discards the filter history, so the next chunk is converted as the start
-// of a fresh signal rather than the continuation of the last one. The rate and
-// quality are unchanged.
+// Delay is how many input frames it takes for the last input to reach the
+// output: the audio the filter is holding, which Flush emits.
+func (r *Resampler) Delay() int {
+	if r.s == nil {
+		return 0
+	}
+	return r.s.f.delay()
+}
+
+// Clear discards the audio held in the filter, so the next chunk is converted as
+// the start of a fresh signal rather than the continuation of the last one.
 //
 // It is the counterpart of Flush: use Clear for a stream that was abandoned, so
 // its leftover tail does not bleed into the next one, and Flush for one that
 // ended, so the tail is heard before the next one starts.
 func (r *Resampler) Clear() {
-	if r.r != nil {
-		r.r.Reset()
+	if r.s != nil {
+		r.s.reset()
 	}
 	r.idle.reset()
 }
 
-// flushFrames is how many output frames Flush drains per call. The tail a
-// converter holds is bounded by its filter delay, which is far shorter than
-// this, so one call drains it; the loop is there for a converter that wants
-// more than one.
-const flushFrames = 4096
-
-// Flush emits the audio the converter is still holding and clears it, so the
-// next chunk starts a fresh stream.
-//
-// A streaming converter keeps the most recent input in its filter, which is
-// what lets a continuous stream convert cleanly across chunk boundaries: the
-// tail of one call is only emitted once the next call supplies the audio that
-// follows it. At the end of a stream there is no next call, so without this the
-// tail is never heard. Call it when a stream has ended; the returned audio
-// belongs at the end of that stream.
-//
-// It returns nothing when the rates match, since a passthrough buffers nothing.
+// Flush emits the audio the filter is still delaying and resets for the next
+// stream. Call it when a stream has ended; the returned audio belongs at the end
+// of that stream. It returns nothing when no audio has gone in since the
+// resampler was created, flushed or cleared, and when the rates match.
 func (r *Resampler) Flush() []byte {
-	if r.r == nil {
+	if r.s == nil {
 		return nil
 	}
-	defer r.Clear()
-
-	outSamples := flushFrames * r.channels
-	if cap(r.outF) < outSamples {
-		r.outF = make([]float32, outSamples)
-	}
-	out := r.outF[:outSamples]
-
-	var tail []byte
-	for {
-		d := gore.Data{
-			Out:          out,
-			OutputFrames: flushFrames,
-			Ratio:        r.ratio,
-			EndOfInput:   true,
-		}
-		if err := r.r.Process(&d); err != nil || d.OutputFramesGen == 0 {
-			return tail
-		}
-		tail = append(tail, encodeS16(out[:d.OutputFramesGen*r.channels])...)
-		if d.OutputFramesGen < flushFrames {
-			return tail
-		}
-	}
+	r.idle.reset()
+	return r.s.flush()
 }
 
-// Process resamples one buffer of interleaved S16LE PCM and returns the
-// resampled audio. When the input and output rates match it returns the input
+// Process resamples one buffer of interleaved S16LE PCM and returns exactly the
+// audio it amounts to at the output rate, carrying any fraction of a frame into
+// the next call. When the input and output rates match it returns the input
 // unchanged; otherwise the returned slice is freshly allocated and owned by the
-// caller. Because the converter has filter delay, the first calls of a stream
-// emit slightly fewer frames than the rate ratio implies, which later calls make
-// up. Use Resample instead for a buffer that is complete on its own.
+// caller. Use Resample instead for a buffer that is complete on its own.
 //
-// A gap longer than the configured idle window clears the filter history first,
-// so the tail of what came before is not mixed into what comes next.
+// A gap longer than a configured idle window clears the audio held in the
+// filter first, so the tail of what came before is not mixed into what comes
+// next.
 func (r *Resampler) Process(in []byte) []byte {
-	if r.r == nil {
+	if r.s == nil {
 		return in
 	}
 	if r.idle.stale() {
-		r.r.Reset()
+		r.s.reset()
 	}
-	bytesPerFrame := r.channels * 2
-	inFrames := len(in) / bytesPerFrame
-	if inFrames == 0 {
+	if len(in)/(2*r.channels) == 0 {
 		return nil
 	}
-	inSamples := inFrames * r.channels
-
-	// Decode interleaved S16LE -> float32 in [-1, 1).
-	if cap(r.inF) < inSamples {
-		r.inF = make([]float32, inSamples)
-	}
-	inF := r.inF[:inSamples]
-	for i := range inF {
-		inF[i] = float32(int16(binary.LittleEndian.Uint16(in[i*2:]))) / 32768
-	}
-
-	// The converter emits about inFrames*outRate/inRate frames per call; the
-	// margin covers rounding and filter delay so a single call drains all of the
-	// output the input can yield (Process consumes every input frame).
-	outFrames := inFrames*r.outRate/r.inRate + 64
-	outSamples := outFrames * r.channels
-	if cap(r.outF) < outSamples {
-		r.outF = make([]float32, outSamples)
-	}
-	outF := r.outF[:outSamples]
-
-	d := gore.Data{
-		In:           inF,
-		InputFrames:  inFrames,
-		Out:          outF,
-		OutputFrames: outFrames,
-		Ratio:        r.ratio,
-	}
-	if err := r.r.Process(&d); err != nil {
-		return nil
-	}
-
-	return encodeS16(outF[:d.OutputFramesGen*r.channels])
+	return r.s.process(in)
 }
 
-// resampleAll converts a complete buffer in one pass, flushing the converter's
-// filter delay so nothing is left behind. It backs Resample; see there.
-func resampleAll(pcm []byte, inRate, outRate, channels int, q Quality) ([]byte, error) {
-	bytesPerFrame := channels * 2
-	inFrames := len(pcm) / bytesPerFrame
-	if inFrames == 0 {
+// resampleAll converts a complete buffer in one pass. It backs Resample; see
+// there.
+func resampleAll(pcm []byte, inRate, outRate, channels int) ([]byte, error) {
+	if len(pcm)/(2*channels) == 0 {
 		return nil, nil
 	}
-	inSamples := inFrames * channels
-
-	in := make([]float32, inSamples)
-	for i := range in {
-		in[i] = float32(int16(binary.LittleEndian.Uint16(pcm[i*2:]))) / 32768
-	}
-
-	out, err := gore.Simple(in, float64(outRate)/float64(inRate), channels, converterFor(q))
+	f, err := filterFor(inRate, outRate)
 	if err != nil {
 		return nil, fmt.Errorf("resample: %d->%d ch=%d: %w", inRate, outRate, channels, err)
 	}
-	// The clip keeps its length: as many frames at the output rate as it lasts,
-	// to the nearest frame. The converter's own count can be one off.
-	want := int(math.Floor(float64(inFrames)*float64(outRate)/float64(inRate)+0.5)) * channels
-	if len(out) > want {
-		out = out[:want]
-	} else if len(out) < want {
-		out = append(out, make([]float32, want-len(out))...)
-	}
-	return encodeS16(out), nil
+	return f.resample(pcm, channels), nil
 }
 
-// encodeS16 converts normalized float samples to interleaved S16LE.
-func encodeS16(samples []float32) []byte {
-	out := make([]byte, len(samples)*2)
-	for i, s := range samples {
-		binary.LittleEndian.PutUint16(out[i*2:], uint16(f32ToS16(s)))
-	}
-	return out
-}
-
-// f32ToS16 converts a normalized float sample to S16 with rounding and
-// clamping. Sinc interpolation can overshoot past [-1, 1), so the clamp is
-// load-bearing, not defensive.
-func f32ToS16(f float32) int16 {
-	v := float64(f) * 32768
-	if v >= 0 {
-		v += 0.5
-	} else {
-		v -= 0.5
-	}
-	switch {
-	case v > 32767:
-		return 32767
-	case v < -32768:
-		return -32768
-	default:
-		return int16(v)
-	}
-}
-
-// Close releases converter resources. The pure-Go converter holds none, so this
-// is a no-op and is safe to call more than once. Callers should still call it,
-// so the stream lifecycle stays explicit at every call site.
+// Close releases the stream. The filter it used stays shared with the other
+// streams between the same rates. It is safe to call more than once.
 func (r *Resampler) Close() {
-	r.r = nil
+	r.s = nil
 }

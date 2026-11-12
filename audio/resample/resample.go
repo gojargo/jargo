@@ -6,26 +6,26 @@
 // audio keeps coming:
 //
 //   - A Resampler is for a stream. It is stateful, carrying filter state across
-//     calls so a continuous stream converts cleanly across chunk boundaries, and
-//     it holds back the filter delay at the end of every call because more audio
-//     is expected. Create one per stream with New; it is not safe for concurrent
-//     use, and Close must be called when finished.
+//     calls so a continuous stream converts cleanly across chunk boundaries.
+//     Its output keeps pace with its input, so equal chunks in give equal
+//     chunks out, the first one included; the filter delays the audio by a few
+//     milliseconds, which Flush emits where the stream ends. Create one per
+//     stream with New; it is not safe for concurrent use.
 //   - Resample is for a buffer that is complete on its own: a sound effect, a
 //     recorded utterance, one turn of audio handed to a model. It converts in a
-//     single pass and flushes the filter delay, so nothing is clipped off the
-//     end. Running a complete buffer through a Resampler instead loses a
-//     millisecond or two of its tail.
+//     single pass, taking the clip to be silent before and after, and its
+//     output lines up with its input and keeps the clip's length.
 //
-// The conversion is pure Go (see resampler.go), a no-cgo converter from
-// github.com/gojargo/go-resample. It cross-compiles and links into static
-// binaries with no native dependency.
+// Both run one polyphase windowed-sinc filter (see sinc.go), flat to 90% of the
+// lower rate's band, with about 90 dB of aliasing and image rejection. It is
+// pure Go, so it cross-compiles and links into static binaries with no native
+// dependency.
 package resample
 
 // Resample converts a complete buffer of interleaved S16LE PCM from inRate to
-// outRate at the default quality, in a single pass. Unlike Resampler.Process it
-// flushes the converter's filter delay, so the returned audio holds the whole
-// signal rather than stopping a filter length short of it. Use it for audio that
-// arrives whole; use a Resampler for audio that keeps coming.
+// outRate in a single pass. The output lines up with the input and holds the
+// clip's length at the output rate, rounded to the nearest frame. Use it for
+// audio that arrives whole; use a Resampler for audio that keeps coming.
 //
 // It returns the input unchanged when the rates match, and nil for an empty
 // buffer.
@@ -33,7 +33,9 @@ func Resample(pcm []byte, inRate, outRate, channels int) ([]byte, error) {
 	return ResampleQuality(pcm, inRate, outRate, channels, QualityVHQ)
 }
 
-// ResampleQuality is Resample at a chosen quality.
+// ResampleQuality is Resample; the quality has no effect.
+//
+// Deprecated: use Resample. Every conversion runs the same filter.
 func ResampleQuality(pcm []byte, inRate, outRate, channels int, q Quality) ([]byte, error) {
 	if channels < 1 {
 		channels = 1
@@ -41,5 +43,5 @@ func ResampleQuality(pcm []byte, inRate, outRate, channels int, q Quality) ([]by
 	if inRate == outRate {
 		return pcm, nil
 	}
-	return resampleAll(pcm, inRate, outRate, channels, q)
+	return resampleAll(pcm, inRate, outRate, channels)
 }
