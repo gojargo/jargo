@@ -121,6 +121,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   error carries a generic account ("Response failed") when the server sent no
   message. Stream errors read `Responses API error: <message>` over HTTP and
   `WebSocket API error: <message>` over the WebSocket.
+- **Cartesia STT reports a server error and keeps the session.** An `error`
+  message from Cartesia ended the session as if the connection had failed: the
+  service redialed, the server's message reached only the log, and three such
+  errors in quick succession made the STT unusable for the rest of the call. The
+  message is now pushed as a non-fatal error, and reading carries on over the
+  same connection.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

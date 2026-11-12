@@ -1,8 +1,8 @@
 package cartesia
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -200,11 +200,13 @@ func TestSTTStreamRecv(t *testing.T) {
 	}
 }
 
-// TestSTTStreamRecvServerError checks an error message is reported rather than
-// leaving the pipeline waiting for a transcript that will not come.
+// TestSTTStreamRecvServerError checks an error the server sends is reported with
+// its message, as a non-fatal error, and that the session carries on: the
+// transcript that follows on the same connection still arrives.
 func TestSTTStreamRecvServerError(t *testing.T) {
 	endpoint, _ := sttServer(t, []map[string]any{
-		{"type": "error", "message": "unsupported sample rate"},
+		{"type": "error", "message": "something went wrong"},
+		{"type": "transcript", "text": "hello", "is_final": true},
 	})
 	c := newSTTConnector(sttConfigFor(endpoint))
 
@@ -213,11 +215,22 @@ func TestSTTStreamRecvServerError(t *testing.T) {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer func() { _ = stream.Close() }()
+	var reported []string
+	cs, ok := stream.(*sttStream)
+	if !ok {
+		t.Fatalf("stream is %T, want *sttStream", stream)
+	}
+	cs.report = func(_ context.Context, msg string) { reported = append(reported, msg) }
 
-	if _, err := stream.Recv(); !errors.Is(err, errSTTProtocol) {
-		t.Fatalf("Recv error = %v, want errSTTProtocol", err)
-	} else if !strings.Contains(err.Error(), "unsupported sample rate") {
-		t.Errorf("error = %v, want it to carry the server's message", err)
+	results, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v, want the session to carry on past the error", err)
+	}
+	if len(results) != 1 || results[0].Text != "hello" {
+		t.Errorf("results = %+v, want the transcript that followed the error", results)
+	}
+	if len(reported) != 1 || reported[0] != "something went wrong" {
+		t.Errorf("reported = %q, want the server's message once", reported)
 	}
 }
 

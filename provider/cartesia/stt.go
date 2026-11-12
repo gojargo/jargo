@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -111,7 +110,10 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	if cfg.Encoding == "" {
 		cfg.Encoding = defaultSTTEncoding
 	}
-	return stt.NewStream("CartesiaSTT", newSTTConnector(cfg), cfg.SampleRate)
+	c := newSTTConnector(cfg)
+	svc := stt.NewStream("CartesiaSTT", c, cfg.SampleRate)
+	c.svc = svc
+	return svc
 }
 
 type sttConnector struct {
@@ -119,6 +121,20 @@ type sttConnector struct {
 	// live is what may change while the pipeline runs: the model and the
 	// language, which is the set Cartesia treats as changeable.
 	live *STTSettings
+	// svc is the service this connector drives, for reporting the errors the
+	// server sends on a session that carries on.
+	svc *stt.StreamService
+}
+
+// reportServerError puts an error the server sent on the pipeline as a
+// non-fatal error frame, carrying the server's message. The session carries
+// on over the same connection.
+func (c *sttConnector) reportServerError(ctx context.Context, msg string) {
+	if c.svc == nil {
+		slog.Warn("cartesia stt reported an error", "message", msg)
+		return
+	}
+	c.svc.PushError(ctx, msg, nil, false)
 }
 
 // newSTTConnector builds the connector with its settings seeded, which is the
@@ -205,7 +221,7 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 	if err != nil {
 		return nil, err
 	}
-	return &sttStream{conn: conn, ctx: ctx}, nil
+	return &sttStream{conn: conn, ctx: ctx, report: c.reportServerError}, nil
 }
 
 // endpoint builds the STT WebSocket URL with the model, language, encoding, and
@@ -275,6 +291,8 @@ type sttStream struct {
 	conn    *wsutil.Conn
 	ctx     context.Context
 	writeMu sync.Mutex
+	// report puts an error the server sent on the pipeline.
+	report func(ctx context.Context, msg string)
 }
 
 // sttMessage is the subset of a Cartesia STT message we read.
@@ -322,7 +340,9 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 			}
 			return []stt.Result{{Text: m.Text, Final: m.IsFinal, Language: m.Language}}, nil
 		case "error":
-			return nil, fmt.Errorf("%w: %s", errSTTProtocol, m.Message)
+			// An error the server reports in band leaves the session open: it is
+			// reported, and reading carries on.
+			s.report(s.ctx, m.Message)
 		}
 	}
 }
