@@ -276,6 +276,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **A caller keying in a DTMF entry interrupts the bot.** The aggregator only
   collected the keys, so the bot kept talking over a caller entering digits. The
   first key of an entry now broadcasts an interruption, as speech does.
+- **The DTMF aggregator flushes a pending entry when the session ends.** Digits
+  waiting on their terminator or their timeout were lost at an `EndFrame` or a
+  `CancelFrame`. They are now flushed ahead of it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

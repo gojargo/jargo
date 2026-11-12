@@ -133,3 +133,12 @@ func TestAggregatorInterruptsOnTheFirstKey(t *testing.T) {
 		t.Errorf("frames = %v, want %v", r.names, want)
 	}
 }
+
+// TestAggregatorFlushesAtTheEnd checks an entry still waiting on its terminator
+// or its timeout goes out when the session ends, rather than being lost.
+func TestAggregatorFlushesAtTheEnd(t *testing.T) {
+	r := runKeys(t, dtmf.AggregatorConfig{Timeout: time.Second}, true, frames.KeypadOne, frames.KeypadTwo)
+	if got := r.gotTexts(); len(got) != 1 || got[0] != "DTMF: 12" {
+		t.Errorf("transcriptions = %q, want the pending entry flushed at the end", got)
+	}
+}

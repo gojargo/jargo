@@ -74,12 +74,22 @@ func (a *Aggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir proce
 	if err := a.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	if df, ok := f.(*frames.InputDTMFFrame); ok {
+	switch fr := f.(type) {
+	case *frames.InputDTMFFrame:
 		if err := a.PushFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		a.handle(ctx, df.Button)
+		a.handle(ctx, fr.Button)
 		return nil
+	case *frames.EndFrame, *frames.CancelFrame:
+		// The session is ending, so an entry still waiting on its terminator or
+		// its timeout goes out now rather than being lost.
+		a.mu.Lock()
+		text := a.buf.String()
+		a.buf.Reset()
+		a.stopTimer()
+		a.mu.Unlock()
+		a.emit(ctx, text)
 	}
 	return a.PushFrame(ctx, f, dir)
 }
