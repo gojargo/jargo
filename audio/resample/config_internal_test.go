@@ -12,7 +12,7 @@ func TestClearAfterResolvesTheZeroValue(t *testing.T) {
 		want    time.Duration
 		enabled bool
 	}{
-		{"zero uses the default", Config{}, DefaultClearAfter, true},
+		{"zero never clears", Config{}, 0, false},
 		{"explicit window", Config{ClearAfter: time.Second}, time.Second, true},
 		{"negative never clears", Config{ClearAfter: -1}, 0, false},
 	}
@@ -59,14 +59,19 @@ func TestIdleClockGoesStaleAfterAGap(t *testing.T) {
 }
 
 func TestIdleClockNeverStaleWhenDisabled(t *testing.T) {
-	now := time.Unix(0, 0)
-	c := newIdleClock(Config{ClearAfter: -1})
-	c.now = func() time.Time { return now }
+	// The default config keeps the history across a pause, as an explicit
+	// never does: a pause is not the end of the stream, and dropping the held
+	// audio would cut a gap into it.
+	for _, cfg := range []Config{{}, {ClearAfter: -1}} {
+		now := time.Unix(0, 0)
+		c := newIdleClock(cfg)
+		c.now = func() time.Time { return now }
 
-	c.stale()
-	now = now.Add(time.Hour)
-	if c.stale() {
-		t.Error("clearing is disabled, so no gap should ever be stale")
+		c.stale()
+		now = now.Add(time.Hour)
+		if c.stale() {
+			t.Errorf("ClearAfter %v: a gap was stale, want the history kept", cfg.ClearAfter)
+		}
 	}
 }
 

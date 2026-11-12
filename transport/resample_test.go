@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/transport"
 )
@@ -195,7 +194,7 @@ func TestBaseOutputKeepsSpeechIntactAcrossAPauseBetweenChunks(t *testing.T) {
 	// resampler left to guess clears itself after.
 	const (
 		chunkBytes = 9600 // 200ms at 24 kHz mono
-		pause      = 2 * resample.DefaultClearAfter
+		pause      = 400 * time.Millisecond
 	)
 	for range 3 {
 		task.QueueFrame(frames.NewTTSAudioRawFrame(dcPCM(chunkBytes), 24000, 1))

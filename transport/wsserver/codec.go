@@ -40,10 +40,9 @@ type AudioConfig struct {
 	SampleRate int
 	// ResamplerClearAfter is how long the resamplers may sit idle before they
 	// treat the next chunk as a fresh signal rather than the continuation of the
-	// last one. 0 uses resample.DefaultClearAfter; a negative value never
-	// clears, which is what a provider whose chunks arrive at irregular
-	// intervals wants, since those gaps are gaps in delivery rather than gaps in
-	// the audio.
+	// last one. Zero, the default, and a negative value never clear, which is
+	// what a provider whose chunks arrive at irregular intervals wants, since
+	// those gaps are gaps in delivery rather than gaps in the audio.
 	ResamplerClearAfter time.Duration
 }
 

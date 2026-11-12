@@ -43,9 +43,12 @@ func (q Quality) String() string {
 	}
 }
 
-// DefaultClearAfter is how long a Resampler may sit idle before the next chunk
-// is treated as the start of a fresh signal rather than the continuation of the
-// last one.
+// DefaultClearAfter was the idle window a Resampler used when its config left
+// ClearAfter at zero.
+//
+// Deprecated: a zero ClearAfter now keeps the filter history across pauses, so
+// nothing uses this window unless it is asked for. Mark where a stream ends
+// with Flush and Clear instead.
 const DefaultClearAfter = 200 * time.Millisecond
 
 // NeverClear is the ClearAfter that turns the idle window off, for a caller that
@@ -62,8 +65,9 @@ type Config struct {
 	// saw so that a continuous stream converts cleanly across chunk boundaries,
 	// but after a gap that tail is no longer what came before: it is the end of
 	// the previous utterance bleeding into the start of the next one, which is
-	// heard as a click. 0 uses DefaultClearAfter; NeverClear (or any negative
-	// value) never clears.
+	// heard as a click. Zero, the default, never clears, and neither does
+	// NeverClear (or any negative value); a positive value clears after that
+	// long idle.
 	//
 	// Leave it off for a caller that knows where its streams end, and say so
 	// with Flush and Clear. The window only ever guesses, and it guesses wrong
@@ -73,17 +77,13 @@ type Config struct {
 	ClearAfter time.Duration
 }
 
-// clearAfter returns the idle window the config asks for, resolving the zero
-// value to the default and reporting whether clearing is wanted at all.
+// clearAfter returns the idle window the config asks for, and whether clearing
+// is wanted at all: only a positive window clears.
 func (c Config) clearAfter() (time.Duration, bool) {
-	switch {
-	case c.ClearAfter < 0:
+	if c.ClearAfter <= 0 {
 		return 0, false
-	case c.ClearAfter == 0:
-		return DefaultClearAfter, true
-	default:
-		return c.ClearAfter, true
 	}
+	return c.ClearAfter, true
 }
 
 // idleClock decides when a stream has been idle long enough that the filter

@@ -306,6 +306,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   or AssemblyAI TTS, or a WebSocket LLM connection, and on giving up, beside the
   error frame. `service.Base.ReportConnectionError` raises it and pushes the
   frame.
+- **A stream resampler keeps its history across a pause by default.** A
+  resampler built with the default config dropped the audio it held after
+  200 ms without audio, cutting a short gap (and a filter warm-up) into the
+  audio at every pause: in user audio arriving in bursts, and in the bot's audio
+  pausing mid-utterance. A zero `ClearAfter` now never clears; mark where a
+  stream ends with `Flush` and `Clear`. `resample.DefaultClearAfter` is
+  deprecated.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
