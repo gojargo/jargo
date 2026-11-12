@@ -733,6 +733,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   cache read, cache write and reasoning counts are always set, to zero when
   the usage leaves one out.
 
+- **Responses traces name the model that answered.** The OpenAI Responses
+  services never recorded the model a completed response names, so their
+  spans carried the configured alias rather than the dated build behind it,
+  as the chat service already reports.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

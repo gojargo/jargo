@@ -379,6 +379,9 @@ func (s *Service) turn(
 	}
 	s.recordContinuation(state, full, sent, lane)
 	s.reportUsage(ctx, state)
+	if state.model != "" {
+		s.SetFullModelName(state.model)
+	}
 	if state.emptyResponse() {
 		incremental := req.PreviousResponseID != ""
 		reportEmptyResponse(ctx, s.Base, state, &incremental)

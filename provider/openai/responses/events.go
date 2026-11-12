@@ -101,7 +101,10 @@ type outputItem struct {
 type responseObject struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
-	Error  *struct {
+	// Model is the model that answered, more specific than the one asked for:
+	// an alias resolves to a dated build here.
+	Model string `json:"model"`
+	Error *struct {
 		Message string `json:"message"`
 		Code    string `json:"code"`
 	} `json:"error"`
@@ -223,6 +226,8 @@ type streamState struct {
 	// response, which the next turn can continue from.
 	completed bool
 	output    []responseOutput
+	// model is the model a completed response names.
+	model string
 }
 
 // emptyResponse reports whether the response completed with neither text nor a
@@ -299,6 +304,7 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 		s.completed = true
 		if ev.Response != nil {
 			s.output = ev.Response.Output
+			s.model = ev.Response.Model
 		}
 		return true, s.flushCalls(false)
 	case evtIncomplete, evtFailed:
