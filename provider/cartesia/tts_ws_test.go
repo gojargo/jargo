@@ -19,6 +19,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/service/wsservice"
 	uctx "github.com/gojargo/jargo/utils/context"
 )
 
@@ -796,4 +797,96 @@ func (h *ttsHost) rotated() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.rotations
+}
+
+// recordingService records what the synthesizer reports to its service, and
+// becomes unusable on a permanent error as the service does.
+type recordingService struct {
+	mu        sync.Mutex
+	errors    []string
+	permanent bool
+}
+
+func (r *recordingService) PushError(_ context.Context, msg string, _ error, _ bool, _ ...processor.ErrorOption) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.errors = append(r.errors, msg)
+}
+
+func (r *recordingService) PushErrorFrame(_ context.Context, ef *frames.ErrorFrame, force bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.errors = append(r.errors, ef.Error)
+	r.permanent = r.permanent || force
+}
+
+func (r *recordingService) Usable() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.permanent
+}
+
+// TestQuickFailuresGiveUpAndReport checks a server that accepts the handshake
+// and drops the connection with an error at once is redialed only until the
+// failures are plainly not the network, and that giving up is reported as a
+// permanent error, rather than redialed in a tight loop for the rest of the call.
+func TestQuickFailuresGiveUpAndReport(t *testing.T) {
+	var mu sync.Mutex
+	dials := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		_ = c.Close(websocket.StatusInternalError, "overloaded")
+	}))
+	defer srv.Close()
+
+	s := newSynthesizer(ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http")))
+	s.ws = wsservice.New(s, wsservice.Config{
+		ReconnectBackoffMinWait: time.Millisecond, ReconnectBackoffMaxWait: time.Millisecond,
+	})
+	rec := &recordingService{}
+	s.svc = rec
+	s.SetAudioContextHost(&ttsHost{})
+
+	s.Start(t.Context())
+	time.Sleep(300 * time.Millisecond)
+	s.disconnect(t.Context())
+
+	mu.Lock()
+	n := dials
+	mu.Unlock()
+	if n > 4 {
+		t.Errorf("dialed %d times, want the redialing to stop after a few quick failures", n)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if !rec.permanent {
+		t.Errorf("reported %q, want a permanent error once the redialing stopped", rec.errors)
+	}
+}
+
+// TestStartReportsAFailedConnect checks a connection that cannot be opened when
+// the pipeline starts is reported then, not when the bot first speaks.
+func TestStartReportsAFailedConnect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	s := newSynthesizer(ttsConfig("ws" + strings.TrimPrefix(srv.URL, "http")))
+	rec := &recordingService{}
+	s.svc = rec
+	s.Start(t.Context())
+	defer s.disconnect(t.Context())
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.errors) != 1 {
+		t.Errorf("reported %q, want the failed connect reported once", rec.errors)
+	}
 }

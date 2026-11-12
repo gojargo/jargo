@@ -33,6 +33,9 @@ const (
 	// into a context the user interrupted. It runs off the session context, which
 	// an interruption may already have canceled.
 	cancelWriteTimeout = 2 * time.Second
+	// receiveStopTimeout bounds how long a disconnect waits for the receive
+	// loop to stop.
+	receiveStopTimeout = 2 * time.Second
 
 	// fieldTranscript is what Cartesia calls the text in both directions: the
 	// text to speak on a synthesis request, and the text heard on a transcript.

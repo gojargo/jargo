@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -20,6 +23,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 	uctx "github.com/gojargo/jargo/utils/context"
 	"github.com/gojargo/jargo/utils/text"
@@ -36,6 +40,34 @@ type GenerationConfig struct {
 	Emotion string `json:"emotion,omitempty"`
 }
 
+// serviceReporter is what the synthesizer needs of the service it runs in: a
+// way to report errors, and whether it is still usable.
+type serviceReporter interface {
+	PushError(ctx context.Context, msg string, err error, fatal bool, opts ...processor.ErrorOption)
+	PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool)
+	Usable() bool
+}
+
+// detachedService stands in for the service until NewTTS attaches the real
+// one: it logs what would be reported, and stays usable.
+type detachedService struct{}
+
+func (detachedService) PushError(_ context.Context, msg string, err error, _ bool, _ ...processor.ErrorOption) {
+	slog.Error(msg, "err", err)
+}
+
+func (detachedService) PushErrorFrame(_ context.Context, ef *frames.ErrorFrame, _ bool) {
+	slog.Error(ef.Error)
+}
+
+func (detachedService) Usable() bool { return true }
+
+// errNotConnected is returned by a sentence that found no connection to send
+// on, the dial having failed and been reported.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNotConnected = errors.New("cartesia tts: websocket not connected")
+
 // NewTTS builds a Cartesia TTS service.
 func NewTTS(cfg Config) *tts.Base {
 	cfg = ttsDefaults(cfg)
@@ -45,6 +77,7 @@ func NewTTS(cfg Config) *tts.Base {
 	// base emits each word's text as its audio plays and the conversation keeps
 	// only what was heard before an interruption.
 	b := tts.New("CartesiaTTS", &timedSynthesizer{synthesizer: s})
+	s.svc = b
 	// Always hold off on a sentence boundary inside a spell tag. The tag is full
 	// of periods that end no sentence, and splitting it would hand Cartesia half
 	// a tag. The preferred way to use Cartesia's markup is to have a text
@@ -113,21 +146,31 @@ type synthesizer struct {
 	// writeMu serializes writes; the connection permits one writer at a time.
 	writeMu sync.Mutex
 
+	// svc is the service this synthesizes for, which reports errors and says
+	// whether it is still usable.
+	svc serviceReporter
+	// ws runs the receive loop and restores a lost connection with backoff.
+	ws *wsservice.Base
+
 	// mu guards the connection. It is never held across a call into the host:
 	// appending blocks while the audio plays out, and the next sentence has to
 	// be able to go out while that happens.
-	mu       sync.Mutex
-	conn     *wsutil.Conn
-	connStop context.CancelFunc
-	// reading records that the loop owning incoming messages is running, so it
-	// is started once and survives the reconnects it makes itself.
-	reading bool
+	mu   sync.Mutex
+	conn *wsutil.Conn
+	// closed records that the read on conn ended: the connection is gone.
+	closed bool
+	// receiveStop ends the receive loop, and receiveDone is closed once it has
+	// ended. Both are nil while no loop runs.
+	receiveStop context.CancelFunc
+	receiveDone chan struct{}
 }
 
 // newSynthesizer builds the synthesizer with its settings seeded, which is the
 // only way it should be built: the settings store is not optional.
 func newSynthesizer(cfg Config) *synthesizer {
-	return &synthesizer{cfg: cfg, live: newTTSSettings(cfg)}
+	s := &synthesizer{cfg: cfg, live: newTTSSettings(cfg), svc: detachedService{}}
+	s.ws = wsservice.New(s, wsservice.Config{})
+	return s
 }
 
 // timedSynthesizer adds word-timestamp streaming on top of synthesizer. It
@@ -197,38 +240,71 @@ func (s *synthesizer) spacelessLanguage() bool {
 	}
 }
 
-// Start dials the connection when the pipeline starts, so the handshake is paid
-// while the transport is still negotiating rather than in front of the first
-// thing the bot says. It implements tts.Starter.
+// Start connects when the pipeline starts, so the handshake is paid while the
+// transport is still negotiating rather than in front of the first thing the
+// bot says. It implements tts.Starter.
 func (s *synthesizer) Start(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.connect(ctx); err != nil {
-		// Best effort: the first sentence dials again and reports the failure.
-		slog.Debug("cartesia tts connect on start failed", "err", err)
-	}
+	s.connect(ctx)
 }
 
-// Close releases the connection, implementing tts.Closer.
+// Close disconnects, implementing tts.Closer.
 func (s *synthesizer) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	conn := s.conn
-	if conn == nil {
-		return nil
-	}
-	if s.connStop != nil {
-		s.connStop()
-		s.connStop = nil
-	}
-	s.conn = nil
-	return conn.Close(websocket.StatusNormalClosure, "")
+	s.disconnect(context.Background())
+	return nil
 }
 
-// connect dials the connection, and starts the loop that owns the messages
-// coming back on it the first time. Callers hold mu.
-func (s *synthesizer) connect(ctx context.Context) error {
-	if s.conn != nil {
+// connect readies a fresh connection, opens it, and starts the receive loop on
+// it. A connection that cannot be opened is reported, and leaves no loop
+// running: the next sentence tries again.
+func (s *synthesizer) connect(ctx context.Context) {
+	s.ws.Connect()
+	_ = s.ConnectWebsocket(ctx)
+	s.mu.Lock()
+	if s.conn == nil || s.receiveStop != nil {
+		s.mu.Unlock()
+		return
+	}
+	// The loop outlives the call that connected: it runs until the service
+	// disconnects, not until this sentence is done.
+	runCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	s.receiveStop, s.receiveDone = stop, done
+	s.mu.Unlock()
+	go func() {
+		defer close(done)
+		s.ws.ReceiveTaskHandler(runCtx, s.reportError)
+		s.mu.Lock()
+		if s.receiveDone == done {
+			s.receiveStop, s.receiveDone = nil, nil
+		}
+		s.mu.Unlock()
+	}()
+}
+
+// disconnect marks the disconnect deliberate, stops the receive loop, and
+// closes the connection.
+func (s *synthesizer) disconnect(ctx context.Context) {
+	s.ws.Disconnect()
+	s.mu.Lock()
+	stop, done := s.receiveStop, s.receiveDone
+	s.receiveStop, s.receiveDone = nil, nil
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+		select {
+		case <-done:
+		case <-time.After(receiveStopTimeout):
+			slog.Debug("cartesia tts receive loop did not stop in time")
+		}
+	}
+	s.closeWebsocket(ctx)
+}
+
+// ConnectWebsocket opens the connection, implementing wsservice.Handler. A
+// failure is reported here and leaves no connection behind, which the receive
+// loop reads as a failed attempt.
+func (s *synthesizer) ConnectWebsocket(ctx context.Context) error {
+	if s.Connected() {
 		return nil
 	}
 	header := http.Header{}
@@ -241,30 +317,55 @@ func (s *synthesizer) connect(ctx context.Context) error {
 	}
 	conn, err := wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
 	if err != nil {
-		return err
-	}
-	s.conn = conn
-	if s.reading {
-		// The loop is already running and dialed this one for itself.
+		s.svc.PushError(ctx, fmt.Sprintf("Unknown error occurred: %v", err), err, false)
 		return nil
 	}
-	// The reader outlives the call that dialed: it runs until the connection is
-	// closed for good, not until this sentence is done.
-	runCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
-	s.connStop = stop
-	s.reading = true
-	go s.readLoop(runCtx)
+	s.mu.Lock()
+	s.conn, s.closed = conn, false
+	s.mu.Unlock()
 	return nil
 }
 
-// disconnect closes the connection so the next write dials a fresh one. Callers
-// hold mu.
-func (s *synthesizer) disconnect() {
-	if s.conn == nil {
+// DisconnectWebsocket readies a redial, implementing wsservice.Handler. The
+// contexts open on the connection being replaced never get the rest of their
+// audio, and the new one has never seen them, so they are let go first.
+func (s *synthesizer) DisconnectWebsocket(ctx context.Context) error {
+	if s.host != nil {
+		s.host.ReplaceConnection()
+	}
+	s.closeWebsocket(ctx)
+	return nil
+}
+
+// closeWebsocket closes the connection, if there is one still open.
+func (s *synthesizer) closeWebsocket(ctx context.Context) {
+	s.mu.Lock()
+	conn, open := s.conn, s.conn != nil && !s.closed
+	s.conn, s.closed = nil, false
+	s.mu.Unlock()
+	if !open {
 		return
 	}
-	_ = s.conn.Close(websocket.StatusInternalError, "")
-	s.conn = nil
+	if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil {
+		s.svc.PushError(ctx, fmt.Sprintf("Unknown error occurred: %v", err), err, false)
+	}
+}
+
+// Connected reports whether there is a live connection, implementing
+// wsservice.Handler.
+func (s *synthesizer) Connected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn != nil && !s.closed
+}
+
+// Usable reports whether the service can still do its job, implementing
+// wsservice.Handler.
+func (s *synthesizer) Usable() bool { return s.svc.Usable() }
+
+// reportError reports a connection error from the receive loop.
+func (s *synthesizer) reportError(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
+	s.svc.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
 }
 
 // write sends one JSON message, serialized against the other writers.
@@ -278,57 +379,58 @@ func (s *synthesizer) write(ctx context.Context, conn *wsutil.Conn, msg map[stri
 	return conn.Write(ctx, websocket.MessageText, payload)
 }
 
-// readLoop owns the connection's incoming messages for as long as the service
-// lasts.
+// ReceiveMessages reads and dispatches messages until the connection fails,
+// implementing wsservice.Handler.
 //
 // Cartesia closes a connection that has carried nothing for five minutes, and it
-// offers no keepalive, so a read ending is usually that rather than a failure.
-// The loop dials again for it, which keeps the socket warm: the next turn pays
-// no handshake in front of the first thing the bot says.
-func (s *synthesizer) readLoop(ctx context.Context) {
-	defer func() {
-		s.mu.Lock()
-		s.reading = false
-		s.mu.Unlock()
-	}()
+// offers no keepalive, so a connection the server closes gracefully is usually
+// that rather than a failure, and is dialed again at once. That keeps the socket
+// warm: the next turn pays no handshake in front of the first thing the bot
+// says. A read that fails goes back to the receive loop, which restores the
+// connection with backoff.
+func (s *synthesizer) ReceiveMessages(ctx context.Context) error {
 	for {
 		s.mu.Lock()
 		conn := s.conn
 		s.mu.Unlock()
-		if conn == nil || ctx.Err() != nil {
-			return
+		if conn == nil {
+			return wsservice.ErrNotConnected
 		}
-
-		s.readMessages(ctx, conn)
-		if ctx.Err() != nil {
-			return
+		err := s.readMessages(ctx, conn)
+		s.mu.Lock()
+		if s.conn == conn {
+			s.closed = true
 		}
-
+		s.mu.Unlock()
+		if ctx.Err() != nil || !gracefulClose(err) {
+			return err
+		}
 		slog.Debug("cartesia tts connection was disconnected (timeout?), reconnecting")
-		// The contexts open on the dropped connection never get the rest of
-		// their audio, and the new one has never seen the turn's context.
 		if s.host != nil {
 			s.host.ReplaceConnection()
 		}
-		s.mu.Lock()
-		if s.conn == conn {
-			s.conn = nil
-		}
-		err := s.connect(ctx)
-		s.mu.Unlock()
-		if err != nil {
-			slog.Warn("reconnecting to cartesia tts failed", "err", err)
-			return
-		}
+		_ = s.ConnectWebsocket(ctx)
 	}
 }
 
-// readMessages reads until the connection ends, dispatching each message.
-func (s *synthesizer) readMessages(ctx context.Context, conn *wsutil.Conn) {
+// gracefulClose reports whether err is the server closing the connection the
+// way it does after an idle timeout.
+func gracefulClose(err error) bool {
+	switch websocket.CloseStatus(err) {
+	case websocket.StatusNormalClosure, websocket.StatusGoingAway:
+		return true
+	default:
+		return false
+	}
+}
+
+// readMessages reads until the connection ends, dispatching each message, and
+// returns what ended it.
+func (s *synthesizer) readMessages(ctx context.Context, conn *wsutil.Conn) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			return
+			return err
 		}
 		var m wsMessage
 		if json.Unmarshal(data, &m) != nil {
@@ -404,13 +506,15 @@ func (s *synthesizer) finishContext(contextID string, host tts.AudioContextHost)
 func (s *synthesizer) RunTTS(
 	ctx context.Context, text, contextID string, _ func(f frames.Frame) error,
 ) error {
-	s.mu.Lock()
-	if err := s.connect(ctx); err != nil {
-		s.mu.Unlock()
-		return err
+	if !s.Connected() {
+		s.connect(ctx)
 	}
+	s.mu.Lock()
 	conn := s.conn
 	s.mu.Unlock()
+	if conn == nil {
+		return errNotConnected
+	}
 
 	// continue says more of this turn may follow, which is what lets the
 	// sentences of one turn stream as a single utterance. The flush at the end of
@@ -426,14 +530,8 @@ func (s *synthesizer) RunTTS(
 	if host := s.host; host != nil && host.AudioContextAvailable(contextID) {
 		s.finishContext(contextID, host)
 	}
-	s.mu.Lock()
-	if s.conn == conn {
-		s.disconnect()
-		if connectErr := s.connect(ctx); connectErr != nil {
-			slog.Debug("cartesia tts reconnect after a failed send failed", "err", connectErr)
-		}
-	}
-	s.mu.Unlock()
+	s.disconnect(ctx)
+	s.connect(ctx)
 	return err
 }
 

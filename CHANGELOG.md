@@ -87,6 +87,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `CancelFrame`, makes sure it is there before each turn, and restores a lost
   one with the `wsservice` reconnect policy (three attempts with exponential
   backoff, each failure reported, a permanent error at the end).
+- **Cartesia TTS reconnects with backoff, and gives up on an endpoint that
+  keeps failing.** The service ran its own reconnect loop: after any read error
+  it redialed at once, with no backoff and no limit, so a server that accepted
+  the handshake and dropped the connection was redialed thousands of times a
+  second for the rest of the call, and nothing was reported. A failed dial at
+  start was logged at debug only. It now runs on the `wsservice` base: a read
+  error is restored with exponential backoff, repeated instant failures end the
+  retrying with a permanent error (so a service switcher can fail over), and a
+  failed connect is reported when it happens. A connection Cartesia closes
+  gracefully after its idle timeout is still dialed again at once.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
