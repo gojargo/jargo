@@ -91,8 +91,9 @@ type TTSSpeakMessage struct {
 	BaseDataMessage
 	// Text is what to say.
 	Text string
-	// AppendToContext reports whether what is said joins the conversation.
-	AppendToContext bool
+	// AppendToContext reports whether what is said joins the conversation. Nil
+	// means it does, as a TTSSpeakFrame's does by default.
+	AppendToContext *bool
 }
 
 // FlushProgressMessage reports that a flush probe from another worker is still

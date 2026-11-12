@@ -716,7 +716,7 @@ func (t *Worker) OnBusMessage(ctx context.Context, m bus.Message) {
 	switch msg := m.(type) {
 	case *bus.TTSSpeakMessage:
 		f := frames.NewTTSSpeakFrame(msg.Text)
-		f.AppendToContext = msg.AppendToContext
+		f.AppendToContext = msg.AppendToContext == nil || *msg.AppendToContext
 		t.QueueFrame(f)
 	case *bus.FlushProgressMessage:
 		// A probe of ours is being answered in another pipeline, whose work this

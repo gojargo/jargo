@@ -63,6 +63,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `VoicemailResponseDelay` used zero for their defaults (1 s and 2 s), so acting
   as soon as the verdict is in could not be asked for. Nil now means the
   default, and zero acts at once. **Breaking:** set them with `new(d)`.
+- **`bus.TTSSpeakMessage` joins the conversation by default.** Its
+  `AppendToContext` was a plain boolean, so a message that said nothing about
+  it was spoken but left out of the conversation, unlike a `TTSSpeakFrame`. It
+  is now a `*bool`, nil meaning the text joins the conversation.
+  **Breaking:** set it with `new(false)` to keep the text out.
 
 ### Fixed
 

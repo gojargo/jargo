@@ -218,7 +218,7 @@ func TestWorkerSpeakMessageBecomesAFrame(t *testing.T) {
 
 	done := runWorker(t, w)
 
-	m := &bus.TTSSpeakMessage{Text: "hello there", AppendToContext: true}
+	m := &bus.TTSSpeakMessage{Text: "hello there", AppendToContext: new(true)}
 	m.From = "other"
 	m.To = w.Name()
 	msgBus.Send(t.Context(), m)
@@ -233,6 +233,43 @@ func TestWorkerSpeakMessageBecomesAFrame(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("nothing was spoken")
+	}
+
+	w.StopWhenDone()
+	awaitClosed(t, done, "the run returning")
+}
+
+// TestWorkerSpeakMessageJoinsTheContextByDefault checks a speak message that
+// says nothing about the conversation joins it, as a TTSSpeakFrame does, and
+// one that says no stays out.
+func TestWorkerSpeakMessageJoinsTheContextByDefault(t *testing.T) {
+	t.Parallel()
+	w, msgBus := newSessionWorker(t, pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TTSSpeakFrame{}),
+	})
+	spoken := make(chan *frames.TTSSpeakFrame, 2)
+	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if sf, ok := f.(*frames.TTSSpeakFrame); ok {
+			spoken <- sf
+		}
+	})
+	done := runWorker(t, w)
+
+	for _, m := range []*bus.TTSSpeakMessage{
+		{Text: "by default"},
+		{Text: "kept out", AppendToContext: new(false)},
+	} {
+		m.From = "other"
+		m.To = w.Name()
+		msgBus.Send(t.Context(), m)
+		select {
+		case f := <-spoken:
+			if want := f.Text == "by default"; f.AppendToContext != want {
+				t.Errorf("%q: AppendToContext = %v, want %v", f.Text, f.AppendToContext, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%q was not spoken", m.Text)
+		}
 	}
 
 	w.StopWhenDone()
