@@ -322,6 +322,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **`golang.org/x/net` is at v0.62.0** in the library, the Redis bus and the
   benchmarks, for CVE-2026-78661 and CVE-2026-97045.
 
+- **The Twilio example escapes the request's Host before writing it into the
+  TwiML.** The header is the client's to set, so it could inject markup into
+  the response.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

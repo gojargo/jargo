@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"log/slog"
 	"net/http"
@@ -82,10 +83,11 @@ func handleTwiML(w http.ResponseWriter, r *http.Request, v *viper.Viper) {
 	if host == "" {
 		host = r.Host
 	}
+	// The Host header is the client's to set, so it is escaped before it goes
+	// into the markup.
 	twiml := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>`+
-		`<Response><Connect><Stream url="wss://%s/ws"/></Connect></Response>`, host)
+		`<Response><Connect><Stream url="wss://%s/ws"/></Connect></Response>`, html.EscapeString(host))
 	w.Header().Set("Content-Type", "text/xml")
-	//nolint:gosec // TwiML XML response; host is this server's own request Host
 	if _, err := w.Write([]byte(twiml)); err != nil {
 		slog.Error("write twiml", "err", err)
 	}
