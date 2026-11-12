@@ -169,6 +169,9 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 	if scanErr != nil && !errors.Is(scanErr, errStreamDone) {
 		return scanErr
 	}
+	if state.emptyResponse() {
+		reportEmptyResponse(ctx, s.Base, state, nil)
+	}
 	return nil
 }
 

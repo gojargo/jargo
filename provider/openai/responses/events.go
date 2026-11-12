@@ -1,7 +1,11 @@
 package responses
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -199,8 +203,10 @@ type streamState struct {
 	responseID string
 	// usage is the token accounting the terminal event reported.
 	usage *usage
-	// sawText records whether the model produced any text.
-	sawText bool
+	// hasText records whether the model produced any text other than
+	// whitespace, and sawCall whether it called a function.
+	hasText bool
+	sawCall bool
 	// errorPrefix names where a stream-level error event came from, in the
 	// message it is reported with.
 	errorPrefix string
@@ -209,6 +215,46 @@ type streamState struct {
 	// response, which the next turn can continue from.
 	completed bool
 	output    []responseOutput
+}
+
+// emptyResponse reports whether the response completed with neither text nor a
+// function call: nothing reaches the TTS, and the bot stays silent until the
+// user speaks again.
+func (s *streamState) emptyResponse() bool {
+	return s.completed && !s.hasText && !s.sawCall
+}
+
+// reportEmptyResponse reports a response that completed with no text and no
+// function call: a warning listing its output items (a message with its content
+// types, message[refusal] say) to show why, and a non-fatal error the
+// application can react to. incremental says whether the request sent only the
+// new input after a previous response; it is nil for a transport that always
+// sends the whole conversation.
+func reportEmptyResponse(ctx context.Context, b *llm.Base, s *streamState, incremental *bool) {
+	args := []any{"service", b.Name(), "response", s.responseID, "output", outputItemKinds(s)}
+	if incremental != nil {
+		args = append(args, "incremental", *incremental)
+	}
+	slog.WarnContext(ctx, "response completed with no text or function call", args...)
+	b.PushError(ctx, fmt.Sprintf("LLM response %s completed with no text or function call", s.responseID), nil, false)
+}
+
+// outputItemKinds names a response's output items by type, a message with its
+// content types: message[refusal], say.
+func outputItemKinds(s *streamState) []string {
+	items := make([]string, 0, len(s.output))
+	for _, o := range s.output {
+		kind := cmp.Or(o.Type, "unknown")
+		if kind == itemMessage {
+			types := make([]string, 0, len(o.Content))
+			for _, c := range o.Content {
+				types = append(types, cmp.Or(c.Type, "unknown"))
+			}
+			kind = "message[" + strings.Join(types, ",") + "]"
+		}
+		items = append(items, kind)
+	}
+	return items
 }
 
 // startsFunctionCall reports whether an event announces a function call, the
@@ -235,7 +281,7 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 		}
 	case evtTextDelta:
 		if ev.Delta != "" {
-			s.sawText = true
+			s.hasText = s.hasText || strings.TrimSpace(ev.Delta) != ""
 			return false, s.sink.Text(ev.Delta)
 		}
 	case evtItemAdded, evtArgsDelta, evtArgsDone, evtItemDone:
@@ -340,6 +386,7 @@ func (s *streamState) flushCalls(onlyDone bool) error {
 			args = "{}"
 		}
 		delete(s.calls, i)
+		s.sawCall = true
 		if err := s.sink.Tool(frames.ToolCall{
 			ID:   call.callID,
 			Name: call.name,

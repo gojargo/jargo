@@ -720,6 +720,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   "fatal error: " followed by the error, as every processor and
   `EventPipelineFinished` see it.
 
+- **A Responses reply that says nothing is reported.** A response that
+  completed with no text and no function call (a refusal, reasoning only,
+  whitespace) ended silently, leaving the bot mute until the user spoke
+  again. The OpenAI Responses services now log a warning naming its output
+  items, a refusal as `message[refusal]`, and push a non-fatal error the
+  application can react to.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
