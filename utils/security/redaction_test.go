@@ -32,7 +32,7 @@ func assertKeeps(t *testing.T, messages ...string) {
 
 func TestRedactSecretsMasksACredentialInAPrintedHeaderMap(t *testing.T) {
 	assertRedacts(t, []redactCase{{
-		"Sarvam API error: headers: {'api-subscription-key': 'sk_live_abc123', " +
+		"Sarvam API error: headers: {'api-subscription-key': 'sk_live_abc123', " + // gitleaks:allow (a test fixture)
 			"'User-Agent': 'sarvamai/0.1.28'}, status_code: 429",
 		"Sarvam API error: headers: {'api-subscription-key': '[REDACTED]', " +
 			"'User-Agent': 'sarvamai/0.1.28'}, status_code: 429",
@@ -86,14 +86,14 @@ func TestRedactSecretsMasksEachProviderTokenFormat(t *testing.T) {
 		"sk-proj-" + strings.Repeat("a", 74) + "T3BlbkFJ" + strings.Repeat("b", 74), // OpenAI
 		"ABIA" + strings.Repeat("A", 16),                                            // AWS
 		"ABSK" + strings.Repeat("a", 120) + "==",                                    // Amazon Bedrock, long-lived
-		"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t" + strings.Repeat("a", 40),    // short-lived
+		"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t" + strings.Repeat("a", 40),    // short-lived (gitleaks:allow, a test fixture)
 		"AIza" + strings.Repeat("a", 35),                                            // Google
 		"github_pat_" + strings.Repeat("a", 82),                                     // GitHub
 		"xapp-1-A0123456789-0123456789012-" + strings.Repeat("a", 64),               // Slack
 		"hf_" + strings.Repeat("a", 34),                                             // Hugging Face
 		"pplx-" + strings.Repeat("a", 48),                                           // Perplexity
 		"SK" + strings.Repeat("0", 32),                                              // Twilio
-		"eyJhbGciOiJub25lIn0.eyJzdWIiOiIxMjM0NSJ9.",                                 // unsigned JWT
+		"eyJhbGciOiJub25lIn0.eyJzdWIiOiIxMjM0NSJ9.",                                 // unsigned JWT (gitleaks:allow, a test fixture)
 	} {
 		in := "failed with " + token + " here"
 		if got := security.RedactSecrets(in); got != "failed with [REDACTED] here" {
