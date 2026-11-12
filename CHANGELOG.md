@@ -69,6 +69,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (a message by role and text, a function call by call id) and sends the full
   context when they differ. A response cut short is no longer recorded as one
   to continue from.
+- **WebSocket connections ping their peer.** No WebSocket in jargo sent
+  keepalive pings, so a connection idling behind a NAT or proxy that expires
+  quiet flows died unseen, and the next request was written into it and waited
+  minutes for TCP to give up. Every connection `wsutil.Dial` opens now pings
+  every 20 seconds while it is being read, and drops itself when a ping goes
+  unanswered for 20 seconds, which fails the read in progress and lets the
+  service reconnect.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
