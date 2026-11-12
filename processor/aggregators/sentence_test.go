@@ -162,3 +162,46 @@ func TestSentenceAggregatorSplitsAStreamIntoSentences(t *testing.T) {
 	task.StopWhenDone()
 	<-runDone
 }
+
+// TestSentenceAggregatorGathersLLMTokens checks the tokens an LLM streams are
+// gathered, which is what the aggregator is placed after an LLM for, and the
+// unfinished rest goes out at the end.
+func TestSentenceAggregatorGathersLLMTokens(t *testing.T) {
+	task, seen, runDone := runProcessor(t, aggregators.NewSentence("Sentence"))
+
+	task.QueueFrames([]frames.Frame{
+		frames.NewLLMTextFrame("Hello,"), frames.NewLLMTextFrame(" world."), frames.NewLLMTextFrame(" Bye"),
+	})
+	task.StopWhenDone()
+	<-runDone
+
+	var got []string
+	for _, f := range drainAfterGrace(seen) {
+		switch fr := f.(type) {
+		case *frames.TextFrame:
+			got = append(got, fr.Text)
+		case *frames.LLMTextFrame:
+			t.Errorf("an LLM token went past ungathered: %q", fr.Text)
+		}
+	}
+	if len(got) != 2 || got[0] != "Hello, world." || got[1] != " Bye" {
+		t.Errorf("text = %q, want the sentence, then the rest at the end", got)
+	}
+}
+
+// TestSentenceAggregatorGathersTranscriptions checks a final transcription is
+// gathered and an eager one, which the final one will repeat, is dropped.
+func TestSentenceAggregatorGathersTranscriptions(t *testing.T) {
+	task, seen, runDone := runProcessor(t, aggregators.NewSentence("Sentence"))
+
+	task.QueueFrame(frames.NewEagerTranscriptionFrame("book a", "user-1", "ts"))
+	task.QueueFrame(frames.NewTranscriptionFrame("Book a flight.", "user-1", "ts"))
+
+	got := collectText(seen)
+	if len(got) != 1 || got[0] != "Book a flight." {
+		t.Errorf("text = %q, want the final transcription as a sentence", got)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}

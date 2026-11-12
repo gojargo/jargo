@@ -209,6 +209,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rewrites any text frame and passes on a copy of the same kind with every
   other field kept, in the direction it was going. The new `frames.AsTextFrame`
   and `frames.WithText` read and replace the text of a frame of any text kind.
+- **The sentence aggregator gathers text of every kind.** It matched only a
+  plain `TextFrame`, so placed after an LLM, which is what it is for, it let
+  every token past ungathered, and it passed eager transcriptions on. It now
+  gathers any text frame (LLM tokens, final transcriptions) and drops interim
+  and eager transcriptions.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

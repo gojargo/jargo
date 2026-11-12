@@ -8,15 +8,16 @@ import (
 	"github.com/gojargo/jargo/utils/text"
 )
 
-// Sentence gathers text frames into whole sentences, pushing one on only once a
-// sentence has ended. It is for a downstream processor that needs coherent
-// sentences rather than the fragments a model streams:
+// Sentence gathers text frames of any kind (LLM tokens, transcriptions) into
+// whole sentences, pushing one on only once a sentence has ended. It is for a
+// downstream processor that needs coherent sentences rather than the fragments
+// a model streams:
 //
-//	TextFrame("Hello,")  -> nothing
-//	TextFrame(" world.") -> TextFrame("Hello, world.")
+//	LLMTextFrame("Hello,")  -> nothing
+//	LLMTextFrame(" world.") -> TextFrame("Hello, world.")
 //
-// An interim transcription is dropped: it is a guess that will be revised, so
-// folding it into a sentence would repeat what the final one says.
+// An interim or eager transcription is dropped: it is a guess that will be
+// revised, so folding it into a sentence would repeat what the final one says.
 type Sentence struct {
 	*processor.Base
 	aggregation string
@@ -36,17 +37,21 @@ func (s *Sentence) ProcessFrame(ctx context.Context, f frames.Frame, dir process
 		return err
 	}
 
-	switch fr := f.(type) {
-	case *frames.InterimTranscriptionFrame:
+	switch f.(type) {
+	case *frames.InterimTranscriptionFrame, *frames.EagerTranscriptionFrame:
+		// Provisional: the final transcription will say it again.
 		return nil
-	case *frames.TextFrame:
-		s.aggregation += fr.Text
+	}
+	if tf, ok := frames.AsTextFrame(f); ok {
+		s.aggregation += tf.Text
 		if text.MatchEndOfSentence(s.aggregation, "") == 0 {
 			return nil
 		}
 		said := s.aggregation
 		s.aggregation = ""
 		return s.PushFrame(ctx, frames.NewTextFrame(said), processor.Downstream)
+	}
+	switch f.(type) {
 	case *frames.EndFrame:
 		// The session is over, so whatever is held goes out unfinished rather
 		// than being lost with the processor.
