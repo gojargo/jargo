@@ -108,6 +108,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An interruption stops every clock a processor runs.** The processor base
+  now calls `StopAllMetrics` on a processor implementing
+  `processor.MetricsStopper`, on every `InterruptionFrame` and in
+  `BroadcastInterruption`, and the LLM, TTS and STT bases implement it: what
+  each clock measured so far is reported, once. A TTS reply interrupted before
+  its first audio now reports its time to first byte up to the interruption,
+  and an STT waiting on a transcript reports the wait so far instead of
+  dropping it.
+
 - **An LLM trace names a system prompt carried as the first message.** With no
   instruction of the service's own, the span's `gen_ai.system_instructions`
   read only the conversation's system field, so a conversation set message by

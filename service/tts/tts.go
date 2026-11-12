@@ -1684,6 +1684,36 @@ func (b *Base) pushSpokenText(
 	b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot(), contextID)
 }
 
+// StopAllMetrics stops every clock the service is running and reports what each
+// has measured, implementing processor.MetricsStopper. An interruption is what
+// calls it: the text aggregation under way, and the time to first byte of the
+// newest context still waiting for its first audio, as far as it has got. Every
+// other context waiting is measured no further, since it is being dropped.
+func (b *Base) StopAllMetrics(ctx context.Context) {
+	b.stopTextAggregationMetrics(ctx)
+
+	b.audioCtxMu.Lock()
+	var newest *audioContext
+	waiting := make([]*audioContext, 0, len(b.audioContexts))
+	for id, c := range b.audioContexts {
+		if tc, ok := b.ttsContexts[id]; ok && !tc.interruptible {
+			continue
+		}
+		waiting = append(waiting, c)
+		if newest == nil || c.seq > newest.seq {
+			newest = c
+		}
+	}
+	b.audioCtxMu.Unlock()
+
+	if newest != nil {
+		b.reportTTFB(ctx, newest)
+	}
+	for _, c := range waiting {
+		c.stopTTFB()
+	}
+}
+
 // reportTTFB reports a context's time to first byte, on its first audio, and
 // arms the scan for its first audible sample. It is pushed at once, in a frame
 // of its own, so a reply interrupted after its first audio still reports it.

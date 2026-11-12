@@ -742,6 +742,7 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir Direction) 
 		b.start()
 	case *frames.InterruptionFrame:
 		b.startInterruption()
+		b.stopAllMetrics(ctx)
 	case *frames.CancelFrame:
 		b.cancel()
 	case *frames.FrameProcessorPauseFrame:
@@ -935,7 +936,25 @@ func (b *Base) Broadcast(ctx context.Context, build func() frames.Frame) error {
 func (b *Base) BroadcastInterruption(ctx context.Context) error {
 	slog.DebugContext(ctx, "broadcasting interruption", "processor", b.name)
 	b.resetProcessTask()
+	b.stopAllMetrics(ctx)
 	return b.Broadcast(ctx, func() frames.Frame { return frames.NewInterruptionFrame() })
+}
+
+// MetricsStopper is an optional interface a processor implements when it times
+// what it does: a service measuring its time to first byte or its processing
+// time. StopAllMetrics stops every clock it is running and reports what each has
+// measured so far.
+type MetricsStopper interface {
+	StopAllMetrics(ctx context.Context)
+}
+
+// stopAllMetrics stops the clocks of a processor that runs any, on an
+// interruption: what they were measuring will never finish, so what each has
+// measured is reported now.
+func (b *Base) stopAllMetrics(ctx context.Context) {
+	if m, ok := b.self.(MetricsStopper); ok {
+		m.StopAllMetrics(ctx)
+	}
 }
 
 // StartInterruption stops what this processor is doing without telling anyone

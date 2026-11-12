@@ -113,13 +113,18 @@ func TestStreamServiceResetsTTFBWhenTheUserStartsSpeaking(t *testing.T) {
 	}
 }
 
-// An interruption drops the measurement too, so the transcript after it is not
-// measured against the speech end before it.
-func TestStreamServiceResetsTTFBOnAnInterruption(t *testing.T) {
+// An interruption stops the clock where it stands: what was measured so far is
+// reported, once, and the transcript after it is not measured against the
+// speech end before it.
+func TestStreamServiceStopsTTFBOnAnInterruption(t *testing.T) {
 	t.Parallel()
 
-	if seen := measureAfter(t, frames.NewInterruptionFrame()); len(seen) != 0 {
-		t.Errorf("reported %v after an interruption, want nothing", seen)
+	seen := measureAfter(t, frames.NewInterruptionFrame())
+	if len(seen) != 1 {
+		t.Fatalf("reported %v around an interruption, want the one the interruption stopped", seen)
+	}
+	if seen[0] > time.Second {
+		t.Errorf("reported %v, want the time from the speech end to the interruption", seen[0])
 	}
 }
 

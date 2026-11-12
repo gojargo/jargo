@@ -189,3 +189,37 @@ func TestInterruptedReplyStillReportsTTFBAndTTFA(t *testing.T) {
 		t.Errorf("got %d TTFB and %d TTFA for a reply interrupted after its first audio, want 1 and 1", len(ttfb), len(ttfa))
 	}
 }
+
+// stalledSynth never answers: it waits until the call is given up on.
+type stalledSynth struct{}
+
+func (stalledSynth) SampleRate() int { return toneRate }
+
+func (stalledSynth) RunTTS(ctx context.Context, _, _ string, _ func(f frames.Frame) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A reply interrupted before its first audio still reports its time to first
+// byte, measured as far as it got: the interruption stops the clock.
+func TestReplyInterruptedBeforeItsAudioReportsTTFB(t *testing.T) {
+	w, r, stop := runRecorded(t, tts.New("FakeTTS", stalledSynth{}), true, false)
+
+	w.QueueFrame(frames.NewTTSSpeakFrame("Hello there."))
+	time.Sleep(150 * time.Millisecond)
+	w.QueueFrame(frames.NewInterruptionFrame())
+	waitFor(t, "the TTFB of the interrupted reply", func() bool {
+		ttfb, _ := metricsArrived[frames.TTFBMetricsData](r)
+		return len(ttfb) > 0
+	})
+	time.Sleep(100 * time.Millisecond)
+	stop()
+
+	ttfb, _ := metricsArrived[frames.TTFBMetricsData](r)
+	if len(ttfb) != 1 {
+		t.Fatalf("got %d TTFB reports, want 1", len(ttfb))
+	}
+	if ttfb[0].Value < 100*time.Millisecond {
+		t.Errorf("TTFB = %v, want the time until the interruption", ttfb[0].Value)
+	}
+}

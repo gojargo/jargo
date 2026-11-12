@@ -467,6 +467,11 @@ func audioUserID(f frames.InputAudioFrame) string {
 // through an STTUpdateSettingsFrame.
 func (s *StreamService) CurrentSettings() any { return s.set.settings() }
 
+// StopAllMetrics reports the time to first byte being measured, as far as it
+// has got, implementing processor.MetricsStopper. An interruption is what calls
+// it: the transcript the measurement was waiting for will not come.
+func (s *StreamService) StopAllMetrics(ctx context.Context) { s.ttfb.reportNow(ctx) }
+
 // NewStream builds a streaming STT service named name driven by conn. A non-zero
 // sampleRate overrides the transport's input rate.
 func NewStream(name string, conn Connector, sampleRate int) *StreamService {

@@ -95,6 +95,11 @@ type SegmentService struct {
 // through an STTUpdateSettingsFrame.
 func (s *SegmentService) CurrentSettings() any { return s.set.settings() }
 
+// StopAllMetrics reports the time to first byte being measured, as far as it
+// has got, implementing processor.MetricsStopper. An interruption is what calls
+// it: the transcript the measurement was waiting for will not come.
+func (s *SegmentService) StopAllMetrics(ctx context.Context) { s.ttfb.reportNow(ctx) }
+
 // NewSegment builds a segmented STT service named name driven by tr. A non-zero
 // sampleRate overrides the transport's input rate.
 func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
