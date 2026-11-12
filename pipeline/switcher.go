@@ -49,10 +49,15 @@ type SwitcherStrategy interface {
 	// which errors are worth switching away from. ErrorFrame.Source.Usable()
 	// tells a service that is finished from one having a bad moment.
 	HandleError(ef *frames.ErrorFrame) processor.Processor
-	// OnServiceSwitched registers fn to be called whenever the active service
-	// changes.
-	OnServiceSwitched(fn func(processor.Processor))
+	// Events is where the strategy reports what it does: it raises
+	// EventServiceSwitched whenever the active service changes.
+	Events() *events.Registry
 }
+
+// EventServiceSwitched is raised by a switcher strategy whenever the active
+// service changes, with the service now active. Every handler attached runs,
+// asynchronously, off the frame path that made the switch.
+const EventServiceSwitched = "on_service_switched"
 
 // StrategyFunc builds a strategy over a set of services. A switcher is given the
 // constructor rather than a built strategy, so the strategy is always paired
@@ -222,9 +227,11 @@ func (s *ServiceSwitcher) SwitchTo(svc processor.Processor) bool {
 	return s.switchTo(svc) != nil
 }
 
-// OnSwitch registers fn to be called whenever the active service changes.
+// OnSwitch attaches fn to the strategy's EventServiceSwitched, to be called
+// whenever the active service changes. Every function attached is called, in
+// the order they were attached, asynchronously.
 func (s *ServiceSwitcher) OnSwitch(fn func(processor.Processor)) {
-	s.strategy.OnServiceSwitched(fn)
+	events.On(s.strategy.Events(), EventServiceSwitched, func(_ context.Context, svc processor.Processor) { fn(svc) })
 }
 
 // switchTo asks the strategy to activate svc and, when it does, asks the new
@@ -484,13 +491,19 @@ type manualStrategy struct {
 	mu       sync.Mutex
 	services []processor.Processor
 	active   processor.Processor
-	onSwitch func(processor.Processor)
+	events   events.Registry
 }
 
 // NewManualStrategy builds a strategy that changes the active service only on an
 // explicit request. The first service starts active.
 func NewManualStrategy(services []processor.Processor) SwitcherStrategy {
-	return &manualStrategy{services: services, active: services[0]}
+	return newManualStrategy(services)
+}
+
+func newManualStrategy(services []processor.Processor) *manualStrategy {
+	m := &manualStrategy{services: services, active: services[0]}
+	m.events.Register(EventServiceSwitched, false)
+	return m
 }
 
 func (m *manualStrategy) Services() []processor.Processor { return m.services }
@@ -512,11 +525,7 @@ func (m *manualStrategy) ActiveService() processor.Processor {
 	return m.active
 }
 
-func (m *manualStrategy) OnServiceSwitched(fn func(processor.Processor)) {
-	m.mu.Lock()
-	m.onSwitch = fn
-	m.mu.Unlock()
-}
+func (m *manualStrategy) Events() *events.Registry { return &m.events }
 
 // HandleFrame activates the service a manual switch request names.
 func (m *manualStrategy) HandleFrame(f frames.Frame, _ processor.Direction) processor.Processor {
@@ -556,12 +565,9 @@ func (m *manualStrategy) setActiveIfAvailable(target frames.ServiceTarget) proce
 		return nil
 	}
 	m.active = found
-	cb := m.onSwitch
 	m.mu.Unlock()
 
-	if cb != nil {
-		cb(found)
-	}
+	m.events.Call(context.Background(), EventServiceSwitched, m, found)
 	return found
 }
 
@@ -575,7 +581,7 @@ type failoverStrategy struct {
 // the active one reports a non-fatal error, and can still be switched by hand.
 // The failed service stays in the list and can be switched back to.
 func NewFailoverStrategy(services []processor.Processor) SwitcherStrategy {
-	return &failoverStrategy{manualStrategy: &manualStrategy{services: services, active: services[0]}}
+	return &failoverStrategy{manualStrategy: newManualStrategy(services)}
 }
 
 // HandleError moves to the next service that can still do its job.

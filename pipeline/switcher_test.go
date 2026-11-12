@@ -640,3 +640,45 @@ func TestMetadataFromOutsideReachesEveryService(t *testing.T) {
 		})
 	}
 }
+
+// Ported from upstream (test_on_service_switched_event). A switch raises the
+// strategy's EventServiceSwitched, with the strategy and the service now
+// active, and every handler attached runs: a second does not replace the first.
+func TestServiceSwitchedEventReachesEveryHandler(t *testing.T) {
+	a, b := newTagSvc("A:", ""), newTagSvc("B:", "")
+	sw, err := pipeline.NewServiceSwitcher([]processor.Processor{a, b}, pipeline.NewManualStrategy)
+	if err != nil {
+		t.Fatalf("NewServiceSwitcher: %v", err)
+	}
+	got := make(chan string, 4)
+	sw.OnSwitch(func(p processor.Processor) { got <- "first:" + p.Name() })
+	sw.OnSwitch(func(p processor.Processor) { got <- "second:" + p.Name() })
+	sources := make(chan any, 1)
+	sw.Strategy().Events().Add(pipeline.EventServiceSwitched, func(_ context.Context, source any, _ ...any) {
+		sources <- source
+	})
+
+	if !sw.SwitchTo(b) {
+		t.Fatal("the switch was refused")
+	}
+	var seen []string
+	for range 2 {
+		select {
+		case s := <-got:
+			seen = append(seen, s)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("handlers ran %v, want both", seen)
+		}
+	}
+	if want := []string{"first:" + b.Name(), "second:" + b.Name()}; !slices.Equal(seen, want) {
+		t.Errorf("handlers ran %v, want %v", seen, want)
+	}
+	select {
+	case s := <-sources:
+		if s != sw.Strategy() {
+			t.Errorf("source = %v, want the strategy", s)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the event never reached the raw handler")
+	}
+}

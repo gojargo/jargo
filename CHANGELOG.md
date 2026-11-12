@@ -520,6 +520,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   **Breaking:** `processor.Running` gains `AppResources`, so a custom
   implementation has to add it.
 
+- **Every service-switched handler runs, off the frame path.** A switcher
+  kept a single switch callback, so a second `OnSwitch` silently replaced the
+  first, and it ran on the frame path that made the switch. A switch now
+  raises `pipeline.EventServiceSwitched` on the strategy's `Events()`, with the
+  service now active: every handler attached runs, asynchronously and in
+  order. `OnSwitch` attaches to it. **Breaking:** `SwitcherStrategy` loses
+  `OnServiceSwitched` and gains `Events`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
