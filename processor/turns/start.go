@@ -207,25 +207,30 @@ func NewWakePhraseStart(cfg WakePhraseStartConfig) *WakePhraseStart {
 
 // compileWakePatterns builds a case-insensitive, whitespace-flexible regex per
 // phrase (see text.CompilePhrasePattern), alongside the phrases themselves so a
-// match can name the one it hit.
+// match can name the one it hit. The transcript is matched with its
+// punctuation stripped, so the phrases are too; a phrase left with nothing is
+// skipped.
 func compileWakePatterns(phrases []string) ([]string, []*regexp.Regexp) {
 	var kept []string
 	var out []*regexp.Regexp
 	for _, p := range phrases {
-		if len(strings.Fields(p)) == 0 {
+		normalized := strings.TrimSpace(wakePunctuation.ReplaceAllString(p, ""))
+		if len(strings.Fields(normalized)) == 0 {
 			continue
 		}
 		kept = append(kept, p)
-		out = append(out, text.CompilePhrasePattern(p))
+		out = append(out, text.CompilePhrasePattern(normalized))
 	}
 	return kept, out
 }
 
 // wakePunctuation is everything punctuation strips: anything that is neither a
-// letter, a digit, an underscore, nor whitespace.
+// letter, a number, an underscore, nor whitespace. Whitespace is Unicode's, the
+// no-break and ideographic spaces included, as the stripping a phrase and a
+// transcript share keeps the spaces between their words.
 //
 //nolint:gochecknoglobals // compiled once
-var wakePunctuation = regexp.MustCompile(`[^\p{L}\p{N}_\s]`)
+var wakePunctuation = regexp.MustCompile(`[^\p{L}\p{N}_\s\p{Z}\x{85}\x{1C}-\x{1F}]`)
 
 // Process matches the wake phrase while asleep, and starts turns and keeps the
 // session alive while awake.

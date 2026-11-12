@@ -590,6 +590,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   withdrawn and answered again. It now folds case fully, and counts every
   number as part of a word.
 
+- **A wake phrase written with punctuation matches.** The transcript was
+  stripped of punctuation before matching and the wake phrase was not, so a
+  phrase holding an apostrophe, a hyphen or a comma ("let's talk", "hey,
+  jargo") never matched, and neither did one in a script written with
+  combining marks. The phrase is now stripped the same way, a phrase left
+  with nothing is skipped, and the phrase reported on detection is still the
+  one configured. Unicode whitespace, a no-break space say, is kept as a space
+  rather than stripped.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

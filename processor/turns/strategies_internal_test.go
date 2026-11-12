@@ -549,10 +549,19 @@ func TestCompileWakePatterns(t *testing.T) {
 		{"flexible whitespace", []string{"hey jargo"}, "hey    jargo", true, 1},
 		{"word boundary", []string{"hey jargo"}, "theyjargo", false, 1},
 		{"regex metacharacters are literal", []string{"a.b"}, "axb", false, 1},
-		// Punctuation is stripped from the transcript before matching, so a
-		// phrase written with punctuation in it cannot match: the pattern still
-		// holds the punctuation the text no longer has.
-		{"a punctuated phrase cannot match", []string{"a.b"}, "a.b", false, 1},
+		// Ported from upstream (test_phrase_with_punctuation_matches). The
+		// phrase is stripped of punctuation as the transcript is, so the two
+		// meet without it.
+		{"a punctuated phrase matches", []string{"a.b"}, "a.b", true, 1},
+		{"an apostrophe", []string{"let's talk"}, "Let's talk.", true, 1},
+		{"a hyphen", []string{"hey wall-e"}, "Hey Wall-E", true, 1},
+		{"a comma in both", []string{"hey, jargo"}, "Hey, Jargo!", true, 1},
+		{"a comma in the phrase alone", []string{"hey, jargo"}, "hey jargo", true, 1},
+		{"a phrase that is all punctuation is skipped", []string{"!!!", "Hey, Jargo!"}, "hey jargo", true, 1},
+		// Combining marks are not word characters, and are stripped from both.
+		{"combining marks", []string{"नमस्ते रोबोट"}, "नमस्ते रोबोट, आज मौसम कैसा है?", true, 1},
+		// A no-break space is whitespace, kept between the words.
+		{"a no-break space", []string{"hey jargo"}, "hey\u00a0jargo", true, 1},
 		{"punctuation in the transcript is stripped", []string{"hey jargo"}, "Hey, Jargo!", true, 1},
 		{"blank phrases are skipped", []string{"", "   "}, "anything", false, 0},
 		{"any phrase matches", []string{"hey jargo", "ok jargo"}, "ok jargo", true, 2},
@@ -1547,5 +1556,24 @@ func TestCleanupCancelsATimerWithoutRacingIt(t *testing.T) {
 		if got := s.fired.Load(); got != ran {
 			t.Fatalf("the timer ran its callback after cleanup canceled it")
 		}
+	}
+}
+
+// Ported from upstream (test_wake_phrase_detected_event). The phrase reported
+// is the one configured, as written, though it matched without its
+// punctuation, and a phrase that is only punctuation is skipped.
+func TestWakePhraseDetectedNamesThePhraseAsWritten(t *testing.T) {
+	var detected string
+	s := NewWakePhraseStart(WakePhraseStartConfig{
+		Phrases:              []string{"!!!", "Hey, Jargo!"},
+		Timeout:              time.Minute,
+		OnWakePhraseDetected: func(phrase string) { detected = phrase },
+	})
+	spy := attachStart(s)
+	defer s.Cleanup()
+
+	spy.send(s, transcript("hey jargo"))
+	if detected != "Hey, Jargo!" {
+		t.Errorf("detected %q, want %q", detected, "Hey, Jargo!")
 	}
 }
