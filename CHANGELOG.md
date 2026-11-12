@@ -329,6 +329,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **The echo and voicebot examples serve their page by name** rather than
   through a file server, so nothing lists a directory.
 
+- **The benchmark images say they run as a user other than root**, and that
+  they have no health check, being batch jobs.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

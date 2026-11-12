@@ -29,5 +29,8 @@ RUN pip install --require-hashes --no-deps -r requirements.txt
 COPY bench.py .
 
 USER nobody
+# A benchmark run is a batch job that exits when it is done, with no service to
+# probe.
+HEALTHCHECK NONE
 # -I keeps the environment and the working directory out of the import path.
 ENTRYPOINT ["python", "-I", "/bench/bench.py"]
