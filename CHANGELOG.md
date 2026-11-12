@@ -76,6 +76,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   every 20 seconds while it is being read, and drops itself when a ping goes
   unanswered for 20 seconds, which fails the read in progress and lets the
   service reconnect.
+- **The OpenAI Responses WebSocket connects at setup and reconnects with
+  backoff.** The service dialed inside the first user turn, so the first reply
+  paid for the handshake and a rejected key surfaced only then, and it closed
+  the connection only at cleanup. One refused or failed dial failed the turn,
+  and an endpoint that stayed down failed every turn forever without the
+  service ever becoming unusable, so a service switcher never failed over. The
+  new `llm.Websocket` gives a WebSocket LLM service its connection lifecycle:
+  it opens the connection at setup and closes it on `EndFrame` or
+  `CancelFrame`, makes sure it is there before each turn, and restores a lost
+  one with the `wsservice` reconnect policy (three attempts with exponential
+  backoff, each failure reported, a permanent error at the end).
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

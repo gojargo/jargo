@@ -17,7 +17,9 @@ import (
 	"github.com/gojargo/jargo/adapter/openai"
 	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -74,6 +76,18 @@ type session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	events chan wsEvent
+	// ended is closed once the read loop has stopped: the connection is gone.
+	ended chan struct{}
+}
+
+// live reports whether the session's connection is still being read.
+func (sess *session) live() bool {
+	select {
+	case <-sess.ended:
+		return false
+	default:
+		return true
+	}
 }
 
 // Service is a Responses LLM processor over a persistent WebSocket.
@@ -87,6 +101,9 @@ type Service struct {
 	// http answers a one-shot inference. It is a plain request, so it does not
 	// go near the connection this service holds open for its turns.
 	http *http.Client
+	// ws runs the connection's lifecycle: it opens it at setup, closes it when
+	// the pipeline ends, and restores it with backoff when it is lost.
+	ws *llm.Websocket
 
 	mu   sync.Mutex
 	sess *session
@@ -161,8 +178,30 @@ func NewLLM(cfg Config) *Service {
 	s.Base = llm.New("OpenAIResponsesLLM", s)
 	s.Base.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
+	s.ws = llm.NewWebsocket(s.Base, s, wsservice.Config{})
 	warnIfReasoningUnsupported("OpenAIResponsesLLM", cfg)
 	return s
+}
+
+// Setup sets the service up and opens the connection, so the first turn does
+// not pay for the handshake. A connection that cannot be opened is reported,
+// and the first turn tries again.
+func (s *Service) Setup(ctx context.Context, setup processor.Setup) error {
+	if err := s.Base.Setup(ctx, setup); err != nil {
+		return err
+	}
+	s.ws.Connect(ctx)
+	return nil
+}
+
+// ProcessFrame closes the connection when the pipeline ends or is canceled.
+func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	err := s.Base.ProcessFrame(ctx, f, dir)
+	switch f.(type) {
+	case *frames.EndFrame, *frames.CancelFrame:
+		s.ws.Disconnect(ctx)
+	}
+	return err
 }
 
 // Generate streams a completion, emitting each text delta.
@@ -204,15 +243,37 @@ func (s *Service) ModelSupportsResponseSchema(model string) bool {
 
 // Cleanup closes the connection and tears the processor down.
 func (s *Service) Cleanup(ctx context.Context) error {
-	s.disconnect()
+	s.ws.Disconnect(ctx)
 	return s.Base.Cleanup(ctx)
+}
+
+// ConnectWebsocket implements llm.WebsocketHandler. It opens the connection,
+// and does nothing while one is open.
+func (s *Service) ConnectWebsocket(ctx context.Context) error {
+	_, err := s.connect(ctx)
+	return err
+}
+
+// DisconnectWebsocket implements llm.WebsocketHandler. It closes the
+// connection, and forgets what the server held and which lanes were in use.
+func (s *Service) DisconnectWebsocket(context.Context) error {
+	s.disconnect()
+	return nil
+}
+
+// Connected implements llm.WebsocketHandler.
+func (s *Service) Connected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sess != nil && s.sess.live()
 }
 
 // run drives one turn, retrying once when it hit a recoverable fault. Every one
 // of them loses what the server held for the conversation, so the retry drops
 // the continuation and resends the full context: on the same connection when
-// the server merely lost the previous response, on a fresh one when the
-// connection itself is gone or spent.
+// the server merely lost the previous response, on a restored one when the
+// connection itself is gone or spent. A connection that cannot be restored
+// fails the turn; restoring it has already reported why.
 func (s *Service) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
 	lane := s.chooseNextLane()
 	var err error
@@ -227,7 +288,12 @@ func (s *Service) run(ctx context.Context, convo *frames.LLMContext, sink llm.Si
 			s.forgetContinuation()
 			continue
 		}
-		s.disconnect()
+		if !s.ws.Reconnect(ctx) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
 	}
 	return err
 }
@@ -255,9 +321,15 @@ func (s *Service) forgetContinuation() {
 func (s *Service) turn(
 	ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool, lane string,
 ) error {
-	sess, err := s.connect(ctx)
-	if err != nil {
+	if err := s.ws.EnsureConnected(ctx); err != nil {
 		return err
+	}
+	s.mu.Lock()
+	sess := s.sess
+	s.mu.Unlock()
+	if sess == nil {
+		// Closed on purpose since it was ensured: the pipeline is ending.
+		return errConnectionClosed
 	}
 
 	req, err := s.cfg.newRequest(
@@ -534,8 +606,12 @@ func (s *Service) connect(ctx context.Context) (*session, error) {
 	s.mu.Lock()
 	sess := s.sess
 	s.mu.Unlock()
-	if sess != nil {
+	if sess != nil && sess.live() {
 		return sess, nil
+	}
+	if sess != nil {
+		// The connection behind it is gone: clear it away before dialing.
+		s.disconnect()
 	}
 
 	header := http.Header{}
@@ -555,6 +631,7 @@ func (s *Service) connect(ctx context.Context) (*session, error) {
 		ctx:    sessCtx,
 		cancel: cancel,
 		events: make(chan wsEvent, 32),
+		ended:  make(chan struct{}),
 	}
 
 	s.mu.Lock()
@@ -572,6 +649,7 @@ func (s *Service) connect(ctx context.Context) (*session, error) {
 // connection ends or the session is torn down.
 func (s *Service) readLoop(sess *session) {
 	defer s.wg.Done()
+	defer close(sess.ended)
 	defer close(sess.events)
 	for {
 		_, data, err := sess.conn.Read(sess.ctx)
