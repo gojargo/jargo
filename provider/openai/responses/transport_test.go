@@ -78,9 +78,10 @@ func TestStreamStateText(t *testing.T) {
 	if state.usage == nil {
 		t.Fatal("usage not captured")
 	}
+	// The cache and reasoning counts the response did not give are zero.
 	want := frames.LLMTokenUsage{
 		PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
-		CacheReadTokens: new(int64(4)),
+		CacheReadTokens: new(int64(4)), CacheCreationTokens: new(int64(0)), ReasoningTokens: new(int64(0)),
 	}
 	if got := state.usage.tokenUsage(); !reflect.DeepEqual(got, want) {
 		t.Errorf("tokenUsage = %+v, want %+v", got, want)
@@ -780,5 +781,51 @@ func TestCreateMessageCarriesTheRequestAtTheTopLevel(t *testing.T) {
 	}
 	if _, present := got["input"]; !present {
 		t.Errorf("message lost the input: %v", got)
+	}
+}
+
+// Ported from upstream (test_token_usage_metrics and
+// test_token_usage_metrics_without_a_cache_write_count). Every count the usage
+// gives is reported, the reasoning tokens included, and a cache write count a
+// server without prompt caching leaves out is zero.
+func TestTokenUsageMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		name, usage                string
+		cached, written, reasoning int64
+	}{
+		{
+			"every count", `{"input_tokens":100,"output_tokens":50,"total_tokens":150,` +
+				`"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":30},` +
+				`"output_tokens_details":{"reasoning_tokens":10}}`,
+			20, 30, 10,
+		},
+		{
+			"no cache write count", `{"input_tokens":100,"output_tokens":50,"total_tokens":150,` +
+				`"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`,
+			0, 0, 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, err := feed(t, &recordingSink{},
+				`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-4.1","usage":`+tc.usage+`}}`)
+			if err != nil || state.usage == nil {
+				t.Fatalf("feed: %v, usage %v", err, state.usage)
+			}
+			u := state.usage.tokenUsage()
+			if u.PromptTokens != 100 || u.CompletionTokens != 50 || u.TotalTokens != 150 {
+				t.Errorf("usage = %+v, want 100, 50 and 150", u)
+			}
+			for name, c := range map[string]struct {
+				got  *int64
+				want int64
+			}{
+				"cache read": {u.CacheReadTokens, tc.cached}, "cache creation": {u.CacheCreationTokens, tc.written},
+				"reasoning": {u.ReasoningTokens, tc.reasoning},
+			} {
+				if n, ok := frames.TokenCount(c.got); !ok || n != c.want {
+					t.Errorf("%s = %d (reported %v), want %d", name, n, ok, c.want)
+				}
+			}
+		})
 	}
 }

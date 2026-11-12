@@ -148,6 +148,9 @@ type usage struct {
 		CachedTokens     int64 `json:"cached_tokens"`
 		CacheWriteTokens int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
+	OutputTokensDetails *struct {
+		ReasoningTokens int64 `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
 	// raw is the usage object as sent, for a server that reports fields this
 	// struct does not model.
 	raw json.RawMessage
@@ -167,18 +170,23 @@ func (u *usage) UnmarshalJSON(data []byte) error {
 
 // tokenUsage converts the wire accounting into the framework's usage shape.
 func (u usage) tokenUsage() frames.LLMTokenUsage {
-	out := frames.LLMTokenUsage{
-		PromptTokens:     u.InputTokens,
-		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.TotalTokens,
+	// The cache and reasoning counts are reported whether or not the response
+	// gave them, as zero when it did not.
+	var cached, written, reasoning int64
+	if d := u.InputTokensDetails; d != nil {
+		cached, written = d.CachedTokens, d.CacheWriteTokens
 	}
-	if u.InputTokensDetails != nil {
-		out.CacheReadTokens = new(u.InputTokensDetails.CachedTokens)
-		if u.InputTokensDetails.CacheWriteTokens > 0 {
-			out.CacheCreationTokens = new(u.InputTokensDetails.CacheWriteTokens)
-		}
+	if d := u.OutputTokensDetails; d != nil {
+		reasoning = d.ReasoningTokens
 	}
-	return out
+	return frames.LLMTokenUsage{
+		PromptTokens:        u.InputTokens,
+		CompletionTokens:    u.OutputTokens,
+		TotalTokens:         u.TotalTokens,
+		CacheReadTokens:     new(cached),
+		CacheCreationTokens: new(written),
+		ReasoningTokens:     new(reasoning),
+	}
 }
 
 // pendingCall accumulates a function call as its arguments stream in.

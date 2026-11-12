@@ -727,6 +727,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   items, a refusal as `message[refusal]`, and push a non-fatal error the
   application can react to.
 
+- **Responses usage carries the reasoning tokens.** The OpenAI Responses
+  services never reported a response's reasoning tokens, though its usage
+  says how many output tokens were reasoning. They are now reported, and the
+  cache read, cache write and reasoning counts are always set, to zero when
+  the usage leaves one out.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
