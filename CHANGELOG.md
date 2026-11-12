@@ -567,6 +567,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   announcing itself as realtime was already handled. `turns.UserTurnStrategies`
   gains `FillDefaults`.
 
+- **An external stop ends the turn on a finalized transcript at once.**
+  `ExternalStop` waited out its transcript timer (500 ms by default) after
+  every transcript, finalized or not, so an STT service that detects the end
+  of the turn itself and reports the stop before the end-of-turn transcript
+  added that wait to every turn. A finalized transcript is the last text of
+  the speech, so the turn is now decided on it at once.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

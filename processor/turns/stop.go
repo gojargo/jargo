@@ -651,7 +651,8 @@ func (s *ExternalStop) handleStoppedSpeaking(announcedElsewhere bool) {
 }
 
 // handleTranscription folds a final transcript in, and decides once no more of
-// them arrive for a while.
+// them arrive for a while. A finalized transcript is the last text of the
+// speech, so it is decided on at once.
 func (s *ExternalStop) handleTranscription(fr *frames.TranscriptionFrame) {
 	s.text += fr.Text
 	// A final result has landed, so the interim it supersedes is spent.
@@ -659,6 +660,11 @@ func (s *ExternalStop) handleTranscription(fr *frames.TranscriptionFrame) {
 	// The new text is worth a decision of its own, once no more arrives.
 	s.decided = false
 	s.cancelTranscriptTimer()
+	if fr.Finalized {
+		// No more text is coming for this speech.
+		s.maybeReportStopped()
+		return
+	}
 	s.cancelTranscript = s.after(s.timeout, func() {
 		s.cancelTranscript = nil
 		if s.turnOpen {

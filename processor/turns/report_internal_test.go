@@ -209,3 +209,48 @@ func TestAnInferenceWithoutASpeculationWarnsOnceAndIsIgnored(t *testing.T) {
 		t.Fatalf("warnings = %d, want 1:\n%s", n, buf.String())
 	}
 }
+
+// finalTranscript is the last transcript of a speech, as an STT service that
+// detects the end of the turn itself marks it.
+func finalTranscript(text string) *frames.TranscriptionFrame {
+	f := transcript(text)
+	f.Finalized = true
+	return f
+}
+
+// Ported from upstream
+// (test_a_finalized_transcript_after_the_stop_signal_ends_the_turn_at_once). A
+// finalized transcript is the last text of the speech, so a stop signal already
+// in hand ends the turn on it rather than after the transcript timer.
+func TestExternalStopAFinalizedTranscriptAfterTheStopSignalEndsTheTurnAtOnce(t *testing.T) {
+	s := NewExternalStop(ExternalStopConfig{Timeout: 10 * time.Second})
+	sp := openExternalTurn(t, s)
+
+	sp.sendStop(s, frames.NewProposedUserStartedSpeakingFrame())
+	sp.sendStop(s, frames.NewProposedUserStoppedSpeakingFrame())
+	if n := sp.stops(); n != 0 {
+		t.Fatalf("decisions before the transcript = %d, want 0", n)
+	}
+	sp.sendStop(s, finalTranscript("Hello!"))
+	if n := sp.stops(); n != 1 {
+		t.Fatalf("decisions after a finalized transcript = %d, want 1 at once", n)
+	}
+}
+
+// Ported from upstream
+// (test_a_finalized_transcript_while_the_user_speaks_waits_for_the_stop_signal).
+// While the user still speaks, a finalized transcript waits for the stop.
+func TestExternalStopAFinalizedTranscriptWhileTheUserSpeaksWaitsForTheStopSignal(t *testing.T) {
+	s := NewExternalStop(ExternalStopConfig{Timeout: 10 * time.Second})
+	sp := openExternalTurn(t, s)
+
+	sp.sendStop(s, frames.NewProposedUserStartedSpeakingFrame())
+	sp.sendStop(s, finalTranscript("Hello!"))
+	if n := sp.stops(); n != 0 {
+		t.Fatalf("decisions while speaking = %d, want 0", n)
+	}
+	sp.sendStop(s, frames.NewProposedUserStoppedSpeakingFrame())
+	if n := sp.stops(); n != 1 {
+		t.Fatalf("decisions = %d, want 1", n)
+	}
+}
