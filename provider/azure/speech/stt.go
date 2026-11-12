@@ -1,7 +1,6 @@
 package speech
 
 import (
-	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -95,8 +94,8 @@ type STTConfig struct {
 	EndpointID string
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.AzureTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.AzureTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -116,7 +115,7 @@ type sttConnector struct {
 // Metadata reports Azure's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.AzureTTFSP99)}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.AzureTTFSP99)}
 }
 
 // azureBaseLocales expands the common base language codes to the locale Azure

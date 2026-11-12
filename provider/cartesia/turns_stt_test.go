@@ -357,14 +357,15 @@ func TestTurnsSTTWatchdog(t *testing.T) {
 	if !ok {
 		t.Fatal("the connector does not implement stt.TurnWatchdoger, so a stalled turn hangs")
 	}
-	if got := w.TurnWatchdog().MinTimeout; got != 0 {
-		t.Errorf("MinTimeout = %s, want 0 so the service default applies", got)
+	if got := w.TurnWatchdog().MinTimeout; got != nil {
+		t.Errorf("MinTimeout = %s, want nil so the service default applies", *got)
 	}
 
-	chosen := 250 * time.Millisecond
-	c = newTurnsConnector(TurnsSTTConfig{APIKey: "k", WatchdogMinTimeout: chosen})
-	if got := c.TurnWatchdog().MinTimeout; got != chosen {
-		t.Errorf("MinTimeout = %s, want the configured %s", got, chosen)
+	for _, chosen := range []time.Duration{250 * time.Millisecond, 0} {
+		c = newTurnsConnector(TurnsSTTConfig{APIKey: "k", WatchdogMinTimeout: &chosen})
+		if got := c.TurnWatchdog().MinTimeout; got == nil || *got != chosen {
+			t.Errorf("MinTimeout = %v, want the configured %s", got, chosen)
+		}
 	}
 }
 

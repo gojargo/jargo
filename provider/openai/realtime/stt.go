@@ -1,7 +1,6 @@
 package realtime
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -92,8 +91,8 @@ type STTConfig struct {
 	ShouldInterrupt *bool
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.OpenAIRealtimeTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.OpenAIRealtimeTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -146,7 +145,7 @@ type sttConnector struct {
 // boundaries, and the pipeline's defaults are left in place.
 func (c *sttConnector) Metadata() stt.Metadata {
 	md := stt.Metadata{
-		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.OpenAIRealtimeTTFSP99),
+		TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.OpenAIRealtimeTTFSP99),
 		Model:   c.cfg.Model,
 	}
 	if c.cfg.serverVAD() {

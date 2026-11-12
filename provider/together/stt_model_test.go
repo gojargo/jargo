@@ -17,7 +17,7 @@ func TestSTTMetadataReportsTheModel(t *testing.T) {
 	if got := def.Metadata().Model; got != defaultSTTModel {
 		t.Errorf("Model = %q, want the default %q", got, defaultSTTModel)
 	}
-	if c.Metadata().TTFSP99 != stt.TogetherTTFSP99 {
-		t.Errorf("TTFSP99 = %v, want the measured figure", c.Metadata().TTFSP99)
+	if *c.Metadata().TTFSP99 != stt.TogetherTTFSP99 {
+		t.Errorf("TTFSP99 = %v, want the measured figure", *c.Metadata().TTFSP99)
 	}
 }

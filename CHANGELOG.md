@@ -74,6 +74,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   it was spoken but left out of the conversation, unlike a `TTSSpeakFrame`. It
   is now a `*bool`, nil meaning the text joins the conversation.
   **Breaking:** set it with `new(false)` to keep the text out.
+- **An STT's transcript latency can be zero.** `TTFSP99` on every STT config
+  and on `stt.Metadata`, and the turn watchdog's `MinTimeout`
+  (`stt.TurnWatchdogOptions`, `cartesia.TurnsSTTConfig.WatchdogMinTimeout`,
+  `deepgram.FluxConfig.WatchdogMinTimeout`),
+  used zero for their defaults, so a service published with no transcript wait,
+  or a watchdog bounded by the chunk length alone, could not be asked for. Nil
+  now means the default and zero means none; the user aggregator's realtime
+  handoff likewise waits the fallback only when no latency was published.
+  **Breaking:** set them with `new(d)`.
 
 ### Fixed
 

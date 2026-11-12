@@ -1,7 +1,6 @@
 package grok
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -93,8 +92,8 @@ type STTConfig struct {
 	Diarize *bool
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.XAITTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.XAITTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -134,7 +133,7 @@ type sttConnector struct {
 
 // Metadata reports xAI's time-to-final-segment latency to downstream processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.XAITTFSP99), Model: c.cfg.Model}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.XAITTFSP99), Model: c.cfg.Model}
 }
 
 // Connect opens a transcription session. The session is configured entirely

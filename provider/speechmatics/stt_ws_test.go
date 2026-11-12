@@ -410,11 +410,11 @@ func TestSendWritesAudioAsBinary(t *testing.T) {
 // TestMetadataReportsTheMeasuredLatency checks the transcript latency the turn
 // strategies size their wait by, and that it can be overridden.
 func TestMetadataReportsTheMeasuredLatency(t *testing.T) {
-	if got := (&connector{}).Metadata().TTFSP99; got != stt.SpeechmaticsTTFSP99 {
+	if got := *(&connector{}).Metadata().TTFSP99; got != stt.SpeechmaticsTTFSP99 {
 		t.Errorf("TTFSP99 = %v, want the measured figure", got)
 	}
-	c := &connector{cfg: Config{TTFSP99: 300 * time.Millisecond}}
-	if got := c.Metadata().TTFSP99; got != 300*time.Millisecond {
+	c := &connector{cfg: Config{TTFSP99: new(300 * time.Millisecond)}}
+	if got := *c.Metadata().TTFSP99; got != 300*time.Millisecond {
 		t.Errorf("TTFSP99 = %v, want the override", got)
 	}
 }

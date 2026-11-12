@@ -1,7 +1,6 @@
 package cartesia
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -98,8 +97,8 @@ type STTConfig struct {
 	MaxSilenceDurationSecs *float64
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.CartesiaTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.CartesiaTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -199,7 +198,7 @@ func (c *sttConnector) Keepalive() stt.KeepaliveOptions {
 // Metadata reports Cartesia's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.CartesiaTTFSP99), Model: c.live.Model.Or(c.cfg.Model)}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.CartesiaTTFSP99), Model: c.live.Model.Or(c.cfg.Model)}
 }
 
 // Settings is the configuration a caller may change while the pipeline runs.

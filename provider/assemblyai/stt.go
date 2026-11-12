@@ -1,7 +1,6 @@
 package assemblyai
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -44,7 +43,7 @@ type connector struct {
 // Metadata reports the transcript latency the turn strategies size their
 // wait by.
 func (c *connector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.AssemblyAITTFSP99)}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.AssemblyAITTFSP99)}
 }
 
 // query builds the streaming query string for the given sample rate.

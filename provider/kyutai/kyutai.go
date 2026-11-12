@@ -54,8 +54,8 @@ type Config struct {
 	Language language.Language
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.DefaultTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.DefaultTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.

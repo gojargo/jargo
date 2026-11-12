@@ -217,11 +217,11 @@ func TestTranscribeReportsAnUnreachableEndpoint(t *testing.T) {
 // TestMetadataReportsTheMeasuredLatency checks the transcript latency the turn
 // strategies size their wait by: the measured figure, or an override.
 func TestMetadataReportsTheMeasuredLatency(t *testing.T) {
-	if got := (&sttTranscriber{}).Metadata().TTFSP99; got != stt.GroqTTFSP99 {
+	if got := *(&sttTranscriber{}).Metadata().TTFSP99; got != stt.GroqTTFSP99 {
 		t.Errorf("TTFSP99 = %v, want the measured %v", got, stt.GroqTTFSP99)
 	}
-	tr := &sttTranscriber{cfg: STTConfig{TTFSP99: 250 * time.Millisecond}}
-	if got := tr.Metadata().TTFSP99; got != 250*time.Millisecond {
+	tr := &sttTranscriber{cfg: STTConfig{TTFSP99: new(250 * time.Millisecond)}}
+	if got := *tr.Metadata().TTFSP99; got != 250*time.Millisecond {
 		t.Errorf("TTFSP99 = %v, want the override", got)
 	}
 }

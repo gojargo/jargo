@@ -1,7 +1,6 @@
 package gradium
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -62,8 +61,8 @@ type STTConfig struct {
 	DelayInFrames *int `validate:"omitempty,oneof=7 8 10 12 14 16 20 24 36 48"`
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.GradiumTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.GradiumTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -96,7 +95,7 @@ type sttConnector struct {
 // Metadata reports Gradium's time-to-final-segment latency to downstream
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.GradiumTTFSP99), Model: c.cfg.Model}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.GradiumTTFSP99), Model: c.cfg.Model}
 }
 
 // gradiumPCMSampleRates are the PCM sample rates Gradium accepts, lowest first.

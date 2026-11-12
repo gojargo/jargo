@@ -54,7 +54,7 @@ func TestPublishedTTFS(t *testing.T) {
 		// The measurement is the point: a service that carries one is described
 		// with it rather than with a wait nobody measured.
 		name: "measured",
-		conn: &describedConnector{meta: stt.Metadata{TTFSP99: stt.DeepgramTTFSP99}},
+		conn: &describedConnector{meta: stt.Metadata{TTFSP99: new(stt.DeepgramTTFSP99)}},
 		want: stt.DeepgramTTFSP99,
 	}, {
 		// Nothing to go on, so the fallback: too short truncates the tail of an
@@ -62,6 +62,12 @@ func TestPublishedTTFS(t *testing.T) {
 		name: "described but unmeasured",
 		conn: &describedConnector{meta: stt.Metadata{Model: "some-model"}},
 		want: stt.DefaultTTFSP99,
+	}, {
+		// Zero is a latency like any other: the service asked for no wait, so
+		// it gets none rather than the fallback.
+		name: "set to zero",
+		conn: &describedConnector{meta: stt.Metadata{TTFSP99: new(time.Duration(0))}},
+		want: 0,
 	}, {
 		name: "undescribed",
 		conn: &silentConnector{},
@@ -76,7 +82,7 @@ func TestPublishedTTFS(t *testing.T) {
 		// Explicitly supported is the same as saying nothing about it.
 		name: "supported explicitly",
 		conn: &describedConnector{meta: stt.Metadata{
-			SupportsTTFS: &yesTTFS, TTFSP99: stt.SonioxTTFSP99,
+			SupportsTTFS: &yesTTFS, TTFSP99: new(stt.SonioxTTFSP99),
 		}},
 		want: stt.SonioxTTFSP99,
 	}}

@@ -242,8 +242,9 @@ type FluxConfig struct {
 	// the multilingual model; ignored for other models.
 	LanguageHints []language.Language
 	// WatchdogMinTimeout is the minimum idle period before silence is injected
-	// to keep an active turn from dangling; 0 uses 500ms.
-	WatchdogMinTimeout time.Duration
+	// to keep an active turn from dangling. Nil uses 500ms; zero leaves only the
+	// floor of twice the last chunk's duration.
+	WatchdogMinTimeout *time.Duration
 	// ExtraQuery sets arbitrary additional query parameters; values override any
 	// param of the same name set from other fields.
 	ExtraQuery map[string]string
@@ -261,9 +262,6 @@ func NewFluxSTT(cfg FluxConfig) *stt.StreamService {
 	}
 	if cfg.ListenURL == "" {
 		cfg.ListenURL = fluxListenURL
-	}
-	if cfg.WatchdogMinTimeout == 0 {
-		cfg.WatchdogMinTimeout = defaultWatchdogMinTimeout
 	}
 	c := newFluxConnector(cfg)
 	svc := stt.NewStream("DeepgramFluxSTT", c, cfg.SampleRate)
@@ -451,6 +449,10 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 	if err != nil {
 		return nil, dialError("deepgram flux", err)
 	}
+	watchdogMin := defaultWatchdogMinTimeout
+	if c.cfg.WatchdogMinTimeout != nil {
+		watchdogMin = *c.cfg.WatchdogMinTimeout
+	}
 	s := &fluxStream{
 		conn:        conn,
 		ctx:         ctx,
@@ -458,7 +460,7 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 		model:       c.live.Model.Or(c.cfg.Model),
 		live:        c.live,
 		report:      c.reportProblem,
-		watchdogMin: c.cfg.WatchdogMinTimeout,
+		watchdogMin: watchdogMin,
 		lastAudio:   time.Now(),
 		connectWait: c.connectionTimeout,
 		fail:        c.reportFailure,

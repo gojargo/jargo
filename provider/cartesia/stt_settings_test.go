@@ -5,9 +5,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 func sttConfig() STTConfig {
@@ -83,6 +85,21 @@ func TestSTTMetadataFollowsTheSettings(t *testing.T) {
 	}
 	if got := c.Metadata().Model; got != "ink-whisper-2" {
 		t.Errorf("model = %q, want ink-whisper-2", got)
+	}
+}
+
+// The transcript latency defaults to Cartesia's measured one, and a configured
+// zero is kept as no wait rather than taken for unset.
+func TestSTTMetadataLatency(t *testing.T) {
+	t.Parallel()
+
+	if got := *newSTTConnector(sttConfig()).Metadata().TTFSP99; got != stt.CartesiaTTFSP99 {
+		t.Errorf("default TTFSP99 = %v, want %v", got, stt.CartesiaTTFSP99)
+	}
+	cfg := sttConfig()
+	cfg.TTFSP99 = new(time.Duration(0))
+	if got := *newSTTConnector(cfg).Metadata().TTFSP99; got != 0 {
+		t.Errorf("TTFSP99 = %v, want the configured 0", got)
 	}
 }
 

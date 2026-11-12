@@ -9,7 +9,6 @@
 package mistral
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -68,8 +67,8 @@ type STTConfig struct {
 	TargetStreamingDelayMs int
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.MistralTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.MistralTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -122,7 +121,7 @@ func (c *sttConnector) UpdateSettings(context.Context, settings.Changed) (bool, 
 // strategies size their wait by.
 func (c *sttConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
-		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.MistralTTFSP99),
+		TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.MistralTTFSP99),
 		Model:   c.live.Model.Or(c.cfg.Model),
 	}
 }

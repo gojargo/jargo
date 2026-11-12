@@ -169,8 +169,9 @@ type TurnWatchdogOptions struct {
 	// MinTimeout is the shortest gap in the audio the provider is left to sit
 	// through. The gap actually waited for is the larger of this and twice the
 	// last chunk's duration, so a pipeline sending long chunks is not nudged
-	// between two of them. Zero takes DefaultTurnWatchdogMinTimeout.
-	MinTimeout time.Duration
+	// between two of them. Nil takes DefaultTurnWatchdogMinTimeout; zero leaves
+	// only the twice-a-chunk floor.
+	MinTimeout *time.Duration
 	// Interval is how often the gap is measured. Zero takes
 	// DefaultTurnWatchdogInterval.
 	Interval time.Duration
@@ -289,9 +290,9 @@ type Metadata struct {
 	// frames.ServiceMetadataFrame carries it untyped.
 	UserTurnStrategies any
 	// TTFSP99 is the time-to-final-segment P99 latency reported on the metadata
-	// frame (see frames.STTMetadataFrame). Left unset, the service is described
-	// with DefaultTTFSP99.
-	TTFSP99 time.Duration
+	// frame (see frames.STTMetadataFrame). Nil describes the service with
+	// DefaultTTFSP99; zero describes it with no wait at all.
+	TTFSP99 *time.Duration
 	// SupportsTTFS reports whether TTFS means anything for this service; nil
 	// defaults to true. A service whose server defines the turn boundary sets it
 	// false, and is described with no wait at all rather than a measured one.
@@ -309,12 +310,21 @@ func (m Metadata) ttfs(service string) time.Duration {
 	if m.SupportsTTFS != nil && !*m.SupportsTTFS {
 		return 0
 	}
-	if m.TTFSP99 > 0 {
-		return m.TTFSP99
+	if m.TTFSP99 != nil {
+		return *m.TTFSP99
 	}
 	slog.Warn("stt: no TTFS p99 latency measured for this service, using the fallback",
 		"service", service, "fallback", DefaultTTFSP99)
 	return DefaultTTFSP99
+}
+
+// TTFSP99Or is the latency a provider describes itself with: the configured
+// one when set, zero included, and the provider's measured default otherwise.
+func TTFSP99Or(configured *time.Duration, def time.Duration) *time.Duration {
+	if configured != nil {
+		return configured
+	}
+	return &def
 }
 
 // Describer is an optional interface a Connector or Transcriber implements to
@@ -476,8 +486,8 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	if w, ok := conn.(TurnWatchdoger); ok {
 		s.watchdogWanted = true
 		s.watchdog = w.TurnWatchdog()
-		if s.watchdog.MinTimeout <= 0 {
-			s.watchdog.MinTimeout = DefaultTurnWatchdogMinTimeout
+		if s.watchdog.MinTimeout == nil {
+			s.watchdog.MinTimeout = new(DefaultTurnWatchdogMinTimeout)
 		}
 		if s.watchdog.Interval <= 0 {
 			s.watchdog.Interval = DefaultTurnWatchdogInterval
@@ -1259,7 +1269,7 @@ func (s *StreamService) turnWatchdogLoop(ctx context.Context) {
 		s.mu.Lock()
 		speaking := s.speaking
 		last := s.lastAudio
-		threshold := max(2*s.lastChunk, s.watchdog.MinTimeout)
+		threshold := max(2*s.lastChunk, *s.watchdog.MinTimeout)
 		s.mu.Unlock()
 		if !speaking || last.IsZero() {
 			continue

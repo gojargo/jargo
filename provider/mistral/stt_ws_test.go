@@ -421,11 +421,11 @@ func TestSTTConnectReportsAnUnreachableEndpoint(t *testing.T) {
 // TestSTTMetadataReportsTheMeasuredLatency checks the latency the turn
 // strategies size their wait by, and that it can be overridden.
 func TestSTTMetadataReportsTheMeasuredLatency(t *testing.T) {
-	if got := newSTTConnector(STTConfig{}).Metadata().TTFSP99; got != stt.MistralTTFSP99 {
+	if got := *newSTTConnector(STTConfig{}).Metadata().TTFSP99; got != stt.MistralTTFSP99 {
 		t.Errorf("TTFSP99 = %v, want the measured figure", got)
 	}
-	c := newSTTConnector(STTConfig{TTFSP99: 400 * time.Millisecond})
-	if got := c.Metadata().TTFSP99; got != 400*time.Millisecond {
+	c := newSTTConnector(STTConfig{TTFSP99: new(400 * time.Millisecond)})
+	if got := *c.Metadata().TTFSP99; got != 400*time.Millisecond {
 		t.Errorf("TTFSP99 = %v, want the override", got)
 	}
 }

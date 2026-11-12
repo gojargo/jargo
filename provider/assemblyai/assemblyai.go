@@ -143,8 +143,8 @@ type Config struct {
 	ExtraQuery map[string]string
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.AssemblyAITTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.AssemblyAITTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable. An over-long list of

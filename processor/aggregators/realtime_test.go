@@ -14,6 +14,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 // realtimeMetadata is what a realtime LLM service broadcasts about itself.
@@ -130,6 +131,34 @@ func TestRealtimeWritesTheUserMessageWhenTheAnswerStarts(t *testing.T) {
 	if msgs[1].Text != "hi" {
 		t.Errorf("assistant message = %q, want it after the user's", msgs[1].Text)
 	}
+}
+
+// A transcription service publishing a latency of zero is asking for no wait:
+// the user's message is written as soon as the answer starts, not after the
+// fallback a service that published nothing gets.
+func TestRealtimeHandoffTakesAZeroLatencyAsNoWait(t *testing.T) {
+	task, convo, runDone := runRealtimePair(t,
+		speechTimeoutTurns(), aggregators.WithRealtimeServiceMode(true))
+	defer func() { task.StopWhenDone(); <-runDone }()
+
+	task.QueueFrame(frames.NewSTTMetadataFrame(0))
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	flushPipeline(t, task)
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	task.QueueFrame(frames.NewTranscriptionFrame("hello there", "u", "ts"))
+	flushPipeline(t, task)
+
+	// The answer starts and does not end, so only the handoff can write it.
+	started := time.Now()
+	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
+	msgs := awaitMessages(t, convo, 1)
+	if len(msgs) < 1 || msgs[0].Text != "hello there" {
+		t.Fatalf("conversation = %+v, want the user's message", msgs)
+	}
+	if waited := time.Since(started); waited >= stt.DefaultTTFSP99 {
+		t.Errorf("the message was written after %v, want no wait", waited)
+	}
+	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
 }
 
 // The mode turns itself on when a realtime service says what it is, without the

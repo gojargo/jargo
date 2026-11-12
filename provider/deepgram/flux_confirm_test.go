@@ -74,7 +74,6 @@ func runFlux(t *testing.T, endpoint string, wait, d time.Duration) *stt.StreamSe
 	t.Helper()
 	c := newFluxConnector(FluxConfig{
 		APIKey: "k", ListenURL: endpoint, Model: defaultFluxModel,
-		WatchdogMinTimeout: defaultWatchdogMinTimeout,
 	})
 	c.connectionTimeout = wait
 	svc := stt.NewStream("DeepgramFluxSTT", c, 16000)

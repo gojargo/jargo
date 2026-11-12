@@ -2,7 +2,6 @@ package chat
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -48,8 +47,8 @@ type STTConfig struct {
 	HTTPClient *http.Client
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.OpenAITTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.OpenAITTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -109,7 +108,7 @@ type transcriber struct {
 // Metadata reports the model in use and the transcript latency the turn
 // strategies size their wait by.
 func (t *transcriber) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.OpenAITTFSP99), Model: t.cfg.Model}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(t.cfg.TTFSP99, stt.OpenAITTFSP99), Model: t.cfg.Model}
 }
 
 // writeFields writes the transcription form fields, omitting optional ones that

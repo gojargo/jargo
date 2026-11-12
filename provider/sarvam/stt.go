@@ -1,7 +1,6 @@
 package sarvam
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -115,8 +114,8 @@ type STTConfig struct {
 	NumInitialIgnoredFrames *int
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.SarvamTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.SarvamTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -179,7 +178,7 @@ type connector struct {
 // Metadata reports the model in use and the transcript latency the turn
 // strategies size their wait by.
 func (c *connector) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.SarvamTTFSP99), Model: c.cfg.Model}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.SarvamTTFSP99), Model: c.cfg.Model}
 }
 
 // endpoint returns the WebSocket URL for the configured model. Every supported

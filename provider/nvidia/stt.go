@@ -1,7 +1,6 @@
 package nvidia
 
 import (
-	"cmp"
 	"context"
 	"crypto/tls"
 	"sync"
@@ -87,8 +86,8 @@ type STTConfig struct {
 	Endpointing *Endpointing
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.NvidiaTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.NvidiaTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -153,7 +152,7 @@ type sttConnector struct {
 // processors.
 func (c *sttConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
-		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.NvidiaTTFSP99),
+		TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.NvidiaTTFSP99),
 		Model:   c.cfg.Model,
 	}
 }

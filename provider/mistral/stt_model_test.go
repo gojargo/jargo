@@ -22,7 +22,7 @@ func TestSTTMetadataReportsTheModel(t *testing.T) {
 	}
 
 	// The latency the turn strategies size their wait by is still reported.
-	if c.Metadata().TTFSP99 != stt.MistralTTFSP99 {
-		t.Errorf("TTFSP99 = %v, want the measured figure", c.Metadata().TTFSP99)
+	if *c.Metadata().TTFSP99 != stt.MistralTTFSP99 {
+		t.Errorf("TTFSP99 = %v, want the measured figure", *c.Metadata().TTFSP99)
 	}
 }

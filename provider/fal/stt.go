@@ -2,7 +2,6 @@ package fal
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -32,7 +31,7 @@ type transcriber struct {
 // Metadata reports the transcript latency the turn strategies size their
 // wait by.
 func (t *transcriber) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.FalTTFSP99)}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(t.cfg.TTFSP99, stt.FalTTFSP99)}
 }
 
 // Transcribe uploads the segment as a WAV data URI and returns the transcript.

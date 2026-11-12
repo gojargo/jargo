@@ -423,8 +423,9 @@ type UserAggregator struct {
 	realtimeHandled bool
 	// ttfsP99 is the transcript latency the last transcription service published,
 	// which is how long a late transcript is waited for before the user's message
-	// is written in realtime mode.
-	ttfsP99 time.Duration
+	// is written in realtime mode. Nil until one is published, when the default
+	// applies; zero means no wait.
+	ttfsP99 *time.Duration
 	// handoffCancel stops the deferred write armed when the assistant began
 	// answering, and is nil when none is armed.
 	handoffCancel func()
@@ -804,7 +805,7 @@ func (u *UserAggregator) handleServiceMetadata(md frames.ServiceMetadata) {
 		// written in realtime mode. A realtime service publishes it for the
 		// transcription it runs inside itself.
 		u.mu.Lock()
-		u.ttfsP99 = fr.TTFSP99Latency
+		u.ttfsP99 = &fr.TTFSP99Latency
 		u.mu.Unlock()
 	}
 }
@@ -2867,9 +2868,9 @@ func (a *AssistantAggregator) realtimeMode() bool {
 // regardless, so nothing is lost if the wait was too short.
 func (u *UserAggregator) realtimeHandoff() {
 	u.mu.Lock()
-	wait := u.ttfsP99
-	if wait <= 0 {
-		wait = stt.DefaultTTFSP99
+	wait := stt.DefaultTTFSP99
+	if u.ttfsP99 != nil {
+		wait = *u.ttfsP99
 	}
 	u.cancelHandoff()
 	ctx := u.sessionCtx

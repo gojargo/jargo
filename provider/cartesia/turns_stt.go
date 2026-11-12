@@ -104,8 +104,9 @@ type TurnsSTTConfig struct {
 	// WatchdogMinTimeout is the shortest gap in the audio the server is left to
 	// sit through mid-turn before silence is submitted. The server decides the
 	// end of a turn from the audio it is fed, so a turn it has opened never ends
-	// while the audio is stopped. 0 uses 500ms.
-	WatchdogMinTimeout time.Duration
+	// while the audio is stopped. Nil uses 500ms; zero leaves only the floor of
+	// twice the last chunk's duration.
+	WatchdogMinTimeout *time.Duration
 
 	// OnTurnStart is called when the server reports the start of a turn, with
 	// the transcript it carries (usually empty). It runs on the read goroutine,

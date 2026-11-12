@@ -71,7 +71,7 @@ func TestTurnWatchdogSubmitsSilenceMidTurn(t *testing.T) {
 	t.Parallel()
 
 	s, st := watchdogService(t, TurnWatchdogOptions{
-		MinTimeout: 20 * time.Millisecond, Interval: 5 * time.Millisecond,
+		MinTimeout: new(20 * time.Millisecond), Interval: 5 * time.Millisecond,
 	})
 	// A turn is open and the audio stopped long enough ago to have stalled it.
 	s.speaking = true
@@ -109,7 +109,7 @@ func TestTurnWatchdogStaysQuietOutsideATurn(t *testing.T) {
 	t.Parallel()
 
 	s, st := watchdogService(t, TurnWatchdogOptions{
-		MinTimeout: 20 * time.Millisecond, Interval: 5 * time.Millisecond,
+		MinTimeout: new(20 * time.Millisecond), Interval: 5 * time.Millisecond,
 	})
 	s.speaking = false
 	s.lastAudio = time.Now().Add(-200 * time.Millisecond)
@@ -130,7 +130,7 @@ func TestTurnWatchdogWaitsOutTwoChunks(t *testing.T) {
 	t.Parallel()
 
 	s, st := watchdogService(t, TurnWatchdogOptions{
-		MinTimeout: 10 * time.Millisecond, Interval: 5 * time.Millisecond,
+		MinTimeout: new(10 * time.Millisecond), Interval: 5 * time.Millisecond,
 	})
 	s.speaking = true
 	s.lastAudio = time.Now()
@@ -178,8 +178,8 @@ func TestTurnWatchdogDefaults(t *testing.T) {
 
 	st := &wdStream{}
 	s := NewStream("FakeSTT", &wdConnector{stream: st, wants: true}, 16000)
-	if s.watchdog.MinTimeout != DefaultTurnWatchdogMinTimeout {
-		t.Errorf("MinTimeout = %s, want %s", s.watchdog.MinTimeout, DefaultTurnWatchdogMinTimeout)
+	if got := s.watchdog.MinTimeout; got == nil || *got != DefaultTurnWatchdogMinTimeout {
+		t.Errorf("MinTimeout = %v, want %s", got, DefaultTurnWatchdogMinTimeout)
 	}
 	if s.watchdog.Interval != DefaultTurnWatchdogInterval {
 		t.Errorf("Interval = %s, want %s", s.watchdog.Interval, DefaultTurnWatchdogInterval)

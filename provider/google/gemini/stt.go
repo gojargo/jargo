@@ -2,7 +2,6 @@ package gemini
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -33,8 +32,8 @@ type STTConfig struct {
 	SampleRate int
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.GoogleTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.GoogleTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -56,7 +55,7 @@ type sttTranscriber struct {
 // Metadata reports the transcript latency the turn strategies size their
 // wait by.
 func (t *sttTranscriber) Metadata() stt.Metadata {
-	return stt.Metadata{TTFSP99: cmp.Or(t.cfg.TTFSP99, stt.GoogleTTFSP99)}
+	return stt.Metadata{TTFSP99: stt.TTFSP99Or(t.cfg.TTFSP99, stt.GoogleTTFSP99)}
 }
 
 // sttResponse is the subset of a recognize response the transcriber reads.

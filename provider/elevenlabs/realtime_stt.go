@@ -1,7 +1,6 @@
 package elevenlabs
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -75,8 +74,8 @@ type RealtimeSTTConfig struct {
 	FilterBackgroundAudio *bool
 
 	// TTFSP99 overrides the measured transcript latency the turn strategies
-	// size their wait by; 0 uses stt.ElevenLabsRealtimeTTFSP99.
-	TTFSP99 time.Duration
+	// size their wait by; nil uses stt.ElevenLabsRealtimeTTFSP99, and zero means no wait.
+	TTFSP99 *time.Duration
 }
 
 // Validate reports whether the configuration is usable.
@@ -107,7 +106,7 @@ type realtimeSTTConnector struct {
 // the turn stays with the pipeline.
 func (c *realtimeSTTConnector) Metadata() stt.Metadata {
 	return stt.Metadata{
-		TTFSP99: cmp.Or(c.cfg.TTFSP99, stt.ElevenLabsRealtimeTTFSP99),
+		TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.ElevenLabsRealtimeTTFSP99),
 		Model:   c.cfg.Model,
 	}
 }
