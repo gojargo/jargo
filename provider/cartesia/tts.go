@@ -489,7 +489,9 @@ func (s *synthesizer) dispatch(ctx context.Context, m *wsMessage) {
 		// when its own buffering is disabled. Each turn already has a context of
 		// its own and every chunk carries its id, so there is nothing to do.
 	default:
-		slog.Warn("cartesia tts sent a message of an unknown type", "type", m.Type)
+		// Reported rather than only logged: a message type the service does not
+		// know is a change on the server's side the application should hear of.
+		host.PushError(ctx, "Error, unknown message type: "+string(m.raw), nil, false)
 	}
 }
 

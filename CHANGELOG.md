@@ -760,6 +760,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   at the first term that does not fit, on both Cartesia STT services, and its
   characters are counted rather than its bytes.
 
+- **Cartesia TTS reports a message of an unknown type.** A message of a type
+  the service did not know was only logged. It is now pushed as a non-fatal
+  error, so the application hears of a change on Cartesia's side.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

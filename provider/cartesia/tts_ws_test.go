@@ -574,6 +574,30 @@ func TestRunTTSServerError(t *testing.T) {
 	}
 }
 
+// TestUnknownMessageTypeIsReported checks a message of a type the service does
+// not know is reported as a non-fatal error rather than only logged: a change
+// on the server's side the application should hear of.
+func TestUnknownMessageTypeIsReported(t *testing.T) {
+	endpoint, _ := ttsServer(t, []map[string]any{{"type": "mystery"}})
+
+	s := newSynthesizer(ttsConfig(endpoint))
+	host := &ttsHost{}
+	s.SetAudioContextHost(host)
+	t.Cleanup(func() { _ = s.Close() })
+	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err != nil {
+		t.Fatalf("RunTTS: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(host.pushedErrors()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	pushed := host.pushedErrors()
+	if len(pushed) != 1 || !strings.Contains(pushed[0].Error, "unknown message type") || pushed[0].Fatal {
+		t.Fatalf("pushed %v, want one non-fatal error naming an unknown message type", pushed)
+	}
+}
+
 // TestRunTTSDialError checks a session that cannot be opened is reported rather
 // than treated as an empty synthesis.
 func TestRunTTSDialError(t *testing.T) {
