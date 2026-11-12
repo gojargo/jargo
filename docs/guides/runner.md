@@ -48,8 +48,9 @@ nil cannot be used.
 On `/ws` the provider is detected from its first messages. `CreateTransport`
 then sets `TransportType` and `CallData` on the arguments (call id, numbers,
 custom parameters) and builds the provider's serializer, with its credentials
-from the environment (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
-`TELNYX_API_KEY`, `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN`). A plain WebSocket client
+from the environment (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` or the API key
+pair `TWILIO_API_KEY` and `TWILIO_API_SECRET`, `TELNYX_API_KEY`,
+`PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN`). A plain WebSocket client
 needs a serializer of your choosing in `TransportParams.WebSocket`.
 
 ## Command line
