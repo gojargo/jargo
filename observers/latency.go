@@ -87,11 +87,11 @@ type LatencyConfig struct {
 	// Deprecated: the observer is told about each frame once, so it keeps no
 	// window of the frames it has seen.
 	MaxFrames int
-	// MinContribution is the shortest stretch reported in its own right; 0 uses
-	// 5ms. Anything shorter is a frame hop rather than work worth naming, so it
-	// is rolled into the single pipeline contribution. Set it negative to list
-	// every stretch, individual frame hops included.
-	MinContribution time.Duration
+	// MinContribution is the shortest stretch reported in its own right. Nil
+	// uses 5ms. Anything shorter is a frame hop rather than work worth naming,
+	// so it is rolled into the single pipeline contribution. Zero lists every
+	// stretch, individual frame hops included.
+	MinContribution *time.Duration
 	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
 	// drive a cycle without waiting out the intervals it describes.
 	Now func() time.Time
@@ -165,10 +165,10 @@ func (o *UserBotLatency) now() time.Time {
 // minContribution is the threshold below which a stretch is rolled into the
 // pipeline contribution.
 func (o *UserBotLatency) minContribution() time.Duration {
-	if o.cfg.MinContribution == 0 {
+	if o.cfg.MinContribution == nil {
 		return defaultMinContribution
 	}
-	return o.cfg.MinContribution
+	return *o.cfg.MinContribution
 }
 
 // OnPipelineStarted implements processor.PipelineStartedObserver. The StartFrame

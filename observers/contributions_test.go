@@ -38,19 +38,19 @@ type cycleDriver struct {
 }
 
 // newCycleDriver starts an observer reading the driver's clock. A zero
-// minContribution leaves the default threshold in place.
-func newCycleDriver(t *testing.T, minContribution time.Duration) *cycleDriver {
+// A nil minContribution leaves the default threshold in place.
+func newCycleDriver(t *testing.T, minContribution *time.Duration) *cycleDriver {
 	t.Helper()
 	return newDriver(t, minContribution, false)
 }
 
 // newRealClockDriver starts one on the wall clock instead.
-func newRealClockDriver(t *testing.T, minContribution time.Duration) *cycleDriver {
+func newRealClockDriver(t *testing.T, minContribution *time.Duration) *cycleDriver {
 	t.Helper()
 	return newDriver(t, minContribution, true)
 }
 
-func newDriver(t *testing.T, minContribution time.Duration, realClock bool) *cycleDriver {
+func newDriver(t *testing.T, minContribution *time.Duration, realClock bool) *cycleDriver {
 	t.Helper()
 	d := &cycleDriver{
 		t:         t,
@@ -246,7 +246,7 @@ func near(got, want, tolerance time.Duration) bool {
 // TestContributionsSumToTheMeasuredLatency covers the invariant the whole
 // timeline rests on: nothing in the interval goes unnamed.
 func TestContributionsSumToTheMeasuredLatency(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	b := d.completeTurn(aTurn())
 
 	var total time.Duration
@@ -267,7 +267,7 @@ func TestContributionsSumToTheMeasuredLatency(t *testing.T) {
 // TestCompleteTurnNamesEachStage covers a turn the model completed: it has no
 // wait, and lists the rest in the order they happened.
 func TestCompleteTurnNamesEachStage(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	b := d.completeTurn(aTurn())
 
 	want := []string{
@@ -296,7 +296,7 @@ func TestCompleteTurnNamesEachStage(t *testing.T) {
 // TestHeldTurnNamesTheWait covers an incomplete marker showing up as a wait
 // rather than as slow inference.
 func TestHeldTurnNamesTheWait(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	opts := aTurn()
 	opts.hold = true
 	b := d.completeTurn(opts)
@@ -324,7 +324,7 @@ func TestHeldTurnNamesTheWait(t *testing.T) {
 // TestBotWithoutTurnCompletionHasNoMarkerEntry covers parts that did not happen
 // not being listed.
 func TestBotWithoutTurnCompletionHasNoMarkerEntry(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	opts := aTurn()
 	opts.marker = false
 	b := d.completeTurn(opts)
@@ -340,7 +340,7 @@ func TestBotWithoutTurnCompletionHasNoMarkerEntry(t *testing.T) {
 // on a response that carried none: the wait for a speakable token is then a
 // diagnosis rather than the model simply still streaming.
 func TestMissingMarkerReportedOnceMarkersAreInUse(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	d.completeTurn(aTurn()) // establishes that this bot uses markers
 
 	opts := aTurn()
@@ -397,7 +397,7 @@ func TestTurnContributionLinesRenderNothingWhenEmpty(t *testing.T) {
 // the model's first chunk to the first speakable token, which is the gate
 // reading the verdict plus the token the marker occupies.
 func TestTurnCompletionCoversTheGateAndTheMarkerToken(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	b := d.completeTurn(aTurn())
 
 	completion := labeled(t, b, "turn completion")
@@ -412,7 +412,7 @@ func TestTurnCompletionCoversTheGateAndTheMarkerToken(t *testing.T) {
 // TestEveryContributionListedWhenTheThresholdIsOff covers nothing being folded
 // away when the threshold is lifted.
 func TestEveryContributionListedWhenTheThresholdIsOff(t *testing.T) {
-	d := newRealClockDriver(t, -1)
+	d := newRealClockDriver(t, new(time.Duration(0)))
 	b := d.completeTurn(aTurn())
 
 	if !hasLabel(b, "output transport") {
@@ -429,7 +429,7 @@ func TestEveryContributionListedWhenTheThresholdIsOff(t *testing.T) {
 // timeline's shape: a core stage of a few milliseconds is listed, and one that
 // rounds to zero is not.
 func TestCoreStagesAreListedWhenBriefButMeasurable(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	opts := aTurn()
 	opts.detect = 2 * time.Millisecond
 	b := d.completeTurn(opts)
@@ -450,7 +450,7 @@ func TestCoreStagesAreListedWhenBriefButMeasurable(t *testing.T) {
 // TestSentenceAggregationListedOnlyWhenItWaits covers the wait before speech can
 // start: grouping into sentences reports it, streaming tokens has none.
 func TestSentenceAggregationListedOnlyWhenItWaits(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	opts := aTurn()
 	opts.aggregation = 50 * time.Millisecond
 	b := d.completeTurn(opts)
@@ -482,7 +482,7 @@ func (d *cycleDriver) toolCall(name, id string) (*frames.FunctionCallInProgressF
 // TestFunctionHandlersListedWithTheWaitThatPrecedesThem covers a tool turn
 // naming both writing the call and running the handler.
 func TestFunctionHandlersListedWithTheWaitThatPrecedesThem(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 
 	d.push(frames.NewVADUserStoppedSpeakingFrame(0.02, d.now()), "VAD#0")
 	d.push(frames.NewTranscriptionFrame("weather?", "u", ""), "STT#0")
@@ -529,7 +529,7 @@ func TestFunctionHandlersListedWithTheWaitThatPrecedesThem(t *testing.T) {
 // their wall clock once: listing each would count the same stretch twice and
 // push the sum past the latency it describes.
 func TestConcurrentHandlersAreOneSpan(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 
 	d.push(frames.NewVADUserStoppedSpeakingFrame(0.02, d.now()), "VAD#0")
 	d.push(frames.NewTranscriptionFrame("weather and food?", "u", ""), "STT#0")
@@ -576,7 +576,7 @@ func TestConcurrentHandlersAreOneSpan(t *testing.T) {
 // TestNoTwoContributionsOverlap covers spans tiling the interval rather than
 // covering the same time twice.
 func TestNoTwoContributionsOverlap(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	opts := aTurn()
 	opts.hold = true
 	opts.aggregation = 30 * time.Millisecond
@@ -602,7 +602,7 @@ func TestNoTwoContributionsOverlap(t *testing.T) {
 // TestLongHoldReportedWithoutWaitingItOut covers the clock being the test's: a
 // ten second hold costs the suite nothing.
 func TestLongHoldReportedWithoutWaitingItOut(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	opts := aTurn()
 	opts.hold = true
 	opts.holdFor = 10 * time.Second
@@ -616,7 +616,7 @@ func TestLongHoldReportedWithoutWaitingItOut(t *testing.T) {
 // TestDurationsAreExact covers every span being the interval the cycle
 // described, rather than whatever a wall clock left around it.
 func TestDurationsAreExact(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 	opts := aTurn()
 	opts.detect = 400 * time.Millisecond
 	opts.aggregation = 250 * time.Millisecond
@@ -642,7 +642,7 @@ func TestDurationsAreExact(t *testing.T) {
 // TestTurnHeldTwiceReportsBothWaits covers a turn that can be told to wait more
 // than once before it completes.
 func TestTurnHeldTwiceReportsBothWaits(t *testing.T) {
-	d := newCycleDriver(t, 0)
+	d := newCycleDriver(t, nil)
 
 	d.push(frames.NewVADUserStoppedSpeakingFrame(0.02, d.now()), "VAD#0")
 	d.wait(20 * time.Millisecond)

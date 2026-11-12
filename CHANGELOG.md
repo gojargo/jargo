@@ -53,6 +53,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   150 ms, so a level per audio frame could not be asked for. Nil now means
   150 ms, and zero reports every audio frame. **Breaking:** set it with
   `new(d)`.
+- **Observer thresholds are pointers.** `LatencyConfig.MinContribution` and
+  `TurnTrackingConfig.TurnEndTimeout` used zero for their defaults (5 ms and
+  2.5 s), so listing every contribution, or ending a turn as soon as the bot
+  stops, could not be asked for with zero. Nil now means the default, and zero
+  means none. **Breaking:** set them with `new(d)`; a negative
+  `MinContribution` no longer stands for "list everything".
 
 ### Fixed
 

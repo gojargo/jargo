@@ -16,10 +16,11 @@ type TurnTrackingConfig struct {
 	// Deprecated: the observer is told about each frame once, so it keeps no
 	// window of the frames it has seen.
 	MaxFrames int
-	// TurnEndTimeout is how long after the bot stops speaking a turn ends; 0 uses
-	// 2.5s. The delay lets a turn survive a brief gap between bot utterances (an
-	// HTTP TTS boundary, a function call) without splitting into two turns.
-	TurnEndTimeout time.Duration
+	// TurnEndTimeout is how long after the bot stops speaking a turn ends. Nil
+	// uses 2.5s, and zero ends it as soon as the bot stops. The delay lets a turn
+	// survive a brief gap between bot utterances (an HTTP TTS boundary, a
+	// function call) without splitting into two turns.
+	TurnEndTimeout *time.Duration
 	// OnTurnStarted is called when a turn begins, with the 1-based turn number.
 	OnTurnStarted func(turn int)
 	// OnTurnEnded is called when a turn ends, with the turn number, its duration,
@@ -65,8 +66,8 @@ func (o *TurnTracking) OnTurnEnded(fn func(turn int, duration time.Duration, int
 
 // NewTurnTracking builds a TurnTracking observer.
 func NewTurnTracking(cfg TurnTrackingConfig) *TurnTracking {
-	if cfg.TurnEndTimeout == 0 {
-		cfg.TurnEndTimeout = defaultTurnEndTimeout
+	if cfg.TurnEndTimeout == nil {
+		cfg.TurnEndTimeout = new(defaultTurnEndTimeout)
 	}
 	return &TurnTracking{cfg: cfg}
 }
@@ -170,7 +171,7 @@ func (o *TurnTracking) endTurn(at time.Duration, interrupted bool) {
 func (o *TurnTracking) scheduleEnd(at time.Duration) {
 	o.cancelTimer()
 	turn := o.count
-	o.timer = time.AfterFunc(o.cfg.TurnEndTimeout, func() {
+	o.timer = time.AfterFunc(*o.cfg.TurnEndTimeout, func() {
 		o.mu.Lock()
 		defer o.mu.Unlock()
 		if o.active && !o.botTalk && o.count == turn {

@@ -31,7 +31,7 @@ func newTurnRecorder() *turnRecorder {
 
 func (r *turnRecorder) config(timeout time.Duration) observers.TurnTrackingConfig {
 	return observers.TurnTrackingConfig{
-		TurnEndTimeout: timeout,
+		TurnEndTimeout: new(timeout),
 		OnTurnStarted: func(turn int) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -211,7 +211,7 @@ func TestTurnTrackingStartsWithThePipelineAndEndsOnABargeIn(t *testing.T) {
 func TestTurnTrackingTimesTurnsOnThePipelineClock(t *testing.T) {
 	var got time.Duration
 	o := observers.NewTurnTracking(observers.TurnTrackingConfig{
-		TurnEndTimeout: turnEndTimeoutTest,
+		TurnEndTimeout: new(turnEndTimeoutTest),
 		OnTurnEnded:    func(_ int, d time.Duration, _ bool) { got = d },
 	})
 
@@ -269,5 +269,24 @@ func TestTurnTrackingCleanupCancelsThePendingTurnEnd(t *testing.T) {
 
 	if _, ended := r.snapshot(); len(ended) != 0 {
 		t.Errorf("ended = %+v, want none after cleanup", ended)
+	}
+}
+
+// TestTurnTrackingZeroTimeoutEndsTheTurnWhenTheBotStops checks a turn-end
+// timeout of zero is a setting of its own: the turn ends as soon as the bot
+// stops, rather than after the default wait.
+func TestTurnTrackingZeroTimeoutEndsTheTurnWhenTheBotStops(t *testing.T) {
+	r := newTurnRecorder()
+	o := observers.NewTurnTracking(r.config(0))
+
+	push(o, frames.NewStartFrame(), processor.Downstream)
+	push(o, frames.NewUserStartedSpeakingFrame(), processor.Downstream)
+	push(o, frames.NewBotStartedSpeakingFrame(), processor.Upstream)
+	push(o, frames.NewBotStoppedSpeakingFrame(), processor.Upstream)
+
+	select {
+	case <-r.endSig:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("the turn did not end at once: zero waited for the default timeout")
 	}
 }
