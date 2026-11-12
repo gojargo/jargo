@@ -599,6 +599,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   one configured. Unicode whitespace, a no-break space say, is kept as a space
   rather than stripped.
 
+- **A response that carried nothing is not reported against the marker
+  protocol.** With incomplete user turns filtered, every response pushed an
+  `LLMMarkerResponseFrame`, so one answered with a tool call and no preamble,
+  or an empty completion, reported an empty one: an RTVI client asking for
+  `bot-llm-marker` read it as the model ignoring the protocol, and an eval
+  expecting an `llm_marker` event could match it. A response is reported only
+  once it carried text or a marker.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

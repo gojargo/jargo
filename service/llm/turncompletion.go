@@ -429,7 +429,9 @@ func (b *Base) pushMarker(ctx context.Context, marker, kind string) error {
 // markerResponse is the report of what the service made of the response that
 // just ended: the marker it found, what that meant, and the text the model
 // produced before anything was held back. It reports false when the markers
-// are off, where there is no protocol to report against.
+// are off, where there is no protocol to report against, and when the response
+// carried neither text nor a marker, a tool call with no preamble say, where
+// there was nothing to read.
 //
 // It is a diagnostic for a consumer checking the model against the protocol it
 // was given, and plays no part in the conversation.
@@ -439,6 +441,9 @@ func (b *Base) markerResponse() (*frames.LLMMarkerResponseFrame, bool) {
 	}
 	b.turnCompletion.mu.Lock()
 	defer b.turnCompletion.mu.Unlock()
+	if b.turnCompletion.raw.Len() == 0 && b.turnCompletion.foundMarker == "" {
+		return nil, false
+	}
 	cfg := b.turnCompletion.config
 	return frames.NewLLMMarkerResponseFrame(
 		b.turnCompletion.raw.String(),

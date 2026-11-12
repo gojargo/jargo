@@ -481,6 +481,16 @@ func TestMarkerResponseReportsNoMarker(t *testing.T) {
 	}
 }
 
+// Ported from upstream (test_a_response_the_mixin_never_saw_is_not_reported). A
+// response that carried neither text nor a marker, a tool call with no
+// preamble say, had nothing to read, so nothing is reported.
+func TestAResponseTheServiceNeverReadIsNotReported(t *testing.T) {
+	svc, _, _ := gatedService(t)
+	if report, ok := svc.markerResponse(); ok {
+		t.Errorf("reported %+v for a response that carried nothing", report)
+	}
+}
+
 // With gating off there is no protocol to report against, so nothing is
 // reported: the markers are the gating's own convention with the model.
 func TestNoMarkerResponseWithoutGating(t *testing.T) {
