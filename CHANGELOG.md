@@ -93,6 +93,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Calling off a queued sequential job keeps the queue in order.** A
+  sequential job request called off while it waited for its turn released the
+  request behind it at once, so that request ran alongside the one holding the
+  turn. The request behind now waits for the one holding the turn to finish.
+
 - **A frame crosses a network bus whole.** The JSON bus serializer carried
   only a frame's own exported fields, so every frame arriving from Redis had
   id 0, no name, no timestamp, no metadata and no transport routing (a

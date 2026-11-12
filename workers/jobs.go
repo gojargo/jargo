@@ -429,18 +429,25 @@ func (w *Base) runJobHandler(
 ) {
 	defer close(running.done)
 	defer w.forgetJobHandler(m.JobID)
-	// Released whatever happened, so a request called off while queued does not
-	// strand the ones behind it.
-	if release != nil {
-		defer close(release)
-	}
 
 	if wait != nil {
 		select {
 		case <-wait:
 		case <-ctx.Done():
+			// Called off while queued, it leaves the queue: the request behind it
+			// is let go once the request holding the turn finishes, not now, so
+			// the two never run at once.
+			if release != nil {
+				go func() {
+					<-wait
+					close(release)
+				}()
+			}
 			return
 		}
+	}
+	if release != nil {
+		defer close(release)
 	}
 
 	fn(ctx, m)

@@ -1068,6 +1068,75 @@ func TestSequentialJobsRunOneAtATimeInOrder(t *testing.T) {
 	}
 }
 
+// A request called off while it waits for its turn leaves the queue, and the
+// one behind it keeps waiting for the request holding the turn: the two never
+// run at once.
+func TestSequentialCancelledQueuedRequestKeepsTheNextWaiting(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	var mu sync.Mutex
+	running, maxRunning := 0, 0
+	var started []string
+	gates := map[string]chan struct{}{"t1": make(chan struct{}), "t3": make(chan struct{})}
+
+	worker := newHandlerWorker("worker", func(w *handlerWorker) {
+		w.HandleJob("work", workers.JobOptions{Sequential: true}, func(ctx context.Context, m *bus.JobRequestMessage) {
+			mu.Lock()
+			running++
+			maxRunning = max(maxRunning, running)
+			started = append(started, m.JobID)
+			mu.Unlock()
+			select {
+			case <-gates[m.JobID]:
+			case <-ctx.Done():
+			}
+			mu.Lock()
+			running--
+			mu.Unlock()
+		})
+	})
+	env.setup(worker)
+
+	for _, jobID := range []string{"t1", "t2", "t3"} {
+		giveJobNamed(env, worker, jobID, "work")
+	}
+	eventually(t, "the first handler starts", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return running == 1
+	})
+
+	cancel := &bus.JobCancelMessage{JobID: "t2", Reason: "no longer needed"}
+	cancel.From = "parent"
+	cancel.To = "worker"
+	worker.OnBusMessage(env.ctx, cancel)
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	if maxRunning != 1 || !reflect.DeepEqual(started, []string{"t1"}) {
+		t.Errorf("started %v with t1 still holding the turn (max %d at once), want only t1", started, maxRunning)
+	}
+	mu.Unlock()
+
+	close(gates["t1"])
+	eventually(t, "t3 starts once t1 is done", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(started, "t3")
+	})
+	close(gates["t3"])
+
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"t1", "t3"}; !reflect.DeepEqual(started, want) {
+		t.Errorf("started = %v, want %v: the called-off request never runs", started, want)
+	}
+	if maxRunning != 1 {
+		t.Errorf("%d handlers ran at once, want 1", maxRunning)
+	}
+}
+
 func TestNonSequentialJobsRunConcurrently(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
