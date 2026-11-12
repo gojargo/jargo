@@ -295,7 +295,11 @@ type server struct {
 	auth       *wsAuth
 	rtcHandler *rtc.RequestHandler
 	whatsapp   *whatsapp.Client
-	sessions   sync.WaitGroup
+	// sessions counts the running sessions, which shutdown waits for. closing,
+	// under mu, is set once it has started waiting, and a session arriving
+	// after that is refused: counting it then would race the wait.
+	sessions sync.WaitGroup
+	closing  bool
 }
 
 func newServer(ctx context.Context, args *Args, bot Bot) *server {
@@ -311,7 +315,16 @@ func newServer(ctx context.Context, args *Args, bot Bot) *server {
 // runBotSession runs the bot for one session in the background. When
 // sessionID is tracked, the session is forgotten once the bot returns.
 func (s *server) runBotSession(args Arguments, sessionID string, tracked bool) {
-	s.sessions.Go(func() {
+	if !s.startSession() {
+		if tracked {
+			s.mu.Lock()
+			delete(s.activeSessions, sessionID)
+			s.mu.Unlock()
+		}
+		return
+	}
+	go func() {
+		defer s.sessions.Done()
 		defer func() {
 			if tracked {
 				s.mu.Lock()
@@ -320,7 +333,28 @@ func (s *server) runBotSession(args Arguments, sessionID string, tracked bool) {
 			}
 		}()
 		s.callBot(args, sessionID)
-	})
+	}()
+}
+
+// startSession counts a session for shutdown to wait for. It reports false once
+// shutdown has started waiting, for a session that arrived too late to run.
+func (s *server) startSession() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing {
+		slog.Debug("runner: shutting down, refusing a new session")
+		return false
+	}
+	s.sessions.Add(1)
+	return true
+}
+
+// waitSessions refuses new sessions and waits for the running ones to end.
+func (s *server) waitSessions() {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	s.sessions.Wait()
 }
 
 // callBot runs the bot for one session and logs how it ended. A bot that panics
@@ -962,9 +996,11 @@ func (s *server) setupTelephonyRoutes(mux *http.ServeMux) {
 
 // runWebSocketBot runs the bot for a WebSocket session for as long as it lasts.
 func (s *server) runWebSocketBot(args *WebSocketRunnerArguments) {
-	s.sessions.Add(1)
-	defer s.sessions.Done()
 	defer func() { _ = args.WebSocket.CloseNow() }()
+	if !s.startSession() {
+		return
+	}
+	defer s.sessions.Done()
 	s.callBot(args, args.SessionID)
 }
 
@@ -1462,6 +1498,6 @@ func Run(ctx context.Context, fs *flag.FlagSet, arguments []string, bot Bot) err
 	_ = srv.Shutdown(shutdownCtx)
 	s.shutdown()
 	cancelSessions()
-	s.sessions.Wait()
+	s.waitSessions()
 	return nil
 }

@@ -19,11 +19,40 @@ func TestABotThatPanicsEndsOnlyItsSession(t *testing.T) {
 	s.mu.Unlock()
 
 	s.runBotSession(&RunnerArguments{SessionID: "s1"}, "s1", true)
-	s.sessions.Wait()
+	s.waitSessions()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.activeSessions["s1"]; ok {
 		t.Error("the session is still listed after its bot panicked, want it forgotten")
+	}
+}
+
+// TestASessionArrivingAfterShutdownIsRefused checks a session that arrives once
+// shutdown is waiting for the running ones is not started, and is forgotten,
+// rather than counted against a wait already under way.
+func TestASessionArrivingAfterShutdownIsRefused(t *testing.T) {
+	ran := make(chan struct{}, 1)
+	s := newServer(t.Context(), &Args{}, func(context.Context, Arguments) error {
+		ran <- struct{}{}
+		return nil
+	})
+	s.waitSessions()
+
+	s.mu.Lock()
+	s.activeSessions["late"] = nil
+	s.mu.Unlock()
+	s.runBotSession(&RunnerArguments{SessionID: "late"}, "late", true)
+	s.waitSessions()
+
+	select {
+	case <-ran:
+		t.Error("the bot ran for a session that arrived after shutdown")
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.activeSessions["late"]; ok {
+		t.Error("the refused session is still listed, want it forgotten")
 	}
 }

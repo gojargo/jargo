@@ -55,6 +55,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The runner refuses a session that arrives once shutdown is waiting for
+  the running ones.** A WebSocket connection accepted during shutdown counted
+  its session while the wait was under way, a race on the wait group; its
+  bot now does not start and the connection is closed.
+
 - **The bus reads a whole number too large for an `int` without cutting it
   short.** On a platform where `int` is 32 bits, a whole number past its
   range came out of the JSON serializer truncated. It now comes out as a

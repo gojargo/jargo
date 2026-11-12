@@ -63,7 +63,7 @@ func newTestRunner(t *testing.T, args *Args) *testRunner {
 		cancel()
 		tr.srv.Close()
 		tr.s.shutdown()
-		tr.s.sessions.Wait()
+		tr.s.waitSessions()
 	})
 	return tr
 }
