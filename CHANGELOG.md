@@ -607,6 +607,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   expecting an `llm_marker` event could match it. A response is reported only
   once it carried text or a marker.
 
+- **A turn's perception readings are merged.** With expressive conversation
+  on, the user aggregator kept only a turn's latest final reading of how the
+  user spoke, so a turn the STT finalized in several segments lost the earlier
+  ones: the user message, the user turn frame and `UserTurnStopped` carried
+  only the last. The readings are now merged, a value signal keeping its
+  highest value and a label signal every label at its highest confidence,
+  likeliest first, signals in the order first read. The merge is
+  `expressive.MergePerception`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -1057,10 +1057,12 @@ func (u *UserAggregator) handleTranscription(fr *frames.TranscriptionFrame) erro
 	return nil
 }
 
-// handlePerception keeps a final transcription's reading of how the user spoke,
-// with expressive conversation on: for the user message and for the turn. A
-// later reading in the same turn replaces it. It is folded in under the turn
-// controller's lock, as the transcript is.
+// handlePerception folds a final transcription's reading of how the user spoke
+// into the readings kept, with expressive conversation on: for the user message
+// and for the turn. A later reading in the same turn is merged in, keeping the
+// higher of each (see expressive.MergePerception), so a reading taken early in a
+// long turn is not lost. It is folded in under the turn controller's lock, as
+// the transcript is.
 func (u *UserAggregator) handlePerception(signals []expressive.PerceptionSignal) {
 	u.mu.Lock()
 	on := u.expressive
@@ -1071,8 +1073,8 @@ func (u *UserAggregator) handlePerception(signals []expressive.PerceptionSignal)
 	u.turn.Locked(func() {
 		u.mu.Lock()
 		defer u.mu.Unlock()
-		u.perception = signals
-		u.turnPerception = signals
+		u.perception = expressive.MergePerception(u.perception, signals)
+		u.turnPerception = expressive.MergePerception(u.turnPerception, signals)
 	})
 }
 

@@ -124,12 +124,28 @@ func TestAProvisionalReadingIsNotWritten(t *testing.T) {
 	}
 }
 
-func TestTheTurnsLatestFinalReadingIsWritten(t *testing.T) {
+// Ported from upstream (test_the_turns_final_readings_are_merged). Each final
+// reading of the turn is merged in, keeping the higher of each, so an early one
+// is not lost.
+func TestTheTurnsFinalReadingsAreMerged(t *testing.T) {
 	said, _ := userMessages(t, expressiveOn,
 		readTurn("where my order is?", frustrated, readTranscript("Can you tell me", neutralTone)))
 
-	if want := []string{frustratedMessage}; !slices.Equal(said, want) {
+	want := []string{"([tone frustrated=0.86, neutral=0.81, positive=0.12]) Can you tell me where my order is?"}
+	if !slices.Equal(said, want) {
 		t.Errorf("user messages = %q, want %q", said, want)
+	}
+}
+
+// Ported from upstream (test_the_turn_stops_with_its_final_readings_merged).
+func TestTheTurnStopsWithItsFinalReadingsMerged(t *testing.T) {
+	stopped := stoppedTurns(t, expressiveOn,
+		readTurn("where my order is?", frustrated, readTranscript("Can you tell me", neutralTone)))
+	if len(stopped) == 0 {
+		t.Fatal("no turn stopped")
+	}
+	if want := expressive.MergePerception(neutralTone, frustrated); !reflect.DeepEqual(stopped[0].Perception, want) {
+		t.Errorf("turn perception = %+v, want %+v", stopped[0].Perception, want)
 	}
 }
 

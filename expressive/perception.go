@@ -1,6 +1,8 @@
 package expressive
 
 import (
+	"cmp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -79,4 +81,59 @@ func FormatPerception(signals []PerceptionSignal) string {
 		categories = append(categories, "["+signal.Name+pairs+"]")
 	}
 	return "(" + strings.Join(categories, ",") + ")"
+}
+
+// MergePerception merges a reading into the readings of the same turn so far,
+// keeping the higher of each, and returns the merged reading. merged is nil
+// before the first.
+//
+// A signal read as a value keeps its highest value. A signal read as labels
+// keeps every label either reading has, each with its highest confidence,
+// likeliest first. A signal only one of them has is kept as it is, and the
+// signals stay in the order they were first read.
+func MergePerception(merged, reading []PerceptionSignal) []PerceptionSignal {
+	out := slices.Clone(merged)
+	index := make(map[string]int, len(out))
+	for i, s := range out {
+		index[s.Name] = i
+	}
+	for _, signal := range reading {
+		i, ok := index[signal.Name]
+		if !ok {
+			index[signal.Name] = len(out)
+			out = append(out, signal)
+			continue
+		}
+		out[i] = mergedSignal(out[i], signal)
+	}
+	return out
+}
+
+// mergedSignal is one signal read twice in a turn, keeping the higher of each.
+func mergedSignal(earlier, signal PerceptionSignal) PerceptionSignal {
+	if len(earlier.Labels) > 0 || len(signal.Labels) > 0 {
+		labels := slices.Clone(earlier.Labels)
+		at := make(map[string]int, len(labels))
+		for i, l := range labels {
+			at[l.Label] = i
+		}
+		for _, l := range signal.Labels {
+			if i, ok := at[l.Label]; ok {
+				labels[i].Confidence = max(labels[i].Confidence, l.Confidence)
+				continue
+			}
+			at[l.Label] = len(labels)
+			labels = append(labels, l)
+		}
+		// Stable, so labels as likely as each other stay in the order read.
+		slices.SortStableFunc(labels, func(a, b PerceptionLabel) int { return cmp.Compare(b.Confidence, a.Confidence) })
+		return PerceptionSignal{Name: signal.Name, Labels: labels}
+	}
+	var value *float64
+	for _, v := range []*float64{earlier.Value, signal.Value} {
+		if v != nil && (value == nil || *v > *value) {
+			value = new(*v)
+		}
+	}
+	return PerceptionSignal{Name: signal.Name, Value: value}
 }
