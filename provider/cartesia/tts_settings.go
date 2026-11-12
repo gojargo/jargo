@@ -1,6 +1,7 @@
 package cartesia
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 
@@ -38,9 +39,9 @@ func newTTSSettings(cfg Config) *TTSSettings {
 	s := &TTSSettings{}
 	s.Model = settings.Set(cfg.Model)
 	s.Voice = settings.Set(cfg.VoiceID)
-	if lang := cartesiaLanguage(cfg.Language); lang != "" {
-		s.Language = settings.Set(lang)
-	}
+	// Cartesia is asked for English unless told otherwise, rather than left to
+	// pick a language itself.
+	s.Language = settings.Set(cartesiaLanguage(cmp.Or(cfg.Language, language.English)))
 	if cfg.GenerationConfig != nil {
 		s.GenerationConfig = settings.Set(cfg.GenerationConfig)
 	}

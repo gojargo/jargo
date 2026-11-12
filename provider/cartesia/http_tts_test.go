@@ -139,7 +139,11 @@ func TestHTTPTTSRequestShape(t *testing.T) {
 		t.Errorf("output_format.sample_rate = %v, want %d", format["sample_rate"], defaultSampleRate)
 	}
 	// Nothing optional was configured, so nothing optional is sent.
-	for _, f := range []string{"language", "generation_config", "pronunciation_dict_id", "accent", "normalization"} {
+	// English unless told otherwise, as the service is built.
+	if got.body["language"] != "en" {
+		t.Errorf("language = %v, want en for an unset config", got.body["language"])
+	}
+	for _, f := range []string{"generation_config", "pronunciation_dict_id", "accent", "normalization"} {
 		if _, present := got.body[f]; present {
 			t.Errorf("%s was sent for an unset config: %v", f, got.body[f])
 		}

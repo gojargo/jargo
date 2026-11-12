@@ -86,6 +86,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Cartesia TTS asks for English unless told otherwise.** A service built
+  with no `Language` (WebSocket or HTTP) sent no language at all, leaving
+  Cartesia to pick one; it now sends `"en"`, as the configuration's
+  documented default.
+
 - **The OpenAI Responses services carry the model's reasoning across turns.**
   A configured `Reasoning` now asks for the encrypted reasoning
   (`include: ["reasoning.encrypted_content"]`). The streamed reasoning summary

@@ -51,8 +51,9 @@ type HTTPTTSConfig struct {
 	Version string
 	// Model is the Cartesia model id; empty uses a default.
 	Model string
-	// Language for synthesis; the zero value leaves it unset, which leaves
-	// Cartesia on its own default.
+	// Language for synthesis; the zero value uses English. A regional locale
+	// Cartesia supports keeps its region ("es-MX"); any other is sent under its
+	// base code.
 	Language language.Language
 	// SampleRate is the PCM rate requested from Cartesia and emitted downstream;
 	// 0 uses 24 kHz.

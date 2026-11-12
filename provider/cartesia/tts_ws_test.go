@@ -385,7 +385,11 @@ func TestRunTTSOptionalFields(t *testing.T) {
 	s := newSynthesizer(ttsConfig(endpoint))
 	speak(t, s, "hi")
 	got := seen.first()
-	for _, f := range []string{"language", "generation_config", "pronunciation_dict_id", "accent", "normalization"} {
+	// English unless told otherwise, as the service is built.
+	if got["language"] != "en" {
+		t.Errorf("language = %v, want en for an unset config", got["language"])
+	}
+	for _, f := range []string{"generation_config", "pronunciation_dict_id", "accent", "normalization"} {
 		if _, present := got[f]; present {
 			t.Errorf("%s was sent for an unset config: %v", f, got[f])
 		}
