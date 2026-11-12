@@ -104,7 +104,10 @@ type TurnContextCreator interface {
 
 // TurnContextCompleter is an optional interface a Synthesizer implements to
 // close its server-side context once the turn's text has all been sent. The
-// audio for it may still be arriving.
+// audio for it may still be arriving. It is called for every turn that had a
+// context id, whether or not any text reached it: a provider that opened its
+// context as the turn started (see TurnContextCreator) closes it here even when
+// the turn spoke nothing, as one that only called tools does.
 type TurnContextCompleter interface {
 	OnTurnContextCompleted(ctx context.Context, contextID string)
 }

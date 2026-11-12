@@ -1095,7 +1095,7 @@ func (b *Base) onTurnContextCompleted(ctx context.Context) {
 	if f, ok := b.syn.(AudioFlusher); ok && b.AudioContextAvailable(id) {
 		f.FlushAudio(ctx, id)
 	}
-	if c, ok := b.syn.(TurnContextCompleter); ok && b.AudioContextAvailable(id) {
+	if c, ok := b.syn.(TurnContextCompleter); ok {
 		c.OnTurnContextCompleted(ctx, id)
 	}
 }

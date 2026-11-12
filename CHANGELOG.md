@@ -55,6 +55,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A TTS provider is told a turn is over even when the turn spoke
+  nothing.** `TurnContextCompleter` was only called when text had reached the
+  turn's context, so a provider that opened its server-side context as the
+  turn started (Soniox) left it open to the server's idle timer after a turn
+  that only called tools, and ElevenLabs realtime never closed such a
+  context. It is now called for every turn.
+
 - **`soniox.NewTTS` holds one connection for the call instead of dialing one
   per sentence.** It used to open a connection for each sentence, open a
   stream on it, send the text and close the stream, and wait for that
