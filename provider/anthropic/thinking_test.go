@@ -13,6 +13,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
 )
 
 // appliedDefault returns the request fields a service built for model sends
@@ -80,7 +81,7 @@ func logLines(t *testing.T, models ...string) []string {
 	buf := captureLogs(t)
 	s := NewLLM(Config{Model: models[0]})
 	for _, model := range models {
-		s.model = model
+		s.live.Model = settings.Set(model)
 		paramsOf(t, s)
 		paramsOf(t, s)
 	}

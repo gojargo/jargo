@@ -86,6 +86,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A settings update reaches the Anthropic request.** An
+  `LLMUpdateSettingsFrame` changing the model, the token bound, the sampling
+  controls, prompt caching, thinking, the effort or an unmodeled field was
+  ignored: the service copied its configuration into fields once, at
+  construction. It now keeps its settings as `anthropic.LLMSettings`, seeded
+  from the config with the service's defaults, and builds each request from
+  them, for the Bedrock backend built on it too. `Config.Extra` is now set on
+  each request rather than on the client.
+
 - **A settings update reaches the OpenAI Responses request.** An
   `LLMUpdateSettingsFrame` changing the model, the temperature, the top-p, the
   output bound (`max_completion_tokens`), the reasoning or an unmodeled field

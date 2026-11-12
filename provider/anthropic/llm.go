@@ -10,7 +10,6 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/gojargo/jargo/adapter"
 	anthropicadapter "github.com/gojargo/jargo/adapter/anthropic"
 	"github.com/gojargo/jargo/frames"
@@ -21,30 +20,12 @@ import (
 // Service is a streaming Anthropic LLM processor.
 type Service struct {
 	*llm.Base
-	client    sdk.Client
-	model     sdk.Model
-	maxTokens int64
-	// Sampling controls, applied to each request. A zero param.Opt is omitted
-	// from the request, leaving the API default.
-	temperature param.Opt[float64]
-	topP        param.Opt[float64]
-	topK        param.Opt[int64]
+	client sdk.Client
+	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
+	// It is seeded from the config, and is what every request is built from.
+	live *LLMSettings
 	// adapter converts the conversation into the request Anthropic takes.
 	adapter anthropicadapter.Adapter
-	// cachePrompt gates the ephemeral cache breakpoints on the prompt.
-	cachePrompt bool
-	// systemPromptCacheTTL is how long the system prompt's cache entry lives;
-	// empty leaves Anthropic's default.
-	systemPromptCacheTTL string
-	// thinking is the extended-thinking config sent on each request; thinkingSet
-	// reports whether it was configured (an unset union means "omit").
-	thinking    sdk.ThinkingConfigParamUnion
-	thinkingSet bool
-	// effort is the output_config.effort sent on each request; empty omits it.
-	effort string
-	// extraConfiguresThinking reports whether Extra sets thinking or an effort,
-	// which, like the configured ones, wins over the thinking default.
-	extraConfiguresThinking bool
 	// omitInterleavedThinking leaves the interleaved-thinking beta off every
 	// request, for a backend that does not take it.
 	omitInterleavedThinking bool
@@ -70,9 +51,6 @@ func requestOptions(cfg Config, extra ...option.RequestOption) []option.RequestO
 	if cfg.MaxRetries > 0 {
 		opts = append(opts, option.WithMaxRetries(cfg.MaxRetries))
 	}
-	for k, v := range cfg.Extra {
-		opts = append(opts, option.WithJSONSet(k, v))
-	}
 	return append(opts, extra...)
 }
 
@@ -82,94 +60,57 @@ func requestOptions(cfg Config, extra ...option.RequestOption) []option.RequestO
 // an SDK option rather than an API key.
 func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *Service {
 	s := &Service{
-		client:      sdk.NewClient(requestOptions(cfg, extra...)...),
-		model:       sdk.ModelClaudeHaiku4_5,
-		maxTokens:   defaultMaxTokens,
-		cachePrompt: true,
+		client: sdk.NewClient(requestOptions(cfg, extra...)...),
+		live:   newLLMSettings(cfg),
 
 		omitInterleavedThinking: cfg.OmitInterleavedThinkingBeta,
 	}
-	if cfg.Model != "" {
-		s.model = cfg.Model
-	}
-	if cfg.EnablePromptCaching != nil {
-		s.cachePrompt = *cfg.EnablePromptCaching
-	}
-	s.systemPromptCacheTTL = cfg.SystemPromptCacheTTL
-	if cfg.MaxTokens > 0 {
-		s.maxTokens = int64(cfg.MaxTokens)
-	}
-	if cfg.Temperature != nil {
-		s.temperature = param.NewOpt(*cfg.Temperature)
-	}
-	if cfg.TopP != nil {
-		s.topP = param.NewOpt(*cfg.TopP)
-	}
-	if cfg.TopK != nil {
-		s.topK = param.NewOpt(*cfg.TopK)
-	}
-	if cfg.Thinking != nil {
-		display := sdk.ThinkingConfigAdaptiveDisplay(cfg.Thinking.Display)
-		switch cfg.Thinking.Type {
-		case thinkingDisabled:
-			s.thinking = sdk.ThinkingConfigParamUnion{OfDisabled: &sdk.ThinkingConfigDisabledParam{}}
-			s.thinkingSet = true
-		case thinkingBetweenTools:
-			s.thinking = sdk.ThinkingConfigParamUnion{OfBetweenTools: &sdk.ThinkingConfigBetweenToolsParam{}}
-			s.thinkingSet = true
-		case "adaptive":
-			s.thinking = sdk.ThinkingConfigParamUnion{
-				OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{Display: display},
-			}
-			s.thinkingSet = true
-		case "enabled":
-			enabled := sdk.ThinkingConfigParamOfEnabled(int64(cfg.Thinking.BudgetTokens))
-			enabled.OfEnabled.Display = sdk.ThinkingConfigEnabledDisplay(cfg.Thinking.Display)
-			s.thinking = enabled
-			s.thinkingSet = true
-		}
-	}
-	s.effort = cfg.Effort
-	s.extraConfiguresThinking = extraConfiguresThinking(cfg.Extra)
 	s.Base = llm.New(name, s)
-	s.Base.SetModel(s.model)
+	s.Base.SetModel(s.live.Model.Or(""))
 	return s
 }
 
-// newParams builds the request params shared by both generation paths: model,
-// token cap, the converted conversation, sampling controls and the system
-// prompt.
+// newParams builds the request params shared by both generation paths from the
+// settings as they stand.
 func (s *Service) newParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (sdk.MessageNewParams, error) {
-	opts.EnablePromptCaching = s.cachePrompt
-	opts.SystemPromptCacheTTL = s.systemPromptCacheTTL
+	return s.newParamsFrom(s.requestSettings(), convo, opts)
+}
+
+// newParamsFrom builds the request params from rs: model, token cap, the
+// converted conversation, sampling controls and the system prompt.
+func (s *Service) newParamsFrom(
+	rs requestSettings, convo *frames.LLMContext, opts adapter.Options,
+) (sdk.MessageNewParams, error) {
+	opts.EnablePromptCaching = rs.cachePrompt
+	opts.SystemPromptCacheTTL = rs.systemPromptCacheTTL
 	// A model without assistant-prefill support rejects a request whose message
 	// list ends with an assistant message; give it a trailing user turn.
-	opts.EnsureLastMessageIsUser = !supportsPrefill(s.model)
+	opts.EnsureLastMessageIsUser = !supportsPrefill(rs.model)
 	p, err := s.adapter.LLMInvocationParams(convo, opts)
 	if err != nil {
 		return sdk.MessageNewParams{}, err
 	}
 	params := sdk.MessageNewParams{
-		Model:       s.model,
-		MaxTokens:   s.maxTokens,
+		Model:       rs.model,
+		MaxTokens:   rs.maxTokens,
 		Messages:    p.Messages,
 		System:      p.System,
 		Tools:       p.Tools,
-		Temperature: s.temperature,
-		TopP:        s.topP,
-		TopK:        s.topK,
+		Temperature: rs.temperature,
+		TopP:        rs.topP,
+		TopK:        rs.topK,
 	}
-	if s.thinkingSet {
-		params.Thinking = s.thinking
+	if rs.thinkingSet {
+		params.Thinking = rs.thinking
 	}
-	if s.effort != "" {
-		params.OutputConfig.Effort = sdk.OutputConfigEffort(s.effort)
+	if rs.effort != "" {
+		params.OutputConfig.Effort = sdk.OutputConfigEffort(rs.effort)
 	}
-	// Applied last, so an explicit thinking or effort setting, from the config
-	// or from Extra, wins over the low-latency default.
-	s.applyThinkingDefault(&params)
+	// Applied last, so an explicit thinking or effort setting, from the
+	// settings or from Extra, wins over the low-latency default.
+	s.applyThinkingDefault(&params, rs)
 	return params, nil
 }
 
@@ -199,11 +140,11 @@ func extraConfiguresThinking(extra map[string]any) bool {
 // every request when UseProviderThinkingDefault is set. The first request for
 // each model logs the setting sent, or that the model runs at Anthropic's
 // default, warning for an unlisted Claude model.
-func (s *Service) applyThinkingDefault(params *sdk.MessageNewParams) {
-	if s.thinkingSet || s.effort != "" || s.extraConfiguresThinking {
+func (s *Service) applyThinkingDefault(params *sdk.MessageNewParams, rs requestSettings) {
+	if rs.thinkingSet || rs.effort != "" || extraConfiguresThinking(rs.extra) {
 		return
 	}
-	name := modelName(s.model)
+	name := modelName(rs.model)
 	var setting string
 	if d, ok := thinkingDefaults[name]; ok && !s.UseProviderThinkingDefault() {
 		switch {
@@ -218,7 +159,7 @@ func (s *Service) applyThinkingDefault(params *sdk.MessageNewParams) {
 			setting = fmt.Sprintf(`thinking={"type":%q}`, d.thinking)
 		}
 	}
-	s.ReportThinkingDefault(s.model, setting, strings.HasPrefix(name, "claude-"),
+	s.ReportThinkingDefault(rs.model, setting, strings.HasPrefix(name, "claude-"),
 		"Anthropic", "Thinking or Effort in anthropic.Config")
 }
 
@@ -257,7 +198,8 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	report := s.UsageMetricsEnabled()
 	var acc sdk.Message
-	params, err := s.newParams(convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
+	rs := s.requestSettings()
+	params, err := s.newParamsFrom(rs, convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
 	if err != nil {
 		return err
 	}
@@ -265,7 +207,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 	// call and a reported call would be the provider inventing one.
 	params.Tools = nil
 	s.StartTTFBMetrics()
-	stream := s.client.Messages.NewStreaming(ctx, params, s.requestOpts()...)
+	stream := s.client.Messages.NewStreaming(ctx, params, s.requestOpts(rs)...)
 	for stream.Next() {
 		event := stream.Current()
 		if carriesModelOutput(event) {
@@ -351,12 +293,16 @@ func interleavedThinking() option.RequestOption {
 
 // requestOpts is what every request this service makes is sent with: the
 // interleaved-thinking beta, unless the service was built for a backend that
-// does not take it.
-func (s *Service) requestOpts() []option.RequestOption {
-	if s.omitInterleavedThinking {
-		return nil
+// does not take it, and the settings' extra request fields.
+func (s *Service) requestOpts(rs requestSettings) []option.RequestOption {
+	var opts []option.RequestOption
+	if !s.omitInterleavedThinking {
+		opts = append(opts, interleavedThinking())
 	}
-	return []option.RequestOption{interleavedThinking()}
+	for k, v := range rs.extra {
+		opts = append(opts, option.WithJSONSet(k, v))
+	}
+	return opts
 }
 
 // carriesModelOutput reports whether a stream event holds output the model
@@ -391,14 +337,15 @@ func (s *Service) timeEvent(ctx context.Context, event sdk.MessageStreamEventUni
 // the request, and any tool-use / tool-result turns already in the context are
 // replayed as the matching Anthropic blocks.
 func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
-	params, err := s.newParams(convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
+	rs := s.requestSettings()
+	params, err := s.newParamsFrom(rs, convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
 	if err != nil {
 		return err
 	}
 
 	var acc sdk.Message
 	s.StartTTFBMetrics()
-	stream := s.client.Messages.NewStreaming(ctx, params, s.requestOpts()...)
+	stream := s.client.Messages.NewStreaming(ctx, params, s.requestOpts(rs)...)
 	for stream.Next() {
 		event := stream.Current()
 		s.timeEvent(ctx, event)
@@ -447,7 +394,8 @@ func (s *Service) RunInference(
 	}
 	// Built the way a streamed turn is, tools included: the API refuses a
 	// conversation holding tool_use or tool_result blocks without the tools.
-	params, err := s.newParams(convo, adapter.Options{SystemInstruction: instruction})
+	rs := s.requestSettings()
+	params, err := s.newParamsFrom(rs, convo, adapter.Options{SystemInstruction: instruction})
 	if err != nil {
 		return "", err
 	}
@@ -461,7 +409,7 @@ func (s *Service) RunInference(
 		}
 		params.OutputConfig.Format = sdk.JSONOutputFormatParam{Schema: m}
 	}
-	msg, err := s.client.Messages.New(ctx, params, s.requestOpts()...)
+	msg, err := s.client.Messages.New(ctx, params, s.requestOpts(rs)...)
 	if err != nil {
 		return "", llm.AsCompletionTimeout(ctx, err)
 	}
