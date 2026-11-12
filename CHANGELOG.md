@@ -434,6 +434,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   starts in the stream, whatever the call, and text that comes before a call
   still ends it first.
 
+- **Anthropic reports its thinking tokens.** The usage of an Anthropic
+  service, Bedrock's included, never carried the reasoning tokens, though the
+  final usage reports how many of the output tokens were thinking. They are
+  now reported as `ReasoningTokens`, and left unset when the response does not
+  say.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

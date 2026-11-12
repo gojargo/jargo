@@ -224,7 +224,7 @@ func (s *Service) applyThinkingDefault(params *sdk.MessageNewParams) {
 
 // toUsage converts the SDK's per-request usage into the pipeline's token usage.
 func toUsage(u sdk.Usage) frames.LLMTokenUsage {
-	return frames.LLMTokenUsage{
+	out := frames.LLMTokenUsage{
 		PromptTokens:        u.InputTokens,
 		CompletionTokens:    u.OutputTokens,
 		CacheReadTokens:     new(u.CacheReadInputTokens),
@@ -234,6 +234,12 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 		// service whose provider supplies it that way already.
 		TotalTokens: u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens + u.OutputTokens,
 	}
+	// Thinking tokens are part of the output count, reported apart when the
+	// response says how many there were.
+	if u.OutputTokensDetails.JSON.ThinkingTokens.Valid() {
+		out.ReasoningTokens = new(u.OutputTokensDetails.ThinkingTokens)
+	}
+	return out
 }
 
 // Generate streams a response for the conversation, emitting each text delta.
