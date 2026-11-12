@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
@@ -26,12 +27,41 @@ func NewPocketTTS(cfg PocketTTSConfig) *tts.Base {
 		cfg.SampleRate = pocketSampleRate
 	}
 	cfg.BaseURL = strings.TrimSuffix(cfg.BaseURL, "/")
-	return tts.New("PocketTTS", &pocketSynthesizer{cfg: cfg, http: &http.Client{}})
+	live := &settings.TTS{}
+	if cfg.Voice != "" {
+		live.Voice = settings.Set(cfg.Voice)
+	}
+	return tts.New("PocketTTS", &pocketSynthesizer{cfg: cfg, http: &http.Client{}, live: live})
 }
 
 type pocketSynthesizer struct {
 	cfg  PocketTTSConfig
 	http *http.Client
+	// live is what a caller may change while the pipeline runs, seeded from
+	// the configuration. The voice is the only part the server acts on.
+	live *settings.TTS
+}
+
+// voice is the voice to ask for: the one a settings update set, or the
+// configured one.
+func (s *pocketSynthesizer) voice() string {
+	if s.live == nil {
+		return s.cfg.Voice
+	}
+	return s.live.Voice.Or(s.cfg.Voice)
+}
+
+// Settings implements tts.SettingsHolder.
+func (s *pocketSynthesizer) Settings() any { return s.live }
+
+// UpdateSettings implements tts.SettingsUpdater. A new voice is used from the
+// next sentence: the server takes the voice with each request. A change to
+// anything else is kept but not acted on, as the server loads its model once.
+func (s *pocketSynthesizer) UpdateSettings(_ context.Context, changed settings.Changed) error {
+	if rest := changed.Except("voice"); len(rest) > 0 {
+		slog.Warn("pocket-tts cannot change these settings while running; ignoring them", "settings", rest)
+	}
+	return nil
 }
 
 // SampleRate reports the rate the service expects the server to generate at.
@@ -152,8 +182,8 @@ func (s *pocketSynthesizer) requestBody(text string) (io.Reader, string, error) 
 	if err := w.WriteField("text", text); err != nil {
 		return nil, "", err
 	}
-	if s.cfg.Voice != "" {
-		if err := w.WriteField("voice_url", s.cfg.Voice); err != nil {
+	if voice := s.voice(); voice != "" {
+		if err := w.WriteField("voice_url", voice); err != nil {
 			return nil, "", err
 		}
 	}

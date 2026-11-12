@@ -776,6 +776,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   streaming STT provider asks for this by implementing the new
   `stt.SendErrorReporter`.
 
+- **Pocket TTS changes voice at runtime.** A `TTSUpdateSettingsFrame`
+  changing the voice was dropped with a warning, and every sentence kept the
+  configured voice. The new voice is now used from the next sentence; a
+  change to anything else is kept but warned about, as the server loads its
+  model once.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
