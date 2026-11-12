@@ -15,6 +15,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **IVR navigation classifies the far end and switches to navigating.** The
+  `processor/ivr` processor only stripped `<dtmf>` and `<ivr>` tags and
+  reported a status. `ivr.NewNavigator` now builds a pipeline of the LLM and the
+  processor that asks the LLM, at start, whether an IVR system or a person
+  answered (`ClassifierPrompt`); on an IVR system it pushes the navigation prompt
+  built around a goal (`IVRNavigationBase`) with the conversation so far, runs
+  the LLM, and sets the voice-activity stop to two seconds; on a person it
+  raises `on_conversation_detected` with the conversation. The processor
+  aggregates the LLM's text into sentences (`AggregatedTextFrame`, flushed at
+  the end of a response or of the pipeline), presses each `<dtmf>` key at once
+  (`OutputDTMFUrgentFrame`), refusing anything but one keypad key, records
+  every key and status in the conversation (a `TextFrame` the synthesizer
+  skips), raises `on_ivr_status_changed` for detected, completed and stuck,
+  refuses unknown statuses, and drops a tag left open by an interrupted
+  response. **Breaking:** `ivr.Config` takes `ClassifierPrompt`, `IVRPrompt`
+  and `IVRVADParams`; `OnStatusChanged` is replaced by the events.
+
 - **Resampling keeps pace with its input.** A `resample.Resampler` held its
   filter delay back, so the first chunk of every stream came out short (280
   samples instead of 320 for 40 ms of 24 kHz to 8 kHz) and the tail waited for

@@ -202,7 +202,25 @@ account number typed at speed arrives as one value rather than eight frames.
 
 Play tones outbound with `OutputDTMFFrame`.
 
-For menu navigation, `processor/ivr` handles the traversal, and
+For menu navigation, `processor/ivr` provides a navigator that takes the LLM's
+place in the pipeline. It first asks the LLM whether an automated system or a
+person answered. On an automated system it switches the LLM to a navigation
+prompt built around your goal, and the voice-activity detector to a two-second
+stop so a pause between menu options does not end the turn; the LLM then presses
+keys with `<dtmf>` tags and reports progress with `<ivr>` tags, which the
+navigator raises as `on_ivr_status_changed`. On a person it raises
+`on_conversation_detected` with the conversation so far, for your bot to take
+over:
+
+```go
+nav := ivr.NewNavigator(ivr.NavigatorConfig{LLM: llm, Goal: "Reach the billing department."})
+events.On(nav.Processor().Events(), ivr.EventIVRStatusChanged, func(ctx context.Context, s ivr.Status) {
+    // completed: hand over to the bot; stuck: hang up or retry.
+})
+
+pipe := pipeline.New(in, stt, userAgg, nav, tts, out, assistantAgg)
+```
+
 `processor/voicemail` detects an answering machine so the bot does not hold a
 conversation with a recording.
 
