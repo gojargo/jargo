@@ -69,13 +69,13 @@ func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 	if len(d.Processing) != 1 || !approx(d.Processing[0].Value, 1.2) {
 		t.Fatalf("processing = %+v, want one ~1.2s entry", d.Processing)
 	}
-	if len(d.Tokens) != 1 || d.Tokens[0].TotalTokens != 140 || d.Tokens[0].Model != "claude-haiku" {
+	if len(d.Tokens) != 1 || d.Tokens[0].TotalTokens != 140 {
 		t.Fatalf("tokens = %+v, want one entry totalling 140", d.Tokens)
 	}
 	if len(d.TTFA) != 1 || d.TTFA[0].Processor != "CartesiaTTS#2" || !approx(d.TTFA[0].LeadingSilence, 0.1) {
 		t.Fatalf("ttfa = %+v, want one entry with ~0.1s of leading silence", d.TTFA)
 	}
-	if len(d.STTUsage) != 1 || !approx(d.STTUsage[0].Value, 2.5) {
+	if len(d.STTUsage) != 1 || !approx(d.STTUsage[0].Value.AudioSeconds, 2.5) {
 		t.Fatalf("stt_usage = %+v, want one ~2.5s entry", d.STTUsage)
 	}
 

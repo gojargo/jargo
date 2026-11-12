@@ -679,13 +679,31 @@ type MetricData struct {
 	Model     string  `json:"model,omitempty"`
 }
 
-// TokenMetricData is one LLM token-usage entry in a metrics message.
+// TokenMetricData is one LLM token-usage entry in a metrics message: the
+// usage itself, with the counts the service did not report left out.
 type TokenMetricData struct {
-	Processor        string `json:"processor"`
-	Model            string `json:"model,omitempty"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	TotalTokens      int64  `json:"total_tokens"`
+	PromptTokens              int64  `json:"prompt_tokens"`
+	CompletionTokens          int64  `json:"completion_tokens"`
+	TotalTokens               int64  `json:"total_tokens"`
+	CacheReadInputTokens      *int64 `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens  *int64 `json:"cache_creation_input_tokens,omitempty"`
+	ReasoningTokens           *int64 `json:"reasoning_tokens,omitempty"`
+	InputAudioTokens          *int64 `json:"input_audio_tokens,omitempty"`
+	OutputAudioTokens         *int64 `json:"output_audio_tokens,omitempty"`
+	CacheReadInputAudioTokens *int64 `json:"cache_read_input_audio_tokens,omitempty"`
+}
+
+// STTUsageMetricData is one speech-to-text usage entry in a metrics message.
+type STTUsageMetricData struct {
+	Processor string        `json:"processor"`
+	Model     string        `json:"model,omitempty"`
+	Value     STTUsageValue `json:"value"`
+}
+
+// STTUsageValue is what a speech-to-text service was used for: how much audio
+// it transcribed.
+type STTUsageValue struct {
+	AudioSeconds float64 `json:"audio_seconds"`
 }
 
 // TTFAMetricData is one time-to-first-audible-sample entry, reported with the
@@ -715,15 +733,15 @@ type TTFATMetricData struct {
 // MetricsData is the payload of a metrics message: each kind is a list so a
 // single message can report several processors at once.
 type MetricsData struct {
-	TTFB            []MetricData      `json:"ttfb,omitempty"`
-	TTFA            []TTFAMetricData  `json:"ttfa,omitempty"`
-	TTFAT           []TTFATMetricData `json:"ttfat,omitempty"`
-	Processing      []MetricData      `json:"processing,omitempty"`
-	Characters      []MetricData      `json:"characters,omitempty"`
-	STTUsage        []MetricData      `json:"stt_usage,omitempty"`
-	TextAggregation []MetricData      `json:"text_aggregation,omitempty"`
-	Tokens          []TokenMetricData `json:"tokens,omitempty"`
-	Turn            []TurnMetricData  `json:"turn,omitempty"`
+	TTFB            []MetricData         `json:"ttfb,omitempty"`
+	TTFA            []TTFAMetricData     `json:"ttfa,omitempty"`
+	TTFAT           []TTFATMetricData    `json:"ttfat,omitempty"`
+	Processing      []MetricData         `json:"processing,omitempty"`
+	Characters      []MetricData         `json:"characters,omitempty"`
+	STTUsage        []STTUsageMetricData `json:"stt_usage,omitempty"`
+	TextAggregation []MetricData         `json:"text_aggregation,omitempty"`
+	Tokens          []TokenMetricData    `json:"tokens,omitempty"`
+	Turn            []TurnMetricData     `json:"turn,omitempty"`
 }
 
 // TurnMetricData is one end-of-turn prediction: whether the analyzer judged the

@@ -457,6 +457,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   never reached an RTVI client: the metrics message had no place for it. It
   is now sent under `ttfat`, with `ttfb` and `thinking_time`.
 
+- **RTVI token and STT usage entries take the protocol's shape.** A
+  `tokens` entry carried only the prompt, completion and total counts, with a
+  processor and model the protocol does not have there, so a client never saw
+  the cache, reasoning or audio counts; and an `stt_usage` entry's `value`
+  was a bare number of seconds where clients read `value.audio_seconds`. A
+  `tokens` entry is now the usage itself, with every count the service
+  reported (`cache_read_input_tokens`, `cache_creation_input_tokens`,
+  `reasoning_tokens`, `input_audio_tokens`, `output_audio_tokens`,
+  `cache_read_input_audio_tokens`) and none it did not, and an `stt_usage`
+  value is `{"audio_seconds": ...}`. **Breaking:** `rtvi.TokenMetricData`
+  loses `Processor` and `Model`, and `MetricsData.STTUsage` holds
+  `rtvi.STTUsageMetricData`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

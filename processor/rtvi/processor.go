@@ -772,7 +772,9 @@ func metricsMessage(f *frames.MetricsFrame) Message {
 		case frames.TTSUsageMetricsData:
 			d.Characters = append(d.Characters, MetricData{Processor: p, Value: float64(v.Value), Model: model})
 		case frames.STTUsageMetricsData:
-			d.STTUsage = append(d.STTUsage, MetricData{Processor: p, Value: v.Value.AudioSeconds, Model: model})
+			d.STTUsage = append(d.STTUsage, STTUsageMetricData{
+				Processor: p, Model: model, Value: STTUsageValue{AudioSeconds: v.Value.AudioSeconds},
+			})
 		case frames.TextAggregationMetricsData:
 			d.TextAggregation = append(d.TextAggregation,
 				MetricData{Processor: p, Value: v.Value.Seconds(), Model: model})
@@ -785,11 +787,15 @@ func metricsMessage(f *frames.MetricsFrame) Message {
 			})
 		case frames.LLMUsageMetricsData:
 			d.Tokens = append(d.Tokens, TokenMetricData{
-				Processor:        p,
-				Model:            model,
-				PromptTokens:     v.Value.PromptTokens,
-				CompletionTokens: v.Value.CompletionTokens,
-				TotalTokens:      v.Value.TotalTokens,
+				PromptTokens:              v.Value.PromptTokens,
+				CompletionTokens:          v.Value.CompletionTokens,
+				TotalTokens:               v.Value.TotalTokens,
+				CacheReadInputTokens:      v.Value.CacheReadTokens,
+				CacheCreationInputTokens:  v.Value.CacheCreationTokens,
+				ReasoningTokens:           v.Value.ReasoningTokens,
+				InputAudioTokens:          v.Value.InputAudioTokens,
+				OutputAudioTokens:         v.Value.OutputAudioTokens,
+				CacheReadInputAudioTokens: v.Value.CacheReadAudioTokens,
 			})
 		}
 	}
