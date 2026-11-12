@@ -55,6 +55,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An observer hears that the pipeline started before the frames queued
+  behind the StartFrame.** The worker released those frames as soon as the
+  StartFrame reached the sink, and only then queued the start for the
+  observers, so an observer could see a frame or two of the conversation
+  before `OnPipelineStarted`. The observers are now told first.
+
 - **A TTS provider is told a turn is over even when the turn spoke
   nothing.** `TurnContextCompleter` was only called when text had reached the
   turn's context, so a provider that opened its server-side context as the

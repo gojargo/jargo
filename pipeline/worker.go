@@ -1537,11 +1537,14 @@ func (t *Worker) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direc
 
 	switch fr := f.(type) {
 	case *frames.StartFrame:
-		// Started before anyone hears of it, so a handler that cancels on the
-		// news finds a started pipeline, which a CancelFrame then stops.
+		// The observers hear of it before it is marked started: that releases
+		// the frames queued behind the StartFrame, and an observer must hear of
+		// the start ahead of them.
+		t.observerProxy.pipelineStarted()
+		// Started before the handlers hear of it, so a handler that cancels on
+		// the news finds a started pipeline, which a CancelFrame then stops.
 		t.startedOnce.Do(func() { close(t.startedSig) })
 		t.Call(ctx, EventPipelineStarted, t, fr)
-		t.observerProxy.pipelineStarted()
 		t.startHeartbeats()
 		t.startOnce.Do(func() { close(t.startSig) })
 	case *frames.HeartbeatFrame:
