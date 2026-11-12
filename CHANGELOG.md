@@ -584,6 +584,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transcripts not yet written then the prediction, spaced, and the prediction
   is checked against the transcripts committed after it, spaced.
 
+- **The eager match folds case fully.** `NormalizedMatch` lowercased letter
+  by letter, so "strasse" did not match "Straße" and a final sigma did not
+  match its capital, and a German or Greek user's speculative reply was
+  withdrawn and answered again. It now folds case fully, and counts every
+  number as part of a word.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

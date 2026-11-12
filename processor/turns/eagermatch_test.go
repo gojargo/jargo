@@ -32,6 +32,9 @@ func TestNormalizedMatch(t *testing.T) {
 		{"book a flight", "Book a flight."},
 		{"book  a flight", "book a flight"},
 		{"its ready", "It's ready!"},
+		// Case is folded as upstream folds it, not lowered letter by letter.
+		{"in der strasse", "In der Straße."},
+		{"λογος", "ΛΟΓΟΣ"},
 	} {
 		if !p.Matches(c.eager, c.final) {
 			t.Errorf("%q did not match %q, want formatting ignored", c.eager, c.final)

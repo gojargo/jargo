@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -48,12 +49,14 @@ func (NormalizedMatch) Matches(eager, final string) bool {
 func normalizeForMatch(text string) string {
 	var b strings.Builder
 	b.Grow(len(text))
-	for _, r := range norm.NFKC.String(text) {
+	// Case is folded rather than lowered, so ß matches ss and a final sigma
+	// matches its other form.
+	for _, r := range cases.Fold().String(norm.NFKC.String(text)) {
 		switch {
 		case r == '\'' || r == '’' || r == 'ʼ':
 			// Dropped outright, joining the letters either side of it.
-		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_':
-			b.WriteRune(unicode.ToLower(r))
+		case unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_':
+			b.WriteRune(r)
 		default:
 			// Punctuation and whitespace alike become one separator, collapsed
 			// below.
