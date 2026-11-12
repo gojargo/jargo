@@ -45,6 +45,9 @@ func (q *frameQueue) get(ctx context.Context) (frames.Frame, bool) {
 		q.mu.Lock()
 		if len(q.items) > 0 {
 			f := q.items[0]
+			// Cleared as it is taken, so the backing array does not keep the
+			// frame alive after it has been handed out.
+			q.items[0] = nil
 			q.items = q.items[1:]
 			q.mu.Unlock()
 			return f, true

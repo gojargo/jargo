@@ -37,16 +37,16 @@ var errNoBranches = errors.New("pipeline: parallel pipeline needs at least one b
 //
 // A ParallelPipeline is itself a processor, so it nests inside a Pipeline.
 //
-// The deduplication set retains the id of every frame that escapes the parallel
-// pipeline for the lifetime of the session; this mirrors the upstream design and
-// is bounded only by the session's frame count.
+// The deduplication set holds the frames that escaped the parallel pipeline
+// weakly: a frame nothing holds any more cannot come back out of a branch, so
+// its entry goes with it, and the set stays as large as the frames in flight.
 type ParallelPipeline struct {
 	*processor.Base
 	setupTracker
 	branches []*Pipeline
 
 	mu       sync.Mutex
-	seen     map[uint64]struct{}
+	seen     seenFrames
 	counter  map[uint64]int
 	syncing  bool
 	buffered []bufferedFrame
@@ -79,7 +79,6 @@ func newParallelAs(
 		return nil, errNoBranches
 	}
 	p := &ParallelPipeline{
-		seen:    map[uint64]struct{}{},
 		counter: map[uint64]int{},
 	}
 	if self == nil {
@@ -131,11 +130,10 @@ func (p *ParallelPipeline) ProcessFrame(ctx context.Context, f frames.Frame, dir
 // from the sinks.
 func (p *ParallelPipeline) emit(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	p.mu.Lock()
-	if _, ok := p.seen[f.ID()]; ok {
+	if !p.seen.add(f) {
 		p.mu.Unlock()
 		return nil
 	}
-	p.seen[f.ID()] = struct{}{}
 	if p.syncing {
 		p.buffered = append(p.buffered, bufferedFrame{frame: f, dir: dir})
 		p.mu.Unlock()
@@ -196,13 +194,9 @@ func (p *ParallelPipeline) sinkPush(ctx context.Context, f frames.Frame, dir pro
 // holding everything else back. It deduplicates like emit, since a frame the
 // parallel pipeline fanned out comes back once per branch.
 func (p *ParallelPipeline) emitSynchronized(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	p.mu.Lock()
-	if _, ok := p.seen[f.ID()]; ok {
-		p.mu.Unlock()
+	if !p.seen.add(f) {
 		return nil
 	}
-	p.seen[f.ID()] = struct{}{}
-	p.mu.Unlock()
 	return p.Self().PushFrame(ctx, f, dir)
 }
 
@@ -219,6 +213,7 @@ func (p *ParallelPipeline) flushBuffered(ctx context.Context) {
 			return
 		}
 		bf := p.buffered[0]
+		p.buffered[0] = bufferedFrame{}
 		p.buffered = p.buffered[1:]
 		p.mu.Unlock()
 

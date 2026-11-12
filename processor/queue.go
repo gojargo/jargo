@@ -76,16 +76,21 @@ func (q *queue) get(ctx context.Context) (item, bool) {
 		switch {
 		case len(q.start) > 0:
 			it := q.start[0]
+			// Each slot is cleared as it is taken, so the backing array does not
+			// keep the frame alive after it has been handled.
+			q.start[0] = item{}
 			q.start = q.start[1:]
 			q.mu.Unlock()
 			return it, true
 		case len(q.system) > 0:
 			it := q.system[0]
+			q.system[0] = item{}
 			q.system = q.system[1:]
 			q.mu.Unlock()
 			return it, true
 		case len(q.other) > 0:
 			it := q.other[0]
+			q.other[0] = item{}
 			q.other = q.other[1:]
 			q.mu.Unlock()
 			return it, true

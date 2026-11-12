@@ -117,6 +117,9 @@ func (p *AsyncGeneratorProcessor) get(ctx context.Context) ([]byte, bool) {
 		p.mu.Lock()
 		if len(p.items) > 0 {
 			data := p.items[0]
+			// Cleared as it is taken, so the backing array does not keep the
+			// bytes alive after they have been handed out.
+			p.items[0] = nil
 			p.items = p.items[1:]
 			p.mu.Unlock()
 			return data, true

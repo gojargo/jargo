@@ -638,6 +638,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   are remembered across frames, held weakly, so a copy coming out of a branch
   later is dropped.
 
+- **A parallel pipeline no longer remembers every frame of the session.**
+  To push each frame once, a `ParallelPipeline` kept the id of every frame
+  that left it for the whole session, about a hundred a second in a voice
+  call. It now holds them weakly, so an entry goes once its frame is
+  collected. Frames also stopped being kept alive by the queues that carried
+  them: every processor's input queue, and the pipeline's own, kept the
+  frames it had handed out in its backing array until it grew again, so a
+  burst of frames stayed in memory long after it was handled.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
