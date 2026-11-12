@@ -318,6 +318,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   on as a spoken word, so it was written into the assistant message ("This is
   how ity it is supposed to work") and shown to clients. It is now dropped; the
   next word that matches carries the text it skipped.
+- **A numbered-list marker stays with its item.** Sentence detection split
+  after the marker at the start of a line ("1. Take a walk." became "1." and
+  "Take a walk."), so an LLM's numbered list was spoken with each number as a
+  sentence of its own and recorded that way. The marker is now masked before
+  the sentence rules run, in every language, while a number that ends a
+  sentence still ends it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

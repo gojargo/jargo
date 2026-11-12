@@ -1,6 +1,7 @@
 package text
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -136,6 +137,21 @@ func quotedWordEnd(text string) (start, end int, ok bool) {
 // underscore.
 func isWordRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) }
 
+// listMarker matches a numbered-list marker such as "1." at the start of a line,
+// with the space or tab after it, which is left alone when the marker is
+// blanked.
+//
+//nolint:gochecknoglobals // compiled once, read-only
+var listMarker = regexp.MustCompile(`(?m)^[ \t]*\p{Nd}+\.[ \t]`)
+
+// blankListMarkers replaces each numbered-list marker in text with spaces of
+// the same byte width.
+func blankListMarkers(text string) string {
+	return listMarker.ReplaceAllStringFunc(text, func(m string) string {
+		return strings.Repeat(" ", len(m)-1) + m[len(m)-1:]
+	})
+}
+
 // matchEndOfSentence is what the aggregators find a boundary with. It is a
 // variable so a test can count and steer the checks the lookahead makes.
 //
@@ -156,13 +172,18 @@ func MatchEndOfSentence(text, language string) int {
 		return 0
 	}
 	code := ResolveSentenceTokenizerLanguage(language)
-	sentences := sentTokenize(code, text)
+	// The rules split after a list marker ("1. The" becomes "1.", "The"). The
+	// marker is blanked with spaces of the same byte width, so it stays with its
+	// item and the offsets still refer to the text. The digits are blanked too,
+	// because some languages' rules (German, Finnish, Czech) never start a
+	// sentence at a digit, which would merge each item into the one before it.
+	tokenizerText := blankListMarkers(text)
+	sentences := sentTokenize(code, tokenizerText)
 	if len(sentences) == 0 {
 		return 0
 	}
 	first := sentences[0]
 
-	tokenizerText := text
 	// With an unfinished quote such as 'She said, "Dr. S', the rules can split
 	// after '"Dr.'. A proposed split after a quoted word ending in a period is
 	// checked again, letting the rules decide whether that word is an
@@ -172,7 +193,7 @@ func MatchEndOfSentence(text, language string) int {
 			// Only the opening quotes are replaced, with spaces of the same byte
 			// width, so the rules see the abbreviation without the quote and the
 			// offsets still refer to the text, which keeps its quotes.
-			tokenizerText = text[:start] + strings.Repeat(" ", end-start) + text[end:]
+			tokenizerText = tokenizerText[:start] + strings.Repeat(" ", end-start) + tokenizerText[end:]
 			sentences = sentTokenize(code, tokenizerText)
 			first = sentences[0]
 		}
