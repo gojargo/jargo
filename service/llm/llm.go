@@ -1139,7 +1139,17 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		b.SetModel(model)
 	}
 
-	if changed.Has("user_turn_completion_config") {
+	if changed.Has("filter_incomplete_user_turns") {
+		on, _ := settings.Get(store, "filter_incomplete_user_turns")
+		enabled, _ := on.(bool)
+		b.SetFilterIncompleteUserTurns(enabled)
+	}
+
+	// A turn-completion configuration takes effect only while incomplete turns
+	// are filtered, the flag being applied first so an update turning both on
+	// takes both. One sent while filtering is off is kept in the settings but
+	// not put in force.
+	if changed.Has("user_turn_completion_config") && b.FilterIncompleteUserTurns() {
 		v, _ := settings.Get(store, "user_turn_completion_config")
 		if cfg, ok := v.(UserTurnCompletionConfig); ok {
 			b.SetUserTurnCompletionConfig(cfg)
@@ -1147,12 +1157,6 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 			slog.Error("the turn-completion configuration is not the expected type; ignoring it",
 				"service", b.Name(), "type", fmt.Sprintf("%T", v))
 		}
-	}
-
-	if changed.Has("filter_incomplete_user_turns") {
-		on, _ := settings.Get(store, "filter_incomplete_user_turns")
-		enabled, _ := on.(bool)
-		b.SetFilterIncompleteUserTurns(enabled)
 	}
 
 	if changed.Has("system_instruction") {

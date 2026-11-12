@@ -622,6 +622,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   resamplers held from before, so a few milliseconds of stale audio were
   spliced ahead of the new. Switching it back on now discards that tail.
 
+- **A turn-completion config sent while filtering is off is not put in
+  force.** An `LLMUpdateSettingsFrame` carrying a user turn completion config
+  changed the markers, prompts and timeouts in force even with incomplete
+  user turns not filtered. It is now kept in the settings but put in force
+  only while filtering is on, or when the same update turns filtering on.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

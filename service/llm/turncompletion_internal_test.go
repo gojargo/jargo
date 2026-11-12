@@ -383,6 +383,30 @@ func TestSettingsUpdateEnablesGatingAndCarriesItsConfig(t *testing.T) {
 	}
 }
 
+// A turn-completion configuration sent while incomplete turns are not filtered
+// is not put in force, and turning the filtering on later does not bring it in
+// either: only one sent while filtering, or with the flag that turns it on,
+// takes effect.
+func TestAConfigSentWhileFilteringIsOffIsNotPutInForce(t *testing.T) {
+	svc := New("FakeLLM", generatorFunc(func(context.Context, *frames.LLMContext, Emit) error { return nil }))
+	custom := UserTurnCompletionConfig{IncompleteShortTimeout: 3 * time.Second}
+	defaultShort := svc.UserTurnCompletionConfig().IncompleteShortTimeout
+
+	var delta settings.LLM
+	delta.UserTurnCompletionConfig = settings.Set[any](custom)
+	svc.updateSettings(t.Context(), frames.NewLLMUpdateSettingsFrame(&delta))
+	if got := svc.UserTurnCompletionConfig().IncompleteShortTimeout; got != defaultShort {
+		t.Errorf("IncompleteShortTimeout = %v, want the default %v kept while filtering is off", got, defaultShort)
+	}
+
+	var on settings.LLM
+	on.FilterIncompleteUserTurns = settings.Set(true)
+	svc.updateSettings(t.Context(), frames.NewLLMUpdateSettingsFrame(&on))
+	if got := svc.UserTurnCompletionConfig().IncompleteShortTimeout; got != defaultShort {
+		t.Errorf("IncompleteShortTimeout = %v, want the default: the earlier config was not put in force", got)
+	}
+}
+
 // TestConfiguredMarkersAreTheOnesRead covers a service told to use a marker set
 // of its own: it is those the response is parsed for, and those the prompts
 // teach.
