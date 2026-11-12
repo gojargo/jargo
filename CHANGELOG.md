@@ -108,6 +108,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Word timestamps are rounded to the nanosecond.** A word's offset was
+  converted to a presentation timestamp by truncation, so one in about forty
+  millisecond offsets (1.001 s, say) landed a nanosecond early. It is now
+  rounded, by the new `timeutil.SecondsToNanoseconds`.
+
 - **A clip resampled in one pass keeps its length.** `resample.Resample`
   returned one sample too many for some downsampling ratios (24 to 8 kHz, 48
   to 16 kHz, 44.1 to 16 kHz). It now returns as many samples at the output

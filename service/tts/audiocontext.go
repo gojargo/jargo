@@ -17,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/tracing"
 	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/utils/timeutil"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -261,7 +262,7 @@ func (c *audioContext) wordPTS(offset float64) (time.Duration, bool) {
 	if c.initialWordTimestamp < 0 {
 		return 0, false
 	}
-	return c.initialWordTimestamp + time.Duration(offset*float64(time.Second)), true
+	return c.initialWordTimestamp + timeutil.SecondsToDuration(offset), true
 }
 
 // holdWord keeps a word that arrived before any audio, to be timed once the
