@@ -559,11 +559,13 @@ func (b *Base) OnCompletionTimeout(h CompletionTimeoutHandler) {
 	b.eventsMu.Unlock()
 }
 
-// reportGenerationFailure pushes the error a generation failed with. A timeout
-// is reported as one, and anything watching for a timeout is told first.
+// reportGenerationFailure pushes the error a generation failed with, carrying
+// its own message, which is the provider's account of what went wrong: it is
+// what an RTVI client and the logs get to read. A timeout is reported as one,
+// and anything watching for a timeout is told first.
 func (b *Base) reportGenerationFailure(ctx context.Context, err error) {
 	if !errors.Is(err, ErrCompletionTimeout) {
-		b.PushError(ctx, "llm generation failed", err, false)
+		b.PushError(ctx, err.Error(), err, false)
 		return
 	}
 	b.eventsMu.RLock()

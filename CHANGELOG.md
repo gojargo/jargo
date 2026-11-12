@@ -105,6 +105,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   sent, after the wait the server asks for in `Retry-After` when it is under a
   minute, or else a backoff from 0.5 seconds up to 8. Every OpenAI-compatible
   chat endpoint gets the same.
+- **An LLM error frame carries the provider's message.** A failed generation
+  was reported as the constant "llm generation failed", with the cause only in
+  `ErrorFrame.Err`, so an RTVI client and the frame logs never saw what went
+  wrong. `ErrorFrame.Error` now holds the error's own message.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

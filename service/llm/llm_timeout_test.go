@@ -166,7 +166,9 @@ func TestAnOrdinaryFailureIsNotAnnouncedAsATimeout(t *testing.T) {
 	if announced != 0 {
 		t.Errorf("timeout announcements = %d, want none", announced)
 	}
-	if len(errs) != 1 || strings.Contains(errs[0], "timeout") {
+	// The message is the provider's own account of the failure, which is what
+	// an RTVI client and the logs get to read.
+	if len(errs) != 1 || errs[0] != errConnection.Error() {
 		t.Errorf("errors = %v, want the failure reported on its own terms", errs)
 	}
 }
