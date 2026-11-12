@@ -107,7 +107,11 @@ func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 	existing, claimed := b.handlers[t.Name]
 	removed := b.unregisteredByHand[t.Name]
 	b.handlersMu.Unlock()
-	if removed || (claimed && !existing.fromToolset) {
+	if claimed && !existing.fromToolset {
+		b.warnRedundantRegistration(ctx, t.Name)
+		return
+	}
+	if removed {
 		return
 	}
 
@@ -145,6 +149,27 @@ func (b *Base) registerToolHandler(ctx context.Context, t frames.Tool) {
 	}
 	slog.DebugContext(ctx, "registered the handler an advertised tool carries",
 		"service", b.Name(), "function", t.Name)
+}
+
+// warnRedundantRegistration warns, once per tool, that a tool registered by
+// hand is advertised carrying a handler of its own, which would have registered
+// it anyway. The hand-registered handler is the one that runs.
+func (b *Base) warnRedundantRegistration(ctx context.Context, name string) {
+	b.handlersMu.Lock()
+	warned := b.warnedRedundantRegistrations[name]
+	if !warned {
+		if b.warnedRedundantRegistrations == nil {
+			b.warnedRedundantRegistrations = make(map[string]bool)
+		}
+		b.warnedRedundantRegistrations[name] = true
+	}
+	b.handlersMu.Unlock()
+	if warned {
+		return
+	}
+	slog.WarnContext(ctx, "a tool registered with RegisterFunction is advertised carrying a handler of its own; "+
+		"the registration is unnecessary when the handler is on the tool",
+		"service", b.Name(), "function", name)
 }
 
 // sameHandler reports whether a and b are the same function value: the same

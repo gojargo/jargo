@@ -506,6 +506,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a cancel tool, or the guidance about it, on their own: that happens on the
   next `SyncToolHandlers`, which every inference runs.
 
+- **A redundant hand registration is warned about.** Registering by hand
+  the handler of a tool advertised carrying one of its own kept the
+  hand-registered handler without a word. It still does, and now warns, once
+  per tool, that the registration is unnecessary.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

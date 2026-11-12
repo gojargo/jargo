@@ -405,6 +405,11 @@ type Base struct {
 	// colliding with a tool of the application's own, so the collision is
 	// reported once rather than on every inference. Guarded by handlersMu.
 	warnedCancelCollisions map[string]bool
+	// warnedRedundantRegistrations names the tools already reported as
+	// registered by hand though their advertised tool carries a handler, so the
+	// warning is given once rather than on every inference. Guarded by
+	// handlersMu.
+	warnedRedundantRegistrations map[string]bool
 
 	// Tool calls in flight, keyed by tool call id. They run off the frame path,
 	// on a lifetime of their own, so that a handler taking its time does not hold
