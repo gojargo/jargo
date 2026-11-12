@@ -3,6 +3,7 @@ package resample
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	gore "github.com/gojargo/go-resample"
 )
@@ -205,6 +206,14 @@ func resampleAll(pcm []byte, inRate, outRate, channels int, q Quality) ([]byte, 
 	out, err := gore.Simple(in, float64(outRate)/float64(inRate), channels, converterFor(q))
 	if err != nil {
 		return nil, fmt.Errorf("resample: %d->%d ch=%d: %w", inRate, outRate, channels, err)
+	}
+	// The clip keeps its length: as many frames at the output rate as it lasts,
+	// to the nearest frame. The converter's own count can be one off.
+	want := int(math.Floor(float64(inFrames)*float64(outRate)/float64(inRate)+0.5)) * channels
+	if len(out) > want {
+		out = out[:want]
+	} else if len(out) < want {
+		out = append(out, make([]float32, want-len(out))...)
 	}
 	return encodeS16(out), nil
 }

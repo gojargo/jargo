@@ -108,6 +108,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A clip resampled in one pass keeps its length.** `resample.Resample`
+  returned one sample too many for some downsampling ratios (24 to 8 kHz, 48
+  to 16 kHz, 44.1 to 16 kHz). It now returns as many samples at the output
+  rate as the clip lasts, to the nearest one.
+
 - **The WebRTC transport sends every application message as JSON.** A string
   message went over the data channel raw, which a client that parses every
   message (as the RTVI web client does) failed on. It is now sent as a JSON

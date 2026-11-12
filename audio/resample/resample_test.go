@@ -330,3 +330,28 @@ func TestFlushPassesThroughNothingWhenRatesMatch(t *testing.T) {
 		t.Errorf("a passthrough buffers nothing, so Flush should give nothing, got %d bytes", len(tail))
 	}
 }
+
+// test_output_keeps_the_clip_length: a clip converted in one pass keeps its
+// length, as many samples at the output rate as it lasts, to the nearest one.
+func TestResampleKeepsTheClipLength(t *testing.T) {
+	for _, p := range [][2]int{
+		{24000, 8000}, {24000, 16000}, {48000, 16000}, {44100, 16000},
+		{8000, 16000}, {16000, 24000}, {16000, 44100},
+	} {
+		in, out := p[0], p[1]
+		n := in/10 + 1
+		pcm := make([]byte, 2*n)
+		for i := range n {
+			v := int16(8000 * math.Sin(2*math.Pi*440*float64(i)/float64(in)))
+			binary.LittleEndian.PutUint16(pcm[2*i:], uint16(v))
+		}
+		o, err := resample.Resample(pcm, in, out, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := int(math.Floor(float64(n)*float64(out)/float64(in) + 0.5))
+		if len(o)/2 != want {
+			t.Errorf("%d->%d: %d samples, want %d", in, out, len(o)/2, want)
+		}
+	}
+}
