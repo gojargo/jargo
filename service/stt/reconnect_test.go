@@ -10,6 +10,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/utils/events"
 )
@@ -236,6 +237,36 @@ func TestStreamServiceReopensAfterAGracefulClose(t *testing.T) {
 
 // A session that keeps dying the instant it opens is not waiting on the network,
 // so the service stops redialing and says so rather than reconnecting forever.
+// TestStreamServiceRaisesTheConnectionErrorEvent checks a lost provider
+// connection is raised as the service's connection error event, with the
+// message of the error frame it also pushes, so an application can act on it
+// without filtering error frames.
+func TestStreamServiceRaisesTheConnectionErrorEvent(t *testing.T) {
+	conn := &scriptedConnector{}
+	for range 8 {
+		conn.sessions = append(conn.sessions, &scriptedStream{
+			endErr: closed(websocket.StatusPolicyViolation, "invalid api key"),
+		})
+	}
+	c := newCollector()
+	svc := stt.NewStream("FakeSTT", conn, 16000)
+	raised := make(chan string, 8)
+	events.On(svc.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+		raised <- msg
+	})
+	stop := runService(t, svc, c)
+	defer stop()
+
+	select {
+	case msg := <-raised:
+		if !strings.Contains(msg, "immediately after connecting") {
+			t.Errorf("event carried %q, want the error's message", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection error event was never raised")
+	}
+}
+
 func TestStreamServiceStopsRedialingAnInstantlyFailingSession(t *testing.T) {
 	conn := &scriptedConnector{}
 	// Every session the connector hands out dies at once.

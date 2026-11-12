@@ -921,7 +921,7 @@ func (s *StreamService) reportConnectionError(
 	// not coming on this connection, and holding the measurement open would
 	// carry it into the utterance after the one it belongs to.
 	s.ttfb.reportNow(ctx)
-	s.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
+	s.ReportConnectionError(ctx, ef, forceTreatAsPermanent)
 }
 
 // recordUsage reports the audio the connection was given. The measurement covers

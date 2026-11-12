@@ -812,7 +812,7 @@ func (r *recordingService) PushError(_ context.Context, msg string, _ error, _ b
 	r.errors = append(r.errors, msg)
 }
 
-func (r *recordingService) PushErrorFrame(_ context.Context, ef *frames.ErrorFrame, force bool) {
+func (r *recordingService) ReportConnectionError(_ context.Context, ef *frames.ErrorFrame, force bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.errors = append(r.errors, ef.Error)

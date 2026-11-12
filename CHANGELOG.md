@@ -298,6 +298,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **The DTMF aggregator flushes a pending entry when the session ends.** Digits
   waiting on their terminator or their timeout were lost at an `EndFrame` or a
   `CancelFrame`. They are now flushed ahead of it.
+- **Services raise a connection error event.** An application had no event to
+  subscribe to when a service lost its provider connection, and had to filter
+  error frames instead. Every service now declares
+  `service.EventConnectionError` ("on_connection_error"), raised with the
+  error's message on each failed attempt to restore a streaming STT, a Cartesia
+  or AssemblyAI TTS, or a WebSocket LLM connection, and on giving up, beside the
+  error frame. `service.Base.ReportConnectionError` raises it and pushes the
+  frame.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

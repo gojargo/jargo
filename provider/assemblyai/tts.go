@@ -543,7 +543,7 @@ func (s *synthesizer) Usable() bool { return s.svc.Usable() }
 
 // reportError reports a connection error from the receive loop.
 func (s *synthesizer) reportError(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
-	s.svc.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
+	s.svc.ReportConnectionError(ctx, ef, forceTreatAsPermanent)
 }
 
 // send writes one JSON message.

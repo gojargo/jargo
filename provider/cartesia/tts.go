@@ -44,7 +44,7 @@ type GenerationConfig struct {
 // way to report errors, and whether it is still usable.
 type serviceReporter interface {
 	PushError(ctx context.Context, msg string, err error, fatal bool, opts ...processor.ErrorOption)
-	PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool)
+	ReportConnectionError(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool)
 	Usable() bool
 }
 
@@ -56,7 +56,7 @@ func (detachedService) PushError(_ context.Context, msg string, err error, _ boo
 	slog.Error(msg, "err", err)
 }
 
-func (detachedService) PushErrorFrame(_ context.Context, ef *frames.ErrorFrame, _ bool) {
+func (detachedService) ReportConnectionError(_ context.Context, ef *frames.ErrorFrame, _ bool) {
 	slog.Error(ef.Error)
 }
 
@@ -318,7 +318,9 @@ func (s *synthesizer) ConnectWebsocket(ctx context.Context) error {
 	}
 	conn, err := wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
 	if err != nil {
-		s.svc.PushError(ctx, fmt.Sprintf("Unknown error occurred: %v", err), err, false)
+		ef := frames.NewErrorFrame(fmt.Sprintf("Unknown error occurred: %v", err))
+		ef.Err = err
+		s.svc.ReportConnectionError(ctx, ef, false)
 		return nil
 	}
 	s.mu.Lock()
@@ -366,7 +368,7 @@ func (s *synthesizer) Usable() bool { return s.svc.Usable() }
 
 // reportError reports a connection error from the receive loop.
 func (s *synthesizer) reportError(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
-	s.svc.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
+	s.svc.ReportConnectionError(ctx, ef, forceTreatAsPermanent)
 }
 
 // write sends one JSON message, serialized against the other writers.

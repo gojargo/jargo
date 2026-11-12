@@ -50,7 +50,26 @@ type Base struct {
 // New builds a service Base named name on behalf of self, the concrete service
 // embedding it.
 func New(name string, self processor.Processor, opts ...processor.Option) *Base {
-	return &Base{Base: processor.New(name, self, opts...)}
+	b := &Base{Base: processor.New(name, self, opts...)}
+	b.Events().Register(EventConnectionError, false)
+	return b
+}
+
+// EventConnectionError fires when the service's connection to its provider
+// fails: each failed attempt to restore it, and giving up. The handler is given
+// the error's message.
+//
+//	events.On(svc.Events(), service.EventConnectionError,
+//	    func(ctx context.Context, msg string) { … })
+const EventConnectionError = "on_connection_error"
+
+// ReportConnectionError reports a failure of the service's connection to its
+// provider: it fires EventConnectionError with the message, then pushes the
+// error frame. forceTreatAsPermanent says the failure will keep recurring, as
+// it does once reconnecting has been given up on.
+func (b *Base) ReportConnectionError(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
+	b.Events().Call(ctx, EventConnectionError, b.Self(), ef.Error)
+	b.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
 }
 
 // SettingsUpdated records that this service's settings have actually changed.

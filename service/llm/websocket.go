@@ -112,7 +112,7 @@ func (w *Websocket) Disconnecting() bool { return w.ws.Disconnecting() }
 
 // reportError puts a connection error on the pipeline.
 func (w *Websocket) reportError(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
-	w.llm.PushErrorFrame(ctx, ef, forceTreatAsPermanent)
+	w.llm.ReportConnectionError(ctx, ef, forceTreatAsPermanent)
 }
 
 // wsHandler adapts the service's handler to the wsservice base, which also
