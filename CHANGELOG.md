@@ -49,6 +49,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The AssemblyAI TTS service runs on the websocket TTS base.** It still
+  holds one session open for the call, and the base now owns its receive loop,
+  reconnects, keepalive and error reports, and closes the session when the
+  pipeline ends or is canceled, not only when the service is torn down. A
+  handshake that fails is reported as a connection error, raising
+  `on_connection_error`, where it was only pushed as an error before.
+  Disconnecting reports what the service was timing as far as it got.
+
 - **The Cartesia TTS service runs on the websocket TTS base.** It still holds
   one connection open for the call, and the base now owns its receive loop,
   reconnects and error reports, and closes it when the pipeline ends or is

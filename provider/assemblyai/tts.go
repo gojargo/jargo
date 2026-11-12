@@ -57,10 +57,6 @@ const (
 	// closes without it after this.
 	wordBoundariesGrace = time.Second
 
-	// receiveStopTimeout bounds the wait for the receive loop to end when a
-	// session is closed.
-	receiveStopTimeout = time.Second
-
 	// cancelWriteTimeout bounds the write that cancels the synthesis an
 	// interruption cut off. It runs off the frame's context, which the
 	// interruption may already have canceled.
@@ -186,9 +182,9 @@ func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
 		sessionRenewalMargin: sessionRenewalMargin,
 		now:                  time.Now,
 	}
-	s.ws = wsservice.New(s, cfg.Websocket.Config())
 	b := tts.New("AssemblyAITTS", s)
 	s.svc = b
+	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	if cfg.TextAggregation == frames.TextTypeToken {
 		b.SetTextAggregator(ttstext.NewTokenAggregator())
 	}
@@ -218,15 +214,18 @@ type graceTimer struct {
 }
 
 // synthesizer speaks over one WebSocket session at a time. The receive loop is
-// run by a wsservice.Base, which reconnects when the session closes.
+// run by the service's websocket base, which reconnects when the session
+// closes.
 type synthesizer struct {
 	cfg  TTSConfig
 	live *TTSSettings
-	// svc is the service this synthesizer drives, for reporting errors and
-	// asking whether it is usable. It is also the host audio is appended to.
+	// svc is the service this synthesizer drives, for reporting errors. It is
+	// also the host audio is appended to.
 	svc  *tts.Base
 	host tts.AudioContextHost
-	ws   *wsservice.Base
+	// ws is the connection lifecycle: the receive loop, reconnects, error
+	// reports and the keepalive.
+	ws *tts.Websocket
 
 	// The waits, held here so a test can shorten them.
 	keepaliveInterval    time.Duration
@@ -245,11 +244,6 @@ type synthesizer struct {
 	// closed records that reading from conn failed, so the connection is gone
 	// although it has not been disconnected yet.
 	closed bool
-	// receiveStop and receiveDone stop and wait for the receive loop.
-	receiveStop context.CancelFunc
-	receiveDone chan struct{}
-	// keepalive holds an idle session open.
-	keepalive tts.Keepalive
 
 	// Session state reported by Begin. A session ID means Begin arrived.
 	sessionID        string
@@ -289,13 +283,7 @@ func (s *synthesizer) Metadata() tts.Metadata {
 // here, rather than on the first sentence, keeps the connection setup off the
 // first response's latency.
 func (s *synthesizer) Start(ctx context.Context) {
-	s.connect(ctx)
-}
-
-// Close disconnects, implementing tts.Closer.
-func (s *synthesizer) Close() error {
-	s.disconnect(context.Background())
-	return nil
+	s.Connect(ctx)
 }
 
 // buildURL builds the connect URL, which carries the whole session
@@ -318,64 +306,39 @@ func (s *synthesizer) buildURL() string {
 	return s.cfg.URL + "?" + q.Encode()
 }
 
-// connect connects to AssemblyAI and starts the receive and keepalive loops.
-func (s *synthesizer) connect(ctx context.Context) {
+// Connect connects to AssemblyAI and starts the receive and keepalive loops,
+// implementing tts.WebsocketService.
+func (s *synthesizer) Connect(ctx context.Context) {
 	s.ws.Connect()
 	s.mu.Lock()
 	s.reconnectDelay = 0
 	s.mu.Unlock()
 	s.openSession(ctx)
-	s.keepalive.Start(context.WithoutCancel(ctx), s.keepaliveInterval, s)
+	s.ws.CreateKeepaliveTask(ctx, s.keepaliveInterval, s)
 }
 
-// disconnect disconnects from AssemblyAI and stops the receive and keepalive
-// loops.
-func (s *synthesizer) disconnect(ctx context.Context) {
-	s.closeConnectionContexts()
+// Disconnect disconnects from AssemblyAI and stops the receive and keepalive
+// loops, implementing tts.WebsocketService. The contexts of the connection
+// are ended (their bookkeeping first, see CloseConnectionContexts), and what
+// the service was timing is reported as far as it got.
+func (s *synthesizer) Disconnect(ctx context.Context) {
 	s.ws.Disconnect()
-	s.keepalive.Stop()
+	s.svc.StopAllMetrics(ctx)
+	s.ws.CancelKeepaliveTask()
 	s.closeSession(ctx)
 }
 
 // openSession opens the WebSocket session and starts the receive loop on it.
 func (s *synthesizer) openSession(ctx context.Context) {
 	_ = s.ConnectWebsocket(ctx)
-	s.mu.Lock()
-	if s.conn == nil || s.receiveStop != nil {
-		s.mu.Unlock()
-		return
+	if s.Connected() {
+		s.ws.StartReceiveTask(ctx)
 	}
-	// The loop outlives the call that opened the session: it runs until the
-	// session is closed, not until this sentence is done.
-	runCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-	s.receiveStop, s.receiveDone = stop, done
-	s.mu.Unlock()
-	go func() {
-		defer close(done)
-		s.ws.ReceiveTaskHandler(runCtx, s.reportError)
-		s.mu.Lock()
-		if s.receiveDone == done {
-			s.receiveStop, s.receiveDone = nil, nil
-		}
-		s.mu.Unlock()
-	}()
 }
 
 // closeSession stops the receive loop and closes the session.
 func (s *synthesizer) closeSession(ctx context.Context) {
-	s.mu.Lock()
-	stop, done := s.receiveStop, s.receiveDone
-	s.receiveStop, s.receiveDone = nil, nil
-	s.mu.Unlock()
-	if stop != nil {
-		stop()
-		select {
-		case <-done:
-		case <-time.After(receiveStopTimeout):
-			slog.Debug("assemblyai tts receive loop did not stop in time")
-		}
-	}
+	s.ws.CancelReceiveTask()
 	s.disconnectWebsocket(ctx)
 }
 
@@ -396,9 +359,9 @@ func (s *synthesizer) renewSessionIfExpiring(ctx context.Context) {
 	s.openSession(ctx)
 }
 
-// ConnectWebsocket opens the WebSocket session, implementing wsservice.Handler.
-// A failure is reported here and leaves no connection behind, which the
-// receive loop reads as a failed attempt.
+// ConnectWebsocket opens the WebSocket session, implementing
+// tts.WebsocketHandler. A failure is reported here and leaves no connection
+// behind, which the receive loop reads as a failed attempt.
 func (s *synthesizer) ConnectWebsocket(ctx context.Context) error {
 	if s.Connected() {
 		return nil
@@ -407,9 +370,14 @@ func (s *synthesizer) ConnectWebsocket(ctx context.Context) error {
 	slog.Debug("connecting to assemblyai tts", "url", endpoint)
 	header := authHeader(s.cfg.APIKey)
 	header.Set("User-Agent", ttsUserAgent)
-	conn, err := s.cfg.Websocket.Dial(ctx, endpoint, header, readLimit)
+	conn, err := s.ws.Dial(ctx, endpoint, header, readLimit)
 	if err != nil {
-		s.svc.PushError(ctx, fmt.Sprintf("Error connecting to AssemblyAI TTS: %v", err), err, false)
+		s.mu.Lock()
+		s.conn, s.closed = nil, false
+		s.mu.Unlock()
+		ef := frames.NewErrorFrame(fmt.Sprintf("Error connecting to AssemblyAI TTS: %v", err))
+		ef.Err = err
+		s.ws.ReportError(ctx, ef, false)
 		return nil
 	}
 	s.mu.Lock()
@@ -418,25 +386,31 @@ func (s *synthesizer) ConnectWebsocket(ctx context.Context) error {
 	return nil
 }
 
-// DisconnectWebsocket readies a redial, implementing wsservice.Handler. The
-// receive loop calls it before every reconnect attempt: it first waits as long
-// as the last Error asked, then ends the audio contexts of the connection being
-// replaced, and closes the socket.
-func (s *synthesizer) DisconnectWebsocket(ctx context.Context) error {
+// PrepareReconnectWebsocket waits as long as the last Error asked before the
+// session is dialed again, implementing tts.WebsocketReconnectPreparer. The
+// receive loop calls it before every reconnect attempt, ahead of the base
+// ending the contexts of the connection being replaced.
+func (s *synthesizer) PrepareReconnectWebsocket(ctx context.Context) {
 	s.mu.Lock()
 	delay := s.reconnectDelay
 	s.reconnectDelay = 0
 	s.mu.Unlock()
-	if delay > 0 {
-		slog.Debug("waiting before reconnecting to assemblyai tts, as the server asked", "delay", delay)
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-		case <-timer.C:
-		}
-		timer.Stop()
+	if delay <= 0 {
+		return
 	}
-	s.closeConnectionContexts()
+	slog.Debug("waiting before reconnecting to assemblyai tts, as the server asked", "delay", delay)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+// DisconnectWebsocket closes the socket, implementing tts.WebsocketHandler.
+// The receive loop calls it before every reconnect attempt, once the base has
+// ended the audio contexts of the connection being replaced.
+func (s *synthesizer) DisconnectWebsocket(ctx context.Context) error {
 	s.disconnectWebsocket(ctx)
 	return nil
 }
@@ -473,9 +447,10 @@ func (s *synthesizer) resetSessionState() {
 	s.wordBoundaries = false
 }
 
-// closeConnectionContexts ends the audio contexts of a connection that is being
-// replaced, forgetting their bookkeeping first.
-func (s *synthesizer) closeConnectionContexts() {
+// CloseConnectionContexts forgets the bookkeeping of the contexts a replaced
+// or closed connection ends, implementing tts.ConnectionContextsCloser. The
+// base ends the contexts themselves, right after.
+func (s *synthesizer) CloseConnectionContexts() {
 	s.mu.Lock()
 	ids := make([]string, 0, len(s.contexts))
 	for id := range s.contexts {
@@ -485,13 +460,10 @@ func (s *synthesizer) closeConnectionContexts() {
 	for _, id := range ids {
 		s.forgetContext(id)
 	}
-	if s.host != nil {
-		s.host.ReplaceConnection()
-	}
 }
 
 // ReceiveMessages receives and dispatches server frames until the session
-// ends, implementing wsservice.Handler.
+// ends, implementing tts.WebsocketHandler.
 func (s *synthesizer) ReceiveMessages(ctx context.Context) error {
 	s.mu.Lock()
 	conn := s.conn
@@ -533,20 +505,11 @@ func (s *synthesizer) ReceiveMessages(ctx context.Context) error {
 }
 
 // Connected reports whether there is a live session, implementing
-// wsservice.Handler.
+// tts.WebsocketHandler.
 func (s *synthesizer) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conn != nil && !s.closed
-}
-
-// Usable reports whether the service can still do its job, implementing
-// wsservice.Handler.
-func (s *synthesizer) Usable() bool { return s.svc.Usable() }
-
-// reportError reports a connection error from the receive loop.
-func (s *synthesizer) reportError(ctx context.Context, ef *frames.ErrorFrame, forceTreatAsPermanent bool) {
-	s.svc.ReportConnectionError(ctx, ef, forceTreatAsPermanent)
 }
 
 // send writes one JSON message.
@@ -686,8 +649,12 @@ func (s *synthesizer) closeContext(contextID string) {
 // FlushAudio concludes the turn's text so the context can close once it is
 // spoken, implementing tts.AudioFlusher. In sentence aggregation each sentence
 // is already flushed by RunTTS. When streaming tokens, the turn's text is
-// flushed here.
+// flushed here. With no context named it concludes the one playing, or the
+// turn's.
 func (s *synthesizer) FlushAudio(ctx context.Context, contextID string) {
+	if contextID == "" {
+		contextID = s.svc.ActiveAudioContextID()
+	}
 	if contextID == "" {
 		return
 	}
@@ -901,8 +868,8 @@ func (s *synthesizer) RunTTS(
 
 	if err := s.sendText(ctx, text, contextID); err != nil {
 		s.yieldStopped(contextID, yield)
-		s.disconnect(ctx)
-		s.connect(ctx)
+		s.Disconnect(ctx)
+		s.Connect(ctx)
 		return fmt.Errorf("assemblyai tts: %w", err)
 	}
 	tts.StartUsageMetrics(ctx, text)
@@ -918,7 +885,7 @@ func (s *synthesizer) sendText(ctx context.Context, text, contextID string) erro
 		// A connection that is gone already is dropped first, along with the
 		// state of the session it carried.
 		s.disconnectWebsocket(ctx)
-		s.connect(ctx)
+		s.Connect(ctx)
 	}
 
 	s.writeMu.Lock()
@@ -1047,13 +1014,15 @@ func assemblyaiTTSLanguage(l language.Language) string {
 // Compile-time checks that the synthesizer answers to everything the base asks
 // of a provider whose audio arrives on a receive loop of its own.
 var (
-	_ tts.ContextSynthesizer      = (*synthesizer)(nil)
-	_ tts.WordTimestamps          = (*synthesizer)(nil)
-	_ tts.AudioFlusher            = (*synthesizer)(nil)
-	_ tts.AudioContextInterrupter = (*synthesizer)(nil)
-	_ tts.AudioContextCompleter   = (*synthesizer)(nil)
-	_ tts.Starter                 = (*synthesizer)(nil)
-	_ tts.Closer                  = (*synthesizer)(nil)
-	_ tts.Describer               = (*synthesizer)(nil)
-	_ wsservice.Handler           = (*synthesizer)(nil)
+	_ tts.ContextSynthesizer         = (*synthesizer)(nil)
+	_ tts.WordTimestamps             = (*synthesizer)(nil)
+	_ tts.AudioFlusher               = (*synthesizer)(nil)
+	_ tts.AudioContextInterrupter    = (*synthesizer)(nil)
+	_ tts.AudioContextCompleter      = (*synthesizer)(nil)
+	_ tts.Starter                    = (*synthesizer)(nil)
+	_ tts.Describer                  = (*synthesizer)(nil)
+	_ tts.WebsocketService           = (*synthesizer)(nil)
+	_ tts.KeepaliveHandler           = (*synthesizer)(nil)
+	_ tts.WebsocketReconnectPreparer = (*synthesizer)(nil)
+	_ tts.ConnectionContextsCloser   = (*synthesizer)(nil)
 )

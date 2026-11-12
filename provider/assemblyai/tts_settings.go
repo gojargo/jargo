@@ -57,8 +57,8 @@ func (s *synthesizer) ServiceLanguage(l language.Language) string {
 // reconnects.
 func (s *synthesizer) UpdateSettings(ctx context.Context, changed settings.Changed) error {
 	if changed.Has("voice") || changed.Has("language") || changed.Has("model") {
-		s.disconnect(ctx)
-		s.connect(ctx)
+		s.Disconnect(ctx)
+		s.Connect(ctx)
 		return nil
 	}
 	if len(changed) > 0 {

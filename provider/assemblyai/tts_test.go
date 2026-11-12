@@ -20,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
 	uctx "github.com/gojargo/jargo/utils/context"
@@ -61,8 +62,10 @@ type ttsServerOptions struct {
 
 // captured is what the fake server saw.
 type captured struct {
-	mu           sync.Mutex
-	connections  int
+	mu          sync.Mutex
+	connections int
+	// open is how many connections are still open.
+	open         int
 	connectTimes []time.Time
 	query        url.Values
 	auth         string
@@ -130,6 +133,14 @@ func fakeTTSServer(t *testing.T, opts ttsServerOptions) (endpoint string, got *c
 		if err != nil {
 			return
 		}
+		got.mu.Lock()
+		got.open++
+		got.mu.Unlock()
+		defer func() {
+			got.mu.Lock()
+			got.open--
+			got.mu.Unlock()
+		}()
 		defer func() { _ = c.CloseNow() }()
 		ctx := r.Context()
 		send := func(m map[string]any) bool {
@@ -847,6 +858,70 @@ func TestTTSVoiceIDKeySetsTheVoice(t *testing.T) {
 	}
 	if got := delta.Voice.Or(""); got != "aai-mary" {
 		t.Errorf("voice = %q, want aai-mary", got)
+	}
+}
+
+// The session is one connection for the call, opened when the pipeline starts
+// and closed when it ends.
+func TestTTSConnectionIsClosedWhenThePipelineEnds(t *testing.T) {
+	endpoint, got := fakeTTSServer(t, ttsServerOptions{})
+	svc, _ := testTTS(endpoint, TTSConfig{})
+	runTest(t, svc,
+		speakStep("First reply."), waitMs(300), botStopped(),
+		speakStep("Second reply."), waitMs(300), botStopped())
+
+	deadline := time.Now().Add(2 * time.Second)
+	open := func() int {
+		got.mu.Lock()
+		defer got.mu.Unlock()
+		return got.open
+	}
+	for open() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := got.connectionCount(); n != 1 {
+		t.Errorf("connections = %d, want one for the call", n)
+	}
+	if n := open(); n != 0 {
+		t.Errorf("%d connections still open after the pipeline ended", n)
+	}
+}
+
+// A handshake the server refuses is reported as a connection error, raising
+// the service's event, not only pushed as an error.
+func TestTTSRefusedHandshakeRaisesAConnectionError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	svc, s := testTTS("ws"+strings.TrimPrefix(srv.URL, "http"), TTSConfig{})
+	var mu sync.Mutex
+	var reported []string
+	events.On(svc.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+		mu.Lock()
+		reported = append(reported, msg)
+		mu.Unlock()
+	})
+	s.Start(t.Context())
+	defer s.Disconnect(context.Background())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(reported)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reported) != 1 || !strings.Contains(reported[0], "Error connecting to AssemblyAI TTS") {
+		t.Errorf("connection errors = %q, want the refused handshake", reported)
+	}
+	if s.ws.ReceiveTaskRunning() {
+		t.Error("a receive loop runs with no session to read")
 	}
 }
 
