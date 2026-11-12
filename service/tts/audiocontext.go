@@ -1134,13 +1134,14 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 			// from: it is the point the audio starts being heard.
 			receivedAudio = true
 			c.observe(fr.Audio)
-			waiting := c.startWordTimestamps(b.now(), b.lastWordPTS())
+			// The words reported before it go first, then the frames held for
+			// it, then the audio itself.
+			for _, w := range c.startWordTimestamps(b.now(), b.lastWordPTS()) {
+				b.pushWord(ctx, c, contextID, w)
+			}
 			b.pushHeldFrames(ctx, held)
 			held = nil
 			_ = b.PushFrame(ctx, it.frame, processor.Downstream)
-			for _, w := range waiting {
-				b.pushWord(ctx, c, contextID, w)
-			}
 			continue
 		case *frames.TTSStoppedFrame:
 			b.pushResamplerTail(ctx, contextID, &rs)

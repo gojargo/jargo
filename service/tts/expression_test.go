@@ -1212,3 +1212,25 @@ func TestNothingIsBroadcastWithoutExpressiveConversation(t *testing.T) {
 		t.Fatalf("metadata = %v", got)
 	}
 }
+
+// TestWordsReportedBeforeTheAudioGoOutAheadOfIt checks words a provider times
+// before its first audio chunk reach the pipeline ahead of that chunk, as they
+// were reported.
+func TestWordsReportedBeforeTheAudioGoOutAheadOfIt(t *testing.T) {
+	down, _ := runExpressive(t, true, []frames.Frame{frames.NewTTSSpeakFrame("hello world")},
+		newBase(&timedSynth{}, frames.TextTypeSentence))
+	lastWord, firstAudio := -1, -1
+	for i, f := range down {
+		switch f.(type) {
+		case *frames.TTSTextFrame:
+			lastWord = i
+		case *frames.TTSAudioRawFrame:
+			if firstAudio < 0 {
+				firstAudio = i
+			}
+		}
+	}
+	if lastWord < 0 || firstAudio < 0 || lastWord > firstAudio {
+		t.Errorf("last word at %d, first audio at %d: want the words ahead of the audio", lastWord, firstAudio)
+	}
+}

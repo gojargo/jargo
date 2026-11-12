@@ -371,6 +371,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   an unclosed `<` as a tag running to the end of the token, so a token such as
   "<3" was judged punctuation and merged into the word before it. Only complete
   tags are stripped before the check now.
+- **Words timed before a context's first audio go out ahead of it.** The TTS
+  base pushed the first audio chunk, then the words the provider had already
+  timed, so a processor or observer between the TTS and the transport saw the
+  words after the audio they lead. They now go out first, then the frames held
+  for the audio, then the audio.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
