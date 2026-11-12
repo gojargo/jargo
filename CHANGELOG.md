@@ -201,6 +201,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   call, an `LLMWithBackend` session or a waiting handoff agent canceled itself
   and the runner with it. An LLM worker now runs no idle detection unless its
   `WorkerConfig` sets an `IdleTimeout`.
+- **The text transformer rewrites text of every kind, and keeps the frame.**
+  `StatelessTextTransformer` rewrote only a plain `TextFrame`, so placed after
+  an LLM (or an STT) it never touched the tokens (or the transcriptions) going
+  past. It also replaced the frame with a new plain `TextFrame` sent downstream,
+  losing its kind, its `SkipTTS` and context flags, and its direction. It now
+  rewrites any text frame and passes on a copy of the same kind with every
+  other field kept, in the direction it was going. The new `frames.AsTextFrame`
+  and `frames.WithText` read and replace the text of a frame of any text kind.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

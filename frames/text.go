@@ -2,6 +2,7 @@ package frames
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/gojargo/jargo/expressive"
 )
@@ -31,6 +32,48 @@ func NewTextFrame(text string) *TextFrame {
 		Text:            text,
 		AppendToContext: true,
 	}
+}
+
+// textFrameHolder is implemented by every frame that is a TextFrame or embeds
+// one, through the method TextFrame promotes to them.
+type textFrameHolder interface {
+	textFrame() *TextFrame
+}
+
+func (f *TextFrame) textFrame() *TextFrame { return f }
+
+// WithText returns a copy of f with its text replaced, when f is a text frame of
+// any kind, and whether it was. The copy keeps f's type, its id and every other
+// field, so it stands in for f wherever f was going; f itself is left as it
+// was, since an observer may still be reading it.
+func WithText(f Frame, text string) (Frame, bool) {
+	if _, ok := AsTextFrame(f); !ok {
+		return f, false
+	}
+	v := reflect.ValueOf(f)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return f, false
+	}
+	cp := reflect.New(v.Elem().Type())
+	cp.Elem().Set(v.Elem())
+	copied, ok := reflect.TypeAssert[Frame](cp)
+	if !ok {
+		return f, false
+	}
+	tf, _ := AsTextFrame(copied)
+	tf.Text = text
+	return copied, true
+}
+
+// AsTextFrame returns the TextFrame f is or embeds, and whether it has one: the
+// text of an LLM token, a transcription, an aggregated unit, a spoken word. It
+// asks whether a frame is any kind of text frame, where a type switch on
+// *TextFrame matches only the plain one.
+func AsTextFrame(f Frame) (*TextFrame, bool) {
+	if h, ok := f.(textFrameHolder); ok {
+		return h.textFrame(), true
+	}
+	return nil, false
 }
 
 // String implements fmt.Stringer.

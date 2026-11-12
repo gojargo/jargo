@@ -6,8 +6,9 @@ import (
 	"github.com/gojargo/jargo/frames"
 )
 
-// StatelessTextTransformer rewrites the text of every TextFrame passing through
-// it, and forwards everything else untouched.
+// StatelessTextTransformer rewrites the text of every text frame passing
+// through it, of any kind (an LLM token, a transcription, an aggregated unit),
+// and forwards everything else untouched.
 //
 // It holds nothing between frames, so it suits a rewrite that depends only on
 // the text in hand: changing case, substituting a term, stripping a marker. A
@@ -19,7 +20,7 @@ type StatelessTextTransformer struct {
 }
 
 // NewStatelessTextTransformer builds a transformer applying transform to the
-// text of each TextFrame.
+// text of each text frame.
 func NewStatelessTextTransformer(name string, transform func(string) string) *StatelessTextTransformer {
 	p := &StatelessTextTransformer{transform: transform}
 	p.Base = New(name, p, WithDirectMode())
@@ -33,13 +34,14 @@ func (p *StatelessTextTransformer) ProcessFrame(
 	if err := p.Base.ProcessFrame(ctx, frame, dir); err != nil {
 		return err
 	}
-	tf, ok := frame.(*frames.TextFrame)
-	if !ok {
-		return p.PushFrame(ctx, frame, dir)
+	// The frame passed on keeps its kind, its other fields and its direction:
+	// an LLM token is still one, still bound for whatever speaks it. It is a
+	// copy, so an observer still reading the frame that arrived reads what
+	// arrived.
+	if tf, ok := frames.AsTextFrame(frame); ok {
+		if rewritten, ok := frames.WithText(frame, p.transform(tf.Text)); ok {
+			frame = rewritten
+		}
 	}
-	// The rewritten text is a frame of its own rather than the original with its
-	// text changed, so anything else holding the original still reads what
-	// arrived. It goes downstream whichever way the original was traveling,
-	// because rewritten text is for whoever speaks or records it.
-	return p.PushFrame(ctx, frames.NewTextFrame(p.transform(tf.Text)), Downstream)
+	return p.PushFrame(ctx, frame, dir)
 }
