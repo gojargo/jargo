@@ -126,3 +126,107 @@ func TestStampedToSpeakIsSpoken(t *testing.T) {
 		t.Error("the response was stamped to be spoken but never reached the synthesizer")
 	}
 }
+
+// runAggregated pushes a response whose text arrives already aggregated (as an
+// LLMText processor ahead of the service sends it) through a TTS service, and
+// reports what reached the synthesizer and what reached the end of the
+// pipeline.
+func runAggregated(
+	t *testing.T, skipTypes []frames.TextType, units ...*frames.AggregatedTextFrame,
+) (spoken []string, reached []frames.Frame) {
+	t.Helper()
+
+	synth := &recordingSynth{}
+	svc := tts.New("AggregatedTTS", synth)
+	svc.SetSkipTextTypes(skipTypes...)
+	var mu sync.Mutex
+	var got []frames.Frame
+	task := pipeline.NewWorker(
+		pipeline.New(svc),
+		pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame},
+	)
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
+	})
+	done := make(chan error, 1)
+	go func() { done <- task.Run(t.Context()) }()
+
+	queued := []frames.Frame{frames.NewLLMFullResponseStartFrame()}
+	for _, u := range units {
+		queued = append(queued, u)
+	}
+	task.QueueFrames(append(queued, frames.NewLLMFullResponseEndFrame()))
+
+	task.StopWhenDone()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pipeline did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	return synth.texts(), append([]frames.Frame(nil), got...)
+}
+
+// TestAggregatedTextIsSpoken checks text that reaches the service already
+// aggregated is spoken as the unit it is, rather than passed on unspoken.
+func TestAggregatedTextIsSpoken(t *testing.T) {
+	spoken, got := runAggregated(t, nil, frames.NewAggregatedTextFrame("Hello there.", frames.TextTypeSentence))
+	if len(spoken) != 1 || spoken[0] != "Hello there." {
+		t.Fatalf("spoken = %q, want the unit as it arrived", spoken)
+	}
+	started := false
+	for _, f := range got {
+		if _, ok := f.(*frames.TTSStartedFrame); ok {
+			started = true
+		}
+	}
+	if !started {
+		t.Error("no TTSStartedFrame: the unit was not synthesized")
+	}
+}
+
+// TestAggregatedTextStampedToSkipIsNotSpoken checks a unit stamped to skip TTS
+// travels on as it is, unspoken.
+func TestAggregatedTextStampedToSkipIsNotSpoken(t *testing.T) {
+	skip := true
+	unit := frames.NewAggregatedTextFrame("Not said.", frames.TextTypeSentence)
+	unit.SkipTTS = &skip
+	spoken, got := runAggregated(t, nil, unit)
+	if len(spoken) != 0 {
+		t.Errorf("spoken = %q, want nothing synthesized", spoken)
+	}
+	found := false
+	for _, f := range got {
+		if f == unit {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the stamped unit did not travel on")
+	}
+}
+
+// TestAggregatedTextOfASkippedTypeIsNotSpoken checks a unit grouped a way the
+// service does not speak (a code block, say) travels on unspoken, marked as
+// left out, after the spoken text before it.
+func TestAggregatedTextOfASkippedTypeIsNotSpoken(t *testing.T) {
+	code := frames.NewAggregatedTextFrame("x := 1", "code")
+	spoken, got := runAggregated(t, []frames.TextType{"code"},
+		frames.NewAggregatedTextFrame("Here it is.", frames.TextTypeSentence), code)
+	if len(spoken) != 1 || spoken[0] != "Here it is." {
+		t.Errorf("spoken = %q, want only the sentence", spoken)
+	}
+	skipped := false
+	for _, f := range got {
+		if af, ok := f.(*frames.AggregatedTextFrame); ok && af.Text == "x := 1" {
+			skipped = af.SkipTTS != nil && *af.SkipTTS
+		}
+	}
+	if !skipped {
+		t.Error("the code unit did not travel on marked as left out")
+	}
+}

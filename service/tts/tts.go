@@ -653,6 +653,10 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 	switch fr := f.(type) {
 	case *frames.LLMTextFrame:
 		return b.handleText(ctx, &fr.TextFrame, f, dir)
+	case *frames.AggregatedTextFrame:
+		// Already a unit, aggregated upstream (by an LLMText processor, say), so
+		// it is spoken as it stands rather than aggregated again.
+		return b.handleAggregatedText(ctx, fr)
 	case *frames.TextFrame:
 		return b.handleText(ctx, fr, f, dir)
 	case *frames.TTSSpeakFrame:
@@ -675,6 +679,16 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		return b.queueSerial(ctx, f, dir)
 	case *frames.LLMFullResponseEndFrame, *frames.EndFrame:
 		return b.handleTurnEnd(ctx, f, dir)
+	default:
+		return b.processControlFrame(ctx, f, dir)
+	}
+}
+
+// processControlFrame handles the frames that steer the service rather than
+// carry what it speaks: the pipeline starting, an interruption, a cancellation,
+// a settings update. Anything else is queued behind the audio.
+func (b *Base) processControlFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	switch fr := f.(type) {
 	case *frames.InterruptionFrame:
 		// An interruption stops every clock this service is running, this one
 		// included: what it was measuring will never finish.
@@ -758,15 +772,27 @@ func (b *Base) queueSkippedLLMText(ctx context.Context, agg ttstext.Aggregation,
 	return b.queueSerial(ctx, f, dir)
 }
 
-// skipsTTS reports whether the frame was stamped to bypass synthesis. Only the
-// frames describing the model's output carry the stamp, and an unstamped frame
-// is not one to skip.
+// skipsTTS reports whether the frame was stamped to bypass synthesis. Text of
+// any kind carries the stamp, and so do the brackets of a model's response; an
+// unstamped frame is not one to skip.
 func skipsTTS(f frames.Frame) bool {
 	var skip *bool
 	switch fr := f.(type) {
 	case *frames.LLMTextFrame:
 		skip = fr.SkipTTS
 	case *frames.TextFrame:
+		skip = fr.SkipTTS
+	case *frames.AggregatedTextFrame:
+		skip = fr.SkipTTS
+	case *frames.TTSTextFrame:
+		skip = fr.SkipTTS
+	case *frames.TranscriptionFrame:
+		skip = fr.SkipTTS
+	case *frames.InterimTranscriptionFrame:
+		skip = fr.SkipTTS
+	case *frames.EagerTranscriptionFrame:
+		skip = fr.SkipTTS
+	case *frames.TranslationFrame:
 		skip = fr.SkipTTS
 	case *frames.LLMFullResponseStartFrame:
 		skip = fr.SkipTTS
@@ -1139,6 +1165,14 @@ func (b *Base) handleText(ctx context.Context, tf *frames.TextFrame, _ frames.Fr
 	// sentence starts. A transcription is a distinct type and does not land here.
 	b.startTextAggregationMetrics()
 	return b.aggregate(ctx, tf.Text)
+}
+
+// handleAggregatedText speaks a unit that arrived already aggregated, in the
+// turn's context: it is skipped if its kind is not spoken, read for expression
+// tags if it is text the model writes in, and spoken otherwise.
+func (b *Base) handleAggregatedText(ctx context.Context, f *frames.AggregatedTextFrame) error {
+	agg := ttstext.Aggregation{Text: f.Text, Type: f.TextType, RawText: f.RawText}
+	return b.pushTTSFrames(ctx, agg, frames.Interruptible(f), false)
 }
 
 // aggregate folds text into the aggregator and synthesizes every unit it

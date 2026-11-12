@@ -162,6 +162,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   end-on-unusable policy ended the call. The new `errors.ContentFiltered`
   category, which is not permanent, now covers it, and the OpenAI chat and
   Responses services classify their refusals by the error code the body names.
+- **A TTS service speaks text that reaches it already aggregated.** An
+  `AggregatedTextFrame` arriving at a TTS service (from an `LLMText` processor
+  placed before it, as that processor's documentation lays out) was passed on
+  unspoken, so the bot said nothing while the conversation recorded the text.
+  The service now speaks such a unit as it stands: skipped if its kind is not
+  spoken, read for expression tags if it is text the model writes, synthesized
+  otherwise. A unit stamped `SkipTTS` travels on unspoken, as does any other
+  text frame stamped so.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
