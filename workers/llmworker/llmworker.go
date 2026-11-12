@@ -260,30 +260,38 @@ func (w *Worker) track(handler llm.FunctionCallHandler) llm.FunctionCallHandler 
 		w.inflight++
 		w.mu.Unlock()
 
+		// Released however the handler ends, a panic included: the LLM service
+		// recovers a panicking handler, and a call left counted would hold the
+		// worker's frames and handover back for good.
+		defer w.finishCall(ctx)
+
 		// The context carries the worker, so anything the handler passes it to
 		// is recognized as part of the call. A handler that starts work without
 		// it is outside the call as far as this is concerned, which is the same
 		// answer as for work started on another worker.
-		err := handler(context.WithValue(ctx, inToolCallKey{}, w), params)
-
-		w.mu.Lock()
-		w.inflight--
-		last := w.inflight <= 0
-		if last {
-			w.inflight = 0
-		}
-		closing := w.closing
-		w.mu.Unlock()
-
-		if !last {
-			return err
-		}
-		if !closing {
-			w.flushDeferred(ctx)
-		}
-		w.runHandover(ctx)
-		return err
+		return handler(context.WithValue(ctx, inToolCallKey{}, w), params)
 	}
+}
+
+// finishCall records that a call of this worker's ended, and once the last one
+// has, releases what was held for them.
+func (w *Worker) finishCall(ctx context.Context) {
+	w.mu.Lock()
+	w.inflight--
+	last := w.inflight <= 0
+	if last {
+		w.inflight = 0
+	}
+	closing := w.closing
+	w.mu.Unlock()
+
+	if !last {
+		return
+	}
+	if !closing {
+		w.flushDeferred(ctx)
+	}
+	w.runHandover(ctx)
 }
 
 // afterToolCalls runs what a tool asked for, once no call of this worker's is in

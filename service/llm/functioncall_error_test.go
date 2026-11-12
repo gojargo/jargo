@@ -318,3 +318,25 @@ func TestACallThatReturnedCarriesNoError(t *testing.T) {
 		t.Errorf("error = %q, want empty on a call that returned", got)
 	}
 }
+
+// TestAPanickingHandlerSettlesItsCall checks a handler that panics (an index
+// out of range, say) is a failed call like any other: it is settled with the failure
+// result and reported upstream as an application error, and the process lives
+// on.
+func TestAPanickingHandlerSettlesItsCall(t *testing.T) {
+	watch, _ := runFailingCall(t, func(context.Context, llm.FunctionCallParams) error {
+		var calls []string
+		_ = calls[len(calls)] //nolint:gocritic,gosec // the handler's bug: an index out of range
+		return nil
+	})
+
+	watch.mu.Lock()
+	defer watch.mu.Unlock()
+	want := "The function `get_weather` failed and returned no result."
+	if len(watch.results) != 1 || watch.results[0].Result != want {
+		t.Fatalf("results = %v, want the call settled with the failure result", watch.results)
+	}
+	if len(watch.errors) != 1 || watch.errors[0].Category != errs.Application {
+		t.Errorf("errors = %v, want one application error", watch.errors)
+	}
+}

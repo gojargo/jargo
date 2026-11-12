@@ -170,6 +170,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   spoken, read for expression tags if it is text the model writes, synthesized
   otherwise. A unit stamped `SkipTTS` travels on unspoken, as does any other
   text frame stamped so.
+- **A tool handler that panics no longer crashes the process.** Tool handlers
+  run on goroutines of their own, outside the frame processing that recovers
+  panics, so a bug in one (a nil map, an index out of range) took down the
+  process and every session in it. A panic is now a failed call like a
+  returned error: it is logged with its stack, reported upstream as an
+  application error, and the call is settled with the failure result. The LLM
+  worker releases a panicking call too, rather than holding its frames for good.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

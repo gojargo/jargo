@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -1653,7 +1654,7 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		Context:      call.convo,
 		Result:       report,
 	}
-	if err := item.handler(ctx, params); err != nil {
+	if err := callHandler(ctx, item.handler, params); err != nil {
 		// The failure came from the application's own handler, so it says nothing
 		// about whether this service can go on doing its job.
 		b.PushError(ctx, fmt.Sprintf("error executing function call [%s]: %v", call.name, err), err, false,
@@ -1666,6 +1667,26 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		_ = b.settleCall(ctx, call, item, fmt.Sprintf(functionCallErrorTemplate, call.name), err.Error(), nil)
 	}
 }
+
+// callHandler runs a tool handler, turning a panic into the error it returns. A
+// handler is application code, and a bug in it (a nil map, an index out of
+// range) is a failed call, settled like any other, not the end of the process
+// and every session in it.
+func callHandler(ctx context.Context, handler FunctionCallHandler, params FunctionCallParams) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "function call handler panicked",
+				"function", params.FunctionName, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("%w: %v", errHandlerPanicked, r)
+		}
+	}()
+	return handler(ctx, params)
+}
+
+// errHandlerPanicked wraps the value a tool handler panicked with.
+//
+//nolint:gochecknoglobals // sentinel error
+var errHandlerPanicked = errors.New("handler panicked")
 
 // resolveFunctionCall looks the handler of a call up again as it starts. The
 // function may have been unregistered since the call was dispatched, a tool set
