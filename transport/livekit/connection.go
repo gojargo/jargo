@@ -40,7 +40,13 @@ type Config struct {
 	RoomName string `validate:"required_without=Token"`
 	// Identity is this participant's identity. Required without Token.
 	Identity string `validate:"required_without=Token"`
+	// AudioOutChannels is how many channels the bot's published audio track
+	// carries; 0 means one. Set it to the transport's AudioOutChannels.
+	AudioOutChannels int `validate:"omitempty,min=1,max=2"`
 }
+
+// audioTrackName is the name the bot's audio track is published under.
+const audioTrackName = "jargo-audio"
 
 // Validate reports whether the configuration is usable.
 func (c Config) Validate() error { return validate.Struct(c) }
@@ -64,8 +70,16 @@ type Connection struct {
 	pendingIn  []dataMessage
 
 	dtmfMu      sync.Mutex
-	dtmfHandler func(frames.KeypadEntry)
-	pendingDTMF []frames.KeypadEntry
+	dtmfHandler func(DTMFEvent)
+	pendingDTMF []DTMFEvent
+
+	// disconnectMu guards the disconnect handlers and whether the room has
+	// been reported disconnected, which happens once.
+	disconnectMu       sync.Mutex
+	beforeDisconnect   func()
+	disconnectHandler  func()
+	disconnected       bool
+	disconnectReported bool
 
 	partMu      sync.Mutex
 	partHandler func(identity string)
@@ -122,7 +136,9 @@ func Connect(cfg Config) (*Connection, error) {
 			c.deliver(p.Payload, params.SenderIdentity)
 		case *livekit.SipDTMF:
 			// A key pressed by a caller on a SIP leg of the room.
-			c.deliverDTMF(p.Digit)
+			c.deliverDTMF(DTMFEvent{
+				Tone: p.Digit, Digit: p.Digit, Code: p.Code, ParticipantID: params.SenderIdentity,
+			})
 		}
 	}
 	cb.OnParticipantConnected = func(p *lksdk.RemoteParticipant) { c.deliverParticipant(p.Identity()) }
@@ -134,7 +150,10 @@ func Connect(cfg Config) (*Connection, error) {
 		}
 		c.activeSpeakersChanged(identities)
 	}
-	cb.OnDisconnected = func() { c.closeOnce.Do(func() { close(c.closed) }) }
+	cb.OnDisconnected = func() {
+		c.closeOnce.Do(func() { close(c.closed) })
+		c.reportDisconnected()
+	}
 
 	var room *lksdk.Room
 	var err error
@@ -160,7 +179,11 @@ func Connect(cfg Config) (*Connection, error) {
 		room.Disconnect()
 		return nil, err
 	}
-	opts := &lksdk.TrackPublicationOptions{Name: "audio", Stereo: true}
+	// The track is the bot's microphone, as voice front ends look for an agent's
+	// voice by that source.
+	opts := &lksdk.TrackPublicationOptions{
+		Name: audioTrackName, Source: livekit.TrackSource_MICROPHONE, Stereo: cfg.AudioOutChannels == 2,
+	}
 	if _, err := room.LocalParticipant.PublishTrack(track, opts); err != nil {
 		room.Disconnect()
 		return nil, err
@@ -321,9 +344,22 @@ func (c *Connection) deliver(data []byte, sender string) {
 	h(data, sender)
 }
 
+// DTMFEvent is a key a caller pressed on a SIP leg of the room, as LiveKit
+// reports it.
+type DTMFEvent struct {
+	// Tone is the key, as text: "0" to "9", "*" or "#".
+	Tone string
+	// Digit is the key too, under the name LiveKit gives it.
+	Digit string
+	// Code is the key's RFC 4733 event code.
+	Code uint32
+	// ParticipantID is the identity of the SIP participant who pressed it.
+	ParticipantID string
+}
+
 // OnDTMF registers the handler for the keys a SIP caller presses. Keys that
 // arrived before a handler was set are delivered immediately.
-func (c *Connection) OnDTMF(h func(frames.KeypadEntry)) {
+func (c *Connection) OnDTMF(h func(DTMFEvent)) {
 	c.dtmfMu.Lock()
 	c.dtmfHandler = h
 	pending := c.pendingDTMF
@@ -335,23 +371,75 @@ func (c *Connection) OnDTMF(h func(frames.KeypadEntry)) {
 }
 
 // deliverDTMF hands one keypress to the handler, holding it when none is
-// registered yet. A digit that is not a keypad key is dropped: SIP carries the
-// key as text and there is nothing to press that is not one of them.
-func (c *Connection) deliverDTMF(digit string) {
-	entry := frames.KeypadEntry(digit)
-	if !entry.Valid() {
-		slog.Warn("livekit ignoring an unsupported DTMF key", "digit", digit)
-		return
-	}
+// registered yet.
+func (c *Connection) deliverDTMF(e DTMFEvent) {
 	c.dtmfMu.Lock()
 	h := c.dtmfHandler
 	if h == nil {
-		c.pendingDTMF = append(c.pendingDTMF, entry)
+		c.pendingDTMF = append(c.pendingDTMF, e)
 		c.dtmfMu.Unlock()
 		return
 	}
 	c.dtmfMu.Unlock()
-	h(entry)
+	h(e)
+}
+
+// dtmfCodes are the RFC 4733 event codes of the keys a SIP leg carries.
+//
+//nolint:gochecknoglobals // fixed lookup table
+var dtmfCodes = map[frames.KeypadEntry]uint32{
+	"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+	"*": 10, "#": 11,
+}
+
+// SendDTMF presses a key on the room's SIP legs, as LiveKit's own telephone
+// event rather than as a tone in the audio. A key that is not one of "0" to
+// "9", "*" or "#" is refused with a warning.
+func (c *Connection) SendDTMF(key frames.KeypadEntry) error {
+	code, ok := dtmfCodes[key]
+	if !ok {
+		slog.Warn("livekit: not sending an invalid DTMF key", "key", string(key))
+		return nil
+	}
+	return c.room.LocalParticipant.PublishDTMF(code, string(key))
+}
+
+// OnBeforeDisconnect registers the handler run just before the bot leaves the
+// room on Close, while it is still connected.
+func (c *Connection) OnBeforeDisconnect(h func()) {
+	c.disconnectMu.Lock()
+	c.beforeDisconnect = h
+	c.disconnectMu.Unlock()
+}
+
+// OnDisconnected registers the handler for the room disconnecting, whether the
+// bot left it or the server closed it. It is reported once; a disconnect that
+// came before a handler was set is reported to it at once.
+func (c *Connection) OnDisconnected(h func()) {
+	c.disconnectMu.Lock()
+	c.disconnectHandler = h
+	report := c.disconnected && !c.disconnectReported
+	if report {
+		c.disconnectReported = true
+	}
+	c.disconnectMu.Unlock()
+	if report {
+		h()
+	}
+}
+
+// reportDisconnected reports the room disconnecting, once.
+func (c *Connection) reportDisconnected() {
+	c.disconnectMu.Lock()
+	c.disconnected = true
+	h := c.disconnectHandler
+	if h == nil || c.disconnectReported {
+		c.disconnectMu.Unlock()
+		return
+	}
+	c.disconnectReported = true
+	c.disconnectMu.Unlock()
+	h()
 }
 
 // OnParticipantConnected registers the handler for a remote participant joining
@@ -454,17 +542,29 @@ func (c *Connection) activeSpeakersChanged(identities []string) {
 	}
 }
 
-// SendMessage publishes an application message to the room.
+// SendMessage publishes an application message to the room, reliably, so the
+// messages arrive, and in the order they were sent.
 func (c *Connection) SendMessage(data []byte) error {
-	return c.room.LocalParticipant.PublishDataPacket(&lksdk.UserDataPacket{Payload: data})
+	return c.room.LocalParticipant.PublishDataPacket(
+		&lksdk.UserDataPacket{Payload: data}, lksdk.WithDataPublishReliable(true),
+	)
 }
 
 // Done returns a channel closed when the room disconnects or Close is called.
 func (c *Connection) Done() <-chan struct{} { return c.closed }
 
-// Close leaves the room.
+// Close leaves the room. The before-disconnect handler runs first, while the
+// bot is still in the room, and the disconnect is reported once it has left.
 func (c *Connection) Close() error {
+	c.disconnectMu.Lock()
+	before := c.beforeDisconnect
+	left := c.disconnected
+	c.disconnectMu.Unlock()
+	if before != nil && !left {
+		before()
+	}
 	c.closeOnce.Do(func() { close(c.closed) })
 	c.room.Disconnect()
+	c.reportDisconnected()
 	return nil
 }

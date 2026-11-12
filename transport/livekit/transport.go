@@ -65,6 +65,36 @@ const (
 	// EventDataReceived fires for every data packet, with its bytes and the
 	// sender's identity ("" when a server sent it).
 	EventDataReceived = "on_data_received"
+	// EventAudioTrackSubscribed fires when the room subscribes to a
+	// participant's audio track, with their identity.
+	EventAudioTrackSubscribed = "on_audio_track_subscribed"
+	// EventAudioTrackUnsubscribed fires when a participant's audio track is
+	// unsubscribed, with their identity.
+	EventAudioTrackUnsubscribed = "on_audio_track_unsubscribed"
+)
+
+// The room events a LiveKit transport raises.
+const (
+	// EventConnected fires once the bot is in the room and the transport is
+	// running, with no argument.
+	EventConnected = "on_connected"
+	// EventDisconnected fires once the room has disconnected, whether the bot
+	// left it or the server closed it, with no argument.
+	EventDisconnected = "on_disconnected"
+	// EventBeforeDisconnect fires just before the bot leaves the room through
+	// Connection.Close, while it is still connected, with no argument. Its
+	// handlers run synchronously, so what they send still reaches the room.
+	EventBeforeDisconnect = "on_before_disconnect"
+	// EventDTMF fires for every key a caller presses on a SIP leg of the room,
+	// with a DTMFEvent. A valid key also enters the pipeline as an
+	// InputDTMFFrame.
+	EventDTMF = "on_dtmf_event"
+	// EventActiveSpeakerChanged fires when the room's loudest speaker changes,
+	// with a Client naming them. The bot can be the speaker.
+	EventActiveSpeakerChanged = "on_active_speaker_changed"
+	// EventCallStateUpdated is registered for a handler to listen for a call's
+	// state changing, with the state; LiveKit itself raises nothing for it.
+	EventCallStateUpdated = "on_call_state_updated"
 )
 
 // Client is the client the client events carry: a participant in the room.
@@ -87,10 +117,21 @@ func NewTransport(conn *Connection, params transport.Params, opts ...Option) *Tr
 	for _, name := range []string{
 		EventParticipantConnected, EventParticipantDisconnected, EventParticipantLeft,
 		EventFirstParticipantJoined, EventDataReceived,
+		EventAudioTrackSubscribed, EventAudioTrackUnsubscribed,
+		EventConnected, EventDisconnected, EventDTMF, EventActiveSpeakerChanged, EventCallStateUpdated,
 		transport.EventClientConnected, transport.EventClientDisconnected, transport.EventAppMessage,
 	} {
 		ev.Register(name, false)
 	}
+	ev.Register(EventBeforeDisconnect, true)
+	// The room's own lifecycle is raised whether or not a pipeline is running
+	// over it: leaving the room comes after the pipeline has stopped.
+	conn.OnBeforeDisconnect(func() {
+		ev.Call(context.Background(), EventBeforeDisconnect, t.in)
+	})
+	conn.OnDisconnected(func() {
+		ev.Call(context.Background(), EventDisconnected, t.in)
+	})
 	return t
 }
 
@@ -182,8 +223,12 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	in.readWG.Go(func() { in.audioLoop(readCtx, audio) })
 
 	in.conn.OnAudioTrack(func(track *webrtc.TrackRemote, participant string) {
+		if readCtx.Err() != nil {
+			return
+		}
+		in.Events().Call(readCtx, EventAudioTrackSubscribed, in, participant)
 		// Nothing would take the decoded audio without audio input.
-		if readCtx.Err() != nil || !in.Params().AudioInEnabled {
+		if !in.Params().AudioInEnabled {
 			return
 		}
 		in.readTrack(readCtx, audio, track, participant)
@@ -193,6 +238,13 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		case audio <- participantAudio{participant: participant, released: true}:
 		case <-readCtx.Done():
 		}
+		in.Events().Call(context.WithoutCancel(readCtx), EventAudioTrackUnsubscribed, in, participant)
+	})
+	in.conn.OnActiveSpeakerChanged(func(identity string) {
+		if readCtx.Err() != nil {
+			return
+		}
+		in.Events().Call(readCtx, EventActiveSpeakerChanged, in, Client{ID: identity})
 	})
 
 	in.conn.OnMessage(func(raw []byte, sender string) {
@@ -203,11 +255,11 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	})
 	// A key a SIP caller presses becomes a frame, so the DTMF aggregator works
 	// on a LiveKit call the same way it does on a telephony one.
-	in.conn.OnDTMF(func(button frames.KeypadEntry) {
+	in.conn.OnDTMF(func(e DTMFEvent) {
 		if readCtx.Err() != nil {
 			return
 		}
-		_ = in.PushFrame(readCtx, frames.NewInputDTMFFrame(button), processor.Downstream)
+		in.dtmfReceived(readCtx, e)
 	})
 
 	// The bot is a participant in the room like any other, and it joined when
@@ -215,6 +267,7 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	// join is reported here rather than waited for: by the time a pipeline is
 	// running over this connection it has already happened.
 	in.PushBotConnected(readCtx)
+	in.Events().Call(readCtx, EventConnected, in)
 
 	in.conn.OnParticipantConnected(func(identity string) {
 		if readCtx.Err() != nil {
@@ -226,6 +279,19 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 		in.participantDisconnected(context.WithoutCancel(readCtx), identity)
 	})
 	return nil
+}
+
+// dtmfReceived raises a key a SIP caller pressed and, when it is a keypad key,
+// pushes it into the pipeline so the DTMF aggregator works on a LiveKit call the
+// way it does on a telephony one.
+func (in *inputTransport) dtmfReceived(ctx context.Context, e DTMFEvent) {
+	in.Events().Call(ctx, EventDTMF, in, e)
+	button := frames.KeypadEntry(e.Tone)
+	if !button.Valid() {
+		slog.Warn("livekit: ignoring an unsupported DTMF tone", "tone", e.Tone)
+		return
+	}
+	_ = in.PushFrame(ctx, frames.NewInputDTMFFrame(button), processor.Downstream)
 }
 
 // participantConnected reports a participant in the room, and whether they are
@@ -480,6 +546,20 @@ func (out *outputTransport) SendMessage(_ context.Context, f frames.OutputTransp
 		return err
 	}
 	return out.conn.SendMessage(data)
+}
+
+// SupportsNativeDTMF reports that LiveKit carries keypresses itself, as SIP
+// telephone events.
+func (out *outputTransport) SupportsNativeDTMF() bool { return true }
+
+// WriteDTMFNative presses each key in order on the room's SIP legs.
+func (out *outputTransport) WriteDTMFNative(_ context.Context, f frames.DTMFOutput) error {
+	for _, key := range f.Keys() {
+		if err := out.conn.SendDTMF(key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // encodeMessage encodes an application message for the room.

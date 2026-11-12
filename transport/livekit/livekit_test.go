@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/transport"
 )
 
 func TestValidate(t *testing.T) {
@@ -42,38 +43,51 @@ func TestConnectValidatesConfig(t *testing.T) {
 	}
 }
 
-// A key a SIP caller presses reaches the handler as a keypad entry, and the keys
-// pressed before anything registered are not lost.
+// A key a SIP caller presses reaches the handler with what LiveKit reported
+// about it, and the keys pressed before anything registered are not lost.
 func TestDeliverDTMF(t *testing.T) {
 	c := &Connection{}
 
 	// Pressed before the input transport has registered its handler.
-	c.deliverDTMF("1")
-	c.deliverDTMF("#")
+	c.deliverDTMF(DTMFEvent{Tone: "1", Digit: "1", Code: 1, ParticipantID: "sip-caller"})
+	c.deliverDTMF(DTMFEvent{Tone: "#", Digit: "#", Code: 11})
 
-	var got []frames.KeypadEntry
-	c.OnDTMF(func(e frames.KeypadEntry) { got = append(got, e) })
-	if len(got) != 2 || got[0] != frames.KeypadOne || got[1] != frames.KeypadPound {
-		t.Fatalf("keys held before a handler = %v, want 1 then #", got)
+	var got []DTMFEvent
+	c.OnDTMF(func(e DTMFEvent) { got = append(got, e) })
+	if len(got) != 2 || got[0].Tone != "1" || got[0].ParticipantID != "sip-caller" || got[1].Code != 11 {
+		t.Fatalf("keys held before a handler = %+v, want 1 then #", got)
 	}
 
-	c.deliverDTMF("7")
-	if len(got) != 3 || got[2] != frames.KeypadSeven {
-		t.Errorf("keys = %v, want 7 delivered straight through", got)
+	c.deliverDTMF(DTMFEvent{Tone: "7"})
+	if len(got) != 3 || got[2].Tone != "7" {
+		t.Errorf("keys = %+v, want 7 delivered straight through", got)
 	}
 }
 
-// Anything that is not a keypad key is dropped rather than pushed downstream as
-// a keypress nobody can act on.
-func TestDeliverDTMFIgnoresUnknownKeys(t *testing.T) {
-	c := &Connection{}
-	var got []frames.KeypadEntry
-	c.OnDTMF(func(e frames.KeypadEntry) { got = append(got, e) })
-
-	for _, digit := range []string{"", "12", "x", "%"} {
-		c.deliverDTMF(digit)
+// The keys a SIP leg carries map to their RFC 4733 event codes.
+func TestDTMFCodes(t *testing.T) {
+	want := map[frames.KeypadEntry]uint32{"0": 0, "5": 5, "9": 9, "*": 10, "#": 11}
+	for key, code := range want {
+		if got, ok := dtmfCodes[key]; !ok || got != code {
+			t.Errorf("code for %q = %d (%v), want %d", key, got, ok, code)
+		}
 	}
-	if len(got) != 0 {
-		t.Errorf("delivered %v for keys that are not on a keypad", got)
+	for _, key := range []frames.KeypadEntry{"A", "x", "12", ""} {
+		if _, ok := dtmfCodes[key]; ok {
+			t.Errorf("%q has a code, want it refused", key)
+		}
+	}
+}
+
+// The output presses keys natively, as SIP telephone events rather than as
+// tones in the audio, and refuses a key a SIP leg cannot carry without
+// touching the room.
+func TestOutputPressesKeysNatively(t *testing.T) {
+	out := newOutput(&Connection{}, transport.Params{})
+	if !out.SupportsNativeDTMF() {
+		t.Fatal("the output does not press keys natively")
+	}
+	if err := out.WriteDTMFNative(t.Context(), frames.NewOutputDTMFFrame("A")); err != nil {
+		t.Errorf("an invalid key = %v, want it refused quietly", err)
 	}
 }

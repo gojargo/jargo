@@ -321,11 +321,14 @@ func CreateTransport(ctx context.Context, args Arguments, params TransportParams
 		if params.LiveKit == nil {
 			return nil, missingParams("livekit", "LiveKit")
 		}
-		conn, err := livekit.Connect(livekit.Config{URL: a.URL, Token: a.Token})
+		lkParams := params.LiveKit()
+		conn, err := livekit.Connect(livekit.Config{
+			URL: a.URL, Token: a.Token, AudioOutChannels: lkParams.AudioOutChannels,
+		})
 		if err != nil {
 			return nil, err
 		}
-		return livekit.NewTransport(conn, params.LiveKit()), nil
+		return livekit.NewTransport(conn, lkParams), nil
 	}
 	return nil, fmt.Errorf("%w: %T", ErrUnsupportedArguments, args)
 }

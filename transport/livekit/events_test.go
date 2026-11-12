@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/utils/events"
@@ -166,4 +167,137 @@ func TestFirstParticipantAndDataEvents(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// runInput runs a pipeline of just the transport's input, recording what it
+// pushes, until the test ends.
+func runInput(t *testing.T, tr *Transport) *frameLog {
+	t.Helper()
+	log := &frameLog{}
+	w := pipeline.NewWorker(pipeline.New(tr.Input()), pipeline.WorkerConfig{
+		IdleTimeout: -1, ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		log.add(f)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("the worker never finished")
+		}
+	})
+	return log
+}
+
+// frameLog records frames.
+type frameLog struct {
+	mu sync.Mutex
+	fs []frames.Frame
+}
+
+func (l *frameLog) add(f frames.Frame) { l.mu.Lock(); l.fs = append(l.fs, f); l.mu.Unlock() }
+
+// dtmf is the keys of the InputDTMFFrames recorded so far.
+func (l *frameLog) dtmf() []frames.KeypadEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var keys []frames.KeypadEntry
+	for _, f := range l.fs {
+		if d, ok := f.(*frames.InputDTMFFrame); ok {
+			keys = append(keys, d.Button)
+		}
+	}
+	return keys
+}
+
+// awaitEvent waits for one value on ch.
+func awaitEvent[T any](t *testing.T, ch chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no %s", what)
+		var zero T
+		return zero
+	}
+}
+
+// Every key a SIP caller presses is raised with what LiveKit reported, and a
+// keypad key also enters the pipeline as an InputDTMFFrame; one that is not is
+// raised but goes no further.
+func TestDTMFIsRaisedAndPushed(t *testing.T) {
+	conn := &Connection{}
+	tr := NewTransport(conn, transport.DefaultParams())
+	raised := make(chan DTMFEvent, 4)
+	events.On(tr.Events(), EventDTMF, func(_ context.Context, e DTMFEvent) { raised <- e })
+	log := runInput(t, tr)
+
+	conn.deliverDTMF(DTMFEvent{Tone: "5", Digit: "5", Code: 5, ParticipantID: "sip"})
+	if e := awaitEvent(t, raised, "DTMF event"); e.Tone != "5" || e.ParticipantID != "sip" {
+		t.Errorf("event = %+v, want the key and who pressed it", e)
+	}
+	conn.deliverDTMF(DTMFEvent{Tone: "x"})
+	if e := awaitEvent(t, raised, "DTMF event for an unknown key"); e.Tone != "x" {
+		t.Errorf("event = %+v, want the unknown key raised too", e)
+	}
+	conn.deliverDTMF(DTMFEvent{Tone: "#", Code: 11})
+	awaitEvent(t, raised, "DTMF event")
+
+	deadline := time.Now().Add(3 * time.Second)
+	for len(log.dtmf()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := log.dtmf(); len(got) != 2 || got[0] != frames.KeypadFive || got[1] != frames.KeypadPound {
+		t.Errorf("pushed %v, want 5 then #, and nothing for the unknown key", got)
+	}
+}
+
+// The room's lifecycle is raised: connected once the transport runs, the
+// audio tracks as they are subscribed and unsubscribed, the loudest speaker
+// as it changes, and the disconnect, once, after the handlers that run before
+// it.
+func TestRoomEventsAreRaised(t *testing.T) {
+	conn := &Connection{}
+	tr := NewTransport(conn, transport.DefaultParams())
+	got := make(chan string, 16)
+	tr.Events().Add(EventConnected, func(context.Context, any, ...any) { got <- "connected" })
+	events.On(tr.Events(), EventAudioTrackUnsubscribed, func(_ context.Context, id string) {
+		got <- "unsubscribed:" + id
+	})
+	events.On(tr.Events(), EventActiveSpeakerChanged, func(_ context.Context, c Client) {
+		got <- "speaker:" + c.ID
+	})
+	tr.Events().Add(EventBeforeDisconnect, func(context.Context, any, ...any) { got <- "before" })
+	tr.Events().Add(EventDisconnected, func(context.Context, any, ...any) { got <- "disconnected" })
+	runInput(t, tr)
+
+	if e := awaitEvent(t, got, "connected"); e != "connected" {
+		t.Fatalf("first event = %q, want connected", e)
+	}
+	conn.deliverAudioUnsubscribed("caller")
+	if e := awaitEvent(t, got, "unsubscribed"); e != "unsubscribed:caller" {
+		t.Errorf("event = %q, want the track unsubscribed", e)
+	}
+	conn.activeSpeakersChanged([]string{"caller", "other"})
+	if e := awaitEvent(t, got, "speaker"); e != "speaker:caller" {
+		t.Errorf("event = %q, want the loudest speaker", e)
+	}
+
+	// The server closing the room is reported once, however often it says so.
+	conn.reportDisconnected()
+	conn.reportDisconnected()
+	if e := awaitEvent(t, got, "disconnected"); e != "disconnected" {
+		t.Errorf("event = %q, want disconnected", e)
+	}
+	select {
+	case e := <-got:
+		t.Errorf("unexpected event %q after the disconnect", e)
+	case <-time.After(100 * time.Millisecond):
+	}
 }

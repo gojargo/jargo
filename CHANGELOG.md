@@ -93,6 +93,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The LiveKit transport behaves as a LiveKit agent does.** Application
+  messages are published reliably (they were lossy, so RTVI messages could be
+  lost or reordered). The bot's audio track is published as `jargo-audio`,
+  from the microphone source, mono unless `Config.AudioOutChannels` is 2 (it
+  was named `audio` and always flagged stereo). Keys are pressed as native SIP
+  telephone events (`Connection.SendDTMF`) rather than as tones in the audio.
+  The transport raises `on_connected`, `on_disconnected`,
+  `on_before_disconnect` (run before `Connection.Close` leaves the room),
+  `on_audio_track_subscribed`, `on_audio_track_unsubscribed`,
+  `on_dtmf_event` (with a `DTMFEvent`, for every key, a non-keypad one
+  included, which is not pushed), `on_active_speaker_changed` and
+  `on_call_state_updated`. **Breaking:** `Connection.OnDTMF` takes a
+  `func(DTMFEvent)`, and the connection no longer filters the keys itself.
+
 - **Calling off a queued sequential job keeps the queue in order.** A
   sequential job request called off while it waited for its turn released the
   request behind it at once, so that request ran alongside the one holding the
