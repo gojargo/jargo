@@ -417,6 +417,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   when it ends, and an interruption discards what had gathered. The Groq TTS
   reports none.
 
+- **An LLM reports its TTFAT as the answer token arrives.** The time to the
+  first answer token was held until the generation ended and pushed in the
+  processing time's frame, so a latency breakdown placed the first answer
+  token at the end of the reply. It now goes out in a frame of its own when
+  the token is produced. It is armed by the TTFB, measured from the same
+  request start, so a response with no output before its answer reports none,
+  and a response cut off before its answer token leaves nothing for the next.
+  **Breaking:** `llm.Base.StopTTFATMetrics` takes a context.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

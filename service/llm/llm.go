@@ -442,11 +442,13 @@ type Base struct {
 	processingStart time.Time
 	ttfb            time.Duration
 	hasTTFB         bool
-	// ttfat runs from the same request start as ttfb and ends at the first token
-	// of the answer the caller sees, so whatever the model streamed first falls
-	// between the two.
-	ttfat    time.Duration
-	hasTTFAT bool
+	// TTFAT runs from the same request start as the TTFB and ends at the first
+	// token of the answer the caller sees, so whatever the model streamed first
+	// falls between the two. It is armed when the TTFB is reported, which is when
+	// ttfatStart takes the request start, and ttfatActive says it is still to
+	// be reported.
+	ttfatActive bool
+	ttfatStart  time.Time
 	// reportsTTFATOnce caches whether this service answers in text at all, since
 	// working it out builds a metadata frame.
 	reportsTTFATOnce sync.Once
@@ -716,8 +718,11 @@ func (b *Base) StartTTFBMetrics() {
 	b.ttfbStart = time.Time{}
 	b.ttfb = 0
 	b.hasTTFB = false
-	b.ttfat = 0
-	b.hasTTFAT = false
+	// A response interrupted before its first answer token leaves TTFAT armed;
+	// it is dropped so this request measures its own, whether or not its TTFB
+	// is reported.
+	b.ttfatActive = false
+	b.ttfatStart = time.Time{}
 	if armed {
 		b.ttfbStart = time.Now()
 	}
@@ -744,24 +749,42 @@ func (b *Base) StopTTFBMetrics(ctx context.Context) {
 	b.ReportTTFBMetrics(ctx)
 }
 
-// StopTTFATMetrics records time to the first answer token. A service calls it
-// where it produces that token rather than where the pipeline releases it, so
-// buffering downstream stays out of the number.
+// StopTTFATMetrics reports the time to the first answer token. A service calls
+// it where it produces that token rather than where the pipeline releases it, so
+// buffering downstream stays out of the number. The measurement is pushed at
+// once, in a frame of its own, with the TTFB and the thinking time between them.
 //
-// Only the first call in a generation counts, so a service may call it from
-// every branch that produces an answer: streamed text, and the start of a tool
-// call on a turn that answers with one instead of text.
-func (b *Base) StopTTFATMetrics() {
+// It measures from the request start the TTFB was measured from, and only once
+// the TTFB was reported: a response that produced no output has no answer token
+// to time. Only the first call in a generation counts, so a service may call it
+// from every branch that produces an answer: streamed text, and the start of a
+// tool call on a turn that answers with one instead of text.
+func (b *Base) StopTTFATMetrics(ctx context.Context) {
 	if !b.reportsTTFAT() {
 		return
 	}
 	b.ttfbMu.Lock()
-	defer b.ttfbMu.Unlock()
-	if b.hasTTFAT || b.ttfbStart.IsZero() {
+	if !b.ttfatActive || b.ttfatStart.IsZero() {
+		b.ttfbMu.Unlock()
 		return
 	}
-	b.ttfat = time.Since(b.ttfbStart)
-	b.hasTTFAT = true
+	ttfat := time.Since(b.ttfatStart)
+	ttfb := b.ttfb
+	b.ttfatActive = false
+	b.ttfatStart = time.Time{}
+	b.ttfbMu.Unlock()
+
+	slog.DebugContext(ctx, "TTFAT", "service", b.Name(), "ttfat", ttfat, "thinking", ttfat-ttfb)
+	if !b.MetricsEnabled() {
+		return
+	}
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.modelName()}
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(frames.TTFATMetricsData{
+		BaseMetricsData: base,
+		TTFAT:           ttfat,
+		TTFB:            ttfb,
+		ThinkingTime:    ttfat - ttfb,
+	}), processor.Downstream)
 }
 
 // reportsTTFAT reports whether this service answers in text, and so has an
@@ -781,44 +804,19 @@ func (b *Base) reportsTTFAT() bool {
 	return b.reportsTTFATVal
 }
 
-// ttfatMetrics returns the recorded time to first answer token, and whether the
-// service recorded one at all.
-func (b *Base) ttfatMetrics() (time.Duration, bool) {
-	b.ttfbMu.Lock()
-	defer b.ttfbMu.Unlock()
-	return b.ttfat, b.hasTTFAT
-}
-
-// ttfbMetrics returns the recorded time to first byte, and whether the service
-// recorded one at all.
-func (b *Base) ttfbMetrics() (time.Duration, bool) {
-	b.ttfbMu.Lock()
-	defer b.ttfbMu.Unlock()
-	return b.ttfb, b.hasTTFB
-}
-
 // emitTiming records the generation's processing time to OpenTelemetry (always)
-// and, when in-band metrics are enabled, downstream as a MetricsFrame for the RTVI
-// client, with the time to first answer token. The time to first byte is not
-// among them: StopTTFBMetrics reported it when the first output arrived.
+// and, when in-band metrics are enabled, downstream as a MetricsFrame for the
+// RTVI client. The time to first byte and to the first answer token are not
+// among them: each was reported as it was measured.
 func (b *Base) emitTiming(ctx context.Context, _ trace.Span, processing time.Duration) {
-	ttfb, hadTTFB := b.ttfbMetrics()
 	model := b.modelName()
 	metrics.RecordProcessing(ctx, "llm", b.TypeName(), model, processing.Seconds())
 	if !b.MetricsEnabled() {
 		return
 	}
 	base := frames.BaseMetricsData{Processor: b.Name(), Model: model}
-	data := []frames.MetricsData{frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing}}
-	if ttfat, hadTTFAT := b.ttfatMetrics(); hadTTFAT && hadTTFB {
-		data = append(data, frames.TTFATMetricsData{
-			BaseMetricsData: base,
-			TTFAT:           ttfat,
-			TTFB:            ttfb,
-			ThinkingTime:    ttfat - ttfb,
-		})
-	}
-	_ = b.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing}),
+		processor.Downstream)
 }
 
 // TraceRenderer is a generator that can render the conversation and the toolset
@@ -1505,7 +1503,7 @@ func (b *Base) announceFunctionCalls(
 	if visible := b.userVisibleCalls(calls); len(visible) > 0 {
 		// A turn answering with a tool call rather than text answers here, so
 		// this is where its measurement to the first answer token ends.
-		b.StopTTFATMetrics()
+		b.StopTTFATMetrics(ctx)
 		b.eventsMu.RLock()
 		started := b.onStarted
 		b.eventsMu.RUnlock()

@@ -149,12 +149,17 @@ func (g *thinkingGen) Generate(ctx context.Context, _ *frames.LLMContext, emit l
 	return emit("hello")
 }
 
-// timingMetrics runs one generation and returns the measurements it reported.
+// timingMetrics runs one generation and returns the measurements it reported,
+// from every metrics frame up to the one with the processing time, which closes
+// the generation. Each measurement goes out in a frame of its own as it is
+// taken, so they are gathered across frames.
 func timingMetrics(t *testing.T, svc *llm.Base) []frames.MetricsData {
 	t.Helper()
 
 	noInitial := false
-	mfCh := make(chan *frames.MetricsFrame, 4)
+	var mu sync.Mutex
+	var data []frames.MetricsData
+	done := make(chan struct{}, 1)
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params: pipeline.Params{
@@ -167,10 +172,13 @@ func timingMetrics(t *testing.T, svc *llm.Base) []frames.MetricsData {
 		if !ok {
 			return
 		}
+		mu.Lock()
+		data = append(data, mf.Data...)
+		mu.Unlock()
 		for _, d := range mf.Data {
 			if _, ok := d.(frames.ProcessingMetricsData); ok {
 				select {
-				case mfCh <- mf:
+				case done <- struct{}{}:
 				default:
 				}
 				return
@@ -189,8 +197,10 @@ func timingMetrics(t *testing.T, svc *llm.Base) []frames.MetricsData {
 	task.QueueFrame(frames.NewLLMContextFrame(convo))
 
 	select {
-	case mf := <-mfCh:
-		return mf.Data
+	case <-done:
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]frames.MetricsData(nil), data...)
 	case <-time.After(3 * time.Second):
 		t.Fatal("no timing MetricsFrame emitted")
 		return nil

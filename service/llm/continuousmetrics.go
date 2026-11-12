@@ -28,6 +28,10 @@ func (b *Base) ReportTTFBMetrics(ctx context.Context) {
 	}
 	ttfb := time.Since(b.ttfbStart)
 	b.ttfb, b.hasTTFB = ttfb, true
+	// The first output arms the measurement to the first answer token, from the
+	// same request start.
+	b.ttfatActive = true
+	b.ttfatStart = b.ttfbStart
 	b.ttfbMu.Unlock()
 
 	model := b.modelName()

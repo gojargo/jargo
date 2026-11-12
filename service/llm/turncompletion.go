@@ -500,7 +500,7 @@ func (b *Base) turnReset(ctx context.Context) {
 func (b *Base) pushLLMText(ctx context.Context, text string) error {
 	// Measured before the markers are read, which can hold text back or drop it
 	// entirely. Neither says anything about how fast the model answered.
-	b.StopTTFATMetrics()
+	b.StopTTFATMetrics(ctx)
 	if b.FilterIncompleteUserTurns() {
 		return b.pushTurnText(ctx, text)
 	}
