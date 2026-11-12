@@ -15,6 +15,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A websocket TTS service can act around the base's redial.** A service
+  implementing `tts.WebsocketReconnectPreparer` is called before each redial,
+  ahead of the base ending the replaced connection's audio contexts (to wait
+  as long as the provider asked, say), and one implementing
+  `tts.ConnectionContextsCloser` is called just before the base ends those
+  contexts, on a redial and on a disconnect, to drop its own bookkeeping of
+  them.
+
 - **`tts.NewWebsocketConnection` is the websocket base for a provider whose
   connection keeps no state per audio context.** It is `tts.NewWebsocket` in
   every way (receive loop, reconnects, connection errors, disconnecting at the

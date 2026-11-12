@@ -67,6 +67,22 @@ type WebsocketService interface {
 	Disconnect(ctx context.Context)
 }
 
+// WebsocketReconnectPreparer is an optional interface a WebsocketService
+// implements when it has something to do before each redial, ahead of the base
+// ending the audio contexts of the connection replaced: waiting as long as the
+// provider asked before it is dialed again, say.
+type WebsocketReconnectPreparer interface {
+	PrepareReconnectWebsocket(ctx context.Context)
+}
+
+// ConnectionContextsCloser is an optional interface a WebsocketService
+// implements when it keeps bookkeeping of its own for the audio contexts of a
+// connection. The base calls it whenever it ends those contexts, on a redial
+// and on a disconnect, just before it does.
+type ConnectionContextsCloser interface {
+	CloseConnectionContexts()
+}
+
 // Websocket gives a TTS service the connection lifecycle of one that speaks over
 // a WebSocket held open for the call.
 //
@@ -198,6 +214,9 @@ func (w *Websocket) Disconnect() {
 func (w *Websocket) closeConnectionContexts() {
 	if w.keepsContexts {
 		return
+	}
+	if c, ok := w.svc.(ConnectionContextsCloser); ok {
+		c.CloseConnectionContexts()
 	}
 	w.tts.ReplaceConnection()
 }
@@ -361,8 +380,9 @@ func (w *Websocket) resetConnection(ctx context.Context) {
 	w.svc.Connect(ctx)
 }
 
-// wsHandler adapts the service to the wsservice base. A redial ends the audio
-// contexts of the connection it replaces before closing it.
+// wsHandler adapts the service to the wsservice base. A redial gives the service
+// its chance to prepare, then ends the audio contexts of the connection it
+// replaces before closing it.
 type wsHandler struct{ w *Websocket }
 
 func (h wsHandler) ConnectWebsocket(ctx context.Context) error {
@@ -370,6 +390,9 @@ func (h wsHandler) ConnectWebsocket(ctx context.Context) error {
 }
 
 func (h wsHandler) DisconnectWebsocket(ctx context.Context) error {
+	if p, ok := h.w.svc.(WebsocketReconnectPreparer); ok {
+		p.PrepareReconnectWebsocket(ctx)
+	}
 	h.w.closeConnectionContexts()
 	return h.w.svc.DisconnectWebsocket(ctx)
 }
