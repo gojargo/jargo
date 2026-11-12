@@ -489,6 +489,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   own. Text is measured in characters rather than bytes, so text outside
   ASCII no longer counts several times over.
 
+- **An async tool's result reaches the model unescaped.** The payload an
+  async tool's result travels in rewrote `&`, `<` and `>` in the result as
+  JSON escapes, so the model read `\u0026` where the result said `&`. The
+  result is now carried as it is.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

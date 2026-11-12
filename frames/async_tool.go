@@ -1,6 +1,10 @@
 package frames
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
 
 // This file is the single source of truth for the on-the-wire shape of the
 // async-tool message protocol.
@@ -168,11 +172,16 @@ func (m AsyncToolMessage) json() string {
 		result := m.Result
 		p.Result = &result
 	}
-	data, err := json.Marshal(p)
-	if err != nil {
+	// The result is already serialized, so it is carried as it is: HTML
+	// escaping would rewrite &, < and > in it, and the model would read the
+	// escapes rather than the result.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(p); err != nil {
 		return ""
 	}
-	return string(data)
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 // message wraps the payload in the conversation message shape its kind calls

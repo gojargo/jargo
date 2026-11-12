@@ -145,3 +145,23 @@ func TestAsyncToolDescriptionsSayOnlyWhatToDo(t *testing.T) {
 		}
 	}
 }
+
+// Ported from upstream (test_non_ascii_result_is_not_escaped). The result is
+// already serialized, and the payload carries it without escaping it again:
+// neither non-ASCII text nor &, < and >, which the model would otherwise read
+// as escapes.
+func TestAsyncToolResultIsNotEscaped(t *testing.T) {
+	for result, text := range map[string]string{
+		`{"status": "आपका ऑर्डर कल पहुँचेगा"}`: "आपका ऑर्डर कल पहुँचेगा",
+		`{"menu": "fish & chips <large>"}`:     "fish & chips <large>",
+	} {
+		msg := frames.NewAsyncToolFinalMessage("call_x", result)
+		if !strings.Contains(msg.Text, text) || strings.Contains(msg.Text, `\u`) {
+			t.Errorf("content = %s, want %q in it as it is", msg.Text, text)
+		}
+		info, ok := frames.ParseAsyncToolMessage(msg)
+		if !ok || info.Result != result {
+			t.Errorf("parsed result = %q (ok %v), want %q", info.Result, ok, result)
+		}
+	}
+}
