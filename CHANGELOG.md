@@ -109,6 +109,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   was reported as the constant "llm generation failed", with the cause only in
   `ErrorFrame.Err`, so an RTVI client and the frame logs never saw what went
   wrong. `ErrorFrame.Error` now holds the error's own message.
+- **An OpenAI Responses response cut short is an error, and a failed one
+  still runs the calls it finished.** `response.incomplete` was treated as a
+  success: nothing was reported, and a call whose arguments the output cap cut
+  off was run with truncated JSON. It is now reported as
+  `LLM response error: <reason>`, and only the calls whose arguments completed
+  are run. A call that completed before `response.failed` was dropped, by the
+  service and again by the LLM base, which ran no calls from a failed
+  generation; the base now runs the calls a provider reported before the
+  failure. A failed or incomplete response's token usage is reported, and its
+  error carries a generic account ("Response failed") when the server sent no
+  message. Stream errors read `Responses API error: <message>` over HTTP and
+  `WebSocket API error: <message>` over the WebSocket.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

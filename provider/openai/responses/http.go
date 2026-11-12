@@ -163,12 +163,13 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 
-	state := newStreamState(sink)
+	state := newStreamState(sink, "Responses API error")
 	scanErr := s.consume(ctx, resp.Body, state)
+	// A response cut short or failed is still billed for its tokens.
+	s.reportUsage(ctx, state)
 	if scanErr != nil && !errors.Is(scanErr, errStreamDone) {
 		return scanErr
 	}
-	s.reportUsage(ctx, state)
 	return nil
 }
 

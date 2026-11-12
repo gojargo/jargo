@@ -371,6 +371,8 @@ func (s *Service) turn(
 			s.abandonResponse()
 			return ctx.Err()
 		}
+		// A response cut short or failed is still billed for its tokens.
+		s.reportUsage(ctx, state)
 		return err
 	}
 	s.recordContinuation(state, full, sent, lane)
@@ -382,7 +384,7 @@ func (s *Service) turn(
 // watches the turn's context rather than passing it to the socket, so an
 // interruption leaves the connection open for the next turn.
 func (s *Service) readTurn(ctx context.Context, sess *session, sink llm.Sink, lane string) (*streamState, error) {
-	state := newStreamState(sink)
+	state := newStreamState(sink, "WebSocket API error")
 	for {
 		select {
 		case <-ctx.Done():

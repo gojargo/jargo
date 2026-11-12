@@ -1428,9 +1428,14 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	// report its result ahead of the end of the response that asked for it,
 	// leaving the turn's own text out of the conversation the result runs on.
 	launch := func() {}
-	if err := tg.GenerateWithTools(ctx, convo, s); err != nil && ctx.Err() == nil {
-		b.reportGenerationFailure(ctx, err)
-	} else if ctx.Err() == nil {
+	genErr := tg.GenerateWithTools(ctx, convo, s)
+	if genErr != nil && ctx.Err() == nil {
+		b.reportGenerationFailure(ctx, genErr)
+	}
+	// A response that failed may have finished some calls before it did. The
+	// model made them, so they still run; a provider reports only the calls it
+	// knows to be complete.
+	if ctx.Err() == nil && (genErr == nil || len(calls) > 0) {
 		launchCalls, err := b.announceFunctionCalls(ctx, convo, calls)
 		if err != nil {
 			return err

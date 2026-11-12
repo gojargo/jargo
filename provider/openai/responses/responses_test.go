@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/adapter"
 	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
+	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // mustRequest builds a request and fails the test if the conversion did.
@@ -288,5 +292,72 @@ func TestHTTPRetriesARateLimitedTurn(t *testing.T) {
 	})
 	if err != nil || text != "hi" || requests != 2 {
 		t.Errorf("turn = (%q, %v) after %d requests, want hi after a retry", text, err, requests)
+	}
+}
+
+// TestFailedResponseReportsItsUsage checks a response that failed still reports
+// the tokens it was billed for, beside the error.
+func TestFailedResponseReportsItsUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.failed","response":{"id":"r","status":"failed",` +
+			`"error":{"code":"server_error","message":"server_error"},` +
+			`"usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15}}}` + "\n\n"))
+	}))
+	t.Cleanup(srv.Close)
+	svc := NewHTTPLLM(Config{APIKey: "k", BaseURL: srv.URL})
+
+	var mu sync.Mutex
+	var usage []frames.LLMTokenUsage
+	var errs []string
+	ended := make(chan struct{}, 1)
+	noInitial := false
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+		Params: pipeline.Params{
+			EnableMetrics: true, EnableUsageMetrics: true, SendInitialEmptyMetrics: &noInitial,
+		},
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.MetricsFrame:
+			for _, d := range fr.Data {
+				if u, ok := d.(frames.LLMUsageMetricsData); ok {
+					usage = append(usage, u.Value)
+				}
+			}
+		case *frames.LLMFullResponseEndFrame:
+			ended <- struct{}{}
+		}
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if ef, ok := f.(*frames.ErrorFrame); ok {
+			mu.Lock()
+			errs = append(errs, ef.Error)
+			mu.Unlock()
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewLLMContextFrame(userConvo("hi")))
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the response did not end")
+	}
+	time.Sleep(50 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(usage) != 1 || usage[0].PromptTokens != 12 || usage[0].CompletionTokens != 3 {
+		t.Errorf("usage = %+v, want the failed response's 12 and 3 tokens", usage)
+	}
+	if len(errs) != 1 || errs[0] != "LLM response error: server_error" {
+		t.Errorf("errors = %v, want the failure reported once", errs)
 	}
 }

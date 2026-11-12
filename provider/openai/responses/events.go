@@ -2,7 +2,6 @@ package responses
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -183,6 +182,8 @@ type pendingCall struct {
 	callID string
 	name   string
 	args   string
+	// done records that an event said the arguments are complete.
+	done bool
 }
 
 // streamState turns a sequence of events into text deltas and tool calls. It is
@@ -200,6 +201,9 @@ type streamState struct {
 	usage *usage
 	// sawText records whether the model produced any text.
 	sawText bool
+	// errorPrefix names where a stream-level error event came from, in the
+	// message it is reported with.
+	errorPrefix string
 	// completed records that the response ended with response.completed, and
 	// output is the output that event reported: what the server holds of this
 	// response, which the next turn can continue from.
@@ -208,8 +212,11 @@ type streamState struct {
 }
 
 // newStreamState builds a state machine feeding sink.
-func newStreamState(sink llm.Sink) *streamState {
-	return &streamState{sink: sink, calls: map[int]*pendingCall{}}
+//
+// errorPrefix names where a stream-level error event came from, in the message
+// it is reported with: the HTTP stream and the WebSocket say it differently.
+func newStreamState(sink llm.Sink, errorPrefix string) *streamState {
+	return &streamState{sink: sink, calls: map[int]*pendingCall{}, errorPrefix: errorPrefix}
 }
 
 // handle folds one event in. It reports done when the turn has ended, and an
@@ -233,15 +240,19 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 		if ev.Response != nil {
 			s.output = ev.Response.Output
 		}
-		return true, s.flushCalls()
-	case evtIncomplete:
+		return true, s.flushCalls(false)
+	case evtIncomplete, evtFailed:
+		// A response cut short, by the output cap say, or one that failed. Either
+		// is an error, but a call whose arguments finished before it is still
+		// one the model made, and still runs. A call cut off part way is
+		// dropped rather than run with arguments that are not all there.
 		s.finish(ev)
-		return true, s.flushCalls()
-	case evtFailed:
-		s.finish(ev)
+		if err := s.flushCalls(true); err != nil {
+			return true, err
+		}
 		return true, responseError(ev)
 	case evtError:
-		return true, fmt.Errorf("%w: %s", errServer, firstNonEmpty(ev.errorMessage(), ev.errorCode()))
+		return true, &serverError{msg: s.errorPrefix + ": " + firstNonEmpty(ev.errorMessage(), "Unknown error")}
 	}
 	return false, nil
 }
@@ -273,16 +284,22 @@ func (s *streamState) trackCall(ev event) {
 			call.args += ev.Delta
 		}
 	case evtArgsDone:
-		if call, ok := s.calls[ev.OutputIndex]; ok && ev.Arguments != "" {
-			// The done event carries the complete arguments, so it supersedes the
-			// fragments rather than appending to them.
-			call.args = ev.Arguments
+		if call, ok := s.calls[ev.OutputIndex]; ok {
+			call.done = true
+			if ev.Arguments != "" {
+				// The done event carries the complete arguments, so it supersedes
+				// the fragments rather than appending to them.
+				call.args = ev.Arguments
+			}
 		}
 	case evtItemDone:
 		// The completed item carries the complete arguments too, which is where
 		// a call whose announcement was held back until now gets them.
-		if call, ok := s.calls[ev.OutputIndex]; ok && ev.Item != nil && ev.Item.Arguments != "" {
-			call.args = ev.Item.Arguments
+		if call, ok := s.calls[ev.OutputIndex]; ok && ev.Item != nil {
+			call.done = true
+			if ev.Item.Arguments != "" {
+				call.args = ev.Item.Arguments
+			}
 		}
 	}
 }
@@ -300,13 +317,18 @@ func (s *streamState) finish(ev event) {
 	}
 }
 
-// flushCalls reports every function call the model requested, in output order.
-// The calls are keyed by output index because their argument fragments arrive
+// flushCalls reports the function calls the model requested, in output order,
+// or with onlyDone only those whose arguments an event said were complete. The
+// calls are keyed by output index because their argument fragments arrive
 // interleaved, so they are sorted back into the order the model emitted them.
-func (s *streamState) flushCalls() error {
+func (s *streamState) flushCalls(onlyDone bool) error {
 	indices := slices.Sorted(maps.Keys(s.calls))
 	for _, i := range indices {
 		call := s.calls[i]
+		if onlyDone && !call.done {
+			delete(s.calls, i)
+			continue
+		}
 		args := call.args
 		if args == "" {
 			args = "{}"
@@ -323,15 +345,31 @@ func (s *streamState) flushCalls() error {
 	return nil
 }
 
-// responseError describes a response the model failed to produce.
+// serverError is a failure the API reported on the stream, worded as it is
+// reported to the pipeline. It wraps errServer.
+type serverError struct{ msg string }
+
+func (e *serverError) Error() string { return e.msg }
+
+func (e *serverError) Unwrap() error { return errServer }
+
+// responseError describes a response the model failed to finish: the server's
+// message for one that failed, the reason for one cut short, or else a generic
+// account of which it was.
 func responseError(ev event) error {
-	if ev.Response == nil {
-		return fmt.Errorf("%w: response failed", errServer)
+	reason := "Response failed"
+	if ev.Type == evtIncomplete {
+		reason = "Response incomplete"
 	}
-	if ev.Response.Error != nil {
-		return fmt.Errorf("%w: %s", errServer, firstNonEmpty(ev.Response.Error.Message, ev.Response.Error.Code))
+	if r := ev.Response; r != nil {
+		switch {
+		case r.Error != nil && r.Error.Message != "":
+			reason = r.Error.Message
+		case r.IncompleteDetails != nil && r.IncompleteDetails.Reason != "":
+			reason = r.IncompleteDetails.Reason
+		}
 	}
-	return fmt.Errorf("%w: response failed with status %q", errServer, ev.Response.Status)
+	return &serverError{msg: "LLM response error: " + reason}
 }
 
 // textSink adapts an Emit to the Sink interface, for generation without tools.

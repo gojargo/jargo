@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -1594,5 +1595,72 @@ func TestAFastToolReportsAfterTheResponseThatAskedForIt(t *testing.T) {
 		if want := []string{"end", "in progress", "result"}; !slices.Equal(got, want) {
 			t.Fatalf("frames arrived as %v, want %v", got, want)
 		}
+	}
+}
+
+// failAfterCallGen reports one finished call, then fails the response, as a
+// provider does when the response fails after the call's arguments completed.
+type failAfterCallGen struct{}
+
+func (failAfterCallGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
+
+func (failAfterCallGen) GenerateWithTools(_ context.Context, _ *frames.LLMContext, sink llm.Sink) error {
+	if err := sink.Tool(frames.ToolCall{
+		ID: "call_1", Name: "get_weather", Args: json.RawMessage(`{"location":"Paris"}`),
+	}); err != nil {
+		return err
+	}
+	return errUpstream
+}
+
+// errUpstream is the failure failAfterCallGen ends its response with.
+//
+//nolint:gochecknoglobals // sentinel error for the test above
+var errUpstream = errors.New("LLM response error: upstream error")
+
+// TestCompletedCallRunsAfterAFailedResponse checks a call the model finished
+// before its response failed still runs, beside the error being reported: the
+// model decided on it, and its result belongs in the conversation.
+func TestCompletedCallRunsAfterAFailedResponse(t *testing.T) {
+	svc := llm.New("FailingToolLLM", failAfterCallGen{})
+	ran := make(chan struct{}, 1)
+	svc.RegisterFunction("get_weather", func(ctx context.Context, p llm.FunctionCallParams) error {
+		ran <- struct{}{}
+		return p.Result(ctx, "sunny", nil)
+	})
+
+	var mu sync.Mutex
+	var errs []string
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		ReachedUpstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		if fr, ok := f.(*frames.ErrorFrame); ok {
+			mu.Lock()
+			errs = append(errs, fr.Error)
+			mu.Unlock()
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	convo := frames.NewLLMContext("")
+	convo.SetTools([]frames.Tool{{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)}})
+	convo.AddUserMessage("weather in Paris?")
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+
+	select {
+	case <-ran:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the completed call did not run")
+	}
+	time.Sleep(50 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(errs) != 1 || errs[0] != "LLM response error: upstream error" {
+		t.Errorf("errors = %v, want the failure reported once", errs)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -36,7 +37,7 @@ func (s *recordingSink) Tool(call frames.ToolCall) error {
 // feed folds a sequence of events into a fresh state machine.
 func feed(t *testing.T, sink *recordingSink, events ...string) (*streamState, error) {
 	t.Helper()
-	state := newStreamState(sink)
+	state := newStreamState(sink, "Responses API error")
 	for _, raw := range events {
 		ev, ok := decodeEvent([]byte(raw))
 		if !ok {
@@ -199,18 +200,105 @@ func TestStreamStateFailures(t *testing.T) {
 	}
 }
 
-// TestStreamStateIncomplete checks a response cut short still delivers what the
-// model produced rather than being treated as a failure.
+// TestStreamStateIncomplete checks a response cut short is an error naming the
+// reason, while what the model produced before the cut is still delivered.
 func TestStreamStateIncomplete(t *testing.T) {
-	sink := &recordingSink{}
-	if _, err := feed(t, sink,
-		`{"type":"response.output_text.delta","delta":"partial"}`,
-		`{"type":"response.incomplete","response":{"id":"r","incomplete_details":{"reason":"max_output_tokens"}}}`,
-	); err != nil {
-		t.Fatalf("feed: %v", err)
+	cases := []struct {
+		name, event, want string
+	}{
+		{
+			"with details",
+			`{"type":"response.incomplete","response":{"id":"r","incomplete_details":{"reason":"max_output_tokens"}}}`,
+			"LLM response error: max_output_tokens",
+		},
+		{
+			"without details",
+			`{"type":"response.incomplete","response":{"id":"r"}}`,
+			"LLM response error: Response incomplete",
+		},
 	}
-	if sink.text.String() != "partial" {
-		t.Errorf("text = %q, want what was produced before the cut", sink.text.String())
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sink := &recordingSink{}
+			_, err := feed(t, sink, `{"type":"response.output_text.delta","delta":"partial"}`, c.event)
+			if err == nil || err.Error() != c.want {
+				t.Errorf("error = %v, want %q", err, c.want)
+			}
+			if sink.text.String() != "partial" {
+				t.Errorf("text = %q, want what was produced before the cut", sink.text.String())
+			}
+		})
+	}
+}
+
+// TestStreamStateErrorMessages checks the message each terminal failure is
+// reported with: the server's own message, or a generic account when it sent
+// none, and for a stream-level error which transport it came over.
+func TestStreamStateErrorMessages(t *testing.T) {
+	cases := []struct {
+		name, prefix, event, want string
+	}{
+		{
+			"failed with a message", "Responses API error",
+			`{"type":"response.failed","response":{"id":"r","error":{"message":"The model failed to respond"}}}`,
+			"LLM response error: The model failed to respond",
+		},
+		{
+			"failed with an empty message", "Responses API error",
+			`{"type":"response.failed","response":{"id":"r","error":{"message":""}}}`,
+			"LLM response error: Response failed",
+		},
+		{
+			"error event over HTTP", "Responses API error",
+			`{"type":"error","message":"Internal server error"}`,
+			"Responses API error: Internal server error",
+		},
+		{
+			"error event over the WebSocket", "WebSocket API error",
+			`{"type":"error","error":{"message":"Internal server error"}}`,
+			"WebSocket API error: Internal server error",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			state := newStreamState(&recordingSink{}, c.prefix)
+			ev, _ := decodeEvent([]byte(c.event))
+			if _, err := state.handle(ev); err == nil || err.Error() != c.want {
+				t.Errorf("error = %v, want %q", err, c.want)
+			}
+		})
+	}
+}
+
+// callAdded announces a function call at an output index.
+func callAdded(idx int, name, callID string) string {
+	return fmt.Sprintf(`{"type":"response.output_item.added","output_index":%d,`+
+		`"item":{"type":"function_call","name":%q,"call_id":%q,"arguments":""}}`, idx, name, callID)
+}
+
+// TestTerminalErrorStillReportsCompletedCalls checks a call whose arguments
+// finished before the response was cut short or failed is still reported, and a
+// call cut off part way is dropped rather than run with half its arguments.
+func TestTerminalErrorStillReportsCompletedCalls(t *testing.T) {
+	for _, terminal := range []string{
+		`{"type":"response.incomplete","response":{"id":"r","incomplete_details":{"reason":"max_output_tokens"}}}`,
+		`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"upstream error"}}}`,
+	} {
+		sink := &recordingSink{}
+		_, err := feed(t, sink,
+			callAdded(0, "get_weather", "call_1"),
+			`{"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"city\": \"SF\"}"}`,
+			callAdded(1, "get_time", "call_2"),
+			`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"city\": \"NY"}`,
+			terminal,
+		)
+		if err == nil {
+			t.Errorf("%s: error = nil, want the failure", terminal)
+		}
+		if len(sink.calls) != 1 || sink.calls[0].Name != "get_weather" ||
+			string(sink.calls[0].Args) != `{"city": "SF"}` {
+			t.Errorf("%s: calls = %+v, want only the completed get_weather", terminal, sink.calls)
+		}
 	}
 }
 
