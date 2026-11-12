@@ -628,6 +628,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   user turns not filtered. It is now kept in the settings but put in force
   only while filtering is on, or when the same update turns filtering on.
 
+- **A SyncParallelPipeline ends, and pushes each frame once.** An
+  `EndFrame` was lost whenever a branch produced anything before it, such as
+  an aggregator or a TTS flushing on the end, so the worker never finished;
+  and in branch order it overtook the branch's output. Every system frame
+  crossing it was also pushed a second time, with the next synchronized
+  frame. The `EndFrame` now ends each branch's output and is pushed once,
+  after all of it, and every frame is pushed once: the frames already pushed
+  are remembered across frames, held weakly, so a copy coming out of a branch
+  later is dropped.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

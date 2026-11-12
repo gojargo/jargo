@@ -65,9 +65,12 @@ type syncEndpoint struct {
 // SyncFrame only means the branch is done because frames are handled in order.
 //
 // System frames skip the mechanism and pass straight through, since they are
-// meant to race ahead of data frames. Note that a system frame also lands in the
-// branch queues on its way through, so it is released a second time by the next
-// frame that does synchronize.
+// meant to race ahead of data frames. A system frame also lands in the branch
+// queues on its way through; every frame is pushed once, so the copies that
+// come out later are dropped.
+//
+// An EndFrame is its own sentinel: everything a branch produces before it is
+// released, and the EndFrame itself is pushed once, after every branch's output.
 //
 // Use it where output has to stay together, for instance an image and the speech
 // describing it. Where branches are independent, ParallelPipeline is the lighter
@@ -84,6 +87,10 @@ type SyncParallelPipeline struct {
 	// by every branch, one per direction.
 	upQueue   *frameQueue
 	downQueue *frameQueue
+
+	// seen are the frames already pushed, so the copies that come out of the
+	// branches later are dropped. Kept across frames, held weakly.
+	seen seenFrames
 }
 
 // NewSyncParallel builds a SyncParallelPipeline from one or more branches, each
@@ -144,7 +151,7 @@ func (p *SyncParallelPipeline) ProcessFrame(ctx context.Context, f frames.Frame,
 				return err
 			}
 		}
-		return p.PushFrame(ctx, f, dir)
+		return p.pushOnce(ctx, f, dir)
 	}
 
 	endpoints := p.endpoints(dir)
@@ -161,22 +168,30 @@ func (p *SyncParallelPipeline) ProcessFrame(ctx context.Context, f frames.Frame,
 	wg.Wait()
 
 	if p.frameOrder == FrameOrderPipeline {
-		seen := map[uint64]struct{}{}
 		for _, branchFrames := range perBranch {
 			for _, bf := range branchFrames {
-				if _, dup := seen[bf.ID()]; dup {
-					continue
-				}
-				seen[bf.ID()] = struct{}{}
-				_ = p.PushFrame(ctx, bf, dir)
+				_ = p.pushOnce(ctx, bf, dir)
 			}
 		}
-		return nil
+	} else {
+		p.drain(ctx, p.upQueue, processor.Upstream)
+		p.drain(ctx, p.downQueue, processor.Downstream)
 	}
 
-	p.drain(ctx, p.upQueue, processor.Upstream)
-	p.drain(ctx, p.downQueue, processor.Downstream)
+	// The branches' EndFrames were the sentinels: the one pushed on is the
+	// original, once, after everything the branches produced.
+	if _, isEnd := f.(*frames.EndFrame); isEnd {
+		return p.PushFrame(ctx, f, dir)
+	}
 	return nil
+}
+
+// pushOnce pushes a frame unless it has already been pushed.
+func (p *SyncParallelPipeline) pushOnce(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if !p.seen.add(f) {
+		return nil
+	}
+	return p.PushFrame(ctx, f, dir)
 }
 
 // startBranches starts every branch, then passes the StartFrame on once it is
@@ -234,57 +249,48 @@ func (p *SyncParallelPipeline) waitForSync(
 		return out
 	}
 
-	// An EndFrame is its own sentinel: it is the last frame a branch handles, so
-	// there is no point sending a SyncFrame in behind it.
-	if _, isEnd := f.(*frames.EndFrame); isEnd {
-		next, ok := e.queue.get(ctx)
-		if !ok {
+	// An EndFrame is the last frame out of a branch, so it marks the end of the
+	// output itself. It is pushed once, after every branch's output, by the
+	// caller.
+	_, isEnd := f.(*frames.EndFrame)
+	if !isEnd {
+		if err := e.proc.ProcessFrame(ctx, NewSyncFrame(), dir); err != nil {
 			return out
 		}
-		if _, isEndOut := next.(*frames.EndFrame); isEndOut {
-			collect(next)
-			return out
-		}
-		for {
-			if _, isEndOut := next.(*frames.EndFrame); isEndOut {
-				return out
-			}
-			collect(next)
-			if next, ok = e.queue.get(ctx); !ok {
-				return out
-			}
-		}
-	}
-
-	if err := e.proc.ProcessFrame(ctx, NewSyncFrame(), dir); err != nil {
-		return out
 	}
 	for {
 		next, ok := e.queue.get(ctx)
 		if !ok {
 			return out
 		}
-		if _, isSync := next.(*SyncFrame); isSync {
+		if isSentinel(next, isEnd) {
 			return out
 		}
 		collect(next)
 	}
 }
 
-// drain empties a shared queue, pushing what it holds in dir and dropping the
-// duplicates that come of the same frame emerging from several branches.
+// isSentinel reports whether f is what marks a branch done with the frame sent
+// in: its EndFrame, for an EndFrame, and a SyncFrame for anything else.
+func isSentinel(f frames.Frame, end bool) bool {
+	if end {
+		_, ok := f.(*frames.EndFrame)
+		return ok
+	}
+	_, ok := f.(*SyncFrame)
+	return ok
+}
+
+// drain empties a shared queue, pushing what it holds in dir once each: the
+// same frame emerging from several branches, or emerging again later, is
+// dropped.
 func (p *SyncParallelPipeline) drain(ctx context.Context, q *frameQueue, dir processor.Direction) {
-	seen := map[uint64]struct{}{}
 	for {
 		f, ok := q.tryGet()
 		if !ok {
 			return
 		}
-		if _, dup := seen[f.ID()]; dup {
-			continue
-		}
-		seen[f.ID()] = struct{}{}
-		_ = p.PushFrame(ctx, f, dir)
+		_ = p.pushOnce(ctx, f, dir)
 	}
 }
 
