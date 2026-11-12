@@ -114,7 +114,7 @@ func TestTTSServiceLanguage(t *testing.T) {
 	if !ok {
 		t.Fatal("the synthesizer does not name languages Cartesia's way")
 	}
-	if got := namer.ServiceLanguage(language.FrenchCA); got != "fr" {
-		t.Errorf("ServiceLanguage(fr-CA) = %q, want the base code", got)
+	if got := namer.ServiceLanguage(language.FrenchCA); got != "fr-CA" {
+		t.Errorf("ServiceLanguage(fr-CA) = %q, want the locale Cartesia supports", got)
 	}
 }

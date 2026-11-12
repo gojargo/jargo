@@ -127,6 +127,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   errors in quick succession made the STT unusable for the rest of the call. The
   message is now pushed as a non-fatal error, and reading carries on over the
   same connection.
+- **Cartesia TTS keeps a regional locale it supports.** Every language was
+  reduced to its base code, so Mexican Spanish went out as "es" and British
+  English as "en", and a change between two locales of one language was seen as
+  no change. The service now sends every locale Cartesia lists as it is
+  ("es-MX", "en-GB", "pt-BR"), sends Norwegian Bokmal as "no" and Filipino as
+  "tl", and falls back to the base code only for a locale Cartesia does not
+  list. Chinese and Japanese are recognized by their base code, so a regional
+  "ja-JP" still gets word timings per message.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

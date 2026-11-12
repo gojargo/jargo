@@ -660,23 +660,22 @@ func TestSpacelessLanguage(t *testing.T) {
 // leaves Cartesia on its own default.
 func TestCartesiaLanguage(t *testing.T) {
 	cases := map[language.Language]string{
-		language.English:      "en",
-		language.EnglishGB:    "en",
-		language.French:       "fr",
-		language.FrenchCA:     "fr",
-		language.Spanish:      "es",
-		language.German:       "de",
-		language.PortugueseBR: "pt",
-		language.Japanese:     "ja",
-		language.Korean:       "ko",
-		language.Chinese:      "zh",
-		// The five the verified map gained alongside the rest.
-		language.Arabic:    "ar",
-		language.Bulgarian: "bg",
-		language.Bengali:   "bn",
-		language.Odia:      "or",
-		language.Urdu:      "ur",
-		// Unverified, so its own base code goes out with a warning.
+		// A regional locale Cartesia supports keeps its region.
+		language.Spanish:   "es",
+		language.SpanishMX: "es-MX",
+		language.EnglishGB: "en-GB",
+		language.SpanishAR: "es-AR",
+		language.FrenchCA:  "fr-CA",
+		// One it does not falls back to the base code.
+		language.ChineseTW: "zh",
+		language.SpanishBO: "es",
+		language.GermanCH:  "de",
+		// Cartesia's own codes for Norwegian Bokmal and Filipino.
+		language.NorwegianBokmal:   "no",
+		language.NorwegianBokmalNO: "no-NO",
+		language.Filipino:          "tl",
+		language.FilipinoPH:        "tl-PH",
+		// Unlisted, so its own base code goes out with a warning.
 		language.Language("cy"): "cy",
 		// Unset, so nothing is sent.
 		language.Language(""): "",
@@ -888,5 +887,32 @@ func TestStartReportsAFailedConnect(t *testing.T) {
 	defer rec.mu.Unlock()
 	if len(rec.errors) != 1 {
 		t.Errorf("reported %q, want the failed connect reported once", rec.errors)
+	}
+}
+
+// TestRequestsSendTheMappedLanguage checks the language each request carries is
+// the locale Cartesia supports, or the base code of one it does not.
+func TestRequestsSendTheMappedLanguage(t *testing.T) {
+	for in, want := range map[language.Language]string{
+		language.SpanishMX:       "es-MX",
+		language.EnglishGB:       "en-GB",
+		language.GermanCH:        "de",
+		language.NorwegianBokmal: "no",
+	} {
+		endpoint, seen := ttsServer(t, []map[string]any{{"type": "done"}})
+		cfg := ttsConfig(endpoint)
+		cfg.Language = in
+		speak(t, newSynthesizer(cfg), "hi")
+		if got := seen.first()["language"]; got != want {
+			t.Errorf("%s: language = %v, want %q", in, got, want)
+		}
+
+		base, httpSeen := httpTTSServer(t, http.StatusOK, []byte{1, 2})
+		httpCfg := httpTTSConfig(base)
+		httpCfg.Language = in
+		collectHTTP(t, &httpSynthesizer{cfg: httpCfg}, "hi")
+		if got := httpSeen().body["language"]; got != want {
+			t.Errorf("%s over HTTP: language = %v, want %q", in, got, want)
+		}
 	}
 }
