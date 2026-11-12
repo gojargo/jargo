@@ -759,6 +759,14 @@ func metricsMessage(f *frames.MetricsFrame) Message {
 				TTFB:           v.TTFB.Seconds(),
 				LeadingSilence: v.LeadingSilence.Seconds(),
 			})
+		case frames.TTFATMetricsData:
+			d.TTFAT = append(d.TTFAT, TTFATMetricData{
+				Processor:    p,
+				Model:        model,
+				TTFAT:        v.TTFAT.Seconds(),
+				TTFB:         v.TTFB.Seconds(),
+				ThinkingTime: v.ThinkingTime.Seconds(),
+			})
 		case frames.ProcessingMetricsData:
 			d.Processing = append(d.Processing, MetricData{Processor: p, Value: v.Value.Seconds(), Model: model})
 		case frames.TTSUsageMetricsData:

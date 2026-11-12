@@ -700,11 +700,24 @@ type TTFAMetricData struct {
 	LeadingSilence float64 `json:"leading_silence"`
 }
 
+// TTFATMetricData is one time-to-first-answer-token entry, reported with the
+// breakdown that makes it up: the time to first byte it builds on, and the
+// thinking time between that and the first answer token. TTFB here is the same
+// measurement reported under "ttfb", not another one.
+type TTFATMetricData struct {
+	Processor    string  `json:"processor"`
+	Model        string  `json:"model,omitempty"`
+	TTFAT        float64 `json:"ttfat"`
+	TTFB         float64 `json:"ttfb"`
+	ThinkingTime float64 `json:"thinking_time"`
+}
+
 // MetricsData is the payload of a metrics message: each kind is a list so a
 // single message can report several processors at once.
 type MetricsData struct {
 	TTFB            []MetricData      `json:"ttfb,omitempty"`
 	TTFA            []TTFAMetricData  `json:"ttfa,omitempty"`
+	TTFAT           []TTFATMetricData `json:"ttfat,omitempty"`
 	Processing      []MetricData      `json:"processing,omitempty"`
 	Characters      []MetricData      `json:"characters,omitempty"`
 	STTUsage        []MetricData      `json:"stt_usage,omitempty"`

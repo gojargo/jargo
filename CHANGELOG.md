@@ -453,6 +453,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   provider can adjust its usage the same way through the new
   `chat.Compat.TokenUsage`.
 
+- **RTVI clients receive the TTFAT.** The time to the first answer token
+  never reached an RTVI client: the metrics message had no place for it. It
+  is now sent under `ttfat`, with `ttfb` and `thinking_time`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
