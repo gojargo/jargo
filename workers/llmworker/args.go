@@ -41,12 +41,16 @@ func (a ActivationArgs) ToMap() map[string]any {
 // it was activated with, ignoring anything else in them.
 func ActivationArgsFrom(args map[string]any) ActivationArgs {
 	a := ActivationArgs{BaseActivationArgs: workers.BaseActivationArgsFrom(args)}
-	if listed, ok := args["messages"].([]any); ok {
+	switch listed := args["messages"].(type) {
+	case []any:
 		for _, item := range listed {
 			if msg, ok := item.(map[string]any); ok {
 				a.Messages = append(a.Messages, msg)
 			}
 		}
+	case []map[string]any:
+		// Put into the arguments directly rather than decoded off the bus.
+		a.Messages = append(a.Messages, listed...)
 	}
 	if run, ok := args["run_llm"].(bool); ok {
 		a.RunLLM = &run

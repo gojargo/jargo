@@ -108,6 +108,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **An LLM worker's activation messages keep more than plain text.** A message
+  activating an LLM worker kept only its role and a string content, so content
+  given as a list of parts became an empty message, and tool calls and tool
+  results were lost. Text parts are now joined into the message's text, an
+  assistant's `tool_calls` and a tool message's result are kept, and messages
+  given as `[]map[string]any` are read. A part that is not text has no place in
+  a universal message and is dropped with a warning.
+
 - **Word timestamps are rounded to the nanosecond.** A word's offset was
   converted to a presentation timestamp by truncation, so one in about forty
   millisecond offsets (1.001 s, say) landed a nanosecond early. It is now

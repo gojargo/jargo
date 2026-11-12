@@ -2,7 +2,9 @@ package llmworker
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -358,14 +360,48 @@ func secondsToDuration(secs float64) time.Duration {
 }
 
 // messageFrom reads a conversation message out of the shape it travels in on
-// the bus.
+// the bus, which is the chat-completions one: a role, content as a string or as
+// a list of parts, the tool calls an assistant message made, and the call a
+// tool message answers. Text parts are joined into the message's text; a part
+// of another kind (an image, audio) has no place in a universal message and is
+// dropped with a warning.
 func messageFrom(raw map[string]any) frames.Message {
 	m := frames.Message{}
 	if role, ok := raw["role"].(string); ok {
 		m.Role = frames.Role(role)
 	}
-	if content, ok := raw["content"].(string); ok {
+	switch content := raw["content"].(type) {
+	case string:
 		m.Text = content
+	case []any:
+		var texts []string
+		for _, item := range content {
+			part, _ := item.(map[string]any)
+			if text, ok := part["text"].(string); ok && (part["type"] == "text" || part["type"] == nil) {
+				texts = append(texts, text)
+				continue
+			}
+			slog.Warn("llmworker: dropping a message part that is not text", "type", part["type"])
+		}
+		m.Text = strings.Join(texts, " ")
+	}
+	if calls, ok := raw["tool_calls"].([]any); ok {
+		for _, item := range calls {
+			call, _ := item.(map[string]any)
+			fn, _ := call["function"].(map[string]any)
+			id, _ := call["id"].(string)
+			name, _ := fn["name"].(string)
+			args, _ := fn["arguments"].(string)
+			m.ToolCalls = append(m.ToolCalls, frames.ToolCall{ID: id, Name: name, Args: json.RawMessage(args)})
+		}
+	}
+	// A tool message answers a call; the conversation carries that as a user
+	// turn holding the result.
+	if id, ok := raw["tool_call_id"].(string); ok && raw["role"] == "tool" {
+		name, _ := raw["name"].(string)
+		m.Role = frames.RoleUser
+		m.ToolResults = []frames.ToolResult{{ID: id, Name: name, Content: m.Text}}
+		m.Text = ""
 	}
 	return m
 }
