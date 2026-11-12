@@ -281,10 +281,10 @@ func TestUserReportsTheTurnItCollected(t *testing.T) {
 	}
 }
 
-// TestTurnCompletionMarkersAreStrippedFromTheReport checks that the protocol
-// markers a gated model prefixes its replies with do not reach a transcript. The
-// conversation keeps them, since the model reads its own earlier verdicts back.
-func TestTurnCompletionMarkersAreStrippedFromTheReport(t *testing.T) {
+// assistantTurnsFor runs frames through an assistant aggregator and returns the
+// turns it reported, with the conversation it wrote.
+func assistantTurnsFor(t *testing.T, in ...frames.Frame) ([]aggregators.AssistantTurnStopped, *frames.LLMContext) {
+	t.Helper()
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)
 	log := watchAssistant(pair.Assistant())
@@ -292,53 +292,71 @@ func TestTurnCompletionMarkersAreStrippedFromTheReport(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()
-
-	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
-	task.QueueFrame(frames.NewLLMTextFrame(frames.UserTurnCompleteMarker + " Hello there!"))
-	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
+	task.QueueFrames(in)
 	task.StopWhenDone()
 	<-runDone
 	settle()
+	return log.assistantTurns(), convo
+}
 
-	got := log.assistantTurns()
+// Ported from upstream (test_turn_completion_markers_stripped_from_transcript).
+// The markers a gated model prefixes its replies with arrive as marker frames,
+// and do not reach a transcript.
+func TestTurnCompletionMarkersAreStrippedFromTheReport(t *testing.T) {
+	complete := frames.NewLLMMarkerFrame(frames.UserTurnCompleteMarker)
+	complete.AppendToContextImmediately = false
+	got, _ := assistantTurnsFor(t,
+		frames.NewLLMFullResponseStartFrame(),
+		complete,
+		frames.NewLLMTextFrame("Hello there!"),
+		frames.NewLLMFullResponseEndFrame(),
+	)
 	if len(got) != 1 {
 		t.Fatalf("assistant turns reported = %d, want one", len(got))
 	}
 	if got[0].Content != "Hello there!" {
 		t.Errorf("reported content = %q, want the marker stripped", got[0].Content)
 	}
-	// The conversation keeps the marker.
-	msgs := convo.Messages()
-	if len(msgs) != 1 || msgs[0].Text != frames.UserTurnCompleteMarker+" Hello there!" {
-		t.Errorf("context messages = %+v, want the marker kept", msgs)
-	}
 }
 
-// TestAMarkerOnItsOwnReportsNothingSaid checks the turn where the marker is the
-// whole reply: the spoken answer was suppressed, so there is nothing to report
-// as having been said.
+// Ported from upstream (the incomplete half of the same test). A marker that is
+// the whole reply is a context message of its own, and nothing was said.
 func TestAMarkerOnItsOwnReportsNothingSaid(t *testing.T) {
-	convo := frames.NewLLMContext("system")
-	pair := aggregators.New(convo)
-	log := watchAssistant(pair.Assistant())
-
-	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{})
-	runDone := make(chan error, 1)
-	go func() { runDone <- task.Run(context.Background()) }()
-
-	task.QueueFrame(frames.NewLLMFullResponseStartFrame())
-	task.QueueFrame(frames.NewLLMTextFrame(frames.UserTurnIncompleteShortMarker))
-	task.QueueFrame(frames.NewLLMFullResponseEndFrame())
-	task.StopWhenDone()
-	<-runDone
-	settle()
-
-	got := log.assistantTurns()
+	short := frames.NewLLMMarkerFrame(frames.UserTurnIncompleteShortMarker)
+	short.AppendToContextImmediately = true
+	got, convo := assistantTurnsFor(t,
+		frames.NewLLMFullResponseStartFrame(),
+		short,
+		frames.NewLLMFullResponseEndFrame(),
+	)
 	if len(got) != 1 {
 		t.Fatalf("assistant turns reported = %d, want one", len(got))
 	}
 	if got[0].Content != "" {
 		t.Errorf("reported content = %q, want nothing", got[0].Content)
+	}
+	msgs := convo.Messages()
+	if len(msgs) == 0 || msgs[len(msgs)-1].Text != frames.UserTurnIncompleteShortMarker {
+		t.Errorf("context messages = %+v, want the marker as the last", msgs)
+	}
+}
+
+// Ported from upstream (test_marker_characters_kept_without_marker_frames).
+// Marker characters in plain text, with no marker frame, are content: the
+// report says what the context says.
+func TestMarkerCharactersKeptWithoutMarkerFrames(t *testing.T) {
+	const reply = "○ Option A ● Option B"
+	got, convo := assistantTurnsFor(t,
+		frames.NewLLMFullResponseStartFrame(),
+		frames.NewLLMTextFrame(reply),
+		frames.NewLLMFullResponseEndFrame(),
+	)
+	if len(got) != 1 || got[0].Content != reply {
+		t.Fatalf("reported %+v, want one turn saying %q", got, reply)
+	}
+	msgs := convo.Messages()
+	if len(msgs) == 0 || msgs[len(msgs)-1].Text != got[0].Content {
+		t.Errorf("context messages = %+v, want the same text as reported", msgs)
 	}
 }
 

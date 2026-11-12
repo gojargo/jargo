@@ -550,6 +550,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   there; the summarizer still sees them. **Breaking:** a processor placed
   after the assistant aggregator no longer receives these frames.
 
+- **An assistant transcript keeps marker characters that are content.** The
+  turn an assistant aggregator reported, on `EventAssistantTurnStopped` and
+  the `LLMContextAssistantTurnFrame`, lost every ●, ◐ and ○ in the reply,
+  even when the model never used them as turn completion markers, so a reply
+  bulleted with them was reported differently from what the conversation
+  recorded. Only the markers that came as `LLMMarkerFrame`s are stripped now.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -1670,6 +1670,25 @@ func (a *AssistantAggregator) handleMarker(ctx context.Context, fr *frames.LLMMa
 
 // markersSeen is every marker that has arrived on a marker frame, so a set other
 // than the defaults is stripped from the transcript too.
+// stripSeenMarkers removes every marker seen so far on a marker frame from
+// text, wherever it appears. Only those: a marker character in a reply whose
+// markers never came as frames is content, a bullet say, and is reported as
+// written. Text nothing was removed from is returned as it came; text something
+// was removed from is trimmed.
+func stripSeenMarkers(text string, seen []string) string {
+	found := false
+	for _, marker := range seen {
+		if marker != "" && strings.Contains(text, marker) {
+			text = strings.ReplaceAll(text, marker, "")
+			found = true
+		}
+	}
+	if !found {
+		return text
+	}
+	return strings.TrimSpace(text)
+}
+
 func (a *AssistantAggregator) markersSeen() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2294,7 +2313,7 @@ func (a *AssistantAggregator) commit(ctx context.Context, interrupted bool) erro
 	// prefixed the reply come out. The conversation keeps them, since the model
 	// reads its own earlier verdicts back.
 	if said != "" {
-		said = frames.StripUserTurnMarkers(said, a.markersSeen()...)
+		said = stripSeenMarkers(said, a.markersSeen())
 	}
 	// The context keeps the expression tags the LLM wrote; the transcript is the
 	// words.
