@@ -51,6 +51,7 @@ const (
 const (
 	itemMessage    = "message"
 	itemFuncCall   = "function_call"
+	itemReasoning  = responsesadapter.ItemReasoning
 	itemFuncOutput = "function_call_output"
 )
 
@@ -336,7 +337,11 @@ type request struct {
 	TopP            *float64         `json:"top_p,omitempty"`
 	ServiceTier     string           `json:"service_tier,omitempty"`
 	Reasoning       *ReasoningConfig `json:"reasoning,omitempty"`
-	Tools           []responsesTool  `json:"tools,omitempty"`
+	// Include asks for the encrypted reasoning when reasoning is configured, so
+	// it can go back to the model on later turns and carry its reasoning across
+	// the conversation.
+	Include []string        `json:"include,omitempty"`
+	Tools   []responsesTool `json:"tools,omitempty"`
 	// Text holds the reply to a JSON schema, when an inference asks for one.
 	Text *textConfig `json:"text,omitempty"`
 	// PreviousResponseID lets the server recall the conversation it already
@@ -345,6 +350,9 @@ type request struct {
 	// connection-local.
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 }
+
+// includeEncryptedReasoning asks for a reasoning item's encrypted reasoning.
+const includeEncryptedReasoning = "reasoning.encrypted_content"
 
 // newRequest builds the request for a conversation, without the streaming or
 // continuation fields the transports set themselves.
@@ -366,6 +374,9 @@ func (c Config) newRequest(
 		TopP:            c.TopP,
 		ServiceTier:     c.ServiceTier,
 		Reasoning:       c.configuredReasoning(),
+	}
+	if req.Reasoning != nil {
+		req.Include = []string{includeEncryptedReasoning}
 	}
 	if withTools {
 		req.Tools = p.Tools

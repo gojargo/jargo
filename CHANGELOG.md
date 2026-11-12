@@ -77,6 +77,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The OpenAI Responses services carry the model's reasoning across turns.**
+  A configured `Reasoning` now asks for the encrypted reasoning
+  (`include: ["reasoning.encrypted_content"]`). The streamed reasoning summary
+  is pushed as thought frames (`LLMThoughtStartFrame`, `LLMThoughtTextFrame`,
+  `LLMThoughtEndFrame`), and each completed reasoning item that carries
+  encrypted reasoning is appended to the conversation through an
+  `LLMMessagesAppendFrame`, so it goes back to the model as a `reasoning`
+  input item placed before the reply it led to. The WebSocket service matches
+  a reasoning item on its id when continuing from the previous response, so a
+  turn that reasoned no longer forces the full context to be resent. The
+  adapter gains `NewReasoningMessage`, `SummaryPart` and the reasoning fields
+  on `InputItem`, and elides the encrypted reasoning from logged messages.
+
 - **The OpenAI Responses services keep the conversation's system prompt.**
   As soon as the service composed an instruction of its own (turn completion,
   async tool guidance, expression, `AppendSystemInstruction`), the

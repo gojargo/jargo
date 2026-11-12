@@ -417,6 +417,7 @@ func (s *Service) readTurn(
 	ctx context.Context, sess *session, sink llm.Sink, lane string, outputTimeout time.Duration,
 ) (*streamState, error) {
 	state := newStreamState(sink, "WebSocket API error")
+	state.push = func(f frames.Frame) error { return s.PushFrame(ctx, f, processor.Downstream) }
 	var deadline <-chan time.Time
 	if outputTimeout > 0 {
 		timer := time.NewTimer(outputTimeout)
@@ -600,8 +601,8 @@ func startsWithResponseOutput(items []inputItem, output []responseOutput) bool {
 	if len(items) < len(output) {
 		return false
 	}
-	for i, out := range output {
-		in := items[i]
+	for i, in := range items[:len(output)] {
+		out := output[i]
 		switch out.Type {
 		case itemMessage:
 			role := out.Role
@@ -615,9 +616,13 @@ func startsWithResponseOutput(items []inputItem, output []responseOutput) bool {
 			if in.Type != itemFuncCall || in.CallID != out.CallID {
 				return false
 			}
+		case itemReasoning:
+			// A reasoning item comes back as the adapter's own message, matched
+			// on the id the server gave it.
+			if in.Type != itemReasoning || in.ID != out.ID {
+				return false
+			}
 		default:
-			// The conversation carries no reasoning items yet, so a response that
-			// reasoned cannot be matched either.
 			return false
 		}
 	}

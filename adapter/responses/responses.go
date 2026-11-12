@@ -16,7 +16,11 @@ const (
 	ItemMessage    = "message"
 	ItemFuncCall   = "function_call"
 	ItemFuncOutput = "function_call_output"
+	ItemReasoning  = "reasoning"
 )
+
+// SummaryTypeText is the type of a reasoning summary's text part.
+const SummaryTypeText = "summary_text"
 
 // The roles the Responses API takes on an input message. It has no system role:
 // what would be a system message enters as a developer message, which is the
@@ -31,7 +35,8 @@ const (
 const toolTypeFunction = "function"
 
 // InputItem is one entry of a Responses request's input list: a message, a
-// function call the model made, or the result of one.
+// function call the model made, the result of one, or the model's reasoning
+// before a reply.
 type InputItem struct {
 	Type string `json:"type"`
 	// Role and Content carry a message.
@@ -43,7 +48,53 @@ type InputItem struct {
 	Arguments string `json:"arguments,omitempty"`
 	// Output carries a function call's result.
 	Output string `json:"output,omitempty"`
+	// ID, Summary and EncryptedContent carry a reasoning item: the id the
+	// server gave it, the summary of the reasoning, and the reasoning itself,
+	// encrypted, which is what carries it across turns.
+	ID               string        `json:"id,omitempty"`
+	Summary          []SummaryPart `json:"summary,omitempty"`
+	EncryptedContent string        `json:"encrypted_content,omitempty"`
 }
+
+// SummaryPart is one part of a reasoning item's summary.
+type SummaryPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// MarshalJSON encodes the item. A reasoning item always carries its summary,
+// empty or not, since the API requires one; its encrypted content is left off
+// when there is none rather than sent empty.
+func (i InputItem) MarshalJSON() ([]byte, error) {
+	// plain drops the method set, so marshaling it does not recurse.
+	type plain InputItem
+	if i.Type != ItemReasoning {
+		return json.Marshal(plain(i))
+	}
+	summary := i.Summary
+	if summary == nil {
+		summary = []SummaryPart{}
+	}
+	return json.Marshal(struct {
+		Type             string        `json:"type"`
+		ID               string        `json:"id"`
+		Summary          []SummaryPart `json:"summary"`
+		EncryptedContent string        `json:"encrypted_content,omitempty"`
+	}{i.Type, i.ID, summary, i.EncryptedContent})
+}
+
+// NewReasoningMessage is a reasoning item the model produced, as a message of
+// this adapter's own kind: appended to the conversation, it goes back to the
+// model as a reasoning input item placed before the reply it led to, which is
+// how the model keeps its reasoning across turns.
+func NewReasoningMessage(id string, summary []SummaryPart, encryptedContent string) frames.Message {
+	return frames.NewLLMSpecificMessage(LLMSpecificID, InputItem{
+		Type: ItemReasoning, ID: id, Summary: summary, EncryptedContent: encryptedContent,
+	})
+}
+
+// LLMSpecificID is the id the adapter's own messages are tagged with.
+const LLMSpecificID = "openai_responses"
 
 // Tool is a tool advertised on the request. The Responses API flattens the
 // function fields onto the tool rather than nesting them. A tool the provider
@@ -92,7 +143,7 @@ var _ adapter.LLMAdapter[Params, Tool] = (*Adapter)(nil)
 // IDForLLMSpecificMessages implements adapter.LLMAdapter. It is not the chat
 // adapter's id: the two OpenAI APIs take different native messages, so a
 // conversation shared by both services keeps each one's messages to itself.
-func (*Adapter) IDForLLMSpecificMessages() string { return "openai_responses" }
+func (*Adapter) IDForLLMSpecificMessages() string { return LLMSpecificID }
 
 // LLMInvocationParams converts the conversation into a Responses request.
 //
@@ -218,7 +269,8 @@ func (*Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []Tool {
 	return append(out, custom...)
 }
 
-// MessagesForLogging implements adapter.LLMAdapter.
+// MessagesForLogging implements adapter.LLMAdapter. A reasoning item's
+// encrypted content is opaque noise in a log, so it is elided.
 func (a *Adapter) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
 	params, err := a.LLMInvocationParams(convo, adapter.Options{})
 	if err != nil {
@@ -226,6 +278,9 @@ func (a *Adapter) MessagesForLogging(convo *frames.LLMContext) []map[string]any 
 	}
 	out := make([]map[string]any, 0, len(params.Input))
 	for _, item := range params.Input {
+		if item.Type == ItemReasoning && item.EncryptedContent != "" {
+			item.EncryptedContent = "..."
+		}
 		raw, err := json.Marshal(item)
 		if err != nil {
 			continue

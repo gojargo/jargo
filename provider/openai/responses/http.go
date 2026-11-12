@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/adapter/openai"
 	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/service/llm"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -163,6 +164,7 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 	}
 
 	state := newStreamState(sink, "Responses API error")
+	state.push = func(f frames.Frame) error { return s.PushFrame(ctx, f, processor.Downstream) }
 	scanErr := s.consume(ctx, resp.Body, state)
 	// A response cut short or failed is still billed for its tokens.
 	s.reportUsage(ctx, state)

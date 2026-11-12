@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 )
@@ -22,6 +23,9 @@ const (
 	evtCreated = "response.created"
 	// evtTextDelta is a chunk of generated text.
 	evtTextDelta = "response.output_text.delta"
+	// evtReasoningDelta is a chunk of the summary of the model's reasoning,
+	// streamed when the reasoning configuration asks for one.
+	evtReasoningDelta = "response.reasoning_summary_text.delta"
 	// evtItemAdded announces an output item; a function call arrives this way,
 	// carrying the call id and the function name.
 	evtItemAdded = "response.output_item.added"
@@ -86,7 +90,8 @@ func (ev event) errorCode() string {
 	return ev.Code
 }
 
-// outputItem is an item the model produced: a message or a function call.
+// outputItem is an item the model produced: a message, a function call or its
+// reasoning.
 type outputItem struct {
 	Type   string `json:"type"`
 	ID     string `json:"id"`
@@ -95,6 +100,14 @@ type outputItem struct {
 	// Arguments is a function call's complete arguments, on the item that
 	// response.output_item.done completes.
 	Arguments string `json:"arguments"`
+	// Summary and EncryptedContent are a reasoning item's summary and its
+	// encrypted reasoning, on the item that response.output_item.done
+	// completes. The encrypted reasoning is only there when the request
+	// included it.
+	Summary []struct {
+		Text string `json:"text"`
+	} `json:"summary"`
+	EncryptedContent string `json:"encrypted_content"`
 }
 
 // responseObject is the response a lifecycle event reports on.
@@ -228,6 +241,13 @@ type streamState struct {
 	output    []responseOutput
 	// model is the model a completed response names.
 	model string
+	// push sends the frames the model's reasoning produces downstream: the
+	// thought frames its streamed summary becomes, and the reasoning item
+	// appended to the conversation. Nil drops them, for an inference that
+	// pushes nothing.
+	push func(frames.Frame) error
+	// thoughtOpen records that a thought was started and not yet ended.
+	thoughtOpen bool
 }
 
 // emptyResponse reports whether the response completed with neither text nor a
@@ -297,7 +317,11 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 			s.hasText = s.hasText || strings.TrimSpace(ev.Delta) != ""
 			return false, s.sink.Text(ev.Delta)
 		}
-	case evtItemAdded, evtArgsDelta, evtArgsDone, evtItemDone:
+	case evtReasoningDelta:
+		return false, s.reasoningDelta(ev.Delta)
+	case evtItemDone:
+		return false, s.itemDone(ev)
+	case evtItemAdded, evtArgsDelta, evtArgsDone:
 		s.trackCall(ev)
 	case evtCompleted:
 		s.finish(ev)
@@ -323,6 +347,59 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 	return false, nil
 }
 
+// itemDone folds in a completed output item: a function call's complete
+// arguments, or the reasoning that led to the reply.
+func (s *streamState) itemDone(ev event) error {
+	s.trackCall(ev)
+	if ev.Item != nil && ev.Item.Type == itemReasoning {
+		return s.reasoningDone(ev.Item)
+	}
+	return nil
+}
+
+// reasoningDelta pushes a chunk of the reasoning summary as thought text,
+// opening the thought on the first.
+func (s *streamState) reasoningDelta(delta string) error {
+	if s.push == nil {
+		return nil
+	}
+	if !s.thoughtOpen {
+		s.thoughtOpen = true
+		if err := s.push(frames.NewLLMThoughtStartFrame()); err != nil {
+			return err
+		}
+	}
+	return s.push(frames.NewLLMThoughtTextFrame(delta))
+}
+
+// reasoningDone ends the thought a reasoning item's summary streamed, and
+// appends the item to the conversation so it goes back to the model on the next
+// request: placed, by the order it is appended in, before the reply or the
+// function call it led to. An item with no encrypted reasoning (reasoning
+// turned off, say) has nothing to carry over and is not appended.
+func (s *streamState) reasoningDone(item *outputItem) error {
+	if s.push == nil {
+		return nil
+	}
+	if s.thoughtOpen {
+		s.thoughtOpen = false
+		if err := s.push(frames.NewLLMThoughtEndFrame()); err != nil {
+			return err
+		}
+	}
+	if item.EncryptedContent == "" {
+		return nil
+	}
+	summary := make([]responsesadapter.SummaryPart, 0, len(item.Summary))
+	for _, part := range item.Summary {
+		summary = append(summary, responsesadapter.SummaryPart{
+			Type: responsesadapter.SummaryTypeText, Text: part.Text,
+		})
+	}
+	msg := responsesadapter.NewReasoningMessage(item.ID, summary, item.EncryptedContent)
+	return s.push(frames.NewLLMMessagesAppendFrame([]frames.Message{msg}))
+}
+
 // carriesModelOutput reports whether an event holds output the model produced.
 // The events that open a response (response.created) only acknowledge the
 // request, so TTFB ends at the first event that carries output: a chunk of
@@ -330,7 +407,7 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 // and so produces no text at all.
 func carriesModelOutput(ev event) bool {
 	switch ev.Type {
-	case evtTextDelta, evtItemAdded:
+	case evtTextDelta, evtReasoningDelta, evtItemAdded:
 		return true
 	default:
 		return false
