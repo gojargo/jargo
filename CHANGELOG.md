@@ -214,6 +214,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   every token past ungathered, and it passed eager transcriptions on. It now
   gathers any text frame (LLM tokens, final transcriptions) and drops interim
   and eager transcriptions.
+- **The sentence aggregator drops a sentence cut off by an interruption.** The
+  half of a sentence held when the user interrupted was joined to whatever was
+  said next ("Let me check theOkay."). It is now dropped on an
+  `InterruptionFrame`.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

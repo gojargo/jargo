@@ -52,6 +52,11 @@ func (s *Sentence) ProcessFrame(ctx context.Context, f frames.Frame, dir process
 		return s.PushFrame(ctx, frames.NewTextFrame(said), processor.Downstream)
 	}
 	switch f.(type) {
+	case *frames.InterruptionFrame:
+		// What was being said was cut off, so the half of a sentence held for it
+		// is dropped rather than joined to whatever is said next.
+		s.aggregation = ""
+		return s.PushFrame(ctx, f, dir)
 	case *frames.EndFrame:
 		// The session is over, so whatever is held goes out unfinished rather
 		// than being lost with the processor.

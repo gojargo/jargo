@@ -205,3 +205,22 @@ func TestSentenceAggregatorGathersTranscriptions(t *testing.T) {
 	task.StopWhenDone()
 	<-runDone
 }
+
+// TestSentenceAggregatorDropsAHalfSentenceOnAnInterruption checks a sentence cut
+// off by an interruption is dropped rather than joined to the next one.
+func TestSentenceAggregatorDropsAHalfSentenceOnAnInterruption(t *testing.T) {
+	task, seen, runDone := runProcessor(t, aggregators.NewSentence("Sentence"))
+
+	task.QueueFrame(frames.NewLLMTextFrame("Let me check the"))
+	awaitNothing(seen)
+	task.QueueFrame(frames.NewInterruptionFrame())
+	task.QueueFrame(frames.NewLLMTextFrame("Okay."))
+
+	got := collectText(seen)
+	if len(got) != 1 || got[0] != "Okay." {
+		t.Errorf("text = %q, want only the sentence said after the interruption", got)
+	}
+
+	task.StopWhenDone()
+	<-runDone
+}
