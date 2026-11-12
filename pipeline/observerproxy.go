@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -325,8 +326,17 @@ func (w *observerWorker) onWorkerGoroutine() bool {
 	return id != 0 && id == goid.Current()
 }
 
-// deliver passes one report to the observer.
+// deliver passes one report to the observer. An observer that panics is logged
+// and given the next report all the same: it runs on a goroutine of its own, so
+// an unrecovered panic would end the process and every session in it, and an
+// observer left behind would get nothing more while its queue kept growing.
 func (w *observerWorker) deliver(data any) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("uncaught panic in observer",
+				"observer", fmt.Sprintf("%T", w.observer), "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	switch d := data.(type) {
 	case processor.FramePushed:
 		w.observer.OnPushFrame(d)

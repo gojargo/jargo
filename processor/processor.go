@@ -823,9 +823,11 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir Direction) err
 // internalPushFrame hands the frame to the neighbor in dir, telling the
 // observers about the handover first.
 //
-// The observers and a direct-mode neighbor run inside the call, so a panic in
-// either is caught here and reported as an error from this processor, which
-// then carries on as though the push had gone through.
+// A direct-mode neighbor and the observer reports run inside the call, so a
+// panic in either is caught here and reported as an error from this processor,
+// which then carries on as though the push had gone through. In a pipeline the
+// reports only queue the frame for each observer, which is told on a goroutine
+// of its own that contains its own panics.
 func (b *Base) internalPushFrame(ctx context.Context, f frames.Frame, dir Direction) error {
 	defer func() {
 		if v := recover(); v != nil {

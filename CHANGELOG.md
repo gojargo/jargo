@@ -183,6 +183,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   upstream as a failed tool on every timeout and every barge-in over a running
   tool. The call already ends as canceled; returning the cancellation is no
   longer an error.
+- **An observer that panics no longer crashes the process.** Observers are
+  told on goroutines of their own, where nothing recovered a panic, so a bug in
+  an application observer took down the process and every session in it. The
+  panic is now logged with its stack, and the observer is given the next frame
+  all the same.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
