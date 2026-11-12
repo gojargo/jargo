@@ -86,6 +86,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A Cartesia TTS sentence that fails to send no longer ends the turn's
+  audio.** The provider removed the turn's audio context along with the
+  failed sentence, so the sentences after it, sent on the redialed
+  connection, had nowhere to land. It now stops the sentence's speech through
+  the context and leaves the context open until the server reports it done.
+
 - **Cartesia TTS asks for English unless told otherwise.** A service built
   with no `Language` (WebSocket or HTTP) sent no language at all, leaving
   Cartesia to pick one; it now sends `"en"`, as the configuration's

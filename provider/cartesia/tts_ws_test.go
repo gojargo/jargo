@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -619,6 +620,48 @@ func TestRunTTSDialError(t *testing.T) {
 	s.SetAudioContextHost(&ttsHost{})
 	if err := s.RunTTS(t.Context(), "hi", "c1", nil); err == nil {
 		t.Fatal("RunTTS on a refused session = nil, want an error")
+	}
+}
+
+// TestRunTTSFailedSendKeepsTheContext checks a sentence that cannot be sent
+// stops its speech through the context but leaves the context open, so the
+// turn's later sentences still have somewhere to land once the connection is
+// dialed again.
+func TestRunTTSFailedSendKeepsTheContext(t *testing.T) {
+	endpoint, _ := ttsServer(t, []map[string]any{{"type": "done"}})
+	s := newSynthesizer(ttsConfig(endpoint))
+	host := &ttsHost{}
+	s.SetAudioContextHost(host)
+	t.Cleanup(func() { _ = s.Close() })
+	// Dialed with no receive loop, so nothing notices the close and redials
+	// before the send: the send is what finds the connection dead.
+	if err := s.ConnectWebsocket(t.Context()); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	s.mu.Lock()
+	conn := s.conn
+	s.mu.Unlock()
+	if conn == nil {
+		t.Fatal("the synthesizer did not connect")
+	}
+	_ = conn.CloseNow()
+
+	yield := func(f frames.Frame) error {
+		host.AppendToAudioContext("c1", f)
+		return nil
+	}
+	if err := s.RunTTS(t.Context(), "hi", "c1", yield); err == nil {
+		t.Fatal("RunTTS on a dead connection = nil, want the send error")
+	}
+	_, _, seen, closed := host.snapshot()
+	if !slices.Equal(seen, []string{"stopped"}) {
+		t.Errorf("context frames = %v, want the speech stopped", seen)
+	}
+	if closed {
+		t.Error("the context was removed, want it kept for the turn's later sentences")
+	}
+	if !s.Connected() {
+		t.Error("the connection was not dialed again after the failed send")
 	}
 }
 

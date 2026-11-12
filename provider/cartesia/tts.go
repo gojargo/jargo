@@ -509,7 +509,7 @@ func (s *synthesizer) finishContext(contextID string, host tts.AudioContextHost)
 // still being generated, and the audio arrives on the reader, which appends it
 // to the context it belongs to.
 func (s *synthesizer) RunTTS(
-	ctx context.Context, text, contextID string, _ func(f frames.Frame) error,
+	ctx context.Context, text, contextID string, yield func(f frames.Frame) error,
 ) error {
 	if !s.Connected() {
 		s.connect(ctx)
@@ -531,10 +531,13 @@ func (s *synthesizer) RunTTS(
 	}
 
 	// The server's view of the connection is unknown from here, so it is dropped
-	// and dialed again. The context is closed out rather than left waiting on
-	// audio that is not coming.
-	if host := s.host; host != nil && host.AudioContextAvailable(contextID) {
-		s.finishContext(contextID, host)
+	// and dialed again. The sentence's speech is stopped, but the context stays
+	// open: the turn's later sentences go out on the new connection under the
+	// same id, and the server's done for it is what closes it.
+	if yield != nil {
+		stopped := frames.NewTTSStoppedFrame()
+		stopped.ContextID = contextID
+		_ = yield(stopped)
 	}
 	s.disconnect(ctx)
 	s.connect(ctx)
@@ -614,16 +617,16 @@ func (s *synthesizer) request(text, contextID string, more bool) map[string]any 
 }
 
 // RunTTSTimed sends the sentence like RunTTS, implementing tts.WordTimestamps.
-// The timings arrive on the reader with the audio, so neither callback is used
-// here; implementing the interface is what puts the base on the word-aligned
-// path.
+// The timings arrive on the reader with the audio, so the word callback is not
+// used here; implementing the interface is what puts the base on the
+// word-aligned path.
 func (s *timedSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
-	_ func(f frames.Frame) error,
+	yield func(f frames.Frame) error,
 	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
-	return s.RunTTS(ctx, text, contextID, nil)
+	return s.RunTTS(ctx, text, contextID, yield)
 }
 
 // wsMessage is the subset of a Cartesia WebSocket message we read.
