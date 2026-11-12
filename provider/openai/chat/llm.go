@@ -121,6 +121,8 @@ type LLMService struct {
 	// newStreamFilter builds the filter each completion's stream goes through,
 	// or is nil when the stream is taken as it comes.
 	newStreamFilter func(*LLMService) StreamFilter
+	// tokenUsage adjusts the reported usage, or is nil to take it as converted.
+	tokenUsage func(frames.LLMTokenUsage) frames.LLMTokenUsage
 }
 
 // StreamDelta is the part of a streamed delta a StreamFilter sees.
@@ -195,6 +197,9 @@ type Compat struct {
 	// field. The config's MaxCompletionTokens is not sent to it, and the bound an
 	// inference is given goes in max_tokens instead.
 	NoMaxCompletionTokens bool
+	// TokenUsage, when set, adjusts the token usage converted from what the
+	// endpoint reported, for one that counts differently from OpenAI.
+	TokenUsage func(frames.LLMTokenUsage) frames.LLMTokenUsage
 	// StreamFilter, when set, builds the filter each completion's stream goes
 	// through before the service reads it. It is called once per completion.
 	StreamFilter func(*LLMService) StreamFilter
@@ -245,6 +250,7 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 		noResponseSchema: c.NoResponseSchema,
 		noMaxCompletion:  c.NoMaxCompletionTokens,
 		newStreamFilter:  c.StreamFilter,
+		tokenUsage:       c.TokenUsage,
 	}
 	s.Base = llm.New(c.Name, s, c.Base...)
 	s.Base.SetModel(cfg.Model)
@@ -489,7 +495,7 @@ func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink)
 		scanErr = err
 	}
 	if usage != nil && s.UsageMetricsEnabled() {
-		if err := s.PushTokenUsage(ctx, usage.tokenUsage()); err != nil {
+		if err := s.PushTokenUsage(ctx, s.convertUsage(*usage)); err != nil {
 			return err
 		}
 	}
@@ -497,6 +503,16 @@ func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink)
 		return scanErr
 	}
 	return c.emit(sink)
+}
+
+// convertUsage converts the usage the endpoint reported into the pipeline's,
+// adjusted for an endpoint that counts differently.
+func (s *LLMService) convertUsage(u chatUsage) frames.LLMTokenUsage {
+	out := u.tokenUsage()
+	if s.tokenUsage != nil {
+		out = s.tokenUsage(out)
+	}
+	return out
 }
 
 // endFilter tells the stream filter, if any, the stream has ended. A stream cut

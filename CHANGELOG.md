@@ -444,6 +444,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   usage counted no tokens at all, input, output or cache, was still reported
   as an all-zero usage. It is no longer reported, on Bedrock too.
 
+- **Grok counts its reasoning in the completion tokens.** xAI reports a
+  reasoning model's reasoning tokens apart from its completion tokens, with
+  the total covering both, so a Grok service under-reported its output: the
+  completion count left the reasoning out, and was smaller than the reasoning
+  count it should contain. The reasoning is now added to the completion
+  count, unless the total shows it is already included. An OpenAI-compatible
+  provider can adjust its usage the same way through the new
+  `chat.Compat.TokenUsage`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
