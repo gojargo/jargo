@@ -30,7 +30,8 @@ func readySerializer(t *testing.T, rate int) *twilio.Serializer {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if _, err := s.Deserialize([]byte(`{"event":"start","start":{"streamSid":"stream-sid","callSid":"CA1"}}`)); err != nil {
+	start := `{"event":"start","start":{"streamSid":"stream-sid","callSid":"CA1"}}`
+	if _, err := s.Deserialize([]byte(start)); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -79,7 +80,7 @@ func sentBytes(t *testing.T, s wsserver.Serializer, f frames.Frame) int {
 	return total
 }
 
-// test_audio_at_the_wire_rate_is_encoded_as_is
+// test_audio_at_the_wire_rate_is_encoded_as_is: no conversion at the wire rate.
 func TestRatesAudioAtTheWireRateIsEncodedAsIs(t *testing.T) {
 	s := readySerializer(t, 16000)
 	f := frames.NewOutputAudioRawFrame(repeated([]byte{0x00, 0x10}, 160), 8000, 1)
@@ -88,7 +89,7 @@ func TestRatesAudioAtTheWireRateIsEncodedAsIs(t *testing.T) {
 	}
 }
 
-// test_audio_at_another_rate_is_converted_to_the_wire_rate
+// test_audio_at_another_rate_is_converted_to_the_wire_rate: converted once.
 func TestRatesAudioAtAnotherRateIsConvertedToTheWireRate(t *testing.T) {
 	s := readySerializer(t, 16000)
 	f := frames.NewOutputAudioRawFrame(repeated([]byte{0x00, 0x10}, 480), 24000, 1)
@@ -98,7 +99,7 @@ func TestRatesAudioAtAnotherRateIsConvertedToTheWireRate(t *testing.T) {
 	}
 }
 
-// test_incoming_audio_is_converted_to_the_pipeline_rate
+// test_incoming_audio_is_converted_to_the_pipeline_rate: and back on the way in.
 func TestRatesIncomingAudioIsConvertedToThePipelineRate(t *testing.T) {
 	s := readySerializer(t, 16000)
 	payload := base64.StdEncoding.EncodeToString(repeated([]byte{0x7f}, 160))
