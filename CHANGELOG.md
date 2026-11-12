@@ -108,6 +108,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Job cancel reasons name the worker in single quotes.** A group called off
+  because a worker stopped or errored carried `worker "w1" stopped`; it now
+  carries `worker 'w1' stopped`, the text a peer on the bus matches.
+
 - **An LLM worker's activation messages keep more than plain text.** A message
   activating an LLM worker kept only its role and a string content, so content
   given as a list of parts became an empty message, and tool calls and tool

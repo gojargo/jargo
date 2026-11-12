@@ -468,7 +468,7 @@ func (w *Base) handleJobResponse(ctx context.Context, m bus.JobResponse) {
 			group.SetResponse(m.Source(), orEmpty(result.Response))
 			w.self.OnJobError(ctx, m)
 			w.Call(ctx, EventJobError, w.self, m)
-			w.CancelGroup(ctx, result.JobID, fmt.Sprintf("worker %q errored", m.Source()))
+			w.CancelGroup(ctx, result.JobID, "worker '"+m.Source()+"' errored")
 			return
 		}
 	}

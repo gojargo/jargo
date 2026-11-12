@@ -1363,8 +1363,8 @@ func TestStopCallsOffTheJobsItAskedFor(t *testing.T) {
 	parent.Stop(env.ctx)
 
 	cancels := await[*bus.JobCancelMessage](t, env.recorder, 1)
-	if !strings.Contains(cancels[0].Reason, "stopped") {
-		t.Errorf("reason = %q, want it to say the worker stopped", cancels[0].Reason)
+	if want := "worker 'parent' stopped"; cancels[0].Reason != want {
+		t.Errorf("reason = %q, want %q", cancels[0].Reason, want)
 	}
 }
 

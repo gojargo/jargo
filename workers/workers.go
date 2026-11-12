@@ -485,7 +485,7 @@ func (w *Base) Start(ctx context.Context) {
 // that has stopped.
 func (w *Base) Stop(ctx context.Context) {
 	for _, jobID := range w.groupIDs() {
-		w.CancelGroup(ctx, jobID, fmt.Sprintf("worker %q stopped", w.name))
+		w.CancelGroup(ctx, jobID, "worker '"+w.name+"' stopped")
 	}
 	for _, jobID := range w.activeJobIDs() {
 		if err := w.SendJobResponse(ctx, jobID, nil, JobResponseOptions{
