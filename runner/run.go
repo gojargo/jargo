@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -318,10 +319,23 @@ func (s *server) runBotSession(args Arguments, sessionID string, tracked bool) {
 				s.mu.Unlock()
 			}
 		}()
-		if err := s.bot(s.ctx, args); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("runner: bot session ended with an error", "session_id", sessionID, "err", err)
-		}
+		s.callBot(args, sessionID)
 	})
+}
+
+// callBot runs the bot for one session and logs how it ended. A bot that panics
+// is that session's failure alone: it is logged with its stack, and every other
+// session the runner is serving carries on.
+func (s *server) callBot(args Arguments, sessionID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("runner: bot session panicked",
+				"session_id", sessionID, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	if err := s.bot(s.ctx, args); err != nil && !errors.Is(err, context.Canceled) {
+		slog.Error("runner: bot session ended with an error", "session_id", sessionID, "err", err)
+	}
 }
 
 // runnerBody is the --runner-body file's contents as JSON, or nil when none
@@ -900,10 +914,8 @@ func (s *server) setupTelephonyRoutes(mux *http.ServeMux) {
 func (s *server) runWebSocketBot(args *WebSocketRunnerArguments) {
 	s.sessions.Add(1)
 	defer s.sessions.Done()
-	if err := s.bot(s.ctx, args); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("runner: bot session ended with an error", "session_id", args.SessionID, "err", err)
-	}
-	_ = args.WebSocket.CloseNow()
+	defer func() { _ = args.WebSocket.CloseNow() }()
+	s.callBot(args, args.SessionID)
 }
 
 // setupWebSocketRoutes serves /ws-client, for plain WebSocket clients.

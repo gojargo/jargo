@@ -188,6 +188,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   an application observer took down the process and every session in it. The
   panic is now logged with its stack, and the observer is given the next frame
   all the same.
+- **A bot that panics no longer takes the development runner down.** A
+  WebRTC, LiveKit or WhatsApp session ran its bot on a goroutine nothing
+  recovered, so one bot's bug ended the runner and every other call it was
+  serving. A panic is now that session's failure alone: it is logged with its
+  stack, the session is forgotten, and the runner keeps serving. A WebSocket
+  session's socket is now closed however its bot ends.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
