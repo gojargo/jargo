@@ -108,6 +108,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The Twilio hang-up can authenticate with an API key.** `twilio.Config`
+  gains `APIKeySID` and `APIKeySecret`, which authorize the REST hang-up in
+  place of `AuthToken` (the account stays in the URL); exactly one of the two
+  credentials is accepted, and half an API key is refused. The dev runner
+  reads `TWILIO_API_KEY` and `TWILIO_API_SECRET`.
+
 - **The telephony serializers drop a cut-off reply's tail on an
   interruption.** Twilio, Telnyx, Plivo and Exotel answered an interruption
   with their clear message but kept the cut-off reply's last samples in the

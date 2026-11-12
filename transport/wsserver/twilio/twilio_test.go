@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -602,6 +603,63 @@ func hungServer(t *testing.T) (srv *httptest.Server, arrived, released chan stru
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(stop) })
 	return srv, arrived, released
+}
+
+// The hang-up is authorized by an API key in place of the auth token: the key
+// is the Basic Auth login, and the account stays in the URL, on the default
+// host and on a base URL alike.
+func TestHangUpWithAnAPIKey(t *testing.T) {
+	for _, viaBaseURL := range []bool{false, true} {
+		srv, got := hangupServer(t)
+		cfg := Config{AccountSID: "AC123", APIKeySID: "SK456", APIKeySecret: "secret"}
+		if viaBaseURL {
+			cfg.BaseURL = srv.URL
+		} else {
+			cfg.HTTPClient = redirectToServer(srv)
+		}
+		s := started(t, cfg)
+		if _, err := s.Serialize(frames.NewEndFrame()); err != nil {
+			t.Fatalf("serialize end: %v", err)
+		}
+		select {
+		case r := <-got:
+			user, pass, ok := r.BasicAuth()
+			if !ok || user != "SK456" || pass != "secret" {
+				t.Errorf("basic auth = %q/%q (%v), want the API key", user, pass, ok)
+			}
+			if !strings.Contains(r.URL.Path, "/Accounts/AC123/") {
+				t.Errorf("path = %s, want the account in it", r.URL.Path)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("no hang-up request")
+		}
+	}
+}
+
+// The credentials are the auth token or a whole API key, exactly one of them.
+func TestHangUpCredentialRules(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want error
+	}{
+		{"api key pair alone", Config{AccountSID: "AC1", APIKeySID: "SK1", APIKeySecret: "s"}, nil},
+		{"api key sid without secret", Config{AccountSID: "AC1", APIKeySID: "SK1"}, ErrHangUpCredentialsConflict},
+		{"api key secret without sid", Config{AccountSID: "AC1", APIKeySecret: "s"}, ErrHangUpCredentialsConflict},
+		{"token and sid", Config{AccountSID: "AC1", AuthToken: "t", APIKeySID: "SK1"}, ErrHangUpCredentialsConflict},
+		{"token and secret", Config{AccountSID: "AC1", AuthToken: "t", APIKeySecret: "s"}, ErrHangUpCredentialsConflict},
+		{
+			"token and full pair",
+			Config{AccountSID: "AC1", AuthToken: "t", APIKeySID: "SK1", APIKeySecret: "s"},
+			ErrHangUpCredentialsConflict,
+		},
+		{"no credentials", Config{AccountSID: "AC1"}, ErrHangUpCredentials},
+	}
+	for _, tc := range cases {
+		if err := tc.cfg.Validate(); !errors.Is(err, tc.want) && (err != nil || tc.want != nil) {
+			t.Errorf("%s: Validate = %v, want %v", tc.name, err, tc.want)
+		}
+	}
 }
 
 // TestHangUpIsBoundedAgainstAHungAPI checks a hang-up the API never answers is

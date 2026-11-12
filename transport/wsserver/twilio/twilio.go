@@ -35,10 +35,16 @@ const callResourcePath = "/2010-04-01/Accounts/%s/Calls/%s.json"
 
 // Config configures the Twilio serializer.
 type Config struct {
-	// AccountSID and AuthToken authorize the REST hang-up call. They are
-	// required unless AutoHangUp is turned off.
+	// AccountSID is the account the call belongs to, which the hang-up is
+	// addressed under. It is required unless AutoHangUp is turned off.
 	AccountSID string
-	AuthToken  string
+	// AuthToken authorizes the REST hang-up call. Either it or the API key pair
+	// below is required unless AutoHangUp is turned off, and not both.
+	AuthToken string
+	// APIKeySID and APIKeySecret are a Twilio API key ("SK..."), which
+	// authorizes the hang-up in place of AuthToken. They are given together.
+	APIKeySID    string
+	APIKeySecret string
 	// AutoHangUp ends the Twilio call over the REST API when the pipeline sends
 	// an EndFrame or CancelFrame.
 	//
@@ -74,6 +80,11 @@ type Config struct {
 // has nothing to authorize it with.
 var ErrHangUpCredentials = errors.New("twilio: AutoHangUp is on but credentials are missing")
 
+// ErrHangUpCredentialsConflict reports a configuration naming the auth token
+// alongside an API key, or half an API key. A token left deployed next to the
+// key that replaced it would otherwise go unnoticed.
+var ErrHangUpCredentialsConflict = errors.New("twilio: give either AuthToken or APIKeySID and APIKeySecret")
+
 // ErrRegionEdgePair reports a configuration naming one half of Twilio's
 // region-and-edge host and not the other.
 var ErrRegionEdgePair = errors.New("twilio: Region and Edge are set together or not at all")
@@ -81,6 +92,12 @@ var ErrRegionEdgePair = errors.New("twilio: Region and Edge are set together or 
 // autoHangUp reports whether the call is ended when the pipeline finishes, which
 // it is unless the configuration says otherwise.
 func (c Config) autoHangUp() bool { return c.AutoHangUp == nil || *c.AutoHangUp }
+
+// hasCredential reports whether the configuration names something to authorize
+// the hang-up with: the auth token, or a whole API key.
+func (c Config) hasCredential() bool {
+	return c.AuthToken != "" || (c.APIKeySID != "" && c.APIKeySecret != "")
+}
 
 // Validate reports whether the configuration is usable. A serializer that is to
 // hang the call up needs the credentials to do it, so a missing one is refused
@@ -97,11 +114,21 @@ func (c Config) Validate() error {
 	if c.AccountSID == "" {
 		missing = append(missing, "AccountSID")
 	}
-	if c.AuthToken == "" {
-		missing = append(missing, "AuthToken")
+	if c.AuthToken == "" && c.APIKeySID == "" && c.APIKeySecret == "" {
+		missing = append(missing, "AuthToken or APIKeySID + APIKeySecret")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("%w: %s", ErrHangUpCredentials, strings.Join(missing, ", "))
+	}
+	if c.AuthToken != "" && (c.APIKeySID != "" || c.APIKeySecret != "") {
+		return fmt.Errorf("%w, not both", ErrHangUpCredentialsConflict)
+	}
+	if (c.APIKeySID == "") != (c.APIKeySecret == "") {
+		half := "APIKeySecret"
+		if c.APIKeySID == "" {
+			half = "APIKeySID"
+		}
+		return fmt.Errorf("%w: missing %s", ErrHangUpCredentialsConflict, half)
 	}
 	// The host is built from both halves, so one on its own would silently
 	// address a host that does not exist. A BaseURL replaces the host outright,
@@ -279,7 +306,7 @@ func (s *Serializer) hangup() {
 		return
 	}
 	s.mu.Lock()
-	ready := !s.hungUp && s.callSID != "" && s.cfg.AccountSID != "" && s.cfg.AuthToken != ""
+	ready := !s.hungUp && s.callSID != "" && s.cfg.AccountSID != "" && s.cfg.hasCredential()
 	if ready {
 		s.hungUp = true
 	}
@@ -307,7 +334,12 @@ func (s *Serializer) hangUpCall(callSID string) {
 		slog.Error("twilio: failed to hang up call", "err", err)
 		return
 	}
-	req.SetBasicAuth(s.cfg.AccountSID, s.cfg.AuthToken)
+	// An API key authorizes as itself; the account stays in the URL.
+	if s.cfg.APIKeySID != "" {
+		req.SetBasicAuth(s.cfg.APIKeySID, s.cfg.APIKeySecret)
+	} else {
+		req.SetBasicAuth(s.cfg.AccountSID, s.cfg.AuthToken)
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := s.http.Do(req)
 	if err != nil {

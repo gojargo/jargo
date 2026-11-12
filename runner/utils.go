@@ -259,10 +259,12 @@ func createTelephonyTransport(args *WebSocketRunnerArguments, params WebSocketPa
 	switch transportType {
 	case transportTwilio:
 		params.Serializer = twilio.New(twilio.Config{
-			AccountSID: os.Getenv("TWILIO_ACCOUNT_SID"),
-			AuthToken:  os.Getenv("TWILIO_AUTH_TOKEN"),
-			Region:     os.Getenv("TWILIO_REGION"),
-			Edge:       os.Getenv("TWILIO_EDGE"),
+			AccountSID:   os.Getenv("TWILIO_ACCOUNT_SID"),
+			AuthToken:    os.Getenv("TWILIO_AUTH_TOKEN"),
+			APIKeySID:    os.Getenv("TWILIO_API_KEY"),
+			APIKeySecret: os.Getenv("TWILIO_API_SECRET"),
+			Region:       os.Getenv("TWILIO_REGION"),
+			Edge:         os.Getenv("TWILIO_EDGE"),
 		})
 	case transportTelnyx:
 		params.Serializer = telnyx.New(telnyx.Config{APIKey: os.Getenv("TELNYX_API_KEY")})
