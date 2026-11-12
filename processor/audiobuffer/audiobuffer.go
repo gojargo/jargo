@@ -274,23 +274,7 @@ func (p *Processor) record(f frames.Frame) {
 		p.mu.Unlock()
 		return
 	}
-	switch f.(type) {
-	case *frames.UserStartedSpeakingFrame:
-		p.userSpeaking = true
-	case *frames.UserStoppedSpeakingFrame:
-		p.userSpeaking = false
-	case *frames.BotStartedSpeakingFrame:
-		p.botSpeaking = true
-		// No bot audio arrives between replies, so each reply starts the
-		// resampler clean instead of with the end of the previous one.
-		p.resetResamplersLocked(false, true)
-	case *frames.BotStoppedSpeakingFrame:
-		p.botSpeaking = false
-	case *frames.UserMuteStoppedFrame:
-		// Likewise for user audio, which does not arrive while the user is
-		// muted.
-		p.resetResamplersLocked(true, false)
-	}
+	p.trackSpeakingLocked(f)
 
 	audio, rate, ch, kind := classify(f)
 	var res []byte
@@ -567,6 +551,29 @@ func (p *Processor) fillSilenceGap(buf []byte, last *time.Time, now time.Time, f
 		}
 	}
 	return buf
+}
+
+// trackSpeakingLocked follows who is speaking, which decides where silence is
+// written, and starts a track's resampler afresh where its audio resumes after a
+// pause. The caller holds p.mu.
+func (p *Processor) trackSpeakingLocked(f frames.Frame) {
+	switch f.(type) {
+	case *frames.UserStartedSpeakingFrame:
+		p.userSpeaking = true
+	case *frames.UserStoppedSpeakingFrame:
+		p.userSpeaking = false
+	case *frames.BotStartedSpeakingFrame:
+		p.botSpeaking = true
+		// No bot audio arrives between replies, so each reply starts the
+		// resampler clean instead of with the end of the previous one.
+		p.resetResamplersLocked(false, true)
+	case *frames.BotStoppedSpeakingFrame:
+		p.botSpeaking = false
+	case *frames.UserMuteStoppedFrame:
+		// Likewise for user audio, which does not arrive while the user is
+		// muted.
+		p.resetResamplersLocked(true, false)
+	}
 }
 
 // resetResamplersLocked discards the audio the input and output resamplers
