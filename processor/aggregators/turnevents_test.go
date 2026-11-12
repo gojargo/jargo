@@ -515,6 +515,9 @@ func TestUserAnnouncesTheTurnToThePipeline(t *testing.T) {
 	tf := frames.NewTranscriptionFrame("hello there", "u", "ts")
 	tf.Finalized = true
 	task.QueueFrame(tf)
+	// The stop is a system frame and would overtake the transcription still
+	// queued, so the pause lets the transcription reach the turn first.
+	time.Sleep(50 * time.Millisecond)
 	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
 	// The speech timeout closes the turn, writing it, before the session ends.
 	deadline := time.Now().Add(3 * time.Second)
