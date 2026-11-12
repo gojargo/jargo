@@ -68,6 +68,29 @@ func TestTurnsATurnCutShortByADropEndsWithItsTranscriptSoFar(t *testing.T) {
 	if _, audio := server.counts(); len(audio) != 2 {
 		t.Errorf("connections = %d, want 2", len(audio))
 	}
+	// The transcript is the billing event, so the audio it covers is reported
+	// as usage ahead of it.
+	if !usageBeforeFirstTranscript(res.down) {
+		t.Error("no STT usage was reported ahead of the transcript")
+	}
+}
+
+// usageBeforeFirstTranscript reports whether STT usage reached the end ahead of
+// the first transcript.
+func usageBeforeFirstTranscript(down []frames.Frame) bool {
+	for _, f := range down {
+		switch f := f.(type) {
+		case *frames.TranscriptionFrame:
+			return false
+		case *frames.MetricsFrame:
+			for _, d := range f.Data {
+				if _, ok := d.(frames.STTUsageMetricsData); ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // TestTurnsSpeechContinuingAfterADropBecomesANewTurn checks speech carrying on

@@ -470,6 +470,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   loses `Processor` and `Model`, and `MetricsData.STTUsage` holds
   `rtvi.STTUsageMetricData`.
 
+- **Streaming STT reports its usage per final transcript.** A streaming STT
+  service reported the audio it streamed once, for the whole connection, when
+  the pipeline ended, so no per-turn usage reached an RTVI client or an
+  observer, a process that died first reported none, and its transcription
+  spans never carried `metrics.audio_seconds`. Each final transcript is now a
+  billing event: the audio since the last one is reported ahead of it, and
+  added to the span it closes. What no transcript reported is reported when
+  the pipeline stops. `stt.StreamService.EmitSTTUsageMetrics` makes the
+  report.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

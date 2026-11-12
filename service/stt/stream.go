@@ -365,9 +365,9 @@ type StreamService struct {
 	sessionCancel context.CancelFunc
 	// readCancel ends the read loop, and with it the whole connection. It
 	// outlives any one session, so a reconnect does not stop the loop.
-	readCancel  context.CancelFunc
-	connectedAt time.Time
-	audioBytes  int64
+	readCancel context.CancelFunc
+	// audioBytes is the audio submitted since usage was last reported.
+	audioBytes int64
 	// speaking tracks the boundary a provider that runs its own detection last
 	// reported, so the frames go out in pairs however the provider repeats
 	// itself.
@@ -620,6 +620,8 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		return nil
 	case *frames.EndFrame, *frames.CancelFrame:
 		s.disconnect(ctx)
+		// The audio no final transcript has reported yet.
+		s.EmitSTTUsageMetrics(ctx)
 		return s.PushFrame(ctx, f, dir)
 	default:
 		return s.PushFrame(ctx, f, dir)
@@ -694,8 +696,6 @@ func (s *StreamService) connect(ctx context.Context) {
 	s.ws.Connect()
 	s.mu.Lock()
 	s.readCancel = cancel
-	s.connectedAt = time.Now()
-	s.audioBytes = 0
 	s.mu.Unlock()
 	if err := s.ConnectWebsocket(readCtx); err != nil {
 		s.PushError(readCtx, "stt: unable to connect", err, false)
@@ -704,22 +704,14 @@ func (s *StreamService) connect(ctx context.Context) {
 	s.wg.Go(func() { s.ws.ReceiveTaskHandler(readCtx, s.reportConnectionError) })
 }
 
-// disconnect closes the session and records what it transcribed. Streaming
-// providers bill for every second of audio the session carries, silence
-// included, so the usage is the audio streamed over the whole connection rather
-// than per transcript — and it is reported on one span covering it, started at
-// the point the connection opened. A session dropped and reopened partway
-// through is still the same connection, so it is still one span.
+// disconnect closes the session.
 func (s *StreamService) disconnect(ctx context.Context) {
 	// Marking the disconnect deliberate first is what tells the read loop that
 	// the session ending is the shutdown it asked for, not one to reconnect.
 	s.ws.Disconnect()
 	s.mu.Lock()
 	cancel := s.readCancel
-	connectedAt := s.connectedAt
-	audioBytes := s.audioBytes
 	s.readCancel = nil
-	s.connectedAt = time.Time{}
 	s.mu.Unlock()
 	if cancel == nil {
 		return
@@ -732,7 +724,6 @@ func (s *StreamService) disconnect(ctx context.Context) {
 	cancel()
 	s.wg.Wait()
 	_ = s.DisconnectWebsocket(ctx)
-	s.recordUsage(ctx, connectedAt, audioBytes)
 }
 
 // drainSession tells a provider that answers the end of a session that it is
@@ -924,20 +915,24 @@ func (s *StreamService) reportConnectionError(
 	s.ReportConnectionError(ctx, ef, forceTreatAsPermanent)
 }
 
-// recordUsage reports the audio the connection was given. The measurement covers
-// the whole connection, which is what a stream-priced provider bills, so it is
-// reported as usage rather than as a span: a span covering the connection would
-// outlive every turn in it and could not sit under the one it belongs to.
-func (s *StreamService) recordUsage(ctx context.Context, connectedAt time.Time, audioBytes int64) {
-	_ = connectedAt
-	audio := pcmDuration(audioBytes, s.sampleRate)
+// EmitSTTUsageMetrics reports the audio submitted since the last report as
+// usage, and adds it to the transcription span open for it. Streaming providers
+// bill for every second of audio a session carries, silence included, and the
+// service reports it once per billing event: ahead of each final transcript,
+// and a last time when the pipeline stops, for the audio no transcript
+// reported. It does nothing when there is no audio to report.
+func (s *StreamService) EmitSTTUsageMetrics(ctx context.Context) {
+	s.mu.Lock()
+	pending := s.audioBytes
+	s.audioBytes = 0
+	model := s.model
+	s.mu.Unlock()
+	audio := pcmDuration(pending, s.sampleRate)
 	if audio == 0 {
 		return
 	}
-	s.mu.Lock()
-	model := s.model
-	s.mu.Unlock()
 	metrics.RecordSTTAudio(ctx, s.TypeName(), model, audio.Seconds())
+	s.tracer.addUsage(frames.STTUsage{AudioSeconds: audio.Seconds()})
 	s.pushUsageMetrics(ctx, audio)
 }
 
@@ -1383,6 +1378,9 @@ func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
 	f := frames.NewTranscriptionFrame(r.Text, s.transcriptUserID(), ts)
 	f.Finalized = r.EndOfTurn
 	f.Language = r.Language
+	// A final transcript is the billing event: the audio since the last one is
+	// reported ahead of it, so the span the transcript closes carries it.
+	s.EmitSTTUsageMetrics(ctx)
 	_ = s.PushFrame(ctx, f, processor.Downstream)
 }
 

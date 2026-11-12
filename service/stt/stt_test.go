@@ -221,9 +221,8 @@ func TestSegmentStartsWithTheLastSecondBeforeSpeech(t *testing.T) {
 }
 
 // TestStreamServiceReportsAudioUsage checks that the audio streamed to the
-// provider is reported as usage. Streaming STT is billed on connection time, so
-// silence counts too, and the whole connection is measured rather than the
-// segments cut out of it.
+// provider is reported as usage, under the provider's model. Audio streamed
+// after the last final transcript is reported when the pipeline stops.
 func TestStreamServiceReportsAudioUsage(t *testing.T) {
 	conn := &fakeConnector{
 		model:  "nova-3",
