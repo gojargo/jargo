@@ -14,6 +14,9 @@ func TestFormatPronunciation(t *testing.T) {
 	if got, _ := FormatPronunciation("Glyburide metformin", "ˈɡlaɪ mɛt"); got != "<<ɡ|l|ˈ|aɪ>> <<m|ɛ|t>>" {
 		t.Fatalf("phrase = %q", got)
 	}
+	if got, _ := FormatPronunciation("Canto", "ˈkãtu"); got != "<<k|ˈ|ã|t|u>>" {
+		t.Fatalf("nasal vowel = %q, want the stress on the ã", got)
+	}
 	if _, ok := FormatPronunciation("Crete", ""); ok {
 		t.Fatal("an empty pronunciation was used")
 	}

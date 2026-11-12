@@ -358,6 +358,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   against the promoted sentence, so the reply was intermittently recorded out
   of order ("fine. It's"). A word processed while promoted words are still
   queued now goes out right behind them.
+- **A stress mark stays on a nasal vowel.** `IsIPAVowel` read a vowel composed
+  with a diacritic (ã, õ, é) as not a vowel, so `StressBeforeVowels` moved the
+  stress on to the next plain vowel: Cartesia's and Deepgram's pronunciations put
+  it on the wrong syllable. The phone is now decomposed before it is checked.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

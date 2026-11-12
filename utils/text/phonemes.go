@@ -132,8 +132,10 @@ func IPAPhones(ipa string) []string {
 }
 
 // IsIPAVowel reports whether an IPA phone, as IPAPhones returns it, is a vowel.
+// The phone is decomposed first, so a vowel composed with a diacritic (a nasal
+// ã, an é) is read by its base vowel.
 func IsIPAVowel(phone string) bool {
-	for _, r := range phone {
+	for _, r := range norm.NFD.String(phone) {
 		return strings.ContainsRune(ipaVowels, r)
 	}
 	return false

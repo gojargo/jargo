@@ -118,3 +118,22 @@ func TestPronunciationTransformWithNothingUsable(t *testing.T) {
 		t.Fatalf("got %q, want the text unchanged", got)
 	}
 }
+
+// TestStressBeforeComposedAndDecomposedNasalVowels checks a nasal vowel is a
+// vowel whether it is written composed or with a combining tilde, so the stress
+// lands on it rather than on the next plain vowel.
+func TestStressBeforeComposedAndDecomposedNasalVowels(t *testing.T) {
+	for _, v := range [][2]string{{"ã", "a"}, {"ẽ", "e"}, {"ĩ", "i"}, {"õ", "o"}, {"ũ", "u"}, {"ỹ", "y"}} {
+		for _, notation := range []string{v[0], v[1] + "̃"} {
+			for _, stress := range []string{"ˈ", "ˌ"} {
+				got := text.StressBeforeVowels(text.IPAPhones(stress + "k" + notation))
+				if want := []string{"k", stress, v[0]}; !slices.Equal(got, want) {
+					t.Errorf("%q: got %q, want %q", stress+"k"+notation, got, want)
+				}
+			}
+		}
+	}
+	if got := strings.Join(text.StressBeforeVowels(text.IPAPhones("ˈkãtu")), ""); got != "kˈãtu" {
+		t.Errorf("got %q, want the stress on the nasal vowel", got)
+	}
+}
