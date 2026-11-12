@@ -83,6 +83,17 @@ type Config struct {
 	// WSURL overrides the Responses WebSocket endpoint; empty uses the hosted
 	// one. It is ignored by the HTTP service.
 	WSURL string
+	// Organization is the OpenAI organization the requests are billed to, sent
+	// as the OpenAI-Organization header; empty sends none. Like Project and
+	// DefaultHeaders, it is applied by the HTTP service only: the WebSocket
+	// handshake carries the API key alone.
+	Organization string
+	// Project is the OpenAI project the requests belong to, sent as the
+	// OpenAI-Project header; empty sends none.
+	Project string
+	// DefaultHeaders are additional HTTP headers sent with every request. They
+	// are applied last, so they override any header the service sets.
+	DefaultHeaders map[string]string
 	// Model is the model id; empty uses a current default.
 	Model string
 	// Instructions is the service's system prompt. It is the base of the
@@ -473,6 +484,15 @@ func (c Config) post(ctx context.Context, client *http.Client, body []byte) (*ht
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+c.APIKey)
+			if c.Organization != "" {
+				req.Header.Set("OpenAI-Organization", c.Organization)
+			}
+			if c.Project != "" {
+				req.Header.Set("OpenAI-Project", c.Project)
+			}
+			for k, v := range c.DefaultHeaders {
+				req.Header.Set(k, v)
+			}
 			return req, nil
 		})
 }

@@ -357,6 +357,82 @@ func TestHTTPGenerate(t *testing.T) {
 	}
 }
 
+// TestHTTPSendsTheClientHeaders checks the organization, the project and the
+// default headers reach every request, the default headers applied last so they
+// override what the service sets.
+func TestHTTPSendsTheClientHeaders(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: " + `{"type":"response.output_text.delta","delta":"hi"}` + "\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"type":"response.completed","response":{"id":"r"}}` + "\n\n"))
+	}))
+	defer srv.Close()
+
+	svc := NewHTTPLLM(Config{
+		APIKey: "k", BaseURL: srv.URL, Organization: "org-1", Project: "proj-1",
+		DefaultHeaders: map[string]string{"X-Custom": "yes", "Authorization": "Bearer other"},
+	})
+	svc.http = srv.Client()
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	if err := svc.Generate(context.Background(), convo, func(string) error { return nil }); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for k, want := range map[string]string{
+		"OpenAI-Organization": "org-1", "OpenAI-Project": "proj-1",
+		"X-Custom": "yes", "Authorization": "Bearer other",
+	} {
+		if v := got.Get(k); v != want {
+			t.Errorf("%s = %q, want %q", k, v, want)
+		}
+	}
+
+	// Unset, they are not sent at all.
+	svc = NewHTTPLLM(Config{APIKey: "k", BaseURL: srv.URL})
+	svc.http = srv.Client()
+	if err := svc.Generate(context.Background(), convo, func(string) error { return nil }); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for _, k := range []string{"OpenAI-Organization", "OpenAI-Project"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("%s was sent for an unset config: %q", k, got.Get(k))
+		}
+	}
+}
+
+// TestWSHandshakeCarriesTheKeyAlone checks the WebSocket is opened with the
+// API key as its only header: no beta opt-in, and none of the HTTP client's
+// headers.
+func TestWSHandshakeCarriesTheKeyAlone(t *testing.T) {
+	srv := newFakeResponsesWS(t, [][]string{{
+		`{"type":"response.output_text.delta","delta":"hi"}`,
+		`{"type":"response.completed","response":{"id":"resp_1"}}`,
+	}})
+	svc := NewLLM(Config{
+		APIKey: "k", WSURL: srv.wsURL(), Organization: "org-1",
+		DefaultHeaders: map[string]string{"X-Custom": "yes"},
+	})
+	t.Cleanup(svc.disconnect)
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hello")
+	if err := svc.Generate(context.Background(), convo, func(string) error { return nil }); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	srv.mu.Lock()
+	h := srv.header
+	srv.mu.Unlock()
+	if got := h.Get("Authorization"); got != "Bearer k" {
+		t.Errorf("Authorization = %q, want the Bearer key", got)
+	}
+	for _, k := range []string{"OpenAI-Beta", "OpenAI-Organization", "X-Custom"} {
+		if _, ok := h[k]; ok {
+			t.Errorf("handshake sent %s: %q", k, h.Get(k))
+		}
+	}
+}
+
 // TestHTTPErrorStatus checks a non-200 is reported rather than parsed.
 func TestHTTPErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -395,6 +471,8 @@ type fakeResponsesWS struct {
 	types []string
 	// dials is how many connections were opened.
 	dials int
+	// header is the handshake header of the last connection opened.
+	header http.Header
 }
 
 // closeConnection, as the last event of a script, makes the fake server close
@@ -424,6 +502,7 @@ func newFakeResponsesWS(t *testing.T, scripts [][]string) *fakeResponsesWS {
 		ctx := r.Context()
 		f.mu.Lock()
 		f.dials++
+		f.header = r.Header.Clone()
 		f.mu.Unlock()
 
 		for {

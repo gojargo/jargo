@@ -86,6 +86,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The OpenAI Responses services take the OpenAI client's headers.**
+  `responses.Config` gains `Organization`, `Project` and `DefaultHeaders`,
+  sent with every HTTP request (as `OpenAI-Organization`, `OpenAI-Project`,
+  and the headers as given, applied last). The WebSocket handshake carries the
+  API key alone: it no longer sends an `OpenAI-Beta: responses=v1` header.
+
 - **A Cartesia TTS sentence that fails to send no longer ends the turn's
   audio.** The provider removed the turn's audio context along with the
   failed sentence, so the sentences after it, sent on the redialed

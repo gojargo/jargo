@@ -677,7 +677,6 @@ func (s *Service) connect(ctx context.Context) (*session, error) {
 
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+s.cfg.APIKey)
-	header.Set("OpenAI-Beta", "responses=v1")
 
 	conn, err := wsutil.Dial(ctx, s.cfg.WSURL, header, readLimit)
 	if err != nil {
