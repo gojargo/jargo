@@ -19,7 +19,7 @@
 # The root .dockerignore leaves benchmarks/ out of every other image, so this
 # one has its own, Dockerfile.dockerignore beside it.
 
-FROM golang:1.27-bookworm@sha256:a4f46dc39c6b0359a3e1ed86ef14d01b374cc808649679dd5fca2290e6d54202 AS build
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS build
 
 ENV CGO_ENABLED=0
 WORKDIR /src
