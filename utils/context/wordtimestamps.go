@@ -19,8 +19,9 @@ type WordTiming struct {
 // attached.
 //
 // A token is punct/space-only when it has no alphanumeric character once its
-// complete tags are stripped; a lone '<' is not a tag, so "<3" is a word. Such a token is appended to the preceding word's text and its
-// offset discarded (the preceding word's offset is kept). Leading punct/space
+// complete tags are stripped; a lone '<' is not a tag, so "<3" is a word. Such
+// a token is appended to the preceding word's text and its offset discarded
+// (the preceding word's offset is kept). Leading punct/space
 // tokens with no preceding word are dropped. Every returned token is trimmed of
 // leading and trailing whitespace.
 func MergePunctTokens(words []WordTiming) []WordTiming {
