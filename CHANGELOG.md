@@ -494,6 +494,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   JSON escapes, so the model read `\u0026` where the result said `&`. The
   result is now carried as it is.
 
+- **A tool named like a cancel tool keeps its name whatever the order.**
+  The cancel tools were settled after every registration, so a toolset that
+  listed a cancellable tool before a tool of its own named like that tool's
+  cancel tool lost the second one silently, and the built-in cancel tool
+  answered its calls; listed the other way round, the user tool won. The
+  cancel tools are now settled once, when the tool handlers are synced, after
+  every advertised handler is registered, so the user tool keeps the name
+  either way and the collision is warned about. **Breaking:**
+  `RegisterFunction` and `UnregisterFunction` no longer bring in or take away
+  a cancel tool, or the guidance about it, on their own: that happens on the
+  next `SyncToolHandlers`, which every inference runs.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

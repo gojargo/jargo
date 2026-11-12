@@ -39,6 +39,10 @@ func advertised(g *advertisingGen) []string {
 
 func noop(context.Context, llm.FunctionCallParams) error { return nil }
 
+// syncTools settles the cancel tools and the guidance as an inference does:
+// the tools registered by hand stand, and the conversation advertises none.
+func syncTools(svc *llm.Base) { svc.SyncToolHandlers(context.Background(), frames.ToolsSchema{}) }
+
 // newInstructedService builds a service whose base system prompt is set, which
 // is what the composed instruction is built on top of.
 func newInstructedService(t *testing.T, gen *advertisingGen, prompt string) *llm.Base {
@@ -54,6 +58,7 @@ func TestACancellableToolGetsItsOwnCancelTool(t *testing.T) {
 
 	svc.RegisterFunction("write_report", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	want := []string{llm.CancelToolName("write_report")}
 	if got := advertised(gen); !slices.Equal(got, want) {
@@ -71,6 +76,7 @@ func TestTheCancelToolDoesNotAskForAToolCallID(t *testing.T) {
 	svc := llm.New("FakeLLM", gen)
 	svc.RegisterFunction("write_report", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	var schema struct {
 		Properties map[string]any `json:"properties"`
@@ -99,6 +105,7 @@ func TestAToolThatDidNotOptInGetsNone(t *testing.T) {
 	svc.RegisterFunction("write_report", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
 	svc.RegisterFunction("get_current_weather", noop, llm.WithCancelOnInterruption(false))
+	syncTools(svc)
 
 	// The weather tool has no cancel tool, so there is nothing to call against it.
 	if got := advertised(gen); slices.Contains(got, llm.CancelToolName("get_current_weather")) {
@@ -111,6 +118,7 @@ func TestNothingAdvertisedWithoutACancellableTool(t *testing.T) {
 	svc := llm.New("FakeLLM", gen)
 
 	svc.RegisterFunction("get_current_weather", noop, llm.WithCancelOnInterruption(false))
+	syncTools(svc)
 
 	if got := advertised(gen); len(got) != 0 {
 		t.Errorf("advertised %v, want nothing", got)
@@ -122,8 +130,10 @@ func TestWithdrawnWhenTheCancellableToolGoes(t *testing.T) {
 	svc := llm.New("FakeLLM", gen)
 	svc.RegisterFunction("write_report", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	svc.UnregisterFunction("write_report")
+	syncTools(svc)
 
 	if got := advertised(gen); len(got) != 0 {
 		t.Errorf("advertised %v, want nothing left", got)
@@ -139,6 +149,7 @@ func TestCancellableByLLMIsIgnoredOnASynchronousTool(t *testing.T) {
 	svc := llm.New("FakeLLM", gen)
 
 	svc.RegisterFunction("lookup", noop, llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	if got := advertised(gen); len(got) != 0 {
 		t.Errorf("advertised %v, want nothing: a synchronous call cannot be canceled", got)
@@ -150,6 +161,7 @@ func TestTheDeprecatedFlagCoversEveryAsyncTool(t *testing.T) {
 	svc := llm.New("FakeLLM", gen, llm.WithAsyncToolCancellation())
 
 	svc.RegisterFunction("get_current_weather", noop, llm.WithCancelOnInterruption(false))
+	syncTools(svc)
 
 	want := []string{llm.CancelToolName("get_current_weather")}
 	if got := advertised(gen); !slices.Equal(got, want) {
@@ -162,6 +174,7 @@ func TestTheDeprecatedFlagNeedsAnAsyncTool(t *testing.T) {
 	svc := llm.New("FakeLLM", gen, llm.WithAsyncToolCancellation())
 
 	svc.RegisterFunction("lookup", noop)
+	syncTools(svc)
 
 	if got := advertised(gen); len(got) != 0 {
 		t.Errorf("advertised %v, want nothing", got)
@@ -176,6 +189,7 @@ func TestTheGuidanceIsComposedOnce(t *testing.T) {
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
 	svc.RegisterFunction("fetch_archive", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	system := svc.SystemInstruction()
 
@@ -190,6 +204,7 @@ func TestTheGuidanceIsComposedOnce(t *testing.T) {
 func TestNoGuidanceWithoutACancellableTool(t *testing.T) {
 	svc := newInstructedService(t, &advertisingGen{}, "be brief")
 	svc.RegisterFunction("lookup", noop)
+	syncTools(svc)
 
 	if system := svc.SystemInstruction(); strings.Contains(system, "ASYNC TOOL CANCELLATION") {
 		t.Errorf("system = %q, want no cancellation guidance", system)
@@ -200,11 +215,13 @@ func TestTheGuidanceGoesWhenTheToolDoes(t *testing.T) {
 	svc := newInstructedService(t, &advertisingGen{}, "be brief")
 	svc.RegisterFunction("write_report", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 	if !strings.Contains(svc.SystemInstruction(), "ASYNC TOOL CANCELLATION") {
 		t.Fatal("the guidance was never composed in")
 	}
 
 	svc.UnregisterFunction("write_report")
+	syncTools(svc)
 
 	if system := svc.SystemInstruction(); strings.Contains(system, "ASYNC TOOL CANCELLATION") {
 		t.Errorf("system = %q, want the guidance taken back out", system)
@@ -216,6 +233,7 @@ func TestRegisteringOverACancelToolNameIsRefused(t *testing.T) {
 	svc := llm.New("FakeLLM", gen)
 	svc.RegisterFunction("write_report", noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	name := llm.CancelToolName("write_report")
 	var ran bool
@@ -223,6 +241,7 @@ func TestRegisteringOverACancelToolNameIsRefused(t *testing.T) {
 		ran = true
 		return nil
 	})
+	syncTools(svc)
 
 	// The service owns the name, so the registration is refused rather than
 	// replacing the handler that stops the work.
@@ -283,6 +302,7 @@ func cancelResult(
 		<-ctx.Done()
 		return nil
 	}, llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	reported := make(chan string, 4)
 	probe := newProbe(func(f frames.Frame) {
@@ -417,6 +437,7 @@ func TestTheCancelToolSchemaHoldsAnAwkwardName(t *testing.T) {
 	svc := llm.New("FakeLLM", gen)
 	svc.RegisterFunction(awkward, noop,
 		llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
+	syncTools(svc)
 
 	var schema struct {
 		Type       string         `json:"type"`
@@ -539,5 +560,37 @@ func TestBuiltInToolsAreSentAloneWhenThereAreNoOthers(t *testing.T) {
 	case <-called:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the built-in tool was never called")
+	}
+}
+
+// Ported from upstream (test_user_tool_keeps_a_colliding_cancel_tool_name). A
+// tool of the toolset named like a cancellable tool's cancel tool keeps the
+// name, whichever order the two are listed in, and the cancel tool is not
+// advertised: the cancel tools are settled once every advertised handler is in.
+func TestUserToolKeepsACollidingCancelToolName(t *testing.T) {
+	no, yes := false, true
+	cancellable := frames.Tool{
+		Name: "cancellable_task", Handler: llm.FunctionCallHandler(noop),
+		CancelOnInterruption: &no, CancellableByLLM: &yes,
+	}
+	colliding := frames.Tool{
+		Name:    llm.CancelToolName("cancellable_task"),
+		Handler: llm.FunctionCallHandler(func(context.Context, llm.FunctionCallParams) error { return nil }),
+	}
+	for name, tools := range map[string][]frames.Tool{
+		"cancellable first": {cancellable, colliding},
+		"colliding first":   {colliding, cancellable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gen := &advertisingGen{}
+			svc := llm.New("FakeLLM", gen)
+			svc.SyncToolHandlers(context.Background(), frames.ToolsSchema{Standard: tools})
+			if got := advertised(gen); len(got) != 0 {
+				t.Errorf("advertised built-ins %v, want none: the user tool holds the name", got)
+			}
+			if !svc.HasFunction(colliding.Name) {
+				t.Error("the user tool lost its handler")
+			}
+		})
 	}
 }

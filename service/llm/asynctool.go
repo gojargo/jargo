@@ -152,7 +152,9 @@ func (b *Base) isCancellable(item registryItem) bool {
 // syncCancelTools matches the advertised cancel tools to the tools currently
 // registered: one cancel tool per cancellable tool, named for it, reconciled
 // from a single reading of the registry so what is advertised can never drift
-// from what is actually cancellable. It runs wherever the registry changes.
+// from what is actually cancellable. It runs at the end of every sync of the
+// tool handlers, once every advertised handler is registered, so a name a tool
+// of the toolset holds is left to that tool.
 func (b *Base) syncCancelTools() {
 	b.handlersMu.Lock()
 	wanted := b.wantedCancelToolsLocked()

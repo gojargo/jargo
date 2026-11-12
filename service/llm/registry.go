@@ -198,17 +198,10 @@ func toolCallOptions(t frames.Tool) []RegisterOption {
 // service's own built-in tools are left alone.
 func (b *Base) dropUnadvertisedToolHandlers(advertised map[string]bool) {
 	b.handlersMu.Lock()
-	dropped := false
+	defer b.handlersMu.Unlock()
 	for name, item := range b.handlers {
 		if item.fromToolset && !advertised[name] {
 			delete(b.handlers, name)
-			dropped = true
 		}
-	}
-	b.handlersMu.Unlock()
-
-	if dropped {
-		// Dropping a cancellable tool takes its cancel tool with it.
-		b.syncCancelTools()
 	}
 }

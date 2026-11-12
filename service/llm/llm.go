@@ -989,9 +989,10 @@ func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...Regi
 	// removed, so the removal stops being held against the toolset.
 	delete(b.unregisteredByHand, name)
 	b.handlersMu.Unlock()
-
-	// Registering a cancellable tool is what brings its cancel tool in.
-	b.syncCancelTools()
+	// Its cancel tool, if it is cancellable, comes in with the next sync of the
+	// tool handlers, which settles them once every advertised handler is in:
+	// settled here, it would take a name a tool advertised later in the same
+	// toolset may hold.
 }
 
 // UnregisterFunction removes the handler registered for name, reporting whether
@@ -1016,9 +1017,8 @@ func (b *Base) UnregisterFunction(name string) bool {
 	}
 	b.unregisteredByHand[name] = true
 	b.handlersMu.Unlock()
-
-	// Withdrawing a cancellable tool takes its cancel tool away with it.
-	b.syncCancelTools()
+	// Its cancel tool, if it had one, goes with the next sync of the tool
+	// handlers.
 	return ok
 }
 
