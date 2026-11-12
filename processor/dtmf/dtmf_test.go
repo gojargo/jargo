@@ -35,8 +35,8 @@ func TestAggregatorFlushesOnTerminator(t *testing.T) {
 
 	select {
 	case text := <-got:
-		if text != "digits: 42" {
-			t.Fatalf("aggregated text = %q, want %q", text, "digits: 42")
+		if text != "digits: 42#" {
+			t.Fatalf("aggregated text = %q, want %q", text, "digits: 42#")
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("aggregator never flushed")
@@ -107,5 +107,15 @@ func TestAggregatorDefaults(t *testing.T) {
 	r := runKeys(t, dtmf.AggregatorConfig{}, false, frames.KeypadOne, 2300*time.Millisecond)
 	if got := r.gotTexts(); len(got) != 1 || got[0] != "DTMF: 1" {
 		t.Errorf("transcriptions = %q, want the entry flushed by the default timeout", got)
+	}
+}
+
+// TestAggregatorKeepsTheTerminator checks the terminator is part of the entry,
+// as the caller pressed it, so a lone terminator is an entry too.
+func TestAggregatorKeepsTheTerminator(t *testing.T) {
+	r := runKeys(t, dtmf.AggregatorConfig{Terminator: frames.KeypadStar}, true,
+		frames.KeypadOne, frames.KeypadTwo, frames.KeypadStar, 50*time.Millisecond, frames.KeypadStar)
+	if got := r.gotTexts(); len(got) != 2 || got[0] != "DTMF: 12*" || got[1] != "DTMF: *" {
+		t.Errorf("transcriptions = %q, want the terminator kept in each entry", got)
 	}
 }

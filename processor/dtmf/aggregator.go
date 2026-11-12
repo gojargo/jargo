@@ -92,9 +92,11 @@ func (a *Aggregator) Cleanup(ctx context.Context) error {
 	return a.Base.Cleanup(ctx)
 }
 
-// handle appends a key, or flushes the buffer when the key is the terminator.
+// handle appends a key, and flushes the entry when the key is the terminator.
+// The terminator is part of the entry: it is what the caller pressed.
 func (a *Aggregator) handle(ctx context.Context, button frames.KeypadEntry) {
 	a.mu.Lock()
+	a.buf.WriteString(string(button))
 	if button == a.cfg.Terminator {
 		text := a.buf.String()
 		a.buf.Reset()
@@ -103,7 +105,6 @@ func (a *Aggregator) handle(ctx context.Context, button frames.KeypadEntry) {
 		a.emit(ctx, text)
 		return
 	}
-	a.buf.WriteString(string(button))
 	a.armTimer(ctx)
 	a.mu.Unlock()
 }

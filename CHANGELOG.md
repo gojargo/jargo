@@ -269,6 +269,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   refuses such a configuration with an error in the log and compresses only on
   demand, and an `LLMSummarizeContextFrame` whose settings are not usable is
   refused the same way.
+- **The DTMF aggregator keeps the terminator in the entry.** The terminator was
+  dropped from the text ("DTMF: 123#" came out as "DTMF: 123"), and a lone
+  terminator emitted nothing. It is now part of the entry, as the caller pressed
+  it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
