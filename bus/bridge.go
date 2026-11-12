@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/embeds"
 	"github.com/gojargo/jargo/processor"
 )
 
@@ -53,8 +54,9 @@ type BridgeConfig struct {
 	// with the name, and it accepts only frames tagged with the same one.
 	Bridge string
 	// ExcludeFrames are frame types that never cross the bus, on top of the
-	// lifecycle frames, which never do. A frame matches when it is of the same
-	// concrete type as one given here.
+	// lifecycle frames, which never do. A frame matches when it is of the type
+	// of one given here or of a type built on it: excluding TextFrame keeps LLM
+	// tokens and transcriptions, which embed it, off the bus too.
 	ExcludeFrames []frames.Frame
 }
 
@@ -252,14 +254,14 @@ func (p *EdgeProcessor) OnBusMessage(ctx context.Context, m Message) {
 // excluded frames.
 func excluded(f frames.Frame, exclude []frames.Frame) bool {
 	for _, e := range exclude {
-		if sameFrameType(f, e) {
+		if isFrameOfType(f, e) {
 			return true
 		}
 	}
 	return false
 }
 
-// sameFrameType reports whether two frames are of the same concrete type.
-func sameFrameType(a, b frames.Frame) bool {
-	return reflect.TypeOf(a) == reflect.TypeOf(b)
+// isFrameOfType reports whether a is of b's type or of a type built on it.
+func isFrameOfType(a, b frames.Frame) bool {
+	return embeds.Is(reflect.TypeOf(a), reflect.TypeOf(b))
 }

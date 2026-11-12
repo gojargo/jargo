@@ -223,6 +223,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a frame filter or an idle watcher keyed on it ignored LLM tokens,
   transcriptions and every other frame that embeds `TextFrame`. It now matches
   a frame of the type and any frame that embeds it.
+- **Excluding a frame type from the bus excludes the types built on it.**
+  `ExcludeFrames` on a bus bridge or edge matched only the concrete type, so
+  excluding `TextFrame` still sent LLM tokens, spoken words and transcriptions
+  across. A frame now matches when its type is the one excluded or embeds it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

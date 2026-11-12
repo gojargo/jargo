@@ -199,6 +199,27 @@ func TestBridgeKeepsExcludedFramesLocal(t *testing.T) {
 	}
 }
 
+// TestBridgeExcludesTypesBuiltOnAnExcludedOne checks excluding a frame type
+// keeps the frames built on it off the bus too: excluding TextFrame keeps an LLM
+// token local.
+func TestBridgeExcludesTypesBuiltOnAnExcludedOne(t *testing.T) {
+	b := newBusSpy()
+	p, _ := bridgeUnder(t, bus.BridgeConfig{
+		Bus:           b.Bus,
+		WorkerName:    "worker_a",
+		ExcludeFrames: []frames.Frame{&frames.TextFrame{}},
+	})
+
+	for _, f := range []frames.Frame{frames.NewTextFrame("a"), frames.NewLLMTextFrame("b")} {
+		if err := p.ProcessFrame(t.Context(), f, processor.Downstream); err != nil {
+			t.Fatalf("ProcessFrame: %v", err)
+		}
+	}
+	if len(b.sent) != 0 {
+		t.Errorf("%d frames crossed the bus, want none: both are text frames", len(b.sent))
+	}
+}
+
 // A frame arriving from another worker is pushed into this pipeline.
 func TestBridgeInjectsFramesArrivingFromTheBus(t *testing.T) {
 	b := newBusSpy()
