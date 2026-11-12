@@ -37,9 +37,9 @@ type ServerConfig struct {
 	// to it is what crosses.
 	RemoteWorker string
 	// ForwardMessages are message types that cross whoever they are addressed
-	// to, given as sample values (&bus.FrameMessage{}). It is how frames reach a
-	// bridged worker in another process. Outbound, only the ones the local
-	// worker sent cross.
+	// to, given as sample values (&bus.FrameMessage{}); a message of a type built
+	// on one of them crosses too. It is how frames reach a bridged worker in
+	// another process. Outbound, only the ones the local worker sent cross.
 	ForwardMessages []bus.Message
 	// Serializer converts messages to bytes and back; nil uses the JSON one.
 	Serializer bus.MessageSerializer

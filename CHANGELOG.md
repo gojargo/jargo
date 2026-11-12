@@ -227,6 +227,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `ExcludeFrames` on a bus bridge or edge matched only the concrete type, so
   excluding `TextFrame` still sent LLM tokens, spoken words and transcriptions
   across. A frame now matches when its type is the one excluded or embeds it.
+- **A proxy forwards the messages built on a type it is told to forward.**
+  `ForwardMessages` on the workers proxy client and server matched only the
+  exact message type, so naming `bus.BaseDataMessage` forwarded nothing but a
+  bare base message. A message now crosses when its type is one named or embeds
+  it.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

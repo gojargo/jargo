@@ -25,6 +25,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/internal/embeds"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -131,7 +132,9 @@ func forwards(m bus.Message, named []bus.Message) bool {
 	}
 	t := reflect.TypeOf(m)
 	for _, sample := range named {
-		if reflect.TypeOf(sample) == t {
+		// A message of a type built on a named one forwards too: naming the
+		// base data message forwards every data message.
+		if embeds.Is(t, reflect.TypeOf(sample)) {
 			return true
 		}
 	}

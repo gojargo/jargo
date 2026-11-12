@@ -457,6 +457,25 @@ func TestForwardedTypesOnlyCrossFromTheLocalWorker(t *testing.T) {
 	}
 }
 
+// TestForwardedTypesMatchTheTypesBuiltOnThem checks naming a base message type
+// forwards every message built on it: the base data message forwards a speak
+// message the local worker sent to anybody.
+func TestForwardedTypesMatchTheTypesBuiltOnThem(t *testing.T) {
+	e := newEnv(t)
+	p := newPeer()
+	c := startClient(t, e, p.serve(t), &bus.BaseDataMessage{})
+
+	m := &bus.TTSSpeakMessage{Text: "hello"}
+	m.From = "voice"
+	m.To = "somebody-else"
+	c.OnBusMessage(e.ctx, m)
+
+	sent := awaitSent(t, p, 1)
+	if len(sent) != 1 {
+		t.Fatalf("%d messages crossed, want the speak message", len(sent))
+	}
+}
+
 // TestClientAcceptsARegistrySnapshot checks the one message that arrives
 // addressed to nobody and is still acted on: it is how this side learns which
 // workers the far side has.
