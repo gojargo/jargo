@@ -1675,38 +1675,57 @@ func (b *Base) pushSpokenText(
 	b.pushSequencerFrames(ctx, b.sequencer.CompleteSpokenSlot(), contextID)
 }
 
-// emitTiming records the synthesis's time-to-first-byte, time-to-first-audible
-// sample and character count of an audio context to OpenTelemetry (always) and,
-// when in-band metrics are enabled, downstream as a MetricsFrame for the RTVI
-// client.
-func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter) {
-	model := b.model()
-	metrics.RecordTTSCharacters(ctx, b.TypeName(), model, int64(chars))
-	if m.hadTTFB {
-		metrics.RecordTTFB(ctx, "tts", b.TypeName(), model, m.ttfb.Seconds())
-	}
-	if m.hadTTFA {
-		metrics.RecordTTFA(ctx, "tts", b.TypeName(), model, m.ttfa.Seconds())
-	}
+// emitTiming records the character count of an audio context to OpenTelemetry
+// (always) and, when in-band metrics are enabled, downstream as a MetricsFrame
+// for the RTVI client. The time to first byte and to the first audible sample
+// are not among them: they were reported as the context's audio arrived.
+func (b *Base) emitTiming(ctx context.Context, chars int) {
+	metrics.RecordTTSCharacters(ctx, b.TypeName(), b.model(), int64(chars))
 	if !b.MetricsEnabled() {
 		return
 	}
 	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.model()}
-	data := []frames.MetricsData{
-		frames.TTSUsageMetricsData{BaseMetricsData: base, Value: chars},
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(frames.TTSUsageMetricsData{BaseMetricsData: base, Value: chars}),
+		processor.Downstream)
+}
+
+// reportTTFB reports a context's time to first byte, on its first audio, and
+// arms the scan for its first audible sample. It is pushed at once, in a frame
+// of its own, so a reply interrupted after its first audio still reports it.
+func (b *Base) reportTTFB(ctx context.Context, c *audioContext) {
+	ttfb, ok := c.stopTTFB()
+	if !ok {
+		return
 	}
-	if m.hadTTFB {
-		data = append(data, frames.TTFBMetricsData{BaseMetricsData: base, Value: m.ttfb})
+	model := b.model()
+	metrics.RecordTTFB(ctx, "tts", b.TypeName(), model, ttfb.Seconds())
+	if !b.MetricsEnabled() {
+		return
 	}
-	if m.hadTTFA {
-		data = append(data, frames.TTFAMetricsData{
-			BaseMetricsData: base,
-			TTFA:            m.ttfa,
-			TTFB:            m.ttfb,
-			LeadingSilence:  m.leadingSilence,
-		})
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: model}
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(frames.TTFBMetricsData{BaseMetricsData: base, Value: ttfb}),
+		processor.Downstream)
+}
+
+// reportTTFA scans a chunk of a context's audio for the first audible sample,
+// and reports the time to it once found, at once and in a frame of its own.
+func (b *Base) reportTTFA(ctx context.Context, c *audioContext, f *frames.TTSAudioRawFrame) {
+	m, ok := c.processTTFA(f.Audio, f.SampleRate, f.NumChannels)
+	if !ok {
+		return
 	}
-	_ = b.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
+	model := b.model()
+	metrics.RecordTTFA(ctx, "tts", b.TypeName(), model, m.ttfa.Seconds())
+	if !b.MetricsEnabled() {
+		return
+	}
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: model}
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(frames.TTFAMetricsData{
+		BaseMetricsData: base,
+		TTFA:            m.ttfa,
+		TTFB:            m.ttfb,
+		LeadingSilence:  m.leadingSilence,
+	}), processor.Downstream)
 }
 
 // ServiceMetadataFrame implements service.MetadataDescriber, describing this
@@ -1723,11 +1742,11 @@ func (b *Base) ServiceMetadataFrame() frames.ServiceMetadata {
 }
 
 // ttfaMeter measures a synthesis's time-to-first-byte and time-to-first-audible
-// sample from the emitted PCM. TTFA extends TTFB: once the first byte arrives it
-// scans the leading audio for a sustained speech onset and reports TTFB plus the
-// leading-silence duration.
+// sample. TTFA extends TTFB: once the first byte is recorded, the audio is
+// buffered across chunks (the leading silence may span several, and confirming
+// the onset needs a little audio past it) and scanned for a sustained speech
+// onset, and TTFB plus the leading-silence duration is reported.
 type ttfaMeter struct {
-	rate int
 	// report says whether this synthesis is measured at all. It is false once
 	// the pipeline has had the only measurement it asked for, and nothing is
 	// timed or scanned from then on.
@@ -1743,34 +1762,43 @@ type ttfaMeter struct {
 	leadingSilence time.Duration
 }
 
-// observe folds one non-empty PCM chunk into the measurement, relative to the
-// synthesis start time.
-func (m *ttfaMeter) observe(pcm []byte, start time.Time) {
-	if !m.report {
-		return
+// stopTTFB records the time to first byte as d and arms the TTFA scan. Only the
+// first call takes effect, and it reports whether this was it.
+func (m *ttfaMeter) stopTTFB(d time.Duration) bool {
+	if !m.report || m.hadTTFB {
+		return false
 	}
-	if !m.hadTTFB {
-		m.hadTTFB = true
-		m.ttfb = time.Since(start)
-		m.active = true
-	}
-	if !m.active {
-		return
+	m.hadTTFB = true
+	m.ttfb = d
+	m.active = true
+	m.buf = nil
+	return true
+}
+
+// processTTFA scans a chunk of audio for the speech onset, reporting whether it
+// found it with this chunk. It scans nothing until TTFB is recorded, and stops
+// once the onset is found, or once a bounded window of audio held none.
+func (m *ttfaMeter) processTTFA(pcm []byte, rate, channels int) bool {
+	if !m.active || rate <= 0 {
+		return false
 	}
 	m.buf = append(m.buf, pcm...)
-	if idx := onset.Detect(m.buf, m.rate, 1); idx >= 0 {
-		m.leadingSilence = time.Duration(float64(idx) / float64(m.rate) * float64(time.Second))
-		m.ttfa = m.ttfb + m.leadingSilence
-		m.hadTTFA = true
-		m.active = false
-		m.buf = nil
-		return
+	idx := onset.Detect(m.buf, rate, channels)
+	if idx < 0 {
+		// Bound memory against a long (or never-ending) silence by giving up
+		// past a sane limit.
+		if len(m.buf) >= ttfaMaxBufferSeconds*rate*max(channels, 1)*2 {
+			m.active = false
+			m.buf = nil
+		}
+		return false
 	}
-	if len(m.buf) >= ttfaMaxBufferSeconds*m.rate*2 {
-		// No onset within a bounded window of audio; stop scanning.
-		m.active = false
-		m.buf = nil
-	}
+	m.leadingSilence = time.Duration(float64(idx) / float64(rate) * float64(time.Second))
+	m.ttfa = m.ttfb + m.leadingSilence
+	m.hadTTFA = true
+	m.active = false
+	m.buf = nil
+	return true
 }
 
 // StreamResponse issues req and streams the raw-PCM response body to emit in

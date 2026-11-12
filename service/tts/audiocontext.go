@@ -168,7 +168,6 @@ type audioContext struct {
 	seq uint64
 
 	start time.Time
-	rate  int
 	chars int
 	// texts are the sentences spoken on this context, in the order they were
 	// sent. One context covers a whole utterance, which sentence aggregation
@@ -189,12 +188,11 @@ type audioContext struct {
 	pendingWords []ctxItem
 }
 
-func newAudioContext(rate int, report bool, spanCtx context.Context, span trace.Span) *audioContext {
+func newAudioContext(report bool, spanCtx context.Context, span trace.Span) *audioContext {
 	return &audioContext{
 		notify:               make(chan struct{}, 1),
 		start:                time.Now(),
-		rate:                 rate,
-		meter:                ttfaMeter{rate: rate, report: report},
+		meter:                ttfaMeter{report: report},
 		span:                 span,
 		spanCtx:              spanCtx,
 		initialWordTimestamp: -1,
@@ -212,11 +210,27 @@ func (c *audioContext) addText(text string) {
 	c.chars += utf8.RuneCountInString(text)
 }
 
-// observe folds one chunk of this context's audio into the measurement.
-func (c *audioContext) observe(pcm []byte) {
+// stopTTFB records the context's time to first byte, measured from when it
+// opened, on its first audio. It reports false when the context is not measured
+// or already was.
+func (c *audioContext) stopTTFB() (time.Duration, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.meter.observe(pcm, c.start)
+	if !c.meter.stopTTFB(time.Since(c.start)) {
+		return 0, false
+	}
+	return c.meter.ttfb, true
+}
+
+// processTTFA scans a chunk of the context's audio for its first audible
+// sample, reporting the measurement once that is found.
+func (c *audioContext) processTTFA(pcm []byte, rate, channels int) (ttfaMeter, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.meter.processTTFA(pcm, rate, channels) {
+		return ttfaMeter{}, false
+	}
+	return c.meter, true
 }
 
 // startWordTimestamps fixes the point the context's words are timed from, on the
@@ -619,7 +633,7 @@ func (b *Base) CreateAudioContext(contextID string) {
 	if b.audioContexts == nil {
 		b.audioContexts = map[string]*audioContext{}
 	}
-	c := newAudioContext(b.syn.SampleRate(), b.BeginTTFB(), spanCtx, span)
+	c := newAudioContext(b.BeginTTFB(), spanCtx, span)
 	if old, ok := b.audioContexts[contextID]; ok {
 		// A context opened again under the same id keeps its place.
 		c.seq = old.seq
@@ -1129,19 +1143,9 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 			// a provider emits for itself.
 			fr.AppendToContext = b.appendsToContext(contextID)
 		case *frames.TTSAudioRawFrame:
-			b.resampleContextAudio(ctx, contextID, &rs, fr)
-			// The first chunk of audio is what the context's words are timed
-			// from: it is the point the audio starts being heard.
+			b.pushContextAudio(ctx, c, contextID, &rs, fr, !receivedAudio, held)
 			receivedAudio = true
-			c.observe(fr.Audio)
-			// The words reported before it go first, then the frames held for
-			// it, then the audio itself.
-			for _, w := range c.startWordTimestamps(b.now(), b.lastWordPTS()) {
-				b.pushWord(ctx, c, contextID, w)
-			}
-			b.pushHeldFrames(ctx, held)
 			held = nil
-			_ = b.PushFrame(ctx, it.frame, processor.Downstream)
 			continue
 		case *frames.TTSStoppedFrame:
 			b.pushResamplerTail(ctx, contextID, &rs)
@@ -1166,6 +1170,27 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 	b.finishAudioContext(ctx, c)
 	b.recordContextAudioOutcome(ctx, contextID, receivedAudio)
 	return true
+}
+
+// pushContextAudio pushes one audio frame of the playing context, converted to
+// the service's rate. The first is what the context's words are timed from: it
+// is the point the audio starts being heard. It ends the TTFB, then the words
+// reported before it go out, then the frames held for it. Each frame is then
+// scanned for the first audible sample, ahead of the frame itself.
+func (b *Base) pushContextAudio(
+	ctx context.Context, c *audioContext, contextID string, rs *contextResampler,
+	f *frames.TTSAudioRawFrame, first bool, held []frames.Frame,
+) {
+	b.resampleContextAudio(ctx, contextID, rs, f)
+	if first {
+		b.reportTTFB(ctx, c)
+		for _, w := range c.startWordTimestamps(b.now(), b.lastWordPTS()) {
+			b.pushWord(ctx, c, contextID, w)
+		}
+		b.pushHeldFrames(ctx, held)
+	}
+	b.reportTTFA(ctx, c, f)
+	_ = b.PushFrame(ctx, f, processor.Downstream)
 }
 
 // contextResampler converts a playing context's audio from the rate the
@@ -1281,7 +1306,7 @@ func (b *Base) finishAudioContext(ctx context.Context, c *audioContext) {
 	}
 	tracing.SetTTSAttributes(c.span, attrs)
 	tracing.SetTTSUsage(c.spanCtx, b.meta.Model, chars)
-	b.emitTiming(ctx, chars, &meter)
+	b.emitTiming(ctx, chars)
 	c.span.End()
 }
 

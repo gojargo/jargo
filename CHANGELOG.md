@@ -392,6 +392,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   chunks included. An OpenAI-compatible provider can intercept its stream the
   same way through the new `chat.Compat.StreamFilter`.
 
+- **TTS reports its TTFB and TTFA as the audio arrives.** A TTS service
+  held both until the reply's audio context finished, which is the whole
+  reply since its sentences share one context, and reported neither for a
+  reply interrupted while it played. The TTFB now goes out in a frame of its
+  own on the context's first audio, and the TTFA in another once the speech
+  onset is found, so an RTVI client, an observer or the OpenTelemetry
+  histograms see them when they happen, interrupted replies included. The
+  onset is scanned at the audio frame's own sample rate and channel count.
+  The character usage is still reported when the context finishes.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
