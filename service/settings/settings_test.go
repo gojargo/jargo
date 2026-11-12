@@ -1,6 +1,7 @@
 package settings_test
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -211,11 +212,86 @@ func TestApplyGivingAValueToAClearedSetting(t *testing.T) {
 	}
 }
 
-func TestApplyRefusesADeltaOfAnotherType(t *testing.T) {
+// providerLLM stands for a provider's own LLM settings, which embed the shared
+// ones and add their own.
+type providerLLM struct {
+	settings.LLM
+	Effort settings.Opt[string] `settings:"effort"`
+}
+
+// TestApplyTakesASharedDeltaIntoAProvidersType checks a delta of the shared
+// LLM type, as the flows manager sends a node's persona, merges into settings
+// that embed it: the fields it gives land, the provider's own are left alone.
+func TestApplyTakesASharedDeltaIntoAProvidersType(t *testing.T) {
 	t.Parallel()
 
-	if _, err := settings.Apply(&settings.TTS{}, &settings.STT{}); err == nil {
-		t.Error("applying STT settings to a TTS store was accepted")
+	store := &providerLLM{Effort: settings.Set("low")}
+	store.Temperature = settings.Set(0.5)
+	changed, err := settings.Apply(store, &settings.LLM{
+		SystemInstruction: settings.Set("persona"),
+		Temperature:       settings.Cleared[float64](),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if v, _ := store.SystemInstruction.Value(); v != "persona" {
+		t.Errorf("system instruction = %q, want persona", v)
+	}
+	if _, has := store.Temperature.Value(); has || !store.Temperature.IsGiven() {
+		t.Errorf("temperature = %v, want it cleared", store.Temperature)
+	}
+	if v, _ := store.Effort.Value(); v != "low" {
+		t.Errorf("effort = %q, want it left at low", v)
+	}
+	if got := changed.Names(); len(got) != 2 {
+		t.Errorf("changed = %v, want system_instruction and temperature", got)
+	}
+}
+
+// TestApplyMergesADeltaOfAnotherTypeByName checks a delta of a type the store
+// neither is nor embeds merges as pipecat merges one: the fields both have, by
+// name, and nothing else.
+func TestApplyMergesADeltaOfAnotherTypeByName(t *testing.T) {
+	t.Parallel()
+
+	store := &settings.TTS{Voice: settings.Set("nova"), Language: settings.Set("en")}
+	changed, err := settings.Apply(store, &settings.STT{Language: settings.Set("fr")})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if v, _ := store.Language.Value(); v != "fr" {
+		t.Errorf("language = %q, want fr", v)
+	}
+	if v, _ := store.Voice.Value(); v != "nova" {
+		t.Errorf("voice = %q, want it left alone", v)
+	}
+	if got := changed.Names(); len(got) != 1 || got[0] != "language" {
+		t.Errorf("changed = %v, want language alone", got)
+	}
+}
+
+// numericVoice has a field named like one of TTS's, of another type.
+type numericVoice struct {
+	settings.Base
+	Voice    settings.Opt[int]    `settings:"voice"`
+	Language settings.Opt[string] `settings:"language"`
+}
+
+// TestApplyRefusesAFieldThatDoesNotFitWhole checks a delta whose field cannot
+// be held by the store's field of that name is refused, and that nothing of
+// it lands, not even the fields that would have fit.
+func TestApplyRefusesAFieldThatDoesNotFitWhole(t *testing.T) {
+	t.Parallel()
+
+	store := &settings.TTS{Voice: settings.Set("nova"), Language: settings.Set("en")}
+	_, err := settings.Apply(store, &numericVoice{
+		Voice: settings.Set(3), Language: settings.Set("fr"),
+	})
+	if !errors.Is(err, settings.ErrType) {
+		t.Fatalf("Apply: %v, want ErrType", err)
+	}
+	if v, _ := store.Language.Value(); v != "en" {
+		t.Errorf("language = %q, want it untouched by a refused update", v)
 	}
 }
 

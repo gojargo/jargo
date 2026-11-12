@@ -38,7 +38,10 @@ var (
 	// ErrType is returned when a value cannot be stored in a field without
 	// losing something.
 	ErrType = errors.New("settings: value does not fit the field")
-	// ErrMismatch is returned when a delta and a store are different types.
+	// ErrMismatch was returned when a delta and a store were different types.
+	//
+	// Deprecated: a delta of another type is now merged field by field, as
+	// pipecat merges one, so nothing returns it.
 	ErrMismatch = errors.New("settings: delta and store are different types")
 	// ErrNotSettings is returned for anything that is not a settings struct.
 	ErrNotSettings = errors.New("settings: not a pointer to a settings struct")
@@ -421,7 +424,8 @@ func NewDelta(store any) (any, error) {
 // [Updater] merges the update its own way; any other is merged by
 // [ApplyFields].
 //
-// store and delta must be pointers to the same settings type.
+// store and delta must be pointers to settings structs, of the same type or not:
+// see [ApplyFields].
 func Apply(store, delta any) (Changed, error) {
 	if u, ok := store.(Updater); ok {
 		return u.ApplyUpdate(delta)
@@ -438,30 +442,92 @@ func Apply(store, delta any) (Changed, error) {
 //
 // It is the merge every settings type gets, and the one an [Updater] builds on.
 //
-// store and delta must be pointers to the same settings type.
+// The delta need not be of the store's type. As in pipecat, each of the
+// store's fields is read from the delta by name, so a delta of the shared
+// [LLM] type, which the flows manager sends a node's persona as, reaches a
+// service whose settings embed [LLM] and add their own. A field the store does
+// not have is ignored. A field the store has under another type is converted
+// as [Opt.SetAny] converts a value, and refused with [ErrType] when that would
+// lose something, before anything is applied.
 func ApplyFields(store, delta any) (Changed, error) {
-	sv, dv, err := settingsValues(store, delta)
+	sv, err := settingsValue(store)
+	if err != nil {
+		return nil, err
+	}
+	dv, err := settingsValue(delta)
 	if err != nil {
 		return nil, err
 	}
 
-	changed := Changed{}
-	eachField(dv, func(name string, deltaField reflect.Value, index []int) {
-		d, _ := reflect.TypeAssert[option](deltaField)
-		if !d.IsGiven() {
-			return
+	given := map[string]reflect.Value{}
+	eachField(dv, func(name string, field reflect.Value, _ []int) {
+		if o, _ := reflect.TypeAssert[option](field); o.IsGiven() {
+			given[name] = field
 		}
-		storeField := sv.FieldByIndex(index)
-		s, _ := reflect.TypeAssert[option](storeField)
-		if reflect.DeepEqual(s.AsAny(), d.AsAny()) {
-			return
-		}
-		old := s.AsAny()
-		storeField.Set(deltaField)
-		changed[name] = old
 	})
+
+	// Every given field is put in the store's shape first, so an update with a
+	// field that does not fit changes nothing rather than half of the store.
+	type update struct {
+		name  string
+		field reflect.Value
+		value reflect.Value
+	}
+	var updates []update
+	var fitErr error
+	eachField(sv, func(name string, storeField reflect.Value, _ []int) {
+		deltaField, ok := given[name]
+		if !ok || fitErr != nil {
+			return
+		}
+		value, err := fit(deltaField, storeField.Type())
+		if err != nil {
+			fitErr = fmt.Errorf("setting %s: %w", name, err)
+			return
+		}
+		updates = append(updates, update{name, storeField, value})
+	})
+	if fitErr != nil {
+		return nil, fitErr
+	}
+
+	changed := Changed{}
+	for _, u := range updates {
+		s, _ := reflect.TypeAssert[option](u.field)
+		d, _ := reflect.TypeAssert[option](u.value)
+		if reflect.DeepEqual(s.AsAny(), d.AsAny()) {
+			continue
+		}
+		changed[u.name] = s.AsAny()
+		u.field.Set(u.value)
+	}
 	applyExtra(sv, dv, changed)
 	return changed, nil
+}
+
+// anySetter is an option that takes a value of any type, converting it.
+type anySetter interface {
+	SetAny(v any) error
+}
+
+// fit returns a delta field as a value of the store field's type: itself when
+// the two match, and otherwise a new option holding the delta's value
+// converted, given no value when the delta field holds none.
+func fit(deltaField reflect.Value, want reflect.Type) (reflect.Value, error) {
+	if deltaField.Type() == want {
+		return deltaField, nil
+	}
+	out := reflect.New(want)
+	setter, ok := reflect.TypeAssert[anySetter](out)
+	if !ok {
+		return reflect.Value{}, fmt.Errorf("%w: %s cannot be set from %s",
+			ErrType, want, deltaField.Type())
+	}
+	d, _ := reflect.TypeAssert[option](deltaField)
+	if err := setter.SetAny(d.AsAny()); err != nil {
+		return reflect.Value{}, err
+	}
+	return out.Elem(), nil
 }
 
 // applyExtra merges the provider-specific settings that have no field.
@@ -645,23 +711,6 @@ func extraField(v reflect.Value) reflect.Value {
 		}
 	}
 	return reflect.Value{}
-}
-
-// settingsValues resolves a store and a delta of the same type.
-func settingsValues(store, delta any) (reflect.Value, reflect.Value, error) {
-	sv, err := settingsValue(store)
-	if err != nil {
-		return reflect.Value{}, reflect.Value{}, err
-	}
-	dv, err := settingsValue(delta)
-	if err != nil {
-		return reflect.Value{}, reflect.Value{}, err
-	}
-	if sv.Type() != dv.Type() {
-		return reflect.Value{}, reflect.Value{}, fmt.Errorf(
-			"%w: cannot apply %s to %s", ErrMismatch, dv.Type(), sv.Type())
-	}
-	return sv, dv, nil
 }
 
 // settingsValue resolves a pointer to a settings struct.

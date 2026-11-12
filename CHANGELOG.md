@@ -13,6 +13,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **A node's persona reaches an LLM that keeps settings of its own.** The
+  flows manager sends a node's `RoleMessage` as a shared `settings.LLM`
+  delta, and the Anthropic, OpenAI chat and Responses, Mistral and Gemini
+  services, which keep their settings in a type of their own embedding it,
+  refused it as a different type, so a flow ran with no persona on all of
+  them. `settings.ApplyFields` now merges a delta as pipecat's `apply_update`
+  does: each of the store's fields is read from the delta by name, a field
+  the store lacks is ignored, and one that cannot be held is refused with
+  `ErrType` before anything is applied. `ErrMismatch` is no longer returned
+  and is deprecated.
+
 ## [0.6.0] - 2026-11-12
 
 ### Added
