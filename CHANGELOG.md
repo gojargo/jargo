@@ -738,6 +738,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   spans carried the configured alias rather than the dated build behind it,
   as the chat service already reports.
 
+- **o1, o1-pro, o3-mini and o4-mini run at OpenAI's default reasoning.**
+  The OpenAI Responses services sent them reasoning effort "low" when the
+  configuration set none, so they reasoned less than at the provider's
+  default. Of the o-series, only o3 and o3-pro now get a default effort.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

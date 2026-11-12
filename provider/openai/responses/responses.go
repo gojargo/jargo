@@ -200,12 +200,8 @@ var thinkingDefaults = map[string]string{
 	"gpt-6-sol":     effortNone,
 	"gpt-6.1-sol":   effortLow,
 	"gpt-6.1-terra": effortNone,
-	"o1":            effortLow,
-	"o1-pro":        effortLow,
 	"o3":            effortLow,
-	"o3-mini":       effortLow,
 	"o3-pro":        effortLow,
-	"o4-mini":       effortLow,
 }
 
 // modelName is the name a model id refers to, the key it is looked up by in

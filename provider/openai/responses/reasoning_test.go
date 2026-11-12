@@ -77,6 +77,7 @@ func TestModelsThatMustReasonGetTheirLowestEffort(t *testing.T) {
 		"gpt-6-astra": "low",
 		"gpt-6.1-sol": "low",
 		"o3":          "low",
+		"o3-pro":      "low",
 		"gpt-5.5-pro": "medium",
 		"gpt-5-pro":   "high",
 	} {
@@ -87,9 +88,12 @@ func TestModelsThatMustReasonGetTheirLowestEffort(t *testing.T) {
 }
 
 // TestUnlistedModelsRunAtOpenAIsDefault covers every other model: only listed
-// models get an effort, so a model is never sent one it rejects.
+// models get an effort, so a model is never sent one it rejects. Of the
+// o-series, only o3 and o3-pro are listed.
 func TestUnlistedModelsRunAtOpenAIsDefault(t *testing.T) {
-	for _, model := range []string{"gpt-6.2", "gpt-5-codex", "gpt-4.1", "gpt-5-chat-latest"} {
+	for _, model := range []string{
+		"gpt-6.2", "gpt-5-codex", "gpt-4.1", "gpt-5-chat-latest", "o1", "o1-pro", "o3-mini", "o4-mini",
+	} {
 		if got := reasoningSent(t, model); got != nil {
 			t.Errorf("%s carries reasoning %+v, want none", model, got)
 		}
