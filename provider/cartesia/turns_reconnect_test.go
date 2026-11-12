@@ -198,3 +198,29 @@ func TestTurnsStoppingDoesNotReconnect(t *testing.T) {
 		t.Errorf("handshakes = %d, want 1", handshakes)
 	}
 }
+
+// TestTurnsTranscriptsAreInEnglish checks every transcript the Turns service
+// produces, interim and final, carries the language it transcribes.
+func TestTurnsTranscriptsAreInEnglish(t *testing.T) {
+	server := &fakeInk2{openTurnAfter: 5}
+	res := run(t, turnsService(server.start(t)), time.Second)
+
+	seen := 0
+	for _, f := range res.down {
+		switch fr := f.(type) {
+		case *frames.TranscriptionFrame:
+			seen++
+			if fr.Language != "en" {
+				t.Errorf("transcript %q is in %q, want en", fr.Text, fr.Language)
+			}
+		case *frames.InterimTranscriptionFrame:
+			seen++
+			if fr.Language != "en" {
+				t.Errorf("interim %q is in %q, want en", fr.Text, fr.Language)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no transcript at all")
+	}
+}

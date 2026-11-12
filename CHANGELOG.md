@@ -764,6 +764,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the service did not know was only logged. It is now pushed as a non-fatal
   error, so the application hears of a change on Cartesia's side.
 
+- **Cartesia Turns transcripts carry their language.** The Cartesia Turns
+  STT left the language of its transcripts empty, so nothing downstream
+  reading it (RTVI, a language-routing processor, tracing) saw one. Every
+  interim and final transcript now says English, the language it
+  transcribes.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

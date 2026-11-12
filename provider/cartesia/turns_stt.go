@@ -273,6 +273,10 @@ type turnsStream struct {
 	turnText string
 }
 
+// turnsLanguage is the language every Turns transcript is stamped with: the
+// endpoint transcribes English.
+const turnsLanguage = "en"
+
 // EndSession ends a turn the session was cut off in the middle of,
 // implementing stt.SessionEnder. The transcript received so far is reported
 // as the turn's transcription, since the server never got to commit it, and the
@@ -285,7 +289,7 @@ func (s *turnsStream) EndSession() []stt.Result {
 	slog.Debug("cartesia turns stt connection closed mid-turn, ending the turn")
 	text := s.turnText
 	s.inTurn, s.turnText = false, ""
-	return []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped}}
+	return []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped, Language: turnsLanguage}}
 }
 
 // awaitConnected handles messages until the server confirms the session.
@@ -413,7 +417,7 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 				continue
 			}
 			s.turnText = m.Transcript
-			return []stt.Result{{Text: m.Transcript, Final: false}}, nil
+			return []stt.Result{{Text: m.Transcript, Final: false, Language: turnsLanguage}}, nil
 		case turnsStart:
 			call(s.cfg.OnTurnStart, m.Transcript)
 			s.inTurn, s.turnText = true, m.Transcript
@@ -425,7 +429,7 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 				return []stt.Result{{Speech: stt.SpeechStopped}}, nil
 			}
 			return []stt.Result{{
-				Text: m.Transcript, Final: true, EndOfTurn: true, Speech: stt.SpeechStopped,
+				Text: m.Transcript, Final: true, EndOfTurn: true, Speech: stt.SpeechStopped, Language: turnsLanguage,
 			}}, nil
 		case turnsEagerEnd:
 			// A prediction the server may retract, so it opens no boundary here.
