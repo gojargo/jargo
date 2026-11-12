@@ -507,8 +507,12 @@ func (s *server) setupFrontendRoutes(mux *http.ServeMux) {
 }
 
 // resolveDownloadPath resolves filename inside folder, refusing a path that
-// leaves it.
+// leaves it. An absolute filename names a path of its own, not one inside the
+// folder, so it is refused as leaving it.
 func resolveDownloadPath(folder, filename string) (string, bool) {
+	if filepath.IsAbs(filename) || strings.HasPrefix(filename, "/") {
+		return "", false
+	}
 	base, err := filepath.Abs(folder)
 	if err != nil {
 		return "", false

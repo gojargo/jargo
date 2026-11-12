@@ -468,6 +468,14 @@ func TestDownloads(t *testing.T) {
 	if _, ok := resolveDownloadPath(dir, "../outside"); ok {
 		t.Fatal("a path leaving the folder resolved")
 	}
+	// test_resolve_download_path_blocks_absolute_paths: an absolute path is
+	// refused as access to somewhere else, not answered as a missing file.
+	if _, ok := resolveDownloadPath(dir, "/etc/passwd"); ok {
+		t.Fatal("an absolute path resolved")
+	}
+	if status, _ := tr.do(t, http.MethodGet, "/files/%2Fetc%2Fpasswd", nil); status != http.StatusForbidden {
+		t.Fatalf("absolute path = %d, want 403", status)
+	}
 }
 
 // --- WebSocket routes ---

@@ -108,6 +108,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **The runner's downloads refuse an absolute path as forbidden.** `GET
+  /files/%2Fetc%2Fpasswd` answered 404; an absolute path is now refused as
+  leaving the downloads folder, with 403.
+
 - **A WhatsApp call reaches the bot whole.** The dev runner handed the bot
   only the call's id and caller, so a runner serving several business numbers
   could not tell which was called. `whatsapp.Call` gains `To`, `Event`,
