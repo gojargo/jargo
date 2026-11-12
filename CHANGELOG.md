@@ -367,6 +367,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Extensions B to J was read as an ordinary letter and a run of them as one
   word, and a speaker using them needed more speech to start a turn. Those
   blocks are now counted a character at a time too.
+- **A word after a lone `<` keeps its own timing.** `MergePunctTokens` treated
+  an unclosed `<` as a tag running to the end of the token, so a token such as
+  "<3" was judged punctuation and merged into the word before it. Only complete
+  tags are stripped before the check now.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

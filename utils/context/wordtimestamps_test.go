@@ -31,3 +31,13 @@ func TestMergePunctTokensTrimsWhitespace(t *testing.T) {
 		t.Fatalf("got %v, want trimmed 'Hello'", got)
 	}
 }
+
+// TestMergePunctTokensKeepsAWordAfterALoneAngleBracket checks a lone '<' is
+// not a tag: "<3" has a digit, so it stays a word of its own, while a complete
+// tag is still stripped before the check.
+func TestMergePunctTokensKeepsAWordAfterALoneAngleBracket(t *testing.T) {
+	got := MergePunctTokens([]WordTiming{{"I", 0}, {"<3", 0.5}, {"<break/>", 0.7}})
+	if len(got) != 2 || got[0].Word != "I" || got[1].Word != "<3<break/>" {
+		t.Errorf("got %+v, want I and <3, the tag merged into the word before it", got)
+	}
+}

@@ -1,6 +1,9 @@
 package context
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // WordTiming is a single word-timestamp event from a synthesizer: the spoken
 // token and its start offset in seconds from the beginning of the synthesis.
@@ -15,15 +18,15 @@ type WordTiming struct {
 // so downstream consumers always receive words with trailing punctuation already
 // attached.
 //
-// A token is punct/space-only when it has no alphanumeric character after markup
-// is stripped. Such a token is appended to the preceding word's text and its
+// A token is punct/space-only when it has no alphanumeric character once its
+// complete tags are stripped; a lone '<' is not a tag, so "<3" is a word. Such a token is appended to the preceding word's text and its
 // offset discarded (the preceding word's offset is kept). Leading punct/space
 // tokens with no preceding word are dropped. Every returned token is trimmed of
 // leading and trailing whitespace.
 func MergePunctTokens(words []WordTiming) []WordTiming {
 	merged := make([]WordTiming, 0, len(words))
 	for _, wt := range words {
-		if containsAlnum(stripMarkup(wt.Word)) {
+		if containsAlnum(completeTag.ReplaceAllString(wt.Word, "")) {
 			merged = append(merged, wt)
 			continue
 		}
@@ -37,6 +40,11 @@ func MergePunctTokens(words []WordTiming) []WordTiming {
 	}
 	return merged
 }
+
+// completeTag matches a complete <...> tag.
+//
+//nolint:gochecknoglobals // compiled once, read-only
+var completeTag = regexp.MustCompile(`<[^>]+>`)
 
 // containsAlnum reports whether text contains at least one alphanumeric rune.
 // It is the plain scan the word-timestamp merge wants, where the caller has
