@@ -181,6 +181,25 @@ func TestKeytermsAreCapped(t *testing.T) {
 	}
 }
 
+// Ported from upstream
+// (test_cartesia_connect_websocket_url_clamps_keyterms_to_character_budget).
+// The list is cut at the first term that overflows the character budget: a
+// shorter term after it is not sent, so what is sent is a prefix of what was
+// asked for.
+func TestKeytermsAreCutAtTheFirstThatOverflows(t *testing.T) {
+	t.Parallel()
+
+	got := prepareKeyterms([]string{strings.Repeat("a", 700), strings.Repeat("b", 700), "c"})
+	if len(got) != 1 || got[0] != strings.Repeat("a", 700) {
+		t.Errorf("kept %d keyterms, want only the first", len(got))
+	}
+	// Characters are counted, not bytes: 600 two-byte characters twice fit.
+	wide := strings.Repeat("é", 600)
+	if got := prepareKeyterms([]string{wide, wide}); len(got) != 2 {
+		t.Errorf("kept %d keyterms, want both: 1200 characters fit", len(got))
+	}
+}
+
 // The turn-detecting service reopens for a keyterm change and says so for
 // anything else, since Cartesia binds keyterms to a connection and the rest of
 // what it is told at the session cannot change on one already running.

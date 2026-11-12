@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
@@ -259,21 +260,25 @@ func keytermsFor(model string, keyterms []string) []string {
 // accepts on one connection, warning about what it drops. Truncating keeps an
 // oversized list from failing the connection partway through a call.
 func prepareKeyterms(keyterms []string) []string {
+	var terms []string
+	for _, term := range keyterms {
+		if term = strings.TrimSpace(term); term != "" {
+			terms = append(terms, term)
+		}
+	}
+	// The list is cut at the first term that does not fit, so what is sent is
+	// always a prefix of what was asked for. Characters are counted, not bytes.
 	var prepared []string
 	var chars int
-	var seen int
-	for _, term := range keyterms {
-		term = strings.TrimSpace(term)
-		if term == "" {
-			continue
-		}
-		seen++
-		if len(prepared) >= maxKeyterms || chars+len(term) > maxKeytermChars {
-			continue
+	for _, term := range terms {
+		n := utf8.RuneCountInString(term)
+		if len(prepared) >= maxKeyterms || chars+n > maxKeytermChars {
+			break
 		}
 		prepared = append(prepared, term)
-		chars += len(term)
+		chars += n
 	}
+	seen := len(terms)
 	if dropped := seen - len(prepared); dropped > 0 {
 		slog.Warn("dropping keyterms beyond what Cartesia accepts",
 			"max_keyterms", maxKeyterms, "max_chars", maxKeytermChars, "dropped", dropped)

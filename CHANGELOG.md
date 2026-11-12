@@ -753,6 +753,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   has started producing output is never abandoned. The bounded attempt the
   two OpenAI services share now lives in one place.
 
+- **Cartesia keyterms are cut at the first that overflows.** When the
+  keyterms ran past Cartesia's 1200-character budget, the term that
+  overflowed was skipped and shorter ones after it still sent, so Cartesia
+  got a set that was not a prefix of what was asked for. The list is now cut
+  at the first term that does not fit, on both Cartesia STT services, and its
+  characters are counted rather than its bytes.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
