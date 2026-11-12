@@ -600,3 +600,48 @@ func TestTheMessageWindowRestartsAfterASummary(t *testing.T) {
 		t.Errorf("requested summarization %d times, want 2: the next window filled up", len(*got))
 	}
 }
+
+// TestUnusableConfigurationIsRefused checks a configuration that cannot work is
+// refused rather than run: a message threshold of zero would ask for a summary
+// on every turn, so it summarizes nothing on its own.
+func TestUnusableConfigurationIsRefused(t *testing.T) {
+	for name, cfg := range map[string]frames.AutoSummarizationConfig{
+		"message threshold of zero": {MaxUnsummarizedMessages: new(0)},
+		"negative kept count": {
+			MaxContextTokens: new(50),
+			SummaryConfig:    frames.SummaryConfig{MinMessagesAfterSummary: new(-1)},
+		},
+		"both thresholds off": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			convo := summarizerFixture()
+			s := aggregators.NewSummarizer(convo, cfg, true)
+			defer s.Cleanup(t.Context())
+			got := recordRequests(s)
+
+			addUserMessages(convo, 10, "Test message to add tokens.")
+			s.ProcessFrame(t.Context(), frames.NewLLMFullResponseStartFrame())
+			if len(*got) != 0 {
+				t.Errorf("an unusable configuration requested %d summaries, want none", len(*got))
+			}
+		})
+	}
+}
+
+// TestUnusableOnDemandSettingsAreRefused checks a request to summarize now whose
+// settings cannot work is refused, rather than run into a selection that cannot
+// be made.
+func TestUnusableOnDemandSettingsAreRefused(t *testing.T) {
+	convo := summarizerFixture()
+	s := aggregators.NewSummarizer(convo, frames.NewAutoSummarizationConfig(), false)
+	defer s.Cleanup(t.Context())
+	got := recordRequests(s)
+	addUserMessages(convo, 5, "Test message.")
+
+	f := frames.NewLLMSummarizeContextFrame()
+	f.Config = &frames.SummaryConfig{MinMessagesAfterSummary: new(-1)}
+	s.ProcessFrame(t.Context(), f)
+	if len(*got) != 0 {
+		t.Errorf("unusable settings requested %d summaries, want none", len(*got))
+	}
+}

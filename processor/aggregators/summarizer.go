@@ -88,7 +88,16 @@ type Summarizer struct {
 // NewSummarizer builds a Summarizer over convo. autoTrigger enables the
 // threshold checks; leave it false to compress only when asked with an
 // LLMSummarizeContextFrame.
+//
+// A configuration that is not usable (both thresholds off, a threshold or a
+// count out of range) is refused: it is reported, and the conversation is then
+// compressed only when asked, with the default settings.
 func NewSummarizer(convo *frames.LLMContext, cfg frames.AutoSummarizationConfig, autoTrigger bool) *Summarizer {
+	if err := cfg.Validate(); err != nil {
+		slog.Error("refusing the summarization configuration; the conversation is "+
+			"compressed only when an LLMSummarizeContextFrame asks", "err", err)
+		cfg, autoTrigger = frames.NewAutoSummarizationConfig(), false
+	}
 	s := &Summarizer{
 		context:     convo,
 		autoConfig:  cfg.WithDefaults(),
@@ -140,6 +149,12 @@ func (s *Summarizer) handleManualRequest(ctx context.Context, f *frames.LLMSumma
 	if busy {
 		slog.Debug("summarization already in progress, ignoring the manual request")
 		return
+	}
+	if f.Config != nil {
+		if err := f.Config.Validate(); err != nil {
+			slog.Error("refusing a summarization request whose settings are not usable", "err", err)
+			return
+		}
 	}
 	s.requestSummarization(ctx, f.Config)
 }

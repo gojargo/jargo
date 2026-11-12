@@ -241,6 +241,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the debug log observer's frame filters matched only the exact type, so naming
   `TextFrame` missed LLM tokens and transcriptions. Both now select a frame
   whose type is one named or embeds it.
+- **An unusable summarization configuration is refused.** Nothing outside the
+  tests ever called the summarization configs' `Validate`, so a message
+  threshold of zero asked for a summary on every turn, a negative count of
+  messages to keep panicked in the LLM service's summary goroutine and took the
+  process down, and a configuration with both thresholds off silently never
+  summarized. `NewSummarizer` (and so `aggregators.WithSummarization`) now
+  refuses such a configuration with an error in the log and compresses only on
+  demand, and an `LLMSummarizeContextFrame` whose settings are not usable is
+  refused the same way.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
