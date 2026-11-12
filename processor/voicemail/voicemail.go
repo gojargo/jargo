@@ -82,14 +82,15 @@ type Config struct {
 	Classifier classifier.Classifier
 	// VoicemailResponseDelay is how long the greeting must be quiet after a
 	// voicemail verdict before EventVoicemailDetected is raised, so the message
-	// is left after the greeting ends and the recording starts; zero uses 2s.
-	VoicemailResponseDelay time.Duration `validate:"min=0"`
+	// is left after the greeting ends and the recording starts. Nil uses 2s,
+	// and zero raises it as soon as the verdict is in.
+	VoicemailResponseDelay *time.Duration `validate:"omitnil,min=0"`
 	// DecisionTimeout is how long the caller must be quiet after they stop
-	// speaking before the latest answer decides; zero uses 1s. A greeting
-	// resumes after its pauses while a person stays quiet, so a verdict on a
-	// fragment such as "hi, this is Sam" is not acted on until the caller has
-	// really stopped.
-	DecisionTimeout time.Duration `validate:"min=0"`
+	// speaking before the latest answer decides. Nil uses 1s, and zero decides
+	// as soon as the answer is in. A greeting resumes after its pauses while a
+	// person stays quiet, so a verdict on a fragment such as "hi, this is Sam" is
+	// not acted on until the caller has really stopped.
+	DecisionTimeout *time.Duration `validate:"omitnil,min=0"`
 
 	// LLM is a service to build the classifier from, when Classifier is nil.
 	//
@@ -159,11 +160,11 @@ type Detector struct {
 
 // New builds a voicemail detector.
 func New(cfg Config) (*Detector, error) {
-	if cfg.VoicemailResponseDelay == 0 {
-		cfg.VoicemailResponseDelay = defaultVoicemailResponseDelay
+	if cfg.VoicemailResponseDelay == nil {
+		cfg.VoicemailResponseDelay = new(defaultVoicemailResponseDelay)
 	}
-	if cfg.DecisionTimeout == 0 {
-		cfg.DecisionTimeout = defaultDecisionTimeout
+	if cfg.DecisionTimeout == nil {
+		cfg.DecisionTimeout = new(defaultDecisionTimeout)
 	}
 	c := cfg.Classifier
 	if c == nil {
@@ -357,7 +358,7 @@ func (d *Detector) cancelDecisionTimerLocked() {
 // long enough. A greeting goes on after its pauses; a person stops and waits. So
 // this is how every verdict comes to act.
 func (d *Detector) decideAfterSilence(ctx context.Context) {
-	if !sleep(ctx, d.cfg.DecisionTimeout) {
+	if !sleep(ctx, *d.cfg.DecisionTimeout) {
 		return
 	}
 	// The answer for everything heard so far, once a call in flight is done.
@@ -374,13 +375,13 @@ func (d *Detector) decideAfterSilence(ctx context.Context) {
 	verdict := verdictConversation
 	if d.lastResult != nil {
 		slog.DebugContext(ctx, "voicemail: deciding after silence", "detector", d.Name(),
-			"choice", d.lastResult.Choice, "confidence", d.lastResult.Confidence, "after", d.cfg.DecisionTimeout)
+			"choice", d.lastResult.Choice, "confidence", d.lastResult.Confidence, "after", *d.cfg.DecisionTimeout)
 		if d.lastResult.Choice == verdictVoicemail {
 			verdict = verdictVoicemail
 		}
 	} else {
 		slog.WarnContext(ctx, "voicemail: no answer from the classifier after the silence, assuming a conversation",
-			"detector", d.Name(), "after", d.cfg.DecisionTimeout)
+			"detector", d.Name(), "after", *d.cfg.DecisionTimeout)
 	}
 	d.decision = verdict
 	d.mu.Unlock()
@@ -430,7 +431,7 @@ func (d *Detector) cancelMessageTimerLocked() {
 // been quiet for the delay. It fires once: a beep or a prompt heard while the
 // message is being left does not start it over.
 func (d *Detector) leaveMessageAfterQuiet(ctx context.Context) {
-	if !sleep(ctx, d.cfg.VoicemailResponseDelay) {
+	if !sleep(ctx, *d.cfg.VoicemailResponseDelay) {
 		return
 	}
 	d.mu.Lock()

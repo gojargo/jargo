@@ -105,11 +105,11 @@ func newDetector(t *testing.T, cfg voicemail.Config, answers ...answer) (*voicem
 	t.Helper()
 	c := newFakeClassifier(answers...)
 	cfg.Classifier = c
-	if cfg.VoicemailResponseDelay == 0 {
-		cfg.VoicemailResponseDelay = voicemailDelay
+	if cfg.VoicemailResponseDelay == nil {
+		cfg.VoicemailResponseDelay = new(voicemailDelay)
 	}
-	if cfg.DecisionTimeout == 0 {
-		cfg.DecisionTimeout = decisionTimeout
+	if cfg.DecisionTimeout == nil {
+		cfg.DecisionTimeout = new(decisionTimeout)
 	}
 	d, err := voicemail.New(cfg)
 	if err != nil {
@@ -353,7 +353,7 @@ func TestTheMessageIsLeftOnce(t *testing.T) {
 }
 
 func TestMoreSpeechCancelsTheSilenceDecision(t *testing.T) {
-	d, _ := newDetector(t, voicemail.Config{DecisionTimeout: 300 * time.Millisecond},
+	d, _ := newDetector(t, voicemail.Config{DecisionTimeout: new(300 * time.Millisecond)},
 		answer{label: "voicemail", confidence: 0.3}, answer{label: "conversation", confidence: 0.3})
 	v, c := onVoicemail(d), onConversation(d)
 	run(t, []processor.Processor{d},
@@ -401,7 +401,7 @@ func TestAVoicemailVerdictWaitsForTheCallerToStop(t *testing.T) {
 }
 
 func TestAConfidentConversationDecidesAfterTheSilence(t *testing.T) {
-	d, _ := newDetector(t, voicemail.Config{DecisionTimeout: 400 * time.Millisecond},
+	d, _ := newDetector(t, voicemail.Config{DecisionTimeout: new(400 * time.Millisecond)},
 		answer{label: "conversation", confidence: 0.99})
 	c := onConversation(d)
 	run(t, []processor.Processor{d},
@@ -411,7 +411,7 @@ func TestAConfidentConversationDecidesAfterTheSilence(t *testing.T) {
 		t.Fatal("a conversation verdict did not wait out the silence")
 	}
 
-	d, _ = newDetector(t, voicemail.Config{DecisionTimeout: 200 * time.Millisecond},
+	d, _ = newDetector(t, voicemail.Config{DecisionTimeout: new(200 * time.Millisecond)},
 		answer{label: "conversation", confidence: 0.99})
 	c = onConversation(d)
 	run(t, []processor.Processor{d},
@@ -512,4 +512,16 @@ func TestLLMBuildsAnLLMClassifier(t *testing.T) {
 	if !strings.HasPrefix(d.Classifier().Name(), "LLMClassifier#") {
 		t.Fatalf("classifier = %s, want an LLM classifier", d.Classifier().Name())
 	}
+}
+
+// TestZeroDelaysActAtOnce checks a zero decision timeout and response delay are
+// settings of their own, acting as soon as the answer is in, rather than
+// standing for the defaults of a second and two.
+func TestZeroDelaysActAtOnce(t *testing.T) {
+	d, _ := newDetector(t, voicemail.Config{
+		DecisionTimeout: new(time.Duration(0)), VoicemailResponseDelay: new(time.Duration(0)),
+	}, answer{label: "voicemail", confidence: 0.95})
+	f := onVoicemail(d)
+	run(t, []processor.Processor{d}, said("Hi, you've reached Sam."), 150*time.Millisecond)
+	wantFiredWith(t, f, d)
 }

@@ -59,6 +59,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   stops, could not be asked for with zero. Nil now means the default, and zero
   means none. **Breaking:** set them with `new(d)`; a negative
   `MinContribution` no longer stands for "list everything".
+- **The voicemail detector's delays are pointers.** `DecisionTimeout` and
+  `VoicemailResponseDelay` used zero for their defaults (1 s and 2 s), so acting
+  as soon as the verdict is in could not be asked for. Nil now means the
+  default, and zero acts at once. **Breaking:** set them with `new(d)`.
 
 ### Fixed
 
