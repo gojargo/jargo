@@ -707,6 +707,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   raw-audio chunk that does not decode is now logged rather than answered,
   as a streaming client waits on no reply.
 
+- **RTVI sends an empty user id and an empty raw text.** A `user-input`
+  message left out a transcription's `user_id` when it was empty, and a
+  `bot-llm-marker` left out an empty `raw` (and `markers` when there were
+  none), where the protocol leaves a field out only when it is unknown. They
+  are now sent; a chat message's `user_id` is still left out when the
+  transport does not know the sender. **Breaking:**
+  `rtvi.UserInputData.UserID` is a `*string`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

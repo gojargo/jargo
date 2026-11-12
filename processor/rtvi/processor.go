@@ -335,12 +335,16 @@ func (o *Observer) userInputMessages(f frames.Frame) ([]Message, bool) {
 		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, false, fr.Perception), true
 	case *frames.UserBackchannelFrame:
 		d = UserInputData{
-			Text: fr.Text, InputType: UserInputBackchannel, Timestamp: fr.Timestamp, Final: true, UserID: fr.UserID,
+			Text: fr.Text, InputType: UserInputBackchannel, Timestamp: fr.Timestamp, Final: true, UserID: &fr.UserID,
 		}
 	case *SendTextFrame:
 		d = UserInputData{
 			Text: fr.Text, InputType: UserInputChat, Timestamp: frames.NowTimestamp(), Final: true,
-			UserID: fr.UserID, MsgID: fr.MsgID,
+			MsgID: fr.MsgID,
+		}
+		// The sender of a chat message is known only to some transports.
+		if fr.UserID != "" {
+			d.UserID = &fr.UserID
 		}
 	default:
 		return nil, false
@@ -360,7 +364,7 @@ func (o *Observer) transcriptionMessages(
 	var msgs []Message
 	if o.enabled(userInputOf) {
 		msgs = append(msgs, UserInput(UserInputData{
-			Text: text, InputType: UserInputTranscription, Timestamp: timestamp, Final: final, UserID: userID,
+			Text: text, InputType: UserInputTranscription, Timestamp: timestamp, Final: final, UserID: &userID,
 			Perception: userPerception(perception),
 		}))
 	}
@@ -530,8 +534,12 @@ func (o *Observer) llmMarkerMessage(f frames.Frame) ([]Message, bool) {
 	if !o.botLLMMarkerEnabled() {
 		return nil, true
 	}
+	markers := fr.Markers
+	if markers == nil {
+		markers = []string{}
+	}
 	return []Message{BotLLMMarker(BotLLMMarkerData{
-		Text: fr.Marker, Kind: fr.Kind, Raw: fr.Raw, Markers: fr.Markers,
+		Text: fr.Marker, Kind: fr.Kind, Raw: fr.Raw, Markers: markers,
 	})}, true
 }
 

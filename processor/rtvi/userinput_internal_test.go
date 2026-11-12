@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -23,7 +24,7 @@ func TestAUserBackchannelIsSentAsUserInput(t *testing.T) {
 	if len(o.sent) != 1 || o.sent[0].Type != TypeUserInput {
 		t.Fatalf("sent %+v, want one user-input", o.sent)
 	}
-	want := UserInputData{Text: "mhm", InputType: UserInputBackchannel, UserID: "user", Timestamp: "now", Final: true}
+	want := UserInputData{Text: "mhm", InputType: UserInputBackchannel, UserID: new("user"), Timestamp: "now", Final: true}
 	if got := o.sent[0].Data; !reflect.DeepEqual(got, want) {
 		t.Errorf("data = %+v, want %+v", got, want)
 	}
@@ -39,8 +40,8 @@ func TestATranscriptionIsSentAsUserInputThenUserTranscription(t *testing.T) {
 		t.Fatalf("sent %v, want %v", got, want)
 	}
 	wantData := []UserInputData{
-		{Text: "Hel", InputType: UserInputTranscription, UserID: "user", Timestamp: "t1", Final: false},
-		{Text: "Hello.", InputType: UserInputTranscription, UserID: "user", Timestamp: "t2", Final: true},
+		{Text: "Hel", InputType: UserInputTranscription, UserID: new("user"), Timestamp: "t1", Final: false},
+		{Text: "Hello.", InputType: UserInputTranscription, UserID: new("user"), Timestamp: "t2", Final: true},
 	}
 	if got := []any{o.sent[0].Data, o.sent[2].Data}; !reflect.DeepEqual(got[0], wantData[0]) ||
 		!reflect.DeepEqual(got[1], wantData[1]) {
@@ -71,7 +72,7 @@ func TestTextFromTheClientIsAcknowledgedAsUserInput(t *testing.T) {
 	if d.Text != "Hello." || d.InputType != UserInputChat || !d.Final {
 		t.Errorf("data = %+v, want the text as final chat", d)
 	}
-	if d.MsgID != "msg-1" || d.UserID != "" {
+	if d.MsgID != "msg-1" || d.UserID != nil {
 		t.Errorf("data = %+v, want msg-1 from nobody named", d)
 	}
 	encoded, err := json.Marshal(o.sent[0])
@@ -93,7 +94,7 @@ func TestTextFromAKnownSenderIsAcknowledgedWithTheirID(t *testing.T) {
 	o := userInputObserver(DefaultObserverParams())
 	o.push(NewSendTextFrame("msg-1", "Hello.", "user"))
 
-	if d, _ := o.sent[0].Data.(UserInputData); d.MsgID != "msg-1" || d.UserID != "user" {
+	if d, _ := o.sent[0].Data.(UserInputData); d.MsgID != "msg-1" || d.UserID == nil || *d.UserID != "user" {
 		t.Errorf("data = %+v, want msg-1 from user", d)
 	}
 }
@@ -109,5 +110,35 @@ func TestUserInputIsKeptFromTheClientWhenDisabled(t *testing.T) {
 
 	if got := o.types(); !slices.Equal(got, []string{TypeUserTranscription}) {
 		t.Fatalf("sent %v, want only user-transcription", got)
+	}
+}
+
+// Ported from upstream (the speaker cases, which build every transcription
+// with user_id ""). A transcription's user id is sent even when it is empty:
+// only a chat message whose sender the transport does not know leaves it out.
+func TestATranscriptionCarriesAnEmptyUserID(t *testing.T) {
+	o := userInputObserver(DefaultObserverParams())
+	o.push(frames.NewTranscriptionFrame("Hello.", "", "now"))
+
+	encoded, err := json.Marshal(o.sent[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"user_id":""`) {
+		t.Errorf("wire %s, want the empty user_id sent", encoded)
+	}
+}
+
+// A response that carried no text still reports its empty raw text and the
+// markers, as an empty list when there were none.
+func TestAMarkerReportWithoutTextCarriesRawAndMarkers(t *testing.T) {
+	raw, err := json.Marshal(BotLLMMarker(BotLLMMarkerData{Markers: []string{}}).Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"raw":""`, `"markers":[]`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("wire %s, want %s", raw, want)
+		}
 	}
 }

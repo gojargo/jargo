@@ -512,9 +512,11 @@ type BotLLMMarkerData struct {
 	// emitter gave none.
 	Kind string `json:"kind,omitempty"`
 	// Raw is the response's text as the model produced it, markers included.
-	Raw string `json:"raw,omitempty"`
-	// Markers are every marker the emitter recognizes.
-	Markers []string `json:"markers,omitempty"`
+	// It is sent empty when the response carried no text.
+	Raw string `json:"raw"`
+	// Markers are every marker the emitter recognizes, sent as an empty list
+	// when it gave none.
+	Markers []string `json:"markers"`
 }
 
 // BotLLMMarker builds a bot-llm-marker message, sent once per response and only
@@ -686,9 +688,10 @@ type UserInputData struct {
 	Timestamp string `json:"timestamp"`
 	// Final is whether the text is final. Only an interim transcription is not.
 	Final bool `json:"final"`
-	// UserID identifies who spoke or typed. For chat it is set only when the
-	// transport knows the sender, such as LiveKit.
-	UserID string `json:"user_id,omitempty"`
+	// UserID identifies who spoke or typed, an empty one included. For chat it
+	// is nil, and left out, unless the transport knows the sender, such as
+	// LiveKit.
+	UserID *string `json:"user_id,omitempty"`
 	// MsgID is, for chat, the id of the client's send-text message.
 	MsgID string `json:"msg_id,omitempty"`
 	// Perception is, for a transcription, how the user said it, when it comes
