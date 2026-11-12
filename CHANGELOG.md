@@ -647,6 +647,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   frames it had handed out in its backing array until it grew again, so a
   burst of frames stayed in memory long after it was handled.
 
+- **An error returned from ProcessFrame is not classified.** The error a
+  processor's `ProcessFrame` returns was classified from its cause, so a
+  custom processor returning a wrapped 401, say, was written off as unusable,
+  and the unusable policy could end the call. Where such an error comes from
+  cannot be told (a processor further on, an observer or a callback as much
+  as the processor itself), so it is now reported with the unknown category,
+  as a panic already was, and the processor stays usable. Its text starts
+  "Error processing frame", capitalized.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

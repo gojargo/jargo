@@ -72,7 +72,7 @@ func TestPanicInProcessFrameIsReportedAndProcessingGoesOn(t *testing.T) {
 	queue(t, ctx, p, frames.NewTextFrame("after"))
 
 	got := waitForErrors(t, up, 1)
-	checkPanicReported(t, got[0], p, "error processing frame: panic: boom")
+	checkPanicReported(t, got[0], p, "Error processing frame: panic: boom")
 	if !errors.Is(got[0].Err, processor.ErrPanic) {
 		t.Errorf("err = %v, want it to wrap ErrPanic", got[0].Err)
 	}
@@ -149,5 +149,39 @@ func TestPanicWhilePushingIsReported(t *testing.T) {
 	queue(t, ctx, e, frames.NewTextFrame("after"))
 	if tf := mustReceive[*frames.TextFrame](t, down.got, "TextFrame"); tf.Text != "after" {
 		t.Errorf("got %q downstream, want the frame after the panic", tf.Text)
+	}
+}
+
+// failing returns an error carrying an HTTP status from ProcessFrame.
+type failing struct {
+	*processor.Base
+	err error
+}
+
+func (p *failing) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := p.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(*frames.TextFrame); ok {
+		return p.err
+	}
+	return p.PushFrame(ctx, f, dir)
+}
+
+// Ported from upstream (test_an_uncaught_exception_is_not_classified). An error
+// returned from ProcessFrame carries a 401, but where it came from cannot be
+// told, so it is reported unclassified and the processor stays usable.
+func TestAnErrorReturnedFromProcessFrameIsNotClassified(t *testing.T) {
+	p := &failing{err: errs.NewHTTPStatusError(401, errors.New("unauthorized"))} //nolint:err113 // a one-off cause
+	p.Base = processor.New("Failing", p)
+	up, _ := linkAndStart(t, p)
+
+	queue(t, context.Background(), p, frames.NewTextFrame("hello"))
+	got := waitForErrors(t, up, 1)
+	if got[0].Category != errs.Unknown {
+		t.Errorf("category = %v, want unknown", got[0].Category)
+	}
+	if !p.Usable() {
+		t.Error("the processor was written off for an error whose cause cannot be told")
 	}
 }

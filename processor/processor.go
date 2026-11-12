@@ -707,7 +707,7 @@ func (b *Base) processFrame(ctx context.Context, it item) error {
 	defer b.applyPendingResume()
 	defer func() {
 		if v := recover(); v != nil {
-			b.reportPanic(ctx, "error processing frame", v)
+			b.reportPanic(ctx, "Error processing frame", v)
 		}
 	}()
 	b.notifyProcess(it.frame, it.dir)
@@ -715,8 +715,13 @@ func (b *Base) processFrame(ctx context.Context, it item) error {
 	if err := b.self.ProcessFrame(ctx, it.frame, it.dir); err != nil {
 		// A frame cut short by an interruption or a cancel is not a failure,
 		// so it is not reported as one.
+		// Its cause cannot be attributed: the error may come from a processor
+		// further on, an observer or a callback as much as from this one, so it
+		// is reported unclassified rather than costing this processor its
+		// usability.
 		if cerr := ctx.Err(); cerr == nil || !errors.Is(err, cerr) {
-			b.PushError(ctx, fmt.Sprintf("error processing frame: %v", err), err, false)
+			b.PushError(ctx, fmt.Sprintf("Error processing frame: %v", err), err, false,
+				WithErrorCategory(errs.Unknown))
 		}
 		return err
 	}
