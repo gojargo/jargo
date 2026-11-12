@@ -537,6 +537,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   completion instructions whenever perception signals are taught, and is
   `expressive.PerceptionTurnCompletionInstructions`.
 
+- **LLMText keeps the raw text of plain units a pattern pair cuts.** The
+  plain text a `PatternPairAggregator` releases around a match was given its
+  trimmed text as its `RawText`, losing the whitespace the aggregator keeps on
+  purpose. It now keeps it, as a match keeps its delimiters.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

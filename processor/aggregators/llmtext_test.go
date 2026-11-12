@@ -480,3 +480,24 @@ func TestLLMTextSpeechToSpeechReplyEndsWithItsLastSentence(t *testing.T) {
 		t.Errorf("bot output = %q, want %q", got, want)
 	}
 }
+
+// TestRawTextOfPatternPairUnitsKeepsTheirWhitespace checks the plain text a
+// pattern pair aggregator releases around a match keeps, as its raw text, the
+// whitespace it was cut with, as the match keeps its delimiters.
+func TestRawTextOfPatternPairUnitsKeepsTheirWhitespace(t *testing.T) {
+	got, _ := runLLMText(t, aggregators.NewLLMTextWith("LLMText", codeAggregator(t)),
+		"Run this <code>print(1)</code>\nnow")
+	want := []struct{ text, raw string }{
+		{"Run this", "Run this "},
+		{"print(1)", "<code>print(1)</code>"},
+		{"now", "\nnow"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d aggregations, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].Text != w.text || got[i].RawText != w.raw {
+			t.Errorf("aggregation %d = %q (raw %q), want %q (raw %q)", i, got[i].Text, got[i].RawText, w.text, w.raw)
+		}
+	}
+}

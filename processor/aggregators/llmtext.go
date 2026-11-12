@@ -208,10 +208,12 @@ func (p *LLMText) transformText(ctx context.Context, original string, textType f
 }
 
 // rawText is the text the context records for a unit whose text is now
-// transformed: a pattern match keeps its delimiters around the new text, and
-// any other unit is its text.
+// transformed: a unit cut from text it kept (a pattern match, and the plain text
+// a pattern pair aggregator releases around one) keeps that text, its
+// delimiters and whitespace, around the new text, and any other unit is its
+// text.
 func rawText(unit text.Aggregation, transformed string) string {
-	if unit.RawText == "" || unit.Type == frames.TextTypeSentence || unit.Type == frames.TextTypeToken {
+	if unit.RawText == "" {
 		return transformed
 	}
 	if transformed == unit.Text {
