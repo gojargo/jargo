@@ -1,18 +1,14 @@
 // Package smallest is a streaming text-to-speech service backed by Smallest AI's
-// Waves WebSocket. For each sentence it opens a connection, sends the transcript,
-// and streams the raw PCM audio chunks downstream.
+// Waves WebSocket. It holds one connection open for the call, sends the
+// sentences of a turn on the turn's continuation context so they are spoken as
+// one generation, and labels the audio that comes back with the context
+// playing, since Smallest's messages name no request.
 package smallest
 
 import (
-	"errors"
-
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/service/wsservice"
 )
-
-// errProtocol is returned when Smallest reports an error message.
-//
-//nolint:gochecknoglobals // sentinel error
-var errProtocol = errors.New("smallest: protocol error")
 
 const (
 	defaultURL      = "wss://api.smallest.ai/waves/v1/tts/live"
@@ -22,6 +18,8 @@ const (
 	// defaultLanguage and defaultSampleRate are the same for every model.
 	defaultLanguage   = "en"
 	defaultSampleRate = 24000
+	// defaultOutputFormat is raw PCM, the audio the pipeline carries.
+	defaultOutputFormat = "pcm"
 )
 
 // modelDefaultVoices is the voice each model speaks with when the caller names
@@ -48,6 +46,18 @@ type Config struct {
 	Language string
 	// SampleRate is the PCM rate requested and emitted downstream; 0 uses 24 kHz.
 	SampleRate int
+	// OutputFormat is the audio format Smallest returns: "pcm", "mp3", "wav",
+	// "ulaw" or "alaw". Empty uses "pcm", which is what the pipeline carries.
+	OutputFormat string `validate:"omitempty,oneof=pcm mp3 wav ulaw alaw"`
+	// WordTimestamps asks for the timing of each word, so the text of each word
+	// is pushed as its audio plays and an interruption leaves the context with
+	// only what was heard. Nil turns it on. Voices that do not report word
+	// timing send none, which leaves it harmless to keep on whatever the voice.
+	WordTimestamps *bool
+	// MaxBufferDelayMs bounds, in milliseconds (0 to 5000), how long the server
+	// buffers a fragment of a turn before speaking it. Nil leaves the server's
+	// default, 3000.
+	MaxBufferDelayMs *int `validate:"omitempty,gte=0,lte=5000"`
 	// Speed multiplies the speaking rate; nil uses the service default.
 	Speed *float64
 	// MathNotation reads a math operator between digits as a word, so "2 + 2" is
@@ -70,6 +80,9 @@ type Config struct {
 	// times and dates are read in, independent of the synthesis language.
 	// Empty reads them in the synthesis language.
 	NumberPronunciationLanguage string
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.

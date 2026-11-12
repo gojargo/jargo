@@ -55,6 +55,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`smallest.NewTTS` holds one connection for the call instead of dialing
+  one per sentence, and speaks a turn as one generation.** It used to open a
+  connection for each sentence, send the request and wait for that sentence's
+  audio before the next one could go out. It now connects when the pipeline
+  starts and sends the sentences of a turn on the turn's context, each marked
+  as continuing it, so Smallest joins them into one generation instead of
+  starting the prosody afresh on each; the turn's flush closes the context.
+  The audio that arrives is labeled with the context playing, since
+  Smallest's messages name no request. Word timing is now asked for by
+  default (`Config.WordTimestamps`, nil meaning on), and the text of each word
+  is pushed as its audio plays, the timings of a turn's later requests moved
+  onto the turn's timeline. An interruption while the bot speaks resets the
+  connection, and incoming frames are held after a turn until its audio has
+  played. The connection runs on `tts.Websocket`: a lost connection is
+  restored with backoff, and after three failed redials the service reports a
+  permanent error, so it becomes unusable and a service switcher moves off it.
+  A blank text every thirty seconds keeps the connection open through
+  silences. The new `Config.Websocket` field configures the reconnection and
+  the timeouts, `Config.MaxBufferDelayMs` bounds how long the server buffers a
+  fragment, and `Config.OutputFormat` picks the audio format. The voice, the
+  model, the language, the speed and the reading options can now be changed
+  while the pipeline runs (`smallest.TTSSettings`), taking effect on the next
+  request. A model with no default voice of its own now gets the default
+  model's voice rather than none.
+
 - **`sarvam.NewTTS` holds one connection for the call instead of dialing one
   per sentence, and defaults to bulbul:v3.** It used to open a connection for
   each sentence, send the config, the text and a flush, and wait for that
