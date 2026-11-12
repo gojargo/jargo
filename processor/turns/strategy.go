@@ -106,10 +106,13 @@ type StartStrategy interface {
 // StartStrategyBase is embedded by every start strategy. It carries the
 // open-turn flags and the trigger helpers.
 type StartStrategyBase struct {
-	// EnableInterruptions broadcasts an InterruptionFrame on turn start.
-	EnableInterruptions bool
-	// EnableUserSpeakingFrames broadcasts a UserStartedSpeakingFrame on turn start.
-	EnableUserSpeakingFrames bool
+	// EnableInterruptions broadcasts an InterruptionFrame on turn start. Nil
+	// leaves it on, so a strategy that embeds the base interrupts the bot unless
+	// it says otherwise.
+	EnableInterruptions *bool
+	// EnableUserSpeakingFrames broadcasts a UserStartedSpeakingFrame on turn
+	// start. Nil leaves it on.
+	EnableUserSpeakingFrames *bool
 	env                      strategyEnv
 	// self is the concrete strategy this base belongs to, so a decision the base
 	// signals is attributed to the strategy that made it rather than to the base.
@@ -171,8 +174,8 @@ func (b *StartStrategyBase) ReportStartedOverriding(o StartedOverrides) {
 		return
 	}
 	b.env.started(b.self, UserTurnStartedParams{
-		EnableInterruptions:      boolOr(o.EnableInterruptions, b.EnableInterruptions),
-		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, b.EnableUserSpeakingFrames),
+		EnableInterruptions:      boolOr(o.EnableInterruptions, boolOr(b.EnableInterruptions, true)),
+		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, boolOr(b.EnableUserSpeakingFrames, true)),
 	})
 }
 
@@ -247,8 +250,10 @@ type TranscriptWaiter interface {
 
 // StopStrategyBase is embedded by every stop strategy.
 type StopStrategyBase struct {
-	// EnableUserSpeakingFrames broadcasts a UserStoppedSpeakingFrame on turn stop.
-	EnableUserSpeakingFrames bool
+	// EnableUserSpeakingFrames broadcasts a UserStoppedSpeakingFrame on turn
+	// stop. Nil leaves it on, so a strategy that embeds the base reports the
+	// user stopping unless it says otherwise.
+	EnableUserSpeakingFrames *bool
 	env                      strategyEnv
 	// self is the concrete strategy this base belongs to. See StartStrategyBase.
 	self StopStrategy
@@ -330,7 +335,7 @@ func (b *StopStrategyBase) ReportStoppedOverriding(o StoppedOverrides) {
 		return
 	}
 	b.env.stopped(b.self, UserTurnStoppedParams{
-		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, b.EnableUserSpeakingFrames),
+		EnableUserSpeakingFrames: boolOr(o.EnableUserSpeakingFrames, boolOr(b.EnableUserSpeakingFrames, true)),
 		ConfirmsSpeculation:      o.ConfirmsSpeculation,
 	})
 }

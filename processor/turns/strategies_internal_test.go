@@ -1256,7 +1256,7 @@ func TestStrategyBaseNoOps(t *testing.T) {
 // uses to reach the pipeline.
 func TestStopStrategyBaseEmits(t *testing.T) {
 	b := &plainStop{}
-	b.EnableUserSpeakingFrames = true
+	b.EnableUserSpeakingFrames = new(true)
 	spy := newSpy()
 	b.attach(b, spy.env())
 

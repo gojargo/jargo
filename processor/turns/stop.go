@@ -81,7 +81,6 @@ func NewTurnAnalyzerStop(cfg TurnAnalyzerConfig) *TurnAnalyzerStop {
 		analyzer:  cfg.Analyzer,
 		waitForTx: boolOr(cfg.WaitForTranscript, true),
 	}
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
@@ -383,7 +382,6 @@ func NewSpeechTimeoutStop(cfg SpeechTimeoutConfig) *SpeechTimeoutStop {
 		userSpeechTimeout: timeout,
 		waitForTx:         boolOr(cfg.WaitForTranscript, true),
 	}
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
@@ -601,7 +599,6 @@ func NewExternalStop(cfg ExternalStopConfig) *ExternalStop {
 		timeout = 500 * time.Millisecond
 	}
 	s := &ExternalStop{timeout: timeout, waitForTx: boolOr(cfg.WaitForTranscript, true)}
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
@@ -752,7 +749,6 @@ type ExternalCompletionStop struct {
 // turn-completion markers.
 func NewExternalCompletionStop() *ExternalCompletionStop {
 	s := &ExternalCompletionStop{}
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 

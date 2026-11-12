@@ -27,7 +27,7 @@ type wakeHarness struct {
 func newWakeHarness(t *testing.T, startMode StrategyMode, start ...StartStrategy) *wakeHarness {
 	t.Helper()
 	h := &wakeHarness{stop: &endOnDemandStop{}}
-	h.stop.EnableUserSpeakingFrames = true
+	h.stop.EnableUserSpeakingFrames = new(true)
 	h.c = NewUserTurnControllerWithParams(
 		UserTurnStrategies{Start: start, Stop: []StopStrategy{h.stop}},
 		UserTurnStrategiesParams{StartMode: startMode}, 0)

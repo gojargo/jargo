@@ -30,6 +30,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   default of four, so keeping no message after a summary could not be asked
   for. Nil now means the default, and zero summarizes every message after the
   system prompt. **Breaking:** set it with `new(n)`.
+- **A turn strategy embedding the base interrupts and reports the user by
+  default.** `StartStrategyBase.EnableInterruptions` and
+  `EnableUserSpeakingFrames`, and `StopStrategyBase.EnableUserSpeakingFrames`,
+  were plain booleans whose zero value turned them off, so a custom strategy
+  that embedded the base and set nothing never let the user interrupt the bot
+  and never reported the user speaking. One such stop strategy in a list whose
+  decisions are all required turned the user's stopped frame off for every
+  turn. They are now `*bool`, nil meaning on. **Breaking:** set them with
+  `new(true)` or `new(false)`.
 
 ### Fixed
 

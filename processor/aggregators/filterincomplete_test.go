@@ -172,7 +172,7 @@ func TestSessionEndDoesNotRecoverTheVoidedAnswer(t *testing.T) {
 func TestSpeechWithoutWordsDoesNotRunAnAnswerItDidNotInterrupt(t *testing.T) {
 	strategies := filterIncomplete(llm.UserTurnCompletionConfig{})
 	quiet := turns.NewVADStart()
-	quiet.EnableInterruptions = false
+	quiet.EnableInterruptions = new(false)
 	strategies.Start = []turns.StartStrategy{quiet}
 
 	down := resumeAfterTheAnswerStartedThen(t, turns.Config{Strategies: strategies},
@@ -199,7 +199,7 @@ func TestNewSpeechInterruptsTheTurnsAnswer(t *testing.T) {
 func TestATurnThatDoesNotInterruptOnlyCancelsItsAnswer(t *testing.T) {
 	strategies := filterIncomplete(llm.UserTurnCompletionConfig{})
 	quiet := turns.NewVADStart()
-	quiet.EnableInterruptions = false
+	quiet.EnableInterruptions = new(false)
 	strategies.Start = []turns.StartStrategy{quiet}
 
 	down := resumeAfterTheAnswerStarted(t, strategies)

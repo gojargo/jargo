@@ -20,7 +20,7 @@ type completionStop struct{ turns.StopStrategyBase }
 
 func newCompletionStop() *completionStop {
 	s := &completionStop{}
-	s.EnableUserSpeakingFrames = true
+	s.EnableUserSpeakingFrames = new(true)
 	return s
 }
 

@@ -150,7 +150,6 @@ func NewClassifierStop(cfg ClassifierStopConfig) (*ClassifierStop, error) {
 		longTimeout:           orDuration(cfg.LongTimeout, defaultClassifierLongTimeout),
 		classificationTimeout: orDuration(cfg.ClassificationTimeout, defaultClassifierClassificationTimeout),
 	}
-	s.EnableUserSpeakingFrames = true
 	return s, nil
 }
 

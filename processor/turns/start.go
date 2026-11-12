@@ -25,8 +25,6 @@ type VADStart struct {
 // NewVADStart builds a VAD-based start strategy.
 func NewVADStart() *VADStart {
 	s := &VADStart{}
-	s.EnableInterruptions = true
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
@@ -54,8 +52,6 @@ type TranscriptionStart struct {
 // NewTranscriptionStart builds a transcription-based start strategy.
 func NewTranscriptionStart(cfg TranscriptionStartConfig) *TranscriptionStart {
 	s := &TranscriptionStart{useInterim: cfg.UseInterim == nil || *cfg.UseInterim}
-	s.EnableInterruptions = true
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
@@ -97,8 +93,6 @@ type MinWordsStart struct {
 // NewMinWordsStart builds a min-words start strategy.
 func NewMinWordsStart(cfg MinWordsStartConfig) *MinWordsStart {
 	s := &MinWordsStart{minWords: cfg.MinWords, useInterim: cfg.UseInterim == nil || *cfg.UseInterim}
-	s.EnableInterruptions = true
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
@@ -208,8 +202,6 @@ func NewWakePhraseStart(cfg WakePhraseStartConfig) *WakePhraseStart {
 		detected: cfg.OnWakePhraseDetected,
 		timedOut: cfg.OnWakePhraseTimeout,
 	}
-	s.EnableInterruptions = true
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
@@ -393,8 +385,7 @@ type ExternalStart struct {
 // NewExternalStart builds an external start strategy.
 func NewExternalStart(cfg ExternalStartConfig) *ExternalStart {
 	s := &ExternalStart{}
-	s.EnableInterruptions = boolOr(cfg.EnableInterruptions, true)
-	s.EnableUserSpeakingFrames = true
+	s.EnableInterruptions = cfg.EnableInterruptions
 	return s
 }
 

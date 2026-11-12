@@ -25,7 +25,7 @@ type decidingStop struct {
 
 func newDecidingStop() *decidingStop {
 	s := &decidingStop{}
-	s.EnableUserSpeakingFrames = true
+	s.EnableUserSpeakingFrames = new(true)
 	return s
 }
 
@@ -59,8 +59,8 @@ type decidingStart struct {
 
 func newDecidingStart() *decidingStart {
 	s := &decidingStart{}
-	s.EnableInterruptions = true
-	s.EnableUserSpeakingFrames = true
+	s.EnableInterruptions = new(true)
+	s.EnableUserSpeakingFrames = new(true)
 	return s
 }
 
@@ -862,5 +862,65 @@ func TestEachTurnNeedsItsOwnStartDecisions(t *testing.T) {
 
 	if len(h.starts) != 1 {
 		t.Fatalf("starts = %d, want 1", len(h.starts))
+	}
+}
+
+// bareStart is a start strategy written the way an application writes one: it
+// embeds the base and sets none of its flags.
+type bareStart struct{ turns.StartStrategyBase }
+
+func (s *bareStart) Process(f frames.Frame) turns.ProcessFrameResult {
+	if _, ok := f.(*frames.VADUserStartedSpeakingFrame); ok {
+		s.ReportStarted()
+	}
+	return turns.Continue
+}
+
+// bareStop is a stop strategy written the same way.
+type bareStop struct{ turns.StopStrategyBase }
+
+func (s *bareStop) Process(f frames.Frame) turns.ProcessFrameResult {
+	if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
+		s.ReportStopped()
+	}
+	return turns.Continue
+}
+
+// TestAStrategyEmbeddingTheBaseInterruptsAndReportsByDefault checks a strategy
+// that embeds the base and sets nothing interrupts the bot and reports the user
+// speaking, as the built-in ones do.
+func TestAStrategyEmbeddingTheBaseInterruptsAndReportsByDefault(t *testing.T) {
+	h := newHarness(t, turns.UserTurnStrategies{
+		Start: []turns.StartStrategy{&bareStart{}},
+		Stop:  []turns.StopStrategy{&bareStop{}},
+	}, turns.UserTurnStrategiesParams{}, 30*time.Second)
+	h.speak()
+
+	if len(h.starts) != 1 || len(h.stops) != 1 {
+		t.Fatalf("starts = %d, stops = %d, want one of each", len(h.starts), len(h.stops))
+	}
+	if p := h.starts[0].params; !p.EnableInterruptions || !p.EnableUserSpeakingFrames {
+		t.Errorf("start params = %+v, want both on", p)
+	}
+	if p := h.stops[0].params; !p.EnableUserSpeakingFrames {
+		t.Errorf("stop params = %+v, want the user speaking frames on", p)
+	}
+}
+
+// TestABareStopStrategyBesideABuiltInKeepsTheTurnFrame checks one such stop
+// strategy in a list whose decisions are all required does not switch the
+// user's stopped frame off for every turn.
+func TestABareStopStrategyBesideABuiltInKeepsTheTurnFrame(t *testing.T) {
+	builtIn := newDecidingStop()
+	h := newStopHarness(t, turns.StrategyModeAll, builtIn, &bareStop{})
+	h.send(frames.NewVADUserStartedSpeakingFrame(0, time.Now()))
+	h.do(builtIn.decide)
+	h.send(frames.NewVADUserStoppedSpeakingFrame(0, time.Now()))
+
+	if len(h.stops) != 1 {
+		t.Fatalf("stops = %d, want one", len(h.stops))
+	}
+	if p := h.stops[0].params; !p.EnableUserSpeakingFrames {
+		t.Errorf("turn params = %+v, want the user speaking frames on", p)
 	}
 }

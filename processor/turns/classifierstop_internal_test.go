@@ -106,7 +106,7 @@ type vadStopStrategy struct{ StopStrategyBase }
 
 func newVADStopStrategy() *vadStopStrategy {
 	s := &vadStopStrategy{}
-	s.EnableUserSpeakingFrames = true
+	s.EnableUserSpeakingFrames = new(true)
 	return s
 }
 

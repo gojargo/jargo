@@ -49,7 +49,6 @@ type LLMTurnCompletionStop struct {
 // as FilterIncompleteUserTurnStrategies does.
 func NewLLMTurnCompletionStop(cfg llm.UserTurnCompletionConfig) *LLMTurnCompletionStop {
 	s := &LLMTurnCompletionStop{config: cfg}
-	s.EnableUserSpeakingFrames = true
 	return s
 }
 
