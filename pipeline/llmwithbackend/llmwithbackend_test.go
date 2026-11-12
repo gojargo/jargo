@@ -817,24 +817,37 @@ func TestClientTracingSendsEachExchangeAsAServerMessage(t *testing.T) {
 			}
 		}
 	}
+	// The request is traced once it has been sent, with the status the send
+	// returned, and the backend answers on a goroutine of its own, so its first
+	// event may be traced ahead of the request. The backend's own events keep
+	// their order.
+	var requests, backendEvents []map[string]any
 	var kinds []string
 	for _, d := range traced {
 		if d["type"] != "llm-with-backend" {
 			t.Errorf("traced %v", d)
 		}
 		kind, _ := d["event"].(string)
+		if kind == "request" {
+			requests = append(requests, d)
+			continue
+		}
+		backendEvents = append(backendEvents, d)
 		kinds = append(kinds, kind)
 	}
-	want := []string{"request", "tool_call", "tool_call", "tool_call", "output", "idle"}
+	if len(requests) != 1 {
+		t.Fatalf("traced %d requests, want 1", len(requests))
+	}
+	want := []string{"tool_call", "tool_call", "tool_call", "output", "idle"}
 	if !slices.Equal(kinds, want) {
-		t.Fatalf("traced %v, want %v", kinds, want)
+		t.Fatalf("traced backend events %v, want %v", kinds, want)
 	}
-	request, _ := traced[0]["text"].(string)
-	if traced[0]["backend"] != "idle" || !strings.Contains(request, "weather in seattle?") {
-		t.Errorf("request traced as %v", traced[0])
+	request, _ := requests[0]["text"].(string)
+	if requests[0]["backend"] != "idle" || !strings.Contains(request, "weather in seattle?") {
+		t.Errorf("request traced as %v", requests[0])
 	}
-	if traced[4]["text"] != "It's 62 and raining." || traced[4]["spoken"] != true {
-		t.Errorf("output traced as %v", traced[4])
+	if backendEvents[3]["text"] != "It's 62 and raining." || backendEvents[3]["spoken"] != true {
+		t.Errorf("output traced as %v", backendEvents[3])
 	}
 }
 
