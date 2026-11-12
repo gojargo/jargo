@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-12
+
 ### Added
 
 - **A TTS service can speak each sentence of a turn on a context of its
@@ -7298,7 +7300,8 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/gojargo/jargo/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/gojargo/jargo/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/gojargo/jargo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gojargo/jargo/compare/v0.2.0...v0.3.0
