@@ -165,11 +165,11 @@ func (a *Adapter) LLMInvocationParams(
 	if err != nil {
 		return Params{}, err
 	}
-	input := make([]InputItem, 0, len(converted)+1)
+	input := converted
 	if system != "" {
-		input = append(input, InputItem{Type: ItemMessage, Role: RoleDeveloper, Content: system})
+		input = append([]InputItem{{Type: ItemMessage, Role: RoleDeveloper, Content: system}}, converted...)
 	}
-	params := Params{Input: append(input, converted...)}
+	params := Params{Input: input}
 	if instruction := opts.SystemInstruction; instruction != "" {
 		if len(params.Input) == 0 {
 			params.Input = []InputItem{

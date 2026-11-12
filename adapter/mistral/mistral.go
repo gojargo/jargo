@@ -56,7 +56,7 @@ func TransformMessages(msgs []openai.Message) []openai.Message {
 		return msgs
 	}
 
-	out := make([]openai.Message, 0, len(msgs)+1)
+	out := make([]openai.Message, 0, len(msgs))
 	for i, m := range msgs {
 		out = append(out, m)
 		if m.Role != openai.RoleTool {
