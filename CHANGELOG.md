@@ -313,6 +313,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   pausing mid-utterance. A zero `ClearAfter` now never clears; mark where a
   stream ends with `Flush` and `Clear`. `resample.DefaultClearAfter` is
   deprecated.
+- **A word the TTS reports that matches nothing is dropped.** A word the
+  provider reported that no sentence held (a garbled or stray token) was passed
+  on as a spoken word, so it was written into the assistant message ("This is
+  how ity it is supposed to work") and shown to clients. It is now dropped; the
+  next word that matches carries the text it skipped.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

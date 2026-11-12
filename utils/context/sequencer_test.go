@@ -479,13 +479,13 @@ func TestProcessWordContextRouting(t *testing.T) {
 		}
 	})
 
-	t.Run("a word no unit claims passes through", func(t *testing.T) {
+	t.Run("a word no unit claims is dropped", func(t *testing.T) {
+		// Emitting it would write a word the LLM never wrote into the
+		// conversation.
 		seq := newSeq(t, false)
 		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false, "")
-		out := seq.ProcessWord("zzz", 5, "ctx1", false)
-		passed, ok := out[0].(*frames.TTSTextFrame)
-		if len(out) != 1 || !ok || passed.Text != "zzz" {
-			t.Fatalf("got %v, want the word passed through", texts(out))
+		if out := seq.ProcessWord("zzz", 5, "ctx1", false); len(out) != 0 {
+			t.Fatalf("got %v, want the word dropped", texts(out))
 		}
 	})
 
@@ -1049,12 +1049,11 @@ func TestRegisterSpokenBufferedWords(t *testing.T) {
 		}
 	})
 
-	t.Run("without streaming, an unclaimed word still passes through", func(t *testing.T) {
+	t.Run("without streaming, an unclaimed word is dropped rather than buffered", func(t *testing.T) {
 		seq := newSeq(t, false)
 		seq.RegisterSpoken(spokenFrame("hello world"), "ctx1", "hello world", true, true, false, "")
-		out := seq.ProcessWord("zzz", 5, "ctx1", false)
-		if len(out) != 1 || wordFrames(out)[0].Text != "zzz" {
-			t.Fatalf("got %v, want the word passed through", texts(out))
+		if out := seq.ProcessWord("zzz", 5, "ctx1", false); len(out) != 0 {
+			t.Fatalf("got %v, want the word dropped", texts(out))
 		}
 	})
 }
@@ -1390,4 +1389,71 @@ func TestStreamingNoTrackerSentenceTextIsTrimmedForTheContext(t *testing.T) {
 	if last := words[len(words)-1]; last.Text != "Bye now." || last.RawText != "Bye now." {
 		t.Fatalf("last sentence = (%q, %q), want (%q, %q)", last.Text, last.RawText, "Bye now.", "Bye now.")
 	}
+}
+
+// resyncSentence is spoken through a provider that reports one word garbled.
+const resyncSentence = "This is how it is supposed to work"
+
+// resyncSequencer has the sentence registered and its first three words
+// reported, so the next one is "it".
+func resyncSequencer(t *testing.T) *uctx.AggregatedFrameSequencer {
+	t.Helper()
+	seq := newSeq(t, false)
+	f := spokenFrame(resyncSentence)
+	f.RawText = resyncSentence
+	seq.RegisterSpoken(f, "ctx1", resyncSentence, true, true, false, "")
+	for _, w := range []string{"This", "is", "how"} {
+		seq.ProcessWord(w, 10, "ctx1", false)
+	}
+	return seq
+}
+
+// TestSequencerResyncsPastAGarbledWord checks a word the provider garbled
+// emits nothing, and the next word that matches carries the text it skipped,
+// so the conversation records the sentence as written.
+func TestSequencerResyncsPastAGarbledWord(t *testing.T) {
+	t.Run("the garbled word emits nothing", func(t *testing.T) {
+		if out := resyncSequencer(t).ProcessWord("ity", 20, "ctx1", false); len(out) != 0 {
+			t.Fatalf("got %v, want nothing for a word the sentence does not hold", texts(out))
+		}
+	})
+
+	t.Run("the context reassembles the whole sentence", func(t *testing.T) {
+		seq := resyncSequencer(t)
+		said := []string{"This", "is", "how"}
+		for _, w := range []string{"ity", "ís", "supposed", "to", "work"} {
+			for _, f := range wordFrames(seq.ProcessWord(w, 30, "ctx1", false)) {
+				said = append(said, f.RawText)
+			}
+		}
+		if got := strings.Join(said, " "); got != resyncSentence {
+			t.Fatalf("context = %q, want %q", got, resyncSentence)
+		}
+	})
+
+	t.Run("a word nothing can place is dropped, and force-complete recovers the rest", func(t *testing.T) {
+		seq := resyncSequencer(t)
+		if out := seq.ProcessWord("banana", 20, "ctx1", false); len(out) != 0 {
+			t.Fatalf("got %v, want the word dropped", texts(out))
+		}
+		var rest []string
+		for _, f := range wordFrames(seq.ForceComplete("ctx1", 30, true)) {
+			rest = append(rest, f.Text)
+		}
+		if got := strings.Join(rest, "|"); got != "it is supposed to work" {
+			t.Fatalf("force-complete gave %q, want the rest of the sentence", got)
+		}
+	})
+
+	t.Run("a garbled word after a tag emits nothing", func(t *testing.T) {
+		seq := newSeq(t, false)
+		f := spokenFrame("Call 4111 when it is ready")
+		f.RawText = "Call <card>4111</card> when it is ready"
+		seq.RegisterSpoken(f, "ctx1", "Call <spell>4111</spell> when it is ready", true, true, false, "")
+		seq.ProcessWord("Call", 10, "ctx1", false)
+		seq.ProcessWord("4111", 10, "ctx1", false)
+		if out := seq.ProcessWord("whenx", 20, "ctx1", false); len(out) != 0 {
+			t.Fatalf("got %v, want nothing for a garbled word", texts(out))
+		}
+	})
 }

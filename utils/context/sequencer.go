@@ -209,8 +209,8 @@ func (s *AggregatedFrameSequencer) processWordLocked(
 	}
 
 	active := s.activeSlot(contextID)
-	if handled, out := s.routeWord(active, word, pts, contextID, includesInterFrame); handled {
-		return out
+	if s.routeWord(active, word, pts, contextID, includesInterFrame) {
+		return nil
 	}
 
 	complete, overflow := false, ""
@@ -235,32 +235,38 @@ func (s *AggregatedFrameSequencer) processWordLocked(
 
 // routeWord decides whether the word can be handed to active at all. It reports
 // handled when the word was dealt with here: buffered until the sentence it
-// belongs to is promoted, or passed straight through when no slot claims it.
+// belongs to is promoted, or dropped when no slot claims it.
 func (s *AggregatedFrameSequencer) routeWord(
 	active *aggregatedFrameSlot, word string, pts int64, contextID string, includesInterFrame bool,
-) (handled bool, out []frames.Frame) {
+) (handled bool) {
 	if active == nil {
 		if s.streamingMode {
 			s.buffered = append(s.buffered, bufferedWord{word, pts, contextID, includesInterFrame})
-			return true, nil
+			return true
 		}
-		return false, nil
+		return false
 	}
 	if active.tracker == nil || active.tracker.WordBelongsHere(word) {
-		return false, nil
+		return false
 	}
 	next := s.nextActiveSlot(active, contextID)
 	if next != nil && next.tracker != nil && next.tracker.WordBelongsHere(word) {
 		// It belongs to the next slot, so this one is force-completed below.
-		return false, nil
+		return false
 	}
 	if s.streamingMode {
 		// The sentence it belongs to may simply not be promoted yet.
 		s.buffered = append(s.buffered, bufferedWord{word, pts, contextID, includesInterFrame})
-		return true, nil
+		return true
 	}
-	slog.Warn("sequencer word matched no slot, passing through", "sequencer", s.name, "word", word)
-	return true, []frames.Frame{s.buildWordFrame(word, pts, contextID, 0, "", false, includesInterFrame)}
+	// Nothing left in this turn's text can be what was reported. Emitting it
+	// anyway would write words the LLM never wrote into the conversation.
+	// Dropping it loses nothing: the slot keeps its place, so the next word that
+	// does match is matched past this one and carries the text it should have
+	// covered. Only text no later word accounts for waits for the force-complete
+	// when the audio context ends.
+	slog.Warn("sequencer dropping a word no slot recognizes", "sequencer", s.name, "word", word)
+	return true
 }
 
 // emitWord builds the frames for a word the active slot has taken.
