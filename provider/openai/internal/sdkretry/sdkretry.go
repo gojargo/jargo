@@ -8,12 +8,13 @@ package sdkretry
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"math/rand/v2"
 	"net/http"
 	"os"
 	"strconv"
@@ -103,8 +104,15 @@ func retryDelay(attempt int, header http.Header) time.Duration {
 		return after
 	}
 	backoff := min(float64(initialRetryDelay)*math.Pow(2, float64(attempt)), float64(maxRetryDelay))
-	jitter := 1 - 0.25*rand.Float64() //nolint:gosec // jitter, not a secret
+	jitter := 1 - 0.25*randomFraction()
 	return time.Duration(backoff * jitter)
+}
+
+// randomFraction is a random number in [0, 1), for the jitter.
+func randomFraction() float64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read does not fail
+	return float64(binary.BigEndian.Uint64(b[:])>>11) / (1 << 53)
 }
 
 // retryAfter reads the wait a server asked for: retry-after-ms in
