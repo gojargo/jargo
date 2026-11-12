@@ -440,6 +440,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   now reported as `ReasoningTokens`, and left unset when the response does not
   say.
 
+- **Anthropic skips a usage report that counted nothing.** A response whose
+  usage counted no tokens at all, input, output or cache, was still reported
+  as an all-zero usage. It is no longer reported, on Bedrock too.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

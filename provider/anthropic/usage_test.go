@@ -121,3 +121,12 @@ func TestKeepsInputCountsAMessageDeltaLeavesOut(t *testing.T) {
 		t.Error("reasoning tokens reported, want none")
 	}
 }
+
+// Ported from upstream (test_llm_token_usage_totals.py, the Bedrock case, which
+// runs through this service). A response that counted no tokens at all is not
+// reported.
+func TestAnEmptyUsageReportIsSkipped(t *testing.T) {
+	if got := usageReports(t, usageStream(`{"input_tokens":0,"output_tokens":0}`, `{"output_tokens":0}`)); len(got) != 0 {
+		t.Errorf("got %+v, want no report for a usage that counted nothing", got)
+	}
+}

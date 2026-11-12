@@ -222,6 +222,15 @@ func (s *Service) applyThinkingDefault(params *sdk.MessageNewParams) {
 		"Anthropic", "Thinking or Effort in anthropic.Config")
 }
 
+// reportUsage reports a response's usage, unless it counted no tokens at all:
+// an all-zero report says nothing about what the response cost.
+func (s *Service) reportUsage(ctx context.Context, u sdk.Usage) error {
+	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheCreationInputTokens == 0 && u.CacheReadInputTokens == 0 {
+		return nil
+	}
+	return s.PushTokenUsage(ctx, toUsage(u))
+}
+
 // toUsage converts the SDK's per-request usage into the pipeline's token usage.
 func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 	out := frames.LLMTokenUsage{
@@ -286,7 +295,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 		return llm.AsCompletionTimeout(ctx, err)
 	}
 	if report {
-		return s.PushTokenUsage(ctx, toUsage(acc.Usage))
+		return s.reportUsage(ctx, acc.Usage)
 	}
 	return nil
 }
@@ -420,7 +429,7 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 		}
 	}
 	if s.UsageMetricsEnabled() {
-		return s.PushTokenUsage(ctx, toUsage(acc.Usage))
+		return s.reportUsage(ctx, acc.Usage)
 	}
 	return nil
 }
