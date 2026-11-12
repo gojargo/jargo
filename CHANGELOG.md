@@ -332,6 +332,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   context to the service rate with a resampler of its own, flushing what it
   holds before the context's stop frame or on a rate change, and dropping it on
   an interruption.
+- **TTS processing time is reported per sentence, and only where it means
+  something.** One processing metric was reported per audio context, timed from
+  opening the context to draining it, so it covered the LLM generating the later
+  sentences and the stop-frame wait, and a provider holding a connection of its
+  own reported one too. Processing time is now measured around speaking each
+  unit, for a provider whose `RunTTS` synthesizes before it returns, and not in
+  token mode. A provider that hands its text off (a `ContextSynthesizer`)
+  reports none, unless it implements the new `ProcessingMetricsSupporter`.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -1403,6 +1403,14 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 		return nil
 	}
 
+	// The unit's processing time, for a provider whose RunTTS synthesizes before
+	// it returns. A token is the wrong unit to report one against: that would be
+	// a metric per token, for work that spans a sentence.
+	if !streaming && b.reportsProcessingMetrics() {
+		start := time.Now()
+		defer func() { b.reportProcessing(ctx, time.Since(start)) }()
+	}
+
 	// With expressive conversation on, the text an LLM writes its replies in is
 	// read for expression tags. Other text, such as a pattern's match, is spoken
 	// as it is.
@@ -1425,6 +1433,28 @@ func (b *Base) pushTTSFrames(ctx context.Context, agg ttstext.Aggregation, inter
 		return nil
 	}
 	return b.speakText(ctx, agg, contextID, spokenText{text: original, raw: writtenText(agg)}, prepared, interruptible)
+}
+
+// reportsProcessingMetrics reports whether the provider's processing time means
+// anything. See ProcessingMetricsSupporter.
+func (b *Base) reportsProcessingMetrics() bool {
+	if p, ok := b.syn.(ProcessingMetricsSupporter); ok {
+		return p.SupportsProcessingMetrics()
+	}
+	_, handsOff := b.syn.(ContextSynthesizer)
+	return !handsOff
+}
+
+// reportProcessing records how long speaking one unit took, and pushes it
+// downstream when in-band metrics are enabled.
+func (b *Base) reportProcessing(ctx context.Context, processing time.Duration) {
+	metrics.RecordProcessing(ctx, "tts", b.TypeName(), b.model(), processing.Seconds())
+	if !b.MetricsEnabled() {
+		return
+	}
+	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.model()}
+	_ = b.PushFrame(ctx, frames.NewMetricsFrame(frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing}),
+		processor.Downstream)
 }
 
 // transformUnit turns text to speak into the text sent to the provider: the
@@ -1617,12 +1647,11 @@ func (b *Base) pushSpokenText(
 }
 
 // emitTiming records the synthesis's time-to-first-byte, time-to-first-audible
-// sample, processing time and character count to OpenTelemetry (always) and,
+// sample and character count of an audio context to OpenTelemetry (always) and,
 // when in-band metrics are enabled, downstream as a MetricsFrame for the RTVI
 // client.
-func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processing time.Duration) {
+func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter) {
 	model := b.model()
-	metrics.RecordProcessing(ctx, "tts", b.TypeName(), model, processing.Seconds())
 	metrics.RecordTTSCharacters(ctx, b.TypeName(), model, int64(chars))
 	if m.hadTTFB {
 		metrics.RecordTTFB(ctx, "tts", b.TypeName(), model, m.ttfb.Seconds())
@@ -1635,7 +1664,6 @@ func (b *Base) emitTiming(ctx context.Context, chars int, m *ttfaMeter, processi
 	}
 	base := frames.BaseMetricsData{Processor: b.Name(), Model: b.model()}
 	data := []frames.MetricsData{
-		frames.ProcessingMetricsData{BaseMetricsData: base, Value: processing},
 		frames.TTSUsageMetricsData{BaseMetricsData: base, Value: chars},
 	}
 	if m.hadTTFB {

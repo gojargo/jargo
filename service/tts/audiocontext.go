@@ -82,6 +82,19 @@ type ContextSynthesizer interface {
 	SetAudioContextHost(h AudioContextHost)
 }
 
+// ProcessingMetricsSupporter is an optional interface a Synthesizer implements
+// to say whether its processing time means anything.
+//
+// Processing time is measured around speaking each unit, the RunTTS call
+// included, so it only means something when synthesis finishes before RunTTS
+// returns. A provider that hands the text off and receives its audio elsewhere
+// (a ContextSynthesizer) would time the handoff and nothing else, so by default
+// such a provider reports none, and every other one does. Time to first byte
+// and to first audio carry the latency either way.
+type ProcessingMetricsSupporter interface {
+	SupportsProcessingMetrics() bool
+}
+
 // TurnContextCreator is an optional interface a Synthesizer implements to open
 // its server-side context as soon as the turn starts, before any text flows.
 type TurnContextCreator interface {
@@ -240,10 +253,10 @@ func (c *audioContext) holdWord(it ctxItem) {
 }
 
 // measurement reports what the context cost, once it has finished draining.
-func (c *audioContext) measurement() (chars int, meter ttfaMeter, elapsed time.Duration) {
+func (c *audioContext) measurement() (chars int, meter ttfaMeter) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.chars, c.meter, time.Since(c.start)
+	return c.chars, c.meter
 }
 
 // spoken is everything sent on this context, as one utterance.
@@ -1235,7 +1248,7 @@ func (b *Base) stampLLMResponseFrame(f frames.Frame) {
 
 // finishAudioContext records what the context cost and closes its span.
 func (b *Base) finishAudioContext(ctx context.Context, c *audioContext) {
-	chars, meter, elapsed := c.measurement()
+	chars, meter := c.measurement()
 	attrs := tracing.TTSAttributes{
 		Service:        b.TypeName(),
 		Model:          b.meta.Model,
@@ -1255,7 +1268,7 @@ func (b *Base) finishAudioContext(ctx context.Context, c *audioContext) {
 	}
 	tracing.SetTTSAttributes(c.span, attrs)
 	tracing.SetTTSUsage(c.spanCtx, b.meta.Model, chars)
-	b.emitTiming(ctx, chars, &meter, elapsed)
+	b.emitTiming(ctx, chars, &meter)
 	c.span.End()
 }
 
@@ -1264,7 +1277,7 @@ func (b *Base) finishAudioContext(ctx context.Context, c *audioContext) {
 // discarded whole when the user cuts in, and without this their spans would stay
 // open and never be exported.
 func (b *Base) abandonAudioContext(c *audioContext) {
-	chars, _, _ := c.measurement()
+	chars, _ := c.measurement()
 	tracing.SetTTSAttributes(c.span, tracing.TTSAttributes{
 		Service:        b.TypeName(),
 		Model:          b.meta.Model,
