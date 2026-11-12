@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
@@ -105,6 +106,34 @@ type responseObject struct {
 		Reason string `json:"reason"`
 	} `json:"incomplete_details"`
 	Usage *usage `json:"usage"`
+	// Output is every item the response produced, as response.completed
+	// reports it.
+	Output []responseOutput `json:"output"`
+}
+
+// responseOutput is one item of a completed response's output: a message, a
+// function call, a reasoning item, or a kind of item the service does not read.
+type responseOutput struct {
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Role   string `json:"role"`
+	CallID string `json:"call_id"`
+	// Content holds a message's parts; its text is in the output_text ones.
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}
+
+// text is a message item's text: its output_text parts joined.
+func (o responseOutput) text() string {
+	var b strings.Builder
+	for _, p := range o.Content {
+		if p.Type == "output_text" {
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
 }
 
 // usage is the Responses API's per-response token accounting.
@@ -169,23 +198,13 @@ type streamState struct {
 	responseID string
 	// usage is the token accounting the terminal event reported.
 	usage *usage
-	// sawText records whether the model produced any text, and callCount how
-	// many function calls it requested. Together they say how many input items
-	// this response will add to the conversation, which is what the next turn
-	// must skip when continuing from it.
-	sawText   bool
-	callCount int
-}
-
-// outputItems is how many input items this response contributes to the
-// conversation: one message when it produced text, plus one per function call.
-// It mirrors how buildInput renders an assistant turn.
-func (s *streamState) outputItems() int {
-	n := s.callCount
-	if s.sawText {
-		n++
-	}
-	return n
+	// sawText records whether the model produced any text.
+	sawText bool
+	// completed records that the response ended with response.completed, and
+	// output is the output that event reported: what the server holds of this
+	// response, which the next turn can continue from.
+	completed bool
+	output    []responseOutput
 }
 
 // newStreamState builds a state machine feeding sink.
@@ -208,7 +227,14 @@ func (s *streamState) handle(ev event) (done bool, err error) {
 		}
 	case evtItemAdded, evtArgsDelta, evtArgsDone, evtItemDone:
 		s.trackCall(ev)
-	case evtCompleted, evtIncomplete:
+	case evtCompleted:
+		s.finish(ev)
+		s.completed = true
+		if ev.Response != nil {
+			s.output = ev.Response.Output
+		}
+		return true, s.flushCalls()
+	case evtIncomplete:
 		s.finish(ev)
 		return true, s.flushCalls()
 	case evtFailed:
@@ -241,7 +267,6 @@ func (s *streamState) trackCall(ev event) {
 	case evtItemAdded:
 		if ev.Item != nil && ev.Item.Type == itemFuncCall {
 			s.calls[ev.OutputIndex] = &pendingCall{callID: ev.Item.CallID, name: ev.Item.Name}
-			s.callCount++
 		}
 	case evtArgsDelta:
 		if call, ok := s.calls[ev.OutputIndex]; ok {

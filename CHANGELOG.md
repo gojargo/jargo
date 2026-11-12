@@ -60,6 +60,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   stopped transcribing for the rest of the call. The connection is now
   restored, as for any other close; only a disconnect the service asked for
   ends the loop.
+- **The OpenAI Responses WebSocket continues from a response only when the
+  conversation holds what it said.** The service skipped as many items as the
+  previous response produced without checking them, so after a barge-in, when
+  the conversation records only the words heard, the next turn continued from
+  the server's full reply and the model believed the user heard all of it. It
+  now compares the items after the previous input with the response's output
+  (a message by role and text, a function call by call id) and sends the full
+  context when they differ. A response cut short is no longer recorded as one
+  to continue from.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -84,8 +84,8 @@ func TestStreamStateText(t *testing.T) {
 	if got := state.usage.tokenUsage(); !reflect.DeepEqual(got, want) {
 		t.Errorf("tokenUsage = %+v, want %+v", got, want)
 	}
-	if state.outputItems() != 1 {
-		t.Errorf("outputItems = %d, want 1 for a text-only response", state.outputItems())
+	if !state.completed {
+		t.Error("completed = false, want the response recorded as completed")
 	}
 }
 
@@ -119,9 +119,6 @@ func TestStreamStateToolCalls(t *testing.T) {
 	}
 	if sink.calls[1].Name != "second" || string(sink.calls[1].Args) != `{"y":2}` {
 		t.Errorf("call 1 = %+v, want second with its own arguments", sink.calls[1])
-	}
-	if state.outputItems() != 2 {
-		t.Errorf("outputItems = %d, want one per call", state.outputItems())
 	}
 }
 
@@ -424,7 +421,8 @@ func TestWSIncrementalContext(t *testing.T) {
 		{
 			`{"type":"response.created","response":{"id":"resp_1"}}`,
 			`{"type":"response.output_text.delta","delta":"hi there"}`,
-			`{"type":"response.completed","response":{"id":"resp_1"}}`,
+			`{"type":"response.completed","response":{"id":"resp_1","output":[{"type":"message",` +
+				`"role":"assistant","content":[{"type":"output_text","text":"hi there"}]}]}}`,
 		},
 		{
 			`{"type":"response.created","response":{"id":"resp_2"}}`,

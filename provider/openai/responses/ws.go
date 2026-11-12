@@ -135,9 +135,11 @@ type continuation struct {
 	// inputHash fingerprints those items, so a conversation edited behind the
 	// service's back is detected rather than silently continued from.
 	inputHash string
-	// outputLen is how many items the server's own response added, which the
-	// next turn must skip because the server already has them.
-	outputLen int
+	// output is what the server's own response added, as response.completed
+	// reported it. The next turn continues from the response only when the
+	// conversation holds exactly that output after the previous input, and then
+	// skips it, since the server already has it.
+	output []responseOutput
 	// lane is the lane the response ran on, which the next response avoids.
 	lane string
 }
@@ -429,21 +431,18 @@ func classifyStreamError(ev event) error {
 }
 
 // applyContinuation trims the request's input to what the server does not
-// already hold, and returns how many items were sent. When the conversation has
-// not grown from where the previous turn left off, the full input goes.
+// already hold, and returns how many items were sent. The full input goes
+// unless the conversation is the previous input, then the previous response's
+// own output, then something new.
 func (s *Service) applyContinuation(req *request) int {
 	s.mu.Lock()
 	cont := s.cont
 	s.mu.Unlock()
 
 	full := req.Input
-	if cont.responseID == "" || cont.inputHash == "" {
-		return len(full)
-	}
-	// The server holds the previous input plus the items its own response added.
-	known := cont.inputLen + cont.outputLen
-	if len(full) <= known {
-		// The conversation did not grow, or was rewritten shorter. Send it whole.
+	if cont.responseID == "" || cont.inputHash == "" || len(full) <= cont.inputLen {
+		// Nothing to continue from, or the conversation did not grow from where
+		// the previous turn left off.
 		return len(full)
 	}
 	if hashItems(full[:cont.inputLen]) != cont.inputHash {
@@ -451,31 +450,71 @@ func (s *Service) applyContinuation(req *request) int {
 		// continuing from the server's copy would replay the wrong conversation.
 		return len(full)
 	}
-	req.Input = full[known:]
+	after := full[cont.inputLen:]
+	if !startsWithResponseOutput(after, cont.output) {
+		// What follows is not what the server produced: an interrupted reply
+		// recorded as only the words spoken, say. Continuing would leave the
+		// model believing the user heard all of it.
+		slog.Debug("openai responses sending the full context: the conversation"+
+			" does not continue with the previous response's output", "items", len(full))
+		return len(full)
+	}
+	req.Input = after[len(cont.output):]
 	req.PreviousResponseID = cont.responseID
 	return len(full)
+}
+
+// startsWithResponseOutput reports whether items begin with entries matching a
+// response's output. A message matches on its role and its text, a function
+// call on its call id, and a reasoning item on its id. An item of any other
+// kind cannot be confirmed, so it does not match.
+func startsWithResponseOutput(items []inputItem, output []responseOutput) bool {
+	if len(items) < len(output) {
+		return false
+	}
+	for i, out := range output {
+		in := items[i]
+		switch out.Type {
+		case itemMessage:
+			role := out.Role
+			if role == "" {
+				role = responsesadapter.RoleAssistant
+			}
+			if in.Role != role || in.Content != out.text() {
+				return false
+			}
+		case itemFuncCall:
+			if in.Type != itemFuncCall || in.CallID != out.CallID {
+				return false
+			}
+		default:
+			// The conversation carries no reasoning items yet, so a response that
+			// reasoned cannot be matched either.
+			return false
+		}
+	}
+	return true
 }
 
 // recordContinuation stores what the server now holds, so the next turn can send
 // only what is new. full is the whole input the conversation rendered to, sent
 // is how many of those items the server has seen, and lane is the lane the
 // response ran on.
+//
+// Only a completed response is recorded: one cut short leaves the previous
+// record in place.
 func (s *Service) recordContinuation(state *streamState, full []inputItem, sent int, lane string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if state.responseID == "" {
-		// Without a response to continue from the next turn sends everything.
-		s.cont = continuation{}
+	if !state.completed || state.responseID == "" {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.cont = continuation{
 		responseID: state.responseID,
 		inputLen:   sent,
 		inputHash:  hashItems(full[:sent]),
-		// The response's own output items land in the context before the next
-		// turn, and the server already has them.
-		outputLen: state.outputItems(),
-		lane:      lane,
+		output:     state.output,
+		lane:       lane,
 	}
 }
 
