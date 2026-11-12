@@ -1268,6 +1268,9 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Dire
 		}
 	}
 	b.stampDestination(f)
+	if af, ok := f.(*frames.AggregatedTextFrame); ok {
+		b.stampSegmentAnnouncement(af)
+	}
 	if b.exprFormatter != nil {
 		sounds, keep := b.reportExpression(f)
 		for _, sound := range sounds {
@@ -1280,6 +1283,26 @@ func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Dire
 		}
 	}
 	return b.Base.PushFrame(ctx, f, dir)
+}
+
+// stampSegmentAnnouncement sends a segment's will-be-spoken frame through the
+// transport's clock queue, on the word-timestamp path.
+//
+// That frame announces the segment the progress frames of its words name.
+// Those carry a PTS and travel the transport's clock queue, while a frame with
+// none takes the queue behind the audio. For a context whose audio waits behind
+// another context's, its progress could then reach a client before the segment
+// it belongs to had been announced. The announcement is stamped with the
+// baseline its first word will be timed from, so it rides the clock queue
+// too, just ahead of its first progress frame.
+func (b *Base) stampSegmentAnnouncement(f *frames.AggregatedTextFrame) {
+	if !f.WillBeSpoken || !b.wordPath() {
+		return
+	}
+	if _, has := f.PTS(); has {
+		return
+	}
+	f.SetPTS(int64(max(b.lastWordPTS(), b.now())))
 }
 
 // maybeCloseAssistantTurn tells the aggregator to commit, for a context that

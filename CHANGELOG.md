@@ -346,6 +346,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (and its spoken text named the second announcement, leaving the first never
   completed), and every streamed token was announced on its own. In token mode
   only the sentence is announced now.
+- **A segment is announced ahead of its progress.** On the word-timestamp path
+  a segment's "will be spoken" frame carried no PTS, so it waited behind the
+  audio of the context before it while its progress frames, which carry one,
+  went out through the clock queue: a client could get progress for a segment
+  it had not been told about. The announcement is now stamped with the baseline
+  its first word is timed from.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

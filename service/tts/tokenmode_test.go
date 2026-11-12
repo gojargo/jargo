@@ -302,3 +302,62 @@ func TestTokenModeAnnouncesNoTokenOnItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// TestSegmentAnnouncementPrecedesItsProgress checks, on the word-timestamp
+// path, that each segment's announcement carries a PTS no later than its first
+// progress frame, so it rides the transport's clock queue ahead of it rather
+// than waiting behind another context's audio.
+func TestSegmentAnnouncementPrecedesItsProgress(t *testing.T) {
+	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+		{{Word: "Comment", Offset: 0}, {Word: "ca", Offset: 0.1}, {Word: "va", Offset: 0.2}},
+		{{Word: "Bom", Offset: 0}, {Word: "jour", Offset: 0.1}},
+	}}
+	var mu sync.Mutex
+	var got []frames.Frame
+	task := pipeline.NewWorker(pipeline.New(tts.New("TimedTTS", synth)), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		got = append(got, f)
+		mu.Unlock()
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrames([]frames.Frame{frames.NewTTSSpeakFrame("Comment ca va"), frames.NewTTSSpeakFrame("Bom jour")})
+	time.Sleep(400 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+	synth.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	anchors := map[uint64]int64{}
+	firstProgress := map[uint64]int64{}
+	for _, f := range got {
+		switch fr := f.(type) {
+		case *frames.AggregatedTextFrame:
+			if !fr.WillBeSpoken {
+				continue
+			}
+			pts, ok := fr.PTS()
+			if !ok {
+				t.Errorf("announcement %q carries no PTS", fr.Text)
+			}
+			anchors[fr.ID()] = pts
+		case *frames.AggregatedTextProgressFrame:
+			if _, seen := firstProgress[fr.SegmentID]; !seen {
+				pts, _ := fr.PTS()
+				firstProgress[fr.SegmentID] = pts
+			}
+		}
+	}
+	if len(anchors) != 2 {
+		t.Fatalf("announcements = %d, want two", len(anchors))
+	}
+	for id, pts := range anchors {
+		if first, ok := firstProgress[id]; ok && pts > first {
+			t.Errorf("segment %d announced at %d, after its first progress at %d", id, pts, first)
+		}
+	}
+}
