@@ -82,7 +82,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	http.Handle("/", http.FileServer(http.FS(static)))
+	// The page is the only file, served by name, so nothing lists a directory.
+	http.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, static, "index.html")
+	})
 	http.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) { handleOffer(w, r, v) })
 
 	addr := v.GetString("addr")

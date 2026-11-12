@@ -34,7 +34,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	http.Handle("/", http.FileServer(http.FS(static)))
+	// The page is the only file, served by name, so nothing lists a directory.
+	http.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, static, "index.html")
+	})
 	http.HandleFunc("/offer", handleOffer)
 
 	slog.Info("jargo echo bot listening", "url", "http://localhost"+addr)

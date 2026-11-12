@@ -326,6 +326,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   TwiML.** The header is the client's to set, so it could inject markup into
   the response.
 
+- **The echo and voicebot examples serve their page by name** rather than
+  through a file server, so nothing lists a directory.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added
