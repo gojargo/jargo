@@ -317,6 +317,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   error message from Cartesia, report what the service was timing as far as
   it got.
 
+### Security
+
+- **`golang.org/x/net` is at v0.62.0** in the library, the Redis bus and the
+  benchmarks, for CVE-2026-78661 and CVE-2026-97045.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added
