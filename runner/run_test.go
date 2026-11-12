@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -331,7 +332,8 @@ func TestSessionProxyFallsBackToTheStartBody(t *testing.T) {
 		{"requestData empty object", map[string]any{"requestData": map[string]any{}}, `{"user":"ada"}`},
 		{
 			"request_data null, requestData set",
-			map[string]any{"request_data": nil, "requestData": map[string]any{"x": 1}}, `{"x":1}`,
+			map[string]any{"request_data": nil, "requestData": map[string]any{"x": 1}},
+			`{"x":1}`,
 		},
 		{"request_data set", map[string]any{"request_data": map[string]any{"y": 2}}, `{"y":2}`},
 	} {
@@ -340,9 +342,7 @@ func TestSessionProxyFallsBackToTheStartBody(t *testing.T) {
 			sessionID := str(tr.start(t, map[string]any{"body": map[string]any{"user": "ada"}}), "sessionId")
 			_, offer := pionOffer(t)
 			req := map[string]any{"sdp": offer.SDP, "type": "offer"}
-			for k, v := range tc.extra {
-				req[k] = v
-			}
+			maps.Copy(req, tc.extra)
 			if status, _ := tr.do(t, http.MethodPost, "/sessions/"+sessionID+"/api/offer", req); status != http.StatusOK {
 				t.Fatalf("offer = %d", status)
 			}
