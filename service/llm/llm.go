@@ -1655,6 +1655,12 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		Result:       report,
 	}
 	if err := callHandler(ctx, item.handler, params); err != nil {
+		if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			// The call was canceled, by its timeout, an interruption or the
+			// pipeline ending, and whatever canceled it has settled it. A handler
+			// returning the cancellation is how it stops, not a failure.
+			return
+		}
 		// The failure came from the application's own handler, so it says nothing
 		// about whether this service can go on doing its job.
 		b.PushError(ctx, fmt.Sprintf("error executing function call [%s]: %v", call.name, err), err, false,

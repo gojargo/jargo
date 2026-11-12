@@ -340,3 +340,70 @@ func TestAPanickingHandlerSettlesItsCall(t *testing.T) {
 		t.Errorf("errors = %v, want one application error", watch.errors)
 	}
 }
+
+// runCanceledCall runs one tool call whose handler waits for its context and
+// returns its error, as a cancel-aware handler does, and cancels it: by its
+// timeout, or by an interruption.
+func runCanceledCall(t *testing.T, opts []llm.Option, interrupt bool) *callWatch {
+	t.Helper()
+	gen := &onceToolGen{}
+	svc := llm.New("FakeToolLLM", gen, opts...)
+	running := make(chan struct{}, 1)
+	svc.RegisterFunction("get_weather", func(ctx context.Context, _ llm.FunctionCallParams) error {
+		running <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	watch := newCallWatch()
+	probe := newProbe(watch.see)
+	convo := toolConvo("get_weather")
+	pair := aggregators.New(convo)
+	task := pipeline.NewWorker(pipeline.New(svc, probe, pair.Assistant()), pipeline.WorkerConfig{})
+	events.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+		watch.mu.Lock()
+		watch.errors = append(watch.errors, ef)
+		watch.mu.Unlock()
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewLLMContextFrame(convo))
+	select {
+	case <-running:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the handler never ran")
+	}
+	if interrupt {
+		task.QueueFrame(frames.NewInterruptionFrame())
+	}
+	watch.wait(t)
+	time.Sleep(200 * time.Millisecond)
+	task.StopWhenDone()
+	<-runDone
+	return watch
+}
+
+// TestACanceledHandlerIsNotAFailure checks a handler that stops because its
+// call was canceled, returning its context's error, is not reported as a failed
+// tool: the call ends as canceled, with no error and no result.
+func TestACanceledHandlerIsNotAFailure(t *testing.T) {
+	cases := map[string]struct {
+		opts      []llm.Option
+		interrupt bool
+	}{
+		"timeout":      {opts: []llm.Option{llm.WithFunctionCallTimeout(50 * time.Millisecond)}},
+		"interruption": {interrupt: true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := runCanceledCall(t, c.opts, c.interrupt)
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			if len(w.errors) != 0 {
+				t.Errorf("errors = %q, want none for a canceled call", w.errors[0].Error)
+			}
+			if len(w.results) != 0 {
+				t.Errorf("results = %d, want none for a canceled call", len(w.results))
+			}
+		})
+	}
+}

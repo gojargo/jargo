@@ -177,6 +177,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   returned error: it is logged with its stack, reported upstream as an
   application error, and the call is settled with the failure result. The LLM
   worker releases a panicking call too, rather than holding its frames for good.
+- **A canceled tool call is not reported as a failed one.** A handler that
+  stopped because its call was canceled, by its timeout or by the user
+  interrupting, and returned its context's error as Go code does, was reported
+  upstream as a failed tool on every timeout and every barge-in over a running
+  tool. The call already ends as canceled; returning the cancellation is no
+  longer an error.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
