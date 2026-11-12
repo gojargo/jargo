@@ -59,10 +59,9 @@ func collectAggregated(
 	return append([]*frames.AggregatedTextFrame(nil), got...)
 }
 
-// The frame announcing what is about to be spoken says how the text was
-// grouped. A service passing tokens straight through says so, rather than
-// describing every token as a sentence.
-func TestAggregatedTextCarriesHowItWasGrouped(t *testing.T) {
+// A service passing tokens straight through announces what is about to be
+// spoken once, as the sentence the tokens make, rather than token by token.
+func TestAggregatedTextInTokenModeIsTheSentence(t *testing.T) {
 	agg := ttstext.NewSimpleAggregator(frames.TextTypeToken, "")
 	got := collectAggregated(t, agg, func(task *pipeline.Worker) {
 		task.QueueFrame(frames.NewLLMFullResponseStartFrame())
@@ -70,14 +69,17 @@ func TestAggregatedTextCarriesHowItWasGrouped(t *testing.T) {
 		task.QueueFrame(frames.NewLLMFullResponseEndFrame())
 	})
 
-	if len(got) == 0 {
-		t.Fatal("no aggregated text reached the pipeline")
+	var announced []*frames.AggregatedTextFrame
+	for _, f := range got {
+		if f.WillBeSpoken {
+			announced = append(announced, f)
+		}
 	}
-	if got[0].TextType != frames.TextTypeToken {
-		t.Errorf("aggregated by = %q, want %q", got[0].TextType, frames.TextTypeToken)
+	if len(announced) != 1 {
+		t.Fatalf("announcements = %d, want one", len(announced))
 	}
-	if got[0].RawText != "Hello there." {
-		t.Errorf("raw text = %q, want the text as written", got[0].RawText)
+	if announced[0].TextType == frames.TextTypeToken || announced[0].Text != "Hello there." {
+		t.Errorf("announced %q grouped by %q, want the sentence", announced[0].Text, announced[0].TextType)
 	}
 }
 

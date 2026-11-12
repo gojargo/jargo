@@ -1500,12 +1500,18 @@ func (b *Base) speakText(
 	}
 
 	opening := !b.AudioContextAvailable(contextID)
-	if opening {
+	// In token mode the unit is a single token, not what a listener cares about:
+	// the sequencer gathers the tokens into a sentence and announces that, so
+	// announcing the unit too would be a second announcement (for a
+	// TTSSpeakFrame, an exact duplicate).
+	switch {
+	case b.isStreamingTokens():
+	case opening:
 		// Serialized so it lands immediately before the start of the context it
 		// describes, rather than racing ahead of audio still draining from the
 		// turn before.
 		_ = b.queueSerial(ctx, aggregated, processor.Downstream)
-	} else {
+	default:
 		b.AppendToAudioContext(contextID, aggregated)
 	}
 

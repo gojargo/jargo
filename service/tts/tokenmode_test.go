@@ -251,3 +251,54 @@ func TestTokenModeWithoutWordTimestampsRecordsEachSentenceOnce(t *testing.T) {
 		t.Fatalf("messages = %+v, want one assistant %q", msgs, "Hello there.")
 	}
 }
+
+// TestTokenModeAnnouncesEachUnitOnce checks a TTSSpeakFrame spoken in token mode
+// is announced once, by the sentence the tokens are gathered into, and the
+// spoken text names that announcement.
+func TestTokenModeAnnouncesEachUnitOnce(t *testing.T) {
+	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+		{{Word: "One", Offset: 0}, {Word: "moment,", Offset: 0.1}, {Word: "please.", Offset: 0.2}},
+	}}
+	down := runTokenMode(t, synth, frames.NewTTSSpeakFrame("One moment, please."))
+
+	var anchors []*frames.AggregatedTextFrame
+	var words []*frames.TTSTextFrame
+	for _, f := range down {
+		switch fr := f.(type) {
+		case *frames.AggregatedTextFrame:
+			if fr.WillBeSpoken {
+				anchors = append(anchors, fr)
+			}
+		case *frames.TTSTextFrame:
+			words = append(words, fr)
+		}
+	}
+	if len(anchors) != 1 {
+		t.Fatalf("announcements = %d, want one", len(anchors))
+	}
+	for _, w := range words {
+		if w.SegmentID != anchors[0].ID() {
+			t.Errorf("word %q names segment %d, want the one announced (%d)", w.Text, w.SegmentID, anchors[0].ID())
+		}
+	}
+}
+
+// TestTokenModeAnnouncesNoTokenOnItsOwn checks streamed tokens are announced as
+// the sentence they make, never one by one.
+func TestTokenModeAnnouncesNoTokenOnItsOwn(t *testing.T) {
+	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+		{{Word: "Hi", Offset: 0}},
+		{{Word: "there.", Offset: 0.2}},
+	}}
+	down := runTokenMode(t, synth,
+		frames.NewLLMFullResponseStartFrame(),
+		frames.NewTextFrame("Hi"),
+		frames.NewTextFrame(" there."),
+		frames.NewLLMFullResponseEndFrame(),
+	)
+	for _, f := range down {
+		if a, ok := f.(*frames.AggregatedTextFrame); ok && a.WillBeSpoken && a.TextType == frames.TextTypeToken {
+			t.Errorf("a token was announced on its own: %q", a.Text)
+		}
+	}
+}

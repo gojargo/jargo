@@ -340,6 +340,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   unit, for a provider whose `RunTTS` synthesizes before it returns, and not in
   token mode. A provider that hands its text off (a `ContextSynthesizer`)
   reports none, unless it implements the new `ProcessingMetricsSupporter`.
+- **Token mode announces each sentence once.** With the token aggregator, the
+  TTS base pushed its own "will be spoken" frame for every unit on top of the
+  sentence the sequencer announces, so a `TTSSpeakFrame` was announced twice
+  (and its spoken text named the second announcement, leaving the first never
+  completed), and every streamed token was announced on its own. In token mode
+  only the sentence is announced now.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,
