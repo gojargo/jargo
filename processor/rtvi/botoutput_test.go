@@ -413,9 +413,8 @@ func TestBotOutputTransformRewritesTheSegmentAndItsCaption(t *testing.T) {
 	params := rtvi.DefaultObserverParams()
 	params.BotOutputTransforms = []rtvi.BotOutputTransformer{{
 		TextType: frames.AnyTextType,
-		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
-			seg.Text = strings.ToUpper(seg.Text)
-			return seg
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputTransformResult {
+			return rtvi.BotOutputTransformResult{Text: strings.ToUpper(seg.Text)}
 		},
 	}}
 
@@ -440,9 +439,8 @@ func TestBotOutputTransformAppliesToItsAggregationType(t *testing.T) {
 	params := rtvi.DefaultObserverParams()
 	params.BotOutputTransforms = []rtvi.BotOutputTransformer{{
 		TextType: "code",
-		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
-			seg.Text = "[redacted]"
-			return seg
+		Transform: func(rtvi.BotOutputText) rtvi.BotOutputTransformResult {
+			return rtvi.BotOutputTransformResult{Text: "[redacted]"}
 		},
 	}}
 
@@ -465,22 +463,23 @@ func TestBotOutputTransformAppliesToItsAggregationType(t *testing.T) {
 }
 
 // A progress report is rewritten as one, so a transform can keep the split
-// consistent with the text it produces. Leaving a part empty keeps what the
+// consistent with the text it produces. Leaving a part nil keeps what the
 // rewrite was given.
 func TestBotOutputTransformSeesTheWholeProgressReport(t *testing.T) {
 	var seen []rtvi.BotOutputText
 	params := rtvi.DefaultObserverParams()
 	params.BotOutputTransforms = []rtvi.BotOutputTransformer{{
 		TextType: frames.AnyTextType,
-		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputTransformResult {
 			seen = append(seen, seg)
 			if !seg.Progress {
-				return seg
+				return rtvi.BotOutputTransformResult{Text: seg.Text}
 			}
-			return rtvi.BotOutputText{
+			accumulated, remaining := "HELLO", " THERE."
+			return rtvi.BotOutputTransformResult{
 				Text:        "HELLO THERE.",
-				Accumulated: "HELLO",
-				Remaining:   " THERE.",
+				Accumulated: &accumulated,
+				Remaining:   &remaining,
 			}
 		},
 	}}
@@ -517,9 +516,8 @@ func TestBotOutputTransformCanBeAddedAndRemoved(t *testing.T) {
 	obs := rtvi.NewObserver(nil)
 	id := obs.AddBotOutputTransformer(rtvi.BotOutputTransformer{
 		TextType: frames.AnyTextType,
-		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputText {
-			seg.Text = strings.ToUpper(seg.Text)
-			return seg
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputTransformResult {
+			return rtvi.BotOutputTransformResult{Text: strings.ToUpper(seg.Text)}
 		},
 	})
 	obs.RemoveBotOutputTransformer(id)
@@ -546,5 +544,57 @@ func TestBotOutputSurvivesTheSpeakingCategoryBeingOff(t *testing.T) {
 	}
 	if got := outputs(msgs); len(got) != 1 || got[0].Text != "Hello there." {
 		t.Errorf("bot-output = %+v, want the segment released even so", got)
+	}
+}
+
+// Ported from upstream
+// (TestRTVIObserverSegments::test_progress_uses_the_text_a_progress_aware_transform_returns).
+// A part a rewrite empties is sent empty, so what a redaction removed never
+// reaches the client; and whether speech is done comes from the report, not
+// from the rewritten text.
+func TestBotOutputTransformAnEmptiedPartIsSentEmpty(t *testing.T) {
+	params := rtvi.DefaultObserverParams()
+	params.BotOutputTransforms = []rtvi.BotOutputTransformer{{
+		TextType: frames.AnyTextType,
+		Transform: func(seg rtvi.BotOutputText) rtvi.BotOutputTransformResult {
+			strip := func(s string) string { return strings.TrimSpace(strings.ReplaceAll(s, "[laughs]", "")) }
+			if !seg.Progress {
+				return rtvi.BotOutputTransformResult{Text: strip(seg.Text)}
+			}
+			accumulated, remaining := strip(seg.Accumulated), strip(seg.Remaining)
+			return rtvi.BotOutputTransformResult{
+				Text: strip(seg.Text), Accumulated: &accumulated, Remaining: &remaining,
+			}
+		},
+	}}
+
+	seg := segment("[laughs] Sure.", frames.TextTypeSentence)
+	msgs := outputHarness(t, params, "",
+		speaking(),
+		seg,
+		frames.NewAggregatedTextProgressFrame(seg.ID(), "", "[laughs] Sure.",
+			frames.TextTypeSentence, "[laughs]", " Sure."),
+	)
+
+	got := outputs(msgs)
+	if len(got) != 2 {
+		t.Fatalf("got %d bot-output messages, want the segment and its report: %+v", len(got), got)
+	}
+	for _, m := range got {
+		sent := m.Text
+		if m.SpokenProgress != nil {
+			sent += m.SpokenProgress.AccumulatedText + m.SpokenProgress.RemainingText
+		}
+		if strings.Contains(sent, "[laughs]") {
+			t.Errorf("a message still carries [laughs]: %+v", m)
+		}
+	}
+	progress := got[1]
+	if progress.SpokenProgress == nil || progress.SpokenProgress.AccumulatedText != "" ||
+		progress.SpokenProgress.RemainingText != "Sure." {
+		t.Errorf("progress = %+v, want accumulated empty and remaining Sure.", progress.SpokenProgress)
+	}
+	if progress.SpokenStatus != rtvi.SpokenInProgress {
+		t.Errorf("status = %q, want in progress: the report has words left", progress.SpokenStatus)
 	}
 }

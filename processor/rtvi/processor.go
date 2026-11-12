@@ -723,8 +723,10 @@ func (o *Observer) progressMessages(fr *frames.AggregatedTextProgressFrame) []Me
 	})
 
 	id, willBeSpoken := fr.SegmentID, true
+	// Whether speech is done comes from the frame: a rewrite may empty the
+	// text.
 	status := SpokenInProgress
-	if seg.Remaining == "" {
+	if fr.RemainingText == "" {
 		status = SpokenCompleted
 	}
 	return []Message{BotOutput(BotOutputData{

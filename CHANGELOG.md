@@ -663,6 +663,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   audio after a mute with audio from before it. The resamplers now start
   afresh at each bot reply, at each unmute and at each recording start.
 
+- **A bot output rewrite can empty part of a progress report.** On a spoken
+  progress report, an accumulated or remaining text a `BotOutputTransform`
+  returned empty fell back to the text it was given, so a redaction that
+  removed a whole word sent that word to the client anyway; and whether the
+  segment was spoken out was read from the rewritten text. A rewrite now
+  returns a `BotOutputTransformResult`, whose split parts are pointers: nil
+  keeps the part as given, and an empty string sends it empty. The spoken
+  status comes from the report itself. **Breaking:** `BotOutputTransform`
+  returns a `BotOutputTransformResult` rather than a `BotOutputText`.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

@@ -107,10 +107,21 @@ type BotOutputText struct {
 // client, for a bot whose text needs shaping before anyone reads it: expanding
 // an abbreviation, translating, redacting.
 //
-// It returns the segment rewritten. On a progress report, an Accumulated or
-// Remaining left empty keeps the value the rewrite was given, so a transform
-// that only rewrites the whole text does not have to split it again.
-type BotOutputTransform func(seg BotOutputText) BotOutputText
+// It returns the segment rewritten. On a progress report it may rewrite the
+// split too; a part it leaves nil keeps the value the rewrite was given, so a
+// transform that only rewrites the whole text does not have to split it again.
+type BotOutputTransform func(seg BotOutputText) BotOutputTransformResult
+
+// BotOutputTransformResult is a segment of the bot's output, rewritten.
+type BotOutputTransformResult struct {
+	// Text is the whole segment, rewritten.
+	Text string
+	// Accumulated and Remaining are the split rewritten, read on a progress
+	// report only. Nil keeps the part as the rewrite was given it; an empty
+	// string is the part emptied, a redacted word say, and is sent empty.
+	Accumulated *string
+	Remaining   *string
+}
 
 // BotOutputTransformer is one rewrite and the text type it applies to.
 type BotOutputTransformer struct {
@@ -353,18 +364,17 @@ func (o *Observer) transform(seg BotOutputText) BotOutputText {
 			continue
 		}
 		out := t.Transform(seg)
+		seg.Text = out.Text
 		// A rewrite that only reshaped the whole text leaves the split alone
 		// rather than having to work it out again.
 		if seg.Progress {
-			if out.Accumulated == "" {
-				out.Accumulated = seg.Accumulated
+			if out.Accumulated != nil {
+				seg.Accumulated = *out.Accumulated
 			}
-			if out.Remaining == "" {
-				out.Remaining = seg.Remaining
+			if out.Remaining != nil {
+				seg.Remaining = *out.Remaining
 			}
 		}
-		out.TextType, out.Progress = seg.TextType, seg.Progress
-		seg = out
 	}
 	return seg
 }

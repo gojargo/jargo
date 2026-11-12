@@ -23,7 +23,7 @@ func TestBotOutputTransformerAggregatedByIsStillHonored(t *testing.T) {
 	o := NewObserverWithParams(nil, ObserverParams{})
 	o.AddBotOutputTransformer(BotOutputTransformer{
 		AggregatedBy: frames.TextTypeSentence, //nolint:staticcheck // the deprecated field under test
-		Transform:    func(seg BotOutputText) BotOutputText { seg.Text = "rewritten"; return seg },
+		Transform:    func(BotOutputText) BotOutputTransformResult { return BotOutputTransformResult{Text: "rewritten"} },
 	})
 	if got := o.transform(BotOutputText{Text: "hello", TextType: frames.TextTypeSentence}).Text; got != "rewritten" {
 		t.Errorf("text = %q, want the rewrite registered under the deprecated field", got)
