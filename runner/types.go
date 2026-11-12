@@ -53,7 +53,8 @@ type RunnerArguments struct {
 	// PipelineIdleTimeout is how long the pipeline may stay idle before shutting
 	// down; zero disables it. The runner sets 300 seconds.
 	PipelineIdleTimeout time.Duration
-	// Body is the request data passed from the runner's entry point, as JSON.
+	// Body is the request data passed from the runner's entry point, as JSON. It
+	// is nil when none was given, which a bot can tell from an empty object.
 	Body json.RawMessage
 	// CallData is the parsed telephony handshake, set by CreateTransport for a
 	// telephony connection and nil otherwise.
@@ -69,9 +70,6 @@ func (a *RunnerArguments) Base() *RunnerArguments { return a }
 
 // newRunnerArguments returns the fields every session starts with.
 func newRunnerArguments(body json.RawMessage, sessionID string) RunnerArguments {
-	if body == nil {
-		body = json.RawMessage("{}")
-	}
 	return RunnerArguments{
 		PipelineIdleTimeout: 300 * time.Second,
 		Body:                body,

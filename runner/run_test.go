@@ -510,10 +510,12 @@ func TestTelephonyBotGetsTheRunnerBody(t *testing.T) {
 		t.Fatalf("body = %s", body)
 	}
 
+	// test_telephony_bot_without_a_runner_body: no body at all, not an empty
+	// one.
 	plain := newTestRunner(t, &Args{})
 	plain.dialWS(t, "/ws", nil)
-	if body := string(plain.waitSession(t).Base().Body); body != `{}` {
-		t.Fatalf("body without a runner body = %s", body)
+	if body := plain.waitSession(t).Base().Body; body != nil {
+		t.Fatalf("body without a runner body = %s, want none", body)
 	}
 }
 

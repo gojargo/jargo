@@ -108,6 +108,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A runner session with no body reaches the bot with none.** The dev
+  runner turned a missing body into `{}`, so a bot could not tell "no body"
+  from an empty object. `RunnerArguments.Body` is now nil when none was given.
+
 - **The Markdown filter reads as the text was written.** A double quote
   reached the synthesizer as `&quot;`. With tables filtered, a table whose
   delimiter row had five or more dashes was read out, because the
