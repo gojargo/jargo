@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **A TTS service can speak each sentence of a turn on a context of its
+  own.** `Base.SetReuseContextIDWithinTurn(false)` gives every unit a fresh
+  context instead of the turn's, for a provider that ends each request on
+  its own and cannot add to one it has started. Sharing the turn's context
+  stays the default, and streaming tokens needs it.
+
 - **A websocket TTS service can act around the base's redial.** A service
   implementing `tts.WebsocketReconnectPreparer` is called before each redial,
   ahead of the base ending the replaced connection's audio contexts (to wait

@@ -334,6 +334,10 @@ type Base struct {
 	exprMu       sync.Mutex
 	exprSettings map[string]any
 
+	// newContextPerUnit says every unit of a turn is spoken on a context of its
+	// own rather than on the turn's. See SetReuseContextIDWithinTurn.
+	newContextPerUnit bool
+
 	// websocket is the connection lifecycle of a service that speaks over a
 	// WebSocket held open for the call, nil for any other. See websocket.go.
 	websocket *Websocket
@@ -1019,10 +1023,22 @@ func (b *Base) queueSerial(ctx context.Context, f frames.Frame, dir processor.Di
 	return nil
 }
 
+// SetReuseContextIDWithinTurn says whether the sentences of a turn share the
+// turn's context, which is the default. A provider that ends each request on
+// its own, with no way to add to one it has started, turns it off, and every
+// sentence then gets a context of its own.
+//
+// Streaming tokens needs it on: the tokens are regrouped into sentences by the
+// context they share.
+func (b *Base) SetReuseContextIDWithinTurn(reuse bool) {
+	b.newContextPerUnit = !reuse
+}
+
 // createContextID returns the turn's context id, so every sentence of a turn is
-// synthesized on one context, or a fresh one outside a turn.
+// synthesized on one context, or a fresh one outside a turn or for a service
+// that does not reuse the turn's.
 func (b *Base) createContextID() string {
-	if id := b.turnContextID(); id != "" {
+	if id := b.turnContextID(); id != "" && !b.newContextPerUnit {
 		// Keep the open context from timing out while the next sentence is still
 		// being generated.
 		b.refreshAudioContext(id)
