@@ -2,7 +2,7 @@ module github.com/gojargo/jargo/benchmarks
 
 go 1.27
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 // The suite measures the library in the tree beside it, not a published
 // release, so a change and its effect on the numbers land in the same commit.

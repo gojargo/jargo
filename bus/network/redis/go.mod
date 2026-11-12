@@ -2,7 +2,7 @@ module github.com/gojargo/jargo/bus/network/redis
 
 go 1.27
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 // Developed against the library in the tree around it, so a change to the bus
 // and the Redis bus built on it land in one commit. A module depending on this
