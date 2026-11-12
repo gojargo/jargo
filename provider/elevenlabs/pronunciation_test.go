@@ -49,7 +49,7 @@ func TestTheWebSocketServiceNeedsAPhonemeModelAndSSMLParsing(t *testing.T) {
 		{"eleven_flash_v2", &off, false},
 	}
 	for _, tc := range cases {
-		s := &realtimeSynthesizer{cfg: RealtimeTTSConfig{Model: tc.model, EnableSSMLParsing: tc.ssml}}
+		s := newRealtimeSynthesizer(RealtimeTTSConfig{Model: tc.model, EnableSSMLParsing: tc.ssml})
 		if got := s.SupportsPronunciations(); got != tc.want {
 			t.Errorf("model %s, ssml %v: supports = %v, want %v", tc.model, tc.ssml, got, tc.want)
 		}
@@ -67,11 +67,11 @@ func TestTheHTTPServiceNeedsAPhonemeModel(t *testing.T) {
 
 func TestSSMLParsingIsSentWhenSet(t *testing.T) {
 	on := true
-	s := &realtimeSynthesizer{cfg: RealtimeTTSConfig{EnableSSMLParsing: &on}.withDefaults()}
+	s := newRealtimeSynthesizer(RealtimeTTSConfig{EnableSSMLParsing: &on})
 	if q := parseEndpoint(t, s.endpoint()); q.Get("enable_ssml_parsing") != "true" {
 		t.Fatalf("enable_ssml_parsing = %q, want true", q.Get("enable_ssml_parsing"))
 	}
-	s = &realtimeSynthesizer{cfg: RealtimeTTSConfig{}.withDefaults()}
+	s = newRealtimeSynthesizer(RealtimeTTSConfig{})
 	if q := parseEndpoint(t, s.endpoint()); q.Has("enable_ssml_parsing") {
 		t.Fatal("enable_ssml_parsing was sent when it was not set")
 	}

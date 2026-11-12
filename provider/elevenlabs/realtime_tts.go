@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -19,6 +21,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 	uctx "github.com/gojargo/jargo/utils/context"
 )
@@ -31,31 +34,35 @@ const realtimeTTSPath = "/v1/text-to-speech/%s/multi-stream-input"
 // defaultRealtimeTTSHost is the ElevenLabs WebSocket host.
 const defaultRealtimeTTSHost = "wss://api.elevenlabs.io"
 
-// keepaliveInterval is how often an idle connection is pinged with empty text.
-// The server drops a stream that has gone quiet, and between turns nothing is
-// sent for as long as the user talks.
+// keepaliveInterval is how often an idle connection is sent empty text. The
+// server drops a stream that has gone quiet, and between turns nothing is sent
+// for as long as the user talks.
 const keepaliveInterval = 10 * time.Second
-
-// abortWriteTimeout bounds the best-effort close sent for an interrupted turn.
-const abortWriteTimeout = 2 * time.Second
 
 // Message keys on the multi-stream-input protocol.
 const (
 	keyText         = "text"
 	keyContextID    = "context_id"
 	keyCloseContext = "close_context"
+	keyCloseSocket  = "close_socket"
 	keyFlush        = "flush"
 )
 
-// errRealtimeTTS wraps an error the server reported on the stream.
+// errRealtimeTTS wraps an error reading or writing the stream.
 //
 //nolint:gochecknoglobals // sentinel error
 var errRealtimeTTS = errors.New("elevenlabs realtime tts")
 
-// errStreamClosed releases a turn whose connection failed under it.
+// errWebsocketUnavailable is returned for a sentence when there is still no
+// connection after connecting again.
 //
 //nolint:gochecknoglobals // sentinel error
-var errStreamClosed = errors.New("elevenlabs realtime tts: stream closed")
+var errWebsocketUnavailable = errors.New("elevenlabs realtime tts: websocket unavailable")
+
+// errNotConnected is returned when there is no connection to use.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNotConnected = errors.New("elevenlabs realtime tts: websocket not connected")
 
 // RealtimeTTSConfig configures the streaming WebSocket TTS service.
 type RealtimeTTSConfig struct {
@@ -97,6 +104,9 @@ type RealtimeTTSConfig struct {
 	// concurrently on the one connection (two speak frames pushed at once, or
 	// back-to-back turns) and still play in order.
 	PauseFrameProcessing *bool
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -116,11 +126,11 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 		c.SampleRate = defaultSampleRate
 	}
 	if c.AutoMode == nil {
-		// Without auto mode the server holds text until it is explicitly flushed,
-		// and closing a context discards whatever was never flushed — the synthesis
-		// then ends with a final marker and no audio at all. Sentence-at-a-time
-		// synthesis has nothing to gain from that buffering, so it is on unless the
-		// caller turns it off.
+		// Without auto mode the server holds text until it is explicitly
+		// flushed, and closing a context discards whatever was never flushed:
+		// the synthesis then ends with a final marker and no audio at all.
+		// Sentence-at-a-time synthesis has nothing to gain from that buffering,
+		// so it is on unless the caller turns it off.
 		c.AutoMode = new(true)
 	}
 	if c.PauseFrameProcessing == nil {
@@ -131,10 +141,20 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 
 // NewRealtimeTTS builds an ElevenLabs TTS service over the streaming WebSocket
 // API. Unlike NewTTS, which issues one HTTP request per sentence, this holds a
-// single connection open for the session and one synthesis context open for each
+// single connection open for the call and one synthesis context open for each
 // turn, so neither a sentence nor a turn pays for setup before its audio starts.
+//
+// The connection is opened when the pipeline starts. When it drops it is
+// restored with backoff, and when that keeps failing the service reports a
+// permanent error and becomes unusable. See tts.Websocket.
 func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
-	s := &realtimeSynthesizer{cfg: cfg.withDefaults()}
+	b, _ := newRealtimeTTS(cfg)
+	return b
+}
+
+// newRealtimeTTS builds the service and returns its synthesizer alongside it.
+func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
+	s := newRealtimeSynthesizer(cfg)
 	// The multi-stream endpoint serves no Eleven v3 or v4 model: the connection
 	// is rejected with a 400 at the handshake, which surfaces as an opaque error
 	// that leaves the service unusable. Say so up front, with a pointer to the
@@ -144,7 +164,7 @@ func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
 			"endpoint does not serve; use NewTTS for HTTP streaming", "model", model)
 	}
 	var b *tts.Base
-	if cfg.WordTimestamps {
+	if s.cfg.WordTimestamps {
 		// Only the timestamp-aware type implements tts.WordTimestamps, so the
 		// base takes the word-aligned path solely when timings were requested.
 		b = tts.New("ElevenLabsRealtimeTTS", &timedRealtimeSynthesizer{realtimeSynthesizer: s})
@@ -152,38 +172,71 @@ func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
 		b = tts.New("ElevenLabsRealtimeTTS", s)
 	}
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: *s.cfg.PauseFrameProcessing})
-	return b
+	s.svc = b
+	s.ws = tts.NewWebsocket(b, s, s.cfg.Websocket)
+	return b, s
 }
 
-// realtimeSynthesizer streams over one held-open connection, with one synthesis
-// context per turn.
+// newRealtimeSynthesizer builds the synthesizer, with its settings taken from
+// cfg.
+func newRealtimeSynthesizer(cfg RealtimeTTSConfig) *realtimeSynthesizer {
+	s := &realtimeSynthesizer{cfg: cfg.withDefaults()}
+	s.live = newRealtimeTTSSettings(s.cfg)
+	s.refreshConnectionSettings()
+	return s
+}
+
+// realtimeService is the part of the TTS service the synthesizer asks about
+// the audio contexts, and reports through. tts.Base implements it.
+type realtimeService interface {
+	ActiveAudioContextID() string
+	AudioContextIDs() []string
+	StopAllMetrics(ctx context.Context)
+	WarnUnhandledUpdatedSettings(ctx context.Context, unhandled []string)
+}
+
+// realtimeSynthesizer streams over one connection held open for the call, with
+// one synthesis context per turn.
 //
-// A reader goroutine owns the socket for as long as the connection lasts and
-// attributes each message to the context id it carries. Sending a sentence is
-// therefore just a write: it does not wait for the audio of the sentence before
-// it, so the server generates the next while the current is still playing. The
-// audio it reads goes into the base's audio context for that id, which is what
-// pushes it downstream in order.
+// The base's receive loop reads the connection and attributes each message to
+// the context id it carries. Sending a sentence is therefore just a write: it
+// does not wait for the audio of the sentence before it, so the server
+// generates the next while the current is still playing. The audio goes into
+// the base's audio context for that id, which is what pushes it downstream in
+// order.
 type realtimeSynthesizer struct {
 	cfg  RealtimeTTSConfig
 	host tts.AudioContextHost
+	svc  realtimeService
+	ws   *tts.Websocket
 
-	// writeMu serializes writes; the keepalive and the frame goroutine both
-	// write, and the connection permits one writer at a time.
-	writeMu sync.Mutex
+	// live is the settings store, which the base updates on the frame
+	// goroutine. It is read only there; what the connection needs of it is
+	// copied into conn* below under mu, since a redial reads those from the
+	// receive loop.
+	live *RealtimeTTSSettings
 
-	// mu guards the connection and the per-context state. It is never held
-	// across a call into the host: appending blocks while the audio plays out,
-	// and the next sentence has to be able to go out while that happens.
-	mu       sync.Mutex
-	conn     *wsutil.Conn
-	connStop context.CancelFunc
-	// keepalive holds the connection open between turns.
-	keepalive tts.Keepalive
-	// active is the context the keepalive may name, set once its opening message
-	// has gone out.
-	active string
-	states map[string]*contextState
+	// dialMu serializes opening and closing the connection: the receive loop
+	// redials while a sentence may be reconnecting on the frame goroutine.
+	dialMu sync.Mutex
+
+	// mu guards everything below. It is never held across a call into the
+	// host or a write.
+	mu   sync.Mutex
+	conn *realtimeConn
+	// connURL is the endpoint the next connection dials, and spaceless whether
+	// the language set is written without spaces between words.
+	connURL   string
+	spaceless bool
+	// contextInitSent holds the contexts whose opening message has gone out on
+	// this connection, which are the only ones a keepalive may name.
+	contextInitSent map[string]bool
+	// alignmentStarted holds the contexts that have been given an alignment
+	// yet, which is what makes the next one utterance-leading or not.
+	alignmentStarted map[string]bool
+	// wordClocks holds each context's word timing state. The server
+	// interleaves the alignment of concurrent contexts on one connection.
+	wordClocks map[string]*wordClock
 }
 
 // timedRealtimeSynthesizer adds word-timestamp streaming on top of
@@ -192,8 +245,9 @@ type timedRealtimeSynthesizer struct {
 	*realtimeSynthesizer
 }
 
-// contextState is what the reader carries across one context's messages.
-type contextState struct {
+// wordClock is the word timing state of one context's alignment stream.
+type wordClock struct {
+	// acc carries a word split across alignment messages until it ends.
 	acc uctx.CharAccumulator
 	// cumulative is how much of this context's audio earlier messages accounted
 	// for, in seconds. ElevenLabs times each message from the start of the audio
@@ -201,31 +255,61 @@ type contextState struct {
 	// without that every message after the first reports its words as starting
 	// near zero.
 	cumulative float64
-	// alignmentStarted reports whether this context has been given an alignment
-	// yet, which is what makes the next one utterance-leading or not.
-	alignmentStarted bool
-	// direct, when set, takes the audio instead of the host. It is the standalone
-	// Synthesize path, which has no audio context to append to.
-	direct *directSink
 }
 
-// directSink receives a standalone synthesis, for a caller holding the
-// synthesizer outside a pipeline.
-type directSink struct {
-	audio func(pcm []byte) error
-	word  func(text string, offset float64) error
-	done  chan struct{}
-	once  sync.Once
-	err   error
+// realtimeConn is one connection, with the goroutine reading it.
+//
+// The reading runs apart from the receive loop so stopping the loop does not
+// close the connection: the service still has to ask the server to close it,
+// and wait for it to, which a read cut short would make impossible.
+type realtimeConn struct {
+	conn *wsutil.Conn
+	// reads carries each message read, and finally the error that ended the
+	// reading.
+	reads chan realtimeRead
+	// stop is closed when the connection is being closed, which ends the reading
+	// goroutine once nothing takes its messages any more.
+	stop     chan struct{}
+	stopOnce sync.Once
+	// readEnded is set once the reading has failed, which is the connection
+	// closing as far as the service is concerned.
+	readEnded atomic.Bool
 }
 
-// settle releases the waiter, with err if the synthesis did not finish cleanly.
-func (d *directSink) settle(err error) {
-	d.once.Do(func() {
-		d.err = err
-		close(d.done)
-	})
+// realtimeRead is one message read from the connection, or the error that ended
+// the reading.
+type realtimeRead struct {
+	data []byte
+	err  error
 }
+
+func newRealtimeConn(conn *wsutil.Conn) *realtimeConn {
+	c := &realtimeConn{conn: conn, reads: make(chan realtimeRead), stop: make(chan struct{})}
+	go c.read()
+	return c
+}
+
+// read reads the connection until it ends, handing each message to whoever
+// receives from reads.
+func (c *realtimeConn) read() {
+	for {
+		_, data, err := c.conn.Read(context.Background())
+		if err != nil {
+			c.readEnded.Store(true)
+		}
+		select {
+		case c.reads <- realtimeRead{data: data, err: err}:
+		case <-c.stop:
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// halt stops handing messages on, for a connection about to be closed.
+func (c *realtimeConn) halt() { c.stopOnce.Do(func() { close(c.stop) }) }
 
 // SetAudioContextHost records the host this provider appends its audio to,
 // implementing tts.ContextSynthesizer.
@@ -239,13 +323,27 @@ func (s *realtimeSynthesizer) Metadata() tts.Metadata {
 	return tts.Metadata{Model: s.cfg.Model, VoiceID: s.cfg.VoiceID}
 }
 
-// spacelessLanguage reports whether the configured language is written without
-// spaces between words. Chinese and Japanese are, so the tokens this provider
-// times already read as continuous text and a consumer joining them must add no
-// spacing of its own.
-func (s *realtimeSynthesizer) spacelessLanguage() bool {
-	switch s.cfg.Language.BaseCode() {
-	case "zh", "ja":
+// model is the model the settings name.
+func (s *realtimeSynthesizer) model() string { return s.live.Model.Or(s.cfg.Model) }
+
+// refreshConnectionSettings copies what the connection needs from the settings
+// store. It runs on the frame goroutine, which is where the store is written.
+func (s *realtimeSynthesizer) refreshConnectionSettings() {
+	endpoint := s.endpoint()
+	spaceless := wordTimestampsIncludeInterFrameSpaces(s.live.Language.Or(""))
+	s.mu.Lock()
+	s.connURL, s.spaceless = endpoint, spaceless
+	s.mu.Unlock()
+}
+
+// wordTimestampsIncludeInterFrameSpaces reports whether the language is written
+// without spaces between words. Chinese (Cantonese included) and Japanese are,
+// so the tokens this provider times already read as continuous text and a
+// consumer joining them must add no spacing of its own.
+func wordTimestampsIncludeInterFrameSpaces(lang string) bool {
+	base, _, _ := strings.Cut(lang, "-")
+	switch strings.ToLower(base) {
+	case "zh", "yue", "ja":
 		return true
 	default:
 		return false
@@ -256,13 +354,10 @@ func (s *realtimeSynthesizer) spacelessLanguage() bool {
 // are fixed for the connection; only the text varies per message.
 func (s *realtimeSynthesizer) endpoint() string {
 	q := url.Values{}
-	q.Set("model_id", s.cfg.Model)
+	q.Set("model_id", s.model())
 	q.Set("output_format", outputFormat(s.cfg.SampleRate))
 	if s.cfg.AutoMode != nil {
 		q.Set("auto_mode", strconv.FormatBool(*s.cfg.AutoMode))
-	}
-	if s.cfg.ApplyTextNormalization != "" {
-		q.Set("apply_text_normalization", s.cfg.ApplyTextNormalization)
 	}
 	if s.cfg.EnableSSMLParsing != nil {
 		q.Set("enable_ssml_parsing", strconv.FormatBool(*s.cfg.EnableSSMLParsing))
@@ -270,414 +365,427 @@ func (s *realtimeSynthesizer) endpoint() string {
 	if s.cfg.EnableLogging != nil {
 		q.Set("enable_logging", strconv.FormatBool(*s.cfg.EnableLogging))
 	}
-	if code := elevenlabsLanguage(s.cfg.Language); code != "" {
+	if normalization, ok := s.live.ApplyTextNormalization.Value(); ok && normalization != "" {
+		q.Set("apply_text_normalization", normalization)
+	}
+	if code := elevenlabsLanguage(language.Language(s.live.Language.Or(""))); code != "" {
 		q.Set("language_code", code)
 	}
-	path := fmt.Sprintf(realtimeTTSPath, s.cfg.VoiceID)
+	path := fmt.Sprintf(realtimeTTSPath, s.live.Voice.Or(s.cfg.VoiceID))
 	return s.cfg.Host + path + "?" + q.Encode()
 }
 
-// stream returns the shared connection, dialing it on first use and redialing
-// when a previous turn left it broken. Dialing also starts the goroutines that
-// own the connection for its lifetime. Callers hold mu.
-func (s *realtimeSynthesizer) stream(ctx context.Context) (*wsutil.Conn, error) {
-	if s.conn != nil {
-		return s.conn, nil
+// Start connects when the pipeline starts, implementing tts.Starter. The
+// handshake to the vendor is the slowest part of a call's first sentence, so
+// leaving it to the first sentence puts it in front of the bot's opening words.
+func (s *realtimeSynthesizer) Start(ctx context.Context) {
+	s.refreshConnectionSettings()
+	s.Connect(ctx)
+}
+
+// Connect opens the connection, then starts the receive loop and the keepalive,
+// implementing tts.WebsocketService.
+func (s *realtimeSynthesizer) Connect(ctx context.Context) {
+	s.ws.Connect()
+	_ = s.ConnectWebsocket(ctx)
+	if s.Connected() {
+		s.ws.StartReceiveTask(ctx)
+		s.ws.CreateKeepaliveTask(ctx, keepaliveInterval, s)
 	}
+}
+
+// Disconnect stops the receive loop and the keepalive and closes the
+// connection, implementing tts.WebsocketService.
+func (s *realtimeSynthesizer) Disconnect(ctx context.Context) {
+	s.ws.Disconnect()
+	s.ws.CancelReceiveTask()
+	s.ws.CancelKeepaliveTask()
+	_ = s.DisconnectWebsocket(ctx)
+}
+
+// ConnectWebsocket opens the connection unless one is open, implementing
+// tts.WebsocketHandler. A failure is reported here and leaves no connection
+// behind, which a redial reads as a failed attempt.
+func (s *realtimeSynthesizer) ConnectWebsocket(ctx context.Context) error {
+	s.dialMu.Lock()
+	defer s.dialMu.Unlock()
+	if s.Connected() {
+		return nil
+	}
+	slog.Debug("connecting to elevenlabs realtime tts")
+	s.mu.Lock()
+	endpoint := s.connURL
+	s.mu.Unlock()
 	header := http.Header{}
 	header.Set("xi-api-key", s.cfg.APIKey)
-	conn, err := wsutil.Dial(ctx, s.endpoint(), header, wsutil.DefaultReadLimit)
+	conn, err := s.ws.Dial(ctx, endpoint, header, wsutil.DefaultReadLimit)
 	if err != nil {
-		return nil, err
+		ef := frames.NewErrorFrame(fmt.Sprintf("Unknown error occurred: %v", err))
+		ef.Err = err
+		s.ws.ReportError(ctx, ef, false)
+		return nil
 	}
-	// The reader outlives the call that dialed: it runs until the connection is
-	// dropped, not until this sentence is done.
-	runCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
-	s.conn, s.connStop = conn, stop
-	go s.readLoop(runCtx, conn)
-	s.keepalive.Start(runCtx, keepaliveInterval, s)
-	return conn, nil
-}
-
-// drop closes the connection so the next sentence dials a fresh one, releasing
-// every context still open on it. Callers hold mu.
-func (s *realtimeSynthesizer) drop(cause error) {
-	s.keepalive.Stop()
-	if s.connStop != nil {
-		s.connStop()
-		s.connStop = nil
-	}
-	if s.conn != nil {
-		_ = s.conn.Close(websocket.StatusInternalError, "")
-		s.conn = nil
-	}
-	for id, st := range s.states {
-		if st.direct != nil {
-			st.direct.settle(cause)
-		}
-		delete(s.states, id)
-	}
-	s.active = ""
-	// The contexts open on the dropped connection never get the rest of their
-	// audio, and the next connection has never seen the turn's context.
-	if s.host != nil {
-		s.host.ReplaceConnection()
-	}
-}
-
-// write sends one JSON message, serialized against the other writers.
-func (s *realtimeSynthesizer) write(ctx context.Context, conn *wsutil.Conn, msg map[string]any) error {
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return conn.Write(ctx, websocket.MessageText, payload)
-}
-
-// readLoop owns the connection's incoming messages for as long as it lasts,
-// handing each to the context it belongs to.
-func (s *realtimeSynthesizer) readLoop(ctx context.Context, conn *wsutil.Conn) {
-	for {
-		msg, err := readRealtimeTTSMessage(ctx, conn)
-		if err == nil {
-			err = s.dispatch(msg)
-		}
-		if err != nil {
-			s.mu.Lock()
-			if s.conn == conn {
-				s.drop(err)
-			}
-			s.mu.Unlock()
-			return
-		}
-	}
-}
-
-// dispatch delivers one message to the context it names.
-//
-// Messages for any other context are skipped: an interruption abandons a turn
-// mid-flight, and audio the server had already generated for it arrives
-// afterwards. Attributing by context id keeps that audio out of the next turn,
-// which is what the ids are for.
-func (s *realtimeSynthesizer) dispatch(msg *realtimeTTSMessage) error {
 	s.mu.Lock()
-	st := s.states[msg.ContextID]
-	host := s.host
+	old := s.conn
+	s.conn = newRealtimeConn(conn)
 	s.mu.Unlock()
-	if st == nil {
-		return nil
-	}
-	if msg.IsFinal {
-		return s.finishContext(msg.ContextID, st, host)
-	}
-	return s.deliver(msg, st, host)
-}
-
-// deliver emits a message's audio and reports the words it completes. It runs on
-// the reader goroutine with no lock held, so appending is free to block while
-// the audio already queued plays out.
-func (s *realtimeSynthesizer) deliver(msg *realtimeTTSMessage, st *contextState, host tts.AudioContextHost) error {
-	if err := s.deliverAudio(msg, st, host); err != nil {
-		return err
-	}
-	if st.direct != nil && st.direct.word == nil {
-		return nil
-	}
-	if st.direct == nil && !s.cfg.WordTimestamps {
-		return nil
-	}
-	return s.reportWords(msg, st, host)
-}
-
-// deliverAudio decodes a message's audio and sends it where the context's output
-// goes.
-func (s *realtimeSynthesizer) deliverAudio(
-	msg *realtimeTTSMessage,
-	st *contextState,
-	host tts.AudioContextHost,
-) error {
-	if msg.Audio == "" {
-		return nil
-	}
-	pcm, err := base64.StdEncoding.DecodeString(msg.Audio)
-	if err != nil {
-		return fmt.Errorf("%w: decode audio: %w", errRealtimeTTS, err)
-	}
-	if st.direct != nil {
-		return st.direct.audio(pcm)
-	}
-	if host != nil {
-		host.AppendToAudioContext(msg.ContextID, frames.NewTTSAudioRawFrame(pcm, s.cfg.SampleRate, 1))
+	if old != nil {
+		// A connection whose reading had already ended, replaced rather than
+		// closed: nothing is left to say to the server on it.
+		old.halt()
+		_ = old.conn.CloseNow()
 	}
 	return nil
 }
 
-// reportWords folds a message's character timings into whole words, rebased onto
-// the context's timeline, and reports each word that completed.
-func (s *realtimeSynthesizer) reportWords(
-	msg *realtimeTTSMessage,
-	st *contextState,
-	host tts.AudioContextHost,
-) error {
-	alignment := msg.Alignment
-	if s.cfg.PronunciationDictionaryLocators != nil && msg.NormalizedAlignment != nil {
-		// A pronunciation dictionary rewrites what is spoken, so the normalized
-		// form is the one the timings belong to.
-		alignment = msg.NormalizedAlignment
+// DisconnectWebsocket closes the connection, implementing tts.WebsocketHandler.
+//
+// The protocol tears down in two steps: the service asks ElevenLabs to close,
+// then ElevenLabs closes. The close is sent after that request and waits for
+// the server's own close, up to the close timeout, so the closing handshake is
+// not raced. The server having closed first is the ordinary end of a session
+// and is not an error.
+func (s *realtimeSynthesizer) DisconnectWebsocket(ctx context.Context) error {
+	s.dialMu.Lock()
+	defer s.dialMu.Unlock()
+	if s.svc != nil {
+		s.svc.StopAllMetrics(ctx)
 	}
+	s.mu.Lock()
+	c := s.conn
+	s.conn = nil
+	s.mu.Unlock()
+	if c != nil {
+		slog.Debug("disconnecting from elevenlabs realtime tts")
+		c.halt()
+		err := s.writeTo(ctx, c, map[string]any{keyCloseSocket: true})
+		switch {
+		case err == nil, closedConnection(err):
+			if err != nil {
+				slog.Debug("elevenlabs realtime tts websocket already closed during disconnect", "err", err)
+			}
+		case s.host != nil:
+			s.host.PushError(ctx, "Unknown error occurred", err, false)
+		}
+		_ = c.conn.Close(websocket.StatusNormalClosure, "")
+		slog.Debug("disconnected from elevenlabs realtime tts")
+	}
+	s.clearConnectionState()
+	return nil
+}
+
+// closedConnection reports whether err is a send failing because the
+// connection was already closed.
+func closedConnection(err error) bool {
+	return websocket.CloseStatus(err) != -1 || errors.Is(err, net.ErrClosed)
+}
+
+// clearConnectionState drops what the service knew of the contexts on a
+// connection that has closed.
+func (s *realtimeSynthesizer) clearConnectionState() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.contextInitSent)
+}
+
+// Connected reports whether a connection is open, implementing
+// tts.WebsocketHandler.
+func (s *realtimeSynthesizer) Connected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn != nil && !s.conn.readEnded.Load()
+}
+
+// ReceiveMessages handles the connection's messages until it ends, implementing
+// tts.WebsocketHandler.
+func (s *realtimeSynthesizer) ReceiveMessages(ctx context.Context) error {
+	s.mu.Lock()
+	c := s.conn
+	s.mu.Unlock()
+	if c == nil {
+		return errNotConnected
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case r := <-c.reads:
+			if r.err != nil {
+				return r.err
+			}
+			if err := s.handleMessage(r.data); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// handleMessage handles one server message.
+//
+// A message for a context that is no longer open is dropped: an interruption
+// abandons a turn mid-flight, and audio the server had already generated for it
+// arrives afterwards. Attributing by context id keeps that audio out of the next
+// turn, which is what the ids are for.
+func (s *realtimeSynthesizer) handleMessage(data []byte) error {
+	var msg realtimeTTSMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("%w: decode message: %w", errRealtimeTTS, err)
+	}
+	if msg.Error != "" {
+		slog.Warn("elevenlabs realtime tts error", "context", msg.ContextID, "error", msg.Error)
+	}
+	id := msg.ContextID
+
+	// The final message is handled first, whatever else it carries. An
+	// interrupted context is no longer open, and there is nothing to do for it.
+	if msg.IsFinal {
+		if s.host != nil && s.host.AudioContextAvailable(id) {
+			s.finishContext(id)
+		}
+		return nil
+	}
+
+	if msg.Audio != "" {
+		pcm, err := base64.StdEncoding.DecodeString(msg.Audio)
+		if err != nil {
+			return fmt.Errorf("%w: decode audio: %w", errRealtimeTTS, err)
+		}
+		if s.host != nil {
+			f := frames.NewTTSAudioRawFrame(pcm, s.cfg.SampleRate, 1)
+			f.ContextID = id
+			s.host.AppendToAudioContext(id, f)
+		}
+	}
+
+	// The alignment of an interrupted context keeps arriving after its clock was
+	// dropped; handling it would start a clock nothing removes.
+	if s.host == nil || !s.host.AudioContextAvailable(id) || !s.cfg.WordTimestamps {
+		return nil
+	}
+	alignment := selectRealtimeAlignment(&msg, len(s.cfg.PronunciationDictionaryLocators) > 0)
 	if alignment == nil {
 		return nil
 	}
-	// A turn must not open with whitespace, but a leading space on a later
-	// message is a real word separator: the flash models split a sentence that
-	// way, and dropping it would leave the word carried over from the message
-	// before never flushed.
-	alignment = alignment.stripLeadingSpaces(!st.alignmentStarted)
-	st.alignmentStarted = true
-	starts := make([]float64, len(alignment.CharStartTimesMs))
-	for i, ms := range alignment.CharStartTimesMs {
-		starts[i] = st.cumulative + ms/1000
+	s.mu.Lock()
+	started := s.alignmentStarted[id]
+	if s.alignmentStarted == nil {
+		s.alignmentStarted = map[string]bool{}
 	}
-	words, err := st.acc.Add(alignment.Chars, starts)
-	if err != nil {
-		return err
-	}
-	st.cumulative = alignment.end(st.cumulative)
-
-	// The words are reported as this provider timed them. Assembling the
-	// characters on spaces has already attached each word's punctuation to it,
-	// and punctuation the writing separates from its word (as French does before
-	// "?") is a token in its own right, which is what the text says it is.
-	opts := tts.WordTimingOptions{IncludesInterFrameSpaces: s.spacelessLanguage()}
-	if st.direct == nil {
-		if host != nil {
-			host.AddWordTimestamps(msg.ContextID, words, opts)
-		}
-		return nil
-	}
-	for _, wt := range words {
-		if err := st.direct.word(wt.Word, wt.Offset); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// emitWord reports one spoken token to wherever the context's output goes.
-func (s *realtimeSynthesizer) emitWord(
-	contextID string,
-	st *contextState,
-	host tts.AudioContextHost,
-	word string,
-	offset float64,
-) error {
-	if st.direct != nil {
-		return st.direct.word(word, offset)
-	}
-	if host != nil {
-		host.AppendWordToAudioContext(contextID, word, offset)
+	s.alignmentStarted[id] = true
+	spaceless := s.spaceless
+	s.mu.Unlock()
+	words := s.wordTimesFromAlignment(id, alignment.stripLeadingSpaces(!started))
+	if len(words) > 0 {
+		s.host.AddWordTimestamps(id, words, tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless})
 	}
 	return nil
 }
 
 // finishContext closes a context out once the server has marked it final.
-func (s *realtimeSynthesizer) finishContext(contextID string, st *contextState, host tts.AudioContextHost) error {
-	// The closing word ends on the utterance, not on a space.
-	var err error
-	if wt, ok := st.acc.Flush(); ok {
-		err = s.emitWord(contextID, st, host, wt.Word, wt.Offset)
+func (s *realtimeSynthesizer) finishContext(id string) {
+	if s.cfg.WordTimestamps {
+		// The closing word ends on the utterance, not on a space.
+		s.mu.Lock()
+		var last uctx.WordTiming
+		var ok bool
+		if clock := s.wordClocks[id]; clock != nil {
+			last, ok = clock.acc.Flush()
+		}
+		spaceless := s.spaceless
+		s.mu.Unlock()
+		if ok {
+			s.host.AddWordTimestamps(id, []uctx.WordTiming{last}, tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless})
+		}
 	}
-	s.forgetContext(contextID)
-	if st.direct != nil {
-		st.direct.settle(err)
-		return err
-	}
-	if host != nil {
-		// The stop frame rides the queue behind the audio, so it is pushed only
-		// once the last of that audio has been.
-		stopped := frames.NewTTSStoppedFrame()
-		stopped.ContextID = contextID
-		host.AppendToAudioContext(contextID, stopped)
-		host.RemoveAudioContext(contextID)
-	}
-	return err
+	// The stop frame rides the queue behind the audio, so it is pushed only once
+	// the last of that audio has been.
+	stopped := frames.NewTTSStoppedFrame()
+	stopped.ContextID = id
+	s.host.AppendToAudioContext(id, stopped)
+	s.host.RemoveAudioContext(id)
 }
 
-// forgetContext drops a context's reader state.
-func (s *realtimeSynthesizer) forgetContext(contextID string) {
+// wordTimesFromAlignment folds one alignment message into the words it
+// completes, on its context's own clock.
+func (s *realtimeSynthesizer) wordTimesFromAlignment(id string, a *charAlignment) []uctx.WordTiming {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.states, contextID)
-	if s.active == contextID {
-		s.active = ""
+	if s.wordClocks == nil {
+		s.wordClocks = map[string]*wordClock{}
 	}
+	clock := s.wordClocks[id]
+	if clock == nil {
+		clock = &wordClock{}
+		s.wordClocks[id] = clock
+	}
+	starts := make([]float64, len(a.CharStartTimesMs))
+	for i, ms := range a.CharStartTimesMs {
+		starts[i] = clock.cumulative + ms/1000
+	}
+	words, err := clock.acc.Add(a.Chars, starts)
+	if err != nil {
+		// The message cannot be timed, but its span still counts below.
+		slog.Error("elevenlabs realtime tts: character timings do not line up", "err", err)
+	}
+	// Alignment times restart at zero in every message, so the clock advances by
+	// each message's span. It has to advance for messages that complete no word
+	// too (trailing punctuation arrives on its own), or every later word is
+	// timestamped early by the shortfall.
+	starts, durations := a.CharStartTimesMs, a.CharDurationsMs
+	switch {
+	case len(starts) > 0 && len(durations) > 0:
+		clock.cumulative += (starts[len(starts)-1] + durations[len(durations)-1]) / 1000
+	case len(words) > 0:
+		clock.cumulative = words[len(words)-1].Offset
+	}
+	return words
+}
+
+// resetWordClock drops a context's word timing state.
+func (s *realtimeSynthesizer) resetWordClock(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.wordClocks, id)
+}
+
+// resetAlignmentState drops everything the service tracks for a context.
+func (s *realtimeSynthesizer) resetAlignmentState(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.wordClocks, id)
+	delete(s.alignmentStarted, id)
+	delete(s.contextInitSent, id)
 }
 
 // KeepaliveReady reports whether the connection is open, implementing
 // tts.KeepaliveHandler.
-func (s *realtimeSynthesizer) KeepaliveReady() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conn != nil
-}
+func (s *realtimeSynthesizer) KeepaliveReady() bool { return s.Connected() }
 
-// SendKeepalive sends empty text, implementing tts.KeepaliveHandler. Between
-// turns nothing is written for as long as the user is talking, and the server
-// drops a stream that goes quiet.
+// SendKeepalive sends empty text, implementing tts.KeepaliveHandler.
+//
+// It names the active context only once that context's opening message, which
+// carries the voice settings, has gone out. Otherwise the keepalive would be
+// the context's first message, with no voice settings, and ElevenLabs would
+// reject the opening message that follows. A keepalive naming no context keeps
+// the connection open just as well until then.
 func (s *realtimeSynthesizer) SendKeepalive(ctx context.Context) error {
-	s.mu.Lock()
-	conn, active := s.conn, s.active
-	s.mu.Unlock()
-	if conn == nil {
+	if !s.Connected() {
 		return nil
 	}
 	msg := map[string]any{keyText: ""}
-	if active != "" {
-		// Only a context whose opening message has gone out may be named: a
-		// keepalive that opened one would open it without the voice settings
-		// the opening message carries, and the server rejects the later one.
-		msg[keyContextID] = active
-	}
-	return s.write(ctx, conn, msg)
-}
-
-// Start dials the shared connection when the pipeline starts, implementing
-// tts.Starter. The handshake to the vendor is the slowest part of a session's
-// first sentence, so leaving it to be dialed lazily puts it in front of the
-// bot's opening words.
-func (s *realtimeSynthesizer) Start(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.stream(ctx); err != nil {
-		// Best-effort: the first sentence dials again and reports the failure.
-		slog.Debug("elevenlabs realtime tts connect on start failed", "error", err)
-	}
-}
-
-// Close releases the shared connection, implementing tts.Closer.
-func (s *realtimeSynthesizer) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	conn := s.conn
-	if conn == nil {
-		return nil
-	}
-	if s.connStop != nil {
-		s.connStop()
-		s.connStop = nil
-	}
-	s.conn = nil
-	for id, st := range s.states {
-		if st.direct != nil {
-			st.direct.settle(errStreamClosed)
+	if id := s.svc.ActiveAudioContextID(); id != "" {
+		s.mu.Lock()
+		sent := s.contextInitSent[id]
+		s.mu.Unlock()
+		if sent {
+			msg[keyContextID] = id
 		}
-		delete(s.states, id)
 	}
-	s.active = ""
-	// Ask the server to close so it does not sit on a half-open stream.
-	_ = s.write(context.Background(), conn, map[string]any{"close_socket": true})
-	return conn.Close(websocket.StatusNormalClosure, "")
+	return s.send(ctx, msg)
+}
+
+// send writes one JSON message on the open connection.
+func (s *realtimeSynthesizer) send(ctx context.Context, msg map[string]any) error {
+	s.mu.Lock()
+	c := s.conn
+	s.mu.Unlock()
+	if c == nil {
+		return errNotConnected
+	}
+	return s.writeTo(ctx, c, msg)
+}
+
+// writeTo writes one JSON message on c.
+func (s *realtimeSynthesizer) writeTo(ctx context.Context, c *realtimeConn, msg map[string]any) error {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return c.conn.Write(ctx, websocket.MessageText, payload)
 }
 
 // RunTTS sends one sentence on the turn's context, opening that context on the
 // wire the first time it is used. It yields nothing: the call returns once the
-// text is sent, and the audio arrives on the reader goroutine, which appends it
-// to the context it belongs to.
+// text is sent, and the audio arrives on the receive loop, which appends it to
+// the context it belongs to.
+//
+// A connection that has closed is opened again first. A send that fails ends
+// the context's synthesis with a stop frame and is reported.
 func (s *realtimeSynthesizer) RunTTS(
-	ctx context.Context, text, contextID string, _ func(f frames.Frame) error,
+	ctx context.Context, text, contextID string, yield func(f frames.Frame) error,
 ) error {
-	conn, err := s.openContext(ctx, contextID, nil)
-	if err != nil {
-		return err
+	if !s.Connected() {
+		s.Connect(ctx)
 	}
-	if err := s.sendText(ctx, conn, contextID, text); err != nil {
-		return err
+	if !s.Connected() {
+		slog.Warn("elevenlabs realtime tts: websocket unavailable after reconnect, skipping TTS")
+		return errWebsocketUnavailable
+	}
+	if err := s.sendText(ctx, text, contextID); err != nil {
+		if yield != nil {
+			stopped := frames.NewTTSStoppedFrame()
+			stopped.ContextID = contextID
+			_ = yield(stopped)
+		}
+		return fmt.Errorf("%w: %w", errRealtimeTTS, err)
+	}
+	return nil
+}
+
+// sendText sends text on the context, opening the context first if its opening
+// message has not gone out on this connection.
+func (s *realtimeSynthesizer) sendText(ctx context.Context, text, contextID string) error {
+	s.mu.Lock()
+	opened := s.contextInitSent[contextID]
+	s.mu.Unlock()
+	if !opened {
+		s.resetWordClock(contextID)
+		if err := s.sendContextInit(ctx, contextID); err != nil {
+			return err
+		}
+	}
+	if contextID != "" {
+		if err := s.send(ctx, map[string]any{keyText: text, keyContextID: contextID}); err != nil {
+			return err
+		}
 	}
 	tts.StartUsageMetrics(ctx, text)
 	return nil
 }
 
-// openContext dials if needed and sends the context's opening message the first
-// time the context is used, reporting whether it did.
-func (s *realtimeSynthesizer) openContext(
-	ctx context.Context,
-	contextID string,
-	direct *directSink,
-) (*wsutil.Conn, error) {
-	var (
-		conn *wsutil.Conn
-		err  error
-	)
+// sendContextInit opens a context. The opening message carries the voice
+// settings and the pronunciation dictionaries, and a single space rather than
+// the first sentence: it initializes the context without committing text.
+func (s *realtimeSynthesizer) sendContextInit(ctx context.Context, contextID string) error {
+	// Recorded before the send, so the keepalive may name the context from now
+	// on.
 	s.mu.Lock()
-	conn, err = s.stream(ctx)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
+	if s.contextInitSent == nil {
+		s.contextInitSent = map[string]bool{}
 	}
-	if s.states == nil {
-		s.states = map[string]*contextState{}
-	}
-	if _, ok := s.states[contextID]; ok {
-		s.mu.Unlock()
-		return conn, nil
-	}
-	s.states[contextID] = &contextState{direct: direct}
+	s.contextInitSent[contextID] = true
 	s.mu.Unlock()
-
-	// The opening message carries the voice parameters for the context. A single
-	// space rather than the first sentence: it initializes without committing text.
-	open := map[string]any{keyText: " ", keyContextID: contextID}
-	if s.cfg.VoiceSettings != nil {
-		open["voice_settings"] = s.cfg.VoiceSettings
+	msg := map[string]any{keyText: " ", keyContextID: contextID}
+	if v := s.live.voiceSettings(); v != nil {
+		msg["voice_settings"] = v
 	}
 	if len(s.cfg.PronunciationDictionaryLocators) > 0 {
-		open["pronunciation_dictionary_locators"] = s.cfg.PronunciationDictionaryLocators
+		msg["pronunciation_dictionary_locators"] = s.cfg.PronunciationDictionaryLocators
 	}
-	if err := s.write(ctx, conn, open); err != nil {
-		// A failed write leaves the server's view of the stream unknown.
-		s.mu.Lock()
-		if s.conn == conn {
-			s.drop(err)
-		}
-		s.mu.Unlock()
-		return nil, err
-	}
-	s.mu.Lock()
-	s.active = contextID
-	s.mu.Unlock()
-	return conn, nil
+	return s.send(ctx, msg)
 }
 
-// sendText hands one piece of text to an open context.
-func (s *realtimeSynthesizer) sendText(
-	ctx context.Context,
-	conn *wsutil.Conn,
-	contextID, text string,
-) error {
-	if err := s.write(ctx, conn, map[string]any{keyText: text, keyContextID: contextID}); err != nil {
-		s.mu.Lock()
-		if s.conn == conn {
-			s.drop(err)
-		}
-		s.mu.Unlock()
-		return err
-	}
-	return nil
-}
-
-// FlushAudio tells the server to generate whatever text it is still holding,
-// implementing tts.AudioFlusher.
+// FlushAudio tells the server to generate whatever text it is still holding for
+// the context, or for the active one when none is named, implementing
+// tts.AudioFlusher.
 func (s *realtimeSynthesizer) FlushAudio(ctx context.Context, contextID string) {
-	s.mu.Lock()
-	conn := s.conn
-	_, known := s.states[contextID]
-	s.mu.Unlock()
-	if conn == nil || !known {
+	if contextID == "" {
+		contextID = s.svc.ActiveAudioContextID()
+	}
+	if contextID == "" || !s.Connected() {
 		return
 	}
-	_ = s.write(ctx, conn, map[string]any{keyContextID: contextID, keyFlush: true})
+	_ = s.send(ctx, map[string]any{keyContextID: contextID, keyFlush: true})
 }
 
 // OnTurnContextCompleted closes the server-side context once the turn's text has
@@ -690,29 +798,34 @@ func (s *realtimeSynthesizer) OnTurnContextCompleted(ctx context.Context, contex
 
 // OnAudioContextInterrupted stops the server generating into a context nobody is
 // listening to, implementing tts.AudioContextInterrupter.
-func (s *realtimeSynthesizer) OnAudioContextInterrupted(_ context.Context, contextID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), abortWriteTimeout)
-	defer cancel()
-	s.closeContext(ctx, contextID)
-	s.forgetContext(contextID)
+func (s *realtimeSynthesizer) OnAudioContextInterrupted(ctx context.Context, contextID string) {
+	s.closeContext(context.WithoutCancel(ctx), contextID)
+	s.resetAlignmentState(contextID)
 }
 
-// OnAudioContextCompleted releases the reader state for a context that has
+// OnAudioContextCompleted releases the state kept for a context that has
 // finished playing, implementing tts.AudioContextCompleter.
 func (s *realtimeSynthesizer) OnAudioContextCompleted(_ context.Context, contextID string) {
-	s.forgetContext(contextID)
+	s.resetAlignmentState(contextID)
 }
 
-// closeContext asks the server to close a context, best effort.
+// closeContext closes a server-side context to free it. ElevenLabs leaves
+// closing contexts to the client, both on an interruption and once a turn is
+// done.
 func (s *realtimeSynthesizer) closeContext(ctx context.Context, contextID string) {
-	s.mu.Lock()
-	conn := s.conn
-	_, known := s.states[contextID]
-	s.mu.Unlock()
-	if conn == nil || !known {
+	if contextID == "" {
 		return
 	}
-	_ = s.write(ctx, conn, map[string]any{keyContextID: contextID, keyCloseContext: true})
+	s.mu.Lock()
+	c := s.conn
+	s.mu.Unlock()
+	if c == nil {
+		return
+	}
+	err := s.writeTo(ctx, c, map[string]any{keyContextID: contextID, keyCloseContext: true})
+	if err != nil && s.host != nil {
+		s.host.PushError(ctx, "Unknown error occurred", err, false)
+	}
 }
 
 // charAlignment times each character of a message's audio, relative to the start
@@ -742,18 +855,21 @@ func (a *charAlignment) stripLeadingSpaces(shouldStrip bool) *charAlignment {
 	}
 }
 
-// end reports where the context's timeline stands once this message's audio has
-// been accounted for, starting from base. It falls back to the last character's
-// start when the server sent no durations.
-func (a *charAlignment) end(base float64) float64 {
-	if len(a.CharStartTimesMs) == 0 {
-		return base
+// selectRealtimeAlignment picks which of a message's two alignments to time the
+// words with, the WebSocket schema's counterpart to selectAlignment. The
+// normalized one is preferred only with a pronunciation dictionary, and either
+// falls back to the other when it is missing.
+func selectRealtimeAlignment(m *realtimeTTSMessage, preferNormalized bool) *charAlignment {
+	if preferNormalized {
+		if m.NormalizedAlignment != nil {
+			return m.NormalizedAlignment
+		}
+		return m.Alignment
 	}
-	last := a.CharStartTimesMs[len(a.CharStartTimesMs)-1]
-	if len(a.CharDurationsMs) == len(a.CharStartTimesMs) {
-		last += a.CharDurationsMs[len(a.CharDurationsMs)-1]
+	if m.Alignment != nil {
+		return m.Alignment
 	}
-	return base + last/1000
+	return m.NormalizedAlignment
 }
 
 // realtimeTTSMessage is one server message. Audio arrives base64-encoded, and
@@ -769,25 +885,13 @@ type realtimeTTSMessage struct {
 	Error               string         `json:"error"`
 }
 
-// readRealtimeTTSMessage reads and decodes one server message.
-func readRealtimeTTSMessage(ctx context.Context, conn *wsutil.Conn) (*realtimeTTSMessage, error) {
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var msg realtimeTTSMessage
-	if err := json.Unmarshal(data, &msg); err != nil {
-		return nil, fmt.Errorf("%w: decode message: %w", errRealtimeTTS, err)
-	}
-	if msg.Error != "" {
-		return nil, fmt.Errorf("%w: %s", errRealtimeTTS, msg.Error)
-	}
-	return &msg, nil
-}
-
 var (
 	_ tts.Synthesizer             = (*realtimeSynthesizer)(nil)
 	_ tts.ContextSynthesizer      = (*realtimeSynthesizer)(nil)
+	_ tts.WebsocketService        = (*realtimeSynthesizer)(nil)
+	_ tts.KeepaliveHandler        = (*realtimeSynthesizer)(nil)
+	_ tts.Starter                 = (*realtimeSynthesizer)(nil)
+	_ tts.AudioFlusher            = (*realtimeSynthesizer)(nil)
 	_ tts.TurnContextCompleter    = (*realtimeSynthesizer)(nil)
 	_ tts.AudioContextInterrupter = (*realtimeSynthesizer)(nil)
 	_ tts.AudioContextCompleter   = (*realtimeSynthesizer)(nil)
@@ -796,13 +900,13 @@ var (
 )
 
 // RunTTSTimed sends the sentence like RunTTS, implementing tts.WordTimestamps.
-// The timings arrive on the reader goroutine with the audio, so neither
-// callback is used here.
+// The timings arrive on the receive loop with the audio, so neither callback is
+// used here.
 func (s *timedRealtimeSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
-	_ func(f frames.Frame) error,
+	yield func(f frames.Frame) error,
 	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
-	return s.RunTTS(ctx, text, contextID, nil)
+	return s.RunTTS(ctx, text, contextID, yield)
 }

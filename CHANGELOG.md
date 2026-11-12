@@ -49,6 +49,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **`elevenlabs.NewRealtimeTTS` keeps its connection through a drop, and says
+  so when it cannot.** It used to drop the connection on any read error and
+  redial on the next sentence, with no backoff, no limit and nothing
+  reported. It is now built on `tts.Websocket`: it connects when the pipeline
+  starts, and a receive loop restores a lost connection with backoff. After
+  three failed redials it reports a permanent error, so the service becomes
+  unusable and a service switcher moves off it. A refused connection is
+  reported as a connection error. Disconnecting asks ElevenLabs to close the
+  socket and waits for its close instead of cutting it. The new
+  `RealtimeTTSConfig.Websocket` field configures the reconnection and the
+  timeouts. The service also takes settings updates now
+  (`RealtimeTTSSettings`): a new voice, model, language or text normalization
+  reconnects, and a new voice control (stability, similarity boost, style,
+  speaker boost, speed) closes the open contexts so the next one opens with
+  it.
+
 - **The AssemblyAI TTS service runs on the websocket TTS base.** It still
   holds one session open for the call, and the base now owns its receive loop,
   reconnects, keepalive and error reports, and closes the session when the

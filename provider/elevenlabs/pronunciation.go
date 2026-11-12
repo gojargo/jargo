@@ -64,5 +64,5 @@ func (s *realtimeSynthesizer) FormatPronunciation(word, ipa string) (string, boo
 // SupportsPronunciations implements tts.PronunciationSupporter: phoneme tags are
 // read only with a model in PhonemeModels, and with EnableSSMLParsing on.
 func (s *realtimeSynthesizer) SupportsPronunciations() bool {
-	return supportsPhonemes(s.cfg.Model) && s.cfg.EnableSSMLParsing != nil && *s.cfg.EnableSSMLParsing
+	return supportsPhonemes(s.model()) && s.cfg.EnableSSMLParsing != nil && *s.cfg.EnableSSMLParsing
 }
