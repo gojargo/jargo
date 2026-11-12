@@ -574,6 +574,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   added that wait to every turn. A finalized transcript is the last text of
   the speech, so the turn is now decided on it at once.
 
+- **An eager end of turn speculates on what the conversation lacks, and is
+  checked against what came after it.** The speculated user turn was every
+  transcript of the turn glued to the prediction with no space ("Parisnext
+  Tuesday"), and repeated transcripts an earlier inference had already
+  written; and the prediction was checked against the whole turn glued the
+  same way, so one the service committed in more than one transcript was
+  withdrawn and answered a second time. The speculated turn is now the
+  transcripts not yet written then the prediction, spaced, and the prediction
+  is checked against the transcripts committed after it, spaced.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

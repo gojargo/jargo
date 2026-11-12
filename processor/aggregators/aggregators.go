@@ -2561,9 +2561,13 @@ func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.Us
 	if u.expressive {
 		perception = s.Perception
 	}
+	// The speculated turn is what of the turn the conversation lacks:
+	// transcripts committed earlier in the turn but not written, then the
+	// prediction. What an earlier inference in the turn wrote is already there.
+	said := text.Concatenate(append(slices.Clone(u.aggregation), text.Part{Text: s.Text}))
 	u.mu.Unlock()
 	_ = u.Broadcast(ctx, func() frames.Frame {
-		turn := frames.NewLLMContextUserTurnFrame(s.Text, startedAt)
+		turn := frames.NewLLMContextUserTurnFrame(said, startedAt)
 		turn.Perception = perception
 		turn.Speculation = true
 		return turn
@@ -2572,7 +2576,7 @@ func (u *UserAggregator) runSpeculativeInference(ctx context.Context, s turns.Us
 	provisional := frames.NewLLMContext(u.context.System())
 	provisional.SetMessages(append(u.context.Messages(), frames.Message{
 		Role: frames.RoleUser,
-		Text: withPerception(s.Text, perception),
+		Text: withPerception(said, perception),
 	}))
 	provisional.SetTools(u.context.Tools())
 	provisional.SetToolChoice(u.context.ToolChoice())

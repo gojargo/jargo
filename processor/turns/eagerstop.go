@@ -7,6 +7,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/text"
 )
 
 // DefaultSpeculationTimeout is how long a prediction may go unresolved before it
@@ -73,6 +74,10 @@ type EagerStop struct {
 	// strategies may still be deciding, and a stop reported again confirms it
 	// again. It is only touched under the controller's lock.
 	confirmed *UserTurnSpeculation
+	// committed are the transcripts committed since the prediction, which is
+	// what a prediction is checked against. Only touched under the
+	// controller's lock.
+	committed []text.Part
 }
 
 // NewEagerStop builds an eager stop strategy.
@@ -124,6 +129,8 @@ func (s *EagerStop) Process(f frames.Frame) ProcessFrameResult {
 		// Speech voids the turn's answer, and with it the confirmation of the
 		// speculation that gave it.
 		s.confirmed = nil
+	case *frames.TranscriptionFrame:
+		s.committed = append(s.committed, text.Part{Text: fr.Text, IncludesInterPartSpaces: fr.IncludesInterFrameSpaces})
 	}
 	return s.inner.Process(f)
 }
@@ -146,6 +153,7 @@ func (s *EagerStop) TurnStopped() {
 func (s *EagerStop) reset(inner func()) {
 	speculation := s.takeSpeculation()
 	s.confirmed = nil
+	s.committed = nil
 	inner()
 	if speculation != nil {
 		slog.Debug("turns: the turn ended unresolved, withdrawing the speculative reply")
@@ -193,7 +201,8 @@ func (s *EagerStop) onInnerStopped(_ StopStrategy, params UserTurnStoppedParams)
 		return
 	}
 
-	if s.policy.Matches(speculation.Text, s.inner.text) {
+	committed := text.Concatenate(s.committed)
+	if s.policy.Matches(speculation.Text, committed) {
 		slog.Debug("turns: the eager end of turn held, keeping the speculative reply")
 		s.confirmed = speculation
 		// The inference already ran, on the eager transcript. The turn frame the
@@ -205,7 +214,7 @@ func (s *EagerStop) onInnerStopped(_ StopStrategy, params UserTurnStoppedParams)
 	}
 
 	slog.Debug("turns: the eager end of turn missed, withdrawing the speculative reply",
-		"eager", speculation.Text, "committed", s.inner.text)
+		"eager", speculation.Text, "committed", committed)
 	s.confirmed = nil
 	s.cancelSpeculation()
 	// The committed transcript needs an inference of its own, which the
@@ -223,9 +232,11 @@ func (s *EagerStop) reportStopped(params UserTurnStoppedParams) {
 
 // speculate answers an eager end of turn, leaving the turn open.
 func (s *EagerStop) speculate(fr *frames.EagerTranscriptionFrame) {
-	// Segments committed earlier in this turn are part of what the model will
-	// see, so they are part of what the committed transcript is compared to.
-	speculation := &UserTurnSpeculation{Text: s.inner.text + fr.Text, Perception: fr.Perception}
+	// The prediction alone: what the turn committed before it is the
+	// aggregator's to put ahead of it, and what is committed after it is what
+	// it is checked against.
+	speculation := &UserTurnSpeculation{Text: fr.Text, Perception: fr.Perception}
+	s.committed = nil
 
 	timer := time.AfterFunc(s.timeout, func() { s.speculationTimedOut(speculation) })
 	s.mu.Lock()

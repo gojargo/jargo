@@ -326,3 +326,52 @@ func TestMutedEagerTranscriptDoesNotSpeculate(t *testing.T) {
 		t.Errorf("the conversation holds %v, want nothing", msgs)
 	}
 }
+
+// Ported from upstream (test_an_unwritten_transcript_goes_ahead_of_the_prediction).
+// A transcript committed earlier in the turn, while the user still speaks, is
+// not in the conversation yet, so the speculated turn carries it ahead of the
+// prediction, spaced; and the prediction is checked against what was committed
+// after it, so the turn confirms it.
+func TestAnUnwrittenTranscriptGoesAheadOfThePrediction(t *testing.T) {
+	convo, got := eagerTurn(t,
+		frames.NewProposedUserStartedSpeakingFrame(),
+		frames.NewTranscriptionFrame("I want to go to Paris", "u", "ts"),
+		eagerFrame("next Tuesday"),
+		frames.NewTranscriptionFrame("next Tuesday", "u", "ts"),
+		frames.NewProposedUserStoppedSpeakingFrame(),
+	)
+
+	cfs := contextFrames(got)
+	if len(cfs) != 1 || !cfs[0].Speculation {
+		t.Fatalf("inferences = %d, want the speculative one alone", len(cfs))
+	}
+	msgs := cfs[0].Context.Messages()
+	if len(msgs) == 0 || msgs[len(msgs)-1].Text != "I want to go to Paris next Tuesday" {
+		t.Errorf("the speculated turn is %v, want %q", msgs, "I want to go to Paris next Tuesday")
+	}
+	if n := countOf[*frames.UserTurnResponseCancelFrame](got); n != 0 {
+		t.Errorf("withdrawals = %d, want none", n)
+	}
+	if msgs := convo.Messages(); len(msgs) != 1 || msgs[0].Text != "I want to go to Paris next Tuesday" {
+		t.Errorf("the conversation holds %v, want the whole turn", msgs)
+	}
+}
+
+// TestAPredictionCommittedInTwoTranscriptsIsKept checks a prediction the
+// service commits in more than one transcript still holds: the transcripts are
+// compared with it joined as they are written, spaced.
+func TestAPredictionCommittedInTwoTranscriptsIsKept(t *testing.T) {
+	_, got := eagerTurn(t,
+		frames.NewProposedUserStartedSpeakingFrame(),
+		eagerFrame("book a flight to tokyo"),
+		frames.NewTranscriptionFrame("Book a flight", "u", "ts"),
+		frames.NewTranscriptionFrame("to Tokyo.", "u", "ts"),
+		frames.NewProposedUserStoppedSpeakingFrame(),
+	)
+	if n := countOf[*frames.UserTurnResponseCancelFrame](got); n != 0 {
+		t.Errorf("withdrawals = %d, want none: the committed text is the prediction", n)
+	}
+	if cfs := contextFrames(got); len(cfs) != 1 {
+		t.Errorf("inferences = %d, want 1", len(cfs))
+	}
+}
