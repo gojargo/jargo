@@ -53,6 +53,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   DeepSeek, Mistral, Perplexity, Sarvam and Fireworks endpoints, which have no
   such field, still take `max_tokens`, and are never sent
   `max_completion_tokens` (the new `chat.Compat.NoMaxCompletionTokens`).
+- **A streaming service reconnects after the server closes the socket
+  gracefully.** A provider closing a WebSocket with a normal closure (1000) or
+  going away (1001), as a server recycling its sockets during a deploy does,
+  ended the receive loop with no reconnect and no error, so a streaming STT
+  stopped transcribing for the rest of the call. The connection is now
+  restored, as for any other close; only a disconnect the service asked for
+  ends the loop.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

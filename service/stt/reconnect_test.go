@@ -198,27 +198,39 @@ func TestStreamServiceReopensADroppedSession(t *testing.T) {
 	}
 }
 
-// A peer closing the session the way a peer that is done closes it ends the
-// call's transcription. There is nothing to restore.
-func TestStreamServiceDoesNotReopenAfterANormalClosure(t *testing.T) {
-	conn := &scriptedConnector{sessions: []*scriptedStream{{
-		results: [][]stt.Result{{{Text: "all of it", Final: true}}},
-		endErr:  closed(websocket.StatusNormalClosure, "normal closure"),
-	}}}
-	c := newCollector()
-	svc := stt.NewStream("FakeSTT", conn, 16000)
-	stop := runService(t, svc, c)
-	defer stop()
+// A provider closing the session gracefully mid-call (a server recycling its
+// sockets during a deploy closes with going away) has not ended the call, so
+// the session is reopened and transcription carries on.
+func TestStreamServiceReopensAfterAGracefulClose(t *testing.T) {
+	for _, code := range []websocket.StatusCode{
+		websocket.StatusNormalClosure, websocket.StatusGoingAway,
+	} {
+		t.Run(code.String(), func(t *testing.T) {
+			conn := &scriptedConnector{sessions: []*scriptedStream{
+				{
+					results: [][]stt.Result{{{Text: "before the close", Final: true}}},
+					endErr:  closed(code, "closing"),
+				},
+				{results: [][]stt.Result{{{Text: "after the close", Final: true}}}},
+			}}
+			c := newCollector()
+			svc := stt.NewStream("FakeSTT", conn, 16000)
+			stop := runService(t, svc, c)
+			defer stop()
 
-	c.wait(t, "the transcription", func() bool { return len(c.transcriptions()) == 1 })
-	// Give a reconnect that should not happen the chance to happen.
-	time.Sleep(100 * time.Millisecond)
-
-	if got := conn.Dials(); got != 1 {
-		t.Errorf("dialed %d times, want 1: a normal closure is not reconnected", got)
-	}
-	if got := c.errorFrames(); len(got) != 0 {
-		t.Errorf("reported %d errors, want none for a normal closure", len(got))
+			c.wait(t, "the transcription that follows the reopen", func() bool {
+				return len(c.transcriptions()) == 2
+			})
+			if got, want := c.transcriptions(), []string{"before the close", "after the close"}; !equal(got, want) {
+				t.Errorf("transcriptions = %v, want %v", got, want)
+			}
+			if got := conn.Dials(); got != 2 {
+				t.Errorf("dialed %d times, want 2: the original session and the one replacing it", got)
+			}
+			if got := c.errorFrames(); len(got) != 0 {
+				t.Errorf("reported %d errors, want none for a restored session", len(got))
+			}
+		})
 	}
 }
 

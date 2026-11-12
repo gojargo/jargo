@@ -179,22 +179,42 @@ func closeErr(code websocket.StatusCode, reason string) error {
 
 // The receive loop, and what it makes of each way a connection can end.
 
-func TestNormalClosureExitsCleanly(t *testing.T) {
+// A peer closing the connection gracefully, with a normal closure or going
+// away, is the server closing it while the call carries on: the connection is
+// restored, as when the read ends with no error at all.
+func TestGracefulCloseCodesTriggerReconnect(t *testing.T) {
 	t.Parallel()
 
-	h := &handler{receive: func(int) error {
-		return closeErr(websocket.StatusNormalClosure, "Normal closure")
-	}}
-	rec := newRecorder()
-	b := newTestBase(t, h, newClock())
+	for _, code := range []websocket.StatusCode{
+		websocket.StatusNormalClosure, websocket.StatusGoingAway,
+	} {
+		t.Run(code.String(), func(t *testing.T) {
+			t.Parallel()
 
-	b.ReceiveTaskHandler(t.Context(), rec.report)
+			h := &handler{}
+			rec := newRecorder()
+			b := newTestBase(t, h, newClock())
+			h.receive = func(call int) error {
+				if call == 1 {
+					return closeErr(code, "closing")
+				}
+				b.Disconnect()
+				return nil
+			}
 
-	if got := rec.all(); len(got) != 0 {
-		t.Errorf("reported %v, want nothing reported for a normal closure", got)
-	}
-	if _, connects, _ := h.counts(); connects != 0 {
-		t.Errorf("redialed %d times, want no reconnection after a normal closure", connects)
+			b.ReceiveTaskHandler(t.Context(), rec.report)
+
+			receives, connects, _ := h.counts()
+			if receives != 2 {
+				t.Errorf("read %d times, want 2", receives)
+			}
+			if connects != 1 {
+				t.Errorf("redialed %d times, want 1", connects)
+			}
+			if got := rec.all(); len(got) != 0 {
+				t.Errorf("reported %v, want nothing reported for a restored connection", got)
+			}
+		})
 	}
 }
 

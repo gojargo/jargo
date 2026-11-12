@@ -174,9 +174,8 @@ func (b *Base) Disconnecting() bool {
 }
 
 // ReceiveTaskHandler reads from the connection until there is nothing left to
-// recover, reconnecting in between. It returns when the peer closed the
-// connection normally, when the service is disconnecting, or when reconnecting
-// has stopped being worth trying. Run it in a goroutine of its own for as long
+// recover, reconnecting in between. It returns when the service is
+// disconnecting, or when reconnecting has stopped being worth trying. Run it in a goroutine of its own for as long
 // as the service is connected.
 func (b *Base) ReceiveTaskHandler(ctx context.Context, report ReportError) {
 	for {
@@ -186,14 +185,15 @@ func (b *Base) ReceiveTaskHandler(ctx context.Context, report ReportError) {
 
 		var message string
 		switch {
-		case err == nil:
-			// Reading ended with no error to report, which is what a peer
-			// closing the connection gracefully looks like from here. The
-			// connection is still gone, so it is worth restoring.
+		case err == nil || isNormalClosure(err):
+			// The peer closed the connection gracefully: a server recycling its
+			// sockets during a deploy closes with going away, and one that simply
+			// ends the session with a normal closure. Either way the connection
+			// is gone while the call carries on, so it is worth restoring. A
+			// close the service asked for is told apart by Disconnecting, not by
+			// its code.
 			message = "connection closed by server"
-		case isNormalClosure(err):
-			slog.Debug("websocket connection closed normally", "err", err)
-			return
+			err = nil
 		case isCloseError(err):
 			message = fmt.Sprintf("connection closed, but with an error: %v", err)
 		default:
@@ -432,9 +432,8 @@ func isCloseError(err error) bool {
 	return websocket.CloseStatus(err) != -1
 }
 
-// isNormalClosure reports whether err is the peer closing the connection the way
-// a peer that is done closes it. There is nothing to restore in that case: the
-// session ended because it was meant to.
+// isNormalClosure reports whether err is the peer closing the connection
+// gracefully, with a normal closure or going away.
 func isNormalClosure(err error) bool {
 	switch websocket.CloseStatus(err) {
 	case websocket.StatusNormalClosure, websocket.StatusGoingAway:
