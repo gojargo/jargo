@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/adapter"
+	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -156,7 +157,7 @@ func TestTheDefaultIsReportedForEachRequest(t *testing.T) {
 func TestNothingIsReportedWhenReasoningIsConfigured(t *testing.T) {
 	var r recorder
 	cfg := Config{Model: "gpt-6.2", Reasoning: &ReasoningConfig{Effort: "low"}}
-	req, err := cfg.newRequest(convo(), adapter.Options{}, false)
+	req, err := cfg.newRequest(&responsesadapter.Adapter{}, convo(), adapter.Options{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

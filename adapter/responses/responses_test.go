@@ -62,40 +62,122 @@ func TestDeveloperRoleKept(t *testing.T) {
 	}
 }
 
-// TestSystemInstructionReplacesTheContextPrompt checks that an instruction given
-// for one call stands in place of the conversation's own: the API has one
-// instructions field, so the two cannot both be sent.
-func TestSystemInstructionReplacesTheContextPrompt(t *testing.T) {
-	convo := frames.NewLLMContext("be brief")
-	convo.AddUserMessage("hello")
+// TestContextPromptSentBesideTheInstruction checks the conversation's own
+// system prompt and the call's instruction both reach the model: the prompt as a
+// developer message at the head of the input, the instruction in the
+// instructions field. The conflict is reported, once per adapter.
+func TestContextPromptSentBesideTheInstruction(t *testing.T) {
+	convo := frames.NewLLMContext("You are helpful.")
+	convo.AddUserMessage("Hello")
 	warnings := capturedWarnings(t)
+	a := &Adapter{}
 
-	p := paramsOf(t, convo, adapter.Options{SystemInstruction: "be concise"})
-
-	if p.Instructions != "be concise" {
-		t.Errorf("instructions = %q, want the call's own", p.Instructions)
+	for range 2 {
+		p, err := a.LLMInvocationParams(convo, adapter.Options{SystemInstruction: "Be concise."})
+		if err != nil {
+			t.Fatalf("LLMInvocationParams: %v", err)
+		}
+		if p.Instructions != "Be concise." {
+			t.Errorf("instructions = %q, want the call's instruction", p.Instructions)
+		}
+		if len(p.Input) != 2 {
+			t.Fatalf("input = %+v, want the prompt and the user message", p.Input)
+		}
+		if p.Input[0].Role != RoleDeveloper || p.Input[0].Content != "You are helpful." {
+			t.Errorf("item 0 = %+v, want the conversation's prompt as a developer message", p.Input[0])
+		}
 	}
-	if got := warnings(); !strings.Contains(got, "using the instruction") {
-		t.Errorf("warnings = %q, want the conflict reported", got)
+	if got := warnings(); strings.Count(got, "Both are being sent") != 1 {
+		t.Errorf("warnings = %q, want the conflict reported once", got)
 	}
 }
 
-// TestInstructionsBecomeADeveloperMessageWhenNothingSaid checks a conversation
-// with nothing said yet carries the instruction as a developer message. The API
-// requires at least one input item when instructions are given, so sending them
-// beside an empty list is a request it refuses.
-func TestInstructionsBecomeADeveloperMessageWhenNothingSaid(t *testing.T) {
-	convo := frames.NewLLMContext("be brief")
+// TestContextPromptWithoutInstructionNoWarning checks a conversation's prompt
+// with no instruction for the call raises no warning: there is no conflict.
+func TestContextPromptWithoutInstructionNoWarning(t *testing.T) {
+	convo := frames.NewLLMContext("You are helpful.")
+	convo.AddUserMessage("Hello")
+	warnings := capturedWarnings(t)
 
-	p := paramsOf(t, convo, adapter.Options{})
+	paramsOf(t, convo, adapter.Options{})
+	if got := warnings(); got != "" {
+		t.Errorf("warnings = %q, want none", got)
+	}
+}
+
+// TestDeveloperMessageWithInstructionNoWarning checks a developer message is no
+// system prompt, so it does not conflict with the call's instruction.
+func TestDeveloperMessageWithInstructionNoWarning(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Extra context."})
+	convo.AddUserMessage("Hello")
+	warnings := capturedWarnings(t)
+
+	p := paramsOf(t, convo, adapter.Options{SystemInstruction: "Be concise."})
+	if got := warnings(); got != "" {
+		t.Errorf("warnings = %q, want none", got)
+	}
+	if p.Input[0].Role != RoleDeveloper || p.Instructions != "Be concise." {
+		t.Errorf("params = %+v, want the developer message kept and the instruction beside it", p)
+	}
+}
+
+// TestNonInitialSystemMessageNoWarning checks a system message said partway
+// through is converted without a warning.
+func TestNonInitialSystemMessageNoWarning(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+	convo.AddMessage(frames.Message{Role: frames.RoleSystem, Text: "New instruction"})
+	warnings := capturedWarnings(t)
+
+	p := paramsOf(t, convo, adapter.Options{SystemInstruction: "Be helpful."})
+	if got := warnings(); got != "" {
+		t.Errorf("warnings = %q, want none", got)
+	}
+	if p.Input[1].Role != RoleDeveloper || p.Input[1].Content != "New instruction" {
+		t.Errorf("item 1 = %+v, want the system message as a developer message", p.Input[1])
+	}
+}
+
+// TestInstructionWithMessagesSetsInstructions checks an instruction for a
+// conversation with something in it goes in the instructions field.
+func TestInstructionWithMessagesSetsInstructions(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+
+	p := paramsOf(t, convo, adapter.Options{SystemInstruction: "Be helpful."})
+	if p.Instructions != "Be helpful." {
+		t.Errorf("instructions = %q, want the call's instruction", p.Instructions)
+	}
+	if len(p.Input) != 1 || p.Input[0].Role != RoleUser {
+		t.Errorf("input = %+v, want the user message alone", p.Input)
+	}
+}
+
+// TestInstructionsBecomeADeveloperMessageWhenNothingSaid checks an empty
+// conversation carries the instruction as a developer message. The API requires
+// at least one input item when instructions are given, so sending them beside
+// an empty list is a request it refuses.
+func TestInstructionsBecomeADeveloperMessageWhenNothingSaid(t *testing.T) {
+	p := paramsOf(t, frames.NewLLMContext(""), adapter.Options{SystemInstruction: "Be helpful."})
 	if p.Instructions != "" {
 		t.Errorf("instructions = %q, want none: they went into the input", p.Instructions)
 	}
 	if len(p.Input) != 1 {
 		t.Fatalf("input = %+v, want the instruction as its one item", p.Input)
 	}
-	if p.Input[0].Role != RoleDeveloper || p.Input[0].Content != "be brief" {
+	if p.Input[0].Role != RoleDeveloper || p.Input[0].Content != "Be helpful." {
 		t.Errorf("item = %+v, want the instruction as a developer message", p.Input[0])
+	}
+}
+
+// TestNoInstructionOmitsInstructions checks no instruction for the call leaves
+// the instructions field empty, whatever the conversation holds.
+func TestNoInstructionOmitsInstructions(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hi")
+	if p := paramsOf(t, convo, adapter.Options{}); p.Instructions != "" {
+		t.Errorf("instructions = %q, want none", p.Instructions)
 	}
 }
 
@@ -109,32 +191,54 @@ func TestNoInstructionsAndNothingSaid(t *testing.T) {
 }
 
 func TestIDForLLMSpecificMessages(t *testing.T) {
-	if got := (&Adapter{}).IDForLLMSpecificMessages(); got != "openai" {
-		t.Errorf("id = %q, want %q", got, "openai")
+	if got := (&Adapter{}).IDForLLMSpecificMessages(); got != "openai_responses" {
+		t.Errorf("id = %q, want %q", got, "openai_responses")
 	}
 }
 
-// TestToInputMessages checks a plain conversation becomes message items, and
-// that the system prompt is lifted out into the instructions field rather than
-// traveling as a message.
+// TestLLMSpecificMessagePassthrough checks a message written for this adapter
+// is sent as it is, and one written for the chat-completions adapter is left
+// out rather than failing the request.
+func TestLLMSpecificMessagePassthrough(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+	convo.AddMessage(frames.NewLLMSpecificMessage("openai_responses",
+		InputItem{Type: ItemFuncCall, CallID: "x", Name: "foo", Arguments: "{}"}))
+	convo.AddMessage(frames.NewLLMSpecificMessage("openai",
+		map[string]any{"role": "user", "content": "chat only"}))
+
+	items := paramsOf(t, convo, adapter.Options{}).Input
+	if len(items) != 2 {
+		t.Fatalf("input = %+v, want the user message and the native item", items)
+	}
+	if items[0].Role != RoleUser || items[1].Type != ItemFuncCall {
+		t.Errorf("input = %+v, want the user message then the function call", items)
+	}
+}
+
+// TestToInputMessages checks a plain conversation becomes message items, with
+// the system prompt as the developer message at their head.
 func TestToInputMessages(t *testing.T) {
 	convo := frames.NewLLMContext("be brief")
 	convo.AddUserMessage("hello")
 	convo.AddAssistantMessage("hi there")
 
 	p := paramsOf(t, convo, adapter.Options{})
-	items, instructions := p.Input, p.Instructions
-	if instructions != "be brief" {
-		t.Errorf("instructions = %q, want the system prompt", instructions)
+	items := p.Input
+	if p.Instructions != "" {
+		t.Errorf("instructions = %q, want none: the prompt is in the input", p.Instructions)
 	}
-	if len(items) != 2 {
-		t.Fatalf("items = %+v, want the two non-system messages", items)
+	if len(items) != 3 {
+		t.Fatalf("items = %+v, want the prompt and the two messages", items)
 	}
-	if items[0].Type != ItemMessage || items[0].Role != "user" || items[0].Content != "hello" {
-		t.Errorf("item 0 = %+v, want the user message", items[0])
+	if items[0].Role != RoleDeveloper || items[0].Content != "be brief" {
+		t.Errorf("item 0 = %+v, want the system prompt as a developer message", items[0])
 	}
-	if items[1].Role != "assistant" || items[1].Content != "hi there" {
-		t.Errorf("item 1 = %+v, want the assistant message", items[1])
+	if items[1].Type != ItemMessage || items[1].Role != "user" || items[1].Content != "hello" {
+		t.Errorf("item 1 = %+v, want the user message", items[1])
+	}
+	if items[2].Role != "assistant" || items[2].Content != "hi there" {
+		t.Errorf("item 2 = %+v, want the assistant message", items[2])
 	}
 }
 

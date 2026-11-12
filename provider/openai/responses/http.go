@@ -11,6 +11,7 @@ import (
 
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/adapter/openai"
+	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -22,6 +23,10 @@ type HTTPService struct {
 	cfg     Config
 	http    *http.Client
 	variant HTTPVariant
+	// adapter converts each conversation into a request. It is held rather than
+	// built per request, since it carries the tools the service implements
+	// itself.
+	adapter responsesadapter.Adapter
 }
 
 // HTTPVariant adapts the HTTP service to a server that speaks the Responses
@@ -70,6 +75,7 @@ func NewHTTPVariantLLM(cfg Config, v HTTPVariant) *HTTPService {
 	s := &HTTPService{cfg: cfg, http: &http.Client{}, variant: v}
 	s.Base = llm.New(v.Name, s)
 	s.Base.SetModel(cfg.Model)
+	s.SetSystemInstruction(cfg.Instructions)
 	warnIfReasoningUnsupported(v.Name, cfg)
 	return s
 }
@@ -91,8 +97,14 @@ func (s *HTTPService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
 	opts.ResponseSchema = s.CheckResponseSchema(ctx, opts.ResponseSchema)
-	return runInference(ctx, s.cfg, s.http, convo, opts, s.encode)
+	if opts.SystemInstruction == "" {
+		opts.SystemInstruction = s.SystemInstruction()
+	}
+	return runInference(ctx, s.cfg, &s.adapter, s.http, convo, opts, s.encode)
 }
+
+// LLMAdapter implements llm.AdapterHolder.
+func (s *HTTPService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // encode renders a request for the wire: the thinking default, Extra over the
 // modeled fields, then the variant's edits.
@@ -131,7 +143,9 @@ func (s *HTTPService) ModelSupportsResponseSchema(model string) bool {
 
 // run issues one turn and feeds its event stream to the state machine.
 func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
-	reqBody, err := s.cfg.newRequest(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools)
+	reqBody, err := s.cfg.newRequest(
+		&s.adapter, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools,
+	)
 	if err != nil {
 		return err
 	}

@@ -20,8 +20,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `TTSTextFrame` as its audio plays, so the conversation records only what was
   heard before an interruption. **Breaking:** `cartesia.Config.WordTimestamps`
   is gone; there is no unaligned mode left to choose.
+- **OpenAI Responses messages are tagged `openai_responses`.** The Responses
+  adapter answered to `openai`, the chat-completions adapter's id, so a
+  conversation shared by both services failed every Responses turn on a chat
+  message, and a message tagged for Responses alone was never read.
+  **Breaking:** a provider-specific message written for the Responses services
+  must now be tagged `openai_responses`.
 
 ### Fixed
+
+- **The OpenAI Responses services keep the conversation's system prompt.**
+  As soon as the service composed an instruction of its own (turn completion,
+  async tool guidance, expression, `AppendSystemInstruction`), the
+  conversation's prompt was dropped and only the composed text was sent. The
+  prompt is now the developer message at the head of the input, with the
+  service's instruction in `instructions` beside it, over HTTP and the
+  WebSocket alike. `Config.Instructions` is now the service's base system
+  instruction, onto which that guidance is composed, rather than a fallback used
+  only when nothing else was set. A one-shot inference given no instruction
+  sends the service's own, and one over an empty conversation sends its
+  instruction once rather than twice.
+- **The OpenAI Responses services offer cancel tools.** The services did not
+  expose the adapter they convert through, so a tool the service implements
+  itself (the cancel tool of an async function) never reached the request,
+  while the system instruction still told the model to call it.
 
 - **The OpenAI Responses WebSocket sends its requests the way the API takes
   them.** A `response.create` message carries the request's fields at its top

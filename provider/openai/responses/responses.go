@@ -82,8 +82,11 @@ type Config struct {
 	WSURL string
 	// Model is the model id; empty uses a current default.
 	Model string
-	// Instructions is the system prompt, sent alongside the input rather than as
-	// a message. A system message on the context takes precedence.
+	// Instructions is the service's system prompt. It is the base of the
+	// service's system instruction, onto which the service composes the guidance
+	// it adds itself (turn completion, async tools, expression), and it is sent
+	// in the request's instructions field. A system prompt on the conversation
+	// is sent as well, as a developer message at the head of the input.
 	Instructions string
 	// MaxOutputTokens caps the response length; 0 omits it.
 	MaxOutputTokens int
@@ -340,14 +343,8 @@ type request struct {
 // newRequest builds the request for a conversation, without the streaming or
 // continuation fields the transports set themselves.
 func (c Config) newRequest(
-	convo *frames.LLMContext, opts adapter.Options, withTools bool,
+	a *responsesadapter.Adapter, convo *frames.LLMContext, opts adapter.Options, withTools bool,
 ) (request, error) {
-	var a responsesadapter.Adapter
-	// The configured instructions are this service's own default, standing in
-	// when neither the call nor the conversation states one.
-	if opts.SystemInstruction == "" && convo.System() == "" {
-		opts.SystemInstruction = c.Instructions
-	}
 	p, err := a.LLMInvocationParams(convo, opts)
 	if err != nil {
 		return request{}, err
@@ -390,13 +387,14 @@ type textFormat struct {
 }
 
 // runInference answers the conversation once. opts.ResponseSchema is the schema
-// the service has already checked it can enforce.
+// the service has already checked it can enforce, and opts.SystemInstruction
+// the instruction to send: the call's own, or else the service's.
 func runInference(
-	ctx context.Context, cfg Config, client *http.Client,
+	ctx context.Context, cfg Config, a *responsesadapter.Adapter, client *http.Client,
 	convo *frames.LLMContext, opts llm.InferenceOptions, encode func(request) ([]byte, error),
 ) (string, error) {
 	body, err := cfg.newRequest(
-		convo, adapter.Options{SystemInstruction: opts.SystemInstruction}, false,
+		a, convo, adapter.Options{SystemInstruction: opts.SystemInstruction}, false,
 	)
 	if err != nil {
 		return "", err
@@ -409,12 +407,6 @@ func runInference(
 		body.Text = &textConfig{Format: textFormat{
 			Type: "json_schema", Name: "response", Schema: opts.ResponseSchema, Strict: true,
 		}}
-	}
-	if opts.SystemInstruction != "" {
-		// The Responses API carries the instruction beside the conversation
-		// rather than in it, so the one this inference was given stands in place
-		// of the conversation's own.
-		body.Instructions = opts.SystemInstruction
 	}
 	raw, err := encode(body)
 	if err != nil {

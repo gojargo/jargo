@@ -89,33 +89,44 @@ type Adapter struct {
 // Compile-time check that the adapter satisfies the contract.
 var _ adapter.LLMAdapter[Params, Tool] = (*Adapter)(nil)
 
-// IDForLLMSpecificMessages implements adapter.LLMAdapter.
-func (*Adapter) IDForLLMSpecificMessages() string { return "openai" }
+// IDForLLMSpecificMessages implements adapter.LLMAdapter. It is not the chat
+// adapter's id: the two OpenAI APIs take different native messages, so a
+// conversation shared by both services keeps each one's messages to itself.
+func (*Adapter) IDForLLMSpecificMessages() string { return "openai_responses" }
 
 // LLMInvocationParams converts the conversation into a Responses request.
 //
-// The Responses API takes the system prompt as its own field beside the input
-// rather than as a leading message, so it has one place to put it: an
-// instruction given for this call replaces the conversation's own prompt.
+// The conversation's own system prompt stays in the input, as a developer
+// message at its head. The instruction given for the call (the service's
+// composed system instruction) goes in the request's instructions field beside
+// it, so both reach the model. The only exception is a conversation with
+// nothing in it at all: the API requires at least one input item when
+// instructions are given, so the instruction becomes that item instead.
 func (a *Adapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (Params, error) {
-	instructions := a.ResolveSystemInstruction(
-		convo.System(), opts.SystemInstruction, true,
-	)
-	input, err := ToInput(convo.MessagesFor(a.IDForLLMSpecificMessages()))
+	system := convo.System()
+	// Only the conflict is reported here: both are sent either way.
+	a.ResolveSystemInstruction(system, opts.SystemInstruction, false)
+
+	msgs := convo.MessagesFor(a.IDForLLMSpecificMessages())
+	converted, err := ToInput(msgs)
 	if err != nil {
 		return Params{}, err
 	}
-	params := Params{Input: input, Instructions: instructions}
-	// The API requires at least one input item when instructions are given, so a
-	// conversation with nothing said yet carries the instruction as a developer
-	// message instead of beside an empty list.
-	if instructions != "" && len(params.Input) == 0 {
-		params.Input = []InputItem{
-			{Type: ItemMessage, Role: RoleDeveloper, Content: instructions},
+	input := make([]InputItem, 0, len(converted)+1)
+	if system != "" {
+		input = append(input, InputItem{Type: ItemMessage, Role: RoleDeveloper, Content: system})
+	}
+	params := Params{Input: append(input, converted...)}
+	if instruction := opts.SystemInstruction; instruction != "" {
+		if len(params.Input) == 0 {
+			params.Input = []InputItem{
+				{Type: ItemMessage, Role: RoleDeveloper, Content: instruction},
+			}
+		} else {
+			params.Instructions = instruction
 		}
-		params.Instructions = ""
 	}
 	if tools := a.WithBuiltins(convo.ToolsSchema()); len(tools.Standard) > 0 ||
 		len(tools.Custom) > 0 {

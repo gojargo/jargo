@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/adapter/openai"
+	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -79,6 +80,10 @@ type session struct {
 type Service struct {
 	*llm.Base
 	cfg Config
+	// adapter converts each conversation into a request. It is held rather than
+	// built per request, since it carries the tools the service implements
+	// itself.
+	adapter responsesadapter.Adapter
 	// http answers a one-shot inference. It is a plain request, so it does not
 	// go near the connection this service holds open for its turns.
 	http *http.Client
@@ -153,6 +158,7 @@ func NewLLM(cfg Config) *Service {
 	s := &Service{cfg: cfg, http: &http.Client{}}
 	s.Base = llm.New("OpenAIResponsesLLM", s)
 	s.Base.SetModel(cfg.Model)
+	s.SetSystemInstruction(cfg.Instructions)
 	warnIfReasoningUnsupported("OpenAIResponsesLLM", cfg)
 	return s
 }
@@ -174,10 +180,16 @@ func (s *Service) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
 	opts.ResponseSchema = s.CheckResponseSchema(ctx, opts.ResponseSchema)
-	return runInference(ctx, s.cfg, s.http, convo, opts, func(req request) ([]byte, error) {
+	if opts.SystemInstruction == "" {
+		opts.SystemInstruction = s.SystemInstruction()
+	}
+	return runInference(ctx, s.cfg, &s.adapter, s.http, convo, opts, func(req request) ([]byte, error) {
 		return s.cfg.encode(req, s)
 	})
 }
+
+// LLMAdapter implements llm.AdapterHolder.
+func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // SupportsResponseSchema implements llm.ResponseSchemaSupporter.
 func (s *Service) SupportsResponseSchema() bool { return true }
@@ -246,7 +258,9 @@ func (s *Service) turn(
 		return err
 	}
 
-	req, err := s.cfg.newRequest(convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools)
+	req, err := s.cfg.newRequest(
+		&s.adapter, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools,
+	)
 	if err != nil {
 		return err
 	}

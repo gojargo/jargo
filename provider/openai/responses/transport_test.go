@@ -259,8 +259,12 @@ func TestHTTPGenerate(t *testing.T) {
 	if gotAuth != "Bearer test-key" {
 		t.Errorf("Authorization = %q, want the Bearer key", gotAuth)
 	}
-	if gotBody["instructions"] != "be brief" {
-		t.Errorf("instructions = %v, want the system prompt", gotBody["instructions"])
+	if _, ok := gotBody["instructions"]; ok {
+		t.Errorf("instructions = %v, want none: the system prompt is in the input", gotBody["instructions"])
+	}
+	input, _ := gotBody["input"].([]any)
+	if first, _ := input[0].(map[string]any); first["role"] != "developer" || first["content"] != "be brief" {
+		t.Errorf("input = %v, want the system prompt as the leading developer message", input)
 	}
 	if _, ok := gotBody["previous_response_id"]; ok {
 		t.Error("the HTTP service sent previous_response_id, which needs store=true over HTTP")
@@ -440,8 +444,8 @@ func TestWSIncrementalContext(t *testing.T) {
 		t.Fatalf("first Generate: %v", err)
 	}
 	first := srv.turn(0)
-	if input, _ := first["input"].([]any); len(input) != 1 {
-		t.Fatalf("first turn input = %v, want the whole conversation", first["input"])
+	if input, _ := first["input"].([]any); len(input) != 2 {
+		t.Fatalf("first turn input = %v, want the whole conversation, prompt included", first["input"])
 	}
 	if _, ok := first["previous_response_id"]; ok {
 		t.Error("the first turn continued from a response that does not exist yet")
