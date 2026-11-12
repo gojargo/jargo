@@ -542,6 +542,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   trimmed text as its `RawText`, losing the whitespace the aggregator keeps on
   purpose. It now keeps it, as a match keeps its delimiters.
 
+- **The assistant aggregator consumes the reply it records.** It forwarded
+  the response start and end, every text frame of the reply and the push
+  that records spoken text, though it is where they become conversation, so
+  anything after it, an observer not deduplicating by frame id, or a
+  reached-downstream handler saw the reply a second time. They now stop
+  there; the summarizer still sees them. **Breaking:** a processor placed
+  after the assistant aggregator no longer receives these frames.
+
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

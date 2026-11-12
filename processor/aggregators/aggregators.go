@@ -1450,13 +1450,34 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 			return nil
 		}
 	}
-	if err := a.PushFrame(ctx, f, dir); err != nil {
-		return err
+	return a.pass(ctx, f, dir)
+}
+
+// pass forwards a frame route is done with, unless it stops here, and shows it
+// to the summarizer, which watches the conversation from beside the aggregator
+// and sees each frame once it has gone on, or been consumed, so compressing
+// never delays a turn.
+func (a *AssistantAggregator) pass(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if !consumedHere(f) {
+		if err := a.PushFrame(ctx, f, dir); err != nil {
+			return err
+		}
 	}
-	// The summarizer watches the conversation from beside it, and sees each
-	// frame once it has gone on, so compressing never delays a turn.
 	a.summarizer.ProcessFrame(ctx, f)
 	return nil
+}
+
+// consumedHere reports whether f stops at the assistant aggregator: it is
+// where the reply's text and the response around it become conversation, and
+// nothing beyond it is told them a second time.
+func consumedHere(f frames.Frame) bool {
+	switch f.(type) {
+	case *frames.LLMFullResponseStartFrame, *frames.LLMFullResponseEndFrame,
+		*frames.LLMAssistantPushAggregationFrame,
+		*frames.TextFrame, *frames.LLMTextFrame, *frames.TTSTextFrame, *frames.AggregatedTextFrame:
+		return true
+	}
+	return false
 }
 
 // routeThought folds one piece of a reasoning model's thinking into the thought

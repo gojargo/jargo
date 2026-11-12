@@ -298,10 +298,13 @@ func TestToolContinuationSeesToolResult(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
-		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
+		// The response end stops at the assistant aggregator. Past it, the
+		// continuation's answer, the first reply with text, is announced as the
+		// turn it closes: the tool-only turn before it carries none.
+		if _, ok := f.(*frames.LLMContextAssistantTimestampFrame); ok {
 			mu.Lock()
 			ends++
-			if ends == 2 {
+			if ends == 1 {
 				select {
 				case done <- struct{}{}:
 				default:
