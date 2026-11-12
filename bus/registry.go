@@ -135,6 +135,7 @@ func init() {
 	Types.Register("OutputTransportMessageFrame", &frames.OutputTransportMessageFrame{})
 	Types.Register("OutputTransportMessageUrgentFrame", &frames.OutputTransportMessageUrgentFrame{})
 	Types.Register("OutputTransportReadyFrame", &frames.OutputTransportReadyFrame{})
+	Types.Register("PerceptionFrame", &frames.PerceptionFrame{})
 	Types.Register("PipelineFlushFrame", &frames.PipelineFlushFrame{})
 	Types.Register("ProposedUserStartedSpeakingFrame", &frames.ProposedUserStartedSpeakingFrame{})
 	Types.Register("ProposedUserStoppedSpeakingFrame", &frames.ProposedUserStoppedSpeakingFrame{})

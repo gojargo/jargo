@@ -188,6 +188,32 @@ func (f *PerceptionMetadataFrame) String() string {
 	return fmt.Sprintf("%s(service: %s, signals: %d)", f.Name(), f.ServiceName, len(f.Perception.Signals))
 }
 
+// PerceptionFrame is a reading of how the user spoke, broadcast as soon as a
+// perception producer has one.
+//
+// A producer broadcasts every reading it makes, whether or not a transcription
+// is there to carry it yet, so processors and clients can act on it right away.
+// The LLM is given the reading a transcription carries in its Perception. Part
+// of expressive conversation (alpha).
+type PerceptionFrame struct {
+	BaseSystemFrame
+	// Perception is the reading.
+	Perception []expressive.PerceptionSignal
+}
+
+// NewPerceptionFrame builds a PerceptionFrame carrying a reading.
+func NewPerceptionFrame(perception []expressive.PerceptionSignal) *PerceptionFrame {
+	return &PerceptionFrame{
+		BaseSystemFrame: NewBaseSystemFrame("PerceptionFrame"),
+		Perception:      perception,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *PerceptionFrame) String() string {
+	return fmt.Sprintf("%s(perception: %s)", f.Name(), expressive.FormatPerception(f.Perception))
+}
+
 // ExpressionMetadataFrame is the metadata a processor that tags the LLM's
 // replies broadcasts, once it can. Part of expressive conversation (alpha).
 //

@@ -213,6 +213,13 @@ func catalog() []catalogEntry {
 			},
 		},
 		{
+			label: "PerceptionFrame", cat: system, wantString: "perception: ([speech_rate value=4.1])",
+			build: func() frames.Frame {
+				rate := 4.1
+				return frames.NewPerceptionFrame([]expressive.PerceptionSignal{{Name: "speech_rate", Value: &rate}})
+			},
+		},
+		{
 			label: "InputAudioRawFrame", cat: system, wantString: "sample_rate: 16000",
 			build: func() frames.Frame { return frames.NewInputAudioRawFrame(make([]byte, 4), 16000, 1) },
 		},

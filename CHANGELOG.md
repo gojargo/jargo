@@ -13,6 +13,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **A perception reading is broadcast in a `PerceptionFrame`.** The new
+  system frame carries a reading of how the user spoke as soon as a producer
+  has one, whether or not a transcription is there to carry it yet, so
+  processors and clients can act on it right away. It is registered on the
+  bus. `PerceptionCapabilities.Merge` merges another producer's declared
+  signals into these, keeping every label either reports and the first
+  description that is not empty.
+
 ### Changed
 
 - **IVR navigation classifies the far end and switches to navigating.** The

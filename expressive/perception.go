@@ -56,6 +56,45 @@ type PerceptionCapabilities struct {
 	Signals []PerceptionTerm
 }
 
+// Merge merges another producer's signals into these, and returns the signals
+// of both, these first. A signal both report keeps every label either can
+// report and the first description that is not empty.
+func (c PerceptionCapabilities) Merge(other PerceptionCapabilities) PerceptionCapabilities {
+	terms := make([]PerceptionTerm, 0, len(c.Signals)+len(other.Signals))
+	index := make(map[string]int, cap(terms))
+	put := func(term PerceptionTerm) {
+		if i, ok := index[term.Name]; ok {
+			terms[i] = term
+			return
+		}
+		index[term.Name] = len(terms)
+		terms = append(terms, term)
+	}
+	for _, term := range c.Signals {
+		put(term)
+	}
+	for _, term := range other.Signals {
+		i, ok := index[term.Name]
+		if !ok {
+			put(term)
+			continue
+		}
+		earlier := terms[i]
+		labels := slices.Clone(earlier.Labels)
+		for _, label := range term.Labels {
+			if !slices.Contains(earlier.Labels, label) {
+				labels = append(labels, label)
+			}
+		}
+		description := earlier.Description
+		if description == "" {
+			description = term.Description
+		}
+		terms[i] = PerceptionTerm{Name: term.Name, Description: description, Labels: labels}
+	}
+	return PerceptionCapabilities{Signals: terms}
+}
+
 // FormatPerception formats a reading as written at the head of the user's
 // message to the LLM.
 //

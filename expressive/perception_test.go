@@ -90,3 +90,26 @@ func TestMergingKeepsTheSignalsOnlyOneReadingHasInTheOrderFirstRead(t *testing.T
 		t.Errorf("merged into nothing %+v, want %+v", got, later)
 	}
 }
+
+func TestMergedCapabilitiesKeepEverySignalTheseFirst(t *testing.T) {
+	stt := expressive.PerceptionCapabilities{Signals: []expressive.PerceptionTerm{
+		{Name: "speech_rate", Description: "Words per second."},
+		{Name: "tone", Labels: []string{"calm", "frustrated"}},
+	}}
+	reader := expressive.PerceptionCapabilities{Signals: []expressive.PerceptionTerm{
+		{Name: "tone", Description: "How the user sounded.", Labels: []string{"frustrated", "confused"}},
+		{Name: "hesitation", Description: "The chance the user sounded unsure."},
+	}}
+
+	want := expressive.PerceptionCapabilities{Signals: []expressive.PerceptionTerm{
+		{Name: "speech_rate", Description: "Words per second."},
+		{Name: "tone", Description: "How the user sounded.", Labels: []string{"calm", "frustrated", "confused"}},
+		{Name: "hesitation", Description: "The chance the user sounded unsure."},
+	}}
+	if got := stt.Merge(reader); !reflect.DeepEqual(got, want) {
+		t.Errorf("merged %+v, want %+v", got, want)
+	}
+	if len(stt.Signals[1].Labels) != 2 {
+		t.Errorf("merging changed the signals merged into: %+v", stt.Signals)
+	}
+}
