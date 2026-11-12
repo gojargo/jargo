@@ -21,7 +21,6 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
@@ -190,7 +189,7 @@ func NewLLM(cfg Config) *Service {
 	s.Base = llm.New("OpenAIResponsesLLM", s)
 	s.Base.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
-	s.ws = llm.NewWebsocket(s.Base, s, wsservice.Config{})
+	s.ws = llm.NewWebsocket(s.Base, s, cfg.Websocket.Config())
 	warnIfReasoningUnsupported("OpenAIResponsesLLM", cfg)
 	return s
 }
@@ -683,7 +682,7 @@ func (s *Service) connect(ctx context.Context) (*session, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 
-	conn, err := wsutil.Dial(ctx, s.cfg.WSURL, header, readLimit)
+	conn, err := s.cfg.Websocket.Dial(ctx, s.cfg.WSURL, header, readLimit)
 	if err != nil {
 		return nil, err
 	}

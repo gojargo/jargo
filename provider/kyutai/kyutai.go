@@ -25,6 +25,7 @@ import (
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/wsservice"
 )
 
 // defaultSampleRate is the PCM rate the moshi-server models run at, for both the
@@ -56,6 +57,9 @@ type Config struct {
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.DefaultTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.

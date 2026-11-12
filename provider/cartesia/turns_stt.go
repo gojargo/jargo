@@ -124,6 +124,9 @@ type TurnsSTTConfig struct {
 	// OnTurnEnd is called with the final transcript for a completed turn. Same
 	// rules as OnTurnStart.
 	OnTurnEnd func(transcript string)
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -287,6 +290,10 @@ func (c *turnsConnector) TurnWatchdog() stt.TurnWatchdogOptions {
 // The server confirms the session with a connected message, which the read loop
 // waits for (see Recv). The server takes audio as soon as the socket opens,
 // ahead of that message.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *turnsConnector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *turnsConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := url.Values{}
 	q.Set("model", c.live.Model.Or(c.cfg.Model))
@@ -308,7 +315,7 @@ func (c *turnsConnector) Connect(ctx context.Context, sampleRate int) (stt.Strea
 		header.Set(k, v)
 	}
 
-	conn, err := wsutil.Dial(ctx, c.cfg.URL+"?"+encodeQuery(q), header, readLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.URL+"?"+encodeQuery(q), header, readLimit)
 	if err != nil {
 		return nil, err
 	}

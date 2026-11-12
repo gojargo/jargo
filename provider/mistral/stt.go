@@ -23,6 +23,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -69,6 +70,9 @@ type STTConfig struct {
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.MistralTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -128,12 +132,16 @@ func (c *sttConnector) Metadata() stt.Metadata {
 
 // Connect dials the realtime WebSocket and sends the session configuration. The
 // server's session.created acknowledgement is consumed by the read loop.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *sttConnector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 	endpoint := c.cfg.URL + "?model=" + url.QueryEscape(c.live.Model.Or(c.cfg.Model))
-	conn, err := wsutil.Dial(ctx, endpoint, header, sttReadLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, endpoint, header, sttReadLimit)
 	if err != nil {
 		return nil, err
 	}

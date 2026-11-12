@@ -9,6 +9,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -53,11 +54,15 @@ func (c *connector) Metadata() stt.Metadata {
 
 // Connect dials the moshi-server ASR WebSocket and prepares a resampler from the
 // pipeline's input rate to the server's 24 kHz.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	header := http.Header{}
 	header.Set("kyutai-api-key", c.cfg.APIKey)
 
-	conn, err := wsutil.Dial(ctx, c.cfg.URL, header, wsutil.DefaultReadLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.URL, header, wsutil.DefaultReadLimit)
 	if err != nil {
 		return nil, err
 	}

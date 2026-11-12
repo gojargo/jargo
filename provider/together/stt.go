@@ -15,6 +15,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -52,6 +53,9 @@ type STTConfig struct {
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.TogetherTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -82,6 +86,10 @@ func (c *connector) Metadata() stt.Metadata {
 }
 
 // Connect dials the realtime transcription WebSocket for the given sample rate.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	url := fmt.Sprintf(
 		"%s/realtime?intent=transcription&model=%s&turn_detection=%s&input_audio_format=pcm_s16le_%d",
@@ -91,7 +99,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	header.Set("OpenAI-Beta", "realtime=v1")
 
-	conn, err := wsutil.Dial(ctx, url, header, wsutil.DefaultReadLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, url, header, wsutil.DefaultReadLimit)
 	if err != nil {
 		return nil, err
 	}

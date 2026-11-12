@@ -169,7 +169,7 @@ type synthesizer struct {
 // only way it should be built: the settings store is not optional.
 func newSynthesizer(cfg Config) *synthesizer {
 	s := &synthesizer{cfg: cfg, live: newTTSSettings(cfg), svc: detachedService{}}
-	s.ws = wsservice.New(s, wsservice.Config{})
+	s.ws = wsservice.New(s, cfg.Websocket.Config())
 	return s
 }
 
@@ -316,7 +316,7 @@ func (s *synthesizer) ConnectWebsocket(ctx context.Context) error {
 	for k, v := range s.cfg.Headers {
 		header.Set(k, v)
 	}
-	conn, err := wsutil.Dial(ctx, s.cfg.URL, header, readLimit)
+	conn, err := s.cfg.Websocket.Dial(ctx, s.cfg.URL, header, readLimit)
 	if err != nil {
 		ef := frames.NewErrorFrame(fmt.Sprintf("Unknown error occurred: %v", err))
 		ef.Err = err

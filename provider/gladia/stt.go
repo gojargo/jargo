@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
@@ -87,12 +88,16 @@ func (c *connector) Metadata() stt.Metadata {
 }
 
 // Connect initializes a session over REST then dials the returned WebSocket.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	wsURL, err := c.initSession(ctx, sampleRate)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := wsutil.Dial(ctx, wsURL, nil, readLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, wsURL, nil, readLimit)
 	if err != nil {
 		return nil, err
 	}

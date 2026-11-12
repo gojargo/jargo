@@ -501,7 +501,13 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s.canReopen = true
 	s.Base = service.New(name, s)
 	s.set = &providerSettings{provider: conn, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
-	s.ws = wsservice.New(s, wsservice.Config{})
+	// The connection's reconnection settings come from the provider's
+	// configuration, where it has any.
+	var wsCfg wsservice.Config
+	if o, ok := conn.(wsservice.Optioner); ok {
+		wsCfg = o.WebsocketOptions().Config()
+	}
+	s.ws = wsservice.New(s, wsCfg)
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
 	s.tracer = newSegmentTracer(s.Base.Base, func() tracing.STTAttributes {
 		return tracing.STTAttributes{

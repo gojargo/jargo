@@ -1,7 +1,6 @@
 package whispercpp
 
 import (
-
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/stt"
 )

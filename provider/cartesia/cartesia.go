@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/wsservice"
 )
 
 const (
@@ -97,6 +98,9 @@ type Config struct {
 	// buffering, and unset for tokens, which leaves Cartesia on its own 3000ms
 	// default.
 	MaxBufferDelayMs *int
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.

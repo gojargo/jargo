@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -140,10 +141,14 @@ func assemblyaiLanguage(l language.Language) string {
 }
 
 // Connect opens the streaming WebSocket for the given sample rate.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := c.cfg.query(sampleRate)
 
-	conn, err := wsutil.Dial(ctx, c.cfg.BaseURL+"?"+q.Encode(), authHeader(c.cfg.APIKey), readLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.BaseURL+"?"+q.Encode(), authHeader(c.cfg.APIKey), readLimit)
 	if err != nil {
 		return nil, err
 	}

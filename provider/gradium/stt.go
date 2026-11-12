@@ -17,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -63,6 +64,9 @@ type STTConfig struct {
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.GradiumTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -158,6 +162,10 @@ func gradiumLanguage(l language.Language) string {
 // Connect dials the WebSocket, sends the setup handshake, and waits for the
 // server's ready acknowledgement. Audio is resampled from the pipeline's rate to
 // the rate it is sent at.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *sttConnector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	sendRate := c.sendSampleRate(sampleRate)
 	rs, err := resample.New(sampleRate, sendRate, 1)
@@ -168,7 +176,7 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 	header := http.Header{}
 	header.Set("x-api-key", c.cfg.APIKey)
 
-	conn, err := wsutil.Dial(ctx, c.cfg.URL, header, wsutil.DefaultReadLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.URL, header, wsutil.DefaultReadLimit)
 	if err != nil {
 		return nil, err
 	}

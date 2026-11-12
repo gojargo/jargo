@@ -129,6 +129,9 @@ type TTSConfig struct {
 	// request, frames.TextTypeToken streams the turn's text as it is generated
 	// and flushes it when the turn ends.
 	TextAggregation frames.TextType
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -183,7 +186,7 @@ func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
 		sessionRenewalMargin: sessionRenewalMargin,
 		now:                  time.Now,
 	}
-	s.ws = wsservice.New(s, wsservice.Config{})
+	s.ws = wsservice.New(s, cfg.Websocket.Config())
 	b := tts.New("AssemblyAITTS", s)
 	s.svc = b
 	if cfg.TextAggregation == frames.TextTypeToken {
@@ -404,7 +407,7 @@ func (s *synthesizer) ConnectWebsocket(ctx context.Context) error {
 	slog.Debug("connecting to assemblyai tts", "url", endpoint)
 	header := authHeader(s.cfg.APIKey)
 	header.Set("User-Agent", ttsUserAgent)
-	conn, err := wsutil.Dial(ctx, endpoint, header, readLimit)
+	conn, err := s.cfg.Websocket.Dial(ctx, endpoint, header, readLimit)
 	if err != nil {
 		s.svc.PushError(ctx, fmt.Sprintf("Error connecting to AssemblyAI TTS: %v", err), err, false)
 		return nil

@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 )
 
 func sttConfig() STTConfig {
@@ -273,5 +274,21 @@ func TestFinalizationSettingsAreLeftOffAnotherModel(t *testing.T) {
 	q := queryOf(t, newSTTConnector(cfg).endpoint(16000))
 	if q.Get("model") != "ink-2" || q.Has("min_volume") {
 		t.Errorf("query %v, want model ink-2 and no min_volume", q)
+	}
+}
+
+// The websocket options the configuration carries reach the stream base, which
+// reconnects with them.
+func TestSTTHandsTheBaseItsWebsocketOptions(t *testing.T) {
+	off := false
+	cfg := sttConfig()
+	cfg.Websocket = wsservice.Options{ReconnectOnError: &off, ReconnectBackoffMinWait: time.Second}
+	o, ok := any(newSTTConnector(cfg)).(wsservice.Optioner)
+	if !ok {
+		t.Fatal("the connector does not hand the base its websocket options")
+	}
+	if got := o.WebsocketOptions(); got.ReconnectOnError == nil || *got.ReconnectOnError ||
+		got.ReconnectBackoffMinWait != time.Second {
+		t.Errorf("options = %+v, want the configured ones", got)
 	}
 }

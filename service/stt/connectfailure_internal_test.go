@@ -59,16 +59,24 @@ func (c *failingConnector) connectAttempts() int {
 	return c.attempts
 }
 
-// newFailingService builds a streaming service over conn whose reconnection
-// waits backoff between attempts.
+// optionedConnector is a connector whose configuration carries websocket
+// options, the way a provider's does.
+type optionedConnector struct {
+	Connector
+	opts wsservice.Options
+}
+
+func (c optionedConnector) WebsocketOptions() wsservice.Options { return c.opts }
+
+// newFailingService builds a streaming service over conn whose reconnection,
+// configured through the connector's options as a provider's is, waits backoff
+// between attempts.
 func newFailingService(conn Connector, backoff time.Duration, reconnectOnError bool) *StreamService {
-	s := NewStream("FailingSTT", conn, 16000)
-	s.ws = wsservice.New(s, wsservice.Config{
+	return NewStream("FailingSTT", optionedConnector{Connector: conn, opts: wsservice.Options{
 		ReconnectOnError:        &reconnectOnError,
 		ReconnectBackoffMinWait: backoff,
 		ReconnectBackoffMaxWait: backoff,
-	})
-	return s
+	}}, 16000)
 }
 
 // runFailing streams audio through s for d and returns the errors that reached

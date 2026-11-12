@@ -17,6 +17,7 @@ import (
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -93,6 +94,9 @@ type STTConfig struct {
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.OpenAIRealtimeTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -158,6 +162,10 @@ func (c *sttConnector) Metadata() stt.Metadata {
 
 // Connect opens a transcription session and configures it. Audio is resampled
 // from the pipeline's rate to the 24 kHz the session is configured for.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *sttConnector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	rs, err := resample.New(sampleRate, sttSampleRate, 1)
 	if err != nil {
@@ -170,7 +178,7 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 
 	// The intent selects a transcription session rather than a conversational
 	// one; without it the model would answer instead of only transcribing.
-	conn, err := wsutil.Dial(ctx, c.cfg.BaseURL+"?intent=transcription", header, readLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.BaseURL+"?intent=transcription", header, readLimit)
 	if err != nil {
 		rs.Close()
 		return nil, err

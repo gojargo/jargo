@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -44,11 +45,15 @@ func (c *connector) Metadata() stt.Metadata {
 
 // Connect dials the real-time WebSocket, sends StartRecognition, and waits for
 // the RecognitionStarted acknowledgement before audio flows.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
-	conn, err := wsutil.Dial(ctx, c.cfg.URL, header, readLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.URL, header, readLimit)
 	if err != nil {
 		return nil, err
 	}

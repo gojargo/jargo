@@ -124,6 +124,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **Every websocket service takes the connection options in its config.** The
+  reconnection settings and timeouts the websocket base already had could not
+  be set from any service. `wsservice.Options` carries them (`ReconnectOnError`,
+  `ReconnectBackoffMinWait`, `ReconnectBackoffMaxWait`, `CloseTimeout`,
+  `SendTimeout`), and the config of every streaming STT (AssemblyAI, Azure,
+  Cartesia and Cartesia Turns, Deepgram and Deepgram Flux, ElevenLabs
+  realtime, Gladia, Gradium, Kyutai, Mistral, OpenAI realtime, Sarvam,
+  Smallest, Soniox, Speechmatics, Together, xAI), of the Cartesia and
+  AssemblyAI TTS and of the Responses WebSocket service gains a `Websocket`
+  field of that type: the base reconnects with it, and the connection is
+  opened with its timeouts.
+
 - **An interruption stops every clock a processor runs.** The processor base
   now calls `StopAllMetrics` on a processor implementing
   `processor.MetricsStopper`, on every `InterruptionFrame` and in

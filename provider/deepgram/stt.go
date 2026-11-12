@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -120,6 +121,9 @@ type Config struct {
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.DeepgramTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -355,6 +359,10 @@ func (c *connector) ServiceLanguage(l language.Language) string {
 }
 
 // Connect dials the live transcription WebSocket for the given sample rate.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := c.cfg.query(sampleRate, c.live)
 
@@ -362,7 +370,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	header.Set("Authorization", authToken(c.cfg.APIKey))
 
 	wsURL, _ := deriveDeepgramURLs(c.cfg.BaseURL)
-	conn, err := wsutil.Dial(ctx, wsURL+listenPath+"?"+q.Encode(), header, 0)
+	conn, err := c.cfg.Websocket.Dial(ctx, wsURL+listenPath+"?"+q.Encode(), header, 0)
 	if err != nil {
 		return nil, err
 	}

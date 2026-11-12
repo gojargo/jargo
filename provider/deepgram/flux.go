@@ -248,6 +248,9 @@ type FluxConfig struct {
 	// ExtraQuery sets arbitrary additional query parameters; values override any
 	// param of the same name set from other fields.
 	ExtraQuery map[string]string
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
@@ -439,13 +442,17 @@ func (c *fluxConnector) Metadata() stt.Metadata {
 // Flux confirms the session with a Connected message, which the read loop waits
 // for (see Recv): a dial does not hold up whatever triggered it, the audio
 // path included, for the length of that wait.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *fluxConnector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	q := fluxQuery(c.cfg, c.live, sampleRate)
 
 	header := http.Header{}
 	header.Set("Authorization", "Token "+c.cfg.APIKey)
 
-	conn, err := wsutil.Dial(ctx, c.cfg.ListenURL+"?"+q.Encode(), header, 0)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.ListenURL+"?"+q.Encode(), header, 0)
 	if err != nil {
 		return nil, dialError("deepgram flux", err)
 	}

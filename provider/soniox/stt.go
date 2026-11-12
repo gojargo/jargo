@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
@@ -139,8 +140,12 @@ func (c *connector) ServiceLanguage(l language.Language) string {
 
 // Connect dials the WebSocket, authenticated by the API key in its handshake
 // header, and sends the config message.
+// WebsocketOptions hands the stream base the connection settings the
+// configuration gives, implementing wsservice.Optioner.
+func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
+
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
-	conn, err := wsutil.Dial(ctx, c.cfg.URL, authHeader(c.cfg.APIKey), readLimit)
+	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.URL, authHeader(c.cfg.APIKey), readLimit)
 	if err != nil {
 		return nil, err
 	}

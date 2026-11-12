@@ -34,6 +34,7 @@ import (
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/wsservice"
 )
 
 const (
@@ -138,6 +139,10 @@ type Config struct {
 	// Extra sets arbitrary additional request fields not modeled above, applied
 	// to every request. They override the modeled fields on conflict.
 	Extra map[string]any
+	// Websocket configures the WebSocket service's connection: whether and how
+	// it reconnects, and how long it waits on a peer that has stopped
+	// answering. It is ignored by the HTTP service.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.

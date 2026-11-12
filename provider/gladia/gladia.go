@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/service/wsservice"
 )
 
 // errStatus is returned when the session REST call responds with a non-2xx
@@ -120,6 +121,9 @@ type Config struct {
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.GladiaTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
+	// Websocket configures the connection: whether and how it reconnects, and
+	// how long it waits on a peer that has stopped answering.
+	Websocket wsservice.Options
 }
 
 // Validate reports whether the configuration is usable.
