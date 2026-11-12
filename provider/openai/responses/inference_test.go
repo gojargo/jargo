@@ -76,3 +76,19 @@ func TestWebSocketServiceAnswersOneShotOverHTTP(t *testing.T) {
 		t.Errorf("answer = %q, want the output text", got)
 	}
 }
+
+// TestRunInferenceSendsTools checks an inference carries the conversation's
+// tools as a streamed turn does.
+func TestRunInferenceSendsTools(t *testing.T) {
+	svc, body := recordedBody(t, Config{})
+	convo := frames.NewLLMContext("")
+	convo.SetTools([]frames.Tool{{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)}})
+	convo.AddUserMessage("hi")
+
+	if _, err := svc.RunInference(t.Context(), convo, llm.InferenceOptions{}); err != nil {
+		t.Fatalf("RunInference: %v", err)
+	}
+	if tools, _ := body()["tools"].([]any); len(tools) != 1 {
+		t.Errorf("tools = %v, want the conversation's tool", body()["tools"])
+	}
+}

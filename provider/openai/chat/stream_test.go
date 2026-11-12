@@ -401,3 +401,35 @@ func TestRunInferenceReportsAFailedRequest(t *testing.T) {
 func TestServiceRunsOneShotInferences(t *testing.T) {
 	var _ llm.Inferencer = (*LLMService)(nil)
 }
+
+// TestRunInferenceSendsTheServiceInstructionAndTools checks an inference given
+// no instruction of its own sends the service's, and carries the conversation's
+// tools as a streamed turn does: a conversation holding a tool exchange is only
+// valid alongside the tools it used.
+func TestRunInferenceSendsTheServiceInstructionAndTools(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
+	svc.SetSystemInstruction("You are a booking assistant.")
+	convo := frames.NewLLMContext("")
+	convo.SetTools([]frames.Tool{{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)}})
+	convo.AddUserMessage("hi")
+
+	if _, err := svc.RunInference(t.Context(), convo, llm.InferenceOptions{}); err != nil {
+		t.Fatalf("RunInference: %v", err)
+	}
+	msgs := messagesOf(t, body)
+	if msgs[0]["role"] != RoleSystem || msgs[0]["content"] != "You are a booking assistant." {
+		t.Errorf("message 0 = %v, want the service's instruction", msgs[0])
+	}
+	if tools, _ := body["tools"].([]any); len(tools) != 1 {
+		t.Errorf("tools = %v, want the conversation's tool", body["tools"])
+	}
+}

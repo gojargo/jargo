@@ -40,6 +40,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   only when nothing else was set. A one-shot inference given no instruction
   sends the service's own, and one over an empty conversation sends its
   instruction once rather than twice.
+- **A one-shot inference is built like a streamed turn.** `RunInference` on
+  the OpenAI chat, Anthropic, Gemini and OpenAI Responses services left the
+  conversation's tools off the request, so Anthropic refused a conversation
+  holding a tool exchange, and sent no system instruction when the call gave
+  none. It now sends the tools, and the service's own system instruction when
+  the call gives none.
 - **The OpenAI Responses services offer cancel tools.** The services did not
   expose the adapter they convert through, so a tool the service implements
   itself (the cancel tool of an async function) never reached the request,

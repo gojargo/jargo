@@ -394,7 +394,7 @@ func runInference(
 	convo *frames.LLMContext, opts llm.InferenceOptions, encode func(request) ([]byte, error),
 ) (string, error) {
 	body, err := cfg.newRequest(
-		a, convo, adapter.Options{SystemInstruction: opts.SystemInstruction}, false,
+		a, convo, adapter.Options{SystemInstruction: opts.SystemInstruction}, true,
 	)
 	if err != nil {
 		return "", err

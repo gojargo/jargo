@@ -148,9 +148,13 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 func (s *Service) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
-	body, err := s.requestBody(
-		convo, adapter.Options{SystemInstruction: opts.SystemInstruction}, false,
-	)
+	// The call's own instruction, or else the service's: an inference is still
+	// this service answering. The tools go too, as on a streamed turn.
+	instruction := opts.SystemInstruction
+	if instruction == "" {
+		instruction = s.SystemInstruction()
+	}
+	body, err := s.requestBody(convo, adapter.Options{SystemInstruction: instruction}, true)
 	if err != nil {
 		return "", err
 	}

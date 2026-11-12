@@ -578,3 +578,30 @@ func TestRequestBodyPrefillFixup(t *testing.T) {
 			"want the model turn left last", n, continues[len(continues)-1][keyRole])
 	}
 }
+
+// TestRunInferenceSendsTheServiceInstructionAndTools checks an inference given
+// no instruction of its own sends the service's, and carries the conversation's
+// tools as a streamed turn does.
+func TestRunInferenceSendsTheServiceInstructionAndTools(t *testing.T) {
+	srv := newGenServer(t, `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`)
+	svc := serviceFor(srv, &testShaper{base: srv.URL}, Config{APIKey: "k"})
+	svc.SetSystemInstruction("You are a booking assistant.")
+	convo := frames.NewLLMContext("")
+	convo.SetTools([]frames.Tool{{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)}})
+	convo.AddUserMessage("hi")
+
+	if _, err := svc.RunInference(t.Context(), convo, llm.InferenceOptions{}); err != nil {
+		t.Fatalf("RunInference: %v", err)
+	}
+	sys, _ := srv.body["systemInstruction"].(map[string]any)
+	parts, _ := sys["parts"].([]any)
+	if len(parts) != 1 {
+		t.Fatalf("systemInstruction = %v, want the service's instruction", srv.body["systemInstruction"])
+	}
+	if part, _ := parts[0].(map[string]any); part["text"] != "You are a booking assistant." {
+		t.Errorf("systemInstruction = %v, want the service's instruction", part)
+	}
+	if tools, _ := srv.body["tools"].([]any); len(tools) != 1 {
+		t.Errorf("tools = %v, want the conversation's tool", srv.body["tools"])
+	}
+}

@@ -572,15 +572,20 @@ func (c *toolCoalescer) emit(sink llm.Sink) error {
 func (s *LLMService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
-	reqBody, err := s.baseRequest(convo, adapter.Options{SystemInstruction: opts.SystemInstruction})
+	// The call's own instruction, or else the service's: an inference is still
+	// this service answering.
+	instruction := opts.SystemInstruction
+	if instruction == "" {
+		instruction = s.SystemInstruction()
+	}
+	// Built the way a streamed turn is, tools included: a conversation holding a
+	// tool exchange is only valid alongside the tools it used.
+	reqBody, err := s.baseRequest(convo, adapter.Options{SystemInstruction: instruction})
 	if err != nil {
 		return "", err
 	}
 	reqBody.Stream = false
 	reqBody.StreamOptions = nil
-	// An inference wants an answer, not a tool call, so the toolset is left off.
-	reqBody.Tools = nil
-	reqBody.ToolChoice = ""
 	if opts.MaxTokens > 0 {
 		// Whichever bound this service states is the one to override; a model
 		// that reads only one of the two is told through the field it reads.

@@ -413,17 +413,21 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 func (s *Service) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
-	params, err := s.newParams(
-		convo, adapter.Options{SystemInstruction: opts.SystemInstruction},
-	)
+	// The call's own instruction, or else the service's: an inference is still
+	// this service answering.
+	instruction := opts.SystemInstruction
+	if instruction == "" {
+		instruction = s.SystemInstruction()
+	}
+	// Built the way a streamed turn is, tools included: the API refuses a
+	// conversation holding tool_use or tool_result blocks without the tools.
+	params, err := s.newParams(convo, adapter.Options{SystemInstruction: instruction})
 	if err != nil {
 		return "", err
 	}
 	if opts.MaxTokens > 0 {
 		params.MaxTokens = int64(opts.MaxTokens)
 	}
-	// An inference wants an answer, not a tool call, so the toolset is left off.
-	params.Tools = nil
 	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
 		var m map[string]any
 		if err = json.Unmarshal(schema, &m); err != nil {
