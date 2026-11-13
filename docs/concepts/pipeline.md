@@ -1,5 +1,6 @@
 ---
 title: Pipeline & Task
+description: "Pipeline links processors into a chain, Task runs one pipeline per session, and Runner ends the Task on an interrupt signal."
 weight: 4
 ---
 
