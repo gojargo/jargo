@@ -46,11 +46,5 @@ CLAUDE.local.md
 # Native runtimes fetched by `make deps-onnx` / `make deps-rnnoise`
 /.native/
 
-# Hugo documentation site build output (website/; sources are in docs/)
-/website/public/
-/website/resources/_gen/
-/website/_vendor/
-/website/.hugo_build.lock
-
 # Benchmark results, kept as CI artifacts and never committed
 /benchmarks/out/
