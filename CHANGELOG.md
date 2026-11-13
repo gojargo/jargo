@@ -13,6 +13,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- **The documentation moved to https://gojargo.dev.** The Hugo site under
+  `website/` is gone: gojargo.dev imports `docs/` at build time. The old
+  address, gojargo.github.io/jargo, now sends each page to the same page on
+  gojargo.dev. `make docs-check` runs a Go test (`TestDocsLinks`, also part of
+  `go test ./...`) instead of a Hugo build, so it needs nothing installed.
+
+### Fixed
+
+- **The development runner's banner links to a page that exists.** It pointed
+  at `gojargo.github.io/jargo/deploy/`, which the old site never had; it now
+  points at https://gojargo.dev/docs/deploy/.
+
 ## [0.6.1] - 2026-11-12
 
 ### Fixed

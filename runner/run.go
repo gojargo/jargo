@@ -1107,7 +1107,7 @@ func printDevRunnerBanner(out io.Writer) {
 		"JARGO DEVELOPMENT RUNNER",
 		"",
 		"Learn about running bots locally and in production:",
-		"https://gojargo.github.io/jargo/deploy/",
+		"https://gojargo.dev/docs/deploy/",
 	}
 	width := 0
 	for _, l := range lines {

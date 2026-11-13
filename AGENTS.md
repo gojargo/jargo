@@ -44,7 +44,8 @@ worth knowing:
   `make cover-html`.
 - `make generate`: regenerate the Riva protobuf clients with pinned tool
   versions. CI runs `make generate-check` and fails if the tree is stale.
-- `make docs-check`: build the site and fail on unresolved documentation links.
+- `make docs-check`: fail on a relative link in `docs/` or the README that points
+  at nothing (`TestDocsLinks`, also part of `go test ./...`).
 - `make deps`, `make deps-onnx`, `make deps-rnnoise`: install the cgo headers
   and the two native runtimes above. The last two need no root: they install
   under `.native/` and print the `JARGO_*_LIB` values to export.
@@ -80,8 +81,9 @@ worth knowing:
 - `processor/turns`, `processor/aggregators`, `processor/rtvi`: turn-taking,
   conversation context, RTVI.
 - `observers/`, `telemetry/`: frame observers, metrics and tracing.
-- `docs/`: the documentation sources; `website/` is the Hugo site that renders
-  them (see `website/hugo.toml`). Edit `docs/`, never a copy.
+- `docs/`: the documentation sources. The site at https://gojargo.dev
+  (repository `gojargo/gojargo.dev`) imports them at build time. Edit `docs/`,
+  never a copy.
 
 ## Security
 

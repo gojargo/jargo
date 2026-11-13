@@ -1,0 +1,101 @@
+name: Docs redirect
+
+# The documentation moved from GitHub Pages (gojargo.github.io/jargo) to
+# https://gojargo.dev. This keeps the old address working: it publishes one
+# small page per former URL that sends readers to the same page on
+# gojargo.dev and names it as canonical, which search engines treat as a
+# permanent move. Any other old URL lands on the home page.
+#
+# The page list is generated from docs/, so it runs when docs/ changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-redirect.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate the redirect pages
+        run: |
+          site=https://gojargo.dev
+          out=_site
+
+          # page <old path under /jargo/> <new URL>
+          page() {
+            mkdir -p "$out/$1"
+            cat > "$out/$1index.html" <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <title>Moved to gojargo.dev</title>
+          <link rel="canonical" href="$2">
+          <meta http-equiv="refresh" content="0; url=$2">
+          <script>location.replace("$2" + location.hash)</script>
+          </head>
+          <body><p>The jargo documentation moved to <a href="$2">$2</a>.</p></body>
+          </html>
+          EOF
+          }
+
+          page "" "$site/"
+
+          # docs/concepts/frames.md   → docs/concepts/frames/
+          # docs/concepts/_index.md   → docs/concepts/
+          find docs -name '*.md' | sort | while read -r file; do
+            path="${file%.md}"
+            path="${path%_index}"
+            path="${path%/}/"
+            page "$path" "$site/$path"
+          done
+
+          # The development runner banner of releases up to 0.6.1 links here.
+          page "deploy/" "$site/docs/deploy/"
+
+          # Anything else: the home page.
+          cat > "$out/404.html" <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <title>Moved to gojargo.dev</title>
+          <meta http-equiv="refresh" content="0; url=$site/">
+          <script>location.replace("$site/")</script>
+          </head>
+          <body><p>The jargo documentation moved to <a href="$site/">$site</a>.</p></body>
+          </html>
+          EOF
+
+          find "$out" -name '*.html' | sort
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write # deploy to Pages
+      id-token: write # verify the deployment origin
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

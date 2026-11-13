@@ -11,7 +11,7 @@
 # signing, Pages deploys, multi-arch buildx) stay in the workflows as actions.
 
 # Make runs each recipe line in /bin/sh with no errexit and no pipefail, which
-# would let a failing `hugo | tee` report success. CI gates on these recipes, so
+# would let a failing `cmd | tee` report success. CI gates on these recipes, so
 # make the shell strict.
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -38,16 +38,6 @@ GOVULNCHECK_VERSION ?= v1.8.0
 GITLEAKS_IMAGE ?= ghcr.io/gitleaks/gitleaks:latest
 SEMGREP_IMAGE ?= semgrep/semgrep:1.179.0
 SEMGREP_SARIF ?= semgrep.sarif
-
-# Hugo is installed out of band. This is the single pin for it: the docs
-# workflow provisions the runner from `make -s print-HUGO_VERSION`, and the
-# require-hugo guard names it when the binary is missing locally.
-HUGO_VERSION ?= 0.167.0
-WEBSITE_DIR := website
-HUGO_CHECK_LOG ?= /tmp/hugo-check.log
-# Set by the docs workflow from the Pages configuration; empty for local builds,
-# which fall back to the baseURL in website/hugo.toml.
-HUGO_BASEURL ?=
 
 COVERPROFILE ?= coverage.out
 
@@ -275,30 +265,12 @@ sast: ## Run the Semgrep CE static analysis and write its SARIF report
 
 ##@ Docs
 
-.PHONY: require-hugo
-require-hugo:
-	@command -v hugo >/dev/null || { \
-		echo "hugo (extended) $(HUGO_VERSION) is required: https://gohugo.io/installation/" >&2; \
-		exit 1; \
-	}
-
-.PHONY: docs-serve
-docs-serve: require-hugo ## Serve the documentation site with live reload
-	cd $(WEBSITE_DIR) && hugo serve --buildDrafts --printPathWarnings
-
-.PHONY: docs-build
-docs-build: require-hugo ## Build the documentation site into website/public
-	cd $(WEBSITE_DIR) && hugo --gc --minify --printPathWarnings \
-		$(if $(HUGO_BASEURL),--baseURL "$(HUGO_BASEURL)")
-
+# The site at https://gojargo.dev (repository gojargo/gojargo.dev) imports docs/
+# at build time; nothing here builds it. What stays here is the check that the
+# pages' relative links resolve, which `go test ./...` also runs in CI.
 .PHONY: docs-check
-docs-check: require-hugo ## Fail on any unresolved link in the documentation
-	@cd $(WEBSITE_DIR) && hugo --gc --renderToMemory --logLevel warn 2>&1 | tee $(HUGO_CHECK_LOG)
-	@# The ::error:: prefix is a GitHub Actions annotation, omitted off CI.
-	@if grep -F "render-link: unresolved" $(HUGO_CHECK_LOG); then \
-		echo "$${GITHUB_ACTIONS:+::error::}unresolved documentation links, see the warnings above" >&2; \
-		exit 1; \
-	fi
+docs-check: ## Fail on any relative link in docs/ or the README that points at nothing
+	go test -run '^TestDocsLinks$$' -count=1 .
 
 ##@ Native dependencies
 
