@@ -19,6 +19,11 @@ const (
 	defaultEndOfUtteranceSilence = 0.5
 	// readLimit bounds a single inbound message; transcript messages are small.
 	readLimit = 1 << 20
+	// startTimeout bounds the wait for RecognitionStarted.
+	startTimeout = 5 * time.Second
+	// endOfStreamTimeout bounds the wait for the EndOfTranscript answering
+	// EndOfStream when the pipeline stops.
+	endOfStreamTimeout = 5 * time.Second
 )
 
 // errServer wraps an error reported by Speechmatics.

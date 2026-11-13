@@ -1,15 +1,22 @@
 package assemblyai
 
 import (
+	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/stt"
 )
 
@@ -178,20 +185,216 @@ func TestRecvSkipsWhatCarriesNoTranscript(t *testing.T) {
 	}
 }
 
-// TestCloseTerminatesTheSession checks the socket is not simply dropped:
-// AssemblyAI is told the session is over so it finalizes rather than waiting.
-func TestCloseTerminatesTheSession(t *testing.T) {
+// TestDrainTerminatesTheSession checks the socket is not simply dropped when the
+// pipeline stops: AssemblyAI is told the session is over so it finalizes rather
+// than waiting, and the Termination acknowledging it is waited for.
+func TestDrainTerminatesTheSession(t *testing.T) {
+	s, got := dialAAI(t, Config{})
+	drainer, ok := s.(stt.Drainer)
+	if !ok {
+		t.Fatal("the session cannot be drained")
+	}
+	window, err := drainer.Drain()
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if window != terminationTimeout {
+		t.Errorf("drain window = %v, want %v for the Termination", window, terminationTimeout)
+	}
+	select {
+	case msg := <-got.text:
+		if !strings.Contains(msg, "Terminate") {
+			t.Errorf("the server saw %q on drain, want a Terminate", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("nothing was sent on drain")
+	}
+
+	got.send <- `{"type":"Turn","transcript":"last words","end_of_turn":true,"turn_is_formatted":true}`
+	got.send <- `{"type":"Termination","audio_duration_seconds":1,"session_duration_seconds":2}`
+	if r := recvAAI(t, s); len(r) != 1 || r[0].Text != "last words" {
+		t.Errorf("results = %+v, want the turn that arrived before the Termination", r)
+	}
+	if _, err := recvAAIError(t, s); !errors.Is(err, io.EOF) {
+		t.Errorf("Recv after the Termination = %v, want io.EOF", err)
+	}
+}
+
+// Ported from upstream (test_disconnect_terminates_an_open_session_before_closing).
+// Ending the pipeline sends one Terminate while the socket is still open, and
+// the teardown ends on the Termination that acknowledges it rather than
+// waiting out its window.
+func TestStopTerminatesTheSessionBeforeClosing(t *testing.T) {
+	endpoint, got := terminatingServer(t)
+	svc := NewSTT(Config{APIKey: "test-key", BaseURL: endpoint, SampleRate: 16000})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{IdleTimeout: -1})
+	done := make(chan error, 1)
+	go func() { done <- task.Run(context.Background()) }()
+	waitConnected(t, svc)
+
+	started := time.Now()
+	task.StopWhenDone()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the pipeline did not shut down")
+	}
+	if took := time.Since(started); took >= terminationTimeout {
+		t.Errorf("the teardown took %v, want it to end on the Termination", took)
+	}
+	select {
+	case <-got.ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session was never closed")
+	}
+	if n := got.terminates.Load(); n != 1 {
+		t.Errorf("Terminate messages = %d, want 1", n)
+	}
+}
+
+// A canceled pipeline terminates the session too, as every session the
+// service ends deliberately is: one Terminate, acknowledged before the close.
+func TestCancelTerminatesTheSession(t *testing.T) {
+	endpoint, got := terminatingServer(t)
+	svc := NewSTT(Config{APIKey: "test-key", BaseURL: endpoint, SampleRate: 16000})
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{IdleTimeout: -1})
+	done := make(chan error, 1)
+	go func() { done <- task.Run(context.Background()) }()
+	waitConnected(t, svc)
+
+	task.Cancel(context.Background(), "test")
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the pipeline did not shut down")
+	}
+	select {
+	case <-got.ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session was never closed")
+	}
+	if n := got.terminates.Load(); n != 1 {
+		t.Errorf("Terminate messages = %d, want 1", n)
+	}
+}
+
+// TestCloseSendsNoTerminate checks a session closed to replace it after it
+// dropped is just closed: Terminate belongs to the service ending a session.
+func TestCloseSendsNoTerminate(t *testing.T) {
 	s, got := dialAAI(t, Config{})
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	select {
 	case msg := <-got.text:
-		if !strings.Contains(msg, "Terminate") {
-			t.Errorf("the server saw %q on close, want a Terminate", msg)
+		t.Errorf("the server saw %q on close, want nothing", msg)
+	default:
+	}
+}
+
+// terminated is what a terminatingServer saw.
+type terminated struct {
+	terminates atomic.Int32
+	// ended receives once for each session the client has closed.
+	ended chan struct{}
+}
+
+// terminatingServer is a fake AssemblyAI endpoint that answers a Terminate
+// with Termination, and counts the Terminates it receives.
+func terminatingServer(t *testing.T) (string, *terminated) {
+	t.Helper()
+	got := &terminated{ended: make(chan struct{}, 4)}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
 		}
+		defer func() { _ = c.CloseNow() }()
+		defer func() { got.ended <- struct{}{} }()
+		for {
+			_, data, err := c.Read(r.Context())
+			if err != nil {
+				return
+			}
+			if !strings.Contains(string(data), `"Terminate"`) {
+				continue
+			}
+			got.terminates.Add(1)
+			reply := `{"type":"Termination","audio_duration_seconds":1,"session_duration_seconds":2}`
+			_ = c.Write(r.Context(), websocket.MessageText, []byte(reply))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), got
+}
+
+// waitConnected polls until the service holds its session.
+func waitConnected(t *testing.T, svc *stt.StreamService) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !svc.Connected() {
+		if time.Now().After(deadline) {
+			t.Fatal("the service never held its session")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// recvAAIError reads one batch, returning the error that ended the session,
+// bounded like recvAAI.
+func recvAAIError(t *testing.T, s stt.Stream) ([]stt.Result, error) {
+	t.Helper()
+	type outcome struct {
+		results []stt.Result
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := s.Recv()
+		done <- outcome{r, err}
+	}()
+	select {
+	case o := <-done:
+		return o.results, o.err
 	case <-time.After(3 * time.Second):
-		t.Error("nothing was sent on close")
+		t.Fatal("Recv returned nothing")
+		return nil, nil
+	}
+}
+
+// Ported from upstream (test_explicit_sample_rate_overrides_setup). A rate
+// configured on the service wins over the pipeline's input rate, and it is the
+// one the session is opened at.
+func TestExplicitSampleRateOverridesSetup(t *testing.T) {
+	endpoint, got := aaiServer(t)
+	svc := NewSTT(Config{APIKey: "test-key", BaseURL: endpoint, SampleRate: 16000})
+	ctx := context.Background()
+	if err := svc.Setup(ctx, processor.Setup{AudioInSampleRate: 8000, Clock: clock.NewSystem()}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Cleanup(ctx) })
+
+	if !svc.Connected() {
+		t.Fatal("Setup did not open a session")
+	}
+	if rate := got.query.Get("sample_rate"); rate != "16000" {
+		t.Errorf("dial sample_rate = %q, want the configured 16000 over the pipeline's 8000", rate)
+	}
+}
+
+// Ported from upstream (test_termination_acknowledges_without_ending_pipeline).
+// AssemblyAI sends Termination in reply to the Terminate a closing session
+// sends, including on a reopen a settings change asked for, so it is an
+// acknowledgment: it surfaces nothing and does not end the read.
+func TestTerminationAcknowledgesWithoutEndingTheSession(t *testing.T) {
+	s, got := dialAAI(t, Config{})
+
+	got.send <- `{"type":"Termination","audio_duration_seconds":1,"session_duration_seconds":2}`
+	got.send <- `{"type":"Turn","transcript":"still here"}`
+
+	r := recvAAI(t, s)
+	if len(r) != 1 || r[0].Text != "still here" {
+		t.Errorf("results = %+v, want only the turn after the Termination", r)
 	}
 }
 

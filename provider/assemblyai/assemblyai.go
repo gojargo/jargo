@@ -36,6 +36,9 @@ const (
 	readLimit = 1 << 20
 	// maxLanguageCodes is the longest declared-language list AssemblyAI accepts.
 	maxLanguageCodes = 10
+	// terminationTimeout bounds the wait for the Termination that acknowledges
+	// a Terminate when the pipeline stops.
+	terminationTimeout = 5 * time.Second
 )
 
 // errTooManyLanguages is returned when more languages are declared than

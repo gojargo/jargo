@@ -35,9 +35,11 @@ func newTTSSettings(cfg TTSConfig) *TTSSettings {
 	if cfg.Model != "" {
 		s.Model = settings.Set(cfg.Model)
 	}
+	// The language is stored as the caller gave it; the service names it the
+	// way AssemblyAI does.
 	s.Language = settings.Cleared[string]()
-	if lang := assemblyaiTTSLanguage(cfg.Language); lang != "" {
-		s.Language = settings.Set(lang)
+	if cfg.Language != "" {
+		s.Language = settings.Set(string(cfg.Language))
 	}
 	return s
 }

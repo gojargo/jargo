@@ -410,6 +410,25 @@ func SetNamed(v any, name string, value any) error {
 	return nil
 }
 
+// Copy is a copy of a settings value, for code that is to change a delta without
+// changing the one its caller holds. The fields are copied, and the extra
+// settings with them; the values a field holds are shared, which is safe since
+// a field is changed by replacing its value. v must be a pointer to a settings
+// struct.
+func Copy(v any) (any, error) {
+	sv, err := settingsValue(v)
+	if err != nil {
+		return nil, err
+	}
+	c := reflect.New(sv.Type())
+	c.Elem().Set(sv)
+	if extra := extraField(c.Elem()); extra.IsValid() && !extra.IsNil() {
+		values, _ := reflect.TypeAssert[map[string]any](extra)
+		extra.Set(reflect.ValueOf(maps.Clone(values)))
+	}
+	return c.Interface(), nil
+}
+
 // NewDelta builds an empty delta of the same type as store, for an update that
 // arrived as plain data and has to be given a shape before it can be applied.
 func NewDelta(store any) (any, error) {

@@ -18,7 +18,8 @@ import (
 func endpointQuery(t *testing.T, cfg TTSConfig) url.Values {
 	t.Helper()
 	cfg.APIKey = "test-key"
-	u, err := url.Parse(newSynthesizer(cfg).buildWebsocketURL())
+	_, s := newTTS(cfg)
+	u, err := url.Parse(s.buildWebsocketURL())
 	if err != nil {
 		t.Fatalf("parsing the endpoint: %v", err)
 	}

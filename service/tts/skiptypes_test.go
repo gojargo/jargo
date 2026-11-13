@@ -2,6 +2,7 @@ package tts_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,16 @@ const codeType = frames.TextType("code")
 // the order they arrived.
 func runWithSkippedType(t *testing.T, skip bool, text string) (spoken []string, down []frames.Frame) {
 	t.Helper()
+	return runSkipping(t, func(base *tts.Base) {
+		if skip {
+			base.SetSkipTextTypes(codeType)
+		}
+	}, text)
+}
+
+// runSkipping is runWithSkippedType with the skip list set by configure.
+func runSkipping(t *testing.T, configure func(*tts.Base), text string) (spoken []string, down []frames.Frame) {
+	t.Helper()
 
 	agg := ttstext.NewPatternPairAggregator(frames.TextTypeSentence, "")
 	if err := agg.AddPattern(codeType, "<code>", "</code>", ttstext.MatchAggregate); err != nil {
@@ -32,9 +43,7 @@ func runWithSkippedType(t *testing.T, skip bool, text string) (spoken []string, 
 	syn := &spacedSynth{}
 	base := tts.New("SkipTTS", syn)
 	base.SetTextAggregator(agg)
-	if skip {
-		base.SetSkipTextTypes(codeType)
-	}
+	configure(base)
 
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
@@ -103,6 +112,20 @@ func TestSkippedAggregationTypeStillReachesTheConversation(t *testing.T) {
 	}
 	if skipped.WillBeSpoken {
 		t.Error("a skipped block is marked as one that will be spoken")
+	}
+}
+
+// The former name of the skip list sets the same list.
+func TestSkipAggregatorTypesIsTheFormerNameOfSkipTextTypes(t *testing.T) {
+	spoken, _ := runSkipping(t, func(base *tts.Base) {
+		base.SetSkipAggregatorTypes(codeType) //nolint:staticcheck // the deprecated name is what is tested
+	}, "Here is code <code>print here</code> done.")
+
+	if slices.Contains(spoken, "print here") {
+		t.Fatalf("the skipped block was spoken: %q", spoken)
+	}
+	if len(spoken) == 0 {
+		t.Fatalf("nothing was spoken at all, so the skip proves nothing")
 	}
 }
 

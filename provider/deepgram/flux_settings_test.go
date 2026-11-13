@@ -276,11 +276,27 @@ func TestFluxStrayAckIsIgnored(t *testing.T) {
 func TestFluxConnectionFieldReopensTheSession(t *testing.T) {
 	srv, c, _ := fluxSession(t)
 
-	if !update(t, c, &FluxSettings{Numerals: settings.Set(true)}) {
+	delta := &FluxSettings{}
+	delta.Model = settings.Set(fluxMultilingualModel)
+	if !update(t, c, delta) {
 		t.Error("a connection-only field did not ask for a new session")
 	}
 	if got := srv.configures(); len(got) != 0 {
 		t.Errorf("a connection-only field sent %d configure messages, want none", len(got))
+	}
+}
+
+// Numerals are toggled over the live connection rather than by opening another.
+func TestFluxUpdateSettingsConfiguresNumerals(t *testing.T) {
+	srv, c, _ := fluxSession(t)
+
+	if update(t, c, &FluxSettings{Numerals: settings.Set(true)}) {
+		t.Error("numerals asked for a new session, want them sent to the running one")
+	}
+
+	got := srv.waitForConfigures(t, 1)
+	if want := map[string]any{"type": "Configure", "numerals": true}; !reflect.DeepEqual(got[0], want) {
+		t.Errorf("configure = %v, want %v", got[0], want)
 	}
 }
 

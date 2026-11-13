@@ -354,10 +354,12 @@ func (b *Base) model() string {
 // itself as syn and embeds the returned Base.
 func New(name string, syn Synthesizer) *Base {
 	b := &Base{syn: syn, zeroAudioLimit: defaultZeroAudioContextLimit, stopFrameTimeout: defaultStopFrameTimeout}
-	// Sentences are found in the language the service speaks, English when its
-	// settings name none.
-	b.aggregator = ttstext.NewSimpleAggregator(frames.TextTypeSentence, settingsLanguage(syn))
-	b.skippedAggregator = ttstext.NewSimpleAggregator(frames.TextTypeSentence, settingsLanguage(syn))
+	// Sentences are found in the language the service speaks, as the settings
+	// name it before the provider names it its own way, and English when they
+	// name none.
+	lang := settingsLanguage(syn)
+	b.aggregator = ttstext.NewSimpleAggregator(frames.TextTypeSentence, lang)
+	b.skippedAggregator = ttstext.NewSimpleAggregator(frames.TextTypeSentence, lang)
 	b.sequencer = uctx.NewAggregatedFrameSequencer(name, false)
 	if d, ok := syn.(Describer); ok {
 		b.meta = d.Metadata()
@@ -366,6 +368,12 @@ func New(name string, syn Synthesizer) *Base {
 		b.appendTrailingSpace = t.RequiresTrailingSpace()
 	}
 	b.Base = service.New(name, b)
+	// A provider is handed the language its settings start with as the caller
+	// gave it, and it is named the provider's way here, as an update's is: the
+	// store holds the provider's code from the start.
+	if holder, ok := syn.(SettingsHolder); ok && lang != "" {
+		b.nameLanguage(holder.Settings())
+	}
 	b.Events().Register(EventTTSRequest, false)
 	if cs, ok := syn.(ContextSynthesizer); ok {
 		cs.SetAudioContextHost(b)
@@ -863,12 +871,19 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFr
 	}
 	store := holder.Settings()
 
-	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	resolved, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
 	if err != nil {
 		b.PushError(ctx, "tts: settings update", err, false)
 		return
 	}
 	if !ok {
+		return
+	}
+	// The update is the caller's, and naming its language is the service's: it
+	// works on a copy, so the caller's update reads afterwards as it was sent.
+	delta, err := settings.Copy(resolved)
+	if err != nil {
+		b.PushError(ctx, "tts: settings update", err, false)
 		return
 	}
 
@@ -933,8 +948,9 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.TTSUpdateSettingsFr
 }
 
 // nameLanguage rewrites a language the delta gives into the code the provider
-// uses, when the provider says how. A code the provider does not recognize is
-// left as it came, since it may be one the service accepts directly.
+// uses, when the provider says how. A code that names no language jargo knows
+// is left as it came, since it may be one the service accepts directly, and so
+// is one the provider does not recognize.
 func (b *Base) nameLanguage(delta any) {
 	namer, ok := b.syn.(LanguageNamer)
 	if !ok {
@@ -946,6 +962,11 @@ func (b *Base) nameLanguage(delta any) {
 	}
 	code, ok := value.(string)
 	if !ok || code == "" {
+		return
+	}
+	if !slices.Contains(language.All(), language.Language(code)) {
+		slog.Debug("the language is not a recognized language code, so it is passed to the service as it is",
+			"service", b.Name(), "language", code)
 		return
 	}
 	named := namer.ServiceLanguage(language.Language(code))

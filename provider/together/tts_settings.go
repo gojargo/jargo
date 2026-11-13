@@ -30,7 +30,9 @@ func newTTSSettings(cfg TTSConfig) *TTSSettings {
 	s := &TTSSettings{}
 	s.Model = settings.Set(cfg.Model)
 	s.Voice = settings.Set(cfg.Voice)
-	s.Language = settings.Set(togetherLanguage(cfg.Language))
+	// The language is stored as the caller gave it; the service names it the
+	// way Together does.
+	s.Language = settings.Set(string(cfg.Language))
 	s.MaxPartialLength = settings.Cleared[int]()
 	if cfg.MaxPartialLength != nil {
 		s.MaxPartialLength = settings.Set(*cfg.MaxPartialLength)

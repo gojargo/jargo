@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -33,6 +34,51 @@ func TestQueryDefaults(t *testing.T) {
 	if q.Get("interim_results") != "true" || q.Get("punctuate") != "true" {
 		t.Errorf("interim_results=%q punctuate=%q, want both true",
 			q.Get("interim_results"), q.Get("punctuate"))
+	}
+}
+
+// queryFor builds the query a session opens with for cfg, at 16 kHz.
+func queryFor(cfg Config) url.Values {
+	cfg.APIKey = "k"
+	cfg.Model = defaultSTTModel
+	cfg.Language = language.EnglishUS
+	cfg.Encoding = defaultEncoding
+	cfg.Channels = defaultChannels
+	return cfg.query(16000, newSettings(cfg))
+}
+
+// A parameter jargo does not model still reaches Deepgram through the extra
+// query, alongside the modeled ones.
+func TestUnknownParamsStayInTheExtraQueryAndReachTheSession(t *testing.T) {
+	q := queryFor(Config{Numerals: new(true), ExtraQuery: map[string]string{"custom_param": "test"}})
+
+	if q.Get("numerals") != "true" {
+		t.Errorf("numerals = %q, want true", q.Get("numerals"))
+	}
+	if q.Get("custom_param") != "test" {
+		t.Errorf("custom_param = %q, want test", q.Get("custom_param"))
+	}
+}
+
+// Without a version the parameter is left off, so Deepgram picks the default.
+func TestVersionOmittedByDefault(t *testing.T) {
+	if q := queryFor(Config{}); q.Has("version") {
+		t.Errorf("version = %q, want it omitted", q.Get("version"))
+	}
+}
+
+// A version set pins the model version the session transcribes with.
+func TestVersionForwardedWhenSet(t *testing.T) {
+	if got := queryFor(Config{Version: "2021-03-17.0"}).Get("version"); got != "2021-03-17.0" {
+		t.Errorf("version = %q, want 2021-03-17.0", got)
+	}
+}
+
+// A version passed through the extra query pins the model the same way.
+func TestVersionForwardedFromTheExtraQuery(t *testing.T) {
+	q := queryFor(Config{ExtraQuery: map[string]string{"version": "2021-03-17.0"}})
+	if got := q["version"]; len(got) != 1 || got[0] != "2021-03-17.0" {
+		t.Errorf("version = %v, want [2021-03-17.0]", got)
 	}
 }
 

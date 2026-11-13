@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -56,14 +57,14 @@ var sttModelConfigs = map[string]sttModelConfig{
 		supportsMode:      true,
 		supportsLanguage:  true,
 		supportsVADParams: true,
-		defaultLanguage:   "unknown",
+		defaultLanguage:   autoDetectLanguage,
 		defaultMode:       "transcribe",
 	},
 	"saaras:v4": {
 		supportsMode:      true,
 		supportsLanguage:  true,
 		supportsVADParams: true,
-		defaultLanguage:   "unknown",
+		defaultLanguage:   autoDetectLanguage,
 		defaultMode:       "transcribe",
 	},
 }
@@ -162,7 +163,7 @@ func sarvamSTTLanguageCode(l language.Language) string {
 	case "mr":
 		return "mr-IN"
 	case "or":
-		return "od-IN"
+		return odiaCode
 	case "pa":
 		return "pa-IN"
 	case "ta":
@@ -174,9 +175,96 @@ func sarvamSTTLanguageCode(l language.Language) string {
 	}
 }
 
+const (
+	// autoDetectLanguage is Sarvam's placeholder for a language not configured
+	// or not yet detected.
+	autoDetectLanguage = "unknown"
+	// odiaCode is the code Sarvam names Odia by, rather than its ISO code.
+	odiaCode = "od-IN"
+)
+
+// sarvamSTTLanguages maps each language code Sarvam reports on a transcript
+// to the language it names. Every one is reported under its own tag, except
+// Odia.
+//
+//nolint:gochecknoglobals // read-only lookup table
+var sarvamSTTLanguages = reportedLanguages(
+	language.BengaliIN,
+	language.GujaratiIN,
+	language.HindiIN,
+	language.KannadaIN,
+	language.MalayalamIN,
+	language.MarathiIN,
+	language.TamilIN,
+	language.TeluguIN,
+	language.PunjabiIN,
+	language.EnglishUS,
+	language.EnglishIN,
+	language.AssameseIN,
+	language.UrduIN,
+	language.MaithiliIN,
+	language.SindhiIN,
+	language.KonkaniIN,
+	language.Language("ne-IN"),
+	language.Language("ks-IN"),
+	language.Language("sa-IN"),
+	language.Language("sat-IN"),
+	language.Language("mni-IN"),
+	language.Language("brx-IN"),
+	language.Language("doi-IN"),
+)
+
+// reportedLanguages builds the table of reported codes: each language under its
+// own tag, and Odia under Sarvam's code for it.
+func reportedLanguages(ls ...language.Language) map[string]language.Language {
+	m := make(map[string]language.Language, len(ls)+1)
+	for _, l := range ls {
+		m[string(l)] = l
+	}
+	m[odiaCode] = language.OdiaIN
+	return m
+}
+
 type connector struct {
 	cfg STTConfig
 	mc  sttModelConfig
+
+	// warnedMu guards warned, the language codes already warned about as
+	// having no mapping, so a long call warns about each one once rather than
+	// on every turn.
+	warnedMu sync.Mutex
+	warned   map[string]bool
+}
+
+// transcriptLanguage is the language a transcript is labeled with: the code
+// Sarvam reported on it, or failing that the one the session was opened with.
+// Sarvam's own "unknown" placeholder, and any code the table has no entry for,
+// leave the transcript without a language rather than guessing one.
+func (c *connector) transcriptLanguage(code string) string {
+	if code == "" {
+		code = c.languageString()
+	}
+	if code == "" || code == autoDetectLanguage {
+		return ""
+	}
+	if l, ok := sarvamSTTLanguages[code]; ok {
+		return string(l)
+	}
+	c.warnedMu.Lock()
+	first := !c.warned[code]
+	if first {
+		if c.warned == nil {
+			c.warned = map[string]bool{}
+		}
+		c.warned[code] = true
+	}
+	c.warnedMu.Unlock()
+	if first {
+		slog.Warn("sarvam stt: received a language code with no language mapping; "+
+			"leaving the transcript's language unset rather than guessing",
+			"language_code", code)
+	}
+	return ""
 }
 
 // Metadata reports the model in use and the transcript latency the turn
@@ -263,6 +351,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 		ctx:        ctx,
 		encoding:   c.encoding(),
 		sampleRate: sampleRate,
+		language:   c.transcriptLanguage,
 	}, nil
 }
 
@@ -280,6 +369,9 @@ type stream struct {
 	encoding   string
 	sampleRate int
 	writeMu    sync.Mutex
+	// language resolves the language a transcript is labeled with from the
+	// code Sarvam reported on it.
+	language func(code string) string
 }
 
 // sttMessage is the subset of a Sarvam STT result message we read.
@@ -335,7 +427,7 @@ func (s *stream) Recv() ([]stt.Result, error) {
 				Text:      text,
 				Final:     true,
 				EndOfTurn: true,
-				Language:  m.Data.LanguageCode,
+				Language:  s.language(m.Data.LanguageCode),
 			}}, nil
 		}
 	}

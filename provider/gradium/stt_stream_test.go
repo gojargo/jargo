@@ -133,17 +133,27 @@ func TestRecvHoldsWhatItReadWhileWaiting(t *testing.T) {
 	}
 }
 
-// TestRecvIgnoresAFlushWithNothingToSettle covers the flush that follows silence.
-// There is no transcript to settle, so nothing is emitted: a final carrying an
-// empty transcript would end a turn the user never took.
-func TestRecvIgnoresAFlushWithNothingToSettle(t *testing.T) {
+// TestRecvSettlesWhatArrivesAfterAFlushWithNothingHeld covers a flush answered
+// before any of its text. The text can still be on its way, so the flush holds
+// the transcript open for its window all the same, and what arrives in it is
+// the utterance the flush closed.
+func TestRecvSettlesWhatArrivesAfterAFlushWithNothingHeld(t *testing.T) {
 	s := newTestStream()
 	s.feed(flushed(), text("now speaking"))
 
 	got := recvOne(t, s)
-	if got.Text != "now speaking" || got.Final {
-		t.Errorf("result = %q (final %v), want the interim that followed the empty flush",
-			got.Text, got.Final)
+	if got.Text != "now speaking" || !got.Final || !got.EndOfTurn {
+		t.Errorf("result = %+v, want the text that arrived in the window settled", got)
+	}
+}
+
+// TestRecvIgnoresAFlushWithNothingToSettle covers the flush that follows
+// silence. Nothing arrives in its window, so nothing is emitted: a final
+// carrying an empty transcript would end a turn the user never took.
+func TestRecvIgnoresAFlushWithNothingToSettle(t *testing.T) {
+	s := newTestStream()
+	if got := s.flushed(); len(got) != 0 {
+		t.Errorf("results = %+v, want nothing for an empty flush", got)
 	}
 }
 

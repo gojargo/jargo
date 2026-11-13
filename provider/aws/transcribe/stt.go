@@ -55,20 +55,24 @@ func (c *connector) Metadata() stt.Metadata {
 	}
 }
 
-// Connect opens a streaming transcription session at the resolved sample rate.
+// SendSampleRate is the rate Transcribe is sent audio at, implementing
+// stt.SendRater. Transcribe takes 8 or 16 kHz, so audio at either goes as it is,
+// and audio at any other rate is resampled to 16 kHz.
+func (c *connector) SendSampleRate(sampleRate int) int {
+	if sampleRate == 8000 || sampleRate == 16000 {
+		return sampleRate
+	}
+	return fallbackSampleRate
+}
+
+// Connect opens a streaming transcription session for audio at sampleRate,
+// which is the rate SendSampleRate gave.
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	client, err := c.transcribeClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rate := c.cfg.SampleRate
-	if rate == 0 {
-		rate = sampleRate
-	}
-	if rate != 8000 && rate != 16000 {
-		rate = fallbackSampleRate
-	}
-	out, err := client.StartStreamTranscription(ctx, c.cfg.request(rate))
+	out, err := client.StartStreamTranscription(ctx, c.cfg.request(sampleRate))
 	if err != nil {
 		return nil, err
 	}

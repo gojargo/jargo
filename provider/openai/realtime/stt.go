@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor/turns"
@@ -160,18 +159,17 @@ func (c *sttConnector) Metadata() stt.Metadata {
 	return md
 }
 
-// Connect opens a transcription session and configures it. Audio is resampled
-// from the pipeline's rate to the 24 kHz the session is configured for.
 // WebsocketOptions hands the stream base the connection settings the
 // configuration gives, implementing wsservice.Optioner.
 func (c *sttConnector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
 
-func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
-	rs, err := resample.New(sampleRate, sttSampleRate, 1)
-	if err != nil {
-		return nil, err
-	}
+// SendSampleRate is the 24 kHz the Realtime API takes audio at, implementing
+// stt.SendRater: the service resamples the pipeline's audio to it.
+func (c *sttConnector) SendSampleRate(int) int { return sttSampleRate }
 
+// Connect opens a transcription session and configures it, for audio at the
+// 24 kHz SendSampleRate gives.
+func (c *sttConnector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	header.Set("OpenAI-Beta", "realtime=v1")
@@ -180,23 +178,20 @@ func (c *sttConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream,
 	// one; without it the model would answer instead of only transcribing.
 	conn, err := c.cfg.Websocket.Dial(ctx, c.cfg.BaseURL+"?intent=transcription", header, readLimit)
 	if err != nil {
-		rs.Close()
 		return nil, err
 	}
 
 	payload, err := json.Marshal(c.sessionUpdate())
 	if err != nil {
-		rs.Close()
 		_ = conn.Close(websocket.StatusInternalError, "session encode failed")
 		return nil, err
 	}
 	if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
-		rs.Close()
 		_ = conn.Close(websocket.StatusInternalError, "session update failed")
 		return nil, err
 	}
 	return &sttStream{
-		conn: conn, ctx: ctx, lang: c.cfg.Language.BaseCode(), rs: rs, serverVAD: c.cfg.serverVAD(),
+		conn: conn, ctx: ctx, lang: c.cfg.Language.BaseCode(), serverVAD: c.cfg.serverVAD(),
 	}, nil
 }
 
@@ -247,11 +242,7 @@ type sttStream struct {
 	// serverVAD reports whether the server delimits the utterances. When it
 	// does not, the service commits the audio buffer on the local VAD's stop.
 	serverVAD bool
-	// rs converts the pipeline's audio to the 24 kHz the session takes; it
-	// passes the audio through when the pipeline already runs at that rate.
-	// writeMu guards it.
-	rs      *resample.Resampler
-	writeMu sync.Mutex
+	writeMu   sync.Mutex
 	// partial accumulates the utterance in progress. The API streams each
 	// interim as a fragment rather than the running text, and every other jargo
 	// STT service reports interims cumulatively, so the fragments are joined
@@ -269,18 +260,13 @@ type sttMessage struct {
 	} `json:"error"`
 }
 
-// Send resamples a chunk of input PCM to 24 kHz and appends it to the model's
-// audio buffer.
+// Send appends a chunk of 24 kHz input PCM to the model's audio buffer.
 func (s *sttStream) Send(audio []byte) error {
 	if len(audio) == 0 {
 		return nil
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	audio = s.rs.Process(audio)
-	if len(audio) == 0 {
-		return nil
-	}
 	payload, err := json.Marshal(map[string]any{
 		keyType:  "input_audio_buffer.append",
 		keyAudio: base64.StdEncoding.EncodeToString(audio),
@@ -349,10 +335,7 @@ func (s *sttStream) Finalize() error {
 	return s.conn.Write(s.ctx, websocket.MessageText, payload)
 }
 
-// Close tears the session down and releases the resampler.
+// Close tears the session down.
 func (s *sttStream) Close() error {
-	s.writeMu.Lock()
-	s.rs.Close()
-	s.writeMu.Unlock()
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

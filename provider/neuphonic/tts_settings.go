@@ -1,6 +1,7 @@
 package neuphonic
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 
@@ -42,7 +43,9 @@ func newTTSSettings(cfg Config) *TTSSettings {
 	if cfg.VoiceID != "" {
 		s.Voice = settings.Set(cfg.VoiceID)
 	}
-	s.Language = settings.Set(neuphonicLanguage(cfg.Language))
+	// The language is stored as the caller gave it, English when none was; the
+	// service names it the way Neuphonic does.
+	s.Language = settings.Set(string(cmp.Or(cfg.Language, language.English)))
 	s.Speed = settings.Set(cfg.Speed)
 	s.Temperature = settings.Cleared[float64]()
 	if cfg.Temperature != nil {

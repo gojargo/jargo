@@ -167,7 +167,18 @@ func TestSampleRate(t *testing.T) {
 	}
 }
 
-// TestSTTSendsFixedSizeFrames checks the audio is resampled to moshi's rate and
+// TestSTTIsSentAudioAtMoshisRate checks the service is asked for audio at the
+// 24 kHz moshi takes, whatever rate the pipeline runs at.
+func TestSTTIsSentAudioAtMoshisRate(t *testing.T) {
+	c := &connector{}
+	for _, rate := range []int{8000, 16000, 24000, 48000} {
+		if got := c.SendSampleRate(rate); got != defaultSampleRate {
+			t.Errorf("at %d Hz the service sends audio at %d Hz, want %d", rate, got, defaultSampleRate)
+		}
+	}
+}
+
+// TestSTTSendsFixedSizeFrames checks the audio, at moshi's rate, is
 // forwarded in frames of the size it expects, with the remainder held back
 // rather than sent short.
 func TestSTTSendsFixedSizeFrames(t *testing.T) {
@@ -180,7 +191,7 @@ func TestSTTSendsFixedSizeFrames(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 
-	// Two frames' worth at moshi's own rate, so no resampling is needed, plus a
+	// Two frames' worth, plus a
 	// remainder that must not be sent on its own.
 	if err := st.Send(make([]byte, (sttFrameSamples*2+100)*2)); err != nil {
 		t.Fatalf("Send: %v", err)

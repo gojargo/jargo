@@ -186,6 +186,9 @@ func NewTTS(cfg TTSConfig) *tts.Base {
 func newTTS(cfg TTSConfig) (*tts.Base, *ttsSynthesizer) {
 	s := newTTSSynthesizer(cfg)
 	b := tts.New("XAITTS", s.driven())
+	// The service names the language the settings start with, so the URL is
+	// built again from the store as it now stands.
+	s.refreshEndpoint()
 	s.svc = b
 	s.ws = tts.NewWebsocket(b, s, s.cfg.Websocket)
 	return b, s

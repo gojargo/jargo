@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -372,46 +373,42 @@ func TestSTTServerError(t *testing.T) {
 	}
 }
 
-// TestSTTResamplesInput checks audio at the pipeline's rate is resampled to the
-// 24 kHz the session is configured for before it is appended, so a transport
-// running at 16 kHz is not sent audio labeled with the wrong rate.
-func TestSTTResamplesInput(t *testing.T) {
+// TestSTTIsSentAudioAt24kHz checks the service is asked for audio at the 24 kHz
+// the session is configured for, whatever rate the pipeline runs at, so the
+// audio it appends is at that rate as it stands.
+func TestSTTIsSentAudioAt24kHz(t *testing.T) {
+	conn := &sttConnector{cfg: STTConfig{APIKey: "k", Model: defaultSTTModel}}
+	for _, rate := range []int{8000, 16000, 24000, 48000} {
+		if got := conn.SendSampleRate(rate); got != sttSampleRate {
+			t.Errorf("at %d Hz the service sends audio at %d Hz, want %d", rate, got, sttSampleRate)
+		}
+	}
+
 	endpoint, sent, _ := sttServer(t, nil)
-	conn := &sttConnector{cfg: STTConfig{APIKey: "k", BaseURL: endpoint, Model: defaultSTTModel}}
-	stream, err := conn.Connect(context.Background(), 16000)
+	conn.cfg.BaseURL = endpoint
+	stream, err := conn.Connect(context.Background(), sttSampleRate)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer func() { _ = stream.Close() }()
 	<-sent // the session configuration
 
-	// 200 ms of 16 kHz mono PCM, in 20 ms chunks.
-	const chunks, chunkBytes = 10, 640
-	for range chunks {
-		if err := stream.Send(make([]byte, chunkBytes)); err != nil {
-			t.Fatalf("Send: %v", err)
-		}
+	chunk := bytes.Repeat([]byte{1, 2}, 480)
+	if err := stream.Send(chunk); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
-
-	// The same 200 ms at 24 kHz is 9600 bytes; the resampler may hold back a
-	// few samples of its filter delay.
-	const want = chunks * chunkBytes * 3 / 2
-	got := 0
-	for got < want*9/10 {
-		select {
-		case msg := <-sent:
-			b64, _ := msg[keyAudio].(string)
-			pcm, derr := base64.StdEncoding.DecodeString(b64)
-			if derr != nil {
-				t.Fatalf("decode audio: %v", derr)
-			}
-			got += len(pcm)
-		case <-time.After(2 * time.Second):
-			t.Fatalf("received %d bytes of audio, want about %d", got, want)
+	select {
+	case msg := <-sent:
+		b64, _ := msg[keyAudio].(string)
+		pcm, derr := base64.StdEncoding.DecodeString(b64)
+		if derr != nil {
+			t.Fatalf("decode audio: %v", derr)
 		}
-	}
-	if got > want {
-		t.Errorf("received %d bytes of audio, want at most %d", got, want)
+		if !bytes.Equal(pcm, chunk) {
+			t.Errorf("appended %d bytes, want the %d sent as they are", len(pcm), len(chunk))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no audio was appended")
 	}
 }
 

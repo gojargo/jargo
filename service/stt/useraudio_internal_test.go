@@ -1,7 +1,10 @@
 package stt
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -85,6 +88,78 @@ func TestStreamServiceTranscribesUserAudio(t *testing.T) {
 	}
 	if got[1].UserID != "" {
 		t.Errorf("second transcript user = %q, want none", got[1].UserID)
+	}
+}
+
+// Audio on its way out is the bot's, not the user's: it passes through the
+// service untouched and is never sent to the provider.
+func TestOutputAudioIsForwardedWithoutBeingTranscribed(t *testing.T) {
+	t.Parallel()
+
+	st := &kaStream{}
+	svc := NewStream("FakeSTT", &kaConnector{stream: st}, 16000)
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	task, stop := runWatched(t, pipeline.New(svc), func(_ context.Context, f frames.Frame) {
+		switch f.(type) {
+		case *frames.InputAudioRawFrame:
+			mu.Lock()
+			seen = append(seen, "input")
+			mu.Unlock()
+		case *frames.OutputAudioRawFrame:
+			mu.Lock()
+			seen = append(seen, "output")
+			mu.Unlock()
+		}
+	})
+	defer stop()
+	waitFor(t, "the session to open", func() bool { return svc.Connected() })
+
+	input, output := bytes.Repeat([]byte{1, 0}, 160), bytes.Repeat([]byte{2, 0}, 160)
+	task.QueueFrame(frames.NewInputAudioRawFrame(input, 16000, 1))
+	task.QueueFrame(frames.NewOutputAudioRawFrame(output, 16000, 1))
+	waitFor(t, "both frames downstream", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(seen) == 2
+	})
+
+	mu.Lock()
+	if seen[0] != "input" || seen[1] != "output" {
+		t.Errorf("downstream = %v, want the input audio then the output audio", seen)
+	}
+	mu.Unlock()
+	if sends := st.sends(); len(sends) != 1 || !bytes.Equal(sends[0], input) {
+		t.Errorf("sent chunks of %v bytes, want only the input audio", chunkSizes(sends))
+	}
+}
+
+// An audio frame carrying nothing is not sent to the provider, and is reported:
+// a transport handing over empty frames is one whose audio is not getting
+// through.
+func TestAnEmptyAudioFrameIsNotSent(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	st := &kaStream{}
+	svc := NewStream("FakeSTT", &kaConnector{stream: st}, 16000)
+	task, stop := runKeepaliveService(t, svc)
+	defer stop()
+	waitFor(t, "the session to open", func() bool { return svc.Connected() })
+
+	task.QueueFrame(frames.NewInputAudioRawFrame(nil, 16000, 1))
+	task.QueueFrame(frames.NewInputAudioRawFrame(make([]byte, 320), 16000, 1))
+	waitFor(t, "the audio after the empty frame", func() bool { return len(st.sends()) > 0 })
+
+	if sends := st.sends(); len(sends) != 1 || len(sends[0]) != 320 {
+		t.Errorf("sent chunks of %v bytes, want only the 320 after the empty frame", chunkSizes(sends))
+	}
+	if !strings.Contains(logs.String(), "empty audio frame") {
+		t.Errorf("logged %q, want the empty frame reported", logs.String())
 	}
 }
 

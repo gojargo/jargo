@@ -64,7 +64,7 @@ func TestSendStopsAtTheFirstFailure(t *testing.T) {
 
 	st := &sendStream{broken: true}
 	s := NewStream("FakeSTT", &sendConnector{streams: []*sendStream{st}}, 16000)
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 	s.stream = st
 
 	audio := make([]byte, 320)
@@ -86,7 +86,7 @@ func TestSendResumesOnANewSession(t *testing.T) {
 	fresh := &sendStream{}
 	conn := &sendConnector{streams: []*sendStream{broken, fresh}}
 	s := NewStream("FakeSTT", conn, 16000)
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 
 	ctx := t.Context()
 	if err := s.ConnectWebsocket(ctx); err != nil {

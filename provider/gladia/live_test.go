@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
@@ -30,6 +31,9 @@ type liveSession struct {
 	text       chan string
 	// send carries messages the test wants the server to speak.
 	send chan string
+	// ended is signaled as each socket closes, once everything sent on it
+	// has been read.
+	ended chan struct{}
 }
 
 // liveServer stands up both stages: a session-init endpoint answering with the
@@ -40,6 +44,7 @@ func liveServer(t *testing.T, initStatus int) (initURL string, got *liveSession)
 		audio: make(chan string, 8),
 		text:  make(chan string, 8),
 		send:  make(chan string, 8),
+		ended: make(chan struct{}, 8),
 	}
 
 	mux := http.NewServeMux()
@@ -66,6 +71,12 @@ func liveServer(t *testing.T, initStatus int) (initURL string, got *liveSession)
 			return
 		}
 		defer func() { _ = c.CloseNow() }()
+		defer func() {
+			select {
+			case got.ended <- struct{}{}:
+			default:
+			}
+		}()
 		go func() {
 			for msg := range got.send {
 				if err := c.Write(r.Context(), websocket.MessageText, []byte(msg)); err != nil {
@@ -210,21 +221,25 @@ func TestRecvSkipsUnreadableMessages(t *testing.T) {
 	}
 }
 
-// TestCloseStopsTheRecording checks the socket is not simply dropped: Gladia is
-// told the recording has stopped, so it finalizes rather than timing the session
-// out on its side.
-func TestCloseStopsTheRecording(t *testing.T) {
+// TestStopStopsTheRecording checks the session is not simply dropped as the
+// pipeline ends: Gladia is told the recording has stopped, so it finalizes
+// rather than timing the session out on its side.
+func TestStopStopsTheRecording(t *testing.T) {
 	s, got := dialLive(t, Config{})
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	st, ok := s.(stt.Stopper)
+	if !ok {
+		t.Fatal("the session cannot be stopped, so the recording is never stopped")
+	}
+	if err := st.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
 	}
 	select {
 	case msg := <-got.text:
 		if !strings.Contains(msg, "stop_recording") {
-			t.Errorf("the server saw %q on close, want stop_recording", msg)
+			t.Errorf("the server saw %q on stop, want stop_recording", msg)
 		}
 	case <-time.After(3 * time.Second):
-		t.Error("nothing was sent on close")
+		t.Error("nothing was sent on stop")
 	}
 }
 
@@ -316,5 +331,71 @@ func TestRecvDoesNotReportASuccessfulTranslation(t *testing.T) {
 	recvOne(t, s)
 	if len(*reports) != 0 {
 		t.Errorf("reports = %q, want none for a translation that succeeded", *reports)
+	}
+}
+
+// Ported from upstream (test_stop_disconnects_once). Ending the pipeline closes
+// the session once: the end frame and the cleanup after it both tear the
+// service down, and the second must find nothing left to close, or Gladia is
+// told twice that the recording stopped.
+func TestStopDisconnectsOnce(t *testing.T) {
+	stops := runToTheEnd(t, func(task *pipeline.Worker) { task.StopWhenDone() })
+	if stops != 1 {
+		t.Errorf("stop_recording sent %d times, want once", stops)
+	}
+}
+
+// Ported from upstream (test_cancel_does_not_send_stop_recording). A canceled
+// pipeline closes the session without telling Gladia the recording stopped.
+func TestCancelDoesNotSendStopRecording(t *testing.T) {
+	stops := runToTheEnd(t, func(task *pipeline.Worker) { task.Cancel(context.Background(), "test") })
+	if stops != 0 {
+		t.Errorf("stop_recording sent %d times on cancel, want never", stops)
+	}
+}
+
+// runToTheEnd runs a Gladia service in a pipeline until its session is open,
+// ends the pipeline with end, and reports how many times the server was told
+// the recording stopped.
+func runToTheEnd(t *testing.T, end func(*pipeline.Worker)) int {
+	t.Helper()
+	initURL, got := liveServer(t, http.StatusOK)
+	svc := NewSTT(Config{APIKey: "test-key", URL: initURL, SampleRate: 16000})
+
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{IdleTimeout: -1})
+	done := make(chan error, 1)
+	go func() { done <- task.Run(context.Background()) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for !svc.Connected() {
+		if time.Now().After(deadline) {
+			t.Fatal("the session never opened")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	end(task)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pipeline did not shut down")
+	}
+
+	// The server reads the socket in order, so once it has seen the socket
+	// close it has seen everything sent before.
+	select {
+	case <-got.ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session was never closed")
+	}
+	stops := 0
+	for {
+		select {
+		case msg := <-got.text:
+			if strings.Contains(msg, "stop_recording") {
+				stops++
+			}
+			continue
+		default:
+		}
+		return stops
 	}
 }

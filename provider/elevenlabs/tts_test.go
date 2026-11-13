@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -323,14 +324,15 @@ func TestCumulativeTimeAdvancesAcrossSentences(t *testing.T) {
 	}
 }
 
-// TestLanguageCodeOnlyForMultilingualModels checks the language is sent only to
-// the models that accept one.
-func TestLanguageCodeOnlyForMultilingualModels(t *testing.T) {
+// TestLanguageCodeOnlyForTheModelsThatTakeOne checks the language is sent only
+// to the models that accept one.
+func TestLanguageCodeOnlyForTheModelsThatTakeOne(t *testing.T) {
 	for model, want := range map[string]string{
 		"eleven_flash_v2_5":      "fr",
 		"eleven_turbo_v2_5":      "fr",
 		"eleven_multilingual_v2": "",
-		"eleven_v3":              "",
+		"eleven_v3":              "fr",
+		"eleven_v4_turbo":        "fr",
 	} {
 		srv, reqs := newTTSServer(t, []string{alignmentJSON(t, "bonjour", nil)})
 		cfg := ttsCfg(srv)
@@ -605,27 +607,123 @@ func TestOutputFormat(t *testing.T) {
 }
 
 // TestElevenlabsLanguage pins the synthesis codes. Synthesis takes the plain
-// base code, where transcription takes ISO-639-3, and a language ElevenLabs does
-// not speak maps to nothing so the model detects it.
+// base code, where transcription takes ISO-639-3. Whether a model takes the code
+// is decided apart from the mapping.
 func TestElevenlabsLanguage(t *testing.T) {
 	cases := map[language.Language]string{
-		language.English:           "en",
-		language.EnglishGB:         "en",
-		language.French:            "fr",
-		language.FrenchCA:          "fr",
-		language.Spanish:           "es",
-		language.German:            "de",
-		language.PortugueseBR:      "pt",
-		language.Chinese:           "zh",
-		language.Japanese:          "ja",
-		language.Language(langFil): langFil,
-		// Not spoken, so nothing is sent and the model auto-detects.
-		language.Language("cy"): "",
-		language.Language(""):   "",
+		language.English:             "en",
+		language.EnglishGB:           "en",
+		language.French:              "fr",
+		language.FrenchCA:            "fr",
+		language.Spanish:             "es",
+		language.German:              "de",
+		language.PortugueseBR:        "pt",
+		language.Chinese:             "zh",
+		language.Japanese:            "ja",
+		language.Language(langFil):   langFil,
+		language.Welsh:               "cy",
+		language.WelshGB:             "cy",
+		language.YueChineseCantonese: "yue",
+		// Not verified, so its base code is sent and reported.
+		language.Language("tlh-KL"): "tlh",
+		// Unset, so nothing is sent and the model auto-detects.
+		language.Language(""): "",
 	}
 	for in, want := range cases {
 		if got := elevenlabsLanguage(in); got != want {
 			t.Errorf("elevenlabsLanguage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestV3LanguageSetExtendsTheV25Set(t *testing.T) {
+	// Eleven v3 adds languages; it never drops one Flash and Turbo support.
+	for code := range elevenlabsV25Languages {
+		if _, ok := elevenlabsV3Languages[code]; !ok {
+			t.Errorf("Eleven v3 drops %q", code)
+		}
+	}
+	if got := len(elevenlabsV25Languages); got != 32 {
+		t.Errorf("v2.5 takes %d languages, want 32", got)
+	}
+	if got := len(elevenlabsV3Languages); got != 74 {
+		t.Errorf("v3 takes %d languages, want 74", got)
+	}
+}
+
+func TestV4LanguageSetExtendsTheV3Set(t *testing.T) {
+	// Eleven v4 adds languages; it never drops one Eleven v3 supports.
+	for code := range elevenlabsV3Languages {
+		if _, ok := elevenlabsV4Languages[code]; !ok {
+			t.Errorf("Eleven v4 drops %q", code)
+		}
+	}
+	if got := len(elevenlabsV4Languages); got != 84 {
+		t.Errorf("v4 takes %d languages, want 84", got)
+	}
+}
+
+func TestLanguageCodeIsGatedByModel(t *testing.T) {
+	// A language the model does not cover is dropped rather than sent.
+	for _, tt := range []struct{ model, code, want string }{
+		// Welsh is v3 and up.
+		{"eleven_v3_conversational", "cy", "cy"},
+		{"eleven_flash_v2_5", "cy", ""},
+		// German is common to all.
+		{"eleven_flash_v2_5", "de", "de"},
+		{"eleven_v3", "de", "de"},
+		// Cantonese is v4 only.
+		{"eleven_v4_turbo", "yue", "yue"},
+		{"eleven_v4", "yue", "yue"},
+		{"eleven_v3", "yue", ""},
+	} {
+		if got := elevenlabsLanguageCode(tt.model, tt.code); got != tt.want {
+			t.Errorf("elevenlabsLanguageCode(%q, %q) = %q, want %q", tt.model, tt.code, got, tt.want)
+		}
+	}
+}
+
+func TestModelsWithoutLanguageSupportSendNoCode(t *testing.T) {
+	if _, ok := elevenlabsModelLanguages["eleven_multilingual_v2"]; ok {
+		t.Error("eleven_multilingual_v2 is mapped, want it to take no language code")
+	}
+	for _, model := range []string{"eleven_multilingual_v2", ""} {
+		if got := elevenlabsLanguageCode(model, "de"); got != "" {
+			t.Errorf("model %q took %q, want no code", model, got)
+		}
+	}
+}
+
+func TestNoLanguageRequestedIsNotAWarningCase(t *testing.T) {
+	// Omitting a language is normal, not a mismatch.
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	if got := elevenlabsLanguageCode("eleven_v3", ""); got != "" {
+		t.Errorf("no language sent %q", got)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("no language warned: %s", logs.String())
+	}
+}
+
+func TestEveryMappedLanguageIsAcceptedBySomeModel(t *testing.T) {
+	// The language map and the per-model sets cannot drift apart.
+	for _, l := range language.All() {
+		code := elevenlabsLanguage(l)
+		if _, ok := elevenlabsV3Languages[code]; ok && elevenlabsLanguageCode("eleven_v3", code) != code {
+			t.Errorf("eleven_v3 refuses %q (%s)", code, l)
+		}
+		if _, ok := elevenlabsV4Languages[code]; ok && elevenlabsLanguageCode("eleven_v4_turbo", code) != code {
+			t.Errorf("eleven_v4_turbo refuses %q (%s)", code, l)
+		}
+	}
+	// Every verified code is one some model takes.
+	for l, code := range elevenlabsTTSLanguages {
+		if _, ok := elevenlabsV4Languages[code]; !ok {
+			t.Errorf("%s maps to %q, which no model takes", l, code)
 		}
 	}
 }

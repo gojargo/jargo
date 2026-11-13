@@ -3,10 +3,13 @@ package assemblyai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/query"
@@ -159,6 +162,9 @@ type stream struct {
 	conn    *wsutil.Conn
 	ctx     context.Context
 	writeMu sync.Mutex
+	// terminating is set once Terminate has been sent, so the Termination
+	// answering it ends the read.
+	terminating atomic.Bool
 }
 
 // turnMessage is the subset of a v3 Turn message we read.
@@ -178,7 +184,9 @@ func (s *stream) Send(audio []byte) error {
 
 // Recv reads the next Turn message and maps it to a result. A turn is final only
 // once it is both ended and formatted; the unformatted end-of-turn and ongoing
-// turns are interim.
+// turns are interim. A Termination is the acknowledgment of a Terminate: it
+// ends the read when the session is being terminated, and is passed over
+// otherwise.
 func (s *stream) Recv() ([]stt.Result, error) {
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -189,6 +197,9 @@ func (s *stream) Recv() ([]stt.Result, error) {
 		if err := json.Unmarshal(data, &m); err != nil {
 			continue
 		}
+		if m.Type == "Termination" && s.terminating.Load() {
+			return nil, io.EOF
+		}
 		if m.Type != "Turn" || m.Transcript == "" {
 			continue
 		}
@@ -197,10 +208,24 @@ func (s *stream) Recv() ([]stt.Result, error) {
 	}
 }
 
-// Close terminates the session and closes the socket.
-func (s *stream) Close() error {
+// Drain terminates the session, implementing stt.Drainer: it sends Terminate
+// while the socket is still open, and asks the service to wait up to
+// terminationTimeout for the Termination that acknowledges it. The turns that
+// arrive meanwhile are still read, and the Termination ends the read, which
+// ends the wait early. The service drains every session it ends deliberately,
+// whether the pipeline stops or is canceled.
+func (s *stream) Drain() (time.Duration, error) {
 	s.writeMu.Lock()
-	_ = s.conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"Terminate"}`))
-	s.writeMu.Unlock()
+	defer s.writeMu.Unlock()
+	s.terminating.Store(true)
+	if err := s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"Terminate"}`)); err != nil {
+		return 0, err
+	}
+	return terminationTimeout, nil
+}
+
+// Close closes the socket. The session is terminated by Drain as the service
+// ends it; a session closed to replace it after it dropped is just closed.
+func (s *stream) Close() error {
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

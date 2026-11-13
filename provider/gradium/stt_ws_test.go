@@ -111,7 +111,7 @@ func sttConn(endpoint string, opts ...func(*STTConfig)) *sttConnector {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &sttConnector{cfg: cfg}
+	return newSTTConnector(cfg)
 }
 
 func TestSTTConnectSendsTheSetup(t *testing.T) {
@@ -344,9 +344,10 @@ func TestSTTRecvGathersTrailingWords(t *testing.T) {
 	}
 }
 
-// TestSTTRecvIgnoresAFlushWithNothingHeld checks a flush with no text settles
-// nothing, so silence does not close a turn.
-func TestSTTRecvIgnoresAFlushWithNothingHeld(t *testing.T) {
+// TestSTTRecvSettlesTrailingTextAfterAFlushWithNothingHeld checks a flush
+// answered ahead of its text still holds the transcript open for its window,
+// so text arriving just behind it settles as the utterance it closed.
+func TestSTTRecvSettlesTrailingTextAfterAFlushWithNothingHeld(t *testing.T) {
 	endpoint, _ := sttServer(t, nil, []map[string]any{
 		{msgType: msgFlushed},
 		{msgType: msgText, "text": "after"},
@@ -362,8 +363,8 @@ func TestSTTRecvIgnoresAFlushWithNothingHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if got[0].Text != "after" {
-		t.Errorf("text = %q, want the empty flush stepped over", got[0].Text)
+	if got[0].Text != "after" || !got[0].Final || !got[0].EndOfTurn {
+		t.Errorf("result = %+v, want the trailing text settled by the flush", got[0])
 	}
 }
 

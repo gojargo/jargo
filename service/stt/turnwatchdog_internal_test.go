@@ -60,7 +60,7 @@ func watchdogService(t *testing.T, opts TurnWatchdogOptions) (*StreamService, *w
 	t.Helper()
 	st := &wdStream{}
 	s := NewStream("FakeSTT", &wdConnector{stream: st, wants: true, opts: opts}, 16000)
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 	s.stream = st
 	return s, st
 }

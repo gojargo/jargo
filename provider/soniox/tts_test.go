@@ -60,7 +60,8 @@ func TestTTSConfigMessage(t *testing.T) {
 
 	t.Run("optional settings", func(t *testing.T) {
 		speed, reduce, off := 1.1, true, false
-		s := newTTSSynthesizer(TTSConfig{
+		// Built through the service, which names the language the Soniox way.
+		_, s := newTTS(TTSConfig{
 			APIKey:            "k",
 			Voice:             "9f2b0c1e",
 			Language:          language.FrenchCA,
@@ -95,6 +96,19 @@ func TestTTSConfigMessage(t *testing.T) {
 			t.Error("sample_rate was sent with a format that is not raw PCM")
 		}
 	})
+}
+
+// The language the service is built with is stored as the caller gave it and
+// named the Soniox way once, as the service is built, the way an update's is.
+func TestTTSStartingLanguageIsNamedOnce(t *testing.T) {
+	raw := newTTSSynthesizer(TTSConfig{APIKey: "k", Language: language.NorwegianBokmalNO})
+	if got := raw.live.Language.Or(""); got != "nb-NO" {
+		t.Errorf("stored language before the service names it = %q, want nb-NO as given", got)
+	}
+	_, s := newTTS(TTSConfig{APIKey: "k", Language: language.NorwegianBokmalNO})
+	if got := s.live.Language.Or(""); got != "no" {
+		t.Errorf("language = %q, want no", got)
+	}
 }
 
 // TestSonioxTTSLanguage checks the codes Soniox takes: the base code, with

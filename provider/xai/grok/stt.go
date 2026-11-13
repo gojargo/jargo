@@ -253,9 +253,8 @@ func (s *sttStream) Recv() ([]stt.Result, error) {
 // Close tells xAI the audio is complete, then tears the session down.
 func (s *sttStream) Close() error {
 	s.writeMu.Lock()
-	// Sent on the background context: s.ctx is already canceled by the time the
-	// service closes the session, and this is the signal that flushes the
-	// server's final transcript.
+	// Sent on the background context, so it goes out whatever becomes of the
+	// session's: this is the signal that flushes the server's final transcript.
 	_ = s.conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"audio.done"}`))
 	s.writeMu.Unlock()
 	return s.conn.Close(websocket.StatusNormalClosure, "")

@@ -1,18 +1,25 @@
 package elevenlabs
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/pipeline"
 )
 
 // TestRealtimeSTTConfigValidate pins the fields the provider requires and the
@@ -67,11 +74,8 @@ func TestRealtimeSTTEndpoint(t *testing.T) {
 		if q.Get("model_id") != defaultRealtimeSTTModel {
 			t.Errorf("model_id = %q, want %q", q.Get("model_id"), defaultRealtimeSTTModel)
 		}
-		if q.Get("audio_format") != realtimeSTTFormat {
-			t.Errorf("audio_format = %q, want %q", q.Get("audio_format"), realtimeSTTFormat)
-		}
-		if q.Get("sample_rate") != "16000" {
-			t.Errorf("sample_rate = %q, want the transport rate", q.Get("sample_rate"))
+		if q.Get("audio_format") != "pcm_16000" {
+			t.Errorf("audio_format = %q, want pcm_16000, the format naming the session's rate", q.Get("audio_format"))
 		}
 		if q.Get("commit_strategy") != "vad" {
 			t.Errorf("commit_strategy = %q, want vad so the service delimits utterances", q.Get("commit_strategy"))
@@ -117,6 +121,87 @@ func TestRealtimeSTTEndpoint(t *testing.T) {
 				q.Get("min_speech_duration_ms"), q.Get("min_silence_duration_ms"))
 		}
 	})
+}
+
+// TestRealtimeWebsocketURLIncludesFilterBackgroundAudio checks background
+// filtering reaches the session when it is asked for. Unlike the detector
+// tuning, it applies however the session commits.
+func TestRealtimeWebsocketURLIncludesFilterBackgroundAudio(t *testing.T) {
+	filter := true
+	c := &realtimeSTTConnector{cfg: RealtimeSTTConfig{
+		APIKey: "k", Host: defaultRealtimeSTTHost, Model: defaultRealtimeSTTModel,
+		FilterBackgroundAudio: &filter,
+	}}
+
+	q := parseRealtimeQuery(t, c.endpoint(16000))
+
+	if got := q["filter_background_audio"]; len(got) != 1 || got[0] != "true" {
+		t.Errorf("filter_background_audio = %v, want [true]", got)
+	}
+}
+
+// TestRealtimeWebsocketURLOmitsUnsetFilterBackgroundAudio checks an unset
+// filter leaves the parameter off, so ElevenLabs applies its own default.
+func TestRealtimeWebsocketURLOmitsUnsetFilterBackgroundAudio(t *testing.T) {
+	c := &realtimeSTTConnector{cfg: RealtimeSTTConfig{
+		APIKey: "k", Host: defaultRealtimeSTTHost, Model: defaultRealtimeSTTModel,
+	}}
+
+	q := parseRealtimeQuery(t, c.endpoint(16000))
+
+	if q.Has("filter_background_audio") {
+		t.Errorf("filter_background_audio = %q, want it omitted", q.Get("filter_background_audio"))
+	}
+}
+
+// TestRealtimeAudioAtARateElevenLabsDoesNotTakeIsSentAt16kHz checks audio at a
+// rate ElevenLabs has no format for is resampled to 16 kHz and sent as such,
+// rather than declared at a rate it is not at.
+func TestRealtimeAudioAtARateElevenLabsDoesNotTakeIsSentAt16kHz(t *testing.T) {
+	endpoint, sent, _ := realtimeSTTServer(t, nil)
+	svc := NewRealtimeSTT(RealtimeSTTConfig{APIKey: "test-key", Host: endpoint, SampleRate: 32000})
+	pcm := make([]byte, 2*3200)
+	for i := range 3200 {
+		v := int16(math.Sin(2*math.Pi*220*float64(i)/32000) * 8000)
+		binary.LittleEndian.PutUint16(pcm[2*i:], uint16(v))
+	}
+
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	done := make(chan error, 1)
+	go func() { done <- task.Run(context.Background()) }()
+	task.QueueFrame(frames.NewInputAudioRawFrame(pcm, 32000, 1))
+	var chunk map[string]any
+	select {
+	case chunk = <-sent:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no audio reached the session")
+	}
+	task.StopWhenDone()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pipeline did not shut down")
+	}
+
+	c := &realtimeSTTConnector{cfg: RealtimeSTTConfig{Host: defaultRealtimeSTTHost, Model: defaultRealtimeSTTModel}}
+	if got := parseRealtimeQuery(t, c.endpoint(c.SendSampleRate(32000))).Get("audio_format"); got != "pcm_16000" {
+		t.Errorf("audio_format = %q, want pcm_16000", got)
+	}
+	if chunk["sample_rate"] != 16000.0 {
+		t.Errorf("sample_rate = %v, want 16000", chunk["sample_rate"])
+	}
+	r, err := resample.New(32000, 16000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := chunk["audio_base_64"].(string)
+	got, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("audio_base_64: %v", err)
+	}
+	if want := r.Process(pcm); !bytes.Equal(got, want) {
+		t.Errorf("sent %d bytes, want the audio resampled to 16 kHz (%d bytes)", len(got), len(want))
+	}
 }
 
 // realtimeSTTServer starts a fake streaming endpoint replaying scripted
@@ -216,8 +301,11 @@ func TestRealtimeSTTRecv(t *testing.T) {
 	if chunk["message_type"] != "input_audio_chunk" {
 		t.Errorf("message_type = %v, want input_audio_chunk", chunk["message_type"])
 	}
-	if got, _ := chunk["audio_chunk"].(string); got != base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}) {
-		t.Errorf("audio_chunk = %q, want the base64 PCM", got)
+	if got, _ := chunk["audio_base_64"].(string); got != base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}) {
+		t.Errorf("audio_base_64 = %q, want the base64 PCM", got)
+	}
+	if chunk["sample_rate"] != 16000.0 {
+		t.Errorf("sample_rate = %v, want 16000, the rate the session was opened for", chunk["sample_rate"])
 	}
 	if chunk["commit"] != false {
 		t.Errorf("commit = %v, want false: the service commits on its own silence detection", chunk["commit"])

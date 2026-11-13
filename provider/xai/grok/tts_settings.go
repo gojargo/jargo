@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"cmp"
 	"context"
 
 	"github.com/gojargo/jargo/language"
@@ -35,7 +36,9 @@ func newWebsocketTTSSettings(cfg TTSConfig) *WebsocketTTSSettings {
 	s := &WebsocketTTSSettings{}
 	s.Model = settings.Cleared[string]()
 	s.Voice = settings.Set(cfg.Voice)
-	s.Language = settings.Set(xaiLanguage(cfg.Language))
+	// The language is stored as the caller gave it, auto-detected when none
+	// was; the service names it the way xAI does.
+	s.Language = settings.Set(cmp.Or(string(cfg.Language), ttsLanguageAuto))
 	s.Speed = optional(cfg.Speed)
 	s.OptimizeStreamingLatency = optional(cfg.OptimizeStreamingLatency)
 	s.TextNormalization = optional(cfg.TextNormalization)

@@ -87,6 +87,9 @@ func (s *Service) TriggerAssistantResponse(ctx context.Context) {
 	s.triggeringAssistantResponse = true
 	connected := !s.connectedTime.IsZero()
 	s.mu.Unlock()
+	// The user's audio is dropped while the trigger plays, so the audio after it
+	// must not start with the end of the audio before.
+	s.resetInputResampler()
 	if connected {
 		s.sendAssistantResponseTrigger(ctx)
 	}

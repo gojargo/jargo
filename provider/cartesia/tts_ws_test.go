@@ -1036,7 +1036,10 @@ func TestRequestsSendTheMappedLanguage(t *testing.T) {
 		base, httpSeen := httpTTSServer(t, http.StatusOK, []byte{1, 2})
 		httpCfg := httpTTSConfig(base)
 		httpCfg.Language = in
-		collectHTTP(t, newHTTPSynthesizer(httpCfg), "hi")
+		httpSyn := newHTTPSynthesizer(httpCfg)
+		// The service names the language the settings start with.
+		tts.New("CartesiaHTTPTTS", httpSyn)
+		collectHTTP(t, httpSyn, "hi")
 		if got := httpSeen().body["language"]; got != want {
 			t.Errorf("%s over HTTP: language = %v, want %q", in, got, want)
 		}

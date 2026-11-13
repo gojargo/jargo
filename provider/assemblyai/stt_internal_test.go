@@ -1,7 +1,11 @@
 package assemblyai
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gojargo/jargo/language"
@@ -189,4 +193,143 @@ func TestIsU3ProModel(t *testing.T) {
 			t.Errorf("isU3ProModel(%q) = %v, want %v", model, got, want)
 		}
 	}
+}
+
+// Ported from upstream (test_language_code_omitted_by_default). With no language
+// declared nothing is sent, so the session is not steered.
+func TestLanguageCodeIsLeftOutByDefault(t *testing.T) {
+	cfg := Config{APIKey: "k"}.withDefaults()
+	q := cfg.query(16000)
+	if _, sent := q["language_code"]; sent {
+		t.Errorf("language_code = %q, want it left out", q.Get("language_code"))
+	}
+}
+
+// Ported from upstream (test_language_code_sent_when_set). A declared language is
+// sent as its code.
+func TestLanguageCodeIsSentWhenSet(t *testing.T) {
+	cfg := Config{APIKey: "k", Language: language.Spanish}.withDefaults()
+	q := cfg.query(16000)
+	if got := q.Get("language_code"); got != "es" {
+		t.Errorf("language_code = %q, want es", got)
+	}
+}
+
+// Ported from upstream (test_language_code_sent_for_universal_streaming). Unlike
+// the declared-language list, a single language is not U3 Pro only: it reaches
+// any model.
+func TestLanguageCodeIsSentForUniversalStreaming(t *testing.T) {
+	cfg := Config{APIKey: "k", Model: "universal-streaming-english", Language: language.English}
+	cfg = cfg.withDefaults()
+	if got := cfg.query(16000).Get("language_code"); got != "en" {
+		t.Errorf("language_code = %q, want en", got)
+	}
+}
+
+// Ported from upstream (test_language_codes_omitted_by_default). With no
+// languages declared nothing is sent, so the session is not steered.
+func TestLanguageCodesAreLeftOutByDefault(t *testing.T) {
+	cfg := Config{APIKey: "k"}.withDefaults()
+	q := cfg.query(16000)
+	if _, sent := q["language_codes"]; sent {
+		t.Errorf("language_codes = %q, want it left out", q.Get("language_codes"))
+	}
+}
+
+// Ported from upstream (test_language_code_with_language_detection_warns).
+// Declaring a language and detecting one are independent on the server, so
+// setting both warns about which does what, and both are still sent.
+func TestLanguageCodeWithLanguageDetectionWarns(t *testing.T) {
+	detect := true
+	cfg := Config{APIKey: "k", Language: language.Spanish, LanguageDetection: &detect}
+	logs := captureWarnings(t)
+	NewSTT(cfg)
+
+	cfg = cfg.withDefaults()
+	q := cfg.query(16000)
+	if got := q.Get("language_code"); got != "es" {
+		t.Errorf("language_code = %q, want es", got)
+	}
+	if got := q.Get("language_detection"); got != "true" {
+		t.Errorf("language_detection = %q, want true", got)
+	}
+	if !strings.Contains(logs.String(), "independent") {
+		t.Errorf("logged %q, want a warning that the two are independent", logs.String())
+	}
+}
+
+// Ported from upstream (test_language_codes_with_language_detection_warns).
+// Declaring languages and detecting one are independent on the server, so
+// setting both warns about which does what, and both are still sent.
+func TestLanguageCodesWithLanguageDetectionWarns(t *testing.T) {
+	detect := true
+	cfg := Config{APIKey: "k", LanguageCodes: []language.Language{language.Spanish}, LanguageDetection: &detect}
+	logs := captureWarnings(t)
+	NewSTT(cfg)
+
+	cfg = cfg.withDefaults()
+	q := cfg.query(16000)
+	if got := q.Get("language_codes"); got != `["es"]` {
+		t.Errorf("language_codes = %q, want [\"es\"]", got)
+	}
+	if got := q.Get("language_detection"); got != "true" {
+		t.Errorf("language_detection = %q, want true", got)
+	}
+	if !strings.Contains(logs.String(), "independent") {
+		t.Errorf("logged %q, want a warning that the two are independent", logs.String())
+	}
+}
+
+// Ported from upstream (test_language_code_and_language_codes_together_warns).
+// The two are names for one server parameter, which binds the list and ignores
+// the single language. Setting both warns about that, and both are still sent.
+func TestLanguageCodeAndLanguageCodesTogetherWarn(t *testing.T) {
+	cfg := Config{
+		APIKey:        "k",
+		Language:      language.Spanish,
+		LanguageCodes: []language.Language{language.English, language.Spanish},
+	}
+	logs := captureWarnings(t)
+	NewSTT(cfg)
+
+	cfg = cfg.withDefaults()
+	q := cfg.query(16000)
+	if got := q.Get("language_code"); got != "es" {
+		t.Errorf("language_code = %q, want es", got)
+	}
+	if got := q.Get("language_codes"); got != `["en","es"]` {
+		t.Errorf("language_codes = %q, want [\"en\",\"es\"]", got)
+	}
+	if !strings.Contains(logs.String(), "Language is ignored") {
+		t.Errorf("logged %q, want a warning that Language is ignored", logs.String())
+	}
+}
+
+// captureWarnings routes the default logger's warnings into a buffer for the
+// rest of the test.
+func captureWarnings(t *testing.T) *lockedBuffer {
+	t.Helper()
+	buf := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// lockedBuffer is a buffer safe to log into from any goroutine.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

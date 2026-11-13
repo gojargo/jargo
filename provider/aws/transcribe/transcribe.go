@@ -34,7 +34,8 @@ type Config struct {
 	// fr-FR); empty uses en-US.
 	Language string
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
-	// Transcribe supports 8000 or 16000 Hz; other values are clamped to 16000.
+	// Transcribe takes 8000 or 16000 Hz; audio at any other rate is resampled
+	// to 16000 Hz before it is sent.
 	SampleRate int
 	// PartialResultsStabilization enables partial-result stabilization, trading a
 	// little accuracy for steadier, lower-latency interim results; nil enables it.

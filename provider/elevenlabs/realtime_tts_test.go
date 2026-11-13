@@ -92,6 +92,29 @@ func TestRealtimeTTSEndpoint(t *testing.T) {
 	}
 }
 
+// TestRealtimeTTSEndpointGatesTheLanguageByModel checks the connection asks
+// for a language only of a model that covers it.
+func TestRealtimeTTSEndpointGatesTheLanguageByModel(t *testing.T) {
+	for _, tt := range []struct {
+		model string
+		lang  language.Language
+		want  string
+	}{
+		{"eleven_flash_v2_5", language.German, "de"},
+		{"eleven_flash_v2_5", language.Welsh, ""},
+		{"eleven_multilingual_v2", language.German, ""},
+	} {
+		s := newRealtimeSynthesizer(RealtimeTTSConfig{APIKey: "k", Model: tt.model, Language: tt.lang})
+		u, err := url.Parse(s.endpoint())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := u.Query().Get("language_code"); got != tt.want {
+			t.Errorf("%s in %s: language_code = %q, want %q", tt.model, tt.lang, got, tt.want)
+		}
+	}
+}
+
 // TestRealtimeTTSAutoModeCanBeDisabled checks the default is a default and not a
 // constant: a caller driving generation itself with explicit flushes can turn it
 // off.

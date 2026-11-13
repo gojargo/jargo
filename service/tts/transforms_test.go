@@ -3,6 +3,7 @@ package tts_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -154,6 +155,41 @@ func TestTextTransformOnlyRunsForItsAggregationType(t *testing.T) {
 	got := h.syn.texts()
 	if len(got) != 1 || got[0] != "Hello there." {
 		t.Errorf("spoken = %q, want the sentence untouched", got)
+	}
+}
+
+// A transform registered under the former name of its text type runs for
+// units of that type, whichever way it is registered, and for no others.
+func TestTextTransformAggregatedByIsTheFormerNameOfTextType(t *testing.T) {
+	for name, register := range map[string]func(*tts.Base, tts.TextTransformer){
+		"added": (*tts.Base).AddTextTransformer,
+		"set":   func(b *tts.Base, tt tts.TextTransformer) { b.SetTextTransformers(tt) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			agg := ttstext.NewPatternPairAggregator(frames.TextTypeSentence, "")
+			if err := agg.AddPattern(codeType, "<code>", "</code>", ttstext.MatchAggregate); err != nil {
+				t.Fatal(err)
+			}
+			h := newTransformHarness(t, agg)
+			register(h.base, tts.TextTransformer{
+				AggregatedBy: codeType, //nolint:staticcheck // the deprecated name is what is tested
+				Transform: func(_ context.Context, text string, _ frames.TextType) (string, error) {
+					return strings.ToUpper(text), nil
+				},
+			})
+
+			h.runTurn(t, "Here is code <code>print here</code> done.")
+
+			got := h.syn.texts()
+			if !slices.Contains(got, "PRINT HERE") {
+				t.Errorf("spoken = %q, want the code block transformed", got)
+			}
+			for _, said := range got {
+				if said != "PRINT HERE" && strings.ToUpper(said) == said {
+					t.Errorf("spoken = %q, want only the code block transformed", got)
+				}
+			}
+		})
 	}
 }
 

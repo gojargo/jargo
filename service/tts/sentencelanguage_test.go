@@ -93,6 +93,29 @@ func TestTTSFindsSentencesInItsSettingsLanguage(t *testing.T) {
 	}
 }
 
+// providerCodeSynth names a language with a code of its own, which is no
+// language a sentence could be found in.
+type providerCodeSynth struct{ languageSynth }
+
+func (s *providerCodeSynth) ServiceLanguage(l language.Language) string {
+	return "provider-" + string(l)
+}
+
+// The language the settings start with is named the provider's way in the store,
+// while sentences are found in the language as the caller gave it.
+func TestTTSPreservesLanguageBeforeProviderConversion(t *testing.T) {
+	syn := &providerCodeSynth{}
+	syn.store.Language = settings.Set(string(language.German))
+	svc := tts.New("LanguageTTS", syn)
+
+	if v, _ := syn.store.Language.Value(); v != "provider-de" {
+		t.Errorf("stored language = %q, want provider-de", v)
+	}
+	if got := svc.TextAggregationLanguage(); got != "de" {
+		t.Errorf("sentence language = %q, want de", got)
+	}
+}
+
 // An update applies to the text that follows, and keeps what is buffered.
 func TestTTSLanguageUpdateAppliesToFollowingTextAndPreservesBuffer(t *testing.T) {
 	svc, syn := newLanguageTTS("de")

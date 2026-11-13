@@ -87,6 +87,9 @@ func NewTTS(cfg TTSConfig) *tts.Base {
 func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
 	s := newSynthesizer(cfg)
 	b := tts.New("TogetherTTS", s)
+	// The service names the language the settings start with, so the session
+	// is built again from the store as it now stands.
+	s.refreshSession()
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: true})
 	s.svc = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)

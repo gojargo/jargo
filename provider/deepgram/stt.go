@@ -334,6 +334,9 @@ type connector struct {
 	// reading it here against applying an update, so a session is never opened
 	// from a half-written change.
 	live *Settings
+	// closeStreamTimeout bounds telling Deepgram a session is ending; zero
+	// takes wsutil.DefaultCloseTimeout. Held here so a test can shorten it.
+	closeStreamTimeout time.Duration
 }
 
 // Metadata reports the model transcription is billed against, and the
@@ -374,7 +377,7 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	if err != nil {
 		return nil, err
 	}
-	s := &stream{conn: conn, ctx: ctx}
+	s := &stream{conn: conn, ctx: ctx, stop: make(chan struct{}), closeWait: c.closeStreamTimeout}
 	s.wg.Go(s.keepAlive)
 	return s, nil
 }
@@ -384,6 +387,12 @@ type stream struct {
 	ctx     context.Context
 	writeMu sync.Mutex
 	wg      sync.WaitGroup
+	// stop is closed by Close, which ends the keepalive: Close runs while the
+	// session's context is still live.
+	stop      chan struct{}
+	closeOnce sync.Once
+	// closeWait bounds telling Deepgram the session is ending.
+	closeWait time.Duration
 }
 
 // dgMessage is the subset of Deepgram's live transcription result we use.
@@ -473,6 +482,8 @@ func (s *stream) keepAlive() {
 		select {
 		case <-s.ctx.Done():
 			return
+		case <-s.stop:
+			return
 		case <-ticker.C:
 			s.writeMu.Lock()
 			err := s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"KeepAlive"}`))
@@ -487,11 +498,15 @@ func (s *stream) keepAlive() {
 	}
 }
 
-// Close asks Deepgram to flush and then closes the socket.
+// Close asks Deepgram to flush and then closes the socket. An open session
+// holds one of the account's concurrent connections, so the socket is closed
+// whether or not the ask went out (see sendCloseStream).
 func (s *stream) Close() error {
-	s.writeMu.Lock()
-	_ = s.conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"CloseStream"}`))
-	s.writeMu.Unlock()
+	s.closeOnce.Do(func() { close(s.stop) })
+	open := sendCloseStream(s.ctx, s.conn, &s.writeMu, s.closeWait)
 	s.wg.Wait()
+	if !open {
+		return nil
+	}
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

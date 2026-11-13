@@ -1,7 +1,10 @@
 package tts_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -130,6 +133,56 @@ func TestTTSSettingsUpdateNamesTheLanguageTheProvidersWay(t *testing.T) {
 
 	if v, _ := syn.lang(); v != "fr" {
 		t.Errorf("stored language = %q, want fr: the provider names it by base code", v)
+	}
+}
+
+// The update is the caller's: naming its language the provider's way is done on
+// the service's own copy, so the caller's reads afterwards as it was sent.
+func TestTTSLanguageUpdateLeavesTheCallersDeltaUnchanged(t *testing.T) {
+	syn := &settingsSynth{names: true}
+	svc := tts.New("FakeTTS", syn)
+	task, stop := runTTSService(t, svc)
+	defer stop()
+
+	delta := &settings.TTS{Language: settings.Set(string(language.FrenchCA))}
+	task.QueueFrame(frames.NewTTSUpdateSettingsFrame(delta))
+	waitForTTSUpdates(t, syn, 1)
+
+	if v, _ := delta.Language.Value(); v != string(language.FrenchCA) {
+		t.Errorf("the caller's update holds %q after it was applied, want fr-CA as sent", v)
+	}
+	if v, _ := syn.lang(); v != "fr" {
+		t.Errorf("stored language = %q, want fr", v)
+	}
+}
+
+// A code naming no language jargo knows may still be one the provider takes, so
+// it is stored as it came, and the log says so.
+func TestTTSSettingsUpdatePassesAnUnrecognizedLanguageAsItIs(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	syn := &settingsSynth{names: true}
+	svc := tts.New("FakeTTS", syn)
+	task, stop := runTTSService(t, svc)
+	defer stop()
+
+	task.QueueFrame(frames.NewTTSUpdateSettingsFrame(&settings.TTS{Language: settings.Set("klingon")}))
+	waitForTTSUpdates(t, syn, 1)
+
+	if v, _ := syn.lang(); v != "klingon" {
+		t.Errorf("stored language = %q, want klingon as it came", v)
+	}
+	var notes []string
+	for line := range strings.Lines(logs.String()) {
+		if strings.Contains(line, "not a recognized language code") {
+			notes = append(notes, line)
+		}
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "klingon") {
+		t.Errorf("logged %q, want one debug line naming klingon", notes)
 	}
 }
 

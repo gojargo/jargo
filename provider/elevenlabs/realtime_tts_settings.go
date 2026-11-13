@@ -55,8 +55,10 @@ func newRealtimeTTSSettings(cfg RealtimeTTSConfig) *RealtimeTTSSettings {
 	s := &RealtimeTTSSettings{}
 	s.Model = settings.Set(cfg.Model)
 	s.Voice = settings.Set(cfg.VoiceID)
-	if code := elevenlabsLanguage(cfg.Language); code != "" {
-		s.Language = settings.Set(code)
+	// A language ElevenLabs takes is stored as the caller gave it; the service
+	// names it the way ElevenLabs does.
+	if elevenlabsLanguage(cfg.Language) != "" {
+		s.Language = settings.Set(string(cfg.Language))
 	}
 	if v := cfg.VoiceSettings; v != nil {
 		setOpt(&s.Stability, v.Stability)

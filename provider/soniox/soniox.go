@@ -13,7 +13,6 @@
 package soniox
 
 import (
-	"errors"
 	"net/http"
 	"time"
 
@@ -24,18 +23,24 @@ import (
 
 const (
 	defaultURL   = "wss://stt-rt.soniox.com/transcribe-websocket"
-	defaultModel = "stt-rt-v5"
+	defaultModel = "stt-rt-v6"
+	// audioFormat is the format of the audio the service sends: 16-bit
+	// little-endian PCM.
+	audioFormat = "pcm_s16le"
 	// readLimit bounds a single inbound message.
 	readLimit = 1 << 20
 	// endToken and finToken are Soniox's in-band turn-boundary markers.
 	endToken = "<end>"
 	finToken = "<fin>"
+	// keepaliveMessage holds an idle session open, and finalizeMessage asks for
+	// the final tokens of the audio sent so far.
+	keepaliveMessage = `{"type": "keepalive"}`
+	finalizeMessage  = `{"type": "finalize"}`
+	// keepaliveTimeout is how long a session may go without audio before the
+	// keepalive is sent, and keepaliveInterval how often that is checked.
+	keepaliveTimeout  = time.Second
+	keepaliveInterval = 5 * time.Second
 )
-
-// errServer wraps an error reported by Soniox.
-//
-//nolint:gochecknoglobals // sentinel error
-var errServer = errors.New("soniox: server error")
 
 // Config configures the Soniox STT service.
 type Config struct {
@@ -46,11 +51,18 @@ type Config struct {
 	// Model is the transcription model; empty uses a current default.
 	Model string
 	// Language hints the spoken language; the zero value lets Soniox auto-detect.
+	// It becomes the one language hint, unless LanguageHints are given.
 	Language language.Language
+	// LanguageHints are the languages to expect, for a conversation in more
+	// than one. When given, they are the hints and Language is not added.
+	LanguageHints []language.Language
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
-	// EnableEndpointDetection emits an end-of-turn marker on detected silence;
-	// nil defaults to true.
+	// EnableEndpointDetection has no effect: endpoint detection is always on.
+	// A VAD stop finalizes the transcript sooner, and the endpoint still ends
+	// the transcript of speech the VAD missed.
+	//
+	// Deprecated: endpoint detection is always on.
 	EnableEndpointDetection *bool
 
 	// The remaining options may also be changed while the pipeline runs, through

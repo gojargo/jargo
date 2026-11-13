@@ -122,11 +122,11 @@ var (
 	// Configure message.
 	fluxConfigureFields = []string{
 		fluxFieldKeyterm, fluxFieldEOTThreshold, fluxFieldEagerEOTThreshold,
-		fluxFieldEOTTimeoutMs, fluxFieldLanguageHints,
+		fluxFieldEOTTimeoutMs, fluxFieldLanguageHints, fluxFieldNumerals,
 	}
 	// fluxConnectionFields are the settings Flux only reads from the connection
 	// URL, so a change to one is applied by opening another connection.
-	fluxConnectionFields = []string{fluxFieldModel, fluxFieldNumerals}
+	fluxConnectionFields = []string{fluxFieldModel}
 	// fluxLocalFields are the settings applied to results as they arrive, so a
 	// change to one needs no connection change at all.
 	fluxLocalFields = []string{fluxFieldMinConfidence}
@@ -144,8 +144,8 @@ type FluxSettings struct {
 	// unsupported.
 	settings.STT
 
-	// Numerals writes spoken numbers as digits. Read only from the connection
-	// URL, so a change is applied by opening another connection.
+	// Numerals writes spoken numbers as digits. A change is sent to the
+	// running connection.
 	Numerals settings.Opt[bool] `settings:"numerals"`
 	// Keyterm boosts recognition of the given terms.
 	Keyterm settings.Opt[[]string] `settings:"keyterm"`
@@ -231,8 +231,8 @@ type FluxConfig struct {
 	// MipOptOut opts out of Deepgram's model-improvement program.
 	MipOptOut *bool
 	// Numerals writes spoken numbers as digits ("twenty three" becomes "23");
-	// nil leaves the service default. Flux reads it only from the connection
-	// URL, so changing it while the pipeline runs opens another connection.
+	// nil leaves the service default. Changing it while the pipeline runs sends
+	// the change to the running connection.
 	Numerals *bool
 	// Keyterm boosts recognition of the given terms.
 	Keyterm []string
@@ -322,9 +322,10 @@ func fluxQuery(cfg FluxConfig, live *FluxSettings, sampleRate int) url.Values {
 // settings store it starts from.
 func newFluxConnector(cfg FluxConfig) *fluxConnector {
 	return &fluxConnector{
-		cfg:               cfg,
-		live:              newFluxSettings(cfg),
-		connectionTimeout: fluxConnectionTimeout,
+		cfg:                cfg,
+		live:               newFluxSettings(cfg),
+		connectionTimeout:  fluxConnectionTimeout,
+		closeStreamTimeout: wsutil.DefaultCloseTimeout,
 	}
 }
 
@@ -340,6 +341,9 @@ type fluxConnector struct {
 	// connectionTimeout bounds the wait for Flux to confirm a session. Held here
 	// rather than read from the constant so a test can shorten it.
 	connectionTimeout time.Duration
+	// closeStreamTimeout bounds telling Flux a session is ending, for the same
+	// reason held here.
+	closeStreamTimeout time.Duration
 
 	// mu guards the session the Configure messages go out on.
 	mu     sync.Mutex
@@ -470,6 +474,8 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 		watchdogMin: watchdogMin,
 		lastAudio:   time.Now(),
 		connectWait: c.connectionTimeout,
+		closeWait:   c.closeStreamTimeout,
+		stop:        make(chan struct{}),
 		fail:        c.reportFailure,
 	}
 	if v, ok := c.live.MinConfidence.Value(); ok {
@@ -518,12 +524,17 @@ type fluxStream struct {
 	fail func(ctx context.Context, err error)
 	// connectWait bounds the wait for Flux to confirm this session.
 	connectWait time.Duration
+	// closeWait bounds telling Flux this session is ending.
+	closeWait time.Duration
 	// confirmed records that Flux has confirmed the session. Read loop only.
 	confirmed bool
 	// lifeMu guards closed, which Close sets so a confirmation arriving as the
 	// session closes does not start a watchdog Close is no longer waiting for.
 	lifeMu sync.Mutex
 	closed bool
+	// stop is closed by Close, which ends the watchdog: Close runs while the
+	// session's context is still live.
+	stop chan struct{}
 
 	writeMu sync.Mutex
 	wg      sync.WaitGroup
@@ -540,6 +551,13 @@ type fluxStream struct {
 	// pending holds anything read while waiting for Flux to confirm the
 	// session, so a result that arrived first is still delivered.
 	pending []stt.Result
+
+	// turnText is what Flux has transcribed of the turn in progress, from its
+	// latest Update, and turnLanguage the language that Update was in. A turn
+	// lives in one connection, so these are what end it when the connection
+	// closes before Flux sends EndOfTurn. Read loop only.
+	turnText     string
+	turnLanguage string
 
 	// cfgMu guards the Configure serialization below. A settings update arrives
 	// on the frame goroutine and an ack on the read loop, so the two meet here.
@@ -589,7 +607,7 @@ func (s *fluxStream) handleUnconfirmed(data []byte) (bool, error) {
 	case fluxMsgError:
 		return false, s.fatal(m)
 	case fluxMsgTurnInfo:
-		s.trackTurn(m.Event)
+		s.trackTurn(m)
 		s.pending = append(s.pending, fluxResults(m, s.model, s.minConfidence())...)
 	default:
 	}
@@ -657,6 +675,13 @@ func (s *fluxStream) sendConfigure(fields []string, live *FluxSettings) {
 			values[f] = live.EOTTimeoutMs.Or(0)
 		case fluxFieldLanguageHints:
 			values[f] = live.LanguageHints.Or([]string{})
+		case fluxFieldNumerals:
+			// A value cleared goes out as null, leaving Flux its default.
+			var numerals any
+			if v, ok := live.Numerals.Value(); ok {
+				numerals = v
+			}
+			values[f] = numerals
 		}
 	}
 
@@ -706,6 +731,9 @@ func (s *fluxStream) writeConfigure(values map[string]any) {
 
 	if v, ok := values[fluxFieldKeyterm]; ok {
 		message["keyterms"] = v
+	}
+	if v, ok := values[fluxFieldNumerals]; ok {
+		message["numerals"] = v
 	}
 
 	thresholds := map[string]any{}
@@ -837,7 +865,7 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 		case fluxMsgError:
 			return nil, s.fatal(m)
 		case fluxMsgTurnInfo:
-			s.trackTurn(m.Event)
+			s.trackTurn(m)
 			if res := fluxResults(m, s.model, s.minConfidence()); len(res) > 0 {
 				return res, nil
 			}
@@ -861,19 +889,46 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 	}
 }
 
-// trackTurn records whether the user is currently speaking so the watchdog only
-// injects silence during an active turn.
-func (s *fluxStream) trackTurn(event string) {
-	switch event {
+// trackTurn records whether the user is currently speaking, so the watchdog only
+// injects silence during an active turn, and what Flux has transcribed of the
+// turn so far, so a connection closing mid-turn can end it.
+func (s *fluxStream) trackTurn(m fluxMessage) {
+	switch m.Event {
 	case fluxEventStartOfTurn:
 		s.stateMu.Lock()
 		s.speaking = true
 		s.stateMu.Unlock()
+		s.turnText, s.turnLanguage = m.Transcript, ""
+	case fluxEventUpdate:
+		if m.Transcript != "" {
+			s.turnText, s.turnLanguage = m.Transcript, primaryLanguage(m, s.model)
+		}
 	case fluxEventEndOfTurn:
 		s.stateMu.Lock()
 		s.speaking = false
 		s.stateMu.Unlock()
+		s.turnText, s.turnLanguage = "", ""
 	}
+}
+
+// EndSession ends a turn the connection closed in the middle of, implementing
+// stt.SessionEnder. A Flux turn lives in one connection, so a new connection
+// never ends the old one's turn. The transcript received so far is reported as
+// the turn's transcription, unfinalized since Flux never committed it, and the
+// turn's end is proposed. If the user keeps talking on a new connection, what
+// follows is transcribed as a turn of its own.
+func (s *fluxStream) EndSession() []stt.Result {
+	s.stateMu.Lock()
+	speaking := s.speaking
+	s.speaking = false
+	s.stateMu.Unlock()
+	if !speaking {
+		return nil
+	}
+	slog.Debug("deepgram flux connection closed mid-turn, ending the turn")
+	text, lang := s.turnText, s.turnLanguage
+	s.turnText, s.turnLanguage = "", ""
+	return []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped, Language: lang}}
 }
 
 // fluxResults maps a Flux message to zero or one transcription result.
@@ -976,6 +1031,8 @@ func (s *fluxStream) watchdog() {
 		select {
 		case <-s.ctx.Done():
 			return
+		case <-s.stop:
+			return
 		case <-ticker.C:
 			s.stateMu.Lock()
 			speaking := s.speaking
@@ -1005,15 +1062,23 @@ func (s *fluxStream) sendSilence(durationSecs float64) error {
 	return nil
 }
 
-// Close asks Flux to finish the stream and then closes the socket.
+// Close asks Flux to finish the stream and then closes the socket. An open
+// session holds one of the account's concurrent Flux connections, so the socket
+// is closed whether or not the ask went out.
 func (s *fluxStream) Close() error {
 	s.lifeMu.Lock()
+	already := s.closed
 	s.closed = true
 	s.lifeMu.Unlock()
-	s.writeMu.Lock()
-	_ = s.conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"CloseStream"}`))
-	s.writeMu.Unlock()
+	if !already {
+		// The watchdog stops with the session, which may still be running.
+		close(s.stop)
+	}
+	open := sendCloseStream(s.ctx, s.conn, &s.writeMu, s.closeWait)
 	s.wg.Wait()
+	if !open {
+		return nil
+	}
 	if err := s.conn.Close(websocket.StatusNormalClosure, ""); err != nil {
 		return fmt.Errorf("deepgram flux: close: %w", err)
 	}

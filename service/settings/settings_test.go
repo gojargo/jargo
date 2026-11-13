@@ -491,3 +491,31 @@ func TestOptStates(t *testing.T) {
 		t.Errorf("Or = %q, want the value it holds", got)
 	}
 }
+
+// A copy can be changed without changing what it was copied from, its extra
+// settings included.
+func TestCopyLeavesTheOriginalAlone(t *testing.T) {
+	t.Parallel()
+
+	original := store("alice", "fr-CA")
+	original.Extra = map[string]any{"pace": 1.0}
+	c, err := settings.Copy(original)
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if err := settings.SetNamed(c, "language", "fr"); err != nil {
+		t.Fatalf("SetNamed: %v", err)
+	}
+	copied, _ := c.(*settings.TTS)
+	copied.Extra["pace"] = 2.0
+
+	if v, _ := original.Language.Value(); v != "fr-CA" {
+		t.Errorf("original language = %q, want fr-CA", v)
+	}
+	if original.Extra["pace"] != 1.0 {
+		t.Errorf("original pace = %v, want 1", original.Extra["pace"])
+	}
+	if v, _ := copied.Voice.Value(); v != "alice" {
+		t.Errorf("copied voice = %q, want alice", v)
+	}
+}

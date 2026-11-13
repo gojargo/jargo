@@ -57,7 +57,9 @@ var errNotGenerator = errors.New("novasonic: the model generates continuously")
 // AudioConfig is the audio the session takes in and sends back. It is fixed
 // for the service's lifetime.
 type AudioConfig struct {
-	// InputSampleRate is the user audio's sample rate in Hz.
+	// InputSampleRate is the rate in Hz the session declares for the user's
+	// audio. Audio arriving at another rate is resampled to it before it is
+	// sent.
 	InputSampleRate int `validate:"min=1"`
 	// InputSampleSize is the user audio's sample size in bits.
 	InputSampleSize int `validate:"min=8"`

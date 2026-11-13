@@ -368,7 +368,7 @@ func (s *realtimeSynthesizer) endpoint() string {
 	if normalization, ok := s.live.ApplyTextNormalization.Value(); ok && normalization != "" {
 		q.Set("apply_text_normalization", normalization)
 	}
-	if code := elevenlabsLanguage(language.Language(s.live.Language.Or(""))); code != "" {
+	if code := elevenlabsLanguageCode(s.model(), s.live.Language.Or("")); code != "" {
 		q.Set("language_code", code)
 	}
 	path := fmt.Sprintf(realtimeTTSPath, s.live.Voice.Or(s.cfg.VoiceID))

@@ -12,10 +12,12 @@ package stt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
@@ -33,6 +35,19 @@ import (
 //nolint:gochecknoglobals // sentinel error
 var errNoSession = errors.New("stt: connector returned no session")
 
+// ErrPermanent is wrapped by an error a Connector returns when a session cannot
+// be opened and will not be on a retry either, for a reason the error's
+// category does not already convey: credentials the provider rejected in its
+// own protocol, say. The service reports it as permanent, which leaves it
+// unusable, and does not retry. Wrap an error with Permanent.
+//
+//nolint:gochecknoglobals // sentinel error
+var ErrPermanent = errors.New("stt: permanent failure")
+
+// Permanent marks err as a failure to open a session that will recur, so the
+// service reports it as permanent rather than retrying (see ErrPermanent).
+func Permanent(err error) error { return fmt.Errorf("%w: %w", ErrPermanent, err) }
+
 // Result is one transcription result from a streaming STT provider.
 type Result struct {
 	// Text is the transcribed text.
@@ -45,6 +60,11 @@ type Result struct {
 	EndOfTurn bool
 	// Language is the detected language as a BCP-47 tag, or "" when unknown.
 	Language string
+	// Speaker is the provider's diarization label for who said the text, or ""
+	// when diarization is off or the provider gave none. The service numbers
+	// each label in the order it first appeared and puts the speaker on the
+	// transcript (see frames.TranscriptionSpeaker).
+	Speaker string
 	// Speech reports a speech boundary the provider detected itself. Most
 	// providers leave it unset and let the pipeline's own detection decide when
 	// the user is speaking; a provider running detection server-side sets it so
@@ -98,9 +118,21 @@ type Stream interface {
 	Close() error
 }
 
-// Connector opens a streaming STT session for the given input sample rate.
+// Connector opens a streaming STT session for audio at sampleRate: the rate
+// every chunk the session's Send is handed is at. That is the rate the service
+// sends audio at, its input rate unless the Connector implements SendRater.
 type Connector interface {
 	Connect(ctx context.Context, sampleRate int) (Stream, error)
+}
+
+// SendRater is an optional interface a Connector implements when its provider
+// takes audio at only some rates. SendSampleRate is given the rate the service
+// runs at and returns the rate the provider is sent audio at. The service
+// resamples the input audio to that rate and opens the session for it. A
+// Connector that does not implement it is sent audio at the service's own rate,
+// input audio at any other rate being resampled to it.
+type SendRater interface {
+	SendSampleRate(sampleRate int) int
 }
 
 // ErrorClassifier is an optional interface a Connector implements when the
@@ -211,6 +243,16 @@ type Drainer interface {
 	Drain() (window time.Duration, err error)
 }
 
+// Stopper is an optional interface a Stream implements when the provider is to
+// be told the audio is over when the pipeline ends gracefully, and only then.
+// Stop is called on an EndFrame, before the session is torn down; a CancelFrame,
+// or a teardown with no frame at all, closes the session without it. A message
+// every teardown sends belongs in Close instead, which the session is still open
+// for.
+type Stopper interface {
+	Stop() error
+}
+
 // Finalizer is an optional interface a Stream implements when the provider has
 // to be told the speech has ended before it flushes the transcript for it.
 // Finalize is called once the VAD reports the user stopped, and the session
@@ -265,6 +307,15 @@ type SettingsUpdater interface {
 // change would be reported for two spellings of the same language.
 type LanguageNamer interface {
 	ServiceLanguage(l language.Language) string
+}
+
+// SettingsPreparer is an optional interface a provider implements to see an
+// update before the service names its language and applies it, the way a
+// provider whose settings spell a field another way rewrites it: a language that
+// replaces the provider's own language hints, say. PrepareSettings is handed the
+// service's own copy of the update, never the caller's, and changes it in place.
+type SettingsPreparer interface {
+	PrepareSettings(delta any) error
 }
 
 // EagerEndOfTurner is an optional interface a Connector implements when its
@@ -361,8 +412,15 @@ type StreamService struct {
 	eagerPending   bool
 
 	sampleRate int
-	mu         sync.Mutex
-	stream     Stream
+	// sendRate is the rate the provider is sent audio at: sampleRate unless the
+	// Connector asks for another through SendRater.
+	sendRate int
+	mu       sync.Mutex
+	stream   Stream
+	// sendResampler converts the input audio to sendRate, and resampleFrom is
+	// the rate of the audio it converts. Only the frame path uses them.
+	sendResampler *resample.Resampler
+	resampleFrom  int
 	// sendFailed records that the session refused the audio it was last given,
 	// which takes it out of use until the read loop replaces it. Writing on
 	// indefinitely is how a call goes quiet with nothing in the log to say
@@ -376,6 +434,9 @@ type StreamService struct {
 	// readCancel ends the read loop, and with it the whole connection. It
 	// outlives any one session, so a reconnect does not stop the loop.
 	readCancel context.CancelFunc
+	// receiving is whether the read loop hands what it reads on. It stops as
+	// the session is closed, ahead of the read itself.
+	receiving bool
 	// audioBytes is the audio submitted since usage was last reported.
 	audioBytes int64
 	// speaking tracks the boundary a provider that runs its own detection last
@@ -439,6 +500,9 @@ type StreamService struct {
 	// userID is the user the audio last sent was attributed to, "" when it
 	// named nobody. The transcripts the service emits carry it.
 	userID string
+	// speakers are the speakers the provider's diarization told apart, by its
+	// label, numbered in the order they first appeared.
+	speakers map[string]*frames.TranscriptionSpeaker
 
 	// settingsMu serializes reading the provider's settings against changing
 	// them. A session is opened from the read loop when one drops, and an update
@@ -446,10 +510,11 @@ type StreamService struct {
 	set *providerSettings
 }
 
-// heldAudio is a chunk held while the session is being replaced, with the user
-// it was attributed to.
+// heldAudio is a chunk held while the session is being replaced, with its
+// sample rate and the user it was attributed to.
 type heldAudio struct {
 	audio  []byte
+	rate   int
 	userID string
 }
 
@@ -564,7 +629,8 @@ func (s *StreamService) modelName() string {
 // Setup resolves the rate the service transcribes at and opens the connection. A
 // rate configured on the service wins; otherwise it takes the pipeline's input
 // rate, which it knows from the moment it is set up rather than when the
-// StartFrame arrives.
+// StartFrame arrives. The provider is sent audio at that rate, or at the one it
+// asks for through SendRater.
 func (s *StreamService) Setup(ctx context.Context, st processor.Setup) error {
 	if err := s.Base.Setup(ctx, st); err != nil {
 		return err
@@ -572,6 +638,14 @@ func (s *StreamService) Setup(ctx context.Context, st processor.Setup) error {
 	s.sampleRate = s.cfgRate
 	if s.sampleRate == 0 {
 		s.sampleRate = st.AudioInSampleRate
+	}
+	s.sendRate = s.sampleRate
+	if r, ok := s.conn.(SendRater); ok {
+		s.sendRate = r.SendSampleRate(s.sampleRate)
+	}
+	if s.sendRate != s.sampleRate {
+		slog.Debug("resampling the input audio to the rate the provider takes",
+			"service", s.Name(), "from", s.sampleRate, "to", s.sendRate)
 	}
 	// Dialing here rather than on the StartFrame is what keeps it off the frame
 	// path: a pipeline sets its processors up at once, so several services
@@ -595,7 +669,8 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 	case *frames.StartFrame:
 		return s.PushFrame(ctx, f, dir)
 	case frames.InputAudioFrame:
-		s.sendAudio(fr.AudioData().Audio, audioUserID(fr))
+		data := fr.AudioData()
+		s.sendAudio(data.Audio, data.SampleRate, audioUserID(fr))
 		return s.PushFrame(ctx, f, dir)
 	case *frames.STTUpdateSettingsFrame:
 		if !fr.TargetsService(s) {
@@ -639,9 +714,13 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 		s.tracer.abandon(time.Time{})
 		s.reopenIfDeferred(ctx)
 		return nil
-	case *frames.EndFrame, *frames.CancelFrame:
-		s.disconnect(ctx)
+	case *frames.EndFrame:
+		s.disconnect(ctx, true)
 		// The audio no final transcript has reported yet.
+		s.EmitSTTUsageMetrics(ctx)
+		return s.PushFrame(ctx, f, dir)
+	case *frames.CancelFrame:
+		s.disconnect(ctx, false)
 		s.EmitSTTUsageMetrics(ctx)
 		return s.PushFrame(ctx, f, dir)
 	default:
@@ -651,7 +730,7 @@ func (s *StreamService) ProcessFrame(ctx context.Context, f frames.Frame, dir pr
 
 // Cleanup tears down the session and the processor.
 func (s *StreamService) Cleanup(ctx context.Context) error {
-	s.disconnect(ctx)
+	s.disconnect(ctx, false)
 	s.ttfb.close()
 	return s.Base.Cleanup(ctx)
 }
@@ -717,33 +796,60 @@ func (s *StreamService) connect(ctx context.Context) {
 	s.ws.Connect()
 	s.mu.Lock()
 	s.readCancel = cancel
+	s.receiving = true
 	s.mu.Unlock()
 	if err := s.ConnectWebsocket(readCtx); err != nil {
-		s.PushError(readCtx, "stt: unable to connect", err, false)
+		var opts []processor.ErrorOption
+		if errors.Is(err, ErrPermanent) {
+			opts = append(opts, processor.ForceTreatAsPermanent())
+		}
+		s.PushError(readCtx, "stt: unable to connect", err, false, opts...)
 	}
 	s.startKeepalive(readCtx)
 	s.wg.Go(func() { s.ws.ReceiveTaskHandler(readCtx, s.reportConnectionError) })
 }
 
-// disconnect closes the session.
-func (s *StreamService) disconnect(ctx context.Context) {
+// disconnect closes the session. stopping says the pipeline is ending
+// gracefully, which is when a provider that asks for it is told the audio is
+// over (see Stopper); a cancel or a bare teardown closes without that.
+//
+// The order is what lets a message the provider writes as the session closes
+// reach the server. The read loop stops handing results on first, as a receive
+// task is stopped, but its read is left pending: the session is closed while the
+// connection is still up, and only then is the read loop ended. Ending the read
+// first would drop the connection under the read, and with it whatever the
+// session meant to send as it closed.
+func (s *StreamService) disconnect(ctx context.Context, stopping bool) {
 	// Marking the disconnect deliberate first is what tells the read loop that
 	// the session ending is the shutdown it asked for, not one to reconnect.
 	s.ws.Disconnect()
 	s.mu.Lock()
 	cancel := s.readCancel
 	s.readCancel = nil
+	stream := s.stream
 	s.mu.Unlock()
 	if cancel == nil {
 		return
+	}
+	if st, ok := stream.(Stopper); ok && stopping {
+		if err := st.Stop(); err != nil {
+			slog.Debug("telling the transcription session the audio is over failed",
+				"service", s.Name(), "err", err)
+		}
 	}
 	// Asked for while the read loop is still alive, since what the provider
 	// answers with reaches the pipeline through it. Canceling first would tear
 	// the reader down before the answer arrived.
 	s.drainSession()
 	s.stopKeepalive()
+	s.mu.Lock()
+	s.receiving = false
+	s.mu.Unlock()
+	_ = s.DisconnectWebsocket(ctx)
 	cancel()
 	s.wg.Wait()
+	// A session the read loop opened while this one was closing, as a reconnect
+	// it was partway through, is closed too.
 	_ = s.DisconnectWebsocket(ctx)
 }
 
@@ -792,7 +898,7 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 		stream Stream
 		err    error
 	)
-	s.set.hold(func() { stream, err = s.conn.Connect(sessionCtx, s.sampleRate) })
+	s.set.hold(func() { stream, err = s.conn.Connect(sessionCtx, s.sendRate) })
 	if err != nil {
 		cancel()
 		return err
@@ -811,9 +917,11 @@ func (s *StreamService) ConnectWebsocket(ctx context.Context) error {
 }
 
 // DisconnectWebsocket closes the current transcription session, if there is one.
-// A session that has already dropped cannot be closed cleanly, and that says
-// nothing about whether the next one will open, so the failure is logged rather
-// than failing the reconnect attempt that is about to redial.
+// The session is closed before its context ends, so whatever it sends as it
+// closes goes out on a connection that is still up. A session that has already
+// dropped cannot be closed cleanly, and that says nothing about whether the next
+// one will open, so the failure is logged rather than failing the reconnect
+// attempt that is about to redial.
 func (s *StreamService) DisconnectWebsocket(context.Context) error {
 	s.stopTurnWatchdog()
 	s.mu.Lock()
@@ -822,14 +930,13 @@ func (s *StreamService) DisconnectWebsocket(context.Context) error {
 	s.stream = nil
 	s.sessionCancel = nil
 	s.mu.Unlock()
+	if stream != nil {
+		if err := stream.Close(); err != nil {
+			slog.Debug("closing the transcription session failed", "service", s.Name(), "err", err)
+		}
+	}
 	if cancel != nil {
 		cancel()
-	}
-	if stream == nil {
-		return nil
-	}
-	if err := stream.Close(); err != nil {
-		slog.Debug("closing the transcription session failed", "service", s.Name(), "err", err)
 	}
 	return nil
 }
@@ -854,10 +961,23 @@ func (s *StreamService) ReceiveMessages(ctx context.Context) error {
 			}
 			return err
 		}
+		if !s.isReceiving() {
+			// The session is being closed. The read carries on, so the close
+			// completes, but what it brings in is not handed on.
+			continue
+		}
 		for _, r := range results {
 			s.emit(ctx, r)
 		}
 	}
+}
+
+// isReceiving reports whether the read loop hands what it reads on, which it
+// stops doing once the session is being closed.
+func (s *StreamService) isReceiving() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.receiving
 }
 
 // Connected reports whether there is a session to transcribe on.
@@ -875,12 +995,17 @@ func (s *StreamService) Muted() bool {
 	return s.muted
 }
 
-// setMuted applies an STTMuteFrame.
+// setMuted applies an STTMuteFrame. The audio arriving while muted is dropped,
+// so the audio after the unmute must not start with the end of the audio before
+// it: the resampler starts afresh.
 func (s *StreamService) setMuted(mute bool) {
 	s.mu.Lock()
 	s.muted = mute
 	s.mu.Unlock()
 	if mute {
+		if s.sendResampler != nil {
+			s.sendResampler.Clear()
+		}
 		slog.Debug("stt service muted", "service", s.Name())
 	} else {
 		slog.Debug("stt service unmuted", "service", s.Name())
@@ -893,12 +1018,13 @@ func (s *StreamService) setMuted(mute bool) {
 // here again once the new one is up. Otherwise the chunk is dropped while the
 // service is muted, and when it can no longer do its job: one that cannot
 // transcribe anything would drop the chunk anyway, and one that connects on
-// demand would attempt a handshake per chunk to do it. A chunk that is sent
-// attributes the transcripts after it to userID.
-func (s *StreamService) sendAudio(audio []byte, userID string) {
+// demand would attempt a handshake per chunk to do it. A chunk that is sent is
+// resampled to the rate the provider is sent audio at, and attributes the
+// transcripts after it to userID.
+func (s *StreamService) sendAudio(audio []byte, rate int, userID string) {
 	s.mu.Lock()
 	if s.reopening {
-		s.held = append(s.held, heldAudio{audio: audio, userID: userID})
+		s.held = append(s.held, heldAudio{audio: audio, rate: rate, userID: userID})
 		s.mu.Unlock()
 		return
 	}
@@ -913,7 +1039,53 @@ func (s *StreamService) sendAudio(audio []byte, userID string) {
 	s.mu.Lock()
 	s.userID = userID
 	s.mu.Unlock()
-	s.send(audio)
+	if len(audio) == 0 {
+		// Nothing to transcribe. Reported, since a transport handing over
+		// empty frames is one whose audio is not reaching the service.
+		slog.Warn("empty audio frame received", "service", s.Name())
+		return
+	}
+	s.send(s.resampleAudio(audio, rate))
+}
+
+// resampleAudio returns a chunk of input audio at rate as audio at the rate the
+// provider is sent audio at. The audio is resampled as one stream, so a chunk
+// carries on from the one before it; audio at another rate than the last
+// chunk's starts a new stream. Audio whose rate is not known is sent as it is.
+func (s *StreamService) resampleAudio(audio []byte, rate int) []byte {
+	if rate <= 0 || s.sendRate <= 0 || rate == s.sendRate {
+		return audio
+	}
+	if s.sendResampler == nil || s.resampleFrom != rate {
+		r, err := resample.New(rate, s.sendRate, 1)
+		if err != nil {
+			slog.Warn("cannot resample the input audio to the rate the provider takes, dropping it",
+				"service", s.Name(), "from", rate, "to", s.sendRate, "err", err)
+			return nil
+		}
+		s.sendResampler, s.resampleFrom = r, rate
+	}
+	return s.sendResampler.Process(audio)
+}
+
+// speaker is the speaker for a provider's diarization label, or nil for no
+// label. A label seen for the first time is numbered after the speakers before
+// it, so the numbers follow the order speakers first appeared.
+func (s *StreamService) speaker(label string) *frames.TranscriptionSpeaker {
+	if label == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sp, ok := s.speakers[label]; ok {
+		return sp
+	}
+	if s.speakers == nil {
+		s.speakers = map[string]*frames.TranscriptionSpeaker{}
+	}
+	sp := &frames.TranscriptionSpeaker{Label: label, Number: len(s.speakers) + 1}
+	s.speakers[label] = sp
+	return sp
 }
 
 // transcriptUserID is the user the transcripts emitted now are attributed to.
@@ -933,7 +1105,9 @@ func (s *StreamService) reportConnectionError(
 	// not coming on this connection, and holding the measurement open would
 	// carry it into the utterance after the one it belongs to.
 	s.ttfb.reportNow(ctx)
-	s.ReportConnectionError(ctx, ef, forceTreatAsPermanent)
+	// A session the provider says cannot be opened is not retried.
+	permanent := forceTreatAsPermanent || errors.Is(ef.Err, ErrPermanent)
+	s.ReportConnectionError(ctx, ef, permanent)
 }
 
 // EmitSTTUsageMetrics reports the audio submitted since the last report as
@@ -948,7 +1122,7 @@ func (s *StreamService) EmitSTTUsageMetrics(ctx context.Context) {
 	s.audioBytes = 0
 	model := s.model
 	s.mu.Unlock()
-	audio := pcmDuration(pending, s.sampleRate)
+	audio := pcmDuration(pending, s.sendRate)
 	if audio == 0 {
 		return
 	}
@@ -1011,7 +1185,7 @@ func (s *StreamService) reopen(ctx context.Context) {
 	s.mu.Unlock()
 
 	slog.Info("reopening the transcription session", "service", s.Name())
-	s.disconnect(ctx)
+	s.disconnect(ctx, false)
 	// A session that fails to open here is reported and retried by the read
 	// loop, as on the first connect.
 	s.connect(ctx)
@@ -1023,7 +1197,7 @@ func (s *StreamService) reopen(ctx context.Context) {
 	s.mu.Unlock()
 
 	for _, h := range held {
-		s.sendAudio(h.audio, h.userID)
+		s.sendAudio(h.audio, h.rate, h.userID)
 	}
 }
 
@@ -1032,7 +1206,8 @@ func (s *StreamService) send(audio []byte) {
 	if s.reopening {
 		// The session is being replaced. Hold the audio rather than send it to
 		// one that is going away, or the words spoken across the gap are lost.
-		s.held = append(s.held, heldAudio{audio: audio, userID: s.userID})
+		// It is already at the rate the provider is sent audio at.
+		s.held = append(s.held, heldAudio{audio: audio, rate: s.sendRate, userID: s.userID})
 		s.mu.Unlock()
 		return
 	}
@@ -1042,7 +1217,7 @@ func (s *StreamService) send(audio []byte) {
 	// what says the call is not idle, and a session that opens a moment later
 	// has no catching up to do.
 	s.lastAudio = time.Now()
-	s.lastChunk = pcmDuration(int64(len(audio)), s.sampleRate)
+	s.lastChunk = pcmDuration(int64(len(audio)), s.sendRate)
 	if stream != nil {
 		s.audioBytes += int64(len(audio))
 	}
@@ -1206,7 +1381,7 @@ func (s *StreamService) keepaliveLoop(ctx context.Context) {
 func (s *StreamService) sendKeepalive() error {
 	s.mu.Lock()
 	stream := s.stream
-	rate := s.sampleRate
+	rate := s.sendRate
 	s.mu.Unlock()
 	if stream == nil {
 		return errNoSession
@@ -1305,7 +1480,7 @@ func (s *StreamService) turnWatchdogLoop(ctx context.Context) {
 // the same path the call's own audio takes so it is billed for the same way.
 func (s *StreamService) sendSilence(d time.Duration) error {
 	s.mu.Lock()
-	rate := s.sampleRate
+	rate := s.sendRate
 	stream := s.stream
 	s.mu.Unlock()
 	if stream == nil {
@@ -1358,6 +1533,7 @@ func (s *StreamService) emitEagerEndOfTurn(ctx context.Context, r Result) {
 		slog.DebugContext(ctx, "eager end of turn", "service", s.Name(), "text", r.Text)
 		f := frames.NewEagerTranscriptionFrame(r.Text, s.transcriptUserID(), frames.NowTimestamp())
 		f.Language = r.Language
+		f.Speaker = s.speaker(r.Speaker)
 		_ = s.PushFrame(ctx, f, processor.Downstream)
 	case r.EagerEndOfTurnWithdrawn:
 		if !s.eagerPending {
@@ -1366,10 +1542,13 @@ func (s *StreamService) emitEagerEndOfTurn(ctx context.Context, r Result) {
 		s.eagerPending = false
 		slog.DebugContext(ctx, "eager end of turn withdrawn", "service", s.Name())
 		_ = s.PushFrame(ctx, frames.NewUserTurnResponseCancelFrame(), processor.Downstream)
-	case r.Final && r.EndOfTurn:
-		// The turn was committed, so the prediction is resolved. Whatever was
-		// generated from it is settled by the committed transcript rather than
-		// by anything here.
+	case r.Final && r.EndOfTurn, r.Speech == SpeechStopped:
+		// The turn ended, so the prediction is resolved without being
+		// withdrawn: whatever was generated from it is settled by what closed
+		// the turn rather than by anything here. A turn ends with its committed
+		// transcript, and also with the provider reporting the speech over
+		// without committing one, as for a turn its connection cut short or
+		// one whose words fell below a confidence floor.
 		s.eagerPending = false
 	}
 }
@@ -1410,12 +1589,14 @@ func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
 	if !r.Final {
 		f := frames.NewInterimTranscriptionFrame(r.Text, s.transcriptUserID(), ts)
 		f.Language = r.Language
+		f.Speaker = s.speaker(r.Speaker)
 		_ = s.PushFrame(ctx, f, processor.Downstream)
 		return
 	}
 	f := frames.NewTranscriptionFrame(r.Text, s.transcriptUserID(), ts)
 	f.Finalized = r.EndOfTurn
 	f.Language = r.Language
+	f.Speaker = s.speaker(r.Speaker)
 	// A final transcript is the billing event: the audio since the last one is
 	// reported ahead of it, so the span the transcript closes carries it.
 	s.EmitSTTUsageMetrics(ctx)

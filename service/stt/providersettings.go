@@ -3,6 +3,7 @@ package stt
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
@@ -75,12 +76,24 @@ func (p *providerSettings) apply(ctx context.Context, f *frames.STTUpdateSetting
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	delta, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
+	given, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, store)
 	if err != nil {
 		return false, err
 	}
 	if !ok {
 		return false, nil
+	}
+	// The update is the caller's, and what is done to it below is the
+	// service's: it works on a copy, so the caller's update reads afterwards as
+	// it was sent.
+	delta, err := settings.Copy(given)
+	if err != nil {
+		return false, err
+	}
+	if preparer, prepares := p.provider.(SettingsPreparer); prepares {
+		if perr := preparer.PrepareSettings(delta); perr != nil {
+			return false, perr
+		}
 	}
 
 	// Naming the language the provider's way before applying is what keeps the
@@ -119,8 +132,9 @@ func (p *providerSettings) apply(ctx context.Context, f *frames.STTUpdateSetting
 }
 
 // nameLanguage rewrites a language the delta gives into the code the provider
-// uses, when the provider says how. A code the provider does not recognize is
-// left as it came, since it may be one the service accepts directly.
+// uses, when the provider says how. A code that names no language jargo knows
+// is left as it came, since it may be one the service accepts directly, and so
+// is one the provider does not recognize.
 func (p *providerSettings) nameLanguage(delta any) {
 	namer, ok := p.provider.(LanguageNamer)
 	if !ok {
@@ -132,6 +146,11 @@ func (p *providerSettings) nameLanguage(delta any) {
 	}
 	code, ok := value.(string)
 	if !ok || code == "" {
+		return
+	}
+	if !slices.Contains(language.All(), language.Language(code)) {
+		slog.Debug("the language is not a recognized language code, so it is passed to the service as it is",
+			"service", p.name(), "language", code)
 		return
 	}
 	named := namer.ServiceLanguage(language.Language(code))

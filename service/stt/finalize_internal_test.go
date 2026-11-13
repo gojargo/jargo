@@ -34,7 +34,7 @@ func (c *confirmingConnector) Connect(ctx context.Context, _ int) (Stream, error
 func newConfirmingService(t *testing.T) *StreamService {
 	t.Helper()
 	s := NewStream("FinalizingSTT", &confirmingConnector{stream: &confirmingStream{}}, 16000)
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 	s.finalizeRequested = true
 	return s
 }

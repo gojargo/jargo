@@ -218,6 +218,12 @@ type TranscriptionFrame struct {
 	// Finalized reports whether this is the final transcription for an
 	// utterance, for STT services that signal commit/finalize.
 	Finalized bool
+	// Speaker is the speaker the STT service's diarization assigned to this
+	// text, or nil when diarization is off or the service gave no label.
+	// Speakers only tell people apart within one transcription stream and are
+	// not participant identities: several speakers can share one UserID when
+	// they share an audio stream.
+	Speaker *TranscriptionSpeaker
 	// Perception is how the user said these words, as a perception producer
 	// read them, or nil. Set by an STT service that perceives, or by a
 	// processor after it. Part of expressive conversation (alpha).
@@ -237,8 +243,34 @@ func NewTranscriptionFrame(text, userID, timestamp string) *TranscriptionFrame {
 
 // String implements fmt.Stringer.
 func (f *TranscriptionFrame) String() string {
-	return fmt.Sprintf("%s(user: %s, text: [%s], language: %s, timestamp: %s)",
-		f.Name(), f.UserID, f.Text, f.Language, f.Timestamp)
+	return fmt.Sprintf("%s(user: %s, speaker: %s, text: [%s], language: %s, timestamp: %s)",
+		f.Name(), f.UserID, f.Speaker, f.Text, f.Language, f.Timestamp)
+}
+
+// TranscriptionSpeaker is a speaker an STT service's diarization told apart in a
+// transcription stream.
+//
+// Labels are opaque and provider-specific. Numbers count speakers in the order
+// they first appeared in the service's session, so they read the same whatever
+// labels the provider uses. Both only hold within that session: a provider that
+// restarts its labels, after a reconnect say, may give a known label, and so its
+// number, to a different person, and a service that diarizes each speech
+// segment separately keeps no labels across segments.
+type TranscriptionSpeaker struct {
+	// Label is the provider's label for the speaker ("A", "S1", "2").
+	Label string
+	// Number is the speaker's place in the order speakers first appeared,
+	// starting at 1.
+	Number int
+}
+
+// String implements fmt.Stringer, as the number with the label after it, and
+// "<nil>" for no speaker.
+func (s *TranscriptionSpeaker) String() string {
+	if s == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%d (%s)", s.Number, s.Label)
 }
 
 // EagerTranscriptionFrame carries the transcript of a turn a service predicts
@@ -263,6 +295,10 @@ type EagerTranscriptionFrame struct {
 	Language string
 	// Result is the raw result from the STT service, if available.
 	Result any
+	// Speaker is the speaker the STT service's diarization assigned to this
+	// text, or nil when diarization is off or the service gave no label. See
+	// TranscriptionFrame.Speaker.
+	Speaker *TranscriptionSpeaker
 	// Perception is how the user said the turn, as a perception producer read
 	// it at the predicted end of turn, or nil. A speculative inference answers
 	// the turn with it. Part of expressive conversation (alpha).
@@ -281,8 +317,8 @@ func NewEagerTranscriptionFrame(text, userID, timestamp string) *EagerTranscript
 
 // String implements fmt.Stringer.
 func (f *EagerTranscriptionFrame) String() string {
-	return fmt.Sprintf("%s(user: %s, text: [%s], language: %s, timestamp: %s)",
-		f.Name(), f.UserID, f.Text, f.Language, f.Timestamp)
+	return fmt.Sprintf("%s(user: %s, speaker: %s, text: [%s], language: %s, timestamp: %s)",
+		f.Name(), f.UserID, f.Speaker, f.Text, f.Language, f.Timestamp)
 }
 
 // UserBackchannelFrame is a short acknowledgment the user said while the bot
@@ -327,6 +363,10 @@ type InterimTranscriptionFrame struct {
 	Language string
 	// Result is the raw result from the STT service, if available.
 	Result any
+	// Speaker is the speaker the STT service's diarization assigned to this
+	// text, or nil when diarization is off or the service gave no label. See
+	// TranscriptionFrame.Speaker.
+	Speaker *TranscriptionSpeaker
 	// Perception is a provisional reading of how the user said these words, or
 	// nil. Part of expressive conversation (alpha).
 	Perception []expressive.PerceptionSignal
@@ -345,8 +385,8 @@ func NewInterimTranscriptionFrame(text, userID, timestamp string) *InterimTransc
 
 // String implements fmt.Stringer.
 func (f *InterimTranscriptionFrame) String() string {
-	return fmt.Sprintf("%s(user: %s, text: [%s], language: %s, timestamp: %s)",
-		f.Name(), f.UserID, f.Text, f.Language, f.Timestamp)
+	return fmt.Sprintf("%s(user: %s, speaker: %s, text: [%s], language: %s, timestamp: %s)",
+		f.Name(), f.UserID, f.Speaker, f.Text, f.Language, f.Timestamp)
 }
 
 // Compile-time interface checks.

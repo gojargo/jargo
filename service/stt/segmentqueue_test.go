@@ -267,3 +267,41 @@ func TestATranscriptLandingWhileTheUserSpeaksAgainIsNotFinalized(t *testing.T) {
 		t.Fatalf("finalized = %v, want [false true]", got)
 	}
 }
+
+// halfRateTranscriber reads segments at half the service's rate, and records
+// each one with the rate it was handed over at.
+type halfRateTranscriber struct {
+	mu    sync.Mutex
+	got   [][]byte
+	rates []int
+}
+
+func (tr *halfRateTranscriber) SegmentSampleRate(sampleRate int) int { return sampleRate / 2 }
+
+func (tr *halfRateTranscriber) Transcribe(_ context.Context, audio []byte, rate int) (string, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.got = append(tr.got, append([]byte(nil), audio...))
+	tr.rates = append(tr.rates, rate)
+	return "", nil
+}
+
+// A model that reads one rate is handed each segment resampled to it: the same
+// duration at half the rate is half the bytes, and the rate it is handed says so.
+func TestASegmentIsResampledToTheSegmentSampleRate(t *testing.T) {
+	tr := &halfRateTranscriber{}
+	svc := stt.NewSegment("FakeSegmentSTT", tr, 16000)
+	svc.SetTrailingSilence(0)
+	pcm := make([]byte, 3200)
+
+	runSegments(t, svc, segmentFrames(pcm))
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.got) != 1 || len(tr.got[0]) != len(pcm)/2 {
+		t.Fatalf("transcribed %d segments, want one of %d bytes", len(tr.got), len(pcm)/2)
+	}
+	if tr.rates[0] != 8000 {
+		t.Errorf("segment handed over at %d Hz, want 8000", tr.rates[0])
+	}
+}

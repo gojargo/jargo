@@ -153,6 +153,35 @@ func TestConnectThatKeepsFailingGivesUpAsPermanent(t *testing.T) {
 	}
 }
 
+// permanentConnector refuses every dial with a failure it says will recur.
+type permanentConnector struct{ failingConnector }
+
+func (c *permanentConnector) Connect(ctx context.Context, rate int) (Stream, error) {
+	_, err := c.failingConnector.Connect(ctx, rate)
+	return nil, Permanent(err)
+}
+
+// A connect the provider says will keep failing, for a reason its category does
+// not convey, is reported as permanent and not retried: the service is left
+// unusable at once.
+func TestAPermanentlyRefusedConnectIsReportedAndNotRetried(t *testing.T) {
+	t.Parallel()
+
+	conn := &permanentConnector{failingConnector{failures: 100}}
+	s := newFailingService(conn, 50*time.Millisecond, true)
+	errs := runFailing(t, s, 300*time.Millisecond)
+
+	if got := conn.connectAttempts(); got != 1 {
+		t.Errorf("connect attempts = %d, want 1", got)
+	}
+	if s.Usable() {
+		t.Error("the service is still usable after a permanent refusal")
+	}
+	if len(errs) == 0 || !errors.Is(errs[0].Err, ErrPermanent) {
+		t.Errorf("errors = %v, want the permanent refusal reported", errs)
+	}
+}
+
 // A session that opened is not reopened.
 func TestConnectedServiceIsNotReconnected(t *testing.T) {
 	t.Parallel()
@@ -211,9 +240,9 @@ func TestFailedReopenIsRetried(t *testing.T) {
 	conn := &reopenConnector{fail: map[int]bool{2: true}}
 	s := newFailingService(conn, 50*time.Millisecond, true)
 	ctx := t.Context()
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 	s.connect(ctx)
-	defer s.disconnect(ctx)
+	defer s.disconnect(ctx, false)
 
 	s.reopen(ctx)
 

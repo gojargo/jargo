@@ -12,6 +12,7 @@ import (
 
 	"github.com/gojargo/jargo/adapter"
 	novasonicadapter "github.com/gojargo/jargo/adapter/novasonic"
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
@@ -75,6 +76,13 @@ type Service struct {
 	// triggerAudio is the recording of the user saying "ready" that starts the
 	// first-generation model speaking.
 	triggerAudio []byte
+
+	// resampleMu guards the resampler converting the user's audio to the input
+	// rate the session declares, and inputResampleFrom, the rate of the audio
+	// it converts. The frame path resamples; a trigger starts it afresh.
+	resampleMu        sync.Mutex
+	inputResampler    *resample.Resampler
+	inputResampleFrom int
 
 	mu sync.Mutex
 	// The session and its state. Guarded by mu.
@@ -405,7 +413,8 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
 			return err
 		}
-		s.handleInputAudio(ctx, in.AudioData().Audio)
+		data := in.AudioData()
+		s.handleInputAudio(ctx, data.Audio, data.SampleRate)
 		return s.PushFrame(ctx, f, dir)
 	}
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -461,15 +470,17 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext) {
 	s.processCompletedFunctionCalls(ctx, true)
 }
 
-// handleInputAudio sends the user's audio to the session, except while the
-// assistant response trigger is being sent, and buffers it during a handover.
-func (s *Service) handleInputAudio(ctx context.Context, audio []byte) {
+// handleInputAudio sends the user's audio, at rate, to the session at the input
+// rate the session declares, except while the assistant response trigger is
+// being sent, and buffers it during a handover.
+func (s *Service) handleInputAudio(ctx context.Context, audio []byte, rate int) {
 	s.mu.Lock()
 	triggering := s.triggeringAssistantResponse
 	s.mu.Unlock()
 	if triggering {
 		return
 	}
+	audio = s.resampleInputAudio(audio, rate)
 	s.sc.onAudioInput(audio)
 	// Once a handover is under way the old session hears no more: the audio is
 	// buffered above and replayed to the new session.
@@ -477,6 +488,39 @@ func (s *Service) handleInputAudio(ctx context.Context, audio []byte) {
 		return
 	}
 	s.sendUserAudioEvent(ctx, audio)
+}
+
+// resampleInputAudio converts the user's audio, at rate, to the input rate the
+// session declares. The audio is resampled as one stream, so a chunk carries on
+// from the one before it; audio at another rate than the last chunk's starts a
+// new stream. Audio whose rate is not known is sent as it is.
+func (s *Service) resampleInputAudio(audio []byte, rate int) []byte {
+	want := s.audio.InputSampleRate
+	if rate <= 0 || rate == want {
+		return audio
+	}
+	s.resampleMu.Lock()
+	defer s.resampleMu.Unlock()
+	if s.inputResampler == nil || s.inputResampleFrom != rate {
+		r, err := resample.New(rate, want, 1)
+		if err != nil {
+			slog.Warn("cannot resample the user's audio to the session's input rate, dropping it",
+				"service", s.Name(), "from", rate, "to", want, "err", err)
+			return nil
+		}
+		s.inputResampler, s.inputResampleFrom = r, rate
+	}
+	return s.inputResampler.Process(audio)
+}
+
+// resetInputResampler starts the resampled user audio afresh, for audio that
+// does not carry on from what was sent before it.
+func (s *Service) resetInputResampler() {
+	s.resampleMu.Lock()
+	defer s.resampleMu.Unlock()
+	if s.inputResampler != nil {
+		s.inputResampler.Clear()
+	}
 }
 
 // handleMessagesAppend puts appended messages into the session as text, for

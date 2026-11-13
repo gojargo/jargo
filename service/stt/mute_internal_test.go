@@ -1,6 +1,7 @@
 package stt
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -109,6 +110,30 @@ func TestStreamServiceKeepsAMutedSessionAlive(t *testing.T) {
 	}
 	if got := len(st.sends()); got != 0 {
 		t.Errorf("submitted %d chunks while muted, want 0", got)
+	}
+}
+
+// The audio dropped while muted leaves a gap, so the audio after the unmute is
+// resampled as the start of a fresh stream rather than carrying on from the end
+// of the audio before the mute.
+func TestMutingStartsTheResampledAudioAfresh(t *testing.T) {
+	t.Parallel()
+
+	st := &kaStream{}
+	svc := NewStream("FakeSTT", &kaConnector{stream: st}, 16000)
+	task, stop := runKeepaliveService(t, svc)
+	defer stop()
+	waitFor(t, "the session to open", func() bool { return svc.Connected() })
+
+	before, after := tone(24000, 100*time.Millisecond), tone(24000, 100*time.Millisecond)
+	task.QueueFrame(frames.NewInputAudioRawFrame(before, 24000, 1))
+	task.QueueFrame(frames.NewSTTMuteFrame(true))
+	task.QueueFrame(frames.NewSTTMuteFrame(false))
+	task.QueueFrame(frames.NewInputAudioRawFrame(after, 24000, 1))
+	waitFor(t, "the audio after the unmute", func() bool { return len(st.sends()) == 2 })
+
+	if got, want := st.sends()[1], resampled(t, after, 24000, 16000); !bytes.Equal(got, want) {
+		t.Error("the audio after the unmute carries on from the audio before the mute, want a fresh stream")
 	}
 }
 

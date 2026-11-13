@@ -3,6 +3,7 @@ package soniox
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/gojargo/jargo/language"
@@ -65,8 +66,8 @@ func TestSTTSettingsChangeReachesTheHandshake(t *testing.T) {
 		t.Errorf("client_reference_id = %v, want call-7", got)
 	}
 	// What the caller did not touch is untouched.
-	if got := after["audio_format"]; got != "s16le" {
-		t.Errorf("audio_format = %v, want s16le", got)
+	if got := after["audio_format"]; got != "pcm_s16le" {
+		t.Errorf("audio_format = %v, want pcm_s16le", got)
 	}
 }
 
@@ -133,6 +134,113 @@ func TestSTTAnyChangeAsksForANewSession(t *testing.T) {
 	}
 	if !reopen {
 		t.Error("a change did not ask for a new session")
+	}
+}
+
+// Ported from upstream (test_norwegian_bokmal_maps_to_soniox_norwegian). Soniox
+// takes Bokmål as Norwegian, under "no", whether it is named as a language
+// update or as the language the service was built with.
+func TestNorwegianBokmalMapsToSonioxNorwegian(t *testing.T) {
+	t.Parallel()
+
+	for _, l := range []language.Language{language.NorwegianBokmal, language.NorwegianBokmalNO} {
+		cfg := sttConfig()
+		cfg.Language = l
+		c := &connector{cfg: cfg, live: newSTTSettings(cfg)}
+		if got := c.ServiceLanguage(l); got != "no" {
+			t.Errorf("%s: language = %q, want no", l, got)
+		}
+		if hints := handshake(t, c)["language_hints"]; !slices.Equal(anyStrings(hints), []string{"no"}) {
+			t.Errorf("%s: language_hints = %v, want [no]", l, hints)
+		}
+	}
+}
+
+// A language update replaces the hints, since the hints are what Soniox reads,
+// and leaves the language itself unstored. Hints given in the same update win.
+func TestLanguageUpdateReplacesTheHints(t *testing.T) {
+	t.Parallel()
+
+	cfg := sttConfig()
+	c := &connector{cfg: cfg, live: newSTTSettings(cfg)}
+	changed, err := settings.Apply(c.live, &settings.STT{Language: settings.Set("sv")})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !changed.Has("language_hints") || changed.Has("language") {
+		t.Errorf("changed = %v, want language_hints alone", changed)
+	}
+	if hints, _ := c.live.LanguageHints.Value(); !slices.Equal(hints, []string{"sv"}) {
+		t.Errorf("hints = %v, want [sv]", hints)
+	}
+	if _, ok := c.live.Language.Value(); ok {
+		t.Errorf("language = %v, want it left unstored", c.live.Language)
+	}
+
+	both := &Settings{LanguageHints: settings.Set([]string{"fi", "sv"})}
+	both.Language = settings.Set("fi")
+	if _, err := settings.Apply(c.live, both); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if hints, _ := c.live.LanguageHints.Value(); !slices.Equal(hints, []string{"fi", "sv"}) {
+		t.Errorf("hints = %v, want the [fi sv] given alongside the language", hints)
+	}
+}
+
+// Ported from upstream (test_language_hints_given_with_a_language_are_kept).
+// Hints given alongside the language the service is built with are the
+// hints, rather than being replaced by that language.
+func TestLanguageHintsGivenWithALanguageAreKept(t *testing.T) {
+	t.Parallel()
+
+	cfg := sttConfig()
+	cfg.Language = language.Finnish
+	cfg.LanguageHints = []language.Language{language.Finnish, language.Swedish}
+	c := &connector{cfg: cfg, live: newSTTSettings(cfg)}
+	if hints, _ := c.live.LanguageHints.Value(); !slices.Equal(hints, []string{"fi", "sv"}) {
+		t.Errorf("hints = %v, want [fi sv]", hints)
+	}
+}
+
+// Ported from upstream (the test_language_from_tokens cases). A transcript is
+// labeled with the language most of its tokens were identified as, the first
+// one on a tie. Tokens naming no language, or one the catalog does not know,
+// do not count.
+func TestLanguageFromTokens(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		tokens []token
+		want   string
+	}{
+		"single recognized language": {
+			tokens: []token{{Text: "Hello", Language: "en"}, {Text: " world", Language: "en"}},
+			want:   "en",
+		},
+		"most common language": {
+			tokens: []token{{Text: "Ik", Language: "nl"}, {Text: " zoek", Language: "nl"}, {Text: " computer", Language: "en"}},
+			want:   "nl",
+		},
+		"skips unknown language": {
+			tokens: []token{{Text: "Hello", Language: "en"}, {Text: "!", Language: "klingon"}},
+			want:   "en",
+		},
+		"skips missing language": {
+			tokens: []token{{Text: "Hello", Language: "en"}, {Text: " wereld"}},
+			want:   "en",
+		},
+		"ignores unknown and missing languages": {
+			tokens: []token{{Text: "Hello", Language: "klingon"}, {Text: " world"}, {Text: "!"}},
+			want:   "",
+		},
+		"uses first language on tie": {
+			tokens: []token{{Text: "Hello", Language: "en"}, {Text: " wereld", Language: "nl"}},
+			want:   "en",
+		},
+	} {
+		if got := languageFromTokens(tc.tokens); got != tc.want {
+			t.Errorf("%s: language = %q, want %q", name, got, tc.want)
+		}
 	}
 }
 

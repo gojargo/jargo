@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -122,6 +123,55 @@ func TestStreamServiceEmitsInterimAndFinal(t *testing.T) {
 	}
 	if !finalized {
 		t.Fatal("final transcription not marked finalized (end of turn)")
+	}
+}
+
+// A provider's diarization label reaches the transcript as a speaker, numbered
+// in the order speakers first appeared, so the numbers read the same whatever
+// labels the provider uses. A result with no label carries no speaker.
+func TestTranscriptsCarryTheSpeakerTheProviderLabeled(t *testing.T) {
+	conn := &fakeConnector{stream: &fakeStream{results: [][]stt.Result{
+		{{Text: "hi", Final: true, Speaker: "B"}},
+		{{Text: "hello", Final: true, Speaker: "A"}},
+		{{Text: "again", Final: true, Speaker: "B"}},
+		{{Text: "anyone", Final: true}},
+	}}}
+	svc := stt.NewStream("FakeSTT", conn, 16000)
+
+	var mu sync.Mutex
+	var got []string
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.TranscriptionFrame); ok {
+			mu.Lock()
+			got = append(got, tf.Text+" "+tf.Speaker.String())
+			mu.Unlock()
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+	deadline := time.After(3 * time.Second)
+	for {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n == 4 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("emitted %d transcripts, want 4", n)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"hi 1 (B)", "hello 2 (A)", "again 1 (B)", "anyone <nil>"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("transcripts = %q, want %q", got, want)
 	}
 }
 
@@ -746,6 +796,37 @@ func TestAPredictionIsInertWithoutTheServiceConfiguredForIt(t *testing.T) {
 	if eager != 0 || withdrawn != 0 {
 		t.Errorf("eager frames = %d/%d, want none from a service that was not asked to predict",
 			eager, withdrawn)
+	}
+}
+
+// TestATurnCutShortResolvesItsPrediction covers a turn that ends without a
+// committed transcript, as one its connection dropped in the middle of: the
+// prediction made on it is resolved, not left outstanding for a later
+// withdrawal to cancel.
+func TestATurnCutShortResolvesItsPrediction(t *testing.T) {
+	_, withdrawn := eagerFrameNames(t, true, [][]stt.Result{
+		{{Text: "book a flight", EagerEndOfTurn: true}},
+		{{Text: "book a flight", Final: true, Speech: stt.SpeechStopped}},
+		{{EagerEndOfTurnWithdrawn: true}},
+	})
+
+	if withdrawn != 0 {
+		t.Errorf("withdrawals = %d, want none: the turn the prediction was on had ended", withdrawn)
+	}
+}
+
+// TestALowConfidenceEndOfTurnResolvesItsPrediction covers a turn whose words
+// fell below the confidence floor: it ends with no transcript, and the
+// prediction made on it is resolved all the same.
+func TestALowConfidenceEndOfTurnResolvesItsPrediction(t *testing.T) {
+	_, withdrawn := eagerFrameNames(t, true, [][]stt.Result{
+		{{Text: "book a flight", EagerEndOfTurn: true}},
+		{{Speech: stt.SpeechStopped}},
+		{{EagerEndOfTurnWithdrawn: true}},
+	})
+
+	if withdrawn != 0 {
+		t.Errorf("withdrawals = %d, want none: the turn the prediction was on had ended", withdrawn)
 	}
 }
 

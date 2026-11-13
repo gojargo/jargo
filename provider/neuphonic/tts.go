@@ -54,6 +54,9 @@ func NewTTS(cfg Config) *tts.Base {
 func newTTS(cfg Config) (*tts.Base, *synthesizer) {
 	s := newSynthesizer(cfg)
 	b := tts.New("NeuphonicTTS", s)
+	// The service names the language the settings start with, so the URL is
+	// built again from the store as it now stands.
+	s.refreshEndpoint()
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: true})
 	s.svc = b
 	s.ws = tts.NewInterruptibleWebsocket(b, s, cfg.Websocket)

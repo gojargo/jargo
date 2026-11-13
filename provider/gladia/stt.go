@@ -309,10 +309,19 @@ func (s *stream) reportProblem(msg string) {
 	}
 }
 
-// Close stops the session and closes the socket.
-func (s *stream) Close() error {
+// Stop tells Gladia the recording has stopped as the pipeline ends,
+// implementing stt.Stopper, which ends the session on its side. It is sent
+// while the socket is still open, before the service tears the session down.
+// The transcripts still on their way are not waited for, since Gladia
+// finalizes the session and its stored result either way.
+func (s *stream) Stop() error {
 	s.writeMu.Lock()
-	_ = s.conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"stop_recording"}`))
-	s.writeMu.Unlock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"stop_recording"}`))
+}
+
+// Close closes the socket. Only ending the pipeline stops the recording, so a
+// session canceled, or closed to be reopened, is not told it stopped.
+func (s *stream) Close() error {
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

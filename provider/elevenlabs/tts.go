@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,13 +33,97 @@ import (
 //nolint:gochecknoglobals // sentinel error
 var errTTSStatus = errors.New("elevenlabs: unexpected tts status")
 
-// multilingualModels are the models that accept a language_code. Naming one to
-// any other model is an error the API does not report, so it is left off.
+// elevenlabsV25Languages are the languages Eleven Flash v2.5 and Turbo v2.5
+// accept as a language_code.
 //
 //nolint:gochecknoglobals // read-only lookup table
-var multilingualModels = map[string]struct{}{
-	"eleven_flash_v2_5": {},
-	"eleven_turbo_v2_5": {},
+var elevenlabsV25Languages = languageSet(
+	"ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", "fil", "fr", "hi", "hr",
+	"hu", "id", "it", "ja", "ko", "ms", "nl", "no", "pl", "pt", "ro", "ru", "sk",
+	"sv", "ta", "tr", "uk", "vi", "zh",
+)
+
+// elevenlabsV3Languages are the languages the Eleven v3 models accept as a
+// language_code. A superset of elevenlabsV25Languages.
+//
+//nolint:gochecknoglobals // read-only lookup table
+var elevenlabsV3Languages = languageSet(
+	"af", "ar", "as", "az", "be", "bg", "bn", "bs", "ca", "ceb", "cs", "cy", "da",
+	"de", "el", "en", "es", "et", "fa", "fi", "fil", "fr", "ga", "gl", "gu", "ha",
+	"he", "hi", "hr", "hu", "hy", "id", "is", "it", "ja", "jv", "ka", "kk", "kn",
+	"ko", "ky", "lb", "ln", "lt", "lv", "mk", "ml", "mr", "ms", "ne", "nl", "no",
+	"ny", "pa", "pl", "ps", "pt", "ro", "ru", "sd", "sk", "sl", "so", "sr", "sv",
+	"sw", "ta", "te", "th", "tr", "uk", "ur", "vi", "zh",
+)
+
+// elevenlabsV4Languages are the languages the Eleven v4 models accept as a
+// language_code. A superset of elevenlabsV3Languages. This is the set the API
+// accepts, which differs from the list ElevenLabs publishes for the models.
+//
+//nolint:gochecknoglobals // read-only lookup table
+var elevenlabsV4Languages = withLanguages(elevenlabsV3Languages,
+	"ast", "mi", "mn", "mt", "my", "oc", "or", "tg", "uz", "yue",
+)
+
+// elevenlabsModelLanguages are the models that accept a language_code, and the
+// languages each one takes. Sending a language a model does not cover is
+// rejected with a 400, so the language is checked against this mapping rather
+// than only the model id.
+//
+// Models absent from the mapping take no language code at all. For
+// eleven_multilingual_v2 that is deliberate: ElevenLabs documents language_code
+// as unsupported for it, and omitting the key is how its auto-detection is
+// meant to be used.
+//
+//nolint:gochecknoglobals // read-only lookup table
+var elevenlabsModelLanguages = map[string]map[string]struct{}{
+	"eleven_flash_v2_5":        elevenlabsV25Languages,
+	"eleven_turbo_v2_5":        elevenlabsV25Languages,
+	"eleven_v3":                elevenlabsV3Languages,
+	"eleven_v3_conversational": elevenlabsV3Languages,
+	"eleven_v4":                elevenlabsV4Languages,
+	"eleven_v4_turbo":          elevenlabsV4Languages,
+}
+
+// languageSet is the set of the language codes given.
+func languageSet(codes ...string) map[string]struct{} {
+	return withLanguages(nil, codes...)
+}
+
+// withLanguages is a new set holding the codes of base and the codes given.
+func withLanguages(base map[string]struct{}, codes ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(base)+len(codes))
+	for code := range base {
+		set[code] = struct{}{}
+	}
+	for _, code := range codes {
+		set[code] = struct{}{}
+	}
+	return set
+}
+
+// elevenlabsLanguageCode resolves the language_code to send for a model, given
+// an ElevenLabs language code or "" to send none. It returns "" when the code
+// cannot be used: either the model takes no language code, or it does not cover
+// this language. Both cases are logged.
+func elevenlabsLanguageCode(model, code string) string {
+	if code == "" {
+		return ""
+	}
+	supported, ok := elevenlabsModelLanguages[model]
+	if !ok {
+		models := slices.Sorted(maps.Keys(elevenlabsModelLanguages))
+		slog.Warn("language code not applied: language codes can only be used with "+
+			strings.Join(models, ", "), "service", "ElevenLabsTTS", "model", model, "language", code)
+		return ""
+	}
+	if _, ok := supported[code]; !ok {
+		slog.Warn(fmt.Sprintf("language code not applied: %s supports %d languages, which don't include %s",
+			model, len(supported), code), "service", "ElevenLabsTTS", "model", model, "language", code)
+		return ""
+	}
+	slog.Debug("using language code", "service", "ElevenLabsTTS", "language", code)
+	return code
 }
 
 // contextUnsupportedModels reject the previous_text context parameter.
@@ -186,13 +272,8 @@ func (s *synthesizer) requestBody(text string) ([]byte, error) {
 	if s.cfg.ApplyTextNormalization != "" {
 		payload["apply_text_normalization"] = s.cfg.ApplyTextNormalization
 	}
-	if code := elevenlabsLanguage(s.cfg.Language); code != "" {
-		if _, ok := multilingualModels[s.cfg.Model]; ok {
-			payload["language_code"] = code
-		} else {
-			slog.Warn("language code not applied: only the multilingual models accept one",
-				"service", "ElevenLabsTTS", "model", s.cfg.Model, "language", code)
-		}
+	if code := elevenlabsLanguageCode(s.cfg.Model, elevenlabsLanguage(s.cfg.Language)); code != "" {
+		payload["language_code"] = code
 	}
 	return json.Marshal(payload)
 }
@@ -466,19 +547,106 @@ func outputFormat(sampleRate int) string {
 	}
 }
 
-// elevenlabsLanguage maps a Language to ElevenLabs' language_code: ElevenLabs
-// wants the base code, so the region is stripped and returned only for languages
-// ElevenLabs supports; otherwise "" (the model auto-detects).
+// elevenlabsTTSLanguages are the languages verified against synthesis, each
+// under the code ElevenLabs takes for it.
+//
+//nolint:gochecknoglobals // read-only lookup table
+var elevenlabsTTSLanguages = map[language.Language]string{
+	language.Afrikaans:           "af",
+	language.Arabic:              "ar",
+	language.Assamese:            "as",
+	language.Asturian:            "ast",
+	language.Azerbaijani:         "az",
+	language.Belarusian:          "be",
+	language.Bulgarian:           "bg",
+	language.Bengali:             "bn",
+	language.Bosnian:             "bs",
+	language.Catalan:             "ca",
+	language.Cebuano:             "ceb",
+	language.Czech:               "cs",
+	language.Welsh:               "cy",
+	language.Danish:              "da",
+	language.German:              "de",
+	language.Greek:               "el",
+	language.English:             "en",
+	language.Spanish:             "es",
+	language.Estonian:            "et",
+	language.Persian:             "fa",
+	language.Finnish:             "fi",
+	language.Filipino:            "fil",
+	language.French:              "fr",
+	language.Irish:               "ga",
+	language.Galician:            "gl",
+	language.Gujarati:            "gu",
+	language.Hausa:               "ha",
+	language.Hebrew:              "he",
+	language.Hindi:               "hi",
+	language.Croatian:            "hr",
+	language.Hungarian:           "hu",
+	language.Armenian:            "hy",
+	language.Indonesian:          "id",
+	language.Icelandic:           "is",
+	language.Italian:             "it",
+	language.Japanese:            "ja",
+	language.Javanese:            "jv",
+	language.Georgian:            "ka",
+	language.Kazakh:              "kk",
+	language.Kannada:             "kn",
+	language.Korean:              "ko",
+	language.Kyrgyz:              "ky",
+	language.Luxembourgish:       "lb",
+	language.Lingala:             "ln",
+	language.Lithuanian:          "lt",
+	language.Latvian:             "lv",
+	language.Maori:               "mi",
+	language.Macedonian:          "mk",
+	language.Malayalam:           "ml",
+	language.Mongolian:           "mn",
+	language.Marathi:             "mr",
+	language.Malay:               "ms",
+	language.Maltese:             "mt",
+	language.Burmese:             "my",
+	language.Nepali:              "ne",
+	language.Dutch:               "nl",
+	language.Norwegian:           "no",
+	language.Chichewa:            "ny",
+	language.Occitan:             "oc",
+	language.Odia:                "or",
+	language.Punjabi:             "pa",
+	language.Polish:              "pl",
+	language.Pashto:              "ps",
+	language.Portuguese:          "pt",
+	language.Romanian:            "ro",
+	language.Russian:             "ru",
+	language.Sindhi:              "sd",
+	language.Slovak:              "sk",
+	language.Slovenian:           "sl",
+	language.Somali:              "so",
+	language.Serbian:             "sr",
+	language.Swedish:             "sv",
+	language.Swahili:             "sw",
+	language.Tamil:               "ta",
+	language.Telugu:              "te",
+	language.Tajik:               "tg",
+	language.Thai:                "th",
+	language.Turkish:             "tr",
+	language.Ukrainian:           "uk",
+	language.Urdu:                "ur",
+	language.Uzbek:               "uz",
+	language.Vietnamese:          "vi",
+	language.YueChineseCantonese: "yue",
+	language.Chinese:             "zh",
+}
+
+// elevenlabsLanguage maps a Language to ElevenLabs' language code: ElevenLabs
+// wants the base code, so a language not verified is sent as its base code and
+// reported. The zero value maps to "", which leaves the language to the model.
+// Whether the model takes the code is decided by elevenlabsLanguageCode.
 func elevenlabsLanguage(l language.Language) string {
-	switch base := l.BaseCode(); base {
-	case "ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", langFil,
-		"fr", "hi", "hr", "hu", "id", "it", "ja", "ko", "ms", "nl",
-		"no", "pl", "pt", "ro", "ru", "sk", "sv", "ta", "tr", "uk",
-		"vi", "zh":
-		return base
-	default:
+	if l == "" {
 		return ""
 	}
+	return language.Resolve(l, elevenlabsTTSLanguages, true)
 }
 
 // The HTTP service always asks for timestamps, so it always reports word timing,

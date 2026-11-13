@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -52,13 +51,17 @@ func (c *connector) Metadata() stt.Metadata {
 	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.DefaultTTFSP99)}
 }
 
-// Connect dials the moshi-server ASR WebSocket and prepares a resampler from the
-// pipeline's input rate to the server's 24 kHz.
 // WebsocketOptions hands the stream base the connection settings the
 // configuration gives, implementing wsservice.Optioner.
 func (c *connector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
 
-func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
+// SendSampleRate is the 24 kHz the server takes audio at, implementing
+// stt.SendRater: the service resamples the pipeline's audio to it.
+func (c *connector) SendSampleRate(int) int { return defaultSampleRate }
+
+// Connect dials the moshi-server ASR WebSocket, for audio at the 24 kHz
+// SendSampleRate gives.
+func (c *connector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
 	header := http.Header{}
 	header.Set("kyutai-api-key", c.cfg.APIKey)
 
@@ -66,21 +69,15 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	if err != nil {
 		return nil, err
 	}
-	rs, err := resample.New(sampleRate, defaultSampleRate, 1)
-	if err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "resampler")
-		return nil, err
-	}
-	return &stream{conn: conn, ctx: ctx, rs: rs}, nil
+	return &stream{conn: conn, ctx: ctx}, nil
 }
 
 type stream struct {
 	conn *wsutil.Conn
 	ctx  context.Context
-	rs   *resample.Resampler
 
 	// Send side (pipeline goroutine): writeMu guards writes against Close, and
-	// pending holds resampled samples awaiting a full 1920-sample frame.
+	// pending holds samples awaiting a full 1920-sample frame.
 	writeMu sync.Mutex
 	pending []float32
 
@@ -90,10 +87,10 @@ type stream struct {
 	speechStarted bool
 }
 
-// Send resamples the S16LE PCM to 24 kHz, converts it to float32, and forwards
-// it to the server in 1920-sample Audio messages.
+// Send converts the 24 kHz S16LE PCM to float32 and forwards it to the server
+// in 1920-sample Audio messages.
 func (s *stream) Send(audio []byte) error {
-	s.pending = int16BytesToFloat32(s.pending, s.rs.Process(audio))
+	s.pending = int16BytesToFloat32(s.pending, audio)
 	n := 0
 	for len(s.pending)-n >= sttFrameSamples {
 		if err := s.sendAudio(s.pending[n : n+sttFrameSamples]); err != nil {
@@ -167,10 +164,7 @@ func (s *stream) handle(m sttMsg) (stt.Result, bool) {
 	}
 }
 
-// Close releases the resampler and closes the socket.
+// Close closes the socket.
 func (s *stream) Close() error {
-	if s.rs != nil {
-		s.rs.Close()
-	}
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }

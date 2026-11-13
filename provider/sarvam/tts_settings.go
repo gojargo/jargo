@@ -1,6 +1,7 @@
 package sarvam
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 
@@ -84,7 +85,9 @@ func newTTSSettings(cfg TTSConfig, mc ttsModelConfig) *TTSSettings {
 	s := &TTSSettings{}
 	s.Model = settings.Set(cfg.Model)
 	s.Voice = settings.Set(firstNonEmpty(cfg.Voice, mc.defaultSpeaker))
-	s.Language = settings.Set(resolveTTSLanguage(cfg.Language))
+	// The language is stored as the caller gave it, Sarvam's default when none
+	// was; the service names it the way Sarvam does.
+	s.Language = settings.Set(cmp.Or(string(cfg.Language), defaultTTSLanguage))
 	s.EnablePreprocessing = settings.Set(mc.preprocessingAlwaysEnabled ||
 		(cfg.EnablePreprocessing != nil && *cfg.EnablePreprocessing))
 	s.MinBufferSize = settings.Set(intOr(cfg.MinBufferSize, defaultMinBufferSize))

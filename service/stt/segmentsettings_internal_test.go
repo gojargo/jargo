@@ -1,7 +1,10 @@
 package stt
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -100,6 +103,118 @@ func TestSegmentServiceNamesTheLanguageTheProvidersWay(t *testing.T) {
 
 	if v, _ := settings.Get(&tr.store, "language"); v != "fr-provider" {
 		t.Errorf("the store holds %v, want the provider's own code", v)
+	}
+}
+
+// The update is the caller's: naming its language the provider's way is done on
+// the service's own copy, so the caller's reads afterwards as it was sent.
+func TestALanguageUpdateLeavesTheCallersDeltaUnchanged(t *testing.T) {
+	tr := &settingsTranscriber{}
+	s := NewSegment("TestSTT", tr, 0)
+	f := updateFrame(t, "language", "fr")
+
+	s.updateSettings(context.Background(), f)
+
+	if v, _ := settings.Get(f.Delta, "language"); v != "fr" {
+		t.Errorf("the caller's update holds %v after it was applied, want fr as sent", v)
+	}
+	if v, _ := settings.Get(&tr.store, "language"); v != "fr-provider" {
+		t.Errorf("the store holds %v, want the provider's own code", v)
+	}
+}
+
+// preparingTranscriber moves a language it is given into a field of its own
+// before the service sees it, the way a provider whose language is spelled as
+// hints does, and records the language as it was handed over.
+type preparingTranscriber struct {
+	settingsTranscriber
+	prepared []any
+}
+
+func (t *preparingTranscriber) PrepareSettings(delta any) error {
+	v, _ := settings.Get(delta, "language")
+	t.prepared = append(t.prepared, v)
+	return settings.SetNamed(delta, "language", nil)
+}
+
+// A provider that prepares an update sees it before its language is named, and
+// what it does to it is what the service then applies.
+func TestAProviderSeesTheUpdateBeforeItsLanguageIsNamed(t *testing.T) {
+	tr := &preparingTranscriber{}
+	s := NewSegment("TestSTT", tr, 0)
+	f := updateFrame(t, "language", "fr")
+
+	s.updateSettings(context.Background(), f)
+
+	if len(tr.prepared) != 1 || tr.prepared[0] != "fr" {
+		t.Errorf("the provider was handed %v, want the language as sent", tr.prepared)
+	}
+	if v, ok := settings.Get(&tr.store, "language"); ok {
+		t.Errorf("the store holds %v, want what the provider prepared: no language", v)
+	}
+	if v, _ := settings.Get(f.Delta, "language"); v != "fr" {
+		t.Errorf("the caller's update holds %v, want fr as sent", v)
+	}
+}
+
+// baseCodeTranscriber names the languages it lists by their base code, the way
+// a provider that takes no regional variants does.
+type baseCodeTranscriber struct {
+	settingsTranscriber
+	named []language.Language
+}
+
+func (t *baseCodeTranscriber) ServiceLanguage(l language.Language) string {
+	t.mu.Lock()
+	t.named = append(t.named, l)
+	t.mu.Unlock()
+	codes := map[language.Language]string{language.German: "de", language.English: "en", language.French: "fr"}
+	return language.Resolve(l, codes, true)
+}
+
+// A regional language the provider does not list is named by the base code it
+// does list, whether the update names it by its constant or writes it out.
+func TestARegionalLanguageIsNamedByTheBaseCodeTheProviderLists(t *testing.T) {
+	for _, code := range []string{string(language.FrenchFR), "fr-FR"} {
+		tr := &baseCodeTranscriber{}
+		s := NewSegment("TestSTT", tr, 0)
+
+		s.updateSettings(context.Background(), updateFrame(t, "language", code))
+
+		if v, _ := settings.Get(&tr.store, "language"); v != "fr" {
+			t.Errorf("updating to %q stored %v, want fr", code, v)
+		}
+	}
+}
+
+// A code naming no language jargo knows may still be one the provider takes, so
+// it is stored as it came, without the provider being asked to name it, and
+// the log says so.
+func TestAnUnrecognizedLanguageIsPassedToTheProviderAsItIs(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	tr := &baseCodeTranscriber{}
+	s := NewSegment("TestSTT", tr, 0)
+
+	s.updateSettings(context.Background(), updateFrame(t, "language", "klingon"))
+
+	if v, _ := settings.Get(&tr.store, "language"); v != "klingon" {
+		t.Errorf("the store holds %v, want klingon as it came", v)
+	}
+	if len(tr.named) != 0 {
+		t.Errorf("the provider was asked to name %v, want nothing asked of it", tr.named)
+	}
+	var notes []string
+	for line := range strings.Lines(logs.String()) {
+		if strings.Contains(line, "not a recognized language code") {
+			notes = append(notes, line)
+		}
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "klingon") {
+		t.Errorf("logged %q, want one debug line naming klingon", notes)
 	}
 }
 

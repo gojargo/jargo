@@ -96,7 +96,7 @@ func TestKeepaliveSilenceCountsTowardUsage(t *testing.T) {
 	st := &kaStream{}
 	conn := &kaConnector{stream: st, wants: true, opts: KeepaliveOptions{Timeout: time.Second}}
 	s := NewStream("FakeSTT", conn, 16000)
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 	s.stream = st
 
 	if err := s.sendKeepalive(); err != nil {
@@ -129,7 +129,7 @@ func TestKeepaliveProtocolMessageIsNotBilled(t *testing.T) {
 	st := &kaProtocolStream{}
 	conn := &kaConnector{stream: st, wants: true, opts: KeepaliveOptions{Timeout: time.Second}}
 	s := NewStream("FakeSTT", conn, 16000)
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 	s.stream = st
 
 	if err := s.sendKeepalive(); err != nil {
@@ -322,7 +322,7 @@ func TestKeepaliveSurvivesFailedSend(t *testing.T) {
 	conn := &kaConnector{stream: st, wants: true}
 	s := NewStream("FakeSTT", conn, 16000)
 	s.keepalive = KeepaliveOptions{Timeout: interval, Interval: interval}
-	s.sampleRate = 16000
+	s.sampleRate, s.sendRate = 16000, 16000
 	s.stream = st
 
 	s.startKeepalive(t.Context())

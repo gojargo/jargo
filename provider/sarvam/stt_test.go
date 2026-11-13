@@ -286,7 +286,10 @@ func openSTT(t *testing.T, c *connector, endpoint string) stt.Stream {
 		cancel()
 		t.Fatalf("dialing the session: %v", err)
 	}
-	s := &stream{conn: conn, ctx: ctx, encoding: c.encoding(), sampleRate: 16000}
+	s := &stream{
+		conn: conn, ctx: ctx, encoding: c.encoding(), sampleRate: 16000,
+		language: c.transcriptLanguage,
+	}
 	t.Cleanup(func() {
 		cancel()
 		_ = s.Close()
@@ -385,5 +388,114 @@ func TestSTTStreamRecvServerError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported sample rate") {
 		t.Errorf("error = %v, want it to carry the server's message", err)
+	}
+}
+
+// recvOneSTT reads the one transcript the session delivers.
+func recvOneSTT(t *testing.T, s stt.Stream) stt.Result {
+	t.Helper()
+	res, err := s.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("results = %+v, want one transcript", res)
+	}
+	return res[0]
+}
+
+// Ported from upstream (test_default_configuration_leaves_language_unset). With
+// no language configured the session is opened with Sarvam's "unknown"
+// auto-detect placeholder, and a transcript that reports no language of its
+// own is left without one rather than labeled with a guess.
+func TestATranscriptWithNoLanguageUnderTheDefaultConfigurationHasNone(t *testing.T) {
+	endpoint, _ := sttServer(t, []map[string]any{
+		{"type": "data", "data": map[string]any{"transcript": "Hello there"}},
+	})
+	s := openSTT(t, connectorFor(STTConfig{APIKey: "k"}), endpoint)
+
+	if got := recvOneSTT(t, s); got.Language != "" {
+		t.Errorf("language = %q, want it left unset", got.Language)
+	}
+}
+
+// Ported from upstream (test_unrecognized_language_code_leaves_language_unset).
+// A code the table has no entry for leaves the transcript without a language,
+// and is warned about once however often it comes back.
+func TestAnUnrecognizedLanguageCodeLeavesTheLanguageUnset(t *testing.T) {
+	endpoint, _ := sttServer(t, []map[string]any{
+		{"type": "data", "data": map[string]any{"transcript": "first", "language_code": "new-IN"}},
+		{"type": "data", "data": map[string]any{"transcript": "second", "language_code": "new-IN"}},
+	})
+	c := connectorFor(STTConfig{APIKey: "k"})
+	s := openSTT(t, c, endpoint)
+
+	for _, want := range []string{"first", "second"} {
+		got := recvOneSTT(t, s)
+		if got.Text != want || got.Language != "" {
+			t.Errorf("transcript = %q in %q, want %q with no language", got.Text, got.Language, want)
+		}
+	}
+	c.warnedMu.Lock()
+	defer c.warnedMu.Unlock()
+	if len(c.warned) != 1 || !c.warned["new-IN"] {
+		t.Errorf("warned about %v, want new-IN alone", c.warned)
+	}
+}
+
+// A code Sarvam reports is resolved to the language it names, Odia included,
+// which Sarvam reports under a code of its own.
+func TestARecognizedLanguageCodeIsMapped(t *testing.T) {
+	c := connectorFor(STTConfig{APIKey: "k"})
+	cases := map[string]language.Language{
+		"hi-IN":  language.HindiIN,
+		"od-IN":  language.OdiaIN,
+		"doi-IN": language.Language("doi-IN"),
+	}
+	for code, want := range cases {
+		if got := c.transcriptLanguage(code); got != string(want) {
+			t.Errorf("transcriptLanguage(%q) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+// Ported from upstream (test_configured_language_is_used_when_message_has_none).
+// A language the caller configured labels a transcript that carries none.
+func TestTheConfiguredLanguageIsUsedWhenATranscriptHasNone(t *testing.T) {
+	endpoint, _ := sttServer(t, []map[string]any{
+		{"type": "data", "data": map[string]any{"transcript": "hello"}},
+	})
+	s := openSTT(t, connectorFor(STTConfig{APIKey: "k", Language: language.EnglishIN}), endpoint)
+
+	if got := recvOneSTT(t, s); got.Language != string(language.EnglishIN) {
+		t.Errorf("language = %q, want the configured %q", got.Language, language.EnglishIN)
+	}
+}
+
+// Ported from upstream (test_undecodable_messages_are_skipped). A message that
+// is not JSON, binary or text, is stepped over, and the transcript after it
+// still arrives.
+func TestUndecodableMessagesAreSkipped(t *testing.T) {
+	transcript, err := json.Marshal(map[string]any{"type": "data", "data": map[string]any{"transcript": "hello"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close(websocket.StatusNormalClosure, "") }()
+		ctx := r.Context()
+		_ = c.Write(ctx, websocket.MessageBinary, []byte{0x00, 0x01})
+		_ = c.Write(ctx, websocket.MessageText, []byte("not json"))
+		_ = c.Write(ctx, websocket.MessageText, transcript)
+		_, _, _ = c.Read(ctx)
+	}))
+	t.Cleanup(srv.Close)
+	s := openSTT(t, connectorFor(STTConfig{APIKey: "k"}), "ws"+strings.TrimPrefix(srv.URL, "http"))
+
+	if got := recvOneSTT(t, s); got.Text != "hello" {
+		t.Errorf("transcript = %q, want the one after the undecodable messages", got.Text)
 	}
 }

@@ -42,7 +42,9 @@ func newTTSSettings(cfg TTSConfig) *TTSSettings {
 	s := &TTSSettings{}
 	s.Model = settings.Set(cfg.Model)
 	s.Voice = settings.Set(cfg.Voice)
-	s.Language = settings.Set(sonioxTTSLanguage(cfg.Language))
+	// The language as the caller gave it: the service names it the Soniox way
+	// as it is built, as it names an update's.
+	s.Language = settings.Set(cfg.Language.Code())
 	s.Speed = settings.Cleared[float64]()
 	if cfg.Speed != nil {
 		s.Speed = settings.Set(*cfg.Speed)

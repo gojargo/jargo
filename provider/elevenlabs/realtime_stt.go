@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -27,10 +28,20 @@ const (
 	realtimeSTTPath = "/v1/speech-to-text/realtime"
 	// defaultRealtimeSTTModel is a current streaming transcription model.
 	defaultRealtimeSTTModel = "scribe_v2_realtime"
-	// realtimeSTTFormat is raw 16-bit little-endian PCM, the format the pipeline
-	// carries.
-	realtimeSTTFormat = "pcm_s16le_16"
+	// realtimeSTTFallbackRate is the rate audio at a rate ElevenLabs does not
+	// take is resampled to.
+	realtimeSTTFallbackRate = 16000
 )
+
+// realtimeSTTRates are the rates ElevenLabs takes raw 16-bit PCM at, each
+// named by its own audio format.
+//
+//nolint:gochecknoglobals // a fixed table
+var realtimeSTTRates = []int{8000, 16000, 22050, 24000, 44100, 48000}
+
+// realtimeSTTFormat is the audio format of raw 16-bit PCM at rate, which is one
+// of realtimeSTTRates.
+func realtimeSTTFormat(rate int) string { return "pcm_" + strconv.Itoa(rate) }
 
 // ElevenLabs realtime transcription message types.
 const (
@@ -55,6 +66,8 @@ type RealtimeSTTConfig struct {
 	// Language of the audio; the zero value lets the service detect it.
 	Language language.Language
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
+	// ElevenLabs takes 8000, 16000, 22050, 24000, 44100 or 48000 Hz; audio at
+	// any other rate is resampled to 16000 Hz before it is sent.
 	SampleRate int
 	// Keyterms bias the transcription toward these words or phrases.
 	Keyterms []string
@@ -115,13 +128,23 @@ func (c *realtimeSTTConnector) Metadata() stt.Metadata {
 	}
 }
 
-// endpoint builds the session URL. The session is configured entirely through
-// query parameters, so there is no setup message.
+// SendSampleRate is the rate ElevenLabs is sent audio at, implementing
+// stt.SendRater: the service's own rate when ElevenLabs takes it, and 16 kHz
+// otherwise, the input audio being resampled to it.
+func (c *realtimeSTTConnector) SendSampleRate(sampleRate int) int {
+	if slices.Contains(realtimeSTTRates, sampleRate) {
+		return sampleRate
+	}
+	return realtimeSTTFallbackRate
+}
+
+// endpoint builds the session URL for audio at sampleRate, which names the
+// audio format. The session is configured entirely through query parameters,
+// so there is no setup message.
 func (c *realtimeSTTConnector) endpoint(sampleRate int) string {
 	q := url.Values{}
 	q.Set("model_id", c.cfg.Model)
-	q.Set("audio_format", realtimeSTTFormat)
-	q.Set("sample_rate", strconv.Itoa(sampleRate))
+	q.Set("audio_format", realtimeSTTFormat(sampleRate))
 	// The service commits an utterance on its own detected silence rather than
 	// waiting for the client, which is what makes it a streaming service.
 	q.Set("commit_strategy", "vad")
@@ -139,11 +162,12 @@ func (c *realtimeSTTConnector) endpoint(sampleRate int) string {
 	return c.cfg.Host + realtimeSTTPath + "?" + q.Encode()
 }
 
-// Connect opens a transcription session.
 // WebsocketOptions hands the stream base the connection settings the
 // configuration gives, implementing wsservice.Optioner.
 func (c *realtimeSTTConnector) WebsocketOptions() wsservice.Options { return c.cfg.Websocket }
 
+// Connect opens a transcription session for audio at sampleRate, which is the
+// rate SendSampleRate gave.
 func (c *realtimeSTTConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
 	header := http.Header{}
 	header.Set("xi-api-key", c.cfg.APIKey)
@@ -153,9 +177,10 @@ func (c *realtimeSTTConnector) Connect(ctx context.Context, sampleRate int) (stt
 		return nil, err
 	}
 	return &realtimeSTTStream{
-		conn: conn,
-		ctx:  ctx,
-		lang: elevenlabsSTTLanguage(c.cfg.Language),
+		conn:       conn,
+		ctx:        ctx,
+		lang:       elevenlabsSTTLanguage(c.cfg.Language),
+		sampleRate: sampleRate,
 	}, nil
 }
 
@@ -163,8 +188,11 @@ type realtimeSTTStream struct {
 	conn *wsutil.Conn
 	ctx  context.Context
 	// lang is the configured language echoed on results, or "".
-	lang    string
-	writeMu sync.Mutex
+	lang string
+	// sampleRate is the rate of the audio the session is sent, which every
+	// chunk restates.
+	sampleRate int
+	writeMu    sync.Mutex
 }
 
 // realtimeSTTMessage is the subset of a transcription message we read.
@@ -183,16 +211,17 @@ func (m realtimeSTTMessage) transcript() string {
 	return m.Transcript
 }
 
-// Send writes a chunk of PCM as a base64 audio chunk. The commit flag stays
-// false: the service decides where an utterance ends.
+// Send writes a chunk of PCM as a base64 audio chunk, with the rate it is at.
+// The commit flag stays false: the service decides where an utterance ends.
 func (s *realtimeSTTStream) Send(audio []byte) error {
 	if len(audio) == 0 {
 		return nil
 	}
 	payload, err := json.Marshal(map[string]any{
-		"message_type": "input_audio_chunk",
-		"audio_chunk":  base64.StdEncoding.EncodeToString(audio),
-		"commit":       false,
+		"message_type":  "input_audio_chunk",
+		"audio_base_64": base64.StdEncoding.EncodeToString(audio),
+		"commit":        false,
+		"sample_rate":   s.sampleRate,
 	})
 	if err != nil {
 		return err

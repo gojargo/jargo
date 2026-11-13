@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service"
@@ -18,6 +19,15 @@ import (
 // mono PCM at sampleRate.
 type Transcriber interface {
 	Transcribe(ctx context.Context, audio []byte, sampleRate int) (string, error)
+}
+
+// SegmentRater is an optional interface a Transcriber implements when its model
+// reads one sample rate. SegmentSampleRate is given the rate the service runs at
+// and returns the rate the segments are handed over at; each segment is
+// resampled to it. A Transcriber that does not implement it is handed segments
+// at the service's own rate.
+type SegmentRater interface {
+	SegmentSampleRate(sampleRate int) int
 }
 
 // DefaultTrailingSilence is how much silence is appended to each segment before
@@ -57,6 +67,9 @@ type SegmentService struct {
 	set *providerSettings
 
 	sampleRate int
+	// segmentRate is the rate segments are handed to the Transcriber at:
+	// sampleRate unless it asks for another through SegmentRater.
+	segmentRate int
 	// trailingSilence is how much silence is appended to a segment before it is
 	// transcribed. It is settable so a caller can turn the padding off.
 	trailingSilence time.Duration
@@ -216,6 +229,10 @@ func (s *SegmentService) Setup(ctx context.Context, st processor.Setup) error {
 	if s.sampleRate == 0 {
 		s.sampleRate = st.AudioInSampleRate
 	}
+	s.segmentRate = s.sampleRate
+	if r, ok := s.tr.(SegmentRater); ok {
+		s.segmentRate = r.SegmentSampleRate(s.sampleRate)
+	}
 	s.mu.Lock()
 	s.speech.SetSampleRate(s.sampleRate)
 	s.mu.Unlock()
@@ -303,17 +320,30 @@ func (s *SegmentService) endSegment() {
 	if len(segment) == 0 {
 		return
 	}
-	s.queue = append(s.queue, queuedSegment{audio: segment, number: s.segmentCount})
+	rate := s.sampleRate
+	if s.segmentRate > 0 && s.segmentRate != s.sampleRate {
+		// A model that reads one rate is handed the segment at that rate, the
+		// whole segment converted at once.
+		resampled, err := resample.Resample(segment, s.sampleRate, s.segmentRate, 1)
+		if err != nil {
+			slog.Warn("cannot resample the segment to the rate the model reads, dropping it",
+				"service", s.Name(), "from", s.sampleRate, "to", s.segmentRate, "err", err)
+			return
+		}
+		segment, rate = resampled, s.segmentRate
+	}
+	s.queue = append(s.queue, queuedSegment{audio: segment, rate: rate, number: s.segmentCount})
 	select {
 	case s.queued <- struct{}{}:
 	default:
 	}
 }
 
-// queuedSegment is a segment waiting to be transcribed, with the number of the
-// speech it was cut from.
+// queuedSegment is a segment waiting to be transcribed, with its sample rate
+// and the number of the speech it was cut from.
 type queuedSegment struct {
 	audio  []byte
+	rate   int
 	number int
 }
 
@@ -375,9 +405,8 @@ func (s *SegmentService) segmentTask(ctx context.Context) {
 		segment := s.queue[0]
 		s.queue = s.queue[1:]
 		s.transcribingSegment = segment.number
-		rate := s.sampleRate
 		s.mu.Unlock()
-		s.transcribe(ctx, segment.audio, rate)
+		s.transcribe(ctx, segment.audio, segment.rate)
 		if ctx.Err() != nil {
 			return
 		}

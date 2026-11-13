@@ -40,8 +40,9 @@ func newTTSSettings(cfg Config) *TTSSettings {
 	s.Model = settings.Set(cfg.Model)
 	s.Voice = settings.Set(cfg.VoiceID)
 	// Cartesia is asked for English unless told otherwise, rather than left to
-	// pick a language itself.
-	s.Language = settings.Set(cartesiaLanguage(cmp.Or(cfg.Language, language.English)))
+	// pick a language itself. The language is stored as the caller gave it; the
+	// service names it the way Cartesia does.
+	s.Language = settings.Set(string(cmp.Or(cfg.Language, language.English)))
 	if cfg.GenerationConfig != nil {
 		s.GenerationConfig = settings.Set(cfg.GenerationConfig)
 	}

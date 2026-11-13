@@ -10,13 +10,60 @@
 package deepgram
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/service/wsutil"
 )
 
 // authToken formats the shared Deepgram Authorization header value.
 func authToken(apiKey string) string { return "Token " + apiKey }
+
+// closeStreamMessage tells a transcription session no more audio is coming.
+const closeStreamMessage = `{"type":"CloseStream"}`
+
+// sendCloseStream tells a transcription session on conn that no more audio is
+// coming, and reports whether the socket is still open for the closing
+// handshake. writeMu is the session's own write lock.
+//
+// The message is bounded by wait (wsutil.DefaultCloseTimeout when not
+// positive). An open session holds one of the account's concurrent connections,
+// and a send stuck behind a peer that has stopped reading would otherwise hold
+// the teardown, and the connection with it, for as long as the peer stays
+// silent: once wait passes the socket is dropped instead, which also releases
+// the stuck send.
+func sendCloseStream(ctx context.Context, conn *wsutil.Conn, writeMu *sync.Mutex, wait time.Duration) bool {
+	if wait <= 0 {
+		wait = wsutil.DefaultCloseTimeout
+	}
+	// The session's own context may already have ended, and the message is
+	// what the teardown is waiting on, so it goes out on one of its own.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if ctx.Err() != nil {
+			return
+		}
+		_ = conn.Write(ctx, websocket.MessageText, []byte(closeStreamMessage))
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		slog.Debug("deepgram did not take the close in time, dropping the connection", "timeout", wait)
+		_ = conn.CloseNow()
+		return false
+	}
+}
 
 // defaultHost is the Deepgram API host the services address when no base URL is
 // configured.
