@@ -3,7 +3,7 @@ package jargo_test
 import (
 	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,7 +14,11 @@ import (
 // gojargo.dev, and both resolve a relative link against the file tree, so a
 // link to a missing file or directory is broken in both places. Links inside
 // code (fenced blocks and inline spans) are not links and are skipped.
+//
+// Everything is read through the repository root as an fs.FS, so a link can
+// only resolve inside the repository: one that climbs out of it is reported.
 func TestDocsLinks(t *testing.T) {
+	repo := os.DirFS(".")
 	var (
 		fence      = regexp.MustCompile("^\\s*(`{3,}|~{3,})")
 		inlineCode = regexp.MustCompile("`+[^`]*`+")
@@ -24,12 +28,12 @@ func TestDocsLinks(t *testing.T) {
 	)
 
 	files := []string{"README.md"}
-	err := filepath.WalkDir("docs", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(repo, "docs", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.HasSuffix(path, ".md") {
-			files = append(files, path)
+		if !d.IsDir() && strings.HasSuffix(name, ".md") {
+			files = append(files, name)
 		}
 		return nil
 	})
@@ -39,7 +43,7 @@ func TestDocsLinks(t *testing.T) {
 
 	checked := 0
 	for _, file := range files {
-		data, err := os.ReadFile(file)
+		data, err := fs.ReadFile(repo, file)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -70,15 +74,15 @@ func TestDocsLinks(t *testing.T) {
 				if scheme.MatchString(target) || strings.HasPrefix(target, "#") || strings.HasPrefix(target, "/") {
 					continue // a URL, an anchor on the same page, or site-absolute
 				}
-				path, _, _ := strings.Cut(target, "#")
-				path, _, _ = strings.Cut(path, "?")
-				if path == "" {
+				rel, _, _ := strings.Cut(target, "#")
+				rel, _, _ = strings.Cut(rel, "?")
+				if rel == "" {
 					continue
 				}
 				checked++
-				resolved := filepath.Join(filepath.Dir(file), filepath.FromSlash(path))
-				if _, err := os.Stat(resolved); err != nil {
-					t.Errorf("%s:%d: link %q: %s does not exist", file, i+1, target, resolved)
+				resolved := path.Join(path.Dir(file), rel)
+				if _, err := fs.Stat(repo, resolved); err != nil {
+					t.Errorf("%s:%d: link %q: %s does not exist in the repository", file, i+1, target, resolved)
 				}
 			}
 		}
