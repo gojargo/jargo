@@ -13,6 +13,58 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Streaming STT services resample their input audio.** `StreamService`
+  resamples every input frame to the rate the provider is sent audio at, and a
+  connector that takes only some rates names its own through `stt.SendRater`.
+  Amazon Transcribe (8 or 16 kHz), ElevenLabs realtime transcription, OpenAI
+  Realtime and Kyutai transcription (24 kHz) declare theirs. A segmented
+  service resamples each segment to the rate a transcriber asks for through
+  `stt.SegmentRater`.
+- **More hooks on the STT base.** A stream implementing `stt.Stopper` is told
+  the audio is over on a graceful end only, never on a cancel or a settings
+  reopen. A connector implementing `stt.SettingsPreparer` sees a settings
+  update before the base names its language. A connector error wrapped with
+  `stt.Permanent` leaves the service unusable instead of being retried.
+- **Transcripts carry the speaker diarization labeled them with.**
+  `stt.Result.Speaker` reaches `TranscriptionFrame`, `InterimTranscriptionFrame`
+  and `EagerTranscriptionFrame` as a `frames.TranscriptionSpeaker`, numbered in
+  the order speakers first appeared.
+- **Gemini and Vertex AI report token usage** for each streamed turn, counting
+  thinking tokens as output and tool-use prompt tokens as input.
+- **OpenAI-compatible services report prompt-cache writes**
+  (`prompt_tokens_details.cache_write_tokens`) as cache-creation tokens,
+  leaving the count absent when the provider does not send it. `chat.Compat`
+  gains `Settings`, `CheckRequest` and `Request` hooks for endpoints with
+  runtime settings, request checks or request fields of their own.
+- **Anthropic and Bedrock log why Claude stopped** when it was not a normal
+  end: a refusal with its category, `max_tokens`, the context window or
+  `pause_turn`, for streamed turns and `RunInference`. Gemini's `RunInference`
+  warns on a safety, recitation or token-limit stop as streamed turns already
+  did, and repeats the thinking-budget warning when an update changes the
+  model.
+- **Gradium STT detects turns and changes settings at run time.**
+  `EnableTurnDetection`, `EOTHorizonS`, `EOTThreshold` and
+  `PostFlushCooldownFrames` turn on proposed turn starts and ends from
+  Gradium's end-of-turn signal, with the external strategies recommended and
+  `on_turn_start` / `on_turn_end` raised. A settings update reopens the
+  session only when its setup message changes.
+- **Soniox STT** labels each final transcript with the language most of its
+  tokens were identified as, asks Soniox to finalize when the VAD reports the
+  user stopped, keeps an idle session open with Soniox's keepalive message, and
+  takes several hints as `Config.LanguageHints`.
+- **OpenAI Realtime `InputAudioTranscription`** gains `Delay`, `Keywords` and
+  `Languages`, and a `session.updated` event echoing them is read in full.
+- **eval runs report how they failed.** Every `Failure` carries a `Kind`; a
+  bot that cannot be reached, never says bot-ready, or a harness error (a judge
+  that panics included, with its stack in the debug log) is a `<connect>`,
+  `<bot-ready>` or `<error>` failure of the run. Turns the run never reached
+  are `not_run`, and each `TurnResult` carries its own failures. New:
+  `stop_on_failure` scenario key, `Options.ConnectTimeout`,
+  `Options.BotReadyTimeout`, `eval.IsScenarioFile`, and
+  `jargo eval run --bot-ready-timeout`.
+
 ### Changed
 
 - **The documentation moved to https://gojargo.dev.** The Hugo site under
@@ -20,12 +72,139 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   address, gojargo.github.io/jargo, now sends each page to the same page on
   gojargo.dev. `make docs-check` runs a Go test (`TestDocsLinks`, also part of
   `go test ./...`) instead of a Hugo build, so it needs nothing installed.
+- **Streaming STT sessions are closed before their read is ended**, so a
+  message a provider writes as it closes reaches the server. Results that
+  arrive while a session is closing are dropped. **Breaking:** a custom
+  `stt.Stream` must stop its own goroutines in `Close` rather than wait for
+  its context to end, and `stt.Connector.Connect` is given the send rate.
+- **TTS services name their starting language at construction.** `tts.New`
+  splits sentences in the language as given and names it through the
+  provider's `LanguageNamer`, as updates already did. **Breaking:** a custom
+  synthesizer must store the language as the caller gave it; one that
+  converts it itself gets it converted twice. The bundled providers are
+  updated, and Smallest and AsyncAI now send the base code ("en" for "en-US").
+- **Settings updates leave the caller's update alone.** The STT and TTS bases
+  work on a copy (`settings.Copy`), and a language code outside the catalog is
+  passed to the provider as given instead of being named.
+- **G.711 refuses PCM that is not whole samples.** **Breaking:**
+  `g711.EncodeULaw`, `g711.EncodeALaw`, `audio.PCMToULaw`, `audio.PCMToALaw`
+  and `wsserver.Codec.Encode` return an error (`g711.ErrPartialSample`)
+  instead of dropping the trailing byte, and the Twilio, Plivo, Telnyx and
+  Exotel serializers report it.
+- **Text transforms read the way text is said aloud.** `NormalizeDates` reads
+  a year as a year ("twenty twenty-three", "nineteen oh-five") and uses
+  ordinal suffixes. `ExpandUnits` matches single-letter units by case, so
+  "$5M" and "5G" are no longer meters or grams, and reads "L" as liters.
+  `ExpandCurrency` reads scale words and abbreviations ("$2.5bn"), leaves an
+  amount followed by other letters alone and keeps a currency code apart
+  ("US$5"). `ExpandPercentages` reads thousands separators. `StripMarkdown`
+  keeps inline code as written, matches code delimiters by length and reduces
+  links with brackets or parentheses to their label. `ExpandPhoneNumbers`
+  finds a number that follows other digits.
+- **Sarvam LLM follows Sarvam's API.** **Breaking:** `sarvam.NewLLM` takes a
+  `sarvam.LLMConfig`, which adds `WikiGrounding` and `ReasoningEffort` (both
+  updatable at run time) and only accepts a model Sarvam serves.
+  sarvam-105b-conversations is reached under `/v1` and every other model under
+  `/v2`, the key is also sent as `api-subscription-key`, and `stream_options`,
+  `service_tier` and `max_completion_tokens` are no longer sent. A tool choice
+  without tools, an image on a model without vision, or a setting the model
+  does not take is refused before sending, as a non-fatal error.
+- **Mistral** sends the seed as `random_seed` on every request, so a seed
+  changed at run time reaches it, and no longer sends `stream_options`,
+  `service_tier` or `max_completion_tokens`.
+- **Ollama** sends the placeholder key `ollama` when none is configured,
+  instead of an empty bearer token.
+- **ElevenLabs TTS checks the language against the model.** Flash and Turbo
+  v2.5, Eleven v3 and Eleven v4 each take their own set, on the HTTP and
+  WebSocket services alike, so v3 and v4 now receive a language code and a
+  code a model does not cover is dropped with a warning.
+- **ElevenLabs realtime transcription** names its format by rate
+  (`pcm_16000`) and sends each chunk as `audio_base_64` with its
+  `sample_rate`.
+- **Deepgram Flux sends a `Numerals` change in a Configure message** on the
+  running connection instead of fixing it when the session opens.
+- **Soniox STT** defaults to `stt-rt-v6`, sends its format as `pcm_s16le`,
+  always enables endpoint detection (`Config.EnableEndpointDetection` is
+  deprecated and has no effect), passes text on as Soniox spaced it, and treats
+  an end marker that is not final as provisional text.
+- **Gemini Live is set up with the composed system instruction**: the
+  configured prompt plus the guidance the service adds for async tools, turn
+  completion and expression. The first conversation reopens the session when
+  that differs, and a run-time instruction update reaches a reopened session.
+  When anything is composed onto an empty configured prompt, the
+  conversation's own system message is no longer the instruction.
+- **The expression instruction frames readings and tags in RCS**: readings are
+  taught as the user's input only, tags as output only, and no example reading
+  is shown.
+- **MCP tool results read "Error calling mcp tool <name>: <cause>"** for a
+  failed call and "Sorry, could not call the mcp tool" when there is nothing to
+  read.
+- **The eval judge's explainer is told the verdict** and asked only for the
+  reason, in a response schema, retried once. `JudgeVerdict` gains
+  `Probabilities`, and the reason no longer carries them or a disagreement
+  note.
+- **eval API and file changes.** **Breaking:** `RunURL` takes `Options`;
+  `RunURL`, `Host` and `RunWith` return an error only when the context ends;
+  `Result.Turns` lists every scenario turn; the default bot-ready timeout is
+  60 s; eval-configure asks for markers as `llm_markers`; `LoadManifest`
+  reads the scenario files and refuses two entries running the same scenario
+  under one label, whatever path names it; a suite entry's `concurrency:` must
+  be a positive integer and caps only that entry; a function-call expectation
+  with `args:` claims only a matching call, so a corrected repeat satisfies
+  the turn and a wrong-args call fails at the budget. `jargo eval run` reports
+  a bot it cannot reach as a failed scenario and keeps going, prints each
+  failure with its kind, and leaves `!include` fragments out of a directory.
 
 ### Fixed
 
 - **The development runner's banner links to a page that exists.** It pointed
   at `gojargo.github.io/jargo/deploy/`, which the old site never had; it now
   points at https://gojargo.dev/docs/deploy/.
+- **Audio reaches Amazon Transcribe, Nova Sonic and ElevenLabs transcription
+  at the rate they were told.** Transcribe declared 16 kHz and sent audio at
+  the transport's rate; Nova Sonic sent it whatever `InputSampleRate` said
+  and now resamples to it, starting afresh after the response trigger;
+  ElevenLabs was sent rates it does not take.
+- **End-of-session messages reach the server.** Soniox's end of audio,
+  Gladia's `stop_recording`, Speechmatics' `EndOfStream` and AssemblyAI's
+  `Terminate` were written after the socket had closed. Soniox and Gladia now
+  send theirs when the pipeline ends and not on a cancel. AssemblyAI and
+  Speechmatics send theirs on every disconnect and wait up to 5 s for the
+  server to finish, and Speechmatics also ends a session it replaces after a
+  dropped connection.
+- **Soniox TTS names its language once.** It stored the Soniox code and the
+  base converted it again; it now stores the language as given.
+- **Deepgram closes even when CloseStream cannot be sent.** Flux and the
+  listen stream bound the wait and drop the connection, where a stuck send
+  could block teardown forever. A Flux turn cut short by a dropped connection
+  ends with its transcript so far and a proposed stop.
+- **A pending end-of-turn prediction is resolved when the turn ends without a
+  committed transcript**, as one cut short or below the confidence floor.
+- **STT services skip empty audio frames** with a warning.
+- **Soniox STT** maps Norwegian Bokmål to "no" and every hint to Soniox's
+  code, sends a run-time language change as the hint of the reopened session,
+  reports errors Soniox sends with a category from their code and keeps
+  reading, and ends an utterance at its end marker.
+- **Sarvam STT labels transcripts with a language tag** (od-IN becomes
+  or-IN), falling back to the configured language and leaving it unset for
+  Sarvam's "unknown" and codes it cannot map.
+- **Speechmatics STT reports server errors.** One that rejects the request,
+  or arrives before recognition starts, is reported as permanent and leaves
+  the service unusable instead of reconnecting; others are reported before
+  the session reopens.
+- **Gradium STT flushes when the VAD reports the user stopped**, and keeps a
+  transcript open for its whole aggregation window, so trailing words stay in
+  their utterance.
+- **Gemini Live ends a reply cut off by a dropped session**, so the bot stops
+  speaking and a held EndFrame is released at once; a drop while the pipeline
+  is ending no longer reconnects.
+- **MCP tells the model why a reconnect after a dropped session failed**, as
+  the call's result, and the next call connects again.
+- **A rejected Jev request's error carries the reason Jev gave.**
+- **eval** matches `vad_user_started_speaking` and `vad_user_stopped_speaking`,
+  fails at once with the close code when a bot closes before bot-ready,
+  reports a failing user voice as the run's error, and refuses `expect:` or
+  `context:` that is not a list by name.
 
 ## [0.6.1] - 2026-11-12
 
