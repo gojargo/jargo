@@ -1,5 +1,6 @@
 ---
 title: Installation
+description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime and RNNoise are loaded at run time."
 weight: 1
 ---
 

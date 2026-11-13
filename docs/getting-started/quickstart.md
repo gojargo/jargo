@@ -1,5 +1,6 @@
 ---
 title: Quickstart
+description: "Run the example bots with Docker or a local Go toolchain: an echo bot with no API keys, and a full voice agent on several providers."
 weight: 2
 ---
 

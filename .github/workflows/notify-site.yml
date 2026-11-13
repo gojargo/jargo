@@ -1,0 +1,27 @@
+name: Notify site
+
+# Tells gojargo/gojargo.dev to rebuild when the docs change. The site imports
+# docs/ at build time; see that repository's README.
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+    steps:
+      - name: Trigger site rebuild
+        if: env.TOKEN != ''
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/gojargo/gojargo.dev/dispatches \
+            -d '{"event_type":"jargo-docs"}'
