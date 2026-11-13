@@ -306,11 +306,14 @@ type scriptedMarkerLLM struct {
 	replies    []string
 	delays     []time.Duration
 	inferences int
+	// requests are the messages each inference ran against, as role:text.
+	requests [][]string
 }
 
-func (g *scriptedMarkerLLM) Generate(ctx context.Context, _ *frames.LLMContext, emit llm.Emit) error {
+func (g *scriptedMarkerLLM) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	g.mu.Lock()
 	g.inferences++
+	g.requests = append(g.requests, roleTexts(convo))
 	if len(g.replies) == 0 {
 		g.mu.Unlock()
 		return nil
@@ -328,6 +331,25 @@ func (g *scriptedMarkerLLM) Generate(ctx context.Context, _ *frames.LLMContext, 
 		return nil
 	}
 	return emit(reply)
+}
+
+// lastRequest is the messages the last inference ran against.
+func (g *scriptedMarkerLLM) lastRequest() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.requests) == 0 {
+		return nil
+	}
+	return g.requests[len(g.requests)-1]
+}
+
+// roleTexts are each message's role and text.
+func roleTexts(c *frames.LLMContext) []string {
+	var out []string
+	for _, m := range c.Messages() {
+		out = append(out, string(m.Role)+":"+m.Text)
+	}
+	return out
 }
 
 func (g *scriptedMarkerLLM) count() int {
@@ -492,6 +514,12 @@ func TestFilteringEveryResponseReportsItsMarker(t *testing.T) {
 
 func runEagerFiltering(t *testing.T, model *scriptedMarkerLLM) filteringRun {
 	t.Helper()
+	return runEagerFilteringTurns(t, model, "Book a flight to Boston")
+}
+
+// runEagerFilteringTurns is runEagerFiltering with one eager turn per text.
+func runEagerFilteringTurns(t *testing.T, model *scriptedMarkerLLM, texts ...string) filteringRun {
+	t.Helper()
 	// Until the service recommends its strategies, the extending list joins
 	// the default ones, whose end-of-turn model needs the ONNX runtime.
 	if _, err := turn.NewSmartTurnV3(); err != nil {
@@ -500,18 +528,20 @@ func runEagerFiltering(t *testing.T, model *scriptedMarkerLLM) filteringRun {
 	recommendation := frames.NewSTTMetadataFrame(0)
 	recommendation.ServiceName = "eager-stt"
 	recommendation.UserTurnStrategies = turns.EagerStrategies(turns.EagerStrategiesConfig{})
-	text := "Book a flight to Boston"
+	send := []any{recommendation, pause(50 * time.Millisecond)}
+	for _, text := range texts {
+		send = append(send,
+			frames.NewProposedUserStartedSpeakingFrame(), flush{},
+			frames.NewEagerTranscriptionFrame(text, "user", "now"), pause(100*time.Millisecond),
+			frames.NewTranscriptionFrame(text, "user", "now"), pause(50*time.Millisecond),
+			frames.NewProposedUserStoppedSpeakingFrame(), pause(800*time.Millisecond))
+	}
 	return runFiltering(t, turns.Config{
 		Strategies: turns.FilterIncompleteUserTurnStrategies(nil, llm.UserTurnCompletionConfig{}),
 		StrategiesParams: turns.UserTurnStrategiesParams{
 			StartMergeMode: turns.MergeModeExtend, StopMergeMode: turns.MergeModeExtend,
 		},
-	}, model,
-		recommendation, pause(50*time.Millisecond),
-		frames.NewProposedUserStartedSpeakingFrame(), flush{},
-		frames.NewEagerTranscriptionFrame(text, "user", "now"), pause(100*time.Millisecond),
-		frames.NewTranscriptionFrame(text, "user", "now"), pause(50*time.Millisecond),
-		frames.NewProposedUserStoppedSpeakingFrame(), pause(800*time.Millisecond))
+	}, model, send...)
 }
 
 func assertAnsweredOnce(t *testing.T, run filteringRun) {
@@ -558,4 +588,23 @@ func TestFilteringAnEagerAnswerMarkedIncompleteAsTheTurnCommitsIsAnsweredAgain(t
 		replies: []string{"◐", "● Sure, Boston it is."},
 		delays:  []time.Duration{300 * time.Millisecond, 0},
 	}))
+}
+
+// The first transcript was answered ◐ and written with its answer, so the
+// speculation for the rest of the turn carries only the rest.
+func TestFilteringATurnHeldOpenSpeculatesOnWhatTheContextLacks(t *testing.T) {
+	run := runEagerFilteringTurns(t, &scriptedMarkerLLM{replies: []string{"◐", "◐", "● Sure, Boston it is."}},
+		"Book a flight", "to Boston")
+
+	if got := run.recorder.spokenText(); !slices.Equal(got, []string{"Sure, Boston it is."}) {
+		t.Fatalf("spoken = %v, want the answer once", got)
+	}
+	want := []string{"user:Book a flight", "assistant:◐", "user:to Boston"}
+	if got := run.model.lastRequest(); !slices.Equal(got, want) {
+		t.Errorf("the last inference ran against %q, want %q", got, want)
+	}
+	want = append(want, "assistant:● Sure, Boston it is.")
+	if got := roleTexts(run.context); !slices.Equal(got, want) {
+		t.Errorf("messages = %q, want %q", got, want)
+	}
 }

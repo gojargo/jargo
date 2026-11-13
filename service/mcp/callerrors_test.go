@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"errors"
+	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,10 +25,41 @@ type serverPool struct {
 	mu       sync.Mutex
 	sessions []*mcpsdk.ServerSession
 	calls    int
+
+	// onCall runs once, inside the next call of the greet tool, before it
+	// answers.
+	onCall func()
+	// greeting is what the greet tool answers with, or nil for its greeting.
+	greeting []mcpsdk.Content
+	// failDials is how many of the next dials fail to connect.
+	failDials int
+	// onClose runs once, as the next client connection is closed.
+	onClose func()
+	// closeErr is what closing a client connection reports, or nil for a clean
+	// close.
+	closeErr error
+	// loseResponses has a client connection lose the next answer it reads, as
+	// a connection that ends with the answer on its way does.
+	loseResponses bool
+	// conns are the client connections handed out, and closed how many of them
+	// were closed.
+	conns, closed int
 }
+
+// errConnectFailed is what a dial the pool was told to fail reports.
+const errConnectFailed = testError("connect failed")
 
 // dial builds one transport, with a server already running on the other end.
 func (p *serverPool) dial(ctx context.Context) mcpsdk.Transport {
+	p.mu.Lock()
+	fail := p.failDials > 0
+	if fail {
+		p.failDials--
+	}
+	p.mu.Unlock()
+	if fail {
+		return failingTransport{}
+	}
 	serverT, clientT := mcpsdk.NewInMemoryTransports()
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil)
 	schema := map[string]any{"type": "object", "properties": map[string]any{}}
@@ -33,8 +67,16 @@ func (p *serverPool) dial(ctx context.Context) mcpsdk.Transport {
 		func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 			p.mu.Lock()
 			p.calls++
+			onCall, greeting := p.onCall, p.greeting
+			p.onCall = nil
 			p.mu.Unlock()
-			return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "hello there"}}}, nil
+			if onCall != nil {
+				onCall()
+			}
+			if greeting == nil {
+				greeting = []mcpsdk.Content{&mcpsdk.TextContent{Text: "hello there"}}
+			}
+			return &mcpsdk.CallToolResult{Content: greeting}, nil
 		})
 	server.AddTool(&mcpsdk.Tool{Name: "boom", Description: "Fail", InputSchema: schema},
 		func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
@@ -48,7 +90,89 @@ func (p *serverPool) dial(ctx context.Context) mcpsdk.Transport {
 	p.mu.Lock()
 	p.sessions = append(p.sessions, session)
 	p.mu.Unlock()
-	return clientT
+	return pooledTransport{Transport: clientT, pool: p}
+}
+
+// failingTransport is a server that cannot be reached.
+type failingTransport struct{}
+
+func (failingTransport) Connect(context.Context) (mcpsdk.Connection, error) {
+	return nil, errConnectFailed
+}
+
+// pooledTransport hands out connections the pool watches being closed.
+type pooledTransport struct {
+	mcpsdk.Transport
+	pool *serverPool
+}
+
+func (t pooledTransport) Connect(ctx context.Context) (mcpsdk.Connection, error) {
+	conn, err := t.Transport.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.pool.mu.Lock()
+	t.pool.conns++
+	t.pool.mu.Unlock()
+	return &pooledConn{Connection: conn, pool: t.pool}, nil
+}
+
+// pooledConn is a client connection that reports its close to the pool. The SDK
+// closes a connection whose read or write fails as well as one it is told to
+// close, so it may be closed more than once.
+type pooledConn struct {
+	mcpsdk.Connection
+	pool *serverPool
+	once sync.Once
+}
+
+func (c *pooledConn) Read(ctx context.Context) (jsonrpc.Message, error) {
+	msg, err := c.Connection.Read(ctx)
+	if _, answer := msg.(*jsonrpc.Response); answer {
+		c.pool.mu.Lock()
+		lose := c.pool.loseResponses
+		c.pool.loseResponses = false
+		c.pool.mu.Unlock()
+		if lose {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+	return msg, err
+}
+
+func (c *pooledConn) Close() error {
+	err := c.Connection.Close()
+	c.once.Do(func() {
+		c.pool.mu.Lock()
+		c.pool.closed++
+		onClose := c.pool.onClose
+		c.pool.onClose = nil
+		c.pool.mu.Unlock()
+		if onClose != nil {
+			onClose()
+		}
+	})
+	c.pool.mu.Lock()
+	closeErr := c.pool.closeErr
+	c.pool.mu.Unlock()
+	if closeErr != nil {
+		return closeErr
+	}
+	return err
+}
+
+// openConnections is how many client connections are still open.
+func (p *serverPool) openConnections() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.conns - p.closed
+}
+
+// set changes the pool's behavior under its lock.
+func (p *serverPool) set(change func(p *serverPool)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	change(p)
 }
 
 func (p *serverPool) dials() int {
@@ -107,7 +231,7 @@ func TestALostConnectionDropsTheSessionAndRunsTheToolOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a lost connection should reach the model, not the service: %v", err)
 	}
-	if !strings.Contains(out, "failed") {
+	if !strings.HasPrefix(out, "Error calling mcp tool greet: ") {
 		t.Errorf("result = %q, want the failure named", out)
 	}
 	if s := held(c); s != nil {
@@ -243,6 +367,182 @@ func TestCloseTwiceIsSafe(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
+	}
+}
+
+// Asking for the tools of a client that holds a session runs on that session
+// rather than connecting again.
+func TestToolsIsIdempotentOnConnection(t *testing.T) {
+	c, pool := pooledClient(t)
+
+	for range 2 {
+		if _, err := c.Tools(t.Context()); err != nil {
+			t.Fatalf("Tools: %v", err)
+		}
+	}
+	if got := pool.dials(); got != 1 {
+		t.Errorf("dials = %d, want the one connection", got)
+	}
+}
+
+// A client closed while a call is in flight stays closed, and the call reports
+// the connection it lost, which differs from the error of a call on a client
+// that holds no session.
+func TestAClosedClientReportsTheLostConnection(t *testing.T) {
+	c, pool := pooledClient(t)
+	inCall, release := make(chan struct{}), make(chan struct{})
+	pool.set(func(p *serverPool) {
+		p.onCall = func() {
+			close(inCall)
+			<-release
+		}
+	})
+	type result struct {
+		out string
+		err error
+	}
+	called := make(chan result, 1)
+	go func() {
+		out, err := c.call(t.Context(), "greet", nil)
+		called <- result{out, err}
+	}()
+	<-inCall
+
+	// The close waits for the call in flight, holding the client while it does.
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	for c.mu.TryLock() {
+		c.mu.Unlock()
+		runtime.Gosched()
+	}
+	// The connection goes with the answer still on its way.
+	pool.set(func(p *serverPool) { p.loseResponses = true })
+	close(release)
+
+	r := <-called
+	<-closed
+	out, err := r.out, r.err
+	if err != nil {
+		t.Fatalf("the lost connection should reach the model, not the service: %v", err)
+	}
+	if want := "Error calling mcp tool greet: "; !strings.HasPrefix(out, want) {
+		t.Errorf("result = %q, want it to start %q", out, want)
+	}
+	if held(c) != nil {
+		t.Error("the closed client holds a session")
+	}
+	if got := pool.dials(); got != 1 {
+		t.Errorf("dials = %d, want the closed client not to connect again", got)
+	}
+}
+
+// A teardown that meets a call dropping its dead session waits the drop out and
+// finds the session already released, so nothing is left open.
+func TestATeardownMeetingADropLeavesNothingOpen(t *testing.T) {
+	c, pool := pooledClient(t)
+	teardown := make(chan struct{})
+	pool.set(func(p *serverPool) {
+		// Once the call is in flight, its connection goes with the answer on
+		// its way, and the owner tears the client down as it does.
+		p.onCall = func() {
+			pool.set(func(p *serverPool) {
+				p.loseResponses = true
+				p.onClose = func() {
+					go func() {
+						_ = c.Close() // the connection is already gone, so how it closes is moot
+						close(teardown)
+					}()
+				}
+			})
+		}
+	})
+
+	out, err := c.call(t.Context(), "greet", nil)
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	<-teardown
+
+	if want := "Error calling mcp tool greet: "; !strings.HasPrefix(out, want) {
+		t.Errorf("result = %q, want it to start %q", out, want)
+	}
+	if got := pool.openConnections(); got != 0 {
+		t.Errorf("%d connections are still open", got)
+	}
+	if held(c) != nil {
+		t.Error("the client still holds a session")
+	}
+}
+
+// A dead session whose transport fails as it is dropped still leaves the model
+// reading the cause of its own call, and the client holding no session, so the
+// next call connects.
+func TestADropWhoseTransportFailsKeepsTheCauseOfTheCall(t *testing.T) {
+	c, pool := pooledClient(t)
+	const closeFailure = testError("transport exit failed")
+	pool.set(func(p *serverPool) { p.closeErr = closeFailure })
+	pool.kill()
+
+	out, err := c.call(t.Context(), "greet", nil)
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if want := "Error calling mcp tool greet: "; !strings.HasPrefix(out, want) ||
+		strings.Contains(out, string(closeFailure)) {
+		t.Errorf("result = %q, want the cause of the call and not the failed close", out)
+	}
+	if held(c) != nil {
+		t.Error("the dead session is still held")
+	}
+
+	pool.set(func(p *serverPool) { p.closeErr = nil })
+	if out, err := c.call(t.Context(), "greet", nil); err != nil || out != "hello there" {
+		t.Errorf("result = %q, err = %v, want the tool's own output", out, err)
+	}
+}
+
+// The connect a call runs after a drop can fail too. The model reads why, and
+// the call after it connects and runs.
+func TestAFailedConnectAfterADropReportsItsErrorAndHeals(t *testing.T) {
+	c, pool := pooledClient(t)
+	pool.kill()
+	if _, err := c.call(t.Context(), "greet", nil); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+
+	pool.set(func(p *serverPool) { p.failDials = 1 })
+	out, err := c.call(t.Context(), "greet", nil)
+	if err != nil {
+		t.Fatalf("the failed connect should reach the model, not the service: %v", err)
+	}
+	if want := "Error calling mcp tool greet: " + string(errConnectFailed); out != want {
+		t.Errorf("result = %q, want %q", out, want)
+	}
+
+	if out, err := c.call(t.Context(), "greet", nil); err != nil || out != "hello there" {
+		t.Errorf("result = %q, err = %v, want the tool's own output", out, err)
+	}
+}
+
+// A call that produced no text reads as the stock line, whether the result was
+// empty or of another content type.
+func TestAResultWithNoTextReadsAsTheStockLine(t *testing.T) {
+	for name, greeting := range map[string][]mcpsdk.Content{
+		"empty":                {},
+		"another content type": {&mcpsdk.ImageContent{Data: []byte{1, 2, 3}, MIMEType: "image/png"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, pool := pooledClient(t)
+			pool.set(func(p *serverPool) { p.greeting = greeting })
+
+			out, err := c.call(t.Context(), "greet", nil)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if want := "Sorry, could not call the mcp tool"; out != want {
+				t.Errorf("result = %q, want %q", out, want)
+			}
+		})
 	}
 }
 

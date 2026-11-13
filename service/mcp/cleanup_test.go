@@ -57,6 +57,34 @@ func TestCleanupClosesTheRegisteredServer(t *testing.T) {
 	}
 }
 
+// A toolset that no longer advertises the server's tools prunes their handlers
+// but leaves the session open: the conversation may advertise them again, and
+// the close happens at teardown.
+func TestClientSurvivesToolPruningUntilCleanup(t *testing.T) {
+	c, _ := searchClient(t, Config{})
+	tools, err := c.Tools(context.Background())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+
+	svc := newLLM("LLM")
+	convo := frames.NewLLMContext("")
+	convo.SetTools(tools)
+	svc.SyncToolHandlers(context.Background(), convo.ToolsSchema())
+	convo.SetTools(nil) // the toolset is replaced
+	svc.SyncToolHandlers(context.Background(), convo.ToolsSchema())
+
+	if !alive(t, c) {
+		t.Fatal("pruning the tools closed the session mid-conversation")
+	}
+	if err := svc.Cleanup(context.Background()); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if alive(t, c) {
+		t.Error("the session outlived the service whose tools it answered")
+	}
+}
+
 // Cleaning up twice releases the connection once, so a second teardown does not
 // close a session something else may since have opened.
 func TestCleanupTwiceReleasesOnce(t *testing.T) {

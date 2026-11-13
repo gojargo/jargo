@@ -6,11 +6,14 @@ import (
 )
 
 // The instruction that teaches an LLM to take part in an expressive
-// conversation (alpha). It has three parts: how to read what was perceived of
+// conversation (alpha). The readings and tags it teaches are written in RCS,
+// the Real-time Context Standard. It has three parts: how to read what was perceived of
 // how the user spoke, built from a perception producer's
 // PerceptionCapabilities; the tags the active TTS service can perform, by
 // their universal names, built from its ExpressionCapabilities; and the
 // developer's guidance on how to answer, from an ExpressionPolicy.
+
+const rcsOpening = "This conversation uses RCS, the Real-time Context Standard, for context beyond plain text."
 
 // ExpressionInstructions builds the instruction for an LLM in an expressive
 // conversation.
@@ -50,7 +53,7 @@ func ExpressionInstructions(
 	if len(guidance) > 0 {
 		parts = append(parts, strings.Join(guidance, "\n"))
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(append([]string{rcsOpening}, parts...), "\n\n")
 }
 
 // PerceptionTurnCompletionInstructions tells an LLM that decides when the
@@ -94,25 +97,20 @@ func perceptionSection(perception *PerceptionCapabilities) string {
 	if perception == nil || len(perception.Signals) == 0 {
 		return ""
 	}
-	suchAs := ""
-	for _, term := range perception.Signals {
-		if len(term.Labels) >= 2 {
-			example := PerceptionSignal{Name: term.Name, Labels: []PerceptionLabel{
-				{Label: term.Labels[0], Confidence: 0.86}, {Label: term.Labels[1], Confidence: 0.10},
-			}}
-			suchAs = " such as " + FormatPerception([]PerceptionSignal{example}) + ","
-			break
-		}
-	}
 	signals := make([]string, 0, len(perception.Signals))
 	for _, term := range perception.Signals {
 		signals = append(signals, signalLine(term))
 	}
-	return "A user message may start with how the user sounded, in parentheses," + suchAs + " each " +
-		"signal with its likeliest labels and how sure the reading is, from 0 to 1, or with a " +
-		"measure. The reading can be wrong, so weigh it against their words. A reading below " +
-		"0.5 is a guess: don't act on it. Never write it yourself. The signals are:\n" +
-		strings.Join(signals, "\n")
+	// No example reading: an LLM shown one, even with placeholders, learns to
+	// write readings of its own.
+	return "RCS readings (the user's input, never your output):\n" +
+		"A user message may start with an RCS reading of how the user sounded, in parentheses, " +
+		"each signal in square brackets with its likeliest labels and how sure the reading is, " +
+		"from 0 to 1, or with a measure. Readings appear ONLY in the user's messages, added by a " +
+		"separate system, never by you: a reading is part of the user's input and never part of " +
+		"your output. It is context about their words, not words they said. It can be wrong, so " +
+		"weigh it against their words. A reading below 0.5 is a guess: don't act on it. The " +
+		"signals are:\n" + strings.Join(signals, "\n")
 }
 
 func signalLine(term PerceptionTerm) string {
@@ -185,7 +183,8 @@ func tagsSection(capabilities *ExpressionCapabilities, policy *ExpressionPolicy)
 	if len(tags) == 0 {
 		return ""
 	}
-	return "You can direct how your words are spoken with tags:\n" + strings.Join(tags, "\n")
+	return "RCS tags (output only):\nYou can direct how your words are spoken with tags:\n" +
+		strings.Join(tags, "\n")
 }
 
 // policyLeftOut is the policy's tags the service cannot perform, each as it

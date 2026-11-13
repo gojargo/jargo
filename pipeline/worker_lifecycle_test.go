@@ -239,6 +239,45 @@ func TestWorkerSpeakMessageBecomesAFrame(t *testing.T) {
 	awaitClosed(t, done, "the run returning")
 }
 
+// TestWorkerSpeakMessageWorksWithoutRTVI checks a speak message is spoken by a
+// worker with no RTVI processor: speaking does not need one.
+func TestWorkerSpeakMessageWorksWithoutRTVI(t *testing.T) {
+	t.Parallel()
+	w, msgBus := newSessionWorker(t, pipeline.WorkerConfig{
+		EnableRTVI:              new(false),
+		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TTSSpeakFrame{}),
+	})
+	if w.RTVI() != nil {
+		t.Fatal("the worker has an RTVI processor, want none")
+	}
+
+	spoken := make(chan *frames.TTSSpeakFrame, 1)
+	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if sf, ok := f.(*frames.TTSSpeakFrame); ok {
+			spoken <- sf
+		}
+	})
+
+	done := runWorker(t, w)
+
+	m := &bus.TTSSpeakMessage{Text: "hello there"}
+	m.From = "ui"
+	m.To = w.Name()
+	msgBus.Send(t.Context(), m)
+
+	select {
+	case f := <-spoken:
+		if f.Text != "hello there" {
+			t.Errorf("spoke %q, want hello there", f.Text)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing was spoken")
+	}
+
+	w.StopWhenDone()
+	awaitClosed(t, done, "the run returning")
+}
+
 // TestWorkerSpeakMessageJoinsTheContextByDefault checks a speak message that
 // says nothing about the conversation joins it, as a TTSSpeakFrame does, and
 // one that says no stays out.

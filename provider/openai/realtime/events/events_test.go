@@ -2,6 +2,7 @@ package events_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,6 +37,29 @@ func TestParseServerEventReturnsNoneForUnmodeledType(t *testing.T) {
 	ev, err := events.ParseServerEvent([]byte(`{"event_id":"ev_1","type":"output_audio_buffer.cleared"}`))
 	if err != nil || ev != nil {
 		t.Errorf("event = %+v, err = %v, want neither", ev, err)
+	}
+}
+
+// The server echoes transcription fields that may not be modeled here; parsing
+// ignores them.
+func TestParseSessionUpdatedWithUnmodeledTranscriptionFields(t *testing.T) {
+	raw := `{"event_id":"ev_1","type":"session.updated","session":{"type":"realtime",` +
+		`"audio":{"input":{"transcription":{"model":"gpt-live-transcribe","language":null,` +
+		`"languages":["en","es"],"prompt":null,"a_field_openai_adds_later":true}}}}}`
+
+	ev, err := events.ParseServerEvent([]byte(raw))
+	if err != nil || ev == nil || ev.Session == nil {
+		t.Fatalf("event = %+v, err = %v, want a session.updated", ev, err)
+	}
+	parsed := ev.Session.InputTranscription()
+	if parsed == nil {
+		t.Fatal("the session carries no transcription")
+	}
+	if parsed.Model != "gpt-live-transcribe" {
+		t.Errorf("model = %q, want gpt-live-transcribe", parsed.Model)
+	}
+	if !slices.Equal(parsed.Languages, []string{"en", "es"}) {
+		t.Errorf("languages = %q, want [en es]", parsed.Languages)
 	}
 }
 

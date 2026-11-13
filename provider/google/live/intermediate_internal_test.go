@@ -111,6 +111,18 @@ func startedServiceBuilt(t *testing.T, s *Service) *Service {
 	t.Helper()
 	s.RegisterFunction("delegate", func(context.Context, llm.FunctionCallParams) error { return nil },
 		llm.WithCancelOnInterruption(false))
+	runningLive(t, s)
+	s.mu.Lock()
+	s.toolNames["call_1"] = "delegate"
+	s.mu.Unlock()
+	return s
+}
+
+// runningLive runs s in a pipeline until its session is ready, returning the
+// worker. Nothing is registered on it, so the instruction the session is set up
+// with stays the one configured.
+func runningLive(t *testing.T, s *Service) *pipeline.Worker {
+	t.Helper()
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})
 	started := make(chan struct{})
 	events.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
@@ -134,10 +146,7 @@ func startedServiceBuilt(t *testing.T, s *Service) *Service {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	s.mu.Lock()
-	s.toolNames["call_1"] = "delegate"
-	s.mu.Unlock()
-	return s
+	return w
 }
 
 func resultFrame(final, run bool) *frames.FunctionCallResultFrame {

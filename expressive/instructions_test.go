@@ -9,6 +9,8 @@ import (
 
 // How the instruction that teaches an LLM to write expression tags is built.
 
+const rcs = "This conversation uses RCS, the Real-time Context Standard, for context beyond plain text."
+
 func fixed() *expressive.ExpressionCapabilities {
 	return &expressive.ExpressionCapabilities{
 		Sounds: []expressive.ExpressionTerm{{Name: "laughter"}},
@@ -197,7 +199,9 @@ func TestAFreeTextServiceIsTaughtNoneOfAKindThePolicyNamesNoneOf(t *testing.T) {
 		Delivery: []expressive.ExpressionDelivery{}, Sounds: []expressive.ExpressionSound{},
 	}, nil)
 
-	if want := "You can direct how your words are spoken with tags:\n- ^^word^^ stresses a word."; got != want {
+	want := rcs + "\n\nRCS tags (output only):\nYou can direct how your words are spoken with tags:\n" +
+		"- ^^word^^ stresses a word."
+	if got != want {
 		t.Errorf("taught %q, want %q", got, want)
 	}
 }
@@ -270,15 +274,30 @@ func tonePerception() *expressive.PerceptionCapabilities {
 	}}
 }
 
-func TestPerceptionIsTaughtWithAnExampleAndItsSignals(t *testing.T) {
+func TestPerceptionIsTaughtWithItsSignalsAndNoExampleReading(t *testing.T) {
 	instructions := expressive.ExpressionInstructions(nil, nil, tonePerception())
 
-	contains(t, instructions, "in parentheses, such as ([tone positive=0.86, neutral=0.10]), each")
 	contains(t, instructions, "A reading below 0.5 is a guess: don't act on it.")
 	want := "- tone: positive, neutral, sad, frustrated.\n- speech_rate: Words per second."
 	if !strings.HasSuffix(instructions, want) {
 		t.Errorf("the instruction ends %q, want it to end %q", instructions, want)
 	}
+	// An LLM shown a reading learns to write its own.
+	lacks(t, instructions, "([")
+}
+
+func TestReadingsAreTaughtAsInputAndTagsAsOutput(t *testing.T) {
+	instructions := expressive.ExpressionInstructions(fixed(), nil, tonePerception())
+
+	want := rcs + "\n\nRCS readings (the user's input, never your output):\n" +
+		"A user message may start with an RCS reading"
+	if !strings.HasPrefix(instructions, want) {
+		t.Errorf("the instruction starts %q, want it to start %q", instructions, want)
+	}
+	contains(t, instructions, "in parentheses, each signal in square brackets")
+	contains(t, instructions, "Readings appear ONLY in the user's messages, added by a separate system, "+
+		"never by you: a reading is part of the user's input and never part of your output.")
+	contains(t, instructions, "RCS tags (output only):\nYou can direct how your words are spoken")
 }
 
 func TestPerceptionComesBeforeTheTagsAndTheGuidanceLast(t *testing.T) {
@@ -286,8 +305,8 @@ func TestPerceptionComesBeforeTheTagsAndTheGuidanceLast(t *testing.T) {
 
 	instructions := expressive.ExpressionInstructions(fixed(), policy, tonePerception())
 
-	reading := strings.Index(instructions, "([tone")
-	tags := strings.Index(instructions, "You can direct how your words are spoken")
+	reading := strings.Index(instructions, "RCS readings (the user's input")
+	tags := strings.Index(instructions, "RCS tags (output only)")
 	guidance := strings.Index(instructions, string(expressive.GuidanceMatchStyle))
 	if reading < 0 || reading >= tags || tags >= guidance {
 		t.Errorf("reading at %d, tags at %d, guidance at %d, want them in that order", reading, tags, guidance)

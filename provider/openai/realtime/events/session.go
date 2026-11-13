@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/gojargo/jargo/frames"
 )
@@ -53,6 +54,16 @@ type InputAudioTranscription struct {
 	Language string `json:"language,omitempty"`
 	// Prompt is text that guides the transcription.
 	Prompt string `json:"prompt,omitempty"`
+	// Delay is how long the model waits before emitting transcription text, one
+	// of "minimal", "low", "medium", "high" or "xhigh". Higher values trade
+	// latency for accuracy. Supported by "gpt-realtime-whisper".
+	Delay string `json:"delay,omitempty"`
+	// Keywords are words or phrases that guide transcription of the input
+	// audio. Supported by "gpt-transcribe" and "gpt-live-transcribe".
+	Keywords []string `json:"keywords,omitempty"`
+	// Languages are the possible languages of the input audio, as ISO-639-1
+	// codes. Supported by "gpt-transcribe" and "gpt-live-transcribe".
+	Languages []string `json:"languages,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler, sending WhisperModel for an empty
@@ -266,6 +277,8 @@ func (p SessionProperties) Copy() SessionProperties {
 			audio.Input = &in
 			if in.Transcription != nil {
 				t := *in.Transcription
+				t.Keywords = slices.Clone(t.Keywords)
+				t.Languages = slices.Clone(t.Languages)
 				audio.Input.Transcription = &t
 			}
 		}

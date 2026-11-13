@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,11 +13,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/utils/events"
 )
-
-// These tests are not ports of upstream tests: upstream has none for session
-// resumption, reconnection or send errors.
 
 // droppingSession is a Live server that acknowledges each session's setup,
 // hands out a resumption handle, and then drops the first drops sessions.
@@ -157,6 +157,187 @@ func TestAStoppedServiceDoesNotReopen(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if n := srv.setupCount(); n != 1 {
 		t.Errorf("opened %d sessions, want the one", n)
+	}
+}
+
+// replyDroppingSession is a Live server whose first session starts a spoken
+// reply and drops before finishing it, once drop is closed. The sessions after
+// it are acknowledged and kept open.
+type replyDroppingSession struct {
+	*droppingSession
+}
+
+func newReplyDroppingSession(t *testing.T, drop <-chan struct{}) *replyDroppingSession {
+	t.Helper()
+	d := &replyDroppingSession{droppingSession: &droppingSession{}}
+	d.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		c, err := websocket.Accept(w, req, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close(websocket.StatusInternalError, "Internal error encountered.") }()
+		_, data, err := c.Read(req.Context())
+		if err != nil {
+			return
+		}
+		var msg map[string]any
+		_ = json.Unmarshal(data, &msg)
+		setup, _ := msg["setup"].(map[string]any)
+		d.mu.Lock()
+		d.setups = append(d.setups, setup)
+		first := len(d.setups) == 1
+		d.mu.Unlock()
+		if c.Write(req.Context(), websocket.MessageText, []byte(`{"setupComplete":{}}`)) != nil {
+			return
+		}
+		if first {
+			if c.Write(req.Context(), websocket.MessageText, []byte(audioMessage([]byte{1, 2, 3, 4}))) != nil {
+				return
+			}
+			select {
+			case <-drop:
+			case <-req.Context().Done():
+			}
+			return // dropped mid-reply
+		}
+		for {
+			if _, _, err := c.Read(req.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(d.Close)
+	return d
+}
+
+// replyRun runs a service against srv in a pipeline, counting the frames that
+// reach its end.
+type replyRun struct {
+	s    *Service
+	w    *pipeline.Worker
+	done chan struct{}
+
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func runReply(t *testing.T, srv *replyDroppingSession) *replyRun {
+	t.Helper()
+	r := &replyRun{done: make(chan struct{}), counts: map[string]int{}}
+	r.s = New(Config{APIKey: "k", BaseURL: wsURL(&recordingSession{Server: srv.Server})})
+	r.w = pipeline.NewWorker(pipeline.New(r.s), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
+	events.On(&r.w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		// Names carry a per-instance suffix ("#7"); the type is what matters.
+		name, _, _ := strings.Cut(f.Name(), "#")
+		r.mu.Lock()
+		r.counts[name]++
+		r.mu.Unlock()
+	})
+	go func() {
+		_ = r.w.Run(context.Background())
+		close(r.done)
+	}()
+	t.Cleanup(func() {
+		r.w.Cancel(context.Background(), "")
+		<-r.done
+	})
+	return r
+}
+
+func (r *replyRun) count(name string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counts[name]
+}
+
+// awaitEnd waits for the pipeline to end, well before a held EndFrame's
+// deferral would release it.
+func (r *replyRun) awaitEnd(t *testing.T) {
+	t.Helper()
+	select {
+	case <-r.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the pipeline did not end: the EndFrame was held for a reply that will never finish")
+	}
+}
+
+// assertReplyEnded checks the cut-off reply was closed once, as a completed
+// turn would have closed it.
+func (r *replyRun) assertReplyEnded(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"TTSStartedFrame", "TTSStoppedFrame", "LLMFullResponseEndFrame"} {
+		if got := r.count(name); got != 1 {
+			t.Errorf("%s reached the end %d times, want 1", name, got)
+		}
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if r.s.botResponding {
+		t.Error("the service still believes the model is answering")
+	}
+}
+
+// A session that drops while the bot is speaking ends the reply, so an EndFrame
+// after the reconnect is not held for a reply that will never finish.
+func TestADropMidReplyEndsTheReply(t *testing.T) {
+	drop := make(chan struct{})
+	close(drop)
+	srv := newReplyDroppingSession(t, drop)
+	r := runReply(t, srv)
+
+	waitFor(t, "the reconnect", func() bool { return srv.setupCount() >= 2 })
+	waitFor(t, "the new session to be ready", r.s.ready.Load)
+	r.w.StopWhenDone()
+	r.awaitEnd(t)
+
+	r.assertReplyEnded(t)
+}
+
+// An EndFrame held for the bot's reply is released when the session drops
+// before the reply finishes, and the session is not opened again for a
+// pipeline that is ending.
+func TestAnEndFrameHeldForTheReplyIsReleasedWhenItDrops(t *testing.T) {
+	drop := make(chan struct{})
+	srv := newReplyDroppingSession(t, drop)
+	r := runReply(t, srv)
+
+	waitFor(t, "the bot to start replying", func() bool {
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		return r.s.botResponding
+	})
+	r.w.StopWhenDone()
+	waitFor(t, "the EndFrame to be held", func() bool {
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		return r.s.deferredEnd != nil
+	})
+	close(drop)
+	r.awaitEnd(t)
+
+	r.assertReplyEnded(t)
+	if n := srv.setupCount(); n != 1 {
+		t.Errorf("opened %d sessions, want no reconnect while the pipeline is ending", n)
+	}
+}
+
+// A failed send while the service closes its own session, to stop or to open it
+// again, is expected and ignored.
+func TestASendErrorWhileDisconnectingIsIgnored(t *testing.T) {
+	for name, disconnect := range map[string]func(s *Service){
+		"stopping":  func(s *Service) { s.stopped.Store(true) },
+		"reopening": func(s *Service) { s.disconnect() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _, source := newTestServiceBothWays(t)
+			s.ready.Store(true)
+			disconnect(s)
+
+			s.handleSendError(context.Background(), errNotGenerator)
+			if hasName(source.names(), "ErrorFrame") {
+				t.Error("an error was reported for a send failing on the service's own disconnect")
+			}
+		})
 	}
 }
 

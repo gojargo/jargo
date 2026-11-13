@@ -40,8 +40,8 @@ const maxErrorDetail = 200
 // names its cause, because the model is the thing that decides whether to call
 // again, differently, or not at all.
 const (
-	callFailedTemplate = "The MCP tool %q failed: %s"
-	noResultTemplate   = "The MCP tool %q returned no result."
+	callFailedTemplate = "Error calling mcp tool %s: %s"
+	noResultLine       = "Sorry, could not call the mcp tool"
 )
 
 // Config selects and configures a single MCP server. Exactly one transport must
@@ -338,7 +338,9 @@ func (c *Client) Register(ctx context.Context, base *llm.Base, convo *frames.LLM
 // error, and running the tool twice is the more expensive mistake.
 //
 // A Go error is returned only for a call this client cannot make at all: one
-// whose arguments will not parse, or one on a client holding no session.
+// whose arguments will not parse, or one on a client nobody connected or whose
+// owner closed it. A failed connect to replace a dropped session is a failure
+// the model reads like any other.
 func (c *Client) call(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	var argMap map[string]any
 	if len(args) > 0 {
@@ -354,24 +356,9 @@ func (c *Client) call(ctx context.Context, name string, args json.RawMessage) (s
 		}
 		maps.Copy(argMap, fixed)
 	}
-	session, err := c.openSession(false)
+	res, failure, err := c.callOnSession(ctx, name, argMap)
 	if err != nil {
 		return "", err
-	}
-
-	var failure string
-	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: argMap})
-	if err != nil {
-		failure = fmt.Sprintf(callFailedTemplate, name, errorDetail(err))
-		slog.Error("an MCP tool call failed", "tool", name, "err", err)
-		if isConnectionLost(err) {
-			slog.Warn("dropping the MCP session a tool call found gone", "tool", name)
-			// The model still gets the cause of its own call, so a transport that
-			// fails on the way out goes to the log and no further.
-			if dropErr := c.dropSession(session); dropErr != nil {
-				slog.Error("an MCP session failed to close after it was dropped", "err", dropErr)
-			}
-		}
 	}
 
 	var sb strings.Builder
@@ -388,7 +375,42 @@ func (c *Client) call(ctx context.Context, name string, args json.RawMessage) (s
 	if failure != "" {
 		return failure, nil
 	}
-	return fmt.Sprintf(noResultTemplate, name), nil
+	return noResultLine, nil
+}
+
+// callOnSession runs one tool call on the session an owner asked for. It
+// returns what the server answered, or the line the model reads when the call
+// failed, dropping a session the call found gone. Its error is for a call that
+// reached no session at all.
+func (c *Client) callOnSession(
+	ctx context.Context, name string, args map[string]any,
+) (*mcpsdk.CallToolResult, string, error) {
+	session, err := c.openSession(false)
+	if errors.Is(err, errNotConnected) {
+		// The call reached no session. That is a wiring mistake, so it goes to
+		// the caller, not to the model.
+		return nil, "", err
+	}
+	if err != nil {
+		// The connect that replaces a dropped session failed. The model is told
+		// why, and the call after it connects again.
+		slog.Error("an MCP tool call could not connect", "tool", name, "err", err)
+		return nil, fmt.Sprintf(callFailedTemplate, name, errorDetail(err)), nil
+	}
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: args})
+	if err == nil {
+		return res, "", nil
+	}
+	slog.Error("an MCP tool call failed", "tool", name, "err", err)
+	if isConnectionLost(err) {
+		slog.Warn("dropping the MCP session a tool call found gone", "tool", name)
+		// The model still gets the cause of its own call, so a transport that
+		// fails on the way out goes to the log and no further.
+		if dropErr := c.dropSession(session); dropErr != nil {
+			slog.Error("an MCP session failed to close after it was dropped", "err", dropErr)
+		}
+	}
+	return res, fmt.Sprintf(callFailedTemplate, name, errorDetail(err)), nil
 }
 
 // isConnectionLost tells a transport that has gone from an error the MCP server

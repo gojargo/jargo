@@ -150,6 +150,9 @@ type Service struct {
 	// resumptionHandle is the latest handle the server gave for resuming the
 	// session, which a session opened again resumes from. Guarded by mu.
 	resumptionHandle string
+	// sentInstruction is the system instruction the session was set up with,
+	// which the first conversation is compared with. Guarded by mu.
+	sentInstruction string
 	// consecutiveFailures counts the sessions lost in a row; connectedAt is when
 	// the current one opened, and a session that stays up long enough resets
 	// the count. Guarded by mu.
@@ -263,6 +266,9 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	// conversation arriving, which is what the option says.
 	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
 	s.SetModel(cfg.Model)
+	// The configured instruction is the base prompt the base composes the
+	// instruction the session is set up with from.
+	s.SetSystemInstruction(cfg.Instructions)
 	s.audioPaused.Store(cfg.StartAudioPaused)
 	// The user's speech, as the session transcribes it, is traced like a
 	// transcription service's.
@@ -501,6 +507,9 @@ func (s *Service) setup() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	s.sentInstruction = system
+	s.mu.Unlock()
 	if system != "" {
 		setup["systemInstruction"] = map[string]any{
 			keyParts: []any{map[string]any{keyText: system}},
@@ -572,7 +581,7 @@ func (s *Service) sessionInstructionAndTools() (string, []map[string]any, error)
 	convo := s.convo
 	s.mu.Unlock()
 	if convo == nil {
-		return s.cfg.Instructions, s.adapter.ToProviderToolsFormat(s.adapter.WithBuiltins(s.cfg.Tools)), nil
+		return s.SystemInstruction(), s.adapter.ToProviderToolsFormat(s.adapter.WithBuiltins(s.cfg.Tools)), nil
 	}
 	params, err := s.sessionParams(convo)
 	if err != nil {
@@ -585,7 +594,7 @@ func (s *Service) sessionInstructionAndTools() (string, []map[string]any, error)
 // configured with.
 func (s *Service) sessionParams(convo *frames.LLMContext) (geminiadapter.Params, error) {
 	return s.adapter.LLMInvocationParams(convo, adapter.Options{
-		SystemInstruction: s.cfg.Instructions,
+		SystemInstruction: s.SystemInstruction(),
 		ServiceTools:      s.cfg.Tools,
 	})
 }
@@ -637,14 +646,17 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 	}()
 
 	// Whether the conversation changes the effective instruction is the
-	// adapter's to settle, and it still prefers the configured one when there is
-	// one.
+	// adapter's to settle, and it still prefers the service's own when there is
+	// one. The session was set up before the pipeline started, so an
+	// instruction composed since then differs from it too.
 	params, err := s.sessionParams(convo)
 	if err != nil {
 		s.PushError(ctx, "gemini live: converting the conversation", err, false)
 		return
 	}
-	instructionChanged := params.SystemInstruction != s.cfg.Instructions
+	s.mu.Lock()
+	instructionChanged := params.SystemInstruction != s.sentInstruction
+	s.mu.Unlock()
 	// Tools of its own warrant reopening without being compared with the
 	// configured ones.
 	hasTools := !convo.ToolsSchema().Empty()
@@ -665,10 +677,12 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 	// the configured instruction is put in for it to answer, when it is to
 	// answer at all.
 	if len(params.Contents) == 0 && s.inferenceOnContextInitialization() {
-		if s.cfg.Instructions != "" {
+		// The base prompt, as the application set it, rather than everything
+		// composed onto it.
+		if base := s.live.SystemInstruction.Or(""); base != "" {
 			slog.DebugContext(ctx, "no messages in the initial conversation; seeding it with the "+
 				"system instruction to have the bot answer", "service", s.Name())
-			convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: s.cfg.Instructions})
+			convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: base})
 		} else {
 			slog.WarnContext(ctx, "no messages in the initial conversation and no system instruction; "+
 				"the bot cannot be made to speak first", "service", s.Name())
@@ -1000,6 +1014,50 @@ func (s *Service) reconnect(ctx context.Context) {
 	if err := s.connect(ctx); err != nil {
 		s.PushError(ctx, "gemini live reconnect failed", err, true)
 	}
+}
+
+// handleConnectionLost handles a session that dropped: it ends any reply the
+// drop cut off, then opens the session again or gives up.
+func (s *Service) handleConnectionLost(ctx context.Context, lost *wsutil.Conn, err error) {
+	s.mu.Lock()
+	current := s.conn == lost
+	s.mu.Unlock()
+	if current && !s.stopped.Load() && s.endCutOffBotTurn(ctx) {
+		// The reply was holding back an EndFrame, which is now released: the
+		// pipeline is ending, so there is no point opening the session again.
+		slog.InfoContext(ctx, "the live session was lost while the pipeline is ending, not reconnecting",
+			"service", s.Name(), "err", err)
+		return
+	}
+	s.handleConnectionError(ctx, lost, err)
+}
+
+// endCutOffBotTurn ends a reply that a lost session cut off, reporting whether
+// that released a held EndFrame.
+//
+// The server will never complete that reply, so it is closed here the way a
+// completed turn would be. Otherwise the service goes on believing the model
+// is answering, downstream processors never see the reply end, and an EndFrame
+// is held until its deferral runs out.
+func (s *Service) endCutOffBotTurn(ctx context.Context) bool {
+	s.mu.Lock()
+	responding, endHeld := s.botResponding, s.deferredEnd != nil
+	s.mu.Unlock()
+	if !responding {
+		return false
+	}
+	if s.live.Modalities.Or(ModalityAudio) == ModalityAudio {
+		_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
+	}
+	_ = s.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+	// Last, so an EndFrame it releases follows the frames above.
+	s.mu.Lock()
+	stopped := s.setBotRespondingLocked(false)
+	s.mu.Unlock()
+	if stopped {
+		s.releaseDeferredEnd(ctx)
+	}
+	return endHeld
 }
 
 // handleConnectionError opens a lost session again, unless sessions have been
@@ -1602,7 +1660,7 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 				// again closes this one, which waits for this loop, so it is done
 				// once this loop has ended, and outlives this session's context,
 				// which closing it cancels.
-				go s.handleConnectionError(context.WithoutCancel(connCtx), conn, err)
+				go s.handleConnectionLost(context.WithoutCancel(connCtx), conn, err)
 			}
 			return
 		}

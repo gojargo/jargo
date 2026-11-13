@@ -342,6 +342,32 @@ func TestStreamsEvents(t *testing.T) {
 }
 
 // TestSetToolsFrameReachesTheSession checks a tool change mid-conversation
+// TestTextDeltaAliasesStreamTheReply checks a session answering in text
+// streams the reply under either spelling of the text delta event.
+func TestTextDeltaAliasesStreamTheReply(t *testing.T) {
+	for _, eventType := range []string{"response.output_text.delta", "response.text.delta"} {
+		t.Run(eventType, func(t *testing.T) {
+			srv := newFakeRealtime(t, []string{
+				`{"type":"conversation.created"}`,
+				`{"type":"response.created"}`,
+				`{"type":"` + eventType + `","event_id":"evt-3","response_id":"resp-1",` +
+					`"item_id":"item-1","output_index":0,"content_index":0,"delta":"Hi"}`,
+			})
+			task, done, collected := runCollecting(t, realtime.Config{APIKey: "k", BaseURL: srv.wsURL()}, false)
+
+			waitFor(t, func() bool { return hasFrame[*frames.LLMTextFrame](collected()) })
+			for _, f := range collected() {
+				if text, ok := f.(*frames.LLMTextFrame); ok && text.Text != "Hi" {
+					t.Errorf("text = %q, want %q", text.Text, "Hi")
+				}
+			}
+
+			task.StopWhenDone()
+			<-done
+		})
+	}
+}
+
 // produces a session.update, since the running model never re-reads the context.
 func TestSetToolsFrameReachesTheSession(t *testing.T) {
 	srv := newFakeRealtime(t, []string{`{"type":"conversation.created"}`})

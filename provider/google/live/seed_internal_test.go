@@ -169,7 +169,8 @@ func TestAnEmptyConversationWithoutAnInstructionTakesInputAtOnce(t *testing.T) {
 // A conversation arriving before the session is ready is seeded once it is.
 func TestAConversationBeforeTheSessionIsReadyIsSeededWhenItIs(t *testing.T) {
 	srv := newRecordingSession(t)
-	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv)}))
+	s := New(Config{APIKey: "k", BaseURL: wsURL(srv)})
+	runningLive(t, s)
 	s.ready.Store(false)
 
 	s.handleContext(t.Context(), greeting(), processor.Downstream)
@@ -223,7 +224,8 @@ func TestAReopenedSessionIsSeededAgain(t *testing.T) {
 // Audio is not sent until the session has been seeded.
 func TestAudioWaitsForTheSessionToBeSeeded(t *testing.T) {
 	srv := newRecordingSession(t)
-	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv)}))
+	s := New(Config{APIKey: "k", BaseURL: wsURL(srv)})
+	runningLive(t, s)
 
 	s.sendAudio(t.Context(), []byte{1, 2, 3, 4}, 16000, 1)
 	settle()

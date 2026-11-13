@@ -38,12 +38,12 @@ func (s *Service) baseAttrs(operation string) tracing.GeminiLiveAttributes {
 
 // traceSetup records the session's configuration as a span of its own once the
 // server has acknowledged it, so a trace shows what the model was told before it
-// began answering. The instruction recorded is the effective one: the configured
+// began answering. The instruction recorded is the effective one: the composed
 // instruction, else the conversation's own prompt.
 func (s *Service) traceSetup(ctx context.Context) {
 	_, span := s.StartSpan(ctx, "llm_setup")
 	defer span.End()
-	instruction := s.cfg.Instructions
+	instruction := s.SystemInstruction()
 	if instruction == "" {
 		s.mu.Lock()
 		convo := s.convo

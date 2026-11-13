@@ -812,6 +812,163 @@ func TestSummaryFailureFallsBackToAppending(t *testing.T) {
 	}
 }
 
+func TestSummaryTimeoutFallsBackToAppending(t *testing.T) {
+	inf := &fakeInferencer{err: context.DeadlineExceeded}
+	strategy := ContextStrategyConfig{
+		Strategy: ContextStrategyResetWithSummary, SummaryPrompt: "Summarize the conversation",
+	}
+	fm, enq := newManager(t, func(c *Config) {
+		c.ContextStrategy = &strategy
+		c.LLM = inf
+	})
+	if err := fm.Initialize(context.Background(), node("first")); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	enq.reset()
+
+	if err := fm.SetNode(context.Background(), node("second")); err != nil {
+		t.Fatalf("SetNode: %v", err)
+	}
+	var sawAppend bool
+	for _, f := range enq.frames() {
+		switch f.(type) {
+		case *frames.LLMMessagesAppendFrame:
+			sawAppend = true
+		case *frames.LLMMessagesUpdateFrame:
+			t.Error("a summary that timed out must not reset the conversation")
+		}
+	}
+	if !sawAppend {
+		t.Error("a summary that timed out must fall back to appending")
+	}
+}
+
+// The persona travels as a settings update and the summary as the head of the
+// new conversation, the persona first.
+func TestResetWithSummaryAndARoleMessageCoexist(t *testing.T) {
+	inf := &fakeInferencer{summary: "Conversation summary"}
+	strategy := ContextStrategyConfig{
+		Strategy: ContextStrategyResetWithSummary, SummaryPrompt: "Summarize the conversation",
+	}
+	fm, enq := newManager(t, func(c *Config) {
+		c.ContextStrategy = &strategy
+		c.LLM = inf
+	})
+	if err := fm.Initialize(context.Background(), &NodeConfig{
+		Name:         "first",
+		RoleMessage:  "You are a helpful assistant.",
+		TaskMessages: []frames.Message{{Role: frames.RoleDeveloper, Text: "First task."}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	enq.reset()
+
+	if err := fm.SetNode(context.Background(), &NodeConfig{
+		Name:         "second",
+		RoleMessage:  "You are now a different assistant.",
+		TaskMessages: []frames.Message{{Role: frames.RoleDeveloper, Text: "Second task."}},
+	}); err != nil {
+		t.Fatalf("SetNode: %v", err)
+	}
+
+	settingsIdx, updateIdx, settingsCount := -1, -1, 0
+	for i, f := range enq.frames() {
+		switch fr := f.(type) {
+		case *frames.LLMUpdateSettingsFrame:
+			settingsIdx = i
+			settingsCount++
+			delta, _ := fr.Delta.(*settings.LLM)
+			if got, _ := delta.SystemInstruction.Value(); got != "You are now a different assistant." {
+				t.Errorf("system instruction = %q, want the second node's persona", got)
+			}
+		case *frames.LLMMessagesUpdateFrame:
+			updateIdx = i
+			if len(fr.Messages) != 2 || !strings.Contains(fr.Messages[0].Text, "Conversation summary") ||
+				fr.Messages[1].Text != "Second task." {
+				t.Errorf("messages = %+v, want the summary then the task, without the persona", fr.Messages)
+			}
+		}
+	}
+	if settingsCount != 1 || updateIdx < 0 {
+		t.Fatalf("settings frames = %d, update at %d, want one of each", settingsCount, updateIdx)
+	}
+	if settingsIdx > updateIdx {
+		t.Error("the persona must be set before the conversation is replaced")
+	}
+}
+
+// A reset node without a persona leaves the one an earlier node set: it lives
+// in the LLM service's settings, not in the conversation the reset replaces.
+func TestRoleMessagePersistsAcrossAReset(t *testing.T) {
+	reset := ContextStrategyConfig{Strategy: ContextStrategyReset}
+	fm, enq := newManager(t, func(c *Config) { c.ContextStrategy = &reset })
+	if err := fm.Initialize(context.Background(), &NodeConfig{
+		Name:         "first",
+		RoleMessage:  "You are a helpful assistant.",
+		TaskMessages: []frames.Message{{Role: frames.RoleDeveloper, Text: "First task."}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	var personas []string
+	for _, f := range enq.frames() {
+		if s, ok := f.(*frames.LLMUpdateSettingsFrame); ok {
+			delta, _ := s.Delta.(*settings.LLM)
+			got, _ := delta.SystemInstruction.Value()
+			personas = append(personas, got)
+		}
+	}
+	if len(personas) != 1 || personas[0] != "You are a helpful assistant." {
+		t.Fatalf("personas = %q, want the first node's", personas)
+	}
+	enq.reset()
+
+	task := []frames.Message{{Role: frames.RoleDeveloper, Text: "Second task."}}
+	if err := fm.SetNode(context.Background(), &NodeConfig{Name: "second", TaskMessages: task}); err != nil {
+		t.Fatalf("SetNode: %v", err)
+	}
+	var updates []*frames.LLMMessagesUpdateFrame
+	for _, f := range enq.frames() {
+		switch fr := f.(type) {
+		case *frames.LLMUpdateSettingsFrame:
+			t.Error("a node with no persona must not touch the system instruction")
+		case *frames.LLMMessagesUpdateFrame:
+			updates = append(updates, fr)
+		}
+	}
+	if len(updates) != 1 || len(updates[0].Messages) != 1 || updates[0].Messages[0].Text != "Second task." {
+		t.Errorf("updates = %+v, want one carrying only the node's task", updates)
+	}
+}
+
+// A function a new node declares again under the same name answers with the
+// new node's handler, not the one before it.
+func TestRedeclaredFunctionRebindsTheNewHandler(t *testing.T) {
+	fm, enq := newManager(t)
+	var calls []string
+	handler := func(name string) Handler {
+		return func(context.Context, json.RawMessage, *FlowManager) (string, *NodeConfig, error) {
+			calls = append(calls, name)
+			return "from " + name, nil, nil
+		}
+	}
+	if err := fm.Initialize(context.Background(),
+		node("a", NodeFunction{Name: "go", Description: "A's go", Handler: handler("A")})); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := fm.SetNode(context.Background(),
+		node("b", NodeFunction{Name: "go", Description: "B's go", Handler: handler("B")})); err != nil {
+		t.Fatalf("SetNode: %v", err)
+	}
+
+	result, _, err := call(t, advertisedHandler(t, enq.frames(), "go"))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != "B" || result != "from B" {
+		t.Errorf("calls = %v, result = %q, want node B's handler alone", calls, result)
+	}
+}
+
 func TestPreAndPostActionsSpeak(t *testing.T) {
 	fm, enq := newManager(t)
 	n := node("first")
@@ -883,6 +1040,102 @@ func TestEndConversationSpeaksThenEnds(t *testing.T) {
 	}
 	if speakIdx > endIdx {
 		t.Error("the goodbye must be spoken before the conversation ends")
+	}
+}
+
+func TestEndConversationCarriesAppendTextToContext(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name   string
+		append *bool
+		want   bool
+	}{
+		{"false", &no, false},
+		{"true", &yes, true},
+		// Omitted, the goodbye is written to the conversation.
+		{"omitted", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enq := newFakeEnq()
+			am := newActionManager(enq, enq, nil)
+			err := am.executeActions(context.Background(), []ActionConfig{
+				{Type: "end_conversation", Text: "Goodbye!", AppendTextToContext: tc.append},
+			})
+			if err != nil {
+				t.Fatalf("executeActions: %v", err)
+			}
+
+			var spoken []*frames.TTSSpeakFrame
+			ended := false
+			for _, f := range enq.frames() {
+				switch fr := f.(type) {
+				case *frames.TTSSpeakFrame:
+					spoken = append(spoken, fr)
+				case *frames.EndFrame:
+					ended = true
+				}
+			}
+			if len(spoken) != 1 {
+				t.Fatalf("spoke %d times, want 1", len(spoken))
+			}
+			if spoken[0].AppendToContext != tc.want {
+				t.Errorf("AppendToContext = %v, want %v", spoken[0].AppendToContext, tc.want)
+			}
+			if !ended {
+				t.Error("the conversation was not ended")
+			}
+		})
+	}
+}
+
+func TestRegisteringANilActionHandlerIsRefused(t *testing.T) {
+	fm, _ := newManager(t)
+	err := fm.RegisterAction("invalid", nil)
+	if !errors.Is(err, ErrAction) {
+		t.Fatalf("RegisterAction(nil) = %v, want ErrAction", err)
+	}
+	if !strings.Contains(err.Error(), "must not be nil") {
+		t.Errorf("error = %q, want it to say the handler must not be nil", err)
+	}
+	if _, ok := fm.actions.registered("invalid"); ok {
+		t.Error("the nil handler was registered")
+	}
+}
+
+func TestNoActionsQueueNothing(t *testing.T) {
+	for name, actions := range map[string][]ActionConfig{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			enq := newFakeEnq()
+			am := newActionManager(enq, enq, nil)
+			if err := am.executeActions(context.Background(), actions); err != nil {
+				t.Fatalf("executeActions: %v", err)
+			}
+			if fs := enq.frames(); len(fs) != 0 {
+				t.Errorf("queued %d frames, want none", len(fs))
+			}
+		})
+	}
+}
+
+func TestActionExecutionErrorsAreReported(t *testing.T) {
+	enq := newFakeEnq()
+	am := newActionManager(enq, enq, nil)
+
+	// An action with no handler.
+	err := am.executeActions(context.Background(), []ActionConfig{{Type: "nonexistent_action"}})
+	if !errors.Is(err, ErrAction) {
+		t.Errorf("an action with no handler = %v, want ErrAction", err)
+	}
+
+	// An action whose handler fails.
+	if err := am.register("failing_action", func(context.Context, ActionConfig, *FlowManager) error {
+		return errTestHandler
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	err = am.executeActions(context.Background(), []ActionConfig{{Type: "failing_action"}})
+	if !errors.Is(err, ErrAction) {
+		t.Errorf("a failing action = %v, want ErrAction", err)
 	}
 }
 

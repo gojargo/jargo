@@ -3,12 +3,14 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
 )
 
 func sampleHandler(ctx context.Context, p llm.FunctionCallParams) error {
@@ -182,7 +184,8 @@ func TestAConversationsToolsReplaceTheConfiguredOnes(t *testing.T) {
 // there being none configured, reopens the session with it.
 func TestAConversationsPromptReopensWithoutAConfiguredInstruction(t *testing.T) {
 	srv := newRecordingSession(t)
-	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv)}))
+	s := New(Config{APIKey: "k", BaseURL: wsURL(srv)})
+	runningLive(t, s)
 	waitSetups(t, srv, 1)
 
 	convo := frames.NewLLMContext("be terse")
@@ -200,7 +203,8 @@ func TestAConversationsPromptReopensWithoutAConfiguredInstruction(t *testing.T) 
 // the effective instruction, so the session is not reopened for it.
 func TestAConfiguredInstructionKeepsTheSession(t *testing.T) {
 	srv := newRecordingSession(t)
-	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv), Instructions: "be brief"}))
+	s := New(Config{APIKey: "k", BaseURL: wsURL(srv), Instructions: "be brief"})
+	runningLive(t, s)
 	waitSetups(t, srv, 1)
 
 	convo := frames.NewLLMContext("be terse")
@@ -210,5 +214,77 @@ func TestAConfiguredInstructionKeepsTheSession(t *testing.T) {
 
 	if got := srv.setups(); len(got) != 1 {
 		t.Errorf("received %d setups, want the session left as it was", len(got))
+	}
+}
+
+// The session is set up before the pipeline starts, which is when the
+// instruction is composed, so the first conversation reopens it with what was
+// composed onto the base prompt, here the guidance for asynchronous tools.
+func TestTheFirstConversationReopensWithTheComposedInstruction(t *testing.T) {
+	srv := newRecordingSession(t)
+	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv), Instructions: "base prompt"}))
+	waitSetups(t, srv, 1)
+
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+	s.handleContext(t.Context(), convo, 0)
+
+	setups := waitSetups(t, srv, 2)
+	first, _ := setups[0]["systemInstruction"].(map[string]any)
+	if got := systemText(first); got != "base prompt" {
+		t.Errorf("first instruction = %q, want the base prompt", got)
+	}
+	second, _ := setups[1]["systemInstruction"].(map[string]any)
+	got := systemText(second)
+	if !strings.HasPrefix(got, "base prompt") || !strings.Contains(got, frames.AsyncToolInstructions) {
+		t.Errorf("reopened instruction = %q, want the base prompt and the async tool guidance", got)
+	}
+}
+
+// A session opened again after the instruction was updated at run time is set
+// up with the updated one.
+func TestAReconnectSendsTheCurrentInstruction(t *testing.T) {
+	srv := newRecordingSession(t)
+	s := New(Config{APIKey: "k", BaseURL: wsURL(srv), Instructions: "first"})
+	w := runningLive(t, s)
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+	s.handleContext(t.Context(), convo, 0)
+
+	w.QueueFrame(frames.NewLLMUpdateSettingsFrame(&Settings{SystemInstruction: settings.Set("second")}))
+	waitFor(t, "the instruction to be updated", func() bool { return s.SystemInstruction() == "second" })
+	s.reconnect(t.Context())
+
+	var instructions []string
+	for _, setup := range waitSetups(t, srv, 2) {
+		system, _ := setup["systemInstruction"].(map[string]any)
+		instructions = append(instructions, systemText(system))
+	}
+	if len(instructions) != 2 || instructions[0] != "first" || instructions[1] != "second" {
+		t.Errorf("instructions = %q, want [first second]", instructions)
+	}
+}
+
+// A first conversation that reopens the session seeds the reopened session,
+// and only once it has acknowledged its setup.
+func TestAReopenedSessionIsSeededOnlyOnceItIsReady(t *testing.T) {
+	srv := newRecordingSession(t)
+	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv)}))
+	s.handleContext(t.Context(), greeting(), 0)
+	waitFor(t, "the seed", func() bool { return len(srv.clientContents()) > 0 })
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	setups, seededAfter := 0, -1
+	for _, m := range srv.received {
+		if _, ok := m["setup"]; ok {
+			setups++
+		}
+		if _, ok := m["clientContent"]; ok && seededAfter < 0 {
+			seededAfter = setups
+		}
+	}
+	if setups != 2 || seededAfter != 2 {
+		t.Errorf("seeded after setup %d of %d, want the reopened session's", seededAfter, setups)
 	}
 }
