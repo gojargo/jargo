@@ -276,3 +276,21 @@ func TestSDKRefusalsClassify(t *testing.T) {
 		})
 	}
 }
+
+// TestABadRequestMarksTheServiceUnusable checks an invalid request with
+// nothing in the conversation to repair costs the service its usability: the
+// same request would only be refused again.
+func TestABadRequestMarksTheServiceUnusable(t *testing.T) {
+	convo := convoOf("hello")
+	svc, _ := runTurn(t, convo, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad document"}}`))
+	})
+	if n := len(convo.Messages()); n != 1 {
+		t.Errorf("messages = %d, want the conversation left as it was", n)
+	}
+	if svc.Usable() {
+		t.Error("the service is still usable after a request it will keep being refused")
+	}
+}

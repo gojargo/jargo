@@ -9,6 +9,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
 )
 
@@ -78,6 +79,23 @@ func TestSettingsUpdateReachesTheNextRequest(t *testing.T) {
 	}
 	if got := svc.Model(); got != "claude-opus-4-1" {
 		t.Errorf("Model() = %q, want the updated model", got)
+	}
+}
+
+// TestExtraWinsOverASamplingSettingKeyByKey checks a sampling control set in
+// Extra overrides the configured one, as Extra overrides every other request
+// field, while the controls it leaves out are still sent.
+func TestExtraWinsOverASamplingSettingKeyByKey(t *testing.T) {
+	temp, topK := 0.6, int64(50)
+	body := requestBody(t, Config{
+		Temperature: &temp, TopK: &topK, Extra: map[string]any{"temperature": 0.1},
+	}, llm.InferenceOptions{})
+	if body["temperature"] != 0.1 || body["top_k"] != float64(50) {
+		t.Errorf("temperature, top_k = %v, %v, want Extra's temperature and the configured top_k",
+			body["temperature"], body["top_k"])
+	}
+	if _, ok := body["top_p"]; ok {
+		t.Errorf("top_p = %v, want it omitted when neither sets it", body["top_p"])
 	}
 }
 

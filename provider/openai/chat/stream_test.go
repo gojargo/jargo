@@ -166,6 +166,84 @@ func TestCachedAndReasoningCountsReachTheReport(t *testing.T) {
 	}
 }
 
+// TestCacheWriteCountsReachTheReport checks the tokens written into the prompt
+// cache survive as their own count. They are billed above the input rate, so
+// folded into the prompt count they would be priced wrong; and the provider's
+// own totals stay exactly as sent.
+func TestCacheWriteCountsReachTheReport(t *testing.T) {
+	reported := reportedUsage(t, sse(
+		`{"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":30,"total_tokens":50,`+
+			`"prompt_tokens_details":{"cached_tokens":12,"cache_write_tokens":8},`+
+			`"completion_tokens_details":{"reasoning_tokens":0}}}`,
+	))
+
+	if len(reported) != 1 {
+		t.Fatalf("reports = %+v, want exactly one", reported)
+	}
+	got := reported[0]
+	if n, ok := frames.TokenCount(got.CacheCreationTokens); !ok || n != 8 {
+		t.Errorf("cache-creation tokens = %d (reported: %v), want 8", n, ok)
+	}
+	if n, ok := frames.TokenCount(got.CacheReadTokens); !ok || n != 12 {
+		t.Errorf("cache-read tokens = %d (reported: %v), want 12", n, ok)
+	}
+	if got.PromptTokens != 20 || got.TotalTokens != 50 {
+		t.Errorf("usage = %+v, want 20 in and 50 in total, as sent", got)
+	}
+}
+
+// TestAProviderThatSendsNoCacheWriteFieldStillReports checks a provider
+// without prompt caching, which sends no cache-write count, is reported with
+// that count absent rather than as a zero that looks measured.
+func TestAProviderThatSendsNoCacheWriteFieldStillReports(t *testing.T) {
+	reported := reportedUsage(t, sse(usageChunk(20, 30, 0, 0)))
+
+	if len(reported) != 1 {
+		t.Fatalf("reports = %+v, want exactly one", reported)
+	}
+	if n, ok := frames.TokenCount(reported[0].CacheCreationTokens); ok {
+		t.Errorf("cache-creation tokens = %d, want them reported as absent", n)
+	}
+}
+
+// TestTheStreamIsClosedWhenTheTurnIsCanceled checks a turn canceled mid-stream,
+// as an interruption cancels it, closes the response rather than leaving the
+// connection open for the rest of the call. Every OpenAI-compatible provider
+// streams through this one path.
+func TestTheStreamIsClosedWhenTheTurnIsCanceled(t *testing.T) {
+	closed := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: " + contentChunk("Hello") + "\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+		close(closed)
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := NewCompatLLM(Compat{Name: "CompatLLM"}, LLMConfig{APIKey: "k", BaseURL: srv.URL, Model: "m"})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+
+	err := svc.Generate(ctx, convo, func(string) error {
+		cancel()
+		return nil
+	})
+	if err == nil {
+		t.Error("a canceled turn ended without an error")
+	}
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Error("the stream of a canceled turn was left open")
+	}
+}
+
 // TestACompletionWithoutUsageReportsNothing checks a stream carrying no counts
 // produces no metrics rather than a report of zeros.
 func TestACompletionWithoutUsageReportsNothing(t *testing.T) {

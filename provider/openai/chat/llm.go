@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -132,6 +133,13 @@ type LLMService struct {
 	newStreamFilter func(*LLMService) StreamFilter
 	// tokenUsage adjusts the reported usage, or is nil to take it as converted.
 	tokenUsage func(frames.LLMTokenUsage) frames.LLMTokenUsage
+	// store is what an update is merged into: live itself, or the endpoint's
+	// own settings that embed it.
+	store any
+	// checkRequest rejects a request the endpoint cannot serve, or is nil.
+	checkRequest func(openai.Params) error
+	// editRequest edits each request body before it is sent, or is nil.
+	editRequest func(body map[string]any)
 }
 
 // StreamDelta is the part of a streamed delta a StreamFilter sees.
@@ -217,6 +225,24 @@ type Compat struct {
 	// OpenAI's schema says: such an adapter embeds the OpenAI one and rewrites
 	// what it produced. Nil converts the conversation as OpenAI itself takes it.
 	Adapter adapter.LLMAdapter[openai.Params, openai.Tool]
+	// Settings, when set, is the runtime settings of an endpoint that has some of
+	// its own: a pointer to a struct embedding LLMSettings. The service seeds the
+	// embedded LLMSettings from the config, merges every update into the whole
+	// struct, and builds each request from it, so CheckRequest and Request can
+	// read the endpoint's own fields. Nil keeps the shared LLMSettings alone.
+	Settings SettingsStore
+	// CheckRequest, when set, sees what a request would carry before it is
+	// built, and returns an error for one the endpoint cannot serve, which then
+	// is not sent. A streamed turn fails with that error; a one-shot inference
+	// reports it as a non-fatal error and returns no answer. It runs with the
+	// settings read-locked, so it reads them directly.
+	CheckRequest func(p openai.Params) error
+	// Request, when set, edits each request body before it is sent: a field the
+	// endpoint names differently, one it rejects, or one of its own. It sees the
+	// body as OpenAI's request would carry it, before the Extra fields are merged
+	// over it, and runs with the settings read-locked, so it reads them
+	// directly.
+	Request func(body map[string]any)
 	// Base configures the shared LLM base this service is built on.
 	Base []llm.Option
 }
@@ -250,9 +276,17 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 	if a == nil {
 		a = &openai.Adapter{}
 	}
+	live := newLLMSettings(cfg)
+	var store any = live
+	if c.Settings != nil {
+		embedded := c.Settings.chatSettings()
+		*embedded = *live
+		live, store = embedded, c.Settings
+	}
 	s := &LLMService{
 		cfg:              cfg,
-		live:             newLLMSettings(cfg),
+		live:             live,
+		store:            store,
 		http:             &http.Client{},
 		shaper:           shaper,
 		adapter:          a,
@@ -261,6 +295,8 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 		noMaxCompletion:  c.NoMaxCompletionTokens,
 		newStreamFilter:  c.StreamFilter,
 		tokenUsage:       c.TokenUsage,
+		checkRequest:     c.CheckRequest,
+		editRequest:      c.Request,
 	}
 	s.Base = llm.New(c.Name, s, c.Base...)
 	s.Base.SetModel(cfg.Model)
@@ -317,6 +353,48 @@ func encodeBody(req chatRequest, extra map[string]any) ([]byte, error) {
 	return openai.MergeExtra(req, extra)
 }
 
+// encode marshals the request as this endpoint takes it: edited by the
+// endpoint's Request hook, if it has one, with the extra fields merged over
+// what that left.
+func (s *LLMService) encode(req chatRequest) ([]byte, error) {
+	if s.editRequest == nil {
+		return encodeBody(req, req.extra)
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, err
+	}
+	s.ReadSettings(func() { s.editRequest(body) })
+	maps.Copy(body, req.extra)
+	return json.Marshal(body)
+}
+
+// requestRejectedError is a request the endpoint's CheckRequest refused, which
+// was therefore never sent.
+type requestRejectedError struct{ err error }
+
+func (e *requestRejectedError) Error() string { return e.err.Error() }
+
+func (e *requestRejectedError) Unwrap() error { return e.err }
+
+// check runs the endpoint's CheckRequest, if it has one, on what a request would
+// carry.
+func (s *LLMService) check(p openai.Params) error {
+	if s.checkRequest == nil {
+		return nil
+	}
+	var err error
+	s.ReadSettings(func() { err = s.checkRequest(p) })
+	if err != nil {
+		return &requestRejectedError{err: err}
+	}
+	return nil
+}
+
 type toolCallDelta struct {
 	Index    int    `json:"index"`
 	ID       string `json:"id"`
@@ -344,6 +422,10 @@ type chatUsage struct {
 	TotalTokens         int64 `json:"total_tokens"`
 	PromptTokensDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
+		// CacheWriteTokens is the input written into the prompt cache, which is
+		// billed above the input rate. An endpoint without prompt caching leaves
+		// it out, which reads as not reported rather than as zero.
+		CacheWriteTokens *int64 `json:"cache_write_tokens"`
 	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -359,6 +441,7 @@ func (u chatUsage) tokenUsage() frames.LLMTokenUsage {
 	}
 	if u.PromptTokensDetails != nil {
 		out.CacheReadTokens = new(u.PromptTokensDetails.CachedTokens)
+		out.CacheCreationTokens = u.PromptTokensDetails.CacheWriteTokens
 	}
 	if u.CompletionTokensDetails != nil {
 		out.ReasoningTokens = new(u.CompletionTokensDetails.ReasoningTokens)
@@ -418,6 +501,9 @@ func (s *LLMService) baseRequest(
 	if err != nil {
 		return chatRequest{}, err
 	}
+	if err := s.check(p); err != nil {
+		return chatRequest{}, err
+	}
 	live := s.liveSettings()
 	maxCompletion := live.MaxCompletionTokens.Ptr()
 	if s.noMaxCompletion {
@@ -444,7 +530,7 @@ func (s *LLMService) baseRequest(
 
 // generate sends one streaming request and feeds what comes back to sink.
 func (s *LLMService) generate(ctx context.Context, reqBody chatRequest, sink llm.Sink) error {
-	body, err := encodeBody(reqBody, reqBody.extra)
+	body, err := s.encode(reqBody)
 	if err != nil {
 		return err
 	}
@@ -662,6 +748,12 @@ func (s *LLMService) RunInference(
 	// Built the way a streamed turn is, tools included: a conversation holding a
 	// tool exchange is only valid alongside the tools it used.
 	reqBody, err := s.baseRequest(convo, adapter.Options{SystemInstruction: instruction})
+	if rejected, ok := errors.AsType[*requestRejectedError](err); ok {
+		// Reported rather than returned, as a streamed turn's failure is, so a
+		// switcher can fall back to another service.
+		s.PushError(ctx, rejected.Error(), rejected.err, false)
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -680,7 +772,7 @@ func (s *LLMService) RunInference(
 	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
 		reqBody.ResponseFormat = openai.JSONSchemaFormat(schema)
 	}
-	body, err := encodeBody(reqBody, reqBody.extra)
+	body, err := s.encode(reqBody)
 	if err != nil {
 		return "", err
 	}

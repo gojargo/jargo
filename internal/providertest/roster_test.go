@@ -54,7 +54,7 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		{"perplexity", perplexity.NewLLM, chat.RoleUser},
 		{"qwen", qwen.NewLLM, chat.RoleUser},
 		{"sambanova", sambanova.NewLLM, chat.RoleUser},
-		{"sarvam", sarvam.NewLLM, chat.RoleUser},
+		{"sarvam", sarvamLLM, chat.RoleUser},
 		{"together", togetherLLM, chat.RoleUser},
 
 		{"openai", chat.NewLLM, chat.RoleDeveloper},
@@ -144,6 +144,12 @@ func togetherLLM(cfg chat.LLMConfig) *chat.LLMService {
 // roster sends every provider the same one and DeepSeek's own config wraps it.
 func deepseekLLM(cfg chat.LLMConfig) *chat.LLMService {
 	return deepseek.NewLLM(deepseek.LLMConfig{LLMConfig: cfg})
+}
+
+// sarvamLLM builds a Sarvam service from the shared config alone, since the
+// roster sends every provider the same one and Sarvam's own config wraps it.
+func sarvamLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return sarvam.NewLLM(sarvam.LLMConfig{LLMConfig: cfg})
 }
 
 // groqLLM builds a Groq service from the shared config alone, since the roster

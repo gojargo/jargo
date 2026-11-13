@@ -49,9 +49,21 @@ func setPtr[T any](o *settings.Opt[T], p *T) {
 	}
 }
 
+// SettingsStore is the runtime settings of an endpoint with settings of its
+// own, given to Compat.Settings. It is satisfied by a pointer to LLMSettings or
+// to a struct embedding it, and by nothing else.
+type SettingsStore interface {
+	chatSettings() *LLMSettings
+}
+
+// chatSettings returns the shared settings, for a struct that embeds them to
+// satisfy SettingsStore.
+func (s *LLMSettings) chatSettings() *LLMSettings { return s }
+
 // Settings returns the service's runtime-updatable settings, implementing
-// llm.SettingsHolder.
-func (s *LLMService) Settings() any { return s.live }
+// llm.SettingsHolder: the endpoint's own when it has some, which embed the
+// shared ones.
+func (s *LLMService) Settings() any { return s.store }
 
 // liveSettings is a copy of the settings as they stand, read whole, so the
 // request being built is not changed under it by an update.

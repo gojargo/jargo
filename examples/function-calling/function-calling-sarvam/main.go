@@ -20,7 +20,6 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/sarvam"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/llm"
@@ -110,7 +109,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		Voice:  "shubh",
 	})
 
-	model := sarvam.NewLLM(chat.LLMConfig{APIKey: os.Getenv("SARVAM_API_KEY")})
+	model := sarvam.NewLLM(sarvam.LLMConfig{APIKey: os.Getenv("SARVAM_API_KEY")})
 	model.SetSystemInstruction(systemInstruction)
 
 	model.OnFunctionCallsStarted(func(ctx context.Context, _ []frames.ToolCall) {

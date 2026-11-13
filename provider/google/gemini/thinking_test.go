@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
 )
@@ -505,6 +506,26 @@ func TestThinkingBudgetOnGemma4AndGemini4Warns(t *testing.T) {
 				t.Errorf("logs = %q, want the budget flagged", logged())
 			}
 		})
+	}
+}
+
+// TestSwitchingToAGemini3ModelAtRuntimeWarns covers a settings update that
+// changes the model: the thinking configuration is checked again against the
+// model it now goes to.
+func TestSwitchingToAGemini3ModelAtRuntimeWarns(t *testing.T) {
+	budget := 0
+	svc := NewLLM(Config{APIKey: "k", Model: "gemini-2.5-flash", Thinking: &ThinkingConfig{Budget: &budget}})
+	logged := capturedWarnings(t)
+
+	delta := &LLMSettings{}
+	delta.Model = settings.Set("gemini-3.6-flash")
+	update := frames.NewLLMUpdateSettingsFrame(delta)
+	if err := svc.Base.ProcessFrame(t.Context(), update, processor.Downstream); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if !strings.Contains(logged(), "thinking budget") {
+		t.Errorf("logs = %q, want the budget flagged on the model switched to", logged())
 	}
 }
 

@@ -2,7 +2,6 @@ package mistral
 
 import (
 	"log/slog"
-	"maps"
 
 	mistraladapter "github.com/gojargo/jargo/adapter/mistral"
 	"github.com/gojargo/jargo/frames"
@@ -15,19 +14,9 @@ import (
 // role, it constrains the shape of a conversation (which its adapter settles),
 // and it reports the calls to make from the whole message history rather than
 // from what it just streamed (see dropAnsweredCalls). It also names the
-// sampling seed differently.
+// sampling seed differently, and takes fewer of OpenAI's request fields (see
+// mistralRequest).
 func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
-	if cfg.Seed != nil {
-		// Mistral reads the seed under a name of its own. Send it under that
-		// name only: the modeled field would go out as "seed" as well.
-		extra := maps.Clone(cfg.Extra)
-		if extra == nil {
-			extra = map[string]any{}
-		}
-		extra["random_seed"] = *cfg.Seed
-		cfg.Extra = extra
-		cfg.Seed = nil
-	}
 	return chat.NewCompatLLM(chat.Compat{
 		Name:            "MistralLLM",
 		BaseURL:         baseURL,
@@ -37,7 +26,24 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		NoMaxCompletionTokens: true,
 		Adapter:               &mistraladapter.Adapter{},
 		Base:                  []llm.Option{llm.WithFunctionCallFilter(dropAnsweredCalls)},
+		Request:               mistralRequest,
 	}, cfg)
+}
+
+// mistralRequest shapes a request the way Mistral takes it. The seed is read
+// under a name of its own, so it is sent as random_seed, and as that alone: the
+// request is built from the settings as they stand, so a seed an update sets
+// is renamed too. Mistral has no use for the usage request, the service tier or
+// the completion bound OpenAI's reasoning models read, so they are left off.
+// The caller's Extra fields are merged over all of it.
+func mistralRequest(body map[string]any) {
+	if seed, ok := body["seed"]; ok {
+		body["random_seed"] = seed
+		delete(body, "seed")
+	}
+	delete(body, "stream_options")
+	delete(body, "service_tier")
+	delete(body, "max_completion_tokens")
 }
 
 // dropAnsweredCalls keeps only the calls the conversation has no result for.

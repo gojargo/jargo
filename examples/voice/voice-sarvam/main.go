@@ -16,7 +16,6 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/sarvam"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/transport"
@@ -50,7 +49,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		Voice:  "shubh",
 	})
 
-	llm := sarvam.NewLLM(chat.LLMConfig{APIKey: os.Getenv("SARVAM_API_KEY")})
+	llm := sarvam.NewLLM(sarvam.LLMConfig{APIKey: os.Getenv("SARVAM_API_KEY")})
 	llm.SetSystemInstruction(systemInstruction)
 
 	silero, err := vad.NewSilero()

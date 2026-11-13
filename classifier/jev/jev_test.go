@@ -202,6 +202,35 @@ func TestClientErrors(t *testing.T) {
 	}
 }
 
+func TestClientRejectedRequestErrorCarriesTheReasonJevGave(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		reply  string
+		suffix string
+	}{
+		{
+			"a Jev error", 400,
+			`{"detail": {"error_type": "api_usage_error", "message": "Invalid image request."}}`,
+			"HTTP 400: Invalid image request.",
+		},
+		{"a plain reason", 413, `{"detail": "Too large."}`, "HTTP 413: Too large."},
+		{"no reason", 422, `{"detail": [{"loc": ["x"]}]}`, "HTTP 422"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := stub(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.reply)
+			})
+			_, _, err := c.Ask(t.Context(), "a", noul("?"))
+			if !errors.Is(err, classifier.ErrClassifier) || !strings.HasSuffix(err.Error(), tc.suffix) {
+				t.Fatalf("err = %v, want a classifier error ending in %q", err, tc.suffix)
+			}
+		})
+	}
+}
+
 func TestClientIgnoresUsageThatIsNotAnObject(t *testing.T) {
 	c, _ := stub(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"answers": {"answer": {"type": "noul", "noul": 0.5}}, "usage": "none"}`)

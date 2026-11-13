@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/mistral"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/settings"
 )
 
 // sentBody runs one generation against a recording endpoint and returns the
@@ -79,6 +81,86 @@ func TestSeedIsSentUnderMistralsName(t *testing.T) {
 	mistral.NewLLM(cfg)
 	if cfg.Seed == nil || *cfg.Seed != seed {
 		t.Error("the constructor emptied the seed on the caller's own config")
+	}
+}
+
+// TestAZeroSeedIsSentAsRandomSeed checks a seed of zero is a seed like any
+// other, sent under Mistral's name rather than dropped as unset.
+func TestAZeroSeedIsSentAsRandomSeed(t *testing.T) {
+	seed := 0
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+
+	body := sentBody(t, chat.LLMConfig{APIKey: "k", Seed: &seed}, convo)
+	if got, ok := body["random_seed"]; !ok || got != float64(0) {
+		t.Errorf("random_seed = %v (sent: %v), want 0", got, ok)
+	}
+	if _, ok := body["seed"]; ok {
+		t.Errorf("body carries a seed field Mistral does not read: %v", body)
+	}
+}
+
+// TestAnUnsetSeedIsNotSent checks no seed goes out under either name when none
+// is configured, leaving Mistral to sample as it does by default.
+func TestAnUnsetSeedIsNotSent(t *testing.T) {
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+
+	body := sentBody(t, chat.LLMConfig{APIKey: "k"}, convo)
+	for _, field := range []string{"random_seed", "seed"} {
+		if _, ok := body[field]; ok {
+			t.Errorf("body carries %s with no seed configured: %v", field, body)
+		}
+	}
+}
+
+// TestASeedSetAtRuntimeIsSentAsRandomSeed checks a seed a settings update sets
+// reaches Mistral under its own name too, not only one the service was built
+// with.
+func TestASeedSetAtRuntimeIsSentAsRandomSeed(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	svc := mistral.NewLLM(chat.LLMConfig{APIKey: "k", BaseURL: srv.URL})
+	delta := &chat.LLMSettings{}
+	delta.Seed = settings.Set(7)
+	update := frames.NewLLMUpdateSettingsFrame(delta)
+	if err := svc.Base.ProcessFrame(t.Context(), update, processor.Downstream); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+	if err := svc.Generate(t.Context(), convo, func(string) error { return nil }); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	if body["random_seed"] != float64(7) {
+		t.Errorf("random_seed = %v, want the seed the update set", body["random_seed"])
+	}
+	if _, ok := body["seed"]; ok {
+		t.Errorf("body carries a seed field Mistral does not read: %v", body)
+	}
+}
+
+// TestOpenAIsFieldsMistralDoesNotTakeAreLeftOff checks the request carries none
+// of the fields Mistral has no use for, even when the config sets them.
+func TestOpenAIsFieldsMistralDoesNotTakeAreLeftOff(t *testing.T) {
+	limit := 300
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+
+	body := sentBody(t, chat.LLMConfig{APIKey: "k", ServiceTier: "flex", MaxCompletionTokens: &limit}, convo)
+	for _, field := range []string{"stream_options", "service_tier", "max_completion_tokens"} {
+		if _, ok := body[field]; ok {
+			t.Errorf("body carries %s: %v", field, body)
+		}
 	}
 }
 

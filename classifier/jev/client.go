@@ -263,7 +263,11 @@ func (c *Client) Ask(
 			continue
 		}
 		if status != http.StatusOK {
-			return nil, Usage{}, fmt.Errorf("%w: Jev rejected the request: HTTP %d", classifier.ErrClassifier, status)
+			message := fmt.Sprintf("Jev rejected the request: HTTP %d", status)
+			if reason := errorMessage(data); reason != "" {
+				message += ": " + reason
+			}
+			return nil, Usage{}, fmt.Errorf("%w: %s", classifier.ErrClassifier, message)
 		}
 		return c.read(data, questions)
 	}
@@ -308,6 +312,22 @@ func (c *Client) read(data []byte, questions []NamedQuestion) (map[string]map[st
 			classifier.ErrClassifier, strings.Join(missing, ", "))
 	}
 	return out, usage, nil
+}
+
+// errorMessage is the reason Jev gave for rejecting a request, if it gave
+// one: the reply's detail when it is a string, or the message inside it when
+// it is an object. It is empty for anything else.
+func errorMessage(data []byte) string {
+	var reply map[string]any
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return ""
+	}
+	detail := reply["detail"]
+	if obj, ok := detail.(map[string]any); ok {
+		detail = obj["message"]
+	}
+	reason, _ := detail.(string)
+	return reason
 }
 
 // post sends a question and returns the reply's body and status.

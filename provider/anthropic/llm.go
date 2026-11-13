@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -221,6 +222,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 		if err := s.pushThought(ctx, event); err != nil {
 			return err
 		}
+		s.handleStreamStopReason(ctx, event)
 		delta, ok := event.AsAny().(sdk.ContentBlockDeltaEvent)
 		if !ok {
 			continue
@@ -276,6 +278,36 @@ func (s *Service) pushThought(ctx context.Context, event sdk.MessageStreamEventU
 		return nil
 	}
 	return s.PushFrame(ctx, f, processor.Downstream)
+}
+
+// handleStreamStopReason passes a streamed message_delta's stop reason to
+// handleStopReason. Every other event is left alone.
+func (s *Service) handleStreamStopReason(ctx context.Context, event sdk.MessageStreamEventUnion) {
+	if ev, ok := event.AsAny().(sdk.MessageDeltaEvent); ok {
+		s.handleStopReason(ctx, ev.Delta.StopReason, ev.Delta.StopDetails)
+	}
+}
+
+// handleStopReason logs why Claude stopped generating, when it stopped for a
+// notable reason.
+//
+// Anything other than a normal stop leaves the turn short of what the model
+// would otherwise have said: the request was refused, or the output hit the
+// token limit or the context window. Whatever text did arrive is still passed
+// on. reason and details come from a streamed message_delta or from a complete
+// message, which both carry them.
+func (s *Service) handleStopReason(ctx context.Context, reason sdk.StopReason, details sdk.RefusalStopDetails) {
+	switch reason {
+	case "", sdk.StopReasonEndTurn, sdk.StopReasonToolUse, sdk.StopReasonStopSequence:
+		return
+	default:
+	}
+	var detail string
+	if details.Category != "" {
+		detail = fmt.Sprintf(" (%s)", details.Category)
+	}
+	slog.WarnContext(ctx, fmt.Sprintf("response incomplete, the model stopped for %s%s", reason, detail),
+		"processor", s.Name())
 }
 
 // interleavedThinkingBeta is the Anthropic beta that lets a model think between
@@ -355,6 +387,7 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 		if err := s.pushThought(ctx, event); err != nil {
 			return err
 		}
+		s.handleStreamStopReason(ctx, event)
 		// Emit text deltas live so first-token latency is unaffected by the
 		// tool-use blocks accumulated for the post-stream harvest below.
 		if delta, ok := event.AsAny().(sdk.ContentBlockDeltaEvent); ok {
@@ -413,6 +446,7 @@ func (s *Service) RunInference(
 	if err != nil {
 		return "", llm.AsCompletionTimeout(ctx, err)
 	}
+	s.handleStopReason(ctx, msg.StopReason, msg.StopDetails)
 	for _, blk := range msg.Content {
 		if text := blk.Text; text != "" {
 			return text, nil

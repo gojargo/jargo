@@ -21,6 +21,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
 	errs "github.com/gojargo/jargo/utils/errors"
 	"github.com/google/uuid"
 )
@@ -131,10 +132,42 @@ type genChunk struct {
 		// leaves the turn short of what it would otherwise have said.
 		FinishReason string `json:"finishReason"` //nolint:tagliatelle // Gemini REST uses camelCase keys
 	} `json:"candidates"`
+	// UsageMetadata is the token accounting so far. It can arrive on several
+	// chunks, the last holding the billable count for the whole response.
+	UsageMetadata *usageMetadata `json:"usageMetadata"` //nolint:tagliatelle // Gemini REST uses camelCase keys
+}
+
+// usageMetadata is the token accounting Gemini reports on a response.
+//
+//nolint:tagliatelle // Gemini REST uses camelCase keys
+type usageMetadata struct {
+	PromptTokenCount        int64 `json:"promptTokenCount"`
+	CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
+	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount"`
+	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount"`
+	CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
+}
+
+// tokenUsage converts the reported counts into the shape the pipeline carries.
+// Gemini counts the tool results fed back to the model (code execution, URL
+// context, search) apart from the prompt, and the thinking apart from the
+// candidates, but they are input and output too.
+func (u usageMetadata) tokenUsage() frames.LLMTokenUsage {
+	prompt := u.PromptTokenCount + u.ToolUsePromptTokenCount
+	completion := u.CandidatesTokenCount + u.ThoughtsTokenCount
+	return frames.LLMTokenUsage{
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		TotalTokens:      prompt + completion,
+		CacheReadTokens:  new(u.CachedContentTokenCount),
+		ReasoningTokens:  new(u.ThoughtsTokenCount),
+	}
 }
 
 // Generate streams a Gemini completion, emitting each text delta.
-func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) (err error) {
+	rs := &responseStream{s: s, ctx: ctx, text: emit}
+	defer func() { err = rs.reportUsage(err) }()
 	cfg := s.requestConfig()
 	body, err := s.requestBodyFor(cfg, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, false)
 	if err != nil {
@@ -144,7 +177,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 	if err != nil {
 		return err
 	}
-	return s.stream(req, emit)
+	return s.streamChunks(req, rs)
 }
 
 // RunInference answers the conversation once, off to the side of the pipeline:
@@ -191,15 +224,25 @@ func (s *Service) RunInference(
 	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
 		return "", err
 	}
+	return s.answerText(answer), nil
+}
+
+// answerText reads the answer out of a one-shot response, logging why the model
+// stopped when it stopped for a notable reason. A withheld answer reads as no
+// text, and the log says why.
+func (s *Service) answerText(answer genChunk) string {
+	if len(answer.Candidates) > 0 {
+		s.handleFinishReason(answer.Candidates[0].FinishReason)
+	}
 	for _, c := range answer.Candidates {
 		for _, p := range c.Content.Parts {
 			// A thought is the model reasoning, not its answer.
 			if p.text() != "" && !p.Thought {
-				return p.text(), nil
+				return p.text()
 			}
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // SupportsResponseSchema implements llm.ResponseSchemaSupporter.
@@ -315,19 +358,30 @@ func thinkingSetting(thinking map[string]any) string {
 // warnIfThinkingBudgetIgnored reports a budget set on a model that reads a level
 // instead. Whether such a model honors the budget, ignores it, or refuses the
 // request varies by model and by backend, and a refusal names no field, so this
-// warning is the only signal there is.
+// warning is the only signal there is. It reads the settings as they stand, so
+// it is run again when an update changes the model or the thinking.
 func (s *Service) warnIfThinkingBudgetIgnored() {
-	if s.cfg.Thinking == nil || s.cfg.Thinking.Budget == nil {
+	cfg := s.requestConfig()
+	if cfg.Thinking == nil || cfg.Thinking.Budget == nil {
 		return
 	}
-	name := modelName(s.cfg.Model)
+	name := modelName(cfg.Model)
 	if !slices.ContainsFunc(modelsSupportingThinkingLevel, func(prefix string) bool {
 		return strings.HasPrefix(name, prefix)
 	}) {
 		return
 	}
 	slog.Warn("a thinking budget was set on a model that reads a thinking level",
-		"service", s.Name(), "model", s.cfg.Model)
+		"service", s.Name(), "model", cfg.Model)
+}
+
+// UpdateSettings re-checks the thinking configuration against an update that
+// changed the model or the thinking. It implements llm.SettingsUpdater.
+func (s *Service) UpdateSettings(_ context.Context, changed settings.Changed) error {
+	if changed.Has("model") || changed.Has("thinking") {
+		s.warnIfThinkingBudgetIgnored()
+	}
+	return nil
 }
 
 // handleFinishReason logs why the model stopped, when it stopped for a notable
@@ -431,11 +485,6 @@ func (s *Service) newRequestTo(
 	return req, nil
 }
 
-func (s *Service) stream(req *http.Request, emit llm.Emit) error {
-	rs := &responseStream{s: s, ctx: req.Context(), text: emit}
-	return s.streamChunks(req, rs.consume)
-}
-
 // responseStream reads the parts of one streamed response: answer text goes to
 // text, thoughts and thought signatures go downstream as frames, and each
 // function call goes to tool.
@@ -450,6 +499,23 @@ type responseStream struct {
 	// accumulated is the answer text so far, which a signature on a text part
 	// is bookmarked by.
 	accumulated strings.Builder
+	// usage is the token accounting the response last reported. It is assigned
+	// rather than added up: the counts may be refined from one chunk to the
+	// next, and the last chunk holds the billable count for the whole response.
+	usage usageMetadata
+}
+
+// reportUsage reports the response's token usage once it is over, whether it
+// completed or not: the tokens were spent regardless. It returns err, or the
+// error reporting failed with when there was none.
+func (r *responseStream) reportUsage(err error) error {
+	if !r.s.UsageMetricsEnabled() {
+		return err
+	}
+	if perr := r.s.PushTokenUsage(r.ctx, r.usage.tokenUsage()); err == nil {
+		return perr
+	}
+	return err
 }
 
 // consume reads every part of a chunk.
@@ -558,16 +624,16 @@ func (r *responseStream) keepThoughtSignature(p genPart, callID string) error {
 // chunk that does not arrive in time re-issues the request once instead, which
 // is safe only up to that point: a chunk that has been handed on is already
 // downstream, so re-issuing after one would say everything twice.
-func (s *Service) streamChunks(req *http.Request, onChunk func(genChunk) error) error {
+func (s *Service) streamChunks(req *http.Request, rs *responseStream) error {
 	if s.cfg.RetryOnTimeout {
-		retried, err := s.streamAttempt(req, s.cfg.retryTimeout(), onChunk)
+		retried, err := s.streamAttempt(req, s.cfg.retryTimeout(), rs)
 		if err == nil || !retried {
 			return err
 		}
 		slog.DebugContext(req.Context(), "re-issuing a generation that never began",
 			"service", s.Name(), "model", s.Model())
 	}
-	_, err := s.streamAttempt(req, s.cfg.streamIdleTimeout(), onChunk)
+	_, err := s.streamAttempt(req, s.cfg.streamIdleTimeout(), rs)
 	return err
 }
 
@@ -575,7 +641,7 @@ func (s *Service) streamChunks(req *http.Request, onChunk func(genChunk) error) 
 // model had said anything, which is the only point a request can be re-issued
 // from. Every chunk after the first is bounded by the idle timeout.
 func (s *Service) streamAttempt(
-	req *http.Request, firstChunk time.Duration, onChunk func(genChunk) error,
+	req *http.Request, firstChunk time.Duration, rs *responseStream,
 ) (retriable bool, err error) {
 	// The request is rebuilt per attempt: its body has been read by the time an
 	// attempt ends, and a re-issue needs one to send.
@@ -630,13 +696,19 @@ func (s *Service) streamAttempt(
 		arm(idle)
 		began = true
 		chunk, ok := parseChunk(data)
-		if !ok || len(chunk.Candidates) == 0 {
+		if !ok {
+			return nil
+		}
+		if chunk.UsageMetadata != nil {
+			rs.usage = *chunk.UsageMetadata
+		}
+		if len(chunk.Candidates) == 0 {
 			return nil
 		}
 		// A leading chunk can carry usage metadata and no candidates, so TTFB
 		// ends at the first chunk that holds model output.
 		s.StopTTFBMetrics(ctx)
-		return onChunk(chunk)
+		return rs.consume(chunk)
 	})
 	if err != nil {
 		return timedOut.Load() && !began, s.streamError(attempt.Context(), &timedOut, err)
@@ -685,7 +757,9 @@ func cloneRequest(req *http.Request) (*http.Request, error) {
 // the sink as they arrive and reports each functionCall the model produces. The
 // conversation's tools are sent on the request, and any tool turns already in
 // the context are replayed as functionCall / functionResponse parts.
-func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
+func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) (err error) {
+	rs := &responseStream{s: s, ctx: ctx, text: sink.Text, tool: sink.Tool}
+	defer func() { err = rs.reportUsage(err) }()
 	cfg := s.requestConfig()
 	body, err := s.requestBodyFor(cfg, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, true)
 	if err != nil {
@@ -695,15 +769,9 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 	if err != nil {
 		return err
 	}
-	return s.streamTools(req, sink)
-}
-
-// streamTools streams a tool-capable completion, forwarding text and tool calls.
-// A call is reported under the id Gemini gave it, or a fresh one when it gave
-// none, so its result can be paired back with it.
-func (s *Service) streamTools(req *http.Request, sink llm.Sink) error {
-	rs := &responseStream{s: s, ctx: req.Context(), text: sink.Text, tool: sink.Tool}
-	return s.streamChunks(req, rs.consume)
+	// A call is reported under the id Gemini gave it, or a fresh one when it
+	// gave none, so its result can be paired back with it.
+	return s.streamChunks(req, rs)
 }
 
 // LLMAdapter returns the adapter this service converts through, so the base can

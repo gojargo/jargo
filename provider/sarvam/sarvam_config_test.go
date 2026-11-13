@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/internal/providertest"
+	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/sarvam"
 )
 
@@ -39,5 +40,21 @@ func TestNewServices(t *testing.T) {
 // TestNewLLM checks the Sarvam OpenAI-compatible LLM shim wires the right
 // service name and default model into the shared client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "SarvamLLM", "sarvam-105b", sarvam.NewLLM)
+	providertest.CompatLLM(t, "SarvamLLM", "sarvam-105b", func(cfg chat.LLMConfig) *chat.LLMService {
+		return sarvam.NewLLM(sarvam.LLMConfig{LLMConfig: cfg})
+	})
+}
+
+// TestConfigValidateLLM pins which LLMConfig fields the provider requires: an
+// API key, a model Sarvam serves, and a reasoning effort it knows.
+func TestConfigValidateLLM(t *testing.T) {
+	llmConfig := func(model, effort string) sarvam.LLMConfig {
+		return sarvam.LLMConfig{APIKey: "k", Model: model, ReasoningEffort: effort}
+	}
+	providertest.Configs(t, []providertest.ConfigCase{
+		{Name: "missing API key", Cfg: sarvam.LLMConfig{}, Valid: false},
+		{Name: "API key only", Cfg: llmConfig("", ""), Valid: true},
+		{Name: "unknown reasoning effort", Cfg: llmConfig("", "extreme"), Valid: false},
+		{Name: "known reasoning effort", Cfg: llmConfig("", "high"), Valid: true},
+	})
 }

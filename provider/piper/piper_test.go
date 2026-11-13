@@ -6,10 +6,12 @@ import (
 	"encoding/binary"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // buildWAV builds a minimal 16-bit mono PCM WAV around data.
@@ -97,6 +99,30 @@ func TestSynthesizeStreamsPCM(t *testing.T) {
 	}
 	if !bytes.Equal(got.Bytes(), data) {
 		t.Errorf("streamed %d bytes, want %d", got.Len(), len(data))
+	}
+}
+
+// TestAFailedRequestNamesItsStatus checks a non-2xx answer from the server is
+// reported, with the status it was refused with, rather than read as audio.
+func TestAFailedRequestNamesItsStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "Not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	s := &synthesizer{cfg: Config{BaseURL: srv.URL, SampleRate: defaultSampleRate}, http: srv.Client()}
+	err := s.RunTTS(t.Context(), "Error case.", "", func(frames.Frame) error {
+		t.Error("a frame was yielded for a failed request")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("RunTTS on a 404 = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error = %v, want it to name the status", err)
+	}
+	if status, ok := errs.ExtractHTTPStatusCode(err); !ok || status != http.StatusNotFound {
+		t.Errorf("status = %d (%v), want 404 carried on the error", status, ok)
 	}
 }
 

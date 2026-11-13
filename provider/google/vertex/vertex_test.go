@@ -1,13 +1,19 @@
 package vertex
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/provider/google/gemini"
 	"golang.org/x/oauth2"
 )
 
@@ -166,6 +172,54 @@ func TestLLMDefaultsToGemini38FlashOnTheGlobalEndpoint(t *testing.T) {
 	}
 	if got := location(""); got != "global" {
 		t.Errorf("location = %q, want global", got)
+	}
+}
+
+// TestVertexSharesTheThinkingDefaults checks the Vertex service picks its
+// thinking default from the same per-model table as the Gemini API service.
+func TestVertexSharesTheThinkingDefaults(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n"))
+	}))
+	defer srv.Close()
+
+	svc := newLLM(LLMConfig{
+		ProjectID: "p", Credentials: Credentials{TokenSource: staticSource{"t"}}, Model: "gemini-3.7-flash",
+	}, srv.URL)
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("hi")
+	if err := svc.Generate(t.Context(), convo, func(string) error { return nil }); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	g, _ := body["generationConfig"].(map[string]any)
+	want := map[string]any{"thinkingLevel": "low"}
+	if got := g["thinkingConfig"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("thinkingConfig = %v, want %v", got, want)
+	}
+}
+
+// TestVertexWarnsOnAThinkingBudgetForGemini3 checks the warning about a budget
+// on a model that reads a thinking level covers the Vertex service too.
+func TestVertexWarnsOnAThinkingBudgetForGemini3(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	budget := 0
+	NewLLM(LLMConfig{
+		ProjectID: "p", Credentials: Credentials{TokenSource: staticSource{"t"}},
+		Model: "gemini-3.6-flash", Thinking: &gemini.ThinkingConfig{Budget: &budget},
+	})
+
+	if !strings.Contains(buf.String(), "thinking budget") {
+		t.Errorf("logs = %q, want the budget flagged", buf.String())
 	}
 }
 

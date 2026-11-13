@@ -253,6 +253,46 @@ func TestAPresetInExtraIsLeftAlone(t *testing.T) {
 	}
 }
 
+// providerDefaultRequest runs one turn of a service built from cfg, with
+// UseProviderThinkingDefault set, and returns the body it sent.
+func providerDefaultRequest(t *testing.T, cfg AgentConfig) map[string]any {
+	t.Helper()
+	srv := newAgentServer(t, []string{completedEvent})
+	cfg.APIKey, cfg.BaseURL = "test-key", srv.URL
+	svc := NewAgentLLM(cfg)
+	svc.SetUseProviderThinkingDefault(true)
+	if err := svc.GenerateWithTools(t.Context(), hello(), &calls{}); err != nil {
+		t.Fatalf("GenerateWithTools: %v", err)
+	}
+	return srv.bodies[0]
+}
+
+// TestProviderThinkingDefaultSendsNoPreset covers UseProviderThinkingDefault:
+// the "fast" preset is not sent, and neither is reasoning, so the model runs at
+// Perplexity's own default.
+func TestProviderThinkingDefaultSendsNoPreset(t *testing.T) {
+	body := providerDefaultRequest(t, AgentConfig{})
+
+	if body["model"] != "openai/gpt-5.6-luna" {
+		t.Errorf("model = %v, want openai/gpt-5.6-luna", body["model"])
+	}
+	if _, ok := body["preset"]; ok {
+		t.Errorf("preset = %v, want none", body["preset"])
+	}
+	if _, ok := body["reasoning"]; ok {
+		t.Errorf("reasoning = %v, want none", body["reasoning"])
+	}
+}
+
+// TestProviderThinkingDefaultKeepsAChosenPreset covers a preset the developer
+// chose, which UseProviderThinkingDefault leaves in place: it only stops the
+// default being sent.
+func TestProviderThinkingDefaultKeepsAChosenPreset(t *testing.T) {
+	if body := providerDefaultRequest(t, AgentConfig{Preset: "fast"}); body["preset"] != "fast" {
+		t.Errorf("preset = %v, want the chosen fast", body["preset"])
+	}
+}
+
 // infoLogs routes the default logger to a buffer at INFO and above until the
 // test ends.
 func infoLogs(t *testing.T) *bytes.Buffer {
