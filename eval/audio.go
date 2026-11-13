@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,6 +27,20 @@ const (
 //
 //nolint:gochecknoglobals // sentinel error
 var errNoUserAudio = errors.New("eval: user TTS produced no audio")
+
+// errUserTTS is returned when the user TTS reports an error synthesizing a turn.
+//
+//nolint:gochecknoglobals // sentinel error
+var errUserTTS = errors.New("eval: user TTS failed")
+
+// describeError is what an error frame says: its message, and the error under
+// it when there is one.
+func describeError(ef *frames.ErrorFrame) string {
+	if ef.Err == nil {
+		return ef.Error
+	}
+	return ef.Error + ": " + ef.Err.Error()
+}
 
 // sendUserAudio synthesizes text and streams it to the bot as microphone audio:
 // ~20ms frames at real-time cadence, then a tail of silence so the bot's VAD
@@ -75,11 +90,16 @@ func (s *session) sendUserAudio(ctx context.Context, text string) error {
 // synthesize runs ttsService one-shot to render text to PCM, returning the audio
 // and its sample rate. It drives the service as a single-node pipeline and
 // collects the emitted TTS audio.
+//
+// A synthesis that fails is the run's error, naming what the service reported,
+// rather than a turn of no audio.
 func synthesize(ctx context.Context, ttsService *tts.Base, text string) ([]byte, int, error) {
 	var (
-		pcm  []byte
-		rate int
-		once sync.Once
+		pcm      []byte
+		rate     int
+		once     sync.Once
+		mu       sync.Mutex
+		synthErr error
 	)
 	done := make(chan struct{})
 	task := pipeline.NewWorker(pipeline.New(ttsService), pipeline.WorkerConfig{
@@ -97,6 +117,14 @@ func synthesize(ctx context.Context, ttsService *tts.Base, text string) ([]byte,
 			once.Do(func() { close(done) })
 		}
 	})
+	events.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+		mu.Lock()
+		if synthErr == nil {
+			synthErr = fmt.Errorf("%w: %s", errUserTTS, describeError(ef))
+		}
+		mu.Unlock()
+		once.Do(func() { close(done) })
+	})
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- task.Run(ctx) }()
@@ -109,6 +137,14 @@ func synthesize(ctx context.Context, ttsService *tts.Base, text string) ([]byte,
 		task.Cancel(ctx, "")
 		<-runErr
 		return nil, 0, ctx.Err()
+	}
+	mu.Lock()
+	failure := synthErr
+	mu.Unlock()
+	if failure != nil {
+		task.Cancel(ctx, "")
+		<-runErr
+		return nil, 0, failure
 	}
 	task.StopWhenDone()
 	if err := <-runErr; err != nil {

@@ -3,10 +3,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/eval"
@@ -36,7 +38,10 @@ func evalCmd() *cobra.Command {
 
 // evalRunCmd is `jargo eval run` — play scenarios against a running bot.
 func evalRunCmd() *cobra.Command {
-	var botURL string
+	var (
+		botURL          string
+		botReadyTimeout float64
+	)
 	cmd := &cobra.Command{
 		Use:   "run <scenario.yaml|dir>...",
 		Short: "Play one or more scenarios against a running bot's RTVI WebSocket endpoint",
@@ -49,6 +54,8 @@ func evalRunCmd() *cobra.Command {
 	}
 	getJudge := addJudgeFlags(cmd.Flags())
 	cmd.Flags().StringVar(&botURL, "bot-url", "", "RTVI WebSocket URL of the running bot (ws:// or wss://)")
+	cmd.Flags().Float64Var(&botReadyTimeout, "bot-ready-timeout", eval.DefaultBotReadyTimeout.Seconds(),
+		"seconds to wait, once connected, for the bot's RTVI bot-ready, which covers the bot's startup")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if botURL == "" {
@@ -76,11 +83,14 @@ func evalRunCmd() *cobra.Command {
 				played++
 				// A fresh judge per scenario: it holds the conversation it grades
 				// against, so one scenario's turns must not reach the next one's.
-				res, err := eval.RunURL(cmd.Context(), scenario, botURL, getJudge())
+				res, err := eval.RunURL(cmd.Context(), scenario, botURL, eval.Options{
+					Judge:           getJudge(),
+					BotReadyTimeout: time.Duration(botReadyTimeout * float64(time.Second)),
+				})
 				if err != nil {
 					return fmt.Errorf("%s: %w", scenario.Name, err)
 				}
-				_, _ = fmt.Fprintln(out, res.String())
+				printResult(out, res)
 				if !res.Passed() {
 					failed++
 				}
@@ -103,6 +113,8 @@ var scenarioSuffixes = []string{".yaml", ".yml"}
 // expandScenarioPaths turns each argument into the scenarios to play. A file
 // stands for itself; a directory stands for the scenarios directly in it, in
 // name order, so a whole suite can be played by naming the folder holding it.
+// The fragments its scenarios include, which have no `name:`, are left out of
+// a directory; a file given explicitly is always taken.
 //
 // A directory holding no scenario is refused rather than quietly contributing
 // nothing, since a run that plays nothing at all looks like a run that passed.
@@ -122,8 +134,9 @@ func expandScenarioPaths(args []string) ([]string, error) {
 		}
 		found := len(paths)
 		for _, e := range entries {
-			if !e.IsDir() && slices.Contains(scenarioSuffixes, filepath.Ext(e.Name())) {
-				paths = append(paths, filepath.Join(arg, e.Name()))
+			path := filepath.Join(arg, e.Name())
+			if !e.IsDir() && slices.Contains(scenarioSuffixes, filepath.Ext(e.Name())) && eval.IsScenarioFile(path) {
+				paths = append(paths, path)
 			}
 		}
 		if len(paths) == found {
@@ -160,12 +173,16 @@ func evalSuiteCmd() *cobra.Command {
 
 		failed := 0
 		for _, r := range results {
-			p("%-5s %s (%s)\n", suiteStatus(r), filepath.Base(r.Scenario), r.BotURL)
+			line := fmt.Sprintf("%-5s %s (%s)", suiteStatus(r), filepath.Base(r.Scenario), r.BotURL)
+			if tally := turnTally(r.Result); tally != "" {
+				line += " " + tally
+			}
+			p("%s\n", line)
 			if r.Err != nil {
 				p("  %v\n", r.Err)
 			}
 			for _, f := range r.Result.Failures {
-				p("  - %s\n", f)
+				p("  - %s\n", failureLine(f))
 			}
 			if !r.Passed() {
 				failed++
@@ -178,6 +195,61 @@ func evalSuiteCmd() *cobra.Command {
 		return nil
 	}
 	return cmd
+}
+
+// printResult prints a scenario's result: its verdict and, for a run that
+// failed, how many turns passed and every failure.
+func printResult(out io.Writer, res eval.Result) {
+	if res.Passed() {
+		_, _ = fmt.Fprintf(out, "PASS %s\n", res.Scenario)
+		return
+	}
+	line := "FAIL " + res.Scenario
+	if tally := turnTally(res); tally != "" {
+		line += " " + tally
+	}
+	_, _ = fmt.Fprintln(out, line)
+	for _, f := range res.Failures {
+		_, _ = fmt.Fprintf(out, "  - %s\n", failureLine(f))
+	}
+}
+
+// failureLine is one failure as the run reports it: where, on what, its kind,
+// and its reason. Reading the reasons is how a person tells a bot that
+// misbehaved from one that never started; the kind says which assertion gave
+// way.
+func failureLine(f eval.Failure) string {
+	where := fmt.Sprintf("turn %d", f.Turn)
+	if f.Turn < 1 {
+		where = "run"
+	}
+	return fmt.Sprintf("%s %s %s: %s", where, f.Event, f.Kind, f.Reason)
+}
+
+// turnTally is the run's detail beside its verdict, or "": "7/10 turns" for a
+// run that drove every turn and failed some.
+//
+// A rate needs every turn scored. A run that stopped at its first failure left
+// the rest undriven, and a fraction over those would read as turns that failed
+// when they were never attempted; what it stopped on is in the failure listing
+// instead. A run that passed already says so.
+func turnTally(res eval.Result) string {
+	if len(res.Turns) == 0 {
+		return ""
+	}
+	failed := 0
+	for _, t := range res.Turns {
+		switch t.Status {
+		case eval.TurnNotRun:
+			return ""
+		case eval.TurnFailed:
+			failed++
+		}
+	}
+	if failed == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d turns", len(res.Turns)-failed, len(res.Turns))
 }
 
 // suiteStatus is the one-word status for a suite result.

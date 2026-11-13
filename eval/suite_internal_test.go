@@ -3,6 +3,8 @@ package eval
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -27,23 +29,29 @@ func entry(url string, n, concurrency int) SuiteEntry {
 }
 
 // overlap stands in for the bot and the harness, recording the most scenarios
-// held at once per bot and in all, and the order they started in.
+// held at once per key (the bot, unless key says otherwise) and in all, and the
+// order they started in.
 type overlap struct {
 	mu      sync.Mutex
+	key     func(job) string
 	active  map[string]int
 	peak    map[string]int
 	started []string
 }
 
 func newOverlap() *overlap {
-	return &overlap{active: map[string]int{}, peak: map[string]int{}}
+	return &overlap{
+		key:    func(j job) string { return j.botURL },
+		active: map[string]int{}, peak: map[string]int{},
+	}
 }
 
 func (o *overlap) run(hold time.Duration) func(context.Context, job, Judge) SuiteResult {
 	return func(_ context.Context, j job, _ Judge) SuiteResult {
+		k := o.key(j)
 		o.mu.Lock()
-		o.active[j.botURL]++
-		o.peak[j.botURL] = max(o.peak[j.botURL], o.active[j.botURL])
+		o.active[k]++
+		o.peak[k] = max(o.peak[k], o.active[k])
 		total := 0
 		for _, n := range o.active {
 			total += n
@@ -55,7 +63,7 @@ func (o *overlap) run(hold time.Duration) func(context.Context, job, Judge) Suit
 		time.Sleep(hold)
 
 		o.mu.Lock()
-		o.active[j.botURL]--
+		o.active[k]--
 		o.mu.Unlock()
 		return SuiteResult{Entry: j.entry, BotURL: j.botURL, Scenario: j.path}
 	}
@@ -137,7 +145,29 @@ func TestSuiteEntryQueues(t *testing.T) {
 		}
 	})
 
-	t.Run("an entry cap is the lowest given and none without one", func(t *testing.T) {
+	t.Run("a label's second entry is a queue of its own in its manifest place", func(t *testing.T) {
+		m := withJobs(suiteOf(0,
+			SuiteEntry{Name: "a", BotURL: "a", Scenarios: []string{"s1", "s2"}},
+			SuiteEntry{Name: "b", BotURL: "b", Scenarios: []string{"s1"}},
+			SuiteEntry{Name: "a", BotURL: "a", Scenarios: []string{"s3"}},
+			SuiteEntry{Name: "c", BotURL: "c", Scenarios: []string{"s1"}},
+		))
+		js := m.jobs()
+		var got [][]string
+		for _, q := range m.entryQueues(js) {
+			var items []string
+			for _, i := range q.items {
+				items = append(items, js[i].entry+" "+js[i].path)
+			}
+			got = append(got, items)
+		}
+		want := [][]string{{"a s1", "a s2"}, {"b s1"}, {"a s3"}, {"c s1"}}
+		if !slices.EqualFunc(got, want, slices.Equal) {
+			t.Fatalf("queues %v, want %v", got, want)
+		}
+	})
+
+	t.Run("each entry has its own cap and none without one", func(t *testing.T) {
 		a1 := SuiteEntry{Name: "a", BotURL: "a", Concurrency: 3, Scenarios: []string{"s1"}}
 		a2 := SuiteEntry{Name: "a", BotURL: "a", Concurrency: 2, Scenarios: []string{"s2"}}
 		b := SuiteEntry{Name: "b", BotURL: "b", Scenarios: []string{"s1"}}
@@ -146,8 +176,71 @@ func TestSuiteEntryQueues(t *testing.T) {
 		for _, q := range m.entryQueues(m.jobs()) {
 			caps = append(caps, q.cap)
 		}
-		if !slices.Equal(caps, []int{2, 0}) {
-			t.Fatalf("caps %v, want [2 0]", caps)
+		if !slices.Equal(caps, []int{3, 2, 0}) {
+			t.Fatalf("caps %v, want [3 2 0]", caps)
 		}
 	})
+}
+
+// An entry's cap is its own: another entry for the same bot runs alongside it
+// up to the suite's slots, not held to the first entry's cap.
+func TestSuiteAnEntryCapLeavesAnotherEntryForTheSameBotAlone(t *testing.T) {
+	o := newOverlap()
+	capped := entry("a", 3, 1)
+	capped.Name = "capped"
+	plain := entry("a", 3, 0)
+	plain.Name = "plain"
+	o.key = func(j job) string { return j.entry }
+	runStubbed(t, suiteOf(4, capped, plain), o, 50*time.Millisecond)
+
+	if o.peak["capped"] != 1 {
+		t.Fatalf("capped peak = %d, want its cap of 1", o.peak["capped"])
+	}
+	if o.peak["plain"] != 3 {
+		t.Fatalf("plain peak = %d, want all 3 of its scenarios at once", o.peak["plain"])
+	}
+	if o.peak["total"] != 4 {
+		t.Fatalf("total peak = %d, want the suite's 4 slots filled", o.peak["total"])
+	}
+}
+
+// A scenario file that is not there still gets a run, which reports why it
+// could not load rather than leaving it out of the suite.
+func TestSuiteAMissingScenarioStillGetsARun(t *testing.T) {
+	m := withJobs(suiteOf(0, SuiteEntry{BotURL: "ws://bot", Scenarios: []string{"nope.yaml"}}))
+	js := m.jobs()
+	if len(js) != 1 || js[0].loadErr == nil || js[0].path != "nope.yaml" {
+		t.Fatalf("jobs = %+v, want one run carrying the load error", js)
+	}
+}
+
+// A file holding several scenarios contributes a run for each, under its own
+// name, all read from the one file.
+func TestSuiteAFileContributesARunPerScenario(t *testing.T) {
+	dir := t.TempDir()
+	greet := "name: greet\nturns: []\n"
+	mixed := "name: mixed\nscenarios:\n  - name: hi\n    turns: []\n  - name: bye\n    turns: []\n"
+	for file, body := range map[string]string{"greet.yaml": greet, "mixed.yaml": mixed} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &Manifest{
+		Suite: []SuiteEntry{{BotURL: "ws://bot", Scenarios: []string{"greet.yaml", "mixed.yaml"}}},
+		dir:   dir,
+	}
+	var names, files []string
+	for _, j := range m.jobs() {
+		if j.loadErr != nil {
+			t.Fatalf("%s: %v", j.path, j.loadErr)
+		}
+		names = append(names, j.scenario.Name)
+		files = append(files, filepath.Base(j.path))
+	}
+	if want := []string{"greet", "mixed/hi", "mixed/bye"}; !slices.Equal(names, want) {
+		t.Fatalf("runs %v, want %v", names, want)
+	}
+	if want := []string{"greet.yaml", "mixed.yaml", "mixed.yaml"}; !slices.Equal(files, want) {
+		t.Fatalf("files %v, want %v", files, want)
+	}
 }

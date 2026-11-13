@@ -99,6 +99,53 @@ func TestLoadManifestRejectsInvalid(t *testing.T) {
 	}
 }
 
+// An entry's concurrency, once written, is a positive integer: zero, a negative
+// or something that is not an integer is refused rather than read as no cap.
+func TestAnEntrysConcurrencyMustBeAPositiveInteger(t *testing.T) {
+	for _, bad := range []string{"0", "-1", "two", "true", "1.5"} {
+		dir := t.TempDir()
+		writeFile(t, dir, "m.yaml", "suite:\n  - bot_url: ws://x\n    concurrency: "+bad+"\n    scenarios: [a.yaml]\n")
+		_, err := eval.LoadManifest(filepath.Join(dir, "m.yaml"))
+		if err == nil || !strings.Contains(err.Error(), "concurrency") {
+			t.Errorf("concurrency %s: err = %v, want it refused by name", bad, err)
+		}
+	}
+	dir := t.TempDir()
+	writeFile(t, dir, "m.yaml", "suite:\n  - bot_url: ws://x\n    concurrency: 2\n    scenarios: [a.yaml]\n")
+	m, err := eval.LoadManifest(filepath.Join(dir, "m.yaml"))
+	if err != nil || m.Suite[0].Concurrency != 2 {
+		t.Fatalf("LoadManifest = %+v, %v; want a cap of 2", m, err)
+	}
+}
+
+// Two entries running one scenario under one label are two runs nothing can tell
+// apart, so the manifest is refused. Runs are compared by the scenario read,
+// so two paths to one file collide. The same bot on another scenario is fine,
+// and so is a second entry with a name of its own.
+func TestTwoEntriesMayNotRunAScenarioUnderOneLabel(t *testing.T) {
+	load := func(body string) error {
+		dir := t.TempDir()
+		writeFile(t, dir, "greet.yaml", "name: greet\nturns: []\n")
+		writeFile(t, dir, "book.yaml", "name: book\nturns: []\n")
+		writeFile(t, dir, "m.yaml", body)
+		_, err := eval.LoadManifest(filepath.Join(dir, "m.yaml"))
+		return err
+	}
+	err := load("suite:\n  - bot_url: ws://bot\n    scenarios: [greet.yaml]\n" +
+		"  - bot_url: ws://bot\n    scenarios: [./greet.yaml]\n")
+	if err == nil || !strings.Contains(err.Error(), `"ws://bot" runs "greet" twice`) {
+		t.Fatalf("err = %v, want the repeated run named", err)
+	}
+	if err := load("suite:\n  - bot_url: ws://bot\n    scenarios: [greet.yaml]\n" +
+		"  - bot_url: ws://bot\n    scenarios: [book.yaml]\n"); err != nil {
+		t.Fatalf("the same bot on another scenario: %v", err)
+	}
+	if err := load("suite:\n  - bot_url: ws://bot\n    scenarios: [greet.yaml]\n" +
+		"  - bot_url: ws://bot\n    name: again\n    scenarios: [greet.yaml]\n"); err != nil {
+		t.Fatalf("a named second entry: %v", err)
+	}
+}
+
 // overlapBot counts how many scenarios are being played against it at once, and
 // records the highest that count ever reached, which is what a concurrency cap
 // is about.

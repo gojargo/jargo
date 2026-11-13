@@ -54,6 +54,9 @@
 //	name: <str>              required: the scenario's name
 //	turns: <list>            the turns, played in order
 //	context: <list>          messages the bot's context starts from
+//	stop_on_failure: <bool>  whether the first failed turn ends the scenario
+//	                         (default true); false drives every turn, for a
+//	                         scenario whose turns are scored independently
 //
 // Any value can come from a separate file with !include, resolved against the
 // scenario file's directory, so scenarios can share a block they all need:
@@ -236,6 +239,8 @@ var (
 	errEmptySendAfter  = errors.New("send_after needs an event or a positive delay_ms")
 	errIncludeNotPath  = errors.New("!include expects a file path")
 	errIncludeTooDeep  = errors.New("!include nested too deep, check for a cycle")
+	errExpectNotList   = errors.New("expect must be a list if present")
+	errContextNotList  = errors.New("context must be a list of messages")
 
 	errFileNotMapping          = errors.New("a scenario file must be a mapping")
 	errScenariosNotList        = errors.New("scenarios must be a non-empty list")
@@ -346,6 +351,13 @@ type Scenario struct {
 	// the harness sends it once the bot is ready, replacing whatever context the
 	// bot built for itself. Leave it out to test the bot's own opening state.
 	Context []frames.Message `yaml:"context,omitempty"`
+	// StopOnFailure is whether the first failed turn ends the scenario; nil is
+	// true. A failed turn leaves the conversation in an unknown state, so the
+	// remaining turns usually just burn a budget each. Set it false for a
+	// scenario whose turns are scored independently, where the turns after a
+	// failure are still worth driving; give those turns an explicit within_ms,
+	// since with the 60s default a silent bot costs one full budget per turn.
+	StopOnFailure *bool `yaml:"stop_on_failure,omitempty"`
 
 	// hasTurns records that the scenario wrote a `turns:` key, which is how an
 	// empty list is told from an omitted one.
@@ -353,7 +365,12 @@ type Scenario struct {
 }
 
 // UnmarshalYAML decodes a scenario, recording whether `turns:` was written out.
+// A `context:` left empty is no context, and anything else that is not a list
+// is refused by name.
 func (s *Scenario) UnmarshalYAML(node *yaml.Node) error {
+	if v := mappingValue(node, "context"); v != nil && v.Kind != yaml.SequenceNode && !isNull(v) {
+		return errContextNotList
+	}
 	type raw Scenario // a distinct type, so decoding does not recurse here
 	var r raw
 	if err := node.Decode(&r); err != nil {
@@ -362,6 +379,11 @@ func (s *Scenario) UnmarshalYAML(node *yaml.Node) error {
 	*s = Scenario(r)
 	s.hasTurns = hasKey(node, "turns")
 	return nil
+}
+
+// stopsOnFailure reports whether the first failed turn ends the scenario.
+func (s *Scenario) stopsOnFailure() bool {
+	return s.StopOnFailure == nil || *s.StopOnFailure
 }
 
 // Turn is one step of a scenario: input for the bot, expectations about what it
@@ -405,6 +427,11 @@ func (t *Turn) UnmarshalYAML(node *yaml.Node) error {
 		User      string        `yaml:"user,omitempty"`
 		Expect    []Expectation `yaml:"expect,omitempty"`
 		SendAfter *SendAfter    `yaml:"send_after,omitempty"`
+	}
+	// expect is optional, but once written it is a list, and anything else is
+	// refused by name rather than as a decoding error about a Go type.
+	if v := mappingValue(node, "expect"); v != nil && v.Kind != yaml.SequenceNode {
+		return errExpectNotList
 	}
 	var r raw
 	if err := node.Decode(&r); err != nil {
@@ -654,6 +681,31 @@ func Load(path string) (*Scenario, error) {
 		return nil, fmt.Errorf("eval: %s: %w: %d", path, errNotOneScenario, len(file.Scenarios))
 	}
 	return file.Scenarios[0], nil
+}
+
+// IsScenarioFile reports whether a YAML file is a scenario rather than a
+// fragment one includes.
+//
+// Every scenario file has a `name:`; a fragment a scenario includes with
+// !include (a block of turns, a context) has none. A file that does not parse
+// counts as a scenario, so loading it reports the error instead of a directory
+// run skipping it silently.
+func IsScenarioFile(path string) bool {
+	node, err := loadNode(path, includeDepth)
+	if err != nil {
+		return true
+	}
+	doc := unwrapDocument(node)
+	if doc.Kind != yaml.MappingNode {
+		return true
+	}
+	return hasKey(doc, "name")
+}
+
+// isNull reports whether a node is YAML's null, which a key written with no
+// value holds.
+func isNull(node *yaml.Node) bool {
+	return node.Kind == yaml.ScalarNode && node.Tag == "!!null"
 }
 
 // unwrapDocument returns the value a parsed document wraps.

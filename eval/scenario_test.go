@@ -673,3 +673,122 @@ turns:
 		}
 	}
 }
+
+// An error in a scenario of a file holding several names the file, so the
+// mistake can be found.
+func TestEntryErrorsNameTheFile(t *testing.T) {
+	path := writeScenario(t, "name: g\nscenarios: [{name: a, turns: [{user: hi, expect: nope}]}]\n")
+	_, err := eval.LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("err = %v, want it to name %s", err, path)
+	}
+}
+
+// A keypad turn may be scheduled like a spoken one, which is how a keypress
+// barges in.
+func TestSendAfterIsAllowedOnADTMFTurn(t *testing.T) {
+	s, err := eval.Load(writeScenario(t, `
+name: bargein
+turns:
+  - dtmf: "0"
+    send_after: {event: llm_started, delay_ms: 300}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sa := s.Turns[0].SendAfter; sa == nil || sa.Event != eval.EventLLMStarted || sa.DelayMS != 300 {
+		t.Fatalf("send_after = %+v", sa)
+	}
+}
+
+// expect is optional, but written out it is a list, and anything else is
+// refused by name.
+func TestExpectThatIsNotAListIsRejected(t *testing.T) {
+	_, err := eval.Load(writeScenario(t, "name: bad\nturns: [{user: hi, expect: nope}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "expect") {
+		t.Fatalf("err = %v, want expect named", err)
+	}
+}
+
+// A scenario with no context: starts from the bot's own.
+func TestContextDefaultsToEmpty(t *testing.T) {
+	s, err := eval.Load(writeScenario(t,
+		"name: e\nturns: [{user: hi, expect: [{event: user_stopped_speaking}]}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Context) != 0 {
+		t.Fatalf("context = %+v, want none", s.Context)
+	}
+}
+
+// A failed turn ends the scenario unless the scenario says otherwise, and a
+// file's stop_on_failure is the default each of its scenarios may replace.
+func TestStopOnFailure(t *testing.T) {
+	s, err := eval.Load(writeScenario(t, "name: a\nturns: [{user: hi, expect: [{event: llm_response}]}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.StopOnFailure != nil {
+		t.Fatalf("stop_on_failure = %v, want it left to the default, true", *s.StopOnFailure)
+	}
+	s, err = eval.Load(writeScenario(t,
+		"name: a\nstop_on_failure: false\nturns: [{user: hi, expect: [{event: llm_response}]}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.StopOnFailure == nil || *s.StopOnFailure {
+		t.Fatalf("stop_on_failure = %v, want false", s.StopOnFailure)
+	}
+
+	file, err := eval.LoadFile(writeScenario(t, `
+name: g
+stop_on_failure: false
+scenarios:
+  - name: from_the_file
+    turns: []
+  - name: its_own
+    stop_on_failure: true
+    turns: []
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFile, own := file.Scenarios[0].StopOnFailure, file.Scenarios[1].StopOnFailure
+	if fromFile == nil || *fromFile || own == nil || !*own {
+		t.Fatalf("stop_on_failure = %v and %v, want the file's false then the entry's true", fromFile, own)
+	}
+}
+
+// A context: that is not a list of messages is refused by name.
+func TestContextThatIsNotAListIsRejected(t *testing.T) {
+	_, err := eval.Load(writeScenario(t,
+		"name: bad\ncontext: not_a_list\nturns: [{user: hi, expect: [{event: x}]}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "context") {
+		t.Fatalf("err = %v, want context named", err)
+	}
+}
+
+// The fragments a directory's scenarios include have no name of their own, so
+// they are not scenarios. A file that does not parse still counts as one, so
+// loading it reports the error rather than a directory run skipping it.
+func TestIsScenarioFileLeavesIncludeFragmentsOut(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]struct {
+		body string
+		want bool
+	}{
+		"alpha.yaml":  {"name: alpha\nscenarios: [{name: alpha, turns: []}]\n", true},
+		"judge.yaml":  {"modality: text\n", false},
+		"user.yaml":   {"service: openai\n", false},
+		"broken.yaml": {"name: [broken\n", true},
+	}
+	for file, f := range files {
+		writeFile(t, dir, file, f.body)
+	}
+	for file, f := range files {
+		if got := eval.IsScenarioFile(filepath.Join(dir, file)); got != f.want {
+			t.Errorf("IsScenarioFile(%s) = %v, want %v", file, got, f.want)
+		}
+	}
+}

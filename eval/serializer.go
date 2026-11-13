@@ -43,7 +43,7 @@ type clientMessageData struct {
 type configurePayload struct {
 	FunctionCallReportLevel map[string]rtvi.FunctionCallReportLevel `json:"function_call_report_level,omitempty"`
 	VADUserSpeaking         *bool                                   `json:"vad_user_speaking,omitempty"`
-	BotLLMMarker            *bool                                   `json:"bot_llm_marker,omitempty"`
+	BotLLMMarker            *bool                                   `json:"llm_markers,omitempty"`
 }
 
 // contextPayload is the `d` of an eval-context message: the messages the bot's

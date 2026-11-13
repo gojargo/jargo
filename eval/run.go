@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -34,6 +35,14 @@ type Options struct {
 	// a caller reporting a long run as it happens rather than at the end. It runs
 	// on the harness's own goroutine, so keep it quick.
 	OnProgress func(Progress)
+	// BotReadyTimeout is how long the bot has, once connected, to answer the
+	// RTVI handshake with bot-ready, which covers the bot's startup; zero uses
+	// DefaultBotReadyTimeout. A bot that closes the connection first fails the
+	// run at once.
+	BotReadyTimeout time.Duration
+	// ConnectTimeout is how long the bot has to accept connections at all
+	// before the run fails to connect; zero uses DefaultConnectTimeout.
+	ConnectTimeout time.Duration
 }
 
 // Run plays the scenario at path against buildBot, hosted in-process over a
@@ -71,6 +80,10 @@ func RunWith(t *testing.T, path string, buildBot Bot, opts Options) {
 // Host stands up buildBot on an in-process loopback WebSocket and plays scenario
 // against it, returning the result. Run wraps this for the go-test path; callers
 // that want the Result directly (custom reporting, benchmarks) can use it.
+//
+// What goes wrong with the run itself, a bot that never becomes ready or a
+// harness that fails mid-run, is a failure in the Result, as it is for RunURL.
+// The error is only ctx ending.
 func Host(ctx context.Context, scenario *Scenario, buildBot Bot, opts Options) (Result, error) {
 	srv := httptest.NewServer(Handler(buildBot))
 	defer srv.Close()
@@ -107,8 +120,13 @@ func Handler(buildBot Bot) http.Handler {
 
 // RunURL plays scenario against a bot already listening at botURL (a ws:// or
 // wss:// RTVI endpoint). It backs the command-line runner.
-func RunURL(ctx context.Context, scenario *Scenario, botURL string, judge Judge) (Result, error) {
-	return runAgainst(ctx, scenario, botURL, Options{Judge: judge})
+//
+// A bot that never accepts the connection, refuses it, or never becomes ready
+// is a failure of the Result (a <connect> or <bot-ready> one), and so is the
+// harness failing mid-run (an <error> one), with every turn not reached left
+// TurnNotRun. The error is only ctx ending.
+func RunURL(ctx context.Context, scenario *Scenario, botURL string, opts Options) (Result, error) {
+	return runAgainst(ctx, scenario, botURL, opts)
 }
 
 // runAgainst connects to a bot and plays the scenario.
@@ -116,20 +134,15 @@ func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Option
 	// The judge is closed however the run ends, including a run that never
 	// reaches the bot.
 	defer closeJudge(ctx, opts.Judge)
-	c, err := dial(ctx, url)
-	if err != nil {
-		return Result{Scenario: scenario.Name}, err
-	}
-	defer c.close()
-
 	sess := &session{
-		client:     c,
-		scenario:   scenario,
-		judge:      opts.Judge,
-		userTTS:    opts.UserTTS,
-		onProgress: opts.OnProgress,
+		scenario:        scenario,
+		judge:           opts.Judge,
+		userTTS:         opts.UserTTS,
+		botReadyTimeout: opts.BotReadyTimeout,
+		connectTimeout:  opts.ConnectTimeout,
+		onProgress:      opts.OnProgress,
 	}
-	return sess.run(ctx)
+	return sess.run(ctx, url)
 }
 
 // wsURL rewrites an http(s) base URL to its ws(s) form.

@@ -149,6 +149,21 @@ func TestTranslateFunctionCall(t *testing.T) {
 	}
 }
 
+// The bot's reports about the user, its raw VAD and its turn-level speaking, map
+// to the matching scenario events, as does an interruption.
+func TestTranslateReportedSpeakingAndVADEvents(t *testing.T) {
+	s := &session{events: make(chan Event, eventBuffer)}
+	for msgType, kind := range map[string]string{
+		rtvi.TypeUserStartedSpeaking: EventUserStartedSpeaking,
+		rtvi.TypeUserStoppedSpeaking: EventUserStoppedSpeaking,
+		rtvi.TypeVADUserStarted:      EventVADUserStartedSpeaking,
+		rtvi.TypeVADUserStopped:      EventVADUserStoppedSpeaking,
+		rtvi.TypeBotInterrupted:      EventBotInterrupted,
+	} {
+		wantEvent(t, s.translate(msg(t, msgType, nil)), kind, "")
+	}
+}
+
 // TestTranslateUnmappedMessageIgnored checks a message the scenario format has
 // no Event for carries none.
 func TestTranslateUnmappedMessageIgnored(t *testing.T) {

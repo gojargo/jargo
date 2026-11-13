@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -23,15 +24,26 @@ import (
 // rather than failing on latency. Set within_ms to assert on timing.
 const defaultTimeout = 60 * time.Second
 
-// botReadyTimeout is how long the bot has to announce readiness. It is its own,
-// much shorter budget: a bot that never answers the handshake is not a valid
-// eval target, and there is nothing to wait for.
-const botReadyTimeout = 10 * time.Second
+// DefaultBotReadyTimeout is how long the bot has, once connected, to announce
+// readiness with bot-ready, which covers the bot's startup.
+const DefaultBotReadyTimeout = 60 * time.Second
 
-// errBotNotReady is returned when the bot never completes the RTVI handshake.
-//
-//nolint:gochecknoglobals // sentinel error
-var errBotNotReady = errors.New("eval: bot did not become ready")
+// DefaultConnectTimeout is how long the harness waits for the bot to accept
+// connections at all.
+const DefaultConnectTimeout = 5 * time.Second
+
+// connectRetry is how often the harness tries the bot again while it is not yet
+// accepting connections.
+const connectRetry = 250 * time.Millisecond
+
+// botUnavailableError is a handshake the bot ended before bot-ready: it closed
+// the connection, or never answered. kind is the failure kind the run records.
+type botUnavailableError struct {
+	kind   string
+	reason string
+}
+
+func (e *botUnavailableError) Error() string { return e.reason }
 
 // eventBotReady is the translated bot-ready message. The handshake waits for it;
 // a scenario cannot assert on it, so it is not in knownEvents.
@@ -125,6 +137,15 @@ type session struct {
 	scenario *Scenario
 	judge    Judge
 	userTTS  *tts.Base // non-nil in audio mode: synthesizes each user turn
+	// botReadyTimeout is how long the bot has to answer the handshake; zero
+	// uses DefaultBotReadyTimeout.
+	botReadyTimeout time.Duration
+	// connectTimeout is how long the bot has to accept connections; zero uses
+	// DefaultConnectTimeout.
+	connectTimeout time.Duration
+	// failures is every failure of the run so far, in order. The matcher
+	// goroutine owns it.
+	failures []Failure
 
 	// events carries the translated events the matcher works on. The reader
 	// goroutine is the only writer.
@@ -197,16 +218,29 @@ type session struct {
 // are not lost before the matcher reads them.
 const eventBuffer = 256
 
-// run completes the handshake, then plays every turn. The results are named so
-// the deferred diagnostics reach the caller: an unnamed result is copied before
-// the defer runs.
-func (s *session) run(ctx context.Context) (res Result, err error) {
+// run connects to the bot at url, drives the conversation, and returns the
+// result. The results are named so the deferred diagnostics reach the caller: an
+// unnamed result is copied before the defer runs.
+//
+// What goes wrong with the run itself is a failure of the result rather than an
+// error: a bot that never accepts the connection is a <connect> failure, one
+// that never becomes ready a <bot-ready> failure, and a harness that fails
+// mid-run an <error> failure scored against the turn it interrupted. Every turn
+// the run did not reach stays TurnNotRun. Only the caller ending ctx is
+// returned as an error.
+func (s *session) run(ctx context.Context, url string) (res Result, err error) {
 	res = Result{Scenario: s.scenario.Name}
 
 	s.started = time.Now()
 	s.events = make(chan Event, eventBuffer)
 	s.seenAt = make(map[string]time.Time)
-	go s.readLoop(ctx)
+	// One record per turn, filled in as the turns run. They start as not run
+	// and stay that way on every path that ends the run early, so the result
+	// always says which turns were actually scored.
+	s.turns = make([]TurnResult, len(s.scenario.Turns))
+	for i := range s.turns {
+		s.turns[i] = TurnResult{Turn: i + 1, Status: TurnNotRun}
+	}
 
 	// The diagnostics are attached however the run ends, including the error
 	// paths: a run that could not start is exactly when the trace is wanted.
@@ -216,33 +250,140 @@ func (s *session) run(ctx context.Context) (res Result, err error) {
 		res.Turns = s.turns
 	}()
 
-	s.debugf("run: scenario %q", s.scenario.Name)
-	if err := s.handshake(ctx); err != nil {
-		s.debugf("handshake: failed: %v", err)
+	s.debugf("run: scenario %q -> %s", s.scenario.Name, url)
+	// A bot that never accepts is a clean <connect> failure.
+	if connectErr := waitForBot(ctx, url, s.connectTimeout); connectErr != nil {
+		if ctx.Err() != nil {
+			return res, ctx.Err()
+		}
+		reason := fmt.Sprintf("failed to connect to %s: %v", url, connectErr)
+		res.Failures = []Failure{s.runFailure(RunEventConnect, reason, FailureConnectFailed)}
+		return res, nil
+	}
+
+	res.Failures, err = s.drive(ctx, url)
+	if err != nil {
 		return res, err
 	}
-	s.debugf("handshake: ok")
+	verdict := "PASS"
+	if len(res.Failures) > 0 {
+		verdict = "FAIL"
+	}
+	s.debugf("done: %s (%d failure(s))", verdict, len(res.Failures))
+	return res, nil
+}
 
+// drive opens the connection, converses, and closes it. A failure of the
+// harness itself, a panic included, is recorded as an <error> failure with its
+// stack in the trace, so the run still yields a result.
+func (s *session) drive(ctx context.Context, url string) (failures []Failure, err error) {
+	c, err := dial(ctx, url)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return []Failure{s.runFailure(RunEventConnect, err.Error(), FailureConnectFailed)}, nil
+	}
+	s.client = c
+	defer c.close()
+	go s.readLoop(ctx)
+
+	defer func() {
+		if r := recover(); r != nil {
+			s.failures = append(s.failures, s.errorFailure(fmt.Sprintf("panic: %v", r), debug.Stack()))
+			failures, err = s.failures, nil
+		}
+	}()
+	if err := s.converse(ctx); err != nil {
+		if ctx.Err() != nil {
+			return s.failures, ctx.Err()
+		}
+		s.failures = append(s.failures, s.errorFailure(err.Error(), nil))
+		return s.failures, nil
+	}
+	return s.failures, nil
+}
+
+// converse runs the handshake, then the turns. A bot that never says it is
+// ready is a <bot-ready> failure; an error it returns is the harness's own.
+func (s *session) converse(ctx context.Context) error {
+	s.debugf("connected")
+	if err := s.handshake(ctx); err != nil {
+		if refused, ok := errors.AsType[*botUnavailableError](err); ok {
+			s.debugf("handshake: failed (%v)", err)
+			s.failures = []Failure{s.runFailure(RunEventBotReady, err.Error(), refused.kind)}
+			return nil
+		}
+		return err
+	}
+	s.debugf("handshake: ok (bot-ready)")
+	return s.runTurns(ctx)
+}
+
+// runTurns drives the scenario's turns in order, filling in their records.
+func (s *session) runTurns(ctx context.Context) error {
 	for i, turn := range s.scenario.Turns {
 		s.setTurn(i + 1)
+		s.debugf("--- turn %d: %s", i+1, turn.input())
 		startedTurn := time.Now()
 		failures, err := s.runTurn(ctx, turn, i+1)
 		if err != nil {
-			return res, err
+			return err
 		}
-		s.finishTurn(i+1, failures, time.Since(startedTurn))
-		res.Failures = append(res.Failures, failures...)
+		record := &s.turns[i]
+		record.Status = TurnPassed
 		if len(failures) > 0 {
-			// Fail fast: a failed turn leaves the conversation in an unknown state,
-			// so running the rest just burns another budget per turn. A broken
-			// greeting turn should not cost the full budget here and again on the
-			// question that follows.
-			s.debugf("turn %d failed, stopping the scenario", i+1)
+			record.Status = TurnFailed
+		}
+		record.Failures = failures
+		record.Duration = time.Since(startedTurn)
+		s.failures = append(s.failures, failures...)
+		if len(failures) == 0 {
+			continue
+		}
+		// By default a failed turn ends the scenario: it leaves the conversation
+		// in an unknown state, so running the rest just burns another budget per
+		// turn. A scenario whose turns are scored independently sets
+		// stop_on_failure: false and drives all of them.
+		if s.scenario.stopsOnFailure() {
+			s.debugf("turn %d failed; stopping the scenario (stop_on_failure)", i+1)
 			break
 		}
+		s.debugf("turn %d failed; continuing (stop_on_failure: false)", i+1)
 	}
-	s.debugf("done: %d failure(s)", len(res.Failures))
-	return res, nil
+	return nil
+}
+
+// runFailure is a failure of the run itself rather than of an expectation,
+// scored against the turn the harness is working on (0 before any).
+func (s *session) runFailure(event, reason, kind string) Failure {
+	s.diagMu.Lock()
+	turn := s.currentTurn
+	s.diagMu.Unlock()
+	return Failure{Turn: turn, Expectation: 0, Event: event, Reason: reason, Kind: kind}
+}
+
+// errorFailure traces a failure of the harness itself, with the stack when
+// there is one, and scores it against the turn it interrupted.
+func (s *session) errorFailure(reason string, stack []byte) Failure {
+	s.debugf("error: %s", reason)
+	for line := range strings.Lines(string(stack)) {
+		s.debugf("%s", strings.TrimRight(line, "\n"))
+	}
+	f := s.runFailure(RunEventError, reason, FailureError)
+	s.recordFailure(f)
+	return f
+}
+
+// recordFailure scores a failure of the run against the turn it interrupted,
+// if any. Before any turn started every turn stays not run.
+func (s *session) recordFailure(f Failure) {
+	if f.Turn < 1 || f.Turn > len(s.turns) {
+		return
+	}
+	record := &s.turns[f.Turn-1]
+	record.Status = TurnFailed
+	record.Failures = append(record.Failures, f)
 }
 
 // debug appends a timestamped, turn-tagged line to the run's trace. The tag is
@@ -282,13 +423,7 @@ func (s *session) progress(p Progress) {
 
 // record adds what one expectation resolved to, to the turn it belongs to.
 func (s *session) record(turnNum int, r ExpectationResult) {
-	if n := len(s.turns); n > 0 && s.turns[n-1].Turn == turnNum {
-		s.turns[n-1].Expectations = append(s.turns[n-1].Expectations, r)
-		return
-	}
-	s.turns = append(s.turns, TurnResult{
-		Turn: turnNum, Status: TurnPassed, Expectations: []ExpectationResult{r},
-	})
+	s.turns[turnNum-1].Expectations = append(s.turns[turnNum-1].Expectations, r)
 }
 
 // matchedText is what the expectation matched, which is recorded only where
@@ -298,20 +433,6 @@ func (s *session) matchedText(fail *Failure) string {
 		return ""
 	}
 	return s.lastMatch
-}
-
-// finishTurn closes off a turn's record with how it went and how long it took. A
-// turn with no expectations at all, one that only sends input, is recorded too,
-// so the turns read back in the order the scenario wrote them.
-func (s *session) finishTurn(turnNum int, failures []Failure, took time.Duration) {
-	if n := len(s.turns); n == 0 || s.turns[n-1].Turn != turnNum {
-		s.turns = append(s.turns, TurnResult{Turn: turnNum, Status: TurnPassed})
-	}
-	last := &s.turns[len(s.turns)-1]
-	last.Duration = took
-	if len(failures) > 0 {
-		last.Status = TurnFailed
-	}
 }
 
 // setTurn records which turn the harness is working on, for the trace tag.
@@ -392,18 +513,8 @@ func (s *session) discardInterruptedOutput() {
 // handshake sends client-ready, waits for the bot's bot-ready reply, then asks
 // the bot to report as much of a tool call as this scenario asserts on.
 func (s *session) handshake(ctx context.Context) error {
-	ready := rtvi.Message{
-		Label: rtvi.MessageLabel, Type: rtvi.TypeClientReady, ID: messageID,
-		Data: map[string]any{"version": rtvi.ProtocolVersion},
-	}
-	if err := s.client.send(ctx, ready); err != nil {
+	if err := s.waitBotReady(ctx); err != nil {
 		return err
-	}
-	// bot-ready is a hard gate: a bot that never announces readiness either is
-	// not a valid eval target or has not finished starting, and firing turns at a
-	// half-started bot produces flaky, hard-to-read failures.
-	if _, ok := s.nextMatching(ctx, eventBotReady, time.Now().Add(botReadyTimeout)); !ok {
-		return fmt.Errorf("%w within %s", errBotNotReady, botReadyTimeout)
 	}
 	// Ask the bot to expose what this scenario asserts on, for the duration of
 	// this eval only, so a bot keeps its own defaults for its own clients.
@@ -431,6 +542,60 @@ func (s *session) handshake(ctx context.Context) error {
 	if len(s.scenario.Context) > 0 {
 		s.debugf("context: seeding %d message(s)", len(s.scenario.Context))
 		return s.client.send(ctx, contextMessage(s.scenario.Context))
+	}
+	return nil
+}
+
+// waitBotReady sends client-ready and waits for the bot's bot-ready reply.
+//
+// bot-ready is a hard gate: a bot that never announces readiness either is not
+// a valid eval target or has not finished starting, and firing turns at a
+// half-started bot produces flaky, hard-to-read failures. A bot that closes the
+// connection first, one at its capacity say, has refused the run, which is
+// reported at once with how it closed rather than waited out.
+func (s *session) waitBotReady(ctx context.Context) error {
+	ready := rtvi.Message{
+		Label: rtvi.MessageLabel, Type: rtvi.TypeClientReady, ID: messageID,
+		Data: map[string]any{"version": rtvi.ProtocolVersion},
+	}
+	timeout := s.botReadyTimeout
+	if timeout <= 0 {
+		timeout = DefaultBotReadyTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	if err := s.client.send(ctx, ready); err != nil {
+		// A bot that closes the connection as it arrives fails this write. How
+		// it closed is the reason worth reporting, once the reader has it.
+		for {
+			if _, ok := s.next(ctx, deadline); !ok {
+				break
+			}
+		}
+		if refused := s.refusal(ctx); refused != nil {
+			return refused
+		}
+		return err
+	}
+	if _, ok := s.nextMatching(ctx, eventBotReady, deadline); !ok {
+		if refused := s.refusal(ctx); refused != nil {
+			return refused
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &botUnavailableError{
+			kind:   FailureHandshakeTimeout,
+			reason: fmt.Sprintf("bot-ready not received within %dms", timeout.Milliseconds()),
+		}
+	}
+	return nil
+}
+
+// refusal is the error for a bot that closed the connection before bot-ready,
+// saying how it closed, or nil while the connection is open.
+func (s *session) refusal(ctx context.Context) error {
+	if closed := s.client.closedBy(); closed != nil && ctx.Err() == nil {
+		return &botUnavailableError{kind: FailureClosedBeforeReady, reason: closeDescription(closed)}
 	}
 	return nil
 }
@@ -517,7 +682,7 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 			s.debugf("FAIL: %s: %s", name, reason)
 			s.progress(Progress{Turn: turnNum, Event: name, Status: StatusTimeout, Detail: reason})
 			return []Failure{{
-				Turn: turnNum, Expectation: 0, Event: name, Reason: reason,
+				Turn: turnNum, Expectation: 0, Event: name, Reason: reason, Kind: FailureSendAfterTimeout,
 			}}, nil
 		}
 	}
@@ -663,6 +828,10 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// failFunc builds the failure of the expectation being matched, from its reason
+// and kind.
+type failFunc func(reason, kind string) *Failure
+
 // matchExpectation waits for an event matching exp, skipping unrelated events,
 // until deadline. It returns a failure, or nil on a match, and whether no event
 // of the expectation's kind arrived at all, which ends the turn.
@@ -676,11 +845,11 @@ func sleep(ctx context.Context, d time.Duration) error {
 func (s *session) matchExpectation(
 	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration, turnNum, expNum int,
 ) (*Failure, bool) {
-	fail := func(reason string) *Failure {
-		return &Failure{Turn: turnNum, Expectation: expNum, Event: exp.Event, Reason: reason}
+	fail := func(reason, kind string) *Failure {
+		return &Failure{Turn: turnNum, Expectation: expNum, Event: exp.Event, Reason: reason, Kind: kind}
 	}
 	missing := func() *Failure {
-		return fail(fmt.Sprintf("no matching %s event arrived within %s", exp.Event, budget))
+		return fail(fmt.Sprintf("no matching %s event arrived within %s", exp.Event, budget), FailureTimeout)
 	}
 
 	s.lastMatch = ""
@@ -726,10 +895,10 @@ func (s *session) aggregates(exp Expectation) bool {
 // each one until it is satisfied, affirmatively rejected, or the budget expires.
 func (s *session) matchAggregate(
 	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration,
-	fail func(string) *Failure, missing func() *Failure,
+	fail failFunc, missing func() *Failure,
 ) (*Failure, bool) {
 	if exp.Eval != "" && s.judge == nil {
-		return fail("scenario uses 'eval:' but no judge could be built"), false
+		return fail("scenario uses 'eval:' but no judge could be built", FailureNoJudge), false
 	}
 	var (
 		aggregate  string
@@ -742,13 +911,21 @@ func (s *session) matchAggregate(
 			if !seenAny {
 				return missing(), true // no response at all
 			}
-			return fail(fmt.Sprintf("not satisfied within %s: %s", budget, lastReason)), false
+			kind := FailureTextMismatch
+			if exp.Eval != "" {
+				kind = FailureJudgeContinue
+			}
+			return fail(fmt.Sprintf("not satisfied within %s: %s", budget, lastReason), kind), false
 		}
 		seenAny = true
 		// Feed each segment to the judge as its own reply message, so it judges
 		// the bot's reply in the conversation's context. The cumulative aggregate
 		// is kept for the substring check.
 		aggregate += ev.Text
+		if exp.TextExcludes != "" && textContains(aggregate, exp.TextExcludes) {
+			return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(aggregate), exp.TextExcludes),
+				FailureTextPresent), false
+		}
 		if exp.Eval != "" && s.judge != nil {
 			s.judge.AddAssistantMessage(ev.Text)
 		}
@@ -761,7 +938,7 @@ func (s *session) matchAggregate(
 			s.lastMatch = strings.TrimSpace(aggregate)
 			return nil, false
 		case statusFail:
-			return fail(reason), false
+			return fail(reason, FailureJudgeNo), false
 		}
 		// Continue: wait for the next segment, separated by a space so sentences
 		// do not run together ("...that. The weather...").
@@ -781,10 +958,6 @@ const (
 // monotonic, so a missing substring is a continue and more text may still
 // arrive; only the judge can affirmatively fail.
 func (s *session) evaluateAggregate(ctx context.Context, aggregate string, exp Expectation) (string, string) {
-	if exp.TextExcludes != "" && textContains(aggregate, exp.TextExcludes) {
-		return statusFail, fmt.Sprintf("text %q contains %q",
-			strings.TrimSpace(aggregate), exp.TextExcludes)
-	}
 	if exp.TextContains != "" && !textContains(aggregate, exp.TextContains) {
 		return statusContinue, fmt.Sprintf("does not contain %q", exp.TextContains)
 	}
@@ -813,30 +986,40 @@ func (s *session) evaluateAggregate(ctx context.Context, aggregate string, exp E
 // duplicate-output regression shows what the bot said.
 func (s *session) matchAbsent(
 	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration,
-	fail func(string) *Failure,
+	fail failFunc,
 ) *Failure {
 	ev, ok := s.nextMatching(ctx, exp.Event, deadline)
 	if !ok {
 		return nil // the quiet window held: absence confirmed
 	}
 	return fail(fmt.Sprintf(
-		"expected no %s within %s, but one arrived: %s", exp.Event, budget, ev.summary()))
+		"expected no %s within %s, but one arrived: %s", exp.Event, budget, ev.summary()), FailureUnexpectedEvent)
 }
 
 // matchFunctionCalls claims one call for each of the expectation's expected
 // calls, from the turn's calls already buffered and those still arriving. It
 // passes only when all are claimed within the budget; otherwise it names the
 // call that was missing, or whose arguments did not match.
+//
+// A call is claimed only when its name and its arguments both match, so one
+// the model gets wrong, is refused, and repeats with the right arguments still
+// satisfies the turn. A call of the right name with other arguments is a
+// different failure from no call at all, and the arguments the bot sent are
+// what the reader needs to see.
 func (s *session) matchFunctionCalls(
-	ctx context.Context, exp Expectation, deadline time.Time, fail func(string) *Failure,
+	ctx context.Context, exp Expectation, deadline time.Time, fail failFunc,
 ) *Failure {
 	if exp.Eval != "" && s.judge == nil {
-		return fail("scenario uses 'eval:' but no judge could be built")
+		return fail("scenario uses 'eval:' but no judge could be built", FailureNoJudge)
 	}
 	var matched []string
 	for _, want := range exp.Calls {
-		ev, ok := s.nextFunctionCall(ctx, want.Name, deadline)
+		ev, ok := s.nextFunctionCall(ctx, want, deadline)
 		if !ok {
+			if near := s.unclaimedArgs(want.Name); want.Args != nil && len(near) > 0 {
+				return fail(fmt.Sprintf("no %q call had args %v (saw %v)", want.Name, want.Args, near),
+					FailureFunctionArgsMismatch)
+			}
 			name := want.Name
 			if name == "" {
 				name = "any function"
@@ -845,10 +1028,7 @@ func (s *session) matchFunctionCalls(
 			if len(matched) > 0 {
 				seen = strings.Join(matched, ", ")
 			}
-			return fail(fmt.Sprintf("function call %q not seen (matched: %s)", name, seen))
-		}
-		if missing := missingArgs(want.Args, ev.Args); len(missing) > 0 {
-			return fail(fmt.Sprintf("call %q args %v missing expected %v", ev.Function, ev.Args, missing))
+			return fail(fmt.Sprintf("function call %q not seen (matched: %s)", name, seen), FailureMissingFunctionCall)
 		}
 		if f := s.judgeCall(ctx, ev, exp, fail); f != nil {
 			return f
@@ -868,7 +1048,7 @@ func (s *session) matchFunctionCalls(
 // argument subset cannot match verbatim. The first call the judge rejects fails
 // the expectation.
 func (s *session) judgeCall(
-	ctx context.Context, ev Event, exp Expectation, fail func(string) *Failure,
+	ctx context.Context, ev Event, exp Expectation, fail failFunc,
 ) *Failure {
 	if exp.Eval == "" {
 		return nil
@@ -880,16 +1060,31 @@ func (s *session) judgeCall(
 		return nil
 	}
 	return fail(fmt.Sprintf("eval %q on call %q: judge said %s: %s",
-		exp.Eval, ev.Function, verdict.Verdict, verdict.Reason))
+		exp.Eval, ev.Function, verdict.Verdict, verdict.Reason), FailureJudgeNo)
 }
 
-// nextFunctionCall claims a function_call event for name, where an empty name
-// claims any call. A turn's calls can arrive in any order, so it looks first in
-// the buffer of calls seen but not yet claimed, then reads on; a call that does
-// not match is buffered so another expected call can claim it. Events of other
-// kinds are dropped, as in matchExpectation.
-func (s *session) nextFunctionCall(ctx context.Context, name string, deadline time.Time) (Event, bool) {
-	matches := func(ev Event) bool { return name == "" || ev.Function == name }
+// unclaimedArgs is the arguments of every call of name seen this turn and not
+// claimed, where an empty name stands for any call.
+func (s *session) unclaimedArgs(name string) []map[string]any {
+	var near []map[string]any
+	for _, ev := range s.pendingCalls {
+		if name == "" || ev.Function == name {
+			near = append(near, ev.Args)
+		}
+	}
+	return near
+}
+
+// nextFunctionCall claims a function_call event matching want: its name, where
+// an empty name claims any call, and the argument subset it gives. A turn's
+// calls can arrive in any order, so it looks first in the buffer of calls seen
+// but not yet claimed, then reads on; a call that does not match is buffered so
+// another expected call can claim it. Events of other kinds are dropped, as in
+// matchExpectation.
+func (s *session) nextFunctionCall(ctx context.Context, want FunctionCall, deadline time.Time) (Event, bool) {
+	matches := func(ev Event) bool {
+		return (want.Name == "" || ev.Function == want.Name) && len(missingArgs(want.Args, ev.Args)) == 0
+	}
 
 	for i, ev := range s.pendingCalls {
 		if matches(ev) {
@@ -982,58 +1177,59 @@ func (e Event) summary() string {
 // checkPayload applies the payload-level checks to a matched event, returning
 // the first failure or nil. It is the single-event path; an expectation that
 // aggregates goes through evaluateAggregate instead.
-func checkPayload(ev Event, exp Expectation, fail func(string) *Failure) *Failure {
+func checkPayload(ev Event, exp Expectation, fail failFunc) *Failure {
 	if f := checkMarker(ev, exp, fail); f != nil {
 		return f
 	}
 	if exp.TextContains != "" && !textContains(ev.Text, exp.TextContains) {
-		return fail(fmt.Sprintf("text %q does not contain %q", ev.Text, exp.TextContains))
+		return fail(fmt.Sprintf("text %q does not contain %q", ev.Text, exp.TextContains), FailureTextMismatch)
 	}
 	if exp.TextExcludes != "" && textContains(ev.Text, exp.TextExcludes) {
-		return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(ev.Text), exp.TextExcludes))
+		return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(ev.Text), exp.TextExcludes),
+			FailureTextPresent)
 	}
 	return checkTextMatches(ev.Text, exp, fail)
 }
 
 // checkTextMatches fails on the first of the expectation's text_matches
 // patterns content does not match.
-func checkTextMatches(content string, exp Expectation, fail func(string) *Failure) *Failure {
+func checkTextMatches(content string, exp Expectation, fail failFunc) *Failure {
 	if pattern, missed := exp.TextMatches.firstUnmatched(content); missed {
 		text := strings.TrimSpace(content)
 		if r := []rune(text); len(r) > 200 {
 			text = string(r[:200])
 		}
-		return fail(fmt.Sprintf("text %q does not match %q", text, pattern))
+		return fail(fmt.Sprintf("text %q does not match %q", text, pattern), FailureTextUnmatched)
 	}
 	return nil
 }
 
 // checkMarker applies an llm_marker expectation's checks to the report: what the
 // marker meant, and how well the response followed the protocol it was given.
-func checkMarker(ev Event, exp Expectation, fail func(string) *Failure) *Failure {
+func checkMarker(ev Event, exp Expectation, fail failFunc) *Failure {
 	if exp.Marker != "" && !markerMeans(ev.MarkerKind, exp.Marker) {
 		got := ev.MarkerKind
 		if got == "" {
-			got = "none"
+			got = "of no known kind"
 		}
-		return fail(fmt.Sprintf("the response's marker meant %s, want %s", got, exp.Marker))
+		return fail(fmt.Sprintf("marker %q is %s, expected %s", ev.Text, got, exp.Marker), FailureMarkerMismatch)
 	}
 	if exp.MarkerFirst != nil {
 		if first := markerComesFirst(ev); first != *exp.MarkerFirst {
 			return fail(fmt.Sprintf("the marker came first: %v, want %v, in %q",
-				first, *exp.MarkerFirst, ev.Raw))
+				first, *exp.MarkerFirst, ev.Raw), FailureMarkerFormat)
 		}
 	}
 	if exp.Markers != nil {
 		if n := countMarkers(ev); n != *exp.Markers {
 			return fail(fmt.Sprintf("the response holds %d marker(s), want %d, in %q",
-				n, *exp.Markers, ev.Raw))
+				n, *exp.Markers, ev.Raw), FailureMarkerFormat)
 		}
 	}
 	if exp.TextAfter != nil {
 		if after := textFollowsMarker(ev); after != *exp.TextAfter {
 			return fail(fmt.Sprintf("text follows the marker: %v, want %v, in %q",
-				after, *exp.TextAfter, ev.Raw))
+				after, *exp.TextAfter, ev.Raw), FailureMarkerFormat)
 		}
 	}
 	return nil
@@ -1108,23 +1304,33 @@ func textContains(content, needle string) bool {
 // and llm_response with a criterion aggregates. It becomes live as soon as the
 // scenario format grows another event whose text a judge can read.
 func (s *session) checkJudge(
-	ctx context.Context, ev Event, exp Expectation, fail func(string) *Failure,
+	ctx context.Context, ev Event, exp Expectation, fail failFunc,
 ) *Failure {
 	if exp.Eval == "" {
 		return nil
 	}
 	if s.judge == nil {
-		return fail("scenario uses 'eval:' but no judge could be built")
+		return fail("scenario uses 'eval:' but no judge could be built", FailureNoJudge)
 	}
 	if ev.Text == "" {
-		return fail(fmt.Sprintf("event has no text to judge: %s", ev.Kind))
+		return fail(fmt.Sprintf("event has no text to judge: %s", ev.Kind), FailureNoContent)
 	}
 	s.judge.AddAssistantMessage(ev.Text)
 	verdict := s.judge.Evaluate(ctx, exp.Eval)
 	if !verdict.Passed() {
-		return fail(fmt.Sprintf("eval %q: judge said no: %s", exp.Eval, verdict.Reason))
+		return fail(fmt.Sprintf("eval %q: judge said no: %s", exp.Eval, verdict.Reason), FailureJudgeNo)
 	}
 	return nil
+}
+
+// speakingEvents are the events the bot's reports about the user's speaking map
+// to, by message type, for the reports that carry nothing else.
+//
+//nolint:gochecknoglobals // fixed lookup table
+var speakingEvents = map[string]string{
+	rtvi.TypeUserStoppedSpeaking: EventUserStoppedSpeaking,
+	rtvi.TypeVADUserStarted:      EventVADUserStartedSpeaking,
+	rtvi.TypeVADUserStopped:      EventVADUserStoppedSpeaking,
 }
 
 // translate converts an RTVI server message into a friendly event, or nil if it
@@ -1147,8 +1353,10 @@ func (s *session) translate(in rtvi.Incoming) *Event {
 		s.discardInterruptedOutput()
 		s.awaitingLLMRestart = true
 		return &Event{Kind: EventBotInterrupted}
-	case rtvi.TypeUserStoppedSpeaking:
-		return &Event{Kind: EventUserStoppedSpeaking}
+	case rtvi.TypeUserStoppedSpeaking, rtvi.TypeVADUserStarted, rtvi.TypeVADUserStopped:
+		// The bot's reports about the user: its turn-level speaking, and its raw
+		// VAD, ungated by turn detection.
+		return &Event{Kind: speakingEvents[in.Type]}
 	case rtvi.TypeUserTranscription:
 		var d rtvi.UserTranscriptionData //nolint:staticcheck // the message is still sent
 		if json.Unmarshal(in.Data, &d) != nil || !d.Final {

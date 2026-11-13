@@ -70,6 +70,17 @@ func (f *fakeLLM) ProcessFrame(ctx context.Context, frame frames.Frame, dir proc
 		return err
 	}
 	switch {
+	case strings.Contains(lower, "never mind"):
+		// A model that mistypes an id, is refused, and repeats the call with the
+		// right one.
+		for i, id := range []string{"cull_turtles", "call_turtles"} {
+			args := json.RawMessage(`{"tool_call_id":"` + id + `"}`)
+			call := frames.NewFunctionCallInProgressFrame(
+				fmt.Sprintf("call-cancel-%d", i), "cancel_write_report", args, true, "g1")
+			if err := f.PushFrame(ctx, call, processor.Downstream); err != nil {
+				return err
+			}
+		}
 	case strings.Contains(lower, "weather"):
 		// The restaurant call goes first, so a scenario listing the two in the
 		// other order only passes if the matcher really is order-independent.
@@ -218,7 +229,8 @@ turns:
 	}
 }
 
-// The right tool called with the wrong arguments is the failure worth catching.
+// The right tool called with the wrong arguments is the failure worth catching,
+// and it names the arguments the bot sent.
 func TestHarnessReportsWrongArgs(t *testing.T) {
 	res := host(t, `
 name: wrong-city
@@ -233,9 +245,11 @@ turns:
 	if res.Passed() {
 		t.Fatal("expected a failure for the tool call with the wrong city")
 	}
-	if !strings.Contains(res.Failures[0].Reason, "missing expected") {
+	if !strings.Contains(res.Failures[0].Reason, `no "get_weather" call had args map[city:Berlin]`) ||
+		!strings.Contains(res.Failures[0].Reason, "Paris") {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureFunctionArgsMismatch)
 }
 
 // A turn's calls are matched by name in any order, so a call arriving before
@@ -293,6 +307,7 @@ turns:
 	if !strings.Contains(res.Failures[0].Reason, "you said: hello") {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureUnexpectedEvent)
 }
 
 // "this tool was called, and not again" is the two-expectation pattern: the call
@@ -354,6 +369,7 @@ turns:
 	if !strings.Contains(res.Failures[0].Reason, "does not contain") {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureTextMismatch)
 }
 
 func TestHarnessReportsMissingFunction(t *testing.T) {
@@ -372,6 +388,7 @@ turns:
 	if !strings.Contains(res.Failures[0].Reason, `function call "get_weather" not seen`) {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureMissingFunctionCall)
 }
 
 // The first response is filler and the answer arrives in a second one. An
@@ -447,6 +464,7 @@ turns:
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("a no should fail at once, took %s", elapsed)
 	}
+	wantKind(t, res, eval.FailureJudgeNo)
 }
 
 // A turn that fails ends the scenario: a later turn would run against a
@@ -781,6 +799,7 @@ turns:
 	if !strings.Contains(res.Failures[0].Reason, `contains "hello"`) {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureTextPresent)
 }
 
 // A reply the bot never produces the forbidden text in passes, and passes
@@ -882,6 +901,7 @@ turns:
 	if elapsed := time.Since(started); elapsed > 4*time.Second {
 		t.Errorf("the failure took %s, want it as soon as the text appeared", elapsed)
 	}
+	wantKind(t, res, eval.FailureTextPresent)
 }
 
 // Spacing is an accident of how a reply was streamed, so it is not something a
@@ -947,6 +967,76 @@ turns:
 	if !strings.Contains(res.Failures[0].Reason, `on call "get_weather"`) {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureJudgeNo)
+}
+
+// Every call an expectation lists is put to the judge, and the first it rejects
+// fails the expectation.
+func TestHarnessJudgesEveryListedCall(t *testing.T) {
+	judge := &scriptedJudge{verdicts: []string{eval.VerdictYes, eval.VerdictNo}}
+	res := hostWithJudge(t, judge, `
+name: judged-calls
+turns:
+  - user: "what's the weather in Paris, and food?"
+    expect:
+      - event: function_call
+        calls: [get_weather, get_restaurants]
+        eval: "looks things up for Paris"
+`)
+	if res.Passed() {
+		t.Fatal("the judge rejected the second call, so the turn should fail")
+	}
+	var names []string
+	for _, c := range judge.judged {
+		names = append(names, c.Name)
+	}
+	if !slices.Equal(names, []string{"get_weather", "get_restaurants"}) {
+		t.Fatalf("the judge saw %v, want both listed calls in order", names)
+	}
+	wantKind(t, res, eval.FailureJudgeNo)
+}
+
+// Arguments the scenario gives verbatim are checked before the judge is asked,
+// so a call with the wrong ones fails on them without a judge round trip.
+func TestHarnessChecksVerbatimArgsBeforeTheJudge(t *testing.T) {
+	judge := &scriptedJudge{}
+	res := hostWithJudge(t, judge, `
+name: args-first
+turns:
+  - user: "what's the weather in Paris?"
+    expect:
+      - event: function_call
+        name: get_weather
+        args: {city: Lyon}
+        eval: "asks about a French city"
+        within_ms: 300
+`)
+	if res.Passed() {
+		t.Fatal("the call had the wrong city, so the turn should fail")
+	}
+	if !strings.Contains(res.Failures[0].Reason, "had args") || len(judge.judged) != 0 {
+		t.Fatalf("failure %q after %d judged calls, want the args to fail it unjudged",
+			res.Failures[0].Reason, len(judge.judged))
+	}
+	wantKind(t, res, eval.FailureFunctionArgsMismatch)
+}
+
+// A model that gets a call's arguments wrong, is refused, and repeats it with
+// the right ones has made the call the turn asks for.
+func TestHarnessACorrectedCallSatisfiesTheTurn(t *testing.T) {
+	res := host(t, `
+name: corrected
+turns:
+  - user: "never mind that one"
+    expect:
+      - event: function_call
+        name: cancel_write_report
+        args: {tool_call_id: call_turtles}
+        within_ms: 2000
+`)
+	if !res.Passed() {
+		t.Fatalf("expected the corrected call to pass, got %v", res.Failures)
+	}
 }
 
 // A call is not a partial reply, so there is nothing to wait for: a judge that
@@ -964,6 +1054,7 @@ turns:
 	if res.Passed() {
 		t.Fatal("a call the judge would not pass should fail the turn")
 	}
+	wantKind(t, res, eval.FailureJudgeNo)
 }
 
 // A criterion with no judge to answer it is a failed assertion, reported before
@@ -984,6 +1075,7 @@ turns:
 	if !strings.Contains(res.Failures[0].Reason, "no judge") {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureNoJudge)
 }
 
 // TestResultRecordsWhatEachExpectationMatched covers reading a run back once it
@@ -1175,9 +1267,10 @@ turns:
 	if res.Passed() {
 		t.Fatal("the bot held the turn open, so a complete marker should fail")
 	}
-	if !strings.Contains(res.Failures[0].Reason, "meant short") {
+	if !strings.Contains(res.Failures[0].Reason, "is short, expected complete") {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureMarkerMismatch)
 }
 
 // A scenario that says nothing about markers is told nothing about them, since
@@ -1198,5 +1291,14 @@ turns:
 		if ev.Kind == "llm_marker" {
 			t.Errorf("the bot reported a marker nothing asked for: %v", ev)
 		}
+	}
+}
+
+// wantKind asserts the run's first failure is of kind, the stable key failures
+// are grouped by across runs.
+func wantKind(t *testing.T, res eval.Result, kind string) {
+	t.Helper()
+	if len(res.Failures) == 0 || res.Failures[0].Kind != kind {
+		t.Fatalf("failures = %+v, want the first of kind %s", res.Failures, kind)
 	}
 }

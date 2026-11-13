@@ -22,6 +22,7 @@ var (
 	errNoBotURL     = errors.New("suite entry has no bot_url")
 	errNoScenarios  = errors.New("suite entry has no scenarios")
 	errDuplicateRun = errors.New("two suite entries run one scenario under one label")
+	errConcurrency  = errors.New("suite entry concurrency must be a positive integer")
 )
 
 // Manifest lists the bots to test and the scenarios to run against each. Scenario
@@ -32,7 +33,8 @@ type Manifest struct {
 	// Suite is the list of bots and their scenarios.
 	Suite []SuiteEntry `yaml:"suite"`
 
-	dir string // directory of the manifest file, for resolving scenario paths
+	dir  string // directory of the manifest file, for resolving scenario paths
+	runs []job  // the scenarios to run, read when the manifest is loaded
 }
 
 // SuiteEntry is one bot and the scenarios to play against it.
@@ -43,11 +45,31 @@ type SuiteEntry struct {
 	// BotURL is the bot's RTVI WebSocket endpoint (ws:// or wss://).
 	BotURL string `yaml:"bot_url"`
 	// Concurrency caps how many of this entry's scenarios may be in flight at
-	// once, under the manifest's own; zero sets no cap of its own. It is for a
-	// bot whose provider rate-limits concurrent connections.
+	// once, under the manifest's own; zero, which leaving it out gives, sets no
+	// cap of its own. It is for a bot whose provider rate-limits concurrent
+	// connections. Written out, it must be a positive integer. The cap is the
+	// entry's alone: another entry for the same bot is not held to it.
 	Concurrency int `yaml:"concurrency"`
 	// Scenarios are scenario file paths, resolved relative to the manifest.
 	Scenarios []string `yaml:"scenarios"`
+}
+
+// UnmarshalYAML decodes a suite entry, refusing a `concurrency:` that is not a
+// positive integer rather than reading it as no cap.
+func (e *SuiteEntry) UnmarshalYAML(node *yaml.Node) error {
+	if v := mappingValue(node, "concurrency"); v != nil {
+		var n int
+		if v.Kind != yaml.ScalarNode || v.Tag != "!!int" || v.Decode(&n) != nil || n < 1 {
+			return fmt.Errorf("%w, got %q", errConcurrency, v.Value)
+		}
+	}
+	type raw SuiteEntry // a distinct type, so decoding does not recurse here
+	var r raw
+	if err := node.Decode(&r); err != nil {
+		return err
+	}
+	*e = SuiteEntry(r)
+	return nil
 }
 
 // label is what the entry is called in the results.
@@ -67,9 +89,11 @@ type SuiteResult struct {
 	BotURL string
 	// Scenario is the scenario file path.
 	Scenario string
-	// Result is the scenario result; zero-valued when Err is set.
+	// Result is the scenario result; zero-valued when Err is set. A bot that
+	// never became ready, or a harness that failed mid-run, is a failure in it.
 	Result Result
-	// Err is non-nil when the scenario could not be loaded or run.
+	// Err is non-nil when the scenario could not be loaded, or the run's
+	// context ended.
 	Err error
 }
 
@@ -90,7 +114,27 @@ func LoadManifest(path string) (*Manifest, error) {
 		return nil, fmt.Errorf("eval: %s: %w", path, err)
 	}
 	m.dir = filepath.Dir(path)
+	m.runs = m.jobs()
+	if err := checkDuplicateRuns(m.runs); err != nil {
+		return nil, fmt.Errorf("eval: %s: %w", path, err)
+	}
 	return &m, nil
+}
+
+// checkDuplicateRuns refuses two runs of one scenario under one label. They are
+// two runs nothing can tell apart in the results, which is a manifest mistake
+// rather than something to report twice. Runs are compared by the scenario's
+// name once the files are read, so two paths to one file collide.
+func checkDuplicateRuns(js []job) error {
+	seen := make(map[[2]string]bool, len(js))
+	for _, j := range js {
+		key := [2]string{j.entry, j.name()}
+		if seen[key] {
+			return fmt.Errorf("%w: %q runs %q twice; give one of the entries a name", errDuplicateRun, j.entry, j.name())
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 // validate checks the manifest is well-formed.
@@ -98,24 +142,12 @@ func (m *Manifest) validate() error {
 	if len(m.Suite) == 0 {
 		return errNoSuite
 	}
-	seen := make(map[string]bool)
 	for i, e := range m.Suite {
 		if e.BotURL == "" {
 			return fmt.Errorf("suite entry %d: %w", i+1, errNoBotURL)
 		}
 		if len(e.Scenarios) == 0 {
 			return fmt.Errorf("suite entry %d: %w", i+1, errNoScenarios)
-		}
-		// Two entries running one scenario under one label are two runs nothing
-		// can tell apart in the results, which is a manifest mistake rather than
-		// something to report twice.
-		for _, sc := range e.Scenarios {
-			key := e.label() + "\x00" + sc
-			if seen[key] {
-				return fmt.Errorf("suite entry %d: %w: %s runs %s twice",
-					i+1, errDuplicateRun, e.label(), sc)
-			}
-			seen[key] = true
 		}
 	}
 	return nil
@@ -133,10 +165,20 @@ func (m *Manifest) concurrency() int {
 // reason the file holding it could not be read.
 type job struct {
 	entry    string
+	entryIdx int // the entry's place in the manifest, which its cap counts against
 	botURL   string
 	path     string
 	scenario *Scenario
 	loadErr  error
+}
+
+// name is what the run is called: its scenario's name, or, for a file that
+// would not load, its path.
+func (j job) name() string {
+	if j.scenario != nil {
+		return j.scenario.Name
+	}
+	return j.path
 }
 
 // jobs flattens the manifest into scenario/bot pairs, resolving scenario paths
@@ -147,7 +189,7 @@ type job struct {
 // reported against that file rather than ending the suite.
 func (m *Manifest) jobs() []job {
 	var js []job
-	for _, e := range m.Suite {
+	for i, e := range m.Suite {
 		for _, sc := range e.Scenarios {
 			path := sc
 			if !filepath.IsAbs(path) {
@@ -155,12 +197,12 @@ func (m *Manifest) jobs() []job {
 			}
 			file, err := LoadFile(path)
 			if err != nil {
-				js = append(js, job{entry: e.label(), botURL: e.BotURL, path: path, loadErr: err})
+				js = append(js, job{entry: e.label(), entryIdx: i, botURL: e.BotURL, path: path, loadErr: err})
 				continue
 			}
 			for _, scenario := range file.Scenarios {
 				js = append(js, job{
-					entry: e.label(), botURL: e.BotURL, path: path, scenario: scenario,
+					entry: e.label(), entryIdx: i, botURL: e.BotURL, path: path, scenario: scenario,
 				})
 			}
 		}
@@ -191,7 +233,10 @@ func RunSuite(ctx context.Context, m *Manifest, newJudge func() Judge) []SuiteRe
 func (m *Manifest) runSuite(
 	ctx context.Context, newJudge func() Judge, run func(context.Context, job, Judge) SuiteResult,
 ) []SuiteResult {
-	js := m.jobs()
+	js := m.runs
+	if js == nil {
+		js = m.jobs()
+	}
 	results := make([]SuiteResult, len(js))
 
 	queue := newRunQueue(m.entryQueues(js))
@@ -221,7 +266,8 @@ func (m *Manifest) runSuite(
 // entryQueue is one entry's scenarios, in manifest order, with the entry's cap
 // on scenarios in flight.
 type entryQueue struct {
-	label string
+	// entry is the entry's place in the manifest.
+	entry int
 	// cap is the most of the entry's scenarios in flight at once; zero is no cap.
 	cap   int
 	items []int // indices into the suite's job list
@@ -237,18 +283,18 @@ type runQueue struct {
 	mu       sync.Mutex
 	changed  *sync.Cond
 	queues   []*entryQueue
-	inFlight map[string]int
+	inFlight map[int]int
 }
 
 func newRunQueue(queues []*entryQueue) *runQueue {
-	q := &runQueue{queues: queues, inFlight: make(map[string]int, len(queues))}
+	q := &runQueue{queues: queues, inFlight: make(map[int]int, len(queues))}
 	q.changed = sync.NewCond(&q.mu)
 	return q
 }
 
 // take claims the next scenario to run, and the entry it counts against,
 // reporting false once none is left.
-func (q *runQueue) take() (idx int, entry string, ok bool) {
+func (q *runQueue) take() (idx, entry int, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for q.anyLeft() {
@@ -257,11 +303,11 @@ func (q *runQueue) take() (idx int, entry string, ok bool) {
 		}
 		q.changed.Wait()
 	}
-	return 0, "", false
+	return 0, 0, false
 }
 
 // done counts a scenario of entry as finished, so the entry may take another.
-func (q *runQueue) done(entry string) {
+func (q *runQueue) done(entry int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.inFlight[entry]--
@@ -279,38 +325,30 @@ func (q *runQueue) anyLeft() bool {
 }
 
 // pick takes the first queued scenario whose entry is under its cap.
-func (q *runQueue) pick() (int, string, bool) {
+func (q *runQueue) pick() (idx, entry int, ok bool) {
 	for _, eq := range q.queues {
-		if len(eq.items) > 0 && (eq.cap == 0 || q.inFlight[eq.label] < eq.cap) {
-			q.inFlight[eq.label]++
+		if len(eq.items) > 0 && (eq.cap == 0 || q.inFlight[eq.entry] < eq.cap) {
+			q.inFlight[eq.entry]++
 			idx := eq.items[0]
 			eq.items = eq.items[1:]
-			return idx, eq.label, true
+			return idx, eq.entry, true
 		}
 	}
-	return 0, "", false
+	return 0, 0, false
 }
 
-// entryQueues splits the job list into one queue per entry label, in manifest
-// order, each with the entry's cap. An entry's cap is the lowest Concurrency
-// among the manifest entries under its label, and none when none sets it.
+// entryQueues splits the job list into one queue per manifest entry, in
+// manifest order, each with the entry's cap. An entry's cap is its own
+// Concurrency, and none when it sets none; another entry for the same bot, or
+// under the same label, has a queue and a cap of its own.
 func (m *Manifest) entryQueues(js []job) []*entryQueue {
-	caps := make(map[string]int, len(m.Suite))
-	for _, e := range m.Suite {
-		if e.Concurrency <= 0 {
-			continue
-		}
-		if have, ok := caps[e.label()]; !ok || e.Concurrency < have {
-			caps[e.label()] = e.Concurrency
-		}
-	}
 	var out []*entryQueue
-	queues := make(map[string]*entryQueue, len(m.Suite))
+	queues := make(map[int]*entryQueue, len(m.Suite))
 	for i, j := range js {
-		q, ok := queues[j.entry]
+		q, ok := queues[j.entryIdx]
 		if !ok {
-			q = &entryQueue{label: j.entry, cap: caps[j.entry]}
-			queues[j.entry] = q
+			q = &entryQueue{entry: j.entryIdx, cap: max(m.Suite[j.entryIdx].Concurrency, 0)}
+			queues[j.entryIdx] = q
 			out = append(out, q)
 		}
 		q.items = append(q.items, i)
@@ -327,6 +365,6 @@ func runOne(ctx context.Context, j job, judge Judge) SuiteResult {
 		sr.Err = j.loadErr
 		return sr
 	}
-	sr.Result, sr.Err = RunURL(ctx, j.scenario, j.botURL, judge)
+	sr.Result, sr.Err = RunURL(ctx, j.scenario, j.botURL, Options{Judge: judge})
 	return sr
 }

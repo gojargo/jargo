@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gojargo/jargo/classifier"
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
@@ -40,13 +42,17 @@ const (
 type JudgeVerdict struct {
 	// Verdict is VerdictYes, VerdictNo or VerdictContinue.
 	Verdict string
-	// Reason is a one-sentence justification.
+	// Reason is the explainer's one-sentence reason for the verdict, or the
+	// classifier's probabilities when nothing explained it.
 	Reason string
 	// RawResponse is the judge's raw answer, for diagnostics.
 	RawResponse string
 	// Confidence is how sure the judge is of the verdict, from 0 to 1; nil when
 	// it did not say.
 	Confidence *float64
+	// Probabilities is the probability of each outcome the classifier was
+	// offered; empty when the question failed.
+	Probabilities map[string]float64
 }
 
 // Passed reports whether the verdict is a definite yes.
@@ -95,108 +101,51 @@ func closeJudge(ctx context.Context, judge Judge) {
 	}
 }
 
-// defaultJudgeMaxTokens caps the explainer's answer: enough for a verdict and a
-// short reason, and no room for the model to start explaining itself at length.
+// defaultJudgeMaxTokens caps the explainer's answer for one reason: enough for
+// a short sentence in JSON, and no room for the model to start explaining
+// itself at length.
 const defaultJudgeMaxTokens = 200
 
 // defaultExplainBelow is the confidence under which a yes is explained too.
 const defaultExplainBelow = 0.75
 
-// judgeSystemInstruction is what the explainer is told when it judges a reply.
-const judgeSystemInstruction = "You are a strict but fair judge evaluating a conversation between a user and a " +
-	"bot under test. The 'user' messages are the user; the 'assistant' messages are " +
-	"the bot's replies. Judge only the bot's most recent reply, which may have " +
-	"arrived as several consecutive 'assistant' messages, against the given " +
-	"criterion, using the earlier turns only as context. The reply may still be " +
-	"streaming in. " +
-	"When the bot spoke its reply, the 'assistant' text is an automatic speech-to-text " +
-	"transcription, so it may contain homophones, misspellings, split or merged words, and " +
-	"missing punctuation. Always judge it by the intended spoken meaning, never by its exact " +
-	"spelling. In particular, treat a number as the same value whether it is spelled out, " +
-	"written as a digit, or transcribed as a homophone: 'for' and 'fore' mean 'four' (4), and " +
-	"'to' and 'too' mean 'two' (2). Never answer 'no' solely because of a transcription error " +
-	"when the intended spoken meaning satisfies the criterion. " +
-	"Respond ONLY with a JSON object on a single line containing two fields: " +
-	`{"verdict": "yes" | "no" | "continue", "reason": "<one short sentence>"}. ` +
-	`Use "yes" if the reply satisfies the criterion. ` +
-	`Use "continue" if the bot has not given its answer yet: it says it is checking, ` +
-	"looking something up, fetching, working on something, or that it will report back. " +
-	"The answer is still coming, so there is nothing to judge yet. This holds however " +
-	`long and however fluent the reply is: "The system is checking the current ` +
-	`conditions for you right now." is waiting, not answering. A greeting or an ` +
-	`obviously incomplete fragment is also "continue". ` +
-	`Use "no" only when the bot has given its answer and that answer fails the ` +
-	`criterion. If the bot has not answered yet, always use "continue", never "no". ` +
-	"Do not include any other text, explanation, or markdown."
+// explainerTimeout is how long the explainer has to answer a question before it
+// is asked again.
+const explainerTimeout = 60 * time.Second
 
-// judgeAsk is the transient final user message appended for the explainer's
-// call. The conversation it refers to is the one the judge kept; this only poses
-// the question, and is never stored in that conversation.
-const judgeAsk = "Does the bot's most recent reply satisfy this criterion?\n\n" +
+// explainSystemInstruction is what the explainer is told for every question.
+// The classifier has decided: the explainer is told the verdict and says what
+// in the conversation supports it, so a reason always explains the verdict
+// that counts.
+const explainSystemInstruction = "You explain the verdicts a judge gave on a conversation between a user and a " +
+	"bot under test. The 'user' messages are the user; the 'assistant' messages are the bot's " +
+	"replies. The judge's verdicts are final. For each verdict you are asked about, say in " +
+	"one short sentence what the bot said or did that makes it right, naming it; never " +
+	"just restate the verdict, and never argue for a different verdict. When a criterion " +
+	"does not apply to a reply, say what the reply does instead and why that is outside " +
+	"what the criterion covers. " +
+	"When the bot spoke its replies, its text is an automatic speech-to-text " +
+	"transcription, so it may contain homophones, misspellings, split or merged words, " +
+	"and missing punctuation; read it by its intended spoken meaning. " +
+	"Respond ONLY with the JSON object the question describes, on a single line, with no " +
+	"other text or markdown."
+
+// explainReplyAsk is the ask for a reply's verdict, after the conversation so
+// far: the outcome, then the criterion.
+const explainReplyAsk = "The judge's verdict: the bot's most recent reply %s this criterion.\n\n" +
 	"Criterion: %s\n\n" +
-	"Answer yes, no, or continue."
+	`Answer with {"reason": "<one short sentence>"}.`
 
-// judgeFinalSystemInstruction is what the explainer is told when a reply may not
-// be judged continue: every judged reply is a final answer, so the verdict is
-// yes or no.
-const judgeFinalSystemInstruction = "You are a strict but fair judge evaluating a conversation between a user and a " +
-	"bot under test. The 'user' messages are the user; the 'assistant' messages are " +
-	"the bot's replies. Judge only the bot's most recent reply, which may have " +
-	"arrived as several consecutive 'assistant' messages, against the given " +
-	"criterion, using the earlier turns only as context. The reply is the bot's final " +
-	"answer. " +
-	"When the bot spoke its reply, the 'assistant' text is an automatic speech-to-text " +
-	"transcription, so it may contain homophones, misspellings, split or merged words, and " +
-	"missing punctuation. Always judge it by the intended spoken meaning, never by its exact " +
-	"spelling. In particular, treat a number as the same value whether it is spelled out, " +
-	"written as a digit, or transcribed as a homophone: 'for' and 'fore' mean 'four' (4), and " +
-	"'to' and 'too' mean 'two' (2). Never answer 'no' solely because of a transcription error " +
-	"when the intended spoken meaning satisfies the criterion. " +
-	"Respond ONLY with a JSON object on a single line containing two fields: " +
-	`{"verdict": "yes" | "no", "reason": "<one short sentence>"}. ` +
-	`Use "yes" if the reply satisfies the criterion and "no" if it does not. ` +
-	"Do not include any other text, explanation, or markdown."
-
-// judgeFinalAsk is the ask that goes with judgeFinalSystemInstruction.
-const judgeFinalAsk = "Does the bot's most recent reply satisfy this criterion?\n\n" +
+// explainCallAsk is the ask for a function call's verdict, the conversation so
+// far being context: the call's name, its arguments as JSON, the outcome, then
+// the criterion.
+const explainCallAsk = "The bot called the function `%s` with arguments `%s`. The judge's verdict: " +
+	"this call %s this criterion.\n\n" +
 	"Criterion: %s\n\n" +
-	"Answer yes or no."
+	`Answer with {"reason": "<one short sentence>"}.`
 
-// judgeCallSystemInstruction is what the explainer is told for a tool call. The
-// call is the subject and the conversation is context for it, so the verdict is
-// yes or no: a call is not a partial reply, and there is nothing to wait for.
-const judgeCallSystemInstruction = "You are a strict but fair judge evaluating a function call made by a bot " +
-	"under test in a conversation with a user. The 'user' messages are the user; the " +
-	"'assistant' messages are the bot's replies so far, given only as context for the " +
-	"call. Judge only the call you are asked about, by its name and its arguments, " +
-	"against the given criterion. " +
-	"When the bot spoke its replies, the 'assistant' text is an automatic speech-to-text " +
-	"transcription, so it may contain homophones, misspellings, split or merged words, and " +
-	"missing punctuation; judge it by the intended spoken meaning. " +
-	"Respond ONLY with a JSON object on a single line containing two fields: " +
-	`{"verdict": "yes" | "no", "reason": "<one short sentence>"}. ` +
-	`Use "yes" if the call satisfies the criterion and "no" if it does not. ` +
-	"Do not include any other text, explanation, or markdown."
-
-// judgeCallAsk is the ask for a criterion on a tool call. It names the call and
-// gives its arguments as JSON, so the verdict is about that call rather than
-// about what the bot said around it.
-const judgeCallAsk = "The bot called the function `%s` with arguments `%s`. " +
-	"Does this call satisfy this criterion?\n\n" +
-	"Criterion: %s\n\n" +
-	"Answer yes or no."
-
-// The reasons a verdict carries when there was nothing better to give.
-const (
-	// explainerFailed is the reason a verdict carries when the explainer's call
-	// failed.
-	explainerFailed = "explainer call failed"
-	// noReason is the reason a verdict carries when the judge gave the verdict
-	// without one.
-	noReason = "(no reason given)"
-	// judgeFailed is the reason a verdict carries when its question failed.
-	judgeFailed = "judge call failed"
-)
+// judgeFailed is the reason a verdict carries when its question failed.
+const judgeFailed = "judge call failed"
 
 // The questions the judge asks, each followed by the criterion and the notes
 // that go with every question; see instructions.
@@ -243,8 +192,8 @@ type EvalJudgeConfig struct {
 	// it. A suite whose judged replies are all final answers turns it off, and a
 	// reply is then yes or no.
 	AllowContinue *bool
-	// MaxTokens caps the explainer's answer; zero uses 200, enough for a verdict
-	// and a short reason.
+	// MaxTokens caps the explainer's answer for one reason; zero uses 200,
+	// enough for a short sentence.
 	MaxTokens int
 }
 
@@ -261,9 +210,10 @@ type EvalJudgeConfig struct {
 //
 // A classifier gives no reasons, so the judge asks an LLM of its own, the
 // explainer, for them: for every no, and for every yes less sure than
-// ExplainBelow, but never for a continue. The explainer makes its own judgement
-// over the same conversation and never changes a verdict: when it agrees, its
-// reason is used; when it disagrees, the reason says so.
+// ExplainBelow, but never for a continue. The explainer is told the verdict and
+// asked only what in the conversation supports it, so it never changes a
+// verdict; the reason it gives takes the place of the probabilities, which the
+// verdict still carries.
 //
 // A question that fails is asked once more; a second failure gives a no with
 // the reason "judge call failed".
@@ -320,7 +270,7 @@ func NewEvalJudge(cfg EvalJudgeConfig) (*EvalJudge, error) {
 		if maxTokens == 0 {
 			maxTokens = defaultJudgeMaxTokens
 		}
-		j.explainer = newExplainer(cfg.Explainer, maxTokens, j.allowContinue)
+		j.explainer = newExplainer(cfg.Explainer, maxTokens)
 	}
 	return j, nil
 }
@@ -416,7 +366,7 @@ func (j *EvalJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict
 	} else {
 		verdict = replyVerdict(answers["verdict"], question)
 		if verdict.Verdict != VerdictContinue && j.explainer != nil && j.needsReason(verdict) {
-			verdict = explained(verdict, j.explainer.explain(ctx, all, criterion))
+			verdict = withReason(verdict, j.explainer.explain(ctx, all, criterion, verdict))
 		}
 	}
 	j.store(key, verdict)
@@ -451,7 +401,7 @@ func (j *EvalJudge) EvaluateCall(
 	} else {
 		verdict = yesNoVerdict(answers["answer"])
 		if j.explainer != nil && j.needsReason(verdict) {
-			verdict = explained(verdict, j.explainer.explainCall(ctx, all, name, args, criterion))
+			verdict = withReason(verdict, j.explainer.explainCall(ctx, all, name, args, criterion, verdict))
 		}
 	}
 	j.store(key, verdict)
@@ -595,10 +545,11 @@ func replyVerdict(answer classifier.ChoiceResult, question classifier.ChoiceQues
 	})
 	confidence := answer.Confidence
 	return JudgeVerdict{
-		Verdict:     answer.Choice,
-		Reason:      describeProbabilities(probabilities),
-		RawResponse: string(raw),
-		Confidence:  &confidence,
+		Verdict:       answer.Choice,
+		Reason:        describeProbabilities(probabilities),
+		RawResponse:   string(raw),
+		Confidence:    &confidence,
+		Probabilities: maps.Clone(answer.Probabilities),
 	}
 }
 
@@ -612,10 +563,11 @@ func yesNoVerdict(answer classifier.YesNoResult) JudgeVerdict {
 	raw, _ := ordered.Marshal(ordered.Object{{Key: "probability", Value: p}})
 	confidence := max(p, 1-p)
 	return JudgeVerdict{
-		Verdict:     verdict,
-		Reason:      fmt.Sprintf("P(yes)=%.2f", p),
-		RawResponse: string(raw),
-		Confidence:  &confidence,
+		Verdict:       verdict,
+		Reason:        fmt.Sprintf("P(yes)=%.2f", p),
+		RawResponse:   string(raw),
+		Confidence:    &confidence,
+		Probabilities: map[string]float64{VerdictYes: p, VerdictNo: 1 - p},
 	}
 }
 
@@ -634,24 +586,13 @@ func failed(verdict string) JudgeVerdict {
 	return JudgeVerdict{Verdict: verdict, Reason: judgeFailed}
 }
 
-// explained is the verdict with the explainer's reason, noting when the
-// explainer disagreed. The classifier's verdict always stands.
-func explained(verdict, explanation JudgeVerdict) JudgeVerdict {
-	var reason string
-	if explanation.Verdict == verdict.Verdict {
-		reason = verdict.Reason
-		if explanation.Reason != "" && explanation.Reason != noReason {
-			reason = fmt.Sprintf("%s (%s)", explanation.Reason, verdict.Reason)
-		}
-	} else {
-		reason = fmt.Sprintf("%s; the explainer judged %s: %s", verdict.Reason, explanation.Verdict, explanation.Reason)
+// withReason is the verdict with the explainer's reason in place of the
+// probabilities, when it gave one.
+func withReason(verdict JudgeVerdict, reason string) JudgeVerdict {
+	if reason != "" {
+		verdict.Reason = reason
 	}
-	return JudgeVerdict{
-		Verdict:     verdict.Verdict,
-		Reason:      reason,
-		RawResponse: verdict.RawResponse,
-		Confidence:  verdict.Confidence,
-	}
+	return verdict
 }
 
 // argsOrEmpty is the call's arguments, or an empty object for a call that
@@ -673,54 +614,56 @@ func cacheKey(parts ...any) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// explainer asks an LLM the question a classifier answered, for the reason
-// behind it. Its answers are cached by question and conversation, so explaining
-// the same verdict twice costs one call.
+// explainer asks an LLM why the classifier gave its verdicts, telling it each
+// verdict.
+//
+// Each question names the reason it wants in a response schema, so a service
+// that can enforce one answers in exactly that shape. A question whose call
+// fails, or whose answer gives no reason, is asked once more. Its answers are
+// cached by question and conversation, so explaining the same verdict twice
+// costs one call. A reason is empty when it was still not given.
 type explainer struct {
-	inf           llm.Inferencer
-	maxTokens     int
-	allowContinue bool
+	inf       llm.Inferencer
+	maxTokens int
 
 	mu    sync.Mutex
-	cache map[string]JudgeVerdict
+	cache map[string]string
 }
 
-func newExplainer(inf llm.Inferencer, maxTokens int, allowContinue bool) *explainer {
-	return &explainer{inf: inf, maxTokens: maxTokens, allowContinue: allowContinue, cache: map[string]JudgeVerdict{}}
+func newExplainer(inf llm.Inferencer, maxTokens int) *explainer {
+	return &explainer{inf: inf, maxTokens: maxTokens, cache: map[string]string{}}
 }
 
-// explain judges whether the bot's latest reply satisfies criterion, and says
-// why.
-func (e *explainer) explain(ctx context.Context, transcript []transcriptEntry, criterion string) JudgeVerdict {
-	if e.allowContinue {
-		return e.evaluate(ctx, transcript, judgeSystemInstruction, fmt.Sprintf(judgeAsk, criterion))
-	}
-	v := e.evaluate(ctx, transcript, judgeFinalSystemInstruction, fmt.Sprintf(judgeFinalAsk, criterion))
-	if v.Verdict == VerdictContinue {
-		// An answer that ignored the yes/no instructions counts as a no.
-		return JudgeVerdict{Verdict: VerdictNo, Reason: v.Reason, RawResponse: v.RawResponse}
-	}
-	return v
+// explain is why the bot's latest reply got verdict on criterion: a
+// one-sentence reason, or "" when none was given.
+func (e *explainer) explain(
+	ctx context.Context, transcript []transcriptEntry, criterion string, verdict JudgeVerdict,
+) string {
+	return e.reason(ctx, transcript, fmt.Sprintf(explainReplyAsk, satisfies(verdict), criterion))
 }
 
-// explainCall judges whether a tool call the bot made satisfies criterion, and
-// says why. The ask names the call and its arguments, and the conversation so
-// far is context.
+// explainCall is why a tool call the bot made got verdict on criterion: a
+// one-sentence reason, or "" when none was given. The ask names the call and
+// its arguments, and the conversation so far is context.
 func (e *explainer) explainCall(
 	ctx context.Context, transcript []transcriptEntry, name string, args map[string]any, criterion string,
-) JudgeVerdict {
+	verdict JudgeVerdict,
+) string {
 	encoded, err := ordered.Marshal(argsOrEmpty(args))
 	if err != nil {
 		encoded = []byte("{}")
 	}
-	return e.evaluate(ctx, transcript, judgeCallSystemInstruction, fmt.Sprintf(judgeCallAsk, name, encoded, criterion))
+	return e.reason(ctx, transcript, fmt.Sprintf(explainCallAsk, name, encoded, satisfies(verdict), criterion))
 }
 
-// evaluate asks the question over the spoken conversation, a reply being judged
-// on what was said.
-func (e *explainer) evaluate(
-	ctx context.Context, transcript []transcriptEntry, instruction, ask string,
-) JudgeVerdict {
+// reasonSchema is the shape a reason is asked for in: an object holding only
+// the reason.
+const reasonSchema = `{"type":"object","properties":{"reason":{"type":"string"}},` +
+	`"required":["reason"],"additionalProperties":false}`
+
+// reason is the reason the explainer gives to ask after the spoken
+// conversation, asked once more when the first answer gives none.
+func (e *explainer) reason(ctx context.Context, transcript []transcriptEntry, ask string) string {
 	messages := make([]frames.Message, 0, len(transcript))
 	for _, t := range transcript {
 		switch t.role {
@@ -732,38 +675,42 @@ func (e *explainer) evaluate(
 	}
 	key := cacheKey(ask, messageList(messages))
 	e.mu.Lock()
-	v, ok := e.cache[key]
+	cached, ok := e.cache[key]
 	e.mu.Unlock()
 	if ok {
-		return v
+		return cached
 	}
 
-	response, ok := e.ask(ctx, messages, instruction, ask)
-	if ok {
-		v = parseVerdict(response)
-	} else {
-		v = JudgeVerdict{Verdict: VerdictNo, Reason: explainerFailed}
+	reason := ""
+	for range 2 {
+		if response, ok := e.ask(ctx, messages, ask); ok {
+			reason = parseReason(response)
+		}
+		if reason != "" {
+			break
+		}
 	}
 	e.mu.Lock()
-	e.cache[key] = v
+	e.cache[key] = reason
 	e.mu.Unlock()
-	return v
+	return reason
 }
 
-// ask is the explainer's raw answer, reporting false when the call failed or
-// said nothing.
-func (e *explainer) ask(
-	ctx context.Context, messages []frames.Message, instruction, ask string,
-) (string, bool) {
+// ask is the explainer's raw answer, in the reason's shape, reporting false
+// when the call failed or said nothing.
+func (e *explainer) ask(ctx context.Context, messages []frames.Message, ask string) (string, bool) {
 	// Copy the conversation and append the transient ask, so neither the ask
 	// nor the answer ever lands in the conversation the judge keeps.
 	convo := frames.NewLLMContext("")
 	convo.SetMessages(messages)
 	convo.AddUserMessage(ask)
 
-	response, err := e.inf.RunInference(ctx, convo, llm.InferenceOptions{
+	callCtx, cancel := context.WithTimeout(ctx, explainerTimeout)
+	defer cancel()
+	response, err := e.inf.RunInference(callCtx, convo, llm.InferenceOptions{
 		MaxTokens:         e.maxTokens,
-		SystemInstruction: instruction,
+		SystemInstruction: explainSystemInstruction,
+		ResponseSchema:    json.RawMessage(reasonSchema),
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "eval: explainer call failed", "error", err)
@@ -785,57 +732,41 @@ func messageList(messages []frames.Message) []ordered.Object {
 	return out
 }
 
-// verdictJSON is the object the explainer is asked to answer with.
-type verdictJSON struct {
-	Verdict any `json:"verdict"`
-	Reason  any `json:"reason"`
+// satisfies is a yes or a no as the ask words it.
+func satisfies(verdict JudgeVerdict) string {
+	if verdict.Passed() {
+		return "satisfies"
+	}
+	return "does not satisfy"
 }
 
-// parseVerdict reads a judgement out of the explainer's response. It tolerates
-// extra whitespace and code fences, and reads the first JSON object it finds,
-// ignoring anything around it: some models ignore "respond ONLY with JSON" and
-// wrap the verdict in prose. Absent a verdict it reports a no, so an
-// unparseable judgement never silently passes.
-func parseVerdict(response string) JudgeVerdict {
+// parseReason is the reason in the explainer's answer: its JSON reason, or the
+// answer itself when it is plain text.
+func parseReason(response string) string {
+	if reason := strings.TrimSpace(textOf(jsonObject(response)["reason"])); reason != "" {
+		return reason
+	}
+	return strings.TrimSpace(response)
+}
+
+// jsonObject is the JSON object in an answer, or nil when there is none. It
+// tolerates code fences and reads the first object it finds, ignoring anything
+// around it: some models ignore "respond ONLY with JSON" and wrap the answer in
+// prose.
+func jsonObject(response string) map[string]any {
 	cleaned := strings.TrimSpace(response)
 	if strings.HasPrefix(cleaned, "```") {
 		cleaned = strings.TrimSpace(fenced.ReplaceAllString(cleaned, ""))
 	}
-
-	if start := strings.Index(cleaned, "{"); start >= 0 {
-		var obj verdictJSON
-		dec := json.NewDecoder(strings.NewReader(cleaned[start:]))
-		if err := dec.Decode(&obj); err == nil {
-			verdict := strings.ToLower(strings.TrimSpace(textOf(obj.Verdict)))
-			switch verdict {
-			case VerdictYes, VerdictNo, VerdictContinue:
-			default:
-				verdict = VerdictNo
-			}
-			reason := strings.TrimSpace(textOf(obj.Reason))
-			if reason == "" {
-				reason = noReason
-			}
-			return JudgeVerdict{Verdict: verdict, Reason: reason, RawResponse: response}
-		}
+	start := strings.Index(cleaned, "{")
+	if start < 0 {
+		return nil
 	}
-
-	// Fall back to scanning for a verdict keyword in the raw text.
-	lowered := strings.ToLower(cleaned)
-	hasYes, hasNo := strings.Contains(lowered, VerdictYes), strings.Contains(lowered, VerdictNo)
-	switch {
-	case strings.Contains(lowered, VerdictContinue):
-		return JudgeVerdict{Verdict: VerdictContinue, Reason: "(unstructured continue)", RawResponse: response}
-	case hasYes && !hasNo:
-		return JudgeVerdict{Verdict: VerdictYes, Reason: "(unstructured yes)", RawResponse: response}
-	case hasNo && !hasYes:
-		return JudgeVerdict{Verdict: VerdictNo, Reason: "(unstructured no)", RawResponse: response}
+	var obj map[string]any
+	if json.NewDecoder(strings.NewReader(cleaned[start:])).Decode(&obj) != nil {
+		return nil
 	}
-	return JudgeVerdict{
-		Verdict:     VerdictNo,
-		Reason:      fmt.Sprintf("could not parse explainer response: %q", response),
-		RawResponse: response,
-	}
+	return obj
 }
 
 // textOf writes a JSON value as the text it holds.

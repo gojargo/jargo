@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/classifier"
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
@@ -119,13 +121,16 @@ type call struct {
 	ask         string
 	instruction string
 	maxTokens   int
+	schema      string
 }
 
 // explainerLLM returns a queued answer to every inference, and records the call.
+// Its first failures calls fail instead, as a timed-out service does.
 type explainerLLM struct {
-	mu      sync.Mutex
-	replies []string
-	calls   []call
+	mu       sync.Mutex
+	replies  []string
+	failures int
+	calls    []call
 }
 
 func (f *explainerLLM) RunInference(
@@ -136,7 +141,12 @@ func (f *explainerLLM) RunInference(
 	msgs := convo.Messages()
 	f.calls = append(f.calls, call{
 		ask: msgs[len(msgs)-1].Text, instruction: opts.SystemInstruction, maxTokens: opts.MaxTokens,
+		schema: string(opts.ResponseSchema),
 	})
+	if f.failures > 0 {
+		f.failures--
+		return "", errors.New("explainerLLM: timed out") //nolint:err113 // a test double's own failure
+	}
 	if len(f.replies) == 0 {
 		return "", errors.New("explainerLLM: no more queued responses") //nolint:err113 // a test double's own failure
 	}
@@ -286,32 +296,63 @@ func yesAs(name string, p float64) map[string]classifier.Result {
 
 // The explainer
 
-func TestANoTakesTheExplainersReason(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "no", "reason": "it never mentions rain"}`}}
+func TestANoTakesTheExplainersReasonAndKeepsItsProbabilities(t *testing.T) {
+	explainer := &explainerLLM{replies: []string{`{"reason": "it never mentions rain"}`}}
 	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), explainer)
 	j.AddAssistantMessage("Hello.")
 	v := j.Evaluate(t.Context(), "mentions weather")
-	if v.Verdict != eval.VerdictNo || !strings.HasPrefix(v.Reason, "it never mentions rain") ||
-		!strings.Contains(v.Reason, "P(no)=0.95") {
+	if v.Verdict != eval.VerdictNo || v.Reason != "it never mentions rain" || v.Probabilities["no"] != 0.95 {
 		t.Fatalf("verdict = %+v", v)
 	}
 }
 
-func TestADisagreeingExplainerIsNotedAndTheClassifierStands(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "yes", "reason": "it says it rains"}`}}
-	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), explainer)
-	j.AddAssistantMessage("It rains.")
-	v := j.Evaluate(t.Context(), "mentions weather")
-	if v.Verdict != eval.VerdictNo || !strings.Contains(v.Reason, "the explainer judged yes: it says it rains") {
-		t.Fatalf("verdict = %+v", v)
+// The explainer is told the verdict that counts and asked only what supports
+// it, so a reason always explains the classifier's verdict.
+func TestTheExplainerIsToldTheVerdict(t *testing.T) {
+	for verdict, outcome := range map[string]string{"yes": "satisfies", "no": "does not satisfy"} {
+		explainer := &explainerLLM{replies: []string{`{"reason": "it says it rains"}`}}
+		j := newJudge(t, newFakeClassifier(choice(verdict, 0.6)), explainer)
+		j.AddAssistantMessage("It rains.")
+		j.Evaluate(t.Context(), "mentions weather")
+		calls := explainer.recorded()
+		if len(calls) != 1 || !strings.Contains(calls[0].ask, "reply "+outcome+" this criterion") {
+			t.Fatalf("%s: asked %+v, want the verdict in the ask", verdict, calls)
+		}
 	}
 }
 
-func TestAnAgreeingExplainerWithoutAReasonLeavesTheProbabilities(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "no"}`}}
+func TestTheReasonIsAskedForInASchemaAndAskedAgainWhenTheCallFails(t *testing.T) {
+	explainer := &explainerLLM{failures: 1, replies: []string{`{"reason": "it never mentions rain"}`}}
 	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), explainer)
 	j.AddAssistantMessage("Hello.")
-	if v := j.Evaluate(t.Context(), "mentions weather"); !strings.HasPrefix(v.Reason, "P(yes)=") {
+	v := j.Evaluate(t.Context(), "mentions weather")
+	if v.Reason != "it never mentions rain" {
+		t.Fatalf("verdict = %+v", v)
+	}
+	calls := explainer.recorded()
+	if len(calls) != 2 {
+		t.Fatalf("the explainer was asked %d times, want twice", len(calls))
+	}
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(calls[0].schema), &schema); err != nil {
+		t.Fatalf("schema %q: %v", calls[0].schema, err)
+	}
+	want := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"reason": map[string]any{"type": "string"}},
+		"required":             []any{"reason"},
+		"additionalProperties": false,
+	}
+	if !reflect.DeepEqual(schema, want) {
+		t.Fatalf("schema = %v, want %v", schema, want)
+	}
+}
+
+func TestAFailedExplainerLeavesTheProbabilities(t *testing.T) {
+	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), &explainerLLM{})
+	j.AddAssistantMessage("Hello.")
+	v := j.Evaluate(t.Context(), "mentions weather")
+	if v.Verdict != eval.VerdictNo || !strings.HasPrefix(v.Reason, "P(yes)=") {
 		t.Fatalf("verdict = %+v", v)
 	}
 }
@@ -333,11 +374,11 @@ func TestASureYesAndAContinueAreNotExplained(t *testing.T) {
 }
 
 func TestAnUnsureYesIsExplained(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "yes", "reason": "close enough"}`}}
+	explainer := &explainerLLM{replies: []string{`{"reason": "close enough"}`}}
 	j := newJudge(t, newFakeClassifier(choice("yes", 0.6)), explainer)
 	j.AddAssistantMessage("Sunny-ish.")
 	v := j.Evaluate(t.Context(), "gives the weather")
-	if !v.Passed() || !strings.HasPrefix(v.Reason, "close enough") || len(explainer.recorded()) != 1 {
+	if !v.Passed() || v.Reason != "close enough" || len(explainer.recorded()) != 1 {
 		t.Fatalf("verdict = %+v, explainer asked %d times", v, len(explainer.recorded()))
 	}
 }
@@ -409,11 +450,11 @@ func TestAReplyIsClassifiedInOneCall(t *testing.T) {
 func TestANoIsExplainedByTheExplainersLLM(t *testing.T) {
 	j, service := llmJudge(t, []string{
 		`{"verdict": {"choice": "no", "probabilities": {"no": 0.9}}}`,
-		`{"verdict": "no", "reason": "it never mentions the weather"}`,
+		`{"reason": "it never mentions the weather"}`,
 	}, true)
 	j.AddAssistantMessage("Hello there.")
 	v := j.Evaluate(t.Context(), "describes the weather")
-	if v.Verdict != eval.VerdictNo || !strings.HasPrefix(v.Reason, "it never mentions the weather") ||
+	if v.Verdict != eval.VerdictNo || v.Reason != "it never mentions the weather" ||
 		len(service.recorded()) != 2 {
 		t.Fatalf("verdict = %+v after %d calls", v, len(service.recorded()))
 	}
@@ -432,13 +473,13 @@ func TestWithoutAnExplainerTheProbabilitiesAreTheReason(t *testing.T) {
 func TestALLMJudgeClassifiesAndExplainsWithOneService(t *testing.T) {
 	service := &explainerLLM{replies: []string{
 		`{"verdict": {"choice": "no", "probabilities": {"no": 0.9}}}`,
-		`{"verdict": "no", "reason": "it never mentions the weather"}`,
+		`{"reason": "it never mentions the weather"}`,
 	}}
 	//nolint:staticcheck // the deprecated constructor is what is under test
 	j := eval.NewLLMJudge(service)
 	j.AddAssistantMessage("Hello there.")
 	v := j.Evaluate(t.Context(), "describes the weather")
-	if !strings.HasPrefix(v.Reason, "it never mentions the weather") || len(service.recorded()) != 2 {
+	if v.Reason != "it never mentions the weather" || len(service.recorded()) != 2 {
 		t.Fatalf("verdict = %+v after %d calls", v, len(service.recorded()))
 	}
 }
@@ -452,46 +493,36 @@ func TestAJudgeNeedsAClassifier(t *testing.T) {
 // What the explainer is asked
 
 func TestAReplyIsExplainedOverTheConversation(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "no", "reason": "it never mentions rain"}`}}
+	explainer := &explainerLLM{replies: []string{`{"reason": "it never mentions rain"}`}}
 	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), explainer)
 	j.AddUserMessage("What's the weather?")
 	j.AddAssistantMessage("Hello there.")
 	j.Evaluate(t.Context(), "describes the weather")
 	c := explainer.recorded()[0]
-	if !strings.Contains(c.ask, "Criterion: describes the weather") ||
-		!strings.Contains(c.ask, "Answer yes, no, or continue.") || !strings.Contains(c.instruction, `"continue"`) {
-		t.Fatalf("asked %+v", c)
-	}
-}
-
-func TestWithoutContinueTheExplainerIsAskedYesOrNo(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "no", "reason": "never names Berlin"}`}}
-	j := newJudge(t, newFakeClassifier(choice("no", 0.95, "yes", "no")), explainer, noContinue)
-	j.AddAssistantMessage("Take your time.")
-	j.Evaluate(t.Context(), "says the capital of Germany is Berlin")
-	c := explainer.recorded()[0]
-	if !strings.Contains(c.instruction, "The reply is the bot's final answer.") ||
-		!strings.Contains(c.ask, "Answer yes or no.") {
+	if !strings.Contains(c.ask, "most recent reply does not satisfy this criterion") ||
+		!strings.Contains(c.ask, "Criterion: describes the weather") ||
+		!strings.HasPrefix(c.instruction, "You explain the verdicts a judge gave") {
 		t.Fatalf("asked %+v", c)
 	}
 }
 
 func TestACallIsExplainedByNameAndArguments(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "no", "reason": "wrong speaker"}`}}
+	explainer := &explainerLLM{replies: []string{`{"reason": "wrong speaker"}`}}
 	j := newJudge(t, newFakeClassifier(yes(0.1)), explainer)
 	v := j.EvaluateCall(t.Context(), "submit", map[string]any{"speaker": "Ann"}, "submitted for Bob")
-	if !strings.HasPrefix(v.Reason, "wrong speaker") {
+	if v.Reason != "wrong speaker" {
 		t.Fatalf("verdict = %+v", v)
 	}
 	c := explainer.recorded()[0]
 	if !strings.Contains(c.ask, "called the function `submit` with arguments `{\"speaker\":\"Ann\"}`") ||
-		!strings.Contains(c.instruction, "evaluating a function call") {
+		!strings.Contains(c.ask, "this call does not satisfy this criterion") ||
+		!strings.HasPrefix(c.instruction, "You explain the verdicts a judge gave") {
 		t.Fatalf("asked %+v", c)
 	}
 }
 
 func TestMaxTokensCapsTheExplainer(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "no", "reason": "no rain"}`}}
+	explainer := &explainerLLM{replies: []string{`{"reason": "no rain"}`}}
 	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), explainer,
 		func(cfg *eval.EvalJudgeConfig) { cfg.MaxTokens = 64 })
 	j.AddAssistantMessage("Hello.")
@@ -502,22 +533,12 @@ func TestMaxTokensCapsTheExplainer(t *testing.T) {
 }
 
 func TestTheExplainerDefaultsToAVerdictSizedBound(t *testing.T) {
-	explainer := &explainerLLM{replies: []string{`{"verdict": "no", "reason": "no rain"}`}}
+	explainer := &explainerLLM{replies: []string{`{"reason": "no rain"}`}}
 	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), explainer)
 	j.AddAssistantMessage("Hello.")
 	j.Evaluate(t.Context(), "describes the weather")
 	if got := explainer.recorded()[0].maxTokens; got != 200 {
 		t.Fatalf("max tokens = %d, want 200", got)
-	}
-}
-
-func TestAFailedExplainerKeepsTheVerdict(t *testing.T) {
-	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), &explainerLLM{})
-	j.AddAssistantMessage("Hello.")
-	v := j.Evaluate(t.Context(), "describes the weather")
-	if v.Verdict != eval.VerdictNo || !strings.Contains(v.Reason, "the explainer judged no: explainer call failed") &&
-		!strings.Contains(v.Reason, "explainer call failed") {
-		t.Fatalf("verdict = %+v", v)
 	}
 }
 
@@ -568,7 +589,7 @@ turns:
 		t.Fatal(err)
 	}
 	judge := newJudge(t, answering("no", 0.95),
-		&explainerLLM{replies: []string{`{"verdict": "no", "reason": "it just echoes, no question"}`}})
+		&explainerLLM{replies: []string{`{"reason": "it just echoes, no question"}`}})
 	res, err := eval.Host(t.Context(), scenario, buildFakeBot, eval.Options{Judge: judge})
 	if err != nil {
 		t.Fatal(err)
@@ -598,6 +619,7 @@ turns:
 	if !strings.Contains(res.Failures[0].Reason, "no judge could be built") {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
+	wantKind(t, res, eval.FailureNoJudge)
 }
 
 // The judge sees the user turn as well as the reply, so it can resolve a terse
@@ -674,8 +696,10 @@ func TestARunThatNeverReachesTheBotClosesItsJudge(t *testing.T) {
 		t.Fatal(err)
 	}
 	judge := &closingJudge{}
-	if _, err := eval.RunURL(t.Context(), scenario, "ws://127.0.0.1:1", judge); err == nil {
-		t.Fatal("the run reached a bot that is not there")
+	res, err := eval.RunURL(t.Context(), scenario, "ws://127.0.0.1:1",
+		eval.Options{Judge: judge, ConnectTimeout: 300 * time.Millisecond})
+	if err != nil || len(res.Failures) != 1 || res.Failures[0].Event != eval.RunEventConnect {
+		t.Fatalf("run = %+v, %v; want a failure to connect", res, err)
 	}
 	if !judge.wasClosed() {
 		t.Fatal("the judge was left open")
