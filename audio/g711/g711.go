@@ -3,8 +3,27 @@
 // North American variant, and A-law (PCMA), used elsewhere. Both convert between
 // 16-bit signed little-endian PCM and 8-bit companded samples, one byte per
 // sample, mono. The algorithms are the canonical Sun reference implementations,
-// so they round-trip with audioop.lin2ulaw/ulaw2lin and lin2alaw/alaw2lin.
+// and produce the same bytes they do.
 package g711
+
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrPartialSample is returned by EncodeULaw and EncodeALaw for PCM whose
+// length is not a whole number of 16-bit samples.
+//
+//nolint:gochecknoglobals // sentinel error
+var ErrPartialSample = errors.New("g711: PCM is not a whole number of 16-bit samples")
+
+// checkWholeSamples rejects PCM with an odd number of bytes.
+func checkWholeSamples(pcm []byte) error {
+	if len(pcm)%2 != 0 {
+		return fmt.Errorf("%w: %d bytes", ErrPartialSample, len(pcm))
+	}
+	return nil
+}
 
 const (
 	// ulawBias is added to magnitudes before segment search (G.711 BIAS, 0x84).
@@ -24,14 +43,18 @@ var ulawSegEnd = [8]int16{0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF}
 var ulawDecodeTable = buildULawDecodeTable()
 
 // EncodeULaw encodes 16-bit signed little-endian PCM to μ-law, returning one
-// byte per sample. A trailing odd byte (an incomplete sample) is ignored.
-func EncodeULaw(pcm []byte) []byte {
+// byte per sample. PCM with an odd number of bytes ends in an incomplete
+// sample and is rejected with ErrPartialSample.
+func EncodeULaw(pcm []byte) ([]byte, error) {
+	if err := checkWholeSamples(pcm); err != nil {
+		return nil, err
+	}
 	out := make([]byte, len(pcm)/2)
 	for i := 0; i+1 < len(pcm); i += 2 {
 		sample := int16(uint16(pcm[i]) | uint16(pcm[i+1])<<8)
 		out[i/2] = linearToULaw(sample)
 	}
-	return out
+	return out, nil
 }
 
 // DecodeULaw decodes μ-law bytes to 16-bit signed little-endian PCM, returning

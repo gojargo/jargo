@@ -3,9 +3,12 @@ package audio_test
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/audio/g711"
+	"github.com/gojargo/jargo/audio/resample"
 )
 
 // pcm builds a little-endian S16LE buffer from samples.
@@ -198,6 +201,72 @@ func TestScaleAudio(t *testing.T) {
 	for _, c := range cases {
 		if got := audio.ScaleAudio(c.in, c.factor); !bytes.Equal(got, c.want) {
 			t.Errorf("%s: ScaleAudio = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// newResampler builds a stream resampler for one test.
+func newResampler(t *testing.T, from, to int) *resample.Resampler {
+	t.Helper()
+	r, err := resample.NewWithConfig(from, to, 1, resample.Config{})
+	if err != nil {
+		t.Fatalf("resampler %d to %d: %v", from, to, err)
+	}
+	t.Cleanup(r.Close)
+	return r
+}
+
+// The encoders resample the PCM first and then compand it, since companded
+// bytes are not samples to interpolate between. PCM that is not a whole number
+// of samples is rejected.
+func TestEncodersResampleThenEncode(t *testing.T) {
+	samples := make([]int16, 800)
+	for i := range samples {
+		samples[i] = 1000
+	}
+	in := pcm(samples...)
+	for name, c := range map[string]struct {
+		convert func([]byte, *resample.Resampler) ([]byte, error)
+		encode  func([]byte) ([]byte, error)
+	}{
+		"PCMToULaw": {audio.PCMToULaw, g711.EncodeULaw},
+		"PCMToALaw": {audio.PCMToALaw, g711.EncodeALaw},
+	} {
+		got, err := c.convert(in, newResampler(t, 8000, 16000))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want, err := c.encode(newResampler(t, 8000, 16000).Process(in))
+		if err != nil {
+			t.Fatalf("%s: encode: %v", name, err)
+		}
+		if len(got) == 0 || !bytes.Equal(got, want) {
+			t.Errorf("%s gave %d bytes unlike resampling then encoding (%d)", name, len(got), len(want))
+		}
+		if _, err := c.convert([]byte{0, 0, 0}, nil); !errors.Is(err, g711.ErrPartialSample) {
+			t.Errorf("%s(3 bytes) error = %v, want ErrPartialSample", name, err)
+		}
+	}
+}
+
+// The decoders expand the companded bytes first and then resample the PCM.
+func TestDecodersDecodeThenResample(t *testing.T) {
+	for name, c := range map[string]struct {
+		convert func([]byte, *resample.Resampler) []byte
+		decode  func([]byte) []byte
+		silence byte
+	}{
+		"ULawToPCM": {audio.ULawToPCM, g711.DecodeULaw, 0xff},
+		"ALawToPCM": {audio.ALawToPCM, g711.DecodeALaw, 0xd5},
+	} {
+		codes := bytes.Repeat([]byte{c.silence}, 800)
+		got := c.convert(codes, newResampler(t, 8000, 16000))
+		want := newResampler(t, 8000, 16000).Process(c.decode(codes))
+		if len(got) == 0 || !bytes.Equal(got, want) {
+			t.Errorf("%s gave %d bytes unlike decoding then resampling (%d)", name, len(got), len(want))
+		}
+		if got, want := c.convert(codes, nil), c.decode(codes); !bytes.Equal(got, want) {
+			t.Errorf("%s with no resampler gave %d bytes, want the %d decoded", name, len(got), len(want))
 		}
 	}
 }

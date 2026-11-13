@@ -155,8 +155,9 @@ func ULawToPCM(ulaw []byte, r *resample.Resampler) []byte {
 
 // PCMToULaw converts 16-bit PCM to the rate r runs at and encodes it as G.711
 // μ-law. A nil r leaves the rate alone. Resampling comes first, for the reason
-// given on ULawToPCM.
-func PCMToULaw(pcm []byte, r *resample.Resampler) []byte {
+// given on ULawToPCM. PCM that is not a whole number of samples is rejected
+// with g711.ErrPartialSample.
+func PCMToULaw(pcm []byte, r *resample.Resampler) ([]byte, error) {
 	return g711.EncodeULaw(resampleWith(pcm, r))
 }
 
@@ -167,8 +168,8 @@ func ALawToPCM(alaw []byte, r *resample.Resampler) []byte {
 }
 
 // PCMToALaw converts 16-bit PCM to the rate r runs at and encodes it as G.711
-// A-law. A nil r leaves the rate alone. See ULawToPCM.
-func PCMToALaw(pcm []byte, r *resample.Resampler) []byte {
+// A-law. A nil r leaves the rate alone. See ULawToPCM and PCMToULaw.
+func PCMToALaw(pcm []byte, r *resample.Resampler) ([]byte, error) {
 	return g711.EncodeALaw(resampleWith(pcm, r))
 }
 

@@ -52,7 +52,7 @@ func TestDeserializeStartThenMedia(t *testing.T) {
 		t.Fatalf("start should carry no frame, got %T", f)
 	}
 
-	payload := base64.StdEncoding.EncodeToString(g711.EncodeULaw(silence()))
+	payload := base64.StdEncoding.EncodeToString(encodeULaw(t, silence()))
 	media := `{"event":"media","media":{"payload":"` + payload + `"}}`
 	f, err = s.Deserialize([]byte(media))
 	if err != nil {
@@ -286,3 +286,13 @@ func TestSerializeApplicationMessage(t *testing.T) {
 // serialized unwraps a serializer result to the bytes it produced. These tests
 // are about the wire format, not about how the message carrying it is framed.
 func serialized(m wsserver.Message, err error) ([]byte, error) { return m.Data, err }
+
+// encodeULaw encodes pcm as μ-law, failing the test on an error.
+func encodeULaw(t *testing.T, pcm []byte) []byte {
+	t.Helper()
+	out, err := g711.EncodeULaw(pcm)
+	if err != nil {
+		t.Fatalf("encode μ-law: %v", err)
+	}
+	return out
+}

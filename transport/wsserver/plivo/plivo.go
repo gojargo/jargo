@@ -189,7 +189,10 @@ func (s *Serializer) media(a *frames.AudioRawData) (wsserver.Message, error) {
 	if id == "" {
 		return wsserver.Message{}, nil
 	}
-	ulaw := s.codec.Encode(a.Audio, a.SampleRate, wsserver.EncodingULaw)
+	ulaw, err := s.codec.Encode(a.Audio, a.SampleRate, wsserver.EncodingULaw)
+	if err != nil {
+		return wsserver.Message{}, err
+	}
 	if len(ulaw) == 0 {
 		// The conversion has nothing to emit yet; no audio, no message.
 		return wsserver.Message{}, nil

@@ -205,7 +205,10 @@ func (s *Serializer) Deserialize(data []byte) (frames.Frame, error) {
 }
 
 func (s *Serializer) media(a *frames.AudioRawData) (wsserver.Message, error) {
-	companded := s.codec.Encode(a.Audio, a.SampleRate, encodingOf(s.send))
+	companded, err := s.codec.Encode(a.Audio, a.SampleRate, encodingOf(s.send))
+	if err != nil {
+		return wsserver.Message{}, err
+	}
 	if len(companded) == 0 {
 		// The conversion has nothing to emit yet; no audio, no message.
 		return wsserver.Message{}, nil

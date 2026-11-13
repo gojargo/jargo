@@ -1,6 +1,10 @@
 package context
 
-import "testing"
+import (
+	"testing"
+
+	ttstext "github.com/gojargo/jargo/utils/text"
+)
 
 func TestNormalize(t *testing.T) {
 	cases := map[string]string{
@@ -62,5 +66,83 @@ func TestFoldCaseAndAccentsPreservesLength(t *testing.T) {
 	}
 	if got != "cafe-ω!" {
 		t.Fatalf("fold = %q, want %q", got, "cafe-ω!")
+	}
+}
+
+// alnumOf runs transform over text and returns the alphanumeric sequence of the
+// input and of the output.
+func alnumOf(transform ttstext.Transform, text string) (before, after string) {
+	return alnumOnly(text), alnumOnly(transform(text))
+}
+
+func replaceText(t *testing.T, pattern, with string) ttstext.Transform {
+	t.Helper()
+	tr, err := ttstext.ReplaceText([][2]string{{pattern, with}})
+	if err != nil {
+		t.Fatalf("ReplaceText: %v", err)
+	}
+	return tr
+}
+
+// The transforms that only reshape the text (Markdown stripping, phone number
+// and acronym spacing) leave its alphanumeric sequence as it was, so word
+// tracking needs no segment map for them.
+func TestAlnumPreservingTransformsKeepTheAlnumSequence(t *testing.T) {
+	cases := []struct {
+		name      string
+		transform ttstext.Transform
+		text      string
+	}{
+		{"StripMarkdown", ttstext.StripMarkdown, "**Hello** and _world_"},
+		{"ExpandPhoneNumbers", ttstext.ExpandPhoneNumbers, "123-456-7890"},
+		{"NormalizeAcronyms", ttstext.NormalizeAcronyms, "NASA and HTTP"},
+	}
+	for _, c := range cases {
+		if before, after := alnumOf(c.transform, c.text); after != before {
+			t.Errorf("%s(%q): alnum %q, want %q", c.name, c.text, after, before)
+		}
+	}
+}
+
+// Spelling a percentage out changes its alphanumeric sequence.
+func TestExpandPercentagesChangesTheAlnumSequence(t *testing.T) {
+	if before, after := alnumOf(ttstext.ExpandPercentages, "50%"); after == before {
+		t.Errorf("ExpandPercentages(%q): alnum %q unchanged, want it to differ", "50%", after)
+	}
+}
+
+// A replacement that splits one word into several normalizes the same as the
+// original, since the alphanumeric sequence drops spaces and case.
+func TestAWordSplittingReplacementNormalizesTheSame(t *testing.T) {
+	tr := replaceText(t, `\bBODYPUMP\b`, "body pump")
+	if before, after := alnumOf(tr, "BODYPUMP"); after != before {
+		t.Errorf("alnum after the split = %q, want %q", after, before)
+	}
+}
+
+// A replacement that only changes the case of a word normalizes the same as
+// the original.
+func TestACaseOnlyReplacementNormalizesTheSame(t *testing.T) {
+	tr := replaceText(t, `\bSQL\b`, "sql")
+	if before, after := alnumOf(tr, "SQL"); after != before {
+		t.Errorf("alnum after the case change = %q, want %q", after, before)
+	}
+}
+
+// A respelling ("leisure" to "lezher") changes the letters, so it does not
+// normalize the same and is seen as transformed.
+func TestARespellingDoesNotNormalizeTheSame(t *testing.T) {
+	tr := replaceText(t, `\bleisure\b`, "lezher")
+	if before, after := alnumOf(tr, "leisure"); after == before {
+		t.Errorf("alnum after the respelling = %q, want it to differ from %q", after, before)
+	}
+}
+
+// An SSML phoneme tag wraps the word without altering it, so once the tag is
+// stripped it normalizes the same as the original.
+func TestAnSSMLPhonemeTagNormalizesTheSame(t *testing.T) {
+	tr := replaceText(t, `\bSiobhan\b`, `<phoneme alphabet="ipa" ph="ʃəˈvɔːn">Siobhan</phoneme>`)
+	if before, after := alnumOf(tr, "Siobhan"); after != before {
+		t.Errorf("alnum after the phoneme tag = %q, want %q", after, before)
 	}
 }

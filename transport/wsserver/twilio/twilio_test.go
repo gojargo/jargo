@@ -101,7 +101,7 @@ func TestSetupOverridesThePipelineRate(t *testing.T) {
 
 func TestDeserializeMediaDecodesULaw(t *testing.T) {
 	s := ready(t, Config{}, wireRate)
-	ulaw := g711.EncodeULaw(pcm())
+	ulaw := encodeULaw(t, pcm())
 	payload := base64.StdEncoding.EncodeToString(ulaw)
 
 	f, err := s.Deserialize([]byte(`{"event":"media","media":{"payload":"` + payload + `"}}`))
@@ -218,7 +218,7 @@ func TestSerializeAudio(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode payload: %v", err)
 			}
-			if !bytes.Equal(raw, g711.EncodeULaw(pcm())) {
+			if !bytes.Equal(raw, encodeULaw(t, pcm())) {
 				t.Error("payload was not μ-law encoded")
 			}
 		})
@@ -713,4 +713,14 @@ func TestHangUpFinishesBeforeTheEndingFrameIsSerialized(t *testing.T) {
 	default:
 		t.Fatal("Serialize returned before the hang-up request was made")
 	}
+}
+
+// encodeULaw encodes pcm as μ-law, failing the test on an error.
+func encodeULaw(t *testing.T, pcm []byte) []byte {
+	t.Helper()
+	out, err := g711.EncodeULaw(pcm)
+	if err != nil {
+		t.Fatalf("encode μ-law: %v", err)
+	}
+	return out
 }

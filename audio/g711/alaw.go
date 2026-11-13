@@ -22,15 +22,19 @@ var alawSegEnd = [8]int16{0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF}
 var alawDecodeTable = buildALawDecodeTable()
 
 // EncodeALaw encodes 16-bit signed little-endian PCM to A-law (G.711 PCMA),
-// returning one byte per sample. A trailing odd byte is ignored. A-law is the
-// PSTN companding used outside North America (Telnyx's PCMA encoding).
-func EncodeALaw(pcm []byte) []byte {
+// returning one byte per sample. PCM with an odd number of bytes ends in an
+// incomplete sample and is rejected with ErrPartialSample. A-law is the PSTN
+// companding used outside North America (Telnyx's PCMA encoding).
+func EncodeALaw(pcm []byte) ([]byte, error) {
+	if err := checkWholeSamples(pcm); err != nil {
+		return nil, err
+	}
 	out := make([]byte, len(pcm)/2)
 	for i := 0; i+1 < len(pcm); i += 2 {
 		sample := int16(uint16(pcm[i]) | uint16(pcm[i+1])<<8)
 		out[i/2] = linearToALaw(sample)
 	}
-	return out
+	return out, nil
 }
 
 // DecodeALaw decodes A-law bytes to 16-bit signed little-endian PCM, returning

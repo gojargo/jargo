@@ -152,14 +152,15 @@ func (c *Codec) Decode(companded []byte, enc Encoding) []byte {
 }
 
 // Encode converts one chunk of PCM at frameRate to companded wire audio. It
-// returns nil when the conversion has nothing to emit yet; see Decode.
-func (c *Codec) Encode(pcm []byte, frameRate int, enc Encoding) []byte {
+// returns nil when the conversion has nothing to emit yet; see Decode. It fails
+// when companding PCM that is not a whole number of samples.
+func (c *Codec) Encode(pcm []byte, frameRate int, enc Encoding) ([]byte, error) {
 	r := c.outputResampler(frameRate)
 	switch enc {
 	case EncodingALaw:
 		return audio.PCMToALaw(pcm, r)
 	case EncodingLinear:
-		return audio.ResamplePCM(pcm, r)
+		return audio.ResamplePCM(pcm, r), nil
 	default:
 		return audio.PCMToULaw(pcm, r)
 	}

@@ -49,7 +49,7 @@ func TestDeserializeStartLearnsEncoding(t *testing.T) {
 	}
 
 	// After a PCMA start, inbound media must be decoded as A-law.
-	payload := base64.StdEncoding.EncodeToString(g711.EncodeALaw(silence()))
+	payload := base64.StdEncoding.EncodeToString(encodeALaw(t, silence()))
 	f, err := s.Deserialize([]byte(`{"event":"media","media":{"payload":"` + payload + `"}}`))
 	if err != nil {
 		t.Fatalf("deserialize media: %v", err)
@@ -96,7 +96,7 @@ func TestSerializeSendEncodingPCMA(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	raw, _ := base64.StdEncoding.DecodeString(out.Media.Payload)
-	if got, want := raw, g711.EncodeALaw(pcm); string(got) != string(want) {
+	if got, want := raw, encodeALaw(t, pcm); string(got) != string(want) {
 		t.Fatalf("payload = % x, want A-law % x", got, want)
 	}
 }
@@ -249,4 +249,14 @@ func TestSerializeRTVIMessageIsDropped(t *testing.T) {
 	if err != nil || out != nil {
 		t.Fatalf("Serialize(RTVI message) = %q, %v; want nil, nil", out, err)
 	}
+}
+
+// encodeALaw encodes pcm as A-law, failing the test on an error.
+func encodeALaw(t *testing.T, pcm []byte) []byte {
+	t.Helper()
+	out, err := g711.EncodeALaw(pcm)
+	if err != nil {
+		t.Fatalf("encode A-law: %v", err)
+	}
+	return out
 }
