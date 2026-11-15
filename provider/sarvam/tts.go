@@ -410,8 +410,8 @@ func (s *synthesizer) refreshConfig() {
 // ignored.
 func (s *synthesizer) configMessage() []byte {
 	data := map[string]any{
-		"target_language_code": s.live.Language.AsAny(),
-		"speaker":              s.live.Voice.AsAny(),
+		keyTargetLanguageCode:  s.live.Language.AsAny(),
+		keySpeaker:             s.live.Voice.AsAny(),
 		"speech_sample_rate":   strconv.Itoa(s.sampleRate),
 		"enable_preprocessing": s.live.EnablePreprocessing.AsAny(),
 		"min_buffer_size":      s.live.MinBufferSize.AsAny(),
@@ -680,7 +680,7 @@ func (s *synthesizer) sendText(ctx context.Context, text string) error {
 		slog.Warn("sarvam tts: websocket not ready, cannot send text")
 		return nil
 	}
-	return s.send(ctx, map[string]any{msgType: "text", msgData: map[string]any{"text": text}})
+	return s.send(ctx, map[string]any{msgType: "text", msgData: map[string]any{keyText: text}})
 }
 
 // FlushAudio has Sarvam generate the text it is still buffering, implementing

@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/provider/baseten"
 	"github.com/gojargo/jargo/provider/cerebras"
+	"github.com/gojargo/jargo/provider/crusoe"
 	"github.com/gojargo/jargo/provider/deepseek"
 	"github.com/gojargo/jargo/provider/fireworks"
 	"github.com/gojargo/jargo/provider/groq"
@@ -41,10 +43,13 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		// role is what a developer message is expected to be sent under.
 		role string
 	}{
+		// Baseten's message roles are system, user, assistant and tool.
+		{"baseten", baseten.NewLLM, chat.RoleUser},
 		// Cerebras maps the developer role to its own developer instruction
 		// layer, which sits above user instructions in the prompt hierarchy, so
 		// the message is sent as written.
 		{"cerebras", cerebras.NewLLM, chat.RoleDeveloper},
+		{"crusoe", crusoe.NewLLM, chat.RoleUser},
 		{"deepseek", deepseekLLM, chat.RoleUser},
 		{"inception", inception.NewLLM, chat.RoleUser},
 		{"mistral", mistral.NewLLM, chat.RoleUser},

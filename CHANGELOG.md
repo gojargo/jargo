@@ -373,6 +373,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   grounding, MCP with Gemini Live, heartbeats and observers.
 - **Expressive conversation examples** for Azure, Cartesia, Fish Audio,
   Inworld, MiniMax, Mistral and Soniox, and `persistent-context-aws-nova-sonic`.
+- **Baseten and Crusoe Cloud LLMs.** `baseten.NewLLM` and `crusoe.NewLLM`
+  run on the shared OpenAI-compatible client; neither endpoint has a
+  developer role, so developer messages are sent as user messages.
+- **Async and Sarvam text-to-speech over HTTP.** `asyncai.NewHTTPTTS` and
+  `sarvam.NewHTTPTTS` synthesize each sentence with one request. Sarvam's
+  HTTP settings are `sarvam.HTTPTTSSettings`, which `sarvam.TTSSettings` now
+  embeds alongside its WebSocket buffering fields.
+- **Speechify text-to-speech.** `speechify.NewHTTPTTS` streams audio and
+  word-level speech marks over server-sent events, so the conversation keeps
+  only the words heard before an interruption.
+- **Bland text-to-speech.** `bland.NewTTS` streams the model's tokens into
+  one realtime session for the call, ends each turn with `end_of_turn` and
+  cancels an interrupted turn without reconnecting; `bland.NewHTTPTTS` makes
+  one request per sentence. Examples: `function-calling-baseten`,
+  `function-calling-crusoe`, `voice-asyncai-http`, `voice-sarvam-vad-http`,
+  `voice-speechify-http`, `voice-bland`, `voice-bland-http`.
 
 ### Changed
 

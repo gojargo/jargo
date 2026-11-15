@@ -39,9 +39,12 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | --- | --- |
 | [`voice-assemblyai`](voice/voice-assemblyai) | AssemblyAI speech-to-text and text-to-speech, with an OpenAI LLM. |
 | [`voice-asyncai`](voice/voice-asyncai) | Deepgram speech-to-text, an OpenAI LLM and Async text-to-speech. |
+| [`voice-asyncai-http`](voice/voice-asyncai-http) | Deepgram speech-to-text, an OpenAI LLM and Async text-to-speech (over HTTP). |
 | [`voice-aws`](voice/voice-aws) | AWS Transcribe speech-to-text, Claude on AWS Bedrock and AWS Polly text-to-speech. |
 | [`voice-azure`](voice/voice-azure) | Azure speech-to-text, Azure OpenAI and Azure text-to-speech (streaming). |
 | [`voice-azure-http`](voice/voice-azure-http) | Azure speech-to-text, Azure OpenAI and Azure text-to-speech over HTTP. |
+| [`voice-bland`](voice/voice-bland) | Deepgram speech-to-text, OpenAI's Responses API and Bland text-to-speech. |
+| [`voice-bland-http`](voice/voice-bland-http) | Deepgram speech-to-text, OpenAI's Responses API and Bland text-to-speech (over HTTP). |
 | [`voice-camb`](voice/voice-camb) | Deepgram speech-to-text, an OpenAI LLM and Camb AI text-to-speech. |
 | [`voice-cartesia`](voice/voice-cartesia) | Cartesia speech-to-text and text- to-speech, with an OpenAI LLM. |
 | [`voice-cartesia-http`](voice/voice-cartesia-http) | Cartesia speech-to-text, an OpenAI LLM and Cartesia text-to-speech over HTTP. |
@@ -84,8 +87,10 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-rime-http`](voice/voice-rime-http) | Rime speech-to-text, an OpenAI LLM and Rime text-to-speech (over HTTP). |
 | [`voice-rime-v1`](voice/voice-rime-v1) | Rime speech-to-text, an OpenAI LLM and Rime text-to-speech (over WebSocket v1). |
 | [`voice-sarvam`](voice/voice-sarvam) | Sarvam speech-to-text, LLM and text- to-speech. |
+| [`voice-sarvam-vad-http`](voice/voice-sarvam-vad-http) | Sarvam speech-to-text (with its VAD signals), LLM and text-to-speech (over HTTP). |
 | [`voice-smallest`](voice/voice-smallest) | Smallest AI speech-to-text, LLM (Electron) and text-to-speech. |
 | [`voice-soniox`](voice/voice-soniox) | Soniox speech-to-text and text-to- speech, with an OpenAI LLM. |
+| [`voice-speechify-http`](voice/voice-speechify-http) | Deepgram speech-to-text, an OpenAI LLM and Speechify text-to-speech (over HTTP). |
 | [`voice-speechmatics`](voice/voice-speechmatics) | Speechmatics speech-to-text (with diarization) and text-to-speech, with an OpenAI LLM. |
 | [`voice-speechmatics-vad`](voice/voice-speechmatics-vad) | Speechmatics speech-to-text (with diarization and its own voice activity detection) and text-to-speech, with an OpenAI LLM. |
 | [`voice-together`](voice/voice-together) | Together AI speech-to-text, LLM and text-to-speech. |
@@ -107,7 +112,9 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-aws`](function-calling/function-calling-aws) | Claude on AWS Bedrock | AWS Transcribe, AWS Polly |
 | [`function-calling-aws-video`](function-calling/function-calling-aws-video) | Claude on AWS Bedrock, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-azure`](function-calling/function-calling-azure) | Azure OpenAI | Deepgram, Cartesia |
+| [`function-calling-baseten`](function-calling/function-calling-baseten) | Baseten | Deepgram, Cartesia |
 | [`function-calling-cerebras`](function-calling/function-calling-cerebras) | Cerebras | Deepgram, Cartesia |
+| [`function-calling-crusoe`](function-calling/function-calling-crusoe) | Crusoe Cloud | Deepgram, Cartesia |
 | [`function-calling-deepseek`](function-calling/function-calling-deepseek) | DeepSeek | Deepgram, Cartesia |
 | [`function-calling-direct`](function-calling/function-calling-direct) | OpenAI, with tools that carry their own handlers | Deepgram, Cartesia |
 | [`function-calling-fireworks`](function-calling/function-calling-fireworks) | Fireworks AI | Deepgram, Cartesia |

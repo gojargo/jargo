@@ -24,11 +24,17 @@ suite:
     scenarios: [scripted/capital_question]
   - bot: voice/voice-asyncai
     scenarios: [scripted/capital_question]
+  - bot: voice/voice-asyncai-http
+    scenarios: [scripted/capital_question]
   - bot: voice/voice-aws
     scenarios: [scripted/capital_question]
   - bot: voice/voice-azure
     scenarios: [scripted/capital_question]
   - bot: voice/voice-azure-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-bland
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-bland-http
     scenarios: [scripted/capital_question]
   - bot: voice/voice-camb
     scenarios: [scripted/capital_question]
@@ -104,9 +110,13 @@ suite:
     scenarios: [scripted/capital_question]
   - bot: voice/voice-sarvam
     scenarios: [scripted/capital_question]
+  - bot: voice/voice-sarvam-vad-http
+    scenarios: [scripted/capital_question]
   - bot: voice/voice-smallest
     scenarios: [scripted/capital_question]
   - bot: voice/voice-soniox
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-speechify-http
     scenarios: [scripted/capital_question]
   - bot: voice/voice-speechmatics
     scenarios: [scripted/capital_question]
@@ -134,7 +144,11 @@ suite:
     scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
   - bot: function-calling/function-calling-azure
     scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-baseten
+    scenarios: [scripted/weather_function_call]
   - bot: function-calling/function-calling-cerebras
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-crusoe
     scenarios: [scripted/weather_function_call]
   - bot: function-calling/function-calling-deepseek
     scenarios: [scripted/weather_function_call]

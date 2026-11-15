@@ -26,6 +26,8 @@ import (
 const (
 	keyTranscript = "transcript"
 	keyContextID  = "context_id"
+	keyVoice      = "voice"
+	keyLanguage   = "language"
 )
 
 // keepaliveInterval is how often an idle connection is sent a blank
@@ -42,7 +44,7 @@ var errNotConnected = errors.New("asyncai tts: websocket not connected")
 // them.
 //
 //nolint:gochecknoglobals // the set of fields, fixed
-var sessionInitFields = []string{"model", "voice", "language"}
+var sessionInitFields = []string{"model", keyVoice, keyLanguage}
 
 // NewTTS builds an Async TTS service.
 //
@@ -234,13 +236,13 @@ func (s *synthesizer) UpdateSettings(ctx context.Context, changed settings.Chang
 func (s *synthesizer) refreshInit() {
 	init := map[string]any{
 		"model_id": s.live.Model.AsAny(),
-		"voice":    map[string]any{"mode": "id", "id": s.live.Voice.AsAny()},
+		keyVoice:   map[string]any{"mode": "id", "id": s.live.Voice.AsAny()},
 		"output_format": map[string]any{
 			"container":   defaultContainer,
 			"encoding":    defaultEncoding,
 			"sample_rate": s.cfg.SampleRate,
 		},
-		"language": s.live.Language.AsAny(),
+		keyLanguage: s.live.Language.AsAny(),
 	}
 	s.mu.Lock()
 	s.init = init
