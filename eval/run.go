@@ -10,6 +10,7 @@ import (
 
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
@@ -37,6 +38,10 @@ type Options struct {
 	// any. A local or HTTP service works, e.g. a Kokoro or an OpenAI TTS; a
 	// WebSocket-streaming one does not.
 	UserTTS *tts.Base
+	// BotSTT transcribes the bot's audio for a scenario asserting response in
+	// audio mode. Nil builds one from the scenario's judge: block's
+	// transcription.
+	BotSTT *stt.SegmentService
 	// OnProgress, when set, is called as each turn and expectation resolves, in
 	// order, for a caller reporting a long run as it happens rather than at the
 	// end (see EventProgress). Keep it quick: the records queue behind it.
@@ -170,7 +175,7 @@ func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Option
 			return Result{ScenarioName: scenario.Name}, err
 		}
 	}
-	session, err := ScriptSessionFromScenario(scenario, url, params, opts.Judge, userTTS)
+	session, err := ScriptSessionFromScenario(scenario, url, params, opts.Judge, userTTS, opts.BotSTT)
 	if err != nil {
 		// The session closes its judge however its run ends; one that was never
 		// built closes the caller's here.

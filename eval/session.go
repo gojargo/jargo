@@ -231,7 +231,10 @@ func (s *Session[R]) Run(ctx context.Context) (R, error) {
 // An error in the harness itself, a panic included, is recorded as a failure
 // with its stack in the trace, so the run still yields a result.
 func (s *Session[R]) drive(ctx context.Context) (failures []AssertionFailure, err error) {
-	s.client.Start(ctx)
+	if startErr := s.client.Start(ctx); startErr != nil {
+		s.client.Stop(ctx)
+		return []AssertionFailure{s.errorFailure(startErr.Error(), nil)}, nil
+	}
 	defer func() {
 		s.client.Stop(ctx)
 		// Progress handlers run on their own goroutine; wait them out so every

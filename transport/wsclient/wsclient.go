@@ -280,6 +280,15 @@ func (s *Session) clientTaskHandler(ctx context.Context, conn *websocket.Conn, d
 	}
 }
 
+// InputDriver is the input a WebSocket client transport dispatches to: the
+// InputTransport itself, or an input built on it that reshapes what it receives
+// by overriding how the audio and the frames are pushed.
+type InputDriver interface {
+	transport.InputDriver
+	// PushAudioFrame pushes a chunk of the audio received on the connection.
+	PushAudioFrame(ctx context.Context, f frames.InputAudioFrame)
+}
+
 // InputTransport receives frames over a WebSocket client connection: it
 // deserializes incoming messages and pushes the frames downstream.
 type InputTransport struct {
@@ -287,13 +296,26 @@ type InputTransport struct {
 	transport *Transport
 	session   *Session
 	params    Params
+	// self is the input dispatched to: this one, or the input built on it.
+	self InputDriver
 }
 
-func newInput(t *Transport, session *Session, params Params) *InputTransport {
-	in := &InputTransport{transport: t, session: session, params: params}
-	in.BaseInput = transport.NewBaseInput(t.name+"::Input", params.Params, in)
+// NewInputTransport builds an input for t, over its session. self is the input
+// built on the returned one, which embeds it and is what the pipeline runs and
+// the received audio and frames are pushed through; nil makes the input its own.
+// Give the input to t with SetInput.
+func NewInputTransport(t *Transport, self InputDriver) *InputTransport {
+	in := &InputTransport{transport: t, session: t.session, params: t.params}
+	if self == nil {
+		self = in
+	}
+	in.self = self
+	in.BaseInput = transport.NewBaseInput(t.name+"::Input", t.params.Params, self)
 	return in
 }
+
+// Session is the connection the input reads.
+func (in *InputTransport) Session() *Session { return in.session }
 
 // Setup sets the serializer up and connects the session.
 func (in *InputTransport) Setup(ctx context.Context, s processor.Setup) error {
@@ -344,7 +366,7 @@ func (in *InputTransport) onMessage(ctx context.Context, _ *websocket.Conn, mess
 		return
 	}
 	if af, ok := f.(frames.InputAudioFrame); ok && in.params.AudioInEnabled {
-		in.PushAudioFrame(ctx, af)
+		in.self.PushAudioFrame(ctx, af)
 		return
 	}
 	if mf, ok := f.(*frames.InputTransportMessageFrame); ok {
@@ -372,11 +394,21 @@ type OutputTransport struct {
 	nextSendTime time.Time
 }
 
-func newOutput(t *Transport, session *Session, params Params) *OutputTransport {
-	out := &OutputTransport{transport: t, session: session, params: params}
-	out.BaseOutput = transport.NewBaseOutput(t.name+"::Output", params.Params, out)
+// NewOutputTransport builds an output for t, over its session. self is the
+// output built on the returned one, which embeds it and is what the pipeline
+// runs and the audio is written through; nil makes the output its own. Give the
+// output to t with SetOutput.
+func NewOutputTransport(t *Transport, self transport.OutputDriver) *OutputTransport {
+	out := &OutputTransport{transport: t, session: t.session, params: t.params}
+	if self == nil {
+		self = out
+	}
+	out.BaseOutput = transport.NewBaseOutput(t.name+"::Output", t.params.Params, self)
 	return out
 }
+
+// Session is the connection the output writes.
+func (out *OutputTransport) Session() *Session { return out.session }
 
 // channels is how many channels the outgoing audio carries.
 func (out *OutputTransport) channels() int {
@@ -432,7 +464,7 @@ func (out *OutputTransport) Cleanup(ctx context.Context) error {
 
 // SendMessage sends a transport message over the connection.
 func (out *OutputTransport) SendMessage(ctx context.Context, f frames.OutputTransportMessage) error {
-	_, err := out.writeFrame(ctx, f)
+	_, err := out.WriteFrame(ctx, f)
 	return err
 }
 
@@ -450,7 +482,7 @@ func (out *OutputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 			audio.PCMToWAV(frame.Audio, frame.SampleRate, frame.NumChannels), frame.SampleRate, frame.NumChannels)
 	}
 
-	if ok, err := out.writeFrame(ctx, frame); !ok || err != nil {
+	if ok, err := out.WriteFrame(ctx, frame); !ok || err != nil {
 		return false, err
 	}
 
@@ -459,10 +491,10 @@ func (out *OutputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 	return true, nil
 }
 
-// writeFrame serializes a frame and sends it. It reports whether the transport
+// WriteFrame serializes a frame and sends it. It reports whether the transport
 // took the frame: a serializer that emits no payload has still taken it, see
 // wsserver.Serializer.
-func (out *OutputTransport) writeFrame(ctx context.Context, f frames.Frame) (bool, error) {
+func (out *OutputTransport) WriteFrame(ctx context.Context, f frames.Frame) (bool, error) {
 	if out.session.IsClosing() || !out.session.IsConnected() {
 		return false, nil
 	}
@@ -560,10 +592,28 @@ func newTransport(name, uri string, params Params) *Transport {
 }
 
 // Input returns the input processor, which receives frames.
-func (t *Transport) Input() processor.Processor { return t.inputTransport() }
+func (t *Transport) Input() processor.Processor { return t.inputTransport().Self() }
 
 // Output returns the output processor, which sends frames.
-func (t *Transport) Output() processor.Processor { return t.outputTransport() }
+func (t *Transport) Output() processor.Processor { return t.outputTransport().Self() }
+
+// SetInput makes in the transport's input, for a transport built on this one
+// whose input reshapes what it receives (see NewInputTransport). Set it before
+// the input is first asked for.
+func (t *Transport) SetInput(in *InputTransport) {
+	t.mu.Lock()
+	t.input = in
+	t.mu.Unlock()
+}
+
+// SetOutput makes out the transport's output, for a transport built on this
+// one whose output reshapes what it sends (see NewOutputTransport). Set it
+// before the output is first asked for.
+func (t *Transport) SetOutput(out *OutputTransport) {
+	t.mu.Lock()
+	t.output = out
+	t.mu.Unlock()
+}
 
 // Events is the registry of the events this transport raises. See
 // EventConnected and EventDisconnected.
@@ -578,7 +628,7 @@ func (t *Transport) inputTransport() *InputTransport {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.input == nil {
-		t.input = newInput(t, t.session, t.params)
+		t.input = NewInputTransport(t, nil)
 	}
 	return t.input
 }
@@ -587,7 +637,7 @@ func (t *Transport) outputTransport() *OutputTransport {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.output == nil {
-		t.output = newOutput(t, t.session, t.params)
+		t.output = NewOutputTransport(t, nil)
 	}
 	return t.output
 }

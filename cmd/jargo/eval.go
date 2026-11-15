@@ -47,6 +47,8 @@ func evalRunCmd() *cobra.Command {
 		noCache         bool
 		logsDir         string
 		debugLogs       bool
+		audio           bool
+		recordDir       string
 	)
 	cmd := &cobra.Command{
 		Use:   "run <scenario.yaml|dir>...",
@@ -75,6 +77,10 @@ func evalRunCmd() *cobra.Command {
 		"directory for each scenario's logs: <logs-dir>/<scenario>.eval.log (+ .debug.log)")
 	cmd.Flags().BoolVarP(&debugLogs, "debug", "d", false,
 		"also save <scenario>.debug.log with the harness's full per-pipeline logs")
+	cmd.Flags().BoolVarP(&audio, "audio", "a", false,
+		"record each scenario's conversation audio (audio-mode scenarios)")
+	cmd.Flags().StringVar(&recordDir, "record-dir", "recordings",
+		"directory for --audio recordings: <record-dir>/<scenario>.wav")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if botURL == "" {
@@ -119,6 +125,9 @@ func evalRunCmd() *cobra.Command {
 						UseCache:         &useCache,
 					},
 				}
+				if audio {
+					opts.Params.RecordPath = recordPath(recordDir, scenario.Name)
+				}
 				if verbose {
 					opts.OnProgress = func(p eval.ScriptTurnProgress) { printProgress(out, p) }
 				}
@@ -151,6 +160,15 @@ func writeTrace(logsDir, stem string, trace []string) {
 		return
 	}
 	_ = os.WriteFile(filepath.Join(logsDir, stem+".eval.log"), []byte(strings.Join(trace, "\n")+"\n"), 0o600)
+}
+
+// recordPath is where a scenario's recording goes under recordDir, or "" when
+// recording is off. A group entry's "/" becomes "__" in the file name.
+func recordPath(recordDir, scenarioName string) string {
+	if recordDir == "" {
+		return ""
+	}
+	return filepath.Join(recordDir, strings.ReplaceAll(scenarioName, "/", "__")+".wav")
 }
 
 // scriptsToPlay are a file's scripted scenarios, and how many of its scenarios

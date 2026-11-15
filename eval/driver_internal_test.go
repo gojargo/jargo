@@ -13,7 +13,7 @@ import (
 // reached.
 func newSessionFor(t *testing.T, scenario *ScriptScenario, params SessionParams) *ScriptSession {
 	t.Helper()
-	s, err := NewScriptSession(scenario, "ws://localhost:0", params, nil, nil)
+	s, err := NewScriptSession(scenario, "ws://localhost:0", params, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -367,7 +367,7 @@ func readWAV(path string) (pcm []byte, sampleRate int, err error) {
 			}
 			sampleRate = int(binary.LittleEndian.Uint32(data[body+4 : body+8]))
 			formatSeen = true
-		case "data":
+		case wavDataChunk:
 			if !formatSeen {
 				return nil, 0, fmt.Errorf("%w: %s: data before fmt", errWAV, path)
 			}

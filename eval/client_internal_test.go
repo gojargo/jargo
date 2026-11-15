@@ -17,7 +17,7 @@ import (
 // clientFor is the client of a session of scenario against botURL.
 func clientFor(t *testing.T, scenario *ScriptScenario, botURL string, params SessionParams) *Client {
 	t.Helper()
-	s, err := NewScriptSession(scenario, botURL, params, nil, nil)
+	s, err := NewScriptSession(scenario, botURL, params, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -266,6 +266,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `eval.NewSuite`; `eval.LoadManifest` takes `eval.ManifestOverrides`; the
   suite's `--judge-*` flags are removed, judges coming from each scenario's
   `judge:` block; the suite's output format changed.
+- **Eval audio mode behaves like a live call.** The harness paces the
+  user's audio to the bot in 40 ms frames with continuous silence between
+  turns, re-emits the bot's audio on the same cadence, transcribes the bot's
+  speech with a segmented STT, a VAD and a turn aggregator into the
+  `response` event, plays a turn's `audio:` WAV file, and records the
+  conversation to `SessionParams.RecordPath`. `jargo eval run` gains
+  `-a/--audio` and `--record-dir`, and a scenario asserting `response` in
+  audio mode is no longer skipped. Supporting API:
+  `wsclient.NewInputTransport`, `NewOutputTransport`, `SetInput`,
+  `SetOutput` and `WriteFrame`; `stt.SegmentService.RunSTT` and `SetRunSTT`;
+  `aggregators.UserAggregator.Reset`. A segmented STT's diarized speaker
+  runs are finalized only on the last run. **Breaking:** `NewClient`,
+  `NewScriptSession` and `ScriptSessionFromScenario` take a bot STT
+  (`*stt.SegmentService`), `NewClientTransport` takes a `*ClientRecorder`,
+  and `Client.Start` returns an error.
 
 ### Changed
 

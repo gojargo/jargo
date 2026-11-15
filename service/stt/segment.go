@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"iter"
 	"log/slog"
 	"sync"
 	"time"
@@ -92,6 +93,12 @@ type SegmentService struct {
 	// of the one being transcribed.
 	segmentCount        int
 	transcribingSegment int
+	// hasMoreTranscripts is set while a segment's transcript has more frames to
+	// come, so the one being pushed is not finalized.
+	hasMoreTranscripts bool
+	// runSTT is how a segment is transcribed, nil for the Transcriber's own run.
+	// See SetRunSTT.
+	runSTT RunSTTFunc
 	// queue holds the segments waiting to be transcribed, with their numbers,
 	// in the order they were cut. queued is signaled when one is added.
 	queue  []queuedSegment
@@ -428,7 +435,9 @@ func (s *SegmentService) segmentTask(ctx context.Context) {
 // A transcript is marked finalized when its segment is the latest. Once the
 // user speaks again, the transcript of an earlier segment covers only the words
 // before they resumed, so it is not finalized, the same way a streaming service
-// drops a pending finalize when the user starts speaking.
+// drops a pending finalize when the user starts speaking. When a segment's
+// transcript arrives as several diarized TranscriptionFrames (one per speaker
+// run), only the last one can be.
 //
 // The segment's span is opened before the transcript is pushed and written after
 // it. Opening first is what lets the metrics frame that the timing raises, which
@@ -437,7 +446,7 @@ func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir proc
 	tf, isTranscript := f.(*frames.TranscriptionFrame)
 	if isTranscript {
 		s.mu.Lock()
-		tf.Finalized = s.transcribingSegment == s.segmentCount
+		tf.Finalized = s.transcribingSegment == s.segmentCount && !s.hasMoreTranscripts
 		s.mu.Unlock()
 		s.tracer.open()
 		s.ttfb.transcript(ctx, tf.Finalized)
@@ -472,7 +481,33 @@ func (s *SegmentService) Cleanup(ctx context.Context) error {
 	return s.Base.Cleanup(ctx)
 }
 
-// transcribe hands one segment to the Transcriber and pushes its transcript.
+// RunSTTFunc transcribes one segment, 16-bit mono PCM at sampleRate, and yields
+// the frames of its transcript in order: a TranscriptionFrame per transcript
+// (one per speaker run for a diarized one), and an ErrorFrame for a failure.
+type RunSTTFunc func(ctx context.Context, audio []byte, sampleRate int) iter.Seq[frames.Frame]
+
+// RunSTT is how the service transcribes a segment: through its Transcriber,
+// unless SetRunSTT replaced it.
+func (s *SegmentService) RunSTT() RunSTTFunc {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runSTT != nil {
+		return s.runSTT
+	}
+	return s.transcriberRun
+}
+
+// SetRunSTT replaces how the service transcribes a segment. A caller that tags
+// or adds to what each segment yields wraps the run RunSTT returned, which it
+// calls from its own. The service pushes what the run yields, as it does its
+// own transcripts. Set it before the pipeline starts.
+func (s *SegmentService) SetRunSTT(run RunSTTFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runSTT = run
+}
+
+// transcribe transcribes one segment and pushes what its run yields.
 func (s *SegmentService) transcribe(ctx context.Context, audio []byte, rate int) {
 	// The audio handed to the transcriber is what this segment is billed on, and
 	// it is reported before the transcription, against the segment's own span,
@@ -482,25 +517,78 @@ func (s *SegmentService) transcribe(ctx context.Context, audio []byte, rate int)
 	metrics.RecordSTTAudio(ctx, s.TypeName(), s.modelName(), played.Seconds())
 	s.pushUsageMetrics(ctx, played)
 
-	start := time.Now()
-	text, lang, err := s.transcribeSegment(ctx, audio, rate)
-	if err != nil {
-		if ctx.Err() == nil {
-			s.tracer.recordError(err)
-			s.PushError(ctx, "stt transcription failed", err, false)
+	s.pushSegmentFrames(ctx, s.RunSTT()(ctx, audio, rate))
+}
+
+// pushSegmentFrames pushes the frames a segment's run yields, in order.
+//
+// A diarized transcription frame (one with a Speaker) is held until the next
+// frame arrives, so that only the last of a segment's speaker runs is
+// finalized. Any other frame is pushed as soon as it is yielded.
+func (s *SegmentService) pushSegmentFrames(ctx context.Context, run iter.Seq[frames.Frame]) {
+	var held *frames.TranscriptionFrame
+	for f := range run {
+		if f == nil {
+			continue
 		}
-		return
+		if held != nil {
+			_, more := f.(*frames.TranscriptionFrame)
+			s.setHasMoreTranscripts(more)
+			_ = s.PushFrame(ctx, held, processor.Downstream)
+			s.setHasMoreTranscripts(false)
+			held = nil
+		}
+		switch fr := f.(type) {
+		case *frames.TranscriptionFrame:
+			if fr.Speaker != nil {
+				held = fr
+				continue
+			}
+			_ = s.PushFrame(ctx, fr, processor.Downstream)
+		case *frames.ErrorFrame:
+			s.PushErrorFrame(ctx, fr, false)
+		default:
+			_ = s.PushFrame(ctx, f, processor.Downstream)
+		}
 	}
-	s.work.reportElapsed(ctx, time.Since(start))
-	if text == "" {
-		return
+	if held != nil {
+		_ = s.PushFrame(ctx, held, processor.Downstream)
 	}
+}
+
+// setHasMoreTranscripts records whether the transcript being pushed has more
+// frames to come.
+func (s *SegmentService) setHasMoreTranscripts(more bool) {
 	s.mu.Lock()
-	userID := s.userID
+	s.hasMoreTranscripts = more
 	s.mu.Unlock()
-	tf := frames.NewTranscriptionFrame(text, userID, frames.NowTimestamp())
-	tf.Language = lang
-	_ = s.PushFrame(ctx, tf, processor.Downstream)
+}
+
+// transcriberRun is the Transcriber's run: it hands the segment over whole and
+// yields its transcript, nothing when it heard none. A failure is reported
+// here, with the segment's span.
+func (s *SegmentService) transcriberRun(ctx context.Context, audio []byte, rate int) iter.Seq[frames.Frame] {
+	return func(yield func(frames.Frame) bool) {
+		start := time.Now()
+		text, lang, err := s.transcribeSegment(ctx, audio, rate)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.tracer.recordError(err)
+				s.PushError(ctx, "stt transcription failed", err, false)
+			}
+			return
+		}
+		s.work.reportElapsed(ctx, time.Since(start))
+		if text == "" {
+			return
+		}
+		s.mu.Lock()
+		userID := s.userID
+		s.mu.Unlock()
+		tf := frames.NewTranscriptionFrame(text, userID, frames.NowTimestamp())
+		tf.Language = lang
+		yield(tf)
+	}
 }
 
 // transcribeSegment hands one segment to the Transcriber, asking it for the

@@ -2754,6 +2754,13 @@ func (u *UserAggregator) onSpeculationCanceled(ctx context.Context) {
 // Since a turn beginning no longer clears the aggregation, this is the only way
 // such speech is kept out of the conversation.
 func (u *UserAggregator) onResetAggregation(context.Context, turns.StartStrategy) {
+	u.Reset()
+}
+
+// Reset drops the speech aggregated so far, with the turn's reading of how the
+// user spoke. The turn itself stays as it is: what the user says next is
+// aggregated into it.
+func (u *UserAggregator) Reset() {
 	u.mu.Lock()
 	u.aggregation = nil
 	u.perception = nil

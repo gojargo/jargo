@@ -1393,7 +1393,7 @@ func runScenario(
 ) error {
 	switch scenario := loaded.(type) {
 	case *ScriptScenario:
-		session, err := ScriptSessionFromScenario(scenario, botURL, params, nil, nil)
+		session, err := ScriptSessionFromScenario(scenario, botURL, params, nil, nil, nil)
 		if err != nil {
 			return err
 		}

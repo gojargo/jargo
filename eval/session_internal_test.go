@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -80,6 +81,7 @@ func (f *fakeRTVIServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = conn.CloseNow() }()
+	speaking := false
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -103,6 +105,24 @@ func (f *fakeRTVIServer) serve(w http.ResponseWriter, r *http.Request) {
 			var d rtvi.SendTextData
 			_ = json.Unmarshal(in.Data, &d)
 			replies = f.script[d.Content]
+		case rtvi.TypeRawAudio:
+			// The harness streams the user's side continuously (silence around
+			// each utterance). A real bot transcribes the audio and answers once
+			// the user stops speaking; this one answers with its one scripted
+			// reply on the first silent frame after speech.
+			var d rtvi.RawAudioData
+			_ = json.Unmarshal(in.Data, &d)
+			pcm, _ := base64.StdEncoding.DecodeString(d.Base64Audio)
+			switch {
+			case slices.ContainsFunc(pcm, func(b byte) bool { return b != 0 }):
+				speaking = true
+			case speaking:
+				speaking = false
+				for _, script := range f.script {
+					replies = script
+					break
+				}
+			}
 		}
 		f.mu.Unlock()
 		for _, reply := range replies {
@@ -173,7 +193,7 @@ func statuses(res ScriptResult) []string {
 // judge and params.
 func run(t *testing.T, scenario *ScriptScenario, url string, params SessionParams, judge Judge) ScriptResult {
 	t.Helper()
-	s, err := ScriptSessionFromScenario(scenario, url, params, judge, nil)
+	s, err := ScriptSessionFromScenario(scenario, url, params, judge, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -771,7 +791,7 @@ func TestAUserVoiceThatFailsIsTheRunsError(t *testing.T) {
 	bot := newFakeRTVIServer(t)
 	scenario := oneTurn("a table for two", Expectation{Event: EventLLMResponse, WithinMS: 5000})
 	scenario.UserAudio = true
-	s, err := NewScriptSession(scenario, bot.url(), SessionParams{}, nil, failingVoice(t))
+	s, err := NewScriptSession(scenario, bot.url(), SessionParams{}, nil, failingVoice(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,7 +834,7 @@ func progressScenario() *ScriptScenario {
 func TestProgressEvent(t *testing.T) {
 	bot := newFakeRTVIServer(t)
 	bot.onText("hi", reply("hello")...)
-	s, err := ScriptSessionFromScenario(progressScenario(), bot.url(), SessionParams{}, nil, nil)
+	s, err := ScriptSessionFromScenario(progressScenario(), bot.url(), SessionParams{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -888,7 +908,7 @@ func TestAudioSupportCheck(t *testing.T) {
 			// audio.
 			voice = failingVoice(t)
 		}
-		s, err := NewScriptSession(scenario, bot.url(), SessionParams{AudioSupportCheck: check}, nil, voice)
+		s, err := NewScriptSession(scenario, bot.url(), SessionParams{AudioSupportCheck: check}, nil, voice, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -951,7 +971,7 @@ func TestAudioSupportCheck(t *testing.T) {
 // An audio support check of no known value is refused.
 func TestSessionParamsAreValidated(t *testing.T) {
 	_, err := NewScriptSession(&ScriptScenario{Name: "t"}, "ws://localhost:0",
-		SessionParams{AudioSupportCheck: "always"}, nil, nil)
+		SessionParams{AudioSupportCheck: "always"}, nil, nil, nil)
 	if !errors.Is(err, errAudioSupportCheck) {
 		t.Fatalf("err = %v, want the check refused", err)
 	}
