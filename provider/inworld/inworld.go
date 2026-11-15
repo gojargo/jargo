@@ -1,7 +1,9 @@
-// Package inworld is a streaming text-to-speech service backed by Inworld AI's
-// HTTP streaming endpoint. For each sentence it posts the text and reads the
+// Package inworld provides Inworld AI text-to-speech. NewTTS uses the HTTP
+// streaming endpoint: for each sentence it posts the text and reads the
 // newline-delimited JSON response, decoding each chunk's base64 audio (stripping
-// any WAV header) and streaming the 16-bit PCM downstream.
+// any WAV header) and streaming the 16-bit PCM downstream. NewRealtimeTTS uses
+// the bidirectional WebSocket endpoint, with one connection held open for the
+// call and a synthesis context per turn, and reports when each word is spoken.
 package inworld
 
 import (
@@ -25,6 +27,14 @@ const (
 	// wavHeaderSize is the byte length of the RIFF/WAV header Inworld prefixes to
 	// PCM chunks; it is stripped so only raw samples reach downstream.
 	wavHeaderSize = 44
+)
+
+// Request fields shared by the HTTP and WebSocket APIs.
+const (
+	fieldText        = "text"
+	fieldVoiceID     = "voiceId"
+	fieldModelID     = "modelId"
+	fieldAudioConfig = "audioConfig"
 )
 
 // Config configures the Inworld AI TTS service.

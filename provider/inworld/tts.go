@@ -52,10 +52,16 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: audio markup on
 // TTS-2 models, and none on the older ones.
 func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+	return tts2ExpressionAdapter(s.cfg.Model)
+}
+
+// tts2ExpressionAdapter is the expression adapter for a model: audio markup on
+// TTS-2 models, and none on the older ones.
+func tts2ExpressionAdapter(model string) ttsadapter.ExpressionAdapter {
 	switch {
-	case strings.HasPrefix(s.cfg.Model, "inworld-tts-2-flash"):
+	case strings.HasPrefix(model, "inworld-tts-2-flash"):
 		return ttsinworld.InworldFlashExpressionAdapter{}
-	case strings.HasPrefix(s.cfg.Model, "inworld-tts-2"):
+	case strings.HasPrefix(model, "inworld-tts-2"):
 		return ttsinworld.InworldExpressionAdapter{}
 	default:
 		return ttsadapter.BaseExpressionAdapter{}
@@ -72,10 +78,10 @@ func (s *synthesizer) requestBody(text string) ([]byte, error) {
 		audioConfig["speakingRate"] = *s.cfg.SpeakingRate
 	}
 	m := map[string]any{
-		"text":        text,
-		"voiceId":     s.cfg.VoiceID,
-		"modelId":     s.cfg.Model,
-		"audioConfig": audioConfig,
+		fieldText:        text,
+		fieldVoiceID:     s.cfg.VoiceID,
+		fieldModelID:     s.cfg.Model,
+		fieldAudioConfig: audioConfig,
 	}
 	if s.cfg.Temperature != nil {
 		m["temperature"] = *s.cfg.Temperature

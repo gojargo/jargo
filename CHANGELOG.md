@@ -200,9 +200,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `transport.BaseTransport` for the defaults), `InputDriver` gains
   `SupportsVideoInSource`, and `OutputDriver` gains `WriteVideoFrame` and
   `RegisterVideoDestination`.
+- **Inworld text-to-speech over WebSocket** (`inworld.NewRealtimeTTS`), on
+  one connection held open for the call. Each turn gets a server-side
+  context, created with its first text, flushed and closed once the turn's
+  text is sent, and canceled on an interruption. Inworld times each word, so
+  the conversation keeps only what was heard. Example: `voice-inworld`.
+- **Azure streaming text-to-speech** (`speech.NewRealtimeTTS`), speaking
+  Azure's synthesis WebSocket protocol directly, with no native SDK. Each
+  sentence's audio streams as it is generated, its word boundaries are
+  reported as the words are spoken, and an interruption stops the synthesis
+  on the server. It takes the full set of SSML voice settings, which can
+  change while the pipeline runs. Example: `voice-azure`.
 
 ### Changed
 
+- **Azure text-to-speech over REST builds the same SSML as the streaming
+  service**: the SSML namespaces and a 20 ms sentence-boundary silence, with
+  `TTSConfig` gaining `Style`, `StyleDegree`, `Role`, `Rate`, `Pitch`,
+  `Volume`, `Emphasis` and `VoiceParameters`. The default voice is now
+  `en-US-SaraNeural`, and an unset `Language` is `en-US` rather than the
+  voice's locale. Azure STT and TTS name languages from the same table, so a
+  base language takes Azure's default locale for it (Arabic is now `ar-AE`).
 - **The documentation moved to https://gojargo.dev.** The Hugo site under
   `website/` is gone: gojargo.dev imports `docs/` at build time. The old
   address, gojargo.github.io/jargo, now sends each page to the same page on

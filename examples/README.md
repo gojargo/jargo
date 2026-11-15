@@ -39,6 +39,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-assemblyai`](voice/voice-assemblyai) | AssemblyAI speech-to-text and text-to-speech, with an OpenAI LLM. |
 | [`voice-asyncai`](voice/voice-asyncai) | Deepgram speech-to-text, an OpenAI LLM and Async text-to-speech. |
 | [`voice-aws`](voice/voice-aws) | AWS Transcribe speech-to-text, Claude on AWS Bedrock and AWS Polly text-to-speech. |
+| [`voice-azure`](voice/voice-azure) | Azure speech-to-text, Azure OpenAI and Azure text-to-speech (streaming). |
 | [`voice-azure-http`](voice/voice-azure-http) | Azure speech-to-text, Azure OpenAI and Azure text-to-speech over HTTP. |
 | [`voice-camb`](voice/voice-camb) | Deepgram speech-to-text, an OpenAI LLM and Camb AI text-to-speech. |
 | [`voice-cartesia`](voice/voice-cartesia) | Cartesia speech-to-text and text- to-speech, with an OpenAI LLM. |
@@ -58,6 +59,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-gradium`](voice/voice-gradium) | Gradium speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-groq`](voice/voice-groq) | Groq speech-to-text, LLM and text-to- speech. |
 | [`voice-hume`](voice/voice-hume) | Deepgram speech-to-text, an OpenAI LLM and Hume text-to-speech. |
+| [`voice-inworld`](voice/voice-inworld) | Deepgram speech-to-text, an OpenAI LLM and Inworld text-to-speech (over WebSocket). |
 | [`voice-inworld-http`](voice/voice-inworld-http) | Deepgram speech-to-text, an OpenAI LLM and Inworld (over HTTP) text-to-speech. |
 | [`voice-kokoro`](voice/voice-kokoro) | Deepgram speech-to-text, an OpenAI LLM and Kokoro text-to-speech. |
 | [`voice-minimax`](voice/voice-minimax) | Deepgram speech-to-text, an OpenAI LLM and MiniMax text-to-speech. |

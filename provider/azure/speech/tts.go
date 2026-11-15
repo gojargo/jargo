@@ -3,14 +3,12 @@ package speech
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsazure "github.com/gojargo/jargo/adapter/tts/azure"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -38,19 +36,13 @@ func (s *ttsSynthesizer) SampleRate() int { return s.cfg.SampleRate }
 // DragonHD and DragonHD Omni voices, and none on the others. DragonHD Flash
 // voices each have styles of their own, so they perform none.
 func (s *ttsSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
-	if strings.Contains(s.cfg.Voice, ":DragonHD") && !strings.Contains(s.cfg.Voice, ":DragonHDFlash") {
-		return ttsazure.AzureHDExpressionAdapter{}
-	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return voiceExpressionAdapter(s.cfg.Voice)
 }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
-	ssml, err := s.ssml(text)
-	if err != nil {
-		return err
-	}
+	ssml := s.ssml(text)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint(), bytes.NewReader(ssml))
 	if err != nil {
 		return err
@@ -70,40 +62,27 @@ func (s *ttsSynthesizer) endpoint() string {
 	return strings.TrimSuffix(host, "/") + "/cognitiveservices/v1"
 }
 
-// ssml wraps text in a minimal SSML document with the configured voice and
-// language, escaping the text so it cannot break the markup.
-func (s *ttsSynthesizer) ssml(text string) ([]byte, error) {
-	lang := s.cfg.Language.Code()
-	if lang == "" {
-		lang = localeFromVoice(s.cfg.Voice)
+// ssml wraps text in the SSML document it is synthesized from, escaping the
+// text so it cannot break the markup.
+func (s *ttsSynthesizer) ssml(text string) []byte {
+	lang := defaultTTSLanguage
+	if s.cfg.Language != "" {
+		lang = azureLanguage(s.cfg.Language)
 	}
-	var esc bytes.Buffer
-	if err := xml.EscapeText(&esc, []byte(text)); err != nil {
-		return nil, err
-	}
-	body := esc.String()
-	if s.cfg.ForceLocale {
-		// A multilingual voice reads the language out of the text unless it is
-		// told; the <lang> element is what tells it.
-		body = fmt.Sprintf("<lang xml:lang='%s'>%s</lang>", lang, body)
-	}
-	voiceAttrs := fmt.Sprintf("name='%s'", s.cfg.Voice)
-	if s.cfg.Effect != "" {
-		voiceAttrs += fmt.Sprintf(" effect='%s'", s.cfg.Effect)
-	}
-	doc := fmt.Sprintf("<speak version='1.0' xml:lang='%s'><voice %s>%s</voice></speak>",
-		lang, voiceAttrs, body)
-	return []byte(doc), nil
-}
-
-// localeFromVoice extracts the BCP-47 locale prefix from an Azure voice name
-// ("fr-FR-DeniseNeural" -> "fr-FR"), defaulting to en-US.
-func localeFromVoice(voice string) string {
-	parts := strings.SplitN(voice, "-", 3)
-	if len(parts) >= 2 {
-		return parts[0] + "-" + parts[1]
-	}
-	return "en-US"
+	return []byte(constructSSML(text, ssmlParams{
+		Voice:           s.cfg.Voice,
+		Language:        lang,
+		Effect:          s.cfg.Effect,
+		VoiceParameters: s.cfg.VoiceParameters,
+		ForceLocale:     s.cfg.ForceLocale,
+		Style:           s.cfg.Style,
+		StyleDegree:     s.cfg.StyleDegree,
+		Role:            s.cfg.Role,
+		Rate:            s.cfg.Rate,
+		Pitch:           s.cfg.Pitch,
+		Volume:          s.cfg.Volume,
+		Emphasis:        s.cfg.Emphasis,
+	}))
 }
 
 // outputFormat maps a sample rate to Azure's raw-PCM X-Microsoft-OutputFormat.

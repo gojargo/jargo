@@ -122,56 +122,13 @@ func (c *sttConnector) Metadata() stt.Metadata {
 	return stt.Metadata{TTFSP99: stt.TTFSP99Or(c.cfg.TTFSP99, stt.AzureTTFSP99)}
 }
 
-// azureBaseLocales expands the common base language codes to the locale Azure
-// expects. An already-qualified or unmapped code passes through unchanged.
-//
-//nolint:gochecknoglobals // static lookup table
-var azureBaseLocales = map[language.Language]string{
-	language.English:    "en-US",
-	language.French:     "fr-FR",
-	language.German:     "de-DE",
-	language.Spanish:    "es-ES",
-	language.Italian:    "it-IT",
-	language.Portuguese: "pt-PT",
-	language.Dutch:      "nl-NL",
-	language.Russian:    "ru-RU",
-	language.Chinese:    "zh-CN",
-	language.Japanese:   "ja-JP",
-	language.Korean:     "ko-KR",
-	language.Arabic:     "ar-EG",
-	language.Hindi:      "hi-IN",
-	language.Polish:     "pl-PL",
-	language.Turkish:    "tr-TR",
-	language.Swedish:    "sv-SE",
-	language.Danish:     "da-DK",
-	language.Norwegian:  "nb-NO",
-	language.Finnish:    "fi-FI",
-	language.Greek:      "el-GR",
-	language.Czech:      "cs-CZ",
-	language.Hebrew:     "he-IL",
-	language.Thai:       "th-TH",
-	language.Vietnamese: "vi-VN",
-	language.Indonesian: "id-ID",
-	language.Hungarian:  "hu-HU",
-	language.Romanian:   "ro-RO",
-	language.Ukrainian:  "uk-UA",
-	language.Bulgarian:  "bg-BG",
-	language.Croatian:   "hr-HR",
-	language.Slovak:     "sk-SK",
-	language.Malay:      "ms-MY",
-	language.Filipino:   "fil-PH",
-	language.Tamil:      "ta-IN",
-}
-
-// azureLocale maps a Language to an Azure recognition locale.
+// azureLocale maps a Language to an Azure recognition locale: en-US when none
+// is set, and the locale Azure names it by otherwise (see azureLanguage).
 func azureLocale(l language.Language) string {
 	if l == "" {
 		return defaultSTTLocale
 	}
-	if locale, ok := azureBaseLocales[l]; ok {
-		return locale
-	}
-	return l.Code()
+	return azureLanguage(l)
 }
 
 // endpoint builds the recognition URL. The recognition parameters travel as
@@ -307,11 +264,17 @@ func wavHeader(sampleRate int) []byte {
 
 // headers renders the message headers Azure's framing puts ahead of every body.
 func (s *sttStream) headers(path, contentType string) string {
+	return messageHeaders(path, s.currentRequestID(), contentType)
+}
+
+// messageHeaders renders the headers Azure's framing puts ahead of the body of a
+// message on the request named by requestID.
+func messageHeaders(path, requestID, contentType string) string {
 	var b strings.Builder
 	b.WriteString("Path: ")
 	b.WriteString(path)
 	b.WriteString("\r\nX-RequestId: ")
-	b.WriteString(s.currentRequestID())
+	b.WriteString(requestID)
 	b.WriteString("\r\nX-Timestamp: ")
 	b.WriteString(time.Now().UTC().Format("2006-01-02T15:04:05.000Z"))
 	b.WriteString("\r\n")
@@ -357,12 +320,17 @@ func (s *sttStream) Send(audio []byte) error {
 	return s.sendBinary(pathAudio, "", audio)
 }
 
-// sttMessage is a parsed protocol message: the path that names it and the body
-// it carries.
+// sttMessage is a parsed protocol message: the path that names it, its other
+// headers and the body it carries.
 type sttMessage struct {
-	path string
-	body []byte
+	path    string
+	headers []byte
+	body    []byte
 }
+
+// header reads one of the message's headers, matching the name
+// case-insensitively.
+func (m sttMessage) header(name string) string { return headerValue(m.headers, name) }
 
 // parseMessage splits Azure's framing into a path and a body. A text message is
 // headers, a blank line, then the body; a binary one is a two-byte big-endian
@@ -386,7 +354,7 @@ func parseMessage(typ websocket.MessageType, data []byte) (sttMessage, error) {
 		}
 		headers, body = data[2:2+n], data[2+n:]
 	}
-	return sttMessage{path: headerValue(headers, "path"), body: body}, nil
+	return sttMessage{path: headerValue(headers, "path"), headers: headers, body: body}, nil
 }
 
 // headerValue reads one header, matching the name case-insensitively.

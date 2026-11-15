@@ -18,10 +18,7 @@ func TestSSMLForceLocale(t *testing.T) {
 	}
 	s := &ttsSynthesizer{cfg: cfg}
 
-	doc, err := s.ssml("bonjour")
-	if err != nil {
-		t.Fatalf("ssml: %v", err)
-	}
+	doc := s.ssml("bonjour")
 	if want := "<lang xml:lang='fr-FR'>bonjour</lang>"; !strings.Contains(string(doc), want) {
 		t.Errorf("ssml is missing %s:\n%s", want, doc)
 	}
@@ -35,10 +32,7 @@ func TestSSMLWithoutForceLocale(t *testing.T) {
 		Voice: "en-US-EmmaMultilingualNeural", Language: language.Language("fr-FR"),
 	}}
 
-	doc, err := s.ssml("bonjour")
-	if err != nil {
-		t.Fatalf("ssml: %v", err)
-	}
+	doc := s.ssml("bonjour")
 	if strings.Contains(string(doc), "<lang") {
 		t.Errorf("ssml pins the locale without being asked to:\n%s", doc)
 	}
@@ -56,10 +50,7 @@ func TestSSMLEffect(t *testing.T) {
 		Effect: "eq_telecomhp8k",
 	}}
 
-	doc, err := s.ssml("hello")
-	if err != nil {
-		t.Fatalf("ssml: %v", err)
-	}
+	doc := s.ssml("hello")
 	if want := "<voice name='en-US-JennyNeural' effect='eq_telecomhp8k'>"; !strings.Contains(string(doc), want) {
 		t.Errorf("ssml is missing %s:\n%s", want, doc)
 	}
@@ -70,10 +61,7 @@ func TestSSMLEffect(t *testing.T) {
 func TestSSMLWithoutEffect(t *testing.T) {
 	s := &ttsSynthesizer{cfg: TTSConfig{Voice: "en-US-JennyNeural"}}
 
-	doc, err := s.ssml("hello")
-	if err != nil {
-		t.Fatalf("ssml: %v", err)
-	}
+	doc := s.ssml("hello")
 	if strings.Contains(string(doc), "effect=") {
 		t.Errorf("ssml carries an effect nobody asked for:\n%s", doc)
 	}

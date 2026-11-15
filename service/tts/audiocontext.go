@@ -1074,6 +1074,12 @@ func (b *Base) appendsToContext(contextID string) bool {
 	return !ok || c.appendToContext
 }
 
+// AppendsToContext reports whether what is spoken on a context belongs in the
+// conversation, for a provider that pushes spoken text of its own: the text of a
+// context its provider never timed, say. A context nothing was recorded for
+// appends.
+func (b *Base) AppendsToContext(contextID string) bool { return b.appendsToContext(contextID) }
+
 // takeTTSContext returns what a context carries and forgets it, so the answer is
 // acted on once.
 func (b *Base) takeTTSContext(contextID string) (ttsContext, bool) {
