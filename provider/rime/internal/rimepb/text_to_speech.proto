@@ -1,0 +1,206 @@
+syntax = "proto3";
+
+// Subset of Rime's text-to-speech contract (rime-api 0.4.1), limited to the
+// WebSocket v1 envelopes the V1 TTS service sends and reads. Field numbers, the
+// package name and the message names match Rime's schema exactly, so the wire
+// format, binary and proto3 JSON alike, is that of Rime's own service. The gRPC
+// service, the timestamp and custom lexicon fields, and the text normalization
+// and catalog messages are omitted: a field this subset leaves out is skipped
+// when it arrives. Rime publishes the schema under the Apache License 2.0.
+// Regenerate with:
+//
+//	go generate ./provider/rime/internal/rimepb
+package rime;
+
+option go_package = "github.com/gojargo/jargo/provider/rime/internal/rimepb;rimepb";
+
+message SynthesisRequest {
+  reserved 1, 7;
+  reserved "arcana_parameters";
+
+  // BCP-47 language tag, e.g. "en".
+  // Used to route the frontend pipeline and set backend language.
+  optional string language = 2;
+
+  // Speaker name, e.g. "luna".
+  optional string speaker = 3;
+
+  // Text to synthesize.
+  string text = 4;
+
+  optional AudioParameters audio_parameters = 5;
+
+  // Controls how input text is split before synthesis.
+  // Defaults to SPLIT_STRATEGY_SENTENCE when unset.
+  optional SplitStrategy split_strategy = 6;
+
+  optional CodaParameters coda_parameters = 8;
+  optional MistParameters mist_parameters = 9;
+}
+
+message AudioParameters {
+  // Equivalent to the HTTP `Accept` header.
+  // Examples: "audio/wav", "audio/mpeg", "audio/ogg;codecs=opus", "audio/l16".
+  optional string audio_format = 1;
+
+  optional int32 sampling_rate = 2;
+  optional float time_scale_factor = 3;
+}
+
+message CodaParameters {
+  reserved 1, 2, 3, 4, 5, 6, 7;
+  reserved "temperature", "top_k", "top_p", "repetition_penalty", "max_tokens", "min_tokens", "seed";
+
+  // Streaming text input only: number of leading text tokens prefilled as a
+  // lookahead block so the first audio frames have content context. Higher
+  // values improve content robustness at the start of the utterance but delay
+  // the first audio until that many text tokens have arrived. Clamped to the
+  // tokens available when generation starts. Defaults to 0. Ignored for
+  // one-shot synthesis (which always sees the complete text up front).
+  optional int32 text_lookahead_tokens = 8;
+}
+
+message MistParameters {
+  optional bool pause_between_brackets = 1;
+  optional bool phonemize_between_brackets = 2;
+  repeated float inline_time_scale_factors = 3;
+  optional bool save_oovs = 4;
+}
+
+enum SplitStrategy {
+  SPLIT_STRATEGY_UNSPECIFIED = 0;
+  SPLIT_STRATEGY_SENTENCE = 1;
+  SPLIT_STRATEGY_NONE = 2;
+  // Accumulates streamed sub-sentential text tokens into complete sentences
+  // before synthesis. Only valid for streaming requests (the WebSocket API).
+  SPLIT_STRATEGY_ACCUMULATE_SENTENCE = 3;
+}
+
+// ======================= WebSocket envelope =======================
+//
+// Every WebSocket message carries exactly one envelope message:
+//   - text frames:   canonical proto3 JSON encoding of the envelope
+//   - binary frames: protobuf binary encoding of the envelope
+// The response encoding is fixed at upgrade time by the WebSocket subprotocol:
+// `rime.v1.binary` selects binary frames, `rime.v1.json` selects JSON text
+// frames, and the server echoes the selected subprotocol.
+//
+// A *context* is one continuous synthesis. It is either one-shot (opened by a
+// `start` whose `text` is the whole input) or streaming (opened by a `start`
+// with empty `text`, then fed by `text` chunks and closed by `end`); either
+// way the audio is a single continuous stream. Per context the server emits
+// `started`, then zero or more `audio` payloads, then exactly one terminal
+// event: `done`, `cancelled`, or `error`. Multiple contexts may be open
+// concurrently on one connection; events are correlated by `context_id`.
+
+// Client -> server. Exactly one message per WebSocket frame.
+message WebSocketRequest {
+  reserved 7;
+  reserved "flush";
+
+  // Client-chosen context identifier, at most 128 bytes. Empty selects the
+  // context named "default". An identifier may be reused after its context
+  // reaches a terminal event.
+  string context_id = 1;
+
+  oneof payload {
+    // Connection-level configuration. At most one, and only before the first
+    // `start`. Not required when the upgrade request carried an
+    // `Authorization` header.
+    WebSocketConfig config = 2;
+
+    // Opens the context with the full synthesis parameters. A non-empty
+    // `text` is the complete input for one-shot synthesis. An empty `text`
+    // opens a streaming context that stays open for `text` messages and
+    // finalizes on `end`.
+    SynthesisRequest start = 3;
+
+    // Appends a chunk of input text to an open streaming context.
+    string text = 4;
+
+    // Declares end of input for a streaming context. Remaining audio is
+    // delivered, followed by `done`. The connection stays open for further
+    // contexts.
+    WebSocketEnd end = 5;
+
+    // Aborts the context immediately, discarding in-flight synthesis.
+    // Acknowledged with `cancelled`; idempotent.
+    WebSocketCancel cancel = 6;
+  }
+}
+
+message WebSocketConfig {
+  // Mirrors the HTTP `Authorization` header, e.g. "Api-Key <key>".
+  optional string authorization = 1;
+
+  // License JSON for on-prem deployments.
+  optional string license = 2;
+
+  // Defaults merged (field-wise, shallow) under every subsequent `start`.
+  // Its `text` field is ignored.
+  optional SynthesisRequest defaults = 3;
+}
+
+message WebSocketEnd {}
+
+message WebSocketCancel {}
+
+// Server -> client. Exactly one message per WebSocket frame.
+message WebSocketResponse {
+  // Context the payload applies to. Empty for connection-scoped payloads
+  // (`ready` and connection-level `error`s).
+  string context_id = 1;
+
+  oneof payload {
+    // Sent once per connection when the engine is ready to synthesize.
+    // Gate `start` on this event.
+    WebSocketReady ready = 2;
+
+    // The context was accepted; precedes any of its audio.
+    WebSocketStarted started = 3;
+
+    // A chunk of encoded audio, in the format requested at `start`.
+    bytes audio = 4;
+
+    // Terminal: all audio for the context has been delivered.
+    WebSocketDone done = 5;
+
+    // Terminal: the context was aborted by `cancel`.
+    WebSocketCancelled cancelled = 6;
+
+    // Terminal for the context it names. Errors with an empty `context_id`
+    // are connection-scoped and leave open contexts running.
+    WebSocketError error = 7;
+  }
+}
+
+message WebSocketReady {
+  // Protocol version. Currently 1.
+  uint32 protocol = 1;
+
+  // Supported BCP-47 language tags.
+  repeated string languages = 2;
+
+  optional string default_language = 3;
+}
+
+message WebSocketStarted {
+  // Engine request id for this context.
+  string request_id = 1;
+}
+
+message WebSocketDone {}
+
+message WebSocketCancelled {}
+
+message WebSocketError {
+  // Stable machine-readable kind (e.g. "invalid_input", "unauthenticated",
+  // "unavailable", "internal", "unimplemented").
+  string kind = 1;
+
+  // Human-readable description.
+  string message = 2;
+
+  // Engine request id, when the error occurred inside a synthesis request.
+  optional string request_id = 3;
+}

@@ -48,7 +48,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	tts := deepgram.NewTTS(deepgram.TTSConfig{
 		APIKey: os.Getenv("DEEPGRAM_API_KEY"),
-		Model:  "aura-2-andromeda-en",
+		Voice:  "aura-2-andromeda-en",
 	})
 
 	llm := chat.NewLLM(chat.LLMConfig{APIKey: os.Getenv("OPENAI_API_KEY")})

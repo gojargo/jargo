@@ -1,7 +1,7 @@
-// Command voice-rime-http is a voice agent: Deepgram speech-to-text, an OpenAI
-// LLM and Rime (over HTTP) text-to-speech.
+// Command voice-rime-http is a voice agent: Rime speech-to-text, an OpenAI LLM
+// and Rime (over HTTP) text-to-speech.
 //
-//	DEEPGRAM_API_KEY=… OPENAI_API_KEY=… RIME_API_KEY=… \
+//	OPENAI_API_KEY=… RIME_API_KEY=… \
 //	  go run ./examples/voice/voice-rime-http
 //
 // Then open http://localhost:7860 and connect.
@@ -16,7 +16,6 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/rime"
 	"github.com/gojargo/jargo/runner"
@@ -45,7 +44,7 @@ const systemInstruction = "You are a helpful assistant in a voice conversation. 
 func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) error {
 	slog.Info("Starting bot")
 
-	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY")})
+	stt := rime.NewSTT(rime.STTConfig{APIKey: os.Getenv("RIME_API_KEY")})
 
 	tts := rime.NewTTS(rime.Config{
 		APIKey:  os.Getenv("RIME_API_KEY"),

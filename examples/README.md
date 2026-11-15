@@ -76,7 +76,9 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-piper`](voice/voice-piper) | Deepgram speech-to-text, an OpenAI LLM and Piper text-to-speech. |
 | [`voice-pockettts`](voice/voice-pockettts) | Deepgram speech-to-text, an OpenAI LLM and Pocket TTS text-to-speech. |
 | [`voice-resemble`](voice/voice-resemble) | Deepgram speech-to-text, an OpenAI LLM and Resemble AI text-to-speech. |
-| [`voice-rime-http`](voice/voice-rime-http) | Deepgram speech-to-text, an OpenAI LLM and Rime (over HTTP) text-to-speech. |
+| [`voice-rime`](voice/voice-rime) | Rime speech-to-text, an OpenAI LLM and Rime text-to-speech (over WebSocket). |
+| [`voice-rime-http`](voice/voice-rime-http) | Rime speech-to-text, an OpenAI LLM and Rime text-to-speech (over HTTP). |
+| [`voice-rime-v1`](voice/voice-rime-v1) | Rime speech-to-text, an OpenAI LLM and Rime text-to-speech (over WebSocket v1). |
 | [`voice-sarvam`](voice/voice-sarvam) | Sarvam speech-to-text, LLM and text- to-speech. |
 | [`voice-smallest`](voice/voice-smallest) | Smallest AI speech-to-text, LLM (Electron) and text-to-speech. |
 | [`voice-soniox`](voice/voice-soniox) | Soniox speech-to-text and text-to- speech, with an OpenAI LLM. |

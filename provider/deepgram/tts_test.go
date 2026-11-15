@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
+	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/service/tts"
 )
 
 // speakTripper answers every request from a canned body, recording what it was
@@ -95,12 +100,27 @@ func TestNewServices(t *testing.T) {
 // TestTTSMetadata checks the service reports the voice model synthesis is billed
 // against.
 func TestTTSMetadata(t *testing.T) {
-	s := &synthesizer{cfg: TTSConfig{Model: defaultTTSModel, SampleRate: 24000}}
-	if got := s.Metadata().Model; got != defaultTTSModel {
-		t.Errorf("Metadata().Model = %q, want %q", got, defaultTTSModel)
+	s := newSynthesizer(TTSConfig{APIKey: "k", SampleRate: 24000})
+	if got := s.Metadata().Model; got != defaultTTSVoice {
+		t.Errorf("Metadata().Model = %q, want %q", got, defaultTTSVoice)
 	}
 	if got := s.SampleRate(); got != 24000 {
 		t.Errorf("SampleRate() = %d, want the configured rate", got)
+	}
+}
+
+// TestTTSDefaults pins the voice spoken when none is set, the same one the
+// WebSocket service uses.
+func TestTTSDefaults(t *testing.T) {
+	s := newSynthesizer(TTSConfig{APIKey: "k"})
+	if s.cfg.Voice != "aura-2-helena-en" {
+		t.Errorf("voice = %q, want aura-2-helena-en", s.cfg.Voice)
+	}
+	if s.cfg.SampleRate != 24000 || s.cfg.Encoding != "linear16" || s.cfg.BaseURL != "https://api.deepgram.com" {
+		t.Errorf("defaults = %+v", s.cfg)
+	}
+	if _, ok := any(s).(tts.TrailingSpaceRequirer); ok {
+		t.Error("the HTTP service asks for a trailing space, want the text sent as it is")
 	}
 }
 
@@ -110,16 +130,8 @@ func TestTTSMetadata(t *testing.T) {
 func TestRunTTSRequestShape(t *testing.T) {
 	want := bytes.Repeat([]byte{0x11, 0x22}, 64)
 	rt := &speakTripper{body: want}
-	s := &synthesizer{
-		cfg: TTSConfig{
-			APIKey:     "test-key",
-			BaseURL:    "https://" + defaultHost,
-			Model:      defaultTTSModel,
-			SampleRate: 24000,
-			Encoding:   defaultTTSEncoding,
-		},
-		http: &http.Client{Transport: rt},
-	}
+	s := newSynthesizer(TTSConfig{APIKey: "test-key", SampleRate: 24000})
+	s.http = &http.Client{Transport: rt}
 
 	pcm, rate := synthesize(t, s, "hello there")
 	if !bytes.Equal(pcm, want) {
@@ -133,8 +145,8 @@ func TestRunTTSRequestShape(t *testing.T) {
 		t.Errorf("URL = %q, want the speak endpoint", rt.url)
 	}
 	q := rt.url.Query()
-	if q.Get("model") != defaultTTSModel {
-		t.Errorf("model = %q, want %q", q.Get("model"), defaultTTSModel)
+	if q.Get("model") != defaultTTSVoice {
+		t.Errorf("model = %q, want %q", q.Get("model"), defaultTTSVoice)
 	}
 	if q.Get("encoding") != defaultTTSEncoding {
 		t.Errorf("encoding = %q, want %q", q.Get("encoding"), defaultTTSEncoding)
@@ -156,16 +168,101 @@ func TestRunTTSRequestShape(t *testing.T) {
 	if rt.sent["text"] != "hello there" {
 		t.Errorf("text = %q, want the text to speak", rt.sent["text"])
 	}
+	// Speed and the opt-out are left off the query when unset.
+	if q.Has("speed") || q.Has("mip_opt_out") {
+		t.Errorf("query = %v, want no speed or mip_opt_out", q)
+	}
+}
+
+// TestRunTTSSendsSpeedAndOptOut checks the speed and the Model Improvement
+// Program opt-out reach the query when set.
+func TestRunTTSSendsSpeedAndOptOut(t *testing.T) {
+	rt := &speakTripper{body: []byte{0, 0}}
+	s := newSynthesizer(TTSConfig{APIKey: "k", Voice: "aura-2-andromeda-en", Speed: new(0.9), MipOptOut: new(true)})
+	s.http = &http.Client{Transport: rt}
+
+	synthesize(t, s, "hi")
+
+	q := rt.url.Query()
+	if q.Get("model") != "aura-2-andromeda-en" || q.Get("speed") != "0.9" || q.Get("mip_opt_out") != "true" {
+		t.Errorf("query = %v, want the voice, speed 0.9 and mip_opt_out=true", q)
+	}
+}
+
+// TestRunTTSUsesTheSettingsAsTheyStand checks a voice or speed changed while
+// the pipeline runs goes out on the next request, and relabels the synthesis.
+func TestRunTTSUsesTheSettingsAsTheyStand(t *testing.T) {
+	rt := &speakTripper{body: []byte{0, 0}}
+	s := newSynthesizer(TTSConfig{APIKey: "k"})
+	s.http = &http.Client{Transport: rt}
+
+	update := &TTSSettings{Speed: settings.Set(1.2)}
+	update.Voice = settings.Set("aura-2-thalia-en")
+	changed, err := settings.Apply(s.Settings(), update)
+	if err != nil {
+		t.Fatalf("applying the settings: %v", err)
+	}
+	if !changed.Has("voice") || !changed.Has("model") || !changed.Has("speed") {
+		t.Errorf("changed = %v, want voice, model and speed", changed)
+	}
+
+	synthesize(t, s, "hi")
+
+	q := rt.url.Query()
+	if q.Get("model") != "aura-2-thalia-en" || q.Get("speed") != "1.2" {
+		t.Errorf("query = %v, want the updated voice and speed", q)
+	}
+	if m := s.Metadata(); m.Model != "aura-2-thalia-en" || m.VoiceID != "aura-2-thalia-en" {
+		t.Errorf("Metadata() = %+v, want the updated voice", m)
+	}
+}
+
+// TestHTTPTTSFramesStaySampleAligned checks the audio frames hold whole 16-bit
+// samples however the HTTP stream is split, with metrics on, where the time to
+// first audio is found by reading the audio as 16-bit samples.
+func TestHTTPTTSFramesStaySampleAligned(t *testing.T) {
+	pcm := bytes.Repeat([]byte{0x00, 0x01, 0x02, 0x03}, 1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != speakPath {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/l16")
+		_, _ = w.Write(pcm[:2047])
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(10 * time.Millisecond)
+		_, _ = w.Write(pcm[2047:])
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := NewTTS(TTSConfig{APIKey: "test-key", BaseURL: srv.URL, SampleRate: 24000})
+	down, _ := runAuraPipeline(t, svc, pipeline.Params{EnableMetrics: true},
+		frames.NewTTSSpeakFrame("Hello from Deepgram."), 300*time.Millisecond)
+
+	audio := framesOf[*frames.TTSAudioRawFrame](down)
+	if len(audio) == 0 {
+		t.Fatal("no audio frames")
+	}
+	var joined []byte
+	for _, f := range audio {
+		if len(f.Audio)%2 != 0 {
+			t.Errorf("a frame holds %d bytes, want whole 16-bit samples", len(f.Audio))
+		}
+		joined = append(joined, f.Audio...)
+	}
+	if !bytes.Equal(joined, pcm) {
+		t.Errorf("audio = %d bytes, want the %d bytes sent, in order", len(joined), len(pcm))
+	}
 }
 
 // TestRunTTSStatusError checks a non-200 is reported rather than streamed on as
 // though the body were audio.
 func TestRunTTSStatusError(t *testing.T) {
 	rt := &speakTripper{status: http.StatusUnauthorized, body: []byte("bad credentials")}
-	s := &synthesizer{
-		cfg:  TTSConfig{APIKey: "k", BaseURL: "https://" + defaultHost, Model: defaultTTSModel, SampleRate: 24000},
-		http: &http.Client{Transport: rt},
-	}
+	s := newSynthesizer(TTSConfig{APIKey: "k", SampleRate: 24000})
+	s.http = &http.Client{Transport: rt}
 
 	err := s.RunTTS(t.Context(), "hi", "", func(frames.Frame) error {
 		t.Error("a frame was yielded for a failed request")

@@ -323,3 +323,26 @@ func TestDialFailureKeepsItsCause(t *testing.T) {
 		t.Fatalf("error carries the query: %v", err)
 	}
 }
+
+// TestDialSubprotocolsReportsTheSelectedOne checks the subprotocols offered
+// reach the handshake and the one the server selected is the connection's.
+func TestDialSubprotocolsReportsTheSelectedOne(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"v1.json"}})
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		_, _, _ = c.Read(r.Context())
+	}))
+	t.Cleanup(srv.Close)
+
+	conn, err := wsutil.DialSubprotocols(t.Context(), wsURL(srv), nil, 0, []string{"v1.binary", "v1.json"})
+	if err != nil {
+		t.Fatalf("DialSubprotocols: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	if got := conn.Subprotocol(); got != "v1.json" {
+		t.Errorf("Subprotocol() = %q, want the one the server selected", got)
+	}
+}

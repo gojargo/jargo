@@ -63,6 +63,20 @@ func (o Options) Dial(ctx context.Context, url string, header http.Header, readL
 	return conn, nil
 }
 
+// DialSubprotocols opens a connection as wsutil.DialSubprotocols does, offering
+// subprotocols in the handshake, and applies the timeouts the options give to
+// it.
+func (o Options) DialSubprotocols(
+	ctx context.Context, url string, header http.Header, readLimit int64, subprotocols []string,
+) (*wsutil.Conn, error) {
+	conn, err := wsutil.DialSubprotocols(ctx, url, header, readLimit, subprotocols)
+	if err != nil {
+		return nil, err
+	}
+	o.Apply(conn)
+	return conn, nil
+}
+
 // Optioner is an optional interface a service's connector implements to hand
 // the base the options its configuration carries.
 type Optioner interface {

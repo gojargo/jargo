@@ -44,10 +44,10 @@ func (s *synthesizer) requestBody(text string) ([]byte, error) {
 		"text":         text,
 		"modelId":      s.cfg.Model,
 		"samplingRate": s.cfg.SampleRate,
-		"speaker":      nil,
+		fieldSpeaker:   nil,
 	}
 	if s.cfg.Speaker != "" {
-		m["speaker"] = s.cfg.Speaker
+		m[fieldSpeaker] = s.cfg.Speaker
 	}
 	if s.cfg.Lang != "" {
 		m["lang"] = s.cfg.Lang

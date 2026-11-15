@@ -311,9 +311,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `eval.NewClient` takes a persona, `EventProgress` handlers may receive
   `SimulationProgress` records, and `jargo eval run` runs simulations
   instead of reporting them as not scripted.
+- **Rime text-to-speech over WebSocket.** `rime.NewRealtimeTTS` holds one
+  connection open for the call with a context per turn: the turn is flushed
+  once its text has all been sent, an interruption clears what Rime holds,
+  and Rime's word timings keep only what was heard. Its settings can change
+  while the pipeline runs, which reconnects. `rime.Spell`, `rime.PauseTag`,
+  `rime.Pronounce` and `rime.InlineSpeed` write Rime's markup. Example:
+  `voice-rime`.
+- **Rime text-to-speech over WebSocket v1.** `rime.NewV1TTS` speaks Rime's
+  protobuf envelopes, binary or JSON. The model selects the public endpoint
+  for coda and mistv3, and a custom deployment sets `URL`. An interruption
+  cancels the turn's context without reconnecting. Example: `voice-rime-v1`.
+- **WebSocket subprotocols.** `wsutil.DialSubprotocols`,
+  `wsservice.Options.DialSubprotocols` and `tts.Websocket.DialSubprotocols`
+  offer subprotocols in the handshake, and `tts.Base.TurnContextID` reports
+  the current turn's context.
 
 ### Changed
 
+- **Deepgram Aura TTS over HTTP matches the WebSocket service.**
+  `deepgram.TTSConfig` gains `Speed` and `MipOptOut`, and the voice and speed
+  can change while the pipeline runs through `deepgram.TTSSettings`. The
+  `voice-rime-http` example transcribes with Rime, as its counterpart does.
+  **Breaking:** `TTSConfig.Model` is renamed `Voice`, the default voice is
+  `aura-2-helena-en` (was `aura-2-thalia-en`), and text is no longer sent
+  with a trailing space appended.
 - **Azure text-to-speech over REST builds the same SSML as the streaming
   service**: the SSML namespaces and a 20 ms sentence-boundary silence, with
   `TTSConfig` gaining `Style`, `StyleDegree`, `Role`, `Rate`, `Pitch`,

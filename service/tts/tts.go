@@ -1094,6 +1094,11 @@ func (b *Base) turnContextID() string {
 	return b.turnContext
 }
 
+// TurnContextID reports the context the current turn is spoken on, empty
+// between turns. A provider whose receive loop handles a context differently
+// while its turn is still sending text reads it there.
+func (b *Base) TurnContextID() string { return b.turnContextID() }
+
 // setTurnContextID records the context the current turn is spoken on.
 func (b *Base) setTurnContextID(id string) {
 	b.audioCtxMu.Lock()

@@ -184,6 +184,15 @@ func (w *Websocket) Dial(ctx context.Context, url string, header http.Header, re
 	return w.opts.Dial(ctx, url, header, readLimit)
 }
 
+// DialSubprotocols opens a connection as Dial does, offering subprotocols in
+// the handshake, most preferred first. The one the server selected is the
+// connection's Subprotocol.
+func (w *Websocket) DialSubprotocols(
+	ctx context.Context, url string, header http.Header, readLimit int64, subprotocols []string,
+) (*wsutil.Conn, error) {
+	return w.opts.DialSubprotocols(ctx, url, header, readLimit, subprotocols)
+}
+
 // Connect readies the base for a fresh connection: reconnection is allowed
 // again, and the streak of instant failures starts over. A service calls it
 // first thing in its own Connect, before opening the socket.

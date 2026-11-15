@@ -272,12 +272,30 @@ func Dial(ctx context.Context, url string, header http.Header, readLimit int64) 
 	return dial(ctx, url, header, readLimit, DefaultPingInterval, DefaultPingTimeout)
 }
 
+// DialSubprotocols is Dial offering subprotocols in the handshake, most
+// preferred first, for a provider that selects its message format by
+// subprotocol. The one the server selected is the connection's Subprotocol,
+// empty when it selected none: a caller that needs one checks it.
+func DialSubprotocols(
+	ctx context.Context, url string, header http.Header, readLimit int64, subprotocols []string,
+) (*Conn, error) {
+	return dialWith(ctx, url, header, readLimit, subprotocols, DefaultPingInterval, DefaultPingTimeout)
+}
+
 // dial is Dial with the keepalive's timing given.
 func dial(
 	ctx context.Context, url string, header http.Header, readLimit int64,
 	pingInterval, pingTimeout time.Duration,
 ) (*Conn, error) {
-	conn, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
+	return dialWith(ctx, url, header, readLimit, nil, pingInterval, pingTimeout)
+}
+
+// dialWith is dial offering subprotocols in the handshake.
+func dialWith(
+	ctx context.Context, url string, header http.Header, readLimit int64, subprotocols []string,
+	pingInterval, pingTimeout time.Duration,
+) (*Conn, error) {
+	conn, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header, Subprotocols: subprotocols})
 	status := 0
 	var respHeader http.Header
 	if resp != nil {

@@ -27,8 +27,6 @@ import (
 const (
 	// defaultWebsocketTTSBaseURL is the host the Aura WebSocket is opened on.
 	defaultWebsocketTTSBaseURL = "wss://" + defaultHost
-	// defaultWebsocketTTSVoice is the Aura voice spoken when none is set.
-	defaultWebsocketTTSVoice = "aura-2-helena-en"
 	// websocketTTSReadLimit bounds a single incoming message. Audio frames can
 	// be larger than the library's default, so the ceiling is raised.
 	websocketTTSReadLimit = 1 << 24
@@ -108,7 +106,7 @@ func (c WebsocketTTSConfig) withDefaults() WebsocketTTSConfig {
 		c.BaseURL = defaultWebsocketTTSBaseURL
 	}
 	if c.Voice == "" {
-		c.Voice = defaultWebsocketTTSVoice
+		c.Voice = defaultTTSVoice
 	}
 	if c.SampleRate == 0 {
 		c.SampleRate = defaultTTSSampleRate
@@ -120,15 +118,15 @@ func (c WebsocketTTSConfig) withDefaults() WebsocketTTSConfig {
 }
 
 // TTSSettings is the part of the Aura synthesis configuration that can change
-// while the pipeline runs.
+// while the pipeline runs, for both the HTTP and the WebSocket service.
 //
 // Voice is the Aura voice model. Deepgram takes it as its "model" query
 // parameter, so Model follows Voice: it is what the synthesis is reported and
 // priced against. Speed multiplies the speaking rate; no value leaves Aura at
 // its default rate.
 //
-// Every setting is a query parameter of the connection, so a change to any of
-// them reconnects.
+// Every setting is a query parameter: the HTTP service sends the next request
+// with the new values, and the WebSocket service reconnects.
 type TTSSettings struct {
 	settings.TTS
 
@@ -136,16 +134,16 @@ type TTSSettings struct {
 	Speed settings.Opt[float64] `settings:"speed"`
 }
 
-// newTTSSettings is the starting state, taken from what the service was built
-// with, once its defaults are applied.
-func newTTSSettings(cfg WebsocketTTSConfig) *TTSSettings {
+// newTTSSettings is the starting state, taken from the voice and the speed the
+// service was built with, once its defaults are applied.
+func newTTSSettings(voice string, speed *float64) *TTSSettings {
 	s := &TTSSettings{}
-	s.Voice = settings.Set(cfg.Voice)
-	s.Model = settings.Set(cfg.Voice)
+	s.Voice = settings.Set(voice)
+	s.Model = settings.Set(voice)
 	s.Language = settings.Cleared[string]()
 	s.Speed = settings.Cleared[float64]()
-	if cfg.Speed != nil {
-		s.Speed = settings.Set(*cfg.Speed)
+	if speed != nil {
+		s.Speed = settings.Set(*speed)
 	}
 	return s
 }
@@ -191,7 +189,7 @@ func NewWebsocketTTS(cfg WebsocketTTSConfig) *tts.Base {
 // newWebsocketTTS builds the service and returns its synthesizer alongside it.
 func newWebsocketTTS(cfg WebsocketTTSConfig) (*tts.Base, *wsSynth) {
 	cfg = cfg.withDefaults()
-	s := &wsSynth{cfg: cfg, live: newTTSSettings(cfg)}
+	s := &wsSynth{cfg: cfg, live: newTTSSettings(cfg.Voice, cfg.Speed)}
 	s.refreshEndpoint()
 	b := tts.New("DeepgramWebsocketTTS", s)
 	s.base = b
