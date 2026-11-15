@@ -1,0 +1,144 @@
+// Command thinking-openai-responses-http shows a model's reasoning:
+// the OpenAI Responses API over HTTP, reasoning at "medium" effort with an "auto" summary.
+//
+// The assistant aggregator raises EventAssistantThought with each completed
+// thought, which this bot logs.
+//
+//	DEEPGRAM_API_KEY=… CARTESIA_API_KEY=… OPENAI_API_KEY=… \
+//	  go run ./examples/thinking/thinking-openai-responses-http
+//
+// Then open http://localhost:7860 and connect.
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+
+	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/deepgram"
+	"github.com/gojargo/jargo/provider/openai/responses"
+	"github.com/gojargo/jargo/runner"
+	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
+	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/workers"
+)
+
+// transportParams builds each transport's parameters when that transport is
+// the one a session arrives on.
+//
+//nolint:gochecknoglobals // the transports' parameters, built per session
+var transportParams = runner.TransportParams{
+	Eval:    func() evalws.TransportParams { return evalws.TransportParams{Params: wsserver.DefaultParams()} },
+	LiveKit: transport.DefaultParams,
+	Twilio:  func() runner.WebSocketParams { return runner.WebSocketParams{Params: wsserver.DefaultParams()} },
+	WebRTC:  transport.DefaultParams,
+}
+
+const systemInstruction = "You are a helpful assistant in a voice conversation. Your responses will be spoken " +
+	"aloud, so avoid emojis, bullet points, or other formatting that can't be spoken. Respond" +
+	" to what the user said in a creative, helpful, and brief way."
+
+func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) error {
+	slog.Info("Starting bot")
+
+	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY")})
+
+	tts := cartesia.NewTTS(cartesia.Config{
+		APIKey:  os.Getenv("CARTESIA_API_KEY"),
+		VoiceID: "86e30c1d-714b-4074-a1f2-1cb6b552fb49",
+	})
+
+	// The default model does not reason, so this example selects a
+	// reasoning-capable model. See OpenAI's reasoning guide
+	// (https://platform.openai.com/docs/guides/reasoning) for which models
+	// reason and which effort levels they accept. An effort level and the
+	// "auto" summary surface a readable summary of the model's thinking,
+	// logged from EventAssistantThought below. "medium" makes a summary appear
+	// reliably: at lower efforts the model reasons only when a turn calls for
+	// it, so ordinary prompts often produce no summary. Some models require a
+	// verified OpenAI organization to return summaries.
+	model := responses.NewHTTPLLM(responses.Config{
+		APIKey: os.Getenv("OPENAI_API_KEY"),
+		Model:  "gpt-5.4",
+		Reasoning: &responses.ReasoningConfig{
+			Effort:  "medium",
+			Summary: "auto",
+		},
+	})
+	model.SetSystemInstruction(systemInstruction)
+
+	silero, err := vad.NewSilero()
+	if err != nil {
+		return err
+	}
+	convo := frames.NewLLMContext("")
+	agg := aggregators.New(convo, aggregators.WithVAD(aggregators.VADConfig{Analyzer: silero}))
+
+	p := pipeline.New(
+		t.Input(), // Transport user input
+		stt,
+		agg.User(),      // User responses
+		model,           // LLM
+		tts,             // TTS
+		t.Output(),      // Transport bot output
+		agg.Assistant(), // Assistant spoken responses
+	)
+
+	worker := pipeline.NewWorker(p, pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			EnableMetrics:      true,
+			EnableUsageMetrics: true,
+		},
+		IdleTimeout:             args.Base().PipelineIdleTimeout,
+		ProcessorUnusablePolicy: pipeline.UnusableEnd,
+	})
+
+	handleSigint := args.Base().HandleSigint
+	r := workers.NewRunner(workers.RunnerConfig{HandleInterrupt: &handleSigint})
+	r.AddWorkers(ctx, worker)
+
+	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+		slog.Info("Client connected")
+		// Kick off the conversation.
+		convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Say hello briefly."})
+		// Here are some example prompts conducive to demonstrating reasoning.
+		// convo.AddMessage(frames.Message{
+		// 	Role: frames.RoleUser,
+		// 	Text: "Analogize photosynthesis and growing up. Keep your answer concise.",
+		// 	// Text: "Compare and contrast electric cars and hybrid cars.",
+		// 	// Text: "Are there an infinite number of prime numbers such that n mod 4 == 3?",
+		// })
+		worker.QueueFrames([]frames.Frame{frames.NewLLMRunFrame()})
+	})
+
+	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+		slog.Info("Client disconnected")
+		r.Cancel(ctx, "client disconnected")
+	})
+
+	events.On(agg.Assistant().Events(), aggregators.EventAssistantThought,
+		func(_ context.Context, m aggregators.AssistantThought) {
+			slog.Info("Thought (timestamp: " + m.Timestamp + "): " + m.Content)
+		})
+
+	return r.Run(ctx, workers.RunOptions{})
+}
+
+func bot(ctx context.Context, args runner.Arguments) error {
+	t, err := runner.CreateTransport(ctx, args, transportParams)
+	if err != nil {
+		return err
+	}
+	return runBot(ctx, t, args)
+}
+
+func main() {
+	runner.Main(bot)
+}

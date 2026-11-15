@@ -361,6 +361,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `vision-*` examples open with an image and a question about it;
   `05-speaking-state` shows one image while the bot speaks and another while
   it waits; `video-processing-mirror` sends the user's audio and camera back.
+- **72 more examples:** features (tool change messages, app resources,
+  processor events, concurrent LLM evaluation, live translation, voice
+  switching, processor health and failover, pronunciation dictionary, screen
+  share, service switching, text transforms, voice formatter, wake phrase),
+  turn management (classifier turn completion, user idle, eager end of turn,
+  empty turns, incomplete-turn filtering, interruption config, local Smart
+  Turn, user mute strategy), thinking with Anthropic, Gemini, Vertex and the
+  Responses API, transcription with 19 STT services, audio recording, sound
+  effects and volume, context summarization, persistent context, Gemini
+  grounding, MCP with Gemini Live, heartbeats and observers.
 
 ### Changed
 

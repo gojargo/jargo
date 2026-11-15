@@ -175,6 +175,23 @@ too, for the user aggregator's default turn strategies.
 | --- | --- | --- |
 | [`features-dtmf-menu`](features/features-dtmf-menu) | A phone menu driven by keypad presses only: a DTMF aggregator turns each key sequence into a transcription for the LLM, with no speech-to-text. Runs on a telephony transport. | OpenAI, Cartesia |
 | [`features-voicemail-detection`](features/features-voicemail-detection) | Tells a person from a voicemail greeting with a Jev classifier, holds the bot's speech until it knows, and leaves a message on voicemail. | Deepgram, OpenAI, Cartesia, TypeSafe |
+| [`features-add-tool-change-messages`](features/features-add-tool-change-messages) | Tool change messages announcing toolset changes made with LLMSetToolsFrame mid-conversation (Ollama). | Deepgram, Cartesia |
+| [`features-app-resources`](features/features-app-resources) | Sharing application resources with tool handlers and custom processors through WorkerConfig.AppResources. | Deepgram, Cartesia, OpenAI |
+| [`features-before-and-after-events`](features/features-before-and-after-events) | Processor before-process and after-push frame events used for synchronization. | Deepgram, Cartesia, OpenAI |
+| [`features-concurrent-llm-evaluation`](features/features-concurrent-llm-evaluation) | Two LLMs answering the same turns in a ParallelPipeline, with one shared UserTurnProcessor. | Deepgram, Cartesia, OpenAI, Groq |
+| [`features-concurrent-llm-rtvi-ignored-sources`](features/features-concurrent-llm-rtvi-ignored-sources) | Keeping a silent evaluator branch's RTVI messages from the client with IgnoredSources. | Deepgram, Cartesia, OpenAI |
+| [`features-custom-frame-processor`](features/features-custom-frame-processor) | A custom processor that pretty-prints metrics frames. | Deepgram, Cartesia, OpenAI |
+| [`features-live-translation`](features/features-live-translation) | English to Spanish live translation, with a turn opened on every transcript. | Deepgram, Cartesia, OpenAI |
+| [`features-pattern-pair-voice-switching`](features/features-pattern-pair-voice-switching) | Switching TTS voices on `<voice>` tags with a PatternPairAggregator. | Deepgram, Cartesia, OpenAI |
+| [`features-processor-usable`](features/features-processor-usable) | Processor health events, error categories and TTS failover. | Deepgram, Cartesia, ElevenLabs, OpenAI |
+| [`features-pronunciation-dictionary`](features/features-pronunciation-dictionary) | Saying medication names right with an IPA pronunciation transform. | Cartesia, OpenAI |
+| [`features-screen-share`](features/features-screen-share) | Tools that fetch a camera or screen-share frame on request for the LLM to describe. | Deepgram, Cartesia, OpenAI |
+| [`features-service-switcher`](features/features-service-switcher) | Manually switching the STT, the LLM and the TTS between providers while the bot runs. | Cartesia, Deepgram, OpenAI, Google AI |
+| [`features-switch-languages`](features/features-switch-languages) | A tool that switches between English and Spanish voices behind function filters. | Deepgram, Cartesia, OpenAI |
+| [`features-switch-voices`](features/features-switch-voices) | A tool that switches between three voices behind function filters. | Deepgram, Cartesia, OpenAI |
+| [`features-text-transforms`](features/features-text-transforms) | Composing text transforms, and stripping emoji in an LLM text processor. | Cartesia, ElevenLabs, OpenAI |
+| [`features-voice-formatter`](features/features-voice-formatter) | The voice formatter reading amounts, dates and acronyms naturally. | Cartesia, ElevenLabs, OpenAI |
+| [`features-wake-phrase`](features/features-wake-phrase) | Answering only after a wake phrase. | Deepgram, Cartesia, OpenAI |
 
 ## MCP
 
@@ -183,6 +200,7 @@ too, for the user aggregator's default turn strategies.
 | [`mcp-stdio`](mcp/mcp-stdio) | Tools from the memory MCP server, started over stdio with npx. Needs Node.js. | Deepgram, Anthropic, Cartesia |
 | [`mcp-streamable-http`](mcp/mcp-streamable-http) | Tools from GitHub's MCP server over streamable HTTP, authenticated with a header. | GitHub, Deepgram, Google AI, Cartesia |
 | [`mcp-multiple-mcp`](mcp/mcp-multiple-mcp) | Tools from two MCP servers at once: memory over stdio and GitHub over streamable HTTP. | GitHub, Deepgram, Anthropic, Cartesia |
+| [`mcp-streamable-http-gemini-live`](mcp/mcp-streamable-http-gemini-live) | GitHub MCP tools over streamable HTTP with Gemini Live. | GitHub, Google AI |
 
 ## Vision
 
@@ -204,6 +222,101 @@ the bot describes the image, then talks by voice.
 | Example | What it shows | Keys |
 | --- | --- | --- |
 | [`video-processing-mirror`](video-processing/video-processing-mirror) | Sends the user's audio and camera straight back to them. | None |
+
+## Turn management
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`turn-management-classifier-turn-completion`](turn-management/turn-management-classifier-turn-completion) | A Jev classifier deciding that the user's turn is complete. | Deepgram, Cartesia, OpenAI, TypeSafe |
+| [`turn-management-detect-user-idle`](turn-management/turn-management-detect-user-idle) | Escalating idle prompts, then ending, with idle detection toggled at runtime. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-eager-end-of-turn`](turn-management/turn-management-eager-end-of-turn) | Answering Deepgram Flux's predicted end of turn ahead of the committed one. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-empty-user-turn`](turn-management/turn-management-empty-user-turn) | Recovering from a user turn that ends with no transcript. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-filter-incomplete-turns`](turn-management/turn-management-filter-incomplete-turns) | LLM turn-completion markers suppressing answers to incomplete turns. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-filter-incomplete-turns-function-calling`](turn-management/turn-management-filter-incomplete-turns-function-calling) | Filtering incomplete turns with a tool the LLM can call. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-filter-incomplete-turns-user-idle`](turn-management/turn-management-filter-incomplete-turns-user-idle) | Filtering incomplete turns combined with user idle re-prompts. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-interruption-config`](turn-management/turn-management-interruption-config) | Requiring three words before the user interrupts, with a transcription log. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-smart-turn-local`](turn-management/turn-management-smart-turn-local) | Local Smart Turn end-of-turn detection, logging the turn metrics. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-user-assistant-turns`](turn-management/turn-management-user-assistant-turns) | A transcript kept from the user and assistant turn events. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-user-mute-strategy`](turn-management/turn-management-user-mute-strategy) | Muting the user until the first bot reply and during tool calls. | Deepgram, OpenAI |
+
+## Thinking
+
+The thoughts the model reports are logged as they arrive.
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`thinking-anthropic`](thinking/thinking-anthropic) | Anthropic extended thinking. | Deepgram, Cartesia, Anthropic |
+| [`thinking-functions-anthropic`](thinking/thinking-functions-anthropic) | Anthropic thinking with function calling. | Deepgram, Cartesia, Anthropic |
+| [`thinking-google`](thinking/thinking-google) | Gemini thinking, with thoughts included. | Deepgram, Cartesia, Google AI |
+| [`thinking-functions-google`](thinking/thinking-functions-google) | Gemini thinking with function calling. | Deepgram, Cartesia, Google AI |
+| [`thinking-google-vertex`](thinking/thinking-google-vertex) | Gemini thinking on Vertex AI. | Deepgram, Cartesia, Google Cloud |
+| [`thinking-functions-google-vertex`](thinking/thinking-functions-google-vertex) | Vertex Gemini thinking with function calling. | Deepgram, Cartesia, Google Cloud |
+| [`thinking-openai-responses`](thinking/thinking-openai-responses) | OpenAI Responses reasoning summaries over WebSocket. | Deepgram, Cartesia, OpenAI |
+| [`thinking-openai-responses-http`](thinking/thinking-openai-responses-http) | OpenAI Responses reasoning summaries over HTTP. | Deepgram, Cartesia, OpenAI |
+| [`thinking-functions-openai-responses`](thinking/thinking-functions-openai-responses) | OpenAI Responses reasoning with function calling. | Deepgram, Cartesia, OpenAI |
+
+## Transcription
+
+Each transcribes the user with one STT service, logging the interim and final transcripts; nothing answers.
+
+| Example | Speech-to-text | Keys |
+| --- | --- | --- |
+| [`transcription-assemblyai`](transcription/transcription-assemblyai) | AssemblyAI. | AssemblyAI |
+| [`transcription-azure`](transcription/transcription-azure) | Azure Speech. | Azure Speech |
+| [`transcription-cartesia`](transcription/transcription-cartesia) | Cartesia. | Cartesia |
+| [`transcription-cartesia-turns`](transcription/transcription-cartesia-turns) | Cartesia, with its own turn detection. | Cartesia |
+| [`transcription-deepgram`](transcription/transcription-deepgram) | Deepgram. | Deepgram |
+| [`transcription-deepgram-flux`](transcription/transcription-deepgram-flux) | Deepgram Flux. | Deepgram |
+| [`transcription-elevenlabs`](transcription/transcription-elevenlabs) | ElevenLabs realtime. | ElevenLabs |
+| [`transcription-gladia`](transcription/transcription-gladia) | Gladia. | Gladia |
+| [`transcription-google`](transcription/transcription-google) | Google Cloud Speech-to-Text. | Google Cloud |
+| [`transcription-google-gemini`](transcription/transcription-google-gemini) | Gemini. | Google AI |
+| [`transcription-gradium`](transcription/transcription-gradium) | Gradium. | Gradium |
+| [`transcription-mistral`](transcription/transcription-mistral) | Mistral. | Mistral |
+| [`transcription-nvidia`](transcription/transcription-nvidia) | NVIDIA Riva. | NVIDIA |
+| [`transcription-openai`](transcription/transcription-openai) | OpenAI realtime transcription. | OpenAI |
+| [`transcription-rime`](transcription/transcription-rime) | Rime. | Rime |
+| [`transcription-soniox`](transcription/transcription-soniox) | Soniox. | Soniox |
+| [`transcription-speechmatics`](transcription/transcription-speechmatics) | Speechmatics, with speakers tagged by diarization. | Speechmatics |
+| [`transcription-together`](transcription/transcription-together) | Together AI. | Together AI |
+| [`transcription-xai`](transcription/transcription-xai) | xAI. | xAI |
+
+## Audio
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`audio-recording`](audio/audio-recording) | Recording the conversation to merged, user and bot WAV files. | Deepgram, Cartesia, OpenAI |
+| [`audio-sound-effects`](audio/audio-sound-effects) | Playing sound effects at each change of turn. | Deepgram, Cartesia, OpenAI |
+| [`audio-volume`](audio/audio-volume) | Changing speech volume with VolumeGainFrame and VolumeFrame. | Deepgram |
+
+## Context summarization
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`context-summarization-openai`](context-summarization/context-summarization-openai) | Automatic context summarization. | Deepgram, Cartesia, OpenAI |
+| [`context-summarization-google`](context-summarization/context-summarization-google) | Automatic context summarization with Gemini. | Deepgram, Cartesia, Google AI |
+| [`context-summarization-dedicated-llm`](context-summarization/context-summarization-dedicated-llm) | Summarization on a dedicated Gemini model, with a custom prompt, template and timeout. | Deepgram, Cartesia, OpenAI, Google AI |
+| [`context-summarization-manual-openai`](context-summarization/context-summarization-manual-openai) | Summarization on demand through a function call. | Deepgram, Cartesia, OpenAI |
+
+## Persistent context
+
+Tools save, list and load the conversation as files.
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`persistent-context-openai`](persistent-context/persistent-context-openai) | Saving, listing and loading conversations with tools, on OpenAI. | Deepgram, Cartesia, OpenAI |
+| [`persistent-context-openai-responses`](persistent-context/persistent-context-openai-responses) | The same on the OpenAI Responses API. | Deepgram, Cartesia, OpenAI |
+| [`persistent-context-openai-responses-http`](persistent-context/persistent-context-openai-responses-http) | The same on the OpenAI Responses API over HTTP. | Deepgram, Cartesia, OpenAI |
+| [`persistent-context-anthropic`](persistent-context/persistent-context-anthropic) | The same on Anthropic. | Deepgram, Cartesia, Anthropic |
+| [`persistent-context-gemini`](persistent-context/persistent-context-gemini) | The same on Gemini, plus a camera tool. | Deepgram, Cartesia, Google AI |
+
+## RAG and observability
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`rag-gemini-grounding-metadata`](rag/rag-gemini-grounding-metadata) | Google Search grounding with Gemini, logging the search responses. | Deepgram, Cartesia, Google AI |
+| [`observability-heartbeats`](observability/observability-heartbeats) | Heartbeat monitoring catching a stalled pipeline. | None |
+| [`observability-observer`](observability/observability-observer) | A custom observer alongside the LLM log and filtered debug log observers. | Deepgram, Cartesia, OpenAI |
 
 ## Transports
 
