@@ -1,7 +1,9 @@
 // Command voice-kokoro is a voice agent: Deepgram speech-to-text, an OpenAI
 // LLM and Kokoro text-to-speech.
 //
-// Kokoro runs locally: start a Kokoro-FastAPI server first.
+// Kokoro runs locally, in process: the model and voices files are downloaded
+// into the user cache on first use, and the text is phonemized with espeak-ng
+// (the libespeak-ng1 package; JARGO_ESPEAK_LIB points at another install).
 //
 //	DEEPGRAM_API_KEY=… OPENAI_API_KEY=…  \
 //	  go run ./examples/voice/voice-kokoro
@@ -49,7 +51,13 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY")})
 
-	tts := kokoro.NewTTS(kokoro.Config{Voice: "af_heart"})
+	tts, err := kokoro.NewTTS(kokoro.Config{
+		Voice:  "af_heart",
+		Espeak: kokoro.EspeakConfig{LibPath: os.Getenv(kokoro.EspeakLibPathEnv)},
+	})
+	if err != nil {
+		return err
+	}
 
 	llm := chat.NewLLM(chat.LLMConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
 	llm.SetSystemInstruction(systemInstruction)

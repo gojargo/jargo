@@ -23,7 +23,9 @@ at run time from their shared libraries with no C toolchain at build time.
   Point at non-standard installs with `JARGO_ONNXRUNTIME_LIB` and
   `JARGO_RNNOISE_LIB`. The Moonshine STT provider's **libmoonshine** is too; it
   takes its path in its config, which the eval harness fills from
-  `JARGO_MOONSHINE_LIB`.
+  `JARGO_MOONSHINE_LIB`, and so is the local Kokoro TTS provider's
+  **libespeak-ng** (a distribution package, `libespeak-ng1`), from
+  `JARGO_ESPEAK_LIB`.
 
 Formatting and lint are enforced by **golangci-lint** (`.golangci.yml`):
 

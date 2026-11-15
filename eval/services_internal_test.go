@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,8 +17,10 @@ import (
 	"github.com/gojargo/jargo/classifier"
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/onnxrt"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/kokoro"
 	"github.com/gojargo/jargo/provider/moonshine"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/llm"
@@ -408,10 +411,65 @@ func TestTTSFactoryEscapeHatch(t *testing.T) {
 	}
 }
 
+// A built-in name with no builder registered is a clear error.
 func TestABuiltInTTSWithNoBuilderYetIsAClearError(t *testing.T) {
-	_, err := TTSServiceFromConfig(&SpeechConfig{Service: "kokoro", Voice: "af_heart"}, t.TempDir(), true)
+	registry.Lock()
+	registry.tts["builtin-test"] = nil
+	registry.Unlock()
+	t.Cleanup(func() {
+		registry.Lock()
+		delete(registry.tts, "builtin-test")
+		registry.Unlock()
+	})
+	_, err := TTSServiceFromConfig(&SpeechConfig{Service: "builtin-test", Voice: "af_heart"}, t.TempDir(), true)
 	if !errors.Is(err, ErrServiceUnavailable) || !strings.Contains(err.Error(), "RegisterTTSService") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Kokoro is the built-in user TTS. A language that names nothing is reported
+// before anything is downloaded or loaded.
+func TestTTSKokoroIsBuiltIn(t *testing.T) {
+	registry.RLock()
+	build := registry.tts[ttsKokoro]
+	registry.RUnlock()
+	if build == nil {
+		t.Fatal("no builder registered for kokoro")
+	}
+	_, err := TTSServiceFromConfig(&SpeechConfig{Service: "kokoro", Voice: "af_heart", Language: "xx"}, t.TempDir(), true)
+	if !errors.Is(err, errUnknownLanguage) {
+		t.Fatalf("err = %v, want the unknown language reported", err)
+	}
+}
+
+// With the model files already in the cache, `service: kokoro` builds a local
+// Kokoro TTS synthesizing at the cache's rate, the wrapper streaming at the
+// block's rate. It skips when the files, the ONNX Runtime or espeak-ng are
+// absent, rather than downloading the model.
+func TestTTSKokoroBuildsTheLocalService(t *testing.T) {
+	dir, err := kokoro.DefaultCacheDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, f := range []string{"kokoro-v1.0.onnx", "voices-v1.0.bin"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Skipf("Kokoro model files not downloaded: %v", err)
+		}
+	}
+	s, err := TTSServiceFromConfig(&SpeechConfig{Service: "kokoro", Voice: "af_heart", SampleRate: 16000},
+		t.TempDir(), true)
+	if errors.Is(err, kokoro.ErrEspeakNotAvailable) || errors.Is(err, onnxrt.ErrNotConfigured) ||
+		(err != nil && strings.Contains(err.Error(), "onnxrt")) {
+		t.Skipf("runtime not available: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("TTSServiceFromConfig: %v", err)
+	}
+	if rate := s.Inner().SampleRate(); rate != CacheSampleRate {
+		t.Errorf("inner rate = %d, want %d", rate, CacheSampleRate)
+	}
+	if rate := s.SampleRate(); rate != 16000 {
+		t.Errorf("wrapper rate = %d, want 16000", rate)
 	}
 }
 

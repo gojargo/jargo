@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime, RNNoise and libmoonshine are loaded at run time."
+description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime, RNNoise, libmoonshine and libespeak-ng are loaded at run time."
 weight: 1
 ---
 
@@ -33,6 +33,7 @@ it unless you have a measured reason not to.
 | **ONNX Runtime** | Silero VAD, Smart Turn v3, the tone reader and tagger | `JARGO_ONNXRUNTIME_LIB` | Bot still runs; falls back to STT endpointing, loses barge-in. |
 | **RNNoise** | Optional input noise reduction | `JARGO_RNNOISE_LIB` | Bot runs without denoising. |
 | **libmoonshine** | The Moonshine STT provider (`provider/moonshine`) | `JARGO_MOONSHINE_LIB` | `moonshine.NewSTT` returns `moonshine.ErrLibraryNotAvailable`. |
+| **libespeak-ng** | The local Kokoro TTS provider (`provider/kokoro`), which also needs the ONNX Runtime | `JARGO_ESPEAK_LIB` | `kokoro.NewTTS` returns `kokoro.ErrEspeakNotAvailable`. |
 
 Each is located by its conventional name on the loader's default search path
 when nothing points at it.
@@ -100,6 +101,39 @@ Moonshine's model CDN into `jargo/moonshine` under the user's cache directory,
 and checked against its published size and CRC32C. `STTConfig.CacheDir` moves
 the cache, and `STTConfig.ModelPath` loads a model already on disk instead.
 
+### libespeak-ng
+
+The local Kokoro TTS provider runs the Kokoro model on the ONNX Runtime above,
+and phonemizes the text with espeak-ng first. Its library is a distribution
+package, so there is no `make` target for it; install the runtime package, which
+brings the espeak-ng data with it:
+
+```sh
+sudo apt-get install -y libespeak-ng1     # or your system's espeak-ng package
+```
+
+It is found by its conventional names (`libespeak-ng.so.1`, then
+`libespeak-ng.so`) on the loader's default search path. The provider takes
+another path in its configuration rather than reading the environment;
+`JARGO_ESPEAK_LIB` is the variable the eval harness and the `voice-kokoro`
+example read, and the one to use in your own application:
+
+```go
+tts, err := kokoro.NewTTS(kokoro.Config{
+    Voice:  "af_heart",
+    Espeak: kokoro.EspeakConfig{LibPath: os.Getenv(kokoro.EspeakLibPathEnv)},
+})
+```
+
+`EspeakConfig.DataPath` points at an espeak-ng data directory when the library
+was not built to find its own.
+
+The model is not in the binary either. The Kokoro v1.0 model and voices files
+(about 350 MB together) are downloaded once, on first use, into
+`jargo/kokoro-onnx` under the user's cache directory. `Config.CacheDir` moves
+the cache, and `Config.ModelPath` and `Config.VoicesPath` load files already on
+disk instead.
+
 ## No cgo
 
 There is no C toolchain in the picture at all. The Opus codec and the resampler
@@ -114,7 +148,7 @@ have to think about them:
 
 - **`gojargo/jargo-build`**: build stage, with the pinned Go toolchain.
 - **`gojargo/jargo`**: distroless runtime, carrying the ONNX Runtime and
-  RNNoise. It does not carry libmoonshine.
+  RNNoise. It does not carry libmoonshine or libespeak-ng.
 
 See **[Deploy with Docker](../deploy/docker.md)** for a copyable Dockerfile.
 

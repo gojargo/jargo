@@ -61,7 +61,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-hume`](voice/voice-hume) | Deepgram speech-to-text, an OpenAI LLM and Hume text-to-speech. |
 | [`voice-inworld`](voice/voice-inworld) | Deepgram speech-to-text, an OpenAI LLM and Inworld text-to-speech (over WebSocket). |
 | [`voice-inworld-http`](voice/voice-inworld-http) | Deepgram speech-to-text, an OpenAI LLM and Inworld (over HTTP) text-to-speech. |
-| [`voice-kokoro`](voice/voice-kokoro) | Deepgram speech-to-text, an OpenAI LLM and Kokoro text-to-speech. |
+| [`voice-kokoro`](voice/voice-kokoro) | Deepgram speech-to-text, an OpenAI LLM and local Kokoro text-to-speech (espeak-ng and the ONNX Runtime, no server). |
 | [`voice-minimax`](voice/voice-minimax) | Deepgram speech-to-text, an OpenAI LLM and MiniMax text-to-speech. |
 | [`voice-mistral`](voice/voice-mistral) | Mistral speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-neuphonic`](voice/voice-neuphonic) | Deepgram speech-to-text, an OpenAI LLM and Neuphonic text-to-speech. |

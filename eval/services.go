@@ -15,6 +15,7 @@ import (
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/kokoro"
 	"github.com/gojargo/jargo/provider/moonshine"
 	"github.com/gojargo/jargo/provider/ollama"
 	"github.com/gojargo/jargo/provider/openai/chat"
@@ -55,7 +56,8 @@ import (
 // reads the API key a deprecated paid provider needs from the environment when
 // the block carries none: CARTESIA_API_KEY for `service: cartesia` and
 // OPENAI_API_KEY for `service: openai`. It reads where libmoonshine is from
-// JARGO_MOONSHINE_LIB for `service: moonshine`.
+// JARGO_MOONSHINE_LIB for `service: moonshine`, and where libespeak-ng is from
+// JARGO_ESPEAK_LIB for `service: kokoro`.
 
 // Default models and endpoint of the built-in LLM services.
 const (
@@ -120,7 +122,7 @@ var registry = struct {
 		typesafeClassifierFactory: TypesafeClassifier,
 	},
 	stt: map[string]STTServiceBuilder{sttMoonshine: moonshineService, sttWhisper: nil},
-	tts: map[string]TTSServiceBuilder{ttsKokoro: nil},
+	tts: map[string]TTSServiceBuilder{ttsKokoro: kokoroService},
 }
 
 // Errors the service constructors report.
@@ -356,6 +358,31 @@ func innerSynthesizer(factoryName string, built any) (tts.Synthesizer, error) {
 		return v, nil
 	}
 	return nil, fmt.Errorf("%w: user.speech.factory %q returned %T, not a TTS service", ErrFactory, factoryName, built)
+}
+
+// kokoroService is a local Kokoro TTS from a `user.speech:` block: its
+// `voice` (e.g. af_heart), its optional `language` code, English when absent,
+// and its optional `speed` (Kokoro accepts 0.5 to 2.0; 1.0 is its default).
+// Voices are language-specific, so a non-English language needs a matching
+// voice: af_heart speaks US English whatever the language is set to. It
+// synthesizes at the cache's rate; the block's `sample_rate` is the rate the
+// cache wrapper streams at.
+//
+// No API key and no per-run cost: the model is downloaded once into the user
+// cache (see kokoro.DefaultCacheDir). libespeak-ng is loaded from
+// JARGO_ESPEAK_LIB, or by its conventional names when that is unset.
+func kokoroService(cfg *SpeechConfig) (*tts.Base, error) {
+	lang, err := cfgLanguage(cfg.Language)
+	if err != nil {
+		return nil, err
+	}
+	return kokoro.NewTTS(kokoro.Config{
+		Voice:      cfg.Voice,
+		Language:   lang,
+		Speed:      cfg.Speed,
+		Espeak:     kokoro.EspeakConfig{LibPath: os.Getenv(kokoro.EspeakLibPathEnv)},
+		SampleRate: CacheSampleRate,
+	})
 }
 
 // cartesiaService is a Cartesia HTTP TTS from a `user.speech:` block, keyed

@@ -287,6 +287,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   voicemail, MCP memory and a simulated caller), with
   `go run ./cmd/jargo eval suite evals/release/manifest.yaml`. A test keeps
   every bot it names an example package and every scenario loadable.
+- **Local Kokoro text-to-speech** (`kokoro.NewTTS`): the Kokoro v1.0 ONNX
+  model runs in process on the ONNX Runtime, phonemizing with espeak-ng
+  through libespeak-ng, bound with purego and loaded at run time from
+  `Config.Espeak.LibPath` or the system's `libespeak-ng.so.1`. The model and
+  voices files are downloaded on first use into the user cache, or loaded
+  from `Config.ModelPath` and `Config.VoicesPath`. Sentences stream a batch
+  at a time at 24 kHz, and the voice, language and speed can change while
+  the pipeline runs. The eval harness builds it for `service: kokoro`,
+  reading `JARGO_ESPEAK_LIB`. **Breaking:** the Kokoro-FastAPI HTTP client is
+  now `kokoro.NewHTTPTTS(kokoro.HTTPConfig)`; `kokoro.NewTTS` and
+  `kokoro.Config` are the local service and return an error. The
+  `voice-kokoro` example uses the local service and needs no server.
 
 ### Changed
 
