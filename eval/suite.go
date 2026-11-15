@@ -23,6 +23,9 @@ var (
 	errNoScenarios  = errors.New("suite entry has no scenarios")
 	errDuplicateRun = errors.New("two suite entries run one scenario under one label")
 	errConcurrency  = errors.New("suite entry concurrency must be a positive integer")
+	// errSimulationNotRun is a simulation listed in a suite, which the harness
+	// does not drive.
+	errSimulationNotRun = errors.New("simulation scenarios are not run by this harness")
 )
 
 // Manifest lists the bots to test and the scenarios to run against each. Scenario
@@ -200,10 +203,18 @@ func (m *Manifest) jobs() []job {
 				js = append(js, job{entry: e.label(), entryIdx: i, botURL: e.BotURL, path: path, loadErr: err})
 				continue
 			}
-			for _, scenario := range file.Scenarios {
-				js = append(js, job{
-					entry: e.label(), entryIdx: i, botURL: e.BotURL, path: path, scenario: scenario,
-				})
+			for _, loaded := range file.Scenarios {
+				j := job{entry: e.label(), entryIdx: i, botURL: e.BotURL, path: path}
+				switch scenario := loaded.(type) {
+				case *ScriptScenario:
+					j.scenario = scenario
+				case *Rubric:
+					// A rubric has nothing to run.
+					continue
+				default:
+					j.loadErr = fmt.Errorf("%w: %s", errSimulationNotRun, loaded.ScenarioName())
+				}
+				js = append(js, j)
 			}
 		}
 	}

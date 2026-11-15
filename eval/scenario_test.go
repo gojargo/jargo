@@ -1,10 +1,11 @@
 package eval_test
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -20,325 +21,340 @@ func writeScenario(t *testing.T, body string) string {
 	return path
 }
 
-func TestLoadValidScenario(t *testing.T) {
-	path := writeScenario(t, `
-name: greeting
-turns:
-  - user: "hello there"
-    expect:
-      - event: llm_started
-      - event: llm_response
-        text_contains: "hi"
-        within_ms: 5000
-      - event: llm_response
-        eval: "greets the user warmly"
-  - user: "what's the weather in Paris?"
-    expect:
-      - event: function_call
-        name: get_weather
-`)
-
-	s, err := eval.Load(path)
+// loadFile loads body as a scenario file, failing the test on an error.
+func loadFile(t *testing.T, body string) *eval.ScenarioFile {
+	t.Helper()
+	file, err := eval.LoadFile(writeScenario(t, body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Name != "greeting" || len(s.Turns) != 2 {
-		t.Fatalf("unexpected scenario: %+v", s)
+	return file
+}
+
+// loadFileErr loads body and returns the error it is rejected with.
+func loadFileErr(t *testing.T, body string) error {
+	t.Helper()
+	_, err := eval.LoadFile(writeScenario(t, body))
+	if err == nil {
+		t.Fatalf("expected an error for:\n%s", body)
 	}
-	if s.Turns[0].User != "hello there" || len(s.Turns[0].Expect) != 3 {
-		t.Fatalf("unexpected turn 1: %+v", s.Turns[0])
+	if _, ok := errors.AsType[*eval.ScenarioError](err); !ok {
+		t.Fatalf("error %v is not a *ScenarioError", err)
 	}
-	if s.Turns[0].Expect[1].TextContains != "hi" || s.Turns[0].Expect[1].WithinMS != 5000 {
-		t.Fatalf("unexpected expectation: %+v", s.Turns[0].Expect[1])
-	}
-	want := []eval.FunctionCall{{Name: "get_weather"}}
-	if s.Turns[1].Expect[0].Event != eval.EventFunctionCall ||
-		!reflect.DeepEqual(s.Turns[1].Expect[0].Calls, want) {
-		t.Fatalf("unexpected function_call expectation: %+v", s.Turns[1].Expect[0])
+	return err
+}
+
+// mustContain asserts err's message holds want.
+func mustContain(t *testing.T, err error, want string) {
+	t.Helper()
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q does not contain %q", err, want)
 	}
 }
 
-// The single-call `name:`/`args:` shorthand normalizes into Calls.
-func TestLoadFunctionCallShorthand(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: one_call
-turns:
-  - user: "weather?"
-    expect:
-      - event: function_call
-        name: get_weather
-        args: {city: Paris}
-`))
+// names are the names of a file's scenarios, in order.
+func names(file *eval.ScenarioFile) []string {
+	out := make([]string, 0, len(file.Scenarios))
+	for _, s := range file.Scenarios {
+		out = append(out, s.ScenarioName())
+	}
+	return out
+}
+
+// get is the scenario called name, of type T.
+func get[T eval.LoadedScenario](t *testing.T, file *eval.ScenarioFile, name string) T {
+	t.Helper()
+	s, err := file.Scenario(name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []eval.FunctionCall{{Name: "get_weather", Args: map[string]any{"city": "Paris"}}}
-	if !reflect.DeepEqual(s.Turns[0].Expect[0].Calls, want) {
-		t.Fatalf("got %+v, want %+v", s.Turns[0].Expect[0].Calls, want)
+	typed, ok := s.(T)
+	if !ok {
+		t.Fatalf("%s is a %T", name, s)
 	}
+	return typed
 }
 
-// Several calls in one turn go under `calls:`, where an entry is either a bare
-// name or a {name, args} mapping.
-func TestLoadFunctionCallsList(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: two_calls
-turns:
-  - user: "weather and food?"
-    expect:
-      - event: function_call
-        calls:
-          - get_weather
-          - {name: get_restaurants, args: {city: Paris}}
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []eval.FunctionCall{
-		{Name: "get_weather"},
-		{Name: "get_restaurants", Args: map[string]any{"city": "Paris"}},
-	}
-	if !reflect.DeepEqual(s.Turns[0].Expect[0].Calls, want) {
-		t.Fatalf("got %+v, want %+v", s.Turns[0].Expect[0].Calls, want)
-	}
-}
-
-// A bare function_call, with neither name nor calls, matches any single call.
-func TestLoadBareFunctionCallMatchesAny(t *testing.T) {
-	s, err := eval.Load(writeScenario(t,
-		"name: bare\nturns: [{user: hi, expect: [{event: function_call}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []eval.FunctionCall{{}}
-	if !reflect.DeepEqual(s.Turns[0].Expect[0].Calls, want) {
-		t.Fatalf("got %+v, want %+v", s.Turns[0].Expect[0].Calls, want)
-	}
-}
-
-// An absent expectation parses, and carries its own budget.
-func TestLoadAbsentExpectation(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: absent
-turns:
-  - user: "x"
-    expect:
-      - event: llm_response
-        eval: "answers"
-      - event: llm_response
-        absent: true
-        within_ms: 5000
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	exp := s.Turns[0].Expect[1]
-	if !exp.Absent || exp.WithinMS != 5000 {
-		t.Fatalf("unexpected absent expectation: %+v", exp)
-	}
-}
-
-func TestLoadRejectsInvalid(t *testing.T) {
-	cases := map[string]struct {
-		body string
-		want string
-	}{
-		"no name": {
-			body: "turns:\n  - user: hi\n    expect:\n      - event: llm_started\n",
-			want: "no name",
-		},
-		"no turns": {
-			body: "name: empty\n",
-			want: "no turns",
-		},
-		"turns not a list": {
-			body: "name: x\nturns: nope\n",
-			want: "cannot unmarshal",
-		},
-		"user and dtmf together": {
-			body: "name: x\nturns:\n  - user: hi\n    dtmf: \"1\"\n    expect: [{event: llm_started}]\n",
-			want: "user or dtmf, not both",
-		},
-		"invalid keypad key": {
-			body: "name: x\nturns:\n  - dtmf: \"12x\"\n    expect: [{event: llm_started}]\n",
-			want: `invalid keypad key "x"`,
-		},
-		"send_after with no input to schedule": {
-			body: "name: x\nturns:\n  - send_after: {event: llm_started, delay_ms: 10}\n" +
-				"    expect: [{event: llm_started}]\n",
-			want: "send_after needs a user or dtmf turn",
-		},
-		"expectation with no event": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - text_contains: hi\n",
-			want: "expectation has no event",
-		},
-		"empty dtmf": {
-			body: "name: x\nturns:\n  - dtmf: \"\"\n    expect: [{event: llm_started}]\n",
-			want: "dtmf must be a string of keypad keys",
-		},
-		"empty calls": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n      - event: function_call\n        calls: []\n",
-			want: "calls must not be empty",
-		},
-		"absent with eval": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n" +
-				"      - event: llm_response\n        absent: true\n        eval: repeats itself\n",
-			want: "absent cannot be combined",
-		},
-		"absent with text_contains": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n" +
-				"      - event: llm_response\n        absent: true\n        text_contains: again\n",
-			want: "absent cannot be combined",
-		},
-		"absent with calls": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n" +
-				"      - event: function_call\n        absent: true\n        name: hang_up\n",
-			want: "absent cannot be combined",
-		},
-		"negative send_after delay": {
-			body: "name: x\nturns:\n  - user: hi\n    send_after: {event: llm_started, delay_ms: -1}\n" +
-				"    expect: [{event: llm_started}]\n",
-			want: "delay_ms must be non-negative",
-		},
-		"send_after with neither event nor delay": {
-			body: "name: x\nturns:\n  - user: hi\n    send_after: {delay_ms: 0}\n" +
-				"    expect: [{event: llm_started}]\n",
-			want: "needs an event or a positive delay_ms",
-		},
-		"absent must be boolean": {
-			body: "name: x\nturns:\n  - user: hi\n    expect:\n" +
-				"      - event: llm_response\n        absent: \"yes please\"\n",
-			want: "cannot unmarshal",
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			_, err := eval.Load(writeScenario(t, tc.body))
-			if err == nil {
-				t.Fatal("expected an error, got nil")
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("error %q does not contain %q", err.Error(), tc.want)
-			}
-		})
-	}
-}
-
-// A turn's send_after parses, and a turn without one has none.
-func TestLoadSendAfter(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: with_send_after
-turns:
-  - user: "first"
-    expect: [{event: llm_started}]
-  - send_after: {event: llm_started, delay_ms: 200}
-    user: "second"
-    expect: [{event: llm_started}]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Turns[0].SendAfter != nil {
-		t.Fatalf("turn 1 should have no schedule, got %+v", s.Turns[0].SendAfter)
-	}
-	want := eval.SendAfter{Event: eval.EventLLMStarted, DelayMS: 200}
-	if s.Turns[1].SendAfter == nil || *s.Turns[1].SendAfter != want {
-		t.Fatalf("got %+v, want %+v", s.Turns[1].SendAfter, want)
-	}
-}
-
-// A send_after with only a delay is a pure time delay, with no event to anchor
-// on.
-func TestLoadSendAfterPureDelay(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: paced
-turns:
-  - user: "first"
-    expect: [{event: llm_started}]
-  - user: "second"
-    send_after: {delay_ms: 500}
-    expect: [{event: llm_started}]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := eval.SendAfter{DelayMS: 500}
-	if s.Turns[1].SendAfter == nil || *s.Turns[1].SendAfter != want {
-		t.Fatalf("got %+v, want %+v", s.Turns[1].SendAfter, want)
-	}
-}
-
-// A turn may have no input at all: it only waits and asserts, which is what a
-// bot-first scenario needs.
-func TestLoadObserveOnlyTurn(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: bot_first
-turns:
-  - expect:
-      - event: llm_response
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Turns[0].User != "" || s.Turns[0].DTMF != "" {
-		t.Fatalf("expected a turn with no input, got %+v", s.Turns[0])
-	}
-}
-
-// A turn may also have no expectations: it only sends, with the assertion on a
-// later turn.
-func TestLoadSendOnlyTurn(t *testing.T) {
-	s, err := eval.Load(writeScenario(t,
-		"name: paced\nturns: [{user: hi}, {user: there, expect: [{event: llm_response}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(s.Turns[0].Expect) != 0 {
-		t.Fatalf("expected a turn with no expectations, got %+v", s.Turns[0])
-	}
-}
-
-// A keypad sequence parses whether or not it is quoted: YAML reads bare digits
-// as a number, and the digits are what matter.
-func TestLoadDTMFTurn(t *testing.T) {
-	for name, body := range map[string]string{
-		"quoted":   "name: keys\nturns: [{dtmf: \"123#\", expect: [{event: user_transcription}]}]\n",
-		"unquoted": "name: keys\nturns: [{dtmf: 123, expect: [{event: user_transcription}]}]\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			s, err := eval.Load(writeScenario(t, body))
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := "123"
-			if name == "quoted" {
-				want = "123#"
-			}
-			if s.Turns[0].DTMF != want {
-				t.Fatalf("dtmf = %q, want %q", s.Turns[0].DTMF, want)
-			}
-		})
-	}
-}
-
-// A scenario's context: seeds the conversation the bot starts from.
-func TestLoadContext(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: seeded
+const group = `
+name: turn_completion
+judge: {modality: text}
 context:
-  - role: user
-    text: "my name is Alex"
-  - role: assistant
-    text: "nice to meet you, Alex"
-turns:
-  - user: "what is my name?"
-    expect: [{event: llm_response}]
-`))
+  - role: system
+    text: "You are a travel assistant."
+stop_on_failure: false
+
+scenarios:
+  - name: short_answer
+    turns:
+      - user: "Japan."
+        expect: [{event: response}]
+  - name: with_history
+    stop_on_failure: true
+    context:
+      - role: system
+        text: "You are a travel assistant."
+      - role: assistant
+        text: "Where would you go?"
+    turns:
+      - user: "Japan."
+        expect: [{event: response}]
+`
+
+func TestAFileOfOneScenarioNamesItUnderTheFile(t *testing.T) {
+	file := loadFile(t, "name: greet\nscenarios:\n  - name: greet\n    turns: [{user: hi}]\n")
+	if got := names(file); len(got) != 1 || got[0] != "greet/greet" {
+		t.Fatalf("names = %v", got)
+	}
+}
+
+func TestAFlatFileIsDeprecatedAndKeepsItsName(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	file := loadFile(t, "name: greet\nturns: [{user: hi}]\n")
+	if got := names(file); len(got) != 1 || got[0] != "greet" {
+		t.Fatalf("names = %v", got)
+	}
+	if !strings.Contains(buf.String(), "`scenarios:` list") {
+		t.Fatalf("want a deprecation warning, logged:\n%s", buf.String())
+	}
+}
+
+func TestEntriesAreNamedUnderTheGroup(t *testing.T) {
+	file := loadFile(t, group)
+	got := names(file)
+	if len(got) != 2 || got[0] != "turn_completion/short_answer" || got[1] != "turn_completion/with_history" {
+		t.Fatalf("names = %v", got)
+	}
+	for _, s := range file.Scenarios {
+		if _, ok := s.(*eval.ScriptScenario); !ok {
+			t.Fatalf("%s is a %T, want a scripted scenario", s.ScenarioName(), s)
+		}
+	}
+}
+
+func TestHeaderKeysAreDefaultsAndAnEntryReplacesAWholeValue(t *testing.T) {
+	file := loadFile(t, group)
+	short := get[*eval.ScriptScenario](t, file, "turn_completion/short_answer")
+	history := get[*eval.ScriptScenario](t, file, "turn_completion/with_history")
+	// Inherited from the header.
+	if len(short.Context) != 1 || short.Context[0].Text != "You are a travel assistant." {
+		t.Fatalf("context = %+v", short.Context)
+	}
+	if *short.StopOnFailure || short.BotAudio {
+		t.Fatalf("short = %+v", short)
+	}
+	// Replaced as a whole, not merged.
+	if len(history.Context) != 2 || history.Context[1].Role != "assistant" {
+		t.Fatalf("context = %+v", history.Context)
+	}
+	if !*history.StopOnFailure || history.BotAudio {
+		t.Fatalf("history = %+v", history)
+	}
+}
+
+func TestEntriesCanBeSimulations(t *testing.T) {
+	file := loadFile(t, `
+name: diner
+persona: "An impatient diner."
+success: "the bot confirms"
+scenarios:
+  - name: book
+    goal: "Book a table."
+  - name: cancel
+    goal: "Cancel a booking."
+`)
+	book := get[*eval.SimulationScenario](t, file, "diner/book")
+	cancel := get[*eval.SimulationScenario](t, file, "diner/cancel")
+	if book.Goal != "Book a table." || cancel.Goal != "Cancel a booking." || book.Persona != "An impatient diner." {
+		t.Fatalf("book %+v, cancel %+v", book, cancel)
+	}
+}
+
+func TestAnEntryWithSuccessAndNoPersonaOrTurnsIsARubric(t *testing.T) {
+	file := loadFile(t, `
+name: diner
+judge: {eval: {service: ollama, model: judge}}
+metrics:
+  - name: politeness
+    criterion: "stays polite"
+scenarios:
+  - name: simulated
+    persona: "An impatient diner."
+    goal: "Book a table."
+    success: "the bot booked a table"
+  - name: production
+    success: "the bot booked the table the caller asked for"
+`)
+	get[*eval.SimulationScenario](t, file, "diner/simulated")
+	rubric := get[*eval.Rubric](t, file, "diner/production")
+	if rubric.Success != "the bot booked the table the caller asked for" {
+		t.Fatalf("success = %q", rubric.Success)
+	}
+	// The file's defaults are merged in, as for any entry.
+	if len(rubric.Metrics) != 1 || rubric.Metrics[0].Name != "politeness" {
+		t.Fatalf("metrics = %+v", rubric.Metrics)
+	}
+	if rubric.Judge.Service != "ollama" || rubric.Judge.Model != "judge" || len(rubric.Judge.Raw) != 2 {
+		t.Fatalf("judge = %+v", rubric.Judge)
+	}
+}
+
+func TestARubricLeavesOutTheMeasuredMetricsItTakesFromTheFile(t *testing.T) {
+	file := loadFile(t, `
+name: diner
+metrics:
+  - name: politeness
+    criterion: "stays polite"
+  - measure: words
+    max_value: 40
+scenarios:
+  - name: simulated
+    persona: "An impatient diner."
+    goal: "Book a table."
+    success: "the bot booked a table"
+  - name: production
+    success: "the bot booked the table the caller asked for"
+`)
+	simulated := get[*eval.SimulationScenario](t, file, "diner/simulated")
+	if len(simulated.Metrics) != 2 || simulated.Metrics[0].Name != "politeness" || simulated.Metrics[1].Name != "words" {
+		t.Fatalf("simulated metrics = %+v", simulated.Metrics)
+	}
+	production := get[*eval.Rubric](t, file, "diner/production")
+	if len(production.Metrics) != 1 || production.Metrics[0].Name != "politeness" {
+		t.Fatalf("production metrics = %+v", production.Metrics)
+	}
+}
+
+func TestARubricRefusesAMeasuredMetricItListsItself(t *testing.T) {
+	err := loadFileErr(t, `
+name: diner
+scenarios:
+  - name: production
+    success: "the bot booked a table"
+    metrics:
+      - measure: words
+        max_value: 40
+`)
+	mustContain(t, err, "metric 'words' is measured")
+}
+
+func TestAFileKnowsItsNameAndPathAndFindsAScenarioByName(t *testing.T) {
+	path := writeScenario(t, group)
+	file, err := eval.LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Context) != 2 || s.Context[0].Text != "my name is Alex" {
-		t.Fatalf("unexpected context: %+v", s.Context)
+	if file.Name != "turn_completion" || file.Path != path || len(file.Scenarios) != 2 {
+		t.Fatalf("file = %+v", file)
+	}
+	if s := get[*eval.ScriptScenario](t, file, "turn_completion/with_history"); s.Name != "turn_completion/with_history" {
+		t.Fatalf("name = %q", s.Name)
+	}
+	_, err = file.Scenario("turn_completion/nope")
+	if err == nil {
+		t.Fatal("expected an error for a missing scenario")
+	}
+	mustContain(t, err, "no scenario called 'turn_completion/nope'")
+}
+
+func TestLoadScenarioFileWantsALoneScenario(t *testing.T) {
+	one := "name: greet\nscenarios:\n  - name: greet\n    turns: [{user: hi}]\n"
+	s, err := eval.LoadScenarioFile(writeScenario(t, one))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ScenarioName() != "greet/greet" {
+		t.Fatalf("name = %q", s.ScenarioName())
+	}
+	_, err = eval.LoadScenarioFile(writeScenario(t, group))
+	if err == nil {
+		t.Fatal("expected an error for a file of two scenarios")
+	}
+	mustContain(t, err, "holds 2 scenarios")
+}
+
+func TestGroupNeedsAName(t *testing.T) {
+	mustContain(t, loadFileErr(t, "scenarios: [{name: a, turns: []}]\n"), "missing or invalid 'name:'")
+}
+
+func TestGroupNeedsEntries(t *testing.T) {
+	mustContain(t, loadFileErr(t, "name: g\nscenarios: []\n"), "non-empty list")
+}
+
+func TestEntryNeedsAName(t *testing.T) {
+	mustContain(t, loadFileErr(t, "name: g\nscenarios: [{turns: []}]\n"), "scenario #0 needs a 'name:'")
+}
+
+func TestEntryCannotNestAGroup(t *testing.T) {
+	mustContain(t, loadFileErr(t, "name: g\nscenarios: [{name: a, scenarios: []}]\n"), "cannot hold a 'scenarios:'")
+}
+
+func TestDuplicateEntryNamesRejected(t *testing.T) {
+	err := loadFileErr(t, "name: g\nscenarios: [{name: a, turns: []}, {name: a, turns: []}]\n")
+	mustContain(t, err, "duplicate scenario names: g/a")
+}
+
+func TestEntryErrorsNameTheFile(t *testing.T) {
+	path := writeScenario(t, "name: g\nscenarios: [{name: a, turns: [{user: hi, expect: nope}]}]\n")
+	_, err := eval.LoadFile(path)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	mustContain(t, err, path)
+}
+
+func TestAScenarioIsOneKindOrTheOther(t *testing.T) {
+	err := loadFileErr(t, "name: nothing\nscenarios: [{name: nothing}]\n")
+	mustContain(t, err, "'turns:'")
+	mustContain(t, err, "'persona:'")
+	err = loadFileErr(t, "name: both\nscenarios: [{name: both, persona: p, goal: g, success: s, turns: []}]\n")
+	mustContain(t, err, "not both")
+}
+
+// checkFromFile is a one-scenario file whose one turn has one expectation.
+func checkFromFile(expectation string) string {
+	return "name: g\nscenarios:\n  - name: a\n    turns:\n      - user: hi\n" +
+		"        expect:\n          - " + expectation + "\n"
+}
+
+func TestCheckFrom(t *testing.T) {
+	t.Run("defaults to previous", func(t *testing.T) {
+		s := get[*eval.ScriptScenario](t, loadFile(t, checkFromFile("{event: response}")), "g/a")
+		if got := s.Turns[0].Expect[0].CheckFrom; got != eval.CheckFromPrevious {
+			t.Fatalf("check_from = %q", got)
+		}
+	})
+	t.Run("turn_start is accepted", func(t *testing.T) {
+		s := get[*eval.ScriptScenario](t, loadFile(t, checkFromFile("{event: response, check_from: turn_start}")), "g/a")
+		if got := s.Turns[0].Expect[0].CheckFrom; got != eval.CheckFromTurnStart {
+			t.Fatalf("check_from = %q", got)
+		}
+	})
+	t.Run("other values are rejected", func(t *testing.T) {
+		err := loadFileErr(t, checkFromFile("{event: response, check_from: later}"))
+		mustContain(t, err, "'check_from:' must be one of previous, turn_start")
+	})
+	t.Run("not combined with absent", func(t *testing.T) {
+		err := loadFileErr(t, checkFromFile("{event: response, absent: true, check_from: turn_start}"))
+		mustContain(t, err, "cannot be combined with 'check_from'")
+	})
+}
+
+// The deprecated single-scenario loader still reads a scripted scenario.
+func TestLoadReadsALoneScriptedScenario(t *testing.T) {
+	s, err := eval.Load(writeScenario(t, "name: greet\nscenarios:\n  - name: greet\n    turns: [{user: hi}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Name != "greet/greet" || s.Turns[0].User != "hi" {
+		t.Fatalf("scenario = %+v", s)
+	}
+	_, err = eval.Load(writeScenario(t, "name: s\nscenarios: [{name: s, persona: p, goal: g, success: s}]\n"))
+	if err == nil {
+		t.Fatal("expected an error for a simulation")
 	}
 }
 
@@ -346,15 +362,14 @@ turns:
 // they all need. Paths resolve against the scenario file.
 func TestLoadInclude(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "turns.yaml", `- user: "hello"
-  expect: [{event: llm_response}]
-`)
-	writeFile(t, dir, "scenario.yaml", "name: shared\nturns: !include turns.yaml\n")
+	writeFile(t, dir, "turns.yaml", "- user: \"hello\"\n  expect: [{event: llm_response}]\n")
+	writeFile(t, dir, "scenario.yaml", "name: shared\nscenarios: [{name: shared, turns: !include turns.yaml}]\n")
 
-	s, err := eval.Load(filepath.Join(dir, "scenario.yaml"))
+	file, err := eval.LoadFile(filepath.Join(dir, "scenario.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	s := get[*eval.ScriptScenario](t, file, "shared/shared")
 	if len(s.Turns) != 1 || s.Turns[0].User != "hello" {
 		t.Fatalf("the included turns should have been pulled in, got %+v", s.Turns)
 	}
@@ -365,7 +380,7 @@ func TestLoadIncludeCycleRejected(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "loop.yaml", "name: loop\nturns: !include loop.yaml\n")
 
-	if _, err := eval.Load(filepath.Join(dir, "loop.yaml")); err == nil {
+	if _, err := eval.LoadFile(filepath.Join(dir, "loop.yaml")); err == nil {
 		t.Fatal("expected an error for the include cycle")
 	} else if !strings.Contains(err.Error(), "nested too deep") {
 		t.Fatalf("unexpected error: %v", err)
@@ -376,397 +391,26 @@ func TestLoadIncludeCycleRejected(t *testing.T) {
 // bot reports, so an unrecognized name loads and fails at match time, naming the
 // event, rather than being rejected up front.
 func TestLoadAcceptsAnyEventName(t *testing.T) {
-	s, err := eval.Load(writeScenario(t,
-		"name: x\nturns: [{user: hi, expect: [{event: something_new}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Turns[0].Expect[0].Event != "something_new" {
-		t.Fatalf("unexpected expectation: %+v", s.Turns[0].Expect[0])
+	file := loadFile(t, "name: x\nscenarios: [{name: x, turns: [{user: hi, expect: [{event: something_new}]}]}]\n")
+	if got := get[*eval.ScriptScenario](t, file, "x/x").Turns[0].Expect[0].Event; got != "something_new" {
+		t.Fatalf("event = %q", got)
 	}
 }
 
-// A field written on an event it does not apply to is dropped rather than
-// rejected: calls only mean something on a function_call.
+// Calls only mean something on a function call event; elsewhere they are
+// dropped rather than rejected.
 func TestLoadIgnoresCallFieldsOffFunctionCall(t *testing.T) {
-	s, err := eval.Load(writeScenario(t,
-		"name: x\nturns: [{user: hi, expect: [{event: llm_response, name: foo}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Turns[0].Expect[0].Calls != nil {
-		t.Fatalf("calls should be dropped off a function_call, got %+v", s.Turns[0].Expect[0].Calls)
+	file := loadFile(t, "name: x\n"+
+		"scenarios: [{name: x, turns: [{user: hi, expect: [{event: llm_response, name: foo}]}]}]\n")
+	if got := get[*eval.ScriptScenario](t, file, "x/x").Turns[0].Expect[0].Calls; got != nil {
+		t.Fatalf("calls should be dropped off a function_call, got %+v", got)
 	}
 }
 
-// An empty turns: list only asserts that the bot completes the handshake, which
-// upstream allows; a missing one is the mistake.
+// An empty turns: list only asserts that the bot completes the handshake; a
+// missing one is the mistake.
 func TestLoadEmptyTurnsAllowed(t *testing.T) {
-	if _, err := eval.Load(writeScenario(t, "name: handshake_only\nturns: []\n")); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A keypad sequence keeps every digit as written. YAML would otherwise read
-// `012` as 10 and `0x10` as 16, rewriting the keys the scenario typed.
-func TestLoadDTMFKeepsDigitsAsWritten(t *testing.T) {
-	s, err := eval.Load(writeScenario(t,
-		"name: keys\nturns: [{dtmf: 012, expect: [{event: user_transcription}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Turns[0].DTMF != "012" {
-		t.Fatalf("dtmf = %q, want %q", s.Turns[0].DTMF, "012")
-	}
-}
-
-// A hex-looking sequence reaches the keypad check with its characters intact,
-// and is rejected there rather than silently read as a number.
-func TestLoadDTMFHexRejected(t *testing.T) {
-	_, err := eval.Load(writeScenario(t,
-		"name: keys\nturns: [{dtmf: 0x10, expect: [{event: user_transcription}]}]\n"))
-	if err == nil {
-		t.Fatal("expected an error for the hex-looking keypad sequence")
-	}
-	if !strings.Contains(err.Error(), "invalid keypad key") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-// TestTextExcludesIsTheMirrorOfTextContains covers what should never reach the
-// user, a marker the model let slip into its reply above all.
-func TestTextExcludesIsTheMirrorOfTextContains(t *testing.T) {
-	sc, err := eval.Load(writeScenario(t, `
-name: excludes
-turns:
-  - user: "what is the capital of Germany?"
-    expect:
-      - event: llm_response
-        text_contains: Berlin
-        text_excludes: "●"
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if exp := sc.Turns[0].Expect[0]; exp.TextContains != "Berlin" || exp.TextExcludes != "●" {
-		t.Errorf("expectation = %+v, want both checks read", exp)
-	}
-}
-
-// It is a content check like any other, so it describes an event that arrives
-// and cannot be asked of one that must not.
-func TestAbsentRejectsTextExcludes(t *testing.T) {
-	_, err := eval.Load(writeScenario(t, `
-name: absent
-turns:
-  - user: "hello"
-    expect:
-      - event: llm_response
-        absent: true
-        text_excludes: "●"
-`))
-	if err == nil {
-		t.Error("an absent expectation with a content check should be rejected")
-	}
-}
-
-// TestTextMatchesTakesAPatternOrAList checks text_matches reads one regular
-// expression or a list of them.
-func TestTextMatchesTakesAPatternOrAList(t *testing.T) {
-	sc, err := eval.Load(writeScenario(t, `
-name: matches
-turns:
-  - user: "x"
-    expect:
-      - event: llm_response
-        text_matches: "^Hi"
-      - event: llm_response
-        text_matches: ["^Hi", "!$"]
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := sc.Turns[0].Expect[0].TextMatches; !slices.Equal(got, eval.Patterns{"^Hi"}) {
-		t.Errorf("one pattern = %q, want [^Hi]", got)
-	}
-	if got := sc.Turns[0].Expect[1].TextMatches; !slices.Equal(got, eval.Patterns{"^Hi", "!$"}) {
-		t.Errorf("a list = %q, want [^Hi !$]", got)
-	}
-}
-
-// TestTextMatchesRejectsBadPatterns checks a pattern that does not compile, and
-// a value that is not a pattern, fail the scenario as it is loaded. The patterns
-// are RE2, so a lookahead is one that does not compile.
-func TestTextMatchesRejectsBadPatterns(t *testing.T) {
-	for _, value := range []string{`"(unclosed"`, "[1, 2]", `"^(?=Hi)"`} {
-		t.Run(value, func(t *testing.T) {
-			_, err := eval.Load(writeScenario(t, `
-name: bad_matches
-turns:
-  - user: "x"
-    expect:
-      - event: llm_response
-        text_matches: `+value+"\n"))
-			if err == nil {
-				t.Errorf("text_matches: %s was accepted", value)
-			}
-		})
-	}
-}
-
-// It is a content check too, so an absent expectation cannot take it.
-func TestAbsentRejectsTextMatches(t *testing.T) {
-	_, err := eval.Load(writeScenario(t, `
-name: absent
-turns:
-  - user: "hello"
-    expect:
-      - event: llm_response
-        absent: true
-        text_matches: "x"
-`))
-	if err == nil {
-		t.Error("an absent expectation with a content check should be rejected")
-	}
-}
-
-// A file holds several scenarios when they test one behavior through many short
-// conversations. Each is named under the file, and the file's own keys are the
-// defaults they start from.
-func TestLoadFileReadsEveryScenarioItHolds(t *testing.T) {
-	file, err := eval.LoadFile(writeScenario(t, `
-name: turn_completion
-context:
-  - role: system
-    text: "be brief"
-scenarios:
-  - name: complete
-    turns:
-      - user: "what is the capital of France?"
-        expect:
-          - event: llm_response
-  - name: cutoff
-    context:
-      - role: system
-        text: "wait for the user"
-    turns:
-      - user: "I was going to say"
-        expect:
-          - event: llm_response
-            absent: true
-            within_ms: 1000
-`))
-	if err != nil {
-		t.Fatalf("LoadFile: %v", err)
-	}
-	if file.Name != "turn_completion" {
-		t.Errorf("file name = %q, want the file's own name", file.Name)
-	}
-	if len(file.Scenarios) != 2 {
-		t.Fatalf("got %d scenarios, want the two the file holds", len(file.Scenarios))
-	}
-	if got := file.Scenarios[0].Name; got != "turn_completion/complete" {
-		t.Errorf("scenario name = %q, want it named under the file", got)
-	}
-	// The file's context is the default, and a scenario setting its own replaces
-	// the whole value rather than adding to it.
-	if got := file.Scenarios[0].Context; len(got) != 1 || got[0].Text != "be brief" {
-		t.Errorf("first scenario context = %v, want the file's default", got)
-	}
-	if got := file.Scenarios[1].Context; len(got) != 1 || got[0].Text != "wait for the user" {
-		t.Errorf("second scenario context = %v, want its own, replacing the default", got)
-	}
-}
-
-// The older shape, the scenario's own keys at the top level, still loads as the
-// one scenario it describes.
-func TestLoadFileReadsAFileWithNoScenariosList(t *testing.T) {
-	file, err := eval.LoadFile(writeScenario(t, `
-name: greeting
-turns:
-  - user: "hello"
-    expect:
-      - event: llm_response
-`))
-	if err != nil {
-		t.Fatalf("LoadFile: %v", err)
-	}
-	if len(file.Scenarios) != 1 || file.Scenarios[0].Name != "greeting" {
-		t.Fatalf("scenarios = %+v, want the one the file describes, under its own name", file.Scenarios)
-	}
-}
-
-// Load reads a file holding one scenario. A file holding several is read with
-// LoadFile, and says so rather than quietly running the first.
-func TestLoadRefusesAFileHoldingSeveral(t *testing.T) {
-	path := writeScenario(t, `
-name: pair
-scenarios:
-  - name: one
-    turns:
-      - user: "hello"
-  - name: two
-    turns:
-      - user: "goodbye"
-`)
-	if _, err := eval.Load(path); err == nil {
-		t.Error("Load should refuse a file holding several scenarios")
-	}
-	file, err := eval.LoadFile(path)
-	if err != nil || len(file.Scenarios) != 2 {
-		t.Errorf("LoadFile = %+v, %v; want both scenarios", file, err)
-	}
-}
-
-// What a malformed file is told, so the mistake is named rather than guessed at.
-func TestLoadFileRejectsAMalformedFile(t *testing.T) {
-	for name, body := range map[string]string{
-		"no file name":     "scenarios:\n  - name: one\n    turns:\n      - user: hi\n",
-		"empty list":       "name: f\nscenarios: []\n",
-		"not a list":       "name: f\nscenarios: {}\n",
-		"no scenario name": "name: f\nscenarios:\n  - turns:\n      - user: hi\n",
-		"nested list":      "name: f\nscenarios:\n  - name: one\n    scenarios: []\n    turns:\n      - user: hi\n",
-		"duplicate names": "name: f\nscenarios:\n  - name: one\n    turns:\n      - user: hi\n" +
-			"  - name: one\n    turns:\n      - user: ho\n",
-	} {
-		if _, err := eval.LoadFile(writeScenario(t, body)); err == nil {
-			t.Errorf("%s: should be rejected", name)
-		}
-	}
-}
-
-// A marker expectation names what the marker meant rather than the symbol, which
-// is configurable, and the check belongs on the event that carries one.
-func TestMarkerExpectationValidation(t *testing.T) {
-	sc, err := eval.Load(writeScenario(t, `
-name: markers
-turns:
-  - user: "hmmm"
-    expect:
-      - event: llm_marker
-        marker: incomplete
-        marker_first: true
-        markers: 1
-        text_after: false
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	exp := sc.Turns[0].Expect[0]
-	if exp.Marker != "incomplete" || exp.MarkerFirst == nil || !*exp.MarkerFirst {
-		t.Errorf("expectation = %+v, want the marker checks read", exp)
-	}
-	if exp.Markers == nil || *exp.Markers != 1 || exp.TextAfter == nil || *exp.TextAfter {
-		t.Errorf("expectation = %+v, want the protocol checks read", exp)
-	}
-
-	for name, body := range map[string]string{
-		"unknown meaning": "name: f\nturns:\n  - user: hi\n    expect:\n" +
-			"      - event: llm_marker\n        marker: maybe\n",
-		"on another event": "name: f\nturns:\n  - user: hi\n    expect:\n" +
-			"      - event: llm_response\n        marker: complete\n",
-		"with absent": "name: f\nturns:\n  - user: hi\n    expect:\n" +
-			"      - event: llm_marker\n        absent: true\n        marker: complete\n",
-	} {
-		if _, err := eval.Load(writeScenario(t, body)); err == nil {
-			t.Errorf("%s: should be rejected", name)
-		}
-	}
-}
-
-// An error in a scenario of a file holding several names the file, so the
-// mistake can be found.
-func TestEntryErrorsNameTheFile(t *testing.T) {
-	path := writeScenario(t, "name: g\nscenarios: [{name: a, turns: [{user: hi, expect: nope}]}]\n")
-	_, err := eval.LoadFile(path)
-	if err == nil || !strings.Contains(err.Error(), path) {
-		t.Fatalf("err = %v, want it to name %s", err, path)
-	}
-}
-
-// A keypad turn may be scheduled like a spoken one, which is how a keypress
-// barges in.
-func TestSendAfterIsAllowedOnADTMFTurn(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, `
-name: bargein
-turns:
-  - dtmf: "0"
-    send_after: {event: llm_started, delay_ms: 300}
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sa := s.Turns[0].SendAfter; sa == nil || sa.Event != eval.EventLLMStarted || sa.DelayMS != 300 {
-		t.Fatalf("send_after = %+v", sa)
-	}
-}
-
-// expect is optional, but written out it is a list, and anything else is
-// refused by name.
-func TestExpectThatIsNotAListIsRejected(t *testing.T) {
-	_, err := eval.Load(writeScenario(t, "name: bad\nturns: [{user: hi, expect: nope}]\n"))
-	if err == nil || !strings.Contains(err.Error(), "expect") {
-		t.Fatalf("err = %v, want expect named", err)
-	}
-}
-
-// A scenario with no context: starts from the bot's own.
-func TestContextDefaultsToEmpty(t *testing.T) {
-	s, err := eval.Load(writeScenario(t,
-		"name: e\nturns: [{user: hi, expect: [{event: user_stopped_speaking}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(s.Context) != 0 {
-		t.Fatalf("context = %+v, want none", s.Context)
-	}
-}
-
-// A failed turn ends the scenario unless the scenario says otherwise, and a
-// file's stop_on_failure is the default each of its scenarios may replace.
-func TestStopOnFailure(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, "name: a\nturns: [{user: hi, expect: [{event: llm_response}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.StopOnFailure != nil {
-		t.Fatalf("stop_on_failure = %v, want it left to the default, true", *s.StopOnFailure)
-	}
-	s, err = eval.Load(writeScenario(t,
-		"name: a\nstop_on_failure: false\nturns: [{user: hi, expect: [{event: llm_response}]}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.StopOnFailure == nil || *s.StopOnFailure {
-		t.Fatalf("stop_on_failure = %v, want false", s.StopOnFailure)
-	}
-
-	file, err := eval.LoadFile(writeScenario(t, `
-name: g
-stop_on_failure: false
-scenarios:
-  - name: from_the_file
-    turns: []
-  - name: its_own
-    stop_on_failure: true
-    turns: []
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fromFile, own := file.Scenarios[0].StopOnFailure, file.Scenarios[1].StopOnFailure
-	if fromFile == nil || *fromFile || own == nil || !*own {
-		t.Fatalf("stop_on_failure = %v and %v, want the file's false then the entry's true", fromFile, own)
-	}
-}
-
-// A context: that is not a list of messages is refused by name.
-func TestContextThatIsNotAListIsRejected(t *testing.T) {
-	_, err := eval.Load(writeScenario(t,
-		"name: bad\ncontext: not_a_list\nturns: [{user: hi, expect: [{event: x}]}]\n"))
-	if err == nil || !strings.Contains(err.Error(), "context") {
-		t.Fatalf("err = %v, want context named", err)
-	}
+	loadFile(t, "name: handshake_only\nscenarios: [{name: h, turns: []}]\n")
 }
 
 // The fragments a directory's scenarios include have no name of their own, so
@@ -790,5 +434,27 @@ func TestIsScenarioFileLeavesIncludeFragmentsOut(t *testing.T) {
 		if got := eval.IsScenarioFile(filepath.Join(dir, file)); got != f.want {
 			t.Errorf("IsScenarioFile(%s) = %v, want %v", file, got, f.want)
 		}
+	}
+}
+
+// A scenario's config renders as the two-line summary printed before a run.
+func TestDescribeConfig(t *testing.T) {
+	file := loadFile(t, `
+name: a
+user: {modality: audio, speech: {service: kokoro, voice: af_heart}}
+judge:
+  modality: audio
+  transcription: {service: moonshine, model: small-streaming}
+scenarios: [{name: a, turns: [{user: hi, expect: [{event: response}]}]}]
+`)
+	s := get[*eval.ScriptScenario](t, file, "a/a")
+	want := "user  -> modality: audio | speech: kokoro/af_heart\n" +
+		"judge -> modality: audio | transcription: moonshine/small-streaming | eval: ollama/gemma4:12b"
+	if got := eval.DescribeConfig(&s.Configured, false); got != want {
+		t.Fatalf("DescribeConfig =\n%s\nwant\n%s", got, want)
+	}
+	colored := eval.DescribeConfig(&s.Configured, true)
+	if !strings.Contains(colored, "\033[1muser \033[0m") || !strings.Contains(colored, "\033[35meval:\033[0m") {
+		t.Fatalf("colored summary = %q", colored)
 	}
 }

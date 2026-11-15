@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -53,7 +54,7 @@ func TestTranslateExpressionFromBotOutput(t *testing.T) {
 // A criterion on the expression the bot performed is a judge's to grade, and
 // accumulates what the turn performed.
 func TestAnExpressionCheckIsJudgedAndAggregates(t *testing.T) {
-	if !judgeableEvents[EventExpression] {
+	if !slices.Contains(JudgeableEvents, EventExpression) {
 		t.Fatal("expression is not judgeable")
 	}
 	s := &session{}

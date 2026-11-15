@@ -487,8 +487,8 @@ turns:
 	if len(res.Failures) != 1 {
 		t.Fatalf("want only the first turn's failure, got:\n%s", res)
 	}
-	if res.Failures[0].Turn != 1 {
-		t.Fatalf("want the failure on turn 1, got %+v", res.Failures[0])
+	if res.Failures[0].TurnIndex != 0 {
+		t.Fatalf("want the failure on turn 0, got %+v", res.Failures[0])
 	}
 }
 
@@ -632,7 +632,7 @@ turns:
 		t.Fatal("expected a failure for the schedule that never fires")
 	}
 	f := res.Failures[0]
-	if f.Expectation != 0 || f.Event != eval.EventUserStartedSpeaking {
+	if f.ExpectationIndex != -1 || f.EventName != eval.EventUserStartedSpeaking {
 		t.Fatalf("want a turn-level failure naming the anchor, got %+v", f)
 	}
 }
@@ -734,12 +734,13 @@ turns:
 	if !res.Passed() {
 		t.Fatalf("expected pass, got:\n%s", res)
 	}
-	if res.Duration <= 0 {
-		t.Fatalf("the run should be timed, got %s", res.Duration)
+	if res.DurationMS <= 0 {
+		t.Fatalf("the run should be timed, got %dms", res.DurationMS)
 	}
 	var kinds []string
-	for _, ev := range res.Events {
-		kinds = append(kinds, ev.Kind)
+	for _, ev := range res.EventsSeen {
+		kind, _ := ev["type"].(string)
+		kinds = append(kinds, kind)
 	}
 	for _, want := range []string{eval.EventLLMStarted, eval.EventLLMResponse} {
 		if !slices.Contains(kinds, want) {
@@ -770,7 +771,7 @@ turns:
 	}
 	var got []string
 	opts := eval.Options{OnProgress: func(p eval.Progress) {
-		got = append(got, p.Status+":"+p.Event)
+		got = append(got, p.Status+":"+p.EventName)
 	}}
 	if _, err := eval.Host(t.Context(), scenario, buildFakeBot, opts); err != nil {
 		t.Fatal(err)
@@ -1102,14 +1103,14 @@ turns:
 	}
 
 	first := res.Turns[0]
-	if first.Turn != 1 || first.Status != eval.TurnPassed {
-		t.Errorf("first turn = %+v, want turn 1 passed", first)
+	if first.TurnIndex != 0 || first.Status != eval.TurnPassed {
+		t.Errorf("first turn = %+v, want turn 0 passed", first)
 	}
 	if len(first.Expectations) != 1 || first.Expectations[0].Matched != "get_weather" {
 		t.Errorf("first turn matched %+v, want the call it made", first.Expectations)
 	}
-	if first.Duration <= 0 {
-		t.Error("a turn that ran should have taken some time")
+	if first.DurationMS > res.DurationMS {
+		t.Errorf("turn took %dms of a %dms run", first.DurationMS, res.DurationMS)
 	}
 
 	second := res.Turns[1].Expectations
@@ -1140,7 +1141,7 @@ turns:
 	if len(got) != 1 || got[0].Passed || got[0].Matched != "" {
 		t.Errorf("expectations = %+v, want the failure recorded with no match", got)
 	}
-	if got[0].Event != "llm_response" || got[0].Expectation != 1 {
+	if got[0].EventName != "llm_response" || got[0].ExpectationIndex != 0 {
 		t.Errorf("expectation = %+v, want it named and numbered", got[0])
 	}
 }
@@ -1287,8 +1288,8 @@ turns:
 	if !res.Passed() {
 		t.Fatalf("expected a pass, got %v", res.Failures)
 	}
-	for _, ev := range res.Events {
-		if ev.Kind == "llm_marker" {
+	for _, ev := range res.EventsSeen {
+		if ev["type"] == "llm_marker" {
 			t.Errorf("the bot reported a marker nothing asked for: %v", ev)
 		}
 	}

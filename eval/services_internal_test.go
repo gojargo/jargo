@@ -108,7 +108,7 @@ func init() {
 }
 
 // captureWarnings records what is logged while fn runs.
-func captureWarnings(t *testing.T, fn func()) string {
+func captureWarningText(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -596,7 +596,7 @@ func TestCartesiaByNameWarnsAndBuilds(t *testing.T) {
 		s   *CachingTTSService
 		err error
 	)
-	logged := captureWarnings(t, func() {
+	logged := captureWarningText(t, func() {
 		s, err = TTSServiceFromConfig(&SpeechConfig{Service: "cartesia", Voice: "v", APIKey: "test-key"}, "", false)
 	})
 	if err != nil || s == nil {
@@ -610,7 +610,7 @@ func TestCartesiaByNameWarnsAndBuilds(t *testing.T) {
 func TestOpenAIByNameWarnsAndBuilds(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	var err error
-	logged := captureWarnings(t, func() {
+	logged := captureWarningText(t, func() {
 		_, err = LLMServiceFromConfig(&LLMServiceConfig{Service: "openai"}, "simulator")
 	})
 	if err != nil {

@@ -123,7 +123,7 @@ func TestRunWithReportsProgress(t *testing.T) {
 // TestResultString checks the one-line summary a runner prints, and the
 // expanded form that lists what actually went wrong.
 func TestResultString(t *testing.T) {
-	passed := eval.Result{Scenario: "echo"}
+	passed := eval.ScriptResult{ScenarioName: "echo"}
 	if got := passed.String(); got != "PASS echo" {
 		t.Errorf("String() = %q, want %q", got, "PASS echo")
 	}
@@ -131,11 +131,11 @@ func TestResultString(t *testing.T) {
 		t.Error("a result with no failures does not report as passed")
 	}
 
-	failed := eval.Result{
-		Scenario: "weather",
-		Failures: []eval.Failure{
-			{Turn: 1, Expectation: 2, Event: "function_call", Reason: "never arrived"},
-			{Turn: 3, Expectation: 1, Event: "llm_response", Reason: "text did not match"},
+	failed := eval.ScriptResult{
+		ScenarioName: "weather",
+		Failures: []eval.AssertionFailure{
+			{TurnIndex: 0, ExpectationIndex: 1, EventName: "function_call", Reason: "never arrived"},
+			{TurnIndex: 2, ExpectationIndex: 0, EventName: "llm_response", Reason: "text did not match"},
 		},
 	}
 	if failed.Passed() {
@@ -143,20 +143,42 @@ func TestResultString(t *testing.T) {
 	}
 
 	want := "FAIL weather (2 failure(s))" +
-		"\n  - turn 1 expectation 2 (function_call): never arrived" +
-		"\n  - turn 3 expectation 1 (llm_response): text did not match"
+		"\n  - turn 0 expectation 1 (function_call): never arrived" +
+		"\n  - turn 2 expectation 0 (llm_response): text did not match"
 	if got := failed.String(); got != want {
 		t.Errorf("String() =\n%q\nwant\n%q", got, want)
+	}
+
+	skipped := eval.ScriptResult{ScenarioName: "audio", Skipped: "asserts response in text modality"}
+	if skipped.Passed() {
+		t.Error("a skipped result reports as passed")
+	}
+	if got := skipped.String(); got != "SKIP audio (asserts response in text modality)" {
+		t.Errorf("String() = %q", got)
 	}
 }
 
 // TestFailureString checks a single unmet expectation renders on one line, which
-// is what reaches the test output through t.Errorf.
+// is what reaches the test output through t.Errorf. A turn-level failure, a
+// send_after that never fired, is at expectation -1, and a failure of the run
+// before any turn at turn -1.
 func TestFailureString(t *testing.T) {
-	f := eval.Failure{Turn: 2, Expectation: 0, Event: "llm_started", Reason: "timed out"}
-	want := "turn 2 expectation 0 (llm_started): timed out"
-	if got := f.String(); got != want {
-		t.Errorf("String() = %q, want %q", got, want)
+	for _, tc := range []struct {
+		f    eval.AssertionFailure
+		want string
+	}{
+		{
+			eval.AssertionFailure{TurnIndex: 1, ExpectationIndex: -1, EventName: "llm_started", Reason: "timed out"},
+			"turn 1 expectation -1 (llm_started): timed out",
+		},
+		{
+			eval.AssertionFailure{TurnIndex: -1, ExpectationIndex: -1, EventName: eval.RunEventHarness, Reason: "boom"},
+			"turn -1 expectation -1 (<harness>): boom",
+		},
+	} {
+		if got := tc.f.String(); got != tc.want {
+			t.Errorf("String() = %q, want %q", got, tc.want)
+		}
 	}
 }
 

@@ -1112,7 +1112,7 @@ func filled(reasons, answer runReasons) runReasons {
 // required.
 func schemaObject(properties ordered.Object) ordered.Object {
 	return ordered.Object{
-		{Key: "type", Value: "object"},
+		{Key: keyType, Value: "object"},
 		{Key: "properties", Value: properties},
 		{Key: "required", Value: properties.Keys()},
 		{Key: "additionalProperties", Value: false},
@@ -1127,7 +1127,7 @@ func reasonSchema() json.RawMessage {
 }
 
 // stringSchema is the schema of one reason.
-func stringSchema() ordered.Object { return ordered.Object{{Key: "type", Value: "string"}} }
+func stringSchema() ordered.Object { return ordered.Object{{Key: keyType, Value: "string"}} }
 
 // runSchema is the run answer's schema: the goal's reason when it is asked,
 // and each asked turn's by its number.

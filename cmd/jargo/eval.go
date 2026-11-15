@@ -79,7 +79,10 @@ func evalRunCmd() *cobra.Command {
 				played++
 				continue
 			}
-			for _, scenario := range file.Scenarios {
+			scripts, unplayable := scriptsToPlay(out, file)
+			failed += unplayable
+			played += unplayable
+			for _, scenario := range scripts {
 				played++
 				// A fresh judge per scenario: it holds the conversation it grades
 				// against, so one scenario's turns must not reach the next one's.
@@ -102,6 +105,25 @@ func evalRunCmd() *cobra.Command {
 		return nil
 	}
 	return cmd
+}
+
+// scriptsToPlay are a file's scripted scenarios, and how many of its scenarios
+// cannot be played, each reported as a failure. A rubric has nothing to run and
+// is left out; a simulation is not driven by this harness.
+func scriptsToPlay(out io.Writer, file *eval.ScenarioFile) ([]*eval.ScriptScenario, int) {
+	var scripts []*eval.ScriptScenario
+	unplayable := 0
+	for _, loaded := range file.Scenarios {
+		switch s := loaded.(type) {
+		case *eval.ScriptScenario:
+			scripts = append(scripts, s)
+		case *eval.Rubric:
+		default:
+			_, _ = fmt.Fprintf(out, "FAIL %s (not a scripted scenario)\n", loaded.ScenarioName())
+			unplayable++
+		}
+	}
+	return scripts, unplayable
 }
 
 // scenarioSuffixes are the file extensions a scenario is written under, which
@@ -199,12 +221,12 @@ func evalSuiteCmd() *cobra.Command {
 
 // printResult prints a scenario's result: its verdict and, for a run that
 // failed, how many turns passed and every failure.
-func printResult(out io.Writer, res eval.Result) {
+func printResult(out io.Writer, res eval.ScriptResult) {
 	if res.Passed() {
-		_, _ = fmt.Fprintf(out, "PASS %s\n", res.Scenario)
+		_, _ = fmt.Fprintf(out, "PASS %s\n", res.ScenarioName)
 		return
 	}
-	line := "FAIL " + res.Scenario
+	line := "FAIL " + res.ScenarioName
 	if tally := turnTally(res); tally != "" {
 		line += " " + tally
 	}
@@ -218,12 +240,12 @@ func printResult(out io.Writer, res eval.Result) {
 // and its reason. Reading the reasons is how a person tells a bot that
 // misbehaved from one that never started; the kind says which assertion gave
 // way.
-func failureLine(f eval.Failure) string {
-	where := fmt.Sprintf("turn %d", f.Turn)
-	if f.Turn < 1 {
+func failureLine(f eval.AssertionFailure) string {
+	where := fmt.Sprintf("turn %d", f.TurnIndex)
+	if f.TurnIndex < 0 {
 		where = "run"
 	}
-	return fmt.Sprintf("%s %s %s: %s", where, f.Event, f.Kind, f.Reason)
+	return fmt.Sprintf("%s %s %s: %s", where, f.EventName, f.Kind, f.Reason)
 }
 
 // turnTally is the run's detail beside its verdict, or "": "7/10 turns" for a
@@ -233,7 +255,7 @@ func failureLine(f eval.Failure) string {
 // the rest undriven, and a fraction over those would read as turns that failed
 // when they were never attempted; what it stopped on is in the failure listing
 // instead. A run that passed already says so.
-func turnTally(res eval.Result) string {
+func turnTally(res eval.ScriptResult) string {
 	if len(res.Turns) == 0 {
 		return ""
 	}

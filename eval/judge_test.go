@@ -746,7 +746,7 @@ func TestARunThatNeverReachesTheBotClosesItsJudge(t *testing.T) {
 	judge := &closingJudge{}
 	res, err := eval.RunURL(t.Context(), scenario, "ws://127.0.0.1:1",
 		eval.Options{Judge: judge, ConnectTimeout: 300 * time.Millisecond})
-	if err != nil || len(res.Failures) != 1 || res.Failures[0].Event != eval.RunEventConnect {
+	if err != nil || len(res.Failures) != 1 || res.Failures[0].EventName != eval.RunEventConnect {
 		t.Fatalf("run = %+v, %v; want a failure to connect", res, err)
 	}
 	if !judge.wasClosed() {

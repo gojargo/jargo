@@ -3,30 +3,68 @@
 // events the bot emits. That is a level above unit tests, which check one
 // processor at a time.
 //
-// A scenario is a YAML file of turns and the events each turn should produce.
+// A scenario describes one conversation to hold with a bot and how to judge it.
+// A YAML file holds one or more under `scenarios:`, each with a `name:`, and a
+// scenario's keys say which kind it is:
+//
+//	turns:     a scripted scenario: the user's turns are written out, each
+//	           with the events expected back from the bot
+//	persona:   a simulated scenario, a simulation for short: an LLM plays a
+//	           caller with a goal, and a judge reads the whole conversation
+//	success:   with neither of the above, a rubric: what a simulation is
+//	           judged on, without the caller, to judge a conversation the
+//	           harness didn't drive; it has nothing to run
+//
 // The same scenario runs from a Go test (the bot hosted in-process, see Run) or
-// from the command line against a running bot. In text mode each user turn is
-// delivered as RTVI send-text, so the audio processors sit idle; in audio mode
-// (Options.UserTTS) it is synthesized and streamed as microphone audio, so the
-// bot's own VAD, turn detection and STT run for real. Transcribing the bot's
-// audio back, to assert on what was actually heard, builds on the same core
-// later.
+// from the command line against a running bot. In text modality each user turn
+// is delivered as RTVI send-text, so the audio processors sit idle; in audio
+// modality it is synthesized and streamed as microphone audio, so the bot's own
+// VAD, turn detection and STT run for real.
+//
+// # Scenario files
+//
+// Any key a scenario can have may also sit at the top of the file, where it is
+// the default for every scenario in it. A scenario that sets the same key
+// replaces the whole value; nothing is merged, so a `context:` is written out in
+// full, never added to. A scenario is named `<file name>/<scenario name>`:
+//
+//	name: turn_completion
+//	judge: !include ../judge_text.yaml
+//	scenarios:
+//	  - name: short_answer
+//	    turns:
+//	      - user: "Japan."
+//	        expect:
+//	          - event: response
+//
+// A file holding a scenario's own keys at its top level and no `scenarios:` is
+// deprecated; it still loads, as that one scenario under the file's `name:`,
+// with a warning.
+//
+// Any value can come from a separate file with !include, resolved against the
+// directory of the file that names it, so scenarios can share a block they all
+// need, the user: and judge: blocks above all:
+//
+//	user: !include user_audio.yaml
+//	judge: !include judge_audio.yaml
+//
+// Integers are plain decimal only, so a DTMF `012` keeps its digits rather than
+// being read as octal.
 //
 // # Expectation fields
 //
 //	event: <name>            required: the event to match
 //	within_ms: <int>         latency budget, measured from the turn's user input
-//	text_contains: <str>     substring check on the event's text, case-sensitive
-//	eval: <str>              criterion an LLM judge checks the bot's reply against
-//	                         (llm_response and tts_response, which carry its text,
-//	                         and the expression its TTS performed),
-//	                         or, on function_call, the call itself by name and args
+//	text_contains: <str>     substring check on the event's text, whatever the spacing
 //	text_excludes: <str>     the reverse of text_contains: the text must not hold it
 //	text_matches: <regex> | [<regex>, ...]
 //	                         regular expressions (RE2, as Go's regexp reads them)
-//	                         the text must each match, such as a format the reply
-//	                         must open with; the failure names the first pattern
-//	                         that did not match
+//	                         the text must each match; the failure names the first
+//	                         pattern that did not match
+//	eval: <str>              criterion an LLM judge checks the bot's reply against
+//	                         (response, llm_response, tts_response, and the
+//	                         expression its TTS performed), or, on function_call,
+//	                         the call itself by name and args
 //	marker: <str>            for llm_marker: what the marker meant, one of
 //	                         complete, short, long, or incomplete for either of
 //	                         the last two
@@ -36,18 +74,34 @@
 //	name: <str>              for function_call: the tool the call must be to
 //	args: <mapping>          for function_call: an argument subset the call must carry
 //	calls: <list>            for function_call: several calls, in any order
+//	check_from: <str>        previous (default) or turn_start (see below)
 //	absent: true             assert the event does NOT arrive
 //
 // # Turn fields
 //
-//	user: <str>              what the user says, sent as text or synthesized
+//	user: <str> | <list>     what the user says, sent as text or synthesized
 //	dtmf: <str>              keypad keys the user presses; quote it, # is a comment
+//	audio: <path>            in audio modality, a recording played instead of
+//	                         synthesizing user, which still says what it says
+//	image: <path>            an image served when the bot requests one
 //	expect: <list>           the events to match, in order
 //	send_after: <mapping>    when to send this turn's input (see below)
 //
 // user and dtmf are mutually exclusive, and both are optional: a turn with
 // neither only waits and asserts, which is what a bot-first scenario needs to
 // check an opening greeting. expect is optional too, for a turn that only sends.
+// audio and image paths resolve against the scenario file.
+//
+// In audio modality a spoken turn may pause, as a person does mid-thought: user
+// is then a list of text and pause_ms silences, played to the bot as one stretch
+// of audio. The judge and text_contains see the text alone. A turn's pauses can
+// total at most MaxTurnPauseMS:
+//
+//	turns:
+//	  - user:
+//	      - "So last week I went to"
+//	      - pause_ms: 2000
+//	      - "Spain with my family."
 //
 // # Scenario fields
 //
@@ -57,19 +111,47 @@
 //	stop_on_failure: <bool>  whether the first failed turn ends the scenario
 //	                         (default true); false drives every turn, for a
 //	                         scenario whose turns are scored independently
+//	user: <mapping>          how user turns are delivered
+//	judge: <mapping>         what the judge evaluates, and what decides the verdicts
 //
-// Any value can come from a separate file with !include, resolved against the
-// scenario file's directory, so scenarios can share a block they all need:
+// The user: block:
 //
-//	turns: !include shared_turns.yaml
+//	user:
+//	  modality: audio          # audio | text (default text)
+//	  speech:                  # needed unless every spoken turn has audio:
+//	    service: kokoro        # the TTS that synthesizes the user turns
+//	    voice: af_heart        # voices are language-specific
+//	    language: en           # optional; must match the voice
+//	    speed: 1.0             # optional
+//	    sample_rate: 16000     # optional
+//
+// The judge: block:
+//
+//	judge:
+//	  modality: audio          # audio | text (default text)
+//	  eval:                    # what judges (default ollama)
+//	    service: ollama
+//	    model: gemma4:12b
+//	  transcription:           # required when modality is audio
+//	    service: moonshine     # STT for the bot's audio
+//	    language: en           # optional; the language the bot speaks
+//
+// audio makes the bot speak and judges the transcription of its actual audio;
+// text (the default) skips TTS and judges the LLM text, which is faster and
+// silent. A factory: key in any service block names a registered builder that
+// makes the service from the block instead.
 //
 // # Asserting on the bot's reply
 //
-// Two events carry the bot's own words, and they sit at different points in the
-// pipeline:
+// Three events carry the bot's own words:
 //
-//	llm_response   the text the model produced (bot-llm-text)
-//	tts_response   the text the TTS reports speaking (bot-tts-text)
+//	response       the transcription of the bot's actual synthesized audio in
+//	               audio modality, or the LLM text in text modality: the real
+//	               end-to-end check, to prefer
+//	llm_response   the text the model produced (bot-llm-text), in both modalities
+//	tts_response   the text the TTS reports speaking (bot-tts-text), audio
+//	               modality only: a text modality scenario asserting on it is
+//	               refused when it is loaded
 //
 // In an expressive conversation (alpha), expression is the expression the bot's
 // TTS performed, from bot-output, in the tags the LLM writes: <<excited>> where
@@ -77,6 +159,20 @@
 // [[laughter]] for a sound, [[pause 600]] for a pause. A tag the TTS can't
 // perform is never reported. A content check on it accumulates the expression
 // performed in the turn.
+//
+// A turn often answers in more than one response: an interim filler ("Let me
+// check on that.") and then the answer. So a content check on a reply
+// aggregates. It accumulates the text of successive segments and re-checks on
+// each, until the check passes, the judge rejects, or within_ms expires. A
+// missing substring is not a failure on its own, because more text may follow,
+// which is why an assertion on text the bot never produces waits out its whole
+// budget. Set within_ms on one to keep that short.
+//
+// A judge grades the conversation rather than one reply on its own: it is given
+// each user turn and each segment of the bot's reply, so a terse answer is read
+// against the question it answers. It may also answer "continue", meaning the
+// reply so far is only filler and the criterion should be judged again once
+// more arrives.
 //
 // # Asserting on the markers the model emits
 //
@@ -101,25 +197,7 @@
 // response holds, and text_after whether anything follows the first one, which a
 // complete turn should have and an incomplete one should not.
 //
-// llm_response is available in both modes. tts_response is audio mode only: a
-// text-mode turn asks for no spoken response, so no TTS runs and no segment is
-// produced. Assert on it when what matters is that the reply reached synthesis
-// rather than that the model wrote it, which is the difference between a turn
-// that answered and a turn that was heard.
-//
-// A turn often answers in more than one response: an interim filler ("Let me
-// check on that.") and then the answer. So a content check on either of them
-// aggregates. It accumulates the text of successive segments and re-checks on
-// each, until the check passes, the judge rejects, or within_ms expires. A
-// missing substring is not a failure on its own, because more text may follow,
-// which is why an assertion on text the bot never produces waits out its whole
-// budget. Set within_ms on one to keep that short.
-//
-// A judge grades the conversation rather than one reply on its own: it is given
-// each user turn and each segment of the bot's reply, so a terse answer is read
-// against the question it answers. It may also answer "continue", meaning the
-// reply so far is only filler and the criterion should be judged again once
-// more arrives.
+// # Asserting on function calls
 //
 // A function_call expectation holds the set of calls the turn should make.
 // They are matched by name in any order and the expectation passes only when
@@ -144,41 +222,41 @@
 // Asserting on a call's name or its arguments requires the bot to report them,
 // which the harness arranges for itself (see Handler).
 //
+// function_call_stopped takes the same calls: shape, and its args say how the
+// call ended, which is how a scenario tells work that was stopped from work
+// that finished on its own. A stopped call carries no arguments to judge, so it
+// takes no eval:.
+//
+// # Absent events
+//
 // absent: true inverts an expectation. It passes only when no event of that
 // type arrives before the within_ms budget expires, and fails as soon as one
 // does, which is how "must not answer twice" is written:
 //
 //	expect:
-//	  - event: llm_response
+//	  - event: response
 //	    eval: "answers the question"
-//	  - event: llm_response
+//	  - event: response
 //	    absent: true
 //	    within_ms: 5000
 //
-// It matches on event type alone, so no content or call check may accompany it,
-// and it waits out its whole budget: set within_ms explicitly to keep the quiet
-// window short.
+// It matches on event type alone, so no content, call or marker check may
+// accompany it, and it waits out its whole budget: set within_ms explicitly to
+// keep the quiet window short.
 //
-// The same two-expectation shape is how "this tool was called, and not again"
-// is written. The first expectation claims the call, and the absent one behind
-// it holds a quiet window open that a repeat trips:
+// # Where an expectation looks
 //
-//	expect:
-//	  - event: function_call
-//	    name: dispatch_alert
-//	  - event: function_call
-//	    absent: true
-//	    within_ms: 3000
-//
-// That is the assertion to reach for against a provider that re-requests a call
-// it already made, where running the tool twice is the expensive fault. Because
-// absent matches on event type, the window forbids any further call, not only
-// another dispatch_alert, so put it on a turn whose tool calls are all listed
-// above it.
+// Expectations are met in order: each is looked for only once the one above it
+// has been met, and an event of another type that arrives in the meantime is
+// passed over. check_from: turn_start lets an expectation run against events
+// since the beginning of the turn that were not used by the expectations above
+// it. Use it for an event whose timing the bot does not control, such as a call
+// a backend makes at its own pace, or a reply some models give before the tool
+// call that others give after.
 //
 // # Scheduling a turn
 //
-// A turn's input goes out as soon as the previous turn finishes, unless the turn
+// A turn's input goes out once the bot has finished speaking, unless the turn
 // carries send_after. That waits for an event to have been seen, then waits
 // delay_ms longer, which is how an interruption is written:
 //
@@ -201,7 +279,7 @@
 //
 // # Diagnosing a run
 //
-// A Result carries more than its failures: how long the run took, every event
+// A result carries more than its failures: how long the run took, every event
 // the bot emitted whether or not the scenario asserted on it, and a timestamped
 // trace of what the harness itself decided. Together they are what makes a
 // scenario that failed once and passed the next time readable. Options.OnProgress
@@ -209,851 +287,241 @@
 package eval
 
 import (
-	"errors"
-	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"regexp"
-
-	"github.com/gojargo/jargo/frames"
-	"gopkg.in/yaml.v3"
+	"maps"
+	"slices"
+	"strings"
 )
 
-// Validation errors. Callers surface these to the operator; they are sentinels
-// so a message change does not silently break a caller matching on them.
-//
-//nolint:gochecknoglobals // sentinel errors
-var (
-	errNoName          = errors.New("scenario has no name")
-	errNoTurns         = errors.New("scenario has no turns")
-	errUserAndDTMF     = errors.New("a turn takes user or dtmf, not both")
-	errDTMFNotKeys     = errors.New("dtmf must be a string of keypad keys")
-	errDTMFKey         = errors.New("invalid keypad key")
-	errScheduleNoInput = errors.New("send_after needs a user or dtmf turn to schedule")
-	errNoEvent         = errors.New("expectation has no event")
-	errEmptyCalls      = errors.New("calls must not be empty")
-	errAbsentWithCheck = errors.New("absent cannot be combined with a content or call check")
-	errTextMatches     = errors.New("text_matches must be a pattern or a list of patterns")
-	errNegativeDelay   = errors.New("send_after delay_ms must be non-negative")
-	errEmptySendAfter  = errors.New("send_after needs an event or a positive delay_ms")
-	errIncludeNotPath  = errors.New("!include expects a file path")
-	errIncludeTooDeep  = errors.New("!include nested too deep, check for a cycle")
-	errExpectNotList   = errors.New("expect must be a list if present")
-	errContextNotList  = errors.New("context must be a list of messages")
+// Kind is the kind of scenario, as a run, a session and a results record name
+// it.
+type Kind string
 
-	errFileNotMapping          = errors.New("a scenario file must be a mapping")
-	errScenariosNotList        = errors.New("scenarios must be a non-empty list")
-	errScenarioNotMapping      = errors.New("a scenario must be a mapping")
-	errNestedScenarios         = errors.New("a scenario cannot hold a scenarios list of its own")
-	errDuplicateScenario       = errors.New("two scenarios share a name")
-	errUnknownMarker           = errors.New("marker must be complete, short, long or incomplete")
-	errMarkerCheckOnOtherEvent = errors.New("a marker check belongs on an llm_marker expectation")
-	errNotOneScenario          = errors.New("the file holds more than one scenario; read it with LoadFile")
-)
-
-// Event names a scenario can assert on. These are the friendly names scenarios
-// use; the harness maps the bot's RTVI server messages onto them.
+// The kinds of scenario that run.
 const (
-	// EventUserStartedSpeaking fires when the bot's VAD detects the user's speech
-	// beginning (audio mode only).
-	EventUserStartedSpeaking = "user_started_speaking"
-	// EventUserStoppedSpeaking fires when the user's turn ends (audio mode only).
-	EventUserStoppedSpeaking = "user_stopped_speaking"
-	// EventUserTranscription carries the bot's STT transcription of the user's
-	// speech (audio mode only).
-	EventUserTranscription = "user_transcription"
-	// EventLLMStarted fires when the bot begins generating a response.
-	EventLLMStarted = "llm_started"
-	// EventLLMResponse carries the bot's LLM text, joined across the response.
-	EventLLMResponse = "llm_response"
-	// EventTTSResponse carries the text the bot's TTS reports speaking, one
-	// segment as each arrives (audio mode only: a text-mode turn asks for no
-	// spoken response, so no TTS runs and no segment is ever produced).
-	EventTTSResponse = "tts_response"
-	// EventFunctionCall fires when the bot invokes a tool.
-	EventFunctionCall = "function_call"
-	// EventBotInterrupted fires when the bot's in-flight output is cut off, by a
-	// barge-in or by a turn sent with send_after. It is the event a barge-in
-	// scenario asserts on.
-	EventBotInterrupted = "bot_interrupted"
-	// EventVADUserStartedSpeaking is the raw VAD signal, ungated by turn
-	// detection (audio mode only). Useful as a timing anchor when a turn strategy
-	// gates or defers the turn-level user_stopped_speaking.
-	EventVADUserStartedSpeaking = "vad_user_started_speaking"
-	// EventVADUserStoppedSpeaking is the raw VAD signal for the end of speech
-	// (audio mode only).
-	EventVADUserStoppedSpeaking = "vad_user_stopped_speaking"
-	// EventLLMMarker carries the sideband marker the bot's model emitted in a
-	// response, such as a turn-completion marker. It arrives when the response
-	// ends, and carries the response's raw text with it. Markers never reach a
-	// client by default; a scenario asserting on one asks the bot to report them.
-	EventLLMMarker = "llm_marker"
-	// EventExpression is the expression the bot's TTS performed in an
-	// expressive conversation (alpha), from bot-output, in the tags the LLM
-	// writes: <<excited>> where the delivery of its spoken text changes
-	// (<<neutral>> back to the baseline), [[laughter]] for a sound,
-	// [[pause 600]] for a pause. A tag the TTS can't perform is never reported.
-	EventExpression = "expression"
+	// KindScript is a scripted scenario.
+	KindScript Kind = "script"
+	// KindSimulation is a simulation.
+	KindSimulation Kind = "simulation"
 )
 
-// The meanings a marker expectation can name, which are the emitter's own
-// vocabulary rather than the marker text, since that is configurable.
-const (
-	// MarkerComplete means the user's turn was finished and the bot answers.
-	MarkerComplete = "complete"
-	// MarkerShort means the user was cut off and the bot waits.
-	MarkerShort = "short"
-	// MarkerLong means the user asked for time and the bot waits longer.
-	MarkerLong = "long"
-	// MarkerIncomplete matches either of the two above, for a scenario that
-	// cares that the bot held the turn open rather than which reason it read.
-	MarkerIncomplete = "incomplete"
-)
+// LoadedScenario is one scenario a file holds, of whichever kind:
+// *ScriptScenario, *SimulationScenario or *Rubric.
+type LoadedScenario interface {
+	// ScenarioName is the scenario's name, `<file name>/<scenario name>` for
+	// one in a file's scenarios: list.
+	ScenarioName() string
+	loadedScenario()
+}
 
-// markerMeanings are the values a marker expectation may name.
+// ScenarioFile is a scenario file: what it is called, where it is, and the
+// scenarios it holds.
 //
-//nolint:gochecknoglobals // fixed lookup table
-var markerMeanings = map[string]bool{
-	MarkerComplete: true, MarkerShort: true, MarkerLong: true, MarkerIncomplete: true,
-}
-
-// judgeableEvents carry text the bot itself produced, which a judge grades as a
-// reply. A function_call is judged too, but as a call rather than as text, so it
-// is not one of these. A criterion on anything else (a user transcript, a
-// speaking signal) draws a warning: the test controls the user's input, so
-// judging it costs a round trip and tells you nothing.
-//
-//nolint:gochecknoglobals // fixed lookup table
-var judgeableEvents = map[string]bool{
-	EventLLMResponse: true,
-	EventTTSResponse: true,
-	// The expression the bot's TTS performed.
-	EventExpression: true,
-}
-
-// vadEvents are the events the bot reports only when asked to. The harness asks
-// when a scenario references one, and not otherwise.
-//
-//nolint:gochecknoglobals // fixed lookup table
-var vadEvents = map[string]bool{
-	EventVADUserStartedSpeaking: true,
-	EventVADUserStoppedSpeaking: true,
-}
-
-// Scenario is a scripted conversation and the events it should produce.
-type Scenario struct {
-	// Name identifies the scenario in reports; required.
-	Name string `yaml:"name"`
-	// Turns are played in order.
-	Turns []Turn `yaml:"turns"`
-	// Context is the conversation the bot's context should start from. When set,
-	// the harness sends it once the bot is ready, replacing whatever context the
-	// bot built for itself. Leave it out to test the bot's own opening state.
-	Context []frames.Message `yaml:"context,omitempty"`
-	// StopOnFailure is whether the first failed turn ends the scenario; nil is
-	// true. A failed turn leaves the conversation in an unknown state, so the
-	// remaining turns usually just burn a budget each. Set it false for a
-	// scenario whose turns are scored independently, where the turns after a
-	// failure are still worth driving; give those turns an explicit within_ms,
-	// since with the 60s default a silent bot costs one full budget per turn.
-	StopOnFailure *bool `yaml:"stop_on_failure,omitempty"`
-
-	// hasTurns records that the scenario wrote a `turns:` key, which is how an
-	// empty list is told from an omitted one.
-	hasTurns bool `yaml:"-"`
-}
-
-// UnmarshalYAML decodes a scenario, recording whether `turns:` was written out.
-// A `context:` left empty is no context, and anything else that is not a list
-// is refused by name.
-func (s *Scenario) UnmarshalYAML(node *yaml.Node) error {
-	if v := mappingValue(node, "context"); v != nil && v.Kind != yaml.SequenceNode && !isNull(v) {
-		return errContextNotList
-	}
-	type raw Scenario // a distinct type, so decoding does not recurse here
-	var r raw
-	if err := node.Decode(&r); err != nil {
-		return err
-	}
-	*s = Scenario(r)
-	s.hasTurns = hasKey(node, "turns")
-	return nil
-}
-
-// stopsOnFailure reports whether the first failed turn ends the scenario.
-func (s *Scenario) stopsOnFailure() bool {
-	return s.StopOnFailure == nil || *s.StopOnFailure
-}
-
-// Turn is one step of a scenario: input for the bot, expectations about what it
-// does, or both.
-//
-// A turn drives the bot one of two ways: the harness sends a user utterance, or
-// it sends a sequence of keypad presses. The two are mutually exclusive, and
-// both are optional. A turn with neither only waits and asserts, which is what a
-// bot-first scenario needs: nothing to say, only an opening greeting to check.
-type Turn struct {
-	// User is the text the user "says" this turn (sent as RTVI send-text).
-	User string `yaml:"user,omitempty"`
-	// DTMF is a keypad sequence the user presses, one frame per key. Mutually
-	// exclusive with User. Quote it in YAML: an unquoted # starts a comment.
-	DTMF string `yaml:"dtmf,omitempty"`
-	// Expect lists the events to match, in order, after the turn's input.
-	// Optional: a turn may just send input, with the assertion on a later turn.
-	Expect []Expectation `yaml:"expect,omitempty"`
-	// SendAfter, when set, schedules when the turn's input is sent rather than
-	// sending it as soon as the previous turn finishes.
-	SendAfter *SendAfter `yaml:"send_after,omitempty"`
-
-	// hasDTMF records that the scenario wrote a `dtmf:` key, which is how an
-	// empty sequence is told from an omitted one.
-	hasDTMF bool `yaml:"-"`
-}
-
-// UnmarshalYAML decodes a turn, reading its keypad sequence from the text as
-// written.
-//
-// dtmf is not decoded like the other fields because YAML reinterprets an
-// unquoted number before any of this sees it: `dtmf: 012` would arrive as 10 and
-// `dtmf: 0x10` as 16, silently rewriting the keys the scenario typed. Taking the
-// raw scalar keeps every digit, so `dtmf: 123` still works unquoted while a
-// leading zero or a hex-looking token reaches the keypad check with its
-// characters intact, and is rejected there rather than misread here.
-func (t *Turn) UnmarshalYAML(node *yaml.Node) error {
-	// A distinct type without DTMF, so decoding neither recurses here nor reads
-	// the reinterpreted number.
-	type raw struct {
-		User      string        `yaml:"user,omitempty"`
-		Expect    []Expectation `yaml:"expect,omitempty"`
-		SendAfter *SendAfter    `yaml:"send_after,omitempty"`
-	}
-	// expect is optional, but once written it is a list, and anything else is
-	// refused by name rather than as a decoding error about a Go type.
-	if v := mappingValue(node, "expect"); v != nil && v.Kind != yaml.SequenceNode {
-		return errExpectNotList
-	}
-	var r raw
-	if err := node.Decode(&r); err != nil {
-		return err
-	}
-	*t = Turn{User: r.User, Expect: r.Expect, SendAfter: r.SendAfter}
-
-	keys, written, ok := rawScalar(node, "dtmf")
-	if written && !ok {
-		return errDTMFNotKeys
-	}
-	t.DTMF, t.hasDTMF = keys, written
-	return nil
-}
-
-// rawScalar reads a mapping's value for key as the text it was written as,
-// reporting whether the key was there at all and whether it held a scalar.
-func rawScalar(node *yaml.Node, key string) (value string, written, scalar bool) {
-	if node.Kind != yaml.MappingNode {
-		return "", false, false
-	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value != key {
-			continue
-		}
-		v := node.Content[i+1]
-		if v.Kind != yaml.ScalarNode {
-			return "", true, false
-		}
-		return v.Value, true, true
-	}
-	return "", false, false
-}
-
-// SendAfter schedules when a turn's input is sent. The harness waits for Event
-// to have been seen, either earlier in the run or arriving now, then waits
-// DelayMS longer before sending. That is how a barge-in is written:
-// `send_after: {event: llm_started, delay_ms: 500}` interrupts 500ms after the
-// bot started responding.
-//
-// Event is optional. On its own, DelayMS is a pure time delay measured from the
-// previous turn's send, with no event to anchor on.
-type SendAfter struct {
-	// Event is the event to schedule from, or empty for a pure delay.
-	Event string `yaml:"event,omitempty"`
-	// DelayMS is how long to wait after the event was seen, or, with no event,
-	// after the previous turn's send.
-	DelayMS int `yaml:"delay_ms,omitempty"`
-}
-
-// FunctionCall is one expected tool call within a function_call expectation.
-type FunctionCall struct {
-	// Name is the tool name to match. An empty name matches any call, which is
-	// what a bare function_call expectation asserts.
-	Name string `yaml:"name,omitempty"`
-	// Args, when set, is a subset check on the call's arguments: every listed
-	// key must be present with the listed value, and any further argument the
-	// model passed is ignored.
-	Args map[string]any `yaml:"args,omitempty"`
-}
-
-// Expectation is one assertion about an event the bot emits.
-type Expectation struct {
-	// Event is the friendly event name to match (see the Event constants).
-	Event string `yaml:"event"`
-	// TextContains, when set, requires the event's text to contain this
-	// substring, case-sensitively and whatever the spacing. Applies to
-	// llm_response and tts_response.
-	TextContains string `yaml:"text_contains,omitempty"`
-	// TextExcludes is the mirror of TextContains: the event's text must not hold
-	// this substring. It is for what should never reach the user, a marker the
-	// model let slip into its reply above all.
-	//
-	// On its own it checks the one event it matches. Alongside TextContains or
-	// Eval, which accumulate a reply across its segments, it is checked on each
-	// segment, so the failure lands as soon as the text appears rather than at
-	// the end of the budget.
-	TextExcludes string `yaml:"text_excludes,omitempty"`
-	// TextMatches are regular expressions the event's text must each match,
-	// checked on the same text as TextExcludes, such as a format the reply must
-	// open with. YAML takes one pattern or a list of them. The patterns are RE2,
-	// as Go's regexp reads them, so a lookaround or a backreference is rejected
-	// when the scenario is loaded.
-	TextMatches Patterns `yaml:"text_matches,omitempty"`
-	// Eval, when set, is a natural-language criterion an LLM judge checks the
-	// bot's reply against. Applies to llm_response and tts_response, the two
-	// events carrying text the bot itself produced.
-	//
-	// On a function_call the criterion is about the call instead: each call the
-	// expectation matches is put to the judge by name and arguments, with the
-	// conversation so far as context, which is how a scenario checks what Args
-	// cannot match verbatim. A call is not a partial reply, so the verdict is
-	// yes or no and the first rejected call fails the expectation.
-	Eval string `yaml:"eval,omitempty"`
-	// Name is the single-call shorthand for Calls: the tool name a function_call
-	// event must match.
-	Name string `yaml:"name,omitempty"`
-	// Args is the single-call shorthand for Calls: the argument subset the
-	// matched call must carry.
-	Args map[string]any `yaml:"args,omitempty"`
-	// Calls is the set of tool calls the turn should make, for a function_call
-	// event. They are matched by name in any order and the expectation passes
-	// only when all of them are found. Built from `calls:`, or from the
-	// `name:`/`args:` shorthand, by normalizeCalls.
-	Calls []FunctionCall `yaml:"calls,omitempty"`
-	// Marker, on an llm_marker, is what the marker must mean: "complete",
-	// "short", "long", or "incomplete" for either of the last two. A bare
-	// llm_marker asserts only that the bot read a marker from its response.
-	Marker string `yaml:"marker,omitempty"`
-	// MarkerFirst, on an llm_marker, requires that the first marker in the
-	// response came before any text, which is what the protocol asks of the
-	// model.
-	MarkerFirst *bool `yaml:"marker_first,omitempty"`
-	// Markers, on an llm_marker, is how many markers the response's text holds.
-	// The protocol asks for exactly one.
-	Markers *int `yaml:"markers,omitempty"`
-	// TextAfter, on an llm_marker, is whether any text follows the first marker.
-	// A complete turn should have some, an incomplete one none.
-	TextAfter *bool `yaml:"text_after,omitempty"`
-	// Absent inverts the expectation: it passes only when no event of this type
-	// arrives before the WithinMS budget expires, and fails as soon as one does.
-	// It matches on event type only, so no content check may accompany it.
-	Absent bool `yaml:"absent,omitempty"`
-	// WithinMS is the latency budget for the event, measured from the user input;
-	// zero uses the harness default.
-	WithinMS int `yaml:"within_ms,omitempty"`
-
-	// hasCalls records that the scenario wrote a `calls:` key, which is how an
-	// empty list is told from an omitted one.
-	hasCalls bool `yaml:"-"`
-}
-
-// includeDepth bounds how deep !include may nest, so a file that includes
-// itself is reported rather than exhausting the stack.
-const includeDepth = 16
-
-// ScenarioFile is a scenario file: what it is called, where it was read from,
-// and the scenarios it holds.
-//
-// Most files hold one. A file holds several when they test one behavior through
-// many short conversations, which is cheaper to read and cheaper to run than the
-// same thing spread over a directory of near-identical files.
+// Manifests and the command line load files through LoadFile, so every kind of
+// scenario mixes in one list.
 type ScenarioFile struct {
-	// Name is the file's own `name:`, which every scenario in it is named under.
+	// Name is the file's own `name:`.
 	Name string
 	// Path is the file it was read from.
 	Path string
-	// Scenarios are the scenarios it holds, in the order the file writes them.
-	Scenarios []*Scenario
+	// Scenarios are the scenarios it holds, in file order.
+	Scenarios []LoadedScenario
 }
 
-// LoadFile reads and validates a scenario file, returning every scenario it
-// holds.
+// LoadFile reads a scenario file, parsing each scenario as whichever kind it
+// is.
 //
-// A file's scenarios sit under `scenarios:`, each with a `name:` of its own, and
-// are named `<file name>/<scenario name>`. Any key a scenario can carry may also
-// sit at the top of the file, where it is the default for every scenario in it;
-// a scenario setting the same key replaces the whole value, so nothing is
-// merged and a `context:` is written out in full rather than added to.
+// A file in the deprecated shape, a scenario's own keys at the top level and no
+// scenarios:, loads as that one scenario under the file's name: and warns.
 //
-// A file whose scenario keys sit at the top level with no `scenarios:` is the
-// older shape, and loads as the one scenario it describes.
+// The error is a *ScenarioError when the file is malformed, or a scenario is of
+// no kind, claims to be two, or is invalid for its kind.
 func LoadFile(path string) (*ScenarioFile, error) {
-	node, err := loadNode(path, includeDepth)
+	data, err := loadMapping(path)
 	if err != nil {
 		return nil, err
 	}
-	doc := unwrapDocument(node)
-	if doc.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("eval: %s: %w", path, errFileNotMapping)
-	}
-	name, _, _ := rawScalar(doc, "name")
-	if name == "" {
-		return nil, fmt.Errorf("eval: %s: %w", path, errNoName)
+	name, ok := data[keyName].(string)
+	if !ok || name == "" {
+		return nil, invalidf("%s: missing or invalid 'name:' field", path)
 	}
 
-	entries := mappingValue(doc, "scenarios")
-	if entries == nil {
-		// The older shape: the scenario's own keys at the top level.
-		s, err := decodeScenario(doc, path)
+	rawEntries := data["scenarios"]
+	if rawEntries == nil {
+		slog.Warn("eval: `top-level turns: or persona:` is deprecated and will be removed. "+
+			"Use a `scenarios:` list instead.", "path", path)
+		scenario, err := scenarioFromMapping(data, path, nil)
 		if err != nil {
 			return nil, err
 		}
-		return &ScenarioFile{Name: name, Path: path, Scenarios: []*Scenario{s}}, nil
-	}
-	if entries.Kind != yaml.SequenceNode || len(entries.Content) == 0 {
-		return nil, fmt.Errorf("eval: %s: %w", path, errScenariosNotList)
+		return &ScenarioFile{Name: name, Path: path, Scenarios: []LoadedScenario{scenario}}, nil
 	}
 
-	defaults := withoutKey(doc, "scenarios")
-	file := &ScenarioFile{Name: name, Path: path}
-	seen := make(map[string]bool, len(entries.Content))
-	for i, entry := range entries.Content {
-		s, err := scenarioFromEntry(entry, defaults, name, path, i)
+	entries, ok := rawEntries.([]any)
+	if !ok || len(entries) == 0 {
+		return nil, invalidf("%s: 'scenarios:' must be a non-empty list", path)
+	}
+	defaults := maps.Clone(data)
+	delete(defaults, "scenarios")
+
+	scenarios := make([]LoadedScenario, 0, len(entries))
+	for idx, raw := range entries {
+		scenario, err := scenarioFromEntry(raw, defaults, name, path, idx)
 		if err != nil {
 			return nil, err
 		}
-		if seen[s.Name] {
-			return nil, fmt.Errorf("eval: %s: %w: %s", path, errDuplicateScenario, s.Name)
+		scenarios = append(scenarios, scenario)
+	}
+	if err := checkDuplicateNames(scenarios, path); err != nil {
+		return nil, err
+	}
+	return &ScenarioFile{Name: name, Path: path, Scenarios: scenarios}, nil
+}
+
+// scenarioFromEntry parses one entry of a file's scenarios: list, over the
+// file's own keys as defaults, naming it under the file.
+func scenarioFromEntry(raw any, defaults map[string]any, fileName, path string, idx int) (LoadedScenario, error) {
+	entry, ok := raw.(map[string]any)
+	if !ok {
+		return nil, invalidf("%s: scenario #%d must be a mapping", path, idx)
+	}
+	if _, nested := entry["scenarios"]; nested {
+		return nil, invalidf("%s: scenario #%d cannot hold a 'scenarios:' list of its own", path, idx)
+	}
+	entryName, ok := entry[keyName].(string)
+	if !ok || entryName == "" {
+		return nil, invalidf("%s: scenario #%d needs a 'name:'", path, idx)
+	}
+	merged := maps.Clone(defaults)
+	maps.Copy(merged, entry)
+	merged[keyName] = fileName + "/" + entryName
+	return scenarioFromMapping(merged, path, entry)
+}
+
+// checkDuplicateNames refuses a file whose scenarios share a name.
+func checkDuplicateNames(scenarios []LoadedScenario, path string) error {
+	counts := make(map[string]int, len(scenarios))
+	for _, s := range scenarios {
+		counts[s.ScenarioName()]++
+	}
+	var duplicates []string
+	for n, c := range counts {
+		if c > 1 {
+			duplicates = append(duplicates, n)
 		}
-		seen[s.Name] = true
-		file.Scenarios = append(file.Scenarios, s)
 	}
-	return file, nil
+	if len(duplicates) > 0 {
+		slices.Sort(duplicates)
+		return invalidf("%s: duplicate scenario names: %s", path, strings.Join(duplicates, ", "))
+	}
+	return nil
 }
 
-// scenarioFromEntry reads one scenario out of a file's `scenarios:` list, over
-// the file's own keys as defaults.
-func scenarioFromEntry(
-	entry, defaults *yaml.Node, fileName, path string, idx int,
-) (*Scenario, error) {
-	if entry.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("eval: %s: scenario #%d: %w", path, idx+1, errScenarioNotMapping)
+// Scenario is the scenario called name, or a *ScenarioError naming the ones the
+// file holds.
+func (f *ScenarioFile) Scenario(name string) (LoadedScenario, error) {
+	names := make([]string, 0, len(f.Scenarios))
+	for _, s := range f.Scenarios {
+		if s.ScenarioName() == name {
+			return s, nil
+		}
+		names = append(names, s.ScenarioName())
 	}
-	if mappingValue(entry, "scenarios") != nil {
-		return nil, fmt.Errorf("eval: %s: scenario #%d: %w", path, idx+1, errNestedScenarios)
-	}
-	name, _, _ := rawScalar(entry, "name")
-	if name == "" {
-		return nil, fmt.Errorf("eval: %s: scenario #%d: %w", path, idx+1, errNoName)
-	}
-	merged := mergeMappings(defaults, entry)
-	setScalar(merged, "name", fileName+"/"+name)
-	return decodeScenario(merged, path)
+	return nil, invalidf("%s: no scenario called %s (has %s)", f.Path, pyRepr(name), strings.Join(names, ", "))
 }
 
-// decodeScenario decodes one scenario mapping and validates it.
-func decodeScenario(node *yaml.Node, path string) (*Scenario, error) {
-	var s Scenario
-	if err := node.Decode(&s); err != nil {
-		return nil, fmt.Errorf("eval: parse %s: %w", path, err)
-	}
-	if err := s.validate(); err != nil {
-		return nil, fmt.Errorf("eval: %s: %w", path, err)
-	}
-	return &s, nil
-}
-
-// Load reads and validates a scenario file holding a single scenario. A file
-// holding several is an error here; read it with LoadFile.
-func Load(path string) (*Scenario, error) {
+// LoadScenarioFile loads a file holding one scenario, as whichever kind it is.
+//
+// Deprecated: Use LoadFile instead, which returns every scenario a file holds.
+func LoadScenarioFile(path string) (LoadedScenario, error) {
+	slog.Warn("eval: `LoadScenarioFile` is deprecated and will be removed. Use `LoadFile` instead.")
 	file, err := LoadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	if len(file.Scenarios) != 1 {
-		return nil, fmt.Errorf("eval: %s: %w: %d", path, errNotOneScenario, len(file.Scenarios))
+		return nil, invalidf("%s: holds %d scenarios; use LoadFile()", path, len(file.Scenarios))
 	}
 	return file.Scenarios[0], nil
 }
 
-// IsScenarioFile reports whether a YAML file is a scenario rather than a
-// fragment one includes.
+// Load reads a file holding one scripted scenario.
+//
+// Deprecated: Use LoadFile instead, which returns every scenario a file holds,
+// of every kind.
+func Load(path string) (*ScriptScenario, error) {
+	file, err := LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(file.Scenarios) != 1 {
+		return nil, invalidf("%s: holds %d scenarios; use LoadFile()", path, len(file.Scenarios))
+	}
+	script, ok := file.Scenarios[0].(*ScriptScenario)
+	if !ok {
+		return nil, invalidf("%s: holds a scenario that is not scripted; use LoadFile()", path)
+	}
+	return script, nil
+}
+
+// scenarioFromMapping parses one scenario's mapping as a simulation (persona:),
+// a script (turns:), or a rubric (success:).
+//
+// own is the entry's keys without the file's defaults, nil when the mapping is
+// all the entry's own. A rubric that takes its metrics: from the file leaves out
+// the measured ones, which only a simulation can score; a measured metric the
+// rubric lists itself is refused.
+func scenarioFromMapping(data map[string]any, path string, own map[string]any) (LoadedScenario, error) {
+	_, hasPersona := data["persona"]
+	_, hasTurns := data["turns"]
+	_, hasSuccess := data["success"]
+	switch {
+	case hasPersona && hasTurns:
+		return nil, invalidf("%s: a scenario is scripted ('turns:') or a simulation ('persona:'), not both", path)
+	case hasPersona:
+		return parseSimulation(data, path)
+	case hasTurns:
+		return parseScript(data, path)
+	case hasSuccess:
+		if _, ownMetrics := own["metrics"]; own != nil && !ownMetrics {
+			data = maps.Clone(data)
+			data["metrics"] = judgedMetrics(data["metrics"])
+		}
+		return RubricFromMap(data, path)
+	default:
+		return nil, invalidf("%s: a scenario needs 'turns:' (scripted), 'persona:' (a simulation), or "+
+			"'success:' (a rubric)", path)
+	}
+}
+
+// judgedMetrics are a metrics: list's judged entries, without its measured
+// ones.
+func judgedMetrics(raw any) []any {
+	list, _ := raw.([]any)
+	judged := []any{}
+	for _, m := range list {
+		if entry, ok := m.(map[string]any); ok {
+			if _, measured := entry["measure"]; measured {
+				continue
+			}
+		}
+		judged = append(judged, m)
+	}
+	return judged
+}
+
+// IsScenarioFile reports whether a YAML file is a scenario of any kind rather
+// than a fragment one includes.
 //
 // Every scenario file has a `name:`; a fragment a scenario includes with
-// !include (a block of turns, a context) has none. A file that does not parse
-// counts as a scenario, so loading it reports the error instead of a directory
-// run skipping it silently.
+// !include (a block of turns, a judge: block) has none. A file that does not
+// parse counts as a scenario, so loading it reports the error instead of a
+// directory run skipping it silently.
 func IsScenarioFile(path string) bool {
-	node, err := loadNode(path, includeDepth)
+	data, err := loadMapping(path)
 	if err != nil {
 		return true
 	}
-	doc := unwrapDocument(node)
-	if doc.Kind != yaml.MappingNode {
-		return true
-	}
-	return hasKey(doc, "name")
-}
-
-// isNull reports whether a node is YAML's null, which a key written with no
-// value holds.
-func isNull(node *yaml.Node) bool {
-	return node.Kind == yaml.ScalarNode && node.Tag == "!!null"
-}
-
-// unwrapDocument returns the value a parsed document wraps.
-func unwrapDocument(node *yaml.Node) *yaml.Node {
-	if node.Kind == yaml.DocumentNode && len(node.Content) == 1 {
-		return node.Content[0]
-	}
-	return node
-}
-
-// mappingValue returns a mapping's value for key, or nil when it has none.
-func mappingValue(node *yaml.Node, key string) *yaml.Node {
-	if node.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			return node.Content[i+1]
-		}
-	}
-	return nil
-}
-
-// withoutKey is a copy of the mapping with one key left out.
-func withoutKey(node *yaml.Node, key string) *yaml.Node {
-	out := *node
-	out.Content = nil
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			continue
-		}
-		out.Content = append(out.Content, node.Content[i], node.Content[i+1])
-	}
-	return &out
-}
-
-// mergeMappings lays entry over defaults: a key entry sets replaces the whole
-// value defaults gave it, so nothing is merged within a value.
-func mergeMappings(defaults, entry *yaml.Node) *yaml.Node {
-	merged := *defaults
-	merged.Content = append([]*yaml.Node(nil), defaults.Content...)
-	for i := 0; i+1 < len(entry.Content); i += 2 {
-		setNode(&merged, entry.Content[i], entry.Content[i+1])
-	}
-	return &merged
-}
-
-// setNode sets a mapping's value for a key node, replacing any it already had.
-func setNode(node *yaml.Node, key, value *yaml.Node) {
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key.Value {
-			node.Content[i+1] = value
-			return
-		}
-	}
-	node.Content = append(node.Content, key, value)
-}
-
-// setScalar sets a mapping's value for key to a plain string.
-func setScalar(node *yaml.Node, key, value string) {
-	setNode(node,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: value})
-}
-
-// loadNode parses a YAML file and resolves the !include tags in it.
-func loadNode(path string, depth int) (*yaml.Node, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // scenario path is operator-supplied
-	if err != nil {
-		return nil, fmt.Errorf("eval: read scenario: %w", err)
-	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("eval: parse %s: %w", path, err)
-	}
-	if err := resolveIncludes(&doc, filepath.Dir(path), depth); err != nil {
-		return nil, fmt.Errorf("eval: %s: %w", path, err)
-	}
-	return &doc, nil
-}
-
-// resolveIncludes replaces every `!include <path>` node in the tree with the
-// contents of the file it names, resolved against dir. Included files are parsed
-// the same way, so an include may itself include.
-//
-// It is what lets scenarios share a block they all need, rather than each
-// repeating it.
-func resolveIncludes(node *yaml.Node, dir string, depth int) error {
-	if node.Tag == "!include" {
-		if depth <= 0 {
-			return errIncludeTooDeep
-		}
-		if node.Kind != yaml.ScalarNode {
-			return errIncludeNotPath
-		}
-		included, err := loadNode(filepath.Join(dir, node.Value), depth-1)
-		if err != nil {
-			return err
-		}
-		// A parsed file is a document node wrapping the value it holds.
-		if included.Kind == yaml.DocumentNode && len(included.Content) == 1 {
-			included = included.Content[0]
-		}
-		*node = *included
-		return nil
-	}
-	for _, child := range node.Content {
-		if err := resolveIncludes(child, dir, depth); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validate checks the scenario is well-formed. An empty turns: list is allowed,
-// and only asserts that the bot completes the handshake; a missing one is the
-// mistake worth reporting.
-func (s *Scenario) validate() error {
-	if s.Name == "" {
-		return errNoName
-	}
-	if !s.hasTurns {
-		return errNoTurns
-	}
-	for i, turn := range s.Turns {
-		if err := turn.validate(); err != nil {
-			return fmt.Errorf("turn %d: %w", i+1, err)
-		}
-		for j := range turn.Expect {
-			// By pointer: validate normalizes the expectation's tool calls, and
-			// the scenario must carry the normalized form.
-			if err := turn.Expect[j].validate(); err != nil {
-				return fmt.Errorf("turn %d expectation %d: %w", i+1, j+1, err)
-			}
-		}
-	}
-	return nil
-}
-
-// input is what the turn sends, for a report: the utterance, the keys, or a
-// note that the turn only observes.
-func (t Turn) input() string {
-	switch {
-	case t.User != "":
-		return t.User
-	case t.DTMF != "":
-		return "dtmf " + t.DTMF
-	default:
-		return "(observe only)"
-	}
-}
-
-// validate checks a turn is well-formed. Both kinds of input are optional, but
-// a turn takes one kind or the other, and a schedule needs input to schedule.
-func (t *Turn) validate() error {
-	if t.User != "" && t.hasDTMF {
-		return errUserAndDTMF
-	}
-	if t.hasDTMF && t.DTMF == "" {
-		return errDTMFNotKeys
-	}
-	for _, key := range t.DTMF {
-		if !frames.KeypadEntry(key).Valid() {
-			return fmt.Errorf("%w %q", errDTMFKey, string(key))
-		}
-	}
-	if t.SendAfter != nil && t.User == "" && t.DTMF == "" {
-		return errScheduleNoInput
-	}
-	return t.SendAfter.validate()
-}
-
-// validate checks a turn's schedule is well-formed. A nil schedule is valid:
-// the turn's input goes out as soon as the previous turn finishes.
-func (s *SendAfter) validate() error {
-	if s == nil {
-		return nil
-	}
-	if s.DelayMS < 0 {
-		return errNegativeDelay
-	}
-	// With no event to anchor on, a zero delay would be a schedule that
-	// schedules nothing.
-	if s.Event == "" && s.DelayMS == 0 {
-		return errEmptySendAfter
-	}
-	return nil
-}
-
-// UnmarshalYAML decodes an expectation, recording whether `calls:` was written
-// out. The distinction matters: a missing `calls:` falls back to the
-// `name:`/`args:` shorthand, whereas an empty one is a mistake.
-func (e *Expectation) UnmarshalYAML(node *yaml.Node) error {
-	type raw Expectation // a distinct type, so decoding does not recurse here
-	var r raw
-	if err := node.Decode(&r); err != nil {
-		return err
-	}
-	*e = Expectation(r)
-	e.hasCalls = hasKey(node, "calls")
-	return nil
-}
-
-// hasKey reports whether a YAML mapping node has the named key.
-func hasKey(node *yaml.Node, key string) bool {
-	if node.Kind != yaml.MappingNode {
-		return false
-	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			return true
-		}
-	}
-	return false
-}
-
-// UnmarshalYAML accepts either a bare tool name or a {name, args} mapping, so a
-// calls: list can mix the two.
-func (c *FunctionCall) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		return node.Decode(&c.Name)
-	}
-	type raw FunctionCall
-	var r raw
-	if err := node.Decode(&r); err != nil {
-		return err
-	}
-	*c = FunctionCall(r)
-	return nil
-}
-
-// validate checks a single expectation is well-formed, and normalizes its
-// expected tool calls.
-//
-// Only what cannot mean anything is an error. A field written on an event it
-// does not apply to is dropped, and a criterion on an event whose text no judge
-// can read is warned about, because the event names a scenario may use are open:
-// the harness matches whatever the bot reports, so a name it does not recognize
-// today may be one the bot emits tomorrow. What a scenario gets wrong that way
-// shows up as the assertion never matching, with the event named in the failure.
-func (e *Expectation) validate() error {
-	if e.Event == "" {
-		return errNoEvent
-	}
-	if e.Eval != "" && !judgeableEvents[e.Event] && e.Event != EventFunctionCall {
-		slog.Warn("eval: a judge criterion is only meaningful on an event carrying the bot's own "+
-			"text, or on a function call, where the call itself is what is judged",
-			"event", e.Event, "judgeable", []string{EventLLMResponse, EventTTSResponse, EventExpression, EventFunctionCall})
-	}
-	// An absent expectation matches on event type only: a content or call check
-	// describes an event that must arrive, which contradicts absence.
-	if e.Absent && e.checksContent() {
-		return errAbsentWithCheck
-	}
-	return errors.Join(e.TextMatches.compile(), e.validateMarker(), e.normalizeCalls())
-}
-
-// strTag is the YAML tag of a plain string.
-const strTag = "!!str"
-
-// Patterns are regular expressions an event's text must each match. YAML takes
-// one pattern or a list of them.
-type Patterns []string
-
-// UnmarshalYAML reads one pattern or a list of them.
-func (p *Patterns) UnmarshalYAML(node *yaml.Node) error {
-	switch node.Kind {
-	case yaml.ScalarNode:
-		if node.Tag != strTag {
-			return errTextMatches
-		}
-		*p = Patterns{node.Value}
-		return nil
-	case yaml.SequenceNode:
-		out := make(Patterns, 0, len(node.Content))
-		for _, item := range node.Content {
-			if item.Kind != yaml.ScalarNode || item.Tag != strTag {
-				return errTextMatches
-			}
-			out = append(out, item.Value)
-		}
-		*p = out
-		return nil
-	default:
-		return errTextMatches
-	}
-}
-
-// compile checks every pattern is a regular expression.
-func (p Patterns) compile() error {
-	for _, pattern := range p {
-		if _, err := regexp.Compile(pattern); err != nil {
-			return fmt.Errorf("%w: %q: %w", errTextMatches, pattern, err)
-		}
-	}
-	return nil
-}
-
-// firstUnmatched is the first pattern content does not match, and whether
-// there is one.
-func (p Patterns) firstUnmatched(content string) (string, bool) {
-	for _, pattern := range p {
-		// The patterns were compiled when the scenario was loaded.
-		if !regexp.MustCompile(pattern).MatchString(content) {
-			return pattern, true
-		}
-	}
-	return "", false
-}
-
-// checksContent reports whether the expectation checks anything of the event
-// beyond its type.
-func (e *Expectation) checksContent() bool {
-	return e.TextContains != "" || e.TextExcludes != "" || len(e.TextMatches) > 0 || e.Eval != "" ||
-		e.Name != "" || e.Args != nil || e.hasCalls || e.marksAnything()
-}
-
-// validateMarker checks what a marker expectation asks for: a meaning the
-// emitter has a name for, and an event carrying a marker at all.
-func (e *Expectation) validateMarker() error {
-	if e.Marker != "" && !markerMeanings[e.Marker] {
-		return fmt.Errorf("%w: %s", errUnknownMarker, e.Marker)
-	}
-	if e.marksAnything() && e.Event != EventLLMMarker {
-		return fmt.Errorf("%w: %s", errMarkerCheckOnOtherEvent, e.Event)
-	}
-	return nil
-}
-
-// marksAnything reports whether the expectation checks a marker at all.
-func (e *Expectation) marksAnything() bool {
-	return e.Marker != "" || e.MarkerFirst != nil || e.Markers != nil || e.TextAfter != nil
-}
-
-// normalizeCalls resolves an expectation's expected tool calls into Calls: the
-// `calls:` list as written, or the single `name:`/`args:` shorthand, or one
-// nameless call for a bare function_call, which matches whatever the bot calls.
-func (e *Expectation) normalizeCalls() error {
-	if e.Event != EventFunctionCall || e.Absent {
-		e.Calls = nil
-		return nil
-	}
-	if !e.hasCalls {
-		e.Calls = []FunctionCall{{Name: e.Name, Args: e.Args}}
-		return nil
-	}
-	if len(e.Calls) == 0 {
-		return errEmptyCalls
-	}
-	return nil
+	_, named := data[keyName]
+	return named
 }

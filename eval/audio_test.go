@@ -157,6 +157,7 @@ func buildSpeakingBot(in, out processor.Processor) *pipeline.Worker {
 func TestHarnessTTSResponse(t *testing.T) {
 	scenario, err := eval.Load(writeScenario(t, `
 name: spoken
+judge: {modality: audio, transcription: {service: moonshine}}
 turns:
   - user: "hello"
     expect:
@@ -213,6 +214,7 @@ func buildSilentBot(in, out processor.Processor) *pipeline.Worker {
 func TestHarnessTTSResponseCatchesSilentTurn(t *testing.T) {
 	scenario, err := eval.Load(writeScenario(t, `
 name: silent
+judge: {modality: audio, transcription: {service: moonshine}}
 turns:
   - user: "hello"
     expect:
@@ -238,7 +240,7 @@ turns:
 	if res.Passed() {
 		t.Fatal("expected a failure for the reply that was never spoken")
 	}
-	if len(res.Failures) != 1 || res.Failures[0].Event != eval.EventTTSResponse {
+	if len(res.Failures) != 1 || res.Failures[0].EventName != eval.EventTTSResponse {
 		t.Fatalf("expected the one failure to be on tts_response, got:\n%s", res)
 	}
 }

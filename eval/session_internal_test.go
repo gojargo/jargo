@@ -134,7 +134,7 @@ func (f *fakeRTVIServer) sentTexts() []string {
 
 // oneTurn is a scenario of one turn saying text and expecting expect.
 func oneTurn(text string, expect ...Expectation) *Scenario {
-	return &Scenario{Name: "t", Turns: []Turn{{User: text, Expect: expect}}, hasTurns: true}
+	return &Scenario{Name: "t", Turns: []Turn{{User: text, Expect: expect}}}
 }
 
 // statuses is the status of each turn of a result, in order.
@@ -157,7 +157,7 @@ func wantRunFailure(t *testing.T, res Result, err error, event, kind, reason str
 		t.Fatalf("failures = %+v, want one", res.Failures)
 	}
 	f := res.Failures[0]
-	if f.Event != event || f.Kind != kind || !strings.Contains(f.Reason, reason) {
+	if f.EventName != event || f.Kind != kind || !strings.Contains(f.Reason, reason) {
 		t.Fatalf("failure = %+v, want %s %s holding %q", f, event, kind, reason)
 	}
 	if got := statuses(res); !slices.Equal(got, []string{TurnNotRun}) {
@@ -247,8 +247,8 @@ func TestAConnectFailureIsReportedCleanly(t *testing.T) {
 	res, err := runAgainst(t.Context(), oneTurn("x", Expectation{Event: EventLLMStarted}), url,
 		Options{ConnectTimeout: 500 * time.Millisecond})
 	wantRunFailure(t, res, err, RunEventConnect, FailureConnectFailed, "failed to connect to "+url)
-	if res.Scenario != "t" {
-		t.Fatalf("scenario = %q, want it named", res.Scenario)
+	if res.ScenarioName != "t" {
+		t.Fatalf("scenario = %q, want it named", res.ScenarioName)
 	}
 }
 
@@ -304,7 +304,7 @@ func TestAnUnexpectedErrorIsSurfacedNotSwallowed(t *testing.T) {
 		t.Fatalf("failures = %+v, want one", res.Failures)
 	}
 	f := res.Failures[0]
-	if f.Event != RunEventError || f.Kind != FailureError || !strings.Contains(f.Reason, "judge boom") {
+	if f.EventName != RunEventHarness || f.Kind != FailureError || !strings.Contains(f.Reason, "judge boom") {
 		t.Fatalf("failure = %+v, want the panic as the run's error", f)
 	}
 	trace := strings.Join(res.DebugLog, "\n")
@@ -327,7 +327,7 @@ func twoTurnsFirstFails(t *testing.T, stopOnFailure bool) (*fakeRTVIServer, *Sce
 	bot.onText("first", reply("Paris")...)
 	bot.onText("second", reply("Berlin")...)
 	return bot, &Scenario{
-		Name: "stop", StopOnFailure: &stopOnFailure, hasTurns: true,
+		Name: "stop", StopOnFailure: &stopOnFailure,
 		Turns: []Turn{
 			{User: "first", Expect: []Expectation{{Event: EventLLMResponse, WithinMS: 300, TextContains: "London"}}},
 			{User: "second", Expect: []Expectation{{Event: EventLLMResponse, WithinMS: 2000, TextContains: "Berlin"}}},
@@ -335,11 +335,11 @@ func twoTurnsFirstFails(t *testing.T, stopOnFailure bool) (*fakeRTVIServer, *Sce
 	}
 }
 
-// failureTurns is the turn of each failure, in order.
+// failureTurns is the turn index of each failure, in order.
 func failureTurns(fs []Failure) []int {
 	out := make([]int, 0, len(fs))
 	for _, f := range fs {
-		out = append(out, f.Turn)
+		out = append(out, f.TurnIndex)
 	}
 	return out
 }
@@ -353,7 +353,7 @@ func TestAFailedTurnStopsTheScenarioByDefault(t *testing.T) {
 	if err != nil || res.Passed() {
 		t.Fatalf("run = %v, %v; want a failure", res, err)
 	}
-	if got := failureTurns(res.Failures); !slices.Equal(got, []int{1}) {
+	if got := failureTurns(res.Failures); !slices.Equal(got, []int{0}) {
 		t.Fatalf("failures on turns %v, want only the first", got)
 	}
 	if got := bot.sentTexts(); !slices.Equal(got, []string{"first"}) {
@@ -372,7 +372,7 @@ func TestStopOnFailureFalseDrivesTheRemainingTurns(t *testing.T) {
 	if err != nil || res.Passed() {
 		t.Fatalf("run = %v, %v; want a failure", res, err)
 	}
-	if got := failureTurns(res.Failures); !slices.Equal(got, []int{1}) {
+	if got := failureTurns(res.Failures); !slices.Equal(got, []int{0}) {
 		t.Fatalf("failures on turns %v, want only the first", got)
 	}
 	if got := bot.sentTexts(); !slices.Equal(got, []string{"first", "second"}) {
@@ -416,8 +416,8 @@ func TestTurnResultsRecordFailedExpectationsToo(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]ExpectationResult{
-		{{Expectation: 1, Event: EventLLMResponse, Passed: false}},
-		{{Expectation: 1, Event: EventLLMResponse, Passed: true, Matched: "Berlin"}},
+		{{ExpectationIndex: 0, EventName: EventLLMResponse, Passed: false}},
+		{{ExpectationIndex: 0, EventName: EventLLMResponse, Passed: true, Matched: "Berlin"}},
 	}
 	for i, turn := range res.Turns {
 		if !slices.Equal(turn.Expectations, want[i]) {
@@ -433,8 +433,10 @@ func TestTurnResultsAreTimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Turns[0].Duration <= 0 || res.Turns[1].Duration <= 0 {
-		t.Fatalf("durations %s and %s, want both driven turns timed", res.Turns[0].Duration, res.Turns[1].Duration)
+	// The first turn waits out its 300ms budget; the second may answer within
+	// the millisecond.
+	if res.Turns[0].DurationMS <= 0 || res.Turns[1].Status != TurnPassed {
+		t.Fatalf("turns %+v, want both driven and the first timed", res.Turns)
 	}
 
 	bot, scenario = twoTurnsFirstFails(t, true)
@@ -442,8 +444,8 @@ func TestTurnResultsAreTimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stopping.Turns[1].Duration != 0 {
-		t.Fatalf("duration of the turn never run = %s, want none", stopping.Turns[1].Duration)
+	if stopping.Turns[1].DurationMS != 0 {
+		t.Fatalf("duration of the turn never run = %dms, want none", stopping.Turns[1].DurationMS)
 	}
 }
 

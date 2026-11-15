@@ -90,6 +90,40 @@ type Event struct {
 	Markers []string
 }
 
+// dict is the event as a results record lists it: its type, and whichever of
+// its fields it carries.
+func (e Event) dict() map[string]any {
+	d := map[string]any{keyType: e.Kind}
+	if e.Text != "" {
+		d["text"] = e.Text
+	}
+	if e.Function != "" {
+		d["name"] = e.Function
+	}
+	if e.Args != nil {
+		d["args"] = e.Args
+	}
+	if e.MarkerKind != "" {
+		d["marker"] = e.MarkerKind
+	}
+	if e.Raw != "" {
+		d["raw"] = e.Raw
+	}
+	if e.Markers != nil {
+		d["markers"] = e.Markers
+	}
+	return d
+}
+
+// eventDicts are the events as a results record lists them.
+func eventDicts(events []Event) []map[string]any {
+	out := make([]map[string]any, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.dict())
+	}
+	return out
+}
+
 // String renders an Event as a short label: the call signature for a tool call,
 // the text for anything that carries some, the name alone otherwise.
 func (e Event) String() string {
@@ -102,34 +136,6 @@ func (e Event) String() string {
 		return e.Kind
 	}
 }
-
-// Progress reports how one turn or expectation resolved, as it happens.
-type Progress struct {
-	// Turn is the 1-based turn number.
-	Turn int
-	// Expectation is the 1-based expectation index, or 0 for a turn-level
-	// record: the turn's header, or a schedule that never fired.
-	Expectation int
-	// Event is the expectation's event name, or the turn's input for a header.
-	Event string
-	// Status is "turn", "matched", "failed" or "timeout".
-	Status string
-	// Detail is the failure reason, or what was matched.
-	Detail string
-}
-
-// The Progress statuses.
-const (
-	// StatusTurn heads a turn, carrying its input as the event.
-	StatusTurn = "turn"
-	// StatusMatched means the expectation was met.
-	StatusMatched = "matched"
-	// StatusFailed means the event arrived but did not satisfy the expectation.
-	StatusFailed = "failed"
-	// StatusTimeout means nothing of the expectation's kind arrived at all
-	// before its budget expired.
-	StatusTimeout = "timeout"
-)
 
 // session drives one scenario against a connected bot.
 type session struct {
@@ -193,8 +199,8 @@ type session struct {
 	diagMu sync.Mutex
 	// started is when the run began, the zero point of the debug trace.
 	started time.Time
-	// currentTurn is the turn the harness is working on, tagged onto each trace
-	// line. Zero before the first turn.
+	// currentTurn is the index of the turn the harness is working on, tagged
+	// onto each trace line; -1 before the first turn.
 	currentTurn int
 	// debugLog is a timestamped trace of the harness's own decisions, for
 	// diagnosing a flaky run.
@@ -225,13 +231,14 @@ const eventBuffer = 256
 // What goes wrong with the run itself is a failure of the result rather than an
 // error: a bot that never accepts the connection is a <connect> failure, one
 // that never becomes ready a <bot-ready> failure, and a harness that fails
-// mid-run an <error> failure scored against the turn it interrupted. Every turn
+// mid-run a <harness> failure scored against the turn it interrupted. Every turn
 // the run did not reach stays TurnNotRun. Only the caller ending ctx is
 // returned as an error.
 func (s *session) run(ctx context.Context, url string) (res Result, err error) {
-	res = Result{Scenario: s.scenario.Name}
+	res = Result{ScenarioName: s.scenario.Name}
 
 	s.started = time.Now()
+	s.currentTurn = -1
 	s.events = make(chan Event, eventBuffer)
 	s.seenAt = make(map[string]time.Time)
 	// One record per turn, filled in as the turns run. They start as not run
@@ -239,14 +246,16 @@ func (s *session) run(ctx context.Context, url string) (res Result, err error) {
 	// always says which turns were actually scored.
 	s.turns = make([]TurnResult, len(s.scenario.Turns))
 	for i := range s.turns {
-		s.turns[i] = TurnResult{Turn: i + 1, Status: TurnNotRun}
+		s.turns[i] = TurnResult{TurnIndex: i, Status: TurnNotRun}
 	}
 
 	// The diagnostics are attached however the run ends, including the error
 	// paths: a run that could not start is exactly when the trace is wanted.
 	defer func() {
-		res.Duration = time.Since(s.started)
-		res.DebugLog, res.Events = s.diagnostics()
+		res.DurationMS = int(time.Since(s.started).Milliseconds())
+		var events []Event
+		res.DebugLog, events = s.diagnostics()
+		res.EventsSeen = eventDicts(events)
 		res.Turns = s.turns
 	}()
 
@@ -274,7 +283,7 @@ func (s *session) run(ctx context.Context, url string) (res Result, err error) {
 }
 
 // drive opens the connection, converses, and closes it. A failure of the
-// harness itself, a panic included, is recorded as an <error> failure with its
+// harness itself, a panic included, is recorded as a <harness> failure with its
 // stack in the trace, so the run still yields a result.
 func (s *session) drive(ctx context.Context, url string) (failures []Failure, err error) {
 	c, err := dial(ctx, url)
@@ -323,10 +332,10 @@ func (s *session) converse(ctx context.Context) error {
 // runTurns drives the scenario's turns in order, filling in their records.
 func (s *session) runTurns(ctx context.Context) error {
 	for i, turn := range s.scenario.Turns {
-		s.setTurn(i + 1)
-		s.debugf("--- turn %d: %s", i+1, turn.input())
+		s.setTurn(i)
+		s.debugf("--- turn %d: %s", i, turn.input())
 		startedTurn := time.Now()
-		failures, err := s.runTurn(ctx, turn, i+1)
+		failures, err := s.runTurn(ctx, turn, i)
 		if err != nil {
 			return err
 		}
@@ -336,7 +345,7 @@ func (s *session) runTurns(ctx context.Context) error {
 			record.Status = TurnFailed
 		}
 		record.Failures = failures
-		record.Duration = time.Since(startedTurn)
+		record.DurationMS = int(time.Since(startedTurn).Milliseconds())
 		s.failures = append(s.failures, failures...)
 		if len(failures) == 0 {
 			continue
@@ -346,21 +355,21 @@ func (s *session) runTurns(ctx context.Context) error {
 		// turn. A scenario whose turns are scored independently sets
 		// stop_on_failure: false and drives all of them.
 		if s.scenario.stopsOnFailure() {
-			s.debugf("turn %d failed; stopping the scenario (stop_on_failure)", i+1)
+			s.debugf("turn %d failed; stopping the scenario (stop_on_failure)", i)
 			break
 		}
-		s.debugf("turn %d failed; continuing (stop_on_failure: false)", i+1)
+		s.debugf("turn %d failed; continuing (stop_on_failure: false)", i)
 	}
 	return nil
 }
 
 // runFailure is a failure of the run itself rather than of an expectation,
-// scored against the turn the harness is working on (0 before any).
+// scored against the turn the harness is working on (-1 before any).
 func (s *session) runFailure(event, reason, kind string) Failure {
 	s.diagMu.Lock()
 	turn := s.currentTurn
 	s.diagMu.Unlock()
-	return Failure{Turn: turn, Expectation: 0, Event: event, Reason: reason, Kind: kind}
+	return Failure{TurnIndex: turn, ExpectationIndex: -1, EventName: event, Reason: reason, Kind: kind}
 }
 
 // errorFailure traces a failure of the harness itself, with the stack when
@@ -370,7 +379,7 @@ func (s *session) errorFailure(reason string, stack []byte) Failure {
 	for line := range strings.Lines(string(stack)) {
 		s.debugf("%s", strings.TrimRight(line, "\n"))
 	}
-	f := s.runFailure(RunEventError, reason, FailureError)
+	f := s.runFailure(RunEventHarness, reason, FailureError)
 	s.recordFailure(f)
 	return f
 }
@@ -378,10 +387,10 @@ func (s *session) errorFailure(reason string, stack []byte) Failure {
 // recordFailure scores a failure of the run against the turn it interrupted,
 // if any. Before any turn started every turn stays not run.
 func (s *session) recordFailure(f Failure) {
-	if f.Turn < 1 || f.Turn > len(s.turns) {
+	if f.TurnIndex < 0 || f.TurnIndex >= len(s.turns) {
 		return
 	}
-	record := &s.turns[f.Turn-1]
+	record := &s.turns[f.TurnIndex]
 	record.Status = TurnFailed
 	record.Failures = append(record.Failures, f)
 }
@@ -399,7 +408,7 @@ func (s *session) debugf(format string, args ...any) {
 		elapsed = time.Since(s.started)
 	}
 	tag := "--"
-	if s.currentTurn > 0 {
+	if s.currentTurn >= 0 {
 		tag = fmt.Sprintf("t%d", s.currentTurn)
 	}
 	s.debugLog = append(s.debugLog,
@@ -422,8 +431,8 @@ func (s *session) progress(p Progress) {
 }
 
 // record adds what one expectation resolved to, to the turn it belongs to.
-func (s *session) record(turnNum int, r ExpectationResult) {
-	s.turns[turnNum-1].Expectations = append(s.turns[turnNum-1].Expectations, r)
+func (s *session) record(turnIdx int, r ExpectationResult) {
+	s.turns[turnIdx].Expectations = append(s.turns[turnIdx].Expectations, r)
 }
 
 // matchedText is what the expectation matched, which is recorded only where
@@ -601,71 +610,26 @@ func (s *session) refusal(ctx context.Context) error {
 }
 
 // requiredReportLevel is the least a bot has to report for this scenario's
-// assertions to be checkable: everything when a call's arguments are asserted or
-// a judge is asked about the call, the name when only the name is asserted, and
-// nothing more than the default when the scenario merely asserts that a call
-// happened.
+// assertions to be checkable, and whether it has to report anything beyond the
+// default at all.
 func (s *session) requiredReportLevel() (rtvi.FunctionCallReportLevel, bool) {
-	needsName := false
-	for _, turn := range s.scenario.Turns {
-		for _, exp := range turn.Expect {
-			// A judged call is put to the judge by name and arguments, so both
-			// have to be reported whatever the expectation matches on.
-			if exp.Event == EventFunctionCall && exp.Eval != "" {
-				return rtvi.ReportFull, true
-			}
-			for _, call := range exp.Calls {
-				if call.Args != nil {
-					return rtvi.ReportFull, true
-				}
-				if call.Name != "" {
-					needsName = true
-				}
-			}
-		}
-	}
-	return rtvi.ReportName, needsName
+	level := s.scenario.RequiredReportLevel()
+	return level, level != ""
 }
 
 // needsVADEvents reports whether the scenario references the raw VAD speaking
-// events, either asserting on one or scheduling from it. They are off by
-// default, so the harness asks for them only when they are wanted.
-func (s *session) needsVADEvents() bool {
-	for _, turn := range s.scenario.Turns {
-		if turn.SendAfter != nil && vadEvents[turn.SendAfter.Event] {
-			return true
-		}
-		for _, exp := range turn.Expect {
-			if vadEvents[exp.Event] {
-				return true
-			}
-		}
-	}
-	return false
-}
+// events. They are off by default, so the harness asks for them only when they
+// are wanted.
+func (s *session) needsVADEvents() bool { return s.scenario.NeedsVADEvents() }
 
 // needsMarkerEvents reports whether the scenario asserts on the markers the
-// bot's model emits. They never reach a client by default, being a diagnostic
-// rather than part of the conversation, so the harness asks for them only when a
-// scenario reads them.
-func (s *session) needsMarkerEvents() bool {
-	for _, turn := range s.scenario.Turns {
-		if turn.SendAfter != nil && turn.SendAfter.Event == EventLLMMarker {
-			return true
-		}
-		for _, exp := range turn.Expect {
-			if exp.Event == EventLLMMarker {
-				return true
-			}
-		}
-	}
-	return false
-}
+// bot's model emits, which never reach a client by default.
+func (s *session) needsMarkerEvents() bool { return s.scenario.NeedsMarkerEvents() }
 
 // runTurn sends the user's text and matches the turn's expectations in order.
 // Every expectation's budget is anchored at the send, so a stalled turn fails
 // within a single budget rather than one per expectation.
-func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failure, error) {
+func (s *session) runTurn(ctx context.Context, turn Turn, turnIdx int) ([]Failure, error) {
 	// A turn's tool calls are matched by name in any order; start each turn with
 	// an empty buffer so a prior turn's calls cannot carry over.
 	s.pendingCalls = nil
@@ -673,16 +637,18 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 	if turn.SendAfter != nil {
 		if err := s.waitSendAfter(ctx, *turn.SendAfter); err != nil {
 			// The turn's input never went out, so none of its expectations can be
-			// judged. Report the schedule itself, at expectation 0.
+			// judged. Report the schedule itself, at expectation -1.
 			name := turn.SendAfter.Event
 			if name == "" {
 				name = "send_after"
 			}
 			reason := fmt.Sprintf("%v", err)
 			s.debugf("FAIL: %s: %s", name, reason)
-			s.progress(Progress{Turn: turnNum, Event: name, Status: StatusTimeout, Detail: reason})
+			s.progress(Progress{
+				TurnIndex: turnIdx, ExpectationIndex: -1, EventName: name, Status: StatusTimeout, Detail: reason,
+			})
 			return []Failure{{
-				Turn: turnNum, Expectation: 0, Event: name, Reason: reason, Kind: FailureSendAfterTimeout,
+				TurnIndex: turnIdx, ExpectationIndex: -1, EventName: name, Reason: reason, Kind: FailureSendAfterTimeout,
 			}}, nil
 		}
 	}
@@ -691,7 +657,7 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 		return nil, err
 	}
 	anchor := time.Now()
-	s.progress(Progress{Turn: turnNum, Event: turn.input(), Status: StatusTurn})
+	s.progress(Progress{TurnIndex: turnIdx, ExpectationIndex: -1, EventName: turn.input(), Status: StatusTurn})
 
 	var failures []Failure
 	for j, exp := range turn.Expect {
@@ -699,13 +665,13 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 		if exp.WithinMS > 0 {
 			budget = time.Duration(exp.WithinMS) * time.Millisecond
 		}
-		fail, absent := s.matchExpectation(ctx, exp, anchor.Add(budget), budget, turnNum, j+1)
-		s.record(turnNum, ExpectationResult{
-			Expectation: j + 1, Event: exp.Event, Passed: fail == nil, Matched: s.matchedText(fail),
+		fail, absent := s.matchExpectation(ctx, exp, anchor.Add(budget), budget, turnIdx, j)
+		s.record(turnIdx, ExpectationResult{
+			ExpectationIndex: j, EventName: exp.Event, Passed: fail == nil, Matched: s.matchedText(fail),
 		})
 		switch fail {
 		case nil:
-			s.progress(Progress{Turn: turnNum, Expectation: j + 1, Event: exp.Event, Status: StatusMatched})
+			s.progress(Progress{TurnIndex: turnIdx, ExpectationIndex: j, EventName: exp.Event, Status: StatusMatched})
 		default:
 			failures = append(failures, *fail)
 			s.debugf("FAIL: %s: %s", exp.Event, fail.Reason)
@@ -714,7 +680,7 @@ func (s *session) runTurn(ctx context.Context, turn Turn, turnNum int) ([]Failur
 				status = StatusTimeout
 			}
 			s.progress(Progress{
-				Turn: turnNum, Expectation: j + 1, Event: exp.Event,
+				TurnIndex: turnIdx, ExpectationIndex: j, EventName: exp.Event,
 				Status: status, Detail: fail.Reason,
 			})
 		}
@@ -843,10 +809,10 @@ type failFunc func(reason, kind string) *Failure
 // interim filler ("Let me check on that.") or an on-connect greeting rather than
 // mistaking it for the turn's answer.
 func (s *session) matchExpectation(
-	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration, turnNum, expNum int,
+	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration, turnIdx, expIdx int,
 ) (*Failure, bool) {
 	fail := func(reason, kind string) *Failure {
-		return &Failure{Turn: turnNum, Expectation: expNum, Event: exp.Event, Reason: reason, Kind: kind}
+		return &Failure{TurnIndex: turnIdx, ExpectationIndex: expIdx, EventName: exp.Event, Reason: reason, Kind: kind}
 	}
 	missing := func() *Failure {
 		return fail(fmt.Sprintf("no matching %s event arrived within %s", exp.Event, budget), FailureTimeout)

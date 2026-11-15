@@ -166,6 +166,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   **Breaking:** a stdio server no longer inherits the whole environment. It
   is given only HOME, LOGNAME, PATH, SHELL, TERM and USER (their Windows
   equivalents there), with `Env` laid over them.
+- **The eval harness reads the full scenario format.** Scenarios gain
+  `user:` and `judge:` blocks, parsed into the typed configuration the
+  services are built from; turns gain `audio:`, `image:` and `user:` lists
+  with pauses; expectations gain `check_from:`, `response` (read as
+  `llm_response` in text modality) and `function_call_stopped`. Simulation
+  (`persona:`) and rubric (`success:`) files are parsed with their metrics,
+  and results gain the `bot_ended`, `audio_unsupported` and
+  `judge_no_verdict` failure kinds and `Skipped`. A file without a
+  `scenarios:` list, and `trigger_disconnect:`, are deprecated.
+  **Breaking:** turns and expectations in results are numbered from 0, a
+  turn-level or run-level failure uses `-1`, and the run's own failure is
+  labelled `<harness>`; result types are renamed (`ScriptResult`,
+  `ScriptTurnResult`, `AssertionFailure` with `TurnIndex`,
+  `ExpectationIndex`, `EventName`, `DurationMS`, `EventsSeen`), with the old
+  names kept as deprecated aliases; `ScenarioFile.Scenarios` holds scripted
+  scenarios, simulations and rubrics; parse errors are `*ScenarioError`;
+  `tts_response` in text modality and `eval:` on `function_call_stopped` no
+  longer load.
 
 ### Changed
 

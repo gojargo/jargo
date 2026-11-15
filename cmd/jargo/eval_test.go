@@ -449,10 +449,10 @@ func TestEvalRunPlaysEachScenarioOfAGroupFile(t *testing.T) {
 }
 
 // resultOf is a result whose turns have the given statuses.
-func resultOf(statuses ...string) eval.Result {
-	res := eval.Result{Scenario: "s"}
+func resultOf(statuses ...string) eval.ScriptResult {
+	res := eval.ScriptResult{ScenarioName: "s"}
 	for i, s := range statuses {
-		res.Turns = append(res.Turns, eval.TurnResult{Turn: i + 1, Status: s})
+		res.Turns = append(res.Turns, eval.ScriptTurnResult{TurnIndex: i, Status: s})
 	}
 	return res
 }
@@ -541,7 +541,7 @@ turns:
 		t.Fatalf("expected the run to fail\noutput:\n%s", out)
 	}
 	if !strings.Contains(out, "FAIL tally 1/2 turns") ||
-		!strings.Contains(out, "turn 1 llm_response text_mismatch: ") {
+		!strings.Contains(out, "turn 0 llm_response text_mismatch: ") {
 		t.Fatalf("output lacks the tally or the failure:\n%s", out)
 	}
 }
