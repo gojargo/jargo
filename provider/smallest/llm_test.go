@@ -175,14 +175,15 @@ func TestDeveloperMessagesAreConvertedToUser(t *testing.T) {
 // The prompt cache key travels in the request body, and the caller's own extra
 // fields win over it, as they do over every other request parameter.
 func TestPromptCacheKeyReachesTheRequest(t *testing.T) {
-	req := generate(t, newLLMServer(t), smallest.LLMConfig{PromptCacheKey: "conversation-1"})
+	cfg := smallest.LLMConfig{PromptCacheKey: "conversation-1"} // not a secret, gitleaks:allow
+	req := generate(t, newLLMServer(t), cfg)
 	if req.body["prompt_cache_key"] != "conversation-1" {
 		t.Errorf("prompt_cache_key = %v, want conversation-1", req.body["prompt_cache_key"])
 	}
 
 	req = generate(t, newLLMServer(t), smallest.LLMConfig{
 		Extra:          map[string]any{"prompt_cache_key": "from-extra"},
-		PromptCacheKey: "conversation-1",
+		PromptCacheKey: "conversation-1", // not a secret, gitleaks:allow
 	})
 	if req.body["prompt_cache_key"] != "from-extra" {
 		t.Errorf("prompt_cache_key = %v, want the caller's extra", req.body["prompt_cache_key"])
