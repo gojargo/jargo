@@ -756,15 +756,3 @@ func TestARunThatNeverReachesTheBotClosesItsJudge(t *testing.T) {
 		t.Fatal("the judge was left open")
 	}
 }
-
-func TestASkippedRunClosesItsJudge(t *testing.T) {
-	m := suiteDir(t, "suite:\n  - bot_url: ws://127.0.0.1:1\n    scenarios: [missing.yaml]\n", 0)
-	judge := &closingJudge{}
-	results := eval.RunSuite(t.Context(), m, func() eval.Judge { return judge })
-	if len(results) != 1 || results[0].Err == nil {
-		t.Fatalf("got %+v, want the missing scenario reported", results)
-	}
-	if !judge.wasClosed() {
-		t.Fatal("the judge was left open")
-	}
-}

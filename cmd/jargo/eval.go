@@ -45,6 +45,8 @@ func evalRunCmd() *cobra.Command {
 		verbose         bool
 		cacheDir        string
 		noCache         bool
+		logsDir         string
+		debugLogs       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run <scenario.yaml|dir>...",
@@ -69,11 +71,19 @@ func evalRunCmd() *cobra.Command {
 		"directory for cached synthesized user audio (default <user-cache-dir>/jargo/eval/tts)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false,
 		"disable the user-audio cache: synthesize every turn again (no reads or writes)")
+	cmd.Flags().StringVar(&logsDir, "logs-dir", ".",
+		"directory for each scenario's logs: <logs-dir>/<scenario>.eval.log (+ .debug.log)")
+	cmd.Flags().BoolVarP(&debugLogs, "debug", "d", false,
+		"also save <scenario>.debug.log with the harness's full per-pipeline logs")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if botURL == "" {
 			return errBotURLRequired
 		}
+		// The logs go to <scenario>.debug.log under --debug; either way, keep
+		// them off the console so they cannot corrupt the output.
+		restore := eval.QuietLogs()
+		defer restore()
 		paths, err := expandScenarioPaths(args)
 		if err != nil {
 			return err
@@ -112,10 +122,14 @@ func evalRunCmd() *cobra.Command {
 				if verbose {
 					opts.OnProgress = func(p eval.ScriptTurnProgress) { printProgress(out, p) }
 				}
-				res, err := eval.RunURL(cmd.Context(), scenario, botURL, opts)
+				stem := strings.ReplaceAll(scenario.Name, "/", "__")
+				ctx, finishLogs := eval.CapturePipelineLogs(cmd.Context(), logsDir, stem, scenario.Name, debugLogs)
+				res, err := eval.RunURL(ctx, scenario, botURL, opts)
+				finishLogs()
 				if err != nil {
 					return fmt.Errorf("%s: %w", scenario.Name, err)
 				}
+				writeTrace(logsDir, stem, res.DebugLog)
 				printResult(out, res)
 				if !res.Passed() {
 					failed++
@@ -128,6 +142,15 @@ func evalRunCmd() *cobra.Command {
 		return nil
 	}
 	return cmd
+}
+
+// writeTrace saves a run's decision trace as <logs-dir>/<stem>.eval.log. A
+// trace that cannot be written is dropped: it is a by-product of the run.
+func writeTrace(logsDir, stem string, trace []string) {
+	if len(trace) == 0 || os.MkdirAll(logsDir, 0o750) != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(logsDir, stem+".eval.log"), []byte(strings.Join(trace, "\n")+"\n"), 0o600)
 }
 
 // scriptsToPlay are a file's scripted scenarios, and how many of its scenarios
@@ -148,12 +171,6 @@ func scriptsToPlay(out io.Writer, file *eval.ScenarioFile) ([]*eval.ScriptScenar
 	}
 	return scripts, unplayable
 }
-
-// scenarioSuffixes are the file extensions a scenario is written under, which
-// are the ones a manifest resolves a bare scenario name to.
-//
-//nolint:gochecknoglobals // fixed set, read only
-var scenarioSuffixes = []string{".yaml", ".yml"}
 
 // expandScenarioPaths turns each argument into the scenarios to play. A file
 // stands for itself; a directory stands for the scenarios directly in it, in
@@ -180,7 +197,7 @@ func expandScenarioPaths(args []string) ([]string, error) {
 		found := len(paths)
 		for _, e := range entries {
 			path := filepath.Join(arg, e.Name())
-			if !e.IsDir() && slices.Contains(scenarioSuffixes, filepath.Ext(e.Name())) && eval.IsScenarioFile(path) {
+			if !e.IsDir() && slices.Contains(eval.ScenarioSuffixes, filepath.Ext(e.Name())) && eval.IsScenarioFile(path) {
 				paths = append(paths, path)
 			}
 		}
@@ -196,50 +213,6 @@ func expandScenarioPaths(args []string) ([]string, error) {
 // what could not be read.
 func scenarioName(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-}
-
-// evalSuiteCmd is `jargo eval suite`: run a manifest of scenarios concurrently.
-func evalSuiteCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "suite <manifest.yaml>",
-		Short: "Run a manifest of scenarios against one or more bots, concurrently",
-		Args:  cobra.ExactArgs(1),
-	}
-	getJudge := addJudgeFlags(cmd.Flags())
-
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		m, err := eval.LoadManifest(args[0])
-		if err != nil {
-			return err
-		}
-		results := eval.RunSuite(cmd.Context(), m, getJudge)
-		out := cmd.OutOrStdout()
-		p := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
-
-		failed := 0
-		for _, r := range results {
-			line := fmt.Sprintf("%-5s %s (%s)", suiteStatus(r), filepath.Base(r.Scenario), r.BotURL)
-			if tally := turnTally(r.Result); tally != "" {
-				line += " " + tally
-			}
-			p("%s\n", line)
-			if r.Err != nil {
-				p("  %v\n", r.Err)
-			}
-			for _, f := range r.Result.Failures {
-				p("  - %s\n", failureLine(f))
-			}
-			if !r.Passed() {
-				failed++
-			}
-		}
-		p("\n%d/%d scenarios passed\n", len(results)-failed, len(results))
-		if failed > 0 {
-			return fmt.Errorf("%w: %d of %d", errScenariosFailed, failed, len(results))
-		}
-		return nil
-	}
-	return cmd
 }
 
 // printProgress prints a progress record as it arrives (verbose mode): a line
@@ -317,18 +290,6 @@ func turnTally(res eval.ScriptResult) string {
 		return ""
 	}
 	return fmt.Sprintf("%d/%d turns", len(res.Turns)-failed, len(res.Turns))
-}
-
-// suiteStatus is the one-word status for a suite result.
-func suiteStatus(r eval.SuiteResult) string {
-	switch {
-	case r.Err != nil:
-		return "ERROR"
-	case !r.Result.Passed():
-		return "FAIL"
-	default:
-		return "PASS"
-	}
 }
 
 // addJudgeFlags registers the --judge-* flags on f and returns a getter that

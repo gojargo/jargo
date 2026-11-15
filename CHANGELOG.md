@@ -249,6 +249,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `service: moonshine`, reading `JARGO_MOONSHINE_LIB`. A segmented STT
   provider can label its transcripts with a language
   (`stt.LanguageTranscriber`).
+- **`jargo eval suite` builds and spawns the bots in a manifest.** An
+  entry's `bot:` is a Go main package directory: the suite builds each
+  distinct bot once into `<runs_dir>/<name>/bin`, spawns it for each run on
+  its own port (`spawn`, default `"{bot} --port {port}"`, `base_port` 7900)
+  and stops it after the run. New manifest keys: `bots_dir`, `scenarios_dir`
+  (bare names like `scripted/greet`), `runs_dir`, `record`, `cache_dir`,
+  `repeat` (attempt-major) and `runner_body` (`{path:}` or `{data:}`). Each
+  run writes `<prefix>.log`, `.eval.log` and `.debug.log`, and the suite
+  writes `results.jsonl`. New flags: `-p`, `-s`, `-k`, `-n`, `-r`, `-c`,
+  `--runs-dir`, `--bots-dir`, `--scenarios-dir`, `--base-port`, `--spawn`,
+  `--cache-dir`, `--no-cache`, `-t`, `-a`, `-d`. `bot_url:` entries still
+  connect to a bot already running. `jargo eval run` gains `--logs-dir` and
+  `-d/--debug`. **Breaking:** `eval.RunSuite`, `eval.SuiteResult` and
+  `eval.SuiteEntry` are replaced by `eval.Suite`, `eval.SuiteRun` and
+  `eval.NewSuite`; `eval.LoadManifest` takes `eval.ManifestOverrides`; the
+  suite's `--judge-*` flags are removed, judges coming from each scenario's
+  `judge:` block; the suite's output format changed.
 
 ### Changed
 

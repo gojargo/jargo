@@ -90,7 +90,7 @@ turns:
 
 	var out strings.Builder
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"eval", "run", path, "--bot-url", wsURL})
+	cmd.SetArgs([]string{"eval", "run", path, "--bot-url", wsURL, "--logs-dir", t.TempDir()})
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 
@@ -124,17 +124,103 @@ turns:
 		t.Fatal(err)
 	}
 
+	out, err := suiteCLI(t, filepath.Join(dir, "m.yaml"), "--runs-dir", dir, "-n", "nightly")
+	if err != nil {
+		t.Fatalf("eval suite failed: %v\noutput:\n%s", err, out)
+	}
+	for _, want := range []string{"Scripted scenarios:", "Settings:", "✓ " + ws + " s", "1/1 passed", "logs: "} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nightly", "results.jsonl")); err != nil {
+		t.Fatalf("no results.jsonl under the named run: %v", err)
+	}
+}
+
+// suiteCLI runs `jargo eval suite` on manifest with flags, returning the output
+// and the error.
+func suiteCLI(t *testing.T, manifest string, flags ...string) (string, error) {
+	t.Helper()
 	var out strings.Builder
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"eval", "suite", filepath.Join(dir, "m.yaml")})
+	cmd.SetArgs(append([]string{"eval", "suite", manifest}, flags...))
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
+	err := cmd.Execute()
+	return out.String(), err
+}
 
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("eval suite failed: %v\noutput:\n%s", err, out.String())
+// A filter that leaves no run fails rather than passing on nothing.
+func TestEvalSuiteFilterThatMatchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"),
+		[]byte("suite:\n  - bot_url: ws://127.0.0.1:1/ws\n    scenarios: [s.yaml]\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "1/1 scenarios passed") {
-		t.Fatalf("expected summary in output, got:\n%s", out.String())
+	out, err := suiteCLI(t, filepath.Join(dir, "m.yaml"), "-p", "nothing", "--runs-dir", dir)
+	if err == nil || !strings.Contains(out, "No runs match.") {
+		t.Fatalf("err = %v\noutput:\n%s", err, out)
+	}
+	out, err = suiteCLI(t, filepath.Join(dir, "m.yaml"), "-k", "persona", "--runs-dir", dir)
+	if err == nil || !strings.Contains(err.Error(), "--kind") {
+		t.Fatalf("err = %v\noutput:\n%s", err, out)
+	}
+}
+
+// A repeated sweep measures a rate: it reports each pair's pass rate and
+// exits 0 even when attempts fail.
+func TestEvalSuiteRepeatReportsRates(t *testing.T) {
+	srv := httptest.NewServer(eval.Handler(echoBot))
+	defer srv.Close()
+	ws := "ws" + strings.TrimPrefix(srv.URL, "http")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "s.yaml"), []byte(`name: s
+turns:
+  - user: "ping"
+    expect:
+      - event: llm_response
+        text_contains: "pong"
+        within_ms: 500
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Appendf(nil, "suite:\n  - bot_url: %s\n    scenarios: [s.yaml]\n", ws)
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := suiteCLI(t, filepath.Join(dir, "m.yaml"), "-r", "2", "--runs-dir", dir)
+	if err != nil {
+		t.Fatalf("a repeated sweep failed: %v\noutput:\n%s", err, out)
+	}
+	for _, want := range []string{
+		"2 (1 eval x 2 attempts)", "Pass rate:", "0/2 (0%)", "Failures (2 of 2):", "s #2", "results: ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// --logs-dir is where a run's trace goes, and -d adds its debug log.
+func TestEvalRunLogsDirAndDebug(t *testing.T) {
+	srv := httptest.NewServer(eval.Handler(echoBot))
+	defer srv.Close()
+	path := writeScenario(t, "name: logged\nscenarios:\n  - name: one\n    turns:\n"+
+		"      - user: ping\n        expect:\n          - event: llm_response\n")
+	logs := t.TempDir()
+	var out strings.Builder
+	cmd := rootCmd()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	cmd.SetArgs([]string{"eval", "run", path, "--bot-url", url, "--logs-dir", logs, "-d"})
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("eval run failed: %v\noutput:\n%s", err, out.String())
+	}
+	trace, err := os.ReadFile(filepath.Join(logs, "logged__one.eval.log")) //nolint:gosec // a test file
+	if err != nil || !strings.Contains(string(trace), "handshake: ok") {
+		t.Fatalf("trace = %s, %v", trace, err)
 	}
 }
 
@@ -314,7 +400,7 @@ func TestEvalRunExpandsADirectory(t *testing.T) {
 
 	var out strings.Builder
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"eval", "run", dir, "--bot-url", wsURL})
+	cmd.SetArgs([]string{"eval", "run", dir, "--bot-url", wsURL, "--logs-dir", t.TempDir()})
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 
@@ -336,7 +422,7 @@ func TestEvalRunExpandsADirectory(t *testing.T) {
 func TestEvalRunRejectsADirectoryWithNoScenarios(t *testing.T) {
 	var out strings.Builder
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"eval", "run", t.TempDir(), "--bot-url", "ws://example.test"})
+	cmd.SetArgs([]string{"eval", "run", t.TempDir(), "--bot-url", "ws://example.test", "--logs-dir", t.TempDir()})
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 
@@ -368,7 +454,7 @@ func TestEvalRunRecordsAScenarioThatWillNotLoad(t *testing.T) {
 
 	var out strings.Builder
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"eval", "run", dir, "--bot-url", wsURL})
+	cmd.SetArgs([]string{"eval", "run", dir, "--bot-url", wsURL, "--logs-dir", t.TempDir()})
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 
@@ -432,7 +518,7 @@ func TestEvalRunPlaysEachScenarioOfAGroupFile(t *testing.T) {
 
 	var out strings.Builder
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"eval", "run", group, single, "--bot-url", wsURL})
+	cmd.SetArgs([]string{"eval", "run", group, single, "--bot-url", wsURL, "--logs-dir", t.TempDir()})
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	if err := cmd.Execute(); err != nil {
@@ -489,7 +575,7 @@ func runCLI(t *testing.T, path, url string, flags ...string) (string, error) {
 	t.Helper()
 	var out strings.Builder
 	cmd := rootCmd()
-	cmd.SetArgs(append([]string{"eval", "run", path, "--bot-url", url}, flags...))
+	cmd.SetArgs(append([]string{"eval", "run", path, "--bot-url", url, "--logs-dir", t.TempDir()}, flags...))
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	err := cmd.Execute()

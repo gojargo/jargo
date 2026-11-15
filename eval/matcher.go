@@ -456,7 +456,7 @@ func (m *ExpectationMatcher) checkCallJudge(
 	if args == nil {
 		args = map[string]any{}
 	}
-	verdict := m.judge.EvaluateCall(ctx, name, args, exp.Eval)
+	verdict := m.judge.EvaluateCall(withEvalPipeline(ctx, PipelineJudge), name, args, exp.Eval)
 	m.trace.Log(fmt.Sprintf("eval: %s (%s) %s", verdict.Verdict, matchSummary(event), verdict.Reason))
 	if verdict.Passed() {
 		return nil
@@ -482,7 +482,7 @@ func (m *ExpectationMatcher) evaluateAggregate(
 		}
 		// The reply segments were added to the judge's conversation in the
 		// aggregation loop; the judge evaluates that context, not aggregate.
-		verdict := m.judge.Evaluate(ctx, exp.Eval)
+		verdict := m.judge.Evaluate(withEvalPipeline(ctx, PipelineJudge), exp.Eval)
 		switch verdict.Verdict {
 		case VerdictNone:
 			return aggregateNoVerdict, "judge said none: " + verdict.Reason
@@ -630,7 +630,7 @@ func (m *ExpectationMatcher) checkJudge(
 			fmt.Sprintf("event has no text/transcript to judge: %v", event), FailureNoContent)
 	}
 	m.judge.AddAssistantMessage(content)
-	verdict := m.judge.Evaluate(ctx, exp.Eval)
+	verdict := m.judge.Evaluate(withEvalPipeline(ctx, PipelineJudge), exp.Eval)
 	if verdict.Passed() {
 		return nil
 	}

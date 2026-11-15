@@ -114,19 +114,6 @@ func unwrapDocument(node *yaml.Node) *yaml.Node {
 	return node
 }
 
-// mappingValue returns a mapping node's value for key, or nil when it has none.
-func mappingValue(node *yaml.Node, key string) *yaml.Node {
-	if node.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			return node.Content[i+1]
-		}
-	}
-	return nil
-}
-
 // The plain scalars a scenario file resolves to something other than a string.
 //
 //nolint:gochecknoglobals // compiled once, read only

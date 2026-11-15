@@ -161,6 +161,7 @@ func (s *CachingTTSService) RunTTS(
 // Synthesize is the audio for text, from the cache or by driving the inner
 // service, as 16-bit mono PCM at the service's sample rate.
 func (s *CachingTTSService) Synthesize(ctx context.Context, text string) ([]byte, error) {
+	ctx = withEvalPipeline(ctx, PipelineSpeech)
 	var (
 		pcm      []byte
 		reported error
