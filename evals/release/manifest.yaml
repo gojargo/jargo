@@ -94,7 +94,11 @@ suite:
     scenarios: [scripted/capital_question]
   - bot: voice/voice-resemble
     scenarios: [scripted/capital_question]
+  - bot: voice/voice-rime
+    scenarios: [scripted/capital_question]
   - bot: voice/voice-rime-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-rime-v1
     scenarios: [scripted/capital_question]
   - bot: voice/voice-sarvam
     scenarios: [scripted/capital_question]
