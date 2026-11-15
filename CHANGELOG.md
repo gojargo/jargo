@@ -71,6 +71,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   update with no text fires nothing. The `voice-deepgram-flux` example logs each
   update, and the two OpenAI Responses function-calling examples log the LLM's
   connection errors.
+- **Feature and MCP examples.** `features-dtmf-menu` (a keypad-driven phone
+  menu on the DTMF aggregator), `features-voicemail-detection` (the voicemail
+  detector with a Jev classifier) and `mcp-stdio` (tools from an MCP server
+  run over stdio).
 
 ### Changed
 

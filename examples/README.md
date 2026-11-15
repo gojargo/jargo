@@ -131,6 +131,19 @@ too, for the user aggregator's default turn strategies.
 | [`realtime-gemini-live-vertex`](realtime/realtime-gemini-live-vertex) | Gemini Live through Vertex AI, with tools configured on the service. | Google Cloud |
 | [`realtime-aws-nova-sonic`](realtime/realtime-aws-nova-sonic) | Amazon Nova Sonic, with a tool, session continuation and transcript logging. | AWS |
 
+## Features
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`features-dtmf-menu`](features/features-dtmf-menu) | A phone menu driven by keypad presses only: a DTMF aggregator turns each key sequence into a transcription for the LLM, with no speech-to-text. Runs on a telephony transport. | OpenAI, Cartesia |
+| [`features-voicemail-detection`](features/features-voicemail-detection) | Tells a person from a voicemail greeting with a Jev classifier, holds the bot's speech until it knows, and leaves a message on voicemail. | Deepgram, OpenAI, Cartesia, TypeSafe |
+
+## MCP
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`mcp-stdio`](mcp/mcp-stdio) | Tools from the memory MCP server, started over stdio with npx. Needs Node.js. | Deepgram, Anthropic, Cartesia |
+
 ## Transports
 
 | Example | What it shows | Keys |
