@@ -105,6 +105,21 @@ jobs:
       - run: go test -race ./...
         working-directory: ${{ matrix.module }}
 
+  # An example that needs a network bus is a module of its own, so only it
+  # depends on the bus's client. Build and vet it against the tree.
+  example-modules:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [examples/multi-worker/distributed-handoff/redis-handoff]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+      - run: go vet ./... && go build ./...
+        working-directory: ${{ matrix.module }}
+
   # The *.pb.go clients are checked in, so nothing else would notice a .proto
   # edit that was never regenerated. Regenerate with the pinned buf and plugin
   # versions and fail if the result differs from the tree.

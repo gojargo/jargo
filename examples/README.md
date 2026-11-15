@@ -348,6 +348,94 @@ Tools save, list and load the conversation as files.
 | [`observability-heartbeats`](observability/observability-heartbeats) | Heartbeat monitoring catching a stalled pipeline. | None |
 | [`observability-observer`](observability/observability-observer) | A custom observer alongside the LLM log and filtered debug log observers. | Deepgram, Cartesia, OpenAI |
 
+## Update settings
+
+Each changes its service's settings while the conversation runs, starting ten
+seconds after the client connects, with the frame that service takes.
+
+| Example | Service |
+| --- | --- |
+| [`llm-anthropic`](update-settings/llm/llm-anthropic) | Anthropic LLM |
+| [`llm-aws-bedrock`](update-settings/llm/llm-aws-bedrock) | AWS Bedrock LLM |
+| [`llm-aws-nova-sonic`](update-settings/llm/llm-aws-nova-sonic) | Amazon Nova Sonic LLM |
+| [`llm-azure`](update-settings/llm/llm-azure) | Azure OpenAI LLM |
+| [`llm-azure-realtime`](update-settings/llm/llm-azure-realtime) | Azure OpenAI Realtime LLM |
+| [`llm-cerebras`](update-settings/llm/llm-cerebras) | Cerebras LLM |
+| [`llm-deepseek`](update-settings/llm/llm-deepseek) | DeepSeek LLM |
+| [`llm-fireworks`](update-settings/llm/llm-fireworks) | Fireworks LLM |
+| [`llm-gemini-live`](update-settings/llm/llm-gemini-live) | Gemini Live LLM |
+| [`llm-gemini-live-vertex`](update-settings/llm/llm-gemini-live-vertex) | Gemini Live on Vertex AI LLM |
+| [`llm-google`](update-settings/llm/llm-google) | Google Gemini LLM |
+| [`llm-google-vertex`](update-settings/llm/llm-google-vertex) | Gemini on Vertex AI LLM |
+| [`llm-grok`](update-settings/llm/llm-grok) | xAI Grok LLM |
+| [`llm-groq`](update-settings/llm/llm-groq) | Groq LLM |
+| [`llm-mistral`](update-settings/llm/llm-mistral) | Mistral LLM |
+| [`llm-nvidia`](update-settings/llm/llm-nvidia) | NVIDIA LLM |
+| [`llm-ollama`](update-settings/llm/llm-ollama) | Ollama LLM |
+| [`llm-openai`](update-settings/llm/llm-openai) | OpenAI LLM |
+| [`llm-openai-realtime`](update-settings/llm/llm-openai-realtime) | OpenAI Realtime LLM |
+| [`llm-openai-responses`](update-settings/llm/llm-openai-responses) | OpenAI Responses API LLM |
+| [`llm-openai-responses-http`](update-settings/llm/llm-openai-responses-http) | OpenAI Responses API over HTTP LLM |
+| [`llm-openrouter`](update-settings/llm/llm-openrouter) | OpenRouter LLM |
+| [`llm-perplexity`](update-settings/llm/llm-perplexity) | Perplexity LLM |
+| [`llm-qwen`](update-settings/llm/llm-qwen) | Qwen LLM |
+| [`llm-sambanova`](update-settings/llm/llm-sambanova) | SambaNova LLM |
+| [`llm-sarvam`](update-settings/llm/llm-sarvam) | Sarvam LLM |
+| [`llm-smallest`](update-settings/llm/llm-smallest) | Smallest AI LLM |
+| [`llm-together`](update-settings/llm/llm-together) | Together AI LLM |
+| [`stt-cartesia`](update-settings/stt/stt-cartesia) | Cartesia speech-to-text |
+| [`stt-deepgram`](update-settings/stt/stt-deepgram) | Deepgram speech-to-text |
+| [`stt-deepgram-flux`](update-settings/stt/stt-deepgram-flux) | Deepgram Flux speech-to-text |
+| [`stt-google`](update-settings/stt/stt-google) | Google Cloud speech-to-text |
+| [`stt-gradium`](update-settings/stt/stt-gradium) | Gradium speech-to-text |
+| [`stt-soniox`](update-settings/stt/stt-soniox) | Soniox speech-to-text |
+| [`stt-speechmatics`](update-settings/stt/stt-speechmatics) | Speechmatics speech-to-text |
+| [`tts-assemblyai`](update-settings/tts/tts-assemblyai) | AssemblyAI text-to-speech |
+| [`tts-asyncai`](update-settings/tts/tts-asyncai) | Async text-to-speech |
+| [`tts-azure`](update-settings/tts/tts-azure) | Azure OpenAI text-to-speech |
+| [`tts-cartesia`](update-settings/tts/tts-cartesia) | Cartesia text-to-speech |
+| [`tts-cartesia-http`](update-settings/tts/tts-cartesia-http) | Cartesia over HTTP text-to-speech |
+| [`tts-deepgram`](update-settings/tts/tts-deepgram) | Deepgram text-to-speech |
+| [`tts-deepgram-flux`](update-settings/tts/tts-deepgram-flux) | Deepgram Flux text-to-speech |
+| [`tts-deepgram-http`](update-settings/tts/tts-deepgram-http) | Deepgram over HTTP text-to-speech |
+| [`tts-elevenlabs`](update-settings/tts/tts-elevenlabs) | ElevenLabs text-to-speech |
+| [`tts-google-stream`](update-settings/tts/tts-google-stream) | Google Cloud streaming text-to-speech |
+| [`tts-gradium`](update-settings/tts/tts-gradium) | Gradium text-to-speech |
+| [`tts-inworld`](update-settings/tts/tts-inworld) | Inworld text-to-speech |
+| [`tts-kokoro`](update-settings/tts/tts-kokoro) | local Kokoro text-to-speech |
+| [`tts-neuphonic`](update-settings/tts/tts-neuphonic) | Neuphonic text-to-speech |
+| [`tts-neuphonic-http`](update-settings/tts/tts-neuphonic-http) | Neuphonic over HTTP text-to-speech |
+| [`tts-pockettts`](update-settings/tts/tts-pockettts) | local Pocket TTS text-to-speech |
+| [`tts-resembleai`](update-settings/tts/tts-resembleai) | Resemble AI text-to-speech |
+| [`tts-rime`](update-settings/tts/tts-rime) | Rime text-to-speech |
+| [`tts-sarvam`](update-settings/tts/tts-sarvam) | Sarvam text-to-speech |
+
+## Multi-worker
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`local-handoff-two-agents`](multi-worker/local-handoff/local-handoff-two-agents) | A main worker bridges the transport to the bus, and two LLM workers (greeter and support) hand the conversation to each other with tools. | Deepgram, OpenAI, Cartesia |
+| [`local-handoff-two-agents-tts`](multi-worker/local-handoff/local-handoff-two-agents-tts) | The same handoff, with each LLM worker running its own voice and the main worker playing the audio it receives over the bus. | Deepgram, OpenAI, Cartesia |
+| [`parallel-debate`](multi-worker/parallel-debate/parallel-debate) | A moderator tool sends a topic to three LLM workers in parallel through a job group and summarizes their answers. | Deepgram, OpenAI, Cartesia |
+| [`sensor-controller`](multi-worker/sensor-controller/sensor-controller) | A voice agent forwards requests as jobs to a second worker running a simulated temperature sensor and an LLM with tools over it. | Deepgram, OpenAI, Cartesia |
+| [`openai-responses-frontend`](multi-worker/llm-with-backend/openai-responses-frontend) | A frontend on the OpenAI Responses API delegates tool work to a Claude backend worker. | Deepgram, OpenAI, Anthropic, Cartesia |
+| [`openai-responses-frontend-predictive-delegation`](multi-worker/llm-with-backend/openai-responses-frontend-predictive-delegation) | The same, with a Jev classifier deciding after each request whether to start the delegation early. | Deepgram, OpenAI, Anthropic, Cartesia, TypeSafe |
+| [`anthropic-frontend`](multi-worker/llm-with-backend/anthropic-frontend) | A frontend on Claude delegates tool work to a Claude backend worker. | Deepgram, Anthropic, Cartesia |
+| [`google-frontend`](multi-worker/llm-with-backend/google-frontend) | A frontend on Gemini delegates tool work to a Claude backend worker. | Deepgram, Google AI, Anthropic, Cartesia |
+| [`openai-realtime-frontend`](multi-worker/llm-with-backend/openai-realtime-frontend) | An OpenAI Realtime frontend delegates tool work to a Claude backend worker. | OpenAI, Anthropic |
+| [`gemini-live-frontend`](multi-worker/llm-with-backend/gemini-live-frontend) | A Gemini Live frontend delegates tool work to a Claude backend worker. | Google AI, Anthropic |
+| [`redis-handoff`](multi-worker/distributed-handoff/redis-handoff) | The local handoff split into a transport process and one process per LLM worker, connected by a Redis bus. A module of its own. | Deepgram, OpenAI, Cartesia |
+| [`remote-proxy-assistant`](multi-worker/remote-proxy-assistant) | A transport process reaches an LLM worker on a remote server through WebSocket proxy workers. | Deepgram, OpenAI, Cartesia |
+
+## Flows
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`hello_world`](flows/hello_world) | A two-node flow that asks for a favorite color, records it and ends the call. | Cartesia, Google AI |
+| [`food_ordering`](flows/food_ordering) | A pizza or sushi ordering flow with a pre-action, a global function, confirmation, revision and an end-of-call post-action, on the LLM picked by `LLM_PROVIDER`. | Deepgram, Cartesia, OpenAI |
+| [`food_ordering_advanced_functionschema`](flows/food_ordering_advanced_functionschema) | The same with each function schema written out by hand, with enum and range constraints. | Deepgram, Cartesia, OpenAI |
+| [`multi_worker_handoff`](flows/multi_worker_handoff) | A transport worker, a free-form router worker and a reservation worker driven by a flow, handing off over the bus. | Deepgram, Cartesia, OpenAI |
+
 ## Transports
 
 | Example | What it shows | Keys |

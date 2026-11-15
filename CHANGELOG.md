@@ -399,6 +399,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Interactions steps. Examples: `voice-google-interactions`, the four
   `function-calling-google-interactions` variants,
   `vision-google-interactions` and `thinking-functions-google-interactions`.
+- **Update-settings, multi-worker and flows examples.** 54 examples change
+  an LLM, STT or TTS service's settings while the conversation runs;
+  multi-worker examples cover local handoff between LLM workers (with and
+  without per-worker voices), a parallel debate through a job group, a
+  sensor controller, LLM-with-backend frontends on the Responses API,
+  Claude, Gemini, OpenAI Realtime and Gemini Live, a Redis bus handoff
+  (a module of its own) and a remote proxy assistant; flows examples cover
+  hello world, food ordering (with hand-written schemas too) and a
+  multi-worker handoff. The release suite runs the handoff and flows bots.
 
 ### Changed
 

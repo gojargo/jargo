@@ -279,3 +279,19 @@ suite:
     scenarios: [scripted/expressive_conversation]
   - bot: expressive-conversation/expressive-conversation-soniox
     scenarios: [scripted/expressive_conversation]
+  - bot: multi-worker/local-handoff/local-handoff-two-agents
+    scenarios: [scripted/acme_handoff]
+  - bot: multi-worker/local-handoff/local-handoff-two-agents-tts
+    scenarios: [scripted/acme_handoff_voices]
+  - bot: flows/hello_world
+    scenarios: [scripted/hello_world]
+  - bot: flows/food_ordering
+    scenarios: [scripted/food_ordering_pizza]
+  - bot: flows/food_ordering_advanced_functionschema
+    scenarios: [scripted/food_ordering_sushi]
+  - bot: flows/multi_worker_handoff
+    scenarios: [scripted/multi_worker_handoff]
+  - bot: flows/food_ordering
+    scenarios: [simulated/order_pizza]
+  - bot: flows/food_ordering_advanced_functionschema
+    scenarios: [simulated/order_sushi]
