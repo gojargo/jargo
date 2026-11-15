@@ -289,6 +289,21 @@ Each transcribes the user with one STT service, logging the interim and final tr
 | [`audio-sound-effects`](audio/audio-sound-effects) | Playing sound effects at each change of turn. | Deepgram, Cartesia, OpenAI |
 | [`audio-volume`](audio/audio-volume) | Changing speech volume with VolumeGainFrame and VolumeFrame. | Deepgram |
 
+## Expressive conversation
+
+The LLM writes expression tags that the TTS performs; see
+[Expressive conversation](../docs/guides/expressive-conversation.md).
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`expressive-conversation-azure`](expressive-conversation/expressive-conversation-azure) | The LLM writes expression tags and an Azure HD voice performs style markers and sounds. | Deepgram, OpenAI, Azure |
+| [`expressive-conversation-cartesia`](expressive-conversation/expressive-conversation-cartesia) | Cartesia emotions, with a policy offering 16 deliveries. | Cartesia, OpenAI |
+| [`expressive-conversation-fish`](expressive-conversation/expressive-conversation-fish) | Fish Audio S2 tags. | Deepgram, OpenAI, Fish Audio |
+| [`expressive-conversation-inworld`](expressive-conversation/expressive-conversation-inworld) | Inworld TTS-2. | Deepgram, OpenAI, Inworld |
+| [`expressive-conversation-minimax`](expressive-conversation/expressive-conversation-minimax) | MiniMax speech-2.8, offering its whole vocabulary. | Deepgram, OpenAI, MiniMax |
+| [`expressive-conversation-mistral`](expressive-conversation/expressive-conversation-mistral) | Mistral Voxtral 3 emotion and pace tags. | Deepgram, OpenAI, Mistral |
+| [`expressive-conversation-soniox`](expressive-conversation/expressive-conversation-soniox) | Soniox tts-rt-v2 audio tags. | Deepgram, OpenAI, Soniox |
+
 ## Context summarization
 
 | Example | What it shows | Keys |
@@ -309,6 +324,7 @@ Tools save, list and load the conversation as files.
 | [`persistent-context-openai-responses-http`](persistent-context/persistent-context-openai-responses-http) | The same on the OpenAI Responses API over HTTP. | Deepgram, Cartesia, OpenAI |
 | [`persistent-context-anthropic`](persistent-context/persistent-context-anthropic) | The same on Anthropic. | Deepgram, Cartesia, Anthropic |
 | [`persistent-context-gemini`](persistent-context/persistent-context-gemini) | The same on Gemini, plus a camera tool. | Deepgram, Cartesia, Google AI |
+| [`persistent-context-aws-nova-sonic`](persistent-context/persistent-context-aws-nova-sonic) | The same on Amazon Nova Sonic; loading resets the session. | AWS |
 
 ## RAG and observability
 

@@ -371,6 +371,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Responses API, transcription with 19 STT services, audio recording, sound
   effects and volume, context summarization, persistent context, Gemini
   grounding, MCP with Gemini Live, heartbeats and observers.
+- **Expressive conversation examples** for Azure, Cartesia, Fish Audio,
+  Inworld, MiniMax, Mistral and Soniox, and `persistent-context-aws-nova-sonic`.
 
 ### Changed
 
