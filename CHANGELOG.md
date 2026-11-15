@@ -389,6 +389,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   one request per sentence. Examples: `function-calling-baseten`,
   `function-calling-crusoe`, `voice-asyncai-http`, `voice-sarvam-vad-http`,
   `voice-speechify-http`, `voice-bland`, `voice-bland-http`.
+- **Gemini on the Interactions API.** `interactions.NewLLM` streams Gemini
+  through Google's Interactions API with the Gemini service's settings, and
+  `vertex.NewInteractionsLLM` serves it from Vertex AI. It supports function
+  calling (including asynchronous tools), image input, thinking levels with
+  thought summaries, response schemas and token usage, and shares thought
+  signatures with the Gemini service, so a conversation can move between
+  them. `adapter/geminiinteractions` converts the conversation into
+  Interactions steps. Examples: `voice-google-interactions`, the four
+  `function-calling-google-interactions` variants,
+  `vision-google-interactions` and `thinking-functions-google-interactions`.
 
 ### Changed
 

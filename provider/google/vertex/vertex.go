@@ -1,6 +1,7 @@
 // Package vertex provides Google's Gemini models as served by Vertex AI: a
-// streaming LLM (NewLLM) and the Live speech-to-speech service (NewS2S). Both
-// wrap the corresponding Gemini service, changing only how requests are
+// streaming LLM (NewLLM), the same on the Interactions API
+// (NewInteractionsLLM), and the Live speech-to-speech service (NewS2S). Each
+// wraps the corresponding Gemini service, changing only how requests are
 // addressed and authorized.
 //
 // Vertex addresses a model by project and location rather than by name alone,

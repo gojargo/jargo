@@ -123,6 +123,33 @@ func canThink(name string) bool {
 	return thinkingModel.MatchString(name)
 }
 
+// ThinkingDefault is the lowest thinking setting Google documents for a model,
+// or nil when it lists none, and whether the model can think, which decides
+// whether a model with no default is warned about. model may be in any form
+// Google names models by: a resource path or a versioned id.
+//
+// levelsOnly is for an API that takes thinking as a level only. The 2.5 models
+// take a budget, so such an API has no default to send them and no setting to
+// suggest.
+func ThinkingDefault(model string, levelsOnly bool) (*ThinkingConfig, bool) {
+	name := modelName(model)
+	if levelsOnly && strings.HasPrefix(name, "gemini-2.5") {
+		return nil, false
+	}
+	d, ok := thinkingDefaults[name]
+	if !ok {
+		return nil, canThink(name)
+	}
+	thinking := &ThinkingConfig{}
+	if level, ok := d[keyThinkingLevel].(string); ok {
+		thinking.Level = level
+	}
+	if budget, ok := d[keyThinkingBudget].(int); ok {
+		thinking.Budget = &budget
+	}
+	return thinking, canThink(name)
+}
+
 // SafetySetting is one content-safety filter: a category of harm and the
 // threshold at which the model blocks content for it. A category left
 // unspecified keeps the API's own default.

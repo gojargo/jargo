@@ -13,13 +13,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/gojargo/jargo/adapter"
 	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/provider/google/internal/stream"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -335,14 +334,14 @@ func (s *Service) applyThinkingDefault(g map[string]any, model string) {
 	if _, set := g[keyThinkingConfig]; set {
 		return
 	}
-	name := modelName(model)
+	thinking, can := ThinkingDefault(model, false)
 	var setting string
-	if d, ok := thinkingDefaults[name]; ok && !s.UseProviderThinkingDefault() {
-		thinking := maps.Clone(d)
-		g[keyThinkingConfig] = thinking
-		setting = keyThinkingConfig + "=" + thinkingSetting(thinking)
+	if thinking != nil && !s.UseProviderThinkingDefault() {
+		params := ThinkingParams(thinking)
+		g[keyThinkingConfig] = params
+		setting = keyThinkingConfig + "=" + thinkingSetting(params)
 	}
-	s.ReportThinkingDefault(model, setting, canThink(name), "Google", "Thinking in the service's Config")
+	s.ReportThinkingDefault(model, setting, can, "Google", "Thinking in the service's Config")
 }
 
 // thinkingSetting renders a thinking default as the JSON it is sent as, for the
@@ -615,86 +614,26 @@ func (r *responseStream) keepThoughtSignature(p genPart, callID string) error {
 		frames.NewLLMMessagesAppendFrame([]frames.Message{msg}), processor.Downstream)
 }
 
-// streamChunks issues req and hands each chunk of the streamed answer to onChunk,
-// bounding how long the model may go quiet for.
-//
-// A request the API accepts and then never answers is the case this exists for:
-// nothing closes such a stream, so without a bound the turn stays open and the
-// caller waits on a bot that will never speak. With RetryOnTimeout set, a first
-// chunk that does not arrive in time re-issues the request once instead, which
-// is safe only up to that point: a chunk that has been handed on is already
-// downstream, so re-issuing after one would say everything twice.
+// streamChunks issues req and hands each chunk of the streamed answer to rs,
+// bounding how long the model may go quiet for and re-issuing a request that
+// never began answering once, when RetryOnTimeout asks for it.
 func (s *Service) streamChunks(req *http.Request, rs *responseStream) error {
-	if s.cfg.RetryOnTimeout {
-		retried, err := s.streamAttempt(req, s.cfg.retryTimeout(), rs)
-		if err == nil || !retried {
-			return err
-		}
-		slog.DebugContext(req.Context(), "re-issuing a generation that never began",
-			"service", s.Name(), "model", s.Model())
-	}
-	_, err := s.streamAttempt(req, s.cfg.streamIdleTimeout(), rs)
-	return err
-}
-
-// streamAttempt runs one attempt, reporting whether it timed out before the
-// model had said anything, which is the only point a request can be re-issued
-// from. Every chunk after the first is bounded by the idle timeout.
-func (s *Service) streamAttempt(
-	req *http.Request, firstChunk time.Duration, rs *responseStream,
-) (retriable bool, err error) {
-	// The request is rebuilt per attempt: its body has been read by the time an
-	// attempt ends, and a re-issue needs one to send.
-	attempt, err := cloneRequest(req)
-	if err != nil {
-		return false, err
-	}
-
-	// The watchdog cancels the request when the model goes quiet for too long,
-	// which is what unblocks the read. The flag tells that cancellation apart
-	// from the pipeline canceling the turn.
-	ctx, cancel := context.WithCancel(attempt.Context())
-	defer cancel()
-	var timedOut atomic.Bool
-	idle := s.cfg.streamIdleTimeout()
-	var watchdog *time.Timer
-	arm := func(d time.Duration) {
-		if d <= 0 {
-			return
-		}
-		if watchdog == nil {
-			watchdog = time.AfterFunc(d, func() { timedOut.Store(true); cancel() })
-			return
-		}
-		watchdog.Reset(d)
-	}
-	defer func() {
-		if watchdog != nil {
-			watchdog.Stop()
-		}
-	}()
-
-	s.StartTTFBMetrics()
-	arm(firstChunk)
-	resp, err := s.http.Do(attempt.WithContext(ctx))
-	if err != nil {
-		return timedOut.Load(), s.streamError(attempt.Context(), &timedOut, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return false, errs.NewHTTPStatusError(resp.StatusCode,
-			fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
-	}
-
-	// began records that the model has said something, which is the point past
-	// which the request can no longer be re-issued.
-	var began bool
-	err = llm.ScanSSE(resp.Body, func(data string) error {
-		// Any chunk at all is the model still producing, so the bound is on the
-		// gap between chunks rather than on the response as a whole.
-		arm(idle)
-		began = true
+	return stream.WithRetry(req, stream.Config{
+		Client:         s.http,
+		IdleTimeout:    s.cfg.streamIdleTimeout(),
+		RetryOnTimeout: s.cfg.RetryOnTimeout,
+		RetryTimeout:   s.cfg.retryTimeout(),
+		Begin:          s.StartTTFBMetrics,
+		Retrying: func(ctx context.Context) {
+			slog.DebugContext(ctx, "re-issuing a generation that never began",
+				"service", s.Name(), "model", s.Model())
+		},
+		StatusError: func(resp *http.Response) error {
+			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return errs.NewHTTPStatusError(resp.StatusCode,
+				fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		},
+	}, func(ctx context.Context, data string) error {
 		chunk, ok := parseChunk(data)
 		if !ok {
 			return nil
@@ -710,10 +649,6 @@ func (s *Service) streamAttempt(
 		s.StopTTFBMetrics(ctx)
 		return rs.consume(chunk)
 	})
-	if err != nil {
-		return timedOut.Load() && !began, s.streamError(attempt.Context(), &timedOut, err)
-	}
-	return false, nil
 }
 
 // parseChunk reads one streamed chunk, reporting whether it could be read at
@@ -725,32 +660,6 @@ func parseChunk(data string) (genChunk, bool) {
 		return genChunk{}, false
 	}
 	return chunk, true
-}
-
-// streamError names the failure that ended a stream. A read the watchdog cut
-// short is reported as a completion timeout, which is what tells the base to
-// report it as one and notify anything watching for it.
-func (s *Service) streamError(ctx context.Context, timedOut *atomic.Bool, err error) error {
-	if timedOut.Load() {
-		return fmt.Errorf("%w: the model stopped producing for %s",
-			llm.ErrCompletionTimeout, s.cfg.streamIdleTimeout())
-	}
-	return llm.AsCompletionTimeout(ctx, err)
-}
-
-// cloneRequest copies a request along with its body, so an attempt that consumed
-// one can be made again.
-func cloneRequest(req *http.Request) (*http.Request, error) {
-	if req.GetBody == nil {
-		return req, nil
-	}
-	body, err := req.GetBody()
-	if err != nil {
-		return nil, err
-	}
-	clone := req.Clone(req.Context())
-	clone.Body = body
-	return clone, nil
 }
 
 // GenerateWithTools streams a tool-capable completion. It emits text deltas to

@@ -78,11 +78,11 @@ const unnamedToolResult = "tool_call_result"
 // is there to satisfy the shape, not to be read.
 const noOpUserTurn = "."
 
-// placeholderThoughtSignature is the signature Google documents for a function
+// PlaceholderThoughtSignature is the signature Google documents for a function
 // call that has none, which skips the validation the model would otherwise
 // refuse the request over. It travels base64-encoded, the field being bytes on
 // the wire.
-const placeholderThoughtSignature = "skip_thought_signature_validator"
+const PlaceholderThoughtSignature = "skip_thought_signature_validator"
 
 // Params is what one generateContent call takes from the conversation: the
 // system instruction Gemini carries beside the conversation, the contents
@@ -229,7 +229,7 @@ func ToContents(msgs []frames.Message) ([]map[string]any, error) {
 // like. A turn already holding a signed part is left as it stands: the model
 // signs only the first call of a parallel batch and expects the rest unsigned.
 func addPlaceholderThoughtSignatures(contents []map[string]any) {
-	signature := base64.StdEncoding.EncodeToString([]byte(placeholderThoughtSignature))
+	signature := base64.StdEncoding.EncodeToString([]byte(PlaceholderThoughtSignature))
 	for _, c := range contents {
 		if role, _ := c[keyRole].(string); role != roleModel {
 			continue
@@ -338,17 +338,20 @@ func bookmarkMatchesPart(bookmark, part map[string]any) bool {
 }
 
 // textBookmarkMatches reports whether a text part is the one a text bookmark
-// recorded. Whitespace is normalized before comparing, and a prefix either way
-// matches: the part is cut short when the response was interrupted, and the
-// bookmark holds only the text seen so far when the signature arrived early.
+// recorded.
 func textBookmarkMatches(bookmark string, part map[string]any) bool {
 	text, _ := part[keyText].(string)
-	if text == "" {
-		return false
-	}
+	return TextBookmarkMatches(bookmark, text)
+}
+
+// TextBookmarkMatches reports whether a thought signature's text bookmark names
+// a reply's text. Whitespace is normalized before comparing, and a prefix either
+// way matches: the reply is cut short when the response was interrupted, and
+// the bookmark holds only the text seen so far when the signature arrived early.
+func TextBookmarkMatches(bookmark, text string) bool {
 	want := strings.Join(strings.Fields(bookmark), " ")
 	got := strings.Join(strings.Fields(text), " ")
-	return got == want || strings.HasPrefix(want, got) || strings.HasPrefix(got, want)
+	return got != "" && (strings.HasPrefix(want, got) || strings.HasPrefix(got, want))
 }
 
 // inlineDataBookmarkMatches reports whether an inline-data part is the one a
@@ -668,24 +671,7 @@ func FunctionResponseDict(content string) any {
 func (a *Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []map[string]any {
 	var out []map[string]any
 	if len(schema.Standard) > 0 {
-		decls := make([]map[string]any, 0, len(schema.Standard))
-		adapted := map[string][]string{}
-		for _, t := range schema.Standard {
-			d := map[string]any{keyName: t.Name}
-			if t.Description != "" {
-				d["description"] = t.Description
-			}
-			notes := map[string]bool{}
-			if params := geminiParameters(t.Parameters, notes); params != nil {
-				d["parameters"] = params
-			}
-			for note := range notes {
-				adapted[note] = append(adapted[note], t.Name)
-			}
-			decls = append(decls, d)
-		}
-		a.warnSchemaAdaptations(adapted)
-		out = append(out, map[string]any{"functionDeclarations": decls})
+		out = append(out, map[string]any{"functionDeclarations": a.FunctionDeclarations(schema.Standard)})
 	}
 	// A custom tool that cannot be read is left out rather than failing the whole
 	// conversion: the tools are advertised alongside a conversation that is
@@ -696,6 +682,33 @@ func (a *Adapter) ToProviderToolsFormat(schema frames.ToolsSchema) []map[string]
 		return out
 	}
 	return append(out, custom...)
+}
+
+// FunctionDeclarations renders standard tools as Gemini function declarations,
+// each tool's parameters adapted to the subset of JSON Schema Gemini accepts
+// (see adaptSchema). The adaptations made are reported once per tool, through
+// the warnings this adapter keeps. It is what ToProviderToolsFormat declares the
+// standard tools with, and what an adapter for another Gemini API declares its
+// own function tools with.
+func (a *Adapter) FunctionDeclarations(tools []frames.Tool) []map[string]any {
+	decls := make([]map[string]any, 0, len(tools))
+	adapted := map[string][]string{}
+	for _, t := range tools {
+		d := map[string]any{keyName: t.Name}
+		if t.Description != "" {
+			d["description"] = t.Description
+		}
+		notes := map[string]bool{}
+		if params := geminiParameters(t.Parameters, notes); params != nil {
+			d["parameters"] = params
+		}
+		for note := range notes {
+			adapted[note] = append(adapted[note], t.Name)
+		}
+		decls = append(decls, d)
+	}
+	a.warnSchemaAdaptations(adapted)
+	return decls
 }
 
 // geminiParameters returns the tool's JSON-Schema parameters adapted to what

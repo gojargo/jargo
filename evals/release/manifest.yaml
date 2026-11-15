@@ -250,3 +250,32 @@ suite:
     scenarios: [scripted/empty_user_turn]
   - bot: turn-management/turn-management-classifier-turn-completion
     scenarios: [scripted/classifier_turn_completion]
+  - bot: voice/voice-google-interactions
+    scenarios: [scripted/capital_question]
+  - bot: function-calling/function-calling-google-interactions
+    scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
+  - bot: function-calling/function-calling-google-interactions-vertex
+    scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
+  - bot: function-calling/function-calling-google-interactions-async
+    scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/async_tool_cancellation, scripted/function_call_timeout]
+  - bot: function-calling/function-calling-google-interactions-video
+    scenarios: [scripted/describe_image]
+  - bot: thinking/thinking-functions-google-interactions
+    scenarios: [scripted/flight_taxi]
+  - bot: vision/vision-google-interactions
+    runner_body: {path: scenarios/vision-cat.yaml}
+    scenarios: [scripted/vision_describe]
+  - bot: expressive-conversation/expressive-conversation-azure
+    scenarios: [scripted/expressive_conversation]
+  - bot: expressive-conversation/expressive-conversation-cartesia
+    scenarios: [scripted/expressive_conversation]
+  - bot: expressive-conversation/expressive-conversation-fish
+    scenarios: [scripted/expressive_conversation]
+  - bot: expressive-conversation/expressive-conversation-inworld
+    scenarios: [scripted/expressive_conversation]
+  - bot: expressive-conversation/expressive-conversation-minimax
+    scenarios: [scripted/expressive_conversation]
+  - bot: expressive-conversation/expressive-conversation-mistral
+    scenarios: [scripted/expressive_conversation]
+  - bot: expressive-conversation/expressive-conversation-soniox
+    scenarios: [scripted/expressive_conversation]

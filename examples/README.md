@@ -61,6 +61,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-gladia-vad`](voice/voice-gladia-vad) | Gladia (with its own voice activity detection) speech-to-text, an OpenAI LLM and Cartesia text-to- speech. |
 | [`voice-google`](voice/voice-google) | Google Cloud speech-to-text and streaming text-to-speech, with a Gemini LLM. |
 | [`voice-google-http`](voice/voice-google-http) | Google Cloud speech-to-text, a Gemini LLM and Google Cloud text-to-speech over HTTP. |
+| [`voice-google-interactions`](voice/voice-google-interactions) | Deepgram speech-to-text and Cartesia text-to-speech, with a Gemini LLM on the Interactions API. |
 | [`voice-gradium`](voice/voice-gradium) | Gradium speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-gradium-turns`](voice/voice-gradium-turns) | Gradium speech-to-text that detects the turns itself, an OpenAI LLM and Gradium text-to-speech. |
 | [`voice-groq`](voice/voice-groq) | Groq speech-to-text, LLM and text-to- speech. |
@@ -121,6 +122,10 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-google`](function-calling/function-calling-google) | Google Gemini, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-google-async`](function-calling/function-calling-google-async) | Google Gemini, with tools that run while the conversation goes on, a deadline, one the LLM can cancel, and a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-google-async-stream`](function-calling/function-calling-google-async-stream) | Google Gemini, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
+| [`function-calling-google-interactions`](function-calling/function-calling-google-interactions) | Google Gemini on the Interactions API | Deepgram, Cartesia |
+| [`function-calling-google-interactions-async`](function-calling/function-calling-google-interactions-async) | Google Gemini on the Interactions API, with tools that run while the conversation goes on, a deadline, one the LLM can cancel, and a tool that looks at the user's camera | Deepgram, Cartesia |
+| [`function-calling-google-interactions-vertex`](function-calling/function-calling-google-interactions-vertex) | Gemini on Google Vertex AI, through the Interactions API | Deepgram, ElevenLabs |
+| [`function-calling-google-interactions-video`](function-calling/function-calling-google-interactions-video) | Google Gemini on the Interactions API, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-google-video`](function-calling/function-calling-google-video) | Google Gemini, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-google-vertex`](function-calling/function-calling-google-vertex) | Gemini on Google Vertex AI | Deepgram, ElevenLabs |
 | [`function-calling-grok`](function-calling/function-calling-grok) | xAI Grok | Deepgram, xAI |
@@ -220,6 +225,7 @@ the bot describes the image, then talks by voice.
 | [`vision-anthropic`](vision/vision-anthropic) | Anthropic | Deepgram, Anthropic, Cartesia |
 | [`vision-aws`](vision/vision-aws) | Claude on AWS Bedrock | Deepgram, AWS, Cartesia |
 | [`vision-gemini-flash`](vision/vision-gemini-flash) | Google Gemini | Deepgram, Google AI, Cartesia |
+| [`vision-google-interactions`](vision/vision-google-interactions) | Google Gemini on the Interactions API | Deepgram, Google AI, Cartesia |
 | [`vision-openai`](vision/vision-openai) | OpenAI | Deepgram, OpenAI, Cartesia |
 | [`vision-openai-responses`](vision/vision-openai-responses) | OpenAI Responses API | Deepgram, OpenAI, Cartesia |
 | [`vision-openai-responses-http`](vision/vision-openai-responses-http) | OpenAI Responses API over HTTP | Deepgram, OpenAI, Cartesia |
@@ -258,6 +264,7 @@ The thoughts the model reports are logged as they arrive.
 | [`thinking-functions-google`](thinking/thinking-functions-google) | Gemini thinking with function calling. | Deepgram, Cartesia, Google AI |
 | [`thinking-google-vertex`](thinking/thinking-google-vertex) | Gemini thinking on Vertex AI. | Deepgram, Cartesia, Google Cloud |
 | [`thinking-functions-google-vertex`](thinking/thinking-functions-google-vertex) | Vertex Gemini thinking with function calling. | Deepgram, Cartesia, Google Cloud |
+| [`thinking-functions-google-interactions`](thinking/thinking-functions-google-interactions) | Gemini on the Interactions API thinks before it checks a flight and books a taxi, with each thought summary logged. | Deepgram, Cartesia, Google AI |
 | [`thinking-openai-responses`](thinking/thinking-openai-responses) | OpenAI Responses reasoning summaries over WebSocket. | Deepgram, Cartesia, OpenAI |
 | [`thinking-openai-responses-http`](thinking/thinking-openai-responses-http) | OpenAI Responses reasoning summaries over HTTP. | Deepgram, Cartesia, OpenAI |
 | [`thinking-functions-openai-responses`](thinking/thinking-functions-openai-responses) | OpenAI Responses reasoning with function calling. | Deepgram, Cartesia, OpenAI |
