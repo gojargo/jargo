@@ -335,6 +335,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `InputTransport`, `OutputTransport`, `NewInputTransport`,
   `NewOutputTransport`, `Transport.SetInput`, `Transport.SetOutput` and
   `OutputTransport.WriteFrame`, so a transport can be built on it.
+- **More examples.** `voice-deepgram-flux-eager`, `voice-gradium-turns`,
+  `voice-moonshine`, `function-calling-direct`,
+  `function-calling-advanced-functionschema`, the async-tool variants of the
+  OpenAI, Azure, Grok, Gemini Live and Nova Sonic speech-to-speech examples,
+  locally driven turns for OpenAI Realtime, Grok and Gemini Live,
+  `realtime-openai-text`, and Gemini Live with Google Search, a graceful end
+  and grounding metadata.
 
 ### Changed
 

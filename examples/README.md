@@ -47,6 +47,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-cartesia-turns`](voice/voice-cartesia-turns) | Cartesia speech-to-text that detects the turns itself, an OpenAI LLM and Cartesia text-to-speech. |
 | [`voice-deepgram`](voice/voice-deepgram) | Deepgram speech-to-text and text-to-speech (over WebSocket), with an OpenAI LLM. |
 | [`voice-deepgram-flux`](voice/voice-deepgram-flux) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM. |
+| [`voice-deepgram-flux-eager`](voice/voice-deepgram-flux-eager) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM, answering Flux's eager end of turn while the LLM's turn-completion markers hold incomplete turns open. |
 | [`voice-deepgram-http`](voice/voice-deepgram-http) | Deepgram speech-to-text and text-to-speech (over HTTP), with an OpenAI LLM. |
 | [`voice-elevenlabs`](voice/voice-elevenlabs) | ElevenLabs realtime speech-to- text and streaming text-to-speech, with an OpenAI LLM. |
 | [`voice-elevenlabs-http`](voice/voice-elevenlabs-http) | ElevenLabs speech-to-text and text-to-speech over HTTP, with an OpenAI LLM. |
@@ -57,12 +58,14 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-google`](voice/voice-google) | Google Cloud speech-to-text and streaming text-to-speech, with a Gemini LLM. |
 | [`voice-google-http`](voice/voice-google-http) | Google Cloud speech-to-text, a Gemini LLM and Google Cloud text-to-speech over HTTP. |
 | [`voice-gradium`](voice/voice-gradium) | Gradium speech-to-text and text-to- speech, with an OpenAI LLM. |
+| [`voice-gradium-turns`](voice/voice-gradium-turns) | Gradium speech-to-text that detects the turns itself, an OpenAI LLM and Gradium text-to-speech. |
 | [`voice-groq`](voice/voice-groq) | Groq speech-to-text, LLM and text-to- speech. |
 | [`voice-hume`](voice/voice-hume) | Deepgram speech-to-text, an OpenAI LLM and Hume text-to-speech. |
 | [`voice-inworld`](voice/voice-inworld) | Deepgram speech-to-text, an OpenAI LLM and Inworld text-to-speech (over WebSocket). |
 | [`voice-inworld-http`](voice/voice-inworld-http) | Deepgram speech-to-text, an OpenAI LLM and Inworld (over HTTP) text-to-speech. |
 | [`voice-kokoro`](voice/voice-kokoro) | Deepgram speech-to-text, an OpenAI LLM and local Kokoro text-to-speech (espeak-ng and the ONNX Runtime, no server). |
 | [`voice-minimax`](voice/voice-minimax) | Deepgram speech-to-text, an OpenAI LLM and MiniMax text-to-speech. |
+| [`voice-moonshine`](voice/voice-moonshine) | Local Moonshine speech-to-text (libmoonshine, no server), an OpenAI LLM and Cartesia text-to-speech. |
 | [`voice-mistral`](voice/voice-mistral) | Mistral speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-neuphonic`](voice/voice-neuphonic) | Deepgram speech-to-text, an OpenAI LLM and Neuphonic text-to-speech. |
 | [`voice-neuphonic-http`](voice/voice-neuphonic-http) | Deepgram speech-to-text, an OpenAI LLM and Neuphonic text-to-speech (over HTTP). |
@@ -98,10 +101,12 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-anthropic`](function-calling/function-calling-anthropic) | Anthropic | Deepgram, Cartesia |
 | [`function-calling-anthropic-async`](function-calling/function-calling-anthropic-async) | Anthropic, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | Deepgram, Cartesia |
 | [`function-calling-anthropic-async-stream`](function-calling/function-calling-anthropic-async-stream) | Anthropic, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
+| [`function-calling-advanced-functionschema`](function-calling/function-calling-advanced-functionschema) | OpenAI, with a tool schema written out by hand (an enum parameter) | OpenAI realtime transcription, OpenAI |
 | [`function-calling-aws`](function-calling/function-calling-aws) | Claude on AWS Bedrock | AWS Transcribe, AWS Polly |
 | [`function-calling-azure`](function-calling/function-calling-azure) | Azure OpenAI | Deepgram, Cartesia |
 | [`function-calling-cerebras`](function-calling/function-calling-cerebras) | Cerebras | Deepgram, Cartesia |
 | [`function-calling-deepseek`](function-calling/function-calling-deepseek) | DeepSeek | Deepgram, Cartesia |
+| [`function-calling-direct`](function-calling/function-calling-direct) | OpenAI, with tools that carry their own handlers | Deepgram, Cartesia |
 | [`function-calling-fireworks`](function-calling/function-calling-fireworks) | Fireworks AI | Deepgram, Cartesia |
 | [`function-calling-google-async-stream`](function-calling/function-calling-google-async-stream) | Google Gemini, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
 | [`function-calling-google-vertex`](function-calling/function-calling-google-vertex) | Gemini on Google Vertex AI | Deepgram, ElevenLabs |
@@ -137,11 +142,23 @@ too, for the user aggregator's default turn strategies.
 | Example | What it shows | Keys |
 | --- | --- | --- |
 | [`realtime-openai`](realtime/realtime-openai) | OpenAI Realtime, with semantic turn detection, noise reduction, a tool added at runtime and transcript logging. | OpenAI |
+| [`realtime-openai-async-tool`](realtime/realtime-openai-async-tool) | OpenAI Realtime, with a slow tool that runs while the conversation goes on. | OpenAI |
+| [`realtime-openai-locally-driven-turns`](realtime/realtime-openai-locally-driven-turns) | OpenAI Realtime with server turn detection off and turns driven by a local VAD, a tool added at runtime and transcript logging. | OpenAI |
+| [`realtime-openai-text`](realtime/realtime-openai-text) | OpenAI Realtime answering in text, spoken by Cartesia, with tools. | OpenAI, Cartesia |
 | [`realtime-azure`](realtime/realtime-azure) | Azure OpenAI Realtime, with tools and transcript logging. | Azure OpenAI |
+| [`realtime-azure-async-tool`](realtime/realtime-azure-async-tool) | Azure OpenAI Realtime, with a slow tool that runs while the conversation goes on. | Azure OpenAI |
 | [`realtime-grok`](realtime/realtime-grok) | xAI's Grok Voice Agent, with tools and transcript logging. | xAI |
+| [`realtime-grok-async-tool`](realtime/realtime-grok-async-tool) | xAI's Grok Voice Agent, with a slow tool that runs while the conversation goes on. | xAI |
+| [`realtime-grok-locally-driven-turns`](realtime/realtime-grok-locally-driven-turns) | xAI's Grok Voice Agent with server turn detection off and turns driven by a local VAD, with tools and transcript logging. | xAI |
 | [`realtime-gemini-live`](realtime/realtime-gemini-live) | Gemini Live, with tools configured on the service, Google Search and transcript logging. | Google AI |
+| [`realtime-gemini-live-async-tool`](realtime/realtime-gemini-live-async-tool) | Gemini Live, with a slow tool that runs while the conversation goes on. | Google AI |
+| [`realtime-gemini-live-google-search`](realtime/realtime-gemini-live-google-search) | Gemini Live answering with the latest news through Google Search. | Google AI |
+| [`realtime-gemini-live-graceful-end`](realtime/realtime-gemini-live-graceful-end) | Gemini Live ending the conversation itself through a tool, then saying goodbye. | Google AI |
+| [`realtime-gemini-live-grounding-metadata`](realtime/realtime-gemini-live-grounding-metadata) | Gemini Live with Google Search and code execution, logging the grounding metadata of each searched answer. | Google AI |
+| [`realtime-gemini-live-locally-driven-turns`](realtime/realtime-gemini-live-locally-driven-turns) | Gemini Live with server VAD off and turns driven by a local VAD, with transcript logging. | Google AI |
 | [`realtime-gemini-live-vertex`](realtime/realtime-gemini-live-vertex) | Gemini Live through Vertex AI, with tools configured on the service. | Google Cloud |
 | [`realtime-aws-nova-sonic`](realtime/realtime-aws-nova-sonic) | Amazon Nova Sonic, with a tool, session continuation and transcript logging. | AWS |
+| [`realtime-aws-nova-sonic-async-tool`](realtime/realtime-aws-nova-sonic-async-tool) | Amazon Nova Sonic, with a slow tool that runs while the conversation goes on. | AWS |
 
 ## Features
 

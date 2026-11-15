@@ -42,6 +42,8 @@ suite:
     scenarios: [scripted/capital_question]
   - bot: voice/voice-deepgram-flux
     scenarios: [scripted/capital_question]
+  - bot: voice/voice-deepgram-flux-eager
+    scenarios: [scripted/capital_question, scripted/filter_incomplete_turns]
   - bot: voice/voice-deepgram-http
     scenarios: [scripted/capital_question]
   - bot: voice/voice-elevenlabs
