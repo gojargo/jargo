@@ -114,8 +114,9 @@ type judgeCloser interface {
 	Close(ctx context.Context) error
 }
 
-// closeJudge releases what a judge holds open, if it holds anything.
-func closeJudge(ctx context.Context, judge Judge) {
+// closeJudge releases what a judge holds open, if it holds anything: a Judge or
+// a RunJudge.
+func closeJudge(ctx context.Context, judge any) {
 	if c, ok := judge.(judgeCloser); ok {
 		if err := c.Close(ctx); err != nil {
 			slog.WarnContext(ctx, "eval: closing the judge failed", "error", err)

@@ -33,6 +33,9 @@ type fakeRTVIServer struct {
 	// greeting is sent right after bot-ready, like a bot that greets on
 	// connect.
 	greeting []rtvi.Message
+	// closeAfter, when set, is the send-text content after whose replies the
+	// bot hangs up by closing the connection.
+	closeAfter string
 
 	mu       sync.Mutex
 	script   map[string][]rtvi.Message
@@ -93,7 +96,10 @@ func (f *fakeRTVIServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.received = append(f.received, in)
-		var replies []rtvi.Message
+		var (
+			replies []rtvi.Message
+			hangUp  bool
+		)
 		switch in.Type {
 		case rtvi.TypeClientReady:
 			ready := map[string]any{"version": rtvi.ProtocolVersion}
@@ -105,6 +111,7 @@ func (f *fakeRTVIServer) serve(w http.ResponseWriter, r *http.Request) {
 			var d rtvi.SendTextData
 			_ = json.Unmarshal(in.Data, &d)
 			replies = f.script[d.Content]
+			hangUp = f.closeAfter != "" && d.Content == f.closeAfter
 		case rtvi.TypeRawAudio:
 			// The harness streams the user's side continuously (silence around
 			// each utterance). A real bot transcribes the audio and answers once
@@ -130,6 +137,10 @@ func (f *fakeRTVIServer) serve(w http.ResponseWriter, r *http.Request) {
 			if conn.Write(ctx, websocket.MessageText, out) != nil {
 				return
 			}
+		}
+		if hangUp {
+			_ = conn.Close(websocket.StatusNormalClosure, "")
+			return
 		}
 	}
 }

@@ -59,10 +59,11 @@ func NewScriptSession(
 		MarkerEvents:      scenario.NeedsMarkerEvents(),
 		Context:           scenario.Context,
 		TriggerDisconnect: scenario.TriggerDisconnect, //nolint:staticcheck // the deprecated key still asks
-	}, s.params, s.stream, s.trace, userTTS, botSTT)
+	}, s.params, s.stream, s.trace, userTTS, botSTT, nil)
 	// What the user says next and how the outcome is scored: a scenario is
 	// played by the script driver.
-	s.script = newScriptDriver(scenario, s.params.DefaultTimeoutMS, s.client, s.stream, judge, s.trace, s.progress)
+	s.script = newScriptDriver(scenario, s.params.DefaultTimeoutMS, s.client, s.stream, judge, s.trace,
+		func(p Progress) { s.progress(p) })
 	s.driver = s.script
 	s.assemble = s.script.result
 	s.describe = func() string { return DescribeConfig(&scenario.Configured, false) }

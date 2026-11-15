@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,11 +24,13 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/pipeline/capabilities"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/transport/wsclient"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
@@ -264,15 +267,27 @@ type botTurnResetter interface {
 //
 // The bot's frames become events on the stream and go no further. The user's
 // turns are injected here, past the bot's side of the pipeline, so an
-// interruption there cannot drop them. An interruption reaching the sink stops
-// here: for a scripted turn it would flush the user audio being sent.
+// interruption there cannot drop them.
+//
+// Two rules apply. The aggregator's interruption, raised when the bot speaks,
+// stops here for a scripted turn (it would flush the user audio being sent) and
+// passes for a persona (a caller who hears the bot keep talking stops). And the
+// persona answers from here: in text mode it hears each finished bot response
+// through the sink, in audio mode the aggregator hands it the bot's turn; either
+// way nothing reaches it once it hung up.
 type botFrameSink struct {
 	*processor.Base
-	stream *EventStream
+	stream  *EventStream
+	persona *Persona
+	// personaHears is whether the persona hears the bot's responses through
+	// the sink (text mode, with no aggregator to hand it the turn).
+	personaHears bool
 }
 
-func newBotFrameSink(stream *EventStream) *botFrameSink {
-	s := &botFrameSink{stream: stream}
+// newBotFrameSink builds the sink. persona is the simulated caller, or nil;
+// personaHears is whether it hears the bot's responses through the sink.
+func newBotFrameSink(stream *EventStream, persona *Persona, personaHears bool) *botFrameSink {
+	s := &botFrameSink{stream: stream, persona: persona, personaHears: personaHears && persona != nil}
 	s.Base = processor.New("EvalBotFrameSink", s)
 	return s
 }
@@ -288,25 +303,163 @@ func (s *botFrameSink) ProcessFrame(ctx context.Context, f frames.Frame, dir pro
 		return err
 	}
 	// The bot's frames arrive downstream, from the input transport. What
-	// travels upstream is the user side's own, not bot output, and passes
-	// through as is.
+	// travels upstream is the user side's own (a persona's function call, a
+	// TTS's lifecycle), not bot output, and passes through as is.
 	if dir != processor.Downstream {
 		return s.PushFrame(ctx, f, dir)
 	}
 	if event := s.stream.FrameToEvent(f); event != nil {
 		s.stream.Append(event)
+		if s.personaHears {
+			if err := s.answer(ctx, s.persona.Hear(event)); err != nil {
+				return err
+			}
+		}
 	}
-	switch f.(type) {
-	case *botSegmentTranscribedFrame:
+	if _, ok := f.(*botSegmentTranscribedFrame); ok {
 		s.stream.BotSegmentTranscribed()
-		return nil
-	case *frames.InterruptionFrame, *frames.LLMContextFrame:
 		return nil
 	}
 	if botFrame(f) {
 		return nil
 	}
+	switch fr := f.(type) {
+	case *frames.InterruptionFrame:
+		if s.persona == nil {
+			return nil
+		}
+	case *frames.LLMContextFrame:
+		// The aggregator handing the persona the bot's turn (audio mode).
+		return s.answer(ctx, fr)
+	}
 	return s.PushFrame(ctx, f, dir)
+}
+
+// answer pushes the frame that has the persona answer, unless there is none or
+// it hung up.
+func (s *botFrameSink) answer(ctx context.Context, f *frames.LLMContextFrame) error {
+	if f == nil || s.persona == nil || s.persona.HungUp() {
+		return nil
+	}
+	return s.PushFrame(ctx, f, processor.Downstream)
+}
+
+// EventPersonaTurn is the event the relay appends for each response the persona
+// completes.
+const EventPersonaTurn = "persona_turn"
+
+// personaTurnRelay sends the persona's replies to the bot and reports each one
+// as a turn.
+//
+// In text mode a whole reply goes to the bot as one send-text; in audio mode the
+// user TTS has already spoken it and this only logs the text. A reply with words
+// in it is one persona_turn event, up to where the bot's speech cut it off if it
+// did; a reply that only calls end_call, or that the bot's speech cut off before
+// a word went out, is not a turn.
+//
+// The persona's end_call event follows the turn of the reply that made the
+// call: in audio mode the reply is still being spoken when the persona calls
+// it.
+type personaTurnRelay struct {
+	*processor.Base
+	textTurnMessage func(text string) rtvi.Message
+	trace           *Trace
+	stream          *EventStream
+
+	mu   sync.Mutex
+	text []string
+	// spoken is what the persona said in the current response: the one text
+	// turn, or the sentences the user TTS spoke.
+	spoken []string
+	// replying is whether a response is on its way to the bot, and endCall the
+	// end_call event held until it has gone out.
+	replying bool
+	endCall  map[string]any
+}
+
+// newPersonaTurnRelay builds the relay: textTurnMessage builds the RTVI
+// send-text message for a turn, and stream is where the persona's turns are
+// counted.
+func newPersonaTurnRelay(
+	textTurnMessage func(string) rtvi.Message, trace *Trace, stream *EventStream,
+) *personaTurnRelay {
+	r := &personaTurnRelay{textTurnMessage: textTurnMessage, trace: trace, stream: stream}
+	r.Base = processor.New("EvalPersonaTurnRelay", r)
+	return r
+}
+
+// reportEndCall appends the persona's end_call event once the response in
+// progress has gone out.
+func (r *personaTurnRelay) reportEndCall(event map[string]any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.replying {
+		r.endCall = event
+		return
+	}
+	r.stream.Append(event)
+}
+
+// ProcessFrame relays the persona's replies.
+func (r *personaTurnRelay) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := r.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	r.stream.Touch()
+	var send string
+	r.mu.Lock()
+	switch fr := f.(type) {
+	case *frames.LLMFullResponseStartFrame:
+		r.text, r.spoken = nil, nil
+		r.replying = true
+	case *frames.InterruptionFrame:
+		// The bot heard what the user TTS spoke before the cut; a text-mode
+		// reply is sent only once it is complete.
+		r.text = nil
+		r.endReplyLocked()
+	case *frames.LLMTextFrame:
+		if fr.SkipTTS != nil && *fr.SkipTTS {
+			r.text = append(r.text, fr.Text)
+		}
+	case *frames.LLMFullResponseEndFrame:
+		text := pytext.Strip(strings.Join(r.text, ""))
+		r.text = nil
+		if fr.SkipTTS != nil && *fr.SkipTTS && text != "" {
+			r.trace.Log(fmt.Sprintf("send: %q (persona, text)", text))
+			send = text
+			r.spoken = append(r.spoken, text)
+		}
+	case *frames.TTSTextFrame:
+		r.trace.Log(fmt.Sprintf("send: %q (persona, audio)", fr.Text))
+		r.spoken = append(r.spoken, fr.Text)
+	}
+	r.mu.Unlock()
+	if send != "" {
+		message := frames.NewOutputTransportMessageUrgentFrame(r.textTurnMessage(send))
+		if err := r.PushFrame(ctx, message, processor.Downstream); err != nil {
+			return err
+		}
+	}
+	if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
+		r.mu.Lock()
+		r.endReplyLocked()
+		r.mu.Unlock()
+	}
+	return r.PushFrame(ctx, f, dir)
+}
+
+// endReplyLocked appends what went out of the reply as a turn, then the
+// end_call event held for it.
+func (r *personaTurnRelay) endReplyLocked() {
+	if len(r.spoken) > 0 {
+		r.stream.Append(map[string]any{keyType: EventPersonaTurn, keyText: strings.Join(r.spoken, " ")})
+	}
+	r.spoken = nil
+	r.replying = false
+	if r.endCall != nil {
+		r.stream.Append(r.endCall)
+		r.endCall = nil
+	}
 }
 
 // ClientParams is what the scenario asks of the bot; the session derives it
@@ -371,14 +524,18 @@ func (e *handshakeTimeoutError) Error() string {
 // Built once per run: WaitForBot, Start, Handshake, the turns (SendText, Say,
 // Play, SendDTMF, SendImage), then Stop. The pipeline is
 //
-//	input -> [STT -> speech gate -> bot-turn aggregator] -> sink -> [user TTS] -> output
+//	input -> [STT -> speech gate -> bot-turn aggregator] -> sink -> [persona LLM]
+//	      -> [user TTS] -> [persona relay] -> output -> [assistant aggregator]
 //
-// The bracketed stages exist only in audio mode: the STT that transcribes the
-// bot's speech, the gate that drops transcripts of audio from before a send that
+// The bracketed stages exist in audio mode (the STT that transcribes the bot's
+// speech, the gate that drops transcripts of audio from before a send that
 // talked over the bot, the aggregator that cuts the transcripts into the bot's
-// turns, and the user TTS. The bot's output comes in through the input and stops
-// at the sink, as events; the user's turns start at the sink and leave through
-// the output. A session builds it, with the params its scenario asks for.
+// turns, the user TTS) or in a simulation (the persona LLM, its relay, and the
+// assistant aggregator that keeps the persona's own replies in its context). The
+// bot's output comes in through the input and stops at the sink, as events; the
+// user's turns start at the sink and leave through the output. In a simulation
+// the persona answers the bot on its own from the sink. A session builds it,
+// with the params its scenario asks for.
 type Client struct {
 	botURL        string
 	stream        *EventStream
@@ -387,6 +544,11 @@ type Client struct {
 	sessionParams SessionParams
 	userTTS       *CachingTTSService
 	botSTT        *stt.SegmentService
+	// persona is a simulation's simulated caller, or nil.
+	persona *Persona
+	// relay sends the persona's replies to the bot (built with the
+	// processors), or nil.
+	relay *personaTurnRelay
 	// botTurns is the aggregator that turns the bot's transcribed speech into
 	// turns (audio mode), kept so a send that talks over the bot can drop what
 	// it holds of the bot's speech from before the send.
@@ -434,14 +596,15 @@ type Client struct {
 // NewClient builds the client for the bot at botURL. stream is where the bot's
 // output is appended as events; userTTS speaks the user's text turns, or is nil
 // for text turns; botSTT transcribes the bot's audio into the response event,
-// or is nil when unused.
+// or is nil when unused; persona is a simulation's simulated caller, whose LLM
+// rides in the pipeline and answers the bot, or nil.
 //
 // The bot's speech is transcribed by a segmented STT or not at all: only a
 // segmented STT's transcripts can be traced to when their audio began, which is
 // how the client tells the speech a send talked over from the bot's reply.
 func NewClient(
 	botURL string, params ClientParams, sessionParams SessionParams,
-	stream *EventStream, trace *Trace, userTTS *CachingTTSService, botSTT *stt.SegmentService,
+	stream *EventStream, trace *Trace, userTTS *CachingTTSService, botSTT *stt.SegmentService, persona *Persona,
 ) *Client {
 	c := &Client{
 		botURL:        botURL,
@@ -451,6 +614,7 @@ func NewClient(
 		sessionParams: sessionParams.withDefaults(),
 		userTTS:       userTTS,
 		botSTT:        botSTT,
+		persona:       persona,
 		newBotVAD:     newSileroBotVAD,
 		handshakeOver: make(chan struct{}),
 	}
@@ -558,6 +722,14 @@ func (c *Client) Start(ctx context.Context) error {
 		}
 		c.harnessFailed(reason)
 	})
+
+	// Before the pipeline runs, so the persona is configured before it can
+	// hear the bot, which may greet as soon as the input transport starts.
+	if c.persona != nil {
+		if err := c.configurePersona(ctx, c.persona.Instruction()); err != nil {
+			return err
+		}
+	}
 
 	c.runDone = make(chan error, 1)
 	go func() {
@@ -837,6 +1009,35 @@ func (c *Client) dropBotSpeechIfTalkingOver() {
 	c.botTurns.Reset()
 }
 
+// HangUp ends the persona's part of the conversation: it answers nothing more.
+func (c *Client) HangUp() {
+	if c.persona != nil {
+		c.persona.HangUp()
+	}
+}
+
+// ReportEndCall appends the persona's end_call event once the reply that made
+// the call has gone out.
+func (c *Client) ReportEndCall(event map[string]any) {
+	if c.relay == nil {
+		// No pipeline to send a reply through: nothing is going out.
+		c.stream.Append(event)
+		return
+	}
+	c.relay.reportEndCall(event)
+}
+
+// configurePersona gives the persona LLM its instruction, and says whether its
+// replies are spoken or sent as text.
+func (c *Client) configurePersona(ctx context.Context, instruction string) error {
+	if err := c.sink.inject(ctx, frames.NewLLMUpdateSettingsFrame(&settings.LLM{
+		SystemInstruction: settings.Set(instruction),
+	})); err != nil {
+		return err
+	}
+	return c.sink.inject(ctx, frames.NewLLMConfigureOutputFrame(!c.params.UserAudio))
+}
+
 // checkAudioSupport refuses the run when the bot reports its transport is off
 // for audio the run uses.
 //
@@ -870,6 +1071,10 @@ func (c *Client) refuse(kind, reason string) {
 	default:
 	}
 	c.refusal = &BotUnavailableError{Kind: kind, Reason: reason}
+	// A bot can greet as the run is torn down; the persona must not answer it.
+	if c.persona != nil {
+		c.persona.HangUp()
+	}
 	close(c.handshakeOver)
 }
 
@@ -981,39 +1186,84 @@ func (c *Client) newTransport() *ClientTransport {
 }
 
 // processors are the pipeline's processors: inbound from the bot, the sink,
-// outbound to the bot. The STT, the gate and the turn aggregator exist in audio
-// mode, when the bot's speech is transcribed.
+// outbound to the bot.
+//
+// The STT, the gate and the turn aggregator exist in audio mode, when the bot's
+// speech is transcribed; the persona LLM, its relay, and the assistant
+// aggregator in a simulation.
 func (c *Client) processors(tr *ClientTransport) ([]processor.Processor, error) {
-	c.sink = newBotFrameSink(c.stream)
+	// The context the aggregators keep: the persona's in a simulation, else a
+	// throwaway that only gives the bot-turn aggregator somewhere to put turns.
+	persona := c.persona
+	convo := frames.NewLLMContext("")
+	if persona != nil {
+		convo = persona.Context()
+	}
+	// With no STT there is no aggregator to hand the persona the bot's turns;
+	// it hears them through the sink instead.
+	c.sink = newBotFrameSink(c.stream, persona, c.botSTT == nil)
 	c.injector = c.sink
 
 	inbound := []processor.Processor{tr.Input()}
+	var aggregatorPair *aggregators.Pair
 	if c.botSTT != nil {
 		starts := &segmentStarts{}
 		tagBotSegments(c.botSTT, starts)
-		turns, err := c.botTurnAggregator()
+		pair, err := c.botTurnAggregator(convo)
 		if err != nil {
 			return nil, err
 		}
+		aggregatorPair = pair
+		turns := pair.User()
 		c.botTurns = turns
 		inbound = append(inbound, c.botSTT, newBotSpeechGate(c.stream, c.trace, starts), turns)
 	}
-	outbound := []processor.Processor{tr.Output()}
+
+	var speech []processor.Processor
 	if c.userTTS != nil {
-		outbound = append([]processor.Processor{c.userTTS}, outbound...)
+		speech = []processor.Processor{c.userTTS}
+	}
+	var outbound []processor.Processor
+	if persona == nil {
+		outbound = slices.Concat(speech, []processor.Processor{tr.Output()})
+	} else {
+		if aggregatorPair == nil {
+			aggregatorPair = aggregators.New(convo)
+		}
+		c.relay = newPersonaTurnRelay(c.textTurnMessage, c.trace, c.stream)
+		outbound = append(append([]processor.Processor{newPersonaStage(persona.LLM())}, speech...),
+			c.relay, tr.Output(), aggregatorPair.Assistant())
 	}
 	return append(append(inbound, c.sink), outbound...), nil
 }
 
-// botTurnAggregator is the aggregator that cuts the bot's transcribed speech
-// into turns (audio mode).
+// personaStage holds the persona LLM, and sets it up under a context that tags
+// what it logs as the persona's (see PipelinePersona), so a run's debug log
+// files the persona's logs under their own heading.
+type personaStage struct {
+	*pipeline.Pipeline
+}
+
+func newPersonaStage(service PersonaLLM) *personaStage {
+	return &personaStage{Pipeline: pipeline.New(service)}
+}
+
+// Setup sets the persona LLM up under the persona's log tag.
+func (p *personaStage) Setup(ctx context.Context, s processor.Setup) error {
+	return p.Pipeline.Setup(withEvalPipeline(ctx, PipelinePersona), s)
+}
+
+// botTurnAggregator is the aggregator pair whose user half cuts the bot's
+// transcribed speech into turns (audio mode), over convo.
 //
 // It takes the STT's transcriptions in to build the bot's turn, so the response
 // comes from the aggregated turn text here rather than from a frame at the
 // sink. Transcripts of audio from before an interrupting send never reach it
 // (see botSpeechGate); the stream still holds a turn back until the bot's LLM
-// has answered the send (see EventStream.BotTurnStopped).
-func (c *Client) botTurnAggregator() (*aggregators.UserAggregator, error) {
+// has answered the send (see EventStream.BotTurnStopped). Its turn hooks give
+// the stream the timing of the bot's replies, and its finished turn is the
+// persona's next user message.
+func (c *Client) botTurnAggregator(convo *frames.LLMContext) (*aggregators.Pair, error) {
 	analyzer, err := c.newBotVAD()
 	if err != nil {
 		return nil, fmt.Errorf("eval: the VAD that hears the bot's speech: %w", err)
@@ -1021,8 +1271,8 @@ func (c *Client) botTurnAggregator() (*aggregators.UserAggregator, error) {
 	options := append([]aggregators.Option{
 		aggregators.WithVAD(aggregators.VADConfig{Analyzer: analyzer}),
 	}, c.botTurnOptions...)
-	user := aggregators.New(frames.NewLLMContext(""), options...).User()
-	// The turn hooks give the stream the timing of the bot's replies.
+	pair := aggregators.New(convo, options...)
+	user := pair.User()
 	user.Events().Add(aggregators.EventUserTurnStarted, func(context.Context, any, ...any) {
 		c.stream.BotTurnStarted()
 	})
@@ -1035,7 +1285,7 @@ func (c *Client) botTurnAggregator() (*aggregators.UserAggregator, error) {
 		}
 		c.stream.BotTurnStopped(text)
 	})
-	return user, nil
+	return pair, nil
 }
 
 // writeRecording writes the recorded conversation audio (bot and user) to the

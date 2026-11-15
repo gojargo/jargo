@@ -5,15 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -927,11 +932,126 @@ func TestManifestAFlatFileStillLoadsAndWarns(t *testing.T) {
 	}
 }
 
-// Until the simulation driver lands, a simulation run fails clearly rather
-// than passing or hanging.
-func TestSuiteASimulationRunIsNotSupportedYet(t *testing.T) {
+// yesClassifier answers every question yes, surely: the judge a suite test's
+// simulation is judged by.
+type yesClassifier struct{ *classifier.Base }
+
+func (*yesClassifier) Model() string { return "" }
+
+func (*yesClassifier) AskQuestions(
+	_ context.Context, _ any, questions []classifier.Named[classifier.Question], _ []classifier.Input,
+) (map[string]classifier.Result, *frames.LLMTokenUsage, error) {
+	results := map[string]classifier.Result{}
+	for _, q := range questions {
+		switch q.Question.(type) {
+		case classifier.YesNoQuestion:
+			results[q.Name] = classifier.YesNoResult{Probability: 0.99}
+		case classifier.ChoiceQuestion:
+			results[q.Name] = classifier.ChoiceResult{
+				Choice: VerdictYes, Probabilities: map[string]float64{VerdictYes: 0.99}, Confidence: 0.99,
+			}
+		}
+	}
+	return results, nil, nil
+}
+
+func init() {
+	RegisterFactory("evaltest.suite_persona", func(map[string]any) (any, error) {
+		persona, _ := scriptedPersona(map[string]any{
+			"Hello! How can I help?": "What is the capital of Germany?",
+			"Berlin.":                endCallReply{"success": true, "reason": "I learned it"},
+		})
+		return persona, nil
+	})
+	RegisterFactory("evaltest.yes_classifier", func(map[string]any) (any, error) {
+		c := &yesClassifier{}
+		c.Base = classifier.NewBase("YesClassifier", "", c)
+		return c, nil
+	})
+}
+
+// A simulation run in a suite plays the persona against the bot, records its
+// result, and keeps its conversation beside its logs.
+func TestSuiteASimulationRunRecordsItsResultAndItsConversation(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.greeting = reply("Hello! How can I help?")
+	bot.onText("What is the capital of Germany?", reply("Berlin.")...)
+	base := manifestDir(t)
+	writeIn(t, base, "scenarios/capital.yaml", `
+name: capital
+simulator: {factory: evaltest.suite_persona}
+judge:
+  eval: {factory: evaltest.yes_classifier, explainer: false}
+scenarios:
+  - name: capital
+    persona: "A curious traveler."
+    goal: "Learn the capital of Germany."
+    success: "the bot named Berlin"
+    max_turns: 5
+    max_duration_s: 10
+`)
+	m := mustManifest(t, base, "suite:\n  - bot_url: "+bot.url()+"\n    scenarios: [capital]\n", ManifestOverrides{})
+	suite := NewSuite(m)
+	logs := filepath.Join(base, "logs")
+	opts := SuiteRunOptions{ResultsPath: filepath.Join(base, "results.jsonl"), Debug: true}
+	if err := suite.Run(t.Context(), logs, opts); err != nil {
+		t.Fatal(err)
+	}
+	run := suite.Runs[0]
+	if run.Status != RunDone || run.Error != "" || run.SimulationResult == nil {
+		t.Fatalf("run = %+v", run)
+	}
+	if res := run.SimulationResult; !res.Passed() || res.EndedBy != SimulationEndedByEndCall || res.Turns != 1 {
+		t.Fatalf("result = %+v\n%s", res, strings.Join(res.DebugLog, "\n"))
+	}
+	record := readRecord(t, filepath.Join(base, "results.jsonl"))
+	if record["kind"] != "simulation" || record["passed"] != true || record["ended_by"] != "end_call" {
+		t.Fatalf("record = %v", record)
+	}
+	artifacts, _ := record["artifacts"].(map[string]any)
+	path, _ := artifacts["conversation"].(string)
+	data, err := os.ReadFile(path) //nolint:gosec // a test file
+	if err != nil {
+		t.Fatalf("conversation file: %v (artifacts %v)", err, artifacts)
+	}
+	var conversation []map[string]any
+	if err := json.Unmarshal(data, &conversation); err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string]any{
+		{"role": "assistant", "content": "Hello! How can I help?"},
+		{"role": "user", "content": "What is the capital of Germany?"},
+		{"role": "assistant", "content": "Berlin."},
+	}
+	if !reflect.DeepEqual(conversation, want) {
+		t.Fatalf("conversation = %v", conversation)
+	}
+	// The persona LLM's own logs are filed under their heading.
+	debugLogs, _ := filepath.Glob(filepath.Join(logs, "*.debug.log"))
+	if len(debugLogs) != 1 {
+		t.Fatalf("debug logs = %v", debugLogs)
+	}
+	content, err := os.ReadFile(debugLogs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	heading := "===== persona LLM logs: capital/capital ====="
+	_, section, found := strings.Cut(string(content), heading)
+	section, _, _ = strings.Cut(section, "=====")
+	if !found || !strings.Contains(section, "scripted persona: answering Hello! How can I help?") {
+		t.Fatalf("debug log lacks the persona's section:\n%s", content)
+	}
+}
+
+// A simulation whose bot cannot be reached is a run that failed to connect,
+// not an error of the suite.
+func TestSuiteASimulationThatCannotConnectIsAFailedRun(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer srv.Close()
 	base := simulationsDir(t)
-	m := mustManifest(t, base, "suite:\n  - bot_url: ws://127.0.0.1:1/ws\n    scenarios: [once]\n",
+	m := mustManifest(t, base, "suite:\n  - bot_url: "+wsURL(srv.URL)+"\n    scenarios: [once]\n",
 		ManifestOverrides{})
 	suite := NewSuite(m)
 	logs := filepath.Join(base, "logs")
@@ -940,11 +1060,13 @@ func TestSuiteASimulationRunIsNotSupportedYet(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := suite.Runs[0]
-	if run.Status != RunDone || !strings.Contains(run.Error, "simulations are not supported yet") {
+	if run.Status != RunDone || run.Error != "" || run.SimulationResult == nil ||
+		run.SimulationResult.FailureKind != FailureConnectFailed {
 		t.Fatalf("run = %+v", run)
 	}
 	record := readRecord(t, filepath.Join(base, "results.jsonl"))
-	if record["kind"] != "simulation" || record["passed"] != false || record["ended_by"] != "error" {
+	if record["kind"] != "simulation" || record["passed"] != false || record["ended_by"] != "error" ||
+		record["failure_kind"] != FailureConnectFailed {
 		t.Fatalf("record = %v", record)
 	}
 }

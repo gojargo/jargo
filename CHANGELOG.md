@@ -299,6 +299,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   now `kokoro.NewHTTPTTS(kokoro.HTTPConfig)`; `kokoro.NewTTS` and
   `kokoro.Config` are the local service and return an error. The
   `voice-kokoro` example uses the local service and needs no server.
+- **The eval harness runs simulations.** A persona LLM plays the caller and
+  ends the call with its `end_call` tool; the judge scores the whole
+  conversation against the goal and per-turn criteria, and measured metrics
+  cover turns, duration, words, latency and function calls. Simulations run
+  in text and audio modes, through the suite and `jargo eval run`, which save
+  `<run>.conversation.json`. `jargo eval judge` judges saved conversation
+  files against a simulation or a rubric, `eval.ConversationObserver`
+  records a bot's own conversation in the same format, and
+  `eval.SessionFromScenario` builds a session of either kind. **Breaking:**
+  `eval.NewClient` takes a persona, `EventProgress` handlers may receive
+  `SimulationProgress` records, and `jargo eval run` runs simulations
+  instead of reporting them as not scripted.
 
 ### Changed
 

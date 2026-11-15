@@ -317,6 +317,9 @@ type SimulationMetricScore struct {
 	Criterion string
 }
 
+// unscored is how a metric without a score is reported.
+const unscored = "unscored"
+
 // SimulationResult is the outcome of one run of a simulation.
 type SimulationResult struct {
 	// SimulationName is the name of the simulation that was run.
@@ -395,7 +398,7 @@ func (r *SimulationResult) Failure() string {
 		if m.MinScore == nil {
 			return m.Name + ": " + m.Reason
 		}
-		score := "unscored"
+		score := unscored
 		if m.Score != nil {
 			score = fmt.Sprintf("%.2f", *m.Score)
 		}

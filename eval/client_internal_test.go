@@ -3,7 +3,9 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
 
@@ -168,8 +171,8 @@ func (c *collector) seen() []frames.Frame {
 // user's.
 func TestBotFrameSink(t *testing.T) {
 	ctx := t.Context()
-	sink := func() (*botFrameSink, *collector) {
-		s := newBotFrameSink(newStream(true))
+	sinkWith := func(persona *Persona, personaHears bool) (*botFrameSink, *collector) {
+		s := newBotFrameSink(newStream(true), persona, personaHears)
 		if err := s.Setup(ctx, processor.Setup{}); err != nil {
 			t.Fatal(err)
 		}
@@ -178,6 +181,7 @@ func TestBotFrameSink(t *testing.T) {
 		s.Link(next)
 		return s, next
 	}
+	sink := func() (*botFrameSink, *collector) { return sinkWith(nil, false) }
 	push := func(s *botFrameSink, fs ...frames.Frame) {
 		for _, f := range fs {
 			if err := s.ProcessFrame(ctx, f, processor.Downstream); err != nil {
@@ -230,5 +234,264 @@ func TestBotFrameSink(t *testing.T) {
 		if len(s.stream.EventsSeen()) != 0 {
 			t.Fatalf("events = %v, want none", s.stream.EventsSeen())
 		}
+	})
+	t.Run("a persona is interrupted and runs per context frame", func(t *testing.T) {
+		persona := stubPersona()
+		s, next := sinkWith(persona, false)
+		interruption := frames.NewInterruptionFrame()
+		run := frames.NewLLMContextFrame(persona.Context())
+		push(s, interruption, run)
+		if got := next.seen(); len(got) != 2 || got[0] != frames.Frame(interruption) || got[1] != frames.Frame(run) {
+			t.Fatalf("pushed %v", got)
+		}
+	})
+	t.Run("hang up silences the persona", func(t *testing.T) {
+		persona := stubPersona()
+		s, next := sinkWith(persona, true)
+		persona.HangUp()
+		push(s, frames.NewLLMContextFrame(persona.Context()))
+		push(s, botResponse(false, "Anything else?")...)
+		if got := next.seen(); len(got) != 0 {
+			t.Fatalf("pushed %v", got)
+		}
+		if got := persona.Context().Messages(); len(got) != 0 {
+			t.Fatalf("messages = %v", got)
+		}
+	})
+	t.Run("text feed hands the bot's response to the persona", func(t *testing.T) {
+		persona := stubPersona()
+		s, next := sinkWith(persona, true)
+		push(s, botResponse(false, "Hello ", "there")...)
+		wantMessages(t, persona, "Hello there")
+		got := next.seen()
+		if len(got) != 1 {
+			t.Fatalf("pushed %v", got)
+		}
+		if cf, ok := got[0].(*frames.LLMContextFrame); !ok || cf.Context != persona.Context() {
+			t.Fatalf("pushed %v, want the persona's context", got[0])
+		}
+	})
+	t.Run("text feed waits for the bot's function call", func(t *testing.T) {
+		persona := stubPersona()
+		s, next := sinkWith(persona, true)
+		push(s, frames.NewLLMFullResponseStartFrame(), frames.NewLLMTextFrame("Let me check."),
+			frames.NewFunctionCallInProgressFrame("c", "f", json.RawMessage(`{}`), true, ""),
+			frames.NewLLMFullResponseEndFrame())
+		// Held: the call is still running.
+		wantMessages(t, persona)
+		push(s, frames.NewFunctionCallResultFrame("c", "f", json.RawMessage(`{}`), "1"))
+		push(s, botResponse(false, "It's sunny.")...)
+		wantMessages(t, persona, "Let me check. It's sunny.")
+		if got := next.seen(); len(got) != 1 {
+			t.Fatalf("pushed %v", got)
+		}
+	})
+	t.Run("text feed ignores an empty response", func(t *testing.T) {
+		persona := stubPersona()
+		s, next := sinkWith(persona, true)
+		push(s, botResponse(false)...)
+		wantMessages(t, persona)
+		if got := next.seen(); len(got) != 0 {
+			t.Fatalf("pushed %v", got)
+		}
+	})
+}
+
+// stubPersonaLLM is a persona LLM that only takes registrations: the sink and
+// relay tests need only the persona's context and its hearing.
+type stubPersonaLLM struct {
+	*processor.Base
+	mu       sync.Mutex
+	handlers map[string]llm.FunctionCallHandler
+}
+
+func newStubPersonaLLM() *stubPersonaLLM {
+	s := &stubPersonaLLM{handlers: map[string]llm.FunctionCallHandler{}}
+	s.Base = processor.New("StubPersonaLLM", s)
+	return s
+}
+
+func (s *stubPersonaLLM) RegisterFunction(name string, h llm.FunctionCallHandler, _ ...llm.RegisterOption) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.handlers[name] = h
+}
+
+func (s *stubPersonaLLM) handler(name string) llm.FunctionCallHandler {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.handlers[name]
+}
+
+func stubPersona() *Persona { return NewPersona("A caller.", "A goal.", newStubPersonaLLM()) }
+
+// botResponse is the frames of one LLM response, as the bot's (or the
+// persona's) LLM emits them.
+func botResponse(skipTTS bool, texts ...string) []frames.Frame {
+	start, end := frames.NewLLMFullResponseStartFrame(), frames.NewLLMFullResponseEndFrame()
+	start.SkipTTS, end.SkipTTS = &skipTTS, &skipTTS
+	out := []frames.Frame{start}
+	for _, text := range texts {
+		f := frames.NewLLMTextFrame(text)
+		f.SkipTTS = &skipTTS
+		out = append(out, f)
+	}
+	return append(out, end)
+}
+
+// wantMessages asserts the persona's context holds one user message per text.
+func wantMessages(t *testing.T, persona *Persona, texts ...string) {
+	t.Helper()
+	got := persona.Context().Messages()
+	if len(got) != len(texts) {
+		t.Fatalf("messages = %+v, want %q", got, texts)
+	}
+	for i, text := range texts {
+		if m := got[i]; m.Role != frames.RoleUser || m.Text != text {
+			t.Fatalf("message %d = %+v, want the user saying %q", i, m, text)
+		}
+	}
+}
+
+// untimed are the events without the arrival time the stream stamps on them.
+func untimed(events []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(events))
+	for _, e := range events {
+		c := maps.Clone(e)
+		delete(c, "at")
+		out = append(out, c)
+	}
+	return out
+}
+
+// The persona's text-mode responses become one send-text each.
+func TestPersonaTurnRelay(t *testing.T) {
+	ctx := t.Context()
+	relayOf := func() (*personaTurnRelay, *collector, *Trace) {
+		trace := NewTrace()
+		r := newPersonaTurnRelay(func(text string) rtvi.Message {
+			return rtvi.Message{Type: rtvi.TypeSendText, Data: text}
+		}, trace, newStream(true))
+		if err := r.Setup(ctx, processor.Setup{}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = r.Cleanup(context.WithoutCancel(ctx)) })
+		next := newCollector()
+		r.Link(next)
+		return r, next, trace
+	}
+	push := func(r *personaTurnRelay, fs ...frames.Frame) {
+		for _, f := range fs {
+			if err := r.ProcessFrame(ctx, f, processor.Downstream); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	traced := func(trace *Trace, want string) bool {
+		return slices.ContainsFunc(trace.Lines(), func(line string) bool { return strings.Contains(line, want) })
+	}
+	wantEvents := func(t *testing.T, r *personaTurnRelay, want ...map[string]any) {
+		t.Helper()
+		got := untimed(r.stream.EventsSeen())
+		if len(want) == 0 && len(got) == 0 {
+			return
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+	}
+	sentTexts := func(next *collector) []any {
+		var sent []any
+		for _, f := range next.seen() {
+			if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
+				if message, ok := m.Message.(rtvi.Message); ok {
+					sent = append(sent, message.Data)
+				}
+			}
+		}
+		return sent
+	}
+
+	t.Run("a skip_tts response is sent as one text turn", func(t *testing.T) {
+		r, next, trace := relayOf()
+		response := botResponse(true, "Hi ", "there.")
+		push(r, response...)
+		if got := sentTexts(next); !reflect.DeepEqual(got, []any{"Hi there."}) {
+			t.Fatalf("sent %v", got)
+		}
+		// The response's own frames go on, for the assistant aggregator.
+		var passed []frames.Frame
+		for _, f := range next.seen() {
+			if slices.Contains(response, f) {
+				passed = append(passed, f)
+			}
+		}
+		if !slices.Equal(passed, response) {
+			t.Fatalf("passed %v, want %v", passed, response)
+		}
+		if !traced(trace, `"Hi there." (persona, text)`) {
+			t.Fatalf("trace = %v", trace.Lines())
+		}
+		wantEvents(t, r, map[string]any{"type": "persona_turn", "text": "Hi there."})
+	})
+	t.Run("a spoken response is only traced", func(t *testing.T) {
+		r, next, trace := relayOf()
+		// In audio mode the TTS speaks the text and forwards the end frame after
+		// it.
+		push(r, frames.NewLLMFullResponseStartFrame(), frames.NewLLMTextFrame("Hi"),
+			frames.NewTTSTextFrame("Hi", frames.TextTypeSentence), frames.NewLLMFullResponseEndFrame())
+		if got := sentTexts(next); len(got) != 0 {
+			t.Fatalf("sent %v", got)
+		}
+		if !traced(trace, `"Hi" (persona, audio)`) {
+			t.Fatalf("trace = %v", trace.Lines())
+		}
+		wantEvents(t, r, map[string]any{"type": "persona_turn", "text": "Hi"})
+	})
+	t.Run("a response without words is not a turn", func(t *testing.T) {
+		// An end_call-only response, or one cut off before any word went out.
+		r, _, _ := relayOf()
+		push(r, frames.NewLLMFullResponseStartFrame(), frames.NewLLMFullResponseEndFrame())
+		push(r, frames.NewLLMFullResponseStartFrame(), frames.NewInterruptionFrame(), frames.NewLLMFullResponseEndFrame())
+		wantEvents(t, r)
+	})
+	t.Run("an end_call made while the response is spoken follows its turn", func(t *testing.T) {
+		// In audio mode the persona calls end_call before the TTS has spoken the
+		// response it came with.
+		r, _, _ := relayOf()
+		push(r, frames.NewLLMFullResponseStartFrame())
+		r.reportEndCall(map[string]any{"type": "end_call", "text": "done"})
+		wantEvents(t, r)
+		push(r, frames.NewTTSTextFrame("Goodbye!", frames.TextTypeSentence), frames.NewLLMFullResponseEndFrame())
+		wantEvents(t, r,
+			map[string]any{"type": "persona_turn", "text": "Goodbye!"},
+			map[string]any{"type": "end_call", "text": "done"})
+	})
+	t.Run("an end_call with no response going out is appended at once", func(t *testing.T) {
+		r, _, _ := relayOf()
+		// The response already went out.
+		push(r, frames.NewLLMFullResponseStartFrame(), frames.NewLLMFullResponseEndFrame())
+		r.reportEndCall(map[string]any{"type": "end_call", "text": "first"})
+		// The bot's speech cut the response off.
+		push(r, frames.NewLLMFullResponseStartFrame())
+		r.reportEndCall(map[string]any{"type": "end_call", "text": "second"})
+		push(r, frames.NewInterruptionFrame())
+		wantEvents(t, r,
+			map[string]any{"type": "end_call", "text": "first"},
+			map[string]any{"type": "end_call", "text": "second"})
+	})
+	t.Run("a response interrupted before a word went out is not a turn", func(t *testing.T) {
+		r, _, _ := relayOf()
+		push(r, frames.NewLLMFullResponseStartFrame(), frames.NewLLMTextFrame("Could you"), frames.NewInterruptionFrame())
+		wantEvents(t, r)
+	})
+	t.Run("an interrupted response is a turn of the words that went out", func(t *testing.T) {
+		r, _, _ := relayOf()
+		push(r, frames.NewLLMFullResponseStartFrame())
+		r.reportEndCall(map[string]any{"type": "end_call", "text": "done"})
+		push(r, frames.NewTTSTextFrame("No thanks,", frames.TextTypeSentence), frames.NewInterruptionFrame())
+		wantEvents(t, r,
+			map[string]any{"type": "persona_turn", "text": "No thanks,"},
+			map[string]any{"type": "end_call", "text": "done"})
 	})
 }

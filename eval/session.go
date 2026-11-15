@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -17,7 +18,8 @@ import (
 // A session connects to a running bot's eval transport as an RTVI client, runs
 // the handshake, lets its driver converse, tears down, and returns the driver's
 // result, a failed connect or a harness error included. SessionParams is how the
-// run behaves, whichever kind of scenario it is.
+// run behaves, whichever kind of scenario it is, and SessionFromScenario builds
+// the session of whichever kind a scenario is.
 
 const (
 	// DefaultEventTimeoutMS is the latency budget for an expectation that sets
@@ -44,9 +46,11 @@ const (
 	AudioSupportCheckWhenAdvertised = "when_advertised"
 )
 
-// EventProgress fires with a Progress record as the conversation advances: a
-// scripted scenario's turns and expectations as they resolve. Records are
-// delivered in order, and Run waits for every handler before it returns:
+// EventProgress fires with a progress record as the conversation advances: a
+// scripted scenario's turns and expectations as they resolve (a
+// ScriptTurnProgress), a simulation's lines as they are spoken (a
+// SimulationProgress). Records are delivered in order, and Run waits for every
+// handler before it returns:
 //
 //	events.On(&session.Registry, eval.EventProgress, func(ctx context.Context, p eval.Progress) { … })
 const EventProgress = "on_progress"
@@ -142,8 +146,9 @@ func (p SessionParams) validate() error {
 //
 // Connect, run the handshake, let the driver converse, tear down, and turn what
 // happened, a failed connect or a harness error included, into the driver's
-// result. ScriptSession builds the client and the driver for a scripted
-// scenario. It raises EventProgress.
+// result. ScriptSession and SimulationSession build the client and the driver
+// for their kind of scenario; SessionFromScenario builds whichever kind a
+// scenario is. It raises EventProgress.
 type Session[R any] struct {
 	events.Registry
 
@@ -178,6 +183,8 @@ func newSession[R any](kind Kind, name, botURL string, params SessionParams) *Se
 
 // Trace is the run's trace.
 func (s *Session[R]) Trace() *Trace { return s.trace }
+
+func (*Session[R]) scenarioSession() {}
 
 // Run connects, drives the conversation, and returns the result.
 //
@@ -325,7 +332,87 @@ func (s *Session[R]) errorFailure(reason string, stack []byte) AssertionFailure 
 	return f
 }
 
-// progress emits a progress record to the EventProgress handlers.
-func (s *Session[R]) progress(record Progress) {
+// progress emits a progress record, a ScriptTurnProgress or a
+// SimulationProgress, to the EventProgress handlers.
+func (s *Session[R]) progress(record any) {
 	s.Call(context.Background(), EventProgress, s, record)
+}
+
+// errNotRunnable is a scenario SessionFromScenario cannot build a session for.
+var errNotRunnable = errors.New("eval: expected a scripted scenario or a simulation")
+
+// errPersonaForScript is a persona LLM given for a scripted scenario.
+var errPersonaForScript = errors.New("eval: a persona LLM applies to simulations only")
+
+// errNotARunJudge is a judge given for a simulation that cannot judge a whole
+// run.
+var errNotARunJudge = errors.New("eval: a simulation's judge must judge whole runs (a RunJudge)")
+
+// ScenarioSession is a session of either kind, as SessionFromScenario builds
+// it: a *ScriptSession or a *SimulationSession. Switch on its type to run it.
+type ScenarioSession interface {
+	// Trace is the run's trace.
+	Trace() *Trace
+	scenarioSession()
+}
+
+// SessionServices are the services a session can be given rather than build
+// from its scenario. A nil field is built from the scenario when the run needs
+// it.
+type SessionServices struct {
+	// PersonaLLM plays a simulation's caller; it applies to simulations only.
+	PersonaLLM PersonaLLM
+	// Judge decides the scenario's eval: assertions, or a simulation's goal and
+	// criteria, which takes a judge that is also a RunJudge (EvalJudge is
+	// both).
+	Judge Judge
+	// UserTTS speaks the user's turns in audio mode.
+	UserTTS *CachingTTSService
+	// BotSTT transcribes the bot's audio when the run transcribes it.
+	BotSTT *stt.SegmentService
+}
+
+// SessionFromScenario builds a ready-to-run session for a scenario of either
+// kind: a *ScriptSession for a *ScriptScenario, a *SimulationSession for a
+// *SimulationScenario, each constructing the services it needs that services
+// does not give. Then run it:
+//
+//	url := "ws://localhost:7860/ws"
+//	session, err := eval.SessionFromScenario(scenario, url, eval.SessionParams{}, eval.SessionServices{})
+//	if err != nil { … }
+//	switch s := session.(type) {
+//	case *eval.ScriptSession:
+//		result, err := s.Run(ctx)
+//		…
+//	case *eval.SimulationSession:
+//		result, err := s.Run(ctx)
+//		…
+//	}
+//
+// It fails when a persona LLM is given for a scripted scenario, which has no
+// persona, when a simulation's judge cannot judge a whole run, when scenario is
+// neither kind (a rubric has nothing to run), or when a service the scenario
+// names cannot be built.
+func SessionFromScenario(
+	scenario LoadedScenario, botURL string, params SessionParams, services SessionServices,
+) (ScenarioSession, error) {
+	switch sc := scenario.(type) {
+	case *SimulationScenario:
+		var judge RunJudge
+		if services.Judge != nil {
+			runJudge, ok := services.Judge.(RunJudge)
+			if !ok {
+				return nil, fmt.Errorf("%w; %q got %T", errNotARunJudge, sc.Name, services.Judge)
+			}
+			judge = runJudge
+		}
+		return SimulationSessionFromScenario(sc, botURL, params, services.PersonaLLM, judge,
+			services.UserTTS, services.BotSTT)
+	case *ScriptScenario:
+		if services.PersonaLLM != nil {
+			return nil, fmt.Errorf("%w; %q is scripted", errPersonaForScript, sc.Name)
+		}
+		return ScriptSessionFromScenario(sc, botURL, params, services.Judge, services.UserTTS, services.BotSTT)
+	}
+	return nil, fmt.Errorf("%w, got %T", errNotRunnable, scenario)
 }

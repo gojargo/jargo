@@ -475,7 +475,7 @@ func TestTagBotSegments(t *testing.T) {
 	t.Run("the sink reports a closed segment as transcribed", func(t *testing.T) {
 		stream := newStream(true)
 		stream.BotSegmentEnded()
-		sink := newBotFrameSink(stream)
+		sink := newBotFrameSink(stream, nil, false)
 		if err := sink.Setup(t.Context(), processor.Setup{}); err != nil {
 			t.Fatal(err)
 		}

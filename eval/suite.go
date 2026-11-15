@@ -178,9 +178,6 @@ var (
 	errSpawnTemplate = errors.New("eval: spawn template")
 	// errNothingToRun is a run whose scenario is a rubric.
 	errNothingToRun = errors.New("which has nothing to run")
-	// errSimulationNotSupported is a simulation run: the harness does not drive
-	// simulations yet.
-	errSimulationNotSupported = errors.New("simulations are not supported yet: the simulation driver has not landed")
 	// errHarnessTimeout is a run that outlived WorkerSafetyTimeout.
 	errHarnessTimeout = errors.New("harness worker timed out")
 )
@@ -1391,29 +1388,24 @@ func (s *Suite) defaultRunHarness(
 func runScenario(
 	ctx context.Context, run *SuiteRun, loaded LoadedScenario, botURL string, params SessionParams,
 ) error {
-	switch scenario := loaded.(type) {
-	case *ScriptScenario:
-		session, err := ScriptSessionFromScenario(scenario, botURL, params, nil, nil, nil)
-		if err != nil {
-			return err
-		}
-		result, err := session.Run(ctx)
-		run.ScriptResult = &result
-		return err
-	case *SimulationScenario:
-		return runSimulation(ctx, run, scenario, botURL, params)
-	default:
+	if _, ok := loaded.(*Rubric); ok {
 		return fmt.Errorf("%s is a rubric, %w", loaded.ScenarioName(), errNothingToRun)
 	}
-}
-
-// runSimulation builds the simulation's session, runs it against botURL, and
-// records its result on run.
-//
-// The harness does not drive simulations yet, so a simulation run fails with
-// errSimulationNotSupported; the simulation session replaces this.
-func runSimulation(_ context.Context, _ *SuiteRun, scenario *SimulationScenario, _ string, _ SessionParams) error {
-	return fmt.Errorf("%s: %w", scenario.Name, errSimulationNotSupported)
+	session, err := SessionFromScenario(loaded, botURL, params, SessionServices{})
+	if err != nil {
+		return err
+	}
+	switch s := session.(type) {
+	case *ScriptSession:
+		result, err := s.Run(ctx)
+		run.ScriptResult = &result
+		return err
+	case *SimulationSession:
+		result, err := s.Run(ctx)
+		run.SimulationResult = result
+		return err
+	}
+	return nil
 }
 
 // defaultFinish marks the run done, stops its bot, and keeps the artifacts.

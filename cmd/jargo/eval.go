@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/eval"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -32,7 +35,7 @@ func evalCmd() *cobra.Command {
 		Use:   "eval",
 		Short: "Run behavioral eval scenarios against a jargo bot",
 	}
-	cmd.AddCommand(evalRunCmd(), evalSuiteCmd())
+	cmd.AddCommand(evalRunCmd(), evalJudgeCmd(), evalSuiteCmd())
 	return cmd
 }
 
@@ -53,8 +56,11 @@ func evalRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <scenario.yaml|dir>...",
 		Short: "Play one or more scenarios against a running bot's RTVI WebSocket endpoint",
-		Long: "Play one or more scenarios against a running bot. A directory stands\n" +
-			"for the scenarios directly in it, in name order.\n\n" +
+		Long: "Play one or more scenarios, scripted or simulations, against a running bot.\n" +
+			"A directory stands for the scenarios directly in it, in name order. A\n" +
+			"simulation runs once here, and its conversation is saved as\n" +
+			"<logs-dir>/<scenario>.conversation.json; a rubric has nothing to run and is\n" +
+			"judged with `jargo eval judge`.\n\n" +
 			"The bot must expose an RTVI WebSocket endpoint (see eval.Handler). Each\n" +
 			"scenario's result is printed; the command exits non-zero if any fail.\n\n" +
 			"A scenario using eval: is judged by the judge its judge: block configures,\n" +
@@ -68,7 +74,8 @@ func evalRunCmd() *cobra.Command {
 	cmd.Flags().IntVarP(&timeout, "timeout", "t", eval.DefaultEventTimeoutMS/1000,
 		"default per-expectation timeout in seconds (for expectations without their own within_ms)")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false,
-		"print a line for each turn and expectation as it resolves")
+		"print a line for each turn and expectation as it resolves; for a simulation, "+
+			"the conversation as it happens and the judge's reasons at the end")
 	cmd.Flags().StringVar(&cacheDir, "cache-dir", "",
 		"directory for cached synthesized user audio (default <user-cache-dir>/jargo/eval/tts)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false,
@@ -108,39 +115,39 @@ func evalRunCmd() *cobra.Command {
 				played++
 				continue
 			}
-			scripts, unplayable := scriptsToPlay(out, file)
-			failed += unplayable
-			played += unplayable
-			for _, scenario := range scripts {
-				played++
+			for _, loaded := range file.Scenarios {
 				// A fresh judge per scenario: it holds the conversation it grades
 				// against, so one scenario's turns must not reach the next one's.
 				useCache := !noCache
-				opts := eval.Options{
-					Judge: getJudge(),
-					Params: eval.SessionParams{
-						BotReadyTimeout:  time.Duration(botReadyTimeout * float64(time.Second)),
-						DefaultTimeoutMS: timeout * 1000,
-						CacheDir:         cacheDir,
-						UseCache:         &useCache,
-					},
+				params := eval.SessionParams{
+					BotReadyTimeout:  time.Duration(botReadyTimeout * float64(time.Second)),
+					DefaultTimeoutMS: timeout * 1000,
+					CacheDir:         cacheDir,
+					UseCache:         &useCache,
 				}
 				if audio {
-					opts.Params.RecordPath = recordPath(recordDir, scenario.Name)
+					params.RecordPath = recordPath(recordDir, loaded.ScenarioName())
 				}
-				if verbose {
-					opts.OnProgress = func(p eval.ScriptTurnProgress) { printProgress(out, p) }
+				var passed bool
+				switch scenario := loaded.(type) {
+				case *eval.ScriptScenario:
+					passed, err = playScript(cmd.Context(), out, scenario, botURL, getJudge(), params, runLogs{
+						dir: logsDir, debug: debugLogs, verbose: verbose,
+					})
+				case *eval.SimulationScenario:
+					passed, err = playSimulation(cmd.Context(), out, scenario, botURL, getJudge(), params, runLogs{
+						dir: logsDir, debug: debugLogs, verbose: verbose,
+					})
+				default:
+					// A rubric judges a call that already happened; there is
+					// nothing to run (see `jargo eval judge`).
+					continue
 				}
-				stem := strings.ReplaceAll(scenario.Name, "/", "__")
-				ctx, finishLogs := eval.CapturePipelineLogs(cmd.Context(), logsDir, stem, scenario.Name, debugLogs)
-				res, err := eval.RunURL(ctx, scenario, botURL, opts)
-				finishLogs()
 				if err != nil {
-					return fmt.Errorf("%s: %w", scenario.Name, err)
+					return err
 				}
-				writeTrace(logsDir, stem, res.DebugLog)
-				printResult(out, res)
-				if !res.Passed() {
+				played++
+				if !passed {
 					failed++
 				}
 			}
@@ -171,23 +178,128 @@ func recordPath(recordDir, scenarioName string) string {
 	return filepath.Join(recordDir, strings.ReplaceAll(scenarioName, "/", "__")+".wav")
 }
 
-// scriptsToPlay are a file's scripted scenarios, and how many of its scenarios
-// cannot be played, each reported as a failure. A rubric has nothing to run and
-// is left out; a simulation is not driven by this harness.
-func scriptsToPlay(out io.Writer, file *eval.ScenarioFile) ([]*eval.ScriptScenario, int) {
-	var scripts []*eval.ScriptScenario
-	unplayable := 0
-	for _, loaded := range file.Scenarios {
-		switch s := loaded.(type) {
-		case *eval.ScriptScenario:
-			scripts = append(scripts, s)
-		case *eval.Rubric:
-		default:
-			_, _ = fmt.Fprintf(out, "FAIL %s (not a scripted scenario)\n", loaded.ScenarioName())
-			unplayable++
-		}
+// runLogs is where a scenario's logs go, and what is printed as it runs.
+type runLogs struct {
+	dir     string
+	debug   bool
+	verbose bool
+}
+
+// playScript plays a scripted scenario against the bot at botURL, prints its
+// result, and reports whether it passed.
+func playScript(
+	ctx context.Context, out io.Writer, scenario *eval.ScriptScenario, botURL string, judge eval.Judge,
+	params eval.SessionParams, logs runLogs,
+) (bool, error) {
+	opts := eval.Options{Judge: judge, Params: params}
+	if logs.verbose {
+		opts.OnProgress = func(p eval.ScriptTurnProgress) { printProgress(out, p) }
 	}
-	return scripts, unplayable
+	stem := strings.ReplaceAll(scenario.Name, "/", "__")
+	ctx, finishLogs := eval.CapturePipelineLogs(ctx, logs.dir, stem, scenario.Name, logs.debug)
+	res, err := eval.RunURL(ctx, scenario, botURL, opts)
+	finishLogs()
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", scenario.Name, err)
+	}
+	writeTrace(logs.dir, stem, res.DebugLog)
+	printResult(out, res)
+	return res.Passed(), nil
+}
+
+// playSimulation runs a simulation once against the bot at botURL, writes its
+// trace and its <scenario>.conversation.json, prints its result, and reports
+// whether it passed. Verbose, the conversation is printed as it happens and the
+// judge's reasons at the end.
+//
+// A judge from the --judge-* flags judges it when it can judge a whole run;
+// otherwise the simulation's judge: block builds one.
+func playSimulation(
+	ctx context.Context, out io.Writer, scenario *eval.SimulationScenario, botURL string, judge eval.Judge,
+	params eval.SessionParams, logs runLogs,
+) (bool, error) {
+	runJudge, _ := judge.(eval.RunJudge)
+	session, err := eval.SimulationSessionFromScenario(scenario, botURL, params, nil, runJudge, nil, nil)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", scenario.Name, err)
+	}
+	d := display{out: out, color: isTerminal(out)}
+	if logs.verbose {
+		d.printf("    %s\n", d.paint("conversation:", "1"))
+		events.On(&session.Registry, eval.EventProgress, func(_ context.Context, p eval.SimulationProgress) {
+			d.simulationProgress(p)
+		})
+	}
+	stem := strings.ReplaceAll(scenario.Name, "/", "__")
+	ctx, finishLogs := eval.CapturePipelineLogs(ctx, logs.dir, stem, scenario.Name, logs.debug)
+	res, err := session.Run(ctx)
+	finishLogs()
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", scenario.Name, err)
+	}
+	writeTrace(logs.dir, stem, res.DebugLog)
+	writeConversation(logs.dir, stem, res.Conversation)
+	if logs.verbose {
+		// The detail closes the conversation above it; the verdict line comes
+		// last, as a scripted scenario's does after its turns.
+		d.simulationDetail(res)
+	}
+	printSimulationResult(out, res)
+	return res.Passed(), nil
+}
+
+// endingColors are the colors of how a simulation ended: the persona hanging
+// up is green, the bot yellow; a cap cutting it short is red.
+//
+//nolint:gochecknoglobals // fixed table, read only
+var endingColors = map[string]string{eval.SimulationEndedByEndCall: "32", eval.SimulationEndedByBot: "33"}
+
+// simulationProgress prints a simulation's progress record as it arrives
+// (verbose mode): the conversation as it is spoken, and how it ended.
+func (d display) simulationProgress(p eval.SimulationProgress) {
+	if p.Status == "ended" {
+		color, ok := endingColors[p.Text]
+		if !ok {
+			color = "31"
+		}
+		d.printf("\n      %s %s %s\n", d.dim("ended by"), d.paint(p.Text, color),
+			d.dim(fmt.Sprintf("after %d persona turn(s)", p.Turn)))
+		return
+	}
+	color := "36"
+	if p.Status == "bot" {
+		color = "32"
+	}
+	d.printf("      %s %s\n", d.paint(p.Status+":", color), p.Text)
+}
+
+// printSimulationResult prints a simulation's result: its verdict and, for a
+// run that did not pass, how it ended and why.
+func printSimulationResult(out io.Writer, res *eval.SimulationResult) {
+	if res.Passed() {
+		_, _ = fmt.Fprintf(out, "PASS %s\n", res.SimulationName)
+		return
+	}
+	_, _ = fmt.Fprintf(out, "FAIL %s (ended by %s)\n", res.SimulationName, res.EndedBy)
+	line := res.Failure()
+	if res.FailureKind != "" {
+		line = res.FailureKind + ": " + line
+	}
+	_, _ = fmt.Fprintf(out, "  - %s\n", line)
+}
+
+// writeConversation saves a simulation's conversation as
+// <logs-dir>/<stem>.conversation.json. A file that cannot be written is
+// dropped: it is a by-product of the run.
+func writeConversation(logsDir, stem string, conversation []map[string]any) {
+	if conversation == nil {
+		conversation = []map[string]any{}
+	}
+	data, err := json.MarshalIndent(conversation, "", "  ")
+	if err != nil || os.MkdirAll(logsDir, 0o750) != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(logsDir, stem+".conversation.json"), append(data, '\n'), 0o600)
 }
 
 // expandScenarioPaths turns each argument into the scenarios to play. A file
