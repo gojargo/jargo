@@ -113,6 +113,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reconnects. `neuphonic.NewHTTPTTS` speaks each sentence with one request
   whose audio streams back as server-sent events. Examples:
   `voice-deepgram`, `voice-neuphonic-http`.
+- **A WebSocket client transport, and RTVI as a client.** `transport/wsclient`
+  dials a server and bridges the socket to a pipeline, with the same
+  serializers as the server transport (protobuf by default), audio paced to
+  the rate it plays, and `on_connected` and `on_disconnected` events.
+  `wsclient.RTVITransport` speaks RTVI to a bot: it sends `client-ready` with
+  `about.library` set to `jargo`, fires `on_bot_ready` when the bot answers,
+  and reports the bot's capabilities. `transport/wsclient/rtviclient` is its
+  serializer, which turns a bot's RTVI messages into frames and sends the
+  pipeline's audio as numbered `raw-audio` messages. `utils/shared` runs the
+  paired setup and teardown of a resource two processors share once each.
 
 ### Changed
 
