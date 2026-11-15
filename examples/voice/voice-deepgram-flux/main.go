@@ -100,6 +100,10 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		r.Cancel(ctx, "client disconnected")
 	})
 
+	events.On(stt.Events(), deepgram.EventFluxUpdate, func(_ context.Context, transcript string) {
+		slog.Debug("Deepgram Flux update", "transcript", transcript)
+	})
+
 	return r.Run(ctx, workers.RunOptions{})
 }
 

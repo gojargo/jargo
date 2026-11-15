@@ -64,6 +64,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `stop_on_failure` scenario key, `Options.ConnectTimeout`,
   `Options.BotReadyTimeout`, `eval.IsScenarioFile`, and
   `jargo eval run --bot-ready-timeout`.
+- **Deepgram Flux STT fires its turn events.** `EventFluxStartOfTurn`,
+  `EventFluxTurnResumed`, `EventFluxEndOfTurn`, `EventFluxEagerEndOfTurn` and
+  `EventFluxUpdate` fire as Flux reports on the turn, each after the frames the
+  report produced, carrying its transcript (all but `EventFluxTurnResumed`). An
+  update with no text fires nothing. The `voice-deepgram-flux` example logs each
+  update, and the two OpenAI Responses function-calling examples log the LLM's
+  connection errors.
 
 ### Changed
 

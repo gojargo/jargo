@@ -76,6 +76,40 @@ const (
 	fluxDefaultLanguageForEn = "en"
 )
 
+// The events the Flux STT service fires as Flux reports on the turn, each after
+// the frames the report produced have been pushed. All but EventFluxTurnResumed
+// carry the transcript Flux sent with the report:
+//
+//	events.On(svc.Events(), deepgram.EventFluxUpdate,
+//	    func(ctx context.Context, transcript string) { … })
+//	events.OnSignal(svc.Events(), deepgram.EventFluxTurnResumed,
+//	    func(ctx context.Context) { … })
+const (
+	// EventFluxStartOfTurn fires when Flux detects the user started a turn. The
+	// transcript may hold the turn's first few words, or nothing.
+	EventFluxStartOfTurn = "on_start_of_turn"
+	// EventFluxTurnResumed fires when the user resumes speaking after a pause
+	// Flux had predicted to be the end of the turn.
+	EventFluxTurnResumed = "on_turn_resumed"
+	// EventFluxEndOfTurn fires when Flux commits the end of the turn, with its
+	// final transcript.
+	EventFluxEndOfTurn = "on_end_of_turn"
+	// EventFluxEagerEndOfTurn fires when Flux predicts the turn has ended
+	// without committing to it, with the predicted transcript.
+	EventFluxEagerEndOfTurn = "on_eager_end_of_turn"
+	// EventFluxUpdate fires on each interim transcript of the turn in progress,
+	// with the turn's transcript so far. An update with no text fires nothing.
+	EventFluxUpdate = "on_update"
+)
+
+// fluxEvents are the events NewFluxSTT registers on the service.
+//
+//nolint:gochecknoglobals // a fixed table
+var fluxEvents = []string{
+	EventFluxStartOfTurn, EventFluxTurnResumed, EventFluxEndOfTurn,
+	EventFluxEagerEndOfTurn, EventFluxUpdate,
+}
+
 // fluxFatalError is a fatal error Flux reported over the connection. It carries
 // the code Flux named so the failure can be classified: reported in the protocol
 // rather than as an HTTP status, it leaves the shared classification nothing to
@@ -268,10 +302,13 @@ func NewFluxSTT(cfg FluxConfig) *stt.StreamService {
 	}
 	c := newFluxConnector(cfg)
 	svc := stt.NewStream("DeepgramFluxSTT", c, cfg.SampleRate)
+	for _, name := range fluxEvents {
+		svc.Events().Register(name, false)
+	}
 	// The connector is handed the service it drives, so it can report a rejected
-	// Configure on the pipeline. The rejection arrives on the read loop, long
-	// after the update that caused it returned, so there is no call left to fail
-	// and the service is the only way back.
+	// Configure on the pipeline and fire the turn events. The rejection arrives
+	// on the read loop, long after the update that caused it returned, so there
+	// is no call left to fail and the service is the only way back.
 	c.svc = svc
 	return svc
 }
@@ -471,6 +508,7 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 		model:       c.live.Model.Or(c.cfg.Model),
 		live:        c.live,
 		report:      c.reportProblem,
+		raise:       c.raise,
 		watchdogMin: watchdogMin,
 		lastAudio:   time.Now(),
 		connectWait: c.connectionTimeout,
@@ -507,6 +545,47 @@ func (c *fluxConnector) reportProblem(ctx context.Context, msg string) {
 	c.svc.PushError(ctx, msg, nil, false)
 }
 
+// raise fires one of the service's turn events.
+func (c *fluxConnector) raise(ctx context.Context, ev fluxTurnEvent) {
+	if c.svc == nil {
+		return
+	}
+	if ev.name == EventFluxTurnResumed {
+		c.svc.Events().Call(ctx, ev.name, c.svc)
+		return
+	}
+	c.svc.Events().Call(ctx, ev.name, c.svc, ev.transcript)
+}
+
+// fluxTurnEvent is a turn event waiting to be fired.
+type fluxTurnEvent struct {
+	name       string
+	transcript string
+}
+
+// fluxTurnEventFor reports the turn event a TurnInfo message fires, if any.
+func fluxTurnEventFor(m fluxMessage) (fluxTurnEvent, bool) {
+	var name string
+	switch m.Event {
+	case fluxEventStartOfTurn:
+		name = EventFluxStartOfTurn
+	case fluxEventTurnResumed:
+		name = EventFluxTurnResumed
+	case fluxEventEndOfTurn:
+		name = EventFluxEndOfTurn
+	case fluxEventEagerEndOfTurn:
+		name = EventFluxEagerEndOfTurn
+	case fluxEventUpdate:
+		if m.Transcript == "" {
+			return fluxTurnEvent{}, false
+		}
+		name = EventFluxUpdate
+	default:
+		return fluxTurnEvent{}, false
+	}
+	return fluxTurnEvent{name: name, transcript: m.Transcript}, true
+}
+
 type fluxStream struct {
 	conn        *wsutil.Conn
 	ctx         context.Context //nolint:containedctx // mirrors the STT stream lifetime
@@ -520,6 +599,13 @@ type fluxStream struct {
 	live *FluxSettings
 	// report puts a problem the session survived on the pipeline.
 	report func(ctx context.Context, msg string)
+	// raise fires one of the service's turn events.
+	raise func(ctx context.Context, ev fluxTurnEvent)
+	// turnEvents are the turn events of the messages whose results Recv last
+	// returned, fired at the start of the next Recv: the read loop pushes a
+	// Recv's results before it calls again, so each event fires after the
+	// frames its message produced. Read loop only.
+	turnEvents []fluxTurnEvent
 	// fail puts a failure that ends the session on the pipeline.
 	fail func(ctx context.Context, err error)
 	// connectWait bounds the wait for Flux to confirm this session.
@@ -608,6 +694,7 @@ func (s *fluxStream) handleUnconfirmed(data []byte) (bool, error) {
 		return false, s.fatal(m)
 	case fluxMsgTurnInfo:
 		s.trackTurn(m)
+		s.queueTurnEvent(m)
 		s.pending = append(s.pending, fluxResults(m, s.model, s.minConfidence())...)
 	default:
 	}
@@ -834,6 +921,7 @@ func (s *fluxStream) Send(audio []byte) error {
 // StartOfTurn events become interim results; EndOfTurn becomes a finalized,
 // end-of-turn result.
 func (s *fluxStream) Recv() ([]stt.Result, error) {
+	s.fireTurnEvents()
 	if !s.confirmed {
 		if err := s.awaitConnected(); err != nil {
 			return nil, err
@@ -848,6 +936,7 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 		s.pending = nil
 		return res, nil
 	}
+	s.fireTurnEvents()
 	for {
 		_, data, err := s.conn.Read(s.ctx)
 		if err != nil {
@@ -866,9 +955,12 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 			return nil, s.fatal(m)
 		case fluxMsgTurnInfo:
 			s.trackTurn(m)
+			s.queueTurnEvent(m)
 			if res := fluxResults(m, s.model, s.minConfidence()); len(res) > 0 {
 				return res, nil
 			}
+			// Nothing to push first, so the event fires now.
+			s.fireTurnEvents()
 		case fluxMsgConfigureSuccess:
 			slog.Info("deepgram flux accepted the configure message")
 			s.onConfigureAcked()
@@ -886,6 +978,27 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 		default:
 			// Connected and other control messages carry no text.
 		}
+	}
+}
+
+// queueTurnEvent queues the turn event a TurnInfo message fires, to be fired
+// once the results it produced have been pushed.
+func (s *fluxStream) queueTurnEvent(m fluxMessage) {
+	if ev, ok := fluxTurnEventFor(m); ok {
+		s.turnEvents = append(s.turnEvents, ev)
+	}
+}
+
+// fireTurnEvents fires the queued turn events, in the order their messages
+// arrived.
+func (s *fluxStream) fireTurnEvents() {
+	evs := s.turnEvents
+	s.turnEvents = nil
+	if s.raise == nil {
+		return
+	}
+	for _, ev := range evs {
+		s.raise(s.ctx, ev)
 	}
 }
 

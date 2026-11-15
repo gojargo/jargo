@@ -25,6 +25,7 @@ import (
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/openai/responses"
 	"github.com/gojargo/jargo/runner"
+	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
@@ -110,6 +111,10 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	model := responses.NewLLM(responses.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
 	model.SetSystemInstruction(systemInstruction)
+
+	events.On(model.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+		slog.Error("LLM connection error", "err", msg)
+	})
 
 	model.OnFunctionCallsStarted(func(ctx context.Context, _ []frames.ToolCall) {
 		_ = tts.QueueFrame(ctx, frames.NewTTSSpeakFrame("Let me check on that."), processor.Downstream)
