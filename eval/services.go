@@ -15,6 +15,7 @@ import (
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/moonshine"
 	"github.com/gojargo/jargo/provider/ollama"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/llm"
@@ -53,7 +54,8 @@ import (
 // This is harness code, so like the factories the release suite names, it
 // reads the API key a deprecated paid provider needs from the environment when
 // the block carries none: CARTESIA_API_KEY for `service: cartesia` and
-// OPENAI_API_KEY for `service: openai`.
+// OPENAI_API_KEY for `service: openai`. It reads where libmoonshine is from
+// JARGO_MOONSHINE_LIB for `service: moonshine`.
 
 // Default models and endpoint of the built-in LLM services.
 const (
@@ -117,7 +119,7 @@ var registry = struct {
 	factories: map[string]Factory{
 		typesafeClassifierFactory: TypesafeClassifier,
 	},
-	stt: map[string]STTServiceBuilder{sttMoonshine: nil, sttWhisper: nil},
+	stt: map[string]STTServiceBuilder{sttMoonshine: moonshineService, sttWhisper: nil},
 	tts: map[string]TTSServiceBuilder{ttsKokoro: nil},
 }
 
@@ -252,6 +254,27 @@ func STTServiceFromConfig(cfg *TranscriptionConfig) (*stt.SegmentService, error)
 			"with eval.RegisterSTTService, or set transcription.factory", ErrServiceUnavailable, name)
 	}
 	return build(cfg)
+}
+
+// moonshineService is a local Moonshine STT from a `judge.transcription:`
+// block: its `model` (default small-streaming) and its optional `language`
+// code, English when absent. libmoonshine is loaded from JARGO_MOONSHINE_LIB,
+// or by its conventional name when that is unset.
+//
+// Prefer Whisper for a non-English bot: Moonshine's non-English models
+// transcribe synthesized speech unreliably, returning an empty transcript or
+// dropping the tail of an utterance, and an empty transcript is
+// indistinguishable from a bot that said nothing.
+func moonshineService(cfg *TranscriptionConfig) (*stt.SegmentService, error) {
+	lang, err := cfgLanguage(cfg.Language)
+	if err != nil {
+		return nil, err
+	}
+	return moonshine.NewSTT(moonshine.STTConfig{
+		Model:       moonshine.Model(cmp.Or(cfg.Model, string(moonshine.ModelSmallStreaming))),
+		Language:    lang,
+		LibraryPath: os.Getenv(moonshine.LibPathEnv),
+	})
 }
 
 // TTSServiceFromConfig builds the user-audio TTS, wrapped in a cache, from a

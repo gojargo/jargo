@@ -115,12 +115,11 @@ func (p *providerSettings) apply(ctx context.Context, f *frames.STTUpdateSetting
 		p.onChanged(ctx)
 	}
 
+	model := storeModel(store)
 	if changed.Has("model") && p.onModel != nil {
 		// The model labels the usage this service reports, and it is priced
 		// against it, so a model that changed mid-call has to relabel what
 		// follows or the cost lands against the wrong one.
-		name, _ := settings.Get(store, "model")
-		model, _ := name.(string)
 		p.onModel(model)
 	}
 
@@ -128,7 +127,21 @@ func (p *providerSettings) apply(ctx context.Context, f *frames.STTUpdateSetting
 	if !ok {
 		return false, nil
 	}
-	return updater.UpdateSettings(ctx, changed)
+	reopen, err := updater.UpdateSettings(ctx, changed)
+	// Acting on the change may settle the provider on another model than the
+	// one the store held, a model the new language does not publish replaced
+	// by one it does, say, and that is the model now in force.
+	if settled := storeModel(store); settled != model && p.onModel != nil {
+		p.onModel(settled)
+	}
+	return reopen, err
+}
+
+// storeModel is the model a settings store holds, or "" for none.
+func storeModel(store any) string {
+	name, _ := settings.Get(store, "model")
+	model, _ := name.(string)
+	return model
 }
 
 // nameLanguage rewrites a language the delta gives into the code the provider

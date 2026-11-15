@@ -68,6 +68,16 @@ ORT_VERSION ?= 1.30.0
 ORT_ARCH ?= $(if $(filter aarch64 arm64,$(shell uname -m)),aarch64,x64)
 NATIVE_DIR ?= $(CURDIR)/.native
 
+# libmoonshine, for the Moonshine STT provider, comes from the moonshine-voice
+# wheel on PyPI, which ships it with the ONNX Runtime build it links against.
+# The wheels are manylinux_2_34, so they need glibc 2.34 or later. The pins
+# are the wheels' published SHA-256 digests.
+MOONSHINE_VERSION ?= 0.1.6
+MOONSHINE_ARCH ?= $(if $(filter aarch64 arm64,$(shell uname -m)),aarch64,x86_64)
+MOONSHINE_SHA256_x86_64 ?= 04e438f393af3f963ac7988204f379d04a9c8949801595cab4bd68a7ceedf6c7
+MOONSHINE_SHA256_aarch64 ?= 41bfd82ca61f1878e4681c25cf1a6c8f2692a14c2ca88a6840ffa00c452891fe
+MOONSHINE_WHEEL = moonshine_voice-$(MOONSHINE_VERSION)-py3-none-manylinux_2_34_$(MOONSHINE_ARCH).whl
+
 ##@ General
 
 .PHONY: help
@@ -276,8 +286,8 @@ docs-check: ## Fail on any relative link in docs/ or the README that points at n
 ##@ Native dependencies
 
 # These follow docker/runtime.Dockerfile, which is Debian and Linux only, so the
-# host install is too. On another system install the same two libraries by hand:
-# the ONNX Runtime and RNNoise.
+# host install is too. On another system install the same libraries by hand:
+# the ONNX Runtime, RNNoise and libmoonshine.
 .PHONY: require-linux
 require-linux:
 	@[[ "$$(uname -s)" == "Linux" ]] || { \
@@ -307,6 +317,24 @@ deps-rnnoise: require-linux ## Build RNNoise from source for the optional denois
 		&& make install
 	@echo
 	@echo "export JARGO_RNNOISE_LIB=$(NATIVE_DIR)/lib/librnnoise.so.0"
+
+# The wheel is unpacked in its own layout: the library in moonshine_voice/ and
+# its ONNX Runtime in moonshine_voice.libs/ beside it, which is where the
+# library's RPATH looks for it. Nothing else in the wheel is needed.
+.PHONY: deps-moonshine
+deps-moonshine: require-linux ## Fetch libmoonshine for the Moonshine STT provider
+	@mkdir -p $(NATIVE_DIR)/moonshine
+	curl -fsSL -o $(NATIVE_DIR)/$(MOONSHINE_WHEEL) \
+		"https://files.pythonhosted.org/packages/py3/m/moonshine_voice/$(MOONSHINE_WHEEL)"
+	echo "$(MOONSHINE_SHA256_$(MOONSHINE_ARCH))  $(NATIVE_DIR)/$(MOONSHINE_WHEEL)" | sha256sum -c -
+	rm -rf $(NATIVE_DIR)/moonshine/moonshine_voice $(NATIVE_DIR)/moonshine/moonshine_voice.libs
+	unzip -q -o $(NATIVE_DIR)/$(MOONSHINE_WHEEL) \
+		'moonshine_voice/libmoonshine.so' 'moonshine_voice.libs/*' \
+		'moonshine_voice-$(MOONSHINE_VERSION).dist-info/licenses/*' \
+		-d $(NATIVE_DIR)/moonshine
+	@rm -f $(NATIVE_DIR)/$(MOONSHINE_WHEEL)
+	@echo
+	@echo "export JARGO_MOONSHINE_LIB=$(NATIVE_DIR)/moonshine/moonshine_voice/libmoonshine.so"
 
 ##@ Packaging
 

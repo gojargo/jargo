@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime and RNNoise are loaded at run time."
+description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime, RNNoise and libmoonshine are loaded at run time."
 weight: 1
 ---
 
@@ -19,7 +19,7 @@ CGO_ENABLED=0 go build ./...
 ```
 
 That works out of the box. Opus encode/decode and resampling are **pure Go**, and
-the two native runtimes are bound through
+the native runtimes are bound through
 [purego](https://github.com/ebitengine/purego), located and loaded at *run* time
 from their shared libraries, with nothing required at build time.
 
@@ -32,9 +32,10 @@ it unless you have a measured reason not to.
 |---|---|---|---|
 | **ONNX Runtime** | Silero VAD, Smart Turn v3, the tone reader and tagger | `JARGO_ONNXRUNTIME_LIB` | Bot still runs; falls back to STT endpointing, loses barge-in. |
 | **RNNoise** | Optional input noise reduction | `JARGO_RNNOISE_LIB` | Bot runs without denoising. |
+| **libmoonshine** | The Moonshine STT provider (`provider/moonshine`) | `JARGO_MOONSHINE_LIB` | `moonshine.NewSTT` returns `moonshine.ErrLibraryNotAvailable`. |
 
-Both are located by their conventional name on the loader's default search path
-when the variable is unset.
+Each is located by its conventional name on the loader's default search path
+when nothing points at it.
 
 ### ONNX Runtime
 
@@ -70,21 +71,50 @@ if filter, err := rnnoise.New(); err == nil {
 `rnnoise.New` returns an error when the library is missing, which is the
 idiomatic way to make denoising optional.
 
+### libmoonshine
+
+The Moonshine STT provider transcribes on the CPU with Moonshine's native
+library, `libmoonshine.so` (`libmoonshine.dylib` on macOS, `moonshine.dll` on
+Windows). The library runs the models on its own bundled ONNX Runtime, which has
+to sit where the library expects it: the `moonshine-voice` wheel on PyPI ships
+both in that layout. On Linux, `make deps-moonshine` unpacks them from the wheel
+under `.native/moonshine/` and prints the path to export:
+
+```sh
+make deps-moonshine
+export JARGO_MOONSHINE_LIB=$PWD/.native/moonshine/moonshine_voice/libmoonshine.so
+```
+
+The provider takes the path in its configuration rather than reading the
+environment; `JARGO_MOONSHINE_LIB` is the variable the eval harness reads, and
+the one to use in your own application:
+
+```go
+stt, err := moonshine.NewSTT(moonshine.STTConfig{
+    LibraryPath: os.Getenv(moonshine.LibPathEnv), // empty searches the default path
+})
+```
+
+The models are not in the binary. Each is downloaded once, on first use, from
+Moonshine's model CDN into `jargo/moonshine` under the user's cache directory,
+and checked against its published size and CRC32C. `STTConfig.CacheDir` moves
+the cache, and `STTConfig.ModelPath` loads a model already on disk instead.
+
 ## No cgo
 
 There is no C toolchain in the picture at all. The Opus codec and the resampler
-are pure Go, and the two native runtimes below are loaded at run time rather
+are pure Go, and the native runtimes above are loaded at run time rather
 than linked, so `CGO_ENABLED=0 go build ./...` is the ordinary build and no
 build tag changes that.
 
 ## Docker
 
-The published base images bundle all of the above, so you do not have to think
-about any of it:
+The published base images bundle the ONNX Runtime and RNNoise, so you do not
+have to think about them:
 
 - **`gojargo/jargo-build`**: build stage, with the pinned Go toolchain.
 - **`gojargo/jargo`**: distroless runtime, carrying the ONNX Runtime and
-  RNNoise.
+  RNNoise. It does not carry libmoonshine.
 
 See **[Deploy with Docker](../deploy/docker.md)** for a copyable Dockerfile.
 

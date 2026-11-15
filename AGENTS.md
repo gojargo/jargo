@@ -21,7 +21,9 @@ at run time from their shared libraries with no C toolchain at build time.
 - `go test ./...` — run tests. Add `-race` as CI does.
 - The **ONNX Runtime** and **RNNoise** shared libraries are located at run time.
   Point at non-standard installs with `JARGO_ONNXRUNTIME_LIB` and
-  `JARGO_RNNOISE_LIB`.
+  `JARGO_RNNOISE_LIB`. The Moonshine STT provider's **libmoonshine** is too; it
+  takes its path in its config, which the eval harness fills from
+  `JARGO_MOONSHINE_LIB`.
 
 Formatting and lint are enforced by **golangci-lint** (`.golangci.yml`):
 
@@ -46,9 +48,10 @@ worth knowing:
   versions. CI runs `make generate-check` and fails if the tree is stale.
 - `make docs-check`: fail on a relative link in `docs/` or the README that points
   at nothing (`TestDocsLinks`, also part of `go test ./...`).
-- `make deps`, `make deps-onnx`, `make deps-rnnoise`: install the cgo headers
-  and the two native runtimes above. The last two need no root: they install
-  under `.native/` and print the `JARGO_*_LIB` values to export.
+- `make deps`, `make deps-onnx`, `make deps-rnnoise`, `make deps-moonshine`:
+  install the cgo headers and the native runtimes above. The last three need no
+  root: they install under `.native/` and print the `JARGO_*_LIB` values to
+  export.
 - `make vuln`, `make secrets`: the govulncheck and gitleaks scans CI gates on.
 - `make sast`: the Semgrep CE scan; CI reports its findings without gating.
 

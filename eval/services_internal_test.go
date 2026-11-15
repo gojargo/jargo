@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/moonshine"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/stt"
@@ -312,11 +314,24 @@ func TestSTTFactoryEscapeHatch(t *testing.T) {
 }
 
 func TestABuiltInSTTWithNoBuilderYetIsAClearError(t *testing.T) {
-	for _, cfg := range []*TranscriptionConfig{nil, {Service: "whisper"}} {
-		_, err := STTServiceFromConfig(cfg)
-		if !errors.Is(err, ErrServiceUnavailable) || !strings.Contains(err.Error(), "RegisterSTTService") {
-			t.Fatalf("err = %v", err)
+	_, err := STTServiceFromConfig(&TranscriptionConfig{Service: "whisper"})
+	if !errors.Is(err, ErrServiceUnavailable) || !strings.Contains(err.Error(), "RegisterSTTService") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Moonshine is the default transcription service, built with libmoonshine from
+// JARGO_MOONSHINE_LIB; a path that names no library is reported before anything
+// is loaded or downloaded.
+func TestSTTMoonshineIsBuiltFromTheLibraryTheEnvironmentNames(t *testing.T) {
+	t.Setenv(moonshine.LibPathEnv, filepath.Join(t.TempDir(), "libmoonshine.so"))
+	for _, cfg := range []*TranscriptionConfig{nil, {Service: "moonshine", Model: "base", Language: "es"}} {
+		if _, err := STTServiceFromConfig(cfg); !errors.Is(err, moonshine.ErrLibraryNotAvailable) {
+			t.Fatalf("err = %v, want the missing library reported", err)
 		}
+	}
+	if _, err := STTServiceFromConfig(&TranscriptionConfig{Language: "xx"}); !errors.Is(err, errUnknownLanguage) {
+		t.Fatalf("err = %v, want the unknown language reported", err)
 	}
 }
 

@@ -239,6 +239,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `{role, content}`, as `eval-context` now carries them; `eval.Event` is
   removed, events are maps; a scenario with `eval:` checks and no judge
   given builds its judge from its `judge:` block.
+- **Moonshine speech-to-text** (`provider/moonshine`): local CPU
+  transcription with Moonshine's models through libmoonshine, bound with
+  purego and loaded at run time from `STTConfig.LibraryPath`. Models are
+  downloaded on first use into the user cache and checked for size and
+  CRC32C, or loaded from `STTConfig.ModelPath`; a language or model change
+  reloads the model. `make deps-moonshine` installs the library under
+  `.native/`, and the eval harness builds the service for
+  `service: moonshine`, reading `JARGO_MOONSHINE_LIB`. A segmented STT
+  provider can label its transcripts with a language
+  (`stt.LanguageTranscriber`).
 
 ### Changed
 

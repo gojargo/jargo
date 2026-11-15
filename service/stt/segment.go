@@ -21,6 +21,14 @@ type Transcriber interface {
 	Transcribe(ctx context.Context, audio []byte, sampleRate int) (string, error)
 }
 
+// LanguageTranscriber is an optional interface a Transcriber implements when it
+// knows the language of what it transcribed. The service transcribes through
+// TranscribeLanguage instead of Transcribe, and labels the transcript with the
+// language it returns: a BCP-47 tag, or "" for none.
+type LanguageTranscriber interface {
+	TranscribeLanguage(ctx context.Context, audio []byte, sampleRate int) (text, lang string, err error)
+}
+
 // SegmentRater is an optional interface a Transcriber implements when its model
 // reads one sample rate. SegmentSampleRate is given the rate the service runs at
 // and returns the rate the segments are handed over at; each segment is
@@ -475,7 +483,7 @@ func (s *SegmentService) transcribe(ctx context.Context, audio []byte, rate int)
 	s.pushUsageMetrics(ctx, played)
 
 	start := time.Now()
-	text, err := s.tr.Transcribe(ctx, audio, rate)
+	text, lang, err := s.transcribeSegment(ctx, audio, rate)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.tracer.recordError(err)
@@ -491,7 +499,18 @@ func (s *SegmentService) transcribe(ctx context.Context, audio []byte, rate int)
 	userID := s.userID
 	s.mu.Unlock()
 	tf := frames.NewTranscriptionFrame(text, userID, frames.NowTimestamp())
+	tf.Language = lang
 	_ = s.PushFrame(ctx, tf, processor.Downstream)
+}
+
+// transcribeSegment hands one segment to the Transcriber, asking it for the
+// language of the transcript too when it can say.
+func (s *SegmentService) transcribeSegment(ctx context.Context, audio []byte, rate int) (text, lang string, err error) {
+	if lt, ok := s.tr.(LanguageTranscriber); ok {
+		return lt.TranscribeLanguage(ctx, audio, rate)
+	}
+	text, err = s.tr.Transcribe(ctx, audio, rate)
+	return text, "", err
 }
 
 // silence is d of 16-bit mono silence at rate, as the samples a segment is
