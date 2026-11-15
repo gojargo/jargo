@@ -973,6 +973,8 @@ func (s *session) evaluateAggregate(ctx context.Context, aggregate string, exp E
 			return statusFail, "judge said no: " + verdict.Reason
 		case VerdictContinue:
 			return statusContinue, "judge said continue: " + verdict.Reason
+		case VerdictNone:
+			return statusFail, "judge gave no verdict: " + verdict.Reason
 		}
 		return statusPass, "judge said yes: " + verdict.Reason
 	}

@@ -123,6 +123,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   serializer, which turns a bot's RTVI messages into frames and sends the
   pipeline's audio as numbered `raw-audio` messages. `utils/shared` runs the
   paired setup and teardown of a resource two processors share once each.
+- **The eval judge judges whole runs and is built from configuration.**
+  `EvalJudge.EvaluateRun` judges a run against its goal and every bot turn
+  against each criterion, in parallel, and explains them in one call.
+  `NewEvalJudgeFromConfig` builds a judge from a scenario's `judge.eval`
+  block. `ClassifierFromConfig`, `LLMServiceFromConfig`,
+  `STTServiceFromConfig` and `TTSServiceFromConfig` build the harness's
+  services from their blocks, and `RegisterFactory` names a factory a block
+  can point at, with `evals.judges.typesafe_classifier` (Jev) registered.
+  `CachingTTSService` keeps the user's synthesized speech on disk at 24 kHz
+  under the user cache directory. `tts.Base.Synthesizer` returns the
+  service's synthesizer. **Breaking:** a judge question that fails twice
+  gives the new `VerdictNone` instead of a no, with the error as its reason
+  (credentials masked), and is not cached; a reply judged with no verdict
+  fails.
 
 ### Changed
 

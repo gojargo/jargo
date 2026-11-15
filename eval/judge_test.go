@@ -39,6 +39,9 @@ type fakeClassifier struct {
 	mu      sync.Mutex
 	answers []any
 	answer  func([]classifier.Named[classifier.Question]) map[string]classifier.Result
+	// respond answers as a function of the state asked about as well, or
+	// fails.
+	respond func(map[string]any, []classifier.Named[classifier.Question]) (map[string]classifier.Result, error)
 	asked   []asked
 }
 
@@ -62,6 +65,10 @@ func (c *fakeClassifier) AskQuestions(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.asked = append(c.asked, asked{state: decoded, questions: questions})
+	if c.respond != nil {
+		results, err := c.respond(decoded, questions)
+		return results, nil, err
+	}
 	if c.answer != nil {
 		return c.answer(questions), nil, nil
 	}
@@ -264,7 +271,34 @@ func TestAVerdictIsCachedByCriterionAndConversation(t *testing.T) {
 	}
 }
 
-func TestAFailedQuestionIsAskedAgainThenGivesANo(t *testing.T) {
+func TestAFailedQuestionIsNotCached(t *testing.T) {
+	c := newFakeClassifier(boom(), boom(), choice("yes", 0.95))
+	j := newJudge(t, c, nil)
+	j.AddAssistantMessage("It rains.")
+	if v := j.Evaluate(t.Context(), "mentions weather"); v.Verdict != eval.VerdictNone {
+		t.Fatalf("verdict = %+v, want none", v)
+	}
+	if v := j.Evaluate(t.Context(), "mentions weather"); !v.Passed() {
+		t.Fatalf("verdict = %+v, want yes", v)
+	}
+	if n := len(c.questions()); n != 3 {
+		t.Fatalf("asked %d times, want 3", n)
+	}
+
+	c = newFakeClassifier(boom(), boom(), yes(0.9))
+	j = newJudge(t, c, nil)
+	if v := j.EvaluateCall(t.Context(), "book", map[string]any{}, "books"); v.Verdict != eval.VerdictNone {
+		t.Fatalf("verdict = %+v, want none", v)
+	}
+	if v := j.EvaluateCall(t.Context(), "book", map[string]any{}, "books"); !v.Passed() {
+		t.Fatalf("verdict = %+v, want yes", v)
+	}
+	if n := len(c.questions()); n != 3 {
+		t.Fatalf("asked %d times, want 3", n)
+	}
+}
+
+func TestAFailedQuestionIsAskedAgainThenGivesNoVerdict(t *testing.T) {
 	c := newFakeClassifier(boom(), choice("yes", 0.95))
 	j := newJudge(t, c, nil)
 	j.AddAssistantMessage("It rains.")
@@ -276,8 +310,21 @@ func TestAFailedQuestionIsAskedAgainThenGivesANo(t *testing.T) {
 	j = newJudge(t, c, nil)
 	j.AddAssistantMessage("anything")
 	v := j.Evaluate(t.Context(), "anything")
-	if v.Verdict != eval.VerdictNo || v.Reason != "judge call failed" || len(c.questions()) != 2 {
+	if v.Verdict != eval.VerdictNone || v.Reason != "judge call failed: classifier: boom" || len(c.questions()) != 2 {
 		t.Fatalf("verdict = %+v after %d questions", v, len(c.questions()))
+	}
+}
+
+func TestAFailedQuestionsReasonMasksCredentials(t *testing.T) {
+	leak := func() error {
+		//nolint:err113 // a provider's refusal quoting the key it was sent
+		return fmt.Errorf("%w: 401: invalid key sk-proj-abcdefghijklmnopqrstuvwxyz123456", classifier.ErrClassifier)
+	}
+	j := newJudge(t, newFakeClassifier(leak(), leak()), nil)
+	j.AddAssistantMessage("anything")
+	v := j.Evaluate(t.Context(), "anything")
+	if strings.Contains(v.Reason, "abcdefghijklmnopqrstuvwxyz") || !strings.Contains(v.Reason, "[REDACTED]") {
+		t.Fatalf("reason = %q, want the key masked", v.Reason)
 	}
 }
 
@@ -285,7 +332,8 @@ func TestAnAnswerOfTheWrongTypeFailsTheQuestion(t *testing.T) {
 	c := newFakeClassifier(yesAs("verdict", 0.9), yesAs("verdict", 0.9))
 	j := newJudge(t, c, nil)
 	j.AddAssistantMessage("anything")
-	if v := j.Evaluate(t.Context(), "anything"); v.Verdict != eval.VerdictNo || v.Reason != "judge call failed" {
+	v := j.Evaluate(t.Context(), "anything")
+	if v.Verdict != eval.VerdictNone || !strings.HasPrefix(v.Reason, "judge call failed: ") {
 		t.Fatalf("verdict = %+v", v)
 	}
 }
@@ -543,7 +591,7 @@ func TestTheExplainerDefaultsToAVerdictSizedBound(t *testing.T) {
 }
 
 func TestPassedOnlyForYes(t *testing.T) {
-	for verdict, want := range map[string]bool{"yes": true, "no": false, "continue": false} {
+	for verdict, want := range map[string]bool{"yes": true, "no": false, "continue": false, "none": false} {
 		if (eval.JudgeVerdict{Verdict: verdict}).Passed() != want {
 			t.Errorf("Passed() for %q = %v, want %v", verdict, !want, want)
 		}

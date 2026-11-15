@@ -394,6 +394,10 @@ func New(name string, syn Synthesizer) *Base {
 	return b
 }
 
+// Synthesizer is the provider the service speaks through, for a caller that
+// drives its RunTTS directly, outside the pipeline.
+func (b *Base) Synthesizer() Synthesizer { return b.syn }
+
 // Cleanup releases the Synthesizer's resources, when it holds any, and tears
 // down the processor.
 func (b *Base) Cleanup(ctx context.Context) error {

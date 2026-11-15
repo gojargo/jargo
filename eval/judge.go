@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/ordered"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/utils/security"
 )
 
 // fenced matches the markdown code fences a judge model wraps its JSON in when
@@ -36,11 +38,14 @@ const (
 	// VerdictContinue means the bot is still working toward its answer, and the
 	// criterion should be judged again once more text arrives.
 	VerdictContinue = "continue"
+	// VerdictNone means the judge's question failed, so nothing was decided.
+	VerdictNone = "none"
 )
 
 // JudgeVerdict is the outcome of a single judge call.
 type JudgeVerdict struct {
-	// Verdict is VerdictYes, VerdictNo or VerdictContinue.
+	// Verdict is VerdictYes, VerdictNo, VerdictContinue, or VerdictNone when
+	// the judge's question failed and nothing was decided.
 	Verdict string
 	// Reason is the explainer's one-sentence reason for the verdict, or the
 	// classifier's probabilities when nothing explained it.
@@ -57,6 +62,23 @@ type JudgeVerdict struct {
 
 // Passed reports whether the verdict is a definite yes.
 func (v JudgeVerdict) Passed() bool { return v.Verdict == VerdictYes }
+
+// RunVerdicts is a whole simulation run's verdicts.
+type RunVerdicts struct {
+	// Goal is the verdict on the goal, over the whole conversation.
+	Goal JudgeVerdict
+	// Turns is, per criterion name, a verdict per bot turn, in order.
+	Turns map[string][]JudgeVerdict
+}
+
+// Criterion is one per-turn criterion of a judged run: its name and what it
+// asks of every bot reply.
+type Criterion struct {
+	// Name is the criterion's name, which the run's verdicts are keyed by.
+	Name string
+	// Criterion is the natural-language criterion.
+	Criterion string
+}
 
 // Judge decides whether the bot's most recent reply satisfies a
 // natural-language criterion, which is what a scenario's `judge:` assertion
@@ -75,8 +97,8 @@ type Judge interface {
 	// AddAssistantMessage appends a segment of the bot's current reply.
 	AddAssistantMessage(text string)
 	// Evaluate judges the conversation so far against criterion. A judge that
-	// cannot answer reports VerdictNo with the reason, rather than failing: an
-	// unavailable judge is a failed assertion, not a broken run.
+	// cannot answer reports VerdictNone with the reason, rather than failing:
+	// an unavailable judge leaves the assertion undecided, not the run broken.
 	Evaluate(ctx context.Context, criterion string) JudgeVerdict
 	// EvaluateCall judges a tool call the bot made against criterion, by the
 	// call's name and arguments, with the conversation so far as context. It is
@@ -144,8 +166,21 @@ const explainCallAsk = "The bot called the function `%s` with arguments `%s`. Th
 	"Criterion: %s\n\n" +
 	`Answer with {"reason": "<one short sentence>"}.`
 
-// judgeFailed is the reason a verdict carries when its question failed.
-const judgeFailed = "judge call failed"
+// explainRunAsk is the ask for a simulation run's verdicts: the transcript,
+// with the bot's turns numbered and its tool calls inline, what the run was
+// judged on, and the verdicts to explain, one per line.
+const explainRunAsk = "Transcript:\n%s\n\n" +
+	"A line marked '[tool call]' is a function the bot called at that point.\n\n" +
+	"Criteria every bot reply was judged on:\n%s\n\n" +
+	"Goal the conversation as a whole was judged on: %s\n\n" +
+	"The judge's verdicts to explain:\n%s\n\n" +
+	`Answer with {"goal": "<reason>", "turns": {"<criterion name>": ` +
+	`{"<bot turn number>": "<reason>"}}}, a reason for each verdict listed and ` +
+	"nothing else."
+
+// judgeFailed starts the reason a verdict carries when its question failed;
+// the question's error follows it.
+const judgeFailed = "judge call failed: "
 
 // The questions the judge asks, each followed by the criterion and the notes
 // that go with every question; see instructions.
@@ -154,7 +189,12 @@ const (
 		"satisfy this criterion?"
 	callQuestion = "Does the bot's function `call`, judged by its name and arguments, satisfy this " +
 		"criterion?"
-	callNote          = "`conversation` is context only."
+	callNote     = "`conversation` is context only."
+	goalQuestion = "Does the conversation as a whole achieve this goal?"
+	goalNote     = "A `tool` entry is a function the bot called at that point; a completed call is " +
+		"stronger evidence of an action than the bot saying it did it."
+	turnQuestion = "`latest_bot_reply` is the bot's reply following `conversation`. How does it stand " +
+		"against this criterion?"
 	transcriptionNote = "The bot's text may be an automatic speech-to-text transcription: judge its " +
 		"intended spoken meaning, never its spelling ('for' may mean 'four', 'to' may mean 'two')."
 )
@@ -170,6 +210,33 @@ var replyOutcomes = []classifier.Option{
 	{Name: VerdictContinue, Description: "The bot is still working toward its answer: it only greets, " +
 		"says it is checking or looking something up and will report back, or the reply is an obviously " +
 		"incomplete fragment."},
+}
+
+// The keys of the state a question is about: the conversation before what is
+// judged, and the bot's reply being judged.
+const (
+	stateConversation = "conversation"
+	stateLatestReply  = "latest_bot_reply"
+)
+
+// The outcomes of a run's per-turn question.
+const (
+	turnMeets         = "meets"
+	turnFails         = "fails"
+	turnNotApplicable = "not_applicable"
+)
+
+// turnOutcomes are the answers to a run's per-turn question, in order. A
+// classifier cannot tell by itself whether a criterion only applies in some
+// situation ("when the time is taken, apologizes"), so "does not apply" is an
+// outcome of its own rather than a rule in the instructions.
+//
+//nolint:gochecknoglobals // the options the judge offers, fixed
+var turnOutcomes = []classifier.Option{
+	{Name: turnMeets, Description: "The reply does what the criterion asks."},
+	{Name: turnFails, Description: "The criterion applies to this reply, and the reply does not do what it asks."},
+	{Name: turnNotApplicable, Description: "The criterion only asks something of replies in a particular " +
+		"situation (it says 'when', 'if', or similar), and that situation does not arise in this reply."},
 }
 
 // errNoClassifier reports a judge given nothing to decide with.
@@ -206,7 +273,13 @@ type EvalJudgeConfig struct {
 // so the classifier knows which part to judge. A tool call is judged yes or no
 // by its name and arguments. Each verdict carries the classifier's confidence,
 // and its reason starts out as the probabilities it gave (P(yes)=0.97). Each
-// question's verdict is cached by its criterion and state.
+// question's verdict is cached by its criterion and state; a failed question is
+// not, since it decided nothing.
+//
+// A whole simulation run is judged by EvaluateRun: the goal is one yes or no
+// question over the whole conversation, and each bot turn is asked about on its
+// own, once per criterion, with only the conversation before it as context.
+// All of a run's questions go out at once.
 //
 // A classifier gives no reasons, so the judge asks an LLM of its own, the
 // explainer, for them: for every no, and for every yes less sure than
@@ -215,8 +288,9 @@ type EvalJudgeConfig struct {
 // verdict; the reason it gives takes the place of the probabilities, which the
 // verdict still carries.
 //
-// A question that fails is asked once more; a second failure gives a no with
-// the reason "judge call failed".
+// A question that fails is asked once more; a second failure gives a none (no
+// verdict), with the reason "judge call failed: " and the error, its
+// credentials masked.
 type EvalJudge struct {
 	classifier    classifier.Classifier
 	explainer     *explainer
@@ -231,6 +305,10 @@ type EvalJudge struct {
 	// harness over the scenario.
 	transcript []transcriptEntry
 	cache      map[string]JudgeVerdict
+	runCache   map[string]RunVerdicts
+	// callError is the last failed question's error, for the reason of the
+	// verdict it fails.
+	callError string
 }
 
 // transcriptEntry is one entry of the conversation the judge keeps: a user turn,
@@ -257,6 +335,7 @@ func NewEvalJudge(cfg EvalJudgeConfig) (*EvalJudge, error) {
 		explainBelow:  defaultExplainBelow,
 		allowContinue: cfg.AllowContinue == nil || *cfg.AllowContinue,
 		cache:         map[string]JudgeVerdict{},
+		runCache:      map[string]RunVerdicts{},
 	}
 	if cfg.ExplainBelow != nil {
 		j.explainBelow = *cfg.ExplainBelow
@@ -273,6 +352,53 @@ func NewEvalJudge(cfg EvalJudgeConfig) (*EvalJudge, error) {
 		j.explainer = newExplainer(cfg.Explainer, maxTokens)
 	}
 	return j, nil
+}
+
+// NewEvalJudgeFromConfig builds a judge from a scenario's `judge.eval:` block.
+//
+// The block names an LLM, Ollama by default, and the judge classifies and
+// explains with it. A factory builds the classifier instead, or an LLM service
+// to classify with; the explainer is then the `explainer:` block's LLM, or the
+// default LLM when the block names none. `explainer: false` gives no
+// explainer. A nil cfg uses all the defaults. For a fully custom judge, build
+// one with NewEvalJudge.
+//
+// It fails when the block names an unknown service, or its factory is not
+// registered or returned neither a classifier nor an LLM service.
+func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*EvalJudge, error) {
+	if cfg == nil {
+		cfg = &JudgeEvalConfig{}
+	}
+	c, err := ClassifierFromConfig(&cfg.LLMServiceConfig, "judge.eval")
+	if err != nil {
+		return nil, err
+	}
+	var inf llm.Inferencer
+	switch {
+	case cfg.Explainer.Disabled:
+	case cfg.Explainer.LLM != nil && !cfg.Explainer.LLM.empty():
+		inf, err = LLMServiceFromConfig(cfg.Explainer.LLM, "judge.eval.explainer")
+	default:
+		if lc, ok := c.(*llmclassifier.Classifier); ok {
+			// Without a block of its own, the explainer is the judging LLM.
+			inf = lc.LLM()
+		} else {
+			inf, err = LLMServiceFromConfig(nil, "judge.eval.explainer")
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	explainBelow := defaultExplainBelow
+	if cfg.ExplainBelow != nil {
+		explainBelow = *cfg.ExplainBelow
+	}
+	return NewEvalJudge(EvalJudgeConfig{
+		Classifier:    c,
+		Explainer:     inf,
+		ExplainBelow:  &explainBelow,
+		AllowContinue: cfg.AllowContinue,
+	})
 }
 
 // NewLLMJudge builds a judge that classifies with inf and explains with it too,
@@ -333,7 +459,7 @@ func (j *EvalJudge) spoken() (spoken, all []transcriptEntry) {
 // conversation so far. It gives a yes, a no, or, when continue is allowed, a
 // continue when the bot is still working toward its answer, cached by criterion
 // and conversation. A final verdict that needs a reason is explained, and a
-// failed question is a no with the failure as its reason.
+// failed question is a none with the failure as its reason, not cached.
 func (j *EvalJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict {
 	spoken, all := j.spoken()
 	entries := numberedTurns(spoken)
@@ -343,8 +469,8 @@ func (j *EvalJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict
 		entries = entries[:n-1]
 	}
 	state := ordered.Object{
-		{Key: "conversation", Value: conversation(entries)},
-		{Key: "latest_bot_reply", Value: latest},
+		{Key: stateConversation, Value: conversation(entries)},
+		{Key: stateLatestReply, Value: latest},
 	}
 	key := cacheKey("reply", criterion, state)
 	if v, ok := j.cached(key); ok {
@@ -355,19 +481,17 @@ func (j *EvalJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict
 		Instructions: instructions(replyQuestion, "Criterion", criterion, ""),
 		Options:      j.outcomes,
 	}
-	var verdict JudgeVerdict
 	answers, err := askTwice(ctx, j, func() (map[string]classifier.ChoiceResult, error) {
 		return j.classifier.Choice(ctx, state, []classifier.Named[classifier.ChoiceQuestion]{
 			{Name: "verdict", Question: question},
 		})
 	})
 	if err != nil {
-		verdict = failed(VerdictNo)
-	} else {
-		verdict = replyVerdict(answers["verdict"], question)
-		if verdict.Verdict != VerdictContinue && j.explainer != nil && j.needsReason(verdict) {
-			verdict = withReason(verdict, j.explainer.explain(ctx, all, criterion, verdict))
-		}
+		return j.failed(VerdictNone) // not cached: it decided nothing
+	}
+	verdict := choiceVerdict(answers["verdict"], question)
+	if verdict.Verdict != VerdictContinue && j.explainer != nil && j.needsReason(verdict) {
+		verdict = withReason(verdict, j.explainer.explain(ctx, all, criterion, verdict))
 	}
 	j.store(key, verdict)
 	return verdict
@@ -375,13 +499,14 @@ func (j *EvalJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict
 
 // EvaluateCall judges whether a tool call the bot made satisfies criterion, in
 // the conversation so far. It gives a yes or a no, cached by call, criterion and
-// conversation, and explained when it needs a reason.
+// conversation, and explained when it needs a reason. A failed question is a
+// none, not cached.
 func (j *EvalJudge) EvaluateCall(
 	ctx context.Context, name string, args map[string]any, criterion string,
 ) JudgeVerdict {
 	spoken, all := j.spoken()
 	state := ordered.Object{
-		{Key: "conversation", Value: conversation(numberedTurns(spoken))},
+		{Key: stateConversation, Value: conversation(numberedTurns(spoken))},
 		{Key: "call", Value: ordered.Object{{Key: "name", Value: name}, {Key: "arguments", Value: argsOrEmpty(args)}}},
 	}
 	key := cacheKey("call", criterion, state)
@@ -390,22 +515,195 @@ func (j *EvalJudge) EvaluateCall(
 	}
 
 	question := classifier.YesNoQuestion{Instructions: instructions(callQuestion, "Criterion", criterion, callNote)}
-	var verdict JudgeVerdict
+	answer, err := j.yesNo(ctx, state, question)
+	if err != nil {
+		return j.failed(VerdictNone) // not cached: it decided nothing
+	}
+	verdict := yesNoVerdict(answer)
+	if j.explainer != nil && j.needsReason(verdict) {
+		verdict = withReason(verdict, j.explainer.explainCall(ctx, all, name, args, criterion, verdict))
+	}
+	j.store(key, verdict)
+	return verdict
+}
+
+// EvaluateRun judges the whole conversation: every bot turn on every
+// criterion, and the goal.
+//
+// The goal is asked over the whole conversation, tool calls included. Each bot
+// turn is its own question, judged in the light of the conversation before it,
+// with the turn itself as latest_bot_reply, and its verdict is a no only when
+// the criterion applies to the turn and the turn fails it. The questions run
+// concurrently. When any verdict needs a reason, the explainer is asked about
+// the run once and its reasons go with the classifier's verdicts.
+//
+// It gives the goal's verdict and, per criterion name, a verdict per bot turn
+// in order. A failed question is a none for each verdict it asked for, and a
+// run with a failed question is not cached.
+func (j *EvalJudge) EvaluateRun(ctx context.Context, criteria []Criterion, success string) RunVerdicts {
+	_, conversationKept := j.spoken()
+	entries := numberedTurns(conversationKept)
+	key := cacheKey("run", criteriaObject(criteria), success, conversation(entries))
+	j.mu.Lock()
+	cached, ok := j.runCache[key]
+	j.mu.Unlock()
+	if ok {
+		return cached
+	}
+
+	goalQ := classifier.YesNoQuestion{Instructions: instructions(goalQuestion, "Goal", success, goalNote)}
+	turnQuestions := make([]classifier.Named[classifier.ChoiceQuestion], 0, len(criteria))
+	for _, c := range criteria {
+		turnQuestions = append(turnQuestions, classifier.Named[classifier.ChoiceQuestion]{
+			Name: c.Name,
+			Question: classifier.ChoiceQuestion{
+				Instructions: instructions(turnQuestion, "Criterion", c.Criterion, ""),
+				Options:      turnOutcomes,
+			},
+		})
+	}
+	var turnStates []ordered.Object
+	if len(turnQuestions) > 0 {
+		for i, e := range entries {
+			if e.role == roleBot {
+				turnStates = append(turnStates, ordered.Object{
+					{Key: stateConversation, Value: conversation(entries[:i])},
+					{Key: stateLatestReply, Value: e.content},
+				})
+			}
+		}
+	}
+
+	// The goal, and every criterion on each turn: one question each, all at
+	// once.
+	var (
+		wg         sync.WaitGroup
+		goalAnswer classifier.YesNoResult
+		goalErr    error
+	)
+	turnAnswers := make([]map[string]classifier.ChoiceResult, len(turnStates))
+	turnErrs := make([]error, len(turnStates))
+	wg.Go(func() {
+		goalAnswer, goalErr = j.yesNo(ctx, ordered.Object{{Key: stateConversation, Value: conversation(entries)}}, goalQ)
+	})
+	for i, state := range turnStates {
+		wg.Go(func() {
+			turnAnswers[i], turnErrs[i] = askTwice(ctx, j, func() (map[string]classifier.ChoiceResult, error) {
+				return j.classifier.Choice(ctx, state, turnQuestions)
+			})
+		})
+	}
+	wg.Wait()
+
+	// The questions ran at once and share the judge's last error, so a failed
+	// verdict's reason may give another question's: they ask the same
+	// provider.
+	failedVerdict := j.failed(VerdictNone)
+	verdicts := RunVerdicts{Goal: failedVerdict, Turns: make(map[string][]JudgeVerdict, len(criteria))}
+	decided := goalErr == nil
+	if goalErr == nil {
+		verdicts.Goal = yesNoVerdict(goalAnswer)
+	}
+	for _, q := range turnQuestions {
+		turns := make([]JudgeVerdict, 0, len(turnStates))
+		for i := range turnStates {
+			if turnErrs[i] != nil {
+				turns = append(turns, failedVerdict)
+				continue
+			}
+			turns = append(turns, turnVerdict(turnAnswers[i][q.Name], q.Question))
+		}
+		verdicts.Turns[q.Name] = turns
+	}
+	for _, err := range turnErrs {
+		decided = decided && err == nil
+	}
+	verdicts = j.explainRun(ctx, verdicts, conversationKept, criteria, success)
+	// A run with a failed question decided nothing for it, so is not cached.
+	if decided {
+		j.mu.Lock()
+		j.runCache[key] = verdicts
+		j.mu.Unlock()
+	}
+	return verdicts
+}
+
+// explainRun is the run's verdicts, those that need a reason given the
+// explainer's; it explains them in one call.
+func (j *EvalJudge) explainRun(
+	ctx context.Context, verdicts RunVerdicts, transcript []transcriptEntry, criteria []Criterion, success string,
+) RunVerdicts {
+	var goal *JudgeVerdict
+	if j.needsReason(verdicts.Goal) {
+		goal = &verdicts.Goal
+	}
+	asked := make([]askedCriterion, 0, len(criteria))
+	anyTurn := false
+	for _, c := range criteria {
+		ac := askedCriterion{name: c.Name}
+		for i, v := range verdicts.Turns[c.Name] {
+			if j.needsReason(v) {
+				ac.turns = append(ac.turns, askedTurn{number: i + 1, verdict: v})
+				anyTurn = true
+			}
+		}
+		asked = append(asked, ac)
+	}
+	if j.explainer == nil || (goal == nil && !anyTurn) {
+		return verdicts
+	}
+	reasons := j.explainer.explainRun(ctx, transcript, criteria, success, goal, asked)
+	out := RunVerdicts{
+		Goal:  withReason(verdicts.Goal, reasons.goal),
+		Turns: make(map[string][]JudgeVerdict, len(verdicts.Turns)),
+	}
+	for name, turns := range verdicts.Turns {
+		explained := make([]JudgeVerdict, 0, len(turns))
+		for i, v := range turns {
+			explained = append(explained, withReason(v, reasons.turns[name][i+1]))
+		}
+		out.Turns[name] = explained
+	}
+	return out
+}
+
+// yesNo is the classifier's answer to one yes or no question, asked once more
+// if it failed.
+func (j *EvalJudge) yesNo(
+	ctx context.Context, state any, question classifier.YesNoQuestion,
+) (classifier.YesNoResult, error) {
 	answers, err := askTwice(ctx, j, func() (map[string]classifier.YesNoResult, error) {
 		return j.classifier.YesNo(ctx, state, []classifier.Named[classifier.YesNoQuestion]{
 			{Name: "answer", Question: question},
 		})
 	})
 	if err != nil {
-		verdict = failed(VerdictNo)
-	} else {
-		verdict = yesNoVerdict(answers["answer"])
-		if j.explainer != nil && j.needsReason(verdict) {
-			verdict = withReason(verdict, j.explainer.explainCall(ctx, all, name, args, criterion, verdict))
-		}
+		return classifier.YesNoResult{}, err
 	}
-	j.store(key, verdict)
-	return verdict
+	return answers["answer"], nil
+}
+
+// askedTurn is a turn verdict the explainer is asked about, by its turn number
+// from 1.
+type askedTurn struct {
+	number  int
+	verdict JudgeVerdict
+}
+
+// askedCriterion is the turn verdicts of one criterion the explainer is asked
+// about, in turn order.
+type askedCriterion struct {
+	name  string
+	turns []askedTurn
+}
+
+// criteriaObject is the criteria as a cache key takes them.
+func criteriaObject(criteria []Criterion) ordered.Object {
+	obj := make(ordered.Object, 0, len(criteria))
+	for _, c := range criteria {
+		obj = append(obj, ordered.Field{Key: c.Name, Value: c.Criterion})
+	}
+	return obj
 }
 
 // Close releases what the judge holds open; the session calls it when the run
@@ -463,6 +761,9 @@ func askTwice[R any](ctx context.Context, j *EvalJudge, ask func() (R, error)) (
 			slog.WarnContext(ctx, "eval: judge question failed, asking again", "error", err)
 		} else {
 			slog.ErrorContext(ctx, "eval: judge question failed", "error", err)
+			j.mu.Lock()
+			j.callError = security.RedactSecrets(err.Error())
+			j.mu.Unlock()
 		}
 	}
 	return answers, err
@@ -530,27 +831,56 @@ func instructions(question, label, criterion, note string) string {
 	return strings.Join(append(parts, transcriptionNote), " ")
 }
 
-// replyVerdict is a reply's verdict: the choice of yes, no or continue.
-func replyVerdict(answer classifier.ChoiceResult, question classifier.ChoiceQuestion) JudgeVerdict {
-	probabilities := ordered.Object{}
+// choiceVerdict is a reply's verdict: the choice of yes, no or continue, with
+// the confidence in it.
+func choiceVerdict(answer classifier.ChoiceResult, question classifier.ChoiceQuestion) JudgeVerdict {
+	probabilities, raw := choiceProbabilities(answer, question)
+	confidence := answer.Confidence
+	return JudgeVerdict{
+		Verdict:       answer.Choice,
+		Reason:        describeProbabilities(probabilities),
+		RawResponse:   raw,
+		Confidence:    &confidence,
+		Probabilities: maps.Clone(answer.Probabilities),
+	}
+}
+
+// turnVerdict is a run turn's verdict: a no only when the criterion applies to
+// the turn and the turn fails it. Its confidence is the probability of the
+// verdict given: for a pass, the probability of either outcome that passes.
+func turnVerdict(answer classifier.ChoiceResult, question classifier.ChoiceQuestion) JudgeVerdict {
+	probabilities, raw := choiceProbabilities(answer, question)
+	fails := answer.Probabilities[turnFails]
+	verdict, confidence := VerdictNo, fails
+	if answer.Choice != turnFails {
+		verdict, confidence = VerdictYes, 1-fails
+	}
+	return JudgeVerdict{
+		Verdict:       verdict,
+		Reason:        describeProbabilities(probabilities),
+		RawResponse:   raw,
+		Confidence:    &confidence,
+		Probabilities: maps.Clone(answer.Probabilities),
+	}
+}
+
+// choiceProbabilities is the probability of each option of a choice, in the
+// question's order, and the answer as raw JSON for diagnostics.
+func choiceProbabilities(
+	answer classifier.ChoiceResult, question classifier.ChoiceQuestion,
+) (probabilities ordered.Object, raw string) {
+	probabilities = ordered.Object{}
 	for _, o := range question.OptionNames() {
 		if p, ok := answer.Probabilities[o]; ok {
 			probabilities.Set(o, p)
 		}
 	}
-	raw, _ := ordered.Marshal(ordered.Object{
+	encoded, _ := ordered.Marshal(ordered.Object{
 		{Key: "choice", Value: answer.Choice},
 		{Key: "probabilities", Value: probabilities},
 		{Key: "confidence", Value: answer.Confidence},
 	})
-	confidence := answer.Confidence
-	return JudgeVerdict{
-		Verdict:       answer.Choice,
-		Reason:        describeProbabilities(probabilities),
-		RawResponse:   string(raw),
-		Confidence:    &confidence,
-		Probabilities: maps.Clone(answer.Probabilities),
-	}
+	return probabilities, string(encoded)
 }
 
 // yesNoVerdict is a yes/no verdict from the probability of yes.
@@ -581,9 +911,12 @@ func describeProbabilities(probabilities ordered.Object) string {
 	return strings.Join(parts, ", ")
 }
 
-// failed is the verdict a failed question gives.
-func failed(verdict string) JudgeVerdict {
-	return JudgeVerdict{Verdict: verdict, Reason: judgeFailed}
+// failed is the verdict a failed question gives, with the question's error as
+// its reason.
+func (j *EvalJudge) failed(verdict string) JudgeVerdict {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return JudgeVerdict{Verdict: verdict, Reason: judgeFailed + j.callError}
 }
 
 // withReason is the verdict with the explainer's reason in place of the
@@ -626,12 +959,260 @@ type explainer struct {
 	inf       llm.Inferencer
 	maxTokens int
 
-	mu    sync.Mutex
-	cache map[string]string
+	mu       sync.Mutex
+	cache    map[string]string
+	runCache map[string]runReasons
 }
 
 func newExplainer(inf llm.Inferencer, maxTokens int) *explainer {
-	return &explainer{inf: inf, maxTokens: maxTokens, cache: map[string]string{}}
+	return &explainer{inf: inf, maxTokens: maxTokens, cache: map[string]string{}, runCache: map[string]runReasons{}}
+}
+
+// runReasons is the explainer's reasons for a run's verdicts.
+type runReasons struct {
+	// goal is the goal verdict's reason; empty when it was not asked or not
+	// given.
+	goal string
+	// turns is, per criterion name, the reason for each turn asked about, by
+	// turn number.
+	turns map[string]map[int]string
+}
+
+// explainRun is why a whole conversation's verdicts were given, in one call:
+// the reasons for the verdicts asked about, a reason not given being empty.
+//
+// The conversation goes in the question, bot turns numbered and tool calls
+// inline. A bot turn is a run of reply segments with nothing else between
+// them. goal is the goal's verdict to explain, or nil, and turns the turn
+// verdicts to explain, per criterion.
+func (e *explainer) explainRun(
+	ctx context.Context, transcript []transcriptEntry, criteria []Criterion, success string,
+	goal *JudgeVerdict, turns []askedCriterion,
+) runReasons {
+	verdicts := runVerdictLines(goal, turns)
+	listed := make([]string, 0, len(criteria))
+	for _, c := range criteria {
+		listed = append(listed, fmt.Sprintf("- %s: %s", c.Name, c.Criterion))
+	}
+	criteriaListed := strings.Join(listed, "\n")
+	if criteriaListed == "" {
+		criteriaListed = "(none)"
+	}
+	ask := fmt.Sprintf(explainRunAsk, runTranscript(transcript), criteriaListed, success, strings.Join(verdicts, "\n"))
+
+	key := cacheKey(ask, []any{})
+	e.mu.Lock()
+	cached, ok := e.runCache[key]
+	e.mu.Unlock()
+	if ok {
+		return cached
+	}
+	// Room for a reason per verdict; a budget sized for one cuts it short.
+	budget := max(300, 50*len(verdicts)+80)
+	schema := runSchema(goal != nil, turns)
+	reasons := runReasons{turns: map[string]map[int]string{}}
+	for attempt := 1; attempt <= 2; attempt++ {
+		response, _ := e.ask(ctx, nil, ask, schema, budget)
+		reasons = filled(reasons, parseRunReasons(response, turns))
+		if reasons.complete(goal != nil) {
+			break
+		}
+		if attempt == 1 {
+			slog.WarnContext(ctx, "eval: explainer left reasons out, asking again")
+		}
+	}
+	e.mu.Lock()
+	e.runCache[key] = reasons
+	e.mu.Unlock()
+	return reasons
+}
+
+// runTranscript is the conversation as the run's ask shows it: a line per
+// user turn, per bot turn (its reply segments joined and numbered from 1) and
+// per tool call.
+func runTranscript(transcript []transcriptEntry) string {
+	var lines []string
+	turn := 0
+	for _, entry := range transcript {
+		switch entry.role {
+		case roleAssistant:
+			if n := len(lines); n > 0 && strings.HasPrefix(lines[n-1], fmt.Sprintf("Bot turn %d:", turn)) {
+				lines[n-1] += " " + entry.content
+				continue
+			}
+			turn++
+			lines = append(lines, fmt.Sprintf("Bot turn %d: %s", turn, entry.content))
+		case roleTool:
+			lines = append(lines, "[tool call] "+entry.content)
+		default:
+			lines = append(lines, "User: "+entry.content)
+		}
+	}
+	if len(lines) == 0 {
+		return "(nothing was said)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// runVerdictLines is the verdicts the run's ask asks about, one line each: the
+// goal's, when it is asked, then each asked turn's.
+func runVerdictLines(goal *JudgeVerdict, turns []askedCriterion) []string {
+	var verdicts []string
+	if goal != nil {
+		outcome := "not achieved"
+		if goal.Passed() {
+			outcome = "achieved"
+		}
+		verdicts = append(verdicts, "- goal: "+outcome)
+	}
+	for _, c := range turns {
+		for _, t := range c.turns {
+			verdicts = append(verdicts, fmt.Sprintf("- %s, bot turn %d: %s", c.name, t.number, turnOutcome(t.verdict)))
+		}
+	}
+	return verdicts
+}
+
+// complete reports whether every reason asked for was given: the goal's, when
+// it was asked, and every turn's.
+func (r runReasons) complete(goalAsked bool) bool {
+	if goalAsked && r.goal == "" {
+		return false
+	}
+	for _, byTurn := range r.turns {
+		for _, reason := range byTurn {
+			if reason == "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// filled is reasons, with the ones it lacks taken from answer.
+func filled(reasons, answer runReasons) runReasons {
+	out := runReasons{goal: reasons.goal, turns: make(map[string]map[int]string, len(answer.turns))}
+	if out.goal == "" {
+		out.goal = answer.goal
+	}
+	for name, byTurn := range answer.turns {
+		merged := make(map[int]string, len(byTurn))
+		for number, reason := range byTurn {
+			if had := reasons.turns[name][number]; had != "" {
+				reason = had
+			}
+			merged[number] = reason
+		}
+		out.turns[name] = merged
+	}
+	return out
+}
+
+// schemaObject is a schema for an object with exactly these properties, all
+// required.
+func schemaObject(properties ordered.Object) ordered.Object {
+	return ordered.Object{
+		{Key: "type", Value: "object"},
+		{Key: "properties", Value: properties},
+		{Key: "required", Value: properties.Keys()},
+		{Key: "additionalProperties", Value: false},
+	}
+}
+
+// reasonSchema is the shape a reason is asked for in: an object holding only
+// the reason.
+func reasonSchema() json.RawMessage {
+	encoded, _ := ordered.Marshal(schemaObject(ordered.Object{{Key: "reason", Value: stringSchema()}}))
+	return encoded
+}
+
+// stringSchema is the schema of one reason.
+func stringSchema() ordered.Object { return ordered.Object{{Key: "type", Value: "string"}} }
+
+// runSchema is the run answer's schema: the goal's reason when it is asked,
+// and each asked turn's by its number.
+func runSchema(goalAsked bool, turns []askedCriterion) json.RawMessage {
+	properties := ordered.Object{}
+	if goalAsked {
+		properties.Set("goal", stringSchema())
+	}
+	asked := ordered.Object{}
+	for _, c := range turns {
+		if len(c.turns) == 0 {
+			continue
+		}
+		byTurn := ordered.Object{}
+		for _, t := range c.turns {
+			byTurn.Set(strconv.Itoa(t.number), stringSchema())
+		}
+		asked.Set(c.name, schemaObject(byTurn))
+	}
+	if len(asked) > 0 {
+		properties.Set("turns", schemaObject(asked))
+	}
+	encoded, _ := ordered.Marshal(schemaObject(properties))
+	return encoded
+}
+
+// turnOutcome is a turn's verdict as the ask words it: which outcome the
+// classifier chose.
+func turnOutcome(verdict JudgeVerdict) string {
+	if !verdict.Passed() {
+		return "fails the criterion"
+	}
+	if verdict.Probabilities[turnNotApplicable] > verdict.Probabilities[turnMeets] {
+		return "passes because the criterion does not apply to it"
+	}
+	return "meets the criterion"
+}
+
+// turnNumber finds the number in a turn's key, so "bot turn 2" reads as turn 2.
+//
+//nolint:gochecknoglobals // compiled once
+var turnNumber = regexp.MustCompile(`\d+`)
+
+// parseRunReasons is the reasons in the run answer, for the turns asked about;
+// one not given is empty.
+//
+// Criterion names match case-insensitively, and a turn is the number in its
+// key, so "bot turn 2" reads as turn 2. An answer that is not the expected JSON
+// gives no reasons, and is logged.
+func parseRunReasons(response string, turns []askedCriterion) runReasons {
+	obj := jsonObject(response)
+	if len(obj) == 0 {
+		slog.Warn("eval: explainer answer was not the expected JSON", "answer", response)
+	}
+	goal := obj["goal"]
+	if g, ok := goal.(map[string]any); ok {
+		goal = g["reason"]
+	}
+	given := map[string]map[int]string{}
+	if byName, ok := obj["turns"].(map[string]any); ok {
+		for name, byTurn := range byName {
+			reasons, ok := byTurn.(map[string]any)
+			if !ok {
+				continue
+			}
+			numbered := map[int]string{}
+			for k, v := range reasons {
+				if m := turnNumber.FindString(k); m != "" {
+					if n, err := strconv.Atoi(m); err == nil {
+						numbered[n] = textOf(v)
+					}
+				}
+			}
+			given[strings.ToLower(name)] = numbered
+		}
+	}
+	out := runReasons{goal: strings.TrimSpace(textOf(goal)), turns: make(map[string]map[int]string, len(turns))}
+	for _, c := range turns {
+		byTurn := make(map[int]string, len(c.turns))
+		for _, t := range c.turns {
+			byTurn[t.number] = strings.TrimSpace(given[strings.ToLower(c.name)][t.number])
+		}
+		out.turns[c.name] = byTurn
+	}
+	return out
 }
 
 // explain is why the bot's latest reply got verdict on criterion: a
@@ -656,11 +1237,6 @@ func (e *explainer) explainCall(
 	return e.reason(ctx, transcript, fmt.Sprintf(explainCallAsk, name, encoded, satisfies(verdict), criterion))
 }
 
-// reasonSchema is the shape a reason is asked for in: an object holding only
-// the reason.
-const reasonSchema = `{"type":"object","properties":{"reason":{"type":"string"}},` +
-	`"required":["reason"],"additionalProperties":false}`
-
 // reason is the reason the explainer gives to ask after the spoken
 // conversation, asked once more when the first answer gives none.
 func (e *explainer) reason(ctx context.Context, transcript []transcriptEntry, ask string) string {
@@ -682,8 +1258,9 @@ func (e *explainer) reason(ctx context.Context, transcript []transcriptEntry, as
 	}
 
 	reason := ""
+	schema := reasonSchema()
 	for range 2 {
-		if response, ok := e.ask(ctx, messages, ask); ok {
+		if response, ok := e.ask(ctx, messages, ask, schema, e.maxTokens); ok {
 			reason = parseReason(response)
 		}
 		if reason != "" {
@@ -696,9 +1273,11 @@ func (e *explainer) reason(ctx context.Context, transcript []transcriptEntry, as
 	return reason
 }
 
-// ask is the explainer's raw answer, in the reason's shape, reporting false
-// when the call failed or said nothing.
-func (e *explainer) ask(ctx context.Context, messages []frames.Message, ask string) (string, bool) {
+// ask is the explainer's raw answer to ask, in schema's shape and within
+// maxTokens, reporting false when the call failed or said nothing.
+func (e *explainer) ask(
+	ctx context.Context, messages []frames.Message, ask string, schema json.RawMessage, maxTokens int,
+) (string, bool) {
 	// Copy the conversation and append the transient ask, so neither the ask
 	// nor the answer ever lands in the conversation the judge keeps.
 	convo := frames.NewLLMContext("")
@@ -708,9 +1287,9 @@ func (e *explainer) ask(ctx context.Context, messages []frames.Message, ask stri
 	callCtx, cancel := context.WithTimeout(ctx, explainerTimeout)
 	defer cancel()
 	response, err := e.inf.RunInference(callCtx, convo, llm.InferenceOptions{
-		MaxTokens:         e.maxTokens,
+		MaxTokens:         maxTokens,
 		SystemInstruction: explainSystemInstruction,
-		ResponseSchema:    json.RawMessage(reasonSchema),
+		ResponseSchema:    schema,
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "eval: explainer call failed", "error", err)
