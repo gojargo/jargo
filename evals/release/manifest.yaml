@@ -222,3 +222,17 @@ suite:
   - bot: vision/vision-gemini-flash
     runner_body: {path: scenarios/vision-cat.yaml}
     scenarios: [scripted/vision_describe]
+  - bot: thinking/thinking-functions-google
+    scenarios: [scripted/flight_taxi]
+  - bot: turn-management/turn-management-filter-incomplete-turns
+    scenarios: [scripted/filter_incomplete_turns]
+  - bot: turn-management/turn-management-filter-incomplete-turns-function-calling
+    scenarios: [scripted/filter_incomplete_turns_function_calling]
+  - bot: turn-management/turn-management-filter-incomplete-turns-function-calling
+    scenarios: [scripted/filter_incomplete_turns]
+  - bot: turn-management/turn-management-filter-incomplete-turns-user-idle
+    scenarios: [scripted/filter_incomplete_turns_user_idle]
+  - bot: turn-management/turn-management-empty-user-turn
+    scenarios: [scripted/empty_user_turn]
+  - bot: turn-management/turn-management-classifier-turn-completion
+    scenarios: [scripted/classifier_turn_completion]
