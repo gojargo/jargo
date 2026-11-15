@@ -24,6 +24,7 @@ import (
 	"github.com/gojargo/jargo/provider/qwen"
 	"github.com/gojargo/jargo/provider/sambanova"
 	"github.com/gojargo/jargo/provider/sarvam"
+	"github.com/gojargo/jargo/provider/smallest"
 	"github.com/gojargo/jargo/provider/together"
 	"github.com/gojargo/jargo/provider/xai/grok"
 )
@@ -55,6 +56,8 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		{"qwen", qwen.NewLLM, chat.RoleUser},
 		{"sambanova", sambanova.NewLLM, chat.RoleUser},
 		{"sarvam", sarvamLLM, chat.RoleUser},
+		// Electron does not support the developer role.
+		{"smallest", smallestLLM, chat.RoleUser},
 		{"together", togetherLLM, chat.RoleUser},
 
 		{"openai", chat.NewLLM, chat.RoleDeveloper},
@@ -150,6 +153,13 @@ func deepseekLLM(cfg chat.LLMConfig) *chat.LLMService {
 // roster sends every provider the same one and Sarvam's own config wraps it.
 func sarvamLLM(cfg chat.LLMConfig) *chat.LLMService {
 	return sarvam.NewLLM(sarvam.LLMConfig{LLMConfig: cfg})
+}
+
+// smallestLLM builds a Smallest AI service from the shared config alone, since
+// the roster sends every provider the same one and Smallest's own config wraps
+// it.
+func smallestLLM(cfg chat.LLMConfig) *chat.LLMService {
+	return smallest.NewLLM(smallest.LLMConfig{LLMConfig: cfg})
 }
 
 // groqLLM builds a Groq service from the shared config alone, since the roster

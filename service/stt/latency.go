@@ -50,4 +50,7 @@ const (
 	// yours and pass it in rather than trusting the fallback.
 	NvidiaTTFSP99  = DefaultTTFSP99
 	WhisperTTFSP99 = DefaultTTFSP99
+
+	// Not yet measured.
+	RimeTTFSP99 = DefaultTTFSP99
 )

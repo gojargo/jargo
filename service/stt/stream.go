@@ -91,6 +91,12 @@ type Result struct {
 	// provider that flushes without confirming leaves it unset and says what it
 	// knows through EndOfTurn instead.
 	FromFinalize bool
+	// KeepEmpty reports that a final result with no text is still a transcript
+	// to push: the provider's word that the stretch of speech it closes held no
+	// words. The empty transcript is what tells the user turn that nothing more
+	// is coming for it. Most providers leave it unset, and a final result with
+	// no text then pushes nothing.
+	KeepEmpty bool
 }
 
 // SpeechState is a speech boundary a provider detected on its own.
@@ -936,6 +942,13 @@ func (s *StreamService) DisconnectWebsocket(context.Context) error {
 		if err := stream.Close(); err != nil {
 			slog.Debug("closing the transcription session failed", "service", s.Name(), "err", err)
 		}
+		// What the session submitted and no report has counted yet is still
+		// the call's usage, reported once the pipeline stops.
+		if r, ok := stream.(AudioUsageReporter); ok {
+			s.mu.Lock()
+			s.audioBytes += r.TakeAudioUsage()
+			s.mu.Unlock()
+		}
 	}
 	if cancel != nil {
 		cancel()
@@ -1148,6 +1161,9 @@ func (s *StreamService) reportConnectionError(
 func (s *StreamService) EmitSTTUsageMetrics(ctx context.Context) {
 	s.mu.Lock()
 	pending := s.audioBytes
+	if r, ok := s.stream.(AudioUsageReporter); ok {
+		pending += r.TakeAudioUsage()
+	}
 	s.audioBytes = 0
 	model := s.model
 	s.mu.Unlock()
@@ -1247,7 +1263,7 @@ func (s *StreamService) send(audio []byte) {
 	// has no catching up to do.
 	s.lastAudio = time.Now()
 	s.lastChunk = pcmDuration(int64(len(audio)), s.sendRate)
-	if stream != nil {
+	if _, counts := stream.(AudioUsageReporter); stream != nil && !counts {
 		s.audioBytes += int64(len(audio))
 	}
 	s.mu.Unlock()
@@ -1268,6 +1284,17 @@ func (s *StreamService) send(audio []byte) {
 			s.PushError(context.Background(), r.SendErrorMessage(err), err, false)
 		}
 	}
+}
+
+// AudioUsageReporter is an optional interface a Stream implements when not every
+// chunk it is sent reaches the provider: a Stream that holds the audio back
+// until speech starts, say, and submits only the stretches of speech. The audio
+// it holds back is not billed, so the Stream counts what it submits and the
+// service reports that as usage, rather than every chunk it handed over.
+type AudioUsageReporter interface {
+	// TakeAudioUsage returns how many bytes of audio, at the rate the session
+	// was opened for, the Stream has submitted since it was last called.
+	TakeAudioUsage() int64
 }
 
 // SendErrorReporter is an optional interface a Stream implements when a failed
@@ -1608,7 +1635,7 @@ func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
 	if answered {
 		s.confirmFinalize()
 	}
-	if r.Text == "" {
+	if r.Text == "" && (!r.Final || !r.KeepEmpty) {
 		if answered {
 			// The transcript went out ahead of the confirmation, so the wait
 			// ended with it. Reported now rather than left to the deadline.

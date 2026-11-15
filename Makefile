@@ -229,6 +229,7 @@ generate: tools-proto ## Regenerate the protobuf code from the .proto files
 
 # Every directory holding checked-in generated protobuf code.
 GENERATED_PROTO_DIRS := provider/nvidia/internal/rivapb \
+	provider/rime/internal/rimepb \
 	transport/wsserver/protobuf/internal/framepb
 
 .PHONY: generate-check

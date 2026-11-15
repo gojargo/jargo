@@ -19,7 +19,7 @@ coverage:
 #
 # `examples/` is 24 runnable `main()` programs that exist as documentation; they
 # are compiled by CI but will never carry unit tests, and counting them hides
-# ~13 points of real library coverage. `rivapb` is protoc output.
+# ~13 points of real library coverage. `rivapb` and `rimepb` are protoc output.
 # `internal/providertest` is test scaffolding: it runs on every provider test but
 # is credited to none of them, so it would read 0% forever.
 #
@@ -31,6 +31,7 @@ coverage:
 ignore:
   - "examples/**"
   - "**/internal/rivapb/**"
+  - "**/internal/rimepb/**"
   - "internal/providertest/**"
   - "internal/onnxrt/backend_*.go"
 

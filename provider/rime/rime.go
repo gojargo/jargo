@@ -1,5 +1,9 @@
-// Package rime is a streaming text-to-speech service backed by Rime's HTTP API.
-// It requests raw PCM via the Accept header and streams it downstream.
+// Package rime provides Rime's services: streaming text-to-speech over Rime's
+// HTTP API, and streaming speech-to-text over its gRPC API.
+//
+// The text-to-speech service requests raw PCM via the Accept header and streams
+// it downstream. The speech-to-text service streams each stretch of speech the
+// VAD reports as its own recognition request.
 package rime
 
 import (

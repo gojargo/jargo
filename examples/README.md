@@ -78,6 +78,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-resemble`](voice/voice-resemble) | Deepgram speech-to-text, an OpenAI LLM and Resemble AI text-to-speech. |
 | [`voice-rime-http`](voice/voice-rime-http) | Deepgram speech-to-text, an OpenAI LLM and Rime (over HTTP) text-to-speech. |
 | [`voice-sarvam`](voice/voice-sarvam) | Sarvam speech-to-text, LLM and text- to-speech. |
+| [`voice-smallest`](voice/voice-smallest) | Smallest AI speech-to-text, LLM (Electron) and text-to-speech. |
 | [`voice-soniox`](voice/voice-soniox) | Soniox speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-speechmatics`](voice/voice-speechmatics) | Speechmatics speech-to-text (with diarization) and text-to-speech, with an OpenAI LLM. |
 | [`voice-speechmatics-vad`](voice/voice-speechmatics-vad) | Speechmatics speech-to-text (with diarization and its own voice activity detection) and text-to-speech, with an OpenAI LLM. |
@@ -122,6 +123,7 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-qwen`](function-calling/function-calling-qwen) | Qwen | Deepgram, Cartesia |
 | [`function-calling-sambanova`](function-calling/function-calling-sambanova) | SambaNova | Deepgram, Cartesia |
 | [`function-calling-sarvam`](function-calling/function-calling-sarvam) | Sarvam AI | Sarvam, Sarvam |
+| [`function-calling-smallest`](function-calling/function-calling-smallest) | Smallest AI (Electron) | Smallest AI, Smallest AI |
 | [`function-calling-together`](function-calling/function-calling-together) | Together AI | Deepgram, Cartesia |
 | [`function-calling-missing-handler`](function-calling/function-calling-missing-handler) | OpenAI, with a tool deliberately left without a handler, to show how the LLM service recovers | Deepgram, Cartesia |
 

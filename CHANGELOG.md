@@ -211,6 +211,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reported as the words are spoken, and an interruption stops the synthesis
   on the server. It takes the full set of SSML voice settings, which can
   change while the pipeline runs. Example: `voice-azure`.
+- **Rime speech-to-text** (`rime.NewSTT`), streaming over Rime's gRPC API.
+  Each VAD speech segment is streamed as its own request, starting with the
+  audio from just before speech. Finals are pushed in speech order, and only
+  the latest segment's final is finalized. Its settings (`language`, `mode`,
+  `context_terms`, `output_contract`) can change while the pipeline runs and
+  apply to the segments that start afterwards; an invalid update is refused
+  whole. `stt.Result.KeepEmpty` and the optional `stt.AudioUsageReporter`
+  stream interface let a streaming provider push an empty final transcript
+  and report as usage only the audio it submitted.
+- **Smallest AI LLM** (`smallest.NewLLM`), Electron over the Waves API's
+  OpenAI-compatible endpoint, with a `prompt_cache_key` that can change while
+  the pipeline runs. Examples: `voice-smallest`, `function-calling-smallest`.
 
 ### Changed
 

@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+// Subset of Rime's speech-to-text gRPC contract (rime-api 0.4.1), limited to
+// the realtime streaming RPC the STT service uses. Field numbers, the package
+// name, and the service and method names match Rime's schema exactly, so the
+// wire format and the gRPC method path are those of Rime's own service. Rime
+// publishes the schema under the Apache License 2.0. Regenerate with:
+//
+//	go generate ./provider/rime/internal/rimepb
+package rime;
+
+option go_package = "github.com/gojargo/jargo/provider/rime/internal/rimepb;rimepb";
+
+// SpeechToText is Rime's speech recognition service. The whole-utterance
+// Transcribe RPC is omitted.
+service SpeechToText {
+  // Transcribes exactly one realtime PCM16 mono 16 kHz utterance per client
+  // stream. The first request must contain `config`; following requests contain
+  // audio. Client half-close commits the utterance and produces one final `done`
+  // response. Dropping either side of the RPC cancels the associated backend
+  // work.
+  rpc TranscribeStreaming(stream StreamingTranscriptionRequest) returns (stream StreamingTranscriptionResponse) {}
+}
+
+// Output formatting intent. It steers the model rather than hard-guaranteeing
+// token-level behavior.
+enum TranscriptionMode {
+  // Defaults to TRANSCRIPTION_MODE_WRITTEN.
+  TRANSCRIPTION_MODE_UNSPECIFIED = 0;
+  // Standard written formatting: numerals as digits, codes compact.
+  // "flight two four seven" is intended to come back as "flight 247".
+  TRANSCRIPTION_MODE_WRITTEN = 1;
+  // Verbatim rendering: keep every filler, repetition, and false start;
+  // numbers as spoken words.
+  TRANSCRIPTION_MODE_VERBATIM = 2;
+}
+
+// How the resolved language was chosen.
+enum LanguageSource {
+  // The service could not resolve a catalog language for this result.
+  LANGUAGE_SOURCE_UNSPECIFIED = 0;
+  // The caller supplied the language and the service confirmed it against
+  // the packaged model catalog.
+  LANGUAGE_SOURCE_SELECTED = 1;
+  // The model detected the served catalog language.
+  LANGUAGE_SOURCE_DETECTED = 2;
+}
+
+message ResolvedLanguage {
+  // Canonical BCP-47 tag drawn from the packaged model catalog.
+  string tag = 1;
+  LanguageSource source = 2;
+}
+
+// Which streaming output contract the session uses.
+enum StreamingOutputContract {
+  // Invalid for a request: callers must explicitly select an output contract.
+  STREAMING_OUTPUT_CONTRACT_UNSPECIFIED = 0;
+  // Responses are append-only `delta` fragments, never revised. Concatenate
+  // them in arrival order (including newline separators between transcription
+  // windows) to form the transcript. The final `done` text equals that
+  // concatenation.
+  STREAMING_OUTPUT_CONTRACT_APPEND_FRAGMENTS = 1;
+  // Responses are full replacing `hypothesis` transcripts: each carries the
+  // complete current transcript and a monotonically increasing revision. The
+  // final `done` text equals the last hypothesis and carries its revision; an
+  // utterance with no recognized speech may emit no hypothesis and finishes
+  // with an empty final at revision zero.
+  STREAMING_OUTPUT_CONTRACT_REVISED_HYPOTHESES = 2;
+}
+
+// The opening request of a stream. Streaming input is always headerless
+// signed PCM16 little-endian mono 16 kHz; the format is not configurable.
+message StreamingConfig {
+  reserved 1, 2;
+  reserved "sample_rate_hertz", "channels";
+
+  // Required BCP-47 tag of the spoken language (an omitted tag or `und` is
+  // rejected).
+  optional string language = 3;
+  // Selects the written or verbatim prompt.
+  TranscriptionMode mode = 4;
+  // Explicitly selects the output contract. The service confirms the
+  // selection before accepting audio.
+  StreamingOutputContract output_contract = 5;
+  // Recognition terms. An empty list adds no bias; the service rejects empty
+  // or whitespace-only terms. Order and term text are preserved, with ", "
+  // inserted between terms.
+  repeated string context_terms = 6;
+}
+
+message StreamingTranscriptionRequest {
+  oneof payload {
+    // Required exactly once as the first request.
+    StreamingConfig config = 1;
+    // PCM16 bytes. Each message is bounded to 64 KiB and the utterance to
+    // 16 MiB. An odd byte count is invalid.
+    bytes audio = 2;
+  }
+}
+
+message StreamingTranscriptionResponse {
+  oneof payload {
+    // An append-only transcript fragment under the append-fragment contract.
+    TranscriptionDelta delta = 1;
+    // Exactly one final transcript for a successfully completed utterance. It
+    // may be empty when the input contains no recognized speech.
+    TranscriptionDone done = 2;
+    // Confirms the selected output contract before any audio-derived
+    // response.
+    StreamingAccepted accepted = 3;
+    // The latest full transcript hypothesis under the revised-hypotheses
+    // contract. Each hypothesis replaces the previous one entirely.
+    TranscriptionHypothesis hypothesis = 4;
+  }
+}
+
+message StreamingAccepted {
+  StreamingOutputContract output_contract = 1;
+  // Confirms the selected language.
+  optional ResolvedLanguage language = 2;
+}
+
+message TranscriptionDelta {
+  string text = 1;
+}
+
+// A full-hypothesis partial. `text` is the complete current transcript, not a
+// delta; a later hypothesis with a higher revision replaces it.
+message TranscriptionHypothesis {
+  string text = 1;
+  // Monotonically increasing within a session, starting at 1.
+  uint64 revision = 2;
+}
+
+message TranscriptionDone {
+  string text = 1;
+  // The canonical catalog language the caller selected.
+  optional ResolvedLanguage language = 2;
+  // The revision of the final hypothesis under the revised-hypotheses
+  // contract; zero under the append-fragment contract.
+  uint64 revision = 3;
+}

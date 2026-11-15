@@ -1,5 +1,8 @@
-// Package smallest is a streaming text-to-speech service backed by Smallest AI's
-// Waves WebSocket. It holds one connection open for the call, sends the
+// Package smallest provides Smallest AI's services: Electron, its LLM, over the
+// Waves API's OpenAI-compatible endpoint; Pulse streaming speech-to-text; and
+// streaming text-to-speech over the Waves WebSocket.
+//
+// The text-to-speech service holds one connection open for the call, sends the
 // sentences of a turn on the turn's continuation context so they are spoken as
 // one generation, and labels the audio that comes back with the context
 // playing, since Smallest's messages name no request.
