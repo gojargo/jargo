@@ -48,3 +48,4 @@ CLAUDE.local.md
 
 # Benchmark results, kept as CI artifacts and never committed
 /benchmarks/out/
+evals/release/test-runs/

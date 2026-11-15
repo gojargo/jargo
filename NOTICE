@@ -50,6 +50,10 @@ The speech fixture audio/vad/testdata/continuous_speech_16k.wav is taken
 unmodified from the Pipecat test assets (BSD 2-Clause License, above). It is
 synthesized speech and is used only by tests.
 
+The release eval scenarios and audio assets under evals/release/scenarios and
+evals/release/assets are taken from the Pipecat release evals (BSD 2-Clause
+License, above).
+
 
 Sentence segmentation
 ---------------------

@@ -1,0 +1,184 @@
+# Release evals manifest: which scenarios each example bot runs.
+# Run from the repository root with:
+#
+#   go run ./cmd/jargo eval suite evals/release/manifest.yaml
+#
+# Scenarios are reusable, so one shared scenario covers many bots. A scenario is
+# scripted (a `turns:` list, in scenarios/scripted/) or a simulation (a
+# `persona:`, an autonomous caller, in scenarios/simulated/); the judge and
+# user blocks they `!include` sit beside the two folders. An entry names its
+# folder and file, without the extension.
+#
+# A bot is an example's package directory under bots_dir. The suite builds each
+# one once and starts it for every run on its own port.
+
+bots_dir: ../../examples       # bot paths below are relative to this
+scenarios_dir: scenarios       # scenario names resolve to <dir>/<name>.yaml
+concurrency: 4
+runs_dir: test-runs            # logs + recordings -> test-runs/<timestamp>/
+record: true                   # record conversation audio (or pass -a)
+spawn: "{bot} --port {port}"
+
+suite:
+  - bot: voice/voice-assemblyai
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-asyncai
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-aws
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-azure
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-azure-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-camb
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-cartesia
+    scenarios: [scripted/capital_question, scripted/capital_question_recording, scripted/multi_turn, scripted/interruption, scripted/language_switch]
+  - bot: voice/voice-cartesia-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-cartesia-turns
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-deepgram
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-deepgram-flux
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-deepgram-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-elevenlabs
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-elevenlabs-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-fal
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-fish
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-gladia
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-gladia-vad
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-google
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-google-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-gradium
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-groq
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-inworld
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-inworld-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-kokoro
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-minimax
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-mistral
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-neuphonic
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-neuphonic-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-nvidia
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-nvidia-segmented
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-openai
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-openai-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-openai-responses
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-openai-responses-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-piper
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-resemble
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-rime-http
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-sarvam
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-smallest
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-soniox
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-speechmatics
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-speechmatics-vad
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-xai
+    scenarios: [scripted/capital_question]
+  - bot: voice/voice-xai-http
+    scenarios: [scripted/capital_question]
+  - bot: realtime/realtime-aws-nova-sonic
+    scenarios: [scripted/weather_function_call_audio]
+  - bot: realtime/realtime-azure
+    scenarios: [scripted/weather_function_call_audio]
+  - bot: realtime/realtime-gemini-live
+    scenarios: [scripted/weather_function_call_audio]
+  - bot: realtime/realtime-grok
+    scenarios: [scripted/weather_function_call_audio]
+  - bot: realtime/realtime-openai
+    scenarios: [scripted/weather_function_call_audio]
+  - bot: getting-started/07-function-calling
+    scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
+  - bot: function-calling/function-calling-anthropic
+    scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
+  - bot: function-calling/function-calling-aws
+    scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
+  - bot: function-calling/function-calling-azure
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-cerebras
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-deepseek
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-fireworks
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-google-vertex
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-grok
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-groq
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-inception
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-mistral
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-nebius
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-novita
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-nvidia
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-openai
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-openai-responses
+    scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
+  - bot: function-calling/function-calling-openai-responses-http
+    scenarios: [scripted/weather_function_call, scripted/weather_and_restaurant]
+  - bot: function-calling/function-calling-openrouter
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-perplexity
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-qwen
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-sambanova
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-sarvam
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-smallest
+    scenarios: [scripted/weather_function_call]
+  - bot: function-calling/function-calling-anthropic-async
+    scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/async_tool_cancellation, scripted/function_call_timeout]
+  - bot: function-calling/function-calling-openai-async
+    scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/function_call_timeout]
+  - bot: function-calling/function-calling-openai-responses-async
+    scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/async_tool_cancellation, scripted/function_call_timeout]
+  - bot: mcp/mcp-stdio
+    scenarios: [scripted/mcp_memory]
+  - bot: features/features-dtmf-menu
+    scenarios: [scripted/dtmf_menu]
+  - bot: features/features-voicemail-detection
+    scenarios: [scripted/voicemail_detection]
+  - bot: voice/voice-cartesia
+    scenarios: [simulated/capital_curious]

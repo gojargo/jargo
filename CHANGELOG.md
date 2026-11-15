@@ -281,6 +281,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `NewScriptSession` and `ScriptSessionFromScenario` take a bot STT
   (`*stt.SegmentService`), `NewClientTransport` takes a `*ClientRecorder`,
   and `Client.Start` returns an error.
+- **Release evals.** `evals/release` holds a suite manifest that runs the
+  example bots through the release scenarios (capital question, multi-turn,
+  interruption, language switch, function calls, async tools, DTMF,
+  voicemail, MCP memory and a simulated caller), with
+  `go run ./cmd/jargo eval suite evals/release/manifest.yaml`. A test keeps
+  every bot it names an example package and every scenario loadable.
 
 ### Changed
 
