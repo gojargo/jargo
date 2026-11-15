@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"reflect"
 	"testing"
 
@@ -223,6 +226,62 @@ func TestEvalConnectConsumedAndNotForwarded(t *testing.T) {
 
 // DTMF is a first-class RTVI message handled by the RTVI processor, so the
 // serializer forwards it like any other RTVI message.
+// redPNG is a 4x3 PNG filled with red.
+func redPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	for y := range 3 {
+		for x := range 4 {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestUserImageFrameDecodesTheRegisteredImage(t *testing.T) {
+	s := evalws.NewSerializer()
+	msg := clientMessage("7", evalws.ImageMessageType, map[string]any{
+		"image":  base64.StdEncoding.EncodeToString(redPNG(t)),
+		"format": "image/png",
+	})
+	if _, err := s.Deserialize(encode(t, msg)); err != nil {
+		t.Fatal(err)
+	}
+	request := frames.NewUserImageRequestFrame("user")
+	request.Text = "what is this?"
+
+	f, err := s.UserImageFrame(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f == nil {
+		t.Fatal("UserImageFrame = nil, want the registered image")
+	}
+	if f.Width != 4 || f.Height != 3 {
+		t.Fatalf("size = (%d, %d), want (4, 3)", f.Width, f.Height)
+	}
+	if f.Format != "RGB" {
+		t.Fatalf("format = %q, want RGB", f.Format)
+	}
+	if !bytes.Equal(f.Image[:3], []byte{255, 0, 0}) {
+		t.Fatalf("first pixel = %v, want [255 0 0]", f.Image[:3])
+	}
+	if f.Request != request {
+		t.Fatal("the frame does not carry the request it answers")
+	}
+}
+
+func TestUserImageFrameWithoutAnImageIsNone(t *testing.T) {
+	f, err := evalws.NewSerializer().UserImageFrame(frames.NewUserImageRequestFrame("user"))
+	if err != nil || f != nil {
+		t.Fatalf("UserImageFrame = %v, %v, want nil", f, err)
+	}
+}
+
 func TestDTMFMessageForwardedToProcessor(t *testing.T) {
 	msg := map[string]any{
 		"label": rtvi.MessageLabel,
@@ -337,4 +396,35 @@ func TestOtherMessagesAreNotEvalConnect(t *testing.T) {
 			t.Errorf("%s message parsed as eval-connect: %+v", name, parsed)
 		}
 	}
+}
+
+// The bot reports its output images by size and format, only when asked.
+func TestEvalSerializerBotImages(t *testing.T) {
+	outputImage := func() *frames.OutputImageRawFrame {
+		return frames.NewOutputImageRawFrame(make([]byte, 12), 2, 2, "RGB")
+	}
+
+	t.Run("image dropped by default", func(t *testing.T) {
+		assertDropped(t, evalws.NewSerializer(), outputImage())
+	})
+
+	t.Run("image reported when captured", func(t *testing.T) {
+		s := evalws.NewSerializer()
+		s.SetCaptureImages(true)
+		out, err := s.Serialize(outputImage())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var message map[string]any
+		if err := json.Unmarshal(out.Data, &message); err != nil {
+			t.Fatal(err)
+		}
+		if message["type"] != evalws.BotImageType {
+			t.Fatalf("type = %v, want %s", message["type"], evalws.BotImageType)
+		}
+		want := map[string]any{"width": 2.0, "height": 2.0, "format": "RGB"}
+		if !reflect.DeepEqual(message["data"], want) {
+			t.Fatalf("data = %v, want %v", message["data"], want)
+		}
+	})
 }

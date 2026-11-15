@@ -12,10 +12,16 @@
 package evalws
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/gif"  // registers the GIF decoder for user images
+	_ "image/jpeg" // registers the JPEG decoder for user images
+	_ "image/png"  // registers the PNG decoder for user images
 	"log/slog"
 	"strings"
 	"sync"
@@ -185,6 +191,46 @@ func (s *Serializer) UserImage() (data []byte, format string, ok bool) {
 	return s.userImage.data, s.userImage.format, true
 }
 
+// UserImageFrame returns the registered image as the frame answering request,
+// or nil when no image is registered.
+//
+// The harness sends the image encoded, but a real camera transport pushes raw
+// frames, so it is decoded to raw RGB. The LLM context encodes raw frames again
+// anyway, and consumers that read the pixels directly (a local vision model,
+// say) need the raw pixels and the real size.
+func (s *Serializer) UserImageFrame(request *frames.UserImageRequestFrame) (*frames.UserImageRawFrame, error) {
+	data, _, ok := s.UserImage()
+	if !ok {
+		return nil, nil //nolint:nilnil // no image is registered
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("evalws: decode the user image: %w", err)
+	}
+	pixels, width, height := rgbPixels(decoded)
+	f := frames.NewUserImageRawFrame(request.UserID, pixels, width, height, "RGB")
+	f.Text = request.Text
+	f.AppendToContext = request.AppendToContext
+	f.Request = request
+	return f, nil
+}
+
+// rgbPixels converts an image to packed 8-bit RGB, row by row, and returns the
+// pixels with the image's width and height. An alpha channel is dropped rather
+// than blended in.
+func rgbPixels(img image.Image) (pixels []byte, width, height int) {
+	bounds := img.Bounds()
+	width, height = bounds.Dx(), bounds.Dy()
+	pixels = make([]byte, 0, width*height*3)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c, _ := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			pixels = append(pixels, c.R, c.G, c.B)
+		}
+	}
+	return pixels, width, height
+}
+
 // botAudioData is the payload of an eval-bot-audio message.
 type botAudioData struct {
 	Audio string `json:"audio"`
@@ -192,8 +238,16 @@ type botAudioData struct {
 	SampleRate int `json:"sampleRate"`
 }
 
+// botImageData is the payload of an eval-bot-image message.
+type botImageData struct {
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	Format string `json:"format"`
+}
+
 // Serialize encodes an outbound frame for the harness. Only RTVI server
-// messages go out, plus the bot's audio when the harness asked for it.
+// messages go out, plus the bot's audio and the size and format of its images
+// when the harness asked for them.
 func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 	switch fr := f.(type) {
 	case frames.OutputTransportMessage:
@@ -210,6 +264,16 @@ func (s *Serializer) Serialize(f frames.Frame) (wsserver.Message, error) {
 				Audio:      base64.StdEncoding.EncodeToString(a.Audio),
 				SampleRate: a.SampleRate,
 			},
+		}))
+	case frames.OutputImageFrame:
+		if !s.captureImages.Load() {
+			return wsserver.Message{}, nil
+		}
+		img := fr.ImageData()
+		return wsserver.TextMessage(json.Marshal(rtvi.Message{
+			Label: rtvi.MessageLabel,
+			Type:  BotImageType,
+			Data:  botImageData{Width: img.Width, Height: img.Height, Format: img.Format},
 		}))
 	}
 	return wsserver.Message{}, nil

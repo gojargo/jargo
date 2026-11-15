@@ -1,17 +1,25 @@
 package evalws
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -120,6 +128,16 @@ func newTestTransport(t *testing.T, flags ConnectionFlags) *Transport {
 	}, flags)
 }
 
+func TestUsesTheEvalInputAndOutput(t *testing.T) {
+	tr := newTestTransport(t, ConnectionFlags{})
+	if _, ok := tr.Input().(*InputTransport); !ok {
+		t.Fatalf("input = %T, want the eval input", tr.Input())
+	}
+	if _, ok := tr.Output().(*OutputTransport); !ok {
+		t.Fatalf("output = %T, want the eval output", tr.Output())
+	}
+}
+
 func TestCaptureFlagsReachTheSerializer(t *testing.T) {
 	tr := newTestTransport(t, ConnectionFlags{CaptureBotAudio: true, CaptureBotImages: true})
 	s, ok := tr.Params().Serializer.(*Serializer)
@@ -158,7 +176,7 @@ func greetingSkipTTS(t *testing.T, skipTTS bool) []bool {
 		mu     sync.Mutex
 		pushed []bool
 	)
-	tr.pushFrame = func(_ context.Context, f frames.Frame) error {
+	tr.input.pushFrame = func(_ context.Context, f frames.Frame) error {
 		if c, ok := f.(*frames.LLMConfigureOutputFrame); ok {
 			mu.Lock()
 			pushed = append(pushed, c.SkipTTS)
@@ -193,5 +211,104 @@ func TestNilSerializerDefaultsToTheEvalSerializer(t *testing.T) {
 	s, ok := tr.Params().Serializer.(*Serializer)
 	if !ok || !s.captureAudio.Load() {
 		t.Fatalf("serializer = %T, want the eval serializer capturing audio", tr.Params().Serializer)
+	}
+}
+
+func TestUserImageRequests(t *testing.T) {
+	t.Run("request without an image is answered with an error", func(t *testing.T) {
+		in := newTestTransport(t, ConnectionFlags{}).input
+		pushed := recordPushes(in)
+		var results []string
+		request := frames.NewUserImageRequestFrame("user")
+		request.ResultCallback = func(_ context.Context, result string, _ *frames.FunctionCallResultProperties) error {
+			results = append(results, result)
+			return nil
+		}
+
+		if err := in.serveUserImage(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(results) != 1 || !strings.Contains(results[0], "error") {
+			t.Fatalf("results = %q, want one error", results)
+		}
+		if len(*pushed) != 0 {
+			t.Fatalf("pushed %v, want nothing", *pushed)
+		}
+	})
+
+	t.Run("request with an image is served the image", func(t *testing.T) {
+		in := newTestTransport(t, ConnectionFlags{}).input
+		s, ok := in.params.Serializer.(*Serializer)
+		if !ok {
+			t.Fatalf("serializer = %T, want the eval serializer", in.params.Serializer)
+		}
+		registerImage(t, s)
+		pushed := recordPushes(in)
+		called := false
+		request := frames.NewUserImageRequestFrame("user")
+		request.ResultCallback = func(context.Context, string, *frames.FunctionCallResultProperties) error {
+			called = true
+			return nil
+		}
+
+		if err := in.serveUserImage(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(*pushed) != 1 {
+			t.Fatalf("pushed %v, want the image", *pushed)
+		}
+		f, ok := (*pushed)[0].(*frames.UserImageRawFrame)
+		if !ok {
+			t.Fatalf("pushed %T, want a UserImageRawFrame", (*pushed)[0])
+		}
+		if f.Request != request {
+			t.Fatal("the image does not carry the request it answers")
+		}
+		if called {
+			t.Fatal("the result callback was called; the image answers the request")
+		}
+	})
+}
+
+// recordPushes replaces the input's push with one that records the frames.
+func recordPushes(in *InputTransport) *[]frames.Frame {
+	var pushed []frames.Frame
+	in.pushFrame = func(_ context.Context, f frames.Frame) error {
+		pushed = append(pushed, f)
+		return nil
+	}
+	return &pushed
+}
+
+// registerImage registers an image with the serializer, as the harness's
+// eval-image message does.
+func registerImage(t *testing.T, s *Serializer) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	for y := range 3 {
+		for x := range 4 {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	message, err := json.Marshal(map[string]any{
+		"label": rtvi.MessageLabel,
+		"type":  rtvi.TypeClientMessage,
+		"id":    "1",
+		"data": map[string]any{
+			"t": ImageMessageType,
+			"d": map[string]any{"image": base64.StdEncoding.EncodeToString(buf.Bytes()), "format": "image/png"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Deserialize(message); err != nil {
+		t.Fatal(err)
 	}
 }

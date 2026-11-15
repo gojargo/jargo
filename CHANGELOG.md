@@ -326,6 +326,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `wsservice.Options.DialSubprotocols` and `tts.Websocket.DialSubprotocols`
   offer subprotocols in the handshake, and `tts.Base.TurnContextID` reports
   the current turn's context.
+- **The eval transport serves images.** A `UserImageRequestFrame` is
+  answered with the harness's `eval-image` decoded to RGB
+  (`evalws.Serializer.UserImageFrame`), or with a "No user image is
+  registered." error result, and with `capture_bot_images` set each image the
+  bot outputs is reported as `eval-bot-image` (width, height, format),
+  whether or not video output is enabled. `wsserver` exports
+  `InputTransport`, `OutputTransport`, `NewInputTransport`,
+  `NewOutputTransport`, `Transport.SetInput`, `Transport.SetOutput` and
+  `OutputTransport.WriteFrame`, so a transport can be built on it.
 
 ### Changed
 

@@ -66,6 +66,86 @@ type TransportParams struct {
 	Serializer wsserver.Serializer
 }
 
+// InputTransport is the eval transport's input: it serves the harness's image.
+//
+// A vision bot asks for the user's camera image; under eval there is no camera,
+// so the image the harness registered for the turn is served instead. With no
+// image registered, the request is answered with an error, so the tool call
+// that made it still finishes.
+type InputTransport struct {
+	*wsserver.InputTransport
+
+	params TransportParams
+	// pushFrame sends a frame downstream.
+	pushFrame func(ctx context.Context, f frames.Frame) error
+}
+
+func newInputTransport(t *wsserver.Transport, params TransportParams) *InputTransport {
+	in := &InputTransport{params: params}
+	in.InputTransport = wsserver.NewInputTransport(t, in)
+	in.pushFrame = func(ctx context.Context, f frames.Frame) error {
+		return in.PushFrame(ctx, f, processor.Downstream)
+	}
+	return in
+}
+
+// ProcessFrame serves image requests; otherwise it behaves like the WebSocket
+// input.
+func (in *InputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := in.InputTransport.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if request, ok := f.(*frames.UserImageRequestFrame); ok {
+		return in.serveUserImage(ctx, request)
+	}
+	return nil
+}
+
+func (in *InputTransport) serveUserImage(ctx context.Context, request *frames.UserImageRequestFrame) error {
+	var image *frames.UserImageRawFrame
+	if s, ok := in.params.Serializer.(*Serializer); ok {
+		var err error
+		if image, err = s.UserImageFrame(request); err != nil {
+			return err
+		}
+	}
+	if image == nil {
+		in.AnswerImageRequests(ctx, []*frames.UserImageRequestFrame{request}, "No user image is registered.")
+		return nil
+	}
+	return in.pushFrame(ctx, image)
+}
+
+// OutputTransport is the eval transport's output: it reports the bot's images
+// to the harness.
+//
+// An image the bot outputs is handed to the serializer as it arrives, whether
+// or not the bot enabled video output; the serializer sends it only when the
+// harness asked.
+type OutputTransport struct {
+	*wsserver.OutputTransport
+}
+
+func newOutputTransport(t *wsserver.Transport) *OutputTransport {
+	out := &OutputTransport{}
+	out.OutputTransport = wsserver.NewOutputTransport(t, out)
+	return out
+}
+
+// ProcessFrame reports output images; otherwise it behaves like the WebSocket
+// output.
+func (out *OutputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := out.OutputTransport.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if _, ok := f.(frames.OutputImageFrame); ok {
+		if _, err := out.WriteFrame(ctx, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Transport is the eval transport over a WebSocket the bot accepted itself.
 //
 // On a hosted deployment a session's WebSocket arrives already accepted, and
@@ -82,8 +162,8 @@ type Transport struct {
 
 	params TransportParams
 	flags  ConnectionFlags
-	// pushFrame sends a frame downstream from the input.
-	pushFrame func(ctx context.Context, f frames.Frame) error
+	input  *InputTransport
+	output *OutputTransport
 }
 
 // NewTransport builds the eval transport on conn, a WebSocket already accepted
@@ -94,14 +174,16 @@ func NewTransport(conn *websocket.Conn, params TransportParams, flags Connection
 	if params.Serializer == nil {
 		params.Serializer = NewSerializer()
 	}
+	ws := wsserver.NewTransport(conn, params.Serializer, params.Params, pending...)
 	t := &Transport{
-		Transport: wsserver.NewTransport(conn, params.Serializer, params.Params, pending...),
+		Transport: ws,
 		params:    params,
 		flags:     flags,
+		input:     newInputTransport(ws, params),
+		output:    newOutputTransport(ws),
 	}
-	t.pushFrame = func(ctx context.Context, f frames.Frame) error {
-		return t.Input().PushFrame(ctx, f, processor.Downstream)
-	}
+	ws.SetInput(t.input.InputTransport)
+	ws.SetOutput(t.output.OutputTransport)
 
 	if s, ok := params.Serializer.(*Serializer); ok {
 		s.SetCaptureAudio(flags.CaptureBotAudio)
@@ -126,7 +208,7 @@ func (t *Transport) Params() TransportParams { return t.params }
 func (t *Transport) onClientConnected(ctx context.Context) {
 	skipTTS := t.flags.SkipTTS
 	slog.Debug("evalws: configuring eval LLM output", "skip_tts", skipTTS)
-	if err := t.pushFrame(ctx, frames.NewLLMConfigureOutputFrame(skipTTS)); err != nil {
+	if err := t.input.pushFrame(ctx, frames.NewLLMConfigureOutputFrame(skipTTS)); err != nil {
 		slog.Warn("evalws: could not configure the LLM output", "err", err)
 	}
 }

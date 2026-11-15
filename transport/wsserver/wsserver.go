@@ -88,9 +88,15 @@ const (
 // Transport bridges a WebSocket session to a pipeline.
 type Transport struct {
 	transport.BaseTransport
-	in   *inputTransport
-	out  *outputTransport
-	sess *Session
+	sess   *Session
+	ser    Serializer
+	params Params
+
+	// mu guards in and out, built when first asked for unless a transport built
+	// on this one sets its own (see SetInput and SetOutput).
+	mu  sync.Mutex
+	in  *InputTransport
+	out *OutputTransport
 }
 
 // Params configures a WebSocket server transport: the media parameters every
@@ -208,18 +214,56 @@ func NewTransport(c *websocket.Conn, ser Serializer, params Params, pending ...[
 		sess.closeTimeout = *params.CloseTimeout
 	}
 	return &Transport{
-		Name: "WebSocketServerTransport",
-		sess: sess,
-		in:   newInput(sess, ser, params),
-		out:  newOutput(sess, ser, params),
+		Name:   "WebSocketServerTransport",
+		sess:   sess,
+		ser:    ser,
+		params: params,
 	}
 }
 
-// Input returns the input processor.
-func (t *Transport) Input() processor.Processor { return t.in }
+// Input returns the input processor: the InputTransport, or the input built on
+// it that SetInput gave the transport.
+func (t *Transport) Input() processor.Processor { return t.inputTransport().Self() }
 
-// Output returns the output processor.
-func (t *Transport) Output() processor.Processor { return t.out }
+// Output returns the output processor: the OutputTransport, or the output built
+// on it that SetOutput gave the transport.
+func (t *Transport) Output() processor.Processor { return t.outputTransport().Self() }
+
+// SetInput makes in the transport's input, for a transport built on this one
+// whose input handles frames of its own (see NewInputTransport). Set it before
+// the input or the events are first asked for.
+func (t *Transport) SetInput(in *InputTransport) {
+	t.mu.Lock()
+	t.in = in
+	t.mu.Unlock()
+}
+
+// SetOutput makes out the transport's output, for a transport built on this one
+// whose output handles frames of its own (see NewOutputTransport). Set it before
+// the output is first asked for.
+func (t *Transport) SetOutput(out *OutputTransport) {
+	t.mu.Lock()
+	t.out = out
+	t.mu.Unlock()
+}
+
+func (t *Transport) inputTransport() *InputTransport {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.in == nil {
+		t.in = NewInputTransport(t, nil)
+	}
+	return t.in
+}
+
+func (t *Transport) outputTransport() *OutputTransport {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.out == nil {
+		t.out = NewOutputTransport(t, nil)
+	}
+	return t.out
+}
 
 // Done is closed when the call ends: the client hung up, or the pipeline
 // finished with the session and the connection was closed. Cancel the pipeline
@@ -232,7 +276,7 @@ func (t *Transport) Done() <-chan struct{} { return t.sess.done }
 
 // Events is the registry of events this transport raises. See
 // EventClientConnected, EventClientDisconnected and EventSessionTimeout.
-func (t *Transport) Events() *events.Registry { return t.in.Events() }
+func (t *Transport) Events() *events.Registry { return t.inputTransport().Events() }
 
 // Session owns one WebSocket connection and serializes writes, which
 // coder/websocket requires.
@@ -422,9 +466,9 @@ func channels(n int) int {
 	return n
 }
 
-// inputTransport reads provider messages off the socket, deserializes them, and
+// InputTransport reads provider messages off the socket, deserializes them, and
 // pushes the resulting frames into the pipeline.
-type inputTransport struct {
+type InputTransport struct {
 	*transport.BaseInput
 	sess *Session
 	ser  Serializer
@@ -443,9 +487,16 @@ type inputTransport struct {
 	releaseOnce sync.Once
 }
 
-func newInput(sess *Session, ser Serializer, params Params) *inputTransport {
-	in := &inputTransport{sess: sess, ser: ser, sessionTimeout: params.SessionTimeout}
-	in.BaseInput = transport.NewBaseInput("WSInput", params.Params, in)
+// NewInputTransport builds the input of t, over its session and with its
+// serializer. self is the input built on the returned one, which embeds it and
+// is what the pipeline runs, so it can handle frames of its own around this
+// one's; nil makes the input its own. Give the input to t with SetInput.
+func NewInputTransport(t *Transport, self transport.InputDriver) *InputTransport {
+	in := &InputTransport{sess: t.sess, ser: t.ser, sessionTimeout: t.params.SessionTimeout}
+	if self == nil {
+		self = in
+	}
+	in.BaseInput = transport.NewBaseInput("WSInput", t.params.Params, self)
 	in.Events().Register(EventClientConnected, false)
 	in.Events().Register(EventClientDisconnected, false)
 	in.Events().Register(EventSessionTimeout, false)
@@ -456,7 +507,7 @@ func newInput(sess *Session, ser Serializer, params Params) *inputTransport {
 // long as it is allowed to, and does nothing for one that ends first. It is
 // started with the read loop, so the clock runs from the point the session
 // begins carrying conversation rather than from the socket being accepted.
-func (in *inputTransport) watchSessionLength(ctx context.Context) {
+func (in *InputTransport) watchSessionLength(ctx context.Context) {
 	defer in.readWG.Done()
 	timer := time.NewTimer(in.sessionTimeout)
 	defer timer.Stop()
@@ -480,7 +531,7 @@ func (in *inputTransport) watchSessionLength(ctx context.Context) {
 // pushes the StartFrame downstream before it calls StartReading. Configuring the
 // serializer first would mean a failure swallowed the StartFrame, leaving every
 // processor downstream uninitialized and the pipeline unable to finish.
-func (in *inputTransport) Setup(ctx context.Context, s processor.Setup) error {
+func (in *InputTransport) Setup(ctx context.Context, s processor.Setup) error {
 	// Taken here rather than when the read loop starts, so the output cannot
 	// find the connection closed before its own StartFrame has reached it.
 	in.holdOnce.Do(in.sess.hold)
@@ -500,7 +551,7 @@ func (in *inputTransport) Setup(ctx context.Context, s processor.Setup) error {
 // the provider's wire format at all, so the failure is fatal: it ends the
 // pipeline and closes the socket rather than holding a call open that can
 // neither hear nor answer.
-func (in *inputTransport) StartReading(ctx context.Context) error {
+func (in *InputTransport) StartReading(ctx context.Context) error {
 	in.mu.Lock()
 	setup := in.setup
 	in.mu.Unlock()
@@ -546,7 +597,7 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 // that is left to whichever side releases its hold last. On a pipeline built
 // without the output in it that is this call, and the connection closes here as
 // it always did.
-func (in *inputTransport) StopReading(context.Context) error {
+func (in *InputTransport) StopReading(context.Context) error {
 	in.mu.Lock()
 	in.stopping = true
 	in.mu.Unlock()
@@ -556,13 +607,13 @@ func (in *inputTransport) StopReading(context.Context) error {
 
 // stopped reports that the pipeline has stopped and the read loop is no longer
 // to deliver what it reads.
-func (in *inputTransport) stopped() bool {
+func (in *InputTransport) stopped() bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	return in.stopping
 }
 
-func (in *inputTransport) readLoop(ctx context.Context) {
+func (in *InputTransport) readLoop(ctx context.Context) {
 	defer in.readWG.Done()
 	defer in.reportPeerGone(ctx)
 	for {
@@ -601,7 +652,7 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 // read that ends because this side stopped it is a shutdown already under way,
 // and reporting that would have the endpoint cancel the pipeline in the middle
 // of its own drain, taking the goodbye with it.
-func (in *inputTransport) reportPeerGone(ctx context.Context) {
+func (in *InputTransport) reportPeerGone(ctx context.Context) {
 	if in.stopped() {
 		return
 	}
@@ -609,9 +660,9 @@ func (in *inputTransport) reportPeerGone(ctx context.Context) {
 	in.Events().Call(ctx, EventClientDisconnected, in, struct{}{})
 }
 
-// outputTransport serializes outbound audio and control frames and writes them
+// OutputTransport serializes outbound audio and control frames and writes them
 // to the socket.
-type outputTransport struct {
+type OutputTransport struct {
 	*transport.BaseOutput
 	sess   *Session
 	ser    Serializer
@@ -647,14 +698,21 @@ func chunkDuration(chunkSize, sampleRate, numChannels int) time.Duration {
 	return time.Duration(chunkSize) * time.Second / time.Duration(bytesPerSec)
 }
 
-func newOutput(sess *Session, ser Serializer, params Params) *outputTransport {
-	out := &outputTransport{sess: sess, ser: ser, params: params}
-	out.BaseOutput = transport.NewBaseOutput("WSOutput", params.Params, out)
+// NewOutputTransport builds the output of t, over its session and with its
+// serializer. self is the output built on the returned one, which embeds it and
+// is what the pipeline runs, so it can handle frames of its own around this
+// one's; nil makes the output its own. Give the output to t with SetOutput.
+func NewOutputTransport(t *Transport, self transport.OutputDriver) *OutputTransport {
+	out := &OutputTransport{sess: t.sess, ser: t.ser, params: t.params}
+	if self == nil {
+		self = out
+	}
+	out.BaseOutput = transport.NewBaseOutput("WSOutput", t.params.Params, self)
 	return out
 }
 
 // WriteAudio serializes a PCM chunk to a provider media message and sends it.
-func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
+func (out *OutputTransport) WriteAudio(ctx context.Context, f frames.OutputAudioFrame) (bool, error) {
 	if out.sess.closed() {
 		// The client is gone. The audio is not heard, but nothing failed, so it
 		// is reported as unsent rather than as an error the pipeline reports on.
@@ -690,7 +748,7 @@ func (out *outputTransport) WriteAudio(ctx context.Context, f frames.OutputAudio
 // write sends one wire message, framing binary payloads at a fixed size when the
 // endpoint asked for that. Whatever does not fill a packet is held back until
 // the next payload completes it, so the endpoint never sees a short frame.
-func (out *outputTransport) write(ctx context.Context, msg Message) error {
+func (out *OutputTransport) write(ctx context.Context, msg Message) error {
 	size := out.params.FixedAudioPacketSize
 	if size <= 0 || !msg.Binary {
 		return out.sess.write(ctx, msg)
@@ -718,7 +776,7 @@ func (out *outputTransport) write(ctx context.Context, msg Message) error {
 // dropBufferedPacket throws away audio that has not filled a whole packet. A
 // barge-in cuts what the bot was saying, and holding the tail of it would splice
 // it onto the front of whatever is said next.
-func (out *outputTransport) dropBufferedPacket() {
+func (out *OutputTransport) dropBufferedPacket() {
 	out.packetMu.Lock()
 	out.packetBuffer = nil
 	out.packetMu.Unlock()
@@ -726,7 +784,7 @@ func (out *outputTransport) dropBufferedPacket() {
 
 // writeAudioSleep blocks until the next chunk is due, so audio leaves at the
 // rate it plays rather than the rate it is produced.
-func (out *outputTransport) writeAudioSleep(ctx context.Context) {
+func (out *OutputTransport) writeAudioSleep(ctx context.Context) {
 	out.paceMu.Lock()
 	interval, next := out.sendInterval, out.nextSend
 	out.paceMu.Unlock()
@@ -763,27 +821,39 @@ func (out *outputTransport) writeAudioSleep(ctx context.Context) {
 // SendMessage hands the message frame to the serializer and writes what it
 // produces. The serializer decides both whether the message belongs on this wire
 // and how it is encoded, which is the same path an audio frame takes.
-func (out *outputTransport) SendMessage(ctx context.Context, f frames.OutputTransportMessage) error {
+func (out *OutputTransport) SendMessage(ctx context.Context, f frames.OutputTransportMessage) error {
+	_, err := out.WriteFrame(ctx, f)
+	return err
+}
+
+// WriteFrame serializes a frame and writes what the serializer produces. It
+// reports whether the transport took the frame: a serializer that emits nothing
+// for it has still taken it, while a connection that is closed or goes away
+// while writing has not, without that being an error.
+func (out *OutputTransport) WriteFrame(ctx context.Context, f frames.Frame) (bool, error) {
 	if out.sess.closed() {
-		return nil
+		return false, nil
 	}
 	msg, err := out.ser.Serialize(f)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if msg.Empty() {
 		// The serializer had nothing to send for this frame.
-		return nil
+		return true, nil
 	}
-	if err := out.write(ctx, msg); err != nil && !gone(err) {
-		return err
+	if err := out.write(ctx, msg); err != nil {
+		if gone(err) {
+			return false, nil
+		}
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 // Setup takes the output's hold on the connection, so that it is not closed
 // under the output while there is still audio to send. See Session.
-func (out *outputTransport) Setup(ctx context.Context, s processor.Setup) error {
+func (out *OutputTransport) Setup(ctx context.Context, s processor.Setup) error {
 	out.holdOnce.Do(out.sess.hold)
 	return out.BaseOutput.Setup(ctx, s)
 }
@@ -792,18 +862,15 @@ func (out *outputTransport) Setup(ctx context.Context, s processor.Setup) error 
 // end or cancel frame. It is the backstop: the ordinary path releases as that
 // frame arrives, so the connection closes once the last of the audio is out
 // rather than waiting for the pipeline to be torn down.
-func (out *outputTransport) Cleanup(ctx context.Context) error {
+func (out *OutputTransport) Cleanup(ctx context.Context) error {
 	err := out.BaseOutput.Cleanup(ctx)
 	out.releaseOnce.Do(out.sess.release)
 	return err
 }
 
-// ProcessFrame adds the control-frame handling the base output does not: an
-// interruption becomes the provider's "clear" message (barge-in), and end or
-// cancel triggers the serializer's hang-up.
 // StartWriting sets the playout clock. The base has sized the chunks by the time
 // it calls this, so the interval can be derived from them.
-func (out *outputTransport) StartWriting(context.Context) error {
+func (out *OutputTransport) StartWriting(context.Context) error {
 	out.paceMu.Lock()
 	defer out.paceMu.Unlock()
 	out.sendInterval = chunkDuration(out.ChunkSize(), out.SampleRate(), channels(out.Params().AudioOutChannels))
@@ -811,7 +878,10 @@ func (out *outputTransport) StartWriting(context.Context) error {
 	return nil
 }
 
-func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+// ProcessFrame adds the control-frame handling the base output does not: an
+// interruption becomes the provider's "clear" message (barge-in), and end or
+// cancel triggers the serializer's hang-up.
+func (out *OutputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := out.BaseOutput.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -846,12 +916,6 @@ func (out *outputTransport) ProcessFrame(ctx context.Context, f frames.Frame, di
 
 // sendControl serializes a control frame to the provider's own message, if the
 // serializer has one for it, and sends it.
-func (out *outputTransport) sendControl(ctx context.Context, f frames.Frame) {
-	if out.sess.closed() {
-		return
-	}
-	msg, err := out.ser.Serialize(f)
-	if err == nil && !msg.Empty() {
-		_ = out.write(ctx, msg)
-	}
+func (out *OutputTransport) sendControl(ctx context.Context, f frames.Frame) {
+	_, _ = out.WriteFrame(ctx, f)
 }
