@@ -355,6 +355,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   connections offer only VP8 and H.264 for video, negotiate the media id
   header extension, send NACKs and RTCP reports, and ask a client that
   offered video to renegotiate once the pipeline connects.
+- **Vision and video examples.** The `get_image` function-calling examples
+  for Gemini (plus its async variant), Anthropic, Claude on Bedrock and
+  OpenAI (chat, Responses, Responses over HTTP) look at the user's camera; the
+  `vision-*` examples open with an image and a question about it;
+  `05-speaking-state` shows one image while the bot speaks and another while
+  it waits; `video-processing-mirror` sends the user's audio and camera back.
 
 ### Changed
 

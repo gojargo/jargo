@@ -20,12 +20,13 @@ Each step adds one idea to the one before. The bots run on the
 | [`01-say-one-thing`](getting-started/01-say-one-thing) | Speak one sentence to whoever connects, then hang up. | Cartesia |
 | [`01a-local-audio`](getting-started/01a-local-audio) | The same through the local speaker, no browser. | Cartesia |
 | [`02-llm-say-one-thing`](getting-started/02-llm-say-one-thing) | An LLM writes the sentence. | OpenAI, Cartesia |
+| [`05-speaking-state`](getting-started/05-speaking-state) | The voice agent shows one image as video while it speaks and another while it waits. | Deepgram, OpenAI, Cartesia |
 | [`06-voice-agent`](getting-started/06-voice-agent) | A full voice agent: speech-to-text, LLM, text-to-speech, with VAD. | Deepgram, OpenAI, Cartesia |
 | [`06a-voice-agent-local`](getting-started/06a-voice-agent-local) | The voice agent on the local microphone and speaker. | Deepgram, OpenAI, Cartesia |
 | [`07-function-calling`](getting-started/07-function-calling) | The voice agent with tools the LLM calls. | Deepgram, OpenAI, Cartesia |
 
 The numbering follows the getting-started series these are ported from. Steps
-03 to 05 show images and video, which jargo's transports do not carry, so they
+03, 03a and 04 need image generation services jargo does not have yet, so they
 are not here.
 
 ## Voice
@@ -101,14 +102,19 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-anthropic`](function-calling/function-calling-anthropic) | Anthropic | Deepgram, Cartesia |
 | [`function-calling-anthropic-async`](function-calling/function-calling-anthropic-async) | Anthropic, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | Deepgram, Cartesia |
 | [`function-calling-anthropic-async-stream`](function-calling/function-calling-anthropic-async-stream) | Anthropic, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
+| [`function-calling-anthropic-video`](function-calling/function-calling-anthropic-video) | Anthropic, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-advanced-functionschema`](function-calling/function-calling-advanced-functionschema) | OpenAI, with a tool schema written out by hand (an enum parameter) | OpenAI realtime transcription, OpenAI |
 | [`function-calling-aws`](function-calling/function-calling-aws) | Claude on AWS Bedrock | AWS Transcribe, AWS Polly |
+| [`function-calling-aws-video`](function-calling/function-calling-aws-video) | Claude on AWS Bedrock, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-azure`](function-calling/function-calling-azure) | Azure OpenAI | Deepgram, Cartesia |
 | [`function-calling-cerebras`](function-calling/function-calling-cerebras) | Cerebras | Deepgram, Cartesia |
 | [`function-calling-deepseek`](function-calling/function-calling-deepseek) | DeepSeek | Deepgram, Cartesia |
 | [`function-calling-direct`](function-calling/function-calling-direct) | OpenAI, with tools that carry their own handlers | Deepgram, Cartesia |
 | [`function-calling-fireworks`](function-calling/function-calling-fireworks) | Fireworks AI | Deepgram, Cartesia |
+| [`function-calling-google`](function-calling/function-calling-google) | Google Gemini, with a tool that looks at the user's camera | Deepgram, Cartesia |
+| [`function-calling-google-async`](function-calling/function-calling-google-async) | Google Gemini, with tools that run while the conversation goes on, a deadline, one the LLM can cancel, and a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-google-async-stream`](function-calling/function-calling-google-async-stream) | Google Gemini, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
+| [`function-calling-google-video`](function-calling/function-calling-google-video) | Google Gemini, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-google-vertex`](function-calling/function-calling-google-vertex) | Gemini on Google Vertex AI | Deepgram, ElevenLabs |
 | [`function-calling-grok`](function-calling/function-calling-grok) | xAI Grok | Deepgram, xAI |
 | [`function-calling-groq`](function-calling/function-calling-groq) | Groq | Groq, Cartesia |
@@ -121,10 +127,13 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-openai`](function-calling/function-calling-openai) | OpenAI | OpenAI realtime transcription, OpenAI |
 | [`function-calling-openai-async`](function-calling/function-calling-openai-async) | OpenAI, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | OpenAI realtime transcription, OpenAI |
 | [`function-calling-openai-async-stream`](function-calling/function-calling-openai-async-stream) | OpenAI, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
+| [`function-calling-openai-video`](function-calling/function-calling-openai-video) | OpenAI, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-openai-responses`](function-calling/function-calling-openai-responses) | OpenAI Responses API | Deepgram, Cartesia |
 | [`function-calling-openai-responses-async`](function-calling/function-calling-openai-responses-async) | OpenAI Responses API, with tools that run while the conversation goes on, a deadline, and one the LLM can cancel | Deepgram, Cartesia |
 | [`function-calling-openai-responses-async-stream`](function-calling/function-calling-openai-responses-async-stream) | OpenAI Responses API, with a tool that reports intermediate results while it runs | Deepgram, Cartesia |
 | [`function-calling-openai-responses-http`](function-calling/function-calling-openai-responses-http) | OpenAI Responses API over HTTP | Deepgram, Cartesia |
+| [`function-calling-openai-responses-video`](function-calling/function-calling-openai-responses-video) | OpenAI's Responses API, with a tool that looks at the user's camera | Deepgram, Cartesia |
+| [`function-calling-openai-responses-video-http`](function-calling/function-calling-openai-responses-video-http) | OpenAI's Responses API over HTTP, with a tool that looks at the user's camera | Deepgram, Cartesia |
 | [`function-calling-openrouter`](function-calling/function-calling-openrouter) | OpenRouter | Deepgram, Azure |
 | [`function-calling-perplexity`](function-calling/function-calling-perplexity) | Perplexity Agent API | Deepgram, Cartesia |
 | [`function-calling-qwen`](function-calling/function-calling-qwen) | Qwen | Deepgram, Cartesia |
@@ -174,6 +183,27 @@ too, for the user aggregator's default turn strategies.
 | [`mcp-stdio`](mcp/mcp-stdio) | Tools from the memory MCP server, started over stdio with npx. Needs Node.js. | Deepgram, Anthropic, Cartesia |
 | [`mcp-streamable-http`](mcp/mcp-streamable-http) | Tools from GitHub's MCP server over streamable HTTP, authenticated with a header. | GitHub, Deepgram, Google AI, Cartesia |
 | [`mcp-multiple-mcp`](mcp/mcp-multiple-mcp) | Tools from two MCP servers at once: memory over stdio and GitHub over streamable HTTP. | GitHub, Deepgram, Anthropic, Cartesia |
+
+## Vision
+
+An image and a question about it open the conversation, read from the session
+body (`image_path`, `question`) and defaulting to [`assets/cat.jpg`](vision/assets/cat.jpg);
+the bot describes the image, then talks by voice.
+
+| Example | LLM | Keys |
+| --- | --- | --- |
+| [`vision-anthropic`](vision/vision-anthropic) | Anthropic | Deepgram, Anthropic, Cartesia |
+| [`vision-aws`](vision/vision-aws) | Claude on AWS Bedrock | Deepgram, AWS, Cartesia |
+| [`vision-gemini-flash`](vision/vision-gemini-flash) | Google Gemini | Deepgram, Google AI, Cartesia |
+| [`vision-openai`](vision/vision-openai) | OpenAI | Deepgram, OpenAI, Cartesia |
+| [`vision-openai-responses`](vision/vision-openai-responses) | OpenAI Responses API | Deepgram, OpenAI, Cartesia |
+| [`vision-openai-responses-http`](vision/vision-openai-responses-http) | OpenAI Responses API over HTTP | Deepgram, OpenAI, Cartesia |
+
+## Video processing
+
+| Example | What it shows | Keys |
+| --- | --- | --- |
+| [`video-processing-mirror`](video-processing/video-processing-mirror) | Sends the user's audio and camera straight back to them. | None |
 
 ## Transports
 
