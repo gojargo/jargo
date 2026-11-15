@@ -692,6 +692,26 @@ func TestResolveFlags(t *testing.T) {
 	}
 }
 
+// TestDeprecatedEvalTransportOption covers `-t eval`: it is accepted, and the
+// server runs as it does without `-t`, every transport served, since an eval
+// harness connects to /ws.
+func TestDeprecatedEvalTransportOption(t *testing.T) {
+	t.Setenv("JARGO_ICE_SERVERS", "")
+	t.Setenv("JARGO_ALLOWED_ORIGINS", "")
+	fs := flag.NewFlagSet("bot", flag.ContinueOnError)
+	raw := addFlags(fs)
+	if err := fs.Parse([]string{"-t", "eval"}); err != nil {
+		t.Fatal(err)
+	}
+	args, err := raw.resolve()
+	if err != nil {
+		t.Fatalf("`-t eval` refused: %v", err)
+	}
+	if args.Transport != "" {
+		t.Fatalf("transport = %q, want none", args.Transport)
+	}
+}
+
 // TestRunServesUntilCanceled covers the entry point: it parses its flags,
 // serves, and shuts down when its context ends.
 func TestRunServesUntilCanceled(t *testing.T) {

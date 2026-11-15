@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/transport/livekit"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
 	"github.com/gojargo/jargo/transport/wsserver/exotel"
 	"github.com/gojargo/jargo/transport/wsserver/plivo"
 	"github.com/gojargo/jargo/transport/wsserver/telnyx"
@@ -25,6 +26,9 @@ const (
 	transportPlivo   = "plivo"
 	transportExotel  = "exotel"
 	transportUnknown = "unknown"
+	// transportEval is an eval harness, recognized from its eval-connect
+	// message rather than a provider's handshake.
+	transportEval = "eval"
 )
 
 // ErrHandshakeClosed is returned when a telephony WebSocket closes before it
@@ -67,6 +71,14 @@ type TransportParams struct {
 	Telnyx    func() WebSocketParams
 	Plivo     func() WebSocketParams
 	Exotel    func() WebSocketParams
+	// Eval configures the transport an eval harness connecting to /ws gets. A
+	// nil Serializer defaults to the eval serializer, so a bot only has to opt
+	// in:
+	//
+	//	Eval: func() evalws.TransportParams {
+	//		return evalws.TransportParams{Params: wsserver.DefaultParams()}
+	//	},
+	Eval func() evalws.TransportParams
 }
 
 // missingParams reports a transport with no parameters configured.
@@ -99,6 +111,20 @@ func (p TransportParams) webSocketParams(key string) (WebSocketParams, error) {
 	}
 	slog.Debug("runner: using transport params", "transport", key)
 	return build(), nil
+}
+
+// evalTransportParams returns the eval transport's parameters, with its
+// serializer defaulted, so a bot only has to opt into the eval transport.
+func (p TransportParams) evalTransportParams() (evalws.TransportParams, error) {
+	if p.Eval == nil {
+		return evalws.TransportParams{}, missingParams(transportEval, "Eval")
+	}
+	slog.Debug("runner: using transport params", "transport", transportEval)
+	params := p.Eval()
+	if params.Serializer == nil {
+		params.Serializer = evalws.NewSerializer()
+	}
+	return params, nil
 }
 
 // field reads one string field of a JSON object, or "".
@@ -142,6 +168,34 @@ func detectTransportType(message map[string]any) string {
 	return transportUnknown
 }
 
+// parseEvalConnect returns the eval flags of an eval-connect message, or nil
+// for any other message.
+func parseEvalConnect(message map[string]any) *evalws.ConnectionFlags {
+	// A cheap check first, so a provider's handshake is not looked at further.
+	if field(message, "type") != "client-message" {
+		return nil
+	}
+	return evalws.ParseConnect(message)
+}
+
+// evalFlagsBody is the connection's eval flags as the call data's body.
+func evalFlagsBody(flags *evalws.ConnectionFlags) map[string]any {
+	return map[string]any{
+		"skip_tts":           flags.SkipTTS,
+		"capture_bot_audio":  flags.CaptureBotAudio,
+		"capture_bot_images": flags.CaptureBotImages,
+	}
+}
+
+// evalFlags reads the connection's eval flags back from the call data's body.
+func evalFlags(body map[string]any) evalws.ConnectionFlags {
+	var flags evalws.ConnectionFlags
+	flags.SkipTTS, _ = body["skip_tts"].(bool)
+	flags.CaptureBotAudio, _ = body["capture_bot_audio"].(bool)
+	flags.CaptureBotImages, _ = body["capture_bot_images"].(bool)
+	return flags
+}
+
 // readMessage reads the next message as a JSON object. A message that is not
 // one reads as an empty object.
 func readMessage(ctx context.Context, args *WebSocketRunnerArguments) (map[string]any, error) {
@@ -164,7 +218,14 @@ func readMessage(ctx context.Context, args *WebSocketRunnerArguments) (map[strin
 // reports which provider it is and what it says about the call.
 //
 // It reads the first message, which is required, and a second one, which some
-// providers never send. It is idempotent: the messages it reads are gone from
+// providers never send.
+//
+// An eval harness is recognized from its first message alone, an eval-connect:
+// the transport type is "eval" and the call data's Body holds the connection's
+// eval flags. No second message is read, so the harness's next message reaches
+// the eval transport.
+//
+// It is idempotent: the messages it reads are gone from
 // the socket, so the first parse is kept on args and returned again, and the
 // transport CreateTransport builds is handed the messages to deserialize first.
 func ParseTelephonyWebSocket(ctx context.Context, args *WebSocketRunnerArguments) (string, *CallData, error) {
@@ -178,6 +239,11 @@ func parseTelephonyWebSocket(ctx context.Context, args *WebSocketRunnerArguments
 	first, err := readMessage(ctx, args)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: %w", ErrHandshakeClosed, err)
+	}
+
+	if flags := parseEvalConnect(first); flags != nil {
+		slog.Debug("runner: detected transport from the first message", "transport", transportEval)
+		return transportEval, &CallData{Body: evalFlagsBody(flags)}, nil
 	}
 
 	second, err := readMessage(ctx, args)
@@ -284,10 +350,12 @@ func createTelephonyTransport(args *WebSocketRunnerArguments, params WebSocketPa
 // CreateTransport builds the transport for a session from the arguments the
 // runner handed the bot, configured by params.
 //
-// A WebSocket session that is not a plain WebSocket client is a telephony call:
-// its provider is detected from its first messages, and args.TransportType and
-// args.CallData are set from what they say, so the bot can personalize the
-// call without parsing them again.
+// A WebSocket session that is not a plain WebSocket client is a telephony call
+// or an eval harness: its provider is detected from its first messages, and
+// args.TransportType and args.CallData are set from what they say, so the bot
+// can personalize the call without parsing them again. An eval harness gets the
+// eval transport, configured by params.Eval, with the flags its eval-connect
+// message carried.
 func CreateTransport(ctx context.Context, args Arguments, params TransportParams) (transport.Transport, error) {
 	switch a := args.(type) {
 	case *WebRTCRunnerArguments:
@@ -313,6 +381,17 @@ func CreateTransport(ctx context.Context, args Arguments, params TransportParams
 		}
 		a.TransportType = transportType
 		a.CallData = data
+
+		if transportType == transportEval {
+			p, perr := params.evalTransportParams()
+			if perr != nil {
+				return nil, perr
+			}
+			// The eval-connect the parse read is handed over like a provider's
+			// handshake; the eval serializer consumes it.
+			return evalws.NewTransport(a.WebSocket, p, evalFlags(data.Body), a.takeConsumed()...), nil
+		}
+
 		p, err := params.webSocketParams(transportType)
 		if err != nil {
 			return nil, err

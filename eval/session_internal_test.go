@@ -18,7 +18,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/transport/wsserver/rtviws"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
 
 // fakeRTVIServer is a minimal RTVI WebSocket bot with scripted replies. It
@@ -176,11 +176,11 @@ func TestNoEvalContextMessageIsSentWhenTheContextIsEmpty(t *testing.T) {
 	if err != nil || !res.Passed() {
 		t.Fatalf("run = %v, %v", res, err)
 	}
-	clientMessages := bot.messages(typeClientMessage)
+	clientMessages := bot.messages(rtvi.TypeClientMessage)
 	for _, in := range clientMessages {
 		var d clientMessageData
 		_ = json.Unmarshal(in.Data, &d)
-		if d.T == evalContextMessage {
+		if d.T == evalws.ContextMessageType {
 			t.Fatalf("an empty context was sent: %s", in.Data)
 		}
 	}
@@ -479,17 +479,17 @@ func TestUserAudioIsPacedThenFollowedBySilence(t *testing.T) {
 	const chunkBytes = 16000 * audioChunkMS / 1000 * 2
 	utterance := bytes.Repeat([]byte{0x01, 0x02}, 16000*12/100)
 	wantChunks := len(utterance)/chunkBytes + silenceTailMS/audioChunkMS
-	in := bot.messages(rtviws.TypeRawAudio)
+	in := bot.messages(rtvi.TypeRawAudio)
 	if len(in) != wantChunks {
 		t.Fatalf("the bot got %d frames, want %d", len(in), wantChunks)
 	}
 	var chunks [][]byte
 	for _, m := range in {
-		var d rtviws.RawAudioData
+		var d rtvi.RawAudioData
 		if err := json.Unmarshal(m.Data, &d); err != nil {
 			t.Fatal(err)
 		}
-		pcm, err := base64.StdEncoding.DecodeString(d.Audio)
+		pcm, err := base64.StdEncoding.DecodeString(d.Base64Audio)
 		if err != nil {
 			t.Fatal(err)
 		}

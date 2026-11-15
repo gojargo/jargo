@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
 	"github.com/livekit/protocol/auth"
 )
 
@@ -172,6 +174,71 @@ func TestCreateTransportExposesCallData(t *testing.T) {
 	}
 	if !args.consumedTaken || len(args.consumed) != 2 {
 		t.Fatalf("the transport was not handed the %d messages the parse read", len(args.consumed))
+	}
+}
+
+// TestParseEvalConnectDetectedFromFirstMessage covers an eval harness: its
+// eval-connect is recognized from the first message, and the call data's body
+// carries its flags.
+func TestParseEvalConnectDetectedFromFirstMessage(t *testing.T) {
+	flags := evalws.ConnectionFlags{SkipTTS: true, CaptureBotAudio: true}
+	typ, data, err := parse(t, evalws.ConnectMessage(flags))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typ != "eval" || evalFlags(data.Body) != flags {
+		t.Fatalf("got %s %+v, want eval with %+v", typ, data, flags)
+	}
+}
+
+// TestParseEvalConnectLeavesTheNextMessageUnread covers the harness's
+// client-ready, which follows eval-connect and must reach the bot.
+func TestParseEvalConnectLeavesTheNextMessageUnread(t *testing.T) {
+	args := telephonySocket(t, evalws.ConnectMessage(evalws.ConnectionFlags{}), `{"type":"client-ready"}`)
+	if _, _, err := ParseTelephonyWebSocket(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if len(args.consumed) != 1 {
+		t.Fatalf("the parse read %d messages, want only the eval-connect", len(args.consumed))
+	}
+}
+
+func TestCreateTransportEvalConnectBuildsTheEvalTransportWithItsFlags(t *testing.T) {
+	flags := evalws.ConnectionFlags{SkipTTS: true, CaptureBotAudio: true}
+	args := telephonySocket(t, evalws.ConnectMessage(flags))
+
+	tr, err := CreateTransport(context.Background(), args, TransportParams{
+		Eval: func() evalws.TransportParams { return evalws.TransportParams{Params: wsserver.DefaultParams()} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	evalTr, ok := tr.(*evalws.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want the eval transport", tr)
+	}
+	if args.TransportType != "eval" {
+		t.Fatalf("transport type = %q, want eval", args.TransportType)
+	}
+	ser, ok := evalTr.Params().Serializer.(*evalws.Serializer)
+	if !ok {
+		t.Fatalf("serializer = %T, want the eval serializer", evalTr.Params().Serializer)
+	}
+	// The bot's audio is captured: it goes out to the harness.
+	out, err := ser.Serialize(frames.NewOutputAudioRawFrame([]byte{0, 0}, 16000, 1))
+	if err != nil || out.Empty() {
+		t.Fatalf("bot audio = %q, %v, want it captured", out.Data, err)
+	}
+}
+
+func TestCreateTransportEvalConnectWithoutEvalParamsFails(t *testing.T) {
+	args := telephonySocket(t, evalws.ConnectMessage(evalws.ConnectionFlags{}))
+	_, err := CreateTransport(context.Background(), args, TransportParams{
+		Twilio: func() WebSocketParams { return WebSocketParams{Params: wsserver.DefaultParams()} },
+	})
+	if !errors.Is(err, ErrMissingTransportParams) || !strings.Contains(err.Error(), `"eval"`) {
+		t.Fatalf("err = %v, want it to name the missing eval params", err)
 	}
 }
 

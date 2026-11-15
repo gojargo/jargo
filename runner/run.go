@@ -1335,7 +1335,8 @@ func addFlags(fs *flag.FlagSet) *rawFlags {
 	fs.StringVar(&a.Host, "host", defaultHost, "Host address")
 	fs.IntVar(&a.Port, "port", 7860, "Port number")
 	transportUsage := "Restrict the server to a single transport (webrtc, websocket, livekit, twilio, telnyx, " +
-		"plivo, exotel) and set it as the default for /start. Omit to support all transports."
+		"plivo, exotel) and set it as the default for /start. Omit to support all transports. " +
+		"`-t eval` is deprecated and ignored: an eval harness connects to the server's /ws route."
 	fs.StringVar(&a.Transport, "transport", "", transportUsage)
 	fs.StringVar(&a.Transport, "t", "", transportUsage)
 	fs.StringVar(&a.Proxy, "proxy", "", "Public proxy host name")
@@ -1385,6 +1386,12 @@ var ErrInvalidArgs = errors.New("runner: invalid arguments")
 func (f *rawFlags) resolve() (*Args, error) {
 	a := f.args
 	a.Verbose = int(f.verbose)
+	// An eval harness connects to the WebSocket routes the server always has.
+	if a.Transport == transportEval {
+		slog.Warn("runner: `-t eval` is deprecated and will be removed. " +
+			"Run the bot without `-t`; the eval harness connects to ws://<host>:<port>/ws.")
+		a.Transport = ""
+	}
 	if a.Transport != "" && !supportedTransports[a.Transport] {
 		return nil, fmt.Errorf("%w: transport %q is not supported; choose one of webrtc, websocket, livekit, "+
 			"twilio, telnyx, plivo, exotel", ErrInvalidArgs, a.Transport)

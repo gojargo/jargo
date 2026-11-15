@@ -93,6 +93,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   longer sent as `en-US`.
 - **`tts.ChunkSize`** gives the half-second frame size a provider that
   downloads its audio cuts it into.
+- **The runner hosts a bot for the eval harness.** A client that connects
+  to the runner's `/ws` and sends `eval-connect` as its first message gets
+  the eval transport (`transport/wsserver/evalws`), built from
+  `runner.TransportParams.Eval`. The connect message carries the session's
+  flags: `skip_tts` silences the bot's speech before the client-connected
+  handlers run, and `capture_bot_audio` sends the bot's audio back as
+  `eval-bot-audio`. The eval serializer also takes `eval-cancel` (cancel the
+  worker) and stores an `eval-image`. `-t eval` is accepted and deprecated:
+  the runner always serves the route. **Breaking:** `eval.Handler` forwards
+  `raw-audio` to the RTVI processor, which takes the standard payload
+  (`base64Audio`, `sampleRate`, `numChannels`), so that processor must sit
+  upstream of the input transport, as the worker places it.
 
 ### Changed
 

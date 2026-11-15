@@ -12,6 +12,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
 
 // Bot builds the bot's pipeline task around the harness-provided transport
@@ -92,22 +93,34 @@ func Host(ctx context.Context, scenario *Scenario, buildBot Bot, opts Options) (
 }
 
 // Handler serves buildBot over RTVI on a plain WebSocket: it accepts one client
-// per connection, wires the transport into the bot's pipeline, and runs it until
-// the client disconnects. Mount it in a bot's own HTTP server to expose an eval
-// endpoint that `jargo eval run`, or any RTVI WebSocket client, can drive. The
-// in-process Host uses it too.
+// per connection, wires the eval transport into the bot's pipeline, and runs it
+// until the client disconnects. Mount it in a bot's own HTTP server to expose an
+// eval endpoint that `jargo eval run`, or any RTVI WebSocket client, can drive.
+// The in-process Host uses it too.
 //
 // The endpoint speaks RTVI through the eval serializer, which additionally
 // understands the harness's own control messages. Serving the bot's production
 // RTVI endpoint to the harness instead works, but a scenario asserting on tool
 // arguments will not see them: raising the report level is deliberately
 // something only this serializer allows.
+//
+// The harness sets each connection's flags on its URL (see
+// evalws.SkipTTSQueryParam and the parameters beside it), and they apply to that
+// connection alone. A bot run under the development runner needs none of this:
+// the harness connects to the runner's /ws, and runner.CreateTransport builds
+// the same transport from its eval-connect message.
 func Handler(buildBot Bot) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tr, err := wsserver.Accept(w, r, newSerializer(), wsserver.DefaultParams())
+		params := evalws.TransportParams{Params: wsserver.DefaultParams(), Serializer: evalws.NewSerializer()}
+		conn, err := wsserver.AcceptConn(w, r, params.Params)
 		if err != nil {
 			return
 		}
+		tr := evalws.NewTransport(conn, params, evalws.ConnectionFlags{
+			SkipTTS:          evalws.QueryFlag(r, evalws.SkipTTSQueryParam),
+			CaptureBotAudio:  evalws.QueryFlag(r, evalws.CaptureAudioQueryParam),
+			CaptureBotImages: evalws.QueryFlag(r, evalws.CaptureImagesQueryParam),
+		})
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		go func() {

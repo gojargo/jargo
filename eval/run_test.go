@@ -1,10 +1,78 @@
 package eval_test
 
 import (
+	"context"
+	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/eval"
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 )
+
+// outputSettings reports the LLM output settings that reach the bot's pipeline.
+type outputSettings struct {
+	*processor.Base
+	seen chan<- bool
+}
+
+func (o *outputSettings) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := o.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if c, ok := f.(*frames.LLMConfigureOutputFrame); ok {
+		o.seen <- c.SkipTTS
+	}
+	return o.PushFrame(ctx, f, dir)
+}
+
+// TestHandlerConfiguresEachConnectionsOutput covers a handler serving several
+// connections in a row: each gets the output setting its own URL asks for, an
+// audio connection after a text one included, whether it says so or not.
+func TestHandlerConfiguresEachConnectionsOutput(t *testing.T) {
+	for _, audioPath := range []string{"/", "/?skip_tts=false"} {
+		t.Run(audioPath, func(t *testing.T) {
+			seen := make(chan bool, 4)
+			srv := httptest.NewServer(eval.Handler(func(in, out processor.Processor) *pipeline.Worker {
+				o := &outputSettings{seen: seen}
+				o.Base = processor.New("OutputSettings", o)
+				return pipeline.NewWorker(pipeline.New(in, o, out), pipeline.WorkerConfig{})
+			}))
+			defer srv.Close()
+
+			var observed []bool
+			for _, path := range []string{"/?skip_tts=true", audioPath, "/?skip_tts=true"} {
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				conn, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+path, nil)
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				if err != nil {
+					cancel()
+					t.Fatalf("dial %s: %v", path, err)
+				}
+				select {
+				case skipTTS := <-seen:
+					observed = append(observed, skipTTS)
+				case <-ctx.Done():
+					t.Fatalf("%s: the bot's output was never configured", path)
+				}
+				_ = conn.CloseNow()
+				cancel()
+			}
+
+			// Each connection must see its own session's output setting.
+			if want := []bool{true, false, true}; !slices.Equal(observed, want) {
+				t.Fatalf("skip_tts per connection = %v, want %v", observed, want)
+			}
+		})
+	}
+}
 
 // Tests for the entry points a bot's own test file calls. They stand the bot up
 // on a loopback WebSocket, play the scenario, and report each unmet expectation

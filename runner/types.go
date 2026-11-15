@@ -11,7 +11,8 @@ import (
 
 // CallData is what a telephony provider's opening WebSocket messages say about
 // the call, parsed by ParseTelephonyWebSocket and exposed on the bot's
-// arguments by CreateTransport. Fields a provider does not send stay empty.
+// arguments by CreateTransport. Fields a provider does not send stay empty. For
+// an eval harness only Body is set, to the connection's eval flags.
 type CallData struct {
 	// StreamID is the provider's media-stream identifier.
 	StreamID string `json:"stream_id,omitempty"`
@@ -24,7 +25,7 @@ type CallData struct {
 	// ToNumber is the dialed number.
 	ToNumber string `json:"to,omitempty"`
 	// Body holds the custom parameters the provider sent, such as Twilio's TwiML
-	// stream parameters.
+	// stream parameters, or an eval harness's connection flags.
 	Body map[string]any `json:"body,omitempty"`
 
 	// OutboundEncoding is Telnyx's outbound media encoding.
@@ -92,8 +93,9 @@ type WebSocketRunnerArguments struct {
 	// WebSocket is the accepted connection.
 	WebSocket *websocket.Conn
 	// TransportType is "websocket" for a plain WebSocket client. Empty means a
-	// telephony provider, detected from its first messages; CreateTransport
-	// then sets it to the provider it found (for example "twilio").
+	// telephony provider or an eval harness, detected from its first messages;
+	// CreateTransport then sets it to what it found (for example "twilio", or
+	// "eval").
 	TransportType string
 
 	// The handshake is parsed once, since the messages it reads are gone from

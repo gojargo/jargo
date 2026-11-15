@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,8 +10,8 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/transport/wsserver/rtviws"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -60,7 +61,7 @@ func (s *session) sendUserAudio(ctx context.Context, text string) error {
 	defer ticker.Stop()
 
 	send := func(chunk []byte) error {
-		if err := s.client.send(ctx, rtviws.RawAudio(chunk, rate, 1)); err != nil {
+		if err := s.client.send(ctx, rawAudio(chunk, rate)); err != nil {
 			return err
 		}
 		select {
@@ -85,6 +86,22 @@ func (s *session) sendUserAudio(ctx context.Context, text string) error {
 		}
 	}
 	return nil
+}
+
+// rawAudio builds the RTVI raw-audio message carrying one chunk of 16-bit mono
+// PCM at sampleRate. The bot's RTVI processor decodes it and pushes the audio
+// into its input transport, as it would a live microphone's.
+func rawAudio(pcm []byte, sampleRate int) rtvi.Message {
+	return rtvi.Message{
+		Label: rtvi.MessageLabel,
+		Type:  rtvi.TypeRawAudio,
+		ID:    messageID,
+		Data: rtvi.RawAudioData{
+			Base64Audio: base64.StdEncoding.EncodeToString(pcm),
+			SampleRate:  sampleRate,
+			NumChannels: 1,
+		},
+	}
 }
 
 // synthesize runs ttsService one-shot to render text to PCM, returning the audio

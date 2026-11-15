@@ -137,9 +137,11 @@ func buildAudioBot(in, out processor.Processor) *pipeline.Worker {
 func buildSpeakingBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
+	// The RTVI processor heads the pipeline, so the audio it decodes from the
+	// harness's raw-audio messages flows down into the input transport.
 	return pipeline.NewWorker(pipeline.New(
-		in, newFakeAudioSTT(), agg.User(), newFakeLLM(),
-		tts.New("fakeTTS", fakeSynth{}), rtviProc, out, agg.Assistant(),
+		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(),
+		tts.New("fakeTTS", fakeSynth{}), out, agg.Assistant(),
 	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
 		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},

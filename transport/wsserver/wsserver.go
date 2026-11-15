@@ -172,17 +172,24 @@ var ErrOriginNotAllowed = errors.New("wsserver: origin not allowed")
 // the upgrade, with ErrOriginNotAllowed and no reply written. The caller
 // answers it, so that an endpoint can choose what to tell a rejected client.
 func Accept(w http.ResponseWriter, r *http.Request, ser Serializer, params Params) (*Transport, error) {
+	c, err := AcceptConn(w, r, params)
+	if err != nil {
+		return nil, err
+	}
+	return NewTransport(c, ser, params), nil
+}
+
+// AcceptConn is the upgrade Accept does, origin check included, for a transport
+// built on this one that wants the accepted connection rather than a Transport.
+// Hand the connection to NewTransport, or to that transport's own constructor.
+func AcceptConn(w http.ResponseWriter, r *http.Request, params Params) (*websocket.Conn, error) {
 	if !security.IsOriginAllowed(r.Header.Get("Origin"), params.AllowedOrigins) {
 		return nil, fmt.Errorf("%w: %q", ErrOriginNotAllowed, r.Header.Get("Origin"))
 	}
 	// The origins are checked above rather than handed to the library, whose own
 	// rule is a different one: it compares the origin's host against the request
 	// host, which turns away a client legitimately served from elsewhere.
-	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
-	if err != nil {
-		return nil, err
-	}
-	return NewTransport(c, ser, params), nil
+	return websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 }
 
 // NewTransport builds a Transport on a WebSocket that has already been
