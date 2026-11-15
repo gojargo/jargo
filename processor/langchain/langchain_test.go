@@ -79,6 +79,9 @@ func runChain(t *testing.T, chain langchain.Chain, in ...frames.Frame) *recorder
 	case <-time.After(5 * time.Second):
 		t.Fatal("pipeline did not finish")
 	}
+	// The reached events are delivered asynchronously, so the recorder is read
+	// only once every one queued has been handled.
+	task.Registry.Cleanup(context.Background())
 	return rec
 }
 
