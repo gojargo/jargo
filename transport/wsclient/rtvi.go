@@ -36,6 +36,9 @@ type RTVITransport struct {
 	mu              sync.Mutex
 	botReady        bool
 	botCapabilities *capabilities.BotCapabilities
+	// opening is what goes out first on every connection, ahead of the
+	// connected event and the handshake.
+	opening []wsserver.Message
 }
 
 // NewRTVITransport builds an RTVI client transport that connects to the bot's
@@ -71,8 +74,25 @@ func (r *RTVITransport) BotCapabilities() *capabilities.BotCapabilities {
 	return r.botCapabilities
 }
 
-// onConnected fires the connected event and starts the RTVI handshake.
+// SetOpeningMessages sets the messages sent first on every connection, ahead
+// of the connected event and the client-ready handshake. A transport built on
+// this one opens the session with messages of its own this way, such as the
+// eval harness's eval-connect. Set them before the pipeline runs.
+func (r *RTVITransport) SetOpeningMessages(messages ...wsserver.Message) {
+	r.mu.Lock()
+	r.opening = append([]wsserver.Message(nil), messages...)
+	r.mu.Unlock()
+}
+
+// onConnected sends the opening messages, fires the connected event and starts
+// the RTVI handshake.
 func (r *RTVITransport) onConnected(ctx context.Context, conn *websocket.Conn) {
+	r.mu.Lock()
+	opening := r.opening
+	r.mu.Unlock()
+	for _, message := range opening {
+		r.session.Send(ctx, message)
+	}
 	r.Transport.onConnected(ctx, conn)
 	r.sendClientReady(ctx)
 }

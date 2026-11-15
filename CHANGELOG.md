@@ -223,6 +223,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Smallest AI LLM** (`smallest.NewLLM`), Electron over the Waves API's
   OpenAI-compatible endpoint, with a `prompt_cache_key` that can change while
   the pipeline runs. Examples: `voice-smallest`, `function-calling-smallest`.
+- **The eval harness drives the bot through a pipeline.** A `Client` on an
+  RTVI client transport opens each connection with `eval-connect` before the
+  `client-ready` handshake, and an `EventStream`, an `ExpectationMatcher`, a
+  `ScriptDriver` and a `ScriptSession` play the scenario, with
+  `SessionParams` for timeouts, the speech cache and the audio support
+  check. Expectations gain `check_from: turn_start`, `function_call_stopped`
+  and the backchannel events; a judge's no stays provisional while the bot
+  is still speaking, and a judge error fails as `judge_no_verdict`; external
+  function calls count as calls; user transcriptions are read from
+  `user-input`; a turn waits for the bot to be quiet before it speaks;
+  `response` in text modality skips the scenario; a bot that hangs up fails
+  as `bot_ended`. `jargo eval run` gains `-t/--timeout`, `-v`, `--cache-dir`
+  and `--no-cache`. **Breaking:** scenario `context:` messages are
+  `{role, content}`, as `eval-context` now carries them; `eval.Event` is
+  removed, events are maps; a scenario with `eval:` checks and no judge
+  given builds its judge from its `judge:` block.
 
 ### Changed
 

@@ -80,7 +80,7 @@ name: turn_completion
 judge: {modality: text}
 context:
   - role: system
-    text: "You are a travel assistant."
+    content: "You are a travel assistant."
 stop_on_failure: false
 
 scenarios:
@@ -92,9 +92,9 @@ scenarios:
     stop_on_failure: true
     context:
       - role: system
-        text: "You are a travel assistant."
+        content: "You are a travel assistant."
       - role: assistant
-        text: "Where would you go?"
+        content: "Where would you go?"
     turns:
       - user: "Japan."
         expect: [{event: response}]
@@ -140,14 +140,14 @@ func TestHeaderKeysAreDefaultsAndAnEntryReplacesAWholeValue(t *testing.T) {
 	short := get[*eval.ScriptScenario](t, file, "turn_completion/short_answer")
 	history := get[*eval.ScriptScenario](t, file, "turn_completion/with_history")
 	// Inherited from the header.
-	if len(short.Context) != 1 || short.Context[0].Text != "You are a travel assistant." {
+	if len(short.Context) != 1 || short.Context[0]["content"] != "You are a travel assistant." {
 		t.Fatalf("context = %+v", short.Context)
 	}
 	if *short.StopOnFailure || short.BotAudio {
 		t.Fatalf("short = %+v", short)
 	}
 	// Replaced as a whole, not merged.
-	if len(history.Context) != 2 || history.Context[1].Role != "assistant" {
+	if len(history.Context) != 2 || history.Context[1]["role"] != "assistant" {
 		t.Fatalf("context = %+v", history.Context)
 	}
 	if !*history.StopOnFailure || history.BotAudio {

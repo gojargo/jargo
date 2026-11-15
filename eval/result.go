@@ -86,8 +86,12 @@ const (
 	RunEventConnect = "<connect>"
 	// RunEventBotReady is a run whose bot never became ready.
 	RunEventBotReady = "<bot-ready>"
-	// RunEventHarness is a run the harness itself failed.
+	// RunEventHarness is a run the harness's own pipeline failed: a service in
+	// it, not the bot.
 	RunEventHarness = "<harness>"
+	// RunEventError is a run an unexpected error in the harness ended, with
+	// its stack in the trace.
+	RunEventError = "<error>"
 )
 
 // AssertionFailure is a single failed assertion within an eval, or a failure

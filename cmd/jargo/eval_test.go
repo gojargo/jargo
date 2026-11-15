@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
@@ -567,5 +568,37 @@ func TestEvalRunBotReadyTimeoutFlag(t *testing.T) {
 	out, _ := runCLI(t, path, "ws"+strings.TrimPrefix(srv.URL, "http"), "--bot-ready-timeout", "0.3")
 	if !strings.Contains(out, "run <bot-ready> handshake_timeout: bot-ready not received within 300ms") {
 		t.Fatalf("output lacks the handshake timeout:\n%s", out)
+	}
+}
+
+// TestEvalRunVerboseAndTimeoutFlags checks -v prints each turn and expectation
+// as it resolves, and -t is the budget of an expectation without its own.
+func TestEvalRunVerboseAndTimeoutFlags(t *testing.T) {
+	srv := httptest.NewServer(eval.Handler(echoBot))
+	defer srv.Close()
+
+	path := writeScenario(t, `
+name: verbose
+turns:
+  - user: "ping"
+    expect:
+      - event: llm_response
+        text_contains: "echo: ping"
+      - event: function_call
+`)
+	start := time.Now()
+	out, err := runCLI(t, path, "ws"+strings.TrimPrefix(srv.URL, "http"), "-v", "-t", "1")
+	if err == nil {
+		t.Fatalf("expected the run to fail\noutput:\n%s", out)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("took %s, want the 1s budget", elapsed)
+	}
+	for _, want := range []string{
+		`turn 0 → "ping"`, "✓ llm_response: echo: ping", `✗ function_call: function call "any function" not seen`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
 	}
 }

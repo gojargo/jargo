@@ -13,6 +13,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // Bot builds the bot's pipeline task around the harness-provided transport
@@ -21,28 +22,34 @@ import (
 // agnostic: the harness supplies a WebSocket transport's input and output.
 type Bot func(in, out processor.Processor) *pipeline.Worker
 
-// Options configures a scenario run.
+// Options configures a scenario run: the services a ScriptSession is given, and
+// its SessionParams.
 type Options struct {
-	// Judge grades `judge:` assertions; nil is fine when no scenario uses one.
-	// It holds the conversation it grades against, so give each scenario its own
-	// rather than reusing one across scenarios.
+	// Judge grades `eval:` assertions. Nil builds one from the scenario's
+	// judge: block when it has any. It holds the conversation it grades
+	// against, so give each scenario its own rather than reusing one across
+	// scenarios.
 	Judge Judge
-	// UserTTS selects audio mode. When set, each user turn is synthesized with
-	// this TTS service and streamed to the bot as microphone audio (so the bot's
-	// real VAD, turn detection and STT run), instead of the text-mode send-text.
-	// Any jargo TTS service works, e.g. cartesia.NewTTS(...).
+	// UserTTS speaks the user's turns. When set, each user turn is synthesized
+	// with this TTS service's synthesizer and streamed to the bot as audio (so
+	// the bot's real VAD, turn detection and STT run), instead of the text-mode
+	// send-text. Nil builds one from the scenario's user: block's speech, if
+	// any. A local or HTTP service works, e.g. a Kokoro or an OpenAI TTS; a
+	// WebSocket-streaming one does not.
 	UserTTS *tts.Base
-	// OnProgress, when set, is called as each turn and expectation resolves, for
-	// a caller reporting a long run as it happens rather than at the end. It runs
-	// on the harness's own goroutine, so keep it quick.
+	// OnProgress, when set, is called as each turn and expectation resolves, in
+	// order, for a caller reporting a long run as it happens rather than at the
+	// end (see EventProgress). Keep it quick: the records queue behind it.
 	OnProgress func(Progress)
+	// Params is how the run behaves: its timeouts, its cache, its audio
+	// support check.
+	Params SessionParams
 	// BotReadyTimeout is how long the bot has, once connected, to answer the
 	// RTVI handshake with bot-ready, which covers the bot's startup; zero uses
-	// DefaultBotReadyTimeout. A bot that closes the connection first fails the
-	// run at once.
+	// Params. A bot that closes the connection first fails the run at once.
 	BotReadyTimeout time.Duration
 	// ConnectTimeout is how long the bot has to accept connections at all
-	// before the run fails to connect; zero uses DefaultConnectTimeout.
+	// before the run fails to connect; zero uses Params.
 	ConnectTimeout time.Duration
 }
 
@@ -83,8 +90,8 @@ func RunWith(t *testing.T, path string, buildBot Bot, opts Options) {
 // that want the Result directly (custom reporting, benchmarks) can use it.
 //
 // What goes wrong with the run itself, a bot that never becomes ready or a
-// harness that fails mid-run, is a failure in the Result, as it is for RunURL.
-// The error is only ctx ending.
+// harness that fails mid-run, is a failure in the Result, and the error is what
+// RunURL returns.
 func Host(ctx context.Context, scenario *Scenario, buildBot Bot, opts Options) (Result, error) {
 	srv := httptest.NewServer(Handler(buildBot))
 	defer srv.Close()
@@ -136,26 +143,44 @@ func Handler(buildBot Bot) http.Handler {
 //
 // A bot that never accepts the connection, refuses it, or never becomes ready
 // is a failure of the Result (a <connect> or <bot-ready> one), and so is the
-// harness failing mid-run (an <error> one), with every turn not reached left
-// TurnNotRun. The error is only ctx ending.
+// harness failing mid-run (an <error> or <harness> one), with every turn not
+// reached left TurnNotRun. The error is ctx ending, or a service the scenario
+// names that cannot be built.
 func RunURL(ctx context.Context, scenario *Scenario, botURL string, opts Options) (Result, error) {
 	return runAgainst(ctx, scenario, botURL, opts)
 }
 
-// runAgainst connects to a bot and plays the scenario.
+// runAgainst plays the scenario against the bot at url, in a ScriptSession.
 func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Options) (Result, error) {
-	// The judge is closed however the run ends, including a run that never
-	// reaches the bot.
-	defer closeJudge(ctx, opts.Judge)
-	sess := &session{
-		scenario:        scenario,
-		judge:           opts.Judge,
-		userTTS:         opts.UserTTS,
-		botReadyTimeout: opts.BotReadyTimeout,
-		connectTimeout:  opts.ConnectTimeout,
-		onProgress:      opts.OnProgress,
+	params := opts.Params
+	if opts.BotReadyTimeout > 0 {
+		params.BotReadyTimeout = opts.BotReadyTimeout
 	}
-	return sess.run(ctx, url)
+	if opts.ConnectTimeout > 0 {
+		params.ConnectTimeout = opts.ConnectTimeout
+	}
+	var userTTS *CachingTTSService
+	if opts.UserTTS != nil {
+		syn := opts.UserTTS.Synthesizer()
+		var err error
+		noCache := false
+		userTTS, err = NewCachingTTSService(syn, CachingTTSConfig{UseCache: &noCache, SampleRate: syn.SampleRate()})
+		if err != nil {
+			closeJudge(ctx, opts.Judge)
+			return Result{ScenarioName: scenario.Name}, err
+		}
+	}
+	session, err := ScriptSessionFromScenario(scenario, url, params, opts.Judge, userTTS)
+	if err != nil {
+		// The session closes its judge however its run ends; one that was never
+		// built closes the caller's here.
+		closeJudge(ctx, opts.Judge)
+		return Result{ScenarioName: scenario.Name}, err
+	}
+	if opts.OnProgress != nil {
+		events.On(&session.Registry, EventProgress, func(_ context.Context, p Progress) { opts.OnProgress(p) })
+	}
+	return session.Run(ctx)
 }
 
 // wsURL rewrites an http(s) base URL to its ws(s) form.

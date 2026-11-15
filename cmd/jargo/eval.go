@@ -36,11 +36,15 @@ func evalCmd() *cobra.Command {
 	return cmd
 }
 
-// evalRunCmd is `jargo eval run` — play scenarios against a running bot.
+// evalRunCmd is `jargo eval run`: play scenarios against a running bot.
 func evalRunCmd() *cobra.Command {
 	var (
 		botURL          string
 		botReadyTimeout float64
+		timeout         int
+		verbose         bool
+		cacheDir        string
+		noCache         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run <scenario.yaml|dir>...",
@@ -49,13 +53,22 @@ func evalRunCmd() *cobra.Command {
 			"for the scenarios directly in it, in name order.\n\n" +
 			"The bot must expose an RTVI WebSocket endpoint (see eval.Handler). Each\n" +
 			"scenario's result is printed; the command exits non-zero if any fail.\n\n" +
-			"Scenarios that use judge: need an LLM judge — enable one with --judge-model.",
+			"A scenario using eval: is judged by the judge its judge: block configures,\n" +
+			"or by the LLM judge --judge-model enables.",
 		Args: cobra.MinimumNArgs(1),
 	}
 	getJudge := addJudgeFlags(cmd.Flags())
 	cmd.Flags().StringVar(&botURL, "bot-url", "", "RTVI WebSocket URL of the running bot (ws:// or wss://)")
 	cmd.Flags().Float64Var(&botReadyTimeout, "bot-ready-timeout", eval.DefaultBotReadyTimeout.Seconds(),
 		"seconds to wait, once connected, for the bot's RTVI bot-ready, which covers the bot's startup")
+	cmd.Flags().IntVarP(&timeout, "timeout", "t", eval.DefaultEventTimeoutMS/1000,
+		"default per-expectation timeout in seconds (for expectations without their own within_ms)")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false,
+		"print a line for each turn and expectation as it resolves")
+	cmd.Flags().StringVar(&cacheDir, "cache-dir", "",
+		"directory for cached synthesized user audio (default <user-cache-dir>/jargo/eval/tts)")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false,
+		"disable the user-audio cache: synthesize every turn again (no reads or writes)")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if botURL == "" {
@@ -86,10 +99,20 @@ func evalRunCmd() *cobra.Command {
 				played++
 				// A fresh judge per scenario: it holds the conversation it grades
 				// against, so one scenario's turns must not reach the next one's.
-				res, err := eval.RunURL(cmd.Context(), scenario, botURL, eval.Options{
-					Judge:           getJudge(),
-					BotReadyTimeout: time.Duration(botReadyTimeout * float64(time.Second)),
-				})
+				useCache := !noCache
+				opts := eval.Options{
+					Judge: getJudge(),
+					Params: eval.SessionParams{
+						BotReadyTimeout:  time.Duration(botReadyTimeout * float64(time.Second)),
+						DefaultTimeoutMS: timeout * 1000,
+						CacheDir:         cacheDir,
+						UseCache:         &useCache,
+					},
+				}
+				if verbose {
+					opts.OnProgress = func(p eval.ScriptTurnProgress) { printProgress(out, p) }
+				}
+				res, err := eval.RunURL(cmd.Context(), scenario, botURL, opts)
 				if err != nil {
 					return fmt.Errorf("%s: %w", scenario.Name, err)
 				}
@@ -175,7 +198,7 @@ func scenarioName(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 
-// evalSuiteCmd is `jargo eval suite` — run a manifest of scenarios concurrently.
+// evalSuiteCmd is `jargo eval suite`: run a manifest of scenarios concurrently.
 func evalSuiteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "suite <manifest.yaml>",
@@ -217,6 +240,28 @@ func evalSuiteCmd() *cobra.Command {
 		return nil
 	}
 	return cmd
+}
+
+// printProgress prints a progress record as it arrives (verbose mode): a line
+// for each turn as it is sent, and for each expectation as it resolves.
+func printProgress(out io.Writer, p eval.ScriptTurnProgress) {
+	if p.Status == eval.StatusTurn {
+		label := "(observe)"
+		if p.EventName != "" {
+			label = fmt.Sprintf("%q", p.EventName)
+		}
+		_, _ = fmt.Fprintf(out, "      turn %d → %s\n", p.TurnIndex, label)
+		return
+	}
+	badge := "✗"
+	if p.Status == eval.StatusMatched {
+		badge = "✓"
+	}
+	line := fmt.Sprintf("        %s %s", badge, p.EventName)
+	if p.Detail != "" {
+		line += ": " + strings.Join(strings.Fields(p.Detail), " ")
+	}
+	_, _ = fmt.Fprintln(out, line)
 }
 
 // printResult prints a scenario's result: its verdict and, for a run that

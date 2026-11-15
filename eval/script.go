@@ -12,7 +12,6 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"gopkg.in/yaml.v3"
 )
 
 // MaxTurnPauseMS is the most a turn's pauses can add up to, in milliseconds. A
@@ -305,19 +304,6 @@ type ScriptTurn struct {
 	Image string
 }
 
-// input is what the turn sends, for a report: the utterance, the keys, or a
-// note that the turn only observes.
-func (t ScriptTurn) input() string {
-	switch {
-	case t.User != "":
-		return t.User
-	case t.DTMF != "":
-		return "dtmf " + t.DTMF
-	default:
-		return "(observe only)"
-	}
-}
-
 // Turn is a scripted turn.
 //
 // Deprecated: Use ScriptTurn instead.
@@ -330,11 +316,12 @@ type ScriptScenario struct {
 	Name string
 	// Turns are played in order.
 	Turns []ScriptTurn
-	// Context is the conversation the bot's context should start from. When
-	// set, the harness sends it once the bot is ready, replacing whatever
-	// context the bot built for itself. Leave it out to test the bot's own
-	// opening state.
-	Context []frames.Message
+	// Context is the conversation the bot's context should start from: LLM
+	// messages in the universal shape, each a role and its content, such as
+	// {"role": "system", "content": "Be terse."}. When set, the harness sends
+	// them once the bot is ready, replacing whatever context the bot built for
+	// itself. Leave it out to test the bot's own opening state.
+	Context []map[string]any
 	// Configured is the scenario's user: and judge: blocks.
 	Configured
 	// TriggerDisconnect is the trigger_disconnect: key.
@@ -517,8 +504,10 @@ func parseScript(data map[string]any, path string) (*ScriptScenario, error) {
 	}, nil
 }
 
-// parseContext reads the context: list as messages.
-func parseContext(raw any, path string) ([]frames.Message, error) {
+// parseContext reads the context: list, LLM messages in the universal shape
+// (a role and its content), kept as written: the harness sends them to the bot
+// as they are.
+func parseContext(raw any, path string) ([]map[string]any, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -526,13 +515,13 @@ func parseContext(raw any, path string) ([]frames.Message, error) {
 	if !ok {
 		return nil, invalidf("%s: 'context:' must be a list of message dicts", path)
 	}
-	encoded, err := yaml.Marshal(list)
-	if err != nil {
-		return nil, invalidf("%s: 'context:' must be a list of message dicts", path)
-	}
-	var messages []frames.Message
-	if err := yaml.Unmarshal(encoded, &messages); err != nil {
-		return nil, invalidf("%s: 'context:' must be a list of message dicts", path)
+	messages := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, invalidf("%s: 'context:' must be a list of message dicts", path)
+		}
+		messages = append(messages, m)
 	}
 	return messages, nil
 }

@@ -683,9 +683,9 @@ func TestHarnessContextSeeded(t *testing.T) {
 name: seeded
 context:
   - role: user
-    text: "remember the number four"
+    content: "remember the number four"
   - role: assistant
-    text: "four, noted"
+    content: "four, noted"
 turns:
   - user: "how many messages do you have?"
     expect:
@@ -965,7 +965,7 @@ turns:
 	if res.Passed() {
 		t.Fatal("the judge rejected the call, so the turn should fail")
 	}
-	if !strings.Contains(res.Failures[0].Reason, `on call "get_weather"`) {
+	if !strings.Contains(res.Failures[0].Reason, `on get_weather(city=Paris, units=celsius): judge said no`) {
 		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
 	}
 	wantKind(t, res, eval.FailureJudgeNo)
@@ -1056,27 +1056,6 @@ turns:
 		t.Fatal("a call the judge would not pass should fail the turn")
 	}
 	wantKind(t, res, eval.FailureJudgeNo)
-}
-
-// A criterion with no judge to answer it is a failed assertion, reported before
-// anything is matched rather than silently passing.
-func TestHarnessReportsAJudgedCallWithNoJudge(t *testing.T) {
-	res := host(t, `
-name: unjudged-call
-turns:
-  - user: "what's the weather in Paris?"
-    expect:
-      - event: function_call
-        name: get_weather
-        eval: "asks about a European capital"
-`)
-	if res.Passed() {
-		t.Fatal("a criterion with no judge should fail")
-	}
-	if !strings.Contains(res.Failures[0].Reason, "no judge") {
-		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
-	}
-	wantKind(t, res, eval.FailureNoJudge)
 }
 
 // TestResultRecordsWhatEachExpectationMatched covers reading a run back once it

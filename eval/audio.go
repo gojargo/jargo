@@ -4,66 +4,45 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
-	"sync"
 	"time"
 
-	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const (
-	// audioChunkMS is the size of each streamed mic frame — the granularity a live
-	// transport delivers, and what VAD and turn models consume.
+	// audioChunkMS is the size of each streamed frame of the user's audio: the
+	// granularity a live transport delivers, and what VAD and turn models
+	// consume.
 	audioChunkMS = 20
-	// silenceTailMS is how much trailing silence follows a user turn's speech, so
-	// the bot's VAD registers the end of the turn.
+	// silenceTailMS is how much silence follows a user turn's speech, so the
+	// bot's VAD registers the end of the turn.
 	silenceTailMS = 1000
 )
 
-// errNoUserAudio is returned when the user TTS produced no audio for a turn.
-//
-//nolint:gochecknoglobals // sentinel error
+// errNoUserAudio is a user turn the user TTS produced no audio for.
 var errNoUserAudio = errors.New("eval: user TTS produced no audio")
 
-// errUserTTS is returned when the user TTS reports an error synthesizing a turn.
+// streamUserAudio streams a user turn's audio to the bot as raw-audio messages,
+// 16-bit mono PCM at sampleRate: frames of audioChunkMS at a real-time cadence,
+// then a tail of silence so the bot's VAD ends the turn. Real-time pacing
+// matters: flooding the whole utterance at once breaks VAD windows and
+// turn-detecting STTs.
 //
-//nolint:gochecknoglobals // sentinel error
-var errUserTTS = errors.New("eval: user TTS failed")
-
-// describeError is what an error frame says: its message, and the error under
-// it when there is one.
-func describeError(ef *frames.ErrorFrame) string {
-	if ef.Err == nil {
-		return ef.Error
-	}
-	return ef.Error + ": " + ef.Err.Error()
-}
-
-// sendUserAudio synthesizes text and streams it to the bot as microphone audio:
-// ~20ms frames at real-time cadence, then a tail of silence so the bot's VAD
-// ends the turn. Real-time pacing matters — flooding the whole utterance at once
-// breaks VAD windows and turn-detecting STTs.
-func (s *session) sendUserAudio(ctx context.Context, text string) error {
-	pcm, rate, err := synthesize(ctx, s.userTTS, text)
-	if err != nil {
-		return err
-	}
-	if rate == 0 || len(pcm) == 0 {
+// It returns once the turn, silence included, has gone out.
+func (c *Client) streamUserAudio(ctx context.Context, pcm []byte, sampleRate int) error {
+	if sampleRate == 0 || len(pcm) == 0 {
 		return errNoUserAudio
 	}
-
-	bytesPerChunk := (rate * audioChunkMS / 1000) * 2 // 16-bit mono
+	bytesPerChunk := (sampleRate * audioChunkMS / 1000) * 2
 	ticker := time.NewTicker(audioChunkMS * time.Millisecond)
 	defer ticker.Stop()
 
 	send := func(chunk []byte) error {
-		if err := s.client.send(ctx, rawAudio(chunk, rate)); err != nil {
-			return err
-		}
+		c.Send(c.message(rtvi.TypeRawAudio, rtvi.RawAudioData{
+			Base64Audio: base64.StdEncoding.EncodeToString(chunk),
+			SampleRate:  sampleRate,
+			NumChannels: 1,
+		}))
 		select {
 		case <-ticker.C:
 			return nil
@@ -73,12 +52,10 @@ func (s *session) sendUserAudio(ctx context.Context, text string) error {
 	}
 
 	for off := 0; off < len(pcm); off += bytesPerChunk {
-		end := min(off+bytesPerChunk, len(pcm))
-		if err := send(pcm[off:end]); err != nil {
+		if err := send(pcm[off:min(off+bytesPerChunk, len(pcm))]); err != nil {
 			return err
 		}
 	}
-
 	silence := make([]byte, bytesPerChunk)
 	for sent := 0; sent < silenceTailMS; sent += audioChunkMS {
 		if err := send(silence); err != nil {
@@ -86,86 +63,4 @@ func (s *session) sendUserAudio(ctx context.Context, text string) error {
 		}
 	}
 	return nil
-}
-
-// rawAudio builds the RTVI raw-audio message carrying one chunk of 16-bit mono
-// PCM at sampleRate. The bot's RTVI processor decodes it and pushes the audio
-// into its input transport, as it would a live microphone's.
-func rawAudio(pcm []byte, sampleRate int) rtvi.Message {
-	return rtvi.Message{
-		Label: rtvi.MessageLabel,
-		Type:  rtvi.TypeRawAudio,
-		ID:    messageID,
-		Data: rtvi.RawAudioData{
-			Base64Audio: base64.StdEncoding.EncodeToString(pcm),
-			SampleRate:  sampleRate,
-			NumChannels: 1,
-		},
-	}
-}
-
-// synthesize runs ttsService one-shot to render text to PCM, returning the audio
-// and its sample rate. It drives the service as a single-node pipeline and
-// collects the emitted TTS audio.
-//
-// A synthesis that fails is the run's error, naming what the service reported,
-// rather than a turn of no audio.
-func synthesize(ctx context.Context, ttsService *tts.Base, text string) ([]byte, int, error) {
-	var (
-		pcm      []byte
-		rate     int
-		once     sync.Once
-		mu       sync.Mutex
-		synthErr error
-	)
-	done := make(chan struct{})
-	task := pipeline.NewWorker(pipeline.New(ttsService), pipeline.WorkerConfig{
-		ReachedDownstreamFilter: pipeline.FrameTypes(
-			&frames.TTSAudioRawFrame{},
-			&frames.TTSStoppedFrame{},
-		),
-	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
-		switch fr := f.(type) {
-		case *frames.TTSAudioRawFrame:
-			pcm = append(pcm, fr.Audio...)
-			rate = fr.SampleRate
-		case *frames.TTSStoppedFrame:
-			once.Do(func() { close(done) })
-		}
-	})
-	events.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
-		mu.Lock()
-		if synthErr == nil {
-			synthErr = fmt.Errorf("%w: %s", errUserTTS, describeError(ef))
-		}
-		mu.Unlock()
-		once.Do(func() { close(done) })
-	})
-
-	runErr := make(chan error, 1)
-	go func() { runErr <- task.Run(ctx) }()
-
-	task.QueueFrame(frames.NewTTSSpeakFrame(text))
-
-	select {
-	case <-done:
-	case <-ctx.Done():
-		task.Cancel(ctx, "")
-		<-runErr
-		return nil, 0, ctx.Err()
-	}
-	mu.Lock()
-	failure := synthErr
-	mu.Unlock()
-	if failure != nil {
-		task.Cancel(ctx, "")
-		<-runErr
-		return nil, 0, failure
-	}
-	task.StopWhenDone()
-	if err := <-runErr; err != nil {
-		return nil, 0, err
-	}
-	return pcm, rate, nil
 }

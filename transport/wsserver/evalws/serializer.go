@@ -14,7 +14,10 @@ package evalws
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -274,8 +277,9 @@ func evalPayload(message map[string]any, t string) (any, bool) {
 }
 
 // maybeContextFrame returns the LLMMessagesUpdateFrame for an eval-context
-// message, and whether message is one. A context whose messages cannot be read
-// is dropped, with a nil frame.
+// message, and whether message is one. The messages are LLM messages in the
+// universal role and content shape; a context whose messages cannot be read is
+// dropped, with a nil frame.
 func (s *Serializer) maybeContextFrame(message map[string]any) (frames.Frame, bool) {
 	d, ok := evalPayload(message, ContextMessageType)
 	if !ok {
@@ -283,21 +287,109 @@ func (s *Serializer) maybeContextFrame(message map[string]any) (frames.Frame, bo
 	}
 	payload, _ := d.(map[string]any)
 	raw, _ := payload["messages"].([]any)
-	messages := []frames.Message{}
-	if len(raw) > 0 {
-		encoded, err := json.Marshal(raw)
-		if err == nil {
-			err = json.Unmarshal(encoded, &messages)
-		}
-		if err != nil {
-			slog.Warn("evalws: dropping an eval-context whose messages cannot be read", "err", err)
-			return nil, true
-		}
+	messages, err := contextMessages(raw)
+	if err != nil {
+		slog.Warn("evalws: dropping an eval-context whose messages cannot be read", "err", err)
+		return nil, true
 	}
 	f := frames.NewLLMMessagesUpdateFrame(messages)
 	// Seed the context, do not trigger a response.
 	f.RunLLM = false
 	return f, true
+}
+
+// errContextMessage is an eval-context message that is not an LLM message.
+var errContextMessage = errors.New("not an LLM message with a role")
+
+// contextMessages reads the messages of an eval-context. Each is a mapping with
+// a role and its content, as text or as a list of text parts; an assistant's
+// may carry tool_calls, and a tool message the tool_call_id it answers.
+func contextMessages(raw []any) ([]frames.Message, error) {
+	messages := make([]frames.Message, 0, len(raw))
+	for i, item := range raw {
+		m, ok := item.(map[string]any)
+		role, _ := m["role"].(string)
+		if !ok || role == "" {
+			return nil, fmt.Errorf("message %d: %w", i, errContextMessage)
+		}
+		if role == "tool" {
+			id, _ := m["tool_call_id"].(string)
+			messages = append(messages, frames.Message{
+				Role:        frames.RoleUser,
+				ToolResults: []frames.ToolResult{{ID: id, Content: contentText(m["content"])}},
+			})
+			continue
+		}
+		msg := frames.Message{Role: frames.Role(role), ToolCalls: toolCalls(m["tool_calls"])}
+		if list, ok := m["content"].([]any); ok {
+			msg.Content = contentParts(list)
+		} else {
+			msg.Text, _ = m["content"].(string)
+		}
+		messages = append(messages, msg)
+	}
+	return messages, nil
+}
+
+// contentParts reads a list of content parts: text, and images by URL.
+func contentParts(list []any) []frames.ContentPart {
+	parts := make([]frames.ContentPart, 0, len(list))
+	for _, p := range list {
+		part, _ := p.(map[string]any)
+		switch part["type"] {
+		case string(frames.ContentPartText):
+			text, _ := part["text"].(string)
+			parts = append(parts, frames.ContentPart{Type: frames.ContentPartText, Text: text})
+		case string(frames.ContentPartImageURL):
+			image, _ := part["image_url"].(map[string]any)
+			url, _ := image["url"].(string)
+			detail, _ := image["detail"].(string)
+			parts = append(parts, frames.ContentPart{Type: frames.ContentPartImageURL, ImageURL: url, Detail: detail})
+		}
+	}
+	return parts
+}
+
+// contentText is the text of a content: the string itself, or its text parts
+// joined.
+func contentText(content any) string {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []any:
+		var texts []string
+		for _, part := range contentParts(c) {
+			if part.Type == frames.ContentPartText {
+				texts = append(texts, part.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	default:
+		return ""
+	}
+}
+
+// toolCalls reads an assistant message's tool_calls, each a function call with
+// its id, its name and its arguments as JSON text.
+func toolCalls(raw any) []frames.ToolCall {
+	list, _ := raw.([]any)
+	var calls []frames.ToolCall
+	for _, item := range list {
+		c, _ := item.(map[string]any)
+		id, _ := c["id"].(string)
+		fn, _ := c["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		var args json.RawMessage
+		switch a := fn["arguments"].(type) {
+		case string:
+			args = json.RawMessage(a)
+		case nil:
+		default:
+			args, _ = json.Marshal(a) //nolint:errchkjson // decoded JSON encodes again
+		}
+		calls = append(calls, frames.ToolCall{ID: id, Name: name, Args: args})
+	}
+	return calls
 }
 
 // maybeCancelFrame returns the frame for an eval-cancel message, or nil for any

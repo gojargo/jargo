@@ -691,18 +691,19 @@ func TestScriptContextDefaultsToEmpty(t *testing.T) {
 	}
 }
 
-// A context is a list of messages, in jargo's message form (text:).
+// A context is a list of LLM messages, a role and its content, kept as written.
 func TestScriptContextParsedAsList(t *testing.T) {
 	s := script(t, `
 name: with_context
 context:
   - role: system
-    text: "You are a helpful assistant."
+    content: "You are a helpful assistant."
 turns:
   - user: hi
     expect: [{event: user_stopped_speaking}]
 `)
-	if len(s.Context) != 1 || s.Context[0].Role != "system" || s.Context[0].Text != "You are a helpful assistant." {
+	if len(s.Context) != 1 || s.Context[0]["role"] != "system" ||
+		s.Context[0]["content"] != "You are a helpful assistant." {
 		t.Fatalf("context = %+v", s.Context)
 	}
 }

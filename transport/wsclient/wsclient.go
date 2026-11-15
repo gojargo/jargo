@@ -114,6 +114,9 @@ type Session struct {
 	stopping   bool
 	readCancel context.CancelFunc
 	readDone   chan struct{}
+	// closeErr is the error the server ending the connection made the read
+	// fail with, which carries its close code and reason when it sent them.
+	closeErr error
 }
 
 // NewSession builds a Session that connects to uri. transportName names the
@@ -154,7 +157,7 @@ func (s *Session) connect(ctx context.Context) error {
 	readCtx, readCancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	s.mu.Lock()
-	s.conn, s.state, s.stopping = conn, stateOpen, false
+	s.conn, s.state, s.stopping, s.closeErr = conn, stateOpen, false, nil
 	s.readCancel, s.readDone = readCancel, done
 	s.mu.Unlock()
 
@@ -221,6 +224,16 @@ func (s *Session) Send(ctx context.Context, message wsserver.Message) bool {
 	return true
 }
 
+// CloseError is the error the read failed with when the server closed the
+// connection or it was lost, or nil while it is open and after a disconnect
+// this side made. websocket.CloseStatus reads the close code from it, and a
+// websocket.CloseError carries the reason the server gave.
+func (s *Session) CloseError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeErr
+}
+
 // IsConnected reports whether the connection is open.
 func (s *Session) IsConnected() bool {
 	s.mu.Lock()
@@ -245,7 +258,7 @@ func (s *Session) clientTaskHandler(ctx context.Context, conn *websocket.Conn, d
 			s.mu.Lock()
 			stopping := s.stopping
 			if !stopping {
-				s.state = stateClosed
+				s.state, s.closeErr = stateClosed, err
 			}
 			s.mu.Unlock()
 			if stopping {
@@ -555,6 +568,11 @@ func (t *Transport) Output() processor.Processor { return t.outputTransport() }
 // Events is the registry of the events this transport raises. See
 // EventConnected and EventDisconnected.
 func (t *Transport) Events() *events.Registry { return &t.events }
+
+// CloseError is how the server closed the connection, or nil while it is open
+// (see Session.CloseError). A handler of EventDisconnected reads it to say how
+// the server ended the session.
+func (t *Transport) CloseError() error { return t.session.CloseError() }
 
 func (t *Transport) inputTransport() *InputTransport {
 	t.mu.Lock()

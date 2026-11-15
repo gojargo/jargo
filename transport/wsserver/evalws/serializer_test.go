@@ -91,9 +91,9 @@ func TestOtherRTVIMessageWrapsAsTransportMessage(t *testing.T) {
 }
 
 func TestEvalContextShortCircuitsToMessagesUpdate(t *testing.T) {
-	// The messages are in the shape the harness sends the bot's context in.
+	// The messages are universal LLM messages, a role and its content.
 	msg := clientMessage("4", evalws.ContextMessageType, map[string]any{
-		"messages": []any{map[string]any{"Role": "system", "Text": "be terse"}},
+		"messages": []any{map[string]any{"role": "system", "content": "be terse"}},
 	})
 	f, ok := deserialize(t, msg).(*frames.LLMMessagesUpdateFrame)
 	if !ok {
@@ -105,6 +105,47 @@ func TestEvalContextShortCircuitsToMessagesUpdate(t *testing.T) {
 	}
 	if f.RunLLM {
 		t.Fatal("run_llm is on, want the context seeded without a response")
+	}
+}
+
+// The context's messages read as LLM messages: content as text or as parts, an
+// assistant's tool calls, and a tool's result. One without a role is not a
+// message, and the whole context is dropped.
+func TestEvalContextReadsUniversalMessages(t *testing.T) {
+	msg := clientMessage("5", evalws.ContextMessageType, map[string]any{"messages": []any{
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "What is this?"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,AA=="}},
+		}},
+		map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{
+			"id": "call_1", "type": "function",
+			"function": map[string]any{"name": "lookup", "arguments": `{"q":"x"}`},
+		}}},
+		map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "found"},
+	}})
+	f, ok := deserialize(t, msg).(*frames.LLMMessagesUpdateFrame)
+	if !ok {
+		t.Fatalf("got %T, want an LLMMessagesUpdateFrame", f)
+	}
+	want := []frames.Message{
+		{Role: frames.RoleUser, Content: []frames.ContentPart{
+			{Type: frames.ContentPartText, Text: "What is this?"},
+			{Type: frames.ContentPartImageURL, ImageURL: "data:image/png;base64,AA=="},
+		}},
+		{Role: frames.RoleAssistant, ToolCalls: []frames.ToolCall{
+			{ID: "call_1", Name: "lookup", Args: json.RawMessage(`{"q":"x"}`)},
+		}},
+		{Role: frames.RoleUser, ToolResults: []frames.ToolResult{{ID: "call_1", Content: "found"}}},
+	}
+	if !reflect.DeepEqual(f.Messages, want) {
+		t.Fatalf("messages = %+v, want %+v", f.Messages, want)
+	}
+
+	bad := clientMessage("6", evalws.ContextMessageType, map[string]any{
+		"messages": []any{map[string]any{"content": "no role"}},
+	})
+	if f := deserialize(t, bad); f != nil {
+		t.Fatalf("got %T, want the context dropped", f)
 	}
 }
 

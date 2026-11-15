@@ -2,1512 +2,327 @@ package eval
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
+	"log/slog"
 	"runtime/debug"
-	"slices"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/utils/events"
 )
 
-// defaultTimeout is the latency budget for an expectation that sets no
-// within_ms. It is generous so that an expectation without one waits long
-// enough for a slow LLM or TTS response, and for a function-call round trip,
-// rather than failing on latency. Set within_ms to assert on timing.
-const defaultTimeout = 60 * time.Second
-
-// DefaultBotReadyTimeout is how long the bot has, once connected, to announce
-// readiness with bot-ready, which covers the bot's startup.
-const DefaultBotReadyTimeout = 60 * time.Second
-
-// DefaultConnectTimeout is how long the harness waits for the bot to accept
-// connections at all.
-const DefaultConnectTimeout = 5 * time.Second
-
-// connectRetry is how often the harness tries the bot again while it is not yet
-// accepting connections.
-const connectRetry = 250 * time.Millisecond
-
-// botUnavailableError is a handshake the bot ended before bot-ready: it closed
-// the connection, or never answered. kind is the failure kind the run records.
-type botUnavailableError struct {
-	kind   string
-	reason string
-}
-
-func (e *botUnavailableError) Error() string { return e.reason }
-
-// eventBotReady is the translated bot-ready message. The handshake waits for it;
-// a scenario cannot assert on it, so it is not in knownEvents.
-const eventBotReady = "bot_ready"
+// The eval session: one conversation with a bot, driven to a result.
+//
+// A session connects to a running bot's eval transport as an RTVI client, runs
+// the handshake, lets its driver converse, tears down, and returns the driver's
+// result, a failed connect or a harness error included. SessionParams is how the
+// run behaves, whichever kind of scenario it is.
 
 const (
-	// sendAfterMaxWait is how long a turn waits for the event it is scheduled
-	// from before giving up. It is not the expectation budget: nothing is being
-	// asserted yet, only waited for.
-	sendAfterMaxWait = 30 * time.Second
-	// sendAfterPoll is how often the wait re-checks whether the event has been
-	// seen.
-	sendAfterPoll = 10 * time.Millisecond
+	// DefaultEventTimeoutMS is the latency budget for an expectation that sets
+	// no within_ms. It is generous so an expectation without one waits long
+	// enough for a slow LLM or TTS response, and a function-call round trip,
+	// rather than failing on latency. Set within_ms to assert on timing.
+	DefaultEventTimeoutMS = 60_000
+	// DefaultBotReadyTimeout is how long the bot has, once connected, to answer
+	// the handshake with bot-ready. A bot builds its pipeline when the harness
+	// connects, so the wait covers its startup: connecting its services and
+	// loading any local models.
+	DefaultBotReadyTimeout = 60 * time.Second
+	// DefaultConnectTimeout is how long the harness waits for the bot to accept
+	// connections at all.
+	DefaultConnectTimeout = 5 * time.Second
 )
 
-// errSendAfterNotSeen is returned when a turn's schedule never fires.
+// The values SessionParams.AudioSupportCheck takes.
+const (
+	// AudioSupportCheckOff runs every bot unchecked.
+	AudioSupportCheckOff = "off"
+	// AudioSupportCheckWhenAdvertised refuses a bot whose bot-ready reports its
+	// transport off for audio the run uses.
+	AudioSupportCheckWhenAdvertised = "when_advertised"
+)
+
+// EventProgress fires with a Progress record as the conversation advances: a
+// scripted scenario's turns and expectations as they resolve. Records are
+// delivered in order, and Run waits for every handler before it returns:
 //
-//nolint:gochecknoglobals // sentinel error
-var errSendAfterNotSeen = errors.New("send_after never fired")
+//	events.On(&session.Registry, eval.EventProgress, func(ctx context.Context, p eval.Progress) { … })
+const EventProgress = "on_progress"
 
-// Event is a friendly, translated view of an RTVI server message: the level a
-// scenario asserts on. A run reports every one it saw, so a scenario that failed
-// can be read against what the bot actually did.
-type Event struct {
-	// Kind is one of the Event* name constants.
-	Kind string
-	// Text is the reply text on an llm_response, the spoken text on a
-	// tts_response, or the transcript on a user_transcription. Empty for events
-	// that carry no text.
-	Text string
-	// Function is the tool name on a function_call.
-	Function string
-	// Args are the arguments the model produced for a function_call.
-	Args map[string]any
+// errAudioSupportCheck is an AudioSupportCheck of no known value.
+var errAudioSupportCheck = errors.New("eval: audio_support_check must be off or when_advertised")
 
-	// Kind, on an llm_marker, is what the marker meant: "complete", "short" or
-	// "long". Text carries the marker as the model wrote it.
-	MarkerKind string
-	// Raw, on an llm_marker, is the response as the model produced it, markers
-	// included, which is what a check on how well it follows the protocol reads.
-	Raw string
-	// Markers, on an llm_marker, is every marker the bot recognizes, so the raw
-	// text can be read without knowing how the bot was configured.
-	Markers []string
-}
-
-// dict is the event as a results record lists it: its type, and whichever of
-// its fields it carries.
-func (e Event) dict() map[string]any {
-	d := map[string]any{keyType: e.Kind}
-	if e.Text != "" {
-		d["text"] = e.Text
-	}
-	if e.Function != "" {
-		d["name"] = e.Function
-	}
-	if e.Args != nil {
-		d["args"] = e.Args
-	}
-	if e.MarkerKind != "" {
-		d["marker"] = e.MarkerKind
-	}
-	if e.Raw != "" {
-		d["raw"] = e.Raw
-	}
-	if e.Markers != nil {
-		d["markers"] = e.Markers
-	}
-	return d
-}
-
-// eventDicts are the events as a results record lists them.
-func eventDicts(events []Event) []map[string]any {
-	out := make([]map[string]any, 0, len(events))
-	for _, e := range events {
-		out = append(out, e.dict())
-	}
-	return out
-}
-
-// String renders an Event as a short label: the call signature for a tool call,
-// the text for anything that carries some, the name alone otherwise.
-func (e Event) String() string {
-	switch {
-	case e.Kind == EventFunctionCall:
-		return e.Kind + " " + e.summary()
-	case e.Text != "":
-		return fmt.Sprintf("%s %q", e.Kind, e.Text)
-	default:
-		return e.Kind
-	}
-}
-
-// session drives one scenario against a connected bot.
-type session struct {
-	client   *client
-	scenario *Scenario
-	judge    Judge
-	userTTS  *tts.Base // non-nil in audio mode: synthesizes each user turn
-	// botReadyTimeout is how long the bot has to answer the handshake; zero
-	// uses DefaultBotReadyTimeout.
-	botReadyTimeout time.Duration
-	// connectTimeout is how long the bot has to accept connections; zero uses
-	// DefaultConnectTimeout.
-	connectTimeout time.Duration
-	// failures is every failure of the run so far, in order. The matcher
-	// goroutine owns it.
-	failures []Failure
-
-	// events carries the translated events the matcher works on. The reader
-	// goroutine is the only writer.
-	events chan Event
-
-	// The reader goroutine owns everything below, and nothing else reads it.
-	// Upstream translates on its single event loop, which is what makes the
-	// interruption discard safe there; keeping translation on one goroutine is
-	// how jargo gets the same guarantee.
+// SessionParams is how a run behaves, whichever kind of scenario it is:
+// timeouts, recording, caching, teardown.
+//
+// It is plain configuration, so one value serves many runs; the services a run
+// uses are passed to the session separately. The zero value uses the defaults.
+type SessionParams struct {
+	// ConnectTimeout is how long to wait for the bot to accept the connection
+	// before giving up; zero uses DefaultConnectTimeout.
+	ConnectTimeout time.Duration
+	// BotReadyTimeout is how long to wait, once connected, for the bot to
+	// answer the RTVI handshake with bot-ready; zero uses
+	// DefaultBotReadyTimeout.
+	BotReadyTimeout time.Duration
+	// DefaultTimeoutMS is, for scripted scenarios, the latency budget of
+	// expectations without their own within_ms (a turn's expectations share one
+	// deadline anchored at the send); zero uses DefaultEventTimeoutMS.
+	DefaultTimeoutMS int
+	// RecordPath is where to save the conversation audio, or "". Only an audio
+	// run records.
+	RecordPath string
+	// CacheDir is the directory for cached synthesized user audio, or "" for
+	// the default (see DefaultCacheDir).
+	CacheDir string
+	// UseCache, when false, ignores cached user audio and forces fresh
+	// synthesis, with no cache reads or writes; nil is true.
+	UseCache *bool
+	// AudioSupportCheck is whether an audio run checks that the bot's transport
+	// carries the audio it uses, as the bot reports in bot-ready. With
+	// AudioSupportCheckWhenAdvertised, a bot that reports a direction the run
+	// uses as off is refused before the conversation (failure kind
+	// audio_unsupported); a bot that reports nothing runs unchecked. "" is
+	// AudioSupportCheckOff.
+	AudioSupportCheck string
+	// StopBot has no effect: the harness ends the bot's session when a run
+	// finishes.
 	//
-	// llmBuf accumulates bot-llm-text between bot-llm-started and bot-llm-stopped.
-	llmBuf strings.Builder
-	// awaitingLLMRestart is set on an interruption and cleared at the next
-	// bot-llm-started. While set, llm_response segments are dropped: the
-	// interrupted response can still flush a trailing token after the
-	// interruption event, generated before the interrupt propagated, and that
-	// straggler must not be attributed to the new turn. The genuinely new
-	// response begins at the next bot-llm-started.
-	awaitingLLMRestart bool
-	// exprDelivery is the delivery the bot last reported speaking in during the
-	// current response, so an expression event marks only where the delivery
-	// changes, and exprSegments the sound and pause segments already reported.
-	exprDelivery []string
-	exprSegments map[uint64]bool
-
-	// turns is what each turn resolved to, and what each of its expectations
-	// matched. The matcher goroutine owns it.
-	turns []TurnResult
-
-	// pendingCalls holds function_call events popped while matching a different
-	// call, so a turn's calls can be claimed by name in any order. Reset per turn.
-	// The matcher goroutine owns it.
-	pendingCalls []Event
-
-	// lastMatch is what the expectation just matched, in short, which is what a
-	// passing turn records rather than leaving the run readable only by its
-	// failures. The matcher goroutine owns it.
-	lastMatch string
-
-	// onProgress, when set, is told how each turn and expectation resolved as it
-	// happens, for a caller reporting progress live.
-	onProgress func(Progress)
-
-	// diagMu guards the diagnostics the reader and the matcher both write.
-	diagMu sync.Mutex
-	// started is when the run began, the zero point of the debug trace.
-	started time.Time
-	// currentTurn is the index of the turn the harness is working on, tagged
-	// onto each trace line; -1 before the first turn.
-	currentTurn int
-	// debugLog is a timestamped trace of the harness's own decisions, for
-	// diagnosing a flaky run.
-	debugLog []string
-	// eventsSeen is every event the bot emitted, for diagnostics. It keeps events
-	// the interruption discard drops, which is the point: it is a record of what
-	// happened, not a queue of what is still to match.
-	eventsSeen []Event
-
-	// seenMu guards seenAt, which the reader writes and a turn's schedule reads.
-	seenMu sync.Mutex
-	// seenAt is when each kind of event was last seen. A turn scheduled from an
-	// event anchors on this, so an event seen earlier in the run fires the
-	// schedule at once. It survives the interruption discard: it is a record of
-	// what happened, not a queue of what is still to be matched.
-	seenAt map[string]time.Time
+	// Deprecated: No replacement. The harness always ends the bot's session.
+	StopBot bool
+	// TriggerDisconnect, when true, asks a bot serving eval.Handler to fire its
+	// client-disconnected handlers when the connection ends.
+	//
+	// Deprecated: No replacement. A bot fires its client-disconnected handlers
+	// whenever the harness disconnects.
+	TriggerDisconnect bool
 }
 
-// eventBuffer is how many translated events the reader may run ahead by. It is
-// generous so events emitted while the harness is busy streaming a turn's audio
-// are not lost before the matcher reads them.
-const eventBuffer = 256
+// withDefaults is the params with every zero value replaced by its default.
+func (p SessionParams) withDefaults() SessionParams {
+	if p.ConnectTimeout <= 0 {
+		p.ConnectTimeout = DefaultConnectTimeout
+	}
+	if p.BotReadyTimeout <= 0 {
+		p.BotReadyTimeout = DefaultBotReadyTimeout
+	}
+	if p.DefaultTimeoutMS <= 0 {
+		p.DefaultTimeoutMS = DefaultEventTimeoutMS
+	}
+	if p.AudioSupportCheck == "" {
+		p.AudioSupportCheck = AudioSupportCheckOff
+	}
+	return p
+}
 
-// run connects to the bot at url, drives the conversation, and returns the
-// result. The results are named so the deferred diagnostics reach the caller: an
-// unnamed result is copied before the defer runs.
+// useCache reports whether cached user audio is read and written.
+func (p SessionParams) useCache() bool { return p.UseCache == nil || *p.UseCache }
+
+// validate checks the params are well-formed, and warns about the deprecated
+// ones that ask for something.
+func (p SessionParams) validate() error {
+	switch p.AudioSupportCheck {
+	case "", AudioSupportCheckOff, AudioSupportCheckWhenAdvertised:
+	default:
+		return fmt.Errorf("%w, not %q", errAudioSupportCheck, p.AudioSupportCheck)
+	}
+	if p.StopBot { //nolint:staticcheck // warning about the deprecated field
+		slog.Warn("eval: SessionParams.StopBot is deprecated and has no effect")
+	}
+	if p.TriggerDisconnect { //nolint:staticcheck // warning about the deprecated field
+		slog.Warn("eval: SessionParams.TriggerDisconnect is deprecated: " +
+			"a bot fires its client-disconnected handlers whenever the harness disconnects")
+	}
+	return nil
+}
+
+// Session is one conversation with a bot, driven to a result R.
+//
+// Connect, run the handshake, let the driver converse, tear down, and turn what
+// happened, a failed connect or a harness error included, into the driver's
+// result. ScriptSession builds the client and the driver for a scripted
+// scenario. It raises EventProgress.
+type Session[R any] struct {
+	events.Registry
+
+	kind   Kind
+	name   string
+	botURL string
+	params SessionParams
+	// trace is a timestamped trace of the harness's own decisions, for
+	// diagnosing flakes.
+	trace *Trace
+	// Built by the kind of session: the bot's output as events, the
+	// connection to the bot, and what drives the conversation.
+	stream *EventStream
+	client *Client
+	driver driver
+	// assemble has the driver build the run's result.
+	assemble func(failures []AssertionFailure, durationMS int, eventsSeen []map[string]any,
+		debugLog []string, skipped string) R
+	// describe is the run's config summary, one line per section, for the
+	// trace.
+	describe func() string
+	// skipReason is why the run cannot be driven at all, or "" to run it.
+	skipReason func() string
+}
+
+// newSession initializes the runtime of a session of kind.
+func newSession[R any](kind Kind, name, botURL string, params SessionParams) *Session[R] {
+	s := &Session[R]{kind: kind, name: name, botURL: botURL, params: params.withDefaults(), trace: NewTrace()}
+	s.Register(EventProgress, false)
+	return s
+}
+
+// Trace is the run's trace.
+func (s *Session[R]) Trace() *Trace { return s.trace }
+
+// Run connects, drives the conversation, and returns the result.
 //
 // What goes wrong with the run itself is a failure of the result rather than an
 // error: a bot that never accepts the connection is a <connect> failure, one
 // that never becomes ready a <bot-ready> failure, and a harness that fails
-// mid-run a <harness> failure scored against the turn it interrupted. Every turn
-// the run did not reach stays TurnNotRun. Only the caller ending ctx is
-// returned as an error.
-func (s *session) run(ctx context.Context, url string) (res Result, err error) {
-	res = Result{ScenarioName: s.scenario.Name}
-
-	s.started = time.Now()
-	s.currentTurn = -1
-	s.events = make(chan Event, eventBuffer)
-	s.seenAt = make(map[string]time.Time)
-	// One record per turn, filled in as the turns run. They start as not run
-	// and stay that way on every path that ends the run early, so the result
-	// always says which turns were actually scored.
-	s.turns = make([]TurnResult, len(s.scenario.Turns))
-	for i := range s.turns {
-		s.turns[i] = TurnResult{TurnIndex: i, Status: TurnNotRun}
+// mid-run an <error> or <harness> one, scored against the turn it interrupted.
+// Only ctx ending is returned as an error.
+func (s *Session[R]) Run(ctx context.Context) (R, error) {
+	started := time.Now()
+	s.trace.Start()
+	s.trace.Log(fmt.Sprintf("run: %s %q -> %s", s.kind, s.name, s.botURL))
+	// Record which speech, transcription and judge services and models were
+	// used, so a saved trace is self-describing.
+	for line := range strings.Lines(s.describe()) {
+		s.trace.Log(strings.TrimRight(line, "\n"))
 	}
 
-	// The diagnostics are attached however the run ends, including the error
-	// paths: a run that could not start is exactly when the trace is wanted.
-	defer func() {
-		res.DurationMS = int(time.Since(s.started).Milliseconds())
-		var events []Event
-		res.DebugLog, events = s.diagnostics()
-		res.EventsSeen = eventDicts(events)
-		res.Turns = s.turns
-	}()
+	// The judge is closed however the run ends, including the runs that are
+	// skipped or never reach the bot.
+	defer s.driver.close(context.WithoutCancel(ctx))
 
-	s.debugf("run: scenario %q -> %s", s.scenario.Name, url)
+	if skipped := s.skipReason(); skipped != "" {
+		slog.WarnContext(ctx, fmt.Sprintf("eval %q: %s; skipping", s.name, skipped))
+		return s.result(started, nil, skipped), nil
+	}
+
 	// A bot that never accepts is a clean <connect> failure.
-	if connectErr := waitForBot(ctx, url, s.connectTimeout); connectErr != nil {
+	if err := s.client.WaitForBot(ctx); err != nil {
 		if ctx.Err() != nil {
-			return res, ctx.Err()
+			return s.result(started, nil, ""), ctx.Err()
 		}
-		reason := fmt.Sprintf("failed to connect to %s: %v", url, connectErr)
-		res.Failures = []Failure{s.runFailure(RunEventConnect, reason, FailureConnectFailed)}
-		return res, nil
+		reason := fmt.Sprintf("failed to connect to %s: %v", s.botURL, err)
+		return s.result(started, []AssertionFailure{s.failure(RunEventConnect, reason, FailureConnectFailed)}, ""), nil
 	}
 
-	res.Failures, err = s.drive(ctx, url)
+	failures, err := s.drive(ctx)
 	if err != nil {
-		return res, err
+		return s.result(started, failures, ""), err
 	}
 	verdict := "PASS"
-	if len(res.Failures) > 0 {
+	if len(failures) > 0 {
 		verdict = "FAIL"
 	}
-	s.debugf("done: %s (%d failure(s))", verdict, len(res.Failures))
-	return res, nil
+	s.trace.Log(fmt.Sprintf("done: %s (%d failure(s))", verdict, len(failures)))
+	return s.result(started, failures, ""), nil
 }
 
-// drive opens the connection, converses, and closes it. A failure of the
-// harness itself, a panic included, is recorded as a <harness> failure with its
-// stack in the trace, so the run still yields a result.
-func (s *session) drive(ctx context.Context, url string) (failures []Failure, err error) {
-	c, err := dial(ctx, url)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return []Failure{s.runFailure(RunEventConnect, err.Error(), FailureConnectFailed)}, nil
-	}
-	s.client = c
-	defer c.close()
-	go s.readLoop(ctx)
-
-	defer func() {
-		if r := recover(); r != nil {
-			s.failures = append(s.failures, s.errorFailure(fmt.Sprintf("panic: %v", r), debug.Stack()))
-			failures, err = s.failures, nil
-		}
-	}()
-	if err := s.converse(ctx); err != nil {
-		if ctx.Err() != nil {
-			return s.failures, ctx.Err()
-		}
-		s.failures = append(s.failures, s.errorFailure(err.Error(), nil))
-		return s.failures, nil
-	}
-	return s.failures, nil
-}
-
-// converse runs the handshake, then the turns. A bot that never says it is
-// ready is a <bot-ready> failure; an error it returns is the harness's own.
-func (s *session) converse(ctx context.Context) error {
-	s.debugf("connected")
-	if err := s.handshake(ctx); err != nil {
-		if refused, ok := errors.AsType[*botUnavailableError](err); ok {
-			s.debugf("handshake: failed (%v)", err)
-			s.failures = []Failure{s.runFailure(RunEventBotReady, err.Error(), refused.kind)}
-			return nil
-		}
-		return err
-	}
-	s.debugf("handshake: ok (bot-ready)")
-	return s.runTurns(ctx)
-}
-
-// runTurns drives the scenario's turns in order, filling in their records.
-func (s *session) runTurns(ctx context.Context) error {
-	for i, turn := range s.scenario.Turns {
-		s.setTurn(i)
-		s.debugf("--- turn %d: %s", i, turn.input())
-		startedTurn := time.Now()
-		failures, err := s.runTurn(ctx, turn, i)
-		if err != nil {
-			return err
-		}
-		record := &s.turns[i]
-		record.Status = TurnPassed
-		if len(failures) > 0 {
-			record.Status = TurnFailed
-		}
-		record.Failures = failures
-		record.DurationMS = int(time.Since(startedTurn).Milliseconds())
-		s.failures = append(s.failures, failures...)
-		if len(failures) == 0 {
-			continue
-		}
-		// By default a failed turn ends the scenario: it leaves the conversation
-		// in an unknown state, so running the rest just burns another budget per
-		// turn. A scenario whose turns are scored independently sets
-		// stop_on_failure: false and drives all of them.
-		if s.scenario.stopsOnFailure() {
-			s.debugf("turn %d failed; stopping the scenario (stop_on_failure)", i)
-			break
-		}
-		s.debugf("turn %d failed; continuing (stop_on_failure: false)", i)
-	}
-	return nil
-}
-
-// runFailure is a failure of the run itself rather than of an expectation,
-// scored against the turn the harness is working on (-1 before any).
-func (s *session) runFailure(event, reason, kind string) Failure {
-	s.diagMu.Lock()
-	turn := s.currentTurn
-	s.diagMu.Unlock()
-	return Failure{TurnIndex: turn, ExpectationIndex: -1, EventName: event, Reason: reason, Kind: kind}
-}
-
-// errorFailure traces a failure of the harness itself, with the stack when
-// there is one, and scores it against the turn it interrupted.
-func (s *session) errorFailure(reason string, stack []byte) Failure {
-	s.debugf("error: %s", reason)
-	for line := range strings.Lines(string(stack)) {
-		s.debugf("%s", strings.TrimRight(line, "\n"))
-	}
-	f := s.runFailure(RunEventHarness, reason, FailureError)
-	s.recordFailure(f)
-	return f
-}
-
-// recordFailure scores a failure of the run against the turn it interrupted,
-// if any. Before any turn started every turn stays not run.
-func (s *session) recordFailure(f Failure) {
-	if f.TurnIndex < 0 || f.TurnIndex >= len(s.turns) {
-		return
-	}
-	record := &s.turns[f.TurnIndex]
-	record.Status = TurnFailed
-	record.Failures = append(record.Failures, f)
-}
-
-// debug appends a timestamped, turn-tagged line to the run's trace. The tag is
-// the turn the harness is working on, so a line's place in the conversation is
-// readable without counting events.
+// drive starts the client, converses, and tears down.
 //
-// Both the reader and the matcher write it, so it is guarded.
-func (s *session) debugf(format string, args ...any) {
-	s.diagMu.Lock()
-	defer s.diagMu.Unlock()
-	var elapsed time.Duration
-	if !s.started.IsZero() {
-		elapsed = time.Since(s.started)
-	}
-	tag := "--"
-	if s.currentTurn >= 0 {
-		tag = fmt.Sprintf("t%d", s.currentTurn)
-	}
-	s.debugLog = append(s.debugLog,
-		fmt.Sprintf("%8.3f  [%3s]  %s", elapsed.Seconds(), tag, fmt.Sprintf(format, args...)))
-}
-
-// recordEvent notes an event for the run's diagnostics.
-func (s *session) recordEvent(ev Event) {
-	s.diagMu.Lock()
-	s.eventsSeen = append(s.eventsSeen, ev)
-	s.diagMu.Unlock()
-	s.debugf("event: %s", ev)
-}
-
-// progress tells the caller how a turn or expectation resolved, if it asked.
-func (s *session) progress(p Progress) {
-	if s.onProgress != nil {
-		s.onProgress(p)
-	}
-}
-
-// record adds what one expectation resolved to, to the turn it belongs to.
-func (s *session) record(turnIdx int, r ExpectationResult) {
-	s.turns[turnIdx].Expectations = append(s.turns[turnIdx].Expectations, r)
-}
-
-// matchedText is what the expectation matched, which is recorded only where
-// there was a match: a failure's reason is in the turn's failures instead.
-func (s *session) matchedText(fail *Failure) string {
-	if fail != nil {
-		return ""
-	}
-	return s.lastMatch
-}
-
-// setTurn records which turn the harness is working on, for the trace tag.
-func (s *session) setTurn(n int) {
-	s.diagMu.Lock()
-	s.currentTurn = n
-	s.diagMu.Unlock()
-}
-
-// diagnostics is the trace and the events seen, for the Result.
-func (s *session) diagnostics() ([]string, []Event) {
-	s.diagMu.Lock()
-	defer s.diagMu.Unlock()
-	return slices.Clone(s.debugLog), slices.Clone(s.eventsSeen)
-}
-
-// readLoop translates the bot's RTVI messages into friendly events and hands
-// them to the matcher, until the socket closes or ctx is canceled.
-func (s *session) readLoop(ctx context.Context) {
-	defer close(s.events)
-	for {
-		select {
-		case in, ok := <-s.client.incoming:
-			if !ok {
-				return
-			}
-			if ev := s.translate(in); ev != nil {
-				// Record the sighting before queueing, so a turn scheduled from
-				// this event can anchor on it even if the discard drops the event
-				// itself before the matcher gets to it.
-				s.seenMu.Lock()
-				s.seenAt[ev.Kind] = time.Now()
-				s.seenMu.Unlock()
-				s.recordEvent(*ev)
-				select {
-				case s.events <- *ev:
-				case <-ctx.Done():
-					return
-				}
-			}
-		case <-ctx.Done():
+// An error in the harness itself, a panic included, is recorded as a failure
+// with its stack in the trace, so the run still yields a result.
+func (s *Session[R]) drive(ctx context.Context) (failures []AssertionFailure, err error) {
+	s.client.Start(ctx)
+	defer func() {
+		s.client.Stop(ctx)
+		// Progress handlers run on their own goroutine; wait them out so every
+		// record is delivered before the caller has the result in hand.
+		s.Cleanup(context.WithoutCancel(ctx))
+		if err != nil {
 			return
 		}
-	}
-}
+		// A harness service can fail once nothing is waiting on it, such as
+		// the caller's voice on a last turn that expects nothing. Stopping the
+		// client lets the failure surface; a run that otherwise passed is then
+		// no evidence.
+		if reason, failed := s.stream.HarnessError(); failed && len(failures) == 0 {
+			s.trace.Log("FAIL: harness: " + reason)
+			f := s.failure(RunEventHarness, reason, FailureError)
+			s.driver.recordFailure(f)
+			failures = []AssertionFailure{f}
+		}
+	}()
+	defer func() {
+		if r := recover(); r != nil {
+			failures, err = []AssertionFailure{s.errorFailure(fmt.Sprintf("panic: %v", r), debug.Stack())}, nil
+		}
+	}()
 
-// discardInterruptedOutput drops the bot's interrupted, unmatched output. It
-// clears the response buffer and drains what the matcher has not taken yet, so a
-// greeting, or any prior bot output, that the user just interrupted cannot be
-// matched against this turn. A user transcription is kept: a keypress emits its
-// transcription immediately before the turn-start interruption, and that
-// transcription is the turn's input, not the stale bot output this is meant to
-// clear.
-//
-// It runs on the reader goroutine, the only one that translates, so the buffers
-// it clears are never touched concurrently.
-func (s *session) discardInterruptedOutput() {
-	s.llmBuf.Reset()
-	var preserved []Event
-	for drained := true; drained; {
-		select {
-		case ev := <-s.events:
-			if ev.Kind == EventUserTranscription {
-				preserved = append(preserved, ev)
-			}
-		default:
-			drained = false
-		}
-	}
-	for _, ev := range preserved {
-		select {
-		case s.events <- ev:
-		default: // the buffer refilled behind us; the Event is gone either way
-		}
-	}
-}
-
-// handshake sends client-ready, waits for the bot's bot-ready reply, then asks
-// the bot to report as much of a tool call as this scenario asserts on.
-func (s *session) handshake(ctx context.Context) error {
-	if err := s.waitBotReady(ctx); err != nil {
-		return err
-	}
-	// Ask the bot to expose what this scenario asserts on, for the duration of
-	// this eval only, so a bot keeps its own defaults for its own clients.
-	level, wantLevel := s.requiredReportLevel()
-	vad := s.needsVADEvents()
-	markers := s.needsMarkerEvents()
-	if wantLevel || vad || markers {
-		var want *rtvi.FunctionCallReportLevel
-		if wantLevel {
-			want = &level
-		}
-		var wantVAD, wantMarkers *bool
-		if vad {
-			wantVAD = &vad
-		}
-		if markers {
-			wantMarkers = &markers
-		}
-		if err := s.client.send(ctx, configureMessage(want, wantVAD, wantMarkers)); err != nil {
-			return err
-		}
-	}
-	// Only send the context when the scenario provides one. An implicit empty
-	// one would race the bot's own startup and wipe the context it just built.
-	if len(s.scenario.Context) > 0 {
-		s.debugf("context: seeding %d message(s)", len(s.scenario.Context))
-		return s.client.send(ctx, contextMessage(s.scenario.Context))
-	}
-	return nil
-}
-
-// waitBotReady sends client-ready and waits for the bot's bot-ready reply.
-//
-// bot-ready is a hard gate: a bot that never announces readiness either is not
-// a valid eval target or has not finished starting, and firing turns at a
-// half-started bot produces flaky, hard-to-read failures. A bot that closes the
-// connection first, one at its capacity say, has refused the run, which is
-// reported at once with how it closed rather than waited out.
-func (s *session) waitBotReady(ctx context.Context) error {
-	ready := rtvi.Message{
-		Label: rtvi.MessageLabel, Type: rtvi.TypeClientReady, ID: messageID,
-		Data: map[string]any{"version": rtvi.ProtocolVersion},
-	}
-	timeout := s.botReadyTimeout
-	if timeout <= 0 {
-		timeout = DefaultBotReadyTimeout
-	}
-	deadline := time.Now().Add(timeout)
-	if err := s.client.send(ctx, ready); err != nil {
-		// A bot that closes the connection as it arrives fails this write. How
-		// it closed is the reason worth reporting, once the reader has it.
-		for {
-			if _, ok := s.next(ctx, deadline); !ok {
-				break
-			}
-		}
-		if refused := s.refusal(ctx); refused != nil {
-			return refused
-		}
-		return err
-	}
-	if _, ok := s.nextMatching(ctx, eventBotReady, deadline); !ok {
-		if refused := s.refusal(ctx); refused != nil {
-			return refused
-		}
+	failures, err = s.converse(ctx)
+	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return failures, ctx.Err()
 		}
-		return &botUnavailableError{
-			kind:   FailureHandshakeTimeout,
-			reason: fmt.Sprintf("bot-ready not received within %dms", timeout.Milliseconds()),
-		}
-	}
-	return nil
-}
-
-// refusal is the error for a bot that closed the connection before bot-ready,
-// saying how it closed, or nil while the connection is open.
-func (s *session) refusal(ctx context.Context) error {
-	if closed := s.client.closedBy(); closed != nil && ctx.Err() == nil {
-		return &botUnavailableError{kind: FailureClosedBeforeReady, reason: closeDescription(closed)}
-	}
-	return nil
-}
-
-// requiredReportLevel is the least a bot has to report for this scenario's
-// assertions to be checkable, and whether it has to report anything beyond the
-// default at all.
-func (s *session) requiredReportLevel() (rtvi.FunctionCallReportLevel, bool) {
-	level := s.scenario.RequiredReportLevel()
-	return level, level != ""
-}
-
-// needsVADEvents reports whether the scenario references the raw VAD speaking
-// events. They are off by default, so the harness asks for them only when they
-// are wanted.
-func (s *session) needsVADEvents() bool { return s.scenario.NeedsVADEvents() }
-
-// needsMarkerEvents reports whether the scenario asserts on the markers the
-// bot's model emits, which never reach a client by default.
-func (s *session) needsMarkerEvents() bool { return s.scenario.NeedsMarkerEvents() }
-
-// runTurn sends the user's text and matches the turn's expectations in order.
-// Every expectation's budget is anchored at the send, so a stalled turn fails
-// within a single budget rather than one per expectation.
-func (s *session) runTurn(ctx context.Context, turn Turn, turnIdx int) ([]Failure, error) {
-	// A turn's tool calls are matched by name in any order; start each turn with
-	// an empty buffer so a prior turn's calls cannot carry over.
-	s.pendingCalls = nil
-
-	if turn.SendAfter != nil {
-		if err := s.waitSendAfter(ctx, *turn.SendAfter); err != nil {
-			// The turn's input never went out, so none of its expectations can be
-			// judged. Report the schedule itself, at expectation -1.
-			name := turn.SendAfter.Event
-			if name == "" {
-				name = "send_after"
-			}
-			reason := fmt.Sprintf("%v", err)
-			s.debugf("FAIL: %s: %s", name, reason)
-			s.progress(Progress{
-				TurnIndex: turnIdx, ExpectationIndex: -1, EventName: name, Status: StatusTimeout, Detail: reason,
-			})
-			return []Failure{{
-				TurnIndex: turnIdx, ExpectationIndex: -1, EventName: name, Reason: reason, Kind: FailureSendAfterTimeout,
-			}}, nil
-		}
-	}
-
-	if err := s.sendTurnInput(ctx, turn); err != nil {
-		return nil, err
-	}
-	anchor := time.Now()
-	s.progress(Progress{TurnIndex: turnIdx, ExpectationIndex: -1, EventName: turn.input(), Status: StatusTurn})
-
-	var failures []Failure
-	for j, exp := range turn.Expect {
-		budget := defaultTimeout
-		if exp.WithinMS > 0 {
-			budget = time.Duration(exp.WithinMS) * time.Millisecond
-		}
-		fail, absent := s.matchExpectation(ctx, exp, anchor.Add(budget), budget, turnIdx, j)
-		s.record(turnIdx, ExpectationResult{
-			ExpectationIndex: j, EventName: exp.Event, Passed: fail == nil, Matched: s.matchedText(fail),
-		})
-		switch fail {
-		case nil:
-			s.progress(Progress{TurnIndex: turnIdx, ExpectationIndex: j, EventName: exp.Event, Status: StatusMatched})
-		default:
-			failures = append(failures, *fail)
-			s.debugf("FAIL: %s: %s", exp.Event, fail.Reason)
-			status := StatusFailed
-			if absent {
-				status = StatusTimeout
-			}
-			s.progress(Progress{
-				TurnIndex: turnIdx, ExpectationIndex: j, EventName: exp.Event,
-				Status: status, Detail: fail.Reason,
-			})
-		}
-		if absent {
-			// Nothing of the expectation's kind ever arrived, so no later
-			// expectation of this turn will match either.
-			break
-		}
+		return []AssertionFailure{s.errorFailure(err.Error(), nil)}, nil
 	}
 	return failures, nil
 }
 
-// sendTurnInput delivers whatever the turn says the user does: speaks, presses
-// keys, or nothing at all. A turn with no input only waits and asserts, which is
-// what a bot-first scenario needs.
-//
-// Whatever is sent is also recorded in the judge's conversation, so a later
-// reply is judged in context: a terse "that's four" against the question it
-// answers.
-func (s *session) sendTurnInput(ctx context.Context, turn Turn) error {
-	switch {
-	case turn.User != "":
-		s.debugf("send: %q (%s)", turn.User, s.mode())
-		if s.userTTS != nil {
-			if err := s.sendUserAudio(ctx, turn.User); err != nil {
-				return err
-			}
-		} else if err := s.client.send(ctx, sendText(turn.User)); err != nil {
-			return err
-		}
-		if s.judge != nil {
-			s.judge.AddUserMessage(turn.User)
-		}
-	case turn.DTMF != "":
-		s.debugf("send: dtmf %q", turn.DTMF)
-		if err := s.client.send(ctx, dtmf(turn.DTMF)); err != nil {
-			return err
-		}
-		// Record the keypresses too, so the bot's reply is judged knowing what
-		// was pressed.
-		if s.judge != nil {
-			s.judge.AddUserMessage("(DTMF keypad input: " + turn.DTMF + ")")
-		}
-	default:
-		s.debugf("send: nothing, the turn only observes")
-	}
-	return nil
-}
-
-// mode is how user turns are delivered, for the debug trace.
-func (s *session) mode() string {
-	if s.userTTS != nil {
-		return "audio"
-	}
-	return "text"
-}
-
-// waitSendAfter blocks until the turn's schedule fires: until its event has
-// been seen and the delay has elapsed on top. An event seen earlier in the run
-// anchors the delay at that earlier sighting, so the wait may be over already.
-//
-// With no event it is a pure time delay, measured from now, which is the
-// previous turn's send.
-func (s *session) waitSendAfter(ctx context.Context, sa SendAfter) error {
-	delay := time.Duration(sa.DelayMS) * time.Millisecond
-	if sa.Event == "" {
-		return sleep(ctx, delay)
-	}
-
-	deadline := time.Now().Add(sendAfterMaxWait)
-	ticker := time.NewTicker(sendAfterPoll)
-	defer ticker.Stop()
-	for {
-		if seen, ok := s.eventSeenAt(sa.Event); ok {
-			return sleep(ctx, time.Until(seen.Add(delay)))
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%w: event %q not seen within %s",
-				errSendAfterNotSeen, sa.Event, sendAfterMaxWait)
-		}
-		select {
-		case <-ticker.C:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-// eventSeenAt reports when an event of the given kind was last seen, and
-// whether one has been at all.
-func (s *session) eventSeenAt(kind string) (time.Time, bool) {
-	s.seenMu.Lock()
-	defer s.seenMu.Unlock()
-	seen, ok := s.seenAt[kind]
-	return seen, ok
-}
-
-// sleep waits out d, or returns early if ctx is canceled. A non-positive d
-// returns at once.
-func sleep(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// failFunc builds the failure of the expectation being matched, from its reason
-// and kind.
-type failFunc func(reason, kind string) *Failure
-
-// matchExpectation waits for an event matching exp, skipping unrelated events,
-// until deadline. It returns a failure, or nil on a match, and whether no event
-// of the expectation's kind arrived at all, which ends the turn.
-//
-// Most events match a single event and are checked once. An llm_response
-// carrying a content check instead aggregates: it accumulates the text of
-// successive response segments and re-checks on each new one, until the check
-// passes, the judge rejects, or the budget expires. That is what rolls past an
-// interim filler ("Let me check on that.") or an on-connect greeting rather than
-// mistaking it for the turn's answer.
-func (s *session) matchExpectation(
-	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration, turnIdx, expIdx int,
-) (*Failure, bool) {
-	fail := func(reason, kind string) *Failure {
-		return &Failure{TurnIndex: turnIdx, ExpectationIndex: expIdx, EventName: exp.Event, Reason: reason, Kind: kind}
-	}
-	missing := func() *Failure {
-		return fail(fmt.Sprintf("no matching %s event arrived within %s", exp.Event, budget), FailureTimeout)
-	}
-
-	s.lastMatch = ""
-	if exp.Absent {
-		return s.matchAbsent(ctx, exp, deadline, budget, fail), false
-	}
-	if exp.Event == EventFunctionCall {
-		// A function_call expectation holds the set of calls the turn should make;
-		// it completes only when all are found, in any order. A call that never
-		// arrives is a failure rather than the end of the turn, so a turn missing
-		// both a call and a reply reports both within one budget.
-		return s.matchFunctionCalls(ctx, exp, deadline, fail), false
-	}
-	if !s.aggregates(exp) {
-		ev, ok := s.nextMatching(ctx, exp.Event, deadline)
-		if !ok {
-			return missing(), true
-		}
-		if f := checkPayload(ev, exp, fail); f != nil {
-			return f, false
-		}
-		if f := s.checkJudge(ctx, ev, exp, fail); f != nil {
-			return f, false
-		}
-		s.lastMatch = ev.summary()
-		return nil, false
-	}
-	return s.matchAggregate(ctx, exp, deadline, budget, fail, missing)
-}
-
-// aggregates reports whether an expectation accumulates successive response
-// segments rather than checking the first one. Only a content check on the
-// bot's own text does, and on the expression performed in the turn; a bare
-// event, or a check on a user transcription, matches once.
-func (s *session) aggregates(exp Expectation) bool {
-	if exp.Event != EventLLMResponse && exp.Event != EventTTSResponse && exp.Event != EventExpression {
-		return false
-	}
-	return exp.TextContains != "" || exp.Eval != ""
-}
-
-// matchAggregate accumulates response segments and re-checks the expectation on
-// each one until it is satisfied, affirmatively rejected, or the budget expires.
-func (s *session) matchAggregate(
-	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration,
-	fail failFunc, missing func() *Failure,
-) (*Failure, bool) {
-	if exp.Eval != "" && s.judge == nil {
-		return fail("scenario uses 'eval:' but no judge could be built", FailureNoJudge), false
-	}
+// converse runs the handshake, then the driver; a bot that never says ready is
+// a failure.
+func (s *Session[R]) converse(ctx context.Context) ([]AssertionFailure, error) {
+	s.trace.Log("connected")
+	err := s.client.Handshake(ctx)
 	var (
-		aggregate  string
-		lastReason string
-		seenAny    bool
+		unavailable *BotUnavailableError
+		timeout     *handshakeTimeoutError
 	)
-	for {
-		ev, ok := s.nextMatching(ctx, exp.Event, deadline)
-		if !ok {
-			if !seenAny {
-				return missing(), true // no response at all
-			}
-			kind := FailureTextMismatch
-			if exp.Eval != "" {
-				kind = FailureJudgeContinue
-			}
-			return fail(fmt.Sprintf("not satisfied within %s: %s", budget, lastReason), kind), false
+	switch {
+	case errors.As(err, &unavailable):
+		s.trace.Log(fmt.Sprintf("handshake: failed (%v)", err))
+		where := RunEventBotReady
+		switch unavailable.Kind {
+		case FailureConnectFailed:
+			where = RunEventConnect
+		case FailureError:
+			where = RunEventHarness
 		}
-		seenAny = true
-		// Feed each segment to the judge as its own reply message, so it judges
-		// the bot's reply in the conversation's context. The cumulative aggregate
-		// is kept for the substring check.
-		aggregate += ev.Text
-		if exp.TextExcludes != "" && textContains(aggregate, exp.TextExcludes) {
-			return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(aggregate), exp.TextExcludes),
-				FailureTextPresent), false
-		}
-		if exp.Eval != "" && s.judge != nil {
-			s.judge.AddAssistantMessage(ev.Text)
-		}
-		status, reason := s.evaluateAggregate(ctx, aggregate, exp)
-		switch status {
-		case statusPass:
-			if f := checkTextMatches(aggregate, exp, fail); f != nil {
-				return f, false
-			}
-			s.lastMatch = strings.TrimSpace(aggregate)
-			return nil, false
-		case statusFail:
-			return fail(reason, FailureJudgeNo), false
-		}
-		// Continue: wait for the next segment, separated by a space so sentences
-		// do not run together ("...that. The weather...").
-		aggregate += " "
-		lastReason = reason
+		return []AssertionFailure{s.failure(where, unavailable.Reason, unavailable.Kind)}, nil
+	case errors.As(err, &timeout):
+		s.trace.Log("handshake: failed (bot-ready not received)")
+		return []AssertionFailure{s.failure(RunEventBotReady, err.Error(), FailureHandshakeTimeout)}, nil
+	case err != nil:
+		return nil, err
+	}
+	s.trace.Log("handshake: ok (bot-ready)")
+	return s.driver.run(ctx)
+}
+
+// result has the driver assemble the run's result.
+func (s *Session[R]) result(started time.Time, failures []AssertionFailure, skipped string) R {
+	return s.assemble(failures, int(time.Since(started).Milliseconds()), s.stream.EventsSeen(), s.trace.Lines(), skipped)
+}
+
+// failure is a failure of the run itself rather than of an expectation, scored
+// against the trace's current turn (-1 before any).
+func (s *Session[R]) failure(eventName, reason, kind string) AssertionFailure {
+	return AssertionFailure{
+		TurnIndex: s.trace.Turn(), ExpectationIndex: -1, EventName: eventName, Reason: reason, Kind: kind,
 	}
 }
 
-// The outcomes of evaluating the accumulated response text.
-const (
-	statusPass     = "pass"
-	statusFail     = "fail"
-	statusContinue = "continue"
-)
-
-// evaluateAggregate evaluates the accumulated response text. text_contains is
-// monotonic, so a missing substring is a continue and more text may still
-// arrive; only the judge can affirmatively fail.
-func (s *session) evaluateAggregate(ctx context.Context, aggregate string, exp Expectation) (string, string) {
-	if exp.TextContains != "" && !textContains(aggregate, exp.TextContains) {
-		return statusContinue, fmt.Sprintf("does not contain %q", exp.TextContains)
+// errorFailure traces an unexpected error with its stack, when there is one,
+// and lets the driver score it.
+func (s *Session[R]) errorFailure(reason string, stack []byte) AssertionFailure {
+	s.trace.Log("error: " + reason)
+	for line := range strings.Lines(string(stack)) {
+		s.trace.Log(strings.TrimRight(line, "\n"))
 	}
-	if exp.Eval != "" {
-		if strings.TrimSpace(aggregate) == "" {
-			return statusContinue, "no response text yet"
-		}
-		// matchAggregate guarantees a judge exists before aggregating a criterion.
-		// The judge evaluates the conversation it was fed, not this aggregate.
-		verdict := s.judge.Evaluate(ctx, exp.Eval)
-		switch verdict.Verdict {
-		case VerdictNo:
-			return statusFail, "judge said no: " + verdict.Reason
-		case VerdictContinue:
-			return statusContinue, "judge said continue: " + verdict.Reason
-		case VerdictNone:
-			return statusFail, "judge gave no verdict: " + verdict.Reason
-		}
-		return statusPass, "judge said yes: " + verdict.Reason
-	}
-	return statusPass, ""
+	f := s.failure(RunEventError, reason, FailureError)
+	s.driver.recordFailure(f)
+	return f
 }
 
-// matchAbsent is the inverted match: it passes when no event of the
-// expectation's type arrives before the deadline. The budget is the whole point
-// here, so the expectation holds the turn open for the full window; an arriving
-// event fails immediately, and its content goes into the reason so a
-// duplicate-output regression shows what the bot said.
-func (s *session) matchAbsent(
-	ctx context.Context, exp Expectation, deadline time.Time, budget time.Duration,
-	fail failFunc,
-) *Failure {
-	ev, ok := s.nextMatching(ctx, exp.Event, deadline)
-	if !ok {
-		return nil // the quiet window held: absence confirmed
-	}
-	return fail(fmt.Sprintf(
-		"expected no %s within %s, but one arrived: %s", exp.Event, budget, ev.summary()), FailureUnexpectedEvent)
-}
-
-// matchFunctionCalls claims one call for each of the expectation's expected
-// calls, from the turn's calls already buffered and those still arriving. It
-// passes only when all are claimed within the budget; otherwise it names the
-// call that was missing, or whose arguments did not match.
-//
-// A call is claimed only when its name and its arguments both match, so one
-// the model gets wrong, is refused, and repeats with the right arguments still
-// satisfies the turn. A call of the right name with other arguments is a
-// different failure from no call at all, and the arguments the bot sent are
-// what the reader needs to see.
-func (s *session) matchFunctionCalls(
-	ctx context.Context, exp Expectation, deadline time.Time, fail failFunc,
-) *Failure {
-	if exp.Eval != "" && s.judge == nil {
-		return fail("scenario uses 'eval:' but no judge could be built", FailureNoJudge)
-	}
-	var matched []string
-	for _, want := range exp.Calls {
-		ev, ok := s.nextFunctionCall(ctx, want, deadline)
-		if !ok {
-			if near := s.unclaimedArgs(want.Name); want.Args != nil && len(near) > 0 {
-				return fail(fmt.Sprintf("no %q call had args %v (saw %v)", want.Name, want.Args, near),
-					FailureFunctionArgsMismatch)
-			}
-			name := want.Name
-			if name == "" {
-				name = "any function"
-			}
-			seen := "none"
-			if len(matched) > 0 {
-				seen = strings.Join(matched, ", ")
-			}
-			return fail(fmt.Sprintf("function call %q not seen (matched: %s)", name, seen), FailureMissingFunctionCall)
-		}
-		if f := s.judgeCall(ctx, ev, exp, fail); f != nil {
-			return f
-		}
-		matched = append(matched, ev.Function)
-	}
-	s.lastMatch = strings.Join(matched, ", ")
-	if s.lastMatch == "" {
-		s.lastMatch = "function call"
-	}
-	return nil
-}
-
-// judgeCall puts one matched call to the judge, when the expectation carries a
-// criterion. The judge is asked about the call by name and arguments, with the
-// conversation so far as context, which is how a scenario checks what an
-// argument subset cannot match verbatim. The first call the judge rejects fails
-// the expectation.
-func (s *session) judgeCall(
-	ctx context.Context, ev Event, exp Expectation, fail failFunc,
-) *Failure {
-	if exp.Eval == "" {
-		return nil
-	}
-	// matchFunctionCalls fails before matching anything when there is no judge.
-	verdict := s.judge.EvaluateCall(ctx, ev.Function, ev.Args, exp.Eval)
-	s.debugf("judge on call %s: %s (%s)", ev.Function, verdict.Verdict, verdict.Reason)
-	if verdict.Passed() {
-		return nil
-	}
-	return fail(fmt.Sprintf("eval %q on call %q: judge said %s: %s",
-		exp.Eval, ev.Function, verdict.Verdict, verdict.Reason), FailureJudgeNo)
-}
-
-// unclaimedArgs is the arguments of every call of name seen this turn and not
-// claimed, where an empty name stands for any call.
-func (s *session) unclaimedArgs(name string) []map[string]any {
-	var near []map[string]any
-	for _, ev := range s.pendingCalls {
-		if name == "" || ev.Function == name {
-			near = append(near, ev.Args)
-		}
-	}
-	return near
-}
-
-// nextFunctionCall claims a function_call event matching want: its name, where
-// an empty name claims any call, and the argument subset it gives. A turn's
-// calls can arrive in any order, so it looks first in the buffer of calls seen
-// but not yet claimed, then reads on; a call that does not match is buffered so
-// another expected call can claim it. Events of other kinds are dropped, as in
-// matchExpectation.
-func (s *session) nextFunctionCall(ctx context.Context, want FunctionCall, deadline time.Time) (Event, bool) {
-	matches := func(ev Event) bool {
-		return (want.Name == "" || ev.Function == want.Name) && len(missingArgs(want.Args, ev.Args)) == 0
-	}
-
-	for i, ev := range s.pendingCalls {
-		if matches(ev) {
-			s.pendingCalls = append(s.pendingCalls[:i], s.pendingCalls[i+1:]...)
-			return ev, true
-		}
-	}
-	for {
-		ev, ok := s.next(ctx, deadline)
-		if !ok {
-			return Event{}, false
-		}
-		if ev.Kind != EventFunctionCall {
-			continue
-		}
-		if matches(ev) {
-			return ev, true
-		}
-		s.pendingCalls = append(s.pendingCalls, ev)
-	}
-}
-
-// missingArgs is the subset check on a call's arguments: the entries of want
-// that got is missing or disagrees with. Arguments got carries that want does
-// not list are ignored.
-func missingArgs(want, got map[string]any) map[string]any {
-	var missing map[string]any
-	for k, v := range want {
-		if actual, ok := got[k]; ok && sameArg(actual, v) {
-			continue
-		}
-		if missing == nil {
-			missing = make(map[string]any, len(want))
-		}
-		missing[k] = v
-	}
-	return missing
-}
-
-// sameArg compares an argument the model produced against the one a scenario
-// expects. Both sides are decoded from a text format, but not the same one: JSON
-// has a single number type where YAML distinguishes integers, so 3 and 3.0 have
-// to compare equal. Everything else compares by value.
-func sameArg(actual, want any) bool {
-	af, aok := toFloat(actual)
-	wf, wok := toFloat(want)
-	if aok && wok {
-		return af == wf
-	}
-	return reflect.DeepEqual(actual, want)
-}
-
-// toFloat reports a numeric value as a float64, whichever numeric type carries
-// it, and whether it was numeric at all.
-func toFloat(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case uint64:
-		return float64(n), true
-	default:
-		return 0, false
-	}
-}
-
-// summary is a short label for an event, for a failure reason: the call
-// signature for a tool call, and the text content for everything else.
-func (e Event) summary() string {
-	if e.Kind != EventFunctionCall {
-		return e.Text
-	}
-	name := e.Function
-	if name == "" {
-		name = "?"
-	}
-	args := make([]string, 0, len(e.Args))
-	for k, v := range e.Args {
-		args = append(args, fmt.Sprintf("%s=%v", k, v))
-	}
-	sort.Strings(args) // a map iterates in random order, and this goes in a report
-	return name + "(" + strings.Join(args, ", ") + ")"
-}
-
-// checkPayload applies the payload-level checks to a matched event, returning
-// the first failure or nil. It is the single-event path; an expectation that
-// aggregates goes through evaluateAggregate instead.
-func checkPayload(ev Event, exp Expectation, fail failFunc) *Failure {
-	if f := checkMarker(ev, exp, fail); f != nil {
-		return f
-	}
-	if exp.TextContains != "" && !textContains(ev.Text, exp.TextContains) {
-		return fail(fmt.Sprintf("text %q does not contain %q", ev.Text, exp.TextContains), FailureTextMismatch)
-	}
-	if exp.TextExcludes != "" && textContains(ev.Text, exp.TextExcludes) {
-		return fail(fmt.Sprintf("text %q contains %q", strings.TrimSpace(ev.Text), exp.TextExcludes),
-			FailureTextPresent)
-	}
-	return checkTextMatches(ev.Text, exp, fail)
-}
-
-// checkTextMatches fails on the first of the expectation's text_matches
-// patterns content does not match.
-func checkTextMatches(content string, exp Expectation, fail failFunc) *Failure {
-	if pattern, missed := exp.TextMatches.firstUnmatched(content); missed {
-		text := strings.TrimSpace(content)
-		if r := []rune(text); len(r) > 200 {
-			text = string(r[:200])
-		}
-		return fail(fmt.Sprintf("text %q does not match %q", text, pattern), FailureTextUnmatched)
-	}
-	return nil
-}
-
-// checkMarker applies an llm_marker expectation's checks to the report: what the
-// marker meant, and how well the response followed the protocol it was given.
-func checkMarker(ev Event, exp Expectation, fail failFunc) *Failure {
-	if exp.Marker != "" && !markerMeans(ev.MarkerKind, exp.Marker) {
-		got := ev.MarkerKind
-		if got == "" {
-			got = "of no known kind"
-		}
-		return fail(fmt.Sprintf("marker %q is %s, expected %s", ev.Text, got, exp.Marker), FailureMarkerMismatch)
-	}
-	if exp.MarkerFirst != nil {
-		if first := markerComesFirst(ev); first != *exp.MarkerFirst {
-			return fail(fmt.Sprintf("the marker came first: %v, want %v, in %q",
-				first, *exp.MarkerFirst, ev.Raw), FailureMarkerFormat)
-		}
-	}
-	if exp.Markers != nil {
-		if n := countMarkers(ev); n != *exp.Markers {
-			return fail(fmt.Sprintf("the response holds %d marker(s), want %d, in %q",
-				n, *exp.Markers, ev.Raw), FailureMarkerFormat)
-		}
-	}
-	if exp.TextAfter != nil {
-		if after := textFollowsMarker(ev); after != *exp.TextAfter {
-			return fail(fmt.Sprintf("text follows the marker: %v, want %v, in %q",
-				after, *exp.TextAfter, ev.Raw), FailureMarkerFormat)
-		}
-	}
-	return nil
-}
-
-// markerMeans reports whether the kind the bot gave the marker is the one the
-// scenario asked for. "incomplete" stands for either reason the bot holds a turn
-// open, for a scenario that cares that it did rather than which reason it read.
-func markerMeans(kind, want string) bool {
-	if want == MarkerIncomplete {
-		return kind == MarkerShort || kind == MarkerLong
-	}
-	return kind == want
-}
-
-// markerComesFirst reports whether the first marker in the response comes before
-// any text, which is what the protocol asks of the model.
-func markerComesFirst(ev Event) bool {
-	at, _ := firstMarker(ev)
-	return at == 0 && strings.TrimSpace(ev.Raw) != ""
-}
-
-// countMarkers is how many markers the response's text holds. The protocol asks
-// for exactly one, so a response holding several is one the model got wrong even
-// where the first of them was right.
-func countMarkers(ev Event) int {
-	n := 0
-	for _, marker := range ev.Markers {
-		if marker != "" {
-			n += strings.Count(ev.Raw, marker)
-		}
-	}
-	return n
-}
-
-// textFollowsMarker reports whether anything the user would hear follows the
-// first marker. A complete turn should have some, an incomplete one none.
-func textFollowsMarker(ev Event) bool {
-	at, marker := firstMarker(ev)
-	if at < 0 {
-		return strings.TrimSpace(ev.Raw) != ""
-	}
-	return strings.TrimSpace(ev.Raw[at+len(marker):]) != ""
-}
-
-// firstMarker is where the earliest marker sits in the response's raw text, and
-// which marker it is. It reports -1 when the response carried none.
-func firstMarker(ev Event) (at int, marker string) {
-	at = -1
-	for _, m := range ev.Markers {
-		if m == "" {
-			continue
-		}
-		if i := strings.Index(ev.Raw, m); i >= 0 && (at < 0 || i < at) {
-			at, marker = i, m
-		}
-	}
-	return at, marker
-}
-
-// textContains reports whether needle occurs in content, whatever the spacing.
-// A reply arrives in segments and is joined back together here, so where its
-// line breaks and runs of spaces fall is an accident of how it was streamed,
-// not something a scenario should have to write out.
-func textContains(content, needle string) bool {
-	return strings.Contains(strings.Join(strings.Fields(content), " "),
-		strings.Join(strings.Fields(needle), " "))
-}
-
-// checkJudge runs the judge assertion when the expectation carries one. Today
-// that never happens on this path: a criterion is only valid on llm_response,
-// and llm_response with a criterion aggregates. It becomes live as soon as the
-// scenario format grows another event whose text a judge can read.
-func (s *session) checkJudge(
-	ctx context.Context, ev Event, exp Expectation, fail failFunc,
-) *Failure {
-	if exp.Eval == "" {
-		return nil
-	}
-	if s.judge == nil {
-		return fail("scenario uses 'eval:' but no judge could be built", FailureNoJudge)
-	}
-	if ev.Text == "" {
-		return fail(fmt.Sprintf("event has no text to judge: %s", ev.Kind), FailureNoContent)
-	}
-	s.judge.AddAssistantMessage(ev.Text)
-	verdict := s.judge.Evaluate(ctx, exp.Eval)
-	if !verdict.Passed() {
-		return fail(fmt.Sprintf("eval %q: judge said no: %s", exp.Eval, verdict.Reason), FailureJudgeNo)
-	}
-	return nil
-}
-
-// speakingEvents are the events the bot's reports about the user's speaking map
-// to, by message type, for the reports that carry nothing else.
-//
-//nolint:gochecknoglobals // fixed lookup table
-var speakingEvents = map[string]string{
-	rtvi.TypeUserStoppedSpeaking: EventUserStoppedSpeaking,
-	rtvi.TypeVADUserStarted:      EventVADUserStartedSpeaking,
-	rtvi.TypeVADUserStopped:      EventVADUserStoppedSpeaking,
-}
-
-// translate converts an RTVI server message into a friendly event, or nil if it
-// carries no event on its own (bot-llm-text is accumulated until the response
-// ends). It runs on the reader goroutine.
-func (s *session) translate(in rtvi.Incoming) *Event {
-	switch in.Type {
-	case rtvi.TypeBotReady:
-		return &Event{Kind: eventBotReady}
-	case rtvi.TypeUserStartedSpeaking:
-		// A new user turn in audio mode. Drop any leftover bot output from a prior
-		// turn so it is not aggregated into this one.
-		s.discardInterruptedOutput()
-		s.awaitingLLMRestart = true
-		return &Event{Kind: EventUserStartedSpeaking}
-	case rtvi.TypeBotInterrupted:
-		// The bot's in-flight output was cut off, by a VAD barge-in or by a
-		// run-immediately text interrupt. Drop it so only what the bot says after
-		// the interruption is matched.
-		s.discardInterruptedOutput()
-		s.awaitingLLMRestart = true
-		return &Event{Kind: EventBotInterrupted}
-	case rtvi.TypeUserStoppedSpeaking, rtvi.TypeVADUserStarted, rtvi.TypeVADUserStopped:
-		// The bot's reports about the user: its turn-level speaking, and its raw
-		// VAD, ungated by turn detection.
-		return &Event{Kind: speakingEvents[in.Type]}
-	case rtvi.TypeUserTranscription:
-		var d rtvi.UserTranscriptionData //nolint:staticcheck // the message is still sent
-		if json.Unmarshal(in.Data, &d) != nil || !d.Final {
-			return nil // only final transcriptions are turn-level events
-		}
-		return &Event{Kind: EventUserTranscription, Text: d.Text}
-	case rtvi.TypeBotLLMStarted, rtvi.TypeBotLLMText, rtvi.TypeBotLLMStopped:
-		return s.translateLLM(in)
-	case rtvi.TypeBotTTSText, rtvi.TypeBotOutput:
-		return s.translateOutput(in)
-	case rtvi.TypeBotLLMMarker:
-		var d rtvi.BotLLMMarkerData
-		if json.Unmarshal(in.Data, &d) != nil {
-			return nil
-		}
-		return &Event{
-			Kind: EventLLMMarker, Text: d.Text,
-			MarkerKind: d.Kind, Raw: d.Raw, Markers: d.Markers,
-		}
-	case rtvi.TypeLLMFunctionCall:
-		var d rtvi.LLMFunctionCallData
-		_ = json.Unmarshal(in.Data, &d)
-		var args map[string]any
-		_ = json.Unmarshal(d.Arguments, &args)
-		return &Event{Kind: EventFunctionCall, Function: d.FunctionName, Args: args}
-	default:
-		return nil
-	}
-}
-
-// translateOutput handles what the bot's TTS reports speaking: its text, and in
-// expressive conversation the expression it performed.
-func (s *session) translateOutput(in rtvi.Incoming) *Event {
-	if in.Type == rtvi.TypeBotOutput {
-		return s.expressionEvent(in)
-	}
-	// The text the TTS reports speaking, one segment per spoken sentence,
-	// emitted as it arrives. It cannot be bounded on bot-tts-stopped the way
-	// llm_response is bounded on bot-llm-stopped, because some services report
-	// the text after the audio has finished. The matcher aggregates the
-	// segments of the turn instead.
-	var d rtvi.TextData
-	if json.Unmarshal(in.Data, &d) != nil {
-		return nil
-	}
-	return &Event{Kind: EventTTSResponse, Text: d.Text}
-}
-
-// expressionEvent is the expression the bot performed, from a bot-output
-// message, written as the LLM writes it.
-//
-// Only expressive conversation reports it: a sound or pause segment, once, or
-// spoken text carrying a delivery, where it differs from the delivery before
-// it in the response. Each is reported as it is spoken rather than announced,
-// so they keep the order they were performed in.
-func (s *session) expressionEvent(in rtvi.Incoming) *Event {
-	var d rtvi.BotOutputData
-	if json.Unmarshal(in.Data, &d) != nil {
-		return nil
-	}
-	if d.WillBeSpoken == nil || !*d.WillBeSpoken || d.SpokenStatus == rtvi.SpokenNew {
-		return nil
-	}
-	if d.OutputType == frames.TextTypeExpressionSound || d.OutputType == frames.TextTypeExpressionPause {
-		var id uint64
-		if d.SegmentID != nil {
-			id = *d.SegmentID
-		}
-		if s.exprSegments[id] {
-			return nil
-		}
-		if s.exprSegments == nil {
-			s.exprSegments = map[uint64]bool{}
-		}
-		s.exprSegments[id] = true
-		tag := "[[" + d.Text + "]]"
-		if d.OutputType == frames.TextTypeExpressionPause {
-			tag = "[[pause " + d.Text + "]]"
-		}
-		return &Event{Kind: EventExpression, Text: tag}
-	}
-	if d.Delivery == nil || slices.Equal(d.Delivery, s.exprDelivery) {
-		return nil
-	}
-	s.exprDelivery = d.Delivery
-	delivery := strings.Join(d.Delivery, ", ")
-	if delivery == "" {
-		delivery = "neutral"
-	}
-	return &Event{Kind: EventExpression, Text: "<<" + delivery + ">>"}
-}
-
-// next reads the next translated event, blocking until one arrives, the deadline
-// passes, or ctx is canceled.
-func (s *session) next(ctx context.Context, deadline time.Time) (Event, bool) {
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		return Event{}, false
-	}
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
-	select {
-	case ev, ok := <-s.events:
-		return ev, ok
-	case <-timer.C:
-		return Event{}, false
-	case <-ctx.Done():
-		return Event{}, false
-	}
-}
-
-// translateLLM handles the bot's LLM response boundary messages, joining the
-// text of one response and emitting it as a single llm_response.
-func (s *session) translateLLM(in rtvi.Incoming) *Event {
-	switch in.Type {
-	case rtvi.TypeBotLLMStarted:
-		// The genuinely new response begins here, so stragglers from an
-		// interrupted prior response are now behind us.
-		s.awaitingLLMRestart = false
-		s.llmBuf.Reset()
-		s.exprDelivery = nil
-		return &Event{Kind: EventLLMStarted}
-	case rtvi.TypeBotLLMText:
-		if s.awaitingLLMRestart {
-			return nil
-		}
-		var d rtvi.TextData
-		if json.Unmarshal(in.Data, &d) == nil {
-			s.llmBuf.WriteString(d.Text)
-		}
-		return nil
-	default: // rtvi.TypeBotLLMStopped
-		// A stopped that arrives before the post-interruption restart is the tail
-		// of the interrupted response; drop it instead of emitting it as this
-		// turn's llm_response.
-		if s.awaitingLLMRestart {
-			s.llmBuf.Reset()
-			return nil
-		}
-		text := s.llmBuf.String()
-		s.llmBuf.Reset()
-		return &Event{Kind: EventLLMResponse, Text: text}
-	}
-}
-
-// nextMatching pops events until one of kind arrives. Events that do not match
-// are dropped, so a scenario does not have to enumerate every event the bot
-// emits. It reports false once the deadline passes.
-func (s *session) nextMatching(ctx context.Context, kind string, deadline time.Time) (Event, bool) {
-	for {
-		ev, ok := s.next(ctx, deadline)
-		if !ok {
-			return Event{}, false
-		}
-		if ev.Kind == kind {
-			return ev, true
-		}
-	}
-}
-
-// dtmf builds a dtmf message carrying the keys the user pressed. The bot turns
-// each into a keypress frame, the same path a telephony transport takes, so a
-// DTMFAggregator in the pipeline sees them as it would a real caller's.
-func dtmf(keys string) rtvi.Message {
-	buttons := make([]string, 0, len(keys))
-	for _, key := range keys {
-		buttons = append(buttons, string(key))
-	}
-	return rtvi.Message{
-		Label: rtvi.MessageLabel, Type: rtvi.TypeDTMF, ID: messageID,
-		Data: rtvi.DTMFData{Buttons: buttons},
-	}
-}
-
-// sendText builds a send-text message that appends the user's turn and runs the
-// LLM immediately, without a spoken audio response.
-func sendText(content string) rtvi.Message {
-	runNow, noAudio := true, false
-	return rtvi.Message{
-		Label: rtvi.MessageLabel, Type: rtvi.TypeSendText, ID: messageID,
-		Data: rtvi.SendTextData{
-			Content: content,
-			Options: &rtvi.SendTextOptions{RunImmediately: &runNow, AudioResponse: &noAudio},
-		},
-	}
+// progress emits a progress record to the EventProgress handlers.
+func (s *Session[R]) progress(record Progress) {
+	s.Call(context.Background(), EventProgress, s, record)
 }

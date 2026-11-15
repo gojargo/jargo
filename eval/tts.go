@@ -47,6 +47,9 @@ var errWebsocketTTS = errors.New("eval: CachingTTSService supports only local or
 // errWAV reports a cache file that is not mono 16-bit PCM.
 var errWAV = errors.New("eval: not a mono 16-bit PCM WAV file")
 
+// errSynthesis is a synthesis the wrapped service reported failed.
+var errSynthesis = errors.New("eval: user TTS failed")
+
 // DefaultCacheDir is where cached user audio is stored when no directory is
 // given: jargo/eval/tts under the user's cache directory.
 func DefaultCacheDir() (string, error) {
@@ -158,17 +161,29 @@ func (s *CachingTTSService) RunTTS(
 // Synthesize is the audio for text, from the cache or by driving the inner
 // service, as 16-bit mono PCM at the service's sample rate.
 func (s *CachingTTSService) Synthesize(ctx context.Context, text string) ([]byte, error) {
-	var pcm []byte
+	var (
+		pcm      []byte
+		reported error
+	)
 	rate := s.syn.sampleRate
 	err := s.syn.RunTTS(ctx, text, uuid.NewString(), func(f frames.Frame) error {
-		if a, ok := f.(*frames.TTSAudioRawFrame); ok {
-			pcm = append(pcm, a.Audio...)
-			rate = a.SampleRate
+		switch fr := f.(type) {
+		case *frames.TTSAudioRawFrame:
+			pcm = append(pcm, fr.Audio...)
+			rate = fr.SampleRate
+		case *frames.ErrorFrame:
+			// A service reports a failed synthesis as an error frame.
+			if reported == nil {
+				reported = fmt.Errorf("%w: %s", errSynthesis, fr.Error)
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if reported != nil {
+		return nil, reported
 	}
 	return resampleUtterance(pcm, rate, s.syn.sampleRate)
 }

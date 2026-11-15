@@ -1,9 +1,7 @@
 package eval
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,7 +15,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
 
@@ -30,9 +27,14 @@ type fakeRTVIServer struct {
 	// onConnect, when set, takes the connection over once it is accepted, for
 	// a bot that refuses the run or never answers.
 	onConnect func(ctx context.Context, conn *websocket.Conn)
-	script    map[string][]rtvi.Message
+	// capabilities, when set, is what bot-ready reports.
+	capabilities map[string]any
+	// greeting is sent right after bot-ready, like a bot that greets on
+	// connect.
+	greeting []rtvi.Message
 
 	mu       sync.Mutex
+	script   map[string][]rtvi.Message
 	received []rtvi.Incoming
 }
 
@@ -48,6 +50,8 @@ func (f *fakeRTVIServer) url() string { return wsURL(f.URL) }
 
 // onText registers the messages the bot sends back for a send-text of content.
 func (f *fakeRTVIServer) onText(content string, replies ...rtvi.Message) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.script[content] = append(f.script[content], replies...)
 }
 
@@ -70,7 +74,6 @@ func (f *fakeRTVIServer) serve(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	conn.SetReadLimit(readLimit)
 	ctx := r.Context()
 	if f.onConnect != nil {
 		f.onConnect(ctx, conn)
@@ -88,17 +91,20 @@ func (f *fakeRTVIServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.received = append(f.received, in)
-		f.mu.Unlock()
-
 		var replies []rtvi.Message
 		switch in.Type {
 		case rtvi.TypeClientReady:
-			replies = []rtvi.Message{botMessage(rtvi.TypeBotReady, nil)}
+			ready := map[string]any{"version": rtvi.ProtocolVersion}
+			if f.capabilities != nil {
+				ready["capabilities"] = f.capabilities
+			}
+			replies = append([]rtvi.Message{botMessage(rtvi.TypeBotReady, ready)}, f.greeting...)
 		case rtvi.TypeSendText:
 			var d rtvi.SendTextData
 			_ = json.Unmarshal(in.Data, &d)
 			replies = f.script[d.Content]
 		}
+		f.mu.Unlock()
 		for _, reply := range replies {
 			out, _ := json.Marshal(reply)
 			if conn.Write(ctx, websocket.MessageText, out) != nil {
@@ -121,6 +127,23 @@ func (f *fakeRTVIServer) messages(msgType string) []rtvi.Incoming {
 	return out
 }
 
+// evalMessages is the payload of every client-message of evalType the bot
+// received.
+func (f *fakeRTVIServer) evalMessages(evalType string) []map[string]any {
+	var out []map[string]any
+	for _, in := range f.messages(rtvi.TypeClientMessage) {
+		var d struct {
+			T string         `json:"t"`
+			D map[string]any `json:"d"`
+		}
+		_ = json.Unmarshal(in.Data, &d)
+		if d.T == evalType {
+			out = append(out, d.D)
+		}
+	}
+	return out
+}
+
 // sentTexts is the content of every send-text the bot received, in order.
 func (f *fakeRTVIServer) sentTexts() []string {
 	var out []string
@@ -133,12 +156,12 @@ func (f *fakeRTVIServer) sentTexts() []string {
 }
 
 // oneTurn is a scenario of one turn saying text and expecting expect.
-func oneTurn(text string, expect ...Expectation) *Scenario {
-	return &Scenario{Name: "t", Turns: []Turn{{User: text, Expect: expect}}}
+func oneTurn(text string, expect ...Expectation) *ScriptScenario {
+	return &ScriptScenario{Name: "t", Turns: []ScriptTurn{{User: text, Expect: expect}}}
 }
 
 // statuses is the status of each turn of a result, in order.
-func statuses(res Result) []string {
+func statuses(res ScriptResult) []string {
 	out := make([]string, 0, len(res.Turns))
 	for _, t := range res.Turns {
 		out = append(out, t.Status)
@@ -146,13 +169,32 @@ func statuses(res Result) []string {
 	return out
 }
 
+// run plays scenario against the bot at url in a session built from it, with
+// judge and params.
+func run(t *testing.T, scenario *ScriptScenario, url string, params SessionParams, judge Judge) ScriptResult {
+	t.Helper()
+	s, err := ScriptSessionFromScenario(scenario, url, params, judge, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Run(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func wantPassed(t *testing.T, res ScriptResult) {
+	t.Helper()
+	if !res.Passed() {
+		t.Fatalf("want a pass, got:\n%s", res)
+	}
+}
+
 // wantRunFailure asserts the result failed on the run itself, once, with event
 // and kind, and a reason holding reason, and that no turn was run.
-func wantRunFailure(t *testing.T, res Result, err error, event, kind, reason string) {
+func wantRunFailure(t *testing.T, res ScriptResult, event, kind, reason string) {
 	t.Helper()
-	if err != nil {
-		t.Fatalf("err = %v, want the failure in the result", err)
-	}
 	if len(res.Failures) != 1 {
 		t.Fatalf("failures = %+v, want one", res.Failures)
 	}
@@ -165,170 +207,196 @@ func wantRunFailure(t *testing.T, res Result, err error, event, kind, reason str
 	}
 }
 
-// The context: message seeds the bot only when the scenario has one: an empty
-// one would wipe the context the bot just built for itself.
-func TestNoEvalContextMessageIsSentWhenTheContextIsEmpty(t *testing.T) {
+func TestOneEventPass(t *testing.T) {
 	bot := newFakeRTVIServer(t)
-	bot.onText("hi", botMessage(rtvi.TypeBotLLMStarted, nil), botMessage(rtvi.TypeBotLLMStopped, nil))
-
-	res, err := runAgainst(t.Context(), oneTurn("hi", Expectation{Event: EventLLMStarted, WithinMS: 2000}),
-		bot.url(), Options{})
-	if err != nil || !res.Passed() {
-		t.Fatalf("run = %v, %v", res, err)
+	bot.onText("what is the capital of France?", reply("Paris")...)
+	res := run(t, oneTurn("what is the capital of France?",
+		Expectation{Event: EventLLMStarted, WithinMS: 2000},
+		Expectation{Event: EventLLMResponse, WithinMS: 2000, TextContains: "Paris"},
+	), bot.url(), SessionParams{}, nil)
+	wantPassed(t, res)
+	// The connection opened with the flags it asks for, then the handshake.
+	connect := bot.messages(rtvi.TypeClientMessage)
+	if len(connect) == 0 || connect[0].ID != evalws.ConnectMessageType {
+		t.Fatalf("the first client message = %+v, want eval-connect", connect)
 	}
-	clientMessages := bot.messages(rtvi.TypeClientMessage)
-	for _, in := range clientMessages {
-		var d clientMessageData
-		_ = json.Unmarshal(in.Data, &d)
-		if d.T == evalws.ContextMessageType {
-			t.Fatalf("an empty context was sent: %s", in.Data)
-		}
+	if flags := bot.evalMessages(evalws.ConnectMessageType); len(flags) != 1 || flags[0]["skip_tts"] != true {
+		t.Fatalf("eval-connect = %v, want skip_tts in text mode", flags)
 	}
 }
 
-// A bot that closes the connection before bot-ready, one at its capacity say,
-// has refused the run: it fails at once, saying how the bot closed it, rather
-// than waiting out the handshake.
-func TestACloseBeforeBotReadyFailsAtOnceWithItsCode(t *testing.T) {
+// The first response is filler; the answer arrives in a second segment, and
+// text_contains aggregates across both.
+func TestOneEventAggregatesPastFiller(t *testing.T) {
 	bot := newFakeRTVIServer(t)
-	bot.onConnect = func(_ context.Context, conn *websocket.Conn) {
-		_ = conn.Close(websocket.StatusInternalError, "Concurrency limit reached")
-	}
-
-	start := time.Now()
-	res, err := runAgainst(t.Context(), oneTurn("x", Expectation{Event: EventLLMStarted}), bot.url(), Options{})
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("took %s, want it to fail at once rather than wait out the handshake", elapsed)
-	}
-	wantRunFailure(t, res, err, RunEventBotReady, FailureClosedBeforeReady, "1011 Concurrency limit reached")
+	bot.onText("weather?", append(reply("Let me check on that. "), reply("It is sunny in Paris.")...)...)
+	wantPassed(t, run(t, oneTurn("weather?", Expectation{Event: EventLLMResponse, WithinMS: 2000, TextContains: "Paris"}),
+		bot.url(), SessionParams{}, nil))
 }
 
-// A bot that refuses the connection outright fails the run at once, with the
-// status it answered.
-func TestARefusedConnectionFailsAtOnce(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-	}))
-	defer srv.Close()
-
-	start := time.Now()
-	res, err := runAgainst(t.Context(), oneTurn("x", Expectation{Event: EventLLMStarted}), wsURL(srv.URL), Options{})
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("took %s, want it to fail at once", elapsed)
-	}
-	wantRunFailure(t, res, err, RunEventConnect, FailureConnectFailed, "403")
-}
-
-// A bot that accepts the connection but never says it is ready still fails,
-// once the handshake's budget runs out.
-func TestABotThatAcceptsButNeverSaysReadyStillTimesOut(t *testing.T) {
+// An STT that finalizes an utterance in pieces emits one user-input per piece;
+// text_contains accumulates the finals (skipping interims), so a phrase
+// spanning pieces matches however each piece is spaced.
+func TestUserTranscriptionAggregatesPieces(t *testing.T) {
 	bot := newFakeRTVIServer(t)
-	bot.onConnect = func(ctx context.Context, conn *websocket.Conn) {
-		defer func() { _ = conn.CloseNow() }()
-		for {
-			if _, _, err := conn.Read(ctx); err != nil {
-				return
-			}
-		}
+	piece := func(text string, final bool) rtvi.Message {
+		return botMessage(rtvi.TypeUserInput, map[string]any{"text": text, "input_type": "transcription", "final": final})
 	}
-
-	res, err := runAgainst(t.Context(), oneTurn("x", Expectation{Event: EventLLMStarted}), bot.url(),
-		Options{BotReadyTimeout: 300 * time.Millisecond})
-	wantRunFailure(t, res, err, RunEventBotReady, FailureHandshakeTimeout, "bot-ready not received within 300ms")
+	bot.onText("what is the capital of Germany?", append([]rtvi.Message{
+		piece(" What is", false), piece(" What", true), piece(" is the capital", true), piece(" of", true),
+		piece(" Germany?", true),
+	}, reply("Berlin.")...)...)
+	wantPassed(t, run(t, oneTurn("what is the capital of Germany?",
+		Expectation{Event: EventUserTranscription, WithinMS: 2000, TextContains: "capital of Germany"},
+		Expectation{Event: EventLLMResponse, WithinMS: 2000, TextContains: "Berlin"},
+	), bot.url(), SessionParams{}, nil))
 }
 
-// A run against a bot that is not there fails cleanly, as a failure to connect
-// that scored nothing.
-func TestAConnectFailureIsReportedCleanly(t *testing.T) {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	url := wsURL(srv.URL)
-	srv.Close() // nothing listens there any more
-
-	res, err := runAgainst(t.Context(), oneTurn("x", Expectation{Event: EventLLMStarted}), url,
-		Options{ConnectTimeout: 500 * time.Millisecond})
-	wantRunFailure(t, res, err, RunEventConnect, FailureConnectFailed, "failed to connect to "+url)
-	if res.ScenarioName != "t" {
-		t.Fatalf("scenario = %q, want it named", res.ScenarioName)
-	}
+// inProgress is the bot reporting a call it is making.
+func inProgress(name string, args map[string]any, id string) rtvi.Message {
+	return botMessage(rtvi.TypeLLMFunctionCall,
+		map[string]any{"function_name": name, "arguments": args, "tool_call_id": id})
 }
 
-// failingSynth is a user voice whose synthesis fails.
-type failingSynth struct{}
-
-func (failingSynth) SampleRate() int { return 16000 }
-
-func (failingSynth) RunTTS(context.Context, string, string, func(frames.Frame) error) error {
-	return errors.New("synthesis failed") //nolint:err113 // a test double's own failure
+// stopped is the bot reporting a call it stopped.
+func stopped(name, id string, canceled bool) rtvi.Message {
+	return botMessage(rtvi.TypeLLMFunctionCallStop, map[string]any{
+		"function_name": name, "tool_call_id": id, keyCanceled: canceled,
+	})
 }
 
-// A user voice that fails to synthesize the turn is the run's error, naming the
-// failure, rather than a turn that waits out its budget for a reply to nothing.
-func TestAUserVoiceThatFailsIsTheRunsError(t *testing.T) {
+func TestFunctionCallPass(t *testing.T) {
 	bot := newFakeRTVIServer(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
-	defer cancel()
+	bot.onText("weather in Paris?", inProgress("get_weather", map[string]any{"city": "Paris"}, "1"))
+	res := run(t, oneTurn("weather in Paris?", Expectation{
+		Event: EventFunctionCall, WithinMS: 2000,
+		Calls: []FunctionCall{{Name: "get_weather", Args: map[string]any{"city": "Paris"}}},
+	}), bot.url(), SessionParams{}, nil)
+	wantPassed(t, res)
+	// Asserting on the arguments raised the bot's report level for the run.
+	configure := bot.evalMessages(evalws.ConfigureMessageType)
+	if len(configure) != 1 || !strings.Contains(mustJSON(t, configure[0]), `"function_call_report_level":{"*":"full"}`) {
+		t.Fatalf("eval-configure = %v, want the full report level", configure)
+	}
+}
 
-	res, err := runAgainst(ctx, oneTurn("a table for two", Expectation{Event: EventLLMResponse, WithinMS: 5000}),
-		bot.url(), Options{UserTTS: tts.New("failingTTS", failingSynth{})})
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	data, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Failures) != 1 || res.Failures[0].Kind != FailureError ||
-		!strings.Contains(res.Failures[0].Reason, "synthesis failed") {
-		t.Fatalf("failures = %+v, want the synthesis failure as the run's error", res.Failures)
-	}
-	if ctx.Err() != nil {
-		t.Fatal("the run waited for its context to end rather than failing")
-	}
+	return string(data)
 }
 
-// boomJudge panics as soon as it is given the conversation, as a broken judge
-// might.
-type boomJudge struct{ countingJudge }
-
-func (*boomJudge) AddUserMessage(string) {
-	panic("judge boom") //nolint:forbidigo // the failure under test
+// cancelScenario is one turn asserting a cancel call named a particular id.
+func cancelScenario(expectedID string) *ScriptScenario {
+	return oneTurn("never mind that one", Expectation{
+		Event: EventFunctionCall, WithinMS: 2000,
+		Calls: []FunctionCall{{Name: "cancel_write_report", Args: map[string]any{"tool_call_id": expectedID}}},
+	})
 }
 
-// An unexpected failure mid-run, here a judge that panics, is reported as the
-// run's error with its stack in the trace, scored against the turn it
-// interrupted, rather than taking the caller down with it.
-func TestAnUnexpectedErrorIsSurfacedNotSwallowed(t *testing.T) {
+// A model that mistypes an id, is refused, and repeats the call with the right
+// one has made the call the turn asks for.
+func TestCorrectedCallSatisfiesTheTurn(t *testing.T) {
 	bot := newFakeRTVIServer(t)
-	res, err := runAgainst(t.Context(), oneTurn("hi", Expectation{Event: EventLLMStarted}), bot.url(),
-		Options{Judge: &boomJudge{}})
-	if err != nil {
-		t.Fatal(err)
+	bot.onText("never mind that one",
+		inProgress("cancel_write_report", map[string]any{"tool_call_id": "cull_turtles"}, "call_cancel_1"),
+		inProgress("cancel_write_report", map[string]any{"tool_call_id": "call_turtles"}, "call_cancel_2"))
+	wantPassed(t, run(t, cancelScenario("call_turtles"), bot.url(), SessionParams{}, nil))
+}
+
+// No call carried the expected id, so the failure names the ones that did
+// arrive rather than claiming the call was never made.
+func TestWrongArgsReportsWhatTheBotSent(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("never mind that one",
+		inProgress("cancel_write_report", map[string]any{"tool_call_id": "call_volcanoes"}, "call_cancel"))
+	res := run(t, cancelScenario("call_turtles"), bot.url(), SessionParams{}, nil)
+	if res.Passed() || res.Failures[0].Kind != FailureFunctionArgsMismatch ||
+		!strings.Contains(res.Failures[0].String(), "call_volcanoes") {
+		t.Fatalf("failures = %+v", res.Failures)
 	}
-	if res.Passed() || len(res.Failures) != 1 {
-		t.Fatalf("failures = %+v, want one", res.Failures)
+}
+
+// runStopped plays a turn asserting a call stopped and how it ended, against a
+// bot reporting it stopped as reported.
+func runStopped(t *testing.T, reported, expected bool) ScriptResult {
+	t.Helper()
+	bot := newFakeRTVIServer(t)
+	bot.onText("never mind that one", stopped("write_report", "call_turtles", reported))
+	return run(t, oneTurn("never mind that one", Expectation{
+		Event: EventFunctionCallStopped, WithinMS: 2000,
+		Calls: []FunctionCall{{
+			Name: "write_report", Args: map[string]any{"tool_call_id": "call_turtles", keyCanceled: expected},
+		}},
+	}), bot.url(), SessionParams{}, nil)
+}
+
+func TestCancelledCallMatches(t *testing.T) {
+	wantPassed(t, runStopped(t, true, true))
+}
+
+// Work that finished on its own stops too, and a scenario asserting
+// cancellation must not accept it.
+func TestCallThatRanToCompletionIsNotACancellation(t *testing.T) {
+	res := runStopped(t, false, true)
+	if res.Passed() || res.Failures[0].Kind != FailureFunctionArgsMismatch {
+		t.Fatalf("failures = %+v", res.Failures)
 	}
-	f := res.Failures[0]
-	if f.EventName != RunEventHarness || f.Kind != FailureError || !strings.Contains(f.Reason, "judge boom") {
-		t.Fatalf("failure = %+v, want the panic as the run's error", f)
+}
+
+// Both carry a name and a tool_call_id, so an expectation for one must not be
+// satisfied by the other.
+func TestStartedAndStoppedEventsDoNotClaimEachOther(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("report on sea turtles",
+		inProgress("write_report", map[string]any{"topic": "sea turtles"}, "call_turtles"))
+	res := run(t, oneTurn("report on sea turtles", Expectation{
+		Event: EventFunctionCallStopped, WithinMS: 1500, Calls: []FunctionCall{{Name: "write_report"}},
+	}), bot.url(), SessionParams{}, nil)
+	if res.Passed() || res.Failures[0].Kind != FailureMissingFunctionCall {
+		t.Fatalf("failures = %+v", res.Failures)
 	}
-	trace := strings.Join(res.DebugLog, "\n")
-	if !strings.Contains(trace, "judge boom") || !strings.Contains(trace, "goroutine") {
-		t.Fatalf("trace lacks the panic and its stack:\n%s", trace)
-	}
-	if got := statuses(res); !slices.Equal(got, []string{TurnFailed}) {
-		t.Fatalf("turns = %v, want the interrupted turn failed", got)
-	}
-	if !slices.Equal(res.Turns[0].Failures, res.Failures) {
-		t.Fatalf("turn failures = %+v, want the run's error", res.Turns[0].Failures)
+}
+
+// The bot reports the cancel tool running, then the call it canceled stopping,
+// back to back; the events keep that order.
+func TestCancelledCallStopsAfterTheCancelToolStarts(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("never mind that one",
+		inProgress("cancel_write_report", map[string]any{"tool_call_id": "call_turtles"}, "call_cancel"),
+		stopped("write_report", "call_turtles", true))
+	wantPassed(t, run(t, oneTurn("never mind that one",
+		Expectation{Event: EventFunctionCall, WithinMS: 2000, Calls: []FunctionCall{{Name: "cancel_write_report"}}},
+		Expectation{
+			Event: EventFunctionCallStopped, WithinMS: 2000,
+			Calls: []FunctionCall{{Name: "write_report", Args: map[string]any{keyCanceled: true}}},
+		},
+	), bot.url(), SessionParams{}, nil))
+}
+
+func TestTextMismatchFailsClearly(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("hi", reply("Paris")...)
+	res := run(t, oneTurn("hi", Expectation{Event: EventLLMResponse, WithinMS: 2000, TextContains: "London"}),
+		bot.url(), SessionParams{}, nil)
+	if res.Passed() || len(res.Failures) != 1 || !strings.Contains(res.Failures[0].Reason, "does not contain") {
+		t.Fatalf("failures = %+v", res.Failures)
 	}
 }
 
 // twoTurnsFirstFails is a scenario whose first turn fails on content and whose
 // second passes, against a bot that answers each.
-func twoTurnsFirstFails(t *testing.T, stopOnFailure bool) (*fakeRTVIServer, *Scenario) {
+func twoTurnsFirstFails(t *testing.T, stopOnFailure bool) (*fakeRTVIServer, *ScriptScenario) {
 	t.Helper()
 	bot := newFakeRTVIServer(t)
 	bot.onText("first", reply("Paris")...)
 	bot.onText("second", reply("Berlin")...)
-	return bot, &Scenario{
+	return bot, &ScriptScenario{
 		Name: "stop", StopOnFailure: &stopOnFailure,
-		Turns: []Turn{
+		Turns: []ScriptTurn{
 			{User: "first", Expect: []Expectation{{Event: EventLLMResponse, WithinMS: 300, TextContains: "London"}}},
 			{User: "second", Expect: []Expectation{{Event: EventLLMResponse, WithinMS: 2000, TextContains: "Berlin"}}},
 		},
@@ -336,7 +404,7 @@ func twoTurnsFirstFails(t *testing.T, stopOnFailure bool) (*fakeRTVIServer, *Sce
 }
 
 // failureTurns is the turn index of each failure, in order.
-func failureTurns(fs []Failure) []int {
+func failureTurns(fs []AssertionFailure) []int {
 	out := make([]int, 0, len(fs))
 	for _, f := range fs {
 		out = append(out, f.TurnIndex)
@@ -346,13 +414,10 @@ func failureTurns(fs []Failure) []int {
 
 // A failed turn ends the scenario by default, and the turn it stopped short of
 // is not run rather than passed.
-func TestAFailedTurnStopsTheScenarioByDefault(t *testing.T) {
+func TestFailedTurnStopsScenarioByDefault(t *testing.T) {
 	bot, scenario := twoTurnsFirstFails(t, true)
 	scenario.StopOnFailure = nil
-	res, err := runAgainst(t.Context(), scenario, bot.url(), Options{})
-	if err != nil || res.Passed() {
-		t.Fatalf("run = %v, %v; want a failure", res, err)
-	}
+	res := run(t, scenario, bot.url(), SessionParams{}, nil)
 	if got := failureTurns(res.Failures); !slices.Equal(got, []int{0}) {
 		t.Fatalf("failures on turns %v, want only the first", got)
 	}
@@ -366,12 +431,9 @@ func TestAFailedTurnStopsTheScenarioByDefault(t *testing.T) {
 
 // With stop_on_failure false every turn is driven, and the passing turn after
 // the failure adds no failure of its own.
-func TestStopOnFailureFalseDrivesTheRemainingTurns(t *testing.T) {
+func TestStopOnFailureFalseDrivesRemainingTurns(t *testing.T) {
 	bot, scenario := twoTurnsFirstFails(t, false)
-	res, err := runAgainst(t.Context(), scenario, bot.url(), Options{})
-	if err != nil || res.Passed() {
-		t.Fatalf("run = %v, %v; want a failure", res, err)
-	}
+	res := run(t, scenario, bot.url(), SessionParams{}, nil)
 	if got := failureTurns(res.Failures); !slices.Equal(got, []int{0}) {
 		t.Fatalf("failures on turns %v, want only the first", got)
 	}
@@ -387,18 +449,12 @@ func TestStopOnFailureFalseDrivesTheRemainingTurns(t *testing.T) {
 // order.
 func TestTurnResultsCarryTheirOwnFailures(t *testing.T) {
 	bot, scenario := twoTurnsFirstFails(t, false)
-	res, err := runAgainst(t.Context(), scenario, bot.url(), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := run(t, scenario, bot.url(), SessionParams{}, nil)
 	failed, passed := res.Turns[0], res.Turns[1]
-	if len(failed.Failures) != 1 || failed.Failures[0].Kind != FailureTextMismatch {
-		t.Fatalf("first turn failures = %+v, want one text mismatch", failed.Failures)
+	if len(failed.Failures) != 1 || failed.Failures[0].Kind != FailureTextMismatch || len(passed.Failures) != 0 {
+		t.Fatalf("turns = %+v", res.Turns)
 	}
-	if len(passed.Failures) != 0 {
-		t.Fatalf("second turn failures = %+v, want none", passed.Failures)
-	}
-	var flat []Failure
+	var flat []AssertionFailure
 	for _, turn := range res.Turns {
 		flat = append(flat, turn.Failures...)
 	}
@@ -407,230 +463,496 @@ func TestTurnResultsCarryTheirOwnFailures(t *testing.T) {
 	}
 }
 
-// A turn records its failed expectations as well as what the passing ones
-// matched.
+// A turn records what each expectation matched; the marker the LLM produced is
+// kept, so incomplete can be told apart.
+func TestTurnResultsRecordWhatEachExpectationMatched(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("hello",
+		botMessage(rtvi.TypeBotLLMStarted, nil),
+		botMessage(rtvi.TypeBotLLMText, rtvi.TextData{Text: "Hi there"}),
+		botMessage(rtvi.TypeBotLLMMarker, map[string]any{"text": "◐", "kind": "short", "raw": "◐ Hi there"}),
+		botMessage(rtvi.TypeBotLLMStopped, nil))
+	res := run(t, oneTurn("hello",
+		Expectation{Event: EventLLMMarker, Marker: MarkerIncomplete, WithinMS: 300},
+		Expectation{Event: EventLLMResponse, WithinMS: 300},
+	), bot.url(), SessionParams{}, nil)
+	wantPassed(t, res)
+	want := []ExpectationResult{
+		{ExpectationIndex: 0, EventName: EventLLMMarker, Passed: true, Matched: "◐"},
+		{ExpectationIndex: 1, EventName: EventLLMResponse, Passed: true, Matched: "Hi there"},
+	}
+	if got := res.Turns[0].Expectations; !slices.Equal(got, want) {
+		t.Fatalf("expectations = %+v, want %+v", got, want)
+	}
+	if markers := bot.evalMessages(evalws.ConfigureMessageType); len(markers) != 1 || markers[0]["llm_markers"] != true {
+		t.Fatalf("eval-configure = %v, want the markers asked for", markers)
+	}
+}
+
 func TestTurnResultsRecordFailedExpectationsToo(t *testing.T) {
 	bot, scenario := twoTurnsFirstFails(t, false)
-	res, err := runAgainst(t.Context(), scenario, bot.url(), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := run(t, scenario, bot.url(), SessionParams{}, nil)
 	want := [][]ExpectationResult{
 		{{ExpectationIndex: 0, EventName: EventLLMResponse, Passed: false}},
 		{{ExpectationIndex: 0, EventName: EventLLMResponse, Passed: true, Matched: "Berlin"}},
 	}
 	for i, turn := range res.Turns {
 		if !slices.Equal(turn.Expectations, want[i]) {
-			t.Errorf("turn %d expectations = %+v, want %+v", i+1, turn.Expectations, want[i])
+			t.Errorf("turn %d expectations = %+v, want %+v", i, turn.Expectations, want[i])
 		}
+	}
+}
+
+func TestTurnResultsStopRecordingAtATimeout(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	res := run(t, oneTurn("hi",
+		Expectation{Event: EventLLMResponse, WithinMS: 200},
+		Expectation{Event: EventTTSResponse, WithinMS: 200},
+	), bot.url(), SessionParams{}, nil)
+	want := []ExpectationResult{{ExpectationIndex: 0, EventName: EventLLMResponse}}
+	if got := res.Turns[0].Expectations; !slices.Equal(got, want) {
+		t.Fatalf("expectations = %+v, want %+v", got, want)
 	}
 }
 
 // A driven turn is timed; one that never ran has no time to report.
 func TestTurnResultsAreTimed(t *testing.T) {
 	bot, scenario := twoTurnsFirstFails(t, false)
-	res, err := runAgainst(t.Context(), scenario, bot.url(), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The first turn waits out its 300ms budget; the second may answer within
-	// the millisecond.
+	res := run(t, scenario, bot.url(), SessionParams{}, nil)
 	if res.Turns[0].DurationMS <= 0 || res.Turns[1].Status != TurnPassed {
 		t.Fatalf("turns %+v, want both driven and the first timed", res.Turns)
 	}
-
 	bot, scenario = twoTurnsFirstFails(t, true)
-	stopping, err := runAgainst(t.Context(), scenario, bot.url(), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	stopping := run(t, scenario, bot.url(), SessionParams{}, nil)
 	if stopping.Turns[1].DurationMS != 0 {
 		t.Fatalf("duration of the turn never run = %dms, want none", stopping.Turns[1].DurationMS)
 	}
 }
 
-// toneSynth renders any text as 120ms of non-silent 16 kHz PCM.
-type toneSynth struct{}
-
-func (toneSynth) SampleRate() int { return 16000 }
-
-func (toneSynth) RunTTS(_ context.Context, _, _ string, yield func(frames.Frame) error) error {
-	return tts.PCMYielder(yield, 16000)(bytes.Repeat([]byte{0x01, 0x02}, 16000*12/100))
+func TestMissingEventTimesOut(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	res := run(t, oneTurn("hi", Expectation{Event: EventLLMResponse, WithinMS: 200}), bot.url(), SessionParams{}, nil)
+	if len(res.Failures) != 1 || !strings.Contains(res.Failures[0].Reason, "arrived within") ||
+		!strings.Contains(res.Failures[0].Reason, "200ms") {
+		t.Fatalf("failures = %+v", res.Failures)
+	}
 }
 
-// A user turn in audio mode is streamed as the microphone would: the whole
-// utterance, in order, in 20ms frames at real-time pace, then a second of
-// silence so the bot's VAD ends the turn.
-func TestUserAudioIsPacedThenFollowedBySilence(t *testing.T) {
+// Only the first failed expectation reports once an event never arrived.
+func TestSubsequentAssertionsSkippedAfterTimeout(t *testing.T) {
 	bot := newFakeRTVIServer(t)
-	c, err := dial(t.Context(), bot.url())
+	res := run(t, oneTurn("hi",
+		Expectation{Event: EventLLMStarted, WithinMS: 100},
+		Expectation{Event: EventLLMResponse, WithinMS: 100},
+		Expectation{Event: EventFunctionCall, WithinMS: 100},
+	), bot.url(), SessionParams{}, nil)
+	if len(res.Failures) != 1 {
+		t.Fatalf("failures = %+v, want only the first", res.Failures)
+	}
+}
+
+// A turn expecting a call and a response, getting neither, fails within one
+// budget: both expectations wait against one deadline.
+func TestTurnSharesOneDeadlineAcrossExpectations(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	start := time.Now()
+	res := run(t, oneTurn("weather?",
+		Expectation{Event: EventFunctionCall, WithinMS: 400, Calls: []FunctionCall{{Name: "get_weather"}}},
+		Expectation{Event: EventLLMResponse, WithinMS: 400},
+	), bot.url(), SessionParams{}, nil)
+	if res.Passed() {
+		t.Fatal("passed with nothing arriving")
+	}
+	if elapsed := time.Since(start); elapsed > 800*time.Millisecond+500*time.Millisecond {
+		t.Fatalf("took %s, want one 400ms budget for both", elapsed)
+	}
+}
+
+func TestSendAfterDelaysRun(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("first", botMessage(rtvi.TypeBotLLMStarted, nil), botMessage(rtvi.TypeBotLLMStopped, nil))
+	bot.onText("second", reply("ok")...)
+	res := run(t, &ScriptScenario{Name: "send_after", Turns: []ScriptTurn{
+		{User: "first", Expect: []Expectation{{Event: EventLLMStarted, WithinMS: 2000}}},
+		{
+			User: "second", Expect: []Expectation{{Event: EventLLMResponse, WithinMS: 2000}},
+			SendAfter: &SendAfter{Event: EventLLMStarted, DelayMS: 200},
+		},
+	}}, bot.url(), SessionParams{}, nil)
+	wantPassed(t, res)
+	if res.DurationMS < 200 {
+		t.Fatalf("duration = %dms, want the 200ms delay", res.DurationMS)
+	}
+}
+
+// A run against a bot that is not there fails cleanly, as a failure to connect
+// that scored nothing, and closes its judge.
+func TestConnectFailureReportedCleanly(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := wsURL(srv.URL)
+	srv.Close() // nothing listens there any more
+	judge := newFakeJudge()
+	scenario := oneTurn("x", Expectation{Event: EventLLMResponse, Eval: "ok"})
+	res := run(t, scenario, url, SessionParams{ConnectTimeout: 500 * time.Millisecond}, judge)
+	wantRunFailure(t, res, RunEventConnect, FailureConnectFailed, "failed to connect to "+url)
+	if !judge.isClosed() {
+		t.Fatal("the judge of a run that never reached the bot was not closed")
+	}
+}
+
+// boomJudge panics as soon as it is given the conversation, as a broken judge
+// might.
+type boomJudge struct{ fakeJudge }
+
+func (*boomJudge) AddUserMessage(string) {
+	panic("judge boom") //nolint:forbidigo // the failure under test
+}
+
+// An unexpected failure mid-run, here a judge that panics, is reported as the
+// run's error with its stack in the trace, scored against the turn it
+// interrupted, rather than taking the caller down with it.
+func TestUnexpectedErrorSurfacedNotSwallowed(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	res := run(t, oneTurn("hi", Expectation{Event: EventLLMStarted}), bot.url(), SessionParams{}, &boomJudge{})
+	if len(res.Failures) != 1 {
+		t.Fatalf("failures = %+v, want one", res.Failures)
+	}
+	f := res.Failures[0]
+	if f.EventName != RunEventError || f.Kind != FailureError || !strings.Contains(f.Reason, "panic: judge boom") {
+		t.Fatalf("failure = %+v, want the panic as the run's error", f)
+	}
+	trace := strings.Join(res.DebugLog, "\n")
+	if !strings.Contains(trace, "judge boom") || !strings.Contains(trace, "goroutine") {
+		t.Fatalf("trace lacks the panic and its stack:\n%s", trace)
+	}
+	got := statuses(res)
+	if !slices.Equal(got, []string{TurnFailed}) || !slices.Equal(res.Turns[0].Failures, res.Failures) {
+		t.Fatalf("turns = %+v, want the interrupted turn failed with the error", res.Turns)
+	}
+}
+
+func TestContextSendsEvalContextMessage(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("hi", botMessage(rtvi.TypeBotLLMStarted, nil), botMessage(rtvi.TypeBotLLMStopped, nil))
+	scenario := oneTurn("hi", Expectation{Event: EventLLMStarted, WithinMS: 2000})
+	scenario.Context = []map[string]any{{"role": "system", "content": "be terse"}}
+	wantPassed(t, run(t, scenario, bot.url(), SessionParams{}, nil))
+	sent := bot.evalMessages(evalws.ContextMessageType)
+	if len(sent) != 1 || mustJSON(t, sent[0]["messages"]) != `[{"content":"be terse","role":"system"}]` {
+		t.Fatalf("eval-context = %v, want the scenario's messages as they are", sent)
+	}
+}
+
+// The context: message seeds the bot only when the scenario has one: an empty
+// one would wipe the context the bot just built for itself.
+func TestNoEvalContextMessageWhenEmpty(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("hi", botMessage(rtvi.TypeBotLLMStarted, nil), botMessage(rtvi.TypeBotLLMStopped, nil))
+	run(t, oneTurn("hi", Expectation{Event: EventLLMStarted, WithinMS: 2000}), bot.url(), SessionParams{}, nil)
+	if sent := bot.evalMessages(evalws.ContextMessageType); len(sent) != 0 {
+		t.Fatalf("eval-context = %v, want none", sent)
+	}
+}
+
+// Stopping the run ends the bot's session with eval-cancel.
+func TestARunEndsTheBotsSession(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("hi", reply("hello")...)
+	run(t, oneTurn("hi", Expectation{Event: EventLLMResponse, WithinMS: 2000}), bot.url(), SessionParams{}, nil)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(bot.evalMessages(evalws.CancelMessageType)) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(bot.evalMessages(evalws.CancelMessageType)) != 1 {
+		t.Fatal("the bot never got eval-cancel")
+	}
+}
+
+// A bot that ends the call fails the turn waiting on it at once.
+func TestTheBotHangingUpFailsTheTurnAsBotEnded(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onConnect = func(ctx context.Context, conn *websocket.Conn) {
+		for {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			in, _ := rtvi.ParseIncoming(data)
+			switch in.Type {
+			case rtvi.TypeClientReady:
+				out, _ := json.Marshal(botMessage(rtvi.TypeBotReady, nil))
+				_ = conn.Write(ctx, websocket.MessageText, out)
+			case rtvi.TypeSendText:
+				_ = conn.Close(websocket.StatusNormalClosure, "goodbye")
+				return
+			}
+		}
+	}
+	start := time.Now()
+	res := run(t, oneTurn("bye", Expectation{Event: EventLLMResponse, WithinMS: 10_000}), bot.url(), SessionParams{}, nil)
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("the turn waited out its budget")
+	}
+	if len(res.Failures) != 1 || res.Failures[0].Kind != FailureBotEnded {
+		t.Fatalf("failures = %+v, want the bot ending the call", res.Failures)
+	}
+}
+
+// A bot that closes the connection before bot-ready, one at its capacity say,
+// has refused the run: it fails at once, saying how the bot closed it.
+func TestACloseBeforeBotReadyFailsAtOnceWithItsCode(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onConnect = func(_ context.Context, conn *websocket.Conn) {
+		_ = conn.Close(websocket.StatusInternalError, "Concurrency limit reached")
+	}
+	start := time.Now()
+	res := run(t, oneTurn("x", Expectation{Event: EventLLMStarted}), bot.url(), SessionParams{}, nil)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("took %s, want it to fail at once", elapsed)
+	}
+	wantRunFailure(t, res, RunEventBotReady, FailureClosedBeforeReady, "1011 Concurrency limit reached")
+}
+
+// A bot that refuses the connection outright fails the run at once, with the
+// status it answered.
+func TestARefusedConnectionFailsAtOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	start := time.Now()
+	res := run(t, oneTurn("x", Expectation{Event: EventLLMStarted}), wsURL(srv.URL), SessionParams{}, nil)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("took %s, want it to fail at once", elapsed)
+	}
+	wantRunFailure(t, res, RunEventConnect, FailureConnectFailed, "403")
+}
+
+// A bot that accepts the connection but never says it is ready still fails,
+// once the handshake's budget runs out.
+func TestABotThatAcceptsButNeverSaysReadyStillTimesOut(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onConnect = func(ctx context.Context, conn *websocket.Conn) {
+		for {
+			if _, _, err := conn.Read(ctx); err != nil {
+				return
+			}
+		}
+	}
+	res := run(t, oneTurn("x", Expectation{Event: EventLLMStarted}), bot.url(),
+		SessionParams{BotReadyTimeout: 300 * time.Millisecond}, nil)
+	wantRunFailure(t, res, RunEventBotReady, FailureHandshakeTimeout, "bot-ready not received within 300ms")
+}
+
+// failingSynth is a user voice whose synthesis fails, reporting it as a service
+// does.
+type failingSynth struct{}
+
+func (failingSynth) SampleRate() int { return 16000 }
+
+func (failingSynth) RunTTS(_ context.Context, _, _ string, yield func(frames.Frame) error) error {
+	return yield(frames.NewErrorFrame("failingTTS error: synthesis failed"))
+}
+
+// failingVoice is a user voice that never speaks.
+func failingVoice(t *testing.T) *CachingTTSService {
+	t.Helper()
+	noCache := false
+	voice, err := NewCachingTTSService(failingSynth{}, CachingTTSConfig{CacheKey: "failing", UseCache: &noCache})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &session{client: c, userTTS: tts.New("toneTTS", toneSynth{})}
+	return voice
+}
 
-	start := time.Now()
-	if err := s.sendUserAudio(t.Context(), "hello"); err != nil {
+// A user voice that fails to synthesize the turn is the run's error, naming the
+// failure, rather than a turn that waits out its budget for a reply to nothing.
+func TestAUserVoiceThatFailsIsTheRunsError(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	scenario := oneTurn("a table for two", Expectation{Event: EventLLMResponse, WithinMS: 5000})
+	scenario.UserAudio = true
+	s, err := NewScriptSession(scenario, bot.url(), SessionParams{}, nil, failingVoice(t))
+	if err != nil {
 		t.Fatal(err)
 	}
-	elapsed := time.Since(start)
-	// The closing handshake follows every frame sent, so once it completes the
-	// bot has read them all.
-	c.close()
-
-	const chunkBytes = 16000 * audioChunkMS / 1000 * 2
-	utterance := bytes.Repeat([]byte{0x01, 0x02}, 16000*12/100)
-	wantChunks := len(utterance)/chunkBytes + silenceTailMS/audioChunkMS
-	in := bot.messages(rtvi.TypeRawAudio)
-	if len(in) != wantChunks {
-		t.Fatalf("the bot got %d frames, want %d", len(in), wantChunks)
+	res, err := s.Run(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	var chunks [][]byte
-	for _, m := range in {
-		var d rtvi.RawAudioData
-		if err := json.Unmarshal(m.Data, &d); err != nil {
-			t.Fatal(err)
+	if len(res.Failures) != 1 || res.Failures[0].Kind != FailureError ||
+		!strings.Contains(res.Failures[0].Reason, "synthesis failed") || res.Turns[0].Status != TurnFailed {
+		t.Fatalf("failures = %+v, want the synthesis failure as the run's error", res.Failures)
+	}
+}
+
+// The response transcription needs the bot's audio: without audio mode the
+// scenario is skipped, not failed, and its judge is closed.
+func TestResponseTranscriptionSkip(t *testing.T) {
+	scenario := oneTurn("x", Expectation{Event: EventResponse, Eval: "ok"})
+	judge := newFakeJudge()
+	res := run(t, scenario, "ws://localhost:0", SessionParams{}, judge)
+	if res.Skipped == "" || res.Passed() || !strings.Contains(res.Skipped, "response") {
+		t.Fatalf("result = %+v, want it skipped", res)
+	}
+	if got := statuses(res); !slices.Equal(got, []string{TurnNotRun}) {
+		t.Fatalf("turns = %v", got)
+	}
+	if !judge.isClosed() {
+		t.Fatal("the skipped run's judge was not closed")
+	}
+}
+
+// progressScenario is one turn expecting the bot's reply.
+func progressScenario() *ScriptScenario {
+	return oneTurn("hi",
+		Expectation{Event: EventLLMStarted, WithinMS: 2000},
+		Expectation{Event: EventLLMResponse, WithinMS: 2000})
+}
+
+// EventProgress handlers see every turn and expectation, in order, before Run
+// returns.
+func TestProgressEvent(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("hi", reply("hello")...)
+	s, err := ScriptSessionFromScenario(progressScenario(), bot.url(), SessionParams{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu       sync.Mutex
+		finished []string
+		sources  []any
+	)
+	s.Add(EventProgress, func(_ context.Context, source any, args ...any) {
+		time.Sleep(10 * time.Millisecond)
+		p, _ := args[0].(Progress)
+		mu.Lock()
+		finished = append(finished, p.EventName+" "+p.Status)
+		sources = append(sources, source)
+		mu.Unlock()
+	})
+	if _, err := s.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"hi turn", "llm_started matched", "llm_response matched"}
+	if !slices.Equal(finished, want) {
+		t.Fatalf("progress = %v, want %v", finished, want)
+	}
+	for _, source := range sources {
+		if source != any(s.Session) {
+			t.Fatalf("source = %T, want the session", source)
 		}
-		pcm, err := base64.StdEncoding.DecodeString(d.Base64Audio)
+	}
+}
+
+// Options.OnProgress is told the same records, in order.
+func TestOptionsOnProgressIsCalled(t *testing.T) {
+	bot := newFakeRTVIServer(t)
+	bot.onText("hi", reply("hello")...)
+	var seen []string
+	res, err := RunURL(t.Context(), progressScenario(), bot.url(), Options{
+		OnProgress: func(p Progress) { seen = append(seen, p.EventName+" "+p.Status) },
+	})
+	if err != nil || !res.Passed() {
+		t.Fatalf("run = %v, %v", res, err)
+	}
+	if want := []string{"hi turn", "llm_started matched", "llm_response matched"}; !slices.Equal(seen, want) {
+		t.Fatalf("progress = %v, want %v", seen, want)
+	}
+}
+
+// An audio run checks the audio the bot's bot-ready reports its transport
+// carries.
+func TestAudioSupportCheck(t *testing.T) {
+	callerOff := map[string]any{"audio_in": false, "audio_out": true}
+	botOff := map[string]any{"audio_in": true, "audio_out": false}
+	bothOff := map[string]any{"audio_in": false, "audio_out": false}
+	bothOn := map[string]any{"audio_in": true, "audio_out": true}
+
+	runWith := func(
+		t *testing.T, capabilities map[string]any, userAudio, botAudio bool, check string,
+	) (ScriptResult, time.Duration) {
+		t.Helper()
+		bot := newFakeRTVIServer(t)
+		bot.capabilities = capabilities
+		bot.greeting = reply("Welcome!")
+		scenario := &ScriptScenario{Name: "greeting", Turns: []ScriptTurn{
+			{Expect: []Expectation{{Event: EventLLMResponse, WithinMS: 2000}}},
+		}}
+		scenario.UserAudio, scenario.BotAudio = userAudio, botAudio
+		var voice *CachingTTSService
+		if userAudio {
+			// The caller never speaks; the voice only makes the run send caller
+			// audio.
+			voice = failingVoice(t)
+		}
+		s, err := NewScriptSession(scenario, bot.url(), SessionParams{AudioSupportCheck: check}, nil, voice)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(pcm) != chunkBytes || d.SampleRate != 16000 {
-			t.Fatalf("a chunk of %d bytes at %d Hz, want %d bytes at 16000 Hz", len(pcm), d.SampleRate, chunkBytes)
+		start := time.Now()
+		res, err := s.Run(t.Context())
+		if err != nil {
+			t.Fatal(err)
 		}
-		chunks = append(chunks, pcm)
+		return res, time.Since(start)
 	}
-	speech := bytes.Join(chunks[:len(utterance)/chunkBytes], nil)
-	if !bytes.Equal(speech, utterance) {
-		t.Fatal("the utterance did not arrive whole and in order")
-	}
-	for _, pcm := range chunks[len(utterance)/chunkBytes:] {
-		if !bytes.Equal(pcm, make([]byte, chunkBytes)) {
-			t.Fatal("the tail after the utterance is not silence")
-		}
-	}
-	// Real-time pacing: each frame waits out its 20ms, so the turn takes as long
-	// to send as it lasts rather than going out at once.
-	if minimum := time.Duration(wantChunks-1) * audioChunkMS * time.Millisecond; elapsed < minimum {
-		t.Fatalf("sent %d frames in %s, want at least %s at real-time pace", wantChunks, elapsed, minimum)
-	}
-}
 
-// A keypad turn of one key is one dtmf message carrying that key.
-func TestADTMFTurnOfOneKeyIsOneMessageWithThatKey(t *testing.T) {
-	m := dtmf("1")
-	d, ok := m.Data.(rtvi.DTMFData)
-	if m.Type != rtvi.TypeDTMF || !ok || len(d.Buttons) != 1 || d.Buttons[0] != "1" {
-		t.Fatalf("message = %+v, want one dtmf message carrying the key 1", m)
-	}
-}
-
-// A marker the bot gave no kind fails a check on what it meant, saying so.
-func TestAMarkerOfNoKindFails(t *testing.T) {
-	exp := Expectation{Event: EventLLMMarker, Marker: MarkerComplete}
-	fail := func(reason, kind string) *Failure { return &Failure{Reason: reason, Kind: kind} }
-	f := checkMarker(Event{Kind: EventLLMMarker, Text: "?"}, exp, fail)
-	if f == nil || !strings.Contains(f.Reason, "no known kind") || f.Kind != FailureMarkerMismatch {
-		t.Fatalf("failure = %+v, want it to say the marker has no known kind", f)
-	}
-}
-
-// A response that does not follow the marker protocol a check asks about fails
-// as a marker format failure, and text that misses a pattern as an unmatched
-// one.
-func TestFormatAndPatternChecksHaveTheirOwnKinds(t *testing.T) {
-	fail := func(reason, kind string) *Failure { return &Failure{Reason: reason, Kind: kind} }
-	one := 1
-	exp := Expectation{Event: EventLLMMarker, Markers: &one}
-	ev := Event{Kind: EventLLMMarker, Raw: "<x> hi <x>", Markers: []string{"<x>"}}
-	if f := checkMarker(ev, exp, fail); f == nil || f.Kind != FailureMarkerFormat {
-		t.Fatalf("failure = %+v, want a marker format failure", f)
-	}
-	patterns := Expectation{Event: EventLLMResponse, TextMatches: Patterns{"^Hello"}}
-	if f := checkTextMatches("Goodbye", patterns, fail); f == nil || f.Kind != FailureTextUnmatched {
-		t.Fatalf("failure = %+v, want an unmatched text failure", f)
-	}
-}
-
-// countingJudge counts how often it is asked.
-type countingJudge struct{ asked int }
-
-func (*countingJudge) AddUserMessage(string)      {}
-func (*countingJudge) AddAssistantMessage(string) {}
-
-func (j *countingJudge) Evaluate(context.Context, string) JudgeVerdict {
-	j.asked++
-	return JudgeVerdict{Verdict: VerdictYes}
-}
-
-func (j *countingJudge) EvaluateCall(context.Context, string, map[string]any, string) JudgeVerdict {
-	j.asked++
-	return JudgeVerdict{Verdict: VerdictYes}
-}
-
-// A reply with nothing in it yet has nothing to judge, so the judge is not
-// asked and the reply is waited on.
-func TestAnEmptyAggregateSkipsTheJudge(t *testing.T) {
-	judge := &countingJudge{}
-	s := &session{judge: judge}
-	exp := Expectation{Event: EventLLMResponse, Eval: "describes the weather"}
-	status, _ := s.evaluateAggregate(t.Context(), "   ", exp)
-	if status != statusContinue || judge.asked != 0 {
-		t.Fatalf("status %q after %d judge calls, want continue without asking", status, judge.asked)
-	}
-}
-
-// requiredLevel is the report level a one-turn scenario asks the bot for, and
-// whether it asks at all.
-func requiredLevel(expect ...Expectation) (rtvi.FunctionCallReportLevel, bool) {
-	s := &session{scenario: oneTurn("x", expect...)}
-	return s.requiredReportLevel()
-}
-
-// The harness raises the bot's function-call report level only as far as the
-// scenario's assertions need.
-func TestRequiredReportLevel(t *testing.T) {
-	t.Run("none without a function call", func(t *testing.T) {
-		if _, want := requiredLevel(Expectation{Event: EventLLMResponse}); want {
-			t.Fatal("asked for a report level with no call asserted")
+	t.Run("a transport off for audio the run uses is refused at once", func(t *testing.T) {
+		for _, tc := range []struct {
+			userAudio, botAudio bool
+			capabilities        map[string]any
+			named               []string
+		}{
+			{true, false, callerOff, []string{"audio_in_enabled"}},
+			{false, true, bothOff, []string{"audio_out_enabled"}},
+			{true, true, bothOff, []string{"audio_in_enabled", "audio_out_enabled"}},
+		} {
+			res, elapsed := runWith(t, tc.capabilities, tc.userAudio, tc.botAudio, AudioSupportCheckWhenAdvertised)
+			if elapsed > 2*time.Second {
+				t.Fatalf("%+v: took %s, want it refused at once", tc, elapsed)
+			}
+			wantRunFailure(t, res, RunEventBotReady, FailureAudioUnsupported, "")
+			for _, setting := range []string{"audio_in_enabled", "audio_out_enabled"} {
+				if strings.Contains(res.Failures[0].Reason, setting) != slices.Contains(tc.named, setting) {
+					t.Fatalf("%+v: reason %q, want it to name %v", tc, res.Failures[0].Reason, tc.named)
+				}
+			}
 		}
 	})
-	t.Run("none for a bare function call", func(t *testing.T) {
-		// A bare function_call matches any call, which is how it is normalized.
-		bare := Expectation{Event: EventFunctionCall, Calls: []FunctionCall{{}}}
-		if _, want := requiredLevel(bare); want {
-			t.Fatal("asked for a report level to assert only that a call happened")
+	t.Run("a run goes ahead when the audio it uses is on or unreported", func(t *testing.T) {
+		for _, tc := range []struct {
+			userAudio, botAudio bool
+			capabilities        map[string]any
+		}{
+			{true, false, bothOn},
+			{true, true, bothOn},
+			// A bot that reports no capabilities runs unchecked.
+			{true, true, nil},
+			// A direction the run does not use is off.
+			{false, true, callerOff},
+			{true, false, botOff},
+			{false, false, bothOff},
+		} {
+			if res, _ := runWith(t, tc.capabilities, tc.userAudio, tc.botAudio, AudioSupportCheckWhenAdvertised); !res.Passed() {
+				t.Fatalf("%+v: want a pass, got:\n%s", tc, res)
+			}
 		}
 	})
-	t.Run("a judged reply after a call does not need args", func(t *testing.T) {
-		// A reply is judged on the spoken conversation only, so the call needs
-		// no more than a name to be matched.
-		level, want := requiredLevel(
-			Expectation{Event: EventFunctionCall, Calls: []FunctionCall{{Name: "submit"}}},
-			Expectation{Event: EventLLMResponse, Eval: "confirms what it submitted"},
-		)
-		if !want || level != rtvi.ReportName {
-			t.Fatalf("level = %v (%v), want the name only", level, want)
+	t.Run("the check is off by default", func(t *testing.T) {
+		if res, _ := runWith(t, callerOff, true, false, ""); !res.Passed() {
+			t.Fatalf("want a pass, got:\n%s", res)
 		}
 	})
 }
 
-// The harness asks for the raw VAD events only when the scenario references
-// them, as an assertion or as what a turn is scheduled from.
-func TestNeedsVADEvents(t *testing.T) {
-	needs := func(turn Turn) bool {
-		return (&session{scenario: &Scenario{Name: "t", Turns: []Turn{turn}}}).needsVADEvents()
-	}
-	if needs(Turn{User: "x", Expect: []Expectation{{Event: EventLLMResponse}}}) {
-		t.Error("asked for VAD events with none referenced")
-	}
-	if !needs(Turn{User: "x", Expect: []Expectation{{Event: EventVADUserStartedSpeaking}}}) {
-		t.Error("did not ask for VAD events a turn expects")
-	}
-	if !needs(Turn{
-		User: "x", Expect: []Expectation{{Event: EventLLMResponse}},
-		SendAfter: &SendAfter{Event: EventVADUserStoppedSpeaking, DelayMS: 2000},
-	}) {
-		t.Error("did not ask for the VAD event a turn is scheduled from")
+// An audio support check of no known value is refused.
+func TestSessionParamsAreValidated(t *testing.T) {
+	_, err := NewScriptSession(&ScriptScenario{Name: "t"}, "ws://localhost:0",
+		SessionParams{AudioSupportCheck: "always"}, nil, nil)
+	if !errors.Is(err, errAudioSupportCheck) {
+		t.Fatalf("err = %v, want the check refused", err)
 	}
 }

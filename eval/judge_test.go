@@ -650,24 +650,27 @@ turns:
 	}
 }
 
-// A criterion with no judge configured is a failure naming what is missing,
-// rather than a silent pass.
-func TestHarnessJudgeMissing(t *testing.T) {
-	res := host(t, `
-name: judged-no-judge
+// A criterion with no judge given is put to the judge the scenario's judge:
+// block builds; a block naming a factory nothing registered fails the run
+// before it starts, naming it.
+func TestHarnessBuildsTheJudgeFromTheScenario(t *testing.T) {
+	scenario, err := eval.Load(writeScenario(t, `
+name: judged-from-config
+judge:
+  eval: {factory: evaltest.no_such_judge}
 turns:
   - user: "hello there"
     expect:
       - event: llm_response
         eval: "acknowledges the greeting"
-`)
-	if res.Passed() {
-		t.Fatal("expected a failure for the criterion with no judge")
+`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(res.Failures[0].Reason, "no judge could be built") {
-		t.Fatalf("unexpected failure reason: %s", res.Failures[0].Reason)
+	_, err = eval.Host(t.Context(), scenario, buildFakeBot, eval.Options{})
+	if err == nil || !strings.Contains(err.Error(), "evaltest.no_such_judge") {
+		t.Fatalf("err = %v, want the judge's factory named", err)
 	}
-	wantKind(t, res, eval.FailureNoJudge)
 }
 
 // The judge sees the user turn as well as the reply, so it can resolve a terse
