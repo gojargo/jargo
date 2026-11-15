@@ -137,6 +137,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   gives the new `VerdictNone` instead of a no, with the error as its reason
   (credentials masked), and is not cached; a reply judged with no verdict
   fails.
+- **Speechmatics STT runs on the Agent STT API, with diarization and turn
+  detection modes.** `speechmatics.Config` gains `TurnDetectionMode`
+  (`TurnDetectionExternal`, the default, finalizes on the pipeline's VAD
+  with `ForceEndOfUtterance`; `TurnDetectionVAD` lets Speechmatics close
+  turns and recommends the external turn strategies), `EnableDiarization`,
+  `SpeakerSensitivity`, `MaxSpeakers`, `PreferCurrentSpeaker`,
+  `KnownSpeakers`, `SpeakerFormat` (`{speaker}`, `{speaker_number}`,
+  `{text}`), `Domain`, `Model`, `AdditionalVocab`, `EmitSentences`,
+  `PunctuationOverrides` and `TranscriptFilteringConfig`, all updatable at
+  runtime. Transcripts carry the speaker label,
+  `speechmatics.EventSpeakersResult` reports the speakers a `GetSpeakers`
+  sent with `speechmatics.SendMessage` returns, and the STT base applies a
+  provider's `speaker_format` setting. Examples: `voice-speechmatics`,
+  `voice-speechmatics-vad`. **Breaking:** the default endpoint is
+  `wss://eu2.rt.speechmatics.com/v2/agent` and the default model `linden-1`;
+  the default language is `en` and turn detection `external`; only 8 and
+  16 kHz are accepted; `EnablePartials` unset is left to Speechmatics;
+  `OperatingPoint` is a deprecated alias of `Model`, and `MaxDelay` and
+  `EndOfUtteranceSilence` have no effect.
+- **MCP servers take their connection parameters.** `mcp.Config` gains
+  `Headers`, `Timeout`, `SSEReadTimeout` and `TerminateOnClose` for SSE and
+  streamable-HTTP servers, so a server behind a bearer token can be reached,
+  and `Env` and `Cwd` for a stdio server. Connecting times out after 5 s over
+  SSE and 30 s over streamable HTTP, and a request waits up to 5 minutes for
+  the server to send anything. Each option is refused for a transport it
+  does not apply to. Examples: `mcp-streamable-http`, `mcp-multiple-mcp`.
+  **Breaking:** a stdio server no longer inherits the whole environment. It
+  is given only HOME, LOGNAME, PATH, SHELL, TERM and USER (their Windows
+  equivalents there), with `Env` laid over them.
 
 ### Changed
 

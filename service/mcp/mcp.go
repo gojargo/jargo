@@ -17,8 +17,10 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/llm"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -45,15 +47,44 @@ const (
 )
 
 // Config selects and configures a single MCP server. Exactly one transport must
-// be set.
+// be set: Command, SSEURL or HTTPURL. The options after each are its own, and
+// setting one for a transport that is not in use is rejected.
 type Config struct {
 	// Command runs an MCP server over stdio, e.g.
 	// {"npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"}.
 	Command []string
+	// Env is added to the environment a stdio server runs with. The server does
+	// not inherit this process's whole environment: it is given only the
+	// variables a program needs to run (on Unix HOME, LOGNAME, PATH, SHELL, TERM
+	// and USER), with Env laid over them. Anything else it needs, a credential
+	// say, goes here.
+	Env map[string]string `validate:"excluded_without=Command"`
+	// Cwd is the directory a stdio server runs in; empty runs it in this
+	// process's.
+	Cwd string `validate:"excluded_without=Command"`
+
 	// SSEURL connects to an MCP server over SSE.
-	SSEURL string
+	SSEURL string `validate:"omitempty,url"`
 	// HTTPURL connects to an MCP server over streamable HTTP.
-	HTTPURL string
+	HTTPURL string `validate:"omitempty,url"`
+	// Headers are sent with every request to an SSE or streamable-HTTP server,
+	// e.g. {"Authorization": "Bearer …"}. A header the protocol sets itself
+	// keeps its own value. Authorization is not carried across a redirect to
+	// another origin.
+	Headers map[string]string `validate:"excluded_without_all=SSEURL HTTPURL"`
+	// Timeout bounds connecting to an SSE or streamable-HTTP server; nil uses
+	// DefaultSSETimeout over SSE and DefaultHTTPTimeout over streamable HTTP.
+	Timeout *time.Duration `validate:"omitnil,gt=0,excluded_without_all=SSEURL HTTPURL"`
+	// SSEReadTimeout is how long a request waits for the server to send
+	// anything, its response or the next event on a stream, before it fails;
+	// nil uses DefaultSSEReadTimeout.
+	SSEReadTimeout *time.Duration `validate:"omitnil,gt=0,excluded_without_all=SSEURL HTTPURL"`
+	// TerminateOnClose ends the session on a streamable-HTTP server when the
+	// client closes it, with the DELETE the protocol defines for it; nil
+	// defaults to true. Set false to leave the session for the server to
+	// expire.
+	TerminateOnClose *bool `validate:"excluded_without=HTTPURL"`
+
 	// ToolsFilter, when non-empty, restricts the exposed tools to these names.
 	ToolsFilter []string
 	// ToolsArguments fixes some of a tool's arguments, by tool name. The fixed
@@ -77,7 +108,8 @@ type Config struct {
 	ToolsOutputFilters map[string]func(result string) string
 }
 
-// Validate reports whether exactly one transport is configured.
+// Validate reports whether exactly one transport is configured, with only its
+// own options set.
 func (c Config) Validate() error {
 	n := 0
 	if len(c.Command) > 0 {
@@ -92,18 +124,27 @@ func (c Config) Validate() error {
 	if n != 1 {
 		return errNoTransport
 	}
-	return nil
+	return validate.Struct(c)
 }
 
 func (c Config) transport(ctx context.Context) mcpsdk.Transport {
 	switch {
 	case len(c.Command) > 0:
 		//nolint:gosec // launching the user-configured MCP server is the intended behavior
-		return &mcpsdk.CommandTransport{Command: exec.CommandContext(ctx, c.Command[0], c.Command[1:]...)}
+		cmd := exec.CommandContext(ctx, c.Command[0], c.Command[1:]...)
+		cmd.Env = stdioEnvironment(c.Env)
+		cmd.Dir = c.Cwd
+		return &mcpsdk.CommandTransport{Command: cmd}
 	case c.SSEURL != "":
-		return &mcpsdk.SSEClientTransport{Endpoint: c.SSEURL}
+		return &mcpsdk.SSEClientTransport{
+			Endpoint:   c.SSEURL,
+			HTTPClient: c.httpClient(DefaultSSETimeout),
+		}
 	default:
-		return &mcpsdk.StreamableClientTransport{Endpoint: c.HTTPURL}
+		return &mcpsdk.StreamableClientTransport{
+			Endpoint:   c.HTTPURL,
+			HTTPClient: c.httpClient(DefaultHTTPTimeout),
+		}
 	}
 }
 

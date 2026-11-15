@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1088,6 +1090,33 @@ func (s *StreamService) speaker(label string) *frames.TranscriptionSpeaker {
 	return sp
 }
 
+// applySpeakerFormat applies the provider's speaker_format setting to a
+// diarized transcript. The format uses {speaker} for the provider's speaker
+// label, {speaker_number} for the speaker's number, which stays the same
+// whatever labels the provider uses, and {text} for the transcript text (e.g.
+// "Speaker {speaker_number}: {text}"). The text is returned unchanged when there
+// is no speaker, no format, or a provider whose settings have no such setting.
+func (s *StreamService) applySpeakerFormat(text string, speaker *frames.TranscriptionSpeaker) string {
+	if speaker == nil {
+		return text
+	}
+	format := s.set.speakerFormat()
+	if format == "" {
+		return text
+	}
+	return strings.NewReplacer(
+		"{{", "{",
+		"}}", "}",
+		"{speaker}", speaker.Label,
+		"{speaker_number}", strconv.Itoa(speaker.Number),
+		"{text}", text,
+	).Replace(format)
+}
+
+// Connector is the provider's Connector the service was built with, for a
+// provider package that offers calls of its own on the service it built.
+func (s *StreamService) Connector() Connector { return s.conn }
+
 // transcriptUserID is the user the transcripts emitted now are attributed to.
 func (s *StreamService) transcriptUserID() string {
 	s.mu.Lock()
@@ -1531,9 +1560,11 @@ func (s *StreamService) emitEagerEndOfTurn(ctx context.Context, r Result) {
 	case r.EagerEndOfTurn:
 		s.eagerPending = true
 		slog.DebugContext(ctx, "eager end of turn", "service", s.Name(), "text", r.Text)
-		f := frames.NewEagerTranscriptionFrame(r.Text, s.transcriptUserID(), frames.NowTimestamp())
+		speaker := s.speaker(r.Speaker)
+		text := s.applySpeakerFormat(r.Text, speaker)
+		f := frames.NewEagerTranscriptionFrame(text, s.transcriptUserID(), frames.NowTimestamp())
 		f.Language = r.Language
-		f.Speaker = s.speaker(r.Speaker)
+		f.Speaker = speaker
 		_ = s.PushFrame(ctx, f, processor.Downstream)
 	case r.EagerEndOfTurnWithdrawn:
 		if !s.eagerPending {
@@ -1586,17 +1617,19 @@ func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
 		return
 	}
 	ts := frames.NowTimestamp()
+	speaker := s.speaker(r.Speaker)
+	text := s.applySpeakerFormat(r.Text, speaker)
 	if !r.Final {
-		f := frames.NewInterimTranscriptionFrame(r.Text, s.transcriptUserID(), ts)
+		f := frames.NewInterimTranscriptionFrame(text, s.transcriptUserID(), ts)
 		f.Language = r.Language
-		f.Speaker = s.speaker(r.Speaker)
+		f.Speaker = speaker
 		_ = s.PushFrame(ctx, f, processor.Downstream)
 		return
 	}
-	f := frames.NewTranscriptionFrame(r.Text, s.transcriptUserID(), ts)
+	f := frames.NewTranscriptionFrame(text, s.transcriptUserID(), ts)
 	f.Finalized = r.EndOfTurn
 	f.Language = r.Language
-	f.Speaker = s.speaker(r.Speaker)
+	f.Speaker = speaker
 	// A final transcript is the billing event: the audio since the last one is
 	// reported ahead of it, so the span the transcript closes carries it.
 	s.EmitSTTUsageMetrics(ctx)

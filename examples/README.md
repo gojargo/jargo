@@ -77,6 +77,8 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-rime-http`](voice/voice-rime-http) | Deepgram speech-to-text, an OpenAI LLM and Rime (over HTTP) text-to-speech. |
 | [`voice-sarvam`](voice/voice-sarvam) | Sarvam speech-to-text, LLM and text- to-speech. |
 | [`voice-soniox`](voice/voice-soniox) | Soniox speech-to-text and text-to- speech, with an OpenAI LLM. |
+| [`voice-speechmatics`](voice/voice-speechmatics) | Speechmatics speech-to-text (with diarization) and text-to-speech, with an OpenAI LLM. |
+| [`voice-speechmatics-vad`](voice/voice-speechmatics-vad) | Speechmatics speech-to-text (with diarization and its own voice activity detection) and text-to-speech, with an OpenAI LLM. |
 | [`voice-together`](voice/voice-together) | Together AI speech-to-text, LLM and text-to-speech. |
 | [`voice-xai`](voice/voice-xai) | XAI speech-to-text, Grok and xAI text- to-speech. |
 | [`voice-xai-http`](voice/voice-xai-http) | Deepgram speech-to-text, Grok and xAI text-to-speech over HTTP. |
@@ -147,6 +149,8 @@ too, for the user aggregator's default turn strategies.
 | Example | What it shows | Keys |
 | --- | --- | --- |
 | [`mcp-stdio`](mcp/mcp-stdio) | Tools from the memory MCP server, started over stdio with npx. Needs Node.js. | Deepgram, Anthropic, Cartesia |
+| [`mcp-streamable-http`](mcp/mcp-streamable-http) | Tools from GitHub's MCP server over streamable HTTP, authenticated with a header. | GitHub, Deepgram, Google AI, Cartesia |
+| [`mcp-multiple-mcp`](mcp/mcp-multiple-mcp) | Tools from two MCP servers at once: memory over stdio and GitHub over streamable HTTP. | GitHub, Deepgram, Anthropic, Cartesia |
 
 ## Transports
 

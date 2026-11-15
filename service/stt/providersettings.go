@@ -163,6 +163,20 @@ func (p *providerSettings) nameLanguage(delta any) {
 	}
 }
 
+// speakerFormat is the format the provider's speaker_format setting holds, or
+// "" when it holds none or the provider has no such setting.
+func (p *providerSettings) speakerFormat() string {
+	store, ok := p.store()
+	if !ok {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	value, _ := settings.Get(store, "speaker_format")
+	format, _ := value.(string)
+	return format
+}
+
 // traceSettings is what the provider's store gives, for the span covering the
 // work. It is nil for a provider that holds no settings.
 func (p *providerSettings) traceSettings() map[string]any {

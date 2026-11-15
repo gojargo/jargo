@@ -12,6 +12,26 @@ func TestConfigValidateSTT(t *testing.T) {
 	providertest.Configs(t, []providertest.ConfigCase{
 		{Name: "missing API key", Cfg: speechmatics.Config{}, Valid: false},
 		{Name: "API key only", Cfg: speechmatics.Config{APIKey: "k"}, Valid: true},
+		{
+			Name:  "VAD turn detection",
+			Cfg:   speechmatics.Config{APIKey: "k", TurnDetectionMode: speechmatics.TurnDetectionVAD},
+			Valid: true,
+		},
+		{
+			Name:  "unknown turn detection mode",
+			Cfg:   speechmatics.Config{APIKey: "k", TurnDetectionMode: "smart"},
+			Valid: false,
+		},
+		{
+			Name:  "operating point naming the model",
+			Cfg:   speechmatics.Config{APIKey: "k", Model: "linden-1", OperatingPoint: "linden-1"},
+			Valid: true,
+		},
+		{
+			Name:  "operating point naming another model",
+			Cfg:   speechmatics.Config{APIKey: "k", Model: "linden-1", OperatingPoint: "other"},
+			Valid: false,
+		},
 	})
 }
 

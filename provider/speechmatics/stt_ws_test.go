@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -28,10 +30,35 @@ import (
 
 // session is what the fake endpoint saw, and the socket it is speaking on.
 type session struct {
-	header http.Header
-	start  map[string]any
-	audio  chan []byte
-	closed map[string]any
+	header   http.Header
+	path     string
+	query    url.Values
+	start    map[string]any
+	audio    chan []byte
+	messages chan map[string]any
+	closed   map[string]any
+}
+
+// awaitAudio, as a scripted message, holds the rest of the script until the
+// session has been sent audio.
+const awaitAudio = "test: await audio"
+
+// readUntilAudio reads what the client sends until a binary frame arrives,
+// recording it, and reports whether one did.
+func readUntilAudio(ctx context.Context, c *websocket.Conn, got *session) bool {
+	for {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
+			return false
+		}
+		if typ == websocket.MessageBinary {
+			select {
+			case got.audio <- data:
+			default:
+			}
+			return true
+		}
+	}
 }
 
 // sttServer starts a fake Speechmatics endpoint. It acknowledges the start
@@ -41,7 +68,10 @@ func sttServer(t *testing.T, ackErr string, reply []map[string]any) (endpoint st
 	sessions := make(chan *session, 1)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := &session{header: r.Header.Clone(), audio: make(chan []byte, 8)}
+		got := &session{
+			header: r.Header.Clone(), path: r.URL.Path, query: r.URL.Query(),
+			audio: make(chan []byte, 8), messages: make(chan map[string]any, 8),
+		}
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -68,6 +98,13 @@ func sttServer(t *testing.T, ackErr string, reply []map[string]any) (endpoint st
 			ack = map[string]any{"message": "Error", "reason": ackErr}
 		}
 		for _, m := range append([]map[string]any{ack}, reply...) {
+			if m["message"] == awaitAudio {
+				// Hold the rest of the script until the first audio arrives.
+				if !readUntilAudio(ctx, c, got) {
+					return
+				}
+				continue
+			}
 			b, err := json.Marshal(m)
 			if err != nil {
 				t.Errorf("encoding a reply: %v", err)
@@ -91,9 +128,18 @@ func sttServer(t *testing.T, ackErr string, reply []map[string]any) (endpoint st
 				}
 				continue
 			}
-			end := map[string]any{}
-			if json.Unmarshal(data, &end) == nil && end["message"] == "EndOfStream" {
-				got.closed = end
+			m := map[string]any{}
+			if json.Unmarshal(data, &m) != nil {
+				continue
+			}
+			if m["message"] == "EndOfStream" {
+				got.closed = m
+				_ = c.Write(ctx, websocket.MessageText, []byte(`{"message":"EndOfTranscript"}`))
+				continue
+			}
+			select {
+			case got.messages <- m:
+			default:
 			}
 		}
 	}))
@@ -110,27 +156,28 @@ func sttServer(t *testing.T, ackErr string, reply []map[string]any) (endpoint st
 	}
 }
 
-// transcript builds a transcript message of the given kind.
-func transcript(kind, text string) map[string]any {
+// segment builds a segment message of the given kind, attributed to speaker
+// when one is given.
+func segment(kind, text, speaker string) map[string]any {
+	seg := map[string]any{"transcript": text}
+	if speaker != "" {
+		seg["speaker"] = speaker
+	}
 	return map[string]any{
 		"message":  kind,
-		"metadata": map[string]any{"transcript": text},
+		"segment":  seg,
+		"metadata": map[string]any{"start_time": 0.0, "end_time": 1.0},
 	}
 }
 
-// conn builds a connector pointed at endpoint with the defaults NewSTT fills in.
+// conn builds a connector pointed at endpoint, with its settings built the way
+// NewSTT builds them.
 func conn(endpoint string, opts ...func(*Config)) *connector {
-	cfg := Config{
-		APIKey:         "test-key",
-		URL:            endpoint,
-		Language:       language.EnglishUS,
-		OperatingPoint: defaultOperatingPoint,
-		MaxDelay:       defaultMaxDelay,
-	}
+	cfg := Config{APIKey: "test-key", URL: endpoint}
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &connector{cfg: cfg}
+	return &connector{cfg: cfg, live: newSTTSettings(cfg)}
 }
 
 func TestConnectSendsStartRecognition(t *testing.T) {
@@ -146,6 +193,12 @@ func TestConnectSendsStartRecognition(t *testing.T) {
 	if got.header.Get("Authorization") != "Bearer test-key" {
 		t.Errorf("Authorization = %q, want the key as a bearer token", got.header.Get("Authorization"))
 	}
+	if got.path != "/agent" {
+		t.Errorf("path = %q, want the agent endpoint", got.path)
+	}
+	if got.query.Get("sm-app") != appName {
+		t.Errorf("sm-app = %q, want %q", got.query.Get("sm-app"), appName)
+	}
 	if got.start["message"] != "StartRecognition" {
 		t.Fatalf("first message = %v, want StartRecognition", got.start)
 	}
@@ -158,62 +211,73 @@ func TestConnectSendsStartRecognition(t *testing.T) {
 		t.Errorf("sample_rate = %v, want the rate the pipeline runs at", format["sample_rate"])
 	}
 
+	// The turn config is a sibling of the transcription config, and the
+	// pipeline closes turns unless told otherwise.
+	turn, _ := got.start["turn_config"].(map[string]any)
+	if turn["turn_detection_mode"] != "external" {
+		t.Errorf("turn_config = %v, want external turn detection by default", turn)
+	}
+
 	tc, _ := got.start["transcription_config"].(map[string]any)
-	if tc["language"] != "en" {
-		t.Errorf("language = %v, want the base code", tc["language"])
-	}
-	if tc["operating_point"] != defaultOperatingPoint {
-		t.Errorf("operating_point = %v, want %q", tc["operating_point"], defaultOperatingPoint)
-	}
-	if tc["enable_partials"] != true {
-		t.Errorf("enable_partials = %v, want it on by default", tc["enable_partials"])
-	}
-	if tc["max_delay"] != defaultMaxDelay {
-		t.Errorf("max_delay = %v, want %v", tc["max_delay"], defaultMaxDelay)
-	}
-
-	// End-of-utterance detection is on by default, and is what closes a turn.
-	cc, _ := tc["conversation_config"].(map[string]any)
-	if cc["end_of_utterance_silence_trigger"] != defaultEndOfUtteranceSilence {
-		t.Errorf("conversation_config = %v, want the default silence trigger", cc)
+	want := map[string]any{"language": "en", "model": defaultModel}
+	if !reflect.DeepEqual(tc, want) {
+		t.Errorf("transcription_config = %v, want only %v when nothing else is set", tc, want)
 	}
 }
 
-// TestConnectOmitsEndOfUtteranceWhenDisabled checks a zero silence leaves the
-// whole conversation config out, so the provider does not end utterances itself.
-func TestConnectOmitsEndOfUtteranceWhenDisabled(t *testing.T) {
+// TestConnectSendsWhatIsConfigured checks every transcription setting reaches
+// the session as Speechmatics names it, the diarization knobs inside the
+// speaker diarization config.
+func TestConnectSendsWhatIsConfigured(t *testing.T) {
 	endpoint, seen := sttServer(t, "", nil)
-	off := 0.0
 
-	s, err := conn(endpoint, func(c *Config) { c.EndOfUtteranceSilence = &off }).
-		Connect(context.Background(), 16000)
+	s, err := conn(endpoint, func(c *Config) {
+		c.Language = language.EnglishGB
+		c.Domain = "finance"
+		c.Model = "linden-2"
+		c.TurnDetectionMode = TurnDetectionVAD
+		c.EnablePartials = new(false)
+		c.EmitSentences = new(true)
+		c.PunctuationOverrides = map[string]any{"permitted_marks": []any{".", ","}}
+		c.TranscriptFilteringConfig = map[string]any{"remove_disfluencies": true}
+		c.AdditionalVocab = []AdditionalVocabEntry{{Content: "jargo", SoundsLike: []string{"jar go"}}}
+		c.EnableDiarization = new(true)
+		c.MaxSpeakers = new(2)
+		c.SpeakerSensitivity = new(0.7)
+		c.PreferCurrentSpeaker = new(true)
+		c.KnownSpeakers = []SpeakerIdentifier{{Label: "Agent", SpeakerIdentifiers: []string{"id1"}}}
+	}).Connect(context.Background(), 8000)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	tc, _ := seen().start["transcription_config"].(map[string]any)
-	if _, ok := tc["conversation_config"]; ok {
-		t.Errorf("conversation_config = %v, want it omitted when disabled", tc["conversation_config"])
+	got := seen()
+	turn, _ := got.start["turn_config"].(map[string]any)
+	if turn["turn_detection_mode"] != "vad" {
+		t.Errorf("turn_config = %v, want vad", turn)
 	}
-}
-
-// TestConnectDisablesPartials checks partials can be turned off, for a caller
-// who wants only finalized text.
-func TestConnectDisablesPartials(t *testing.T) {
-	endpoint, seen := sttServer(t, "", nil)
-	off := false
-
-	s, err := conn(endpoint, func(c *Config) { c.EnablePartials = &off }).
-		Connect(context.Background(), 16000)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
+	tc, _ := got.start["transcription_config"].(map[string]any)
+	want := map[string]any{
+		"language":                    "en",
+		"output_locale":               "en-GB",
+		"model":                       "linden-2",
+		"domain":                      "finance",
+		"enable_partials":             false,
+		"emit_sentences":              true,
+		"punctuation_overrides":       map[string]any{"permitted_marks": []any{".", ","}},
+		"transcript_filtering_config": map[string]any{"remove_disfluencies": true},
+		"additional_vocab":            []any{map[string]any{"content": "jargo", "sounds_like": []any{"jar go"}}},
+		"diarization":                 "speaker",
+		"speaker_diarization_config": map[string]any{
+			"max_speakers":           float64(2),
+			"speaker_sensitivity":    0.7,
+			"prefer_current_speaker": true,
+			"speakers":               []any{map[string]any{"label": "Agent", "speaker_identifiers": []any{"id1"}}},
+		},
 	}
-	defer func() { _ = s.Close() }()
-
-	tc, _ := seen().start["transcription_config"].(map[string]any)
-	if tc["enable_partials"] != false {
-		t.Errorf("enable_partials = %v, want it off", tc["enable_partials"])
+	if !reflect.DeepEqual(tc, want) {
+		t.Errorf("transcription_config =\n%v\nwant\n%v", tc, want)
 	}
 }
 
@@ -257,7 +321,7 @@ func TestSpeechmaticsLanguage(t *testing.T) {
 // TestConnectFailsWhenTheStartIsRefused checks the session is not handed back
 // when the provider refuses the start, so audio is never sent into nothing.
 func TestConnectFailsWhenTheStartIsRefused(t *testing.T) {
-	endpoint, _ := sttServer(t, "invalid operating point", nil)
+	endpoint, _ := sttServer(t, "invalid model", nil)
 
 	s, err := conn(endpoint).Connect(context.Background(), 16000)
 	if err == nil {
@@ -267,16 +331,16 @@ func TestConnectFailsWhenTheStartIsRefused(t *testing.T) {
 	if !errors.Is(err, errServer) {
 		t.Errorf("error = %v, want it reported as a server error", err)
 	}
-	if !strings.Contains(err.Error(), "invalid operating point") {
+	if !strings.Contains(err.Error(), "invalid model") {
 		t.Errorf("error = %v, want it to carry what the provider said", err)
 	}
 }
 
-// TestRecvEmitsPartialsAsTheyCome checks an interim transcript is reported
-// straight away, so the pipeline can react before the utterance ends.
-func TestRecvEmitsPartialsAsTheyCome(t *testing.T) {
+// TestRecvEmitsPartialSegmentsAsInterims checks a partial segment is reported
+// straight away as an interim transcript, with its speaker.
+func TestRecvEmitsPartialSegmentsAsInterims(t *testing.T) {
 	endpoint, _ := sttServer(t, "", []map[string]any{
-		transcript("AddPartialTranscript", "hello"),
+		segment(msgAddPartialSegment, "hello", "S1"),
 	})
 
 	s, err := conn(endpoint).Connect(context.Background(), 16000)
@@ -289,19 +353,20 @@ func TestRecvEmitsPartialsAsTheyCome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if len(got) != 1 || got[0].Text != "hello" || got[0].Final {
-		t.Errorf("results = %+v, want one interim hello", got)
+	want := []stt.Result{{Text: "hello", Speaker: "S1"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("results = %+v, want %+v", got, want)
 	}
 }
 
-// TestRecvJoinsFinalSegmentsAtEndOfUtterance checks finalized segments
-// accumulate and are emitted together when the utterance ends. Emitting each on
-// its own would end the turn on the first one.
-func TestRecvJoinsFinalSegmentsAtEndOfUtterance(t *testing.T) {
+// TestRecvEmitsEachFinalSegment checks each final segment is its own final
+// transcript, marked as the one answering a finalize when one was asked for,
+// and that an empty segment is stepped over.
+func TestRecvEmitsEachFinalSegment(t *testing.T) {
 	endpoint, _ := sttServer(t, "", []map[string]any{
-		transcript("AddTranscript", "hello"),
-		transcript("AddTranscript", "there"),
-		{"message": "EndOfUtterance"},
+		segment(msgAddSegment, "", ""),
+		segment(msgAddSegment, "hello there", "S2"),
+		segment(msgAddSegment, "bye", ""),
 	})
 
 	s, err := conn(endpoint).Connect(context.Background(), 16000)
@@ -310,48 +375,110 @@ func TestRecvJoinsFinalSegmentsAtEndOfUtterance(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
-	got, err := s.Recv()
-	if err != nil {
-		t.Fatalf("Recv: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("results = %+v, want one", got)
-	}
-	if got[0].Text != "hello there" {
-		t.Errorf("text = %q, want the segments joined with a space", got[0].Text)
-	}
-	if !got[0].Final || !got[0].EndOfTurn {
-		t.Errorf("result = %+v, want it final and ending the turn", got[0])
+	for _, want := range []stt.Result{
+		{Text: "hello there", Final: true, Speaker: "S2", FromFinalize: true},
+		{Text: "bye", Final: true, FromFinalize: true},
+	} {
+		got, err := s.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		if !reflect.DeepEqual(got, []stt.Result{want}) {
+			t.Errorf("results = %+v, want %+v", got, want)
+		}
 	}
 }
 
-// TestRecvIgnoresAnEmptyUtterance checks an end-of-utterance with nothing
-// accumulated reports no turn, so silence does not close one.
-func TestRecvIgnoresAnEmptyUtterance(t *testing.T) {
-	endpoint, _ := sttServer(t, "", []map[string]any{
-		{"message": "EndOfUtterance"},
-		transcript("AddPartialTranscript", "after"),
+// TestTurnEventsFollowTheTurnDetectionMode checks Speechmatics' turn events
+// are reported as speech boundaries only when it closes turns itself, and that
+// only then is the session left to close them: with external turn detection
+// the session finalizes on the pipeline's VAD instead.
+func TestTurnEventsFollowTheTurnDetectionMode(t *testing.T) {
+	reply := []map[string]any{
+		{"message": msgStartOfTurn},
+		{"message": msgEndOfTurn},
+		segment(msgAddSegment, "done", ""),
+	}
+
+	t.Run("vad", func(t *testing.T) {
+		endpoint, _ := sttServer(t, "", reply)
+		s, err := conn(endpoint, func(c *Config) { c.TurnDetectionMode = TurnDetectionVAD }).
+			Connect(context.Background(), 16000)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		defer func() { _ = s.Close() }()
+		if _, ok := s.(stt.Finalizer); ok {
+			t.Error("the session finalizes on the pipeline's VAD, want the service to close turns")
+		}
+		for _, want := range []stt.SpeechState{stt.SpeechStarted, stt.SpeechStopped} {
+			got, err := s.Recv()
+			if err != nil {
+				t.Fatalf("Recv: %v", err)
+			}
+			if len(got) != 1 || got[0].Speech != want {
+				t.Errorf("results = %+v, want speech %v", got, want)
+			}
+		}
 	})
 
+	t.Run("external", func(t *testing.T) {
+		endpoint, _ := sttServer(t, "", reply)
+		s, err := conn(endpoint).Connect(context.Background(), 16000)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		defer func() { _ = s.Close() }()
+		if _, ok := s.(stt.Finalizer); !ok {
+			t.Error("the session does not finalize on the pipeline's VAD")
+		}
+		got, err := s.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		if len(got) != 1 || got[0].Text != "done" || got[0].Speech != stt.SpeechUnknown {
+			t.Errorf("results = %+v, want the turn events stepped over", got)
+		}
+	})
+}
+
+// TestFinalizeForcesTheEndOfUtterance checks a finalize closes the turn at the
+// point in the audio sent so far, as an audio timestamp.
+func TestFinalizeForcesTheEndOfUtterance(t *testing.T) {
+	endpoint, seen := sttServer(t, "", nil)
 	s, err := conn(endpoint).Connect(context.Background(), 16000)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	got, err := s.Recv()
-	if err != nil {
-		t.Fatalf("Recv: %v", err)
+	// Half a second of 16 kHz 16-bit audio.
+	if err := s.Send(make([]byte, 16000)); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
-	if len(got) != 1 || got[0].Text != "after" {
-		t.Errorf("results = %+v, want the empty utterance stepped over", got)
+	fin, ok := s.(stt.Finalizer)
+	if !ok {
+		t.Fatal("the session does not finalize")
+	}
+	if err := fin.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	got := seen()
+	select {
+	case m := <-got.messages:
+		if m["message"] != "ForceEndOfUtterance" || m["timestamp"] != 0.5 {
+			t.Errorf("message = %v, want ForceEndOfUtterance at 0.5s", m)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the finalize never arrived")
 	}
 }
 
 // TestRecvEndsOnEndOfTranscript checks the session reports it is over the way
 // the caller expects, so the read loop stops rather than treating it as a fault.
 func TestRecvEndsOnEndOfTranscript(t *testing.T) {
-	endpoint, _ := sttServer(t, "", []map[string]any{{"message": "EndOfTranscript"}})
+	endpoint, _ := sttServer(t, "", []map[string]any{{"message": msgEndOfTranscript}})
 
 	s, err := conn(endpoint).Connect(context.Background(), 16000)
 	if err != nil {
@@ -365,10 +492,11 @@ func TestRecvEndsOnEndOfTranscript(t *testing.T) {
 }
 
 // TestRecvReportsAServerError checks an error mid-session is surfaced carrying
-// what the provider said.
+// what the provider said, and that a warning is not: the session continues.
 func TestRecvReportsAServerError(t *testing.T) {
 	endpoint, _ := sttServer(t, "", []map[string]any{
-		{"message": "Error", "reason": "audio too quiet"},
+		{"message": msgWarning, "type": "duration_limit_exceeded", "reason": "soon"},
+		{"message": msgError, "reason": "audio too quiet"},
 	})
 
 	s, err := conn(endpoint).Connect(context.Background(), 16000)
@@ -415,10 +543,10 @@ func TestSendWritesAudioAsBinary(t *testing.T) {
 // TestMetadataReportsTheMeasuredLatency checks the transcript latency the turn
 // strategies size their wait by, and that it can be overridden.
 func TestMetadataReportsTheMeasuredLatency(t *testing.T) {
-	if got := *(&connector{}).Metadata().TTFSP99; got != stt.SpeechmaticsTTFSP99 {
+	if got := *conn("").Metadata().TTFSP99; got != stt.SpeechmaticsTTFSP99 {
 		t.Errorf("TTFSP99 = %v, want the measured figure", got)
 	}
-	c := &connector{cfg: Config{TTFSP99: new(300 * time.Millisecond)}}
+	c := conn("", func(c *Config) { c.TTFSP99 = new(300 * time.Millisecond) })
 	if got := *c.Metadata().TTFSP99; got != 300*time.Millisecond {
 		t.Errorf("TTFSP99 = %v, want the override", got)
 	}
@@ -839,7 +967,7 @@ func TestCancelSendsEndOfStream(t *testing.T) {
 // failed, is still sent EndOfStream before its socket closes.
 func TestCloseEndsAnUndrainedSession(t *testing.T) {
 	server, endpoint := newEndingServer(t, true)
-	c := &connector{cfg: Config{APIKey: "test-key", URL: endpoint}}
+	c := conn(endpoint)
 	s, err := c.Connect(t.Context(), 16000)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)

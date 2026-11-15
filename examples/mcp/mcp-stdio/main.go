@@ -70,12 +70,9 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	llm.SetSystemInstruction(systemPrompt)
 
 	// https://github.com/modelcontextprotocol/servers/tree/main/src/memory
-	//
-	// The server inherits this process's environment. Optional: set
-	// MEMORY_FILE_PATH (e.g. /tmp/jargo_memory.jsonl) to choose where it stores
-	// its memory.
 	server, err := mcp.Connect(ctx, mcp.Config{
 		Command: []string{"npx", "-y", "@modelcontextprotocol/server-memory"},
+		// Env: map[string]string{"MEMORY_FILE_PATH": "/tmp/jargo_memory.jsonl"}, // Optional: specify MEMORY_FILE_PATH
 	})
 	if err != nil {
 		return err
