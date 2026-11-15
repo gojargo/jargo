@@ -26,6 +26,7 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
 	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
@@ -115,6 +116,7 @@ func tools() frames.ToolsSchema {
 //
 //nolint:gochecknoglobals // the transports' parameters, built per session
 var transportParams = runner.TransportParams{
+	Eval:    func() evalws.TransportParams { return evalws.TransportParams{Params: wsserver.DefaultParams()} },
 	LiveKit: transport.DefaultParams,
 	Twilio:  func() runner.WebSocketParams { return runner.WebSocketParams{Params: wsserver.DefaultParams()} },
 	WebRTC:  transport.DefaultParams,

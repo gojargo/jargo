@@ -20,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
 	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
@@ -36,6 +37,7 @@ func outputOnly(p transport.Params) transport.Params {
 //
 //nolint:gochecknoglobals // the transports' parameters, built per session
 var transportParams = runner.TransportParams{
+	Eval:    func() evalws.TransportParams { return evalws.TransportParams{Params: wsserver.DefaultParams()} },
 	LiveKit: func() transport.Params { return outputOnly(transport.DefaultParams()) },
 	Twilio: func() runner.WebSocketParams {
 		p := wsserver.DefaultParams()
