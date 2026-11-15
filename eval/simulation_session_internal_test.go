@@ -364,12 +364,23 @@ func spoken(text string) []rtvi.Message {
 	return replies
 }
 
+// spokenAfter is spoken, opened by a pause of silence before the bot speaks, as
+// a bot takes a moment to answer: it lets the turn before it end first.
+func spokenAfter(pause time.Duration, text string) []rtvi.Message {
+	head := reply(text)
+	silence := make([]byte, int(pause.Seconds()*16000)*2)
+	for off := 0; off < len(silence); off += 1280 {
+		head = append(head, botAudioMessage(silence[off:min(off+1280, len(silence))], 16000))
+	}
+	return append(head, spoken(text)[len(reply(text)):]...)
+}
+
 // In audio mode the persona hears the bot's transcribed speech, handed over by
 // the turn aggregator, and answers it.
 func TestSimulationIntegrationThePersonaAnswersTheBotsSpeech(t *testing.T) {
 	bot := newFakeRTVIServer(t)
 	bot.greeting = spoken("How can I help?")
-	bot.onText("A table for two.", spoken("Booked.")...)
+	bot.onText("A table for two.", spokenAfter(time.Second, "Booked.")...)
 	persona, gen := scriptedPersona(map[string]any{
 		"How can I help?": "A table for two.",
 		"Booked.":         endCallReply{"success": true, "reason": "booked"},
