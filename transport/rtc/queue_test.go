@@ -24,7 +24,8 @@ func newTestOutput(t *testing.T) *outputTransport {
 
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = opus.SampleRate
-	out := newOutput(conn, params, &atomic.Bool{})
+	closing := &atomic.Bool{}
+	out := newOutput(conn, params, closing, &client{conn: conn, params: params, closing: closing})
 	if err := out.startSending(); err != nil {
 		t.Fatal(err)
 	}

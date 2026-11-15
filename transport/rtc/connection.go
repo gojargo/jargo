@@ -2,6 +2,12 @@
 // connection, decodes received Opus audio into PCM frames, and encodes outgoing
 // PCM frames into Opus sent over an RTP track.
 //
+// Video goes both ways too. The client's camera and screen share are decoded
+// (VP8 through libvpx, H.264 through OpenH264) into RGB images, and the images
+// the bot shows are encoded to VP8 on its own video track. The codec libraries
+// are loaded at run time, the first time video needs them; VideoCodecConfig
+// locates them.
+//
 // Pion is the WebRTC implementation it is built on, which is why it imports
 // github.com/pion/webrtc. That is an implementation detail rather than part of
 // the interface this package offers.
@@ -26,9 +32,35 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/nack"
+	"github.com/pion/rtcp"
+	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
+
+// The positions of the client's transceivers, in the order the client offers
+// them: its microphone, its camera, then its screen share.
+const (
+	AudioTransceiverIndex       = 0
+	VideoTransceiverIndex       = 1
+	ScreenVideoTransceiverIndex = 2
+)
+
+// screenVideoJitterBufferCapacity is how many packets the screen share
+// receiver holds while it assembles a frame, which bounds the size of a frame
+// it can assemble. The camera's default, defaultJitterBufferCapacity, is
+// smaller than a keyframe of a detailed, high-resolution screen share, so such
+// a keyframe would be dropped, the next keyframe asked for would be as large,
+// and no frame would ever decode. 512 packets fit frames of about 600 KB. The
+// capacity does not delay frames, but it is how many packets arrive before a
+// lost one is given up on, so the camera keeps the default.
+const screenVideoJitterBufferCapacity = 512
+
+// defaultJitterBufferCapacity is how many packets a camera receiver holds
+// while it assembles a frame.
+const defaultJitterBufferCapacity = 128
 
 // errConnectionClosed is returned when the peer connection closes while a
 // caller is waiting on it.
@@ -95,9 +127,22 @@ type trackStatusMessage struct {
 	Enabled       bool   `json:"enabled"`
 }
 
+// VideoCodecConfig locates the native libraries video is decoded and encoded
+// with. They are loaded the first time video needs them, so a session without
+// video never loads them.
+type VideoCodecConfig struct {
+	// VPXLibPath is libvpx, which decodes and encodes VP8. Empty looks for its
+	// conventional names (libvpx.so.12, libvpx.so.11, and so on) on the
+	// loader's default search path.
+	VPXLibPath string
+	// OpenH264LibPath is libopenh264, which decodes H.264. Empty looks for its
+	// conventional names (libopenh264.so.8, libopenh264.so.7, and so on).
+	OpenH264LibPath string
+}
+
 // Connection wraps a Pion peer connection for one client session. It owns the
-// outgoing audio track and exposes the incoming one. It is safe for concurrent
-// use.
+// outgoing audio track and exposes the incoming one, and the client's camera
+// and screen share as Tracks. It is safe for concurrent use.
 //
 // The peer connection behind it can be replaced: a renegotiation that asks for a
 // restart closes the current one and answers on a new one, which also takes a
@@ -108,6 +153,7 @@ type Connection struct {
 	localAudio        *webrtc.TrackLocalStaticSample
 	connectionTimeout time.Duration
 	name              string
+	videoCodecs       VideoCodecConfig
 
 	// sigMu serializes signaling: an offer, a renegotiation and the candidates
 	// trickled in for them arrive on separate requests.
@@ -125,6 +171,12 @@ type Connection struct {
 	// trackReady is closed when remoteAudio is set, and replaced when the peer
 	// connection is.
 	trackReady chan struct{}
+	// remoteVideo holds the incoming video tracks by the receiver they arrived
+	// on, and remoteVideoReady is closed, then replaced, as each arrives.
+	remoteVideo      map[*webrtc.RTPReceiver]*webrtc.TrackRemote
+	remoteVideoReady chan struct{}
+	// trackMap holds the input Tracks handed out, by transceiver index.
+	trackMap map[int]*Track
 	// replaced is closed when the current peer connection is replaced by a
 	// restart.
 	replaced chan struct{}
@@ -208,6 +260,12 @@ func WithICEServers(servers ...webrtc.ICEServer) Option {
 	return func(c *Connection) { c.iceServers = servers }
 }
 
+// WithVideoCodecs locates the native libraries video is decoded and encoded
+// with. Without it they are looked for by their conventional names.
+func WithVideoCodecs(cfg VideoCodecConfig) Option {
+	return func(c *Connection) { c.videoCodecs = cfg }
+}
+
 // WithConnectionTimeout sets how long the peer connection may stay in the
 // connecting state before it is closed. The default is 60 seconds.
 func WithConnectionTimeout(d time.Duration) Option {
@@ -229,11 +287,11 @@ func NewConnection(opts ...Option) (*Connection, error) {
 		opt(c)
 	}
 
-	m := &webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
-		return nil, fmt.Errorf("register codecs: %w", err)
+	api, err := newAPI()
+	if err != nil {
+		return nil, err
 	}
-	c.api = webrtc.NewAPI(webrtc.WithMediaEngine(m))
+	c.api = api
 
 	local, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
@@ -250,6 +308,83 @@ func NewConnection(opts ...Option) (*Connection, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// The video codecs offered, in order of preference, each with its own payload
+// type and the RTX payload type after it.
+//
+//nolint:gochecknoglobals // a fixed table
+var videoCodecs = []struct {
+	mimeType string
+	fmtp     string
+}{
+	{webrtc.MimeTypeVP8, ""},
+	{webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"},
+	{webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
+}
+
+// firstVideoPayloadType is the payload type of the first video codec.
+const firstVideoPayloadType = 97
+
+// newAPI builds the Pion API the peer connections are made with: Opus and the
+// G.711 and G.722 codecs for audio, VP8 and H.264 for video, the media id
+// header extension that routes packets to their transceiver, and NACKs and
+// RTCP reports.
+func newAPI() (*webrtc.API, error) {
+	m := &webrtc.MediaEngine{}
+	for _, codec := range []webrtc.RTPCodecParameters{
+		{
+			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1",
+			PayloadType: 111,
+		},
+		{MimeType: webrtc.MimeTypeG722, ClockRate: 8000, PayloadType: 9},
+		{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, PayloadType: 0},
+		{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, PayloadType: 8},
+	} {
+		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeAudio); err != nil {
+			return nil, fmt.Errorf("register codecs: %w", err)
+		}
+	}
+	feedback := []webrtc.RTCPFeedback{{Type: "nack"}, {Type: "nack", Parameter: "pli"}, {Type: "goog-remb"}}
+	pt := webrtc.PayloadType(firstVideoPayloadType)
+	for _, vc := range videoCodecs {
+		for _, codec := range []webrtc.RTPCodecParameters{
+			{
+				MimeType: vc.mimeType, ClockRate: 90000, SDPFmtpLine: vc.fmtp, RTCPFeedback: feedback,
+				PayloadType: pt,
+			},
+			{
+				MimeType: webrtc.MimeTypeRTX, ClockRate: 90000, SDPFmtpLine: fmt.Sprintf("apt=%d", pt),
+				PayloadType: pt + 1,
+			},
+		} {
+			if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
+				return nil, fmt.Errorf("register codecs: %w", err)
+			}
+		}
+		pt += 2
+	}
+	for _, kind := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeAudio, webrtc.RTPCodecTypeVideo} {
+		if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.SDESMidURI}, kind); err != nil {
+			return nil, fmt.Errorf("register header extension: %w", err)
+		}
+	}
+
+	registry := &interceptor.Registry{}
+	generator, err := nack.NewGeneratorInterceptor()
+	if err != nil {
+		return nil, fmt.Errorf("nack generator: %w", err)
+	}
+	responder, err := nack.NewResponderInterceptor()
+	if err != nil {
+		return nil, fmt.Errorf("nack responder: %w", err)
+	}
+	registry.Add(responder)
+	registry.Add(generator)
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+		return nil, fmt.Errorf("rtcp reports: %w", err)
+	}
+	return webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(registry)), nil
 }
 
 // initializeLocked builds a new peer connection and the state that goes with
@@ -272,6 +407,9 @@ func (c *Connection) initializeLocked() error {
 	if c.replaced != nil {
 		close(c.replaced)
 	}
+	c.stopTracksLocked()
+	c.remoteVideo = map[*webrtc.RTPReceiver]*webrtc.TrackRemote{}
+	c.remoteVideoReady = make(chan struct{})
 	c.replaced = make(chan struct{})
 	c.gen++
 	c.pc = pc
@@ -303,14 +441,22 @@ func randomHex(n int) string {
 // generation it was registered for, so a peer connection replaced by a restart
 // can no longer act on the Connection.
 func (c *Connection) setupListeners(pc *webrtc.PeerConnection, gen int) {
-	pc.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+	pc.OnTrack(func(tr *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		slog.Debug("rtc: track received", "kind", tr.Kind().String())
-		if tr.Kind() != webrtc.RTPCodecTypeAudio {
-			return
-		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if gen != c.gen || c.remoteAudio != nil {
+		if gen != c.gen {
+			return
+		}
+		if tr.Kind() == webrtc.RTPCodecTypeVideo {
+			if _, ok := c.remoteVideo[receiver]; !ok {
+				c.remoteVideo[receiver] = tr
+				close(c.remoteVideoReady)
+				c.remoteVideoReady = make(chan struct{})
+			}
+			return
+		}
+		if tr.Kind() != webrtc.RTPCodecTypeAudio || c.remoteAudio != nil {
 			return
 		}
 		c.remoteAudio = tr
@@ -393,6 +539,7 @@ func (c *Connection) createAnswer(offer webrtc.SessionDescription) error {
 	if err := pc.SetRemoteDescription(offer); err != nil {
 		return fmt.Errorf("set remote description: %w", err)
 	}
+	c.forceTransceiversToSendRecv(pc)
 	slog.Debug("rtc: creating answer")
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
@@ -410,6 +557,224 @@ func (c *Connection) createAnswer(offer webrtc.SessionDescription) error {
 		c.answer = pc.LocalDescription()
 	}
 	return nil
+}
+
+// mediaTransceivers returns the peer connection's transceivers that carry a
+// media line of the offer, in the order of their lines.
+func mediaTransceivers(pc *webrtc.PeerConnection) []*webrtc.RTPTransceiver {
+	var out []*webrtc.RTPTransceiver
+	for _, t := range pc.GetTransceivers() {
+		if t.Mid() != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// forceTransceiversToSendRecv makes the first two transceivers, the
+// microphone's and the camera's, send as well as receive, so the bot can send
+// its audio and video on them. The others, a screen share, only receive.
+//
+// The microphone's transceiver already sends the outgoing audio. The camera's
+// gets a sender here, with a track sending nothing until the transport
+// replaces it with its own (see ReplaceVideoTrack). The bot's video is
+// encoded to VP8, so a camera line the client offers without VP8 is left
+// receiving only.
+func (c *Connection) forceTransceiversToSendRecv(pc *webrtc.PeerConnection) {
+	for i, t := range mediaTransceivers(pc) {
+		if i >= 2 || t.Sender() != nil || t.Kind() != webrtc.RTPCodecTypeVideo {
+			continue
+		}
+		receiver := t.Receiver()
+		if receiver == nil || !hasCodec(receiver.GetParameters().Codecs, webrtc.MimeTypeVP8) {
+			slog.Warn("rtc: the client's camera does not take VP8, the bot cannot send it video")
+			continue
+		}
+		placeholder, err := newLocalVideoTrack()
+		if err != nil {
+			slog.Error("rtc: new local video track", "err", err)
+			continue
+		}
+		sender, err := c.api.NewRTPSender(placeholder, receiver.Transport())
+		if err != nil {
+			slog.Error("rtc: new video sender", "err", err)
+			continue
+		}
+		if err := t.SetSender(sender, placeholder); err != nil {
+			slog.Error("rtc: set video sender", "err", err)
+			_ = sender.Stop()
+			continue
+		}
+		go readSenderRTCP(sender)
+	}
+}
+
+// newLocalVideoTrack builds an outgoing VP8 video track.
+func newLocalVideoTrack() (*webrtc.TrackLocalStaticSample, error) {
+	return webrtc.NewTrackLocalStaticSample(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000},
+		"video", "jargo",
+	)
+}
+
+// hasCodec reports whether codecs include one of the given MIME type.
+func hasCodec(codecs []webrtc.RTPCodecParameters, mimeType string) bool {
+	for _, codec := range codecs {
+		if strings.EqualFold(codec.MimeType, mimeType) {
+			return true
+		}
+	}
+	return false
+}
+
+// keyframeRequester is an outgoing video track that can be told the receiver
+// wants a keyframe.
+type keyframeRequester interface {
+	requestKeyframe()
+}
+
+// bitrateTarget is an outgoing video track whose bitrate the receiver's
+// estimate of the available bandwidth sets.
+type bitrateTarget interface {
+	setTargetBitrate(bitrate int)
+}
+
+// readSenderRTCP reads the RTCP the client sends about the bot's video until
+// the sender stops. A picture loss or a full intra request makes the next
+// frame a keyframe, and a bandwidth estimate sets the encoder's bitrate. The
+// reading also runs the NACK responder that retransmits lost packets.
+func readSenderRTCP(sender *webrtc.RTPSender) {
+	for {
+		packets, _, err := sender.ReadRTCP()
+		if err != nil {
+			return
+		}
+		track := sender.Track()
+		for _, packet := range packets {
+			switch p := packet.(type) {
+			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+				if kr, ok := track.(keyframeRequester); ok {
+					kr.requestKeyframe()
+				}
+			case *rtcp.ReceiverEstimatedMaximumBitrate:
+				if bt, ok := track.(bitrateTarget); ok {
+					bt.setTargetBitrate(int(p.Bitrate))
+				}
+			}
+		}
+	}
+}
+
+// replaceTrack sends track on the transceiver at index, or logs that there is
+// no transceiver there sending.
+func (c *Connection) replaceTrack(index int, track webrtc.TrackLocal, what string) {
+	slog.Debug("rtc: replacing track", "track", what)
+	c.mu.Lock()
+	pc := c.pc
+	c.mu.Unlock()
+	transceivers := mediaTransceivers(pc)
+	if len(transceivers) <= index || transceivers[index].Sender() == nil {
+		slog.Warn("rtc: transceiver not found, cannot replace track", "track", what)
+		return
+	}
+	if err := transceivers[index].Sender().ReplaceTrack(track); err != nil {
+		slog.Warn("rtc: cannot replace track", "track", what, "err", err)
+	}
+}
+
+// ReplaceVideoTrack sends track on the camera's transceiver, the second.
+func (c *Connection) ReplaceVideoTrack(track webrtc.TrackLocal) {
+	c.replaceTrack(VideoTransceiverIndex, track, "video")
+}
+
+// ReplaceScreenVideoTrack sends track on the screen share's transceiver, the
+// third.
+func (c *Connection) ReplaceScreenVideoTrack(track webrtc.TrackLocal) {
+	c.replaceTrack(ScreenVideoTransceiverIndex, track, "screen video")
+}
+
+// VideoInputTrack returns the client's camera, the track of the second
+// transceiver, or nil when the client offered none.
+func (c *Connection) VideoInputTrack() *Track {
+	return c.inputTrack(VideoTransceiverIndex, defaultJitterBufferCapacity, "video")
+}
+
+// ScreenVideoInputTrack returns the client's screen share, the track of the
+// third transceiver, or nil when the client offered none.
+func (c *Connection) ScreenVideoInputTrack() *Track {
+	return c.inputTrack(ScreenVideoTransceiverIndex, screenVideoJitterBufferCapacity, "screen video")
+}
+
+// inputTrack returns the Track of the transceiver at index, creating it the
+// first time.
+func (c *Connection) inputTrack(index int, capacity uint16, what string) *Track {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t := c.trackMap[index]; t != nil {
+		return t
+	}
+	transceivers := mediaTransceivers(c.pc)
+	if len(transceivers) <= index || transceivers[index].Receiver() == nil {
+		slog.Warn("rtc: no transceiver is available", "track", what)
+		return nil
+	}
+	t := newTrack(c, c.gen, transceivers[index].Receiver(), transceivers[index].Kind(), capacity)
+	if c.trackMap == nil {
+		c.trackMap = map[int]*Track{}
+	}
+	c.trackMap[index] = t
+	return t
+}
+
+// stopTracksLocked stops the input Tracks handed out and forgets them. c.mu
+// must be held.
+func (c *Connection) stopTracksLocked() {
+	for _, t := range c.trackMap {
+		t.Stop()
+	}
+	c.trackMap = nil
+}
+
+// remoteVideoTrack waits for the incoming video track of receiver, from the
+// peer connection of generation gen. It returns nil once that peer connection
+// is replaced or closed, or stop is closed.
+func (c *Connection) remoteVideoTrack(gen int, receiver *webrtc.RTPReceiver, stop <-chan struct{}) *webrtc.TrackRemote {
+	for {
+		c.mu.Lock()
+		if gen != c.gen {
+			c.mu.Unlock()
+			return nil
+		}
+		tr, ready, replaced := c.remoteVideo[receiver], c.remoteVideoReady, c.replaced
+		c.mu.Unlock()
+		if tr != nil {
+			return tr
+		}
+		select {
+		case <-ready:
+		case <-replaced:
+			return nil
+		case <-c.closed:
+			return nil
+		case <-stop:
+			return nil
+		}
+	}
+}
+
+// sendPictureLossIndication asks the client for a keyframe of the stream ssrc,
+// on the peer connection of generation gen.
+func (c *Connection) sendPictureLossIndication(gen int, ssrc webrtc.SSRC) {
+	c.mu.Lock()
+	pc := c.pc
+	current := gen == c.gen
+	c.mu.Unlock()
+	if !current {
+		return
+	}
+	if err := pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(ssrc)}}); err != nil {
+		slog.Debug("rtc: send picture loss indication", "err", err)
+	}
 }
 
 // GetAnswer returns the answer to the last offer applied, or nil when there is
@@ -506,6 +871,20 @@ func (c *Connection) Connect() {
 	slog.Debug("rtc: flushing pending app messages", "count", len(pending))
 	for _, m := range pending {
 		c.emitAppMessage(m)
+	}
+	// The first frames of video were likely lost while the pipeline was not
+	// ready, and a decoder can show nothing until the next keyframe, which can
+	// be seconds away. A renegotiation makes the client send one now.
+	videoInputTrack := c.VideoInputTrack()
+	if videoInputTrack != nil {
+		videoInputTrack.DiscardOldFrames()
+	}
+	screenVideoInputTrack := c.ScreenVideoInputTrack()
+	if screenVideoInputTrack != nil {
+		screenVideoInputTrack.DiscardOldFrames()
+	}
+	if videoInputTrack != nil || screenVideoInputTrack != nil {
+		c.AskToRenegotiate()
 	}
 }
 
@@ -668,6 +1047,16 @@ func (c *Connection) handleSignalingMessage(raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &m); err != nil || m.Type != "trackStatus" {
 		slog.Warn("rtc: unsupported signaling message", "message", string(raw))
 		return
+	}
+	var track *Track
+	switch m.ReceiverIndex {
+	case VideoTransceiverIndex:
+		track = c.VideoInputTrack()
+	case ScreenVideoTransceiverIndex:
+		track = c.ScreenVideoInputTrack()
+	}
+	if track != nil {
+		track.SetEnabled(m.Enabled)
 	}
 	c.mu.Lock()
 	hs := append([]func(int, bool){}, c.onTrackStatus...)
@@ -915,6 +1304,7 @@ func (c *Connection) closePeer(gen int) {
 	}
 	pc := c.pc
 	c.stopTimersLocked()
+	c.stopTracksLocked()
 	c.outgoing = nil
 	c.pendingApp = nil
 	c.dataChannelEnabled = true
@@ -938,6 +1328,7 @@ func (c *Connection) Close() error {
 		c.renegotiationTimer.Stop()
 		c.renegotiationTimer = nil
 	}
+	c.stopTracksLocked()
 	c.outgoing = nil
 	c.pendingApp = nil
 	c.mu.Unlock()

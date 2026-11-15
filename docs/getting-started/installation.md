@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime, RNNoise, libmoonshine and libespeak-ng are loaded at run time."
+description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime, RNNoise, libmoonshine, libespeak-ng and the video codecs are loaded at run time."
 weight: 1
 ---
 
@@ -34,6 +34,8 @@ it unless you have a measured reason not to.
 | **RNNoise** | Optional input noise reduction | `JARGO_RNNOISE_LIB` | Bot runs without denoising. |
 | **libmoonshine** | The Moonshine STT provider (`provider/moonshine`) | `JARGO_MOONSHINE_LIB` | `moonshine.NewSTT` returns `moonshine.ErrLibraryNotAvailable`. |
 | **libespeak-ng** | The local Kokoro TTS provider (`provider/kokoro`), which also needs the ONNX Runtime | `JARGO_ESPEAK_LIB` | `kokoro.NewTTS` returns `kokoro.ErrEspeakNotAvailable`. |
+| **libvpx** | Video over the WebRTC transport (`transport/rtc`): VP8 in both directions | none | No VP8 video is received or sent; an error is logged once per track. |
+| **libopenh264** | Video over the WebRTC transport: H.264 sent by the client | none | No H.264 video is received; an error is logged once per track. |
 
 Each is located by its conventional name on the loader's default search path
 when nothing points at it.
@@ -134,6 +136,33 @@ The model is not in the binary either. The Kokoro v1.0 model and voices files
 the cache, and `Config.ModelPath` and `Config.VoicesPath` load files already on
 disk instead.
 
+### Video codecs
+
+The WebRTC transport decodes the video a client sends (its camera and its
+screen share) and encodes the video the bot shows. VP8 goes through libvpx and
+H.264 through OpenH264, both distribution packages, so there is no `make`
+target for them either:
+
+```sh
+sudo apt-get install -y libvpx12 libopenh264-8   # or your release's versions
+```
+
+They are found by their conventional names on the loader's default search path:
+`libvpx.so.12`, then the older `libvpx.so.11`, `libvpx.so.9` and so on, and
+`libopenh264.so.8`, then `libopenh264.so.7` and so on. Neither is loaded until
+video needs it, so an audio-only bot runs without them. The transport takes
+other paths in its configuration rather than reading the environment:
+
+```go
+conn, err := rtc.NewConnection(rtc.WithVideoCodecs(rtc.VideoCodecConfig{
+    VPXLibPath:      "/opt/vpx/lib/libvpx.so.12",
+    OpenH264LibPath: "/opt/openh264/lib/libopenh264.so.8",
+}))
+```
+
+`rtc.RequestHandlerConfig.VideoCodecs` does the same for the connections a
+request handler creates.
+
 ## No cgo
 
 There is no C toolchain in the picture at all. The Opus codec and the resampler
@@ -148,7 +177,7 @@ have to think about them:
 
 - **`gojargo/jargo-build`**: build stage, with the pinned Go toolchain.
 - **`gojargo/jargo`**: distroless runtime, carrying the ONNX Runtime and
-  RNNoise. It does not carry libmoonshine or libespeak-ng.
+  RNNoise. It does not carry libmoonshine, libespeak-ng or the video codecs.
 
 See **[Deploy with Docker](../deploy/docker.md)** for a copyable Dockerfile.
 

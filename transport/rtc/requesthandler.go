@@ -85,6 +85,9 @@ type RequestHandlerConfig struct {
 	Host string
 	// ConnectionMode defaults to ConnectionModeMultiple.
 	ConnectionMode ConnectionMode
+	// VideoCodecs locates the libraries each connection's video is decoded and
+	// encoded with. The zero value looks for them by their conventional names.
+	VideoCodecs VideoCodecConfig
 }
 
 // RequestHandler answers the offers and ICE candidates clients send over HTTP.
@@ -196,7 +199,7 @@ func (h *RequestHandler) handleWebRequest(req Request, onConnection func(*Connec
 func (h *RequestHandler) newConnection(
 	offer webrtc.SessionDescription, iceServers []webrtc.ICEServer, onConnection func(*Connection) error,
 ) (*Connection, error) {
-	conn, err := NewConnection(WithICEServers(iceServers...))
+	conn, err := NewConnection(WithICEServers(iceServers...), WithVideoCodecs(h.cfg.VideoCodecs))
 	if err != nil {
 		return nil, err
 	}

@@ -342,6 +342,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   locally driven turns for OpenAI Realtime, Grok and Gemini Live,
   `realtime-openai-text`, and Gemini Live with Google Search, a graceful end
   and grounding metadata.
+- **Video over the WebRTC transport.** `transport/rtc` receives the
+  client's camera and screen share and sends the bot's video. VP8 is decoded
+  and encoded with libvpx and H.264 decoded with OpenH264, both loaded at run
+  time through purego (`rtc.VideoCodecConfig`, `rtc.WithVideoCodecs`,
+  `RequestHandlerConfig.VideoCodecs`, or found by their conventional names).
+  Pictures are pushed as `UserImageRawFrame`, sampled per source as
+  `CaptureParticipantVideo` and `Params.VideoInSources` set, and a
+  `UserImageRequestFrame` is answered by its source's next picture or with
+  an error when the source is off or the peer leaves. Images the bot shows
+  are sent as VP8 on the camera's transceiver. **Behaviour change:**
+  connections offer only VP8 and H.264 for video, negotiate the media id
+  header extension, send NACKs and RTCP reports, and ask a client that
+  offered video to renegotiate once the pipeline connects.
 
 ### Changed
 

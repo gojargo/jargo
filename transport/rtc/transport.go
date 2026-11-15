@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -29,11 +30,20 @@ const readDeadline = 500 * time.Millisecond
 // established (again after a restart), transport.EventClientDisconnected when
 // the client goes away, and transport.EventAppMessage for each message the
 // client sends. The client passed to the first two is the *Connection.
+//
+// With video input enabled, the client's camera is read from the start and its
+// screen share once it is captured or an image is asked of it. Their pictures
+// are pushed as UserImageRawFrames, sampled at the framerate each source is
+// captured at (see CaptureParticipantVideo and Params.VideoInSources), and a
+// UserImageRequestFrame is answered by the next picture of its source. With
+// video output enabled, the images the pipeline shows are sent to the client
+// as VP8 on the camera's transceiver.
 type Transport struct {
 	transport.BaseTransport
-	in   *inputTransport
-	out  *outputTransport
-	conn *Connection
+	in     *inputTransport
+	out    *outputTransport
+	conn   *Connection
+	client *client
 	// closing is set once the bot disconnects, so the connection closing then
 	// is not reported as the client leaving.
 	closing atomic.Bool
@@ -42,8 +52,9 @@ type Transport struct {
 // NewTransport builds a WebRTC transport over conn.
 func NewTransport(conn *Connection, params transport.Params) *Transport {
 	t := &Transport{Name: "RTCTransport", conn: conn}
-	t.in = newInput(conn, params)
-	t.out = newOutput(conn, params, &t.closing)
+	t.client = &client{conn: conn, params: params, closing: &t.closing}
+	t.in = newInput(conn, params, t.client)
+	t.out = newOutput(conn, params, &t.closing, t.client)
 
 	ev := t.in.Events()
 	ev.Register(transport.EventAppMessage, false)
@@ -52,7 +63,9 @@ func NewTransport(conn *Connection, params transport.Params) *Transport {
 
 	conn.OnMessage(t.onAppMessage)
 	conn.OnConnected(t.onClientConnected)
+	conn.OnDisconnected(t.onPeerDisconnected)
 	conn.OnClosed(t.onClientClosed)
+	conn.OnTrackStatus(t.onTrackStatus)
 	return t
 }
 
@@ -86,20 +99,46 @@ func (t *Transport) onAppMessage(raw []byte) {
 	t.in.Events().Call(ctx, transport.EventAppMessage, t, json.RawMessage(raw), t.conn.PCID())
 }
 
-// onClientConnected raises EventClientConnected and reports the client to the
-// pipeline. The connection raises it only once the pipeline is ready for it.
+// onClientConnected picks up the client's tracks, captures the video sources
+// Params.VideoInSources lists, raises EventClientConnected and reports the
+// client to the pipeline. The connection raises it only once the pipeline is
+// ready for it.
+//
+// The sources are captured before the event handlers run, so a handler that
+// captures a source itself takes precedence.
 func (t *Transport) onClientConnected() {
 	ctx := t.in.readContext()
 	if ctx == nil {
 		return
 	}
+	t.client.handleClientConnected()
+	params := t.in.Params()
+	for _, videoSource := range configuredVideoSources(params) {
+		if !t.in.SupportsVideoInSource(videoSource) {
+			continue
+		}
+		sourceParams := params.VideoInSources[videoSource]
+		framerate := sourceParams.Rate()
+		if sourceParams.OnRequestOnly {
+			framerate = 0
+		}
+		t.in.captureParticipantMedia(videoSource, framerate)
+	}
 	t.in.Events().Call(ctx, transport.EventClientConnected, t, t.conn)
 	t.in.PushClientConnected(ctx)
 }
 
-// onClientClosed raises EventClientDisconnected when the client went away,
-// rather than the bot disconnecting.
+// onPeerDisconnected forgets the client's tracks while the peer connection is
+// down. They are picked up again when it reconnects.
+func (t *Transport) onPeerDisconnected() {
+	t.client.handlePeerDisconnected()
+}
+
+// onClientClosed forgets the client's tracks and, when the client went away
+// rather than the bot disconnecting, answers the image requests waiting on its
+// video and raises EventClientDisconnected.
 func (t *Transport) onClientClosed() {
+	t.client.handlePeerDisconnected()
 	if t.closing.Load() {
 		return
 	}
@@ -107,21 +146,61 @@ func (t *Transport) onClientClosed() {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	t.in.Events().Call(context.WithoutCancel(ctx), transport.EventClientDisconnected, t, t.conn)
+	ctx = context.WithoutCancel(ctx)
+	t.in.removeAllVideo(ctx)
+	t.in.Events().Call(ctx, transport.EventClientDisconnected, t, t.conn)
+}
+
+// onTrackStatus handles the client turning one of its sources on or off: the
+// image requests waiting on a video source turned off are answered.
+func (t *Transport) onTrackStatus(receiverIndex int, enabled bool) {
+	source, ok := sourcesByReceiver[receiverIndex]
+	if !ok || source == micAudioSource || enabled {
+		return
+	}
+	ctx := t.in.readContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	t.in.stopVideo(context.WithoutCancel(ctx), source)
+}
+
+// CaptureParticipantVideo captures the peer's camera or screen share,
+// passing on framerate frames per second, every frame for
+// transport.EveryFrame, or with onRequestOnly only the frames that answer image
+// requests. The transport has one peer, so participantID does not select it.
+// An empty videoSource is the camera.
+func (t *Transport) CaptureParticipantVideo(
+	_ context.Context, _ string, framerate int, videoSource string, onRequestOnly bool,
+) error {
+	if videoSource == "" {
+		videoSource = camVideoSource
+	}
+	t.in.captureParticipantMedia(videoSource, transport.CaptureFramerate(framerate, onRequestOnly))
+	return nil
 }
 
 // inputTransport reads Opus RTP from the connection, decodes it to PCM, and
-// pushes InputAudioRawFrames into the pipeline at the input sample rate.
+// pushes InputAudioRawFrames into the pipeline at the input sample rate. It
+// also reads the client's video sources, as UserImageRawFrames.
 type inputTransport struct {
 	*transport.BaseInput
-	conn *Connection
-	dec  *opus.Decoder
+	conn   *Connection
+	client *client
+	// videoSamplers decide which pictures of each video source are pushed.
+	videoSamplers *transport.VideoInSamplers
+	// receiveVideo holds the cancel function of each video source being read.
+	receiveVideo map[string]context.CancelFunc
+	videoWG      sync.WaitGroup
+	// pushVideoFrame pushes a picture downstream: PushVideoFrame.
+	pushVideoFrame func(context.Context, frames.InputImageFrame)
+	dec            *opus.Decoder
 	// resampler converts the 48 kHz the codec decodes to into the rate the
 	// transport reads at. It passes audio through when the two match.
 	resampler *resample.Resampler
 
 	readWG     sync.WaitGroup
-	mu         sync.Mutex // guards readCancel and readCtx
+	mu         sync.Mutex // guards readCancel, readCtx and receiveVideo
 	readCancel context.CancelFunc
 	// readCtx is the context the input reads under, nil while it is not.
 	readCtx context.Context //nolint:containedctx // the reading's lifetime, for the connection's callbacks
@@ -135,10 +214,129 @@ func (in *inputTransport) readContext() context.Context {
 	return in.readCtx
 }
 
-func newInput(conn *Connection, params transport.Params) *inputTransport {
-	in := &inputTransport{conn: conn}
+func newInput(conn *Connection, params transport.Params, c *client) *inputTransport {
+	in := &inputTransport{
+		conn:          conn,
+		client:        c,
+		videoSamplers: transport.NewVideoInSamplers(),
+		receiveVideo:  map[string]context.CancelFunc{},
+	}
 	in.BaseInput = transport.NewBaseInput("PionInput", params, in)
+	in.pushVideoFrame = in.PushVideoFrame
 	return in
+}
+
+// SupportsVideoInSource reports that the transport captures the camera and the
+// screen share listed in Params.VideoInSources.
+func (in *inputTransport) SupportsVideoInSource(videoSource string) bool {
+	return videoSource == camVideoSource || videoSource == screenVideoSource
+}
+
+// ProcessFrame answers image requests, on top of what the base input does.
+func (in *inputTransport) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := in.BaseInput.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if request, ok := f.(*frames.UserImageRequestFrame); ok {
+		in.requestParticipantImage(ctx, request)
+	}
+	return nil
+}
+
+// startReceiveVideo starts reading a video source, unless it is being read
+// already or the input is not reading.
+func (in *inputTransport) startReceiveVideo(videoSource string) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.readCtx == nil || in.receiveVideo[videoSource] != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(in.readCtx)
+	in.receiveVideo[videoSource] = cancel
+	in.videoWG.Go(func() { in.receiveVideoFrames(ctx, videoSource) })
+}
+
+// stopReceiveVideo stops reading every video source and waits for the reading
+// to finish.
+func (in *inputTransport) stopReceiveVideo() {
+	in.mu.Lock()
+	for source, cancel := range in.receiveVideo {
+		cancel()
+		delete(in.receiveVideo, source)
+	}
+	in.mu.Unlock()
+	in.videoWG.Wait()
+}
+
+// receiveVideoFrames pushes the pictures of a video source its sampler passes
+// on, each carrying the image request it answers, if any.
+func (in *inputTransport) receiveVideoFrames(ctx context.Context, videoSource string) {
+	for frame := range in.client.readVideoFrames(ctx, videoSource) {
+		due, request := in.videoSamplers.Sample(peerID, videoSource)
+		if !due {
+			continue
+		}
+		if request != nil {
+			frame.Text = request.Text
+			frame.AppendToContext = request.AppendToContext
+			frame.Request = request
+		}
+		in.pushVideoFrame(ctx, frame)
+	}
+}
+
+// requestParticipantImage queues an image request, answered by the next
+// picture of its source (the camera when it names none). A source the peer is
+// not sending answers it at once, with an error.
+//
+// A request for a source not being captured starts capturing it, passing on
+// every frame.
+func (in *inputTransport) requestParticipantImage(ctx context.Context, request *frames.UserImageRequestFrame) {
+	slog.Debug("rtc: requesting image from participant", "user", request.UserID)
+	videoSource := request.VideoSource
+	if videoSource == "" {
+		videoSource = camVideoSource
+	}
+	if !in.client.videoSourceEnabled(videoSource) {
+		in.AnswerImageRequests(ctx, []*frames.UserImageRequestFrame{request},
+			fmt.Sprintf("The peer isn't sending %s video.", videoSource))
+		return
+	}
+	if !in.videoSamplers.IsCapturing(peerID, videoSource) {
+		in.videoSamplers.Capture(peerID, videoSource, transport.EveryFrame)
+	}
+	in.videoSamplers.AddRequest(peerID, videoSource, request)
+	if in.SupportsVideoInSource(videoSource) && in.Params().VideoInEnabled {
+		in.startReceiveVideo(videoSource)
+	}
+}
+
+// stopVideo answers the image requests waiting on a video source the peer
+// turned off. The source stays captured, so its frames are sampled again if it
+// is turned back on.
+func (in *inputTransport) stopVideo(ctx context.Context, videoSource string) {
+	requests := in.videoSamplers.TakeRequests(peerID, videoSource)
+	in.AnswerImageRequests(ctx, requests, fmt.Sprintf("The peer turned off its %s video.", videoSource))
+}
+
+// removeAllVideo stops sampling video and answers the waiting image requests,
+// as when the peer disconnects.
+func (in *inputTransport) removeAllVideo(ctx context.Context) {
+	requests := in.videoSamplers.Clear()
+	in.AnswerImageRequests(ctx, requests, "The peer disconnected.")
+}
+
+// captureParticipantMedia captures a source: a video source at framerate
+// (0 for only the frames that answer image requests, transport.EveryFrame for
+// every frame), read from now on. The microphone is read from the start.
+func (in *inputTransport) captureParticipantMedia(source string, framerate int) {
+	if !in.SupportsVideoInSource(source) {
+		return
+	}
+	in.videoSamplers.Capture(peerID, source, framerate)
+	if in.Params().VideoInEnabled {
+		in.startReceiveVideo(source)
+	}
 }
 
 func channels(n int) int {
@@ -173,6 +371,15 @@ func (in *inputTransport) StartReading(ctx context.Context) error {
 	in.readWG.Add(1)
 	go in.readLoop(readCtx)
 
+	// The camera is read from the start; the screen share once something
+	// captures it.
+	if in.Params().VideoInEnabled {
+		in.startReceiveVideo(camVideoSource)
+		if in.videoSamplers.IsCapturing(peerID, screenVideoSource) {
+			in.startReceiveVideo(screenVideoSource)
+		}
+	}
+
 	// The pipeline is ready for the connection now. The connected event is
 	// raised now if the peer is already connected, or when it connects, and
 	// the client's messages held until this point are released.
@@ -190,6 +397,7 @@ func (in *inputTransport) StopReading(context.Context) error {
 		cancel()
 	}
 	in.readWG.Wait()
+	in.stopReceiveVideo()
 	if in.resampler != nil {
 		in.resampler.Close()
 		in.resampler = nil
@@ -322,9 +530,10 @@ func (g *gapTracker) quiet() {
 // the sender writing every frame, elapsed frames and elapsed time cannot diverge.
 type outputTransport struct {
 	*transport.BaseOutput
-	conn *Connection
-	enc  *opus.Encoder
-	tail []byte
+	conn   *Connection
+	client *client
+	enc    *opus.Encoder
+	tail   []byte
 	// frameBytes is the size of one 20 ms frame at the output sample rate. The
 	// sender runs at that rate and the encoder brings it to the codec's own.
 	frameBytes int
@@ -343,8 +552,8 @@ type outputTransport struct {
 	closing *atomic.Bool
 }
 
-func newOutput(conn *Connection, params transport.Params, closing *atomic.Bool) *outputTransport {
-	out := &outputTransport{conn: conn, closing: closing}
+func newOutput(conn *Connection, params transport.Params, closing *atomic.Bool, c *client) *outputTransport {
+	out := &outputTransport{conn: conn, closing: closing, client: c}
 	out.BaseOutput = transport.NewBaseOutput("PionOutput", params, out)
 	return out
 }
@@ -395,7 +604,16 @@ func (out *outputTransport) disconnect() {
 		slog.Info("rtc: disconnecting from the peer")
 		out.closing.Store(true)
 		_ = out.conn.Disconnect()
+		out.client.handlePeerDisconnected()
 	})
+}
+
+// WriteVideoFrame queues an image on the outgoing video track, already sized to
+// the video output size by the base. It reports false when there is nowhere to
+// send it: the client is not connected, the bot is leaving, or the transport
+// sends no video.
+func (out *outputTransport) WriteVideoFrame(_ context.Context, f *frames.OutputImageRawFrame) (bool, error) {
+	return out.client.writeVideoFrame(f), nil
 }
 
 // SendMessage sends an application message over the data channel. The payload is
