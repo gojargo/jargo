@@ -87,6 +87,7 @@ const (
 
 // Transport bridges a WebSocket session to a pipeline.
 type Transport struct {
+	transport.BaseTransport
 	in   *inputTransport
 	out  *outputTransport
 	sess *Session
@@ -207,6 +208,7 @@ func NewTransport(c *websocket.Conn, ser Serializer, params Params, pending ...[
 		sess.closeTimeout = *params.CloseTimeout
 	}
 	return &Transport{
+		Name: "WebSocketServerTransport",
 		sess: sess,
 		in:   newInput(sess, ser, params),
 		out:  newOutput(sess, ser, params),

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"maps"
 	"regexp"
+	"strings"
 
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
@@ -28,19 +29,54 @@ const (
 // toolTypeFunction is the only tool type OpenAI's chat API defines.
 const toolTypeFunction = "function"
 
-// ContentPartText is the only content part type this format needs today.
-const ContentPartText = "text"
+// The content part types this format uses.
+const (
+	ContentPartText     = "text"
+	ContentPartImageURL = "image_url"
+)
 
 // ContentPart is one part of a message's content. The API takes content either
 // as a plain string or as a list of parts.
 type ContentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL is the image an image part holds: a data URL carrying the image,
+// or a URL the API fetches it from.
+type ImageURL struct {
+	URL string `json:"url"`
+	// Detail is how closely the model looks at the image, or "" for the API's
+	// default.
+	Detail string `json:"detail,omitempty"`
 }
 
 // TextPart builds a text content part.
 func TextPart(text string) ContentPart {
 	return ContentPart{Type: ContentPartText, Text: text}
+}
+
+// ImageURLPart builds an image content part.
+func ImageURLPart(url string) ContentPart {
+	return ContentPart{Type: ContentPartImageURL, ImageURL: &ImageURL{URL: url}}
+}
+
+// contentParts converts a universal message's list of parts. The format is the
+// universal one's own, so each part keeps its type.
+func contentParts(parts []frames.ContentPart) []ContentPart {
+	out := make([]ContentPart, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case frames.ContentPartImageURL:
+			part := ImageURLPart(p.ImageURL)
+			part.ImageURL.Detail = p.Detail
+			out = append(out, part)
+		default:
+			out = append(out, TextPart(p.Text))
+		}
+	}
+	return out
 }
 
 // Message is one message of the conversation as the chat-completions API takes
@@ -259,7 +295,12 @@ func ToMessages(msgs []frames.Message, convertDeveloperToUser bool) ([]Message, 
 			if convertDeveloperToUser && m.Role == frames.RoleDeveloper {
 				role = RoleUser
 			}
-			out = append(out, Message{Role: role, Content: m.Text})
+			msg := Message{Role: role, Content: m.Text}
+			if len(m.Content) > 0 {
+				msg.Content = ""
+				msg.ContentParts = contentParts(m.Content)
+			}
+			out = append(out, msg)
 		}
 	}
 	return out, nil
@@ -314,7 +355,31 @@ func (a *Adapter) MessagesForLogging(convo *frames.LLMContext) []map[string]any 
 	if err != nil {
 		return nil
 	}
-	return asMaps(params.Messages)
+	return ElideImageData(asMaps(params.Messages))
+}
+
+// elidedImageURL stands in for the data URL of an image in a logged message.
+const elidedImageURL = "data:image/..."
+
+// ElideImageData replaces the data URL of every image the messages carry with
+// a short placeholder, in place, so a log shows that an image was sent without
+// carrying its bytes. An image given by a URL the API fetches keeps its URL.
+// It returns the messages it was given.
+func ElideImageData(msgs []map[string]any) []map[string]any {
+	for _, m := range msgs {
+		parts, _ := m["content"].([]any)
+		for _, p := range parts {
+			part, _ := p.(map[string]any)
+			if part["type"] != ContentPartImageURL {
+				continue
+			}
+			image, _ := part["image_url"].(map[string]any)
+			if url, _ := image["url"].(string); strings.HasPrefix(url, "data:image/") {
+				image["url"] = elidedImageURL
+			}
+		}
+	}
+	return msgs
 }
 
 // asMaps renders messages through their own encoding, so what is logged is the

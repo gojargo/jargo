@@ -184,6 +184,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   scenarios, simulations and rubrics; parse errors are `*ScenarioError`;
   `tts_response` in text modality and `eval:` on `function_call_stopped` no
   longer load.
+- **Image frames and the plumbing for them.** `OutputImageRawFrame`,
+  `URLImageRawFrame`, `AssistantImageRawFrame`, `SpriteFrame`,
+  `InputImageRawFrame`, `UserImageRawFrame` and `UserImageRequestFrame` join
+  the frames. The output transport shows still images, sprites and live
+  images at `VideoOutFramerate`, resized to the video output size; the input
+  transport gains `PushVideoFrame`, `AnswerImageRequests` and
+  `VideoInSampler`; transport params gain the `VideoIn*` and `VideoOut*`
+  settings. Conversation messages can hold images (`Message.Content`,
+  `CreateImageMessage`, `LLMContext.AddImageFrameMessage`), sent in each
+  API's image format by the OpenAI, Anthropic, Gemini and Responses
+  adapters, and a tool can ask for the user's image with a
+  `UserImageRequestFrame`. **Breaking:** `transport.Transport` gains
+  `GetClientID` and `CaptureParticipantVideo` (embed
+  `transport.BaseTransport` for the defaults), `InputDriver` gains
+  `SupportsVideoInSource`, and `OutputDriver` gains `WriteVideoFrame` and
+  `RegisterVideoDestination`.
 
 ### Changed
 

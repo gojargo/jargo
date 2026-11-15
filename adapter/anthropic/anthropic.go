@@ -5,6 +5,9 @@ package anthropic
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"slices"
+	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
@@ -174,13 +177,80 @@ func toMessage(m frames.Message) (sdk.MessageParam, bool, error) {
 		msg, err := toolCallMessage(m)
 		return msg, err == nil, err
 	case m.Role == frames.RoleAssistant:
-		return sdk.NewAssistantMessage(sdk.NewTextBlock(text(m.Text))), true, nil
+		return sdk.NewAssistantMessage(contentBlocks(m)...), true, nil
 	default:
 		// A user message, and a system or developer message too: Anthropic has
 		// neither a system nor a developer input role, so all three enter as the
 		// user rather than being dropped.
-		return sdk.NewUserMessage(sdk.NewTextBlock(text(m.Text))), true, nil
+		return sdk.NewUserMessage(contentBlocks(m)...), true, nil
 	}
+}
+
+// contentBlocks converts the content of a plain message: its text, or its list
+// of parts, an image becoming an image block.
+//
+// When the parts hold a single image, as a message built from one image frame
+// does, it is moved ahead of the text, which is where Anthropic recommends an
+// image goes.
+func contentBlocks(m frames.Message) []sdk.ContentBlockParamUnion {
+	if len(m.Content) == 0 {
+		return []sdk.ContentBlockParamUnion{sdk.NewTextBlock(text(m.Text))}
+	}
+	blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.Content))
+	for _, p := range m.Content {
+		switch p.Type {
+		case frames.ContentPartImageURL:
+			block, ok := imageBlock(p.ImageURL)
+			if !ok {
+				slog.Warn("unsupported image url", "url", p.ImageURL)
+				continue
+			}
+			blocks = append(blocks, block)
+		default:
+			blocks = append(blocks, sdk.NewTextBlock(text(p.Text)))
+		}
+	}
+	return imageBeforeText(blocks)
+}
+
+// imageBlock converts an image given by URL: a data URL carries the image
+// itself, and a web URL is fetched by Anthropic. Any other URL is not one
+// Anthropic can read.
+func imageBlock(url string) (sdk.ContentBlockParamUnion, bool) {
+	switch {
+	case strings.HasPrefix(url, "data:"):
+		// A data URL reads "data:image/jpeg;base64,<data>".
+		header, data, _ := strings.Cut(url, ",")
+		mediaType, _, _ := strings.Cut(strings.TrimPrefix(header, "data:"), ";")
+		return sdk.NewImageBlockBase64(mediaType, data), true
+	case strings.HasPrefix(url, "http"):
+		return sdk.NewImageBlock(sdk.URLImageSourceParam{URL: url}), true
+	default:
+		return sdk.ContentBlockParamUnion{}, false
+	}
+}
+
+// imageBeforeText moves the only image among the blocks ahead of the first
+// text block.
+func imageBeforeText(blocks []sdk.ContentBlockParamUnion) []sdk.ContentBlockParamUnion {
+	image, firstText := -1, -1
+	for i, b := range blocks {
+		switch {
+		case b.OfImage != nil:
+			if image >= 0 {
+				return blocks
+			}
+			image = i
+		case b.OfText != nil && firstText < 0:
+			firstText = i
+		}
+	}
+	if image < 0 || firstText < 0 || image < firstText {
+		return blocks
+	}
+	moved := blocks[image]
+	blocks = append(blocks[:image], blocks[image+1:]...)
+	return slices.Insert(blocks, firstText, moved)
 }
 
 // The keys of the conversation message a thought is kept as. The assistant
@@ -439,7 +509,24 @@ func (a *Adapter) MessagesForLogging(convo *frames.LLMContext) []map[string]any 
 		if err := json.Unmarshal(raw, &got); err != nil {
 			continue
 		}
+		elideImageData(got)
 		out = append(out, got)
 	}
 	return out
+}
+
+// elideImageData replaces the data of every image a logged message carries
+// with a short placeholder, so a log shows that an image was sent without
+// carrying its bytes.
+func elideImageData(msg map[string]any) {
+	blocks, _ := msg["content"].([]any)
+	for _, b := range blocks {
+		block, _ := b.(map[string]any)
+		if block["type"] != "image" {
+			continue
+		}
+		if source, ok := block["source"].(map[string]any); ok {
+			source["data"] = "..."
+		}
+	}
 }

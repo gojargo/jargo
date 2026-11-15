@@ -28,11 +28,11 @@ func Encode(img []byte, width, height int, format string) ([]byte, string, error
 		return img, format, nil
 	}
 	if format == "" {
-		format = "RGB"
+		format = formatRGB
 	}
 	var channels int
 	switch format {
-	case "RGB":
+	case formatRGB:
 		channels = 3
 	case "RGBA", "RGBX":
 		channels = 4

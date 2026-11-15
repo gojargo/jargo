@@ -1246,6 +1246,10 @@ type AssistantAggregator struct {
 	// FunctionCallsStartedFrame that announced the call and the
 	// FunctionCallInProgressFrame that starts it.
 	inProgress map[string]*frames.FunctionCallInProgressFrame
+	// imageResults holds the image a tool call asked the user for, keyed by tool
+	// call id, until the call's result arrives and the image goes into the
+	// conversation after it.
+	imageResults map[string]*frames.UserImageRawFrame
 	// userSpeaking and botSpeaking track who holds the floor. A tool result that
 	// arrives while the user is speaking never re-runs generation, and one that
 	// arrives while the bot is speaking defers it until the bot finishes.
@@ -1289,6 +1293,7 @@ func newAssistant(
 		context:            ctx,
 		toolChangeMessages: toolChangeMessages,
 		inProgress:         make(map[string]*frames.FunctionCallInProgressFrame),
+		imageResults:       make(map[string]*frames.UserImageRawFrame),
 		realtime:           realtime,
 	}
 	// The summarizer exists whether or not the thresholds are enabled, so a
@@ -1449,6 +1454,10 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 		// idle watchdog and the mute strategies run inside the user aggregator, and
 		// an RTVI processor sits between the LLM and the output.
 		return a.handleFunctionCallFrame(ctx, f)
+	case *frames.UserImageRawFrame, *frames.AssistantImageRawFrame:
+		// Consumed: this is where an image from the user, or one the output
+		// transport has shown for the assistant, becomes conversation.
+		return a.handleImageFrame(ctx, f)
 	case *frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
 		*frames.BotStartedSpeakingFrame, *frames.BotStoppedSpeakingFrame:
 		return a.handleSpeakingState(ctx, f, dir)
@@ -1903,11 +1912,27 @@ func (a *AssistantAggregator) handleFunctionCallResult(
 		a.recordIntermediateResult(ctx, fr)
 	}
 
+	// An image the call asked the user for goes into the conversation after the
+	// call's result, and having added it is a reason to run the model.
+	a.mu.Lock()
+	image, hasImage := a.imageResults[fr.ToolCallID]
+	delete(a.imageResults, fr.ToolCallID)
+	a.mu.Unlock()
+	runLLM := false
+	if hasImage {
+		runLLM = a.maybeAppendImageToContext(ctx, image)
+	}
+	// A result decides for itself whether to run. Only a call that completed
+	// with no result leaves it to the image.
+	if fr.Result != "" {
+		runLLM = a.shouldRunLLM(fr, props, groupID)
+	}
+
 	// A push owed by an earlier result or append is made here once the way is
 	// clear, whether or not this result asks to run: a burst can end with an
 	// intermediate result, or one that declines, and the run asked for earlier in
 	// it must not be lost.
-	if err := a.settleRunRequest(ctx, a.shouldRunLLM(fr, props, groupID)); err != nil {
+	if err := a.settleRunRequest(ctx, runLLM); err != nil {
 		return err
 	}
 
@@ -2351,6 +2376,30 @@ func (a *AssistantAggregator) commit(ctx context.Context, interrupted bool) erro
 // The timestamp frame that follows marks when the message was written, for
 // anything building a transcript alongside the conversation.
 func (a *AssistantAggregator) pushAggregation(ctx context.Context) (string, error) {
+	said := a.addAggregationToContext()
+	if said == "" {
+		// Nothing was written and nothing is pushed, so a run a tool result
+		// deferred or owes is kept for whatever releases it.
+		return "", nil
+	}
+
+	// This covers whatever a tool result deferred or owes, so that run is
+	// dropped rather than repeated behind it.
+	if err := a.pushContextFrame(ctx, processor.Downstream); err != nil {
+		return said, err
+	}
+	return said, a.PushFrame(ctx,
+		frames.NewLLMContextAssistantTimestampFrame(frames.NowTimestamp()), processor.Downstream)
+}
+
+// addAggregationToContext writes what the turn has said so far to the
+// conversation and empties the aggregation, pushing no frames. It returns what
+// was written, which is empty when nothing was said.
+//
+// On its own it serves a write in the middle of an open turn (an image from the
+// user arriving mid-reply, say): the frames announcing the conversation belong
+// to the turn's real end, not to this write.
+func (a *AssistantAggregator) addAggregationToContext() string {
 	a.mu.Lock()
 	parts := a.aggregation
 	a.aggregation = nil
@@ -2364,19 +2413,99 @@ func (a *AssistantAggregator) pushAggregation(ctx context.Context) (string, erro
 		said = formatter.StripExpressionTags(said)
 	}
 	if said == "" {
-		// Nothing was written and nothing is pushed, so a run a tool result
-		// deferred or owes is kept for whatever releases it.
-		return "", nil
+		return ""
 	}
 	a.context.AddAssistantMessage(said)
+	return said
+}
 
-	// This covers whatever a tool result deferred or owes, so that run is
-	// dropped rather than repeated behind it.
-	if err := a.pushContextFrame(ctx, processor.Downstream); err != nil {
-		return said, err
+// handleImageFrame writes an image into the conversation: the user's, or one
+// the assistant generated.
+func (a *AssistantAggregator) handleImageFrame(ctx context.Context, f frames.Frame) error {
+	switch fr := f.(type) {
+	case *frames.UserImageRawFrame:
+		return a.handleUserImageFrame(ctx, fr)
+	case *frames.AssistantImageRawFrame:
+		return a.handleAssistantImageFrame(ctx, fr)
 	}
-	return said, a.PushFrame(ctx,
-		frames.NewLLMContextAssistantTimestampFrame(frames.NowTimestamp()), processor.Downstream)
+	return nil
+}
+
+// handleUserImageFrame writes an image from the user into the conversation.
+//
+// An image a tool call asked for is held until the call's result arrives, so
+// it lands after the result rather than ahead of it, and the call is told the
+// image has been taken, which is what lets it complete. Any other image is
+// written now, after whatever the bot has said so far, and runs the model
+// unless the frame says not to.
+func (a *AssistantAggregator) handleUserImageFrame(ctx context.Context, fr *frames.UserImageRawFrame) error {
+	req := fr.Request
+	forCall := false
+	if req != nil && req.ToolCallID != "" {
+		a.mu.Lock()
+		if _, forCall = a.inProgress[req.ToolCallID]; forCall {
+			a.imageResults[req.ToolCallID] = fr
+		}
+		a.mu.Unlock()
+	}
+
+	appended := false
+	if forCall {
+		if req.ResultCallback != nil {
+			if err := req.ResultCallback(ctx, "", nil); err != nil {
+				slog.WarnContext(ctx, "image request result callback failed",
+					"processor", a.Name(), "tool_call_id", req.ToolCallID, "err", err)
+			}
+		}
+	} else {
+		// What the bot has said so far goes in first, so the image lands after
+		// it. The turn stays open, and its frames go out at its real end.
+		a.addAggregationToContext()
+		appended = a.maybeAppendImageToContext(ctx, fr)
+	}
+
+	if appended && (fr.RunLLM == nil || *fr.RunLLM) {
+		return a.pushContextFrame(ctx, processor.Upstream)
+	}
+	return nil
+}
+
+// handleAssistantImageFrame writes an image the assistant generated into the
+// conversation, as the assistant's. The image as it was produced goes in when
+// the frame carries it, rather than the pixels shown.
+func (a *AssistantAggregator) handleAssistantImageFrame(
+	ctx context.Context, fr *frames.AssistantImageRawFrame,
+) error {
+	slog.DebugContext(ctx, "appending an assistant image to the conversation",
+		"processor", a.Name(), "width", fr.Width, "height", fr.Height)
+	var err error
+	if len(fr.OriginalData) > 0 && fr.OriginalMIMEType != "" {
+		err = a.context.AddImageFrameMessage(
+			fr.OriginalMIMEType, fr.Width, fr.Height, fr.OriginalData, "", frames.RoleAssistant)
+	} else {
+		err = a.context.AddImageFrameMessage(
+			fr.Format, fr.Width, fr.Height, fr.Image, "", frames.RoleAssistant)
+	}
+	if err != nil {
+		a.PushError(ctx, "add an assistant image to the conversation", err, false)
+	}
+	return nil
+}
+
+// maybeAppendImageToContext writes an image from the user into the
+// conversation when the frame asks for it, and reports whether it did.
+func (a *AssistantAggregator) maybeAppendImageToContext(ctx context.Context, fr *frames.UserImageRawFrame) bool {
+	if !fr.AppendToContext {
+		return false
+	}
+	slog.DebugContext(ctx, "appending a user image to the conversation",
+		"processor", a.Name(), "width", fr.Width, "height", fr.Height)
+	if err := a.context.AddImageFrameMessage(
+		fr.Format, fr.Width, fr.Height, fr.Image, fr.Text, frames.RoleUser); err != nil {
+		a.PushError(ctx, "add a user image to the conversation", err, false)
+		return false
+	}
+	return true
 }
 
 // commitInterrupted closes out a turn cut off by an interruption: whatever the

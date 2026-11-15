@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -93,13 +94,12 @@ func NewBaseOutput(name string, params Params, self OutputDriver) *BaseOutput {
 // transport it is.
 func (bo *BaseOutput) PlaysOutput() {}
 
-// Capabilities is the media this transport sends to the user: audio when
-// AudioOutEnabled is set. A transport here sends no video, so video_out is
-// reported false.
+// Capabilities is the media this transport sends to the user: audio and video
+// as the parameters enable them.
 func (bo *BaseOutput) Capabilities() capabilities.BotCapabilities {
 	return capabilities.BotCapabilities{
 		AudioOut: new(bo.params.AudioOutEnabled),
-		VideoOut: new(false),
+		VideoOut: new(bo.params.VideoOutEnabled),
 	}
 }
 
@@ -193,11 +193,25 @@ func (bo *BaseOutput) StartWriting(context.Context) error { return nil }
 // it to open the outgoing stream a destination names.
 func (bo *BaseOutput) RegisterAudioDestination(context.Context, string) error { return nil }
 
+// RegisterVideoDestination is the default no-op; a concrete transport overrides
+// it to open the outgoing video stream a destination names.
+func (bo *BaseOutput) RegisterVideoDestination(context.Context, string) error { return nil }
+
+// WriteVideoFrame is the default no-op; a concrete transport that sends video
+// overrides it. A base with no transport under it sends nothing, so it reports
+// the image as unsent.
+func (bo *BaseOutput) WriteVideoFrame(context.Context, *frames.OutputImageRawFrame) (bool, error) {
+	return false, nil
+}
+
 // Setup resolves the rate the transport writes at. A rate configured on the
 // transport wins; otherwise it takes the pipeline's output rate, which it knows
 // from the moment it is set up rather than when the StartFrame arrives.
 func (bo *BaseOutput) Setup(ctx context.Context, s processor.Setup) error {
 	if err := bo.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	if err := bo.params.Validate(); err != nil {
 		return err
 	}
 	bo.sampleRate = pick(bo.params.AudioOutSampleRate, s.AudioOutSampleRate)
@@ -309,6 +323,13 @@ func (bo *BaseOutput) handleFrame(ctx context.Context, f frames.Frame) error {
 	switch fr := f.(type) {
 	case *frames.TTSAudioRawFrame, *frames.SpeechOutputAudioRawFrame, *frames.OutputAudioRawFrame:
 		s.handleAudioFrame(f)
+	case frames.OutputImageFrame, *frames.SpriteFrame:
+		s.handleImageFrame(f)
+		if _, ok := f.(*frames.AssistantImageRawFrame); ok {
+			// It goes on, to be written into the conversation by the assistant
+			// aggregator.
+			s.handleSyncFrame(ctx, f)
+		}
 	case frames.MixerControlFrame:
 		if s.mixer != nil {
 			_ = s.mixer.ProcessFrame(ctx, fr)
@@ -414,7 +435,15 @@ func (bo *BaseOutput) startStreaming(ctx context.Context) {
 func (bo *BaseOutput) setTransportReady(ctx context.Context) {
 	// The default sender always exists: it serves every frame that names no
 	// destination of its own.
+	//
+	// A sender carries both audio and video, so a name listed as both an audio
+	// and a video destination gets one sender.
 	destinations := []string{defaultDestination}
+	addDestination := func(d string) {
+		if !slices.Contains(destinations, d) {
+			destinations = append(destinations, d)
+		}
+	}
 	for _, d := range bo.params.AudioOutDestinations {
 		if d == defaultDestination {
 			continue
@@ -423,7 +452,17 @@ func (bo *BaseOutput) setTransportReady(ctx context.Context) {
 			bo.PushError(ctx, "register audio destination "+d, err, false)
 			continue
 		}
-		destinations = append(destinations, d)
+		addDestination(d)
+	}
+	for _, d := range bo.params.VideoOutDestinations {
+		if d == defaultDestination {
+			continue
+		}
+		if err := bo.self.RegisterVideoDestination(ctx, d); err != nil {
+			bo.PushError(ctx, "register video destination "+d, err, false)
+			continue
+		}
+		addDestination(d)
 	}
 
 	bo.sendersMu.Lock()

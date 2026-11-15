@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -122,13 +121,8 @@ func hello() *frames.LLMContext {
 // withImage is a conversation whose one user message carries an image.
 func withImage() *frames.LLMContext {
 	convo := frames.NewLLMContext("")
-	convo.AddMessage(frames.NewLLMSpecificMessage("openai", openai.Message{
-		Role: openai.RoleUser,
-		ContentParts: []openai.ContentPart{
-			openai.TextPart("Describe this image."),
-			{Type: "image_url"},
-		},
-	}))
+	convo.AddMessage(frames.CreateImageURLMessage(
+		frames.RoleUser, "data:image/png;base64,iVBORw0KGgo...", "Describe this image."))
 	return convo
 }
 

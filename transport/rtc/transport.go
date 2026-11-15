@@ -30,6 +30,7 @@ const readDeadline = 500 * time.Millisecond
 // the client goes away, and transport.EventAppMessage for each message the
 // client sends. The client passed to the first two is the *Connection.
 type Transport struct {
+	transport.BaseTransport
 	in   *inputTransport
 	out  *outputTransport
 	conn *Connection
@@ -40,7 +41,7 @@ type Transport struct {
 
 // NewTransport builds a WebRTC transport over conn.
 func NewTransport(conn *Connection, params transport.Params) *Transport {
-	t := &Transport{conn: conn}
+	t := &Transport{Name: "RTCTransport", conn: conn}
 	t.in = newInput(conn, params)
 	t.out = newOutput(conn, params, &t.closing)
 
@@ -63,6 +64,16 @@ func (t *Transport) Output() processor.Processor { return t.out }
 
 // Events returns the registry of the events the transport raises.
 func (t *Transport) Events() *events.Registry { return t.in.Events() }
+
+// GetClientID returns the id of the peer connection a client event carries,
+// which is the participant id image requests take. A client that is not a
+// *Connection has none.
+func (t *Transport) GetClientID(client any) string {
+	if conn, ok := client.(*Connection); ok && conn != nil {
+		return conn.PCID()
+	}
+	return ""
+}
 
 // onAppMessage surfaces a message from the client as a frame in the pipeline,
 // then raises EventAppMessage with the message and the peer connection's id.

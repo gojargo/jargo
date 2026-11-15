@@ -2,7 +2,9 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/gojargo/jargo/audio"
@@ -47,7 +49,68 @@ type BaseInput struct {
 func NewBaseInput(name string, params Params, self InputDriver) *BaseInput {
 	bi := &BaseInput{params: params, self: self, filter: params.AudioInFilter}
 	bi.Base = processor.New(name, self)
+
+	var unsupported []string
+	for source := range params.VideoInSources {
+		if !self.SupportsVideoInSource(source) {
+			unsupported = append(unsupported, source)
+		}
+	}
+	if len(unsupported) > 0 {
+		slices.Sort(unsupported)
+		slog.Warn("video_in_sources aren't supported and will be ignored",
+			"processor", name, "sources", unsupported)
+	}
 	return bi
+}
+
+// SupportsVideoInSource reports whether this transport captures a video source
+// listed in Params.VideoInSources as its user connects. A transport that does
+// overrides it; a listed source it reports false for is ignored, with a
+// warning. The default captures none.
+//
+// It is called while the transport is being built, so an override must answer
+// from the source alone.
+func (bi *BaseInput) SupportsVideoInSource(string) bool { return false }
+
+// PushVideoFrame pushes an image read from the user's video downstream, when
+// video input is enabled and the transport is not paused.
+func (bi *BaseInput) PushVideoFrame(ctx context.Context, f frames.InputImageFrame) {
+	if !bi.params.VideoInEnabled {
+		return
+	}
+	bi.mu.Lock()
+	paused := bi.paused
+	bi.mu.Unlock()
+	if paused {
+		return
+	}
+	_ = bi.PushFrame(ctx, f, processor.Downstream)
+}
+
+// AnswerImageRequests completes image requests that no frame will answer, with
+// an error result naming why. The tool call that made each request would
+// otherwise never finish.
+func (bi *BaseInput) AnswerImageRequests(
+	ctx context.Context, requests []*frames.UserImageRequestFrame, reason string,
+) {
+	if len(requests) == 0 {
+		return
+	}
+	slog.Warn(reason, "processor", bi.Name())
+	result, err := json.Marshal(map[string]string{"error": reason})
+	if err != nil {
+		slog.Error("encode an image request error", "processor", bi.Name(), "err", err)
+		return
+	}
+	for _, request := range requests {
+		if request.ResultCallback == nil {
+			continue
+		}
+		if err := request.ResultCallback(ctx, string(result), nil); err != nil {
+			slog.Warn("image request result callback failed", "processor", bi.Name(), "err", err)
+		}
+	}
 }
 
 // SampleRate is the input sample rate in Hz, set when the transport starts.
@@ -89,14 +152,26 @@ func (bi *BaseInput) PushAudioFrame(ctx context.Context, f frames.InputAudioFram
 	sendAudio(ctx, ch, f)
 }
 
-// Capabilities is the media this transport receives from the user: audio when
-// AudioInEnabled is set. A transport here receives no video, so video_in and
-// screen_in are reported false.
+// Capabilities is the media this transport receives from the user: audio and
+// video as the parameters enable them, and screen shares.
+//
+// Whether screen shares are received is unknown when video input is enabled
+// with no VideoInSources, since the application then decides which sources to
+// capture, and when the transport does not capture screen shares through
+// VideoInSources.
 func (bi *BaseInput) Capabilities() capabilities.BotCapabilities {
+	var screenIn *bool
+	switch {
+	case !bi.params.VideoInEnabled:
+		screenIn = new(false)
+	case bi.self.SupportsVideoInSource(ScreenVideoSource) && len(bi.params.VideoInSources) > 0:
+		_, listed := bi.params.VideoInSources[ScreenVideoSource]
+		screenIn = new(listed)
+	}
 	return capabilities.BotCapabilities{
 		AudioIn:  new(bi.params.AudioInEnabled),
-		VideoIn:  new(false),
-		ScreenIn: new(false),
+		VideoIn:  new(bi.params.VideoInEnabled),
+		ScreenIn: screenIn,
 	}
 }
 
@@ -149,6 +224,9 @@ func (bi *BaseInput) PushBotConnected(ctx context.Context) {
 // from the moment it is set up rather than when the StartFrame arrives.
 func (bi *BaseInput) Setup(ctx context.Context, s processor.Setup) error {
 	if err := bi.Base.Setup(ctx, s); err != nil {
+		return err
+	}
+	if err := bi.params.Validate(); err != nil {
 		return err
 	}
 	bi.sampleRate = pick(bi.params.AudioInSampleRate, s.AudioInSampleRate)

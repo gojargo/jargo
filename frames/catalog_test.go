@@ -145,6 +145,49 @@ func catalog() []catalogEntry {
 			},
 		},
 		{
+			label: "InputImageRawFrame", cat: system, wantString: "size: (2, 1), format: RGB",
+			build: func() frames.Frame {
+				return frames.NewInputImageRawFrame(make([]byte, 6), 2, 1, "RGB")
+			},
+		},
+		{
+			label: "UserImageRawFrame", cat: system, wantString: "user: user-1",
+			build: func() frames.Frame {
+				return frames.NewUserImageRawFrame("user-1", make([]byte, 6), 2, 1, "RGB")
+			},
+		},
+		{
+			label: "UserImageRequestFrame", cat: system, wantString: "user: user-1",
+			build: func() frames.Frame { return frames.NewUserImageRequestFrame("user-1") },
+		},
+		{
+			label: "OutputImageRawFrame", cat: data, wantString: "size: (2, 1), format: RGB",
+			build: func() frames.Frame {
+				return frames.NewOutputImageRawFrame(make([]byte, 6), 2, 1, "RGB")
+			},
+		},
+		{
+			label: "URLImageRawFrame", cat: data, wantString: "url: https://example.com/a.png",
+			build: func() frames.Frame {
+				return frames.NewURLImageRawFrame("https://example.com/a.png", nil, 2, 1, "RGB")
+			},
+		},
+		{
+			label: "AssistantImageRawFrame", cat: data, wantString: "size: (2, 1)",
+			build: func() frames.Frame {
+				return frames.NewAssistantImageRawFrame(make([]byte, 6), 2, 1, "RGB")
+			},
+		},
+		{
+			label: "SpriteFrame", cat: data, wantString: "size: 2",
+			build: func() frames.Frame {
+				return frames.NewSpriteFrame([]*frames.OutputImageRawFrame{
+					frames.NewOutputImageRawFrame(nil, 1, 1, "RGB"),
+					frames.NewOutputImageRawFrame(nil, 1, 1, "RGB"),
+				})
+			},
+		},
+		{
 			label: "BotStartedSpeakingFrame", cat: system,
 			build: func() frames.Frame { return frames.NewBotStartedSpeakingFrame() },
 		},

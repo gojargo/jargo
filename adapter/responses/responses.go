@@ -6,6 +6,8 @@ package responses
 import (
 	"encoding/json"
 	"log/slog"
+	"slices"
+	"strings"
 
 	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
@@ -54,6 +56,44 @@ type InputItem struct {
 	ID               string        `json:"id,omitempty"`
 	Summary          []SummaryPart `json:"summary,omitempty"`
 	EncryptedContent string        `json:"encrypted_content,omitempty"`
+	// ContentParts carries a message's content as a list of parts instead of a
+	// plain string, and replaces Content when it is set.
+	ContentParts []ContentPart `json:"-"`
+}
+
+// The content part types a message's list of parts uses.
+const (
+	ContentInputText  = "input_text"
+	ContentInputImage = "input_image"
+)
+
+// ContentPart is one part of a message's content: text, or an image given by a
+// data URL or a URL the API fetches.
+type ContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	// Detail is how closely the model looks at an image: "auto" lets it
+	// decide.
+	Detail string `json:"detail,omitempty"`
+}
+
+// contentParts converts a universal message's list of parts.
+func contentParts(parts []frames.ContentPart) []ContentPart {
+	out := make([]ContentPart, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case frames.ContentPartImageURL:
+			detail := p.Detail
+			if detail == "" {
+				detail = "auto"
+			}
+			out = append(out, ContentPart{Type: ContentInputImage, ImageURL: p.ImageURL, Detail: detail})
+		default:
+			out = append(out, ContentPart{Type: ContentInputText, Text: p.Text})
+		}
+	}
+	return out
 }
 
 // SummaryPart is one part of a reasoning item's summary.
@@ -68,6 +108,12 @@ type SummaryPart struct {
 func (i InputItem) MarshalJSON() ([]byte, error) {
 	// plain drops the method set, so marshaling it does not recurse.
 	type plain InputItem
+	if i.Type != ItemReasoning && len(i.ContentParts) > 0 {
+		return json.Marshal(struct {
+			plain
+			Content []ContentPart `json:"content"`
+		}{plain(i), i.ContentParts})
+	}
 	if i.Type != ItemReasoning {
 		return json.Marshal(plain(i))
 	}
@@ -208,9 +254,12 @@ func ToInput(msgs []frames.Message) ([]InputItem, error) {
 		case len(m.ToolCalls) > 0:
 			items = append(items, toolCallItems(m)...)
 		default:
-			items = append(items, InputItem{
-				Type: ItemMessage, Role: inputRole(m.Role), Content: m.Text,
-			})
+			item := InputItem{Type: ItemMessage, Role: inputRole(m.Role), Content: m.Text}
+			if len(m.Content) > 0 {
+				item.Content = ""
+				item.ContentParts = contentParts(m.Content)
+			}
+			items = append(items, item)
 		}
 	}
 	return items, nil
@@ -280,6 +329,17 @@ func (a *Adapter) MessagesForLogging(convo *frames.LLMContext) []map[string]any 
 	for _, item := range params.Input {
 		if item.Type == ItemReasoning && item.EncryptedContent != "" {
 			item.EncryptedContent = "..."
+		}
+		// An image's data URL is bulk the log has no use for: the placeholder
+		// shows an image was sent.
+		if len(item.ContentParts) > 0 {
+			parts := slices.Clone(item.ContentParts)
+			for j := range parts {
+				if strings.HasPrefix(parts[j].ImageURL, "data:image/") {
+					parts[j].ImageURL = "data:image/..."
+				}
+			}
+			item.ContentParts = parts
 		}
 		raw, err := json.Marshal(item)
 		if err != nil {

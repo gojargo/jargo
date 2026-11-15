@@ -1,6 +1,7 @@
 package frames
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/expressive"
+	"github.com/gojargo/jargo/utils/images"
 )
 
 // Role identifies who authored a conversation message.
@@ -144,15 +146,45 @@ type ToolResult struct {
 	Content string
 }
 
+// ContentPartType says what a ContentPart holds.
+type ContentPartType string
+
+const (
+	// ContentPartText is a part holding text.
+	ContentPartText ContentPartType = "text"
+	// ContentPartImageURL is a part holding an image, by URL: a data URL for an
+	// image the message carries, or a URL the provider fetches.
+	ContentPartImageURL ContentPartType = "image_url"
+)
+
+// ContentPart is one part of a message whose content is a list of parts rather
+// than plain text, such as an image with the text that goes with it.
+type ContentPart struct {
+	// Type says which of the fields below the part holds.
+	Type ContentPartType
+	// Text is the part's text, for a ContentPartText.
+	Text string
+	// ImageURL is the image's URL, for a ContentPartImageURL.
+	ImageURL string
+	// Detail is how closely the model looks at the image, for a
+	// ContentPartImageURL, such as "low" or "high", or "" for the provider's
+	// default.
+	Detail string
+}
+
 // Message is a single conversation turn. A plain turn carries Text; an assistant
 // turn that invoked tools also carries ToolCalls; a turn returning tool outputs
-// carries ToolResults.
+// carries ToolResults. A turn whose content is more than text, such as an
+// image, carries it as Content.
 //
 // A message may instead be written in one provider's own format, which is what
 // LLM and Native carry. See [NewLLMSpecificMessage].
 type Message struct {
 	Role Role
 	Text string
+	// Content is the message's content as a list of parts, and replaces Text
+	// when it is set.
+	Content []ContentPart
 	// ToolCalls is set on an assistant message that requested tool calls.
 	ToolCalls []ToolCall
 	// ToolResults is set on a message returning the outputs of tool calls.
@@ -184,13 +216,52 @@ func NewLLMSpecificMessage(llm string, native any) Message {
 // format rather than in the universal one.
 func (m Message) IsLLMSpecific() bool { return m.LLM != "" }
 
-// StandardText returns the text of a message in the universal format, or ""
-// for a message in a provider's own format or one that carries no text.
+// StandardText returns the text of a message in the universal format, joining
+// the text parts of one whose content is a list of parts, or "" for a message
+// in a provider's own format or one that carries no text.
 func (m Message) StandardText() string {
 	if m.IsLLMSpecific() {
 		return ""
 	}
-	return m.Text
+	if len(m.Content) == 0 {
+		return m.Text
+	}
+	texts := make([]string, 0, len(m.Content))
+	for _, p := range m.Content {
+		if p.Type == ContentPartText && p.Text != "" {
+			texts = append(texts, p.Text)
+		}
+	}
+	return strings.Join(texts, " ")
+}
+
+// CreateImageURLMessage builds a message holding an image by URL, after the
+// text that goes with it when there is any. An empty role is the user.
+func CreateImageURLMessage(role Role, url, text string) Message {
+	if role == "" {
+		role = RoleUser
+	}
+	content := make([]ContentPart, 0, 2)
+	if text != "" {
+		content = append(content, ContentPart{Type: ContentPartText, Text: text})
+	}
+	content = append(content, ContentPart{Type: ContentPartImageURL, ImageURL: url})
+	return Message{Role: role, Content: content}
+}
+
+// CreateImageMessage builds a message holding an image, after the text that
+// goes with it when there is any. An empty role is the user.
+//
+// format is the pixel format of raw pixels, such as "RGB" or "RGBA", which are
+// encoded as a JPEG, or the MIME type of an image already encoded, such as
+// "image/jpeg", which keeps its bytes. The image travels as a data URL.
+func CreateImageMessage(role Role, format string, width, height int, image []byte, text string) (Message, error) {
+	data, contentType, err := images.Encode(image, width, height, format)
+	if err != nil {
+		return Message{}, err
+	}
+	url := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+	return CreateImageURLMessage(role, url, text), nil
 }
 
 // clone returns a message that shares nothing with this one. Copying the struct
@@ -203,6 +274,9 @@ func (m Message) StandardText() string {
 // that could copy it; treat a native message as written once and not edited
 // afterwards.
 func (m Message) clone() Message {
+	if len(m.Content) > 0 {
+		m.Content = append([]ContentPart(nil), m.Content...)
+	}
 	if len(m.ToolCalls) > 0 {
 		m.ToolCalls = append([]ToolCall(nil), m.ToolCalls...)
 	}
@@ -403,6 +477,19 @@ func (c *LLMContext) AddAssistantMessage(text string) {
 	c.mu.Lock()
 	c.messages = append(c.messages, Message{Role: RoleAssistant, Text: text})
 	c.mu.Unlock()
+}
+
+// AddImageFrameMessage appends a message holding an image, built as
+// CreateImageMessage builds it. An empty role is the user.
+func (c *LLMContext) AddImageFrameMessage(
+	format string, width, height int, image []byte, text string, role Role,
+) error {
+	m, err := CreateImageMessage(role, format, width, height, image, text)
+	if err != nil {
+		return err
+	}
+	c.AddMessage(m)
+	return nil
 }
 
 // ReplaceLastAssistantText replaces the text of the most recent message when it

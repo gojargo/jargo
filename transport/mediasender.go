@@ -88,6 +88,9 @@ type mediaSender struct {
 	botSpeakingFrameAt time.Time
 	// botSpeechLastAt is when the bot was last audibly speaking.
 	botSpeechLastAt time.Time
+
+	// video is the outgoing video: the images shown and the loop sending them.
+	video videoOut
 }
 
 // newMediaSender builds the sender for one destination, taking the audio shape
@@ -128,6 +131,8 @@ func (s *mediaSender) start(ctx context.Context) {
 		s.clockQ = newClockQueue(s.out)
 	}
 	s.clockQ.start(ctx)
+
+	s.createVideoTask(ctx)
 }
 
 // drainClock waits for the frames held for their presentation timestamp to go
@@ -165,6 +170,9 @@ func (s *mediaSender) stop(ctx context.Context) {
 	if s.clockQ != nil {
 		s.clockQ.stop()
 	}
+	// The video loop goes last: it may still be drawing what the audio and
+	// the clock were waiting on.
+	s.cancelVideoTask()
 }
 
 // closeResampler frees the native resampler handle, if one was created.
@@ -477,6 +485,11 @@ func (s *mediaSender) handleInterruption(ctx context.Context) {
 	if s.clockQ != nil {
 		s.clockQ.reset()
 	}
+
+	// Live images still queued are dropped with the rest of the turn; the
+	// images being repeated stay.
+	s.cancelVideoTask()
+	s.createVideoTask(ctx)
 
 	// The bot keeps the floor while uninterruptible audio is still to play, and
 	// after the reset everything left in the queue is uninterruptible.
@@ -820,6 +833,17 @@ func (s *mediaSender) signalDrained() {
 	}
 }
 
+// setVolume applies a volume frame taken from the queue: a VolumeFrame sets the
+// volume, and a VolumeGainFrame the gain on it.
+func (s *mediaSender) setVolume(f frames.Frame) {
+	switch fr := f.(type) {
+	case *frames.VolumeFrame:
+		s.volume = fr.Volume
+	case *frames.VolumeGainFrame:
+		s.volumeGain = fr.Gain
+	}
+}
+
 // handleQueuedFrame plays one queued frame: it applies the frame's own effect,
 // writes whatever audio it carries to the transport, and forwards it downstream.
 // A frame whose audio the transport did not send is not forwarded, so nothing
@@ -857,10 +881,12 @@ func (s *mediaSender) handleQueuedFrame(ctx context.Context, f frames.Frame) boo
 		s.ttsStopped(ctx)
 	case frames.FilterControlFrame:
 		s.handleFilterControl(ctx, af)
-	case *frames.VolumeFrame:
-		s.volume = af.Volume
-	case *frames.VolumeGainFrame:
-		s.volumeGain = af.Gain
+	case *frames.VolumeFrame, *frames.VolumeGainFrame:
+		s.setVolume(f)
+	case frames.OutputImageFrame, *frames.SpriteFrame:
+		// An image synced with the audio, shown once the audio ahead of it
+		// has been sent.
+		s.showQueuedImage(f)
 	case *frames.OutputDTMFFrame:
 		// The keys waited behind the audio around them, so they land where the
 		// caller meant them rather than over what was still being said.

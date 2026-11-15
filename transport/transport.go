@@ -9,6 +9,9 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/gojargo/jargo/audio"
@@ -102,6 +105,145 @@ type Params struct {
 	// destination it carries, so each stream keeps its own buffer, mixer and
 	// speaking state. Leave it empty for a transport with a single stream.
 	AudioOutDestinations []string
+
+	// VideoInEnabled enables receiving video.
+	VideoInEnabled bool
+	// VideoInSources are the video sources to capture from each user as they
+	// connect, keyed by source ("camera", "screenVideo", or a source of the
+	// transport's own). A source not listed is captured only when the
+	// application asks for it, with the transport's CaptureParticipantVideo.
+	// It requires VideoInEnabled. A transport that does not capture a listed
+	// source logs a warning and ignores it, so check the logs if video does not
+	// arrive as configured.
+	VideoInSources map[string]VideoInSourceParams
+
+	// VideoOutEnabled enables sending video.
+	VideoOutEnabled bool
+	// VideoOutIsLive sends each image as a frame of live video, paced at
+	// VideoOutFramerate, rather than repeating the last image (or cycling the
+	// last sprite) until another arrives.
+	VideoOutIsLive bool
+	// VideoOutWidth and VideoOutHeight are the size of the video sent, in
+	// pixels; 0 uses 1024 by 768. An image of another size is resized to it.
+	VideoOutWidth  int
+	VideoOutHeight int
+	// VideoOutFramerate is the rate video is sent at, in frames per second; 0
+	// uses 30.
+	VideoOutFramerate int
+	// VideoOutColorFormat is the pixel format of the video sent; "" uses "RGB".
+	VideoOutColorFormat string
+	// VideoOutCodec is the codec the transport prefers for the video it sends,
+	// such as "VP8" or "H264", or "" for the transport's own choice.
+	VideoOutCodec string
+	// VideoOutDestinations names the additional outgoing video streams the
+	// transport serves, beyond the default unnamed one. A destination named in
+	// both this and AudioOutDestinations is served by one sender carrying both.
+	VideoOutDestinations []string
+}
+
+// VideoInSourceParams says how a transport captures one video source from the
+// user.
+type VideoInSourceParams struct {
+	// Framerate is how many frames per second to pass on from the source; 0
+	// passes on 30. It does not apply with OnRequestOnly.
+	Framerate int
+	// OnRequestOnly passes on frames only to answer a UserImageRequestFrame,
+	// rather than continuously at Framerate.
+	OnRequestOnly bool
+}
+
+// DefaultVideoInFramerate is the rate a video source is captured at when its
+// parameters name none.
+const DefaultVideoInFramerate = 30
+
+// The video output shape when the parameters name none.
+const (
+	DefaultVideoOutWidth       = 1024
+	DefaultVideoOutHeight      = 768
+	DefaultVideoOutFramerate   = 30
+	DefaultVideoOutColorFormat = "RGB"
+)
+
+// errVideoInSourcesWithoutVideoIn reports video sources configured on a
+// transport that receives no video.
+//
+//nolint:gochecknoglobals // sentinel error
+var errVideoInSourcesWithoutVideoIn = errors.New("transport: VideoInSources requires VideoInEnabled")
+
+// errFramerateOnRequestOnly reports a framerate given for a source that passes
+// on frames only to answer image requests.
+//
+//nolint:gochecknoglobals // sentinel error
+var errFramerateOnRequestOnly = errors.New("transport: a framerate does not apply with OnRequestOnly")
+
+// errNegativeVideoParam reports a video size or rate below zero.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNegativeVideoParam = errors.New("transport: a video size or framerate cannot be negative")
+
+// Rate is how many frames per second to pass on from the source: the
+// configured rate, or DefaultVideoInFramerate.
+func (p VideoInSourceParams) Rate() int {
+	if p.Framerate > 0 {
+		return p.Framerate
+	}
+	return DefaultVideoInFramerate
+}
+
+// Validate checks the parameters: no negative sizes or rates, video sources
+// only with video input enabled, and no framerate on a source captured only on
+// request.
+//
+// The checks are written out rather than read from struct tags: the parameters
+// hold the application's own filters and mixers, which a tag-driven validator
+// would walk into while they are in use.
+func (p Params) Validate() error {
+	if p.VideoOutWidth < 0 || p.VideoOutHeight < 0 || p.VideoOutFramerate < 0 {
+		return errNegativeVideoParam
+	}
+	if len(p.VideoInSources) > 0 && !p.VideoInEnabled {
+		return errVideoInSourcesWithoutVideoIn
+	}
+	for source, sp := range p.VideoInSources {
+		if sp.Framerate < 0 {
+			return fmt.Errorf("%w: source %q", errNegativeVideoParam, source)
+		}
+		if sp.OnRequestOnly && sp.Framerate != 0 {
+			return fmt.Errorf("%w: source %q", errFramerateOnRequestOnly, source)
+		}
+	}
+	return nil
+}
+
+// VideoOutSize is the size of the video sent: the configured one, or 1024 by
+// 768.
+func (p Params) VideoOutSize() (width, height int) {
+	width, height = p.VideoOutWidth, p.VideoOutHeight
+	if width <= 0 {
+		width = DefaultVideoOutWidth
+	}
+	if height <= 0 {
+		height = DefaultVideoOutHeight
+	}
+	return width, height
+}
+
+// VideoOutRate is the rate video is sent at: the configured one, or 30 frames
+// per second.
+func (p Params) VideoOutRate() int {
+	if p.VideoOutFramerate > 0 {
+		return p.VideoOutFramerate
+	}
+	return DefaultVideoOutFramerate
+}
+
+// VideoOutFormat is the pixel format of the video sent: the configured one, or
+// "RGB".
+func (p Params) VideoOutFormat() string {
+	if p.VideoOutColorFormat != "" {
+		return p.VideoOutColorFormat
+	}
+	return DefaultVideoOutColorFormat
 }
 
 // DefaultParams returns Params with audio input and output enabled and mono
@@ -168,6 +310,54 @@ type Transport interface {
 	// Events returns the registry of the events the transport raises, such as
 	// EventClientConnected and EventClientDisconnected.
 	Events() *events.Registry
+	// GetClientID returns the id of a client, as passed to
+	// EventClientConnected. It is the participant id CaptureParticipantVideo
+	// and image requests take. A transport with client events implements it;
+	// BaseTransport logs a warning and returns "".
+	GetClientID(client any) string
+	// CaptureParticipantVideo captures a participant's video source, passing on
+	// framerate frames per second, or every frame for EveryFrame. With
+	// onRequestOnly it passes on only the frames that answer image requests,
+	// and framerate does not apply.
+	//
+	// It captures a source on demand, where Params.VideoInSources captures the
+	// listed sources as each user connects, and it takes precedence over that
+	// for the source. A transport that receives user video implements it;
+	// BaseTransport logs a warning.
+	CaptureParticipantVideo(
+		ctx context.Context, participantID string, framerate int, videoSource string, onRequestOnly bool,
+	) error
+}
+
+// The video sources a user can send.
+const (
+	// CameraVideoSource is the user's camera.
+	CameraVideoSource = "camera"
+	// ScreenVideoSource is the user's screen share.
+	ScreenVideoSource = "screenVideo"
+)
+
+// BaseTransport is the part of a Transport every transport shares. A concrete
+// transport embeds it and overrides what it supports: one with client events
+// overrides GetClientID, and one that receives user video overrides
+// CaptureParticipantVideo.
+type BaseTransport struct {
+	// Name labels the transport in the warnings the defaults log.
+	Name string
+}
+
+// GetClientID is the default for a transport with no client ids: it logs a
+// warning and returns "".
+func (b BaseTransport) GetClientID(any) string {
+	slog.Warn("getting a client id isn't supported", "transport", b.Name)
+	return ""
+}
+
+// CaptureParticipantVideo is the default for a transport that receives no user
+// video: it logs a warning and captures nothing.
+func (b BaseTransport) CaptureParticipantVideo(context.Context, string, int, string, bool) error {
+	slog.Warn("capturing participant video isn't supported", "transport", b.Name)
+	return nil
 }
 
 // InputDriver is implemented by a concrete input transport so the base can
@@ -188,6 +378,11 @@ type InputDriver interface {
 	// A transport with a source it can hold back reads Params.AudioInStreamOnStart
 	// when it starts, leaves the source closed when it is off, and opens it here.
 	StartAudioStreaming(ctx context.Context) error
+	// SupportsVideoInSource reports whether the transport captures a video
+	// source listed in Params.VideoInSources as its user connects. A listed
+	// source it reports false for is ignored, with a warning. The default
+	// captures none.
+	SupportsVideoInSource(videoSource string) bool
 }
 
 // OutputDriver is implemented by a concrete output transport so the base can
@@ -247,6 +442,18 @@ type OutputDriver interface {
 	// that fails to open is skipped rather than being sent to. The default does
 	// nothing.
 	RegisterAudioDestination(ctx context.Context, destination string) error
+	// RegisterVideoDestination opens the outgoing video stream a destination
+	// names, for a transport that serves more than one. It is called for each
+	// entry in Params.VideoOutDestinations when the transport starts. The
+	// default does nothing.
+	RegisterVideoDestination(ctx context.Context, destination string) error
+	// WriteVideoFrame sends one image as a frame of the outgoing video, sized to
+	// the video output size. The frame names the stream it belongs to in
+	// TransportDestination. It reports whether the transport took the image; a
+	// transport that sends no video leaves the default, which takes none.
+	//
+	// Like WriteAudio, it must return once ctx is done.
+	WriteVideoFrame(ctx context.Context, f *frames.OutputImageRawFrame) (sent bool, err error)
 }
 
 // audioFrameChanCap bounds the buffered audio channels between the media

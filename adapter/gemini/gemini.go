@@ -28,6 +28,9 @@ const (
 	keyFunctionResponse = "functionResponse"
 	keyInlineData       = "inlineData"
 	keyData             = "data"
+	keyMIMEType         = "mimeType"
+	keyFileData         = "fileData"
+	keyFileURI          = "fileUri"
 	keyThoughtSignature = "thoughtSignature"
 )
 
@@ -203,6 +206,10 @@ func ToContents(msgs []frames.Message) ([]map[string]any, error) {
 			role := roleUser
 			if m.Role == frames.RoleAssistant {
 				role = roleModel
+			}
+			if len(m.Content) > 0 {
+				out = append(out, map[string]any{keyRole: role, keyParts: messageParts(m.Content)})
+				continue
 			}
 			out = append(out, textContent(role, m.Text))
 		}
@@ -516,6 +523,30 @@ func EnsureLastMessageIsUser(contents []map[string]any) []map[string]any {
 		}
 	}
 	return contents
+}
+
+// messageParts converts a message's list of parts. An image carried as a data
+// URL becomes inline data; an image given by any other URL becomes file data
+// Gemini fetches from it.
+func messageParts(content []frames.ContentPart) []map[string]any {
+	parts := make([]map[string]any, 0, len(content))
+	for _, p := range content {
+		switch {
+		case p.Type == frames.ContentPartImageURL && strings.HasPrefix(p.ImageURL, "data:"):
+			// A data URL reads "data:image/jpeg;base64,<data>", and the data is
+			// already the base64 the request carries.
+			header, data, _ := strings.Cut(p.ImageURL, ",")
+			mimeType, _, _ := strings.Cut(strings.TrimPrefix(header, "data:"), ";")
+			parts = append(parts, map[string]any{
+				keyInlineData: map[string]any{keyMIMEType: mimeType, keyData: data},
+			})
+		case p.Type == frames.ContentPartImageURL:
+			parts = append(parts, map[string]any{keyFileData: map[string]any{keyFileURI: p.ImageURL}})
+		default:
+			parts = append(parts, map[string]any{keyText: p.Text})
+		}
+	}
+	return parts
 }
 
 // textContent builds a content carrying one text part.

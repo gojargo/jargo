@@ -57,6 +57,7 @@ type Config struct {
 // Transport captures from the microphone and plays to the speaker over a single
 // PulseAudio client connection.
 type Transport struct {
+	transport.BaseTransport
 	client *pulse.Client
 	in     *inputTransport
 	out    *outputTransport
@@ -74,6 +75,7 @@ func New(cfg Config) (*Transport, error) {
 		return nil, fmt.Errorf("localaudio: connect to PulseAudio: %w", err)
 	}
 	return &Transport{
+		Name:   "LocalAudioTransport",
 		client: client,
 		in:     newInput(client, cfg.Params),
 		out:    newOutput(client, cfg.Params),

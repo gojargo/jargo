@@ -25,6 +25,7 @@ const readDeadline = 500 * time.Millisecond
 // Transport is a LiveKit room transport. It provides the input and output
 // processors for a pipeline.
 type Transport struct {
+	transport.BaseTransport
 	in  *inputTransport
 	out *outputTransport
 }
@@ -110,8 +111,9 @@ func NewTransport(conn *Connection, params transport.Params, opts ...Option) *Tr
 		opt(&o)
 	}
 	t := &Transport{
-		in:  newInput(conn, params, o),
-		out: newOutput(conn, params),
+		Name: "LiveKitTransport",
+		in:   newInput(conn, params, o),
+		out:  newOutput(conn, params),
 	}
 	ev := t.in.Events()
 	for _, name := range []string{
@@ -140,6 +142,16 @@ func (t *Transport) Input() processor.Processor { return t.in }
 
 // Events returns the registry of the events the transport raises.
 func (t *Transport) Events() *events.Registry { return t.in.Events() }
+
+// GetClientID returns the identity of the participant a client event carries,
+// which is the participant id image requests take. A client that is not a
+// Client has none.
+func (t *Transport) GetClientID(client any) string {
+	if c, ok := client.(Client); ok {
+		return c.ID
+	}
+	return ""
+}
 
 // Output returns the output processor.
 func (t *Transport) Output() processor.Processor { return t.out }
