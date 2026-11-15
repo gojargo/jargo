@@ -1,0 +1,301 @@
+package speech
+
+import "github.com/gojargo/jargo/language"
+
+// sttLanguages are the languages Speech-to-Text V2 has been verified against,
+// each under the code it takes for it.
+//
+//nolint:gochecknoglobals,goconst // read-only lookup table, where codes recur
+var sttLanguages = map[language.Language]string{
+	// Afrikaans
+	language.Afrikaans:   "af-ZA",
+	language.AfrikaansZA: "af-ZA",
+	// Albanian
+	language.Albanian:   "sq-AL",
+	language.AlbanianAL: "sq-AL",
+	// Amharic
+	language.Amharic:   "am-ET",
+	language.AmharicET: "am-ET",
+	// Arabic
+	language.Arabic:   "ar-EG", // Default to Egypt
+	language.ArabicAE: "ar-AE",
+	language.ArabicBH: "ar-BH",
+	language.ArabicDZ: "ar-DZ",
+	language.ArabicEG: "ar-EG",
+	language.ArabicIQ: "ar-IQ",
+	language.ArabicJO: "ar-JO",
+	language.ArabicKW: "ar-KW",
+	language.ArabicLB: "ar-LB",
+	language.ArabicMA: "ar-MA",
+	language.ArabicOM: "ar-OM",
+	language.ArabicQA: "ar-QA",
+	language.ArabicSA: "ar-SA",
+	language.ArabicSY: "ar-SY",
+	language.ArabicTN: "ar-TN",
+	language.ArabicYE: "ar-YE",
+	// Armenian
+	language.Armenian:   "hy-AM",
+	language.ArmenianAM: "hy-AM",
+	// Azerbaijani
+	language.Azerbaijani:   "az-AZ",
+	language.AzerbaijaniAZ: "az-AZ",
+	// Basque
+	language.Basque:   "eu-ES",
+	language.BasqueES: "eu-ES",
+	// Bengali
+	language.Bengali:   "bn-IN", // Default to India
+	language.BengaliBD: "bn-BD",
+	language.BengaliIN: "bn-IN",
+	// Bosnian
+	language.Bosnian:   "bs-BA",
+	language.BosnianBA: "bs-BA",
+	// Bulgarian
+	language.Bulgarian:   "bg-BG",
+	language.BulgarianBG: "bg-BG",
+	// Burmese
+	language.Burmese:   "my-MM",
+	language.BurmeseMM: "my-MM",
+	// Catalan
+	language.Catalan:   "ca-ES",
+	language.CatalanES: "ca-ES",
+	// Chinese
+	language.Chinese:               "cmn-Hans-CN", // Default to Simplified Chinese
+	language.ChineseCN:             "cmn-Hans-CN",
+	language.ChineseHK:             "cmn-Hans-HK",
+	language.ChineseTW:             "cmn-Hant-TW",
+	language.YueChineseCantonese:   "yue-Hant-HK", // Cantonese
+	language.YueChineseCantoneseCN: "yue-Hant-HK",
+	// Croatian
+	language.Croatian:   "hr-HR",
+	language.CroatianHR: "hr-HR",
+	// Czech
+	language.Czech:   "cs-CZ",
+	language.CzechCZ: "cs-CZ",
+	// Danish
+	language.Danish:   "da-DK",
+	language.DanishDK: "da-DK",
+	// Dutch
+	language.Dutch:   "nl-NL", // Default to Netherlands
+	language.DutchBE: "nl-BE",
+	language.DutchNL: "nl-NL",
+	// English
+	language.English:   "en-US", // Default to US
+	language.EnglishAU: "en-AU",
+	language.EnglishCA: "en-CA",
+	language.EnglishGB: "en-GB",
+	language.EnglishGH: "en-GH",
+	language.EnglishHK: "en-HK",
+	language.EnglishIN: "en-IN",
+	language.EnglishIE: "en-IE",
+	language.EnglishKE: "en-KE",
+	language.EnglishNG: "en-NG",
+	language.EnglishNZ: "en-NZ",
+	language.EnglishPH: "en-PH",
+	language.EnglishSG: "en-SG",
+	language.EnglishTZ: "en-TZ",
+	language.EnglishUS: "en-US",
+	language.EnglishZA: "en-ZA",
+	// Estonian
+	language.Estonian:   "et-EE",
+	language.EstonianEE: "et-EE",
+	// Filipino
+	language.Filipino:   "fil-PH",
+	language.FilipinoPH: "fil-PH",
+	// Finnish
+	language.Finnish:   "fi-FI",
+	language.FinnishFI: "fi-FI",
+	// French
+	language.French:   "fr-FR", // Default to France
+	language.FrenchBE: "fr-BE",
+	language.FrenchCA: "fr-CA",
+	language.FrenchCH: "fr-CH",
+	language.FrenchFR: "fr-FR",
+	// Galician
+	language.Galician:   "gl-ES",
+	language.GalicianES: "gl-ES",
+	// Georgian
+	language.Georgian:   "ka-GE",
+	language.GeorgianGE: "ka-GE",
+	// German
+	language.German:   "de-DE", // Default to Germany
+	language.GermanAT: "de-AT",
+	language.GermanCH: "de-CH",
+	language.GermanDE: "de-DE",
+	// Greek
+	language.Greek:   "el-GR",
+	language.GreekGR: "el-GR",
+	// Gujarati
+	language.Gujarati:   "gu-IN",
+	language.GujaratiIN: "gu-IN",
+	// Hebrew
+	language.Hebrew:   "iw-IL",
+	language.HebrewIL: "iw-IL",
+	// Hindi
+	language.Hindi:   "hi-IN",
+	language.HindiIN: "hi-IN",
+	// Hungarian
+	language.Hungarian:   "hu-HU",
+	language.HungarianHU: "hu-HU",
+	// Icelandic
+	language.Icelandic:   "is-IS",
+	language.IcelandicIS: "is-IS",
+	// Indonesian
+	language.Indonesian:   "id-ID",
+	language.IndonesianID: "id-ID",
+	// Italian
+	language.Italian:   "it-IT",
+	language.ItalianIT: "it-IT",
+	language.ItalianCH: "it-CH",
+	// Japanese
+	language.Japanese:   "ja-JP",
+	language.JapaneseJP: "ja-JP",
+	// Javanese
+	language.Javanese:   "jv-ID",
+	language.JavaneseID: "jv-ID",
+	// Kannada
+	language.Kannada:   "kn-IN",
+	language.KannadaIN: "kn-IN",
+	// Kazakh
+	language.Kazakh:   "kk-KZ",
+	language.KazakhKZ: "kk-KZ",
+	// Khmer
+	language.Khmer:   "km-KH",
+	language.KhmerKH: "km-KH",
+	// Korean
+	language.Korean:   "ko-KR",
+	language.KoreanKR: "ko-KR",
+	// Lao
+	language.Lao:   "lo-LA",
+	language.LaoLA: "lo-LA",
+	// Latvian
+	language.Latvian:   "lv-LV",
+	language.LatvianLV: "lv-LV",
+	// Lithuanian
+	language.Lithuanian:   "lt-LT",
+	language.LithuanianLT: "lt-LT",
+	// Macedonian
+	language.Macedonian:   "mk-MK",
+	language.MacedonianMK: "mk-MK",
+	// Malay
+	language.Malay:   "ms-MY",
+	language.MalayMY: "ms-MY",
+	// Malayalam
+	language.Malayalam:   "ml-IN",
+	language.MalayalamIN: "ml-IN",
+	// Marathi
+	language.Marathi:   "mr-IN",
+	language.MarathiIN: "mr-IN",
+	// Mongolian
+	language.Mongolian:   "mn-MN",
+	language.MongolianMN: "mn-MN",
+	// Nepali
+	language.Nepali:   "ne-NP",
+	language.NepaliNP: "ne-NP",
+	// Norwegian
+	language.Norwegian:         "no-NO",
+	language.NorwegianBokmal:   "no-NO",
+	language.NorwegianBokmalNO: "no-NO",
+	// Persian
+	language.Persian:   "fa-IR",
+	language.PersianIR: "fa-IR",
+	// Polish
+	language.Polish:   "pl-PL",
+	language.PolishPL: "pl-PL",
+	// Portuguese
+	language.Portuguese:   "pt-PT", // Default to Portugal
+	language.PortugueseBR: "pt-BR",
+	language.PortuguesePT: "pt-PT",
+	// Punjabi
+	language.Punjabi:   "pa-Guru-IN",
+	language.PunjabiIN: "pa-Guru-IN",
+	// Romanian
+	language.Romanian:   "ro-RO",
+	language.RomanianRO: "ro-RO",
+	// Russian
+	language.Russian:   "ru-RU",
+	language.RussianRU: "ru-RU",
+	// Serbian
+	language.Serbian:   "sr-RS",
+	language.SerbianRS: "sr-RS",
+	// Sinhala
+	language.Sinhala:   "si-LK",
+	language.SinhalaLK: "si-LK",
+	// Slovak
+	language.Slovak:   "sk-SK",
+	language.SlovakSK: "sk-SK",
+	// Slovenian
+	language.Slovenian:   "sl-SI",
+	language.SlovenianSI: "sl-SI",
+	// Spanish
+	language.Spanish:   "es-ES", // Default to Spain
+	language.SpanishAR: "es-AR",
+	language.SpanishBO: "es-BO",
+	language.SpanishCL: "es-CL",
+	language.SpanishCO: "es-CO",
+	language.SpanishCR: "es-CR",
+	language.SpanishDO: "es-DO",
+	language.SpanishEC: "es-EC",
+	language.SpanishES: "es-ES",
+	language.SpanishGT: "es-GT",
+	language.SpanishHN: "es-HN",
+	language.SpanishMX: "es-MX",
+	language.SpanishNI: "es-NI",
+	language.SpanishPA: "es-PA",
+	language.SpanishPE: "es-PE",
+	language.SpanishPR: "es-PR",
+	language.SpanishPY: "es-PY",
+	language.SpanishSV: "es-SV",
+	language.SpanishUS: "es-US",
+	language.SpanishUY: "es-UY",
+	language.SpanishVE: "es-VE",
+	// Sundanese
+	language.Sundanese:   "su-ID",
+	language.SundaneseID: "su-ID",
+	// Swahili
+	language.Swahili:   "sw-TZ", // Default to Tanzania
+	language.SwahiliKE: "sw-KE",
+	language.SwahiliTZ: "sw-TZ",
+	// Swedish
+	language.Swedish:   "sv-SE",
+	language.SwedishSE: "sv-SE",
+	// Tamil
+	language.Tamil:   "ta-IN", // Default to India
+	language.TamilIN: "ta-IN",
+	language.TamilMY: "ta-MY",
+	language.TamilSG: "ta-SG",
+	language.TamilLK: "ta-LK",
+	// Telugu
+	language.Telugu:   "te-IN",
+	language.TeluguIN: "te-IN",
+	// Thai
+	language.Thai:   "th-TH",
+	language.ThaiTH: "th-TH",
+	// Turkish
+	language.Turkish:   "tr-TR",
+	language.TurkishTR: "tr-TR",
+	// Ukrainian
+	language.Ukrainian:   "uk-UA",
+	language.UkrainianUA: "uk-UA",
+	// Urdu
+	language.Urdu:   "ur-IN", // Default to India
+	language.UrduIN: "ur-IN",
+	language.UrduPK: "ur-PK",
+	// Uzbek
+	language.Uzbek:   "uz-UZ",
+	language.UzbekUZ: "uz-UZ",
+	// Vietnamese
+	language.Vietnamese:   "vi-VN",
+	language.VietnameseVN: "vi-VN",
+	// Xhosa
+	language.Xhosa: "xh-ZA",
+	// Zulu
+	language.Zulu:   "zu-ZA",
+	language.ZuluZA: "zu-ZA",
+}
+
+// languageToGoogleSTTLanguage names a language the way Speech-to-Text V2 does.
+// A language the table does not list is passed on as its full code, and
+// logged.
+func languageToGoogleSTTLanguage(l language.Language) string {
+	return language.Resolve(l, sttLanguages, false)
+}

@@ -50,10 +50,8 @@ func synthesize(t *testing.T, syn *ttsSynthesizer, text string) ([]byte, int) {
 // and everything downstream resamples against that label.
 func TestSynthesizerReportsConfiguredRate(t *testing.T) {
 	rt := &roundTripper{body: wavReply([]byte{1, 2})}
-	syn := &ttsSynthesizer{
-		cfg:  TTSConfig{APIKey: "k", VoiceName: defaultVoiceName, SampleRate: 16000},
-		http: &http.Client{Transport: rt},
-	}
+	syn := newTTSSynthesizer(TTSConfig{APIKey: "k", VoiceName: defaultVoiceName, SampleRate: 16000},
+		&http.Client{Transport: rt})
 
 	if got := syn.SampleRate(); got != 16000 {
 		t.Errorf("SampleRate() = %d, want the configured 16000", got)
@@ -72,15 +70,12 @@ func TestSynthesizerReportsConfiguredRate(t *testing.T) {
 func TestRunTTSRequestShape(t *testing.T) {
 	want := bytes.Repeat([]byte{0x11, 0x22}, 32)
 	rt := &roundTripper{body: wavReply(want)}
-	syn := &ttsSynthesizer{
-		cfg: TTSConfig{
-			APIKey:     "test-key",
-			VoiceName:  "en-US-Chirp3-HD-Charon",
-			Language:   language.French,
-			SampleRate: 24000,
-		},
-		http: &http.Client{Transport: rt},
-	}
+	syn := newTTSSynthesizer(TTSConfig{
+		APIKey:     "test-key",
+		VoiceName:  "en-US-Chirp3-HD-Charon",
+		Language:   language.French,
+		SampleRate: 24000,
+	}, &http.Client{Transport: rt})
 
 	pcm, rate := synthesize(t, syn, "hello there")
 	if !bytes.Equal(pcm, want) {
@@ -121,7 +116,7 @@ func TestRunTTSRequestShape(t *testing.T) {
 // header yields no audio rather than a slice read past its end.
 func TestRunTTSHeaderOnlyResponse(t *testing.T) {
 	rt := &roundTripper{body: wavReply(nil)}
-	syn := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k", SampleRate: 24000}, http: &http.Client{Transport: rt}}
+	syn := newTTSSynthesizer(TTSConfig{APIKey: "k", SampleRate: 24000}, &http.Client{Transport: rt})
 
 	pcm, _ := synthesize(t, syn, "hi")
 	if len(pcm) != 0 {
@@ -132,7 +127,7 @@ func TestRunTTSHeaderOnlyResponse(t *testing.T) {
 // TestRunTTSStatusError checks a non-200 is reported rather than decoded.
 func TestRunTTSStatusError(t *testing.T) {
 	rt := &roundTripper{status: http.StatusUnauthorized, body: "bad key"}
-	syn := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k", SampleRate: 24000}, http: &http.Client{Transport: rt}}
+	syn := newTTSSynthesizer(TTSConfig{APIKey: "k", SampleRate: 24000}, &http.Client{Transport: rt})
 
 	err := syn.RunTTS(t.Context(), "hi", "", func(frames.Frame) error {
 		t.Error("a frame was yielded for a failed request")
@@ -147,7 +142,7 @@ func TestRunTTSStatusError(t *testing.T) {
 // rather than passed downstream as audio.
 func TestRunTTSBadBase64(t *testing.T) {
 	rt := &roundTripper{body: `{"audioContent":"!!!not base64!!!"}`}
-	syn := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k", SampleRate: 24000}, http: &http.Client{Transport: rt}}
+	syn := newTTSSynthesizer(TTSConfig{APIKey: "k", SampleRate: 24000}, &http.Client{Transport: rt})
 
 	err := syn.RunTTS(t.Context(), "hi", "", func(frames.Frame) error { return nil })
 	if err == nil {
@@ -158,7 +153,7 @@ func TestRunTTSBadBase64(t *testing.T) {
 // TestRunTTSYieldError checks an error from downstream is reported back.
 func TestRunTTSYieldError(t *testing.T) {
 	rt := &roundTripper{body: wavReply([]byte{1, 2, 3, 4})}
-	syn := &ttsSynthesizer{cfg: TTSConfig{APIKey: "k", SampleRate: 24000}, http: &http.Client{Transport: rt}}
+	syn := newTTSSynthesizer(TTSConfig{APIKey: "k", SampleRate: 24000}, &http.Client{Transport: rt})
 
 	err := syn.RunTTS(t.Context(), "hi", "", func(frames.Frame) error { return errDownstream })
 	if !errors.Is(err, errDownstream) {
@@ -173,7 +168,7 @@ func TestRunTTSYieldError(t *testing.T) {
 func TestLanguageToGoogleTTS(t *testing.T) {
 	cases := map[language.Language]string{
 		language.English:      "en-US",
-		language.EnglishGB:    "en-US",
+		language.EnglishGB:    "en-GB",
 		language.French:       "fr-FR",
 		language.Spanish:      "es-ES",
 		language.German:       "de-DE",
@@ -186,8 +181,9 @@ func TestLanguageToGoogleTTS(t *testing.T) {
 		language.Korean:       "ko-KR",
 		language.Chinese:      "cmn-CN",
 		language.Language(""): defaultLangCode,
-		// Not modeled above, so the configured code is passed through as-is.
-		language.Language("sv-SE"): "sv-SE",
+		// Not in the verified table, so the configured code is passed through
+		// as it is.
+		language.Language("is-IS"): "is-IS",
 	}
 	for in, want := range cases {
 		if got := languageToGoogleTTS(in); got != want {

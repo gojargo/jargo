@@ -52,6 +52,8 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-fish`](voice/voice-fish) | Deepgram speech-to-text, an OpenAI LLM and Fish Audio text-to-speech. |
 | [`voice-gladia`](voice/voice-gladia) | Gladia speech-to-text, an OpenAI LLM and Cartesia text-to-speech. |
 | [`voice-gladia-vad`](voice/voice-gladia-vad) | Gladia (with its own voice activity detection) speech-to-text, an OpenAI LLM and Cartesia text-to- speech. |
+| [`voice-google`](voice/voice-google) | Google Cloud speech-to-text and streaming text-to-speech, with a Gemini LLM. |
+| [`voice-google-http`](voice/voice-google-http) | Google Cloud speech-to-text, a Gemini LLM and Google Cloud text-to-speech over HTTP. |
 | [`voice-gradium`](voice/voice-gradium) | Gradium speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-groq`](voice/voice-groq) | Groq speech-to-text, LLM and text-to- speech. |
 | [`voice-hume`](voice/voice-hume) | Deepgram speech-to-text, an OpenAI LLM and Hume text-to-speech. |

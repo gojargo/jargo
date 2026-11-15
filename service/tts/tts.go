@@ -80,6 +80,19 @@ func PCMYielder(yield func(f frames.Frame) error, rate int) func(pcm []byte) err
 	}
 }
 
+// chunkSeconds is how much audio ChunkSize covers.
+const chunkSeconds = 0.5
+
+// ChunkSize is the recommended size, in bytes, of the audio frames a provider
+// that downloads its audio in pieces cuts it into: half a second of 16-bit mono
+// PCM at sampleRate. Holding the first frame back until that much has arrived
+// lets the rest download while it plays, which keeps the start of the speech
+// from stuttering, though how well depends on how fast the provider produces
+// it.
+func ChunkSize(sampleRate int) int {
+	return int(float64(sampleRate)*chunkSeconds) * 2
+}
+
 // WordTimestamps is an optional interface a Synthesizer may implement to report
 // per-word timing aligned to the audio it produces. When the provider driving a
 // Base implements it, the Base tracks word completion and emits playback-aligned

@@ -75,6 +75,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   menu on the DTMF aggregator), `features-voicemail-detection` (the voicemail
   detector with a Jev classifier) and `mcp-stdio` (tools from an MCP server
   run over stdio).
+- **Google Cloud streaming speech services.** `provider/google/speech` adds
+  `NewSTT`, Speech-to-Text V2 streaming recognition over gRPC (languages,
+  model, punctuation, interim results, phrase-set adaptation, denoising,
+  regional locations), which replaces its streaming call before Google's
+  limit on one call's length and replaces a failed call, and `NewTTS`,
+  streaming Text-to-Speech over gRPC with Chirp 3 HD voices and voice cloning.
+  Both authorize with `speech.Credentials`: a service-account key as JSON or
+  a file path, or a token source. Examples: `voice-google`,
+  `voice-google-http`.
+- **Google Cloud Text-to-Speech over HTTP takes credentials and SSML.**
+  `gemini.TTSConfig` gains `Credentials` (the same type, sent as an access
+  token in place of the API key, which still works), `Location` for a
+  regional endpoint, and the pitch, rate, speaking rate, volume, emphasis,
+  gender and style settings, sent as SSML to voices other than Chirp and
+  Journey. Languages map through Google's full table, so `en-GB` is no
+  longer sent as `en-US`.
+- **`tts.ChunkSize`** gives the half-second frame size a provider that
+  downloads its audio cuts it into.
 
 ### Changed
 
