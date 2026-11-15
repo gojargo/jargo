@@ -1225,6 +1225,12 @@ func (b *Base) handleAudioContext(ctx context.Context, contextID string) bool {
 			b.pushWord(ctx, c, contextID, it)
 			continue
 		}
+		if ef, ok := it.frame.(*frames.ErrorFrame); ok {
+			// A provider reports a failure in the same ordered stream as its
+			// audio, and it is pushed as the error it is when its turn comes.
+			b.PushErrorFrame(ctx, ef, false)
+			continue
+		}
 		if shouldHoldFrame(it.frame, receivedAudio, held) {
 			held = append(held, it.frame)
 			continue
@@ -1568,7 +1574,7 @@ func shouldHoldFrame(f frames.Frame, receivedAudio bool, held []frames.Frame) bo
 		return false
 	}
 	switch f.(type) {
-	case *frames.TTSAudioRawFrame, *frames.TTSStoppedFrame, *frames.ErrorFrame:
+	case *frames.TTSAudioRawFrame, *frames.TTSStoppedFrame:
 		return false
 	case *frames.TTSTextFrame:
 		return true

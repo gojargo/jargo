@@ -1,8 +1,12 @@
-// Package neuphonic is a streaming text-to-speech service backed by Neuphonic's
-// TTS WebSocket. It holds one connection open for the call, configured by its
-// URL, and sends each sentence terminated by a <STOP> marker. Neuphonic's
-// messages name no request, so the audio that comes back is labeled with the
-// context playing.
+// Package neuphonic provides Neuphonic's text-to-speech, over two transports.
+//
+// NewTTS speaks over Neuphonic's TTS WebSocket. It holds one connection open
+// for the call, configured by its URL, and sends each sentence terminated by a
+// <STOP> marker. Neuphonic's messages name no request, so the audio that comes
+// back is labeled with the context playing.
+//
+// NewHTTPTTS speaks over the HTTP API, one request per sentence, whose audio
+// streams back as server-sent events (see http_tts.go).
 package neuphonic
 
 import (

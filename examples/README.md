@@ -44,6 +44,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-cartesia`](voice/voice-cartesia) | Cartesia speech-to-text and text- to-speech, with an OpenAI LLM. |
 | [`voice-cartesia-http`](voice/voice-cartesia-http) | Cartesia speech-to-text, an OpenAI LLM and Cartesia text-to-speech over HTTP. |
 | [`voice-cartesia-turns`](voice/voice-cartesia-turns) | Cartesia speech-to-text that detects the turns itself, an OpenAI LLM and Cartesia text-to-speech. |
+| [`voice-deepgram`](voice/voice-deepgram) | Deepgram speech-to-text and text-to-speech (over WebSocket), with an OpenAI LLM. |
 | [`voice-deepgram-flux`](voice/voice-deepgram-flux) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM. |
 | [`voice-deepgram-http`](voice/voice-deepgram-http) | Deepgram speech-to-text and text-to-speech (over HTTP), with an OpenAI LLM. |
 | [`voice-elevenlabs`](voice/voice-elevenlabs) | ElevenLabs realtime speech-to- text and streaming text-to-speech, with an OpenAI LLM. |
@@ -62,6 +63,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-minimax`](voice/voice-minimax) | Deepgram speech-to-text, an OpenAI LLM and MiniMax text-to-speech. |
 | [`voice-mistral`](voice/voice-mistral) | Mistral speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-neuphonic`](voice/voice-neuphonic) | Deepgram speech-to-text, an OpenAI LLM and Neuphonic text-to-speech. |
+| [`voice-neuphonic-http`](voice/voice-neuphonic-http) | Deepgram speech-to-text, an OpenAI LLM and Neuphonic text-to-speech (over HTTP). |
 | [`voice-nvidia`](voice/voice-nvidia) | NVIDIA speech-to-text, LLM and text- to-speech. |
 | [`voice-nvidia-segmented`](voice/voice-nvidia-segmented) | NVIDIA speech-to-text (transcribing each utterance once it ends), LLM and text-to-speech. |
 | [`voice-openai`](voice/voice-openai) | OpenAI's realtime transcription, LLM and text-to-speech. |

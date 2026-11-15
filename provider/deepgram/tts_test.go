@@ -77,6 +77,8 @@ func TestTTSConfigValidate(t *testing.T) {
 	providertest.Configs(t, []providertest.ConfigCase{
 		{Name: "missing API key", Cfg: TTSConfig{}, Valid: false},
 		{Name: "API key only", Cfg: TTSConfig{APIKey: "k"}, Valid: true},
+		{Name: "WebSocket missing API key", Cfg: WebsocketTTSConfig{}, Valid: false},
+		{Name: "WebSocket API key only", Cfg: WebsocketTTSConfig{APIKey: "k"}, Valid: true},
 		{Name: "missing STT API key", Cfg: Config{}, Valid: false},
 		{Name: "STT API key only", Cfg: Config{APIKey: "k"}, Valid: true},
 	})
@@ -86,6 +88,7 @@ func TestTTSConfigValidate(t *testing.T) {
 // identifies it in logs, metrics and traces.
 func TestNewServices(t *testing.T) {
 	providertest.Service(t, "DeepgramTTS", NewTTS(TTSConfig{APIKey: "k"}))
+	providertest.Service(t, "DeepgramWebsocketTTS", NewWebsocketTTS(WebsocketTTSConfig{APIKey: "k"}))
 	providertest.Service(t, "DeepgramSTT", NewSTT(Config{APIKey: "k"}))
 }
 

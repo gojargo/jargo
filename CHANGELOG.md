@@ -105,6 +105,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `raw-audio` to the RTVI processor, which takes the standard payload
   (`base64Audio`, `sampleRate`, `numChannels`), so that processor must sit
   upstream of the input transport, as the worker places it.
+- **Deepgram Aura TTS over WebSocket, and Neuphonic TTS over HTTP.**
+  `deepgram.NewWebsocketTTS` holds one Aura connection open for the call:
+  each sentence is sent as it is ready, the turn is flushed once its text
+  has all been sent, and an interruption clears what Aura holds rather than
+  reconnecting. Voice and speed can change while the pipeline runs, which
+  reconnects. `neuphonic.NewHTTPTTS` speaks each sentence with one request
+  whose audio streams back as server-sent events. Examples:
+  `voice-deepgram`, `voice-neuphonic-http`.
 
 ### Changed
 
@@ -198,6 +206,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- **A TTS provider's error is pushed upstream.** An error a provider yields
+  among its audio was sent on downstream with it; it is now pushed upstream
+  as an error when its turn in the audio context comes.
 - **The development runner's banner links to a page that exists.** It pointed
   at `gojargo.github.io/jargo/deploy/`, which the old site never had; it now
   points at https://gojargo.dev/docs/deploy/.

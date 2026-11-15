@@ -12,6 +12,8 @@ func TestConfigValidate(t *testing.T) {
 	providertest.Configs(t, []providertest.ConfigCase{
 		{Name: "missing API key", Cfg: neuphonic.Config{}, Valid: false},
 		{Name: "API key only", Cfg: neuphonic.Config{APIKey: "k"}, Valid: true},
+		{Name: "HTTP missing API key", Cfg: neuphonic.HTTPTTSConfig{}, Valid: false},
+		{Name: "HTTP API key only", Cfg: neuphonic.HTTPTTSConfig{APIKey: "k"}, Valid: true},
 	})
 }
 
@@ -19,4 +21,5 @@ func TestConfigValidate(t *testing.T) {
 // that identifies it in logs, metrics and traces.
 func TestNewServices(t *testing.T) {
 	providertest.Service(t, "NeuphonicTTS", neuphonic.NewTTS(neuphonic.Config{APIKey: "k"}))
+	providertest.Service(t, "NeuphonicHTTPTTS", neuphonic.NewHTTPTTS(neuphonic.HTTPTTSConfig{APIKey: "k"}))
 }
